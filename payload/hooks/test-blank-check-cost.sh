@@ -167,25 +167,23 @@ issue_spool_note "$SPOOLDIR" "$(printf ' \n\t ')" tester >/dev/null 2>&1
 # quoting it, and a guard that cannot tell the line describing a thing from the line committing it
 # fails on its own documentation (the same trick check-style-guide.sh needs).
 # ---------------------------------------------------------------------------
-REPO="$(cd "$DIR/../.." && pwd -P)"
-# Asked of git rather than of the filesystem (claude-config#402). This read `[ -d "$REPO/.git" ]`,
-# and in a git worktree `.git` is a FILE, so every run from a worktree took the branch below and
-# read only payload/hooks: claude-sync was never scanned and a violation CI caught passed locally.
-# The top level has to BE this file's repo, not merely some repository above an installed copy,
-# so it is compared with the directory rather than taken as present.
-REPO_TOP="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || true)"
-[ -n "$REPO_TOP" ] && REPO_TOP="$(cd "$REPO_TOP" 2>/dev/null && pwd -P || true)"
+# Asked of git rather than of the filesystem (claude-config#402): this read `[ -d "$REPO/.git" ]`,
+# and in a git worktree `.git` is a FILE, so every run from a worktree read only payload/hooks. The
+# top level has to BE this file's repo, not merely some repository above an installed copy, which
+# is what the one shared test, lib/checkout-root.sh, answers (claude-config#1567, #1663): it prints
+# nothing for an installed copy or a copy inside some other repository.
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 # Every file in the repository, committed or not, listed ONCE for both scans below (#522). An empty
 # listing is a scan that read nothing, and nothing must not read as a clean tree (L98): it is what
 # a missing lister produced the first time this was converted, and both scans passed.
 REPO_LIST=""
-if [ -n "$REPO_TOP" ] && [ "$REPO_TOP" = "$REPO" ]; then
+if [ -n "$REPO" ]; then
   REPO_LIST="$(bash "$DIR/lib/repo-files.sh" "$REPO" 2>&1)" || REPO_LIST=""
   [ -n "$REPO_LIST" ] \
     && check "the repository's files were listed to be read" ok \
     || check "the repository's files were listed to be read" "lib/repo-files.sh gave nothing for $REPO, so neither scan below read anything"
 fi
-if [ -n "$REPO_TOP" ] && [ "$REPO_TOP" = "$REPO" ]; then
+if [ -n "$REPO" ]; then
   # Grepped FROM the repository. ls-files prints paths relative to it, and grep resolved them against
   # whatever directory the suite was started in, so run from anywhere but the root every file was
   # missing, the error went to /dev/null, and the guard reported a clean tree it had never read
@@ -249,6 +247,7 @@ if [ -z "${BLANK_CHECK_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
   cp "$DIR/lib/suite-deadline.sh" "$WT_MAIN/payload/hooks/lib/suite-deadline.sh"
   cp "$DIR/lib/kill-tree.sh" "$WT_MAIN/payload/hooks/lib/kill-tree.sh"
   cp "$DIR/lib/repo-files.sh" "$WT_MAIN/payload/hooks/lib/repo-files.sh"
+  cp "$DIR/lib/checkout-root.sh" "$WT_MAIN/payload/hooks/lib/checkout-root.sh"
   # Assembled, for the reason the planted file above is: written whole it is an occurrence here.
   printf '%s\n' '#!/usr/bin/env bash' 'y=""' "[ -z \"\${y${SS}[[:space:]]/}\" ] && echo blank" > "$WT_MAIN/claude-sync"
   git init -q "$WT_MAIN" 2>/dev/null
@@ -289,7 +288,7 @@ fi
 # question and is not matched: the pattern requires `.git` to end the quoted path.
 # Only readable where the repository is, for the reason the blank test above says so.
 GITDIR_PAT='(\[ *(! *)?-d|test +(! +)?-d|isdir\()[^]]{0,80}[/"'"'"']\.git["'"'"')]'
-if [ -n "$REPO_TOP" ] && [ "$REPO_TOP" = "$REPO" ]; then
+if [ -n "$REPO" ]; then
   gitdir_offenders="$(cd "$REPO" && printf '%s\n' "$REPO_LIST" | tr '\n' '\0' \
       | xargs -0 grep -nE "$GITDIR_PAT" 2>/dev/null \
       | grep -vE ':[0-9]+: *#' || true)"

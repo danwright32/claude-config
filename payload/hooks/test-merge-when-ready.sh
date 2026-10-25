@@ -243,6 +243,9 @@ export GH_POLL_STATE_DIR="$WORKDIR/gh-poll"
 export CLAUDE_CODE_SESSION_ID="mwr-suite"
 # The per repository turn (claude-config#1515) is kept here, never in this Mac's own state.
 export MWR_TURN_DIR="$WORKDIR/turns"
+# And the phase each run publishes for tools/load-window.sh (claude-config#1676), so a run here is
+# never read as one of this Mac's helpers.
+export MWR_PHASE_DIR="$WORKDIR/phases"
 # And the record of refused sign ins (claude-config#1626), so the refusals this suite fakes are never
 # counted as this Mac's, on the suite's own clock.
 export MT_SIGNIN_LEDGER_DIR="$WORKDIR/gh-signin"
@@ -260,6 +263,8 @@ cat > "$STUBS/red-gate.sh" <<'EOS'
 #!/usr/bin/env bash
 cat >> "$ST/red-gate-payloads"; printf '\n' >> "$ST/red-gate-payloads"
 printf '%s\n' "${MT_GATE_READ_BUDGET_SECONDS:-unset}" >> "$ST/red-gate-budgets"
+# The phase the helper published while it asked (claude-config#1676).
+sed -n 's/^phase //p' "$MWR_PHASE_DIR"/[0-9]* >> "$ST/phase-at-gate" 2>/dev/null
 [ -s "$ST/red-gate-deny" ] && jq -nc --arg r "$(cat "$ST/red-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
 exit 0
 EOS
@@ -336,7 +341,7 @@ git init -q "$REPO"
 git -C "$REPO" remote add origin https://github.com/acme/widget.git
 
 fresh(){ # fresh <head> <behind> <rollup>
-  rm -rf "$ST" "$GH_POLL_STATE_DIR" "$MWR_TURN_DIR" "$AI_REVIEW_STATE_DIR"; mkdir -p "$ST"
+  rm -rf "$ST" "$GH_POLL_STATE_DIR" "$MWR_TURN_DIR" "$AI_REVIEW_STATE_DIR" "$MWR_PHASE_DIR"; mkdir -p "$ST"
   printf '%s' "$1" > "$ST/head"; printf '%s' "$2" > "$ST/behind"; printf '%s' "$3" > "$ST/rollup"
   printf '%s' "$PENDING" > "$ST/rollup-after-update"
   : > "$ST/next-heads"; : > "$ST/on-sleep"; : > "$ST/stacked"
@@ -505,6 +510,122 @@ fresh "$OLD" 0 "$GREEN"
 gate_out="$(present "bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
 check_eq "#1673 no key: the gate allows the helper" "0" "$grc"
 check_eq "#1673 and records nothing" "" "$(ls "$AI_REVIEW_STATE_DIR/helper-keys" 2>/dev/null)"
+
+# A RECORD MADE BY HAND (claude-config#1700). The record of a typed key was an empty file named by the
+# key's sha256, which anything able to write the folder could make, a session's own shell included.
+# It is now named by an HMAC of the key under a secret only the gate creates, so a file made by hand,
+# under the old name or any other a session can compute without that secret, vouches for nothing.
+KEYS_DIR="$AI_REVIEW_STATE_DIR/helper-keys"
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+mkdir -p "$KEYS_DIR"; : > "$KEYS_DIR/$(printf '%s' 5eed5eed5eed5eed | shasum -a 256 | awk '{ print $1 }')"
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1700 a record made by hand, with no gate ever having run, is refused" "64" "$rc"
+check_eq "#1700 and merges nothing" "0" "$(count gh-calls 'pr merge')"
+# The same, once the gate has made its secret by recording another key: the hand made name is still
+# not the one the gate would write.
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" >/dev/null
+mkdir -p "$KEYS_DIR"; : > "$KEYS_DIR/$(printf '%s' 5eed5eed5eed5eed | shasum -a 256 | awk '{ print $1 }')"
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1700 a hand made record beside the gate's own is refused" "64" "$rc"
+check_eq "#1700 and merges nothing beside it" "0" "$(count gh-calls 'pr merge')"
+# Read through python rather than stat, whose flags mean different things on macOS and Linux (on
+# Linux `stat -f` reports the filesystem, and printed that in CI).
+secret_mode="$(python3 -c 'import os, sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$AI_REVIEW_STATE_DIR/helper-keys.secret" 2>&1)"
+check_eq "#1700 the gate's secret is readable by its owner alone" "600" "$secret_mode"
+# A secret that is not one (cut short, emptied) is replaced, never used, and the typed path still works.
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+mkdir -p "$AI_REVIEW_STATE_DIR"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+gate_out="$(present "PR_REVIEW_READ=5eed5eed5eed5eed bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1700 a damaged secret is replaced and the typed key recorded" "0" "$grc"
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1700 and the typed key then merges" "0" "$rc"
+# TWO GATES REPLACING ONE DAMAGED SECRET AT ONCE (lessons review of #1700). Both see it damaged; if
+# each then put its own secret over it, the second would silently replace the first and the key the
+# first recorded would stop counting. Gate B is held, through the pause the library offers for this,
+# right after it has seen the secret damaged; gate A replaces it and records its key in full; then B
+# goes on. Both keys must count, under one secret. The fifos make the order exact, so nothing here
+# waits on a clock (L290).
+fresh "$OLD" 0 "$GREEN"
+mkdir -p "$AI_REVIEW_STATE_DIR"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+RACE="$WORKDIR/race"; rm -f "$RACE.reached" "$RACE.go"; mkfifo "$RACE.reached" "$RACE.go"
+# B says "done" on the same fifo when it ends, so a B that never pauses cannot leave this waiting.
+( AR_HELPER_SECRET_PAUSE="$RACE" present "PR_REVIEW_READ=bbbb2222 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" > "$WORKDIR/race-b.out"; echo $? > "$WORKDIR/race-b.rc"; printf 'done\n' > "$RACE.reached" ) &
+race_b=$!
+read -r race_said < "$RACE.reached"
+check_eq "#1700 race: the second gate is held after seeing the secret damaged" "reached" "$race_said"
+gate_out="$(present "PR_REVIEW_READ=aaaa1111 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+if [ "$race_said" = reached ]; then printf 'go\n' > "$RACE.go"; read -r _ < "$RACE.reached"; fi
+wait "$race_b"
+check_eq "#1700 race: the first gate to replace the damaged secret records its key" "0" "$grc"
+check_eq "#1700 race: and so does the second" "0" "$(cat "$WORKDIR/race-b.rc" 2>/dev/null)"
+check_eq "#1700 race: the first gate's key still counts once the second has run" "yes" "$( (. "$DIR/lib/ai-review-common.sh" && ar_helper_key_typed aaaa1111) && echo yes || echo no)"
+check_eq "#1700 race: and the second gate's key counts too, under the same secret" "yes" "$( (. "$DIR/lib/ai-review-common.sh" && ar_helper_key_typed bbbb2222) && echo yes || echo no)"
+check_eq "#1700 race: and neither left a spare secret or its lock behind" "helper-keys helper-keys.secret" "$(ls "$AI_REVIEW_STATE_DIR" | tr '\n' ' ' | sed 's/ $//')"
+rm -f "$RACE.reached" "$RACE.go"
+# A gate that finds another one still replacing waits for it, briefly, and never replaces it itself.
+# With the lock held by nobody who will finish it, the wait runs out and the key is not recorded
+# rather than being recorded under a secret the holder is about to replace (the sleep is injected).
+fresh "$OLD" 0 "$GREEN"
+mkdir -p "$AI_REVIEW_STATE_DIR/helper-keys.secret.lock"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+gate_out="$(AR_HELPER_SECRET_SLEEP=true present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1700 a replacement another gate holds and never finishes refuses the command" "2" "$grc"
+check "#1700 saying the key could not be recorded" "could not be recorded" "$gate_out"
+check_eq "#1700 and leaves the secret to the holder" "short" "$(cat "$AI_REVIEW_STATE_DIR/helper-keys.secret")"
+# And when the holder does finish while it waits, it records under the holder's secret. The injected
+# sleep plays the holder: on its first call it puts a secret in place and lets the lock go.
+fresh "$OLD" 0 "$GREEN"
+mkdir -p "$AI_REVIEW_STATE_DIR/helper-keys.secret.lock"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+HOLDER_SECRET="$(printf 'c%.0s' $(seq 64))"
+cat > "$WORKDIR/holder-finishes" <<EOS
+#!/usr/bin/env bash
+printf '%s' '$HOLDER_SECRET' > '$AI_REVIEW_STATE_DIR/helper-keys.secret'
+rmdir '$AI_REVIEW_STATE_DIR/helper-keys.secret.lock' 2>/dev/null
+exit 0
+EOS
+chmod +x "$WORKDIR/holder-finishes"
+gate_out="$(AR_HELPER_SECRET_SLEEP="$WORKDIR/holder-finishes" present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1700 a gate that waited out another's replacement records its key" "0" "$grc"
+check_eq "#1700 under the secret the other put in place" "$HOLDER_SECRET" "$(cat "$AI_REVIEW_STATE_DIR/helper-keys.secret")"
+check_eq "#1700 and the key counts" "yes" "$( (. "$DIR/lib/ai-review-common.sh" && ar_helper_key_typed abc123) && echo yes || echo no)"
+mkdir -p "$AI_REVIEW_STATE_DIR/helper-keys.secret.lock"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+# A lock left by a gate that died mid replacement is cleared once it is over a minute old, so one
+# killed gate cannot stop every later key being recorded.
+touch -t 202601010000 "$AI_REVIEW_STATE_DIR/helper-keys.secret.lock"
+gate_out="$(AR_HELPER_SECRET_SLEEP=true present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1700 a stale lock is cleared and the key recorded" "0" "$grc"
+check_eq "#1700 and the lock is gone" "no" "$([ -e "$AI_REVIEW_STATE_DIR/helper-keys.secret.lock" ] && echo yes || echo no)"
+# A COMMAND THAT NAMES THE RECORD (claude-config#1700). However the name is spelled or cased, a Bash
+# command that writes into the folder, reads the secret, or calls the function that records a key is
+# refused before it runs, since only the gate may make a record.
+fresh "$OLD" 0 "$GREEN"
+for forged in \
+  ": > ~/.claude/state/ai-review/helper-keys/0123abcd" \
+  "touch \"\$HOME/.claude/state/ai-review/HELPER-KEYS/0123abcd\"" \
+  "cat ~/.claude/state/ai-review/helper-keys.secret" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_helper_key_record 5eed5eed5eed5eed" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; touch \"\$(ar__helper_keys_dir)/x\""; do
+  gate_out="$(present "$forged")"; grc=$?
+  check_eq "#1700 a command naming the typed key record is refused: $forged" "2" "$grc"
+  check "#1700 saying only the gate writes it: $forged" "only pr-review-gate.sh writes" "$gate_out"
+done
+check_eq "#1700 and nothing was recorded by any of them" "" "$(ls "$KEYS_DIR" 2>/dev/null)"
+gate_out="$(present "ls ~/.claude/state/ai-review")"; grc=$?
+check_eq "#1700 a command naming none of it is not refused" "0" "$grc"
+# With no reader for the command's text (neither jq nor python3), a payload naming the record is
+# refused, saying which reader is missing, rather than passed unread. The payload is built here and
+# the gate run on a PATH holding only the basic tools it needs.
+NOREAD="$WORKDIR/no-reader-bin"; mkdir -p "$NOREAD"
+for t in bash cat dirname tr sed awk grep basename; do
+  p="$(command -v "$t")" && ln -sf "$p" "$NOREAD/$t"
+done
+noread_payload="$(jq -nc --arg c ": > ~/.claude/state/ai-review/helper-keys/0123abcd" --arg d "$REPO" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}')"
+gate_out="$(printf '%s' "$noread_payload" | PATH="$NOREAD" "$NOREAD/bash" "$DIR/pr-review-gate.sh" 2>&1)"; grc=$?
+check_eq "#1700 with no reader, a command naming the record is refused" "2" "$grc"
+check "#1700 naming the missing reader" "neither jq nor python3 is on PATH" "$gate_out"
 
 fresh "$OLD" 3 "$GREEN"
 : > "$ST/update-fails"
@@ -683,6 +804,39 @@ out="$(run 7 --squash)"; rc=$?
 check_eq "#1615 a compare refused on every try stops" "1" "$rc"
 check "#1615 and says the sign in was refused" "GitHub refused the sign in 4 times" "$out"
 check_eq "#1615 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# A connection gh could not make is asked again too, as its own outcome (claude-config#1675). On
+# 2026-10-24 #1640 stopped at 41m 36s on "could not read pull request #1640 ... (error connecting to
+# api.github.com)" with no retry line: gh prints that, and no HTTP status, when it could not reach
+# GitHub at all, so GitHub never saw the read. It is asked again by the same rule, through the
+# injected sleep, and one that outlasts the tries says so in its own words (L11). Nothing merges on it.
+CONNECT='error connecting to api.github.com'
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/view-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1675 a pull request read gh could not connect for once still merges" "0" "$rc"
+check "#1675 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1675 after one retry wait, through the injected sleep" "1" "$(count sleeps '^7$')"
+check "#1675 the retry is said as the connection, not GitHub not answering" "Could not connect to GitHub reading pull request #7 (try 1 of 4" "$out"
+check_not "#1675 never said as a refused sign in" "refused the sign in" "$out"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1675 a connection never made on any try still stops" "1" "$rc"
+check "#1675 said as the connection, four times, naming what it was reading" "could not connect to GitHub 4 times reading pull request #7 in acme/widget from GitHub (error connecting to api.github.com)" "$out"
+check "#1675 and that GitHub never answered" "GitHub never answered" "$out"
+check_not "#1675 never as a pull request that could not be read" "could not read pull request" "$out"
+check_eq "#1675 the read was tried four times" "4" "$(count gh-calls 'pr view 7')"
+check_eq "#1675 three retry waits" "3" "$(count sleeps '^7$')"
+check_eq "#1675 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/compare-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1675 a compare gh could never connect for stops" "1" "$rc"
+check "#1675 and says so" "could not connect to GitHub 4 times reading whether #7 contains the tip of main" "$out"
+check_eq "#1675 and nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 # Refused sign ins are counted across runs too (claude-config#1626): each one this run sees is written
 # to this Mac's ledger, and once the last day holds five, the run says so as a rate across runs, once,
@@ -1974,7 +2128,7 @@ fresh "$OLD" 2 "$GREEN"
 out="$(MWR_LINE_SECONDS=600 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
 check_eq "#1604 a run never given the turn stops at its line budget" "3" "$rc"
 check "#1604 naming what it waited for" "is waiting for its turn to merge in acme/widget, which #9 holds" "$out"
-check "#1604 and that its time in line ran out" "at the end of its 10m in line for a turn" "$out"
+check "#1604 and that its time in line ran out, the line standing still (#1697)" "nothing ahead of it in line has moved for 10m (MWR_LINE_SECONDS)" "$out"
 check_eq "#1604 after ten minutes" "yes" "$( e="$(el)"; [ "$e" -ge 600 ] && [ "$e" -lt 630 ] && echo yes || echo no)"
 check_eq "#1604 updating nothing" "0" "$(count gh-calls 'pr update-branch')"
 check_eq "#1604 and its place is given up" "9" "$(ticket_prs)"
@@ -2052,6 +2206,132 @@ printf 'gh: Server Error (HTTP 502)\n' > "$ST/recent-runs-down"
 out="$(run 7 --squash)"; rc=$?
 check_eq "#1604 an unreadable run list does not stop a merge" "0" "$rc"
 check "#1604 but says it could not read them, with GitHub's error" "could not read how long acme/widget's recent check runs took (gh: Server Error (HTTP 502)" "$out"
+
+# =================================================================================================
+# 25. A run keeps its place while the line moves (claude-config#1697). On 2026-10-24 Slate had about
+#     15 pull requests in one line at about 20 minutes a merge, longer than the fixed three hours in
+#     line, and #4148, #4164 and #4177 each ran out (exit 3, "at the end of its 180m in line for a
+#     turn") with the line still moving, and were queued again by hand at the back. Now
+#     MWR_LINE_SECONDS counts only time in which nothing ahead advanced, a ceiling of its own
+#     (MWR_LINE_MAX_SECONDS) bounds the whole wait, and each stop says which it was. While it waits
+#     in line it reads GitHub less often (the wait grows, as on checks), and reads its turn locally
+#     every base look, so a turn passing is still taken at once.
+# =================================================================================================
+# leave <pr>: the step that ends that pull request's place in line, whichever ticket it has.
+leave(){ printf 'for f in "$MWR_TURN_DIR"/acme/widget/[0-9]*; do grep -qx "pr %s" "$f" && rm -f "$f" "$f.head"; done' "$1"; }
+
+# Three ahead, each leaving after 15 looks of 30s: the run waits 22m 30s in all, far past a 10m line
+# budget, but the line never stands still for 10m, so it keeps its place and merges. Every figure
+# here is a fixture setting, not measured.
+fresh "$OLD" 0 "$GREEN"
+for p in 9 10 11; do "$BIN/take-turn" acme/widget "$p"; done
+for p in 9 10 11; do
+  for _ in $(seq 1 14); do printf ':\n' >> "$ST/on-sleep"; done
+  leave "$p" >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"
+done
+out="$(MWR_LINE_SECONDS=600 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
+check_eq "#1697 a run whose line keeps moving waits past its line budget and merges" "0" "$rc"
+check "#1697 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1697 having waited longer than the line budget" "yes" "$( [ "$(el)" -gt 600 ] && echo yes || echo no)"
+check "#1697 saying once it passed the budget that it keeps its place because the line is moving" "has waited over 10m in line, but the line is still moving" "$out"
+check_eq "#1697 said once, not at every look" "1" "$(grep -c 'but the line is still moving' <<<"$out")"
+check_not "#1697 never said as out of time" "Out of time" "$out"
+
+# Control, the line standing still (L497): the holder never leaves, so the same budget ends the wait,
+# said as the line not moving, never as a line still moving.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9
+out="$(MWR_LINE_SECONDS=600 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
+check_eq "#1697 control: a line that never moves stops at the line budget" "3" "$rc"
+check "#1697 control: said as nothing ahead having moved for the budget" "nothing ahead of it in line has moved for 10m (MWR_LINE_SECONDS)" "$out"
+check_not "#1697 control: never as the line still moving" "still moving" "$out"
+check_eq "#1697 control: after ten minutes still" "yes" "$( e="$(el)"; [ "$e" -ge 600 ] && [ "$e" -lt 630 ] && echo yes || echo no)"
+
+# The line moving but never reaching it: the ceiling on the whole wait ends it, said as the ceiling
+# with the line still moving, so it is told from a line that stood still (L11).
+fresh "$OLD" 0 "$GREEN"
+for p in 9 10 11 12 13 14; do "$BIN/take-turn" acme/widget "$p"; done
+for p in 9 10 11 12 13 14; do
+  for _ in $(seq 1 9); do printf ':\n' >> "$ST/on-sleep"; done
+  leave "$p" >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"
+done
+out="$(MWR_LINE_SECONDS=600 MWR_LINE_MAX_SECONDS=900 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
+check_eq "#1697 a line that moves but never reaches it stops at the ceiling" "3" "$rc"
+check "#1697 said as the ceiling on the wait in line, with the line still moving" "at the end of its 15m ceiling in line (MWR_LINE_MAX_SECONDS), with the line still moving" "$out"
+check_not "#1697 never as a line that stood still" "nothing ahead of it in line has moved for 10m (MWR_LINE_SECONDS)" "$out"
+check_eq "#1697 at fifteen minutes" "yes" "$( e="$(el)"; [ "$e" -ge 900 ] && [ "$e" -lt 930 ] && echo yes || echo no)"
+check_eq "#1697 updating nothing" "0" "$(count gh-calls 'pr update-branch')"
+check_not "#1697 and its place is given up" "7" "$(ticket_prs)"
+
+# The shared polling budget (L24): in line, GitHub is read on a wait that grows to its ceiling, while
+# the turn is read locally at every base look, so a turn passing mid wait is taken at once. #9 leaves
+# after twelve minutes of one minute looks.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9
+for _ in $(seq 1 11); do printf ':\n' >> "$ST/on-sleep"; done
+leave 9 >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"
+out="$(MWR_POLL_SECONDS=60 MWR_POLL_MAX_SECONDS=180 run 7 --squash)"; rc=$?
+check_eq "#1697 a run in line on a growing wait still merges" "0" "$rc"
+check "#1697 taking the turn the look after it passed, not at the end of a grown wait" "after waiting 12m 00s for it" "$out"
+check_eq "#1697 never sleeping longer than a base look in line" "60" "$(sort -n "$ST/sleeps" | tail -1)"
+reads_in_line="$(awk '$1 < 1000720' "$ST/view-times" | wc -l | tr -d ' ')"
+check_eq "#1697 reading GitHub fewer times than once a minute while in line (5 reads in its 12 minutes in line, not 12)" "5" "$reads_in_line"
+
+# Its default ceiling, measured by running it out (L107), with a line that moves at every look: each
+# of twenty pull requests ahead holds the turn for a look and is passed over. Nine hours, so a line of
+# about 27 merges at 20 minutes each, longer than Slate's 15 on 2026-10-24, is waited through.
+fresh "$OLD" 0 "$GREEN"
+for p in $(seq 101 120); do "$BIN/take-turn" acme/widget "$p"; done
+out="$(MWR_POLL_SECONDS=1800 MWR_HEARTBEAT_SECONDS=1800 MWR_TURN_HOLD_SECONDS=1800 run 7 --squash)"; rc=$?
+default_line_max=$(el)
+check_eq "#1697 with no ceiling set, a run in a line that keeps moving stops after nine hours" "3 32400" "$rc $default_line_max"
+check "#1697 said as the ceiling" "ceiling in line (MWR_LINE_MAX_SECONDS), with the line still moving" "$out"
+# THE RATIO (L227), as #1271 and #1604 hold it, over the longest a run can now last: its ceiling in
+# line plus its deadline from the turn.
+if [[ "${wait_s:-}" =~ ^[0-9]+$ ]]; then
+  [ "$wait_s" -ge $(( 2 * (default_line_max + default_deadline) )) ] && ok || bad "#1697 is-it-live's WAIT_MS (${wait_s}s) is not at least twice the longest a run can last, its ceiling in line plus its deadline ($(( default_line_max + default_deadline ))s)"
+else
+  bad "#1697 WAIT_MS was not read from is-it-live's merges.ts"
+fi
+
+# =================================================================================================
+# 26. The phase it publishes for tools/load-window.sh (claude-config#1676): waiting while it sleeps
+#     on GitHub, renewed before each wait and good only until that wait is over (plus a minute);
+#     local while the gates are asked and while its lessons review runs; gone once it ends. A run
+#     killed outright leaves its record, which then says nothing, because its pid no longer runs.
+# =================================================================================================
+MP_LIBS=". \"$DIR/lib/merge-turn.sh\" && . \"$DIR/lib/merge-phase.sh\""
+SNAP='cat "$MWR_PHASE_DIR"/[0-9]* >> "$ST/phases-seen" 2>/dev/null; echo --- >> "$ST/phases-seen"'
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "$SNAP" "$SNAP; printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1676 a merge that waited on its checks still merges" "0" "$rc"
+seen1="$(awk '/^---$/{exit} {print}' "$ST/phases-seen" 2>/dev/null)"
+check "#1676 while it sleeps on its checks it says it is waiting" "phase waiting" "$seen1"
+check "#1676 on what" "checks still running" "$seen1"
+check "#1676 good until the end of that wait and a minute more, on its own clock" "until 1000090" "$seen1"
+check_eq "#1676 every gate is asked while it says it is doing local work" "local" "$(sort -u "$ST/phase-at-gate" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+check_eq "#1676 and once it has merged it leaves no record" "" "$(ls "$MWR_PHASE_DIR" 2>/dev/null | grep -E '^[0-9]+$')"
+
+# Its lessons review running in the background is local work, so the wait beside it is too.
+fresh "$OLD" 0 "$GREEN"
+printf '3\n0\n' > "$ST/review-answers"
+printf '%s\n' "$SNAP" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1676 a merge whose review ran a while still merges" "0" "$rc"
+seen1="$(awk '/^---$/{exit} {print}' "$ST/phases-seen" 2>/dev/null)"
+check "#1676 while its lessons review runs it says it is doing local work" "phase local" "$seen1"
+check "#1676 naming the review" "lessons review" "$seen1"
+
+# Killed outright mid wait (L409, L617): while it runs, a reader believes its record; once it is
+# killed the record stays behind, and says nothing.
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "( $MP_LIBS && mp_waiting \$PPID \$(cat \"\$ST/clock\") ) && echo believed > \"\$ST/verdict-alive\"; echo \$PPID > \"\$ST/helper-pid\"; kill -9 \$PPID" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+hp="$(cat "$ST/helper-pid" 2>/dev/null)"
+check_eq "#1676 control: while the run is alive and waiting, its record is believed" "believed" "$(cat "$ST/verdict-alive" 2>/dev/null)"
+check_eq "#1676 a run killed outright leaves its record behind" "yes" "$( [ -n "$hp" ] && [ -e "$MWR_PHASE_DIR/$hp" ] && echo yes || echo no)"
+check_eq "#1676 which is not believed once its run has gone" "busy" "$( ( eval "$MP_LIBS" && mp_waiting "$hp" "$(cat "$ST/clock")" ) && echo waiting || echo busy)"
 
 echo
 echo "passed: $pass, failed: $fail"

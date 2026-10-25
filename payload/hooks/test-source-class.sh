@@ -124,6 +124,21 @@ want_source "scripts/checkout.ts"
 want_source "scripts/deploy.ts"
 want_source "lib/check-utils.ts"
 
+# --- Slate's database suites, scripts/verify-*-sql.ts, are tests (claude-config#1698) ---
+# Run by the DB replay workflow against a throwaway Postgres, and named apart from test-*.ts only
+# because they need Docker. A push adding only scripts/verify-calcom-retired-at-sql.ts was refused
+# as source with no tests.
+want_test "scripts/verify-calcom-retired-at-sql.ts"
+want_test "apps/web/scripts/verify-alerts-learning-sql.ts"
+# The live verify-*.ts commands beside them are not tests, nor is a -sql name anywhere else.
+want_nottest "scripts/verify-calcom.ts"
+want_nottest "scripts/verify-sql-connection.ts"
+want_nottest "scripts/verify-sql.ts"
+want_nottest "src/verify-alerts-sql.ts"
+want_nottest "scripts/reverify-alerts-sql.ts"
+want_nottest "scripts/verify-alerts-sql.tsx"
+want_source "scripts/verify-calcom.ts"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

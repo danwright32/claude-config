@@ -245,13 +245,15 @@ overrun_with pastshare LOAD_AVERAGE_CMD="$(mk_load seventeen 17)" LOAD_AVERAGE_C
 # on 2026-10-21 at a load average of 42, through test-scanners-before-push.sh, and reproduced 1 in
 # 200 under load. Made certain here rather than left to the scheduler: BASH_ENV hands the watchdog
 # (and only it sends USR1) a kill that, after that signal, waits until the handler's load reader
-# has STARTED, the gap load leaves, waited on as a condition rather than a fixed time (L290), with a
-# ceiling because once fixed the reader cannot start until the watchdog moves on. The suite idles in
+# has STARTED, the gap load leaves, waited on as a condition rather than a fixed time (L290), for a
+# two second WINDOW (window_wait, #1679), because once fixed the reader cannot start until the
+# watchdog moves on, so a sound run always runs the window out, and load can only make it miss the
+# fault, never fail a sound run. The suite idles in
 # builtins, so nothing defers its handler, and the reader stays alive after it starts, so the kill
 # finds it. The fix stops and kills first and flags last, so whatever the gap, the handler cannot
 # start until the kill is over.
-printf 'kill(){ builtin kill "$@"; local r=$? n=0; if [ "${1:-}" = -USR1 ]; then while [ ! -e %q ] && [ "$n" -lt 20 ]; do sleep 0.1; n=$((n + 1)); done; fi; return "$r"; }\n' \
-  "$TMPROOT/gap-reader-started" > "$TMPROOT/slow-watchdog.env"
+printf '. %q\nkill(){ builtin kill "$@"; local r=$?; if [ "${1:-}" = -USR1 ]; then window_wait 2 %q; fi; return "$r"; }\n' \
+  "$DIR/lib/hang-wait.sh" "[ -e '$TMPROOT/gap-reader-started' ]" > "$TMPROOT/slow-watchdog.env"
 printf '#!/bin/sh\n: > %q\nsleep 2\necho 30.5\n' "$TMPROOT/gap-reader-started" > "$TMPROOT/load-slowbusy"; chmod +x "$TMPROOT/load-slowbusy"
 mk_armed "$TMPROOT/gap.sh" 'while :; do :; done'
 env -u HOOK_TESTS_SLOTS BASH_ENV="$TMPROOT/slow-watchdog.env" \

@@ -668,8 +668,9 @@ case "$o23" in *kappa*) check "and still blocks the push" ok ;;
 #     the rule as written; what matters is which real suites it picks, and above all that it never
 #     picks the four minute suite as a whole (measured 2026-09-21: the selection below runs in 27
 #     seconds, where running that suite whole would be 268).
-REAL="$(cd "$DIR/../.." && pwd)"
-if [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
+# Found by the one shared test, lib/checkout-root.sh (claude-config#1663): empty outside a checkout.
+REAL="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$REAL" ] && [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
   _sel="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"}' "$REAL" \
           | SCANNERS_LIST=1 bash "$H" 2>&1)"
   [ "$(grep -c '^SUITE ' <<< "$_sel")" -ge 5 ] \

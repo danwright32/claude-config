@@ -184,9 +184,6 @@ check_eq "#1574 a spool note that passes is not recorded as a refusal" "absent" 
 # Behind a declared call, its output may be piped into grep, head, tail or cut, which only read
 # what they are given and print it; `2>&1` may stand before the first pipe. Nothing else follows.
 MC='~/.claude/skills/milestone/milestone-candidates.sh'
-# head is named through a variable, so the pipefail ratchet does not read these command strings as
-# this suite's own pipelines.
-HEAD=head
 allowed "the duplicate check, as the docs give it" "bash $MC \"danwright32/claude-config\" --like \"Stop the gh poll loop before git push\""
 allowed "the duplicate check through the absolute path" "bash $HOME/.claude/skills/milestone/milestone-candidates.sh \"owner/repo\" --like \"an rtk rewrite\""
 allowed "the duplicate check with the repository unquoted" "bash $MC danwright32/claude-config --like 'a gh issue title'"
@@ -198,10 +195,10 @@ allowed "another account, a spool note" "GH_TOKEN=\$(gh auth token -u danwright3
 # invented account and repository standing for the real ones): each piped its output to grep.
 allowed "a real refused duplicate check, piped to grep" "bash $MC \"danwright32/claude-config\" --like \"Stop the wrapped command guard refusing an issue spool note that mentions gh git or rtk\" 2>&1 | grep -E \"DUPLICATE|CLOSE-MATCH\""
 allowed "the real refused check for another account, piped to grep" "GH_TOKEN=\$(gh auth token -u other-acct) bash $HOME/.claude/skills/milestone/milestone-candidates.sh \"example-org/enrollment-tracker\" --like \"Delete the stale wildcard allow rules from local Claude settings\" | grep -v -E \"^\\\\s+DESC\""
-allowed "the check piped to head" "bash $MC \"o/r\" --like \"a gh title\" | $HEAD -20"
+allowed "the check piped to head" "bash $MC \"o/r\" --like \"a gh title\" | head -20"
 allowed "the check piped to tail" "bash $MC \"o/r\" --like \"a gh title\" | tail -n 5"
 allowed "the check piped to cut" "bash $MC \"o/r\" --like \"a gh title\" | cut -c1-200"
-allowed "the check piped through grep then head" "bash $MC \"o/r\" --like \"a gh title\" 2>&1 | grep -E 'DUPLICATE|CLOSE' | $HEAD -5"
+allowed "the check piped through grep then head" "bash $MC \"o/r\" --like \"a gh title\" 2>&1 | grep -E 'DUPLICATE|CLOSE' | head -5"
 allowed "a filter whose quoted pattern says gh" "bash $MC \"o/r\" --like \"x\" | grep 'gh pr'"
 allowed "a spool note piped to tail" "bash $SPOOL note . \"git push\" \"builder\" | tail -1"
 refused "the check piped to a shell" "bash $MC \"o/r\" --like \"gh\" | sh" "bash"
@@ -437,6 +434,61 @@ out="$(payload "X=\"a b\" ./build.sh && git push" | bash "$LONE1623/check-wrappe
 check_eq "#1623 the fast path sees a script behind an assignment holding a space" "2" "$rc"
 out="$(payload ". ./env.sh && git push" | bash "$LONE1623/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1623 the fast path sees a sourced file" "2" "$rc"
+
+# 4e. A script call declared read only (claude-config#1669). Dan, 2026-10-24, approving exactly this
+# one: "Allow lesson only". `claude-sync lesson <id>` only reads LESSONS.md and prints one entry, so
+# when it stands as a command of its own, by the live clone's path (~/ or the home directory written
+# out), by bash or by its path, with nothing in front and one plain id after, it is no unread
+# wrapper, and a gh call beside it is judged by the gates as usual. Every other subcommand of
+# claude-sync commits, pushes or pulls, and stays refused beside git, gh or rtk.
+CS='~/claude-config-sync/claude-sync'
+allowed "a lesson read beside gh" "$CS lesson L174 && gh issue view 1669"
+allowed "a lesson read after gh" "gh issue view 1669; $CS lesson L1001"
+allowed "a lesson read by the home directory written out" "$HOME/claude-config-sync/claude-sync lesson L174 && gh pr view 7"
+allowed "a lesson read run by bash" "bash $CS lesson L174 && gh issue view 1669"
+allowed "a lesson read by its id" "$CS lesson 3f9a2b1c4d && gh issue view 1669"
+allowed "a lesson read piped to a filter beside gh" "$CS lesson L174 | cut -c1-200; gh issue view 1669"
+allowed "a lesson read with its errors kept" "$CS lesson L174 2>&1 && gh issue view 1669"
+allowed "two lessons read beside gh" "$CS lesson L174; $CS lesson L1; gh issue view 1669"
+rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
+judge "$CS lesson L174 && gh issue view 1669"
+check_eq "#1669 a lesson read that passes is not recorded as a refusal" "absent" "$([ -e "$LEDGER" ] && echo present || echo absent)"
+refused_file "claude-sync sync beside gh" "$CS sync && gh pr view 7" "$CS"
+refused_file "claude-sync send beside gh" "$CS send && gh pr view 7" "$CS"
+refused_file "claude-sync pull beside gh" "$CS pull; gh pr view 7" "$CS"
+refused_file "claude-sync status beside gh" "$CS status && gh pr view 7" "$CS"
+refused_file "claude-sync next-lesson beside gh" "$CS next-lesson && gh issue view 1" "$CS"
+refused_file "claude-sync lesson-faults, a longer name, beside gh" "$CS lesson-faults && gh issue view 1" "$CS"
+refused_file "claude-sync with no subcommand beside gh" "$CS && gh issue view 1" "$CS"
+refused_file "a lesson read with no id" "$CS lesson && gh issue view 1" "$CS"
+refused_file "a lesson read with a second argument" "$CS lesson L174 sync && gh issue view 1" "$CS"
+refused_file "a lesson read whose id is a substitution" "$CS lesson \"\$(git push)\" && gh issue view 1" "$CS"
+refused_file "a lesson read whose id is a variable" "$CS lesson \$N && gh issue view 1" "$CS"
+refused_file "a lesson read behind an assignment" "SYNC_REPO=/srv/x $CS lesson L174 && gh issue view 1" "$CS"
+refused_file "a lesson read behind BASH_ENV, which bash runs first" "BASH_ENV=./x.sh $CS lesson L174 && gh issue view 1" "$CS"
+refused_file "a lesson read after BASH_ENV is exported" "export BASH_ENV=./x.sh; $CS lesson L174 && gh issue view 1" "$CS"
+refused_file "a lesson read redirected into a file" "$CS lesson L174 > out.txt && gh issue view 1" "$CS"
+refused_file "the development clone's copy" "./claude-sync lesson L174 && gh issue view 1" "./claude-sync"
+refused_file "a claude-sync elsewhere" "~/elsewhere/claude-sync lesson L174 && gh issue view 1" "~/elsewhere/claude-sync"
+refused_file "a lesson read beside an undeclared script" "$CS lesson L174 && ./build.sh && git push" "./build.sh"
+refused "a lesson read run by sh" "sh $CS lesson L174 && gh issue view 1" "sh"
+refused "a lesson read piped into a shell" "$CS lesson L174 | bash && gh issue view 1" "bash"
+# The read only calls are declared in one place, and another is a decision for Dan, never a line to
+# slip in: this fails until the test is changed with it.
+read_only_block="$(sed -n '/^READ_ONLY_CALLS=(/,/^)/p' "$HOOK")"
+read_only="$(grep -c '^  "' <<< "$read_only_block")"
+check_eq "#1669 one call is declared read only, claude-sync lesson" "1" "$read_only"
+check "#1669 it is the live clone's lesson" '  "~/claude-config-sync/claude-sync lesson"' "$read_only_block"
+
+# 4f. A word inside a quoted title or body is no git command (claude-config#1699). A builder's
+# `gh pr create` titled with the word git was refused on 2026-10-24; replayed through every Bash
+# hook here it passes them all, and the refusal is Claude Code's own check on an agent isolated in a
+# worktree. These hold this guard to never becoming a second source of it.
+allowed "a pull request titled with the word git" "gh pr create --title \"Record git worktree state in the hand back\" --body-file /srv/x/pr-body.md"
+allowed "a pull request titled with bash and git" "gh pr create --title \"Run bash checks on git hooks\" --body \"Closes #5\""
+allowed "a pull request body naming a script and a push" "gh pr create --title \"Fix git\" --body \"Run ./build.sh, then bash -c and git push\""
+allowed "a pull request body in a heredoc naming a script" "$(printf "gh pr create --title \"Stop git titles refusing\" --body \"\$(cat <<'EOF'\nCloses #1699\n./build.sh first, then git push\nbash x.sh\nEOF\n)\"")"
+allowed "an issue comment naming eval and git" "gh issue comment 1699 --body 'eval and git and bash -c in a sentence'"
 
 # 5. Every refusal is recorded (claude-config#1492): one tab separated line of time, Mac, wrapper,
 # reason category and outcome, so how often the refusal fires, and on what, can be read after a week

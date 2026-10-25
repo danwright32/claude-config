@@ -100,5 +100,5 @@ payload/skills/plan-council/post-discussion.sh: 0
 payload/skills/production-ready/healthcheck.sh: 0
 tests/audit-changed-sections.sh: 0
 tests/test-audit-changed-sections.sh: 0
-tests/test-claude-sync.sh: 5
+tests/test-claude-sync.sh: 1
 tools/test-measure-sync-gaps.sh: 2

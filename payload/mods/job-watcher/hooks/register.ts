@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
-import type { Jobs, JobsEntry } from '../types/index.d.ts'
-import { assess, harnessFinished, holdRefusal, inFlight, isErrorLine, isPollLoop, leftoverLine, listedStatuses, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, startedTask, type InFlight, type Outcome, type Verdict } from './jobs.ts'
+import type { AgentSeen, Jobs, JobsEntry, JobWatch, WatchedJob, WatchedJobKept, WatcherNotice } from '../types/index.d.ts'
+import { assess, harnessFinished, holdRefusal, holdsOutputBack, inFlight, isErrorLine, isPollLoop, leftoverLine, listedStatuses, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, startedTask, type InFlight, type Outcome, type Verdict } from './jobs.ts'
 
 // Background job watcher (claude-config#611). Every background job is recorded with its process
 // group, traced through the output file it writes (never by matching its command text, L1011), into
@@ -17,13 +17,13 @@ import { assess, harnessFinished, holdRefusal, inFlight, isErrorLine, isPollLoop
 // a kept job in amber in the band above the prompt by its name, its state and its run time, "dev
 // server running 2h 14m" (#784), the run time from startedAt. quiet: kept as quiet by design, so it
 // is never reported for going silent.
-type Kept = { name: string; reason: string; quiet: boolean; at: number }
+type Kept = WatchedJobKept
 // owner: the background agent whose loop started the job, by its id and its task's description; none
 // for this session's own conversation (#784). The process runs every loop's tool calls through one
 // watcher, so without it an agent's job read as this session's, on Dan's bar and in Claude's
 // reminders alike.
 type Owner = { id: string; name: string }
-type Job = { id: string; command: string; outputPath: string; pgid: number | null; startedAt: number; kept?: Kept; owner?: Owner }
+type Job = WatchedJob
 // What the watcher last measured of a job (#784). waiting: a poll loop gone quiet or repeating a line
 // that is no error, which waits on something outside (a queued CI run), never stuck. stalled: no
 // new output past ten minutes, or the same output over and over, from anything else.
@@ -31,26 +31,15 @@ type JobState = 'running' | 'waiting' | 'stalled'
 // told: Claude was told about the stuck spell the job is in. A spell is over only once the job has
 // written healthy output for REARM_MS (L160), from healthySince: growth alone never ends one, since
 // a repeating loop grows as it repeats, and ending a spell on it said the same thing every minute
-// (#706).
-type Watch = {
-  lastSize: number
-  lastGrowth: number
-  state: JobState
-  told: boolean
-  healthySince?: number
-  toldUnreadable: boolean
-  toldUntraced: boolean
-  toldLookFailed: boolean
-  /**
-   * #1517: what Claude Code last said of the job in the in flight list sent with a subagent's stop:
-   * its status there, or 'unlisted' when the stopping agent's own list left out a job that agent
-   * started; or, for any job (#1579), the status its task notification gave it, whichever came
-   * last. Undefined until a readable list or a notification with a status says anything of it.
-   */
-  harness?: string
-  /** What the last measure of its processes found while it had not ended: its group runs, or unknown. */
-  measured?: 'runs' | 'unknown'
-}
+// (#706). lastSize is null until the first look reads it.
+// harness (#1517): what Claude Code last said of the job in the in flight list sent with a
+// subagent's stop: its status there, or 'unlisted' when the stopping agent's own list left out a job
+// that agent started; or, for any job (#1579), the status its task notification gave it, whichever
+// came last. Undefined until a readable list or a notification with a status says anything of it.
+// measured: what the last measure of its processes found while it had not ended. stalledBy (#1583):
+// how it stalled, while it is stalled, for the status bar to say what was measured.
+// #1703: each is a session fact, kept in $.state with the job (see the facts below).
+type Watch = JobWatch & { state: JobState }
 
 const MOD = 'job-watcher'
 const TICK_MS = 60_000
@@ -77,61 +66,257 @@ const KEEP_SPEC = {
     required: ['task_id', 'name', 'reason'],
   },
 }
-// Everything below belongs to one session, cleared at each session start (lessons review of #634).
-const jobs = new Map<string, Job>()
-const watch = new Map<string, Watch>()
-// What Claude should be told, each addressed to the loop it concerns (#784): a background agent's
-// id, or undefined for this session's own conversation. One addressed to an agent that has ended
-// goes to this session instead, so nothing is said to a loop that will never read it.
-// wake: one this session must not wait for its next tool call to read (#1234), a background agent
-// gone quiet: it starts a turn of its own when this conversation is idle.
-type Notice = { to: string | undefined; text: string; wake?: true }
-const notices: Notice[] = []
-const say = (to: string | undefined, text: string, wake?: true) => notices.push({ to, text, ...(wake ? { wake } : {}) })
-// #1234: whether this conversation's own loop has a turn running, from the engine's turn.start and
-// turn.complete of the main loop. Unknown until a session start says idle, and read as not idle, so
-// a session the watcher has not seen start is told on its next tool call as before, never woken.
-let mainTurn: 'idle' | 'busy' | 'unknown' = 'unknown'
-// Counts session starts, so work that spans one (a wake in flight) can tell its session has ended.
-let sessionNo = 0
-let toldUnpublished = false
-let toldClockFailed = false
-// The agents whose loops have not ended, as the last look at the agent list found them, plus any seen
-// making a call since. An agent's job is reminded and reported to it only while it is here.
-const liveAgents = new Set<string>()
+// The watcher's session facts (#1695, #1703) are never in this module: they are in $.state, which
+// the engine holds for the session across a hot reload of the mod. A reload runs this code again in
+// a fresh module and fires session.start again (once per process, then once per fresh load, never at
+// /clear), and a tool call already under way when it lands finishes in the OLD module. While the job
+// list lived in a module Map, that old hook recorded a job and named it in the reminder while the
+// keep tool, answered by the new module, refused it as unknown ("None is running") and the status
+// bar went on counting it: measured in three sessions on this Mac (2026-10-18, 2026-10-20,
+// 2026-10-24), each with "job-watcher: reloaded" between the two. The same reload dropped every fact
+// below while they lived in the module (#1703): an agent's stop was no longer held for work it had
+// started, a refused stop counted from nought again, notices queued for Claude were lost, a quiet
+// agent was dated from the reload, a busy turn read as idle, and a job writing all along was said to
+// have had no new output since its start. Every reader reads the stored fact, and every writer
+// changes it by version (changeFact), so two copies writing at once lose neither change (assume it
+// runs twice). Each address is written out whole, as `claude plugin validate` lists them.
+// One stored fact as the helpers below read and write it: its name, and its read and its versioned
+// write, each spelled out whole at its own call to $.state (the engine reads each address from the
+// call site, and `claude plugin validate` lists them).
+type Fact<S> = {
+  key: string
+  get: () => Promise<{ value: unknown; version: number }>
+  set: (value: S, ifVersion: number) => Promise<{ isSet: boolean; version: number }>
+}
+const jobsFact = ($: EngineInterface): Fact<WatchedJob[]> => ({
+  key: 'jobs',
+  get: () => $.state.get({ plugin: 'job-watcher', key: 'jobs' }),
+  set: (value, ifVersion) => $.state.set({ plugin: 'job-watcher', key: 'jobs' }, value, { ifVersion }),
+})
+const startedByFact = ($: EngineInterface): Fact<Record<string, string>> => ({
+  key: 'startedBy',
+  get: () => $.state.get({ plugin: 'job-watcher', key: 'startedBy' }),
+  set: (value, ifVersion) => $.state.set({ plugin: 'job-watcher', key: 'startedBy' }, value, { ifVersion }),
+})
+const stopRefusalsFact = ($: EngineInterface): Fact<Record<string, number>> => ({
+  key: 'stopRefusals',
+  get: () => $.state.get({ plugin: 'job-watcher', key: 'stopRefusals' }),
+  set: (value, ifVersion) => $.state.set({ plugin: 'job-watcher', key: 'stopRefusals' }, value, { ifVersion }),
+})
+const noticesFact = ($: EngineInterface): Fact<WatcherNotice[]> => ({
+  key: 'notices',
+  get: () => $.state.get({ plugin: 'job-watcher', key: 'notices' }),
+  set: (value, ifVersion) => $.state.set({ plugin: 'job-watcher', key: 'notices' }, value, { ifVersion }),
+})
+const agentsFact = ($: EngineInterface): Fact<Record<string, AgentSeen>> => ({
+  key: 'agents',
+  get: () => $.state.get({ plugin: 'job-watcher', key: 'agents' }),
+  set: (value, ifVersion) => $.state.set({ plugin: 'job-watcher', key: 'agents' }, value, { ifVersion }),
+})
+const mainTurnFact = ($: EngineInterface): Fact<'idle' | 'busy'> => ({
+  key: 'mainTurn',
+  get: () => $.state.get({ plugin: 'job-watcher', key: 'mainTurn' }),
+  set: (value, ifVersion) => $.state.set({ plugin: 'job-watcher', key: 'mainTurn' }, value, { ifVersion }),
+})
+const watchFact = ($: EngineInterface): Fact<Record<string, JobWatch>> => ({
+  key: 'watch',
+  get: () => $.state.get({ plugin: 'job-watcher', key: 'watch' }),
+  set: (value, ifVersion) => $.state.set({ plugin: 'job-watcher', key: 'watch' }, value, { ifVersion }),
+})
+// change gets its own copy of the stored value (parse makes one) and answers the value to write, or
+// undefined to write nothing; a value that would not change what is stored is not written either.
+// Answers the value as read and as written by the attempt that counted, so a caller reads what it
+// took from the stored value itself, never from a variable its callback assigned (lessons review of
+// PR 1705), since the callback runs again on every retry.
+const changeFact = async <S, T>(f: Fact<S>, parse: (value: unknown) => T, change: (value: T) => T | undefined, write: (value: T) => S): Promise<{ before: T; after: T }> => {
+  for (let i = 0; i < 5; i++) {
+    const held = await f.get()
+    const before = parse(held.value)
+    const after = change(parse(held.value))
+    if (after === undefined) return { before, after: before }
+    const value = write(after)
+    if (JSON.stringify(value) === JSON.stringify(held.value)) return { before, after }
+    if ((await f.set(value, held.version)).isSet) return { before, after }
+  }
+  throw new Error(`its ${f.key} kept changing underneath five writes in a row`)
+}
+// Never written is the one empty value. Anything else of the wrong shape is unreadable and throws, so
+// no reader takes it for nothing recorded (L10, lessons review of PR 1705): only this mod writes it,
+// so such a value is a fault to say, never data to skip. Each answers a copy of its own.
+const recordOf =
+  <T>(what: string, isEntry: (x: unknown) => boolean) =>
+  (value: unknown): Record<string, T> => {
+    if (value === undefined) return {}
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`the stored ${what} is not a record (${Array.isArray(value) ? 'a list' : typeof value})`)
+    const bad = Object.entries(value).find(([, v]) => !isEntry(v))
+    if (bad) throw new Error(`the stored ${what} for ${bad[0]} is not one`)
+    return structuredClone(value) as Record<string, T>
+  }
+const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
+const startersOf = recordOf<string>('agent that started each background task', x => typeof x === 'string')
+const refusalsOf = recordOf<number>('count of refused stops', x => Number.isInteger(x) && (x as number) >= 0)
+const seenOf = recordOf<AgentSeen>('last sign of life of an agent', x => isRecord(x) && typeof x.at === 'number' && typeof x.inFlight === 'number' && typeof x.told === 'boolean')
+const watchesOf = recordOf<JobWatch>(
+  'measure of a job',
+  x => isRecord(x) && (x.lastSize === null || typeof x.lastSize === 'number') && typeof x.lastGrowth === 'number' && typeof x.state === 'string' && typeof x.told === 'boolean',
+)
+const noticesOf = (value: unknown): WatcherNotice[] => {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new Error(`the stored notices are not a list (${typeof value})`)
+  const bad = value.findIndex(n => !isRecord(n) || typeof n.text !== 'string' || (n.to !== undefined && typeof n.to !== 'string'))
+  if (bad >= 0) throw new Error(`entry ${bad + 1} of the stored notices is not a notice`)
+  return structuredClone(value) as WatcherNotice[]
+}
+
+// The one list of jobs (#1695): every reader (the reminder, the keep tool, the status bar's list, the
+// minute's look, a subagent's stop) reads it here.
+type JobList = Map<string, Job>
+// What Claude is told when the list cannot be read: never as no job running (L10), and once until a
+// read succeeds again, rather than on every tool result meanwhile.
+let toldListUnreadable = false
+const listOf = (value: unknown): JobList => {
+  if (value === undefined) return new Map()
+  if (!Array.isArray(value)) throw new Error(`the stored list is not a list (${typeof value})`)
+  const bad = value.findIndex(j => !isJob(j))
+  if (bad >= 0) throw new Error(`entry ${bad + 1} of the stored list is not a job record`)
+  return new Map((value as Job[]).map(j => [j.id, j]))
+}
+const readJobs = async ($: EngineInterface): Promise<JobList> => {
+  const held = await $.state.get({ plugin: 'job-watcher', key: 'jobs' })
+  const list = listOf(held.value)
+  // Only a read that succeeded ends an unreadable spell: a stored value listOf refuses is a read
+  // that failed, so the notice stays said once (lessons review of PR 1705).
+  toldListUnreadable = false
+  return list
+}
+// change edits the list in place and says whether it changed anything; nothing is written when not.
+// The registry copy (for the leftover judge of a later session) is written after the list itself.
+const changeJobs = async ($: EngineInterface, change: (list: JobList) => boolean): Promise<JobList> => {
+  const { before, after } = await changeFact(jobsFact($), listOf, list => (change(list) ? list : undefined), list => [...list.values()])
+  if (after !== before) await publishSafely($, after)
+  return after
+}
+const unreadableList = (err: unknown) =>
+  `The background job watcher could not read its list of background jobs: ${message(err)}. Until it can, no job can be kept, and jobs not kept are not named here; stop any no longer needed with TaskStop.`
+
+// What Claude should be told (#784), each addressed to the loop it concerns: a background agent's id,
+// or none for this session's own conversation. One addressed to an agent that has ended goes to this
+// session instead, so nothing is said to a loop that will never read it. wake (#1234): one this
+// session must not wait for its next tool call to read, a background agent gone quiet: it starts a
+// turn of its own when this conversation is idle. Queued in $.state (#1703), so a reload between the
+// look that found something and the next tool result never loses it. A notice that cannot be queued
+// there waits in this module instead, carried on this module's next result, and the fault is logged.
+const unqueued: WatcherNotice[] = []
+const say = async ($: EngineInterface, to: string | undefined, text: string, wake?: true) => {
+  const n: WatcherNotice = { ...(to !== undefined ? { to } : {}), text, ...(wake ? { wake } : {}) }
+  try {
+    await changeFact(noticesFact($), noticesOf, list => [...list, n], list => list)
+  } catch (err) {
+    unqueued.push(n)
+    $.ui.log(`job-watcher: could not queue a notice for Claude in the session's state, so a reload before it is read would lose it: ${message(err)}`, { to: 'debug' })
+  }
+}
+// The agents whose loops have not ended: those the last look at the agent list found, plus any seen
+// making a call since, which is exactly the agents on the stored record (lookAtAgents keeps only
+// those, and stamp adds each caller). One whose record cannot be read is said as none, so every job
+// and notice goes to this conversation, which reads them all, rather than to a loop that may be gone.
+const liveAgentsRead = async ($: EngineInterface): Promise<ReadonlySet<string> | undefined> => {
+  try {
+    return new Set(Object.keys(seenOf((await agentsFact($).get()).value)))
+  } catch (err) {
+    $.ui.log(`job-watcher: could not read which background agents are live, so their jobs and notices go to this conversation: ${message(err)}`, { to: 'debug' })
+    return undefined
+  }
+}
+const liveAgents = async ($: EngineInterface): Promise<ReadonlySet<string>> => (await liveAgentsRead($)) ?? new Set()
 const ENDED: ReadonlySet<string> = new Set(['completed', 'failed', 'killed'])
 // The loop a job's notices and reminders go to: its agent while that runs, else this session.
-const loopOf = (owner: Owner | undefined): string | undefined => (owner && liveAgents.has(owner.id) ? owner.id : undefined)
-const take = (loop: string | undefined): string[] => {
+const loopOf = (owner: Owner | undefined, live: ReadonlySet<string>): string | undefined => (owner && live.has(owner.id) ? owner.id : undefined)
+const take = async ($: EngineInterface, loop: string | undefined): Promise<string[]> => {
+  const live = await liveAgents($)
+  const mine = (n: WatcherNotice) => (n.to !== undefined && live.has(n.to) ? n.to : undefined) === loop
   const out: string[] = []
-  for (let i = 0; i < notices.length; ) {
-    const n = notices[i] as Notice
-    if ((n.to !== undefined && liveAgents.has(n.to) ? n.to : undefined) === loop) {
+  try {
+    const { before } = await changeFact(noticesFact($), noticesOf, list => (list.some(mine) ? list.filter(n => !mine(n)) : undefined), list => list)
+    out.push(...before.filter(mine).map(n => n.text))
+  } catch (err) {
+    $.ui.log(`job-watcher: could not read the notices queued for Claude: ${message(err)}`, { to: 'debug' })
+  }
+  for (let i = 0; i < unqueued.length; ) {
+    const n = unqueued[i] as WatcherNotice
+    if (mine(n)) {
       out.push(n.text)
-      notices.splice(i, 1)
+      unqueued.splice(i, 1)
     } else i++
   }
   return out
 }
+// Everything below belongs to one module and one load of it: flags that hold a notice to once, which
+// a reload at most says once more; the timers, which the engine cancels with the old module and each
+// session start arms again; and the bookkeeping of calls in flight, which only the module awaiting
+// them can finish. None is a fact about the session.
+// #1234: whether this conversation's own loop has a turn running, from the engine's turn.start and
+// turn.complete of the main loop, in $.state (#1703): a reload in the middle of a turn read it as
+// idle, and a quiet agent then woke a conversation that was busy. Unknown until the first session
+// start says idle, and read as not idle, so a session the watcher has not seen start is told on its
+// next tool call as before, never woken; one that cannot be read is unknown too. This module holds
+// the latest turn event it saw itself, which decides while it holds one, so a turn's end that cannot
+// be recorded (logged) still leaves this module idle and able to wake the conversation (push review
+// of PR for #1703); a fresh module after a reload reads $.state alone.
+let turnHere: 'idle' | 'busy' | undefined
+const turnOf = async ($: EngineInterface): Promise<'idle' | 'busy' | 'unknown'> => {
+  if (turnHere !== undefined) return turnHere
+  try {
+    const v = (await mainTurnFact($).get()).value
+    return v === 'idle' || v === 'busy' ? v : 'unknown'
+  } catch (err) {
+    $.ui.log(`job-watcher: could not read whether this conversation has a turn running: ${message(err)}`, { to: 'debug' })
+    return 'unknown'
+  }
+}
+const setTurn = async ($: EngineInterface, turn: 'idle' | 'busy') => {
+  turnHere = turn
+  try {
+    // The latest turn event is the truth, so it is written whatever stood before, and written again
+    // when another write beat it (push review of PR for #1703), never left read as the turn before.
+    await changeFact<'idle' | 'busy', 'idle' | 'busy' | undefined>(mainTurnFact($), () => undefined, () => turn, t => t ?? turn)
+  } catch (err) {
+    $.ui.log(`job-watcher: could not record that this conversation's turn is ${turn === 'busy' ? 'running' : 'over'}: ${message(err)}`, { to: 'debug' })
+  }
+}
+let toldUnpublished = false
+let toldClockFailed = false
 // #759: each background agent's last sign of life, from its own tool calls (the transcript a loop
-// writes moves exactly when one starts or finishes). quiet past QUIET_MS while listed as running
-// is told to this session once, until the agent moves again. 20 minutes is longer than any single
-// test run here (the issue's window).
-type Seen = { at: number; lastTool?: string; startedAt?: number; inFlight: number; told: boolean }
-const agentSeen = new Map<string, Seen>()
+// writes moves exactly when one starts or finishes), in $.state (#1703). quiet past QUIET_MS while
+// listed as running is told to this session once, until the agent moves again. 20 minutes is longer
+// than any single test run here (the issue's window).
+type Seen = AgentSeen
 const QUIET_MS = 20 * 60_000
 let toldAgentsUnlisted = false
+let toldAgentsUnrecorded = false
 // #1326: which agent started each piece of background work, by the task id Claude Code lists it
 // under with a stop: a Bash job, a Monitor, an agent run in the background. The list sent with a
 // stop is the whole session's work (measured on 2.1.302, 2026-10-19), so whose work is whose comes
-// from here. Kept for the session; the list says what is still in flight, so nothing is dropped here.
-const startedBy = new Map<string, string>()
-// How many times running each agent's stop has been refused. Past STOP_REFUSALS_MAX it is let go and
-// this session is told what it left, so a refusal never traps an agent; a stop holding nothing ends
-// the run, so an agent resumed later is held again.
-const stopRefusals = new Map<string, number>()
+// from here, in $.state (#1703). Kept for the session; the list says what is still in flight, so
+// nothing is dropped here.
+// This module holds each it recorded too, and a stop reads both, so a starter that cannot be written
+// (logged) still holds that agent's stop in this module (push review of PR for #1703); only a fresh
+// module after a reload reads $.state alone.
+const startedHere = new Map<string, string>()
+const recordStarter = async ($: EngineInterface, task: string, agentId: string) => {
+  startedHere.set(task, agentId)
+  try {
+    await changeFact(startedByFact($), startersOf, starters => ({ ...starters, [task]: agentId }), starters => starters)
+  } catch (err) {
+    $.ui.log(`job-watcher: could not keep that agent ${agentId} started ${task}, so a reload of the mod would not hold its stop for it: ${message(err)}`, { to: 'debug' })
+  }
+}
+// How many times running each agent's stop has been refused, in $.state (#1703). Past
+// STOP_REFUSALS_MAX it is let go and this session is told what it left, so a refusal never traps an
+// agent; a stop holding nothing ends the run, so an agent resumed later is held again.
 const STOP_REFUSALS_MAX = 2
 let toldInFlightUnreadable = false
+let toldStartersUnreadable = false
 // A look still running when the next minute comes is not overlapped by a second (lessons review).
 // It describes the look in flight, not the session, so a session start never resets it: an earlier
 // session's look may still be running then, and a second would overlap it (#694). A look is given up
@@ -153,18 +338,53 @@ const stopping = new Set<string>()
 // and acted on by the next look, so it is neither lost nor said twice.
 const lateStops = new Map<string, { why: string | undefined; said: string }>()
 // The calls whose result already carried the reminder about unkept jobs, by tool_use_id, so its row
-// is not reminded twice (#706); taken out as each row is appended, and capped meanwhile.
+// is not reminded twice (#706); taken out as each row is appended, and capped meanwhile. A reload
+// between a call and its row at most reminds that row once more.
 const reminded = new Set<string>()
 const REMINDED_MAX = 200
 // One timer, started again by each session start so it looks with that session's engine interface.
 let tick: { cancel: () => void } | undefined
+// What the watcher last measured of each job (#1703), kept in $.state by job id. This map is only a
+// cache of it: filled from $.state at each session start (a reload's fresh module starts empty), and
+// each change written back by version once the hook or look that made it is done with the job
+// (saveWatch). Before, a reload lost when a job last wrote, so a job writing all along was said to
+// have had no new output since its start, and lost what Claude Code had said of a job and whether a
+// quiet spell had been said.
+const watch = new Map<string, Watch>()
 const watchOf = (job: Job): Watch => {
   let w = watch.get(job.id)
   if (!w) {
-    w = { lastSize: NaN, lastGrowth: job.startedAt, state: 'running', told: false, toldUnreadable: false, toldUntraced: false, toldLookFailed: false }
+    w = { lastSize: null, lastGrowth: job.startedAt, state: 'running', told: false, toldUnreadable: false, toldUntraced: false, toldLookFailed: false }
     watch.set(job.id, w)
   }
   return w
+}
+const loadWatch = async ($: EngineInterface) => {
+  watch.clear()
+  try {
+    for (const [id, w] of Object.entries(watchesOf((await watchFact($).get()).value))) watch.set(id, w as Watch)
+  } catch (err) {
+    $.ui.log(`job-watcher: could not read what it last measured of each job, so each is measured afresh: ${message(err)}`, { to: 'debug' })
+  }
+}
+// Written only for a job still on the list, so a job forgotten meanwhile is never written back.
+const saveWatch = async ($: EngineInterface, id: string) => {
+  const w = watch.get(id)
+  if (!w) return
+  try {
+    if (!(await readJobs($)).has(id)) return
+    await changeFact(watchFact($), watchesOf, all => ({ ...all, [id]: structuredClone(w) }), all => all)
+  } catch (err) {
+    $.ui.log(`job-watcher: could not record what it measured of background job ${id}: ${message(err)}`, { to: 'debug' })
+  }
+}
+const forgetWatch = async ($: EngineInterface, id: string) => {
+  watch.delete(id)
+  try {
+    await changeFact(watchFact($), watchesOf, all => (id in all ? Object.fromEntries(Object.entries(all).filter(([k]) => k !== id)) : undefined), all => all)
+  } catch (err) {
+    $.ui.log(`job-watcher: could not forget what it measured of background job ${id}: ${message(err)}`, { to: 'debug' })
+  }
 }
 
 const run = async ($: EngineInterface, argv: string[]): Promise<string | undefined> => {
@@ -176,17 +396,18 @@ const run = async ($: EngineInterface, argv: string[]): Promise<string | undefin
   }
 }
 
-const publish = ($: EngineInterface) => $.sessions.setExtra({ key: 'jobs', value: [...jobs.values()] })
+// The registry's copy of the list, which a later session's leftover judge reads once this one closes.
+const publish = ($: EngineInterface, list: JobList) => $.sessions.setExtra({ key: 'jobs', value: [...list.values()] })
 
 // A registry write that fails never breaks what it rides on; Claude is told once, until one lands.
-const publishSafely = async ($: EngineInterface) => {
+const publishSafely = async ($: EngineInterface, list: JobList) => {
   try {
-    await publish($)
+    await publish($, list)
     toldUnpublished = false
   } catch (err) {
     if (!toldUnpublished) {
       toldUnpublished = true
-      say(undefined, `The background job watcher could not record this session's jobs: ${message(err)}. The status bar and later sessions will not see them.`)
+      await say($, undefined, `The background job watcher could not record this session's jobs: ${message(err)}. The status bar and later sessions will not see them.`)
     }
   }
 }
@@ -263,10 +484,9 @@ const stop = async ($: EngineInterface, id: string): Promise<string | undefined>
 }
 
 const forget = async ($: EngineInterface, id: string) => {
-  jobs.delete(id)
-  watch.delete(id)
   lateStops.delete(id)
-  await publishSafely($)
+  await changeJobs($, list => list.delete(id))
+  await forgetWatch($, id)
 }
 
 // One look at every job, each in its own failure boundary (L73): a job whose look throws is said to
@@ -290,7 +510,7 @@ const lookSafely = async ($: EngineInterface) => {
     if ((await Promise.race([pass, givenUp])) === 'finished') toldLookGivenUp = false
     else if (!toldLookGivenUp) {
       toldLookGivenUp = true
-      say(undefined, `The background job watcher's look at its jobs did not finish within ${LOOK_MAX_MS / 60_000} minutes and was given up; the next look starts at the next minute. A job may be stuck without a word from the watcher meanwhile.`)
+      await say($, undefined, `The background job watcher's look at its jobs did not finish within ${LOOK_MAX_MS / 60_000} minutes and was given up; the next look starts at the next minute. A job may be stuck without a word from the watcher meanwhile.`)
     }
   } finally {
     deadline?.cancel()
@@ -308,7 +528,8 @@ const mins = (ms: number) => Math.round(ms / 60_000)
 // #759: each running agent listed by Claude Code is judged by its own last sign of life, never by
 // being listed (L106: a list entry says only that it exists). One quiet past QUIET_MS is told to this
 // session once, naming it, how long, and the last tool call it started and whether that returned.
-// An agent first seen here is dated from now, so a reload never accuses one at once.
+// An agent first seen here is dated from now. Its last sign of life is in $.state (#1703), so a
+// reload neither dates it afresh nor forgets that its quiet spell was said.
 const lookAtAgents = async ($: EngineInterface, now: number, live: Live) => {
   let agents: Listed[]
   try {
@@ -318,7 +539,7 @@ const lookAtAgents = async ($: EngineInterface, now: number, live: Live) => {
     // Never read as no agents: the live set stays as it was, and Claude is told once.
     if (live() && !toldAgentsUnlisted) {
       toldAgentsUnlisted = true
-      say(undefined, `The background job watcher could not list the background agents: ${message(err)}. One that has stopped moving will not be flagged, and an agent's jobs may be named to the wrong conversation, until it can.`)
+      await say($, undefined, `The background job watcher could not list the background agents: ${message(err)}. One that has stopped moving will not be flagged, and an agent's jobs may be named to the wrong conversation, until it can.`)
     }
     return
   }
@@ -328,33 +549,48 @@ const lookAtAgents = async ($: EngineInterface, now: number, live: Live) => {
   // review of PR 794). One the list names as ended is gone, whatever it did last.
   const gone = new Set(agents.filter(a => ENDED.has(a.status)).map(a => a.id))
   const listed = new Set(agents.map(a => a.id))
-  liveAgents.clear()
-  for (const a of agents) if (!gone.has(a.id)) liveAgents.add(a.id)
-  for (const [id, s] of agentSeen) if (!listed.has(id) && now - s.at < QUIET_MS) liveAgents.add(id)
-  for (const id of [...agentSeen.keys()]) if (!liveAgents.has(id)) agentSeen.delete(id)
+  let seen: { before: Record<string, Seen>; after: Record<string, Seen> }
+  try {
+    seen = await changeFact(agentsFact($),
+      seenOf,
+      all => {
+        const keep = new Set(agents.filter(a => !gone.has(a.id)).map(a => a.id))
+        for (const [id, s] of Object.entries(all)) if (!listed.has(id) && now - s.at < QUIET_MS) keep.add(id)
+        const next: Record<string, Seen> = {}
+        for (const [id, s] of Object.entries(all)) if (keep.has(id)) next[id] = s
+        for (const a of agents) {
+          if (gone.has(a.id)) continue
+          const s = (next[a.id] ??= { at: now, inFlight: 0, told: false })
+          // An agent not running (waiting on a person, idle) is not quiet: it is dated from now, so
+          // its return to running is never judged from before it stopped (lessons review of PR 794).
+          if (a.status !== 'running') {
+            s.at = now
+            s.told = false
+          } else if (now - s.at >= QUIET_MS) s.told = true
+        }
+        return next
+      },
+      all => all,
+    )
+    toldAgentsUnrecorded = false
+  } catch (err) {
+    if (live() && !toldAgentsUnrecorded) {
+      toldAgentsUnrecorded = true
+      await say($, undefined, `The background job watcher could not read or write its record of the background agents: ${message(err)}. One that has stopped moving will not be flagged, and an agent's jobs may be named to this conversation instead of to it, until it can.`)
+    }
+    return
+  }
+  // Said once a spell: told by this look, and not by an earlier one.
   for (const a of agents) {
-    if (gone.has(a.id)) continue
-    let s = agentSeen.get(a.id)
-    if (!s) {
-      s = { at: now, inFlight: 0, told: false }
-      agentSeen.set(a.id, s)
-    }
-    // An agent not running (waiting on a person, idle) is not quiet: it is dated from now, so its
-    // return to running is never judged from before it stopped (lessons review of PR 794).
-    if (a.status !== 'running') {
-      s.at = now
-      s.told = false
-      continue
-    }
+    const s = seen.after[a.id]
+    if (!s || a.status !== 'running' || !s.told || seen.before[a.id]?.told) continue
     const quietMs = now - s.at
-    if (quietMs < QUIET_MS || s.told) continue
-    s.told = true
     const last = s.lastTool === undefined
       ? 'none of its tool calls has been seen since the watcher started'
       : s.inFlight > 0
         ? `the last one it started, ${s.lastTool}, started ${mins(now - (s.startedAt ?? s.at))} minutes ago and has not finished`
         : `the last one it started, ${s.lastTool}, finished ${mins(quietMs)} minutes ago`
-    say(undefined, `Background agent "${nameOf(a)}" (${a.id}) has been quiet for ${mins(quietMs)} minutes: no tool call of its has started or finished in that time, and ${last}. It is listed as running but may be hung: read its transcript, or stop it with TaskStop if it is.`, true)
+    await say($, undefined, `Background agent "${nameOf(a)}" (${a.id}) has been quiet for ${mins(quietMs)} minutes: no tool call of its has started or finished in that time, and ${last}. It is listed as running but may be hung: read its transcript, or stop it with TaskStop if it is.`, true)
   }
 }
 
@@ -366,13 +602,20 @@ const lookAtAgents = async ($: EngineInterface, now: number, live: Live) => {
 // and is said once; it is not tried again each minute. Sleep mode (#841) keeps the overnight
 // sessions working, so asleep the conversation is still woken (a wake reaches Claude, never Dan:
 // questions are refused and sounds stand down while asleep), and each is noted for the morning report.
+// A reload while a wake is in flight is the same session going on (#1703): the copy that took the
+// notices off the queue submits them, or puts them back on it for the next tool call to carry.
 const wakeIfIdle = async ($: EngineInterface) => {
-  if (mainTurn !== 'idle') return
-  const due = notices.filter(n => n.wake && n.to === undefined)
-  if (!due.length) return
-  const mine = sessionNo
-  // Taken before the first wait, so a second call meanwhile finds nothing of these to send.
-  for (const n of due) notices.splice(notices.indexOf(n), 1)
+  if ((await turnOf($)) !== 'idle') return
+  const due = (n: WatcherNotice) => n.wake === true && n.to === undefined
+  let taken: WatcherNotice[]
+  try {
+    // Taken before the first wait, so a second call meanwhile finds nothing of these to send.
+    taken = (await changeFact(noticesFact($), noticesOf, list => (list.some(due) ? list.filter(n => !due(n)) : undefined), list => list)).before.filter(due)
+  } catch (err) {
+    $.ui.log(`job-watcher: could not read the notices queued for Claude, so nobody was woken: ${message(err)}`, { to: 'debug' })
+    return
+  }
+  if (!taken.length) return
   let asleep = false
   try {
     asleep = (await ($ as unknown as { scopeModes: SleepModes }).scopeModes.isAsleep()) === true
@@ -380,7 +623,7 @@ const wakeIfIdle = async ($: EngineInterface) => {
     // A sleep record that cannot be read is awake (scope modes' own rule): woken, nothing noted.
   }
   if (asleep) {
-    for (const n of due) {
+    for (const n of taken) {
       try {
         await ($ as unknown as { scopeModes: SleepModes }).scopeModes.sleepNote({ kind: 'finding', text: n.text })
       } catch (err) {
@@ -388,30 +631,19 @@ const wakeIfIdle = async ($: EngineInterface) => {
       }
     }
   }
-  // A new session started while the sleep check or the notes were awaited (lessons review of
-  // #1234): the notice is about the old session's agents, so it is never submitted to the new one.
-  if (sessionNo !== mine) {
-    $.ui.log('The background job watcher dropped a wake about a quiet background agent: the session it was for has ended.', { to: 'debug' })
-    return
-  }
   try {
-    const r = await $.prompt.submit({ text: due.map(n => n.text).join('\n\n') })
+    const r = await $.prompt.submit({ text: taken.map(n => n.text).join('\n\n') })
     if (r.drop !== undefined) throw new Error(r.drop)
   } catch (err) {
-    // A new session started while the wake was in flight (lessons review of #1234): its notice was
-    // about the old session's agents, so it is dropped, never handed to the new one as its own.
-    if (sessionNo !== mine) {
-      $.ui.log(`The background job watcher could not wake a session about a quiet background agent (${message(err)}), and the session it was for has ended, so the notice is dropped.`, { to: 'debug' })
-      return
-    }
-    for (const n of due) notices.push({ to: undefined, text: n.text })
+    for (const n of taken) await say($, undefined, n.text)
     $.ui.log(`The background job watcher could not wake this session about a quiet background agent (${message(err)}). Claude is told on its next tool call instead.`)
   }
 }
 type SleepModes = { isAsleep: () => Promise<boolean>; sleepNote: (note: { kind: string } & Record<string, unknown>) => Promise<{ isNoted: boolean }> }
 
 // Each tool call of a background agent's loop is a sign it is alive (#759): stamped as it starts and
-// again as it finishes. A clock that cannot be read stamps nothing, so the agent only looks older.
+// again as it finishes. A clock that cannot be read, or a record that cannot be written, stamps
+// nothing, so the agent only looks older; the second is logged.
 const stamp = async ($: EngineInterface, agentId: string, started: string | undefined) => {
   let now: number
   try {
@@ -419,16 +651,25 @@ const stamp = async ($: EngineInterface, agentId: string, started: string | unde
   } catch {
     return
   }
-  liveAgents.add(agentId)
-  const s = agentSeen.get(agentId) ?? { at: now, inFlight: 0, told: false }
-  s.at = now
-  s.told = false
-  if (started !== undefined) {
-    s.lastTool = started
-    s.startedAt = now
-    s.inFlight += 1
-  } else s.inFlight = Math.max(0, s.inFlight - 1)
-  agentSeen.set(agentId, s)
+  try {
+    await changeFact(agentsFact($),
+      seenOf,
+      all => {
+        const s = all[agentId] ?? { at: now, inFlight: 0, told: false }
+        s.at = now
+        s.told = false
+        if (started !== undefined) {
+          s.lastTool = started
+          s.startedAt = now
+          s.inFlight += 1
+        } else s.inFlight = Math.max(0, s.inFlight - 1)
+        return { ...all, [agentId]: s }
+      },
+      all => all,
+    )
+  } catch (err) {
+    $.ui.log(`job-watcher: could not record a sign of life of background agent ${agentId}: ${message(err)}`, { to: 'debug' })
+  }
 }
 // The name of the agent a job belongs to, from the agent list; an agent the list cannot name is still
 // an agent, never this session (#784).
@@ -454,7 +695,7 @@ const lookAll = async ($: EngineInterface, live: Live) => {
     // Said once until the clock reads again, never once a minute (lessons review of #634).
     if (live() && !toldClockFailed) {
       toldClockFailed = true
-      say(undefined, `The background job watcher could not check its jobs: ${message(err)}. Jobs may be stuck without a word from it.`)
+      await say($, undefined, `The background job watcher could not check its jobs: ${message(err)}. Jobs may be stuck without a word from it.`)
     }
     return
   }
@@ -465,10 +706,33 @@ const lookAll = async ($: EngineInterface, live: Live) => {
   // not hold on that (lessons review). The notices leave the queue before its first wait, so a wake
   // still running when the next look comes can never be sent a second time.
   if (live()) wakeIfIdle($).catch(err => $.ui.log(`job-watcher: could not wake this session: ${message(err)}`, { to: 'debug' }))
-  for (const job of [...jobs.values()]) {
+  let all: JobList
+  try {
+    all = await readJobs($)
+  } catch (err) {
+    if (live() && !toldListUnreadable) {
+      toldListUnreadable = true
+      await say($, undefined, unreadableList(err))
+    }
+    return
+  }
+  for (const listed of [...all.values()]) {
     if (!live()) return
-    // One forgotten while an earlier job was looked at (stopped by Claude, or ended) is not looked at.
-    if (!jobs.has(job.id)) continue
+    // Read again as each is looked at: one forgotten while an earlier job was looked at (stopped by
+    // Claude, or ended) is not looked at, and gets no watch entry nothing would delete (lessons review
+    // of PR 1705); one kept meanwhile is looked at as kept. A list that cannot be read now is said
+    // once, as at the start of the look, and ends it.
+    let job: Job | undefined
+    try {
+      job = (await readJobs($)).get(listed.id)
+    } catch (err) {
+      if (live() && !toldListUnreadable) {
+        toldListUnreadable = true
+        await say($, undefined, unreadableList(err))
+      }
+      return
+    }
+    if (!job) continue
     const w = watchOf(job)
     try {
       await look($, job, w, now, live)
@@ -476,9 +740,11 @@ const lookAll = async ($: EngineInterface, live: Live) => {
     } catch (err) {
       if (live() && !w.toldLookFailed) {
         w.toldLookFailed = true
-        say(job.owner?.id, `The background job watcher could not check its jobs: background job ${job.id} (${shortCommand(job.command)}): ${message(err)}. It may be stuck without a word from the watcher.`)
+        await say($, listed.owner?.id, `The background job watcher could not check its jobs: background job ${listed.id} (${shortCommand(listed.command)}): ${message(err)}. It may be stuck without a word from the watcher.`)
       }
     }
+    // What this look measured of the job outlives a reload (#1703); a look given up writes nothing.
+    if (live()) await saveWatch($, job.id)
   }
 }
 
@@ -505,10 +771,14 @@ const measure = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet
   if (Array.isArray(groups) && groups.length === 1 && groups[0] !== undefined) {
     // Only the group is written, onto the record as it is now: a keep that landed while this look
     // waited is kept (L443).
-    const current = jobs.get(job.id)
-    if (current && live()) {
-      jobs.set(job.id, { ...current, pgid: groups[0] })
-      await publishSafely($)
+    const group = groups[0]
+    if (live()) {
+      await changeJobs($, list => {
+        const current = list.get(job.id)
+        if (!current) return false
+        list.set(job.id, { ...current, pgid: group })
+        return true
+      })
     }
     return 'runs'
   }
@@ -519,7 +789,7 @@ const measure = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet
   if (live() && !quiet && !w.toldUntraced) {
     w.toldUntraced = true
     const what = finishedByHarness(w) ? 'Claude Code has finished it, so TaskStop has no task to stop.' : 'Stop it with TaskStop if it is no longer needed.'
-    say(job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) could not be traced to its process, so whether it has ended is unknown. ${what}`)
+    await say($, job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) could not be traced to its process, so whether it has ended is unknown. ${what}`)
   }
   return 'unknown'
 }
@@ -548,8 +818,10 @@ const finishedSentence = (job: Job, name: string, w: Watch | undefined): string 
 // once to this conversation, with what Claude Code last said of it, since that agent will never read
 // Claude Code's own report of the end; one this conversation or a running agent owns is reported by
 // Claude Code itself, so the watcher says nothing of it.
-const endedNotice = (job: Job, w: Watch | undefined): string | undefined => {
-  if (!job.owner || liveAgents.has(job.owner.id)) return undefined
+// Which agents are live is read from $.state; one that cannot be read says nothing, rather than say an
+// agent that may still run has left its job behind.
+const endedNotice = (job: Job, w: Watch | undefined, live: ReadonlySet<string> | undefined): string | undefined => {
+  if (!job.owner || !live || live.has(job.owner.id)) return undefined
   const said = w?.harness
   const how =
     said === 'unlisted'
@@ -561,8 +833,8 @@ const endedNotice = (job: Job, w: Watch | undefined): string | undefined => {
 }
 const drop = async ($: EngineInterface, job: Job) => {
   // Said before the registry write, so a write that fails cannot lose it (lessons review of #634).
-  const notice = endedNotice(jobs.get(job.id) ?? job, watch.get(job.id))
-  if (notice) say(undefined, notice)
+  const notice = endedNotice(job, watch.get(job.id), await liveAgentsRead($))
+  if (notice) await say($, undefined, notice)
   await forget($, job.id)
 }
 
@@ -587,18 +859,18 @@ const notStoppedNotice = (job: Job, said: string, why: string, runs: boolean | u
         : 'Whether it is still running could not be measured, and the watcher is still watching it. Stop it with TaskStop if it is.'
   }`
 const notStopped = async ($: EngineInterface, job: Job, w: Watch, said: string, why: string, once: boolean, live: Live) => {
-  const runs = await runsNow($, (jobs.get(job.id) ?? job).pgid)
+  const runs = await runsNow($, ((await readJobs($)).get(job.id) ?? job).pgid)
   // A look given up while ps answered acts on nothing it read (#706).
   if (!live()) return
   if (runs === false) {
     // Said before the registry write, so a write that fails cannot lose it (lessons review of #634).
-    say(job.owner?.id, notStoppedNotice(job, said, why, runs))
+    await say($, job.owner?.id, notStoppedNotice(job, said, why, runs))
     await forget($, job.id)
     return
   }
   if (once && w.told) return
   w.told = true
-  say(job.owner?.id, notStoppedNotice(job, said, why, runs))
+  await say($, job.owner?.id, notStoppedNotice(job, said, why, runs))
 }
 
 const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: Live) => {
@@ -607,7 +879,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
   if (late) {
     lateStops.delete(job.id)
     if (late.why === undefined) {
-      say(job.owner?.id, stoppedNotice(job, late.said))
+      await say($, job.owner?.id, stoppedNotice(job, late.said))
       await forget($, job.id)
     } else await notStopped($, job, w, late.said, late.why, false, live)
     return
@@ -618,19 +890,31 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
     return
   }
   if (!live()) return
+  // #1583: a command piped through tail or head is silent while it works, so while its process group
+  // is measured as running it is running, whatever its output; told nothing, never stalled. Its
+  // output is still read and dated below, so a later look that cannot read its group, and judges it
+  // by its output, counts silence from its last real output, never its start (lessons review of
+  // PR 1705).
+  const held = holdsOutputBack(job.command) && w.measured === 'runs'
+  const runsHeld = () => {
+    w.state = 'running'
+    w.stalledBy = undefined
+  }
   const statOut = await run($, ['stat', '-f', '%z', job.outputPath])
   const size = statOut === undefined ? NaN : Number(statOut.trim())
   const tail = await run($, ['tail', '-c', '4096', job.outputPath])
   // A look given up while it read acts on nothing it read (#706).
   if (!live()) return
   // The first look dates what is already there from the job's start: it grew before anyone looked.
-  if (Number.isNaN(w.lastSize) && Number.isFinite(size)) w.lastSize = size
+  if (w.lastSize === null && Number.isFinite(size)) w.lastSize = size
   // An output file that cannot be read says nothing about the job, so it is never judged silent:
-  // Claude is told it could not be read, once, until it can be again.
+  // Claude is told it could not be read, once, until it can be again. A held output job measured as
+  // running is running however its file reads.
   if (!Number.isFinite(size) || tail === undefined) {
+    if (held) return runsHeld()
     if (!w.toldUnreadable) {
       w.toldUnreadable = true
-      say(job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}): could not read its output file ${job.outputPath}, so whether it is stuck is unknown.`)
+      await say($, job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}): could not read its output file ${job.outputPath}, so whether it is stuck is unknown.`)
     }
     return
   }
@@ -640,12 +924,16 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
     w.lastSize = size
     w.lastGrowth = now
   }
+  if (held) return runsHeld()
   // Read again for quiet: a keep that landed while this look waited is honoured (L443).
-  const a = assess({ tail, size: w.lastSize, lastGrowth: w.lastGrowth, quietByDesign: (jobs.get(job.id) ?? job).kept?.quiet === true }, now)
+  const current = (await readJobs($)).get(job.id) ?? job
+  if (!live()) return
+  const a = assess({ tail, size, lastGrowth: w.lastGrowth, quietByDesign: current.kept?.quiet === true }, now)
   // What the status bar's job list reads: the watcher's own measure, as it was at the last look. A
   // poll loop quiet or repeating a line that is no error waits on what it polls (#784).
   const waits = isPollLoop(job.command) && (a.state === 'silent' || (a.state === 'repeating' && !isErrorLine(a.line)))
   w.state = a.state === 'running' ? 'running' : waits ? 'waiting' : 'stalled'
+  w.stalledBy = w.state === 'stalled' && a.state !== 'running' ? a.state : undefined
   if (a.state === 'running') {
     if (w.told) {
       w.healthySince ??= now
@@ -656,16 +944,16 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
     }
   } else w.healthySince = undefined
   // A job Claude kept on purpose is only ever reported, never stopped by the watcher (lessons review).
-  if (a.state === 'repeating' && !job.kept && isPollLoop(job.command) && isErrorLine(a.line)) {
+  if (a.state === 'repeating' && !current.kept && isPollLoop(job.command) && isErrorLine(a.line)) {
     // A poll loop that only ever repeated an error never succeeded, and is stopped by itself. Read
     // again just before the stop: a keep that landed while this look waited is honoured (L443).
-    if (jobs.get(job.id)?.kept) return
+    if ((await readJobs($)).get(job.id)?.kept || !live()) return
     const said = repeated(a)
     // Never a second stop while the first is unanswered (#706): Claude is told once instead.
     if (stopping.has(job.id)) {
       if (!w.told) {
         w.told = true
-        say(job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${said}", and the watcher's stop of it has not been answered. Stop it with TaskStop.`)
+        await say($, job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${said}", and the watcher's stop of it has not been answered. Stop it with TaskStop.`)
       }
       return
     }
@@ -682,7 +970,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
     }
     if (why === undefined) {
       // Said before the registry write, so a write that fails cannot lose it (lessons review of #634).
-      say(job.owner?.id, stoppedNotice(job, said))
+      await say($, job.owner?.id, stoppedNotice(job, said))
       await forget($, job.id)
     } else await notStopped($, job, w, said, why, true, live)
   } else if (a.state !== 'running' && !w.told) {
@@ -693,7 +981,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
       : a.state === 'repeating'
         ? `keeps repeating "${repeated(a)}"`
         : `has had no new output for ${Math.round(a.forMs / 60_000)} minutes`
-    say(job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) ${what}. ${remedyFor(jobs.get(job.id) ?? job, w)}, or keep it if that is expected.`)
+    await say($, job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) ${what}. ${remedyFor(current, w)}, or keep it if that is expected.`)
   }
 }
 
@@ -704,8 +992,8 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
 // and of any an agent left running when it ended, each of those naming that agent.
 // #1517: a job Claude Code has finished is never called running: it gets a sentence of its own,
 // saying what still runs of it, or that this could not be read, and a remedy that can work.
-const unkeptReminder = (loop: string | undefined): string | undefined => {
-  const unkept = [...jobs.values()].filter(j => !j.kept && loopOf(j.owner) === loop)
+const unkeptReminder = (jobs: JobList, loop: string | undefined, live: ReadonlySet<string>): string | undefined => {
+  const unkept = [...jobs.values()].filter(j => !j.kept && loopOf(j.owner, live) === loop)
   const labelOf = (j: Job) => `${j.id} (${shortCommand(j.command)}${j.owner && loop === undefined ? `, left by agent ${j.owner.name}` : ''})`
   const running = unkept.filter(j => !finishedByHarness(watch.get(j.id)))
   const parts: string[] = []
@@ -729,17 +1017,43 @@ const unkeptReminder = (loop: string | undefined): string | undefined => {
 const stillRunning = async ($: EngineInterface, job: Job): Promise<boolean> => {
   if (stopping.has(job.id) || lateStops.has(job.id)) return true
   try {
-    if (!(await ended($, job, watchOf(job), () => true, true))) return true
+    if (!(await ended($, job, watchOf(job), () => true, true))) {
+      await saveWatch($, job.id)
+      return true
+    }
   } catch (err) {
     $.ui.log(`job-watcher: could not check whether background job ${job.id} has ended: ${message(err)}`, { to: 'debug' })
     return true
   }
-  if (jobs.has(job.id)) await drop($, job)
+  // A drop that cannot be written leaves the job on the record, so it is still named: never read as
+  // a failure to read the list, which the reminder says differently.
+  try {
+    if ((await readJobs($)).has(job.id)) await drop($, job)
+  } catch (err) {
+    $.ui.log(`job-watcher: could not drop background job ${job.id}, measured as ended: ${message(err)}`, { to: 'debug' })
+    return true
+  }
   return false
 }
-// Every unkept job the reminder to this loop would name, measured first.
-const dropEnded = async ($: EngineInterface, loop: string | undefined) => {
-  for (const job of [...jobs.values()]) if (!job.kept && loopOf(job.owner) === loop) await stillRunning($, job)
+// Every unkept job the reminder to this loop would name, measured first; the list as it is after.
+const dropEnded = async ($: EngineInterface, loop: string | undefined, live: ReadonlySet<string>): Promise<JobList> => {
+  for (const job of [...(await readJobs($)).values()]) if (!job.kept && loopOf(job.owner, live) === loop) await stillRunning($, job)
+  return readJobs($)
+}
+// The reminder a result to this loop carries, from the one list, its ended jobs dropped first. A list
+// that cannot be read is said instead (#1695), once until it can be: never read as no job running.
+const reminderFor = async ($: EngineInterface, loop: string | undefined): Promise<string | undefined> => {
+  let jobs: JobList
+  const live = await liveAgents($)
+  try {
+    jobs = await dropEnded($, loop, live)
+  } catch (err) {
+    $.ui.log(`job-watcher: could not read the job list for a reminder: ${message(err)}`, { to: 'debug' })
+    if (toldListUnreadable) return undefined
+    toldListUnreadable = true
+    return unreadableList(err)
+  }
+  return unkeptReminder(jobs, loop, live)
 }
 const noteReminded = (id: unknown) => {
   if (typeof id !== 'string') return
@@ -1022,11 +1336,20 @@ export const register: Register = on => {
   // 4). A clock that cannot be read refuses the list rather than answer without run times.
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
+    // Read from the one list (#1695), whichever copy of this module recorded a job; one that cannot
+    // be read refuses, as the clock does, never answers that nothing runs.
     const list: Jobs['list'] = async (): Promise<JobsEntry[]> => {
       const now = await built.clock.now()
+      const jobs = listOf((await built.state.get({ plugin: 'job-watcher', key: 'jobs' })).value)
       return [...jobs.values()].map(j => {
-        const state = watch.get(j.id)?.state ?? 'running'
+        const w = watch.get(j.id)
+        const state = w?.state ?? 'running'
+        // #1583: what the bar says of a stalled job is only what was measured: how it stalled and,
+        // for one gone silent, how long since its output last changed, read as of now.
+        const stall = state === 'stalled' ? (w?.stalledBy ?? null) : null
         return {
+          stall,
+          quietMs: stall === 'silent' && w ? Math.max(0, now - w.lastGrowth) : null,
           label: j.kept ? j.kept.name : shortCommand(j.command),
           runMs: Math.max(0, now - j.startedAt),
           kept: Boolean(j.kept),
@@ -1041,32 +1364,42 @@ export const register: Register = on => {
     const agents: Jobs['agents'] = async () => {
       const now = await built.clock.now()
       const listed = (await built.agent.list()) as Listed[]
+      // Refuses when the record cannot be read, as when the list cannot (#1703).
+      const seen = seenOf((await built.state.get({ plugin: 'job-watcher', key: 'agents' })).value)
       return listed.flatMap(a => {
-        const s = agentSeen.get(a.id)
+        const s = seen[a.id]
         return a.status === 'running' && s && now - s.at >= QUIET_MS ? [{ name: nameOf(a), quietMs: now - s.at }] : []
       })
     }
     return { ...built, jobs: { list, agents } }
   })
 
+  // Fires at a process's first load and again at every hot reload of this mod (never at /clear), so
+  // it starts this module's own bookkeeping afresh, as a reload's fresh module has it, and never
+  // touches a session fact (#1695, #1703): a reload's start must find the jobs, notices, agents,
+  // starters, refusals, turn and measures an earlier copy recorded, and a new process starts with
+  // none. The measures are cached here again from $.state.
   on('session.start', async ($, e, next) => {
-    jobs.clear()
-    watch.clear()
+    await loadWatch($)
+    turnHere = undefined
+    startedHere.clear()
     lateStops.clear()
     reminded.clear()
-    notices.length = 0
-    sessionNo += 1
-    // A session starting has no turn running yet (#1234).
-    mainTurn = 'idle'
+    unqueued.length = 0
+    // A session starting has no turn running yet (#1234): written only when nothing has been, so a
+    // reload in the middle of a turn leaves it running (#1703).
+    try {
+      await mainTurnFact($).set('idle', 0)
+    } catch (err) {
+      $.ui.log(`job-watcher: could not record that this conversation has no turn running: ${message(err)}`, { to: 'debug' })
+    }
     toldUnpublished = false
     toldClockFailed = false
     toldLookGivenUp = false
-    liveAgents.clear()
-    agentSeen.clear()
     toldAgentsUnlisted = false
-    startedBy.clear()
-    stopRefusals.clear()
+    toldAgentsUnrecorded = false
     toldInFlightUnreadable = false
+    toldStartersUnreadable = false
     retriedLeftovers = false
     askAgain?.cancel()
     askAgain = undefined
@@ -1090,22 +1423,38 @@ export const register: Register = on => {
     const id = String(input.task_id ?? '').trim()
     const name = String(input.name ?? '').trim()
     const reason = String(input.reason ?? '').trim()
-    const job = jobs.get(id)
-    if (!job) {
+    const at = await $.clock.now()
+    // The one list the reminder names jobs from (#1695); one that cannot be read is said as such.
+    let jobs: JobList
+    try {
+      jobs = await readJobs($)
+    } catch (err) {
+      return { deny: unreadableList(err) }
+    }
+    if (!jobs.has(id)) {
       const running = [...jobs.keys()]
       return { deny: `No running background job ${id || '(no task_id given)'} is known to the watcher. ${running.length ? `Running: ${running.join(', ')}.` : 'None is running.'}` }
     }
     if (!name) return { deny: `Give the job a name: a few words Dan reads on the status bar, like "dev server".` }
     if (!reason) return { deny: `Give a reason why ${id} must keep running.` }
-    const kept: Kept = { name, reason, quiet: input.quiet === true, at: await $.clock.now() }
-    // Written onto the record as it is after the wait, so a group traced meanwhile is kept (L443).
-    const current = jobs.get(id)
+    const kept: Kept = { name, reason, quiet: input.quiet === true, at }
+    // Written onto the record as it is after the waits, so a group traced meanwhile is kept (L443).
+    // Read from the list the write left, never from a variable the callback assigns (lessons review
+    // of PR 1705): the record as written, kept, or none when the job ended meanwhile.
+    let current: Job | undefined
+    try {
+      const after = await changeJobs($, list => {
+        const found = list.get(id)
+        if (found) list.set(id, { ...found, kept })
+        return found !== undefined
+      })
+      current = after.get(id)
+    } catch (err) {
+      return { deny: `The background job watcher could not record the keep of ${id}: ${message(err)}. It is not kept; try again, or stop it with TaskStop.` }
+    }
     if (!current) return { deny: `Background job ${id} ended while it was being kept, so there is nothing to keep.` }
-    jobs.set(id, { ...current, kept })
-    await publishSafely($)
-    await dropEnded($, e.agentId)
-    const said = take(e.agentId)
-    const reminder = unkeptReminder(e.agentId)
+    const reminder = await reminderFor($, e.agentId)
+    const said = await take($, e.agentId)
     if (reminder) {
       said.push(reminder)
       noteReminded(input.tool_use_id)
@@ -1139,20 +1488,23 @@ export const register: Register = on => {
       // throw is said to Claude and never fails the call that started it (lessons review of #634).
       if (started) {
         // Whose it is, for that agent's stop (#1326), even when recording the job below fails.
-        if (agentId !== undefined) startedBy.set(started.id, agentId)
+        if (agentId !== undefined) await recordStarter($, started.id, agentId)
         try {
           const owner = agentId === undefined ? undefined : { id: agentId, name: await agentName($, agentId) }
-          jobs.set(started.id, {
+          const record: Job = {
             id: started.id,
             command: String(input.command ?? ''),
             outputPath: started.outputPath,
             pgid: await traceGroup($, started.outputPath),
             startedAt: await $.clock.now(),
             ...(owner ? { owner } : {}),
+          }
+          await changeJobs($, list => {
+            list.set(started.id, record)
+            return true
           })
-          await publishSafely($)
         } catch (err) {
-          say(e.agentId, `The background job watcher could not record background job ${started.id} (${shortCommand(String(input.command ?? ''))}): ${message(err)}. It is not watched, so stop it with TaskStop when it is no longer needed.`)
+          await say($, e.agentId, `The background job watcher could not record background job ${started.id} (${shortCommand(String(input.command ?? ''))}): ${message(err)}. It is not watched, so stop it with TaskStop when it is no longer needed.`)
         }
       }
     }
@@ -1160,22 +1512,25 @@ export const register: Register = on => {
     // watcher does not watch them; only whose they are is kept, for the agent's stop.
     if (agentId !== undefined && result.deny === undefined && !result.isError) {
       const task = startedTask(e.tool, result.result, String(result.text ?? ''))
-      if (task !== undefined) startedBy.set(task, agentId)
+      if (task !== undefined) await recordStarter($, task, agentId)
     }
     // A job Claude stopped is dropped at once, so neither this result nor the next names it as
     // running (#706): Claude Code's own stop is by the job's traced handle, as the watcher's is (L1011).
     if (e.tool === 'TaskStop' && result.deny === undefined && !result.isError) {
       const id = String(input.task_id ?? input.shell_id ?? '')
-      if (jobs.has(id)) await forget($, id)
+      try {
+        await forget($, id)
+      } catch (err) {
+        $.ui.log(`job-watcher: could not drop background job ${id} after Claude stopped it: ${message(err)}`, { to: 'debug' })
+      }
     }
     // What Claude should know about its jobs rides on the next tool result it reads; the reminder
     // about unkept jobs rides on every one, a failed result included. A refusal can carry no
     // context, so its reminder goes into its row as it is appended (below).
     if (result.deny !== undefined) return result
     // Measured first, so a job found ended here is said on this same result (#1517).
-    await dropEnded($, agentId)
-    const said = result.isError ? [] : take(agentId)
-    const reminder = unkeptReminder(agentId)
+    const reminder = await reminderFor($, agentId)
+    const said = result.isError ? [] : await take($, agentId)
     if (reminder) {
       said.push(reminder)
       noteReminded(input.tool_use_id)
@@ -1200,26 +1555,74 @@ export const register: Register = on => {
     // no longer known only when the stopping agent started it, since that agent's own list must name
     // its own work however a later build scopes the list; another's job left out says nothing. An
     // unreadable list says nothing of any job, and is said below.
+    // The one list (#1695). One that cannot be read holds nothing the stop can be refused for; that
+    // is said, once until it can be read, and Claude Code's own list is still checked.
+    let jobs: JobList = new Map()
+    let jobsUnread = false
+    try {
+      jobs = await readJobs($)
+    } catch (err) {
+      jobsUnread = true
+      $.ui.log(`job-watcher: could not read the job list at agent ${agent}'s stop: ${message(err)}`, { to: 'debug' })
+      if (!toldListUnreadable) {
+        toldListUnreadable = true
+        await say($, undefined, unreadableList(err))
+      }
+    }
     const statuses = listedStatuses(raw)
     if (statuses) {
       for (const job of jobs.values()) {
         const said = statuses.get(job.id)
         if (said !== undefined) watchOf(job).harness = said
         else if (job.owner?.id === agent) watchOf(job).harness = 'unlisted'
+        else continue
+        await saveWatch($, job.id)
       }
     }
+    // Whose work is whose (#1326), from $.state (#1703). A record that cannot be read checks only the
+    // agent's Bash jobs on the watcher's own list, as an unreadable list from Claude Code does.
+    let starters: Record<string, string> | undefined
+    try {
+      starters = { ...startersOf((await startedByFact($).get()).value), ...Object.fromEntries(startedHere) }
+      toldStartersUnreadable = false
+    } catch (err) {
+      $.ui.log(`job-watcher: could not read which agent started which background work at agent ${agent}'s stop: ${message(err)}`, { to: 'debug' })
+    }
     let held: InFlight[]
-    if (listed) {
+    if (listed && starters) {
+      const mine = starters
       // The agent's own entry (a background agent is listed under its own id) is never its work.
-      held = listed.filter(t => t.id !== agent && startedBy.get(t.id) === agent)
+      held = listed.filter(t => t.id !== agent && mine[t.id] === agent)
     } else {
-      // The list is missing or is not a list: the watcher's own record of the agent's background jobs
-      // is all that can be checked, and it is said once that the rest went unchecked (L11).
+      // The list is missing or is not a list, or whose work is whose cannot be read: the watcher's own
+      // record of the agent's background jobs is all that can be checked, and it is said once that
+      // the rest went unchecked (L11).
       held = [...jobs.values()].filter(j => j.owner?.id === agent).map(j => ({ id: j.id, what: shortCommand(j.command) }))
-      $.ui.log(`job-watcher: the background_tasks sent with agent ${agent}'s stop could not be read as a list`, { to: 'debug' })
-      if (!toldInFlightUnreadable) {
-        toldInFlightUnreadable = true
-        say(undefined, `The background job watcher could not read the list of background work Claude Code sent with agent ${await agentName($, agent)}'s stop, so only its background Bash jobs on the watcher's own record were checked; any Monitors and agents it started were not checked. Ask it, or stop them with TaskStop, if it may have left some running.`)
+      if (!listed) {
+        $.ui.log(`job-watcher: the background_tasks sent with agent ${agent}'s stop could not be read as a list`, { to: 'debug' })
+        if (!toldInFlightUnreadable) {
+          toldInFlightUnreadable = true
+          const who = await agentName($, agent)
+          // With its own list unreadable too, nothing was checked, and it says so (L11, lessons review
+          // of PR 1705), never that the record it could not read was checked.
+          await say(
+            $,
+            undefined,
+            jobsUnread
+              ? `The background job watcher could not read the list of background work Claude Code sent with agent ${who}'s stop, nor its own list of background jobs, so nothing agent ${who} left running was checked. Ask it, or stop what it left with TaskStop.`
+              : `The background job watcher could not read the list of background work Claude Code sent with agent ${who}'s stop, so only its background Bash jobs on the watcher's own record were checked; any Monitors and agents it started were not checked. Ask it, or stop them with TaskStop, if it may have left some running.`,
+          )
+        }
+      } else if (!toldStartersUnreadable) {
+        toldStartersUnreadable = true
+        const who = await agentName($, agent)
+        await say(
+          $,
+          undefined,
+          jobsUnread
+            ? `The background job watcher could not read which agent started which background work, nor its own list of background jobs, so nothing agent ${who} left running was checked. Ask it, or stop what it left with TaskStop.`
+            : `The background job watcher could not read which agent started which background work, so only agent ${who}'s background Bash jobs on the watcher's own record were checked; any Monitors and agents it started were not checked. Ask it, or stop them with TaskStop, if it may have left some running.`,
+        )
       }
     }
     // #1387: a Bash job on the watcher's record whose process group has ended holds nothing, listed
@@ -1231,18 +1634,43 @@ export const register: Register = on => {
       if (!job || (await stillRunning($, job))) measured.push(t)
     }
     held = measured
+    // How often this agent's stop was refused is in $.state (#1703), so a reload never starts it again
+    // from nought and holds the agent past the bound.
+    const forgetRefusals = async () => {
+      try {
+        await changeFact(stopRefusalsFact($), refusalsOf, all => (agent in all ? Object.fromEntries(Object.entries(all).filter(([id]) => id !== agent)) : undefined), all => all)
+      } catch (err) {
+        $.ui.log(`job-watcher: could not clear the count of agent ${agent}'s refused stops: ${message(err)}`, { to: 'debug' })
+      }
+    }
     if (!held.length) {
-      stopRefusals.delete(agent)
+      await forgetRefusals()
       return next(e)
     }
-    const refused = stopRefusals.get(agent) ?? 0
+    const named = held.map(t => `${t.id} (${t.what})`).join(', ')
+    let refused: number
+    try {
+      // Counted up, or cleared once at the bound, in one write: the stop below acts on what it counted.
+      const counted = await changeFact(stopRefusalsFact($),
+        refusalsOf,
+        all => {
+          const n = all[agent] ?? 0
+          if (n < STOP_REFUSALS_MAX) return { ...all, [agent]: n + 1 }
+          return Object.fromEntries(Object.entries(all).filter(([id]) => id !== agent))
+        },
+        all => all,
+      )
+      refused = counted.before[agent] ?? 0
+    } catch (err) {
+      // A refusal that cannot be counted could hold the agent for good, so the stop goes ahead and
+      // this conversation is told what it left.
+      await say($, undefined, `Agent "${await agentName($, agent)}" (${agent}) ended still holding background work it started, because the watcher could not count how often its stop was refused (${message(err)}): ${named}. It will not report on that work now: wait on it here, or stop each with TaskStop.`)
+      return next(e)
+    }
     if (refused >= STOP_REFUSALS_MAX) {
-      stopRefusals.delete(agent)
-      const named = held.map(t => `${t.id} (${t.what})`).join(', ')
-      say(undefined, `Agent "${await agentName($, agent)}" (${agent}) ended still holding background work it started, after its stop was refused ${STOP_REFUSALS_MAX} times: ${named}. It will not report on that work now: wait on it here, or stop each with TaskStop.`)
+      await say($, undefined, `Agent "${await agentName($, agent)}" (${agent}) ended still holding background work it started, after its stop was refused ${STOP_REFUSALS_MAX} times: ${named}. It will not report on that work now: wait on it here, or stop each with TaskStop.`)
       return next(e)
     }
-    stopRefusals.set(agent, refused + 1)
     return { block: holdRefusal(held) }
   })
 
@@ -1250,9 +1678,9 @@ export const register: Register = on => {
   // its next tool call; one left unread when the turn ends, or gone quiet while none runs, wakes it.
   // turn.start names a subagent's run only in later builds: 2.1.294's types declare no agentId on
   // it, and 2.1.307's do (#1484). Read it where it exists, so a subagent's turn never marks this
-  // conversation busy on either.
+  // conversation busy on either. Recorded in $.state (#1703), so a reload mid turn leaves it busy.
   on('turn.start', async ($, e, next) => {
-    if (!('agentId' in e) || e.agentId === undefined) mainTurn = 'busy'
+    if (!('agentId' in e) || e.agentId === undefined) await setTurn($, 'busy')
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {
@@ -1262,7 +1690,7 @@ export const register: Register = on => {
       // The turn has ended whatever a hook beneath did with its end (lessons review of #1234): a
       // throw there must not leave this conversation read as busy, and never woken, for good.
       if (e.agentId === undefined) {
-        mainTurn = 'idle'
+        await setTurn($, 'idle')
         // Off the turn's end path, so the turn has ended before the wake is submitted.
         $.clock.after(0, () => {
           wakeIfIdle($).catch(err => $.ui.log(`job-watcher: could not wake this session at a turn's end: ${message(err)}`, { to: 'debug' }))
@@ -1281,7 +1709,17 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
     if (e.origin.kind !== 'task-notification') return result
-    for (const { id, status } of notifiedTasks(e.text)) {
+    const told = notifiedTasks(e.text)
+    if (!told.length) return result
+    let jobs: JobList
+    try {
+      jobs = await readJobs($)
+    } catch (err) {
+      // The minute's look measures the job instead; nothing here is lost but the minute.
+      $.ui.log(`job-watcher: could not read the job list after Claude Code reported a task: ${message(err)}`, { to: 'debug' })
+      return result
+    }
+    for (const { id, status } of told) {
       const job = jobs.get(id)
       if (!job) continue
       if (status !== undefined) watchOf(job).harness = status
@@ -1290,6 +1728,8 @@ export const register: Register = on => {
       } catch (err) {
         $.ui.log(`job-watcher: could not check background job ${id} after Claude Code reported it: ${message(err)}`, { to: 'debug' })
       }
+      // What Claude Code said of it outlives a reload (#1703); a job dropped above is not written back.
+      await saveWatch($, id)
     }
     return result
   })
@@ -1305,8 +1745,7 @@ export const register: Register = on => {
       return r.type === 'tool_result' && typeof r.tool_use_id === 'string' ? [r.tool_use_id] : []
     })
     const unreminded = ids.filter(id => !reminded.delete(id))
-    if (unreminded.length) await dropEnded($, e.agentId)
-    const reminder = unreminded.length ? unkeptReminder(e.agentId) : undefined
+    const reminder = unreminded.length ? await reminderFor($, e.agentId) : undefined
     if (!reminder) return next(e)
     return next({ ...e, message: { ...e.message, content: [...e.message.content, { type: 'text', text: reminder }] } })
   })

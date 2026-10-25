@@ -135,6 +135,13 @@ export const isErrorLine = (line: string): boolean => ERROR_LINE.test(line.repla
 // A loop that waits for something by trying again after a sleep: the 2026-09-22 loop was one.
 export const isPollLoop = (command: string): boolean => /\b(until|while)\b[\s\S]*\bdo\b[\s\S]*\bsleep\b/.test(command)
 
+// #1583: a command piped into tail writes nothing until its input ends, and into head nothing after
+// its first lines, so its silence says nothing about whether it works (a merge helper piped through
+// tail -6 read as stalled while it waited, healthy, in the merge queue). A single pipe, |& included,
+// never ||. Quoting is not parsed: a quoted pipe counts too, which only means the job is judged by
+// whether it runs rather than by its output, the harmless way to be wrong (L648).
+export const holdsOutputBack = (command: string): boolean => /(?:^|[^|])\|&?\s*(?:tail|head)\b/.test(command)
+
 export type Sample = {
   /** The end of the job's output file. */
   tail: string

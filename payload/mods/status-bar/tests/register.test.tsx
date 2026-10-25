@@ -524,6 +524,94 @@ test('Compact pressed while Claude is working is queued, shown, and runs when th
   await ui.unmount()
 })
 
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in
+// the middle of a turn. The turn is still running, so a Compact pressed after it is queued as before,
+// and one queued before it still runs when the turn ends.
+test('a reload in the middle of a turn keeps it running: a Compact pressed after it is queued, never refused (#1703)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  await step($, clock)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+  expect(toasts).toEqual([])
+  expect(await shown(ui as never)).toBe('context 80% Compact queued, runs when this reply ends ')
+  await ui.unmount()
+})
+
+// Push review of PR for #1703: a turn's start whose write failed is written again at the next request,
+// so a reload after it still finds the turn running.
+test("a turn's start whose write failed is written again at its next request, so a reload still finds it running (#1703)", withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  let refused = false
+  on('state.set', async ($, e, next) => {
+    if (!refused && (e as { key?: string }).key === 'turnRunning') {
+      refused = true
+      return { deny: 'state store unavailable' } as never
+    }
+    return next(e)
+  })
+  await start($, clock)
+  await measure($, 80)
+  await step($, clock)
+  expect(refused).toBe(true)
+  await step($, clock)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
+test('a Compact queued before a reload still runs when the turn ends (#1703)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await step($, clock)
+  const idle = w.compact
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  await start($, clock)
+  w.compact = idle
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
+test('a Compact whose queueing cannot be kept for a reload still runs when the turn ends (#1703)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'compactQueued' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await step($, clock)
+  const idle = w.compact
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  w.compact = idle
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
 test('a band that cannot be redrawn after a Compact press or its Cancel is logged, never left unhandled (#1278 lessons review)', withKit, async ($, on) => {
   const { clock, debug, w } = world(on)
   let unreadable = false
@@ -827,6 +915,20 @@ const olderWatcher: { name: string; register: Register } = {
     })
   },
 }
+// #1583: a watcher listing one quiet background command of this conversation's own.
+const quietWatcher: { name: string; register: Register } = {
+  name: 'job-watcher',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const list = async () => [
+        { label: 'merge helper for #2733', runMs: 20 * 60_000, kept: true, stuck: true, state: 'stalled', owner: null, ownerId: null, stall: 'silent', quietMs: 12 * 60_000 },
+      ]
+      const agents = async () => []
+      return { ...built, jobs: { list, agents } }
+    })
+  },
+}
 const brokenWatcher: { name: string; register: Register } = {
   name: 'job-watcher',
   register: on => {
@@ -852,8 +954,29 @@ test('a job watcher from before agents were watched still shows its jobs, with n
   const { clock, logs, debug } = world(on)
   await start($, clock)
   const ui = await $.ui.mount(band)
-  expect(await shown(ui as never)).toBe('1 job not progressing, left to Claude')
+  expect(await shown(ui as never)).toBe('npm test not progressing, ask Claude to check')
   expect([...logs, ...debug.filter(l => /status-bar/.test(l))]).toEqual([])
+  await ui.unmount()
+})
+
+// #1583, settled with Dan: nothing is asked of him while Claude works, so a quiet background command
+// is not in the band then; once Claude's turn has ended and it is still quiet, it asks him to ask
+// Claude to check. Read from the turn the bar already follows: this conversation's own request
+// starts it, its turn's end ends it.
+test('a quiet background command shows only once Claude has stopped, and goes again when a turn runs (#1583)', { plugins: [modKit, quietWatcher] }, async ($, on) => {
+  const { clock } = world(on)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  await step($, clock)
+  expect(await shown(ui as never)).toBe('engine band')
+  await turn($ as never)
+  await clock.settle()
+  expect(await shown(ui as never)).toBe('merge helper for #2733 quiet 12m, ask Claude to check')
+  // A subagent's request is not Claude's turn starting again.
+  await step($, clock, 'a1')
+  expect(await shown(ui as never)).toBe('merge helper for #2733 quiet 12m, ask Claude to check')
+  await step($, clock)
+  expect(await shown(ui as never)).toBe('engine band')
   await ui.unmount()
 })
 

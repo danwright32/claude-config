@@ -51,6 +51,8 @@ LOCK = threading.Lock()
 # times hooks/rule-files-changed.sh's notice that a rule file changed is in what it was sent.
 MARK = re.compile(r'RULEPROBE-[A-Za-z0-9]+')
 NOTICE = re.compile(r'these rule files changed on disk after this session loaded them')
+# And its notice that a mod arrived after the session named its mods (#1684).
+MOD_NOTICE = re.compile(r'these mods arrived on disk after this session started')
 
 
 def texts_of(content):
@@ -276,6 +278,7 @@ class Handler(BaseHTTPRequestHandler):
                                   'probe': probe_of(body.get('messages') or []),
                                   'marks': sorted(set(MARK.findall(raw.decode('utf-8', 'replace')))),
                                   'notices': len(NOTICE.findall(raw.decode('utf-8', 'replace'))),
+                                  'mod_notices': len(MOD_NOTICE.findall(raw.decode('utf-8', 'replace'))),
                                   'tools': len(body.get('tools') or []), 'answer': a}) + '\n')
         mid = 'msg_' + uuid.uuid4().hex[:20]
         if a['kind'] == 'text':

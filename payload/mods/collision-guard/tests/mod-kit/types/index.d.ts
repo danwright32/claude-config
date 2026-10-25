@@ -23,6 +23,11 @@ export type ModKitCard = {
   toolUseId: string
   /** One or more runs, drawn as one bold line, so a leading state word can carry its colour ("Live:" green). */
   title: ModKitRun[]
+  /**
+   * The border's colour, a theme key or a colour name; grey when absent, as every card but one is.
+   * Named only for the Goal accomplished box (#1563), which Dan asked to see green (2026-10-23).
+   */
+  border?: string
   /** The lines under the title, each one or more runs; a long line wraps. */
   lines: ModKitRun[][]
 }
@@ -116,6 +121,9 @@ export type ModKit = {
    * (#1252, moved here from scope-modes so sleep mode and the goal tracker read it one way): the
    * newest goal_status record decides, so a goal met with no /goal clear is none. `set` with its
    * condition, `none`, or `unreadable` with why (no transcript, a read that failed), never none.
+   * A `none` whose newest goal was cleared as met by its own check, rather than ended any other
+   * way, carries `met` (#1563): its condition, the check's reason, and the record's id, which tells
+   * one met goal from the next.
    */
   goal: (input: { transcript: string }) => Promise<ModKitGoal>
   /**
@@ -353,7 +361,9 @@ export type ModKitCodeVerdict = { does: 'run a process' | 'write files' | 'unrea
 export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined }
 
 /** The goal a session's transcript says is set now, as `goal` reads it. */
-export type ModKitGoal = { state: 'set'; condition: string } | { state: 'none' } | { state: 'unreadable'; why: string }
+export type ModKitGoal = { state: 'set'; condition: string } | { state: 'none'; met?: ModKitGoalMet } | { state: 'unreadable'; why: string }
+/** The judgement that cleared a session's newest goal as met (#1563), as `goal` reads it. */
+export type ModKitGoalMet = { condition: string; reason: string; id: string }
 
 /**
  * A gh command as `gh` reads it: its subcommand (`pr`, `api`) and action (`merge`), each empty
@@ -450,8 +460,10 @@ export type ModKitWrites = {
   /**
    * A script file the command runs (#1586), present when one is handed any argument: an interpreter's
    * script operand (`python3 gen.py`, `bash x.sh`, `node build.mjs`, never inline code, a script on
-   * standard input, a module or awk's or sed's program file) or a script run by its own name (one
-   * ending in a script language's extension, or named by `./` or `../`). What it writes cannot be read
+   * standard input, or awk's or sed's program file), a script run by its own name (one ending in a
+   * script language's extension, or named by `./` or `../`), and since #1682 a module run with
+   * `python -m` and a tool run through `npx` (`script` the module or tool, with no `path`; npx's `-c`
+   * command line is not read). What it writes cannot be read
    * before it runs, so each word after it that may name a file is given in `args`: as written, with
    * its absolute path where its words name one, a cd and a variable the command set followed, or the
    * `folder` a pattern lands in; an option's value written `--name=value` is that value, and an

@@ -92,6 +92,15 @@ STATE_DIR="${CLAUDE_RULES_STATE_DIR:-${TMPDIR:-/tmp}}"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 STATE="$STATE_DIR/claude-rule-files-${key}.state"
 MODS_STATE="$STATE_DIR/claude-mods-${key}.state"
+# The Claude Code process the mods baseline was taken in (claude-config#1684). A process names its
+# mods once, at its start, so a resume by the SAME process (the interactive /resume picker) keeps
+# the baseline, while `claude --resume` in a NEW process names them afresh: measured on the real
+# engine by tests/test-rule-files-reload.sh on 2026-10-25, where the resumed process loaded a mod
+# that arrived after the session started and listed it in its own init line. The hook's parent is
+# that process (the same measurement: Claude Code itself, one pid through a start, a compaction and
+# a /clear, another at a resume by a new process). CLAUDE_RULES_PROCESS sets it for a test.
+MODS_PROC="$STATE_DIR/claude-mods-${key}.process"
+PROC_NOW="${CLAUDE_RULES_PROCESS:-$PPID}"
 
 # ONE baseline rule for both snapshots, so the rule files and the mods cannot come to disagree about
 # what a first prompt, an unreadable record or a repeated notice means (L370).
@@ -145,7 +154,9 @@ since_baseline() {
 # older one would make the next prompt say "the older copy is in this session's context" about a
 # copy the session no longer holds (L11). Only the rule files: the mods baseline is kept, since a
 # process names its mods once and a compaction does not rename them. A startup that finds a record
-# keeps it, as before; a /clear starts a new session id, so it has no record to keep.
+# keeps it, as before; a /clear starts a new session id, so it has no record to keep. The mods are
+# re-seeded too at a resume by a NEW process, which names them afresh (claude-config#1684, MODS_PROC
+# above); a resume whose first process was not recorded keeps them, since it cannot be told.
 reseed() {
   local current
   current="$("$2")"
@@ -223,7 +234,16 @@ if [ "$event" = "SessionStart" ]; then
       *) since_baseline "$STATE" snapshot ;;
     esac
   fi
-  since_baseline "$MODS_STATE" mod_snapshot
+  _had_mods=""; [ -s "$MODS_STATE" ] && _had_mods=1
+  if [ "$source" = resume ] && [ -n "$_had_mods" ] && [ -s "$MODS_PROC" ] \
+     && [ "$(cat "$MODS_PROC" 2>/dev/null)" != "$PROC_NOW" ]; then
+    reseed "$MODS_STATE" mod_snapshot
+    printf '%s\n' "$PROC_NOW" > "$MODS_PROC" 2>/dev/null || true
+  else
+    since_baseline "$MODS_STATE" mod_snapshot
+    # Recorded with the baseline it belongs to, and only then, so a kept baseline keeps its process.
+    [ -n "$_had_mods" ] || [ ! -s "$MODS_STATE" ] || printf '%s\n' "$PROC_NOW" > "$MODS_PROC" 2>/dev/null || true
+  fi
   exit 0
 fi
 

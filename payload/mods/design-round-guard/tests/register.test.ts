@@ -2286,14 +2286,7 @@ test('#1524: what cannot be read or checked before it runs is held as any look c
   expect(refusalOf(await call($, { tool: 'Bash', command: `D=/w/slate/docs/design; cp ${ROUND}/settled.html $D/slack-channel-picker.html` }))).toContain(SKIP_QUESTION)
   expect(refusalOf(await call($, { tool: 'Bash', command: `printf x >> ${RECORD}` }))).toContain(SKIP_QUESTION)
   expect(w.sealChecks).toEqual([])
-  // #1586: a script file run with the record only as its argument writes what cannot be read before it
-  // runs, so the seal check is never asked and nothing in #1524 lets it through: it is held, saying
-  // that make-settled.py writing into the scratchpad and a cp alone copying it in goes through.
-  const made = refusalOf(await call($, { tool: 'Bash', command: `python3 ~/.claude/skills/design-rounds/make-settled.py ${ROUND}/settled.json ${RECORD}` }))
-  expect(made).toContain(SKIP_QUESTION)
-  expect(made).toContain("write it into this session's scratchpad and copy it in with a cp alone")
-  expect(made).toContain('copied in whole by a cp alone')
-  expect(w.sealChecks).toEqual([])
+  // A script file run with the record as its argument is judged once it ran since #1593, below.
   expect(Object.keys(w.store)).toEqual([])
   expect(w.ran).toEqual([])
   // A check that cannot be run holds the file, never passes it.
@@ -2367,5 +2360,102 @@ test('#1586: a script handed a mod .ts hook file that draws nothing runs, and on
   const why = refusalOf(await call($, { tool: 'Bash', command: 'python3 scripts/gen.py payload/mods/demo/hooks/keys.ts' }))
   expect(why).toContain('was undone')
   expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  expect(w.ran.length).toBe(1)
+})
+
+// #1682: a tool run through npx and a module run with python -m were read as writing nothing by
+// mod-kit's write reader, so `npx prettier --write app/page.tsx` changed a screen file unasked on an
+// issue with no answer. Each is now a run, as a script file is, and a screen file it is handed is
+// judged as a write of it.
+test('#1682: a tool run through npx or a module run with python -m handed a screen file is held, on a branch with no answer, saying why', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of ['npx prettier --write /w/slate/app/page.tsx', 'cd /w/slate && npx --yes eslint --fix app/page.tsx', 'cd /w/slate && python3 -m tool app/globals.css'])
+    expect({ command, held: refusalOf(await call($, { tool: 'Bash', command })).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'npx prettier --write /w/slate/app/page.tsx' }))
+  expect(why).toContain('The design round guard cannot read what prettier does with app/page.tsx, which it is handed as an argument, before it runs')
+  // A test, or a file of no look kind, runs as it did.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'npx vitest run /w/slate/app/page.test.tsx' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'python3 -m json.tool /w/slate/data.json' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+// #1593: since #1586 a script run handed a settled page under docs/design was held on an issue with no
+// answer, read only scripts too (check-decision-map.py, capture-web.mjs --design), since what a script
+// writes cannot be read before it runs and so could not be seal checked. Now such a run runs, and the
+// page is read again once it ran, as #1296 reads a mod's .ts hook file: unchanged, or still a settled
+// design exactly as make-settled.py sealed it, it stands; otherwise it is put back as it was, what the
+// script wrote kept in the session's scratchpad first, and the call waits on Dan as a refused edit does.
+const RECORD_KEPT = (id: string) => KEPT(id, 'slack-channel-picker.html')
+const RECORD_FILES = { [`${SCRATCH}/.keep`]: '' }
+
+test('#1593: a script handed a settled page that leaves it unchanged or still sealed runs and stands, with no answer for the issue', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...RECORD_FILES, [RECORD]: SETTLED_PAGE } })
+  w.ctl.sealed = [SETTLED_PAGE]
+  // Read only: the page is as it was, so the seal check is not even asked.
+  for (const command of [`python3 ~/.claude/skills/design-rounds/check-decision-map.py ${RECORD}`, `node ~/.claude/skills/design-rounds/capture-web.mjs --design ${RECORD} ${ROUND}/shots`])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.sealChecks).toEqual([])
+  expect(w.files[RECORD]).toBe(SETTLED_PAGE)
+  // make-settled.py writing a new settled page straight into docs/design: sealed, so it stands.
+  delete w.files[RECORD]
+  w.ctl.shell = { [RECORD]: SETTLED_PAGE }
+  expect(refusalOf(await call($, { tool: 'Bash', command: `python3 ~/.claude/skills/design-rounds/make-settled.py ${ROUND}/settled.json ${RECORD}` }))).toBe('')
+  expect(w.sealChecks).toEqual([{ argv: SEAL_CHECK, stdin: SETTLED_PAGE }])
+  expect(w.files[RECORD]).toBe(SETTLED_PAGE)
+  expect(w.ran.length).toBe(3)
+  expect(w.cards).toEqual([])
+  expect(Object.keys(w.store)).toEqual([])
+})
+
+test('#1593: a script that leaves a settled page unsealed has it put back, its text kept, says why, and waits on Dan', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...RECORD_FILES, [RECORD]: SETTLED_PAGE } })
+  w.ctl.sealed = [SETTLED_PAGE]
+  w.ctl.shell = { [RECORD]: EDITED_FRAME }
+  const command = `python3 /w/slate/scripts/retitle.py ${RECORD}`
+  const why = refusalOf(await call($, { tool: 'Bash', command }))
+  expect(w.ran.length).toBe(1)
+  expect(why).toContain('docs/design/slack-channel-picker.html was undone')
+  expect(why).toContain('it has changed since make-settled.py sealed it')
+  expect(why).not.toContain('what the mod draws')
+  BOTH_WAYS(why)
+  const id = idIn(why) as string
+  expect(w.files[RECORD]).toBe(SETTLED_PAGE)
+  expect(w.files[RECORD_KEPT(id)]).toBe(EDITED_FRAME)
+  expect(why).toContain(RECORD_KEPT(id))
+  expect(w.cards.length).toBe(1)
+  // Dan answers Skip them, and the same command, sent again, stands.
+  expect(refusalOf(await askSkip($, w, why, SKIP_YES))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toBe('')
+  expect(w.files[RECORD]).toBe(EDITED_FRAME)
+})
+
+test('#1593: a new page a script makes unsealed is taken away, and on an issue Dan answered an unsealed page stands', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...RECORD_FILES } })
+  w.ctl.sealed = [SETTLED_PAGE]
+  w.ctl.shell = { [RECORD]: EDITED_FRAME }
+  const why = refusalOf(await call($, { tool: 'Bash', command: `python3 /w/slate/scripts/draft.py ${RECORD}` }))
+  expect(why).toContain('was undone')
+  expect(w.removed).toEqual([RECORD])
+  expect(w.files[RECORD]).toBeUndefined()
+  w.store['record:/w/slate|issue:978'] = { kind: 'settled', at: 1, label: 'issue #978 in slate', reading: ISSUE_READING }
+  expect(refusalOf(await call($, { tool: 'Bash', command: `python3 /w/slate/scripts/draft.py ${RECORD}` }))).toBe('')
+  expect(w.files[RECORD]).toBe(EDITED_FRAME)
+})
+
+test('#1593: a seal check that cannot run after the script, or a page unreadable before it, holds the page, saying so, never passed', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...RECORD_FILES, [RECORD]: SETTLED_PAGE } })
+  w.ctl.sealed = [SETTLED_PAGE]
+  w.ctl.shell = { [RECORD]: `${SETTLED_PAGE}\n` }
+  w.ctl.sealFails = true
+  const why = refusalOf(await call($, { tool: 'Bash', command: `python3 /w/slate/scripts/fix.py ${RECORD}` }))
+  expect(why).toContain('was undone')
+  expect(why).toContain('could not be checked (')
+  expect(w.files[RECORD]).toBe(SETTLED_PAGE)
+  // A page that cannot be read before the script runs is held before it runs, saying so.
+  w.ctl.sealFails = false
+  w.ctl.unreadable = RECORD
+  const before = refusalOf(await call($, { tool: 'Bash', command: `python3 /w/slate/scripts/fix.py ${RECORD}` }))
+  expect(before).toContain(SKIP_QUESTION)
+  expect(before).toContain('could not read docs/design/slack-channel-picker.html before the command ran')
   expect(w.ran.length).toBe(1)
 })

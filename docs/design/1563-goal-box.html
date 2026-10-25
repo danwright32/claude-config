@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>#1563, the Goal accomplished box, the settled design</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --dr-bg: #F4F1ED; --dr-text: #1B1613; --dr-muted: #665A51; --dr-border: #DDD5CD;
+    --dr-frame: #FFFFFF; --dr-link: #1D5A96; --dr-target: #F7E3BE; --dr-warn: #A3260F;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --dr-bg: #171412; --dr-text: #EDE6DF; --dr-muted: #ADA197; --dr-border: #3F3731;
+      --dr-frame: #FFFFFF; --dr-link: #8FBDEB; --dr-target: #3D3122; --dr-warn: #F29A80;
+    }
+  }
+  body { margin: 0; background: var(--dr-bg); color: var(--dr-text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .dr-doc { max-width: 1400px; margin: 0 auto; padding: 32px 24px 64px; }
+  .dr-doc h1 { font-size: 28px; margin: 0 0 6px; }
+  .dr-doc h2 { font-size: 18px; margin: 36px 0 10px; }
+  .dr-doc h3 { font-size: 15px; margin: 24px 0 8px; }
+  .dr-meta { color: var(--dr-muted); font-size: 13px; margin: 0; }
+  .dr-decisions li { margin: 0 0 10px; }
+  .dr-how { color: var(--dr-muted); font-size: 13px; }
+  .dr-frame { border: 1px solid var(--dr-border); background: var(--dr-frame); display: block; }
+  .dr-trouble { color: var(--dr-warn); font-weight: 600; max-width: 72ch; margin: 0 0 8px; }
+  .dr-requirements { list-style: none; padding-left: 0; }
+  .dr-requirements li { margin: 0 -6px 10px; padding: 2px 6px; border-radius: 4px; scroll-margin-top: 16px; }
+  .dr-requirements li:target { background: var(--dr-target); outline: none; }
+  .dr-decisions a { color: var(--dr-link); text-decoration: underline; text-underline-offset: 2px; }
+  .dr-decisions a:focus-visible { outline: 2px solid var(--dr-link); outline-offset: 2px; border-radius: 2px; }
+</style></head>
+<body><div class="dr-doc">
+<h1>#1563, the Goal accomplished box</h1>
+<p>For Dan, at the end of a session whose /goal was met or whose request is finished. Settled in one design round on 2026-10-24, where Dan chose option 3, Green border and heading, over a grey card, a green heading in a grey card, and a text box in the reply.</p>
+<p class="dr-meta">The settled design. The Claude Code terminal, which is itself the chrome of a mod. Every frame is drawn at its own width, from the committed fixture the built page renders too. The build is done when it scores 100% against this file on both halves.</p>
+<h2>Requirements</h2>
+<ul class="dr-requirements"><li id="req-1" tabindex="-1"><strong>1</strong> When a /goal is met, or the work Dan asked for is finished, a box says GOAL ACCOMPLISHED, naming the goal.</li><li id="req-2" tabindex="-1"><strong>2</strong> The box lists what shipped, one short line each: issues closed, pull requests merged and live.</li><li id="req-3" tabindex="-1"><strong>3</strong> The box is green where the surface can render colour.</li></ul>
+<h2>Decisions</h2>
+<ol class="dr-decisions"><li id="D1"><strong>D1</strong> The box is a card under the tool result row, its heading GOAL ACCOMPLISHED in bold. Dan chose a card over a text box in the reply, so it reads as the end of the session rather than more prose. <span class="dr-how"><a href="#req-1">Requirement 1</a>. Checked on f1: a card holds the bold line GOAL ACCOMPLISHED.</span></li><li id="D2"><strong>D2</strong> The goal is the first line under the heading, in plain text. the box names the goal before what shipped. <span class="dr-how"><a href="#req-1">Requirement 1</a>. Checked on f1: the line after GOAL ACCOMPLISHED is the goal, not coloured.</span></li><li id="D3"><strong>D3</strong> Each thing that shipped is its own line led by a bullet, the line itself plain. Dan settled on the goal plus a short list of what shipped (2026-10-23). <span class="dr-how"><a href="#req-2">Requirement 2</a>. Checked on f1: each shipped line follows a bullet and is not coloured.</span></li><li id="D4"><strong>D4</strong> The card&#x27;s border, the heading and the bullets are the success green; nothing else is coloured. Dan chose Green border and heading so the box reads at a glance as the end. <span class="dr-how"><a href="#req-3">Requirement 3</a>. Checked on f1: the card&#x27;s border, the heading and each bullet are green, and no other text is.</span></li></ol>
+<h2>Exceptions Dan approved</h2>
+<p>None. A deliberate difference from this design is a new design round, or an exception Dan approves in his own words, recorded here.</p>
+<h2>Frames</h2>
+<h3>A /goal met, dark terminal <span class="dr-meta">f1, 820 wide</span></h3><iframe class="dr-frame" data-frame="f1" title="A /goal met, dark terminal" style="width:820px;height:400px"></iframe>
+
+</div>
+<script type="application/json" id="decision-map">
+{
+ "requirements": [
+  {
+   "number": "1",
+   "text": "When a /goal is met, or the work Dan asked for is finished, a box says GOAL ACCOMPLISHED, naming the goal."
+  },
+  {
+   "number": "2",
+   "text": "The box lists what shipped, one short line each: issues closed, pull requests merged and live."
+  },
+  {
+   "number": "3",
+   "text": "The box is green where the surface can render colour."
+  }
+ ],
+ "decisions": [
+  {
+   "id": "D1",
+   "decision": "The box is a card under the tool result row, its heading GOAL ACCOMPLISHED in bold",
+   "why": "Dan chose a card over a text box in the reply, so it reads as the end of the session rather than more prose",
+   "requirement": "1",
+   "frames": [
+    "f1"
+   ],
+   "check": "a card holds the bold line GOAL ACCOMPLISHED"
+  },
+  {
+   "id": "D2",
+   "decision": "The goal is the first line under the heading, in plain text",
+   "why": "the box names the goal before what shipped",
+   "requirement": "1",
+   "frames": [
+    "f1"
+   ],
+   "check": "the line after GOAL ACCOMPLISHED is the goal, not coloured"
+  },
+  {
+   "id": "D3",
+   "decision": "Each thing that shipped is its own line led by a bullet, the line itself plain",
+   "why": "Dan settled on the goal plus a short list of what shipped (2026-10-23)",
+   "requirement": "2",
+   "frames": [
+    "f1"
+   ],
+   "check": "each shipped line follows a bullet and is not coloured"
+  },
+  {
+   "id": "D4",
+   "decision": "The card's border, the heading and the bullets are the success green; nothing else is coloured",
+   "why": "Dan chose Green border and heading so the box reads at a glance as the end",
+   "requirement": "3",
+   "frames": [
+    "f1"
+   ],
+   "check": "the card's border, the heading and each bullet are green, and no other text is"
+  }
+ ]
+}
+</script>
+<script type="application/json" id="design-frames">
+{
+ "frames": [
+  {
+   "id": "f1",
+   "title": "A /goal met, dark terminal",
+   "width": 820
+  }
+ ],
+ "kind": "terminal"
+}
+</script>
+<script type="application/json" id="design-exceptions">
+{
+ "exceptions": []
+}
+</script>
+<script>
+var DR_TEMPLATE = "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<style>\nhtml, body { margin: 0; }\n<\/style>\n<style>\n/* The Claude Code terminal, dark only (claude-config#651). Dan does not use a light\n   terminal, so there is no light variant and no colour scheme query: a second look would\n   be kept in step for nobody, and a query would draw it on a Mac set to light.\n\n   Every class carries the term- prefix, so a round's own classes (they were .t, .line and\n   .dim in every hand written round) cannot collide with these. A round whose variable IS\n   part of the terminal's look overrides a rule here in its own stylesheet, which comes\n   after this one on the page. */\n.term-window { box-sizing: border-box; background: #1b1b1d; color: #e6e6e6;\n  border: 1px solid #333; border-radius: 8px; overflow: hidden; line-height: 1.6;\n  font-family: Menlo, ui-monospace, SFMono-Regular, monospace; color-scheme: dark; }\n/* Grey dots, not the red, amber and green of a real title bar: amber and red mean\n   something in the band, and decoration must not compete with them. */\n.term-titlebar { display: flex; align-items: center; gap: 7px; height: 28px;\n  padding: 0 12px; background: #2a2a2d; }\n.term-dot { width: 11px; height: 11px; border-radius: 50%; background: #4a4a4e; }\n.term-title { margin-left: 8px; color: #aaaaaa; font: 12px -apple-system, BlinkMacSystemFont, sans-serif; }\n.term-body { box-sizing: border-box; display: flex; flex-direction: column; padding: 10px 14px 8px; }\n.term-spacer { flex: 1; }\n.term-line { white-space: pre-wrap; }\n.term-band { margin: 2px 0 6px; }\n.term-prompt { border: 1px solid #555555; border-radius: 4px; padding: 4px 8px; white-space: pre-wrap; }\n.term-caret { background: #8a8a8a; }\n.term-footer { font-size: .92em; color: #9a9a9a; }\n.term-status { padding-top: 4px; white-space: pre-wrap; font-size: .92em; color: #9a9a9a; }\n.term-amber { color: #e5a83b; }\n.term-grey { color: #9a9a9a; }\n.term-dim { color: #7a7a7a; }\n.term-red { color: #f07167; }\n.term-violet { color: #a99cf0; }\n.term-white { color: #ffffff; }\n.term-bold { font-weight: 700; }\n.term-button { color: #ffffff; font-weight: 700; }\n.term-button-off { color: #666666; font-weight: 400; }\n.term-card { margin: 2px 0 4px; }\n.term-card-box { border: 1px solid; border-radius: 6px; padding: 2px 8px; }\n.term-card-rule { border-left: 2px solid; padding: 0 0 0 10px; }\n.term-divider { height: 0; border-top: 1px solid; margin: 4px 0; }\n.term-edge-grey { border-color: #777777; }\n.term-edge-amber { border-color: #e5a83b; }\n.term-edge-violet { border-color: #a99cf0; }\n.term-edge-red { border-color: #f07167; }\n\n/* Claude Code's success green in a dark terminal, which the shared terminal does not ship. */\n.gb-green { color: #4eba65; }\n.gb-edge-green { border-color: #4eba65 !important; }\n.gb-pre { white-space: pre; }\n\n<\/style>\n<\/head><body><div id=\"dr-slot\"><\/div>\n<script>window.DESIGN_FIXTURE = {\"goal\": \"complete all open issues\", \"shipped\": [\"#1691 and #1674 closed, PR #1704 merged and live\", \"#1697, #1675 and #1676 closed, PR #1705 merged and live\", \"#1695 and #1583 closed, PR #1706 merged and live\"]};<\/script>\n<script>\n/* The Claude Code terminal, dark, for design rounds about mods (claude-config#651).\n\n   A spec asks for it with \"screen\": \"terminal\", and make-switcher.py puts this file and\n   terminal.css on the page ahead of the round's own builder. The builder then states only\n   what varies:\n\n     function buildScreen(variant) {\n       var T = Terminal;\n       return T.screen({\n         title: \"claude-config\",\n         transcript: [T.user(\"keep going\"), \"Merging #653 once its checks pass.\"],\n         band: [[T.amber(\"Work has more room\"), \"  \", T.button(\"Switch\")]]\n       });\n\n   The status line is the built one unless the round names other segments, which are text only:\n   the real line is all grey, divided by |.\n     }\n\n   Everything lives under the one name Terminal. Every hand written round declared its own\n   el, span and line at the top level, and a library declaring those too would be silently\n   replaced by the builder's, so nothing here reaches the page's top level but that name.\n\n   Anything misspelt THROWS, naming what it did not recognise: a style, a card kind, an\n   option. The switcher reports a throwing builder on the page, quoting the message, so a\n   typo is a sentence on screen rather than a colour that quietly is not there. */\nvar Terminal = (function () {\n  \"use strict\";\n\n  var STYLES = [\"amber\", \"grey\", \"red\", \"violet\", \"bold\", \"dim\", \"white\"];\n  var CARDS = [\"box\", \"rule\", \"none\"];\n  var EDGES = [\"grey\", \"amber\", \"violet\", \"red\"];\n  var OPTIONS = [\"title\", \"width\", \"height\", \"fontSize\", \"transcript\", \"band\",\n                 \"prompt\", \"footer\", \"status\"];\n  /* The status line as the status bar mod draws it (docs/mods-design.md, \"Status bar (#610)\"):\n     every always-shown fact in the settled order, so a round that names none shows the line Dan\n     really has (claude-config#699). The switcher's tests compare it with the design record. */\n  var BUILT_STATUS = [\"claude-config\", \"5h 68% (1h 52m)\", \"week 91% (4d 14h)\", \"cache 41m\",\n                      \"Opus 5.5 (high)\", \"Dan, Personal\"];\n\n  function refuse(message) { throw new Error(\"Terminal: \" + message); }\n\n  function has(list, value) { return list.indexOf(value) >= 0; }\n\n  function node(tag, cls, text) {\n    var e = document.createElement(tag);\n    if (cls) e.className = cls;\n    if (text !== undefined) e.textContent = text;\n    return e;\n  }\n\n  function styleClasses(styles, what) {\n    return styles.map(function (s) {\n      if (!has(STYLES, s)) {\n        refuse('unknown style \"' + s + '\" on ' + what + \". The styles are \" + STYLES.join(\", \") + \".\");\n      }\n      return \"term-\" + s;\n    }).join(\" \");\n  }\n\n  /* One piece of a line: plain text, or something one of the helpers below made. */\n  function piece(p) {\n    if (typeof p === \"string\" || typeof p === \"number\") return document.createTextNode(String(p));\n    if (p && p.nodeType === 1) return p;\n    refuse(\"a line can hold text or what a Terminal helper returns, and was given \" + JSON.stringify(p) + \".\");\n  }\n\n  /* run(\"text\", \"amber\", \"bold\"): text in one or more styles. */\n  function run(text) {\n    var styles = Array.prototype.slice.call(arguments, 1);\n    return node(\"span\", styleClasses(styles, '\"' + text + '\"'), String(text));\n  }\n\n  function shorthand(style) { return function (text) { return run(text, style); }; }\n\n  /* line(parts, \"dim\"): a line of pieces, optionally styled as a whole. */\n  function line(parts) {\n    var styles = Array.prototype.slice.call(arguments, 1);\n    var d = node(\"div\", \"term-line\" + (styles.length ? \" \" + styleClasses(styles, \"a line\") : \"\"));\n    (Array.isArray(parts) ? parts : [parts]).forEach(function (p) { d.append(piece(p)); });\n    return d;\n  }\n\n  /* What a transcript, band or card row may be: a string, an array of pieces, or an element. */\n  function row(r) {\n    if (typeof r === \"string\") return line([r]);\n    if (Array.isArray(r)) return line(r);\n    if (r && r.nodeType === 1) return r;\n    refuse(\"a row is text, a list of pieces or what a Terminal helper returns, and was given \" + JSON.stringify(r) + \".\");\n  }\n\n  function rows(list, what) {\n    if (list === undefined || list === null) return [];\n    if (!Array.isArray(list)) refuse(what + \" is a list of rows.\");\n    return list.map(row);\n  }\n\n  /* button(\"Switch\"): drawn [ Switch ], as Claude Code draws one. {disabled: true} greys it. */\n  function button(label, opts) {\n    var off = opts && opts.disabled;\n    return node(\"span\", off ? \"term-button term-button-off\" : \"term-button\", \"[ \" + label + \" ]\");\n  }\n\n  /* user(\"words\"): what the person typed, as the transcript shows it. */\n  function user(text) { return line([run(\"> \", \"grey\"), String(text)]); }\n\n  /* card(\"box\" | \"rule\" | \"none\", rows, {edge: \"amber\"}): a group of rows, boxed, ruled down\n     its left edge, or neither, so a round about the card's shape names it in one field. */\n  function card(kind, list, opts) {\n    if (!has(CARDS, kind)) refuse('unknown card \"' + kind + '\". The cards are ' + CARDS.join(\", \") + \".\");\n    var edge = (opts && opts.edge) || \"grey\";\n    if (!has(EDGES, edge)) refuse('unknown card edge \"' + edge + '\". The edges are ' + EDGES.join(\", \") + \".\");\n    var c = node(\"div\", \"term-card term-card-\" + kind + \" term-edge-\" + edge);\n    rows(list, \"a card\").forEach(function (r) { c.append(r); });\n    return c;\n  }\n\n  /* divider(\"violet\"): a rule across the band, as a dialog's top edge is drawn. */\n  function divider(edge) {\n    edge = edge || \"grey\";\n    if (!has(EDGES, edge)) refuse('unknown divider edge \"' + edge + '\". The edges are ' + EDGES.join(\", \") + \".\");\n    return node(\"div\", \"term-divider term-edge-\" + edge);\n  }\n\n  function size(value, fallback, what) {\n    if (value === undefined) return fallback;\n    if (typeof value !== \"number\" || !(value > 0)) refuse(what + \" is a number of pixels, and was given \" + JSON.stringify(value) + \".\");\n    return value;\n  }\n\n  /* screen({...}): the whole window. The transcript sits at the top; the band, the prompt,\n     the footer and the status line sit at the foot, as they do in Claude Code, with the\n     space between them taken up. The body has a MINIMUM height, never a fixed one, so a\n     band taller than expected grows the window rather than being cut off. */\n  function screen(opts) {\n    opts = opts || {};\n    Object.keys(opts).forEach(function (k) {\n      if (!has(OPTIONS, k)) refuse('unknown option \"' + k + '\". The options are ' + OPTIONS.join(\", \") + \".\");\n    });\n    var win = node(\"div\", \"term-window\");\n    win.style.width = size(opts.width, 820, \"width\") + \"px\";\n    win.style.fontSize = size(opts.fontSize, 13, \"fontSize\") + \"px\";\n\n    var bar = node(\"div\", \"term-titlebar\");\n    bar.append(node(\"span\", \"term-dot\"), node(\"span\", \"term-dot\"), node(\"span\", \"term-dot\"),\n               node(\"span\", \"term-title\", opts.title === undefined ? \"claude-config\" : String(opts.title)));\n    win.append(bar);\n\n    var body = node(\"div\", \"term-body\");\n    body.style.minHeight = size(opts.height, 330, \"height\") + \"px\";\n    rows(opts.transcript, \"transcript\").forEach(function (r) { body.append(r); });\n    body.append(node(\"div\", \"term-spacer\"));\n\n    var band = rows(opts.band, \"band\");\n    if (band.length) {\n      var b = node(\"div\", \"term-band\");\n      band.forEach(function (r) { b.append(r); });\n      body.append(b);\n    }\n\n    if (opts.prompt !== false) {\n      var p = node(\"div\", \"term-prompt\");\n      p.append(run(\"> \", \"grey\"), document.createTextNode(opts.prompt === undefined ? \"\" : String(opts.prompt)),\n               node(\"span\", \"term-caret\", \" \"));\n      body.append(p);\n    }\n\n    if (opts.footer !== undefined) {\n      var f = row(opts.footer);\n      f.classList.add(\"term-footer\");\n      body.append(f);\n    }\n\n    var status = opts.status === undefined ? BUILT_STATUS : opts.status;\n    if (status !== false) {\n      if (!Array.isArray(status)) refuse(\"status is a list of segments, or false for none.\");\n      var s = node(\"div\", \"term-status\");\n      status.forEach(function (segment) {\n        if (typeof segment !== \"string\" && typeof segment !== \"number\") {\n          refuse(\"a status segment is text, because the status line is all grey (docs/mods-design.md); \" +\n                 \"a scope mode or anything amber goes in the band. It was given \" +\n                 (segment && segment.nodeType === 1 ? \"a styled run\" : JSON.stringify(segment)) + \".\");\n        }\n      });\n      // One run of text in the status line's own grey, divided by |, as statusline.sh prints it.\n      s.append(document.createTextNode(status.map(String).join(\" | \")));\n      body.append(s);\n    }\n\n    win.append(body);\n    return win;\n  }\n\n  return {\n    screen: screen,\n    line: line,\n    run: run,\n    amber: shorthand(\"amber\"),\n    grey: shorthand(\"grey\"),\n    red: shorthand(\"red\"),\n    violet: shorthand(\"violet\"),\n    bold: shorthand(\"bold\"),\n    dim: shorthand(\"dim\"),\n    white: shorthand(\"white\"),\n    button: button,\n    user: user,\n    card: card,\n    divider: divider,\n    STYLES: STYLES.slice(),\n    CARDS: CARDS.slice(),\n    EDGES: EDGES.slice()\n  };\n})();\n\n// #1563 round 1: the Goal accomplished box after a /goal is met. The goal and the shipped\n// lines are identical in every option; only how the box uses colour (its form) changes.\n// The goal and the shipped lines, from the committed fixture the mod's tests draw too.\nvar GOAL = window.DESIGN_FIXTURE.goal;\nvar SHIPPED = window.DESIGN_FIXTURE.shipped;\n\nfunction green(el) { el.classList.add(\"gb-green\"); return el; }\n\nfunction cardBox(T, variant) {\n  var heading = T.run(\"GOAL ACCOMPLISHED\", \"bold\");\n  if (variant.heading === \"green\") green(heading);\n  var rows = [[heading], [GOAL]];\n  SHIPPED.forEach(function (s) {\n    var dot = T.run(\"\u2022 \");\n    if (variant.heading === \"green\") green(dot);\n    rows.push([dot, s]);\n  });\n  var c = T.card(\"box\", rows);\n  if (variant.border === \"green\") c.classList.add(\"gb-edge-green\");\n  return c;\n}\n\nfunction textBox(T) {\n  var bar = \"\u2550\".repeat(40);\n  var label = \"GOAL ACCOMPLISHED\";\n  var pad = \" \".repeat(40 - label.length - 1);\n  var lines = [\n    T.line([\"\u2554\" + bar + \"\u2557\"], \"white\"),\n    T.line([\"\u2551 \" + label + pad + \"\u2551\"], \"white\"),\n    T.line([\"\u255a\" + bar + \"\u255d\"], \"white\"),\n    T.line([\"Goal: \" + GOAL]),\n  ];\n  SHIPPED.forEach(function (s) { lines.push(T.line([\"  \" + s])); });\n  lines.forEach(function (l) { l.classList.add(\"gb-pre\"); });\n  return lines;\n}\n\nfunction buildScreen(variant) {\n  var T = Terminal;\n  var transcript = [\n    T.user(\"/goal complete all open issues\"),\n    \"Every batch is merged and live, so the goal is met.\"\n  ];\n  if (variant.form === \"card\") {\n    transcript.push(T.line([T.run(\"goal-box\", \"grey\"), T.run(\" show the box\", \"dim\")]));\n    transcript.push(cardBox(T, variant));\n  } else {\n    transcript = transcript.concat(textBox(T));\n  }\n  return T.screen({ title: \"claude-config\", transcript: transcript, height: 360 });\n}\n\n<\/script>\n<script>\n(function () {\n  \"use strict\";\n  var V = \"__DR_VARIANT__\";\n  var slot = document.getElementById(\"dr-slot\");\n  var report = { built: false, why: \"\" };\n  /* A slot the captured page's text names but its document does not hold (an id inside a comment)\n     is said as that, never as the builder throwing (lessons review of #1364). */\n  if (!slot) {\n    window.DR_FRAME = { built: false, noSlot: true, why: \"the captured page holds no element \" + \"dr-slot\" };\n    return;\n  }\n  try {\n    var node = buildScreen(V);\n    if (!node || !node.nodeType) throw new Error(\"buildScreen returned no element\");\n    slot.replaceChildren(node);\n    report.built = true;\n  } catch (err) {\n    report.why = String(err && err.message ? err.message : err);\n  }\n  window.DR_FRAME = report;\n  if (report.built) report.tell = function () {\n    if (typeof screenShown === \"function\") screenShown(V, slot.firstElementChild);\n  };\n  if (report.tell) {\n    try { report.tell(); } catch (err) { report.shownWhy = String(err && err.message ? err.message : err); }\n  }\n  /* A key pressed while this frame has the focus goes to the page around it, unless the design took\n     it or it was typed into a field, as the switcher's own keys yield (claude-config#356). */\n  document.addEventListener(\"keydown\", function (event) {\n    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;\n    var t = event.target;\n    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|OPTION)$/.test(t.tagName || \"\"))) return;\n    if (window.parent && window.parent !== window) window.parent.postMessage({ drKey: event.key }, \"*\");\n  });\n})();\n<\/script>\n<\/body><\/html>\n";
+var DR_VARIANTS = {"f1": "{\"key\": \"3\", \"name\": \"Green border and heading\", \"form\": \"card\", \"heading\": \"green\", \"border\": \"green\"}"};
+/* A frame's whole document: the captured chrome with the round drawn in it from the fixture. The web
+   adapter of the design match score draws it as a page of its own at the frame's width. The template
+   holds the variant as the quoted token make-settled.py wrote, replaced here by the frame's own. */
+function designFrameDocument(id) {
+  if (!Object.prototype.hasOwnProperty.call(DR_VARIANTS, id)) throw new Error("this design has no frame " + id);
+  return DR_TEMPLATE.split("\"__DR_VARIANT__\"").join(DR_VARIANTS[id]);
+}
+/* What kept a frame of this design from being drawn whole, from the report its document leaves as
+   window.DR_FRAME, or "" when nothing did (claude-config#1539). This page says it beside the frame, and the
+   design match score asks this file for it, so the two never word a frame differently. */
+function designFrameTrouble(report) {
+  if (!report) return "its builder never ran, so nothing of the round is drawn in it";
+  if (report.noSlot) return String(report.why) + ", so there is nowhere in it to draw the round";
+  if (!report.built) return "its builder threw (" + String(report.why) + "), so nothing of the round is drawn in it";
+  if (report.shownWhy) return "its builder's screenShown threw (" + String(report.shownWhy) + "), so whatever that draws once the frame is shown is missing from it";
+  return "";
+}
+Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), function (frame) {
+  frame.addEventListener("load", function () {
+    var fixed = {"f1": false};
+    var d = frame.contentDocument;
+    if (d && !fixed[frame.dataset.frame]) frame.style.height = d.documentElement.scrollHeight + "px";
+    var trouble = designFrameTrouble(frame.contentWindow && frame.contentWindow.DR_FRAME);
+    var said = frame.previousElementSibling;
+    if (said && said.classList.contains("dr-trouble")) said.remove();
+    if (!trouble) return;
+    var note = document.createElement("p");
+    note.className = "dr-trouble";
+    note.textContent = "This frame is not the design: " + trouble + ".";
+    frame.before(note);
+  });
+  frame.srcdoc = designFrameDocument(frame.dataset.frame);
+});
+</script>
+</body></html>
+<!-- design-settled sha256:c5a38e657e3fd7fb956b21ae0af33f555bcac9b981f21870e479c26b923da92c -->

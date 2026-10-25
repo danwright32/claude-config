@@ -23,8 +23,17 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$DIR/../../.." && pwd)"
+# Found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663).
+REPO="$(bash "$DIR/../../hooks/lib/checkout-root.sh" "$DIR/../.." 2>/dev/null || true)"
 GUARD="$DIR/check-chrome-launches.py"
 HEADLESS_DOM="$DIR/headless-dom.sh"
 KILL_TREE="$DIR/../../hooks/lib/kill-tree.sh"
@@ -100,14 +109,15 @@ fi
 chmod 600 "$TMP/locked/hidden.sh"
 
 # --- 2. the guard, on this whole repository ---
-# Three folders up is the checkout only when this runs from one: from the installed copy in
-# ~/.claude/skills it is the home folder, which is never scanned (check-root-guard.sh, #503).
-if [ -e "$REPO/claude-sync" ] && [ -d "$REPO/payload" ]; then
+# REPO is the checkout lib/checkout-root.sh finds for this copy's payload folder ($DIR/../..), and
+# empty when there is none: an installed copy in ~/.claude/skills, or a copy inside some other
+# repository, so neither is ever scanned (#1567, #1663).
+if [ -n "$REPO" ]; then
   python3 -I "$GUARD" "$REPO" > "$TMP/repo.out" 2>&1; rc=$?
   check_eq "every headless Chrome this repository starts goes through headless-dom.sh" "0" "$rc"
   [ "$rc" -eq 0 ] || sed 's/^/    /' "$TMP/repo.out"
 else
-  echo "SUITE-PART-UNMEASURED $REPO is not a claude-config checkout (no claude-sync and payload there), so the repository was not scanned for Chrome started around headless-dom.sh"
+  echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the repository was not scanned for Chrome started around headless-dom.sh"
 fi
 
 # --- 3. HEADLESS_DOM_EXEC, on a stand in Chrome ---
@@ -152,9 +162,9 @@ fi
 before(){ ls -1 "$clones" 2>/dev/null | LC_ALL=C sort > "$TMP/clones.before"; }
 left(){ ls -1 "$clones" 2>/dev/null | LC_ALL=C sort | LC_ALL=C comm -13 "$TMP/clones.before" - | tr '\n' ' ' | sed 's/ $//'; }
 # Ends what a test started, by the pid it recorded (L1011), and waits for it to be gone.
-end_tree(){ [ -n "${1:-}" ] || return 0; bash "$KILL_TREE" "$1" 2>/dev/null; kill -KILL "$1" 2>/dev/null; local n=0; while kill -0 "$1" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done; }
+end_tree(){ [ -n "${1:-}" ] || return 0; bash "$KILL_TREE" "$1" 2>/dev/null; kill -KILL "$1" 2>/dev/null; hang_wait "! kill -0 $1 2>/dev/null"; }
 # Waits, bounded, for a file to hold something (L290).
-await_file(){ local n=0; while [ ! -s "$1" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done; [ -s "$1" ]; }
+await_file(){ hang_wait "[ -s '$1' ]"; }
 
 if [ ! -x "$REAL_CHROME" ]; then
   echo "SUITE-PART-UNMEASURED no Chrome at $REAL_CHROME, so whether a killed real Chrome leaves its copy behind was not measured"
@@ -201,7 +211,7 @@ JS
       : > "$TMP/node.out"
       ( cd "$TMP" && exec node "$TMP/abandon.mjs" "$DIR/score/capture-web.mjs" ) > "$TMP/node.out" 2>&1 &
       np=$!
-      n=0; while ! grep -q -e '^drawn ' -e '^NO-PLAYWRIGHT' "$TMP/node.out" && kill -0 "$np" 2>/dev/null && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done
+      hang_wait "grep -q -e '^drawn ' -e '^NO-PLAYWRIGHT' '$TMP/node.out' || ! kill -0 $np 2>/dev/null"
       said="$(head -c 400 "$TMP/node.out")"
       kids="$(pgrep -P "$np" | tr '\n' ' ')"
       kill -KILL "$np" 2>/dev/null; wait "$np" 2>/dev/null

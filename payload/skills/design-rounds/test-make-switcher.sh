@@ -21,6 +21,16 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679), handed to the stand ins this suite writes as FAKE_HANG_S, since they run as
+# processes of their own.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+export FAKE_HANG_S="$HANG_S"
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$DIR/make-switcher.py"
 TMP="$(mktemp -d)"
@@ -223,7 +233,7 @@ if [ -n "${FAKE_CLONE_MADE:-}" ]; then
   [ -n "${FAKE_FOREIGN_MADE:-}" ] && mktemp -d "$HEADLESS_DOM_CLONE_DIR/code_sign_clone.XXXXXX" > "$FAKE_FOREIGN_MADE"
   # Waits, bounded, for a process outside this run to open the copy as well.
   if [ -n "${FAKE_WAIT_HELD:-}" ]; then
-    n=0; while [ ! -e "$FAKE_WAIT_HELD" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
+    t0=$SECONDS; while [ ! -e "$FAKE_WAIT_HELD" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.05; done
   fi
 fi
 # A Chrome that gives up at once: half a page, a clean exit, nothing left running.
@@ -309,9 +319,7 @@ else
   # A copy something outside this run still has open is in use, so it stays though this run's
   # Chrome made it.
   holder(){ # holder <file naming the clone> <ready file>: opens that clone and keeps it open
-    local n=0
-    while [ ! -s "$1" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
-    [ -s "$1" ] || exit 1
+    hang_wait "[ -s '$1' ]" 0.05 || exit 1
     exec 7< "$(cat "$1")/Google Chrome"
     : > "$2"
     exec sleep 60
@@ -1264,7 +1272,7 @@ check "the page carries the terminal stylesheet" "${css_line:-NO-CSS-LINE}" "$te
 
 # Ahead of the round's own code, so the builder can call it at load and the round's own
 # stylesheet can override a rule when the terminal's look IS the round's variable.
-order="$(python3 - "$TMP/term.html" "${lib_line:-NO-LIB-LINE}" <<'ORDERPY'
+IFS= read -r -d '' order_prog <<'ORDERPY' || true
 import sys
 page = open(sys.argv[1], encoding="utf-8").read()
 # The builder's own text, not "function buildScreen": the library's header carries a worked
@@ -1272,7 +1280,7 @@ page = open(sys.argv[1], encoding="utf-8").read()
 lib = page.find(sys.argv[2]); own = page.find("T.card(variant.card")
 print("before" if 0 <= lib < own else "lib=%d builder=%d" % (lib, own))
 ORDERPY
-)"
+order="$(python3 -c "$order_prog" "$TMP/term.html" "${lib_line:-NO-LIB-LINE}" </dev/null)"
 check_eq "the terminal script comes before the round's builder" "before" "$order"
 
 # A round that does not ask for it gets none of it, so a round drawn in captured chrome carries none.
@@ -1298,7 +1306,7 @@ print(",".join(mod.top_level_names(src)))
 TGPY
 )"
 check_eq "the terminal script declares exactly one top level name" "Terminal" "$term_globals"
-bare_term="$(python3 - "$TERM_CSS" <<'TCPY'
+IFS= read -r -d '' bare_term_prog <<'TCPY' || true
 import re, sys
 try:
     css = open(sys.argv[1], encoding="utf-8").read()
@@ -1311,7 +1319,7 @@ if not names:
     print("NO-CLASSES")
 print(" ".join(n for n in names if not n.startswith("term-")))
 TCPY
-)"
+bare_term="$(python3 -c "$bare_term_prog" "$TERM_CSS" </dev/null)"
 check_eq "every class the terminal styles carries the term- prefix" "" "$bare_term"
 
 # Dark only. Dan does not use a light terminal, so a light variant would be a second look

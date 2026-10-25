@@ -161,7 +161,7 @@ fi
 # --- the hook's fallback payload has to be valid JSON ---
 # It is the one hand written JSON left in the hook. An unescaped quote there is
 # invisible: Claude Code drops the hook and the review simply stops happening.
-result="$(python3 - "$HOOK" <<'PY'
+IFS= read -r -d '' result_prog <<'PY' || true
 import json, re, sys
 
 src = open(sys.argv[1]).read()
@@ -183,7 +183,7 @@ for block in blocks:
         sys.exit(0)
 print("ok")
 PY
-)"
+result="$(python3 -c "$result_prog" "$HOOK" </dev/null)"
 check "the hook's fallback payload is valid JSON with a block decision and a reason" "$result"
 
 # ---------------------------------------------------------------------------

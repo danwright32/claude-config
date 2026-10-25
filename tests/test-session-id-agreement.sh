@@ -49,6 +49,14 @@ ROOT="$(cd "$DIR/.." && pwd)"
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$ROOT/payload/hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 pass=0
 fail=0
 check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); echo "ok: $1"; else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
@@ -103,8 +111,8 @@ MOD_LOG="$WORK/mod.log"
 
 python3 "$DIR/sleep-real-engine-model.py" "$WORK/model.port" "$WORK/model.log" &
 MODEL_PID=$!
-for _ in $(seq 1 50); do [ -s "$WORK/model.port" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
-[ -s "$WORK/model.port" ] || { check "the stand-in model starts" "no port after 5 seconds"; finish; }
+hang_wait '[ -s "$WORK/model.port" ]'
+[ -s "$WORK/model.port" ] || { check "the stand-in model starts" "no port within the hang ceiling, ${HANG_S}s"; finish; }
 PORT="$(cat "$WORK/model.port")"
 
 # The Bash call a step asks for: the id it carries and a look taken through gh-poll.sh, at one fixed

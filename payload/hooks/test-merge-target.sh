@@ -25,6 +25,16 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679), handed to the stand ins this suite writes as FAKE_HANG_S, since they run as
+# processes of their own.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+export FAKE_HANG_S="$HANG_S"
+
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The record of refused sign ins (claude-config#1626) is this suite's own, so the refusals it fakes
 # are never counted as this Mac's.
@@ -584,7 +594,7 @@ echo "merge-target: a merge through the GitHub API (claude-config#1181)"
 NO_GH="$(mktemp -d)"
 printf '#!/usr/bin/env bash\necho "no gh in this case" >&2\nexit 1\n' > "$NO_GH/gh"; chmod +x "$NO_GH/gh"
 API_CASES="$HOOK_DIR/../mods/scope-modes/tests/api-merge-cases.ts"
-api_rows="$(python3 - "$API_CASES" <<'PY' 2>&1
+IFS= read -r -d '' api_rows_prog <<'PY' || true
 import json, re, sys
 for line in open(sys.argv[1]):
     s = line.strip()
@@ -597,7 +607,7 @@ for line in open(sys.argv[1]):
     repo = "-" if "repo" not in row else ("!" if row["repo"] is None else row["repo"])
     print(("yes" if want else "no") + "\x1f" + repo + "\x1f" + row["command"])
 PY
-)"
+api_rows="$(python3 -c "$api_rows_prog" "$API_CASES" </dev/null 2>&1)"
 n_rows="$(printf '%s\n' "$api_rows" | grep -c $'\x1f')"
 # The control: a table that read as empty would agree with any recogniser at all (L98).
 if [ "$n_rows" -ge 20 ]; then pass; else fail "#1181 the shared table read as $n_rows rows from $API_CASES: $api_rows"; fi
@@ -1192,6 +1202,30 @@ mt_gh_read_class 'gh: Not Found (HTTP 404)'; eq "$?" "1" "an answer GitHub gave 
 mt_gh_read_class ''; eq "$?" "1" "an empty error is believed"
 eq "$MT_SIGNIN_RC" "6" "the sign in outcome is 6, a code no reader or caller already gives a meaning"
 
+echo "merge-target: a GitHub this Mac could not connect to is its own outcome, asked again (claude-config#1675)"
+# On 2026-10-24 merge-when-ready.sh stopped #1640 at 41m 36s on "could not read pull request #1640 ...
+# (error connecting to api.github.com). Nothing was merged." with no retry line. That is what gh prints
+# when it could not reach the host at all, with no HTTP status (gh 2.89 carries "error connecting to
+# %s", then "check your internet connection or https://githubstatus.com"), and none of
+# mt_gh_transient's transport words appear in it, so it was believed the first time. It is now its own
+# outcome (L35), asked again by the same loop, and said as such when it outlasts the tries (L11).
+CONNECT_ERR=$'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com'
+mt_gh_read_class "$CONNECT_ERR"; eq "$?" "${MT_CONNECT_RC:-unset}" "a connection gh could not make is its own outcome"
+mt_gh_read_class 'error connecting to api.github.com'; eq "$?" "${MT_CONNECT_RC:-unset}" "its first line alone is read the same"
+eq "${MT_CONNECT_RC:-unset}" "7" "the connection outcome is 7, a code no reader or caller already gives a meaning"
+mt_gh_read_class 'HTTP 401: Requires authentication (https://api.github.com/graphql)'; eq "$?" "$MT_SIGNIN_RC" "a refused sign in is still its own outcome beside it"
+unreachable(){ calls=$((calls + 1)); if [ "$tries_left" -gt 0 ]; then tries_left=$((tries_left - 1)); return 7; fi; return 0; }
+tries_left=1; calls=0; slept=""
+mt_retry_read 4 5 fake_sleep "" "" unreachable; eq "$?|$calls|$slept|${MT_CONNECT_FAILS:-unset}" "0|2| 5|1" "a connection that fails once is asked again after one wait, then answers, counted"
+tries_left=9; calls=0; slept=""
+mt_retry_read 4 5 fake_sleep "" "" unreachable; eq "$?|$calls|$slept|${MT_CONNECT_FAILS:-unset}" "7|4| 5 5 5|4" "a connection that keeps failing is tried four times in all, then reported as the connection"
+tries_left=9; calls=0; slept=""
+mt_retry_read 4 5 fake_sleep "$SECONDS" "" unreachable; eq "$?|$calls|$slept" "7|1|" "no connection retry is made whose wait would end past the deadline"
+said="$(MT_CONNECT_FAILS=4 mt_connect_said "pull request #7 in acme/widget" "error connecting to api.github.com" 2>&1)"
+case "$said" in *"could not connect to GitHub 4 times reading pull request #7 in acme/widget (error connecting to api.github.com)"*) pass ;; *) fail "the give up sentence names the connection, the count and what was read: [$said]" ;; esac
+case "$said" in *"never answered"*) pass ;; *) fail "and says GitHub never answered, not that it refused: [$said]" ;; esac
+case "$said" in *"refused the sign in"*|*"could not read"*) fail "and is never said as a refused sign in or an unreadable answer: [$said]" ;; *) pass ;; esac
+
 ghstub="$(mktemp -d "${TMPDIR:-/tmp}/mt-ghstub.XXXXXX")"
 # The token read gh answers: MT_TOKEN_MODE empty prints nothing (the keyring read came back empty),
 # anything else prints a stand in. Every call is logged, so the tests see the fresh read was made.
@@ -1342,6 +1376,79 @@ done
 wait
 eq "$(lines)" "20" "#1626 twenty runs at once leave twenty lines"
 eq "$(awk -F'\t' 'NF == 7 && $6 == "refused" && $7 == "present"' "$LEDGER" | cut -f4 | sort -u | wc -l | tr -d ' ')" "20" "#1626 each of them whole and its own"
+
+echo "merge-target: the refused sign in log keeps 90 days, trimmed safely when it is next written (claude-config#1670)"
+# Dan, 2026-10-24: "Keep 90 days". The log is only appended, so the trim writes the kept lines to a
+# new file and moves it over the log, and every writer holds the log's lock while it writes, so a line
+# appended by another run while one run trims is never lost with the old file.
+DAY=86400
+rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR"
+{
+  printf '%s\thost\tsess_a\trun-91\tmerge-when-ready.sh\trefused\tempty\n' "$((2000000 + 100 * DAY - 91 * DAY))"
+  printf '%s\thost\tsess_a\trun-89\tmerge-when-ready.sh\trefused\tempty\n' "$((2000000 + 100 * DAY - 89 * DAY))"
+  printf 'not-a-time\thost\tsess_a\trun-odd\tmerge-when-ready.sh\trefused\tempty\n'
+} > "$LEDGER"
+printf '%s' "$((2000000 + 100 * DAY))" > "$SIGNIN_CLOCK"
+MT_SIGNIN_RECORD_NOTE=""
+MT_SIGNIN_RUN=run-now mt_signin_record refused present
+runs_left="$(cut -f4 "$LEDGER" | tr '\n' ' ')"
+case " $runs_left" in *" run-91 "*) fail "#1670 a line 91 days old was kept after the next write: $runs_left" ;; *) pass ;; esac
+case " $runs_left" in *" run-89 "*) pass ;; *) fail "#1670 a line 89 days old was dropped: $runs_left" ;; esac
+case " $runs_left" in *" run-now "*) pass ;; *) fail "#1670 the line just written was lost to the trim: $runs_left" ;; esac
+# A line whose time cannot be read is never judged old (L50), so it is kept rather than destroyed.
+case " $runs_left" in *" run-odd "*) pass ;; *) fail "#1670 a line with no readable time was dropped: $runs_left" ;; esac
+eq "$(ls -A "$MT_SIGNIN_LEDGER_DIR" | tr '\n' ' ')" "refusals.tsv " "#1670 the trim leaves no copy or lock behind"
+eq "${MT_SIGNIN_RECORD_NOTE:-}" "" "#1670 a trim that worked says nothing"
+
+# A run that appends WHILE another trims is not lost: the trim pauses after writing the kept lines
+# (MT_SIGNIN_TRIM_PAUSE, a seam) and starts a second run's append there, then waits until that run
+# is either waiting for the lock (its lock sleep was called) or has finished. Without the lock its
+# line would land in the old file the move then replaces.
+rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR"
+printf '%s\thost\tsess_a\trun-old\tmerge-when-ready.sh\trefused\tempty\n' "$((2000000))" > "$LEDGER"
+WAITED="$SIGNIN_WORK/lock-waited"; rm -f "$WAITED" "$SIGNIN_WORK/racer.pid"
+# The second run's lock sleep says it is waiting, then waits on the condition itself, the lock being
+# released, polled under the hang ceiling (#1679) rather than for a fixed time (L290). It was 400
+# looks 25 ms apart, a ten second ceiling a loaded Mac can reach with nothing broken (a setting,
+# not a measurement).
+printf '#!/usr/bin/env bash\ntouch "%s"\nt0=$SECONDS\nwhile [ -d "%s" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.025; done\n' "$WAITED" "$LEDGER.lock" > "$SIGNIN_WORK/lock-sleep"; chmod +x "$SIGNIN_WORK/lock-sleep"
+signin_trim_pause() {
+  ( MT_SIGNIN_TRIM_PAUSE="" MT_SIGNIN_LOCK_SLEEP="$SIGNIN_WORK/lock-sleep" MT_SIGNIN_RUN=run-racer mt_signin_record refused present ) &
+  echo $! > "$SIGNIN_WORK/racer.pid"
+  hang_wait '[ -f "$WAITED" ] || ! kill -0 "$(cat "$SIGNIN_WORK/racer.pid")" 2>/dev/null' 0.025
+}
+MT_SIGNIN_TRIM_PAUSE=signin_trim_pause MT_SIGNIN_RUN=run-trimmer mt_signin_record refused present
+[ -f "$SIGNIN_WORK/racer.pid" ] && wait "$(cat "$SIGNIN_WORK/racer.pid")" 2>/dev/null
+runs_left="$(cut -f4 "$LEDGER" | tr '\n' ' ')"
+case " $runs_left" in *" run-old "*) fail "#1670 the trim did not run, so the race was not exercised: $runs_left" ;; *) pass ;; esac
+case " $runs_left" in *" run-trimmer "*) pass ;; *) fail "#1670 the trimming run's own line was lost: $runs_left" ;; esac
+case " $runs_left" in *" run-racer "*) pass ;; *) fail "#1670 a line appended while another run trimmed was lost: $runs_left" ;; esac
+eq "$(ls -A "$MT_SIGNIN_LEDGER_DIR" | tr '\n' ' ')" "refusals.tsv " "#1670 the race leaves no copy or lock behind"
+
+# A lock its holder never released (a run killed mid write) is broken once it is stale, rather than
+# blocking every later record; a fresh one is waited for, then written past and said.
+rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR/refusals.tsv.lock"
+touch -t 202001010000 "$MT_SIGNIN_LEDGER_DIR/refusals.tsv.lock"
+MT_SIGNIN_RUN=run-stale MT_SIGNIN_LOCK_SLEEP=true mt_signin_record refused present
+case "$(cut -f4 "$LEDGER" 2>/dev/null)" in *run-stale*) pass ;; *) fail "#1670 a stale lock stopped the record" ;; esac
+eq "$(ls -A "$MT_SIGNIN_LEDGER_DIR" | tr '\n' ' ')" "refusals.tsv " "#1670 a stale lock is cleared"
+rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR/refusals.tsv.lock"
+MT_SIGNIN_RECORD_NOTE=""
+MT_SIGNIN_RUN=run-held MT_SIGNIN_LOCK_SLEEP=true mt_signin_record refused present
+case "$(cut -f4 "$LEDGER" 2>/dev/null)" in *run-held*) pass ;; *) fail "#1670 a lock held by another run lost this run's line" ;; esac
+case "${MT_SIGNIN_RECORD_NOTE:-}" in
+  *"could not take the lock"*"claude-config#1670"*) pass ;;
+  *) fail "#1670 a record written without its lock is not said: ${MT_SIGNIN_RECORD_NOTE:-}" ;;
+esac
+# Written without the lock, the line is not safely recorded: a trim another run makes at that moment
+# replaces the file and can drop it, so the note claims no more than that (L11).
+case "${MT_SIGNIN_RECORD_NOTE:-}" in
+  *"was recorded"*) fail "#1670 a line written without the lock is said to be recorded: ${MT_SIGNIN_RECORD_NOTE:-}" ;;
+  *"written without the lock"*"a trim another run makes at the same moment may drop it"*) pass ;;
+  *) fail "#1670 the note does not say a trim at the same moment may drop the line: ${MT_SIGNIN_RECORD_NOTE:-}" ;;
+esac
+rmdir "$MT_SIGNIN_LEDGER_DIR/refusals.tsv.lock" 2>/dev/null
+printf '2000000' > "$SIGNIN_CLOCK"
 unset MT_SIGNIN_CLOCK
 rm -rf "$ghstub"
 

@@ -25,6 +25,16 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679), handed to the stand ins this suite writes as FAKE_HANG_S, since they run as
+# processes of their own.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+export FAKE_HANG_S="$HANG_S"
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The shipped hooks block in the checkout, the installed one under ~/.claude (claude-config#1237).
 . "$DIR/lib/settings-file.sh"
@@ -247,7 +257,7 @@ _ctl="$(grep -c . "$SHIM_LOG" 2>/dev/null)"
 # however late it runs. A stand-in hook whose first run leaves a detached job holding until the suite
 # releases it, after the measured run has returned; released, the job starts two shimmed commands.
 # Judged by the state, never by timing (L290): the job is waited on until it says it has finished,
-# with a one minute ceiling only a hang reaches, and its two commands must be in the settling run's
+# with the hang ceiling (lib/hang-wait.sh, #1679), and its two commands must be in the settling run's
 # log, so the control knows the straggler really ran (L470) before it reads the measured count.
 STRAGGLER="$WORK/straggler-hook.sh"
 cat > "$STRAGGLER" <<'EOS'
@@ -256,7 +266,7 @@ cat >/dev/null
 if [ ! -f "$CLAUDE_HOME/seeded" ]; then
   : > "$CLAUDE_HOME/seeded"
   nohup /bin/bash -c '
-    n=0; while [ ! -f "$CLAUDE_HOME/release" ] && [ "$n" -lt 1200 ]; do /bin/sleep 0.05; n=$((n + 1)); done
+    t0=$SECONDS; while [ ! -f "$CLAUDE_HOME/release" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do /bin/sleep 0.05; done
     cat /dev/null; cat /dev/null; : > "$CLAUDE_HOME/straggled"' </dev/null >/dev/null 2>&1 &
   exit 0
 fi
@@ -266,7 +276,7 @@ fresh straggler
 run_hook UserPromptSubmit "$STRAGGLER"; _settle_log="$SHIM_LOG"
 run_hook UserPromptSubmit "$STRAGGLER"; _measured_log="$SHIM_LOG"
 : > "$F/home/.claude/release"
-_n=0; while [ ! -f "$F/home/.claude/straggled" ] && [ "$_n" -lt 1200 ]; do sleep 0.05; _n=$((_n + 1)); done
+hang_wait '[ -f "$F/home/.claude/straggled" ]' 0.05
 _late="$(grep -c '^cat$' "$_settle_log" 2>/dev/null)"
 _counted="$(grep -c . "$_measured_log" 2>/dev/null)"
 if [ ! -f "$F/home/.claude/straggled" ] || [ "${_late:-0}" -lt 3 ]; then

@@ -15,9 +15,32 @@ import { ADD_ON_CONTEXT, AMENDMENT_CONTEXT, TOAST, isAddOnNote, isAmendment, res
 // The words Dan typed always reach the model unchanged; only context is added.
 
 // Whether the main loop's last turn ended because Dan interrupted it, not yet answered by a message
-// of his. Held for this session's process only: a hot reload of the mod forgets it, which costs at
-// most one reply read as a plain message, the behaviour without the mod.
-let interrupted = false
+// of his. Once held in the module, where a hot reload forgot it and his reply was read as a plain
+// message; in $.state since #1703, which the engine holds for the session across a reload, as every
+// session fact of a mod now is. One that cannot be read is read as no interrupt, the side that
+// changes nothing (the reply goes on exactly as typed), and one that cannot be written is logged.
+const interruptedRef = { plugin: 'addon-notes', key: 'interrupted' } as const
+// This module holds the latest it recorded too, which decides while it holds one, so a record that
+// cannot be written (logged) neither loses an interrupt nor leaves an answered one standing here
+// (push review of PR for #1703); a fresh module after a reload reads $.state alone.
+let interruptedHere: boolean | undefined
+const wasInterrupted = async ($: EngineInterface): Promise<boolean> => {
+  if (interruptedHere !== undefined) return interruptedHere
+  try {
+    return (await $.state.get(interruptedRef)).value === true
+  } catch (err) {
+    $.ui.log(`addon-notes: could not read whether the last turn was interrupted, so the reply is taken as typed: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    return false
+  }
+}
+const setInterrupted = async ($: EngineInterface, value: boolean) => {
+  interruptedHere = value
+  try {
+    await $.state.set(interruptedRef, value)
+  } catch (err) {
+    $.ui.log(`addon-notes: could not record whether the last turn was interrupted: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+  }
+}
 
 // Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
 // (a mod-kit loaded before it had the reader, which a reload can leave, standing rule 5) reads the
@@ -50,15 +73,21 @@ export const register: Register = on => {
     return { ...built, addonNotes }
   })
 
+  // A reload's fresh module holds nothing of its own (#1703): the interrupt is read from $.state.
+  on('session.start', async ($, e, next) => {
+    interruptedHere = undefined
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     // A subagent's turn is not the session's (its agentId is set).
-    if (e.agentId === undefined) interrupted = e.reason === 'aborted'
+    if (e.agentId === undefined) await setInterrupted($, e.reason === 'aborted')
     return next(e)
   })
 
   on('session.end', async ($, e, next) => {
     // /clear starts a new conversation in the same process: an interrupt before it means nothing after.
-    interrupted = false
+    await setInterrupted($, false)
     return next(e)
   })
 
@@ -70,8 +99,8 @@ export const register: Register = on => {
     const midTurn = e.turnId !== undefined
     // An interrupt is answered by Dan's next message, whatever it says; one typed into a running
     // turn is not that message (the interrupted turn is over by then, so a running turn is a newer one).
-    const afterInterrupt = !midTurn && interrupted
-    if (!midTurn) interrupted = false
+    const afterInterrupt = !midTurn && (await wasInterrupted($))
+    if (!midTurn && afterInterrupt) await setInterrupted($, false)
 
     if (afterInterrupt && isAmendment(e.text)) {
       return next({ ...e, context: [...(e.context ?? []), AMENDMENT_CONTEXT] })

@@ -73,7 +73,7 @@ import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
-import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
+import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
   BBEDIT,
@@ -231,8 +231,31 @@ const keepBoot = (oid: BootOid, r: { exitCode: number; stdout: string; stderr: s
 let interactive = false
 // The last state the band was given, so the minute's tick redraws it only when sleep began or ended.
 let shownAsleep: boolean | undefined
-// The night this session last asked Dan whether he is up (#837), by its generation: once a night.
-let askedUp: string | undefined
+// The night this session last asked Dan whether he is up (#837), by its generation: once a night. In
+// $.state (#1703), which the engine holds for the session across a hot reload: kept in the module, a
+// reload asked him again. This module holds the night it asked too, which decides while it holds
+// one, so an ask whose record cannot be written (logged) is still made once by this module (push
+// review of PR for #1703); a fresh module after a reload reads $.state alone. One that cannot be read
+// asks, the way it asked before this was kept.
+const askedUpRef = { plugin: 'scope-modes', key: 'askedUp' } as const
+let askedUpHere: string | undefined
+const askedUpOf = async ($: EngineInterface): Promise<string | null> => {
+  if (askedUpHere !== undefined) return askedUpHere
+  try {
+    return (await $.state.get(askedUpRef)).value ?? null
+  } catch (err) {
+    $.ui.log(`scope-modes: could not read whether Dan was asked tonight whether he is up: ${msg(err)}`, { to: 'debug' })
+    return null
+  }
+}
+const setAskedUp = async ($: EngineInterface, generation: string) => {
+  askedUpHere = generation
+  try {
+    await $.state.set(askedUpRef, generation)
+  } catch (err) {
+    $.ui.log(`scope-modes: could not record that Dan was asked whether he is up: ${msg(err)}`, { to: 'debug' })
+  }
+}
 
 const sleepPaths = async ($: EngineInterface) => {
   const home = await $.env.get('HOME')
@@ -424,7 +447,8 @@ const ownerGone = async ($: EngineInterface, m: Marker, now: number, staleMs: nu
     return false
   }
 }
-const claimMarker = async ($: EngineInterface, path: string, staleMs: number): Promise<Claim> => {
+// `abandoned` names a held marker its owner is known to have left (#1677), taken over as one gone is.
+const claimMarker = async ($: EngineInterface, path: string, staleMs: number, abandoned?: (m: Marker) => boolean): Promise<Claim> => {
   const mine: Marker = { owner: await $.session.id(), at: await $.clock.now(), nonce: Math.random().toString(36).slice(2, 10) }
   const tmp = `${path}.${mine.nonce}.tmp`
   try {
@@ -441,7 +465,7 @@ const claimMarker = async ($: EngineInterface, path: string, staleMs: number): P
       const held = await readMarkerAt($, path)
       if (held === null) continue
       if ('unreadable' in held) return held
-      if (!(await ownerGone($, held, mine.at, staleMs))) return { held }
+      if (!abandoned?.(held) && !(await ownerGone($, held, mine.at, staleMs))) return { held }
       const aside = `${path}.taken-${mine.nonce}`
       const mv = await run($, ['mv', path, aside])
       if (mv.exitCode !== 0) {
@@ -1061,17 +1085,39 @@ const closedNote = (repo: string | undefined, why: string, at: number, by: strin
 })
 
 // A repository first met after sleep began (on neither list, never asked at bedtime) is noted once a
-// night per session, so the morning report asks which list it belongs on (#843).
-const firstMet = new Set<string>()
+// night per session, so the morning report asks which list it belongs on (#843). Which were noted is
+// in $.state (#1703), which the engine holds for the session across a hot reload: kept in the module,
+// a reload noted the same repository again. Claimed by version before the note is written, so two
+// calls at once note it once (assume it runs twice), and given back when the note fails. This module
+// holds each one it noted too, so a claim that cannot be written (logged) still notes the repository
+// once from this module (push review of PR for #1703); a fresh module reads $.state alone.
+const firstMetRef = { plugin: 'scope-modes', key: 'firstMet' } as const
+const firstMetHere = new Set<string>()
+const claimFirstMet = async ($: EngineInterface, k: string, take: boolean): Promise<boolean> => {
+  for (let i = 0; i < 5; i++) {
+    const held = await $.state.get(firstMetRef)
+    const met = held.value ?? []
+    if (take === met.includes(k)) return false
+    const next = take ? [...met, k] : met.filter(x => x !== k)
+    if ((await $.state.set(firstMetRef, next, { ifVersion: held.version })).isSet) return true
+  }
+  throw new Error('the record of repositories noted kept changing underneath five writes in a row')
+}
 const noteFirstMet = async ($: EngineInterface, record: SleepRecord, over: { repo?: string; why: string }) => {
   if (!over.repo || !over.why.startsWith(`${over.repo} is on neither list`)) return
   const k = `${record.generation}:${over.repo.toLowerCase()}`
-  if (firstMet.has(k)) return
-  firstMet.add(k)
+  if (firstMetHere.has(k)) return
+  firstMetHere.add(k)
+  try {
+    if (!(await claimFirstMet($, k, true))) return
+  } catch (err) {
+    $.ui.log(`scope-modes: could not keep that ${over.repo} was noted tonight, so a reload of the mod may note it again: ${msg(err)}`, { to: 'debug' })
+  }
   try {
     await sleepNote($, (await sleepPaths($)).current, closedNote(over.repo, over.why, await $.clock.now(), await $.session.id()))
   } catch (err) {
-    firstMet.delete(k)
+    firstMetHere.delete(k)
+    await claimFirstMet($, k, false).catch(() => undefined)
     $.ui.toast(`Sleep mode could not note that ${over.repo} is on neither list: ${msg(err)}`)
   }
 }
@@ -1246,15 +1292,54 @@ const hear = (e: { session_id?: unknown; transcript_path?: unknown; agent_id?: u
   if (typeof e.session_id === 'string' && e.session_id && typeof e.transcript_path === 'string' && e.transcript_path) heard = { id: e.session_id, path: e.transcript_path }
 }
 const heardFor = (self: string) => (heard?.id === self ? heard.path : null)
+// The folder this session started in, from its start (#1678), where Claude Code keys its transcripts.
+let startCwd: string | null = null
+// In a fresh session, or right after /clear, no classic hook has named the transcript yet (#1678), so
+// it is looked for where Claude Code keeps it: ~/.claude/projects/<the folder the session started in,
+// each character but a letter, a digit or a hyphen made a hyphen>/<session id>.jsonl (measured on this
+// Mac 2026-10-25, Claude Code 2.1.307). Only a file that is really there, never a guessed path, so a
+// session whose folder Claude Code spells otherwise (a very long one) falls back to the registry as
+// before. Its current folder is tried too, in case this load began after the session moved.
+// A check that fails is no answer (L10, L11): it is kept as `unread`, said beside the registry's
+// own why when the registry finds nothing either, never read as a transcript that is not there.
+type TranscriptFound = { path: string | null; unread?: string }
+const atIdsPath = async ($: EngineInterface, self: string): Promise<TranscriptFound> => {
+  if (!/^[A-Za-z0-9-]+$/.test(self)) return { path: null }
+  let home: string | undefined
+  let here: string | null = null
+  const unread: string[] = []
+  try {
+    home = await $.env.get('HOME')
+    here = await $.session.cwd()
+  } catch (err) {
+    unread.push(`where it is kept could not be worked out (${msg(err)})`)
+  }
+  if (!home && !unread.length) unread.push('where it is kept could not be worked out (HOME is not set)')
+  for (const dir of home ? new Set([startCwd, here].filter((d): d is string => !!d)) : []) {
+    const path = `${home}/.claude/projects/${dir.replace(/[^A-Za-z0-9-]/g, '-')}/${self}.jsonl`
+    try {
+      if (await $.fs.exists(path)) return { path }
+    } catch (err) {
+      unread.push(`whether it is at ${path} could not be checked (${msg(err)})`)
+    }
+  }
+  return { path: null, ...(unread.length ? { unread: unread.join('; ') } : {}) }
+}
+// This session's own transcript: the one Claude Code named to it (#1636), else the one at its id's path (#1678).
+const ownTranscript = async ($: EngineInterface, self: string): Promise<TranscriptFound> => {
+  const named = heardFor(self)
+  return named ? { path: named } : atIdsPath($, self)
+}
 const requestOf = (r: { extra?: Record<string, unknown> }) => {
   const q = (r.extra?.progress as { request?: unknown } | undefined)?.request
   return typeof q === 'string' && q.trim() ? q.trim() : null
 }
 const enrol = async ($: EngineInterface, self: string): Promise<{ workers: string[]; seats: Seat[]; others: number; left: number; unknown?: string }> => {
   const workers = interactive ? [self] : []
-  // This session's transcript is first the one Claude Code named to it, else the registry's (#1636).
-  const own = heardFor(self)
-  const seats: Seat[] = interactive ? [{ id: self, root: null, transcript: own, request: null }] : []
+  // This session's transcript is first the one Claude Code named to it, else the one at its id's
+  // path (#1678), else the registry's (#1636).
+  const own: TranscriptFound = interactive ? await ownTranscript($, self) : { path: null }
+  const seats: Seat[] = interactive ? [{ id: self, root: null, transcript: own.path, ...(own.unread ? { transcriptUnread: own.unread } : {}), request: null }] : []
   let list
   try {
     list = await $.sessions.list()
@@ -1265,9 +1350,12 @@ const enrol = async ($: EngineInterface, self: string): Promise<{ workers: strin
   for (const o of list.open) {
     if (o.sessionId === self) {
       const mine = seats.find(s => s.id === self)
-      if (mine && !own) {
+      if (mine && !own.path) {
         mine.transcript = o.transcriptPath ?? null
-        if (o.transcriptUnread) mine.transcriptUnread = o.transcriptUnread
+        // Every lookup that failed is said, the registry's and the one at the id's path (#1678).
+        const whys = [o.transcriptUnread, own.unread].filter((w): w is string => !!w)
+        if (mine.transcript) delete mine.transcriptUnread
+        else if (whys.length) mine.transcriptUnread = whys.join('; ')
       }
       continue
     }
@@ -1301,7 +1389,26 @@ const startedWhere = async ($: EngineInterface, r: SleepRecord) => `it started a
 // bed questions on the queue's issues (#836) here: paging (phase 2, #841) and the overnight driver
 // (phase 8, #844) build on this record.
 // `began` is set once this call placed the record, so the command acknowledges only a sleep it started (#1086).
-const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: false }): Promise<string> => {
+// `signal` is the command's own (#1677): once it fires, or a step's failure carries the engine's
+// refusal of every later call, /sleep says it was interrupted rather than naming the step it was on.
+// Nothing can be cleaned up then, since every call is refused, so the preparing marker it may leave
+// is remembered here, without a call, and this session's next /sleep takes it over at once (with
+// the list of unanswered issues it may have written) rather than waiting for it to go stale.
+const abandonedClaims = new Map<string, string>()
+const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: false }, signal?: AbortSignal): Promise<string> => {
+  const held: { claim?: Marker; generation?: string } = {}
+  let said: string
+  try {
+    said = await prepareSleep($, began, held)
+  } catch (err) {
+    if (!sleepInterrupted(signal, msg(err))) throw err
+    said = msg(err)
+  }
+  if (!sleepInterrupted(signal, said)) return said
+  if (!began.is && held.claim && held.generation) abandonedClaims.set(held.claim.nonce, held.generation)
+  return interruptedSaid(began.is)
+}
+const prepareSleep = async ($: EngineInterface, began: { is: boolean }, held: { claim?: Marker; generation?: string }): Promise<string> => {
   // This boot first: without it no record can be judged, and one that is sound must never be
   // called broken for it (L11), nor a new one written that could not be told from an old boot's.
   // The session is kept beside the start when it can be read; without it the record is judged by
@@ -1339,11 +1446,18 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   // gone from the registry, or older than PREPARING_STALE_MS, L523) is taken over in one rename.
   // /wake clears any.
   await run($, ['mkdir', '-p', p.dir])
-  const claim = await claimMarker($, p.preparing, PREPARING_STALE_MS)
+  const claim = await claimMarker($, p.preparing, PREPARING_STALE_MS, m => abandonedClaims.has(m.nonce))
   if ('held' in claim) return `Sleep mode is already being prepared in session ${claim.held.owner} since ${etWhen(claim.held.at)}. Nothing changed; if that session has gone, /wake clears it.`
   if ('unreadable' in claim) return `A preparing marker is there but cannot be read (${claim.unreadable}). Nothing changed; /wake clears it.`
   if ('failed' in claim) return `Sleep mode did not start: its preparing marker could not be written (${claim.failed}).`
-  const tookOver = claim.tookOver ? ` A sleep left half prepared by session ${claim.tookOver.owner} since ${etWhen(claim.tookOver.at)} was taken over.` : ''
+  // A claim this session's own abandoned /sleep left goes with the unanswered list it may have
+  // written, for a night that never began (#1677); it is not news, so it is not said.
+  const leftHere = claim.tookOver ? abandonedClaims.get(claim.tookOver.nonce) : undefined
+  if (claim.tookOver && leftHere !== undefined) {
+    abandonedClaims.delete(claim.tookOver.nonce)
+    await run($, ['rm', '-f', `${p.dir}/unanswered/${leftHere}`])
+  }
+  const tookOver = claim.tookOver && leftHere === undefined ? ` A sleep left half prepared by session ${claim.tookOver.owner} since ${etWhen(claim.tookOver.at)} was taken over.` : ''
   // Another /sleep may have placed its record between the read above and this claim: read it again,
   // so the bedtime questions are never asked for a night that has already begun.
   const again = await sleepNow($)
@@ -1360,6 +1474,8 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   let startedIn: string
   let placeBefore: ScopeModesPlace
   const generation = `${now}-${self}`
+  held.claim = claim.claimed
+  held.generation = generation
   try {
     e = await enrol($, self)
     // This session's own checkout, found by mod-kit's walk from its folder, as the session registry
@@ -2313,8 +2429,11 @@ const titleNow = async ($: EngineInterface): Promise<string | null> => {
   let path: string | null = null
   try {
     const self = await $.session.id()
-    // The transcript Claude Code named to this session first, as for its goal (#1636).
-    path = heardFor(self) ?? (await $.sessions.list()).open.find(o => o.sessionId === self)?.transcriptPath ?? null
+    // This session's own transcript first, as for its goal (#1636, #1678).
+    const own = await ownTranscript($, self)
+    // A check at the id's path that failed is logged, as every other failure of this read is.
+    if (own.unread) $.ui.log(`scope-modes: this session's transcript could not be looked for by its id: ${own.unread}`, { to: 'debug' })
+    path = own.path ?? (await $.sessions.list()).open.find(o => o.sessionId === self)?.transcriptPath ?? null
   } catch (err) {
     $.ui.log(`scope-modes: this session's title could not be looked up (${msg(err)}), so its report is named by its id`, { to: 'debug' })
     return null
@@ -2463,8 +2582,56 @@ const isAbsentNoun = (err: unknown) => {
 const STEP_SAID = 'The reminder to end sleep mode'
 
 // The nights whose step this session has pinned on its card (#1283), and taken off, or tried to: once each.
+// In $.state (#1703), which the engine holds for the session across a hot reload: kept in the module
+// alone, a reload pinned the reminder again (drawing the card again, and adding the step back once
+// Dan had checked it off) and took it off again. Each is added by version, so two minutes at once lose
+// neither. This module holds each mark it made too, and a night is marked when either says so, so a
+// mark that cannot be written (logged) still stops this module repeating it every minute (push review
+// of PR for #1703); a fresh module after a reload reads $.state alone. One that cannot be read and was
+// not marked here is read as pinned, so the card is not drawn again every minute, and as not taken
+// off, so the reminder still comes off.
+const pinnedRef = { plugin: 'scope-modes', key: 'pinnedHere' } as const
+const takenOffRef = { plugin: 'scope-modes', key: 'takenOff' } as const
 const pinnedHere = new Set<string>()
-const takenOff = new Set<string>()
+const takenOffHere = new Set<string>()
+type OnceSet = {
+  here: Set<string>
+  get: () => Promise<{ value: string[] | undefined; version: number }>
+  set: (value: string[], ifVersion: number) => Promise<{ isSet: boolean }>
+}
+const pinnedSet = ($: EngineInterface): OnceSet => ({
+  here: pinnedHere,
+  get: () => $.state.get(pinnedRef),
+  set: (value, ifVersion) => $.state.set(pinnedRef, value, { ifVersion }),
+})
+const takenOffSet = ($: EngineInterface): OnceSet => ({
+  here: takenOffHere,
+  get: () => $.state.get(takenOffRef),
+  set: (value, ifVersion) => $.state.set(takenOffRef, value, { ifVersion }),
+})
+const markOnce = async ($: EngineInterface, s: OnceSet, generation: string, what: string) => {
+  s.here.add(generation)
+  try {
+    for (let i = 0; i < 5; i++) {
+      const held = await s.get()
+      const all = held.value ?? []
+      if (all.includes(generation)) return
+      if ((await s.set([...all, generation], held.version)).isSet) return
+    }
+    throw new Error('it kept changing underneath five writes in a row')
+  } catch (err) {
+    $.ui.log(`scope-modes: could not record that the reminder to end sleep mode was ${what} here: ${msg(err)}`, { to: 'debug' })
+  }
+}
+const isMarked = async ($: EngineInterface, s: OnceSet, generation: string, unread: boolean): Promise<boolean> => {
+  if (s.here.has(generation)) return true
+  try {
+    return ((await s.get()).value ?? []).includes(generation)
+  } catch (err) {
+    $.ui.log(`scope-modes: could not read where the reminder to end sleep mode was pinned or taken off: ${msg(err)}`, { to: 'debug' })
+    return unread
+  }
+}
 
 const reviewsPath = async ($: EngineInterface) => `${(await sleepPaths($)).dir}/morning-review.json`
 const readReviews = async ($: EngineInterface): Promise<MorningReview[] | { unreadable: string }> => {
@@ -2508,7 +2675,7 @@ const changeReviews = async ($: EngineInterface, fn: (all: MorningReview[]) => M
 // The step on this session's card, once a night; the noun's throw is the caller's to read.
 const pinStep = async ($: EngineInterface, night: { generation: string; night: string }) => {
   const shown = await ($ as unknown as { manualSteps: ManualStepsNoun }).manualSteps.add({ heading: MORNING_HEADING, step: morningStep(night.night) })
-  pinnedHere.add(night.generation)
+  await markOnce($, pinnedSet($), night.generation, 'pinned')
   return shown
 }
 
@@ -2527,7 +2694,7 @@ const pinMorning = async ($: EngineInterface): Promise<string> => {
     // Shown, the card says it (L605); only a step that is not is said here.
     return shown.isShown ? '' : ` ${STEP_SAID} is kept on the manual steps card but not shown now: ${shown.reason ?? 'no reason given'}.`
   } catch (err) {
-    if (isAbsentNoun(err)) pinnedHere.add(night.generation)
+    if (isAbsentNoun(err)) await markOnce($, pinnedSet($), night.generation, 'pinned')
     return ` ${STEP_SAID} could not be pinned: ${isAbsentNoun(err) ? 'the manual steps mod is not loaded' : msg(err)}.`
   }
 }
@@ -2541,7 +2708,7 @@ const takeOff = async ($: EngineInterface, r: { generation: string; night: strin
   } catch (err) {
     if (!isAbsentNoun(err)) return msg(err)
   }
-  takenOff.add(r.generation)
+  await markOnce($, takenOffSet($), r.generation, 'taken off')
   return undefined
 }
 
@@ -2592,7 +2759,7 @@ const reminderMinute = async ($: EngineInterface, reading: SleepReading) => {
       else all = close(all)
     }
   }
-  if (interactive && asleep && typeof asleep.night === 'string' && !pinnedHere.has(asleep.generation)) {
+  if (interactive && asleep && typeof asleep.night === 'string' && !(await isMarked($, pinnedSet($), asleep.generation, true))) {
     const night = { generation: asleep.generation, night: asleep.night }
     const known = all.find(x => x.generation === night.generation)
     const failed = known ? null : await changeReviews($, a => withPending(a, night))
@@ -2603,13 +2770,13 @@ const reminderMinute = async ($: EngineInterface, reading: SleepReading) => {
         if (!shown.isShown) $.ui.log(`scope-modes: the reminder to end sleep mode is kept on this session's card but not shown now: ${shown.reason ?? 'no reason given'}`, { to: 'debug' })
       } catch (err) {
         // The mod not loaded holds no card, so there is nothing to pin; anything else is tried again.
-        if (isAbsentNoun(err)) pinnedHere.add(night.generation)
+        if (isAbsentNoun(err)) await markOnce($, pinnedSet($), night.generation, 'pinned')
         else $.ui.log(`scope-modes: the reminder to end sleep mode could not be pinned here (${msg(err)}); tried again at the next minute`, { to: 'debug' })
       }
     }
   }
   for (const r of all) {
-    if (!r.done || takenOff.has(r.generation)) continue
+    if (!r.done || (await isMarked($, takenOffSet($), r.generation, false))) continue
     const off = await takeOff($, r)
     if (off) $.ui.log(`scope-modes: the reminder to end sleep mode could not be taken off this session's card (${off})`, { to: 'debug' })
   }
@@ -4293,8 +4460,15 @@ export const register: Register = on => {
     ] as const)
       await $.command.register({ name, description, immediate: true })
     interactive = e.isInteractive === true
+    // This module's own marks start afresh, as a reload's fresh module has them (#1703): the session's
+    // are read from $.state.
+    pinnedHere.clear()
+    takenOffHere.clear()
+    firstMetHere.clear()
+    askedUpHere = undefined
     // A transcript heard before this start was another session's or another load's (#1636).
     heard = null
+    startCwd = e.cwd
     await $.tool.register({
       name: 'switch_to_build',
       description:
@@ -4433,10 +4607,12 @@ export const register: Register = on => {
     return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual. ${ackOff(scope)}`] }
   })
   // Sleep and waking are acknowledged as every other switch is (#1086), and only when they switched.
-  on('command.run', { command: 'sleep' }, async $ => {
+  on('command.run', { command: 'sleep' }, async ($, e, next) => {
     const began = { is: false }
-    const text = await startSleep($, began)
-    // The morning reminder (#1107), only for a night this call began.
+    const text = await startSleep($, began, next.signal)
+    // The morning reminder (#1107), only for a night this call began, and never once the command was
+    // abandoned, since every call is then refused (#1677).
+    if (began.is && text === interruptedSaid(true)) return { text, context: [ackOn('sleep')] }
     return began.is ? { text: `${text}${await pinMorning($)}`, context: [ackOn('sleep')] } : { text }
   })
   on('command.run', { command: 'wake' }, async ($, e) => {
@@ -4580,7 +4756,7 @@ export const register: Register = on => {
       // Only /wake or "I'm up" ends sleep (#837, decision 9): Dan writing in the daytime is asked
       // whether he is up, once a night in each session, and sleep goes on until he says so. It counts
       // as asked only once the prompt carrying it went in (below), so a prompt that failed asks again.
-      if (isDans && askedUp !== sleeping.record.generation) {
+      if (isDans && (await askedUpOf($)) !== sleeping.record.generation) {
         const now = await $.clock.now()
         if (isDaytimeEt(now)) {
           asking = sleeping.record.generation
@@ -4610,7 +4786,7 @@ export const register: Register = on => {
     // morningDone itself (#1383).
     if (carriesMorning)
       await morningDone($, true).catch(err => $.ui.log(`scope-modes: this session's morning went in, but could not be settled (${msg(err)})`, { to: 'debug' }))
-    if (asking !== undefined) askedUp = asking
+    if (asking !== undefined) await setAskedUp($, asking)
     if (askAgain) await setLeftUnanswered($, false)
     return entered
   })

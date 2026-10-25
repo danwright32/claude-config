@@ -33,6 +33,14 @@ fi
 . "$DIR/lib/suite-deadline.sh"
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 pass=0
 fail=0
 check() { # check <description> <result>   ("ok" passes, anything else is the failure text)
@@ -1254,20 +1262,15 @@ own_pid=$!
 mk_hanging_suite "$OWN" owned "$own_pid"
 bash "$OWN/test-owned.sh" &
 owned_pid=$!
-n=0; owned_kid=""
-while [ "$n" -lt 300 ] && [ -z "$owned_kid" ]; do
-  owned_kid="$(pgrep -P "$owned_pid" 2>/dev/null | awk 'NR <= 1')"
-  [ -n "$owned_kid" ] || { sleep 0.1; n=$((n + 1)); }
-done
+owned_kid=""
+owned_kid_found(){ owned_kid="$(pgrep -P "$owned_pid" 2>/dev/null | awk 'NR <= 1')"; [ -n "$owned_kid" ]; }
+hang_wait owned_kid_found
 kill "$own_pid" 2>/dev/null; wait "$own_pid" 2>/dev/null
-n=0
-while [ "$n" -lt 100 ] && { kill -0 "$owned_pid" 2>/dev/null || { [ -n "$owned_kid" ] && kill -0 "$owned_kid" 2>/dev/null; }; }; do
-  sleep 0.1; n=$((n + 1))
-done
+hang_wait '! { kill -0 "$owned_pid" 2>/dev/null || { [ -n "$owned_kid" ] && kill -0 "$owned_kid" 2>/dev/null; }; }'
 if [ -z "$owned_kid" ]; then
   check "#444 a hanging fixture had a child to leave behind" "no child appeared, so the check below measures nothing"
 elif kill -0 "$owned_pid" 2>/dev/null || kill -0 "$owned_kid" 2>/dev/null; then
-  check "#444 a hanging fixture ends by itself once the suite that made it has gone" "fixture $owned_pid or its child $owned_kid is still running 10s after its owner ended"
+  check "#444 a hanging fixture ends by itself once the suite that made it has gone" "fixture $owned_pid or its child $owned_kid is still running ${HANG_S}s after its owner ended, the hang ceiling"
 else
   check "#444 a hanging fixture ends by itself once the suite that made it has gone" ok
 fi
@@ -1287,28 +1290,28 @@ for k_n in one two three; do mk_hanging_suite "$K" "$k_n"; done
 # else (L107).
 k_left=""; k_started=""
 run_and_interrupt() { # run_and_interrupt <runner path>
-  local r="$1" w=0 n p
+  local r="$1" n p
   rm -f "$K"/*.pid
   HOOK_KILL_TREE="${HOOK_KILL_TREE:-}" bash "$r" "$K" > "$TMPROOT/killed.out" 2>&1 &
   k_runner=$!
   # Each suite names its own pid, so what is checked afterwards is what the runner really started
   # rather than whatever the process table happens to hold. Waited for, never assumed: a fixture
   # that never got going satisfies every assertion after it while proving nothing (L159).
-  while [ "$w" -lt 60 ]; do
+  k_two_started(){
+    local n p
     k_started=""
     for n in one two three; do
       p="$(cat "$K/$n.pid" 2>/dev/null || true)"
       case "$p" in ''|*[!0-9]*) continue ;; esac
       kill -0 "$p" 2>/dev/null && k_started="$k_started $p"
     done
-    [ "$(printf '%s' "$k_started" | wc -w | tr -d ' ')" -ge 2 ] && break
-    sleep 1; w=$((w + 1))
-  done
+    [ "$(printf '%s' "$k_started" | wc -w | tr -d ' ')" -ge 2 ]
+  }
+  hang_wait k_two_started 0.2
   k_kids=""
   for p in $k_started; do k_kids="$k_kids $(pgrep -P "$p" 2>/dev/null | tr '\n' ' ')"; done
   kill -TERM "$k_runner" 2>/dev/null || true
-  local g=0
-  while [ "$g" -lt 30 ] && kill -0 "$k_runner" 2>/dev/null; do sleep 1; g=$((g + 1)); done
+  hang_wait '! kill -0 "$k_runner" 2>/dev/null' 0.2
   sleep 1
   k_runner_left=""
   kill -0 "$k_runner" 2>/dev/null && k_runner_left="$k_runner"
