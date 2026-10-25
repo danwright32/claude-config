@@ -243,7 +243,9 @@ case "$read_key" in *[!a-f0-9]*) usage "PR_REVIEW_READ is not a read key (a key 
 # The key proves the findings were READ, so it has to come from whoever read them, typed in front of
 # this command, which pr-review-gate.sh records before the command runs (claude-config#1673). A key in
 # a variable, an export or a substitution was not typed: a Bash loop that greps it from this helper's
-# own refusal and runs it again would otherwise merge with nobody having read anything.
+# own refusal and runs it again would otherwise merge with nobody having read anything. The record is
+# keyed by a secret only the gate creates, so a file a session makes by hand is not one, and this
+# never creates that secret: with none, no key is taken (claude-config#1700).
 if [ -n "$read_key" ]; then
   # shellcheck source=ai-review-common.sh
   if ! . "$MWR_LIB/ai-review-common.sh" 2>/dev/null || [ "$(type -t ar_helper_key_typed)" != function ]; then

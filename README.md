@@ -805,15 +805,25 @@ environment, so the key has to reach it TYPED (claude-config#1673). Before it, a
 the helper, grepped the key out of its refusal and ran it again with `PR_REVIEW_READ="$key"` merged
 with nobody having read the findings: no gate counts the helper as a merge, and #1587 had closed
 only the Monitor form of that loop. Now `pr-review-gate.sh`, which sees every Bash command before it
-runs, records the sha256 of a key written as a literal in front of the helper
+runs, records a key written as a literal in front of the helper
 (`PR_REVIEW_READ=<key> bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> ...`) under the review state
 folder's `helper-keys/`, and the helper refuses, exit 64 and before anything else, a key that was not
 recorded there: one in a variable, an export or a substitution, which nobody could see when the
 command was read. A key that cannot be recorded refuses the command at the gate, saying why. The
 same key typed in front of `gh pr merge` is judged by the gate itself, as before. Run outside Claude
 Code, where no gate sees the command, the helper therefore takes no key at all; merge there with the
-key in front of `gh pr merge`. Anything that can write to `~/.claude/state` can still forge a record,
-as it can forge a review's acknowledgement: this closes the loop, not deliberate tampering.
+key in front of `gh pr merge`.
+
+A session cannot make that record by hand (claude-config#1700). Each record is named by an
+HMAC-SHA256 of the key under a secret only the gate creates (`helper-keys.secret` beside the folder,
+mode 600), so an empty file a session's shell makes under the key's plain sha256, or any name it can
+compute without the secret, vouches for nothing; the helper reads the secret to check a record and
+never creates one. And the gate refuses, before it runs and with no override, any Bash command whose
+text names the folder, the secret, or the functions that write them (`helper-key` or `helper_key`,
+any case), as the design round guard refuses a write to its own record. To read that code, use the
+Read or Grep tool. What is left, since the gate and the session are one user: a command that hides
+the name from the gate (a glob, an escape, a script file written first and then run) can still read
+the secret or call the recorder, and a forged review acknowledgement is not covered here.
 
 Minor findings are advisory (claude-config#1356). In a judged sample of 60 round 1 findings, those
 marked major were real 7 times in 10 and those marked minor 26 times in 50, and 11 of the 12 wrong
