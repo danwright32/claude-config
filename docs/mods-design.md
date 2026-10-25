@@ -3609,6 +3609,46 @@ the mod path faked the runner, so it was measured against the real engine (Claud
   there is no Claude Code or no macOS. Not measured, and said: an interactive `/resume` picker, a
   teammate, and a fork subagent.
 
+## Goal box (#1563), settled 2026-10-24
+
+Dan, 2026-10-23: "show me a green (if possible) box that says the goal has been accomplished when
+you either literally accomplish a goal or just complete what I originally asked you to do", the box
+listing the goal and a short list of what shipped (issues closed, pull requests merged and live),
+once per accomplishment, never while part of the request is open, a merge unconfirmed or a deploy
+not live. The look was settled in one design round on 2026-10-24: Dan chose "Green border and
+heading" over a grey card, a green heading in a grey card, and a text box in the reply. The settled
+file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.fixture.json`.
+
+- **The box.** The mod's `goal_accomplished` tool result, drawn as mod-kit's card with `border:
+  'success'` (the one card with a border of its own colour, a field mod-kit gained for it), the
+  heading GOAL ACCOMPLISHED bold in the success green, then the goal and one line per thing that
+  shipped, each led by a green bullet, the words themselves plain. The tool's text result is the
+  same box as text, a three line double box the shape of SESSION REFLECTION, which is what the model
+  reads and what a surface that cannot draw the card shows; the model is told not to repeat it.
+- **A /goal met.** Read through mod-kit's one goal reader, whose `none` reading now carries `met`
+  when Claude Code's own check cleared the goal as met (a goal_status record without the sentinel;
+  16 of the 159 goal records on this Mac on 2026-10-24, the 22 ended sentinels being /goal clear or
+  a pause). Measured on 2.1.310 with a probe mod in a headless session: an unmet verdict is the Stop
+  chain's own block, and the met record is appended after the Stop chain returns, before
+  turn.complete. So the mod's turn.complete hook finds it and sends the session one prompt of its
+  own asking for the box, once per met goal (`asked`), only in an interactive session, never from a
+  subagent's or an interrupted turn. It hooks no Stop: Claude Code's built-in security default sends
+  every classic event past the tier mods load in (#875), and the transcript comes from the session's
+  own record in the session registry for the same reason. The box is shown under the goal's own
+  condition, whatever the model calls it.
+- **No /goal.** The finish is the session's own judgement, so the session calls the tool, whose
+  description (offered in full, not behind tool search) says when. What can be read is enforced, each
+  refusal naming what holds it: a /goal still set or unreadable; an agent the session started
+  (`spawnedBy` absent) still pending, running or waiting; is it live's `owed` merges and verdicts
+  `deploying` or `unconfirmed`; a pull request the session touched still open. The pull requests are
+  Claude Code's own `pr-link` transcript records (888 across 54 transcripts on 2026-10-24: 93 first
+  seen at a create, 144 at a merge, 13 at a view, 638 while an agent worked), so one only viewed and
+  left open holds the box too, the conservative side. GitHub is asked once per repository, as each
+  account gh is logged in to; a repository it cannot be asked about holds the box, saying why.
+- **Once.** A box is recorded in the session's state by a read and a versioned write, so two calls
+  at once show one; a goal's box by its met record's id, a request's by how many messages Dan had
+  typed (mod-kit's one reader of his own words), and a second box needs a new one.
+
 ## Not design decisions
 
 The rounds were HTML pages standing in for a terminal. The browser window, the font and the exact

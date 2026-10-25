@@ -334,6 +334,30 @@ test("a mod's own tool result is drawn as the boxed card, its title's runs keepi
   }
 })
 
+// #1563: the one card drawn with a border of its own colour, the Goal accomplished box Dan asked to
+// see green (2026-10-23), named as a theme key so it follows his theme. Every other card stays grey.
+test('a card may name its border colour, drawn on every surface; a border that is not a colour is refused (#1563)', { plugins: [carder] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine row</Text>
+  })
+  const green = { toolUseId: 'g1', border: 'success', title: [{ text: 'GOAL ACCOMPLISHED', color: 'success', bold: true }], lines: [[{ text: 'Close issue 12' }]] }
+  const made = (await $.tool.call({ tool: 'Bash', command: JSON.stringify(green), tool_use_id: 'g1' } as never)) as { deny?: string; text?: string }
+  expect(made.deny ?? made.text).toBe('carded')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...resultRow('g1'), surface } as never)
+    const box = await ui.find({ type: 'Box' })
+    expect(box?.props.borderStyle).toBe('round')
+    expect(box?.props.borderColor).toBe('success')
+    await ui.unmount()
+  }
+  for (const border of ['', 3, null]) {
+    const r = (await $.tool.call({ tool: 'Bash', command: JSON.stringify({ ...green, toolUseId: 'g2', border }), tool_use_id: 'g2' } as never)) as { deny?: string }
+    expect(String(r.deny)).toMatch(/refused: .*border/)
+  }
+})
+
 test('a card with no tool use id, no title or malformed lines is refused by name, and the row is left to Claude Code', { plugins: [carder] }, async ($, on) => {
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   on('ui.render', ($, e) => {
