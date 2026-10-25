@@ -3093,8 +3093,8 @@ read no write from a script file's arguments.
 
 - **Read in mod-kit, kept apart.** The write reader gives `runs` (mod-kit's `writes.ts`): each script
   file a command runs, an interpreter's script operand (`python3 gen.py`, `bash x.sh`, `node
-  build.mjs`; never inline code, a script on standard input, `python -m` or awk's and sed's program
-  file) or a script run by its own name (ending in a script language's extension, or named by `./`
+  build.mjs`; never inline code, a script on standard input or awk's and sed's program file; as #1586
+  shipped, `python -m` too, which #1682 now reads) or a script run by its own name (ending in a script language's extension, or named by `./`
   or `../`), with every word after it that may name a file, as a path where its words name one, a cd
   and a variable the command set followed. An option is none, `--name=value` gives its value, and
   an address or another machine's path is none. It sits apart from `files`, `changes` and `unnamed`,
