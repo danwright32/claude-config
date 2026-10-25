@@ -214,10 +214,20 @@ check('InstructionsLoaded: the resume loaded the copy on disk then, as a session
 cleared = [x for x in loads if x['session'] != sid]
 check('InstructionsLoaded: /clear started a new session id that loaded the copy on disk then',
       '' if any(x['reason'] == 'session_start' and x['marks'] == ['RULEPROBE-MainFOUR'] for x in cleared) else f'other loads: {cleared}')
-# The copy written mid session and replaced before the compaction is never loaded: nothing re-reads
-# the files between prompts.
-check('InstructionsLoaded: no load between prompts (the copy written mid session is never loaded)',
-      '' if not any(x['marks'] and x['marks'][0].endswith('TWO') for x in loads) else f'loads: {loads}')
+# Nothing re-reads the files between prompts: the session loads its main rule file exactly three
+# times, at its start, at the compaction and at the resume, in that order, and each of those loads
+# reads the import once from the same copy (claude-config#1685). The #1580 builder first asked for
+# every load in order, which failed because Claude Code logs an import's load BEFORE the compaction
+# load of the main file it belongs to; it was loosened to "the copy written mid session is never
+# loaded", which a scratch copy with one more /compact after the THREE edit (a re-read the session
+# did not ask for) passed on every check (measured 2026-10-25). Ordered on the main file only, so
+# the order in which the import's load is logged around it does not matter.
+main = [(r, m[0][len('RULEPROBE-Main'):]) for r, m in mine if m and m[0].startswith('RULEPROBE-Main')]
+check('InstructionsLoaded: no load between prompts (the main rule file is loaded at the start, the compaction and the resume, in that order, and at nothing else)',
+      '' if main == [('session_start', 'ONE'), ('compact', 'THREE'), ('session_start', 'FIVE')] else f'main file loads of {sid}: {main}')
+inc = sorted((r, m[0][len('RULEPROBE-Import'):]) for r, m in mine if m and m[0].startswith('RULEPROBE-Import'))
+check('InstructionsLoaded: and each of those loads read the import once, from the same copy',
+      '' if inc == sorted(('include', v) for _, v in main) else f'import loads of {sid}: {inc}, main loads: {main}')
 
 # The interactive /resume picker: said as unmeasured only when the headless session itself does not
 # offer it, read from its own list of slash commands (L460).
