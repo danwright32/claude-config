@@ -157,6 +157,25 @@ for (const phrase of ['stop, do the README first instead', 'no, use the other fi
   })
 }
 
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state)
+// between Dan's Esc and his reply, the session going on: the reply still resumes the step.
+test('after an interrupt and a reload of the mod, an amendment still resumes the step (#1703)', KIT, async ($, on) => {
+  const w = world(on)
+  on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
+  await $.turn.complete(ended('aborted'))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
+  await $.prompt.submit(typed('also do a direct link to commission'))
+  expect(w.seen).toEqual([{ text: 'also do a direct link to commission', context: [AMENDMENT_CONTEXT] }])
+})
+
+test('an interrupt that cannot be read is read as none: the reply goes on exactly as typed (#1703)', KIT, async ($, on) => {
+  const w = world(on)
+  on('state.get', async ($, e, next) => ((e as { plugin?: string }).plugin === 'addon-notes' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await $.turn.complete(ended('aborted'))
+  await $.prompt.submit(typed('also do a direct link to commission'))
+  expect(w.seen).toEqual([{ text: 'also do a direct link to commission', context: [] }])
+})
+
 test('the same reply after a turn that finished normally is a new message', KIT, async ($, on) => {
   const w = world(on)
   await $.turn.complete(ended('answer'))
