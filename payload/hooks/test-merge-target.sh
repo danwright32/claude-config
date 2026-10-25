@@ -1192,6 +1192,30 @@ mt_gh_read_class 'gh: Not Found (HTTP 404)'; eq "$?" "1" "an answer GitHub gave 
 mt_gh_read_class ''; eq "$?" "1" "an empty error is believed"
 eq "$MT_SIGNIN_RC" "6" "the sign in outcome is 6, a code no reader or caller already gives a meaning"
 
+echo "merge-target: a GitHub this Mac could not connect to is its own outcome, asked again (claude-config#1675)"
+# On 2026-10-24 merge-when-ready.sh stopped #1640 at 41m 36s on "could not read pull request #1640 ...
+# (error connecting to api.github.com). Nothing was merged." with no retry line. That is what gh prints
+# when it could not reach the host at all, with no HTTP status (gh 2.89 carries "error connecting to
+# %s", then "check your internet connection or https://githubstatus.com"), and none of
+# mt_gh_transient's transport words appear in it, so it was believed the first time. It is now its own
+# outcome (L35), asked again by the same loop, and said as such when it outlasts the tries (L11).
+CONNECT_ERR=$'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com'
+mt_gh_read_class "$CONNECT_ERR"; eq "$?" "${MT_CONNECT_RC:-unset}" "a connection gh could not make is its own outcome"
+mt_gh_read_class 'error connecting to api.github.com'; eq "$?" "${MT_CONNECT_RC:-unset}" "its first line alone is read the same"
+eq "${MT_CONNECT_RC:-unset}" "7" "the connection outcome is 7, a code no reader or caller already gives a meaning"
+mt_gh_read_class 'HTTP 401: Requires authentication (https://api.github.com/graphql)'; eq "$?" "$MT_SIGNIN_RC" "a refused sign in is still its own outcome beside it"
+unreachable(){ calls=$((calls + 1)); if [ "$tries_left" -gt 0 ]; then tries_left=$((tries_left - 1)); return 7; fi; return 0; }
+tries_left=1; calls=0; slept=""
+mt_retry_read 4 5 fake_sleep "" "" unreachable; eq "$?|$calls|$slept|${MT_CONNECT_FAILS:-unset}" "0|2| 5|1" "a connection that fails once is asked again after one wait, then answers, counted"
+tries_left=9; calls=0; slept=""
+mt_retry_read 4 5 fake_sleep "" "" unreachable; eq "$?|$calls|$slept|${MT_CONNECT_FAILS:-unset}" "7|4| 5 5 5|4" "a connection that keeps failing is tried four times in all, then reported as the connection"
+tries_left=9; calls=0; slept=""
+mt_retry_read 4 5 fake_sleep "$SECONDS" "" unreachable; eq "$?|$calls|$slept" "7|1|" "no connection retry is made whose wait would end past the deadline"
+said="$(MT_CONNECT_FAILS=4 mt_connect_said "pull request #7 in acme/widget" "error connecting to api.github.com" 2>&1)"
+case "$said" in *"could not connect to GitHub 4 times reading pull request #7 in acme/widget (error connecting to api.github.com)"*) pass ;; *) fail "the give up sentence names the connection, the count and what was read: [$said]" ;; esac
+case "$said" in *"never answered"*) pass ;; *) fail "and says GitHub never answered, not that it refused: [$said]" ;; esac
+case "$said" in *"refused the sign in"*|*"could not read"*) fail "and is never said as a refused sign in or an unreadable answer: [$said]" ;; *) pass ;; esac
+
 ghstub="$(mktemp -d "${TMPDIR:-/tmp}/mt-ghstub.XXXXXX")"
 # The token read gh answers: MT_TOKEN_MODE empty prints nothing (the keyring read came back empty),
 # anything else prints a stand in. Every call is logged, so the tests see the fresh read was made.
