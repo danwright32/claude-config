@@ -462,11 +462,10 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
   test('a script run in a substitution is read too', () => {
     expect(runs('x=$(python3 gen.py app/page.tsx)').map(r => r.args.map(a => a.path))).toEqual([[`${CWD}/app/page.tsx`]])
   })
-  test('what is no script file run names no run: inline code, standard input, a module, awk -f, a plain command', () => {
+  test('what is no script file run names no run: inline code, standard input, awk -f, a plain command', () => {
     for (const command of [
       "python3 -c 'print(1)' app/page.tsx",
       'cat gen.py | python3 - app/page.tsx',
-      'python3 -m tool app/page.tsx',
       'awk -f prog.awk app/site.css',
       'cat app/page.tsx',
       'grep -n x app/page.tsx',
@@ -476,6 +475,55 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
       expect({ command, runs: runs(command) }).toEqual({ command, runs: [] })
     // A script with no arguments is given nowhere, so every result without one keeps its shape.
     expect(read('bash ./build.sh')).toEqual({ files: [], changes: [], unnamed: [] })
+  })
+})
+
+// #1682: a module run with python -m and a tool run through npx were read as writing nothing, so
+// `npx prettier --write app/page.tsx` and `python3 -m json.tool in.json app/data.json` changed files
+// no guard judged. Measured over this Mac's transcripts for the 14 days to 2026-10-24: of 33,918
+// Bash calls, 469 ran a tool through npx (358 with a path among its words; prettier 100, eslint 19)
+// and 24 ran a python module (17 with a path), where pnpm dlx, yarn dlx, npm exec, bunx, uv run and
+// uvx ran none. What either writes cannot be read before it runs, so each is a run as a script file
+// is, its arguments given in `runs`.
+describe('writes: a module run with python -m and a tool run through npx (#1682)', () => {
+  const runs = (command: string, cwd = CWD) => read(command, cwd).runs ?? []
+  test('python -m names the module and each argument after it, as paths, its options before it read as python reads them', () => {
+    expect(runs('python3 -m json.tool in.json out.json')).toEqual([
+      {
+        what: 'a python3 module run with -m',
+        script: 'json.tool',
+        args: [
+          { word: 'in.json', path: `${CWD}/in.json` },
+          { word: 'out.json', path: `${CWD}/out.json` },
+        ],
+      },
+    ])
+    for (const command of ['python3 -I -m tool app/page.tsx', 'python3 -mtool app/page.tsx', 'python3 -W ignore -m tool app/page.tsx', 'python3 -Im tool app/page.tsx', 'python3.12 -m tool -v app/page.tsx', 'timeout 60 python3 -m tool app/page.tsx'])
+      expect({ command, runs: runs(command).map(r => [r.script, r.args.map(a => a.path)]) }).toEqual({ command, runs: [['tool', [`${CWD}/app/page.tsx`]]] })
+    expect(runs('cd /w/shop && python3 -m tool app/page.tsx').map(r => r.args[0]?.path)).toEqual(['/w/shop/app/page.tsx'])
+  })
+  test('python -m with nothing after the module, inline code before it, or no module names no run', () => {
+    for (const command of ['python3 -m unittest', 'python3 -m', "python3 -c 'import sys' -m tool app/page.tsx", 'python3 -m tool -v --quiet'])
+      expect({ command, runs: runs(command) }).toEqual({ command, runs: [] })
+  })
+  test('a tool run through npx names the tool and each argument after it, past npx options and their values', () => {
+    expect(runs('npx prettier --write app/page.tsx')).toEqual([{ what: 'a tool run through npx', script: 'prettier', args: [{ word: 'app/page.tsx', path: `${CWD}/app/page.tsx` }] }])
+    for (const command of [
+      'npx --yes prettier@3 --write app/page.tsx',
+      'npx -y eslint --fix app/page.tsx',
+      'npx -p @biomejs/biome biome format --write app/page.tsx',
+      'npx --package=@biomejs/biome biome format --write app/page.tsx',
+      'npx -- prettier --write app/page.tsx',
+      'rtk npx prettier --write app/page.tsx',
+    ])
+      expect({ command, args: runs(command).map(r => r.args.map(a => a.word).filter(w => w !== 'format')) }).toEqual({ command, args: [['app/page.tsx']] })
+    expect(runs('npx -p @biomejs/biome biome format --write app/page.tsx').map(r => r.script)).toEqual(['biome'])
+    expect(runs('cd /w/shop && npx prettier --write app/page.tsx').map(r => r.args[0]?.path)).toEqual(['/w/shop/app/page.tsx'])
+    expect(runs("npx prettier --write 'app/*.tsx'").map(r => r.args)).toEqual([[{ word: 'app/*.tsx', folder: `${CWD}/app` }]])
+  })
+  test('npx with no tool, a tool handed nothing, or a command line given by -c names no run', () => {
+    for (const command of ['npx', 'npx --yes', 'npx vitest', "npx -c 'prettier --write app/page.tsx'", 'npx --call=x'])
+      expect({ command, runs: runs(command) }).toEqual({ command, runs: [] })
   })
 })
 

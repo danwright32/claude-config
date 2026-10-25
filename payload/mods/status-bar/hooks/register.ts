@@ -320,7 +320,7 @@ const publish = () =>
     if (!io) return
     const now = await io.now()
     const cache = await io.cache()
-    const look = lookParts({ modes: await io.modes(), pr, jobs, agents, unpushed, now })
+    const look = lookParts({ modes: await io.modes(), pr, jobs, agents, unpushed, now, isWorking: turnRunning })
     const ctx = context === undefined ? [] : [{ text: `context ${Math.round(context)}% `, color: 'warning' }]
     // A press while a turn runs is queued (#1278): the row says so and offers Cancel until it runs.
     // Otherwise each line says why it shows, and the cache's says to send a message (#1596).
@@ -486,6 +486,8 @@ export const register: Register = on => {
   // follow off the request's path, so a slow disk never holds a request up.
   on('turn.step', async function* ($, e, next) {
     if (interactive && e.agentId === undefined) {
+      // Also what takes this conversation's quiet background commands off the band while Claude
+      // works (#1583): cacheMoved below draws the band again from it.
       turnRunning = true
       try {
         await $.state.set(cacheRef, (await $.clock.now()) + CACHE_MS)

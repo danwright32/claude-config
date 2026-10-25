@@ -372,6 +372,14 @@ describe('LESSONS.md, written by any route in command position (L673)', () => {
     for (const c of ['python3 x.py payload/notes.md', 'bash tools/fix.sh --in=README.md', './tidy.sh', 'cd payload && node add.mjs index.md'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
   })
+  // #1682: a tool run through npx and a module run with python -m are runs too, so a formatter given
+  // LESSONS.md is held as a script handed it is.
+  test('a tool run through npx or a python module handed LESSONS.md (#1682)', async () => {
+    for (const c of ['npx prettier --write payload/LESSONS.md', 'python3 -m mdformat payload/LESSONS.md'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: 'write to LESSONS.md' })
+    for (const c of ['npx prettier --write payload/notes.md', 'python3 -m mdformat README.md'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+  })
 })
 
 describe('outward tools: every write under claude.ai, Chrome and PostHog, and database writes', () => {

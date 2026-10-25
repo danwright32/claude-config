@@ -450,8 +450,10 @@ export type ModKitWrites = {
   /**
    * A script file the command runs (#1586), present when one is handed any argument: an interpreter's
    * script operand (`python3 gen.py`, `bash x.sh`, `node build.mjs`, never inline code, a script on
-   * standard input, a module or awk's or sed's program file) or a script run by its own name (one
-   * ending in a script language's extension, or named by `./` or `../`). What it writes cannot be read
+   * standard input, or awk's or sed's program file), a script run by its own name (one ending in a
+   * script language's extension, or named by `./` or `../`), and since #1682 a module run with
+   * `python -m` and a tool run through `npx` (`script` the module or tool, with no `path`; npx's `-c`
+   * command line is not read). What it writes cannot be read
    * before it runs, so each word after it that may name a file is given in `args`: as written, with
    * its absolute path where its words name one, a cd and a variable the command set followed, or the
    * `folder` a pattern lands in; an option's value written `--name=value` is that value, and an
