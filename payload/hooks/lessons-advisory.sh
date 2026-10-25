@@ -42,6 +42,10 @@
 # Seams for tests: LESSONS_FILE overrides the lessons path, TMPDIR the cooldown
 # stamp directory.
 #
+# The README's "The lessons advisory on every push" lists every trigger and its lessons
+# (test-lessons-advisory.sh fails when the table and TRIG_IDS disagree), and says how to measure a
+# trigger change before shipping it: measure-lessons-advisory.sh, beside this hook.
+#
 # Fails QUIET: it is an advisor, so a broken advisor should add nothing rather
 # than nag. The one thing it will not do quietly is lose a lesson: an id that no
 # longer resolves, or a lessons file it cannot read, is reported in the advisory
@@ -190,7 +194,7 @@ TRIG_WHAT=(
 )
 TRIG_RE1=(
   ''
-  '((^|[^[:alnum:]_])cron|setInterval|\.schedule\(|scheduleJob|CronCreate|BackgroundTasks|celery|sidekiq|queue\.(add|send))'
+  '((^|[^[:alnum:]-]|(^|[^[:alnum:]])-+)(cron|celery|sidekiq)|setInterval|\.schedule\(|scheduleJob|CronCreate|BackgroundTasks|queue\.(add|send))'
   '((app|router|server)\.(get|post|put|patch|delete)\(|export[[:space:]]+(async[[:space:]]+)?function[[:space:]]+(GET|POST|PUT|PATCH|DELETE)|@(app|router)\.route|addEventListener\([[:punct:]]fetch)'
   '(DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|TRUNCATE[[:space:]]|DELETE[[:space:]]+FROM|rm[[:space:]]+-rf|fs\.rm\(|unlinkSync|\.drop\()'
   ''
@@ -259,21 +263,60 @@ trig_code_matches(){   # $1 = a file holding the added lines  $2 = the path  $3 
 #
 # What the word list matches (claude-config#1578). `cron` counts only at the START of a word, so
 # crontab, CronJob, @Cron( and cron.schedule fire while Overture #4541's `endsAcronym` does not; a
-# camelCase compound (scheduleCron) is missed. `queue.push` is gone: it is how a breadth first search
-# or any work list appends to an array (claude-config #1277's rules.ts), and a job queue's enqueue is
-# add or send. And a job a shell script starts with `&` counts, outside test files only: a detached
+# camelCase compound (scheduleCron) was missed until #1688, below. `queue.push` is gone: it is how
+# a breadth first search or any work list appends to an array (claude-config #1277's rules.ts), and
+# a job queue's enqueue is add or send. And a job a shell script starts with `&` counts, outside test files only: a detached
 # runner a hook leaves behind is the case L13 and L71 are about, while a test backgrounding a fake
 # and waiting on it is the suite's own business and would make this fire on about one push in ten.
 # Measured on 2026-10-24 over 210 claude-config and 59 Overture merges; the pull request lists every
 # hit, and every one outside a test was a real background job.
+#
+# Three mismatches that left (claude-config#1688). The word starts at the start of a word, after an
+# underscore (schedule_cron), at a camelCase join (scheduleCron, startCelery: TRIG_BG_CAMEL_RE, case
+# sensitive, so endsAcronym's lower case c still does not count), or after a flag's dashes (--cron),
+# but not after a hyphen inside a word: this suite's own fixture repo names, bg-cron, bg-celery and
+# bg-cronjob, are bare words in shell code and fired on every push touching it. celery and sidekiq
+# take the same boundary, where before they matched anywhere. And a file with no extension is read
+# by its shebang (trig_read_as), where fh_lang reads every one as shell, so "A & B" in a LICENSE
+# no longer starts a job. Measured over the same history; the pull request lists what moved.
+TRIG_BG_CAMEL_RE='[[:lower:][:digit:]](Cron|Celery|Sidekiq)'
+
+# The first line of a pushed file, from the working tree: the head being pushed, or what the command
+# is about to commit. A seam of its own so a replay over history can read it at each commit instead.
+trig_first_line(){   # $1 = the path, relative to the repository root
+  head -n 1 "${repo_root:-.}/$1" 2>/dev/null
+}
+
+# The path a file's added lines are READ AS. A file with an extension, or a name fh_lang knows
+# (Makefile, Dockerfile), is itself. A file with no extension is a script only when its shebang says
+# so: a shell one is read as shell, python, ruby and node as those, and anything else (a LICENSE, a
+# NOTICE, a script in a language with no stripper here) as prose, which has no code to match.
+trig_read_as(){   # $1 = the path
+  local base="${1##*/}" first
+  case "$base" in *.*) printf '%s' "$1"; return ;; esac
+  [ "$(fh_lang "$1")" = shell ] || { printf '%s' "$1"; return; }
+  first="$(trig_first_line "$1")"
+  case "$first" in
+    '#!'*python*) printf '%s.py' "$1" ;;
+    '#!'*ruby*) printf '%s.rb' "$1" ;;
+    '#!'*node*|'#!'*deno*|'#!'*bun*) printf '%s.js' "$1" ;;
+    '#!'*sh|'#!'*sh[[:space:]]*) printf '%s' "$1" ;;
+    *) printf '%s.txt' "$1" ;;
+  esac
+}
+
 trig_background_work(){   # $1 = a file holding the added lines  $2 = the path
-  trig_code_matches "$1" "$2" "${TRIG_RE1[1]}" && return 0
-  [ "$(fh_lang "$2")" = shell ] || return 1
+  local as code
+  as="$(trig_read_as "$2")"
+  code="$(fh_code_only "$as" < "$1")"
+  grep -Eqi -- "${TRIG_RE1[1]}" <<< "$code" && return 0
+  grep -Eq -- "$TRIG_BG_CAMEL_RE" <<< "$code" && return 0
+  [ "$(fh_lang "$as")" = shell ] || return 1
   is_test "$2" && return 1
   # An arithmetic expression, $(( x & mask )) or (( mode & bit )), is removed first: its & is a
   # bitwise and, and its operands are bare names (found by the lessons review of this change). One
   # nested in further parentheses is left, and fires.
-  grep -Eq -- "$TRIG_SHELL_JOB_RE" <<< "$(fh_code_only "$2" < "$1" | sed -E 's/\(\([^()]*\)\)//g')"
+  grep -Eq -- "$TRIG_SHELL_JOB_RE" <<< "$(sed -E 's/\(\([^()]*\)\)//g' <<< "$code")"
 }
 
 # An `&` that starts a job: not half of && or |&, not a redirection (>&2, 2>&1, &>file), and followed
