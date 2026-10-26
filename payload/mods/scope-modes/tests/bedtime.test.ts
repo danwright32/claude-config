@@ -143,7 +143,7 @@ describe('answerChoices: the choices a question is offered with (#1771)', () => 
 })
 
 describe('the dialog', () => {
-  test('the question names its issues, and every question offers to skip it and to go to sleep now', () => {
+  test('the question names its issues, and one with no choices offers to skip it and to go to sleep', () => {
     const one: OpenQuestion = { repo: 'o/r', text: 'Keep the old flag?', issues: [12, 14], options: [], at: 1 }
     expect(askText(one)).toBe('o/r#12 and #14: Keep the old flag?')
     expect(askOptions(one)).toEqual([SKIP_QUESTION, GO_TO_SLEEP])
