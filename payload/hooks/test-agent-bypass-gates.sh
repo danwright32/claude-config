@@ -430,13 +430,14 @@ EOF' 1
 # ---------------------------------------------------------------------------------------------
 echo "no-verify-gate.sh: an agent's git command reading /dev/stdin is refused at once (claude-config#1765)"
 # The two commands that hung a worktree subagent on a permission prompt nobody could answer, first
-# lines as recorded in its transcripts (10,469 s on 2026-10-05 and 1,241 s on 2026-10-26).
+# lines as recorded in its transcripts (10,469 s on 2026-10-05 and 1,241 s on 2026-10-26), with the
+# worktree's home directory replaced, since a synced file may name no machine's home.
 HUNG_1='git commit -q -F /dev/stdin <<'"'"'MSG'"'"'
 Refuse the thing
 
 Claude-Session: https://claude.ai/code/session_x
 MSG'
-HUNG_2='git -C /Users/danielhankins-wright/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-a91c75b370aec7ff8 commit -q -F /dev/stdin <<'"'"'EOF'"'"'
+HUNG_2='git -C /private/tmp/wt/claude-config/.claude/worktrees/agent-a91c75b370aec7ff8 commit -q -F /dev/stdin <<'"'"'EOF'"'"'
 Hold the guard
 
 Claude-Session: https://claude.ai/code/session_x
