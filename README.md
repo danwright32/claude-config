@@ -1313,15 +1313,22 @@ does not take it: it gives its place up so the next pull request goes at once, a
 which a rerun resumes. A whole deadline shorter than the check runs stops at once for a person,
 exit 1. With no runs to measure, or a list GitHub would not give, it says so and takes the turn as
 before.
-A GitHub read that fails in transit or on GitHub's server (a timeout, a reset connection, an HTTP
-5xx) is asked again, four times over about a minute, before it stops naming the last error; an
+A GitHub read that fails on GitHub's server (an HTTP 5xx, or a request it took and did not answer
+in time) is asked again, four times over about a minute, before it stops naming the last error; an
 answer GitHub actually gave, such as a 404, is believed the first time, and nothing merges on a
-read it could not confirm (claude-config#1061). A read gh could not make at all ("error connecting
-to api.github.com", which gh prints with no HTTP status when it cannot reach GitHub; it stopped #1640
-at 41 minutes on 2026-10-24 with no retry) is its own outcome, asked again by the same rule, and one
-that outlasts the tries stops as "could not connect to GitHub N times", never as GitHub refusing or
-being unable to show something (claude-config#1675). The gate's own reads are asked again the same way,
-three times within a budget well inside its 30 second hook timeout (a setting, not a measurement, claude-config#1081).
+read it could not confirm (claude-config#1061). A read the network to GitHub failed is its own
+outcome, asked again by the same rule (claude-config#1675, #1735): every network failure gh prints is
+read in one list in `hooks/lib/merge-target.sh` (`mt_gh_network_fault`), not one wording. One that
+never reached GitHub ("error connecting to api.github.com", any `dial tcp` failure, a failed name
+lookup or TLS handshake) stops as "could not connect to GitHub N times"; one whose connection was
+made and then failed before GitHub's answer arrived (a reset, a read timeout, a cut off answer) as
+"lost the connection to GitHub N times"; neither as GitHub refusing or being unable to show
+something. "error connecting to" stopped #1640 at 41 minutes on 2026-10-24, and `dial tcp ...:
+connect: can't assign requested address` (no local port left to connect from) stopped #1732 at once
+on 2026-10-25, with #1675 installed, because only the first wording was known. The gate's own reads are asked again the same way,
+three times within a budget well inside its 30 second hook timeout (a setting, not a measurement, claude-config#1081),
+and a gate whose read the network failed on every try refuses in those same words, never as GitHub
+refusing or not answering (claude-config#1728).
 A sign in GitHub refused for want of a token (HTTP 401 "Requires authentication", which a few runs
 met under heavy load on 2026-10-23, with a direct read seconds later answering) is asked again by the
 same rule, with a token read after each refusal recording whether the
@@ -2001,6 +2008,13 @@ with the start time recorded and only until the time the record names, which the
 end of the one wait it is about to make plus a minute and renews before every wait. A helper with no
 record, a record that cannot be read, or one whose run has gone or gone quiet counts, as every helper
 did before, so a crashed helper's record can only ever make a window wait, never let it overlap.
+A lessons review is counted on its own record (claude-config#1730): the helper starts it detached,
+and one that outlives its helper (a helper stopping on a red check) was seen by nothing. The reviewer
+runner in `hooks/lib/pr-review.sh` writes a `review` record for the reviewer's own pid, good until the
+review's deadline plus a minute, and removes it when the reviewer ends. A window waits for one only on
+positive evidence, its pid running with the start time recorded and inside that time, so a review
+that crashed is never waited for, and one the window's own command started is not counted. The suite
+runner hands every suite a phase folder of its own, so a suite's fixture reviews never publish here.
 `--status` lists the helpers it is not counting, and why. Everything it starts is in its own process group with a
 watchdog, so it is stopped on every way out, a SIGKILL included. Each window's start and end are
 recorded in `~/.claude/state/load-window/windows.tsv` (`hooks/lib/load-window.sh`), and

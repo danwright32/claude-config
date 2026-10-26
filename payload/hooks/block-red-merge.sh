@@ -112,8 +112,8 @@ esac
 # merge-when-ready.sh retries its reads, but it hands the final pinned merge to this gate, whose one
 # shot reads turned a single TLS timeout or reset into a refusal that stopped the merge after the whole
 # CI wait. So each read below is a reader returning 0 (answered), 1 (GitHub answered no, or failed in
-# a way nobody recognised), 2 (mt_gh_transient) or MT_SIGNIN_RC (GitHub refused the sign in, below),
-# run through mt_retry_read, the one retry loop the
+# a way nobody recognised), 2 (mt_gh_transient), MT_SIGNIN_RC (GitHub refused the sign in, below) or
+# MT_CONNECT_RC (the network to GitHub failed, below), run through mt_retry_read, the one retry loop the
 # helper uses too. A refusal is believed the first time, and a read still failing after its tries
 # refuses exactly as before: nothing merges on an unconfirmed read.
 #
@@ -129,6 +129,11 @@ esac
 # failing to read the pull request (claude-config#1615, L11). Asked by merge-when-ready.sh, which runs
 # this under no harness timeout, the budget is the one it names (mt_gate_read_budget); BRM_READ_BUDGET_SECONDS,
 # when set, still wins.
+#
+# THE NETWORK TO GITHUB FAILING (#1675, #1735) is asked again by the same loop, and one that outlasts
+# the tries refuses as the connection failing N times (lib/merge-target.sh's mt_connect_said, through
+# mt_unanswered_said, which says a refused sign in too), never as gh failing to read the pull request
+# or GitHub not answering (claude-config#1728, L11).
 brm_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 READ_TRIES="$(brm_num "${BRM_READ_TRIES:-}" 3)"
 READ_WAIT="$(brm_num "${BRM_READ_RETRY_SECONDS:-}" 2)"
@@ -321,7 +326,8 @@ else
 fi
 if [ -z "$rollup" ]; then
   gh_error=$(printf '%s' "$envelope" | jq -r '.error // ""' 2>/dev/null)
-  [ "$view_rc" = "$MT_SIGNIN_RC" ] && deny "Cannot verify CI for this PR: $(mt_signin_said "the $pr_label in $searched" "$gh_error"). Merging blind is what this gate exists to stop. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+  said="$(mt_unanswered_said "$view_rc" "the $pr_label in $searched" "$gh_error")" \
+    && deny "Cannot verify CI for this PR: $said. Merging blind is what this gate exists to stop. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
   deny "Cannot verify CI for this PR: gh pr view failed for the $pr_label in $searched under every logged-in account${gh_error:+ ($gh_error)}. Check the PR manually, then re-run with ALLOW_RED_MERGE=1 if it is genuinely green."
 fi
 
@@ -343,6 +349,11 @@ if [ -n "$foreign" ]; then
         # later reader adds (#1615): a refused sign in is said as one, and every other refuses below.
         if [ "${MT_SIGNIN_REFUSALS:-0}" -gt 0 ] || [ "${MT_SIGNIN_NOTOKENS:-0}" -gt 0 ]; then
           deny "Refusing to merge: could not tell whether $repo_flag carries its own commit pinned merge tool ($remote_tool): $(mt_signin_said "$remote_tool in $repo_flag" "$MT_REMOTE_ERR"). Run the merge from a checkout of $repo_flag, where the file can be read from disk. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>."
+        fi
+        # The probe's own code is not the read's, so the network failing is read from the last read's
+        # outcome, which mt_retry_read keeps (#1728).
+        if [ "${MT_RETRY_RC:-}" = "$MT_CONNECT_RC" ]; then
+          deny "Refusing to merge: could not tell whether $repo_flag carries its own commit pinned merge tool ($remote_tool): $(mt_connect_said "$remote_tool in $repo_flag" "$MT_REMOTE_ERR"). Run the merge from a checkout of $repo_flag, where the file can be read from disk. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>."
         fi
         deny "Refusing to merge: could not tell whether $repo_flag carries its own commit pinned merge tool ($remote_tool), because GitHub did not answer that question${MT_REMOTE_ERR:+ (gh said: $MT_REMOTE_ERR)}. Where one exists it is the only way this gate lets that repository merge, so not knowing is not the same as it being absent. Run the merge from a checkout of $repo_flag, where the file can be read from disk. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>."
       fi
@@ -431,13 +442,15 @@ if [ "$total" = "0" ]; then
   # here, so the unexplained absence refuses, as it does below; and not knowing refuses too.
   if [ -n "$foreign" ]; then
     read_workflows(){ mt_remote_path "$repo_flag" ".github/workflows" "$view_account"; }
-    read_again read_workflows
+    read_again read_workflows; workflows_rc=$?
     case "$MT_REMOTE_STATE" in
       absent) exit 0 ;;
       present)
         deny "PR #$number has NO checks at all, but $repo_flag has workflows (.github/workflows), and from here the gate cannot read whether they run on pull requests, so something may have stopped them being scheduled: a workflow that will not parse, Actions disabled, or a run that never started. Run the merge from a checkout of $repo_flag, where its workflows can be read, or find out which before merging, because an empty check list is indistinguishable from a green one. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
         ;;
       *)
+        said="$(mt_unanswered_said "$workflows_rc" "whether $repo_flag has any workflows" "$MT_REMOTE_ERR")" \
+          && deny "PR #$number has NO checks at all, and whether $repo_flag has any workflows is unknown, so an empty check list cannot be told from one that was never scheduled: $said. Run the merge from a checkout of $repo_flag, where its workflows can be read. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
         deny "PR #$number has NO checks at all, and GitHub did not answer whether $repo_flag has any workflows${MT_REMOTE_ERR:+ (gh said: $MT_REMOTE_ERR)}, so an empty check list cannot be told from one that was never scheduled. Run the merge from a checkout of $repo_flag, where its workflows can be read. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
         ;;
     esac
@@ -574,8 +587,8 @@ if [ -n "$head_sha" ]; then
   [ -z "$slug" ] && deny "Refusing to merge: nothing here could name the repository PR #$number is in (gh reported no url for it, the merge names none with --repo, and this folder has no GitHub remote), so nothing could read whether CI is still to report on its head ${head_sha:0:7}. Name the repository with --repo owner/name on the merge. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
   read_runs(){ mt_unfinished_runs "$slug" "$head_sha" "$view_account"; }
   read_again read_runs; runs_rc=$?
-  if [ "$runs_rc" = "$MT_SIGNIN_RC" ]; then
-    deny "Refusing to merge: $(mt_signin_said "which workflow runs GitHub has for PR #$number's head ${head_sha:0:7} in $slug" "$MT_RUNS_ERR"), so nothing here can tell whether CI is still to report on it. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+  if said="$(mt_unanswered_said "$runs_rc" "which workflow runs GitHub has for PR #$number's head ${head_sha:0:7} in $slug" "$MT_RUNS_ERR")"; then
+    deny "Refusing to merge: $said, so nothing here can tell whether CI is still to report on it. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
   fi
   if [ "$runs_rc" -ne 0 ]; then
     deny "Refusing to merge: could not read which workflow runs GitHub has for PR #$number's head ${head_sha:0:7} in $slug (${MT_RUNS_ERR:-no answer}), so nothing here can tell whether CI is still to report on it. Not knowing is not the same as nothing being left to run: the checks reported so far may be a fast few, with the rest not registered yet. Re-run once GitHub answers. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
@@ -638,8 +651,8 @@ case "$command" in
       mt_gh_read_class "$errs" "$view_account"
     }
     read_again read_compare; compare_read_rc=$?
-    if [ "$compare_rc" != 0 ] && [ "$compare_read_rc" = "$MT_SIGNIN_RC" ]; then
-      deny "Refusing to merge: $(mt_signin_said "whether PR #$number contains the current tip of its base branch $base_ref${slug:+ in $slug}" "$compare_why"). Not knowing is not the same as being up to date. $behind_override"
+    if [ "$compare_rc" != 0 ] && said="$(mt_unanswered_said "$compare_read_rc" "whether PR #$number contains the current tip of its base branch $base_ref${slug:+ in $slug}" "$compare_why")"; then
+      deny "Refusing to merge: $said. Not knowing is not the same as being up to date. $behind_override"
     fi
 
     compare_status=$(printf '%s' "$compare" | jq -r '.status // ""' 2>/dev/null)
