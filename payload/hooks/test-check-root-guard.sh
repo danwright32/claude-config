@@ -148,6 +148,27 @@ out_talk="$(bash "$CHECK" "$TMPROOT/tree" 2>&1)"; code_talk=$?
   && check "a file that merely MENTIONS claude-sync and payload is not thereby guarded" ok \
   || check "a file that merely MENTIONS claude-sync and payload is not thereby guarded" "exit=$code_talk out=$out_talk"
 
+# USING the derived name is not checking it (claude-config#1729). The guard on the name was matched
+# as any `$NAME/claude-sync` or `$NAME/payload` in the file, so a suite that merely READ
+# `$REPO/payload` counted as guarded, and test-failure-handling.sh's unguarded derivation, written
+# without quotes around the cd target, passed both ways: the quote was required to match at all.
+clear_tree
+mk test-uses-it.sh '#!/usr/bin/env bash
+REPO="$(cd "$DIR/../.." && pwd)"
+grep -rn retry "$REPO/payload"'
+out_use="$(bash "$CHECK" "$TMPROOT/tree" 2>&1)"; code_use=$?
+[ "$code_use" -ne 0 ] \
+  && check "#1729 a file that only READS \$REPO/payload is not thereby guarded" ok \
+  || check "#1729 a file that only READS \$REPO/payload is not thereby guarded" "exit=$code_use out=$out_use"
+clear_tree
+mk test-unquoted.sh '#!/usr/bin/env bash
+REPO=$(cd $DIR/../.. && pwd)
+grep -rn retry "$REPO/payload"'
+out_unq="$(bash "$CHECK" "$TMPROOT/tree" 2>&1)"; code_unq=$?
+[ "$code_unq" -ne 0 ] && grep -q 'test-unquoted.sh:2' <<< "$out_unq" \
+  && check "#1729 a derivation written without quotes is still found" ok \
+  || check "#1729 a derivation written without quotes is still found" "exit=$code_unq out=$out_unq"
+
 # The positive control in the SAME shape, or the check above is satisfied by a rule that refuses
 # everything (L159): the same file, with the guard actually applied to the derived name.
 clear_tree

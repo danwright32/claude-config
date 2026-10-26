@@ -1,6 +1,7 @@
 import { expect, mock } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
+import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
 
 // The Goal accomplished box (claude-config#1563) in a session: shown once when a /goal is met (the
 // session is sent a prompt of its own asking for it once the turn has ended, since the met record
@@ -189,6 +190,7 @@ const turnEnds = ($: Engine, more: Record<string, unknown> = {}) =>
   $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer', ...more } as never)
 
 const ASKED = { goal: 'Show a green box when the goal is met', shipped: ['#1563 closed: Goal accomplished box', 'PR #1700 merged and live'] }
+const DESIGN: { goal: string; shipped: string[] } = DESIGN_FIXTURE
 const MET = { state: 'none' as const, met: { condition: 'complete issue 1563', reason: 'Issue #1563 is closed and PR #1700 is merged.', id: 'met-1' } }
 const withKit = { plugins: [kit, registry] }
 const withLive = { plugins: [kit, registry, live] }
@@ -228,6 +230,25 @@ test('the work Dan asked for, finished: the box is the tool result, drawn as the
   expect(c?.border).toBe('success')
   expect(c?.lines[0]?.map(x => x.color)).toEqual([undefined])
   expect(c?.lines.slice(1).map(l => l.map(x => x.color))).toEqual([['success', undefined], ['success', undefined]])
+})
+
+// The settled design's own goal and shipped lines (docs/design/1563-goal-box.html draws them from
+// its committed fixture; a mod's test loads only code, so the copy here is that file's bytes behind
+// `export default `, and tests/test-mods.sh holds it byte for byte to the design's),
+// drawn by the mod as the design's card draws them: the bold green heading, the goal first in plain
+// text, then each shipped line behind a green bullet, in a green border (claude-config#1729).
+test('the settled design\'s fixture, drawn by the mod, is the card the design draws', withKit, async ($, on) => {
+  const { cards } = world(on)
+  await start($)
+  await says($, 'Finish the open issues')
+  expect(DESIGN.shipped.length).toBeGreaterThan(0)
+  expect((await box($, DESIGN)).deny).toBeUndefined()
+  const [c] = await cards()
+  expect(c?.title).toEqual([{ text: 'GOAL ACCOMPLISHED', color: 'success', bold: true }])
+  expect(c?.border).toBe('success')
+  expect(c?.lines.map(l => l.map(x => x.text).join(''))).toEqual([DESIGN.goal, ...DESIGN.shipped.map(s => `• ${s}`)])
+  expect(c?.lines[0]?.map(x => x.color)).toEqual([undefined])
+  expect(c?.lines.slice(1).map(l => l[0]?.color)).toEqual(DESIGN.shipped.map(() => 'success'))
 })
 
 test('never twice for one request: a second call is refused until Dan asks for something new', withKit, async ($, on) => {
