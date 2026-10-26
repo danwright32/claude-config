@@ -61,6 +61,18 @@ export DERIVED_DATA_SWEEP_STATE_DIR="$TMPROOT/no-sweep-state-here"
 QUIET_PS="$TMPROOT/quiet-ps"
 printf '#!/bin/sh\necho "  77 /usr/bin/login -f someone"\n' > "$QUIET_PS"; chmod +x "$QUIET_PS"
 export DERIVED_DATA_PS="$QUIET_PS"
+# Swap and the memory holders (claude-config#1770) are read from the machine by default, so every
+# run hands the check a swap reader of the suite's own that reports none, a disk size of its own, and
+# a top that records being called and prints nothing. No case here runs the real sysctl or top; the
+# cases about swap swap in readers of their own (L2).
+SWAP_NONE="$TMPROOT/swap-none"
+printf '#!/bin/sh\necho "vm.swapusage: total = 0.00M  used = 0.00M  free = 0.00M  (encrypted)"\n' > "$SWAP_NONE"; chmod +x "$SWAP_NONE"
+export FREE_SPACE_SWAP_CMD="$SWAP_NONE"
+TOP_CALLED="$TMPROOT/top-called"
+TOP_SILENT="$TMPROOT/top-silent"
+printf '#!/bin/sh\n: >> "%s"\n' "$TOP_CALLED" > "$TOP_SILENT"; chmod +x "$TOP_SILENT"
+export FREE_SPACE_TOP_CMD="$TOP_SILENT"
+export FREE_SPACE_DISK_BYTES=$((926 * 1024 * 1024 * 1024))
 
 GB=$((1024 * 1024 * 1024))
 T0=1757500000            # a fixed instant, so every span below is arithmetic rather than a race
@@ -83,6 +95,14 @@ probe(){   # probe <free bytes> <epoch> [state dir] -> sets PROBE_RC and PROBE_M
   PROBE_RC=$?
   PROBE_MSG="$(cat "$out" 2>/dev/null || true)"
   return 0
+}
+rprobe(){   # rprobe <free bytes> <epoch> <state dir> -> sets PROBE_RC and PROBE_MSG, with --report
+  local out="$TMPROOT/rprobe-out"
+  mkdir -p "$3"
+  FREE_SPACE_BYTES="$1" FREE_SPACE_NOW="$2" FREE_SPACE_STATE_DIR="$3" \
+    FREE_SPACE_PATH=/fixture bash "$CHECK" --report > "$out" 2>&1
+  PROBE_RC=$?
+  PROBE_MSG="$(cat "$out" 2>/dev/null || true)"
 }
 
 # ---- a disk with room, and a check that has to say so by SAYING NOTHING and exiting 0 ----
@@ -116,7 +136,8 @@ check "and says it could not measure, rather than reporting a number it does not
 # every arithmetic test error, which bash reads as false, so the check falls through to "there is
 # room" on a disk with 1 GB left: silently landing on the permissive side is exactly the failure
 # L50 describes, and nothing anywhere would have said so.
-for bad_setting in FREE_SPACE_FLOOR_GB FREE_SPACE_HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS FREE_SPACE_RECOVERY_GB; do
+for bad_setting in FREE_SPACE_FLOOR_GB FREE_SPACE_HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS FREE_SPACE_RECOVERY_GB \
+                   FREE_SPACE_PERSIST_MIN FREE_SPACE_SWAP_SHARE_PCT FREE_SPACE_TOP_SECONDS; do
   S_BAD="$TMPROOT/state-bad-$bad_setting"; mkdir -p "$S_BAD"
   bad_msg="$(env "$bad_setting=abc" FREE_SPACE_BYTES="$((1 * GB))" FREE_SPACE_NOW="$T0" \
     FREE_SPACE_STATE_DIR="$S_BAD" FREE_SPACE_PATH=/fixture bash "$CHECK" 2>&1)"; bad_rc=$?
@@ -190,8 +211,11 @@ check "a real fall that starts after a build recovered still states its rate" \
   "$(grep -qi 'per hour' <<< "$after_msg" && echo ok || echo "said: $after_msg")"
 check "and still fires, because zero is inside the horizon" \
   "$([ "$after_rc" -eq 4 ] && echo ok || echo "exit $after_rc, said: $after_msg")"
+# From the recovery at T0 - 4200 to the most free space seen in the last 30 minutes, the 90 GB at
+# T0 - 1400: 46 minutes. Measured from before the recovery (T0 - 5400) it would be 66, which reads
+# as 1 hour, so the figure tells the two apart (claude-config#1754).
 check "and measures from the recovery, not from before it" \
-  "$(grep -qi 'over the last 1 hour' <<< "$after_msg" && echo ok || echo "said: $after_msg")"
+  "$(grep -qi 'over 46 minute(s)' <<< "$after_msg" && echo ok || echo "said: $after_msg")"
 
 # A RECOVERY OF A FEW BYTES IS NOISE, NOT A RECOVERY. Every write and delete on a live machine
 # jitters the reading, so a rule that refused on any increase at all would refuse always, which is
@@ -207,6 +231,59 @@ jit "$(((107 * GB) + 200 * 1024 * 1024))" "$((T0 - 1200))" > /dev/null
 jit_msg="$(jit "$((86 * GB))" "$T0")"
 check "a fall that jittered up by a fraction of a GB still states its rate" \
   "$(grep -qi 'per hour' <<< "$jit_msg" && echo ok || echo "said: $jit_msg")"
+
+# ---- A BURST THAT COMES BACK IS NOT A FALL (claude-config#1754) ----
+# Measured on 2026-10-26 on the work MacBook: Claude sessions' pre push checks (lint, a production
+# build and the test suite in a temporary tree, plus a local database stack) each took 1.4 to 4.4 GB
+# and gave most of it back minutes later: 36.0 GB free at 11:00 ET, 36.2 GB at 11:27 after two
+# bursts. The warning said "17 GB per hour ... zero in about 2 hour(s)", then "7 GB per hour ... 4
+# hour(s)", while the space was coming back. The recovery rule above only helps AFTER a burst has
+# given its space back; while one is still in progress the oldest reading and the dip made a slope.
+#
+# The series below is that morning's shape, a reading every few minutes, in tenths of a GB: a level
+# 36 GB for half an hour, a 4.4 GB burst that holds for fifteen minutes, back up, a second smaller
+# burst, back up. At no reading may the check project zero or state a rate.
+S_BURST="$TMPROOT/state-burst"; mkdir -p "$S_BURST"
+burst_fired=""
+for _reading in -30:360 -20:360 -10:361 0:360 5:335 10:316 15:314 20:359 24:330 27:362; do
+  probe "$(( ${_reading#*:} * GB / 10 ))" "$((T0 + ${_reading%%:*} * 60))" "$S_BURST"
+  if [ "$PROBE_RC" -eq 4 ] || grep -qi 'per hour' <<< "$PROBE_MSG"; then
+    burst_fired="$burst_fired [minute ${_reading%%:*}: exit $PROBE_RC, said: $PROBE_MSG]"
+  fi
+done
+check "a push check's burst that comes back never projects zero, at any reading in the series" \
+  "$([ -z "$burst_fired" ] && echo ok || echo "$burst_fired")"
+
+# The same burst seen from a shorter history, which is how the 17 GB an hour was reached: the first
+# reading in the window is 25 minutes before the dip's bottom. A fall seen for less time than a push
+# check lasts is not stated as a rate, and --report says that is why (L540).
+S_BURST2="$TMPROOT/state-burst-short"
+rprobe "$((36 * GB))" "$((T0 - 1500))" "$S_BURST2"
+rprobe "$((316 * GB / 10))" "$T0" "$S_BURST2"
+check "a drop seen for less than the persistence window states no rate, and says it has not lasted" \
+  "$([ "$PROBE_RC" -eq 0 ] && ! grep -qi 'per hour' <<< "$PROBE_MSG" && grep -q 'lasted 30 minutes' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# THE CONTROL: a real, sustained fall from the same starting point still projects (L159, L248). Half
+# a GB every five minutes for an hour, 6 GB an hour, which reaches zero inside the six hour horizon.
+S_SUSTAIN="$TMPROOT/state-sustained"; mkdir -p "$S_SUSTAIN"
+_m=-60
+while [ "$_m" -lt 0 ]; do
+  probe "$(( (300 - _m) * GB / 10 ))" "$((T0 + _m * 60))" "$S_SUSTAIN"
+  _m=$((_m + 5))
+done
+probe "$((30 * GB))" "$T0" "$S_SUSTAIN"; sustain_msg="$PROBE_MSG"
+check "a sustained fall from the same level still fires" \
+  "$([ "$PROBE_RC" -eq 4 ] && echo ok || echo "exit $PROBE_RC, said: $sustain_msg")"
+check "and states the rate it measured" \
+  "$(grep -q 'about 6 GB per hour' <<< "$sustain_msg" && echo ok || echo "said: $sustain_msg")"
+# A persistence window of 0 is the old behaviour, a rate from the newest reading, so the burst that
+# the default refuses is projected again: proof the window is what refuses it (L1001).
+S_BURST0="$TMPROOT/state-burst-off"; mkdir -p "$S_BURST0"
+for _reading in -30:360 -20:360 -10:361 0:360 5:335 10:316; do
+  FREE_SPACE_PERSIST_MIN=0 probe "$(( ${_reading#*:} * GB / 10 ))" "$((T0 + ${_reading%%:*} * 60))" "$S_BURST0"
+done
+check "with the persistence window set to 0 the same burst is projected, so the window is what refuses it" \
+  "$([ "$PROBE_RC" -eq 4 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
 # ---- falling fast, while still above the floor ----
 # 240 GB now, 300 GB three hours ago: 20 GB an hour, so zero is twelve hours out. That is outside
@@ -276,7 +353,8 @@ while [ "$i" -lt 60 ]; do
   i=$((i + 1))
 done
 probe "$((200 * GB))" "$T0" "$S_MANY"
-many_lines="$(cat "$S_MANY"/* 2>/dev/null | grep -c . || true)"
+# The readings file by name: the daily swap record beside it is bounded by a case of its own.
+many_lines="$(grep -c . "$S_MANY/_fixture" 2>/dev/null || true)"
 check "readings outside the window are pruned rather than accumulating for ever" \
   "$([ "${many_lines:-0}" -ge 1 ] && [ "${many_lines:-999}" -le 5 ] && echo ok || echo "$many_lines line(s) kept")"
 
@@ -317,14 +395,7 @@ check "and that reading really is a number of GB, which is what proves df was pa
 # disk, which is right for a warning on every prompt and useless to somebody triaging: so --report
 # always says how much is left, and either the rate or exactly why there is none (L11, L540).
 # The exit codes are the same four in both modes, because callers judge by those (L184).
-rprobe(){   # rprobe <free bytes> <epoch> <state dir> -> sets PROBE_RC and PROBE_MSG
-  local out="$TMPROOT/rprobe-out"
-  mkdir -p "$3"
-  FREE_SPACE_BYTES="$1" FREE_SPACE_NOW="$2" FREE_SPACE_STATE_DIR="$3" \
-    FREE_SPACE_PATH=/fixture bash "$CHECK" --report > "$out" 2>&1
-  PROBE_RC=$?
-  PROBE_MSG="$(cat "$out" 2>/dev/null || true)"
-}
+# (rprobe, the --report form of probe, is defined beside probe at the top.)
 
 # The quiet default stays quiet: the nudge relies on exit 0 saying nothing (claude-config#363).
 S_QUIET="$TMPROOT/state-quiet"; mkdir -p "$S_QUIET"
@@ -460,6 +531,126 @@ sym_probe "$((7 * GB))" "$T0" "$S_SYMN" "$TMPROOT/absent-symbol-cache"; sym_none
 check "a low verdict on a machine without the folder does not name it" \
   "$([ "$PROBE_RC" -eq 3 ] && ! grep -q 'coresymbolicationd' <<< "$sym_none" && echo ok || echo "exit $PROBE_RC, said: $sym_none")"
 
+# ---- swap, and the processes holding the memory, named when swap is filling the disk (#1770) ----
+# On 2026-10-26 the disk on Daniels-MacBook-Pro-2 reached 1.1 GB free and the cause was 95 GB of
+# swap, held by two processes leaking memory (Backblaze's bzserv at 117 GB and fseventsd at 105 GB
+# by top's MEM). Swap lives on its own volume, /System/Volumes/VM, which shares the disk and which no
+# folder size reaches, and the warning named only the symbol cache, which did not exist that day.
+# The readers below print what sysctl and top printed that day, shaped as they print it; the suite
+# never runs either (L2).
+swap_reader(){   # swap_reader <file> <used, as sysctl prints it, e.g. 94658.81M>
+  printf '#!/bin/sh\necho "vm.swapusage: total = 95232.00M  used = %s  free = 573.19M  (encrypted)"\n' "$2" > "$1"
+  chmod +x "$1"
+}
+SWAP_BIG="$TMPROOT/swap-big"; swap_reader "$SWAP_BIG" 94658.81M
+SWAP_SMALL="$TMPROOT/swap-small"; swap_reader "$SWAP_SMALL" 136.25M
+TOP_BUSY="$TMPROOT/top-busy"
+cat > "$TOP_BUSY" <<TOP
+#!/bin/sh
+: >> "$TOP_CALLED"
+cat <<'OUT'
+Processes: 812 total, 4 running, 808 sleeping, 4210 threads
+2026/10/26 15:58:01
+Load Avg: 5.10, 4.80, 4.62
+PhysMem: 95G used (6100M wired, 39G compressor), 849M unused.
+
+PID    COMMAND          MEM
+612    bzserv           117G
+377    fseventsd        105G
+1290   Google Chrome He 2310M+
+OUT
+TOP
+chmod +x "$TOP_BUSY"
+swap_probe(){   # swap_probe <free bytes> <state dir> <swap reader> [top] [VAR=value...]
+  local free="$1" state="$2" swap="$3" top="${4:-$TOP_BUSY}" out="$TMPROOT/swap-out"
+  shift 3; [ "$#" -gt 0 ] && shift
+  mkdir -p "$state"; rm -f "$TOP_CALLED"
+  env FREE_SPACE_BYTES="$free" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$state" FREE_SPACE_PATH=/fixture \
+    FREE_SPACE_SWAP_CMD="$swap" FREE_SPACE_TOP_CMD="$top" "$@" bash "$CHECK" > "$out" 2>&1
+  PROBE_RC=$?
+  PROBE_MSG="$(cat "$out" 2>/dev/null || true)"
+}
+
+swap_probe "$((1 * GB))" "$TMPROOT/state-swap-big" "$SWAP_BIG"; swap_big="$PROBE_MSG"
+check "a low disk with swap above its share still exits 3" \
+  "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC, said: $swap_big")"
+check "and says how much swap there is, read from sysctl" \
+  "$(grep -q 'Swap holds 92 GB' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
+check "and names the processes holding the most memory, with what top measured" \
+  "$(grep -q 'bzserv (pid 612): 117G' <<< "$swap_big" && grep -q 'fseventsd (pid 377): 105G' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
+check "and keeps a command name that has a space in it whole" \
+  "$(grep -q 'Google Chrome He (pid 1290): 2310M' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
+check "and says a restart gives the space back, and deleting files does not" \
+  "$(grep -qi 'restart' <<< "$swap_big" && grep -qi 'deleting files does not' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
+check "and the swap is said only after the free space sentence, so the nudge still reads its figure" \
+  "$(grep -q '^claude-sync: only 1 GB free on /fixture' <<< "${swap_big%%$'\n'*}" && echo ok || echo "first line: ${swap_big%%$'\n'*}")"
+check "and the first line no longer says nothing measured a cause, since swap was measured" \
+  "$(grep -q 'Swap is measured below' <<< "${swap_big%%$'\n'*}" && ! grep -q 'Nothing here says what is using it' <<< "$swap_big" && echo ok || echo "first line: ${swap_big%%$'\n'*}")"
+check "and hands over the top command that lists them, alone in its block" \
+  "$(grep -qxF 'top -l 1 -o mem -n 10 -stats pid,command,mem,time' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
+
+# Below the share, on the same low disk: no memory holders, and top is never run. The two readings
+# sit either side of the line (L497: shift the input both ways).
+swap_probe "$((1 * GB))" "$TMPROOT/state-swap-small" "$SWAP_SMALL"; swap_small="$PROBE_MSG"
+check "a low disk with ordinary swap names no memory holders" \
+  "$([ "$PROBE_RC" -eq 3 ] && ! grep -q 'bzserv' <<< "$swap_small" && ! grep -qi 'Swap holds' <<< "$swap_small" && echo ok || echo "exit $PROBE_RC, said: $swap_small")"
+check "and never runs top, which costs a second on every warning" \
+  "$([ ! -e "$TOP_CALLED" ] && echo ok || echo "top was run")"
+SWAP_19="$TMPROOT/swap-19"; swap_reader "$SWAP_19" 1945.60M   # 1.9 GB of a 100 GB disk
+SWAP_21="$TMPROOT/swap-21"; swap_reader "$SWAP_21" 2150.40M   # 2.1 GB of it
+swap_probe "$((1 * GB))" "$TMPROOT/state-swap-19" "$SWAP_19" "" FREE_SPACE_DISK_BYTES=$((100 * GB))
+check "swap just under 2% of the disk is not named" \
+  "$(! grep -qi 'Swap holds' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+swap_probe "$((1 * GB))" "$TMPROOT/state-swap-21" "$SWAP_21" "" FREE_SPACE_DISK_BYTES=$((100 * GB))
+check "and just over 2% of it is" \
+  "$(grep -qi 'Swap holds 2 GB' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+
+# A disk with room says nothing, however much swap there is: the holders ride on a warning that is
+# already firing, never on one of their own.
+swap_probe "$((200 * GB))" "$TMPROOT/state-swap-room" "$SWAP_BIG"
+check "a disk with room says nothing about swap, and runs no top" \
+  "$([ "$PROBE_RC" -eq 0 ] && [ -z "$PROBE_MSG" ] && [ ! -e "$TOP_CALLED" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# Swap that cannot be read is said to be unread, never taken as none (L98, L11).
+SWAP_BROKEN="$TMPROOT/swap-broken"
+printf '#!/bin/sh\necho "sysctl: unknown oid vm.swapusage" >&2\nexit 1\n' > "$SWAP_BROKEN"; chmod +x "$SWAP_BROKEN"
+swap_probe "$((1 * GB))" "$TMPROOT/state-swap-broken" "$SWAP_BROKEN"
+check "swap that cannot be read is said to be unread on a low disk, and the verdict still stands" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qi 'could not read swap' <<< "$PROBE_MSG" && grep -qF 'sysctl vm.swapusage' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# A top that prints nothing, or that hangs, still leaves the swap said and the command handed over.
+swap_probe "$((1 * GB))" "$TMPROOT/state-swap-top-empty" "$SWAP_BIG" "$TOP_SILENT"
+check "a top that names nobody is said, never read as nobody holding memory" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'Swap holds 92 GB' <<< "$PROBE_MSG" && grep -qi 'top named no process' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+TOP_HANG="$TMPROOT/top-hang"
+cat > "$TOP_HANG" <<TOP
+#!/bin/sh
+n=0; while [ ! -e "$TMPROOT/release-top" ] && [ "\$n" -lt $((HANG_S * 10)) ]; do sleep 0.1; n=\$((n + 1)); done
+echo "612 bzserv 117G"
+TOP
+chmod +x "$TOP_HANG"
+swap_probe "$((1 * GB))" "$TMPROOT/state-swap-top-hang" "$SWAP_BIG" "$TOP_HANG" FREE_SPACE_TOP_SECONDS=1
+: > "$TMPROOT/release-top"
+check "a top that hangs is stopped at its bound, and the warning still arrives saying so" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'did not answer within 1s' <<< "$PROBE_MSG" && ! grep -q 'bzserv' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# ---- the swap readings are recorded, one maximum per day, so the 2% can be recalibrated ----
+# The threshold rests on eight readings found in transcripts (see the check's header). Recalibrating
+# it needs the healthy days' readings, which nothing kept: the readings file holds six hours.
+S_SWD="$TMPROOT/state-swap-days"
+swap_probe "$((200 * GB))" "$S_SWD" "$SWAP_BIG"
+swap_probe "$((200 * GB))" "$S_SWD" "$SWAP_SMALL"
+swd_day="$(date -u -r "$T0" +%F 2>/dev/null || date -u -d "@$T0" +%F)"
+check "a day's swap record keeps that day's highest reading and the disk size" \
+  "$(grep -qxF "$swd_day 99256956355 $FREE_SPACE_DISK_BYTES" "$S_SWD/_fixture.swap-days" 2>/dev/null && echo ok || echo "record: $(cat "$S_SWD/_fixture.swap-days" 2>/dev/null)")"
+check "and one line per day, not one per reading" \
+  "$([ "$(grep -c . "$S_SWD/_fixture.swap-days" 2>/dev/null)" = 1 ] && echo ok || echo "record: $(cat "$S_SWD/_fixture.swap-days" 2>/dev/null)")"
+S_SWD2="$TMPROOT/state-swap-days-many"; mkdir -p "$S_SWD2"
+awk 'BEGIN { for (i = 0; i < 200; i++) printf "2020-01-%03d 0 1\n", i }' > "$S_SWD2/_fixture.swap-days"
+swap_probe "$((200 * GB))" "$S_SWD2" "$SWAP_SMALL"
+check "and the record keeps a bounded number of days" \
+  "$([ "$(grep -c . "$S_SWD2/_fixture.swap-days")" -le 120 ] && tail -n 1 "$S_SWD2/_fixture.swap-days" | grep -q "^$swd_day " && echo ok || echo "$(grep -c . "$S_SWD2/_fixture.swap-days") line(s), last: $(tail -n 1 "$S_SWD2/_fixture.swap-days")")"
+
 # ================== the nudge: WHEN the answer is spoken ==================
 # The check answers the question; the nudge decides when to say it. Same split as
 # project-list-nudge.sh, so there is one implementation of the question (L107).
@@ -499,6 +690,22 @@ check "but a materially worse answer is said again" \
 n_other="$(nudge "$((7 * GB))" "$((T0 + 180))" "$NS2" sess-other)"
 check "a different session is told as well, having heard nothing itself" \
   "$(grep -q 'GB free on' <<< "$n_other" && echo ok || echo "said: $n_other")"
+
+# Swap crossing its share is a new answer even when the free space has not moved, so the memory
+# holders are named once when it appears, and then not again on every prompt (#1770).
+NS_SWAP="$TMPROOT/ns-swap"; mkdir -p "$NS_SWAP"
+swap_nudge(){   # swap_nudge <epoch> <swap reader>
+  payload sess-swap | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$1" FREE_SPACE_STATE_DIR="$NS_SWAP" \
+    FREE_SPACE_PATH=/fixture FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" FREE_SPACE_SWAP_CMD="$2" \
+    FREE_SPACE_TOP_CMD="$TOP_BUSY" FREE_SPACE_DERIVED_DATA_SECONDS=0 bash "$NUDGE" 2>&1
+}
+swap_nudge "$T0" "$SWAP_SMALL" > /dev/null
+n_swap="$(swap_nudge "$((T0 + 60))" "$SWAP_BIG")"
+check "swap crossing its share is said, holders and all, though the free space has not moved" \
+  "$(grep -q 'bzserv (pid 612)' <<< "$n_swap" && echo ok || echo "said: $n_swap")"
+n_swap_again="$(swap_nudge "$((T0 + 120))" "$SWAP_BIG")"
+check "and the holders are not named again on the next prompt" \
+  "$([ -z "$n_swap_again" ] && echo ok || echo "said: $n_swap_again")"
 
 # When the warning speaks it clears Xcode's build caches whose project folder is gone, on its own:
 # Dan's decision on claude-config#1369, 2026-10-20. Which folders those are is decided by
@@ -744,6 +951,12 @@ check "and it names the macOS symbol cache with the command that sizes it" \
 sym_clear="$(grep -F 'sudo find ' <<< "$sym_low")"
 check "and its clearing command is the very one the warning prints" \
   "$([ -n "$sym_clear" ] && grep -qxF "$sym_clear" "$SKILL" 2>/dev/null && echo ok || echo "warning prints '$sym_clear', not found as a line in $SKILL")"
+
+# And the top command the warning hands over for swap is the very one the skill's swap step runs,
+# read from the warning's own output (claude-config#1769, #1770).
+swap_top="$(grep -F 'top -l 1 ' <<< "$swap_big")"
+check "and the skill's swap step runs the very top command the warning prints" \
+  "$([ -n "$swap_top" ] && grep -qxF "$swap_top" "$SKILL" 2>/dev/null && echo ok || echo "warning prints '$swap_top', not found as a line in $SKILL")"
 
 echo ""
 echo "passed: $pass, failed: $fail"

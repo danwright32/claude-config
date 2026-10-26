@@ -61,8 +61,18 @@
 #   FREE_SPACE_MIN_SPAN_MIN   no rate is reported from a span shorter than this (default 10)
 #   FREE_SPACE_WINDOW_HOURS   readings older than this are pruned and never used (default 6)
 #   FREE_SPACE_RECOVERY_GB    a rise larger than this means the disk recovered, so no rate
+#   FREE_SPACE_PERSIST_MIN    only a fall that has lasted this long is projected (default 30, #1754)
 #   FREE_SPACE_STATE_DIR      where the readings are kept
 #   FREE_SPACE_SYMBOL_CACHE   the macOS symbol cache folder to look for (default the real one)
+#   FREE_SPACE_SWAP_SHARE_PCT swap above this share of the disk names the memory holders (default 2)
+#   FREE_SPACE_TOP_SECONDS    the bound on `top` when it names them (default 2, 0 turns it off)
+#   FREE_SPACE_SWAP_CMD, FREE_SPACE_TOP_CMD, FREE_SPACE_DISK_BYTES  the swap, top and disk size
+#                             readers, described where swap is read (claude-config#1770)
+#
+# ONE CAUSE IS MEASURED: SWAP (claude-config#1770). Swap lives on a volume of its own that shares
+# the disk and that no folder size reaches, so when it is over its share of the disk the verdict says
+# so, from sysctl, and names the processes holding the most memory, from top. That is a measurement,
+# so the first line says swap is measured below rather than that nothing is.
 #
 # ONE ARGUMENT, --report (claude-config#683). The disk-full skill's rate step reads this check
 # rather than measuring a rate a second way: its own copy used awk strftime, which macOS awk does
@@ -94,6 +104,9 @@ FLOOR_GB="${FREE_SPACE_FLOOR_GB:-20}"
 HORIZON_HOURS="${FREE_SPACE_HORIZON_HOURS:-6}"
 MIN_SPAN_MIN="${FREE_SPACE_MIN_SPAN_MIN:-10}"
 WINDOW_HOURS="${FREE_SPACE_WINDOW_HOURS:-6}"
+PERSIST_MIN="${FREE_SPACE_PERSIST_MIN:-30}"
+SWAP_SHARE_PCT="${FREE_SPACE_SWAP_SHARE_PCT:-2}"
+TOP_SECONDS="${FREE_SPACE_TOP_SECONDS:-2}"
 # A reading higher than an earlier one by MORE than this is a recovery rather than jitter.
 # Every write and delete on a live machine moves the number a little, so a rule that refused
 # on any increase at all would refuse always, which is the same as deleting the warning.
@@ -112,13 +125,19 @@ is_number(){ case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 # is room" on a disk with 1 GB left. A value parsed from input that feeds a comparison directly
 # lands on the permissive side when it is bad, and nothing says so. Refused here instead, by name,
 # because a message that does not say which of the four is wrong cannot be acted on (L11, L80).
-for _setting in FREE_SPACE_FLOOR_GB:"$FLOOR_GB" FREE_SPACE_HORIZON_HOURS:"$HORIZON_HOURS"                 FREE_SPACE_MIN_SPAN_MIN:"$MIN_SPAN_MIN" FREE_SPACE_WINDOW_HOURS:"$WINDOW_HOURS" FREE_SPACE_RECOVERY_GB:"$RECOVERY_GB"; do
+for _setting in FREE_SPACE_FLOOR_GB:"$FLOOR_GB" FREE_SPACE_HORIZON_HOURS:"$HORIZON_HOURS" \
+                FREE_SPACE_MIN_SPAN_MIN:"$MIN_SPAN_MIN" FREE_SPACE_WINDOW_HOURS:"$WINDOW_HOURS" FREE_SPACE_RECOVERY_GB:"$RECOVERY_GB" \
+                FREE_SPACE_PERSIST_MIN:"$PERSIST_MIN" FREE_SPACE_SWAP_SHARE_PCT:"$SWAP_SHARE_PCT" FREE_SPACE_TOP_SECONDS:"$TOP_SECONDS"; do
   is_number "${_setting#*:}" || cannot "${_setting%%:*} is set to '${_setting#*:}', which is not a number"
 done
 
 now="${FREE_SPACE_NOW:-$(date +%s 2>/dev/null || true)}"
 is_number "$now" || cannot "the clock gave '$now'"
 
+# The disk's whole size, which the swap share is a share of (claude-config#1770). Read from the same
+# df row as the free space when df is run; a reading supplied directly carries no size unless one is
+# supplied beside it, and then the swap share is said to be unread rather than guessed.
+disk_bytes="${FREE_SPACE_DISK_BYTES:-}"
 if [ -n "${FREE_SPACE_BYTES:-}" ]; then
   free_bytes="$FREE_SPACE_BYTES"
 else
@@ -126,9 +145,12 @@ else
   # the environment this hook is invoked from. -P, so a long device name cannot wrap onto a second
   # line and make the row this reads a continuation of the header rather than the answer: the POSIX
   # format guarantees one line per filesystem, and macOS and Linux agree on it.
-  avail_k="$(df -Pk "$VOLUME" 2>/dev/null | awk 'NR == 2 { print $4 }' || true)"
+  df_row="$(df -Pk "$VOLUME" 2>/dev/null | awk 'NR == 2 { print $2, $4 }' || true)"
+  avail_k="${df_row#* }"
   is_number "$avail_k" || cannot "df said '${avail_k:-<nothing>}'"
   free_bytes=$((avail_k * 1024))
+  size_k="${df_row%% *}"
+  if [ -z "$disk_bytes" ] && is_number "$size_k"; then disk_bytes=$((size_k * 1024)); fi
 fi
 is_number "$free_bytes" || cannot "the reading was '$free_bytes'"
 
@@ -194,17 +216,20 @@ tmp="$STATE.$$"
 # would invent a recovery that never happened.
 recovered=0
 seg_t=""; seg_b=""; seg_n=0
+seg_lines=""   # every reading of the current segment, oldest first, for the persistence rule below
 _prev_b=""
 while IFS=' ' read -r _t _b; do
   is_number "${_t:-}" || continue
   is_number "${_b:-}" || continue
   if [ -n "$_prev_b" ] && [ $((_b - _prev_b)) -gt $((RECOVERY_GB * GIB)) ]; then
-    recovered=1; seg_t="$_t"; seg_b="$_b"; seg_n=1
+    recovered=1; seg_t="$_t"; seg_b="$_b"; seg_n=1; seg_lines=""
   elif [ -z "$seg_t" ]; then
     seg_t="$_t"; seg_b="$_b"; seg_n=1
   else
     seg_n=$((seg_n + 1))
   fi
+  seg_lines="$seg_lines$_t $_b
+"
   _prev_b="$_b"
 done <<EOF
 $(printf '%s%s %s\n' "$kept" "$now" "$free_bytes" | sort -n -k1,1)
@@ -229,27 +254,207 @@ else
 fi
 
 # ---------- the rate, when there is one worth stating ----------
+# ONLY A FALL THAT HAS LASTED IS PROJECTED (claude-config#1754). Measured 2026-10-26 on the work
+# MacBook: Claude sessions' pre push checks (lint, a production build and the test suite in a
+# temporary tree, plus a local database stack) each took 1.4 to 4.4 GB and gave most of it back
+# minutes later, two of them inside 27 minutes (36.0 GB free at 11:00 ET, 36.2 GB at 11:27). The
+# recovery rule above helps only once a burst has given its space back. While one was still in
+# progress, the oldest reading and the bottom of the dip made a slope, and the warning said "17 GB
+# per hour ... zero in about 2 hour(s)" for space that came back within minutes (L36).
+#
+# So the newer end of the rate is not the latest reading but the MOST free space seen in the last
+# FREE_SPACE_PERSIST_MIN minutes (default 30, longer than both bursts measured that morning took to
+# fill and give back): the level the disk has stayed at or below for that long, which is the least
+# space the disk has been USING over it. A dip that comes back inside the window never lowers it; a
+# fall that lasts lowers it, a window late. The rate runs from the start of the segment to the
+# reading that set that level, and zero is projected from that level, less the time since it.
+#
+# WHAT THIS COSTS, said rather than hidden (L93): a real fall is not projected until readings span
+# the window, so a fast fill starting from nothing is reported up to 30 minutes later than before,
+# about 10 GB at the 19 GB an hour of 2026-09-10. The floor does not wait, and it is the warning for
+# a disk already nearly full. A push check that holds its space for longer than the window is still
+# projected, until it gives the space back and the recovery rule takes over. 0 turns the window off,
+# which is the rule as it was before #1754: the latest reading is the newer end.
 rate_clause=""
 falling_fast=0
 if [ -n "$oldest_t" ]; then
   span=$((now - oldest_t))
-  fall=$((oldest_b - free_bytes))
   if [ "$span" -lt $((MIN_SPAN_MIN * 60)) ]; then
     no_rate_clause=" No rate yet: the readings span only $((span / 60)) minute(s), and a rate is stated only over at least $MIN_SPAN_MIN minutes."
-  elif [ "$fall" -le 0 ]; then
-    no_rate_clause=" It is not falling: there is as much free space now as there was $((span / 60)) minute(s) ago, or more."
-  fi
-  if [ "$span" -ge $((MIN_SPAN_MIN * 60)) ] && [ "$fall" -gt 0 ]; then
-    rate_gb=$(( (fall * 3600 / span) / GIB ))
-    # Seconds rather than hours, so a fall that empties the disk inside an hour is not rounded down
-    # to zero hours and read as no time at all.
-    to_zero=$((free_bytes * span / fall))
-    if [ "$span" -ge 3600 ]; then span_words="$((span / 3600)) hour(s)"; else span_words="$((span / 60)) minute(s)"; fi
-    if [ "$to_zero" -ge 3600 ]; then zero_words="about $((to_zero / 3600)) hour(s)"; else zero_words="under an hour"; fi
-    rate_clause=" It is falling at about $rate_gb GB per hour, measured over the last $span_words, which reaches zero in $zero_words."
-    [ "$to_zero" -le $((HORIZON_HOURS * 3600)) ] && falling_fast=1
+  elif [ "$span" -lt $((PERSIST_MIN * 60)) ]; then
+    no_rate_clause=" No rate yet: the readings span only $((span / 60)) minute(s), and a fall is stated only once it has lasted $PERSIST_MIN minutes, longer than a build or push check that gives its space back when it ends."
+  else
+    # The level held over the window, and when it was last seen. Ties go to the later reading,
+    # because the disk was at that level as late as that.
+    held_b=""; held_t=""
+    while IFS=' ' read -r _t _b; do
+      is_number "${_t:-}" || continue
+      is_number "${_b:-}" || continue
+      [ "$_t" -ge $((now - PERSIST_MIN * 60)) ] || continue
+      if [ -z "$held_b" ] || [ "$_b" -ge "$held_b" ]; then held_b="$_b"; held_t="$_t"; fi
+    done <<EOF
+$seg_lines
+EOF
+    [ -n "$held_b" ] || { held_b="$free_bytes"; held_t="$now"; }
+    fall=$((oldest_b - held_b))
+    span=$((held_t - oldest_t))
+    if [ "$fall" -le 0 ]; then
+      if [ "$PERSIST_MIN" -gt 0 ]; then
+        no_rate_clause=" It is not falling: the most free space seen in the last $PERSIST_MIN minutes is as much as there was $(((now - oldest_t) / 60)) minute(s) ago, or more, so any drop since has not lasted."
+      else
+        no_rate_clause=" It is not falling: there is as much free space now as there was $(((now - oldest_t) / 60)) minute(s) ago, or more."
+      fi
+    elif [ "$span" -lt $((MIN_SPAN_MIN * 60)) ]; then
+      no_rate_clause=" No rate yet: the fall that has lasted $PERSIST_MIN minutes spans only $((span / 60)) minute(s) of readings, and a rate is stated only over at least $MIN_SPAN_MIN minutes."
+    else
+      rate_gb=$(( (fall * 3600 / span) / GIB ))
+      # Seconds rather than hours, so a fall that empties the disk inside an hour is not rounded down
+      # to zero hours and read as no time at all.
+      to_zero=$(( held_b * span / fall - (now - held_t) ))
+      [ "$to_zero" -ge 0 ] || to_zero=0
+      if [ "$span" -ge 3600 ]; then span_words="$((span / 3600)) hour(s)"; else span_words="$((span / 60)) minute(s)"; fi
+      if [ "$to_zero" -ge 3600 ]; then zero_words="about $((to_zero / 3600)) hour(s)"; else zero_words="under an hour"; fi
+      if [ "$PERSIST_MIN" -gt 0 ]; then
+        rate_clause=" It is falling at about $rate_gb GB per hour, measured over $span_words and counting only space that has stayed gone for $PERSIST_MIN minutes, which reaches zero in $zero_words."
+      else
+        rate_clause=" It is falling at about $rate_gb GB per hour, measured over the last $span_words, which reaches zero in $zero_words."
+      fi
+      [ "$to_zero" -le $((HORIZON_HOURS * 3600)) ] && falling_fast=1
+    fi
   fi
 fi
+
+# ---------- swap, which fills this disk where no folder size reaches (claude-config#1770) ----------
+# On 2026-10-26 the disk on Daniels-MacBook-Pro-2 reached 1.1 GB free and the cause was 95 GB of
+# swap (`sysctl vm.swapusage`), held by two processes leaking memory: Backblaze's bzserv at 117 GB
+# and fseventsd at 105 GB by top's MEM, both running since boot six days earlier. Swap is kept on
+# /System/Volumes/VM, a volume of its own that shares the disk's space, so every `du` came back clean
+# and this warning named only the symbol cache, which did not exist that day. A restart gave it all
+# back.
+#
+# THE 2% IS MEASURED, AND THIN (L172). Every `sysctl vm.swapusage` reading found in this Mac's Claude
+# transcripts (Daniels-MacBook-Pro-2: 96 GB of memory, a 926 GB disk), read on 2026-10-26, falls in
+# two clusters with nothing between them. Ordinary days: 0 (2026-10-08, and twice on 2026-10-26 after
+# the restart), 0.56 MB (2026-09-25), 136 MB (2026-10-04), all under 0.02% of the disk. Leaking: 34.6
+# GB (2026-10-24, the disk at 94% used), 82.6 GB (2026-10-13), 94.7 GB (2026-10-26), 3.7% to 10.2%.
+# 2% sits in the empty middle, a hundred times above the highest ordinary reading and under the
+# lowest leaking one by almost half, so a small shift in either cluster moves nothing across it. The
+# work MacBook has no reading at all, and a Mac with less memory swaps more on an ordinary day, which
+# is why every reading is now recorded (below) and why the share is a setting,
+# FREE_SPACE_SWAP_SHARE_PCT. Its false positive costs little by construction: it is said only on a
+# warning that is already firing, never as a warning of its own.
+#
+# THE READINGS ARE RECORDED so the 2% can be recalibrated rather than re-argued: the highest reading
+# of each day (UTC), with the disk's size, one line per day in <state dir>/<volume>.swap-days, the
+# newest 120 days kept. The readings file beside it keeps six hours, too short to show an ordinary
+# day. That is a sysctl and an awk on every prompt; `top`, which takes most of a second (0.6 s
+# measured on 2026-10-26 at a load average of 159), runs only when swap is over the share AND the
+# verdict is low or falling, and is bounded by FREE_SPACE_TOP_SECONDS (default 2, 0 turns it off),
+# its whole process group killed when the bound runs out, so the prompt hook stays inside its 10
+# second timeout with the nudge's 6 second Xcode step beside it.
+#
+# Environment (seams, so the suite never reads this machine's swap or runs its top, L2):
+#   FREE_SPACE_SWAP_CMD   an executable printing a `sysctl vm.swapusage` line (default that command)
+#   FREE_SPACE_TOP_CMD    an executable printing top's PID COMMAND MEM table (default the real top)
+#   FREE_SPACE_DISK_BYTES the disk's size, instead of df's
+swap_bytes=""; swap_why=""
+if [ -n "${FREE_SPACE_SWAP_CMD:-}" ]; then swap_out="$("$FREE_SPACE_SWAP_CMD" 2>&1)"; else swap_out="$(sysctl vm.swapusage 2>&1)"; fi
+swap_bytes="$(printf '%s\n' "$swap_out" | awk '{
+  for (i = 1; i < NF - 1; i++) if ($i == "used" && $(i + 1) == "=") {
+    v = $(i + 2); u = substr(v, length(v)); n = substr(v, 1, length(v) - 1)
+    m = (u == "K") ? 1024 : (u == "M") ? 1048576 : (u == "G") ? 1073741824 : (u == "T") ? 1099511627776 : 0
+    if (m && n ~ /^[0-9]+(\.[0-9]+)?$/) printf "%.0f\n", n * m
+    exit
+  } }' 2>/dev/null || true)"
+if ! is_number "$swap_bytes"; then
+  _said="${swap_out:-<nothing>}"; _said="${_said//$'\n'/ }"
+  swap_bytes=""; swap_why="sysctl vm.swapusage said '${_said:0:120}'"
+elif ! is_number "$disk_bytes" || [ "$disk_bytes" -le 0 ]; then
+  swap_why="the disk's size could not be read, so swap's share of it is not known"
+fi
+
+# Over the share, swap is a measured cause, so the verdict's first line stops saying nothing here
+# says what is using the disk (L11: a message claims what was measured, no less and no more).
+swap_over=0
+cause_clause=" Nothing here says what is using it."
+if [ -z "$swap_why" ] && [ $((swap_bytes * 100)) -gt $((disk_bytes * SWAP_SHARE_PCT)) ]; then
+  swap_over=1
+  cause_clause=" Swap is measured below; nothing here says what else is using it."
+fi
+
+# The day's highest swap reading, kept so the share above can be recalibrated (L172).
+swap_day="$(date -u -r "$now" +%F 2>/dev/null || date -u -d "@$now" +%F 2>/dev/null || true)"
+if [ -n "$swap_bytes" ] && [ -n "$swap_day" ]; then
+  SWAP_DAYS="$STATE.swap-days"
+  _days=""; _today_max="$swap_bytes"
+  if [ -f "$SWAP_DAYS" ]; then
+    while IFS=' ' read -r _d _s _rest; do
+      [ -n "${_d:-}" ] || continue
+      if [ "$_d" = "$swap_day" ]; then
+        is_number "${_s:-}" && [ "$_s" -gt "$_today_max" ] && _today_max="$_s"
+        continue
+      fi
+      _days="$_days$_d ${_s:-} ${_rest:-}
+"
+    done < "$SWAP_DAYS"
+  fi
+  _tmp="$SWAP_DAYS.$$"
+  { printf '%s' "$_days"; printf '%s %s %s\n' "$swap_day" "$_today_max" "${disk_bytes:--}"; } | tail -n 120 > "$_tmp" 2>/dev/null \
+    && mv -f "$_tmp" "$SWAP_DAYS" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
+fi
+
+swap_note(){
+  if [ -n "$swap_why" ]; then
+    echo ""
+    echo "Could not read swap here ($swap_why), so whether memory is filling this disk is not known. Swap is kept on /System/Volumes/VM, which shares this disk and which no folder size reaches. To read it:"
+    echo '```'
+    echo "sysctl vm.swapusage"
+    echo '```'
+    return 0
+  fi
+  [ "$swap_over" -eq 1 ] || return 0
+  local pct=$(( (swap_bytes * 1000 / disk_bytes + 5) / 10 )) holders=""
+  echo ""
+  echo "Swap holds $((swap_bytes / GIB)) GB, about $pct% of this disk, by sysctl vm.swapusage. More than $SWAP_SHARE_PCT% is memory that processes are holding rather than ordinary paging, and it is kept on /System/Volumes/VM, which shares this disk and which no folder size reaches."
+  if [ "$TOP_SECONDS" -eq 0 ]; then
+    echo "Naming the processes holding it is turned off here (FREE_SPACE_TOP_SECONDS=0)."
+  else
+    # The bound is lib/bounded-run.sh's, the one copy the nudge's Xcode step uses too. Read only
+    # here, on the rare path that needs it, so an ordinary prompt pays nothing for it.
+    local here="."
+    case "${BASH_SOURCE[0]}" in */*) here="${BASH_SOURCE[0]%/*}" ;; esac
+    . "$here/lib/bounded-run.sh" 2>/dev/null || bounded_run() { BOUNDED_OUT="lib/bounded-run.sh is missing, so top was not run"; BOUNDED_RC=127; }
+    if [ -n "${FREE_SPACE_TOP_CMD:-}" ]; then
+      bounded_run "$TOP_SECONDS" "$FREE_SPACE_TOP_CMD"
+    else
+      bounded_run "$TOP_SECONDS" top -l 1 -o mem -n 5 -stats pid,command,mem
+    fi
+    if [ "$BOUNDED_RC" -eq 124 ]; then
+      echo "top did not answer within ${TOP_SECONDS}s, so the processes holding it are not named here."
+    else
+      # After the PID COMMAND MEM header: the pid first, MEM last, and the command between them,
+      # which can hold spaces ("Google Chrome He"). top marks a value that moved with + or -.
+      holders="$(printf '%s\n' "$BOUNDED_OUT" | awk '
+        found && $1 ~ /^[0-9]+$/ && NF >= 3 {
+          mem = $NF; sub(/[+-]$/, "", mem); cmd = $2
+          for (i = 3; i < NF; i++) cmd = cmd " " $i
+          printf "  %s (pid %s): %s\n", cmd, $1, mem
+          if (++n >= 5) exit
+        }
+        $1 == "PID" && $2 == "COMMAND" { found = 1 }' 2>/dev/null || true)"
+      if [ -n "$holders" ]; then
+        echo "Nothing here measured whose swap it is; these hold the most memory now by top's MEM, which counts pages swapped out to disk (ps's resident size cannot see them):"
+        printf '%s\n' "$holders"
+      else
+        echo "top named no process (it exited $BOUNDED_RC), so the processes holding it are not named here."
+      fi
+    fi
+  fi
+  echo "Swap is given back only when the memory is: restarting the process holding it (quitting its app, or restarting its service), or restarting the Mac, frees the space. Deleting files does not. To list the holders again:"
+  echo '```'
+  echo "top -l 1 -o mem -n 10 -stats pid,command,mem,time"
+  echo '```'
+}
 
 # ---------- the one known cause, named only when the verdict is low or falling ----------
 # The commands below always name the REAL folder, whatever the seam points at, because they are
@@ -288,13 +493,15 @@ symbol_cache_note(){
 [ "$REPORT" -eq 1 ] || no_rate_clause=""
 
 if [ "$free_gb" -lt "$FLOOR_GB" ]; then
-  echo "claude-sync: only $free_gb GB free on $VOLUME, under the $FLOOR_GB GB floor.$rate_clause$no_rate_clause Nothing here says what is using it."
+  echo "claude-sync: only $free_gb GB free on $VOLUME, under the $FLOOR_GB GB floor.$rate_clause$no_rate_clause$cause_clause"
+  swap_note
   symbol_cache_note
   exit 3
 fi
 
 if [ "$falling_fast" -eq 1 ]; then
-  echo "claude-sync: $free_gb GB free on $VOLUME, which is above the $FLOOR_GB GB floor but not for long.$rate_clause Nothing here says what is using it."
+  echo "claude-sync: $free_gb GB free on $VOLUME, which is above the $FLOOR_GB GB floor but not for long.$rate_clause$cause_clause"
+  swap_note
   symbol_cache_note
   exit 4
 fi
