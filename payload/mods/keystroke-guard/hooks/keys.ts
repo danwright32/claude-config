@@ -4,7 +4,10 @@
 export type Classified = { kind: 'input' | 'focus' | 'none'; target?: string; app?: string }
 export type Refusal = { reason: string; safeWay?: string }
 
-const MARKER = /\bTARGET_APP=(?:"([^"]+)"|'([^']+)'|(\S+))/
+// The unquoted form ends where the shell ends the word, at a control character as well as a space:
+// `TARGET_APP=<path>; cliclick` once read the `;` into the path, so pgrep found nothing and a running
+// build in front was refused as not running (#1751).
+const MARKER = /\bTARGET_APP=(?:"([^"]+)"|'([^']+)'|([^\s;&|<>()`]+))/
 
 // Commands are judged in COMMAND POSITION only (L673): the first version matched the words anywhere
 // and refused a heredoc that merely wrote a file mentioning an osascript keystroke, on 2026-10-03.
