@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { branchesTouched, choiceFor, filesWritten, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, whoseFiles, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { branchesTouched, choiceFor, closingComments, filesWritten, neverMergeSaid, prRefs, quoteOf, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, whoseFiles, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 
@@ -91,8 +91,8 @@ describe('outstanding: finished means merged, live, cleaned and closed', () => {
   test('no PR yet on a working branch', () => {
     expect(outstanding({ ...merged, pr: null })).toEqual(['there is no PR for scope-modes-616 yet'])
   })
-  test('a PR closed without merging needs Dan, and names the one way his answer is recorded (#1033)', () => {
-    expect(outstanding({ ...merged, pr: { number: 12, state: 'CLOSED', issues: [] } })).toEqual(['PR #12 was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)'])
+  test('a PR closed without merging is reopened and finished, as Dan would rather merge it (#1767)', () => {
+    expect(outstanding({ ...merged, pr: { number: 12, state: 'CLOSED', issues: [] } })).toEqual([REOPEN(12)])
   })
   test('on the default branch with no PR and nothing uncommitted, there is nothing to finish', () => {
     expect(outstanding({ ...merged, branch: 'main', isDefault: true, pr: null, deploy: null })).toEqual([])
@@ -133,7 +133,7 @@ describe('a PR Dan chose to leave open (#917)', () => {
     expect(outstanding({ ...merged, pr: done, choice })).toEqual([])
     expect(settledByDan({ ...merged, pr: done, choice })).toBe(false)
     expect(outstanding({ ...merged, pr: done, deploy: null, choice })).toEqual(['PR #12 has no is it live card yet: check the deploy and make the card (mcp__is-it-live__card)'])
-    expect(outstanding({ ...merged, pr: { number: 12, state: 'CLOSED', head: 'aaa1111', issues: [] }, choice })).toEqual(['PR #12 was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)'])
+    expect(outstanding({ ...merged, pr: { number: 12, state: 'CLOSED', head: 'aaa1111', issues: [] }, choice })).toEqual([REOPEN(12)])
   })
   test('found by repository and number: the same number in another repository is another PR', () => {
     const all: LeftOpen[] = [choice, { ...choice, repo: 'o/other', number: 31 }]
@@ -157,8 +157,8 @@ describe('a PR Dan chose to leave closed (#1033)', () => {
       expect(settledByDan({ ...closed(head), choice })).toBe(true)
     }
   })
-  test('nobody decided: outstanding, naming the tool that records his answer', () => {
-    expect(outstanding(closed('aaa1111'))).toEqual(['PR #12 was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)'])
+  test('nobody decided, and nothing recorded says it will never merge: reopened and finished (#1767)', () => {
+    expect(outstanding(closed('aaa1111'))).toEqual([REOPEN(12)])
     expect(settledByDan(closed('aaa1111'))).toBe(false)
   })
   test('reopened since he answered: an open PR, outstanding until merged, his answer never carried over', () => {
@@ -179,7 +179,76 @@ describe('a PR Dan chose to leave closed (#1033)', () => {
     expect(choiceFor(all, 'o/other', 12)).toBeUndefined()
     expect(choiceFor(all, 'o/r', 13)).toBeUndefined()
     const other: Reading = { ...merged, pr: { number: 13, state: 'CLOSED', issues: [] }, deploy: null, choice: choiceFor(all, 'o/r', 13) }
-    expect(outstanding(other)).toEqual(['PR #13 was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)'])
+    expect(outstanding(other)).toEqual([REOPEN(13)])
+  })
+})
+
+// #1767: on 2026-10-26 winding down asked Dan whether to leave #1716 closed, and he answered "finish
+// and merge it ... I'd always prefer to merge it unless we're never going to merge it". So a PR this
+// session opened that was closed without merging is reopened and finished, and Dan is asked about
+// leaving it closed only on a recorded reason it will never merge: a closing comment, or his own
+// earlier answer, naming the PR that superseded it. The comments below are measured from
+// danwright32/claude-config's closed unmerged PRs (#1595, #1627, #1644) and #1716's own closing comment.
+function REOPEN(n: number) {
+  return `PR #${n} was closed without merging: reopen it (gh pr reopen ${n}) and finish it, as Dan would rather merge it. Ask him whether to leave it closed (mcp__scope-modes__leave_pr_open) only when he said earlier that another PR superseded it, passing his words as dan_said`
+}
+describe('a PR closed without merging is finished unless a recorded reason says it will never merge (#1767)', () => {
+  const closedAt = '2026-10-23T18:26:34Z'
+  // #1595's three comments: a lessons review, a conflict note naming #1590 39 minutes before it
+  // closed, and the closing comment naming the PR that replaced it.
+  const pr1595 = {
+    number: 1595,
+    closedAt,
+    comments: [
+      { body: '## Lessons review at 856eb73\n\nTwo minor findings, both answered in 02d8daa.', createdAt: '2026-10-23T17:04:30Z' },
+      { body: '## Not merged yet: conflicts with main\n\nmerge-when-ready stopped when GitHub could not update this branch with main: #1590 merged first', createdAt: '2026-10-23T17:47:10Z' },
+      { body: "Replaced by #1606, opened from the rebased branch design-guard-script-args-1586-v2 on Dan's choice (2026-10-23) rather than force pushing this branch.", createdAt: '2026-10-23T18:26:33Z' },
+    ],
+  }
+  test('the closing comment is the one posted with the close or after it, never discussion from before', () => {
+    expect(closingComments(pr1595).map(c => c.refs)).toEqual([[{ number: 1606 }]])
+    // A comment posted after the close still says why it closed.
+    const later = { ...pr1595, comments: [...pr1595.comments, { body: 'Superseded by o/other#9.', createdAt: '2026-10-24T09:00:00Z' }] }
+    expect(closingComments(later).map(c => c.refs)).toEqual([[{ repo: 'o/other', number: 9 }], [{ number: 1606 }]])
+    // With no close time given, every comment is read, newest first, so nothing is missed.
+    expect(closingComments({ number: 1595, comments: pr1595.comments }).map(c => c.refs)).toEqual([[{ number: 1606 }], [{ number: 1590 }], []])
+    expect(closingComments({ number: 1595, closedAt })).toEqual([])
+  })
+  test('what a comment names: #N and owner/name#N, never the PR itself, an HTML entity, a heading or a link (mod-kit reads links)', () => {
+    expect(prRefs('Replaced by #1645, which merged and closed #1604.', { number: 1644 })).toEqual([{ number: 1645 }, { number: 1604 }])
+    expect(prRefs('see https://github.com/o/r/pull/716#issuecomment-1 and o/x#3', { number: 711 })).toEqual([{ repo: 'o/x', number: 3 }])
+    expect(prRefs('o/r#711 is this one, o/other#711 is not', { repo: 'o/r', number: 711 })).toEqual([{ repo: 'o/other', number: 711 }])
+    expect(prRefs('this is #711 again, &#35;12 and ## Heading 2', { number: 711 })).toEqual([])
+    expect(prRefs('#716 #716', { number: 711 })).toEqual([{ number: 716 }])
+  })
+  test("#1716's closing comment names only an issue, so the caller asks GitHub which numbers are PRs", () => {
+    const pr1716 = {
+      number: 1716,
+      closedAt: '2026-10-25T22:43:43Z',
+      comments: [{ body: "Closed unmerged by Dan's choice on 2026-10-25: three review rounds each found another English phrasing that let a stood-by denial read as withdrawn, so #1702 is now fixed by changing the refusal message.", createdAt: '2026-10-25T22:43:42Z' }],
+    }
+    expect(closingComments(pr1716).map(c => c.refs)).toEqual([[{ number: 1702 }]])
+  })
+  test('a quote is one line, cut at 200 characters', () => {
+    expect(quoteOf('Replaced by #1629,\n\nopened  from the rebased branch.')).toBe('Replaced by #1629, opened from the rebased branch.')
+    const long = quoteOf(`Replaced by #1. ${'x'.repeat(300)}`)
+    expect(long.length).toBe(200)
+    expect(long.endsWith('...')).toBe(true)
+  })
+  test('with a recorded reason, Dan is asked, the reason quoted; without one, it is reopened and finished', () => {
+    const closed: Reading = { ...merged, pr: { number: 1595, state: 'CLOSED', issues: [] }, deploy: null }
+    expect(outstanding(closed)).toEqual([REOPEN(1595)])
+    const neverMerge = { from: 'comment' as const, pr: { number: 1606 }, quote: 'Replaced by #1606.' }
+    expect(outstanding({ ...closed, pr: { number: 1595, state: 'CLOSED', issues: [], neverMerge } })).toEqual([
+      'PR #1595 was closed without merging, and its closing comment names PR #1606 ("Replaced by #1606."): ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)',
+    ])
+    expect(neverMergeSaid(neverMerge, true)).toBe('its closing comment names PR #1606 ("Replaced by #1606.")')
+    const dan = { from: 'dan' as const, pr: { repo: 'o/x', number: 3 }, quote: 'leave it, o/x#3 replaced it' }
+    expect(neverMergeSaid(dan)).toBe('Dan named PR o/x#3 earlier ("leave it, o/x#3 replaced it")')
+    expect(neverMergeSaid(dan, true)).toBe('you named PR o/x#3 earlier ("leave it, o/x#3 replaced it")')
+    // His answer to leave it closed settles it either way.
+    const choice: LeftClosed = { repo: 'o/r', number: 1595, closed: true, why: 'its closing comment names PR #1606' }
+    expect(outstanding({ ...closed, pr: { number: 1595, state: 'CLOSED', issues: [], neverMerge }, choice })).toEqual([])
   })
 })
 
