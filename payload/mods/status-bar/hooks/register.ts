@@ -57,6 +57,9 @@ let unpushed: UnpushedReading | null = null
 let unpushedNoted = false
 let jobs: Job[] = []
 let jobsNoted = false
+// The job watcher is loaded and its list could not be read (#1727): said on the band, never shown as
+// no jobs (L10). A watcher not loaded, or one whose copy lacks list (#1281), is not this.
+let jobsUnreadable = false
 let agents: QuietAgent[] = []
 let agentsNoted = false
 let context: number | undefined
@@ -294,13 +297,17 @@ const readPr = async ($: EngineInterface, root: string): Promise<boolean> => {
 }
 
 // The job watcher may not be loaded: that is no job item, never an error. One that is loaded and
-// fails to answer is named once in the debug log.
+// fails to answer, or answers something that is not a list, is named once in the debug log and
+// sets jobsUnreadable, so the band says "job list unreadable" once Claude's turn has ended (#1727).
 const readJobs = async ($: EngineInterface) => {
   // The noun is called in place each time, as the engine requires, never held in a variable.
   try {
-    const list = await ($ as unknown as { jobs: Jobs }).jobs.list()
-    jobs = Array.isArray(list) ? list.filter(isJob) : []
+    const list: unknown = await ($ as unknown as { jobs: Jobs }).jobs.list()
+    // An answer that is not a list is no more readable than a throw, never no jobs (#1727, L10).
+    if (!Array.isArray(list)) throw new Error(`the watcher answered ${list === null ? 'null' : typeof list}, not a list`)
+    jobs = list.filter(isJob)
     jobsNoted = false
+    jobsUnreadable = false
   } catch (err) {
     jobs = []
     agents = []
@@ -309,9 +316,12 @@ const readJobs = async ($: EngineInterface) => {
     const news = skewNews(err, MOD)
     if (news) $.ui.toast(news)
     const isAbsent = missingOf(err) !== null
+    // Loaded and failing (since #1695 it also throws on a malformed stored list): the band says the
+    // list could not be read once Claude has stopped (#1727), and the debug log names why, once.
+    jobsUnreadable = !isAbsent
     if (!isAbsent && !jobsNoted) {
       jobsNoted = true
-      $.ui.log(`status-bar: the job watcher's jobs could not be read, so no job shows: ${msg}`, { to: 'debug' })
+      $.ui.log(`status-bar: the job watcher's jobs could not be read, so the band says the job list is unreadable: ${msg}`, { to: 'debug' })
     }
     return
   }
@@ -352,7 +362,7 @@ const publish = () =>
     if (!io) return
     const now = await io.now()
     const cache = await io.cache()
-    const look = lookParts({ modes: await io.modes(), pr, jobs, agents, unpushed, now, isWorking: turnRunning })
+    const look = lookParts({ modes: await io.modes(), pr, jobs, jobsUnreadable, agents, unpushed, now, isWorking: turnRunning })
     const ctx = context === undefined ? [] : [{ text: `context ${Math.round(context)}% `, color: 'warning' }]
     // A press while a turn runs is queued (#1278): the row says so and offers Cancel until it runs.
     // Otherwise each line says why it shows, and the cache's says to send a message (#1596).
