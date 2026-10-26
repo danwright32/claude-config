@@ -871,11 +871,13 @@ else
   ln -s "$DEAD_PID" "$FAKE/state/held"
   ln -s "$PROXY_PID" "$FAKE/state/held.takeover"
   fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >"$TMP/guard-wait.out" 2>&1 & gw=$!
-  sleep 5
+  # The hold is a window the passing case runs out (#1743): a waiter that gave up or spun through
+  # its budget would have ended inside it.
+  window_wait 5 '! kill -0 "$gw" 2>/dev/null' 0.05; gw_held=$?
   rm -f "$FAKE/state/held.takeover"
   hang_wait '! kill -0 "$gw" 2>/dev/null' 0.05
   wait "$gw"; rc=$?
-  [ "$rc" = 0 ] && [ "$(owner_now)" = "$PROXY_PID" ] && ok || bad "a waiter outlasts a takeover under way and then loads (rc $rc)" "$(cat "$TMP/guard-wait.out")"
+  [ "$gw_held" = 1 ] && [ "$rc" = 0 ] && [ "$(owner_now)" = "$PROXY_PID" ] && ok || bad "a waiter outlasts a takeover under way and then loads (still waiting at the end of the hold: $([ "$gw_held" = 1 ] && echo yes || echo no), rc $rc)" "$(cat "$TMP/guard-wait.out")"
   fakeenv bash "$EGRESS" unload >/dev/null 2>&1
 
   # The proxy takes its rule away when it stops.

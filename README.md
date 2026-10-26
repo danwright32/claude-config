@@ -2036,7 +2036,12 @@ show itself in) is a different thing and calls `window_wait <seconds> "<conditio
 stated, captures its status in the same statement (`; NAME=$?`) and asserts NAME is 1, ran out.
 `hooks/test-hand-rolled-wait.sh` fails any suite that hand rolls a wait bounded by its own clock or
 tick count instead (#1679), and any `window_wait` whose running out is not asserted that way, which
-would be a short ceiling under another name (#1721), with no list of suites excused from either.
+would be a short ceiling under another name (#1721), with no list of suites excused from either. It
+also fails a bare fixed sleep, a `sleep <seconds>` statement of the suite's own that pauses and then
+carries on as though what it waited for has happened (#1743). A poll tick inside a while or until
+loop is judged by the loop rules instead, a holder put in the background or made the process with
+`exec` waits for nothing, and a sleep in the body of a stand in the suite writes through a heredoc
+is how long the fake takes, so none of those is reported.
 
 ### Measuring the section time budget's margin
 
