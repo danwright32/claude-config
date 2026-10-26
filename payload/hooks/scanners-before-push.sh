@@ -167,18 +167,57 @@ fi
 # means lowering the recorded number in the same change, which is what keeps it a measurement rather
 # than a formality. A repository that records nothing is told what to record and not blocked, since
 # refusing a repo for lacking a file it never had stops work for no reason (L42).
+#
+# THE FLOOR BY NAME (claude-config#1744). A count can say only that fewer were selected, never which,
+# and it drifted: on 2026-10-25 it recorded 6 while 21 were selected, so 15 could leave unseen. The file may
+# list the suites themselves, one path per line as the selection prints them (a line ending in .sh),
+# and then every one listed must be selected, and one that is not is named. A suite selected and not
+# listed never blocks (adding a scanner never fails a push); the repository's own suite holds the
+# list equal to the selection, so it cannot drift low again. A file holding only a number is read as
+# the count it always was.
 _sc_selected="$(printf '%s\n' "$scanners" | grep -c . || true)"
 _sc_floor_file="$repo_dir/.claude/scanners-floor.txt"
 _sc_floor=""
 _sc_floor_note=""
-if [ -f "$_sc_floor_file" ]; then
+_sc_named=""
+[ -f "$_sc_floor_file" ] && _sc_named="$(awk '/^[[:space:]]*#/ { next } $1 ~ /[.]sh$/ { print $1 }' "$_sc_floor_file" 2>/dev/null)"
+if [ -n "$_sc_named" ]; then
+  _sc_dropped=""
+  while IFS= read -r _n; do
+    [ -n "$_n" ] || continue
+    # A whole line of the selection, matched by `case` so no pipeline can stop early (L183).
+    case $'\n'"$scanners"$'\n' in *$'\n'"$_n"$'\n'*) ;; *) _sc_dropped="$_sc_dropped$_n"$'\n' ;; esac
+  done <<NAMED
+$_sc_named
+NAMED
+  if [ -n "$_sc_dropped" ]; then
+    {
+      echo "PUSH BLOCKED: whole tree scanners this repository records are no longer selected."
+      echo ""
+      echo "$_sc_floor_file names these, and this gate no longer selects them:"
+      printf '%s' "$_sc_dropped" | sed 's/^/    /'
+      echo ""
+      echo "A scanner that stops being selected is silent: the gate goes on reporting a clean run"
+      echo "over a smaller set, which is how two defects reached main on 2026-09-21 after a change"
+      echo "moved two scanners off the text this gate recognised them by. A suite is selected when"
+      echo "it lists the repository's files (git ls-files or lib/repo-files.sh) in its code."
+      echo ""
+      echo "If one was removed on purpose, take its line out of $_sc_floor_file in the same change."
+      echo "If not, find why it stopped being recognised."
+      echo ""
+      echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    } >&2
+    exit 2
+  fi
+  _sc_floor_note=", meeting the floor of $(printf '%s\n' "$_sc_named" | grep -c .) named suites this repository records"
+elif [ -f "$_sc_floor_file" ]; then
   # The first line that is neither blank nor a comment, so the file can say what the number is for.
   _sc_floor="$(awk '/^[[:space:]]*#/ { next } NF { print $1; exit }' "$_sc_floor_file" 2>/dev/null)"
   case "$_sc_floor" in
     ''|*[!0-9]*)
       # Not a number is a refusal to JUDGE, never a silent zero, which would exempt the repository
       # from the very check it recorded (L257).
-      echo "scanners-before-push: the floor in $_sc_floor_file is '$_sc_floor', which is not a number, so how many scanners this repository expects could not be read. It selected $_sc_selected. Write the expected count there, on its own line." >&2
+      echo "scanners-before-push: the floor in $_sc_floor_file is '$_sc_floor', which is not a number, so how many scanners this repository expects could not be read. It selected $_sc_selected. Write there the path of each scanner suite it should select, one per line, or the expected count on its own line." >&2
       _sc_floor="" ;;
     *)
       if [ "$_sc_selected" -lt "$_sc_floor" ]; then

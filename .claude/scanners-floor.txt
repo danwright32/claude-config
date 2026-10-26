@@ -1,6 +1,30 @@
-# How many whole tree scanner suites scanners-before-push.sh expects to select in this repository.
-# It is a FLOOR: adding a scanner never fails a push, and removing one deliberately means lowering
-# this number in the same change. It exists because on 2026-09-21 a conversion moved the scanners
-# off the text the installed gate recognised them by, two of them stopped being selected in
-# silence, and two defects that both of them catch reached main (claude-config#530).
-6
+# The whole tree scanner suites scanners-before-push.sh is expected to select in this repository,
+# one path per line as `SCANNERS_LIST=1` prints them. It is a FLOOR: a suite listed here that the
+# gate no longer selects blocks the push and is named, while a scanner added and not yet listed
+# never does. Removing one deliberately means taking its line out in the same change. It exists
+# because on 2026-09-21 a conversion moved the scanners off the text the installed gate recognised
+# them by, two of them stopped being selected in silence, and two defects that both of them catch
+# reached main (claude-config#530). It held a count until claude-config#1744, which said only that
+# fewer were selected, never which, and had drifted to 6 while 21 were selected (measured 2026-10-25).
+# test-scanners-before-push.sh holds this list equal to what the gate selects.
+payload/hooks/test-blank-check-cost.sh
+payload/hooks/test-branch-issue-reader.sh
+payload/hooks/test-check-home-paths.sh
+payload/hooks/test-check-root-guard.sh
+payload/hooks/test-checkout-root.sh
+payload/hooks/test-hand-rolled-wait.sh
+payload/hooks/test-heredoc-in-substitution.sh
+payload/hooks/test-lib-self-locate.sh
+payload/hooks/test-pipefail-shortcircuit.sh
+payload/hooks/test-push-changes.sh
+payload/hooks/test-repo-files.sh
+payload/hooks/test-run-all-tests.sh
+payload/hooks/test-suite-result-line.sh
+payload/hooks/test-suite-scratch-isolation.sh
+payload/hooks/test-two-file-awk.sh
+tests/test-ci-environment-tools.sh
+tests/test-claude-sync.sh
+tests/test-dev-update-registry.sh
+tests/test-moved-to-local.sh
+tests/test-payload-secret-scan.sh
+tests/test-work-names-tree.sh

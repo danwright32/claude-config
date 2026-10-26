@@ -1328,7 +1328,10 @@ run_and_interrupt() { # run_and_interrupt <runner path>
   for p in $k_started; do k_kids="$k_kids $(pgrep -P "$p" 2>/dev/null | tr '\n' ' ')"; done
   kill -TERM "$k_runner" 2>/dev/null || true
   hang_wait '! kill -0 "$k_runner" 2>/dev/null' 0.2
-  sleep 1
+  # What the runner stopped is waited on as the condition the passing case meets, every suite and
+  # child gone, never a fixed second a loaded Mac can outlast (#1743, L290).
+  k_none_left(){ local p; for p in $k_started $k_kids; do kill -0 "$p" 2>/dev/null && return 1; done; return 0; }
+  hang_wait k_none_left 0.2
   k_runner_left=""
   kill -0 "$k_runner" 2>/dev/null && k_runner_left="$k_runner"
   k_left=""

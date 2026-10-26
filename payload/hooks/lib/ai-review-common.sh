@@ -166,23 +166,31 @@ ar_readkeys_valid() {   # $1 = finished review file, $2 = presented key -> 0 whe
 }
 # The acknowledgement a read leaves (claude-config#788, #599): the review's finish time, which names
 # the review it read, and a MAC binding that time to the action that presented the key, so a push's
-# acknowledgement cannot stand for a merge's. $3 is merge or push. Written by lib/pr-review.sh once a
-# presented key is valid, and copied with the review when a later head carries it over.
-ar__readkeys_ack_mac() {   # $1 = finish time, $2 = merge or push -> its MAC, or return 1
-  ar__helper_key_mac "ack:$2:$1"
+# acknowledgement cannot stand for a merge's. Written by lib/pr-review.sh once a presented key is
+# valid, and written again for the later review when a later head carries it over.
+#
+# WHICH REVIEW IT READ (claude-config#1739). The MAC bound only the finish time and the action, so a
+# valid acknowledgement copied beside another review that finished in the same second read that one
+# too. It now also binds the review's own identity: the review file's name, which is the repository's
+# key and the head it reviewed. A carried review is a new file, so its acknowledgement is signed for
+# it afresh, and only from one that is valid for the review it carries.
+ar__readkeys_ack_mac() {   # $1 = review file, $2 = finish time, $3 = merge or push -> its MAC, or return 1
+  local id="${1##*/}"
+  [ -n "$id" ] || return 1
+  ar__helper_key_mac "ack:$3:$id:$2"
 }
-ar_readkeys_ack_write() {   # $1 = acknowledgement file, $2 = finish time, $3 = merge or push -> 0 once written
+ar_readkeys_ack_write() {   # $1 = acknowledgement file, $2 = review file, $3 = finish time, $4 = merge or push -> 0 once written
   local m
-  case "$2" in ''|*[!0-9]*) return 1 ;; esac
-  m="$(ar__readkeys_ack_mac "$2" "$3")" || return 1
+  case "$3" in ''|*[!0-9]*) return 1 ;; esac
+  m="$(ar__readkeys_ack_mac "$2" "$3" "$4")" || return 1
   [ "${#m}" -eq 64 ] || return 1
-  { printf 'finished=%s\nmac=%s\n' "$2" "$m" > "$1"; } 2>/dev/null
+  { printf 'finished=%s\nmac=%s\n' "$3" "$m" > "$1"; } 2>/dev/null
 }
-ar_readkeys_ack_ok() {   # $1 = acknowledgement file, $2 = finish time, $3 = merge or push -> 0 when it is one
+ar_readkeys_ack_ok() {   # $1 = acknowledgement file, $2 = review file, $3 = finish time, $4 = merge or push -> 0 when it is one
   local m
-  case "$2" in ''|*[!0-9]*) return 1 ;; esac
-  m="$(ar__readkeys_ack_mac "$2" "$3")" || return 1
-  [ "${#m}" -eq 64 ] && [ "$(cat "$1" 2>/dev/null)" = "finished=$2"$'\n'"mac=$m" ]
+  case "$3" in ''|*[!0-9]*) return 1 ;; esac
+  m="$(ar__readkeys_ack_mac "$2" "$3" "$4")" || return 1
+  [ "${#m}" -eq 64 ] && [ "$(cat "$1" 2>/dev/null)" = "finished=$3"$'\n'"mac=$m" ]
 }
 
 # READ KEYS TYPED IN FRONT OF THE MERGE HELPER (claude-config#1673). A gate reads a typed merge's key

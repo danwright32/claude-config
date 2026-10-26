@@ -821,8 +821,10 @@ ROWS
     { print }' "$rf" > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final" || { rm -f "$final.tmp"; return 1; }
   local fin
   fin="$(meta_of "$final" finished)"
-  [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.acknowledged" "$fin" merge && cp "$rf.acknowledged" "$acknowledged" 2>/dev/null
-  [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.push-acknowledged" "$fin" push && cp "$rf.push-acknowledged" "$push_acknowledged" 2>/dev/null
+  # An acknowledgement names the review it read (#1739), so a valid one of the carried review is
+  # signed again for this head's, never copied: a copy would name the earlier file.
+  [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.acknowledged" "$rf" "$fin" merge && ar_readkeys_ack_write "$acknowledged" "$final" "$fin" merge
+  [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.push-acknowledged" "$rf" "$fin" push && ar_readkeys_ack_write "$push_acknowledged" "$final" "$fin" push
   [ -s "$rf.leftout" ] && cp "$rf.leftout" "$leftout" 2>/dev/null
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
   printf '%s' "$s"
@@ -998,6 +1000,8 @@ narrow_said() {
 }
 
 do_start() {
+  # Inputs of reviews killed with their runner, before anything else (claude-config#1745).
+  prr_sweep_inputs
   if [ -e "$final" ] || [ -e "$pending" ]; then
     echo "The lessons review of $repo_label $branch at $short has already been run, or is still running."
     return 0
@@ -1137,12 +1141,46 @@ run_reviewer() {   # $1 = state dir, $2 = name, $3 = diff file, $4 = base, $5 = 
     --diff-file "$3" --deadline "$6" --started "$7" \
     </dev/null >/dev/null 2>&1 &
   rpid=$!
+  prr_input_owner "$3" "$rpid"
   local what="the lessons review of $repo_label $branch at ${full_sha:0:7}"
   case "$2" in *-g[0-9]*) what="$what, group ${2##*-g}" ;; esac
   prr_phase review "$rpid" "$what" "$6" "$7"
   wait "$rpid"; rc=$?
   prr_phase clear "$rpid"
+  # However the reviewer ended, its input goes with it (claude-config#1745): it removes it itself in
+  # a finally and on SIGTERM, SIGHUP or SIGINT, which a SIGKILL never reaches, so the runner removes
+  # it too.
+  rm -f "$3" "$3.reviewer" 2>/dev/null
   return "$rc"
+}
+
+# A KILLED REVIEW'S INPUT (claude-config#1745). A review input left behind piles up in the state
+# folder, and a suite's reset waits on it. Three exits remove it: the reviewer's own finally and its
+# SIGTERM, SIGHUP and SIGINT handler (ai-review-run.py), and run_reviewer once the reviewer has
+# ended however it did.
+# When the runner was killed outright as well, nothing of the review is left to do it, so each input
+# names its reviewer by pid AND start time in <input>.reviewer, and the next review to start sweeps an
+# input whose reviewer is no longer that process (a dead pid, or one reused by something else), the
+# test the #1730 phase records are believed by. An input with no owner record is never swept here
+# (it may be one still being written); the 14 day sweep of the state folder takes it.
+prr_input_owner() {   # $1 = review input, $2 = its reviewer's pid
+  local st
+  st="$( . "$PRR_LIB/merge-turn.sh" 2>/dev/null && turn_proc_start "$2" )"
+  [ -n "$st" ] || return 0
+  { printf '%s %s\n' "$2" "$st" > "$1.reviewer"; } 2>/dev/null || true
+}
+prr_sweep_inputs() {   # removes every review input whose recorded reviewer is gone
+  local f pid st cur
+  for f in "$AR_STATE_DIR"/*.diff.reviewer "$parts_root"/*/*.diff.reviewer; do
+    [ -f "$f" ] || continue
+    read -r pid st < "$f" 2>/dev/null || continue
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    [ -n "$st" ] || continue
+    cur="$( . "$PRR_LIB/merge-turn.sh" 2>/dev/null && turn_proc_start "$pid" )"
+    [ -n "$cur" ] && [ "$cur" = "$st" ] && continue
+    rm -f "${f%.reviewer}" "$f" 2>/dev/null
+  done
+  return 0
 }
 
 # The reviewer's phase record (see run_reviewer), written and removed through lib/merge-phase.sh in a
@@ -1748,10 +1786,11 @@ do_check() {
       local read_by="" ack_file="$acknowledged"
       [ "$gate" = push ] && ack_file="$push_acknowledged"
       # Each acknowledgement carries a MAC under the gate's secret (claude-config#1719), so one a
-      # session wrote by hand reads as no acknowledgement at all.
-      if [ -n "$fin" ] && ar_readkeys_ack_ok "$acknowledged" "$fin" merge; then
+      # session wrote by hand reads as no acknowledgement at all, and it names this review file
+      # (#1739), so one copied from another review finished in the same second reads as none too.
+      if [ -n "$fin" ] && ar_readkeys_ack_ok "$acknowledged" "$final" "$fin" merge; then
         read_by="merge"
-      elif [ -n "$fin" ] && [ "$gate" = push ] && ar_readkeys_ack_ok "$push_acknowledged" "$fin" push; then
+      elif [ -n "$fin" ] && [ "$gate" = push ] && ar_readkeys_ack_ok "$push_acknowledged" "$final" "$fin" push; then
         read_by="push"
       fi
       if [ -n "$read_by" ]; then
@@ -1760,7 +1799,7 @@ do_check() {
       fi
       if [ -n "$fin" ] && ar_readkeys_valid "$final" "${PR_REVIEW_READ:-}"; then
         # A failed write is said, since the next attempt will then need the key again.
-        ar_readkeys_ack_write "$ack_file" "$fin" "$gate" \
+        ar_readkeys_ack_write "$ack_file" "$final" "$fin" "$gate" \
           || echo "(The read could not be recorded beside $final, so a later $act of this head will need the key again.)"
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), read: this $act presented their key."
         return 0

@@ -120,6 +120,53 @@ wprobe_lines="$(printf '%s\n' "$wprobe" | awk -F: 'NF { printf "%s ", $2 }')"
 $wprobe"
 
 # ---------------------------------------------------------------------------
+# A BARE FIXED SLEEP (claude-config#1743): a suite pausing a fixed time and then acting as though
+# what it waited for has happened asserts about the machine's load, as a short ceiling does (L290).
+# Fourteen such lines in seven suites escaped the loop rules above. A sleep is reported when it is a
+# statement of the suite's own that runs in the foreground and then carries on: not a poll tick in
+# the body of a while or until loop (or a for over ticks), which the loop rules judge; not a holder
+# put in the background (`&`) or made the process itself (`exec`); and not the body of a stand in
+# the suite writes through a heredoc, where it is how long the fake takes, never a wait of the
+# suite's. No list of excused files or lines.
+# ---------------------------------------------------------------------------
+{
+  printf '#!/usr/bin/env bash\n'
+  # Six that are: alone, between two commands, after &&, in an if, quoted, and in the body of a for
+  # loop over cases, which iterates cases rather than ticks.
+  printf '%s 1\n' "$_S"
+  printf 'kill "$p"; %s 2; check gone\n' "$_S"
+  printf 'kill "$p" && %s 0.5\n' "$_S"
+  printf 'if [ -n "$slow" ]; then %s 1; fi\n' "$_S"
+  printf '%s "2"\n' "$_S"
+  printf '%s mode in running stopped; do\n  start "$mode"\n  %s 2\n  check "$mode"\ndone\n' "$_F" "$_S"
+  # And ten that are not: a poll tick in a while loop over several lines and on one, a holder in
+  # the background, one made the process, a stand in's own duration in a heredoc, a comment, a for
+  # loop over ticks that paces output, a wait on the condition itself, a duration named where it is
+  # set, and a tick in a loop written inside a quoted fixture.
+  printf '%s [ ! -e "$f" ]; do\n  %s 0.1\ndone\n' "$_W" "$_S"
+  printf '%s ! kill -0 "$p"; do %s 0.1; done\n' "$_U" "$_S"
+  printf '%s 300 &\n' "$_S"
+  printf '(cd "$wt" && exec %s 120) &\n' "$_S"
+  printf "cat > stub <<'EOF'\n#!/bin/bash\n%s 1.2\nexec real \"\$@\"\nEOF\n" "$_S"
+  printf '# %s 1 here would be a guess\n' "$_S"
+  printf '%s i in $(seq 1 5); do\n  printf .\n  %s 0.1\ndone\n' "$_F" "$_S"
+  printf 'hang_wait %s\n' "'[ -e \"\$f\" ]'"
+  printf '%s "$POLL"\n' "$_S"
+  printf "mon '%s true; do git push && break; %s 30; done'\n" "$_W" "$_S"
+} > "$TMPROOT/payload/hooks/test-bare-probe.sh"
+bprobe="$(printf 'payload/hooks/test-bare-probe.sh\n' | python3 "$SCAN" --root "$TMPROOT")"; bprobe_rc=$?
+bprobe_lines="$(printf '%s\n' "$bprobe" | awk -F: 'NF { printf "%s ", $2 }')"
+[ "$bprobe_rc" = 1 ] && [ "$bprobe_lines" = "2 3 4 5 6 9 " ] \
+  && check "#1743 a bare fixed sleep is reported, and a tick, a holder or a stand in's own duration is not" ok \
+  || check "#1743 a bare fixed sleep is reported, and a tick, a holder or a stand in's own duration is not" "exit $bprobe_rc, lines '$bprobe_lines' where 2 3 4 5 6 9 were wanted:
+$bprobe"
+# The finding says what to do instead, so the next author is not left to guess.
+case "$bprobe" in
+  *"fixed sleep"*hang_wait*window_wait*) check "#1743 and the finding names the two ways on" ok ;;
+  *) check "#1743 and the finding names the two ways on" "it said: $bprobe" ;;
+esac
+
+# ---------------------------------------------------------------------------
 # The real tree: none at all, anywhere.
 # ---------------------------------------------------------------------------
 FILES="$(bash "$DIR/lib/repo-files.sh" "$ROOT" 2>/dev/null || true)"

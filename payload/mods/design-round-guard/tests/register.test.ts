@@ -20,7 +20,8 @@ import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 // mod-kit's own reader, and where a checkout stands by its branch reader (#978) and the project's
 // name by its repo reader (#951), each a byte for byte copy under tests/mod-kit that
 // tools/check-mod-shared-parts.sh holds to mod-kit's, asked through the world (`__modkit`). The checkouts: /w/slate (the project's
-// main working tree), /w/slate-wt (a linked worktree of it, where a subagent works), and /w/other.
+// main working tree), /w/slate-wt (a linked worktree of it, where a subagent works), /w/slate-wt2
+// (another linked worktree of it, another subagent's), and /w/other.
 // A folder under /w/locked is one the disk cannot answer for.
 const modKit: { name: string; register: Register } = {
   name: 'mod-kit',
@@ -37,7 +38,7 @@ const modKit: { name: string; register: Register } = {
         pipeline: async (input: { command: string }) => ask('pipeline', input),
         workingTree: async ({ path }: { path: string }) => {
           if (path.startsWith('/w/locked/')) throw new Error('EACCES: /w/locked')
-          for (const root of ['/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop']) if (path === root || path.startsWith(root + '/')) return root
+          for (const root of ['/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop']) if (path === root || path.startsWith(root + '/')) return root
           return null
         },
         branch: async (input: { path: string }) => ask('branch', input),
@@ -113,7 +114,7 @@ const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isSt
 // as `dialog` says), every call that ran, every card drawn and every git command asked.
 const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
-  const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
+  const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/slate-wt2': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
   const store: Record<string, unknown> = {}
   // `shell`: what a Bash command writes when it runs, by path (#1296); `writeFails`: the paths
   // $.fs.write refuses; `afterWrite`: run once a write lands (another writer arriving, say);
@@ -171,7 +172,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       if (branch === undefined || branch === 'UNREADABLE') return { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' }
       return { exitCode: 0, stdout: `${branch}\n`, stderr: '' }
     }
-    if (sub === 'worktree list --porcelain') return { exitCode: 0, stdout: `worktree ${tree === '/w/slate-wt' ? '/w/slate' : tree}\nHEAD abc\nbranch refs/heads/main\n\n`, stderr: '' }
+    if (sub === 'worktree list --porcelain') return { exitCode: 0, stdout: `worktree ${tree === '/w/slate-wt' || tree === '/w/slate-wt2' ? '/w/slate' : tree}\nHEAD abc\nbranch refs/heads/main\n\n`, stderr: '' }
     if (sub === 'symbolic-ref --short refs/remotes/origin/HEAD') return { exitCode: 0, stdout: 'origin/main\n', stderr: '' }
     throw new Error(`unexpected git: ${argv.join(' ')}`)
   }
@@ -201,7 +202,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     if (cmd === '__modkit' && args[0] === 'branch') {
       if (ctl.branchFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit: the branch reader failed', isStdoutTruncated: false, isStderrTruncated: false } } as never
       const { path } = JSON.parse(String(args[1])) as { path: string }
-      const root = ['/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop'].find(r => path === r || path.startsWith(r + '/'))
+      const root = ['/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop'].find(r => path === r || path.startsWith(r + '/'))
       return ok(JSON.stringify(root === undefined ? null : await readBranch(root, git)))
     }
     if (cmd === '__modkit' && args[0] === 'repo') {
@@ -794,6 +795,59 @@ test("an agent worktree's branch is keyed by its own name, so another agent's br
   expect(refusalOf(await call($, PAGE))).toBe('')
   w.branches['/w/slate'] = 'worktree-agent-a26c84e7831f0b1c2'
   expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+})
+
+// #1740: twice on 2026-10-24/25 (#1563, #1727) Dan's Skip them was kept under a builder's starting
+// branch, worktree-agent-<id>, the builder then renamed its branch to name the issue, and the guard
+// read that issue, found no answer and asked him again. His skip there now carries to the issues the
+// SAME worktree's later branch names, and only there: another worktree, the main checkout, and the
+// issue itself everywhere else are still asked (#1306's guarantee), and nothing is kept under the
+// issue.
+const WT2_PAGE = { tool: 'Edit', file_path: '/w/slate-wt2/app/page.tsx', old_string: 'p-4', new_string: 'p-6' }
+test("#1740: a skip on a builder's worktree-agent branch carries to the issue its renamed branch names, in that worktree only", withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = 'main'
+  w.branches['/w/slate-wt'] = 'worktree-agent-a7f3c2d1e0b9a8c7d'
+  const why = refusalOf(await call($, { ...WT_PAGE }))
+  expect(why).toContain('branch worktree-agent-a7f3c2d1e0b9a8c7d in slate')
+  await askSkip($, w, why, SKIP_YES)
+  // The builder renames its branch to name its issue: the same worktree is not asked again.
+  w.branches['/w/slate-wt'] = 'goal-box-1563'
+  expect(refusalOf(await call($, { ...WT_PAGE }))).toBe('')
+  // Nor after a second rename, to a branch naming two issues.
+  w.branches['/w/slate-wt'] = 'late-followups-1563-1727'
+  expect(refusalOf(await call($, { ...WT_PAGE }))).toBe('')
+  // Another worktree on a branch naming the same issue is asked, as is the main checkout.
+  w.branches['/w/slate-wt2'] = 'goal-box-1563'
+  const other = refusalOf(await call($, WT2_PAGE))
+  expect(other).toContain(SKIP_QUESTION)
+  expect(other).toContain('issue #1563 in slate')
+  w.branches['/w/slate'] = '1563-goal-box'
+  expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+  // Nothing is kept under the issue itself, where any checkout would read it.
+  expect(Object.keys(w.store).filter(k => k.startsWith('record:')).sort()).toEqual([
+    'record:/w/slate|branch:worktree-agent-a7f3c2d1e0b9a8c7d',
+    'record:/w/slate|worktree:/w/slate-wt',
+  ])
+})
+
+test('#1740: only a skip on a worktree-agent branch carries; a skip on any other branch, and a settled round, do not', withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = 'main'
+  // A skip on an ordinary branch of the worktree is that branch's, and a rename is asked again.
+  w.branches['/w/slate-wt'] = 'feat-empty-states'
+  await askSkip($, w, refusalOf(await call($, { ...WT_PAGE })), SKIP_YES)
+  w.branches['/w/slate-wt'] = 'empty-states-1563'
+  expect(refusalOf(await call($, { ...WT_PAGE }))).toContain(SKIP_QUESTION)
+  // A settled round on an agent branch settles that branch's design, and is not carried.
+  w.branches['/w/slate-wt2'] = 'worktree-agent-b8e4d3c2f1a0b9c8e'
+  const id = idIn(refusalOf(await call($, WT2_PAGE)))
+  if (!id) throw new Error('no refused call named')
+  await askSettled($, w, SETTLED_YES, {}, { call: id })
+  expect(refusalOf(await call($, WT2_PAGE))).toBe('')
+  w.branches['/w/slate-wt2'] = 'chart-1727'
+  expect(refusalOf(await call($, WT2_PAGE))).toContain(SKIP_QUESTION)
+  expect(Object.keys(w.store).some(k => k.includes('|worktree:'))).toBe(false)
 })
 
 // #1322: before #1306, an agent worktree's branch read as the issues its random id spelled, and Dan's

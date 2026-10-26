@@ -718,9 +718,65 @@ gone_pid(){ ! kill -0 "$1" 2>/dev/null || case "$(ps -o stat= -p "$1" 2>/dev/nul
 hang_wait "gone_pid '$rpid'" || bad "#1730 the killed reviewer was still running"
 check_eq "#1730 a reviewer killed outright is not believed busy" "" "$(reviews_busy)"
 : > "$HOLD"
-# A runner killed outright never removes its input, which is what the next case's reset waits on, so
-# it is removed here, as the killed runner would have.
-rm -f "$AI_REVIEW_STATE_DIR"/*.diff
+# A KILLED REVIEW'S INPUT (claude-config#1745). The reviewer removed its copy of the changes only in
+# its own `finally`, which a SIGKILL never reaches, so killed reviews left their inputs behind and the
+# next reset waited on them; this case used to remove it by hand. The runner around the reviewer now
+# removes it however the reviewer ended.
+hang_wait "! compgen -G '$AI_REVIEW_STATE_DIR/*.diff' >/dev/null"
+check_eq "#1745 a reviewer killed with SIGKILL leaves no input behind" "" "$(compgen -G "$AI_REVIEW_STATE_DIR/*.diff")"
+# The runner killed outright too: nothing of the review is left to clean up, so the next review to
+# start sweeps an input whose reviewer, judged by pid and start time, is gone.
+held_review(){ # held_review <hold file> -> prints the reviewer's pid once its phase record is up
+  rm -rf "$MWR_PHASE_DIR"; rm -f "$1"
+  FAKE_CLAUDE_HOLD="$1" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+  hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || return 1
+  local f; for f in "$MWR_PHASE_DIR"/[0-9]*; do printf '%s' "${f##*/}"; return 0; done
+}
+head_input="$AI_REVIEW_STATE_DIR/$(basename "$(final_of "$HEAD_SHA")" .txt).diff"
+reset_state; HOLD="$WORKDIR/hold-1745a"
+rpid="$(held_review "$HOLD")" || bad "#1745 the held review published no phase record"
+rrun="$(ps -o ppid= -p "$rpid" 2>/dev/null | tr -d ' ')"
+check "#1745 control: the held review's input is there while it runs" "yes" "$([ -e "$head_input" ] && echo yes)"
+kill -KILL "$rrun" "$rpid" 2>/dev/null
+hang_wait "gone_pid '$rpid' && gone_pid '$rrun'" || bad "#1745 the killed review was still running"
+check "#1745 control: with its runner killed too, the input is left" "yes" "$([ -e "$head_input" ] && echo yes)"
+prr start --dir "$REPO" --sha "$BASE_SHA" >/dev/null
+check_eq "#1745 the next review to start sweeps the input of a reviewer that is gone" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
+: > "$HOLD"
+# A reviewer still running keeps its input through another review's sweep, the other direction (L497).
+reset_state; HOLD="$WORKDIR/hold-1745b"
+rpid="$(held_review "$HOLD")" || bad "#1745 the second held review published no phase record"
+rm -f "$(final_of "$BASE_SHA")"*
+prr start --dir "$REPO" --sha "$BASE_SHA" >/dev/null
+check "#1745 a running reviewer's input survives another review's sweep" "yes" "$([ -e "$head_input" ] && echo yes)"
+# Stopped with SIGTERM after its runner was killed outright, the reviewer removes its own input.
+rrun="$(ps -o ppid= -p "$rpid" 2>/dev/null | tr -d ' ')"
+kill -KILL "$rrun" 2>/dev/null
+hang_wait "gone_pid '$rrun'" || bad "#1745 the runner was still running"
+kill -TERM "$rpid" 2>/dev/null
+hang_wait "gone_pid '$rpid'" || bad "#1745 the reviewer did not stop on SIGTERM"
+hang_wait "[ ! -e '$head_input' ]"
+check_eq "#1745 a reviewer stopped with SIGTERM removes its own input" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
+: > "$HOLD"
+# SIGINT at its default is Python's own default_int_handler, never SIG_DFL, so a check for SIG_DFL
+# alone left it unhandled. The child starts with SIGINT at its default, as a foreground run does.
+INT_INPUT="$WORKDIR/int-1745.diff"; : > "$INT_INPUT"
+python3 - "$DIR/lib/ai-review-run.py" "$INT_INPUT" > "$WORKDIR/int-1745.out" 2>&1 <<'PY'
+import importlib.util, signal, subprocess, sys
+child = (
+    "import importlib.util, os, signal, sys\n"
+    "spec = importlib.util.spec_from_file_location('arr', sys.argv[1])\n"
+    "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+    "m.remove_input_when_stopped(sys.argv[2])\n"
+    "os.kill(os.getpid(), signal.SIGINT)\n"
+    "print('survived')\n"
+)
+p = subprocess.run([sys.executable, "-c", child, sys.argv[1], sys.argv[2]], capture_output=True,
+                   preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+print(p.returncode)
+PY
+check_eq "#1745 a reviewer stopped with SIGINT dies of it" "-2" "$(head -1 "$WORKDIR/int-1745.out")"
+check_eq "#1745 and removes its own input" "no" "$([ -e "$INT_INPUT" ] && echo yes || echo no)"
 
 # 3h. could not run: no claude on PATH. A PATH built from every tool but claude, so the case is
 #     produced on a machine that has one installed, which this suite used to report as UNMEASURED.
@@ -866,13 +922,32 @@ out="$(fire_gate "PR_REVIEW_READ=$shownk gh pr merge 7 --squash")"; rc=$?
 check_eq "#1719 the key the refusal showed still reads the review, beside the forged line" "0" "$rc"
 out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "#1719 and the acknowledgement it recorded lets the next merge of that review through" "0" "$rc"
+# AN ACKNOWLEDGEMENT COPIED TO ANOTHER REVIEW (claude-config#1739). The MAC bound the finish time and
+# the action, not which review was read, so a valid acknowledgement copied beside another review that
+# finished in the same second read that review too. A second review of another head, same stamp, same
+# findings: the copy must not read it, and the key its own refusal shows still must.
+f7b="$(final_of "$BASE_SHA")"
+sed "s/^sha=.*/sha=$BASE_SHA/" "$f7" > "$f7b"
+cp "$f7.acknowledged" "$f7b.acknowledged"
+printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync"}\n' "$BASE_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 an acknowledgement copied from another review with the same finish time does not read this one" "2" "$rc"
+check "#1739 and the refusal shows this review's findings" "deleteEvent still swallows" "$out"
+out="$(fire_gate "PR_REVIEW_READ=$(key_in "$out") gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 this review's own key still reads it" "0" "$rc"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 and the acknowledgement that recorded lets its next merge through" "0" "$rc"
+rm -f "$f7b"*
+printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync"}\n' "$HEAD_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 the first review's own acknowledgement still reads it" "0" "$rc"
 # A COMMAND THAT NAMES THE READ KEYS (claude-config#1719), refused before it runs, as the typed helper
 # key's record is (#1700): the file in any case, the secret's path, and the functions that write them.
 for named in \
   "printf '%s\\n' 0 >> ~/.claude/state/ai-review/1-pr-abc.txt.readkeys-1" \
   "cat \"\$HOME\"/.claude/state/ai-review/*.TXT.READKEYS-*" \
   ". ~/.claude/hooks/lib/ai-review-common.sh; ar_readkeys_issue ~/.claude/state/ai-review/1-pr-abc.txt" \
-  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_readkeys_ack_write x.acknowledged 1 merge" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_readkeys_ack_write x.acknowledged x.txt 1 merge" \
   ". ~/.claude/hooks/lib/ai-review-common.sh; cat \"\$(ar__helper_secret_file)\""; do
   out="$(fire_gate "$named")"; rc=$?
   check_eq "#1719 a command naming the read keys or what writes them is refused: $named" "2" "$rc"
