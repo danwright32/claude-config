@@ -63,6 +63,10 @@
 #   - A snooze for this session (pr-merge-quiz.sh --snooze-session <id>, the command the quiz
 #     itself names): every later merge in that session is skipped with a one line notice
 #     (claude-config#623).
+#   - A merge command still running in the background (moved there by the 600 s limit, or started
+#     with run_in_background): the quiz is HELD, not skipped, and asked at the first turn end after
+#     GitHub says it merged, by this script registered as a Stop hook with --release-held
+#     (claude-config#1768, the block above release_held).
 #
 # Fails QUIET: any parse error exits 0 with no output, so a hiccup never produces a spurious quiz.
 
@@ -115,6 +119,125 @@ if . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/sleep.sh" 2>/dev/null &&
   exit 0
 fi
 
+# HELD UNTIL THE MERGE HAS HAPPENED (claude-config#1768). A merge command that passes the Bash
+# tool's 600 s foreground limit is moved to the background, and PostToolUse fires right then, before
+# anything merged: in PostRoll on 2026-10-26 the quiz was demanded at 3:41 PM ET and the merge landed
+# at 3:43 PM ET (wait_for_checks.py waiting on a 12 minute CI run). The quiz is about what SHIPPED,
+# so for such a run it is HELD instead: one JSON line per held command, in a file per session beside
+# the verdict counts (outside ~/.claude, since a hold is this Mac's alone), and this same script,
+# registered as a Stop hook with --release-held, asks GitHub at each turn end and releases the quiz
+# at the first one after it says the pull request merged. The same shape as is it live's card for a
+# merge helper run in the background.
+#
+# How a backgrounded run is told from a finished one: Claude Code says so in tool_response. The
+# moved PostRoll call carried {"backgroundTaskId": "b1y5zlrqd", "timedOutAfterMs": 600000} there, and
+# a run_in_background call reached a PostToolUse hook with backgroundTaskId in tool_response
+# (measured with a headless run, 2026-10-26). A finished call carries no backgroundTaskId.
+#
+# A released hold is run through this script's ordinary path, with the payload the merge came in on,
+# so the opt out, the snooze and the label gate all judge it as they judge any merge, at the time it
+# actually merged. Released only when GitHub says MERGED; dropped, said in one line, when it says
+# CLOSED or when the hold passes HOLD_KEEP_SECONDS with nothing confirmed (L523); kept, silently,
+# while it is OPEN or GitHub does not answer, since that is a quiz delayed, never one lost.
+HOLD_KEEP_SECONDS=86400
+held_dir() { printf '%s/held' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
+
+release_held() {
+  command -v jq >/dev/null 2>&1 || return 0
+  local stop sid f g now rec at keep="" reasons="" notes="" open unknown merged closed
+  local m_dir m_repo m_slug m_pr envelope state num child r msg labels
+  stop="$(cat)"
+  sid="$(printf '%s' "$stop" | jq -r '.session_id // ""' 2>/dev/null)"
+  valid_session_id "$sid" || return 0
+  f="$(held_dir)/$sid"
+  # Taken by RENAMING, so a hold written while this runs lands in a fresh file and is never
+  # overwritten. A file left by a release that was stopped part way is taken too, so a hook the
+  # harness killed delays a quiz rather than losing it. Kept holds are appended back BEFORE the taken
+  # files are removed: a stop between the two asks a quiz twice, the harmless side (L648).
+  local -a parts=()
+  for g in "$f".releasing.*; do [ -f "$g" ] && parts+=("$g"); done
+  if [ -f "$f" ] && mv "$f" "$f.releasing.$$" 2>/dev/null; then parts+=("$f.releasing.$$"); fi
+  [ "${#parts[@]}" -gt 0 ] || return 0
+
+  . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || return 0
+  . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || return 0
+  now="$(date +%s)"
+  while IFS= read -r rec <&5; do
+    [ -n "$rec" ] || continue
+    at="$(printf '%s' "$rec" | jq -r '.heldAt // 0' 2>/dev/null)"
+    case "$at" in ''|*[!0-9]*) at=0 ;; esac
+    labels="$(printf '%s' "$rec" | jq -r '[.merges[]? | if (.pr // "") != "" then "#" + .pr else "the pull request for its branch" end] | join(", ")' 2>/dev/null)"
+    if [ $((now - at)) -gt "$HOLD_KEEP_SECONDS" ]; then
+      notes="${notes:+$notes }PR quiz dropped: the merge of ${labels:-a pull request} ran in the background and GitHub never confirmed it merged within $((HOLD_KEEP_SECONDS / 3600)) hours. Ask for the quiz if it did ship."
+      continue
+    fi
+    open=0; unknown=0; merged=""; closed=""
+    # One line per merge, its fields split on 0x1f, never a tab: a tab is whitespace to read, so an
+    # empty field between two would vanish and shift the pull request number into the repository.
+    while IFS=$'\x1f' read -r m_dir m_repo m_slug m_pr <&6; do
+      # Asked in the folder the merge ran in, or, when that folder is gone (a worktree removed after
+      # its merge), anywhere with the repository named, as long as there is a number to ask about.
+      if [ -d "$m_dir" ]; then
+        envelope="$(cd "$m_dir" && mt_pr_view "$m_pr" "number,state,mergedAt,url" "${m_repo:-$m_slug}" "$m_repo" </dev/null)"
+      elif [ -n "$m_pr" ] && [ -n "$m_slug" ]; then
+        envelope="$(cd "$HOME" && mt_pr_view "$m_pr" "number,state,mergedAt,url" "$m_slug" "$m_slug" </dev/null)"
+      else
+        envelope=""
+      fi
+      state="$(printf '%s' "$envelope" | jq -r 'if .found then (.view.state // "") else "" end' 2>/dev/null)"
+      num="$(printf '%s' "$envelope" | jq -r '.view.number // empty' 2>/dev/null)"
+      num="#${num:-$m_pr}"
+      case "$state" in
+        MERGED) merged="${merged:+$merged, }$num" ;;
+        CLOSED) closed="${closed:+$closed, }$num" ;;
+        OPEN) open=1 ;;
+        *) unknown=1 ;;
+      esac
+    done 6< <(printf '%s' "$rec" | jq -r '.merges[]? | [.dir // "", .repo // "", .slug // "", .pr // ""] | join("\u001f")' 2>/dev/null)
+    if [ "$open" = 1 ] || [ "$unknown" = 1 ]; then
+      keep+="$rec"$'\n'
+      continue
+    fi
+    if [ -z "$merged" ]; then
+      notes="${notes:+$notes }PR quiz dropped: ${closed:-the pull request} was closed without merging, so nothing shipped to quiz on."
+      continue
+    fi
+    child="$(printf '%s' "$rec" | jq -c '.payload' 2>/dev/null | bash "$HOOK_DIR/pr-merge-quiz.sh" --merged-from-hold 2>/dev/null)"
+    r="$(printf '%s' "$child" | jq -r '.reason // ""' 2>/dev/null)"
+    msg="$(printf '%s' "$child" | jq -r '.systemMessage // ""' 2>/dev/null)"
+    if [ -n "$r" ]; then
+      reasons="${reasons:+$reasons
+
+}The merge command that ran in the background has finished, and GitHub says $merged merged. Its output is in the background task's output file; read that for Step 1.
+
+$r"
+    fi
+    [ -n "$msg" ] && notes="${notes:+$notes }$msg"
+  done 5< <(cat "${parts[@]}" 2>/dev/null)
+
+  if [ -n "$keep" ]; then
+    mkdir -p "$(held_dir)" 2>/dev/null
+    printf '%s' "$keep" >> "$f" 2>/dev/null
+  fi
+  rm -f "${parts[@]}" 2>/dev/null
+
+  if [ -n "$reasons" ]; then
+    jq -nc --arg r "$reasons" --arg m "$notes" '{decision: "block", reason: $r} + (if $m != "" then {systemMessage: $m} else {} end)'
+  elif [ -n "$notes" ]; then
+    jq -nc --arg m "$notes" '{systemMessage: $m}'
+  fi
+  return 0
+}
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "${1:-}" = "--release-held" ]; then
+  release_held
+  exit 0
+fi
+# Set only by release_held, for the payload of a merge GitHub has since confirmed: never held again.
+merge_confirmed=0
+[ "${1:-}" = "--merged-from-hold" ] && merge_confirmed=1
+
 payload="$(cat)"
 
 
@@ -122,7 +245,6 @@ payload="$(cat)"
 # `raw` because the shared matcher does its own splitting and has to see the heredocs intact to
 # strip them, and because quoting a command back at somebody with its newlines rewritten shows
 # them something they did not type.
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
 parsed="$(ps_parse_payload "$payload" raw)" || exit 0
@@ -267,7 +389,7 @@ qv_set() {  # $1 = key, $2 = value (absolute), or $1 = key with $2 = + to increm
 # The counts, most frequent first, as one readable phrase. This IS the diagnosis: no-label
 # says the repo does not use the convention, no-answer says gh is not answering at all.
 qv_breakdown() {
-  awk '$1 !~ /^(fired_since_quiet|warned|started|snoozed)$/ { print $2 + 0, $1 }' "$(qv_file)" 2>/dev/null \
+  awk '$1 !~ /^(fired_since_quiet|warned|started|snoozed|held)$/ { print $2 + 0, $1 }' "$(qv_file)" 2>/dev/null \
     | sort -rn \
     | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }'
 }
@@ -434,6 +556,57 @@ if [ -n "$session_id" ] && snooze_in_force "$session_id"; then
   exit 0
 fi
 
+# STILL RUNNING IN THE BACKGROUND (#1768, the block above release_held). Checked after the opt out and
+# the snooze, which would skip this merge whenever it lands, and before the label gate, which is read
+# when the hold is released. Counted under its own name, so a hold leaves a trace (L357).
+#
+# A hold needs this session's id (the file it is kept in) and to know which pull requests the command
+# merges. Without either it cannot be released, so the quiz fires now as it always did, saying the
+# merge was still running: a missing reader costs a quiz asked early, never one skipped (L490).
+ran_in_background=0
+if [ "$merge_confirmed" = 0 ] && ! ps_reader_missing jq; then
+  [ "$(printf '%s' "$payload" | jq -r '[(.tool_input.run_in_background? == true), ((.tool_response? | if type == "object" then .backgroundTaskId else null end) | (type == "string" and length > 0))] | any' 2>/dev/null)" = "true" ] \
+    && ran_in_background=1
+fi
+quiz_hold() {
+  local dir merges rec m slug
+  dir="$(held_dir)"
+  mkdir -p "$dir" 2>/dev/null || return 1
+  # Each merge's repository is resolved NOW, while its folder certainly exists: a worktree is often
+  # removed straight after its merge, and the release must still be able to ask about it.
+  merges="$(while IFS= read -r m <&3; do
+      [ -n "$m" ] || continue
+      slug="$(printf '%s' "$m" | cut -f2)"
+      [ -n "$slug" ] || slug="$(cd "${m%%$'\t'*}" 2>/dev/null && mt_remote_slug)"
+      jq -nc --arg dir "${m%%$'\t'*}" --arg repo "$(printf '%s' "$m" | cut -f2)" --arg slug "$slug" --arg pr "${m##*$'\t'}" \
+        '{dir: $dir, repo: $repo, slug: $slug, pr: $pr}'
+    done 3<<< "$quizzed_lines" | jq -s -c '.')" || return 1
+  [ "$merges" != "[]" ] || return 1
+  rec="$(printf '%s' "$payload" | jq -c --argjson merges "$merges" --argjson at "$(date +%s)" \
+    '{heldAt: $at, merges: $merges, payload: del(.tool_response)}' 2>/dev/null)" || return 1
+  [ -n "$rec" ] || return 1
+  printf '%s\n' "$rec" >> "$dir/$session_id" 2>/dev/null || return 1
+  # A session that ended with a hold never released leaves its file; anything this old is swept.
+  find "$dir" -type f -mtime +2 -delete 2>/dev/null || true
+  return 0
+}
+background_note=""
+if [ "$ran_in_background" = 1 ]; then
+  if [ -n "$session_id" ] && [ "$merges_unread" = 0 ] && quiz_hold; then
+    qv_set held +
+    held_prs="$(while IFS= read -r m <&3; do [ -n "$m" ] && mt_pr_label "${m##*$'\t'}"; [ -n "$m" ] && printf ', '; done 3<<< "$quizzed_lines")"
+    held_prs="${held_prs%, }"
+    jq -nc \
+      --arg m "PR quiz held: the merge command is still running in the background, so the quiz waits for the first turn end after GitHub says $held_prs merged." \
+      --arg c "The PR merge quiz for this command is held, not skipped: the command was moved to the background before it finished, so nothing has merged yet. Do not run the quiz now. A turn end after GitHub says $held_prs merged asks for it." \
+      '{systemMessage: $m, hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $c}}'
+    exit 0
+  fi
+  background_note="
+
+This merge command was moved to the background before it finished, so it may not have merged yet, and the quiz could not be held for it. Wait until its output, or \`gh pr view <n> --json state\`, says it merged before Step 1; if it never merges, there is no quiz."
+fi
+
 # THE LABEL GATE HAS ITS OWN DEADLINE (claude-config#568). This hook is registered with a 15 second
 # timeout, the gate's read goes through mt_pr_view, which asks gh once per logged in account, and a
 # hook the harness kills emits NOTHING, which reads exactly like a decision not to quiz (L98). On
@@ -498,7 +671,7 @@ if [ -n "$session_id" ]; then
   # single quoted form (#790), and this is the command Claude is told to run exactly.
   skip_note="$skip_note If he says to skip quizzes for the rest of this session, run exactly this command, then confirm in one line: bash $(printf '%q' "$HOOK_DIR/pr-merge-quiz.sh") --snooze-session $session_id"
 fi
-notice="$notice$skip_note"
+notice="$notice$background_note$skip_note"
 
 # More than one merge (#1082): the instruction is written for one, so it names every pull request
 # the command merged and asks for each to be judged, rather than leaving Claude to quiz the first.

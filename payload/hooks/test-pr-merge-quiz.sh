@@ -841,6 +841,163 @@ else
   fail=$((fail+1)); echo "FAIL: the quiz from a quoted path named no snooze command"
 fi
 
+# ---- a merge command still running in the background is not quizzed yet (claude-config#1768) ----
+# A merge command that passes the Bash tool's 600 s foreground limit is moved to the background, and
+# PostToolUse fires right then, before anything merged. Seen 2026-10-26 in PostRoll: the quiz was
+# demanded at 19:41:32 UTC and the merge landed at 19:43. Claude Code says so in tool_response: the
+# moved call carried {"backgroundTaskId": "b1y5zlrqd", "timedOutAfterMs": 600000} in that session's
+# transcript, and a run_in_background call reached a PostToolUse hook carrying backgroundTaskId in
+# tool_response (measured with a headless run, 2026-10-26). So the quiz is HELD, per session, and
+# asked by the Stop hook (--release-held) at the first turn end after GitHub says it merged.
+forget_verdicts
+SID_H="5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"
+SID_H2="6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e"
+held_file() { printf '%s/held/%s' "$CLAUDE_QUIZ_VERDICT_DIR" "$1"; }
+# $1 = session id ("" for none), $2 = bg|rib|fg ; prints the PostToolUse output for gh pr merge 42
+post_merge() {
+  python3 -c '
+import json, sys
+sid, how = sys.argv[2], sys.argv[3]
+resp = {"stdout": "", "stderr": "", "interrupted": False, "isImage": False, "noOutputExpected": False}
+inp = {"command": "gh pr merge 42 --squash"}
+if how == "bg":
+    resp.update({"backgroundTaskId": "b1y5zlrqd", "timedOutAfterMs": 600000})
+elif how == "rib":
+    inp["run_in_background"] = True
+    resp["backgroundTaskId"] = "bglcf09qp"
+else:
+    resp["stdout"] = "Merged pull request #42"
+d = {"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": inp, "tool_response": resp, "cwd": sys.argv[1]}
+if sid:
+    d["session_id"] = sid
+print(json.dumps(d))
+' "$FIXTURE/repo" "$1" "$2" | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" "$HOOK" ) 2>/dev/null
+}
+# $1 = session id ; prints the Stop hook's output
+turn_end() {
+  python3 -c '
+import json, sys
+print(json.dumps({"hook_event_name": "Stop", "session_id": sys.argv[2], "stop_hook_active": False, "cwd": sys.argv[1]}))
+' "$FIXTURE/repo" "$1" | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" "$HOOK" --release-held ) 2>/dev/null
+}
+pr_state() {  # $1 = OPEN|MERGED|CLOSED
+  printf '{"number":42,"url":"https://github.com/acme/widget/pull/42","state":"%s","mergedAt":%s,"labels":[{"name":"changelog/visible"}]}' \
+    "$1" "$([ "$1" = MERGED ] && printf '"2026-10-26T19:43:00Z"' || printf 'null')" > "$FAKE_PR_JSON"
+}
+check() {  # $1 = 0 when the assertion held, $2 = what failed
+  if [ "$1" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $2"; fi
+}
+
+# A merge moved to the background demands no quiz, says it is held, and is recorded for the session.
+pr_state OPEN
+out="$(post_merge "$SID_H" bg)"
+holds "$out" '"block"'; check $((! $?)) "a merge moved to the background demanded the quiz before it merged (got: ${out:0:200})"
+holds "$out" "held"; check $? "the held quiz is not announced (got: ${out:0:200})"
+[ -s "$(held_file "$SID_H")" ]; check $? "a merge moved to the background was not recorded as held"
+saw started 0 "a held merge (the label gate is read when it is released, not now)"
+saw held 1 "a held merge"
+
+# run_in_background is the same case from the start.
+out="$(post_merge "$SID_H2" rib)"
+holds "$out" '"block"'; check $((! $?)) "a run_in_background merge demanded the quiz before it merged (got: ${out:0:200})"
+[ -s "$(held_file "$SID_H2")" ]; check $? "a run_in_background merge was not recorded as held"
+
+# A finished foreground merge, with the same tool_response shape, still quizzes at once.
+out="$(post_merge "$SID_H" fg)"
+holds "$out" '"block"'; check $? "a finished foreground merge no longer quizzes (got: ${out:0:200})"
+
+# With no session id the hold cannot be kept, so the quiz fires (fails open) but says the merge was
+# still running, so Claude waits for its output before Step 1.
+out="$(post_merge "" bg)"
+holds "$out" '"block"'; check $? "a backgrounded merge with no session id was silenced"
+holds "$out" "moved to the background"; check $? "the fallback quiz does not say the merge was still running (got: ${out:0:300})"
+
+# A turn end while the pull request is still open: nothing asked, the hold kept.
+pr_state OPEN
+out="$(turn_end "$SID_H")"
+[ -z "$out" ]; check $? "a turn end with the merge still open said something (got: ${out:0:200})"
+[ -s "$(held_file "$SID_H")" ]; check $? "a turn end with the merge still open dropped the hold"
+
+# A turn end when GitHub answers nothing: kept, never released and never dropped.
+no_record
+out="$(turn_end "$SID_H")"
+holds "$out" '"block"'; check $((! $?)) "a turn end with no answer from GitHub released the quiz"
+[ -s "$(held_file "$SID_H")" ]; check $? "a turn end with no answer from GitHub dropped the hold"
+
+# Another session's turn end does not touch this session's hold.
+pr_state MERGED
+rm -f "$(held_file "$SID_H2")"
+out="$(turn_end "$SID_H2")"
+[ -z "$out" ]; check $? "a session with nothing held said something at its turn end (got: ${out:0:200})"
+[ -s "$(held_file "$SID_H")" ]; check $? "another session's turn end released this session's hold"
+
+# Once GitHub says it merged, the next turn end asks for the quiz, naming the merge, and only once.
+started_before="$(count_of started)"
+out="$(turn_end "$SID_H")"
+holds "$out" '"block"'; check $? "a backgrounded merge that later merged was never quizzed (got: ${out:0:200})"
+reason="$(printf '%s' "$out" | jq -r '.reason // ""' 2>/dev/null)"
+holds "$reason" "comprehension quiz"; check $? "the released block is not the quiz instruction (got: ${reason:0:200})"
+holds "$reason" "#42"; check $? "the released quiz does not name the merged pull request (got: ${reason:0:200})"
+[ ! -s "$(held_file "$SID_H")" ]; check $? "a released hold was kept, so it would quiz again"
+saw started $((started_before + 1)) "a released merge goes through the label gate"
+out="$(turn_end "$SID_H")"
+[ -z "$out" ]; check $? "a released quiz was asked again at the next turn end (got: ${out:0:200})"
+
+# The released quiz still honours the label gate: a quiet label releases the hold with no quiz.
+post_merge "$SID_H" bg >/dev/null
+printf '{"number":42,"url":"https://github.com/acme/widget/pull/42","state":"MERGED","mergedAt":"2026-10-26T19:43:00Z","labels":[{"name":"changelog/none"}]}' > "$FAKE_PR_JSON"
+out="$(turn_end "$SID_H")"
+holds "$out" '"block"'; check $((! $?)) "a released merge with a quiet label was quizzed"
+[ ! -s "$(held_file "$SID_H")" ]; check $? "a released merge with a quiet label kept its hold"
+
+# Closed without merging: the hold is dropped, said in one line, no quiz.
+post_merge "$SID_H" bg >/dev/null
+pr_state CLOSED
+out="$(turn_end "$SID_H")"
+holds "$out" '"block"'; check $((! $?)) "a pull request closed without merging was quizzed"
+holds "$out" "closed without merging"; check $? "a dropped hold for a closed pull request is not said (got: ${out:0:200})"
+[ ! -s "$(held_file "$SID_H")" ]; check $? "a closed pull request's hold was kept"
+
+# A hold older than its expiry is dropped, said in one line, without asking GitHub (L523).
+post_merge "$SID_H" bg >/dev/null
+jq -c '.heldAt = (.heldAt - 90000)' "$(held_file "$SID_H")" > "$FIXTURE/held.tmp" && mv "$FIXTURE/held.tmp" "$(held_file "$SID_H")"
+pr_state OPEN
+out="$(turn_end "$SID_H")"
+holds "$out" "never confirmed"; check $? "an expired hold was not announced as dropped (got: ${out:0:200})"
+[ ! -s "$(held_file "$SID_H")" ]; check $? "an expired hold was kept"
+
+# The incident itself, replayed: PostRoll's merge tool in a worktree, moved to the background with the
+# tool_response its transcript recorded. Held under its own number, and released after the worktree it
+# ran in was removed, which is the usual end of a worktree merge, by the repository resolved at hold time.
+WT="$FIXTURE/PostRoll-wt-adopt"
+mkdir -p "$WT/tools" && ( cd "$WT" && git init -q && git remote add origin "https://github.com/acme/widget.git" ) && : > "$WT/tools/wait_for_checks.py"
+incident="$(python3 -c '
+import json, sys
+wt = sys.argv[1]
+cmd = "cd \"%s\" && venv/bin/python tools/wait_for_checks.py 1582 --merge > /tmp/merge.log 2>&1; echo \"exit=$?\"; tail -15 /tmp/merge.log" % wt
+print(json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": sys.argv[2], "cwd": sys.argv[3],
+  "tool_input": {"command": cmd, "description": "Wait for CI on PR 1582 and merge it"},
+  "tool_response": {"stdout": "", "stderr": "", "interrupted": False, "isImage": False, "noOutputExpected": False,
+    "backgroundTaskId": "b1y5zlrqd", "timedOutAfterMs": 600000,
+    "backgroundCwdHint": "Session cwd remains %s; directory changes made by the backgrounded command do not apply to subsequent commands." % sys.argv[3]}}))
+' "$WT" "$SID_H2" "$FIXTURE/repo")"
+rm -f "$(held_file "$SID_H2")"
+out="$(printf '%s' "$incident" | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" "$HOOK" ) 2>/dev/null)"
+holds "$out" '"block"'; check $((! $?)) "the PostRoll incident, replayed, still demanded the quiz before the merge (got: ${out:0:200})"
+holds "$out" "#1582"; check $? "the PostRoll incident's hold does not name #1582 (got: ${out:0:200})"
+rm -rf "$WT"
+printf '{"number":1582,"url":"https://github.com/acme/widget/pull/1582","state":"MERGED","mergedAt":"2026-10-26T19:43:00Z","labels":[{"name":"changelog/visible"}]}' > "$FAKE_PR_JSON"
+out="$(turn_end "$SID_H2")"
+holds "$out" '"block"'; check $? "a held merge whose worktree was removed was never released (got: ${out:0:200})"
+[ ! -s "$(held_file "$SID_H2")" ]; check $? "a held merge whose worktree was removed kept its hold"
+
+# A Stop payload that cannot be read is quiet, never a crash or a block.
+out="$(printf 'not json' | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" "$HOOK" --release-held ) 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ]; check $? "an unreadable Stop payload was not quiet (rc=$rc, got: ${out:0:200})"
+
+# The Stop hook is registered, so the release runs at all (L3: built is not wired).
+grep -q 'pr-merge-quiz.sh --release-held' "$DIR/../settings.hooks.json"; check $? "settings.hooks.json does not run pr-merge-quiz.sh --release-held"
+
 rm -rf "$FIXTURE"
 
 echo

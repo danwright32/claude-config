@@ -1704,6 +1704,30 @@ two calls ran at the same time (#1077). A rate over fewer than five pushes print
 suites point the gates at a throwaway ledger (`PUSH_GATE_LEDGER_DIR`, which `run-all-tests.sh` and
 `tools/time-push-gates.sh` also set), so no test push is ever counted.
 
+### The quiz after a merge
+
+`hooks/pr-merge-quiz.sh` runs after every Bash call. When the call ran a merge (`gh pr merge`, or a
+repository's own merge tool, read by `lib/merge-target.sh`), it asks Claude for a short quiz about
+how the product behaves now that the change shipped, and Claude skips it, in one line, for anything
+nobody using the product would notice. It also stands down for a repository with `.no-pr-quiz` at
+its root, a session snoozed with `pr-merge-quiz.sh --snooze-session <id>`, a pull request whose
+changelog label says it is not visible, sleep mode, and a headless run. What it decided is counted in
+`~/.claude-quiz-verdicts/counts`.
+
+A merge command still running in the background is not quizzed yet (#1768). A command that passes
+the Bash tool's 600 s limit is moved to the background, and the hook runs at that moment, before
+anything has merged; so does one started with `run_in_background`. Claude Code marks both with a
+`backgroundTaskId` in the call's result, and for those the quiz is held: kept, one line per command,
+in `~/.claude-quiz-verdicts/held/<session id>`, and said in one line. The same script, registered as a
+Stop hook with `--release-held`, asks GitHub at each turn end (`gh pr view <n> --json
+number,state,mergedAt,url`) and, at the first one after it says the pull request MERGED, runs the
+held merge through the ordinary path, so the opt out, the snooze and the label gate still decide, and
+the quiz is asked then. A pull request GitHub says was CLOSED drops its hold, said in one line, as
+does a hold nothing confirmed within 24 hours. While it is OPEN, or GitHub does not answer, the hold
+waits. A finished merge in the foreground is quizzed at once, as before. Without a session id, or
+when the command runs several merges nothing can name, a hold could never be released, so the quiz
+fires at once and says the merge may still be running.
+
 ## Lesson numbers
 
 Each Mac mints lesson numbers from a band it owns, so two lessons written between syncs can never
