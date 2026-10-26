@@ -8824,6 +8824,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L808. A duplicate guard that claims a job when the work STARTS records only that an attempt began, so a later duplicate that finds the claim must learn whether that attempt FINISHED before it reports success, or a first attempt that crashed or was cut off silently swallows every retry and reads as done.**
+  (slate#4236, 2026-10-26)
+  SHORT: A start claim proves only that an attempt began, so a duplicate finding it must learn whether it FINISHED before reporting success.
 - **L804. A worker that waits in line for an exclusive turn must count its time limit from when it gets the turn, and must not take the turn with less time left than the work takes, because a worker that gives up mid turn holds everyone else's place and finishes nothing.**
   (claude-config#1604, 2026-10-23)
   SHORT: A worker queued for an exclusive turn counts its deadline from the turn and never takes a turn it cannot finish, or it holds the line for nothing.
