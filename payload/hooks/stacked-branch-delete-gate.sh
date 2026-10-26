@@ -229,8 +229,9 @@ push_target() {   # PS_RUN_ARGS of a git push
     *)
       [ -d "$rec_dir" ] || unknown "this pushes a delete to $remote from $rec_dir, which is not there, so which repository $remote names cannot be read"
       # git resolves a configured remote BEFORE a path of the same name, so it is asked first: a
-      # file named origin in the checkout must not hide the origin remote.
-      if ! url="$(git -C "$rec_dir" remote get-url "$remote" 2>/dev/null)"; then
+      # file named origin in the checkout must not hide the origin remote. A push goes to the
+      # remote's push address (pushurl, pushInsteadOf) when it has one, so that is what is read.
+      if ! url="$(git -C "$rec_dir" remote get-url --push "$remote" 2>/dev/null)"; then
         [ -e "$rec_dir/$remote" ] && return 0
         unknown "this pushes a delete to $remote, which git in $rec_dir does not resolve to a remote, so whether it is on GitHub cannot be told"
       fi ;;

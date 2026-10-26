@@ -319,6 +319,15 @@ fresh
 judge "git push localmirror.git --delete feat/x"
 check_eq "#1723 control: a word git has no remote for, naming a folder in the checkout, is a path" "0||" "$rc|$out|$calls"
 rmdir "$REPO/localmirror.git"
+# A remote that fetches from off GitHub but pushes to it (a mirror's pushurl): a push goes to the
+# push address, so that is the one judged (lessons review at 5f1b524).
+git -C "$REPO" remote add pushmirror git@gitlab.example.com:acme/widget.git
+git -C "$REPO" remote set-url --push pushmirror https://github.com/acme/widget.git
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+judge "git push pushmirror --delete feat/x"
+check_eq "#1723 a remote whose push address is on GitHub is judged by that address" "2" "$rc"
+git -C "$REPO" remote remove pushmirror
 
 # c. Every spelling of a GitHub URL is read as its repository, and a github.com URL with no
 # owner/name in it is refused rather than read as a remote off GitHub.
