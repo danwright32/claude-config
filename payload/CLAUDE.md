@@ -215,10 +215,9 @@ On Dans-MacBook-Pro:
 - `~/Apps/Slate`: Next.js 16 + Cloudflare Workers + Supabase, Pennie's booking app. Moved here on 2026-10-26 from `~/Documents/Documents - Dan’s MacBook Pro/Slate`, out of the folder iCloud Desktop & Documents syncs, because iCloud's sync process ran at 91% of a core and drove load past 130 while the pre-push gate built (lesson L759).
 - `~/Apps/Pivot`: Cloudflare Workers + the Cloudflare agents SDK, the AI web chat that enrolls leads into debt resolution (repo pivot). PUBLIC for now, so nothing private is ever committed; the call transcripts and research notes in the folder are gitignored on purpose.
 
-The first four above are where they were recorded before this section was split by machine, and their
-absence from Daniels-MacBook-Pro-2 is the only evidence for putting them here. Nothing has
-confirmed them on Dans-MacBook-Pro yet; the first run of the check there is what confirms or
-corrects them.
+This list records where each project should be, never whether it is there today. That is
+`hooks/check-project-list.sh`'s answer, given fresh on each Mac every time it runs, so trust its
+report over any sentence here.
 
 ## Writing Style
 
