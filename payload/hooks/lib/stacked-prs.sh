@@ -33,9 +33,36 @@ sp_read_stacked() {   # $1 = gh runner  $2 = owner/name  $3 = branch
   return 1
 }
 
-# owner/name of a GitHub remote URL, in any of the spellings git takes for one (https, ssh, scp
-# like git@github.com:owner/name, with or without .git); prints nothing for a remote elsewhere.
+# owner/name of a GitHub remote URL, in any spelling git takes for one: https or http, ssh (a port
+# included, ssh.github.com:443 among them), git://, the scp like [user@]github.com:owner/name, with
+# credentials in it, in any case of the host, with or without .git and trailing slashes.
+# Exit 0 printing owner/name; 1, printing nothing, for a URL on another host (plainly off GitHub);
+# 2, printing nothing, for one on github.com that names no owner/name to read. A caller must treat 2
+# as a repository it cannot establish, never as off GitHub (claude-config#1723: an unparsed GitHub
+# URL read as empty passed a delete unjudged).
 sp_github_slug() {   # $1 = a remote URL
-  printf '%s' "$1" | sed -nE 's#^(https?://([^/@]+@)?|ssh://([^/@]+@)?|git://|([^/@]+@))github\.com[:/]([^/]+)/([^/]+)$#\5/\6#p' \
-    | sed -E 's#\.git$##; s#/$##'
+  local u="$1" rest host path owner name
+  case "$u" in
+    *://*)
+      rest="${u#*://}"
+      host="${rest%%/*}"; path="${rest:${#host}}"
+      host="${host##*@}"; host="${host%%:*}" ;;
+    *:*)
+      # scp like: git reads it so only when no slash comes before the first colon.
+      host="${u%%:*}"
+      case "$host" in */*) return 1 ;; esac
+      path="${u#*:}"; host="${host##*@}" ;;
+    *) return 1 ;;
+  esac
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  case "$host" in github.com|www.github.com|ssh.github.com) ;; *) return 1 ;; esac
+  path="${path%%[?#]*}"
+  while [ "${path#/}" != "$path" ]; do path="${path#/}"; done
+  while [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+  path="${path%.git}"
+  while [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+  case "$path" in */*/*|*//*) return 2 ;; */*) ;; *) return 2 ;; esac
+  owner="${path%%/*}"; name="${path#*/}"
+  [ -n "$owner" ] && [ -n "$name" ] || return 2
+  printf '%s/%s' "$owner" "$name"
 }

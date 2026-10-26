@@ -1268,10 +1268,14 @@ any spelling of its method (`{owner}/{repo}` read as the checkout's origin), `gi
 reading the helper moves them with, as the account the command names in
 `GH_TOKEN=$(gh auth token -u <account>)`, and refuses while any is listed, naming them and the
 `gh pr edit <n> --base <branch>` that moves each onto the base the merged pull request went into (for
-a merge, the helper above instead). A list that fails, an answer that is not a list, a merge
-whose branch cannot be read, an account the command names whose token this Mac cannot read, or a
-push remote git cannot resolve (unless it is plainly off GitHub: another host, or a path on disk)
-refuses too, since the next step is a delete that cannot see what it closes. The method is read in
+a merge, the helper above instead). Its rule is that whenever it cannot establish who it is
+asking GitHub as, or which GitHub repository the delete hits, it refuses, never passes. So a list
+that fails, an answer that is not a list, a merge whose branch cannot be read, an account the
+command names whose token this Mac cannot read, a `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST` or `GH_REPO`
+set to anything it cannot read as a literal, a push remote git cannot resolve (git's configured
+remote is asked before a path of the same name), or a github.com URL naming no owner/name all
+refuse, since the next step is a delete that cannot see what it closes. Only a remote plainly off
+GitHub (another host, or a path on disk) passes unasked. The method is read in
 any case, so `-X delete` is a delete as much as `-X DELETE`. `SKIP_STACKED_CHECK=1` in front of the one command overrides it. Since the merge the gates judge no longer carries `--delete-branch`, the helper
 runs them with `MWR_DELETE_BRANCH=1` when it was asked to delete, so the rerun command
 `block-red-merge.sh` suggests on sending the merge back still carries the flag (claude-config#1351).

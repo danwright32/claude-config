@@ -282,6 +282,78 @@ echo '[{"number":9}]' > "$ST/stacked"
 judge "git push origin --delete feat/x"
 check_eq "#1723 control: a resolvable origin is still judged" "2" "$rc"
 
+# 13. THE CLASS RULE (second lessons review of this branch): whenever the gate cannot establish who
+# it is asking GitHub as, or which GitHub repository a delete hits, it refuses, never passes.
+# a. A token set to an expression the gate cannot read: listing as the active account instead could
+# see none of the pull requests, and its empty list would allow the delete.
+for c in \
+  'GH_TOKEN=$(cat ~/.tok) gh api -X DELETE repos/acme/widget/git/refs/heads/feat/x' \
+  'GH_TOKEN=$TOK gh api -X DELETE repos/acme/widget/git/refs/heads/feat/x' \
+  'GH_TOKEN=`cat tok` gh api -X DELETE repos/acme/widget/git/refs/heads/feat/x' \
+  'GITHUB_TOKEN=$TOK gh api -X DELETE repos/acme/widget/git/refs/heads/feat/x' \
+  'GH_HOST=$HOST gh api -X DELETE repos/acme/widget/git/refs/heads/feat/x'; do
+  fresh
+  echo '[]' > "$ST/stacked"
+  judge "$c"
+  check_eq "#1723 a delete as a token or host the gate cannot read is refused: $c" "2" "$rc"
+  check_eq "#1723 and nothing is listed as some other account: $c" "" "$calls"
+done
+fresh
+echo '[]' > "$ST/stacked"
+judge 'GH_TOKEN=literal123 gh api -X DELETE repos/acme/widget/git/refs/heads/feat/x'
+check_eq "#1723 control: a literal token is read, and listed as" "0" "$rc"
+check "#1723 control: as that token" "GH_TOKEN=literal123 pr list" "$calls"
+fresh
+judge 'GH_TOKEN=$TOK gh api repos/acme/widget/pulls'
+check_eq "#1723 control: an unreadable token on a command that deletes no branch passes, unasked" "0||" "$rc|$out|$calls"
+
+# b. A file or folder in the checkout named like a configured remote: git pushes to the remote.
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+touch "$REPO/origin"
+judge "git push origin --delete feat/x"
+check_eq "#1723 a file named origin does not hide the origin remote" "2" "$rc"
+rm -f "$REPO/origin"
+mkdir -p "$REPO/localmirror.git"
+fresh
+judge "git push localmirror.git --delete feat/x"
+check_eq "#1723 control: a word git has no remote for, naming a folder in the checkout, is a path" "0||" "$rc|$out|$calls"
+rmdir "$REPO/localmirror.git"
+
+# c. Every spelling of a GitHub URL is read as its repository, and a github.com URL with no
+# owner/name in it is refused rather than read as a remote off GitHub.
+. "$DIR/lib/stacked-prs.sh"
+for pair in \
+  "https://github.com/acme/widget/|acme/widget" \
+  "https://github.com/acme/widget.git/|acme/widget" \
+  "HTTPS://GitHub.com/acme/widget|acme/widget" \
+  "https://user:tok@github.com/acme/widget|acme/widget" \
+  "ssh://git@ssh.github.com:443/acme/widget.git|acme/widget" \
+  "ssh://git@github.com:22/acme/widget|acme/widget" \
+  "git@github.com:acme/widget.git|acme/widget" \
+  "github.com:acme/widget|acme/widget" \
+  "git://github.com/acme/widget.git|acme/widget"; do
+  got="$(sp_github_slug "${pair%%|*}")"; grc=$?
+  check_eq "#1723 sp_github_slug reads ${pair%%|*}" "0 ${pair#*|}" "$grc $got"
+done
+got="$(sp_github_slug "git@gitlab.example.com:acme/widget.git")"; grc=$?
+check_eq "#1723 sp_github_slug: another host is off GitHub (exit 1, nothing printed)" "1 " "$grc $got"
+got="$(sp_github_slug "https://notgithub.com/acme/widget")"; grc=$?
+check_eq "#1723 sp_github_slug: a host merely ending in github.com is off GitHub" "1 " "$grc $got"
+for u in "https://github.com/acme" "https://github.com/acme/widget/extra" "git@github.com:" "https://github.com/"; do
+  got="$(sp_github_slug "$u")"; grc=$?
+  check_eq "#1723 sp_github_slug: github.com with no owner/name to read is exit 2: $u" "2 " "$grc $got"
+done
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+judge "git push https://github.com/acme/widget/ --delete feat/x" "/tmp"
+check_eq "#1723 a GitHub URL with a trailing slash is read" "2" "$rc"
+check "#1723 as its repository" "pr list --repo acme/widget --base feat/x" "$calls"
+fresh
+judge "git push https://github.com/acme --delete feat/x" "/tmp"
+check_eq "#1723 a github.com URL naming no repository is refused" "2" "$rc"
+check_eq "#1723 without asking GitHub anything" "" "$calls"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

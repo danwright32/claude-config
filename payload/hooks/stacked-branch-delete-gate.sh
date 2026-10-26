@@ -27,7 +27,17 @@
 #
 # FAILS CLOSED. A list GitHub will not give, an answer that is not a list, a pull request whose
 # branch cannot be read, or a repository it cannot tell, refuses: the next step is a delete, and a
-# delete that cannot see what it would close is the exact harm this exists to stop (L98). Without its
+# delete that cannot see what it would close is the exact harm this exists to stop (L98).
+#
+# THE CLASS RULE: whenever this gate cannot establish WHO it is asking GitHub as, or WHICH GitHub
+# repository a delete hits, it refuses, never passes. Both lessons reviews of the branch found the
+# same fault in different clothes, a value the gate could not read taken for a harmless one: a
+# lower case method read as no delete, an unreadable token or GH_TOKEN expression read as the active
+# account (whose empty list allowed the delete), a remote it could not resolve or a GitHub URL it
+# could not parse read as one off GitHub, a file named like a remote read as a path. So every
+# reading below has three answers, never two: established, plainly not this gate's business (a
+# command that deletes no branch, a remote on another host or a path on disk), or unknown, and
+# unknown is a refusal through unknown(). Without its
 # reader (python3, lib/push-scope.sh, lib/shell-words.py, lib/stacked-prs.sh) a command that looks
 # like a delete is refused by name, and one that does not passes.
 #
@@ -80,34 +90,50 @@ case $? in
 esac
 
 # ---- the account and directory one command runs as ----
-rec_tok=""; rec_acct=""; rec_repo_env=""; rec_dir=""
+rec_tok=""; rec_acct=""; rec_unread=""; rec_repo_env=""; rec_dir=""
 run_gh() { if [ -n "$rec_tok" ]; then GH_TOKEN="$rec_tok" gh "$@"; else gh "$@"; fi; }
 # The token of the account the command names, read once a delete needs it. One that cannot be read
 # refuses: listing as whichever account is active instead may not see the pull requests at all, and
 # its empty list would let the delete through (lessons review of claude-config#1723).
 account_ready() {
+  [ -z "$rec_unread" ] || unknown "this runs gh with $rec_unread, whose value cannot be read before the command runs, so which GitHub account (or which GitHub) the open pull requests would be listed as cannot be established"
   [ -n "$rec_acct" ] && [ -z "$rec_tok" ] || return 0
   rec_tok="$(gh auth token -u "$rec_acct" 2>/dev/null)" || rec_tok=""
   [ -n "$rec_tok" ] || unknown "this runs as the GitHub account $rec_acct, and no token for $rec_acct could be read on this Mac (gh auth token -u $rec_acct failed), so the open pull requests based on the branch cannot be listed as that account"
 }
 record_context() {   # $1 = record index
-  local i="$1" line
-  rec_tok=""; rec_acct=""; rec_repo_env=""
+  local i="$1" line gh_token="" github_token="" tok_line
+  rec_tok=""; rec_acct=""; rec_unread=""; rec_repo_env=""
   while IFS= read -r line; do
     case "$line" in
-      GH_TOKEN=*)
-        if [[ "$line" =~ ^GH_TOKEN=\$\([[:space:]]*gh[[:space:]]+auth[[:space:]]+token[[:space:]]+(-u|--user)[[:space:]=]+([A-Za-z0-9_-]+)[[:space:]]*\)$ ]]; then
-          rec_acct="${BASH_REMATCH[2]}"
-        else
-          case "$line" in *'$'*|*'`'*) ;; *) rec_tok="${line#GH_TOKEN=}" ;; esac
-        fi ;;
+      GH_TOKEN=*) gh_token="$line" ;;
+      GITHUB_TOKEN=*) github_token="$line" ;;
+      # gh asks another host altogether; the pull requests on github.com say nothing about it.
+      GH_HOST=*) [ "${line#GH_HOST=}" = github.com ] || rec_unread="$line" ;;
       GH_REPO=*) rec_repo_env="${line#GH_REPO=}" ;;
     esac
   done <<< "${PS__R_ASSIGNS[$i]}"
+  # gh reads GH_TOKEN first, then GITHUB_TOKEN.
+  tok_line="${gh_token:-$github_token}"
+  if [ -n "$tok_line" ]; then
+    if [[ "$tok_line" =~ ^(GH|GITHUB)_TOKEN=\$\([[:space:]]*gh[[:space:]]+auth[[:space:]]+token[[:space:]]+(-u|--user)[[:space:]=]+([A-Za-z0-9_-]+)[[:space:]]*\)$ ]]; then
+      rec_acct="${BASH_REMATCH[3]}"
+    else
+      case "$tok_line" in
+        *'$'*|*'`'*) [ -n "$rec_unread" ] || rec_unread="$tok_line" ;;
+        *) rec_tok="${tok_line#*=}" ;;
+      esac
+    fi
+  fi
   # The directory it runs in: its own git -C, then the cd in force for it, then the session's.
   rec_dir="$cwd"
   [ -n "${PS__R_DIR[$i]}" ] && rec_dir="$(ps__named_path "${PS__R_DIR[$i]}" "$cwd")"
   if [ -n "${PS__R_GITDIR[$i]}" ]; then rec_dir="$(ps__named_path "${PS__R_GITDIR[$i]}" "$rec_dir")"; fi
+}
+repo_env_readable() {
+  case "$rec_repo_env" in
+    *'$'*|*'`'*) unknown "this sets GH_REPO=$rec_repo_env, whose value cannot be read before the command runs, so which repository the delete hits cannot be established" ;;
+  esac
 }
 origin_slug() {   # owner/name of the checkout's origin, or nothing
   [ -d "$rec_dir" ] || return 0
@@ -155,6 +181,7 @@ api_target() {   # PS_RUN_ARGS of a gh api
   [ -n "$branch" ] || return 0
   case "$slug" in
     "{owner}/{repo}"|":owner/:repo")
+      repo_env_readable
       slug="${rec_repo_env:-$(origin_slug)}"
       [ -n "$slug" ] || unknown "this deletes branch $branch with {owner}/{repo}, and the repository that stands for could not be read from the origin of $rec_dir" ;;
   esac
@@ -192,17 +219,28 @@ push_target() {   # PS_RUN_ARGS of a git push
   # word it cannot resolve is never taken for a remote off GitHub, since a delete it cannot place
   # is the delete this exists to see (lessons review of claude-config#1723). Plainly off GitHub: a
   # URL to another host (sp_github_slug below), or a path on this disk.
+  # A word holding a colon is a URL to git (a remote's name cannot hold one): host:path, or a
+  # scheme. It is expanded through any url.<base>.insteadOf, as git does before it pushes.
   case "$remote" in
-    *://*|*@*:*) url="$remote" ;;
+    *:*)
+      if [ -d "$rec_dir" ]; then url="$(git -C "$rec_dir" ls-remote --get-url "$remote" 2>/dev/null)"; else url="$(git ls-remote --get-url "$remote" 2>/dev/null)"; fi
+      [ -n "$url" ] || url="$remote" ;;
     /*|./*|../*|"~"*|.|..) return 0 ;;
     *)
       [ -d "$rec_dir" ] || unknown "this pushes a delete to $remote from $rec_dir, which is not there, so which repository $remote names cannot be read"
-      [ -e "$rec_dir/$remote" ] && return 0
-      url="$(git -C "$rec_dir" remote get-url "$remote" 2>/dev/null)" \
-        || unknown "this pushes a delete to $remote, which git in $rec_dir does not resolve to a remote, so whether it is on GitHub cannot be told" ;;
+      # git resolves a configured remote BEFORE a path of the same name, so it is asked first: a
+      # file named origin in the checkout must not hide the origin remote.
+      if ! url="$(git -C "$rec_dir" remote get-url "$remote" 2>/dev/null)"; then
+        [ -e "$rec_dir/$remote" ] && return 0
+        unknown "this pushes a delete to $remote, which git in $rec_dir does not resolve to a remote, so whether it is on GitHub cannot be told"
+      fi ;;
   esac
   slug="$(sp_github_slug "$url")"
-  [ -n "$slug" ] || return 0
+  case $? in
+    0) ;;
+    1) return 0 ;;
+    *) unknown "this pushes a delete to $url, which is on github.com but names no owner/name this gate can read, so which repository the delete hits cannot be established" ;;
+  esac
   for ref in ${pos[@]+"${pos[@]}"}; do
     if [ -z "$deleting" ]; then
       case "$ref" in :*|+:*) ref="${ref#*:}" ;; *) continue ;; esac
@@ -246,7 +284,7 @@ merge_target() {   # PS_RUN_ARGS of a gh pr merge
     esac
   done
   [ -n "$deleting" ] || return 0
-  [ -n "$repo" ] || repo="$rec_repo_env"
+  [ -n "$repo" ] || { repo_env_readable; repo="$rec_repo_env"; }
   [ -n "$sel" ] && view_args+=("$sel")
   [ -n "$repo" ] && view_args+=(--repo "$repo")
   account_ready
