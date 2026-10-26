@@ -8,7 +8,8 @@
 # `$SECONDS` plus a few seconds, is reached by a loaded Mac with nothing broken (L290). #1577, #1620
 # and #1679 moved every such wait onto lib/hang-wait.sh; this fails the next one on the day it lands
 # (L613), with no list of suites excused from it. A wait whose PASSING case runs to its end (a window
-# in which a fault would show) is a different thing and says so by calling window_wait.
+# in which a fault would show) is a different thing: it calls window_wait, captures its status in the
+# same statement (`; NAME=$?`) and asserts that status is 1, or the scan reports it (#1721).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
