@@ -359,7 +359,7 @@ const publish = () =>
     if (!io) return
     const now = await io.now()
     const cache = await io.cache()
-    const look = lookParts({ modes: await io.modes(), pr, jobs, agents, unpushed, now, isWorking: turnRunning })
+    const look = lookParts({ modes: await io.modes(), pr, jobs, jobsUnreadable, agents, unpushed, now, isWorking: turnRunning })
     const ctx = context === undefined ? [] : [{ text: `context ${Math.round(context)}% `, color: 'warning' }]
     // A press while a turn runs is queued (#1278): the row says so and offers Cancel until it runs.
     // Otherwise each line says why it shows, and the cache's says to send a message (#1596).

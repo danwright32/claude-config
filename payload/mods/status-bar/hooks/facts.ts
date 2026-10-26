@@ -123,6 +123,10 @@ const quietItem = (jobs: readonly Job[], isWorking: boolean): Item[] => {
   const quiet = jobs.filter(j => stateOf(j) === 'stalled')
   return quiet.length && !isWorking ? [{ text: `${listed(quiet.map(quietPhrase))}, ask Claude to check`, color: AMBER }] : []
 }
+// #1727: a job watcher that is loaded but whose list could not be read is said, never shown as no
+// jobs (L10), in #1583's plain style and, like a quiet command, only once Claude's turn has ended.
+const unreadableItem = (isUnreadable: boolean, isWorking: boolean): Item[] =>
+  isUnreadable && !isWorking ? [{ text: 'job list unreadable, ask Claude to check', color: AMBER }] : []
 
 /**
  * The needs-a-look line, amber where something needs a look and lavender for work only going
@@ -136,6 +140,8 @@ export const lookParts = (f: {
   modes: readonly StatusBarMode[]
   pr: PrReading | null
   jobs: readonly Job[]
+  /** The job watcher is loaded and its list could not be read (#1727): said, never shown as no jobs (L10). */
+  jobsUnreadable?: boolean
   agents?: readonly QuietAgent[]
   unpushed: UnpushedReading | null
   now: number
@@ -152,6 +158,7 @@ export const lookParts = (f: {
   // background agent's as one item under its task's name (#784).
   // Its quiet ones only once Claude's turn has ended (#1583), the rest as before.
   const own = f.jobs.filter(j => !j.owner)
+  items.push(...unreadableItem(f.jobsUnreadable === true, f.isWorking === true))
   items.push(...quietItem(own, f.isWorking === true))
   items.push(...jobPhrases(own.filter(j => stateOf(j) !== 'stalled'), 'Claude'))
   // Grouped by the agent's id, never its description: two agents given the same task stay apart,
