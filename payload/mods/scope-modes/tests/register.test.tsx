@@ -2549,7 +2549,7 @@ test('a worker left without a goal is kept with none, said, and its repository i
   expect(r.text).toMatch(asRegExp(` Tonight's goals: this session, "Close #7". No goal, so no work tonight: the session in o/other ("Fix the parser") (you chose no work for it).`))
 })
 
-test('Go to sleep now on a goal question asks nothing more, and every worker it left has no goal (#1242)', withDeps, async ($, on) => {
+test('Going to sleep on a goal question asks nothing more, and every worker it left has no goal (#1242)', withDeps, async ($, on) => {
   const { w, clock } = world(on, withOther({ goals: { s1: null, s2: null }, issueAnswers: { [goalQuestion('this session')]: GO_TO_SLEEP } }))
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
@@ -5593,7 +5593,7 @@ test('a question answered and posted on an earlier night is not asked again', wi
   expect(w.comments).toEqual([])
 })
 
-test('Go to sleep now asks nothing more: every question left is its issue skipped tonight, and nothing is posted', withDeps, async ($, on) => {
+test('Going to sleep asks nothing more: every question left is its issue skipped tonight, and nothing is posted', withDeps, async ($, on) => {
   const { w, clock } = world(on, {
     files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: OLD_NOTES },
     githubRepos: { default: ['o/r'] },
@@ -5608,7 +5608,7 @@ test('Go to sleep now asks nothing more: every question left is its issue skippe
   expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#12 and o/r#14, "Keep the old flag?" (you chose to go to sleep); o/r#20, "Rename it?" (not asked: you chose to go to sleep first); o/r#12, "Which copy?" (not asked: you chose to go to sleep first).'))
 })
 
-test('Go to sleep now on the repository question asks no issue question either, and closes that repository tonight', withDeps, async ($, on) => {
+test('Going to sleep on the repository question asks no issue question either, and closes that repository tonight', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]), [NOTES_OLD]: OLD_NOTES }, githubRepos: { default: ['o/r'] }, repoAnswer: GO_TO_SLEEP })
   await start($ as never, clock)
   await command($ as never, 'sleep')
