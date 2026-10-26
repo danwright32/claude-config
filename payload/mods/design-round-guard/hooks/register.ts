@@ -23,6 +23,7 @@ import {
   contractOf,
   card,
   checked,
+  bracketsOpen,
   commentOnlyChange,
   dataOnlyChange,
   shellUnread,
@@ -172,6 +173,11 @@ import { errorText } from './mod-kit/skew.ts'
 //   it stands; otherwise, on an issue Dan has not answered for, it is put back, what the script wrote
 //   kept first, and the call waits on him. Since #1682 mod-kit's `runs` also gives a module run with
 //   python -m and a tool run through npx, each judged here as a script run is.
+// - Since #1756: the words a mod hands mod-kit's blocked card (`$.modkit.blocked`: its guard name,
+//   reason and safe way) are copy in a tool result row, not drawing, so a changed refusal passes; the
+//   card's look is mod-kit's own, judged in its card.ts (rules.ts DRAW_CALL). And an Edit, MultiEdit
+//   or Write leaving a mod's .ts hook file with a bracket open, half of a change made in two edits,
+//   passes, the edit closing it judged against the file before the first (drawingChange, midEdits).
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -190,6 +196,12 @@ type Watched = { path: string; tree: string; name: string; before: string | unde
 // by the tool.check hook, which judges them, and taken by the tool.call hook around them.
 const watching = new Map<string, Watched[]>()
 const WATCH_MAX = 64
+// #1756: a mod's .ts hook file an Edit, MultiEdit or Write the guard let through left with a bracket
+// open (rules.ts bracketsOpen), by its path, and its text before that edit, against which the edit
+// closing it is judged. Kept in memory: after a reload such a file has no earlier text, and an edit to
+// it is held, as every edit to a file the reader cannot follow was before.
+const midEdits = new Map<string, string>()
+const MID_EDITS_MAX = 64
 
 // An error as words, a call to another mod's noun that failed for a member its loaded copy lacks said
 // as the two mods out of step, never as the raw TypeError (#1299, mod-kit's one reader, hooks/skew.ts).
@@ -546,6 +558,28 @@ const drawingChange = async (
     return 'pass'
   }
   if (now !== undefined && commentOnlyChange(now, after, /\.(tsx|jsx)$/i.test(name))) return 'pass'
+  // #1756: a change made in more than one edit can leave a bracket open between them, as the #1747
+  // builder's Edit giving a loop its opening brace did. That text is no TypeScript, so it draws
+  // nothing: the edit leaving it passes, and the one closing it is judged against the file as it was
+  // before the first, so a look change made across the edits is still held. Only by Edit, MultiEdit
+  // or Write: a shell write to such a file is held whole, as before (git's put back never gets here).
+  if (t.from === undefined && /\.(ts|mts|cts)$/i.test(name) && now !== undefined) {
+    const was = midEdits.get(t.path)
+    const nowOpen = bracketsOpen(now)
+    if (!nowOpen) midEdits.delete(t.path)
+    if (bracketsOpen(after)) {
+      if (!nowOpen && drawnParts(files, name) !== null) {
+        if (midEdits.size >= MID_EDITS_MAX) midEdits.delete(midEdits.keys().next().value as string)
+        midEdits.set(t.path, now)
+        return 'pass'
+      }
+      if (nowOpen && was !== undefined) return 'pass'
+    } else if (nowOpen && was !== undefined) {
+      if (drawsChange(files, name, was, after)) return 'held'
+      midEdits.delete(t.path)
+      return 'pass'
+    }
+  }
   return drawsChange(files, name, now, after) ? 'held' : 'pass'
 }
 

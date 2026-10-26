@@ -1011,14 +1011,42 @@ export const scriptUnread = (script: string, file: string): string =>
  */
 export const isModHookTs = (rel: string): boolean => /(^|\/)mods\/[^/]+\/hooks\/[^/]+\.(ts|mts|cts)$/i.test(rel) && !/\.d\.[mc]?ts$/i.test(rel)
 
+/**
+ * Whether a plain TypeScript text (a `.ts`, `.mts` or `.cts` file, which holds no JSX) is one the
+ * reader follows but for its brackets: a `(`, `[` or `{` left open, or a `)` or `]` shut that nothing
+ * opened or that shuts another kind (#1756). Strings, template literals, regular expressions and
+ * comments are read first, so a bracket inside one is not counted. Such a text is no TypeScript at
+ * all: it is what a change made in more than one edit leaves between them, as the #1747 builder's
+ * Edit giving a loop its opening brace, whose next Edit was to close it, left on 2026-10-26. False
+ * for a text the reader cannot follow for any other reason, an unclosed string or a `}` shutting
+ * nothing among them, which is held as before.
+ */
+export const bracketsOpen = (text: string): boolean => {
+  const spans = sourceSpans(text, false)
+  if (!spans) return false
+  const masked = new Uint8Array(text.length)
+  for (const [a, b] of [...spans.comments, ...spans.strings]) masked.fill(1, a, b)
+  const pair: Record<string, string> = { ')': '(', ']': '[', '}': '{' }
+  const open: string[] = []
+  for (let i = 0; i < text.length; i++) {
+    if (masked[i]) continue
+    const c = text[i] as string
+    if (c === '(' || c === '[' || c === '{') open.push(c)
+    else if (c in pair && open.pop() !== pair[c]) return true
+  }
+  return open.length > 0
+}
+
 /** One of a mod's hook files, by its name in the mod's hooks folder, and its text. */
 export type ModFile = { name: string; text: string }
 
 // The keys that make an object one of mod-kit's text runs, beside `text` (ModKitRun, ModKitBandText).
 const RUN_LOOKS = new Set(['color', 'bold', 'dim', 'italic', 'underline', 'strikethrough', 'inverse', 'indent', 'wrap', 'whole', 'href', 'dimColor', 'backgroundColor'])
-// What draws a mod's lines, with what it is handed: mod-kit's band row, pane and boxed card, a blocked
-// action's grey card, and a pane's size and title as Claude Code opens it.
-const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card|blocked)|ui\s*\.\s*open)\s*\(/g
+// What draws a mod's lines, with what it is handed: mod-kit's band row, pane and boxed card, and a
+// pane's size and title as Claude Code opens it. Not a blocked action's grey card (#1756): its look
+// is mod-kit's own (card.ts blockedCard), judged there, and a caller hands it only the words of a
+// refusal, shown as a tool result row, which are copy, held nowhere else (#1296 had followed them).
+const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card)|ui\s*\.\s*open)\s*\(/g
 const DECL = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(const|let|var|function\s*\*?|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/
 const IMPORT = /^import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]\.\/([^'"/]+)['"]/
 
@@ -1578,7 +1606,7 @@ const readMod = (f: ModFile): ModRead | null => {
     const out: Span[] = []
     for (const [o, c] of pairs) if (o >= a && o < b && o !== own && blank[o] === '(' && isCall(o)) out.push([o, c])
     out.push(...testsIn(a, b, own).map(([x, y]): Span => [x - 1, y]))
-    // What a drawing call is handed to say which surface it draws, never how (a blocked card's
+    // What a drawing call is handed to say which surface it draws, never how (a card's
     // `toolUseId`, a band row's `mod`, `id` and `slot`, a pane's `id`): not followed.
     const shut = own === undefined ? undefined : close.get(own)
     if (own !== undefined && shut !== undefined)
@@ -1659,8 +1687,8 @@ const readMod = (f: ModFile): ModRead | null => {
  * is a top level one; and every top level declaration any part, in this file or another of the mod's,
  * names, through the imports between them, and in turn what each of those names. A type draws nothing.
  * Since #1296 a value reaching a part through a local or a parameter is followed too: a local's
- * declaration, a parameter's argument at each call of its function in the mod's files (a guard's
- * blocked card sentence handed to its drawCard), the values a function returns where a followed value
+ * declaration, a parameter's argument at each call of its function in the mod's files (a card's
+ * sentence handed to a function that draws it), the values a function returns where a followed value
  * calls it, and the `xs` a callback's `xs.map(x => ...)` takes its values from; each compared with
  * what it treats as data or a test taken out (cutCode). Not followed, as no part of the look: what a
  * call it makes is handed, what a value is only tested for, what a method is called on, a called
