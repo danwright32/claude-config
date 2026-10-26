@@ -821,8 +821,10 @@ ROWS
     { print }' "$rf" > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final" || { rm -f "$final.tmp"; return 1; }
   local fin
   fin="$(meta_of "$final" finished)"
-  [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.acknowledged" "$fin" merge && cp "$rf.acknowledged" "$acknowledged" 2>/dev/null
-  [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.push-acknowledged" "$fin" push && cp "$rf.push-acknowledged" "$push_acknowledged" 2>/dev/null
+  # An acknowledgement names the review it read (#1739), so a valid one of the carried review is
+  # signed again for this head's, never copied: a copy would name the earlier file.
+  [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.acknowledged" "$rf" "$fin" merge && ar_readkeys_ack_write "$acknowledged" "$final" "$fin" merge
+  [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.push-acknowledged" "$rf" "$fin" push && ar_readkeys_ack_write "$push_acknowledged" "$final" "$fin" push
   [ -s "$rf.leftout" ] && cp "$rf.leftout" "$leftout" 2>/dev/null
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
   printf '%s' "$s"
@@ -1719,10 +1721,11 @@ do_check() {
       local read_by="" ack_file="$acknowledged"
       [ "$gate" = push ] && ack_file="$push_acknowledged"
       # Each acknowledgement carries a MAC under the gate's secret (claude-config#1719), so one a
-      # session wrote by hand reads as no acknowledgement at all.
-      if [ -n "$fin" ] && ar_readkeys_ack_ok "$acknowledged" "$fin" merge; then
+      # session wrote by hand reads as no acknowledgement at all, and it names this review file
+      # (#1739), so one copied from another review finished in the same second reads as none too.
+      if [ -n "$fin" ] && ar_readkeys_ack_ok "$acknowledged" "$final" "$fin" merge; then
         read_by="merge"
-      elif [ -n "$fin" ] && [ "$gate" = push ] && ar_readkeys_ack_ok "$push_acknowledged" "$fin" push; then
+      elif [ -n "$fin" ] && [ "$gate" = push ] && ar_readkeys_ack_ok "$push_acknowledged" "$final" "$fin" push; then
         read_by="push"
       fi
       if [ -n "$read_by" ]; then
@@ -1731,7 +1734,7 @@ do_check() {
       fi
       if [ -n "$fin" ] && ar_readkeys_valid "$final" "${PR_REVIEW_READ:-}"; then
         # A failed write is said, since the next attempt will then need the key again.
-        ar_readkeys_ack_write "$ack_file" "$fin" "$gate" \
+        ar_readkeys_ack_write "$ack_file" "$final" "$fin" "$gate" \
           || echo "(The read could not be recorded beside $final, so a later $act of this head will need the key again.)"
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), read: this $act presented their key."
         return 0

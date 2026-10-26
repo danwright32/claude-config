@@ -822,9 +822,12 @@ never creates one. The review's own read keys work the same way (claude-config#1
 `<review>.txt.readkeys-<finish stamp>` is the shown key's HMAC under that same secret, not its plain
 sha256, so a line a session appends for a key it made up matches nothing, and the acknowledgement a
 read leaves beside the review (`.acknowledged` for a merge, `.push-acknowledged` for a push) carries a
-MAC of the review's finish time and which of the two it is, so one written by hand reads as no read
-at all. Lines and acknowledgements written before #1719 are in the old form and stop counting, so a
-key shown just before the install is asked for again. And the gate refuses, before it runs and with
+MAC of the review's finish time, which of the two it is, and the review's own file name (the
+repository's key and the head it reviewed, claude-config#1739), so one written by hand reads as no
+read at all, and so does one copied beside another review that finished in the same second. A review
+carried to a later head has its acknowledgement signed again for the carried file. Lines and
+acknowledgements written before #1719, and acknowledgements written before #1739, are in an old form
+and stop counting, so a key shown just before the install is asked for again. And the gate refuses, before it runs and with
 no override, any Bash command whose text names the folder, the secret, a read keys file, or the
 functions that write or reach them (`helper-key`, `helper-secret` or `readkeys`, with a hyphen or an
 underscore, any case), as the design round guard refuses a write to its own record;

@@ -824,13 +824,32 @@ out="$(fire_gate "PR_REVIEW_READ=$shownk gh pr merge 7 --squash")"; rc=$?
 check_eq "#1719 the key the refusal showed still reads the review, beside the forged line" "0" "$rc"
 out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "#1719 and the acknowledgement it recorded lets the next merge of that review through" "0" "$rc"
+# AN ACKNOWLEDGEMENT COPIED TO ANOTHER REVIEW (claude-config#1739). The MAC bound the finish time and
+# the action, not which review was read, so a valid acknowledgement copied beside another review that
+# finished in the same second read that review too. A second review of another head, same stamp, same
+# findings: the copy must not read it, and the key its own refusal shows still must.
+f7b="$(final_of "$BASE_SHA")"
+sed "s/^sha=.*/sha=$BASE_SHA/" "$f7" > "$f7b"
+cp "$f7.acknowledged" "$f7b.acknowledged"
+printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync"}\n' "$BASE_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 an acknowledgement copied from another review with the same finish time does not read this one" "2" "$rc"
+check "#1739 and the refusal shows this review's findings" "deleteEvent still swallows" "$out"
+out="$(fire_gate "PR_REVIEW_READ=$(key_in "$out") gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 this review's own key still reads it" "0" "$rc"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 and the acknowledgement that recorded lets its next merge through" "0" "$rc"
+rm -f "$f7b"*
+printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync"}\n' "$HEAD_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 the first review's own acknowledgement still reads it" "0" "$rc"
 # A COMMAND THAT NAMES THE READ KEYS (claude-config#1719), refused before it runs, as the typed helper
 # key's record is (#1700): the file in any case, the secret's path, and the functions that write them.
 for named in \
   "printf '%s\\n' 0 >> ~/.claude/state/ai-review/1-pr-abc.txt.readkeys-1" \
   "cat \"\$HOME\"/.claude/state/ai-review/*.TXT.READKEYS-*" \
   ". ~/.claude/hooks/lib/ai-review-common.sh; ar_readkeys_issue ~/.claude/state/ai-review/1-pr-abc.txt" \
-  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_readkeys_ack_write x.acknowledged 1 merge" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_readkeys_ack_write x.acknowledged x.txt 1 merge" \
   ". ~/.claude/hooks/lib/ai-review-common.sh; cat \"\$(ar__helper_secret_file)\""; do
   out="$(fire_gate "$named")"; rc=$?
   check_eq "#1719 a command naming the read keys or what writes them is refused: $named" "2" "$rc"
