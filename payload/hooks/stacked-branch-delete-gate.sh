@@ -13,12 +13,17 @@
 # it deletes a branch (claude-config#1337). This holds every other way a command here deletes one.
 #
 # WHAT IT DOES. Reads the command in COMMAND POSITION with lib/push-scope.sh's reader, so a delete
-# quoted in an argument or written in a heredoc is not one, and one inside `bash -c` is. Three
+# quoted in an argument or written in a heredoc is not one, and one inside `bash -c` is. Four
 # spellings delete a branch on GitHub:
 #   gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<branch>   (any spelling of the method;
-#                    {owner}/{repo} is the checkout's origin, as gh reads it)
+#                    {owner}/{repo} is whatever gh fills it with where the command runs, asked of
+#                    gh itself: upstream before origin, so the parent in a fork's checkout, #1758)
+#   gh api graphql with a deleteRef mutation, whose ref id GitHub is asked to name (#1758)
 #   git push <remote> --delete <branch> (or -d), and git push <remote> :<branch>, to a GitHub remote
 #   gh pr merge --delete-branch (or -d), which deletes the pull request's head branch as it merges
+#                    (not a fork's: gh deletes no branch for a cross repository pull request)
+# A pull request from a fork based on the branch counts as stacked like any other: GitHub closes it
+# when its base goes, wherever its head lives, and gh pr list --base lists it (#1758).
 # For each, the open pull requests based on the branch are listed with lib/stacked-prs.sh, the same
 # reading merge-when-ready.sh moves them with, as the account the command itself runs as when it
 # names one (`GH_TOKEN=$(gh auth token -u <account>)`). Any listed refuses (exit 2), naming them and
@@ -37,7 +42,11 @@
 # could not parse read as one off GitHub, a file named like a remote read as a path. So every
 # reading below has three answers, never two: established, plainly not this gate's business (a
 # command that deletes no branch, a remote on another host or a path on disk), or unknown, and
-# unknown is a refusal through unknown(). Without its
+# unknown is a refusal through unknown(). A GitHub other than github.com (GH_HOST, or gh api
+# --hostname) is not "another host": it is GitHub, and deleting a branch there closes the pull
+# requests based on it just the same, but this gate lists pull requests on github.com only, so it
+# cannot ask there, and refuses saying so rather than listing a same named github.com repository
+# (#1758). Without its
 # reader (python3, lib/push-scope.sh, lib/shell-words.py, lib/stacked-prs.sh) a command that looks
 # like a delete is refused by name, and one that does not passes.
 #
@@ -48,19 +57,20 @@
 payload="$(cat)"
 # Every Bash call passes through here, and nearly none can delete a branch: answer those at once,
 # before anything is loaded. What can: a DELETE method, a --delete or --delete-branch, a short flag
-# cluster holding d (git push -d, gh pr merge -sd), or a refspec that is a bare :branch.
+# cluster holding d (git push -d, gh pr merge -sd), or a refspec that is a bare :branch, or any
+# GraphQL call, whose deleteRef can sit in a query file the command only names (#1758).
 fast_re='(^|[[:space:]"'"'"'])(-[A-Za-z]*d|\+?:[A-Za-z0-9_./-]+)([[:space:]"'"'"']|$)'
 # The method is matched in any case (gh api -X delete deletes just the same), and so is --delete.
 shopt -s nocasematch
 case "$payload" in
-  *delete*) ;;
+  *delete*|*graphql*) ;;
   *) [[ "$payload" =~ $fast_re ]] || exit 0 ;;
 esac
 shopt -u nocasematch
 
 # The crude reading used only when the real one cannot run: does the payload LOOK like a delete?
 looks_like_delete() {
-  grep -Eiq 'DELETE.*refs/heads|push.*(--delete|[[:space:]]-[A-Za-z]*d[[:space:]]|[[:space:]]\+?:[A-Za-z0-9_./-])|merge.*(--delete-branch|[[:space:]]-[A-Za-z]*d([[:space:]]|$))' <<< "$payload"
+  grep -Eiq 'DELETE.*refs/heads|deleteRef[[:space:]]*\(|push.*(--delete|[[:space:]]-[A-Za-z]*d[[:space:]]|[[:space:]]\+?:[A-Za-z0-9_./-])|merge.*(--delete-branch|[[:space:]]-[A-Za-z]*d([[:space:]]|$))' <<< "$payload"
 }
 cannot_read() {   # $1 = what is missing or failed, as a clause
   looks_like_delete || exit 0
@@ -164,33 +174,204 @@ branch_of_ref() {   # $1 = a ref as written; prints the branch, or nothing for a
   esac
 }
 
+# gh api --hostname sends the call to another GitHub (an Enterprise server, or a ghe.com tenant).
+# Deleting a branch there closes the pull requests based on it just as on github.com, so it is this
+# gate's business, but the gate lists pull requests on github.com only and cannot ask that host. It
+# refuses, as it does for GH_HOST (record_context), and never lists a same named github.com
+# repository in its place, whose answer says nothing about the host the delete hits (#1758).
+host_ready() {   # $1 = the --hostname value as written, or empty  $2 = what the command does, a clause
+  local h
+  h="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$h" in ""|github.com) return 0 ;; esac
+  unknown "this $2 on $1 (gh api --hostname), not on github.com, and this gate lists pull requests on github.com only, so it cannot ask $1 whether one is based on that branch"
+}
+
 api_target() {   # PS_RUN_ARGS of a gh api
   local -a w=(${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"})
-  local i n=${#w[@]} t method="" endpoint="" slug branch
+  local i n=${#w[@]} t method="" endpoint="" host="" slug branch said
   for ((i = 0; i < n; i++)); do
     t="${w[$i]}"
     case "$t" in
       -X|--method) method="${w[$((i+1))]:-}"; i=$((i+1)) ;;
       --method=*) method="${t#--method=}" ;;
       -X*) method="${t#-X}" ;;
-      -H|--header|-f|--raw-field|-F|--field|--input|-q|--jq|-t|--template|--hostname|--cache|-p|--preview) i=$((i+1)) ;;
+      --hostname) host="${w[$((i+1))]:-}"; i=$((i+1)) ;;
+      --hostname=*) host="${t#--hostname=}" ;;
+      -H|--header|-f|--raw-field|-F|--field|--input|-q|--jq|-t|--template|--cache|-p|--preview) i=$((i+1)) ;;
       -*) ;;
       *) [ -n "$endpoint" ] || endpoint="$t" ;;
     esac
   done
+  if [ "$endpoint" = graphql ]; then graphql_target "$host"; return; fi
   method="$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')"
   [ "$method" = DELETE ] || return 0
   [[ "${endpoint#/}" =~ ^repos/([^/]+)/([^/]+)/git/refs/heads/(.+)$ ]] || return 0
   slug="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
   branch="$(branch_of_ref "${BASH_REMATCH[3]}")"
   [ -n "$branch" ] || return 0
+  host_ready "$host" "deletes branch $branch"
   case "$slug" in
     "{owner}/{repo}"|":owner/:repo")
       repo_env_readable
-      slug="${rec_repo_env:-$(origin_slug)}"
-      [ -n "$slug" ] || unknown "this deletes branch $branch with {owner}/{repo}, and the repository that stands for could not be read from the origin of $rec_dir" ;;
+      slug="$rec_repo_env"
+      # gh fills the placeholders with the FIRST of the remotes upstream, github and origin (its
+      # BaseRepoFunc), not with origin, so in a fork's checkout (origin the fork, upstream the
+      # parent) the delete hits the parent, where the fork's pull requests are based. Reading
+      # origin listed the fork's, found none, and let the delete through (#1758). So gh itself is
+      # asked, where the command runs and as the account it runs as.
+      if [ -z "$slug" ]; then
+        account_ready
+        [ -d "$rec_dir" ] || unknown "this deletes branch $branch with {owner}/{repo} from $rec_dir, which is not there, so which repository that stands for cannot be read"
+        if ! said="$(cd "$rec_dir" && run_gh api 'repos/{owner}/{repo}' --jq .full_name 2>&1)" \
+          || [[ ! "$said" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+          unknown "this deletes branch $branch with {owner}/{repo}, and gh could not say which repository that stands for in $rec_dir (gh said: ${said:0:300})"
+        fi
+        slug="$said"
+      fi ;;
   esac
   targets+=("api"$'\x1f'"$slug"$'\x1f'"$branch")
+}
+
+# A GraphQL deleteRef names its ref by a node id, never by name, so the ids are read from the
+# mutation (a refId literal, or the variable it names, from -f/-F fields or an --input body) and
+# GitHub is asked which ref, in which repository, each one is. One the gate cannot read (a shell
+# expansion, a body on standard input, a file not there yet) refuses: a delete it cannot place is
+# the delete this exists to see. A GraphQL call naming no deleteRef is not asked about (#1758).
+graphql_target() {   # $1 = the --hostname value, or empty; PS_RUN_ARGS of the gh api
+  local found kind rid node info prefix slug name py
+  # Read into a variable rather than a heredoc inside $( ): bash 3.2, /bin/bash on macOS, misparses
+  # quotes in a heredoc nested in a command substitution.
+  IFS= read -r -d '' py <<'PY' || true
+import json, os, re, sys
+
+rec_dir, cmd_text, words = sys.argv[1], sys.argv[2], sys.argv[3:]
+DELETE_REF = re.compile(r'\bdeleteRef\s*\(')
+TAKES_VALUE = {'-H', '--header', '-q', '--jq', '-t', '--template', '--cache', '-p', '--preview',
+               '-X', '--method', '--hostname'}
+fields, inputs = [], []   # fields: (name=value as written, typed)
+i = 0
+while i < len(words):
+    t = words[i]
+    nxt = words[i + 1] if i + 1 < len(words) else ''
+    if t in ('-f', '--raw-field', '-F', '--field'):
+        fields.append((nxt, t in ('-F', '--field'))); i += 2; continue
+    if t.startswith('--raw-field=') or t.startswith('--field='):
+        fields.append((t.split('=', 1)[1], t.startswith('--field='))); i += 1; continue
+    if len(t) > 2 and t[:2] in ('-f', '-F'):
+        fields.append((t[2:], t[1] == 'F')); i += 1; continue
+    if t == '--input':
+        inputs.append(nxt); i += 2; continue
+    if t.startswith('--input='):
+        inputs.append(t[len('--input='):]); i += 1; continue
+    i += 2 if t in TAKES_VALUE else 1
+
+unread, queries, variables = [], [], {}
+
+def read(path):
+    if path == '-':
+        unread.append('standard input'); return None
+    full = path if os.path.isabs(path) else os.path.join(rec_dir, path)
+    try:
+        with open(full, encoding='utf-8', errors='replace') as f:
+            return f.read()
+    except OSError:
+        unread.append(path + ' (not there before the command runs)'); return None
+
+for spec, typed in fields:
+    name, eq, value = spec.partition('=')
+    if not eq:
+        continue
+    if typed and value.startswith('@'):
+        value = read(value[1:])
+        if value is None:
+            continue
+    if name == 'query':
+        queries.append(value)
+    elif name != 'operationName':
+        nested = re.fullmatch(r'(\w+)\[(\w+)\]', name)
+        if nested:
+            inner = variables.setdefault(nested.group(1), {})
+            if isinstance(inner, dict):
+                inner[nested.group(2)] = value
+        else:
+            variables[name] = value
+for path in inputs:
+    body = read(path)
+    if body is None:
+        continue
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        queries.append(body); continue
+    if isinstance(doc, dict):
+        if isinstance(doc.get('query'), str):
+            queries.append(doc['query'])
+        if isinstance(doc.get('variables'), dict):
+            variables.update(doc['variables'])
+
+named = any(DELETE_REF.search(q) for q in queries)
+if not named and not (unread and DELETE_REF.search(cmd_text)):
+    sys.exit(0)
+if unread:
+    print('UNKNOWN\tits mutation or variables are read from ' + ', '.join(unread))
+    sys.exit(0)
+
+def arguments(q, start):   # the text between the ( at start and its matching )
+    depth, k = 0, start
+    while k < len(q):
+        c = q[k]
+        if c == '"':
+            k += 1
+            while k < len(q) and q[k] != '"':
+                k += 2 if q[k] == '\\' else 1
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return q[start + 1:k]
+        k += 1
+    return None
+
+ids = []
+for q in queries:
+    for m in DELETE_REF.finditer(q):
+        args = arguments(q, m.end() - 1)
+        rid = None
+        if args is not None:
+            lit = re.search(r'\brefId\s*:\s*(?:("(?:[^"\\]|\\.)*")|\$(\w+))', args)
+            whole = re.search(r'\binput\s*:\s*\$(\w+)', args)
+            if lit and lit.group(1):
+                rid = json.loads(lit.group(1))
+            elif lit:
+                rid = variables.get(lit.group(2))
+            elif whole and isinstance(variables.get(whole.group(1)), dict):
+                rid = variables[whole.group(1)].get('refId')
+        if not isinstance(rid, str) or not rid or re.search(r'[$`\s]', rid):
+            print('UNKNOWN\tthe ref id it deletes is not written in the command as a value this gate can read')
+            sys.exit(0)
+        if rid not in ids:
+            ids.append(rid)
+for rid in ids:
+    print('ID\t' + rid)
+PY
+  found="$(python3 -c "$py" "$rec_dir" "$cmd" ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"})" || unknown "this runs gh api graphql, and its mutation could not be read to tell whether it deletes a ref"
+  [ -n "$found" ] || return 0
+  while IFS=$'\t' read -r kind rid; do
+    [ "$kind" = UNKNOWN ] && unknown "this runs a GraphQL deleteRef, and $rid, so which branch it deletes cannot be told"
+  done <<< "$found"
+  host_ready "$1" "runs a GraphQL deleteRef"
+  account_ready
+  while IFS=$'\t' read -r kind rid; do
+    [ "$kind" = ID ] || continue
+    node="$(run_gh api graphql -f query='query($id: ID!) { node(id: $id) { ... on Ref { name prefix repository { nameWithOwner } } } }' -f id="$rid" 2>&1)"
+    info="$(jq -r '.data.node | if type == "object" and (.prefix | type == "string") and (.name | type == "string") and (.repository.nameWithOwner | type == "string") then [.prefix, .repository.nameWithOwner, .name] | join("\u001f") else error("no ref") end' <<< "$node" 2>/dev/null)" \
+      || unknown "this runs a GraphQL deleteRef of $rid, and GitHub did not say which ref that is (GitHub said: ${node:0:300})"
+    IFS=$'\x1f' read -r prefix slug name <<< "$info"
+    # A tag or any other ref has no pull request based on it.
+    [ "$prefix" = refs/heads/ ] || continue
+    targets+=("api"$'\x1f'"$slug"$'\x1f'"$name")
+  done <<< "$found"
 }
 
 push_target() {   # PS_RUN_ARGS of a git push
