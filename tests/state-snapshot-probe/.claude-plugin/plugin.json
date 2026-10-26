@@ -1,0 +1,6 @@
+{
+  "name": "state-snapshot-probe",
+  "version": "0.0.1",
+  "description": "A probe for tests/test-state-snapshot.sh, never installed: records what $.state answers inside one hook run.",
+  "types": "./types/index.d.ts"
+}
