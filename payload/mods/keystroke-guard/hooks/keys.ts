@@ -36,7 +36,7 @@ export const appNameOf = (path: string): string => {
 }
 
 const focusApp = (cmd: string): string | undefined => {
-  const open = /\bopen\s+(?:-\w+\s+)*-a\s+(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(cmd)
+  const open = /\bopen\s+(?:-\w+\s+)*-a\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|<>()`]+))/.exec(cmd)
   if (open) return open[1] ?? open[2] ?? open[3]
   const tell = /tell\s+application\s+"([^"]+)"\s+to\s+activate/.exec(cmd)
   if (tell) return tell[1]

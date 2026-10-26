@@ -60,6 +60,9 @@ describe('classify', () => {
   })
   test('the app a focus stealer names is read', () => {
     expect(classify([['open', '-a', 'Google Chrome', 'r.html']], 'open -a "Google Chrome" r.html').app).toBe('Google Chrome')
+    // The unquoted name ends at the shell character that ends its word, as the marker's does (#1751).
+    expect(classify([['open', '-a', 'Safari'], ['echo', 'done']], 'open -a Safari; echo done').app).toBe('Safari')
+    expect(classify([['open', '-a', 'Safari']], 'open -a Safari&&sleep 1').app).toBe('Safari')
     const tell = `osascript -e 'tell application "Overture" to activate'`
     expect(classify([['osascript', '-e', 'tell application "Overture" to activate']], tell).app).toBe('Overture')
   })
