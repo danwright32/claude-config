@@ -1100,7 +1100,7 @@ for mode in pages done junk empty reset forbidden; do
     done) eq "$rc|$MT_RUNS_PENDING" "0|" "every run finished reads as nothing pending" ;;
     junk) eq "$rc" "1" "an answer that is not a list of runs is a failed read, not an empty list" ;;
     empty) eq "$rc" "1" "no answer at all is a failed read, not an empty list" ;;
-    reset) eq "$rc" "2" "a reset connection is a transient failure" ;;
+    reset) eq "$rc" "$MT_CONNECT_RC" "a reset connection is asked again, as the connection lost (#1735)" ;;
     forbidden) eq "$rc|$MT_RUNS_ERR" "1|gh: Resource not accessible by integration (HTTP 403)" "a refusal is believed, with GitHub's words" ;;
   esac
 done
@@ -1128,7 +1128,7 @@ for mode in present absent timeout forbidden silent chatty; do
   case "$mode" in
     present) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "0|present|" "a path that is there is present" ;;
     absent) eq "$rc|$MT_REMOTE_STATE" "0|absent" "gh's own 404 is an answer: absent" ;;
-    timeout) eq "$rc|$MT_REMOTE_STATE" "2|unknown" "a timeout is unknown and worth asking again" ;;
+    timeout) eq "$rc|$MT_REMOTE_STATE" "$MT_CONNECT_RC|unknown" "a TLS handshake timeout is unknown and asked again, as the connection (#1735)" ;;
     forbidden) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "1|unknown|gh: Resource not accessible by integration (HTTP 403)" "a refusal is unknown, believed at once, with GitHub's words" ;;
     silent) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "1|unknown|gh exited 1" "a failure gh says nothing about is unknown and not asked again" ;;
     # Its first non blank line, read from an error text far past a pipe buffer: the reader keeps
@@ -1149,7 +1149,7 @@ for mode in present absent timeout forbidden; do
   case "$mode" in
     present) eq "$rc|$MT_READ_STATE|$MT_READ_ERR|$(cat "$api_out")" "0|ok||{}" "an answer lands in the file named" ;;
     absent) eq "$rc|$MT_READ_STATE" "0|absent" "gh's own 404 is an answer: absent" ;;
-    timeout) eq "$rc|$MT_READ_STATE" "2|unknown" "a timeout is worth asking again" ;;
+    timeout) eq "$rc|$MT_READ_STATE" "$MT_CONNECT_RC|unknown" "a TLS handshake timeout is asked again, as the connection (#1735)" ;;
     forbidden) eq "$rc|$MT_READ_STATE|$MT_READ_ERR" "1|unknown|gh: Resource not accessible by integration (HTTP 403)" "a refusal is believed, in GitHub's words" ;;
   esac
 done
@@ -1197,7 +1197,9 @@ done
 # A token GitHub looked at and refused does not change in seconds, and pr-review.sh has believed it the
 # first time since #1161, so it stays an answer to believe.
 mt_gh_read_class 'HTTP 401: Bad credentials (https://api.github.com/graphql)'; eq "$?" "1" "bad credentials are believed the first time"
-mt_gh_read_class 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout'; eq "$?" "2" "a transport fault stays transient"
+# A transport fault was transient here until claude-config#1735 made every network failure the
+# connection outcome; that is tested below, with the shapes measured on this Mac.
+mt_gh_read_class 'HTTP 502: Bad Gateway (https://api.github.com/graphql)'; eq "$?" "2" "GitHub's own server failing stays transient"
 mt_gh_read_class 'gh: Not Found (HTTP 404)'; eq "$?" "1" "an answer GitHub gave is believed"
 mt_gh_read_class ''; eq "$?" "1" "an empty error is believed"
 eq "$MT_SIGNIN_RC" "6" "the sign in outcome is 6, a code no reader or caller already gives a meaning"
@@ -1225,6 +1227,67 @@ said="$(MT_CONNECT_FAILS=4 mt_connect_said "pull request #7 in acme/widget" "err
 case "$said" in *"could not connect to GitHub 4 times reading pull request #7 in acme/widget (error connecting to api.github.com)"*) pass ;; *) fail "the give up sentence names the connection, the count and what was read: [$said]" ;; esac
 case "$said" in *"never answered"*) pass ;; *) fail "and says GitHub never answered, not that it refused: [$said]" ;; esac
 case "$said" in *"refused the sign in"*|*"could not read"*) fail "and is never said as a refused sign in or an unreadable answer: [$said]" ;; *) pass ;; esac
+
+echo "merge-target: every network failure gh prints is the connection outcome, read in one place (claude-config#1735)"
+# On 2026-10-25 merge-when-ready.sh stopped #1732 at 35m 35s, at once and with no retry, on "could not
+# read pull request #1732 ... (Post \"https://api.github.com/graphql\": dial tcp 140.82.113.6:443:
+# connect: can't assign requested address). Nothing was merged." #1675 was installed (the installed
+# lib/merge-target.sh carried MT_CONNECT_RC from 04:46 ET that day), but it knew only "error connecting
+# to", and no transport word matched, so the error was believed. The same shape had stopped three
+# earlier reads. Measured in the merge helper output this Mac still kept on 2026-10-25, word for word
+# but for the local address: the two dial failures, error connecting to, the TLS handshake timeout and
+# the reset read. The others are the rest of the shapes Go's network library gives the same failures, which gh
+# passes through. Those where no request reached GitHub (a dial, a name lookup, a TLS handshake) are
+# said as gh not reaching it; those where a made connection failed before GitHub's answer arrived (a
+# reset, a read timeout, a cut off answer) as the connection lost (L11).
+for e in \
+  'Post "https://api.github.com/graphql": dial tcp 140.82.113.6:443: connect: can'"'"'t assign requested address' \
+  'Get "https://api.github.com/repos/a/b/compare/main...x?per_page=1": dial tcp 140.82.113.6:443: connect: can'"'"'t assign requested address' \
+  'Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host' \
+  'Post "https://api.github.com/graphql": dial tcp 140.82.112.6:443: i/o timeout' \
+  'Post "https://api.github.com/graphql": dial tcp 140.82.112.6:443: connect: connection refused' \
+  'Post "https://api.github.com/graphql": dial tcp 140.82.112.6:443: connect: network is unreachable' \
+  'Get "https://api.github.com/repos/a/b/compare/main...x": net/http: TLS handshake timeout' \
+  'Post "https://api.github.com/graphql": net/http: request canceled while waiting for connection (Client.Timeout exceeded while awaiting headers)' \
+  "$CONNECT_ERR"; do
+  MT_CONNECT_PHASE=""; mt_gh_read_class "$e"
+  eq "$?|${MT_CONNECT_PHASE:-unset}" "$MT_CONNECT_RC|unreached" "a request that never reached GitHub is the connection outcome, unreached: $e"
+done
+for e in \
+  'Post "https://api.github.com/graphql": read tcp 10.0.0.2:57411->140.82.112.6:443: read: connection reset by peer' \
+  'read tcp 10.0.0.2:51234->140.82.112.6:443: i/o timeout' \
+  'Post "https://api.github.com/graphql": write tcp 10.0.0.2:51234->140.82.112.6:443: write: broken pipe' \
+  'Post "https://api.github.com/graphql": EOF' \
+  'Post "https://api.github.com/graphql": unexpected EOF' \
+  'read tcp: connection reset by peer'; do
+  MT_CONNECT_PHASE=""; mt_gh_read_class "$e"
+  eq "$?|${MT_CONNECT_PHASE:-unset}" "$MT_CONNECT_RC|dropped" "a connection that failed before GitHub answered is the connection outcome, dropped: $e"
+done
+# GitHub's own server failing, and a request it took but did not answer in time, stay transient: the
+# request reached it. An answer GitHub gave is still believed.
+for e in \
+  'HTTP 502: Bad Gateway (https://api.github.com/graphql)' \
+  'gh: Server Error (HTTP 500)' \
+  'GraphQL: Something went wrong while executing your query. Please include `ABCD:1234` when reporting this issue.' \
+  'Post "https://api.github.com/graphql": context deadline exceeded (Client.Timeout exceeded while awaiting headers)'; do
+  mt_gh_read_class "$e"; eq "$?" "2" "a request GitHub took and failed to answer stays transient: $e"
+done
+mt_gh_read_class 'gh: Not Found (HTTP 404)'; eq "$?" "1" "and a 404 is still believed"
+# Every one is still worth asking again, so mt_gh_transient, asked that question, agrees.
+if mt_gh_transient 'Post "https://api.github.com/graphql": dial tcp 140.82.113.6:443: connect: can'"'"'t assign requested address'; then pass; else fail "a dial that failed is not worth asking again"; fi
+
+# The loop counts each kind, and the give up sentence says each in its own words, with its count.
+dialfail(){ calls=$((calls + 1)); mt_gh_read_class 'Post "https://api.github.com/graphql": dial tcp 140.82.113.6:443: connect: can'"'"'t assign requested address'; }
+resetfail(){ calls=$((calls + 1)); mt_gh_read_class 'Post "https://api.github.com/graphql": read tcp 10.0.0.2:57411->140.82.112.6:443: read: connection reset by peer'; }
+calls=0; slept=""
+mt_retry_read 4 5 fake_sleep "" "" dialfail; eq "$?|$calls|$slept|${MT_CONNECT_UNREACHED:-unset}|${MT_CONNECT_DROPPED:-unset}" "7|4| 5 5 5|4|0" "the measured dial failure is asked again four times in all, counted as unreached"
+said="$(mt_connect_said "pull request #1732 in acme/widget")"
+case "$said" in *"could not connect to GitHub 4 times reading pull request #1732 in acme/widget (Post \"https://api.github.com/graphql\": dial tcp"*"never answered"*) pass ;; *) fail "the dial failure's give up sentence names the connection, the count and the error: [$said]" ;; esac
+calls=0; slept=""
+mt_retry_read 3 5 fake_sleep "" "" resetfail; eq "$?|$calls|${MT_CONNECT_UNREACHED:-unset}|${MT_CONNECT_DROPPED:-unset}" "7|3|0|3" "a reset connection is asked again, counted as dropped"
+said="$(mt_connect_said "pull request #7")"
+case "$said" in *"lost the connection to GitHub 3 times reading pull request #7 ("*"connection reset by peer"*) pass ;; *) fail "a dropped connection's give up sentence says it was lost, not never made: [$said]" ;; esac
+case "$said" in *"could not connect"*|*"could not reach"*) fail "and never claims gh could not reach GitHub, which a reset does not measure: [$said]" ;; *) pass ;; esac
 
 ghstub="$(mktemp -d "${TMPDIR:-/tmp}/mt-ghstub.XXXXXX")"
 # The token read gh answers: MT_TOKEN_MODE empty prints nothing (the keyring read came back empty),
