@@ -309,6 +309,17 @@ export const mentionedLookFiles = (text: string): string[] => {
 }
 
 /**
+ * Whether a script run is the issue spool helper's note (#1747): `~/.claude/hooks/lib/issue-spool.sh
+ * note <dir> <text> [who]` appends one record to the spool under ~/.claude-issue-spool, outside every
+ * project, and writes none of the words it is handed, so a file its text names is no write target.
+ * On 2026-10-25 a finding naming payload/hooks/lib/__pycache__/*.pyc was refused as a look change.
+ * Only that helper at its installed path, and only its note: its other commands, a script of the same
+ * name anywhere else, and anything else in the command are judged as any script run is (#1586).
+ */
+export const spoolNote = (run: { path?: string; args: readonly { word: string }[] }, home: string): boolean =>
+  home !== '' && run.path === `${home}/.claude/hooks/lib/issue-spool.sh` && run.args[0]?.word === 'note'
+
+/**
  * Whether a word's file name (its last part) is one the shell would expand as a pattern, as against
  * one built from a variable or a command's output: a `*`, `?`, bracket or brace, or a group, zsh's
  * `(a|b)` or bash's extglob `@(a|b)`. A name in brackets alone (`(shop)`, `x(1)`) is a name. Its

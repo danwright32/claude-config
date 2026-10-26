@@ -2443,6 +2443,46 @@ test('#1586: a script handed no screen file, a test, a file in no checkout, or o
   expect(w.ran.length).toBe(6)
 })
 
+// #1747: on 2026-10-25 a builder recording a finding with the spool helper's note was refused as a
+// look change. Its text named payload/hooks/lib/__pycache__/*.pyc, so the text, handed to the script
+// as an argument (#1586), read as a pattern that may name a screen file. A note appends one record to
+// the issue spool, outside every project, and writes none of the words it is handed.
+const NOTE_1747 =
+  'test-scanners-before-push.sh #1734 control (from PR #1741) copies payload/hooks/lib with cp -R into a fixture repo and commits it with add -A, so any ignored payload/hooks/lib/__pycache__/*.pyc on the machine (left by test-pr-review.sh importing review-answered.py, or any script importing shell_code_lines without dont_write_bytecode) is committed too; the repository then lists 2 more files than check-home-paths reads (90 against 88) and the control fails. Copy only tracked files (git ls-files) into the fixture, or exclude __pycache__.'
+const SPOOL_NOTE = (text: string) => `bash ~/.claude/hooks/lib/issue-spool.sh note . "${text}" "late-followups builder"`
+
+test('#1747: a finding noted with the spool helper runs, whatever files its text names', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of [
+    SPOOL_NOTE(NOTE_1747),
+    SPOOL_NOTE('the button colour in app/globals.css'),
+    SPOOL_NOTE('app/page.tsx and app/(shop)/[id]/page.tsx both draw the header'),
+    `bash ${HOME}/.claude/hooks/lib/issue-spool.sh note . "tokens.json drifted from app/site.css" "a builder"`,
+    `${HOME}/.claude/hooks/lib/issue-spool.sh note . "app/page.tsx" "a builder"`,
+  ])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(5)
+})
+
+test('#1747 control: the same helper writing a screen file another way, another of its commands, or a lookalike is still held', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of [
+    // A redirect is the shell's write, whatever runs.
+    `${SPOOL_NOTE('a finding')} > app/page.tsx`,
+    // Only its note is known to write nothing it is handed.
+    'bash ~/.claude/hooks/lib/issue-spool.sh append app/page.tsx "{}"',
+    // A script of the same name anywhere else is any script.
+    'bash /w/slate/scripts/issue-spool.sh note . app/globals.css',
+    'bash ~/elsewhere/hooks/lib/issue-spool.sh note . app/globals.css',
+    // Another script in the same command is judged as before.
+    `${SPOOL_NOTE('a finding')} && python3 scripts/gen.py app/page.tsx`,
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  }
+  expect(w.ran).toEqual([])
+})
+
 test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {
   const w = world($, on)
   expect(refusalOf(await call($, GEN(STORE)))).toContain('own record')

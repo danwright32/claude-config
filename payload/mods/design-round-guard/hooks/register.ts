@@ -84,6 +84,7 @@ import {
   settledNotYet,
   settledTypedSaid,
   skipTyped,
+  spoolNote,
   unreadable,
   unreadableCard,
   unreadPutBack,
@@ -299,8 +300,11 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // and make-settled.py handed a page under docs/design were not held): what it writes cannot be read
   // before it runs, so each file it is handed as an argument is judged as a write of it, as an Edit of
   // that file would be. What it writes that no argument names (a path in its own text) is not read.
-  for (const r of w.runs ?? [])
+  // The spool helper's note writes none of what it is handed (#1747, rules.ts spoolNote).
+  for (const r of w.runs ?? []) {
+    if (spoolNote(r, at.home)) continue
     for (const a of r.args) targets.push({ word: a.word, ...(a.path ? { path: a.path } : {}), ...(a.folder ? { folder: a.folder } : {}), run: r.path ?? r.script })
+  }
   for (const u of w.unnamed) {
     // A program whose text names every file it writes is judged by those files (#830).
     if (u.targets) {
