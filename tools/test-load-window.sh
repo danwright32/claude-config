@@ -389,7 +389,72 @@ fresh phasestatus
 helper_ps; phase waiting "waiting for its turn to merge in acme/widget" $((T0 + 600))
 run --status
 says "#1676 --status names a helper only waiting on GitHub, as not counted" "pid $$, only waiting on GitHub (waiting for its turn to merge in acme/widget) since 20:00:00 ET, which a window does not wait for" "$OUT"
-says "#1676 and says nothing it waits for is running" "Running now: no merge-when-ready.sh run and no full suite run" "$OUT"
+says "#1676 and says nothing it waits for is running" "Running now: no merge-when-ready.sh run, no lessons review and no full suite run" "$OUT"
+
+# =================================================================================================
+# 14. A lessons review is waited for on its own record (claude-config#1730). A review merge-when-ready.sh
+#     starts keeps running after the helper exits (a helper that stops on a red check), and the window
+#     saw it only through the helper. The review now publishes a "review" record for its own pid
+#     (lib/merge-phase.sh), believed only for a pid running now with the start time recorded and only
+#     until its deadline, so a review that crashed is never waited for. The review here is this
+#     suite's own shell, a live pid, as for the helpers above; no helper is running at all.
+# =================================================================================================
+review(){ ( . "$DIR/../payload/hooks/lib/merge-turn.sh" && . "$DIR/../payload/hooks/lib/merge-phase.sh" && TURN_PID="$1" TURN_PID_START="$2" MWR_PHASE_DIR="$LOAD_WINDOW_MERGE_PHASES" mp_set review "the lessons review of acme/widget feat/x at 1111111" "$T0" "$3" ); }
+fresh reviewbusy
+review $$ "$SELF_START" $((T0 + 600))
+printf '%s\n' "rm -f \"$LOAD_WINDOW_MERGE_PHASES/$$\"" > "$case_dir/hook.1"
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+says "#1730 a lessons review that outlived its helper is waited for" "Waiting for a lessons review (the lessons review of acme/widget feat/x at 1111111)" "$OUT"
+eq "#1730 and the window runs once it has finished" 0 "$RC"
+says "#1730 and then the command ran" "the command ran" "$OUT"
+# Controls (L497): a review that crashed, and one past its own deadline, are not waited for.
+fresh reviewdead
+review 99999999 "Thu Jan  1 00:00:00 1970" $((T0 + 600))
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+lacks "#1730 a review whose process has gone is not waited for" "Waiting for" "$OUT"
+eq "#1730 and the window ran" 0 "$RC"
+fresh reviewstale
+review $$ "$SELF_START" $((T0 - 1))
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+lacks "#1730 a review past its own deadline is not waited for" "Waiting for" "$OUT"
+eq "#1730 and the window ran" 0 "$RC"
+# During the window: a review starting makes it yield, as a helper turning to local work does.
+fresh reviewflip
+cat > "$case_dir/hook.3" <<SH
+( . "$DIR/../payload/hooks/lib/merge-turn.sh" && . "$DIR/../payload/hooks/lib/merge-phase.sh" && TURN_PID=$$ TURN_PID_START="$SELF_START" MWR_PHASE_DIR="$LOAD_WINDOW_MERGE_PHASES" mp_set review "the lessons review of acme/widget feat/x at 1111111" "$T0" $((T0 + 600)) )
+SH
+run --seconds 60 --workers 1 -- bash "$W/forever.sh" "$case_dir/f"
+eq "#1730 a review starting during the window makes it yield" 75 "$RC"
+says "#1730 and says so" "Stopping early: a lessons review" "$OUT"
+# --status names it among what a window waits for.
+fresh reviewstatus
+review $$ "$SELF_START" $((T0 + 600))
+run --status
+says "#1730 --status names a running lessons review" "a lessons review (the lessons review of acme/widget feat/x at 1111111)" "$OUT"
+# A review the window's own command started is never counted, like anything else it started: the
+# command writes a review record for itself, puts its own line and its parent's in the process table,
+# and waits for two of the window's looks. Without that line (the control) the window yields to it.
+cat > "$W/review-self.sh" <<SH
+#!/usr/bin/env bash
+me=\$\$; st="\$(ps -o lstart= -p \$me | sed -e 's/^ *//' -e 's/ *\$//')"
+if [ "\$2" = own ]; then
+  up=\$PPID; top="\$(ps -o ppid= -p \$up | tr -d ' ')"
+  printf '%s %s 00:01 bash review-self.sh\n%s %s 00:01 bash -c load-window-command\n' "\$me" "\$up" "\$up" "\$top" >> "\$SYNC_PS_FIXTURE"
+fi
+( . "$DIR/../payload/hooks/lib/merge-turn.sh" && . "$DIR/../payload/hooks/lib/merge-phase.sh" && TURN_PID=\$me TURN_PID_START="\$st" MWR_PHASE_DIR="\$LOAD_WINDOW_MERGE_PHASES" mp_set review "a review the window's command started" "$T0" $((T0 + 600)) )
+n0="\$(cat "\$LW_CLOCK.sleeps" 2>/dev/null || echo 0)"
+. "$DIR/../payload/hooks/lib/hang-wait.sh"
+hang_wait '[ "\$(cat "\$LW_CLOCK.sleeps" 2>/dev/null || echo 0)" -ge \$((n0 + 2)) ]' 0.05
+echo "the command ran"
+SH
+fresh reviewown
+run --seconds 60 --workers 1 -- bash "$W/review-self.sh" "$case_dir/s" own
+eq "#1730 a review the window's own command started is not counted" 0 "$RC"
+lacks "#1730 so the window does not yield to it" "Stopping early" "$OUT"
+fresh reviewnotown
+run --seconds 60 --workers 1 -- bash "$W/review-self.sh" "$case_dir/s" other
+eq "#1730 control: a review it cannot trace to itself makes it yield" 75 "$RC"
+says "#1730 control: naming the review" "Stopping early: a lessons review" "$OUT"
 
 echo
 echo "passed: $pass, failed: $fail"

@@ -409,6 +409,22 @@ case "$gs_seen" in
        || check "every suite is handed a refused sign in record of its own" "the record it was handed exists: $gs_seen" ;;
 esac
 
+# And none publishes a phase record where the load window reads the Mac's real ones (claude-config#1730):
+# a suite that starts a lessons review without pointing it elsewhere would have the window wait for
+# its fixture reviews.
+PH="$TMPROOT/dir-merge-phases"
+mkdir -p "$PH"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${MWR_PHASE_DIR:-}" > "$(dirname "$0")/phases.seen"\nprintf "SUITE-RESULT passed=1 failed=0\\n"\n' > "$PH/test-merge-phases.sh"
+env -u MWR_PHASE_DIR HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$PH" >/dev/null 2>&1
+ph_seen="$(cat "$PH/phases.seen" 2>/dev/null)"
+case "$ph_seen" in
+  '') check "every suite is handed a phase record folder of its own" "it was handed none, so a lessons review would publish into the real one" ;;
+  "$HOME/.claude/"*) check "every suite is handed a phase record folder of its own" "it was handed the real one: $ph_seen" ;;
+  *) [ ! -e "$ph_seen" ] \
+       && check "every suite is handed a phase record folder of its own" ok \
+       || check "every suite is handed a phase record folder of its own" "the folder it was handed exists: $ph_seen" ;;
+esac
+
 # One at a time is the escape hatch, and it has to keep working: it is what somebody reaches for
 # when a suite only fails alongside others.
 out_seq="$(HOOK_TESTS_JOBS=1 bash "$RUNNER" "$P" 2>&1)"; code_seq=$?

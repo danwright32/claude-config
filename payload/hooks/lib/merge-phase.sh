@@ -38,6 +38,20 @@
 #   mp_clear                              removes this run's record
 #   mp_waiting <pid> <now>                0 when that run's record is believed waiting, with MP_WHAT
 #                                         and MP_SINCE set; 1 (busy) for anything else
+#   mp_reviews_busy <now>                 one line per lessons review believed running, "<pid>" TAB
+#                                         "<what>"; nothing when none
+#
+# A LESSONS REVIEW PUBLISHES ITS OWN PHASE (claude-config#1730). merge-when-ready.sh starts the review
+# detached, and it keeps running after the helper exits (a helper that stops on a red check), so the
+# helper's own "local" record, gone with the helper, could not show it, and a load window could
+# overlap a review still using the Mac. So the reviewer runner (pr-review.sh's run_reviewer) writes a
+# record of phase "review" for the reviewer's own pid, through mp_set like a helper's, whose until is
+# the reviewer's own deadline plus MP_SLACK_SECONDS (ai-review-run.py stops it at that deadline), and
+# removes it when the reviewer ends. A reader counts it as busy ONLY on positive evidence, the
+# opposite way round to a waiting record, so a lying record can only fail to count: the pid running
+# now with the start time recorded, and the until not passed. A reviewer killed outright leaves a
+# record naming a pid no longer running (or running something else), which says nothing and is swept
+# by the next write; a hung one stops counting at its until, as its deadline would have stopped it.
 
 MP_SLACK_SECONDS="${MP_SLACK_SECONDS:-60}"
 mp_swept=""
@@ -60,7 +74,7 @@ mp_sweep(){
   return 0
 }
 
-mp_set(){   # $1 = phase (local or waiting), $2 = what, $3 = now, $4 = until (waiting) or empty
+mp_set(){   # $1 = phase (local, waiting or review), $2 = what, $3 = now, $4 = until (waiting, review) or empty
   local dir pid="${TURN_PID:-$$}" start="${TURN_PID_START:-}" f tmp="" what since="$3"
   dir="$(mp_dir)"; f="$dir/$pid"
   [ -n "$start" ] || start="$(turn_proc_start "$pid")"
@@ -99,5 +113,27 @@ mp_waiting(){   # $1 = pid, $2 = now
   cur="$(turn_proc_start "$1")"
   [ -n "$cur" ] && [ "$cur" = "$st" ] || return 1
   MP_WHAT="$(turn_field "$f" what)"; MP_SINCE="$(turn_field "$f" since)"
+  return 0
+}
+
+mp_reviews_busy(){   # $1 = now
+  local dir f b until st cur
+  case "${1:-}" in ''|*[!0-9]*) return 0 ;; esac
+  dir="$(mp_dir)"
+  for f in "$dir"/*; do
+    b="${f##*/}"
+    case "$b" in ''|*[!0-9]*) continue ;; esac
+    [ -s "$f" ] || continue
+    [ "$(turn_field "$f" pid)" = "$b" ] || continue
+    [ "$(turn_field "$f" phase)" = review ] || continue
+    until="$(turn_field "$f" until)"
+    case "$until" in ''|*[!0-9]*) continue ;; esac
+    [ "$1" -le "$until" ] || continue
+    st="$(turn_field "$f" start)"
+    [ -n "$st" ] || continue
+    cur="$(turn_proc_start "$b")"
+    [ -n "$cur" ] && [ "$cur" = "$st" ] || continue
+    printf '%s\t%s\n' "$b" "$(turn_field "$f" what)"
+  done
   return 0
 }

@@ -27,7 +27,12 @@
 #      record, believed only from a run alive with the start time it recorded and only until the
 #      time the record names, says it is waiting on GitHub (its line for the turn, a CI run) is
 #      not counted. One with no record, or one that cannot be believed, is counted, as before:
-#      on 2026-10-24 counting every helper gave a window once in 42 tries.
+#      on 2026-10-24 counting every helper gave a window once in 42 tries. A LESSONS REVIEW is
+#      counted on its own record (claude-config#1730): the helper starts it detached, and one that
+#      outlives its helper (a helper stopping on a red check) was seen by nothing. Each review
+#      publishes a "review" record for its own pid (lib/merge-phase.sh), counted only on positive
+#      evidence (its pid running now with the start time recorded, inside its deadline), so a review
+#      that crashed is never waited for, and one this window's own command started is not counted.
 #   3. Records the window's start and its deadline in lib/load-window.sh's record, which the merge
 #      helper and the suite pile notice read back and name, in ET.
 #   4. Starts the busy workers and the command, each in a process group of its own, and runs until
@@ -118,13 +123,16 @@ cmd=("$@")
 # What is running that a window must not overlap: one line per run, "<pid> <what>", nothing when
 # clear. A process this run started (its descendants in the table) is never counted.
 busy_now(){
-  local table seen="" f pid st pr slug
+  local table seen="" f pid st pr slug reviews
+  # The lessons reviews running (claude-config#1730), read before the table, so the table can say
+  # which of them this window started.
+  reviews="$(mp_reviews_busy "$(now)")"
   if table="$(suite_pile_table)"; then
     # A run counts only as a ROOT: one with a suite, the runner or the merge helper above it is a
     # fixture (test-run-all-tests.sh runs the runner, test-merge-when-ready.sh the helper), already
     # covered by whatever runs above it. On 2026-10-24 one builder's full run was listed as five full
     # suite runs by its fixtures, and a suite's stand in merge as a merge (#1620).
-    seen="$(printf '%s\n' "$table" | awk -v self="$$" '
+    seen="$(printf '%s\n' "$table" | awk -v self="$$" -v reviews="$reviews" '
       function base(w) { sub(/.*\//, "", w); return w }
       function script_of(c,   m, w, j) {
         m = split(c, w, " ")
@@ -151,9 +159,23 @@ busy_now(){
           if (sc[p] == "merge-when-ready.sh") printf "%s a merge-when-ready.sh run (%s)\n", p, substr(cmd[p], 1, 120)
           else printf "%s a full suite run (%s)\n", p, substr(cmd[p], 1, 120)
         }
+        # A review is counted unless this window started it: one whose line is not in the table at
+        # all is counted, since its record was believed from the live process a moment ago.
+        nr = split(reviews, rv, "\n")
+        for (k = 1; k <= nr; k++) {
+          if (rv[k] == "") continue
+          tab = index(rv[k], "\t"); p = substr(rv[k], 1, tab - 1); w = substr(rv[k], tab + 1)
+          q = p; mine = 0
+          for (d = 0; d < 100 && q != "" && q != "0"; d++) { if (q == self) { mine = 1; break }; q = parent[q] }
+          if (!mine) printf "%s a lessons review (%s)\n", p, substr(w, 1, 120)
+        }
       }')"
   else
     seen="? the process table could not be read, so whether a merge or a full suite is running is unknown"
+    # Which reviews this window started cannot be read either, so every one believed is counted.
+    while IFS=$'\t' read -r pid st; do
+      [ -n "$pid" ] && seen="$seen"$'\n'"$pid a lessons review (${st:0:120})"
+    done <<<"$reviews"
   fi
   for f in "$MERGE_TURNS"/*/*/*; do
     case "${f##*/}" in ''|*[!0-9]*) continue ;; esac
@@ -194,11 +216,12 @@ waiting_helpers(){
 # What busy_now found, in words: the one run itself when there is one, else how many of each kind,
 # "among them" the first. The part before "among them" is what the waiting line compares.
 describe_busy(){
-  awk '{ sub(/^[^ ]* /, ""); n++; if (index($0, "a full suite run") == 1) f++; else m++; if (n == 1) first = $0 }
+  awk '{ sub(/^[^ ]* /, ""); n++; if (index($0, "a full suite run") == 1) f++; else if (index($0, "a lessons review") == 1) r++; else m++; if (n == 1) first = $0 }
     END {
       if (n == 1) { printf "%s", first; exit }
       out = ""
       if (m) out = m " merge-when-ready.sh run" (m > 1 ? "s" : "")
+      if (r) out = out (out != "" ? (f ? ", " : " and ") : "") r " lessons review" (r > 1 ? "s" : "")
       if (f) out = out (out != "" ? " and " : "") f " full suite run" (f > 1 ? "s" : "")
       printf "%s, among them %s", out, first
     }'
@@ -229,7 +252,7 @@ if [ -n "$status" ]; then
   say "The load window turn: $live window run(s) holding or waiting for it."
   b="$(busy_now)"
   if [ -n "$b" ]; then say "Running now, which a window waits for:"; printf '%s\n' "$b" | sed 's/^[^ ]* /  /; s/^/load-window: /'
-  else say "Running now: no merge-when-ready.sh run and no full suite run."; fi
+  else say "Running now: no merge-when-ready.sh run, no lessons review and no full suite run."; fi
   w="$(waiting_helpers)"
   [ -z "$w" ] || { say "Merge helpers not counted (claude-config#1676):"; printf '%s\n' "$w" | sed 's/^/load-window:   /'; }
   exit 0
