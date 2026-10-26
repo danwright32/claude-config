@@ -680,7 +680,7 @@ reset_state; rm -rf "$MWR_PHASE_DIR"
 HOLD="$WORKDIR/hold-3g3"; rm -f "$HOLD"
 FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 a running review published no phase record in ${HANG_S}s"
-rec_file="$(compgen -G "$MWR_PHASE_DIR/[0-9]*" | head -n 1)"; rpid="${rec_file##*/}"
+rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
 rec="$(cat "$rec_file" 2>/dev/null)"
 check "#1730 the record says a review is running" "phase review" "$rec"
 check "#1730 and which" "what the lessons review of " "$rec"
@@ -697,10 +697,13 @@ reset_state; rm -rf "$MWR_PHASE_DIR"
 HOLD="$WORKDIR/hold-3g3b"; rm -f "$HOLD"
 FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 the second review published no phase record in ${HANG_S}s"
-rec_file="$(compgen -G "$MWR_PHASE_DIR/[0-9]*" | head -n 1)"; rpid="${rec_file##*/}"
+rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
 check "#1730 control: busy while it runs" "$rpid	" "$(reviews_busy)"
 kill -KILL "$rpid" 2>/dev/null
-hang_wait "! kill -0 '$rpid' 2>/dev/null || ps -o stat= -p '$rpid' | grep -q Z" || bad "#1730 the killed reviewer was still running"
+# Gone: not running, or killed and not yet reaped (state Z), read whole rather than piped into a
+# matcher that can leave early under pipefail.
+gone_pid(){ ! kill -0 "$1" 2>/dev/null || case "$(ps -o stat= -p "$1" 2>/dev/null)" in *Z*) return 0 ;; *) return 1 ;; esac; }
+hang_wait "gone_pid '$rpid'" || bad "#1730 the killed reviewer was still running"
 check_eq "#1730 a reviewer killed outright is not believed busy" "" "$(reviews_busy)"
 : > "$HOLD"
 # A runner killed outright never removes its input, which is what the next case's reset waits on, so
