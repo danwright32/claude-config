@@ -1265,7 +1265,11 @@ stacked on it, was closed with nothing said. The gate reads, in command position
 any spelling of its method, a GraphQL `deleteRef` mutation through `gh api graphql` (claude-config#1758:
 its ref id, written as a literal, a `-f`/`-F` variable or in a query or `--input` file, is looked up
 on GitHub to name the branch and repository; one it cannot read, such as a body on standard input,
-refuses, and a GraphQL call naming no `deleteRef` passes unasked), `git push <remote>
+refuses, and a GraphQL call naming no `deleteRef` passes unasked), an `updateRefs` mutation whose
+`afterOid` of all zeros deletes a branch (its repository id looked up the same way), the REST
+delete written as a full `https://` URL (read as the path it names, on the host it names), and
+`{branch}` or `:branch` in its path, read as the branch checked out where the command runs as gh
+fills it, and refused where none is, `git push <remote>
 --delete <branch>`, `-d` or `:<branch>` to a GitHub remote, and `gh pr merge --delete-branch` (or
 `-d`; a fork's pull request deletes no branch, as gh deletes none for one). `{owner}/{repo}` is
 asked of gh where the command runs, since gh fills it with the first of the remotes `upstream`,

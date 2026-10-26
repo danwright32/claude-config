@@ -529,6 +529,123 @@ fresh
 out="$(payload "gh api graphql -f query='mutation { deleteRef(input: {refId: \"R\"}) { clientMutationId } }'" | PATH="$STUB:$PATH" bash "$LONE/stacked-branch-delete-gate.sh" 2>&1)"; rc=$?
 check_eq "#1758 with lib/shell-words.py missing a deleteRef is refused" "2" "$rc"
 
+# 18. gh api takes a full URL as its endpoint, and the host in it is the GitHub it asks
+# (claude-config#1758, reproduced passing unjudged on 2026-10-26).
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+judge "gh api -X DELETE https://api.github.com/repos/acme/widget/git/refs/heads/feat/x"
+check_eq "#1758 a REST delete written as a full api.github.com URL is judged" "2" "$rc"
+check "#1758 and listed in its repository" "pr list --repo acme/widget --base feat/x" "$calls"
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+echo "$NODE_FEAT" > "$ST/node"
+judge "gh api https://api.github.com/graphql -f query='mutation { deleteRef(input: {refId: \"REF_kwDOfeat\"}) { clientMutationId } }'"
+check_eq "#1758 a deleteRef sent to the full GraphQL URL is judged" "2" "$rc"
+for c in \
+  "gh api -X DELETE https://ghe.example.com/api/v3/repos/acme/widget/git/refs/heads/feat/x" \
+  "gh api https://ghe.example.com/api/graphql -f query='mutation { deleteRef(input: {refId: \"REF_kwDOfeat\"}) { clientMutationId } }'"; do
+  fresh
+  echo '[]' > "$ST/stacked"
+  judge "$c"
+  check_eq "#1758 a full URL on another GitHub host is refused: $c" "2" "$rc"
+  check "#1758 naming that host: $c" "ghe.example.com" "$out"
+  check_eq "#1758 and nothing is asked of github.com: $c" "" "$calls"
+done
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+for c in \
+  "gh api -X DELETE https://api.github.com/repos/acme/widget/issues/comments/5" \
+  "gh api -X DELETE https://ghe.example.com/api/v3/repos/acme/widget/issues/comments/5"; do
+  judge "$c"
+  check_eq "#1758 control: a full URL deleting no branch passes in silence: $c" "0|" "$rc|$out"
+done
+check_eq "#1758 control: and asked GitHub nothing" "" "$calls"
+
+# 19. {branch} (and :branch) is filled by gh with the branch checked out where the command runs, so
+# that is the branch judged; where none is checked out gh cannot fill it either, and the gate refuses
+# rather than list a branch named {branch} (claude-config#1758, reproduced passing on 2026-10-26).
+REPO_HEAD="$(git -C "$REPO" symbolic-ref HEAD)"
+git -C "$REPO" symbolic-ref HEAD refs/heads/feat/x
+for c in \
+  "gh api -X DELETE repos/acme/widget/git/refs/heads/{branch}" \
+  "gh api -X DELETE repos/acme/widget/git/refs/heads/:branch" \
+  "gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/{branch}"; do
+  fresh
+  echo '[{"number":9}]' > "$ST/stacked"
+  judge "$c"
+  check_eq "#1758 the branch placeholder is the branch checked out: $c" "2" "$rc"
+  check "#1758 and listed as that branch: $c" "pr list --repo acme/widget --base feat/x" "$calls"
+done
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+judge "GH_REPO=acme/widget gh api -X DELETE repos/acme/widget/git/refs/heads/{branch}"
+check_eq "#1758 under GH_REPO gh refuses to fill {branch} itself, so nothing is deleted and it passes" "0||" "$rc|$out|$calls"
+git -C "$REPO" symbolic-ref HEAD "$REPO_HEAD"
+DETACHED="$WORKDIR/detached"
+git init -q "$DETACHED"
+git -C "$DETACHED" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m one
+git -C "$DETACHED" checkout -q --detach
+mkdir -p "$WORKDIR/plain"
+for d in "$DETACHED" "$WORKDIR/plain"; do
+  fresh
+  echo '[]' > "$ST/stacked"
+  judge "gh api -X DELETE repos/acme/widget/git/refs/heads/{branch}" "$d"
+  check_eq "#1758 a branch placeholder with no branch checked out is refused: $d" "2" "$rc"
+  check "#1758 saying the placeholder could not be filled: $d" "{branch}" "$out"
+  check_eq "#1758 and nothing is listed: $d" "" "$calls"
+done
+
+# 20. updateRefs deletes a ref whose afterOid is all zeros (GitHub's own schema, read 2026-10-26:
+# "A value of 0000000000000000000000000000000000000000 can be used to delete a reference"), so a
+# branch it deletes is judged like a deleteRef; its repository is named by a node id GitHub is asked.
+NODE_REPO='{"data":{"node":{"nameWithOwner":"acme/widget"}}}'
+ZERO=0000000000000000000000000000000000000000
+for c in \
+  "gh api graphql -f query='mutation { updateRefs(input: {repositoryId: \"R_widget\", refUpdates: [{name: \"refs/heads/feat/x\", beforeOid: \"abc123\", afterOid: \"$ZERO\"}]}) { clientMutationId } }'" \
+  "gh api graphql -f query='mutation(\$repo: ID!) { updateRefs(input: {repositoryId: \$repo, refUpdates: [{name: \"refs/heads/main\", afterOid: \"abc123\"}, {name: \"refs/heads/feat/x\", afterOid: \"$ZERO\"}]}) { clientMutationId } }' -f repo=R_widget" \
+  "gh api graphql --input upd.json"; do
+  printf '%s\n' "{\"query\": \"mutation(\$input: UpdateRefsInput!) { updateRefs(input: \$input) { clientMutationId } }\", \"variables\": {\"input\": {\"repositoryId\": \"R_widget\", \"refUpdates\": [{\"name\": \"refs/heads/feat/x\", \"afterOid\": \"$ZERO\"}]}}}" > "$REPO/upd.json"
+  fresh
+  echo '[{"number":9}]' > "$ST/stacked"
+  echo "$NODE_REPO" > "$ST/node"
+  judge "$c"
+  check_eq "#1758 an updateRefs deleting a branch with a stacked pull request is refused: $c" "2" "$rc"
+  check "#1758 its repository id is looked up: $c" "R_widget" "$calls"
+  check "#1758 and the deleted branch is listed there: $c" "pr list --repo acme/widget --base feat/x" "$calls"
+  check_not "#1758 never the branch it only moves: $c" "--base main" "$calls"
+done
+rm -f "$REPO/upd.json"
+# Controls: an updateRefs that deletes no branch is not asked about.
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+echo "$NODE_REPO" > "$ST/node"
+for c in \
+  "gh api graphql -f query='mutation { updateRefs(input: {repositoryId: \"R_widget\", refUpdates: [{name: \"refs/heads/feat/x\", afterOid: \"abc123\"}]}) { clientMutationId } }'" \
+  "gh api graphql -f query='mutation { updateRefs(input: {repositoryId: \"R_widget\", refUpdates: [{name: \"refs/tags/v1\", afterOid: \"$ZERO\"}]}) { clientMutationId } }'"; do
+  judge "$c"
+  check_eq "#1758 control: an updateRefs deleting no branch passes in silence: $c" "0|" "$rc|$out"
+done
+check_eq "#1758 control: and asked GitHub nothing" "" "$calls"
+# THE FAILURE PATHS: an update the gate cannot read, or a repository GitHub will not name, refuses.
+for c in \
+  "gh api graphql -f query='mutation(\$u: [RefUpdate!]!) { updateRefs(input: {repositoryId: \"R_widget\", refUpdates: \$u}) { clientMutationId } }'" \
+  "gh api graphql -f query='mutation(\$repo: ID!) { updateRefs(input: {repositoryId: \$repo, refUpdates: [{name: \"refs/heads/feat/x\", afterOid: \"$ZERO\"}]}) { clientMutationId } }' -f repo=\$R"; do
+  fresh
+  echo '[]' > "$ST/stacked"
+  judge "$c"
+  check_eq "#1758 an updateRefs the gate cannot read is refused: $c" "2" "$rc"
+  check "#1758 saying so: $c" "updateRefs" "$out"
+  check_eq "#1758 and nothing is listed: $c" "" "$calls"
+done
+fresh
+touch "$ST/node-fails"
+judge "gh api graphql -f query='mutation { updateRefs(input: {repositoryId: \"R_widget\", refUpdates: [{name: \"refs/heads/feat/x\", afterOid: \"$ZERO\"}]}) { clientMutationId } }'"
+check_eq "#1758 an updateRefs whose repository GitHub will not name is refused" "2" "$rc"
+fresh
+echo "$NODE_FEAT" > "$ST/node"
+judge "gh api graphql -f query='mutation { updateRefs(input: {repositoryId: \"REF_kwDOfeat\", refUpdates: [{name: \"refs/heads/feat/x\", afterOid: \"$ZERO\"}]}) { clientMutationId } }'"
+check_eq "#1758 an updateRefs whose repository id names no repository is refused" "2" "$rc"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
