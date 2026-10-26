@@ -11,8 +11,15 @@
 #   - In the real manual steps card.ts, a divider added to cardLines (#1263's change) is a look
 #     change, and the time a sent step waits (DROPPED_AFTER_MS) is not.
 #   - A changed comment line in each real .ts hook file is no look change.
-#   - #1296: in the real design round guard register.ts, a sentence its blocked card says, handed to
-#     its own drawCard, is a look change, and the store key it keeps refused calls under is not.
+#   - #1296: in the real design round guard register.ts, the store key it keeps refused calls under
+#     is no look change. #1756: nor is a sentence its blocked card says, handed to its own drawCard,
+#     since a blocked card's words are copy in a tool result row, its look mod-kit's own; nor a
+#     refusal's words in the real keystroke guard keys.ts.
+#   - #1756: the real #1747 builder's Edit to the guard's register.ts, giving a loop its opening brace,
+#     leaves a text whose brackets do not balance (bracketsOpen), and the change it was half of, once
+#     its brace is closed, draws nothing. And a real colour, frame and border are look changes: goal
+#     box's card border, scope modes' held band row frame, handoff's heading colour, beside the manual
+#     steps divider (a row) above.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
@@ -41,7 +48,7 @@ cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 const [rules, mods] = process.argv.slice(2)
-const { drawnParts, drawsChange, sourceSpans } = await import(pathToFileURL(rules).href)
+const { drawnParts, drawsChange, sourceSpans, bracketsOpen } = await import(pathToFileURL(rules).href)
 for (const mod of readdirSync(mods)) {
   const hooks = `${mods}/${mod}/hooks`
   if (!existsSync(hooks)) continue
@@ -68,9 +75,31 @@ const once = (s) => card.split(s).length === 2
 const guard = readdirSync(`${mods}/design-round-guard/hooks`).filter(f => /\.(ts|tsx)$/.test(f) && !/\.d\.ts$/.test(f)).map(name => ({ name, text: readFileSync(`${mods}/design-round-guard/hooks/${name}`, 'utf8') }))
 const reg = guard.find(f => f.name === 'register.ts')?.text ?? ''
 const swap = (a, b) => (reg.split(a).length === 2 ? drawsChange(guard, 'register.ts', reg, reg.replace(a, b)) : 'missing')
+// #1747's two halves, as they landed with #1761: the real loop as it is (whole), without the brace it
+// was given and its continue (before), and with the closing brace not yet added (half, what the
+// #1747 builder's first Edit left).
+const loop = '  for (const r of w.runs ?? [])\n    for (const a of r.args)'
+const opened = "  for (const r of w.runs ?? []) {\n    if (spoolNote(r, at.home)) continue\n    for (const a of r.args)"
+const pushed = 'run: r.path ?? r.script })\n'
+const whole = reg.split(opened).length === 2 && reg.split(`${pushed}  }\n`).length === 2 ? reg : undefined
+const before = whole?.replace(opened, loop).replace(`${pushed}  }\n`, pushed)
+const half = whole?.replace(`${pushed}  }\n`, pushed)
+// A real file's text with one span swapped, judged beside its mod's other hook files.
+const real = (mod, name, a, b) => {
+  const dir = `${mods}/${mod}/hooks`
+  const fs = readdirSync(dir).filter(f => /\.(ts|tsx)$/.test(f) && !/\.d\.ts$/.test(f)).map(n => ({ name: n, text: readFileSync(`${dir}/${n}`, 'utf8') }))
+  const t = fs.find(f => f.name === name)?.text ?? ''
+  return t.split(a).length === 2 ? drawsChange(fs, name, t, t.replace(a, b)) : 'missing'
+}
 console.log(JSON.stringify({
   sentence: swap(`"This would change the design round guard's own record."`, `"This changes the design round guard's own record."`),
   pending: swap("key: 'pending' }", "key: 'waiting' }"),
+  keysReason: real('keystroke-guard', 'keys.ts', "safeWay: 'Open it first, then type.'", "safeWay: 'Start it first, then type.'"),
+  halfOpen: half === undefined ? 'missing' : bracketsOpen(half),
+  wholeDraws: whole === undefined ? 'missing' : drawsChange(guard, 'register.ts', before, whole),
+  border: real('goal-box', 'box.ts', "border: 'success'", "border: 'warning'"),
+  frame: real('scope-modes', 'away.ts', "slot: 'held', frame: { kind: 'box' }", "slot: 'held', frame: { kind: 'left-rule' }"),
+  colour: real('handoff', 'handoff.ts', "color: 'warning', bold: true }, { text: input.title }", "color: 'error', bold: true }, { text: input.title }"),
 }))
 console.log(JSON.stringify({
   divider: once(each) ? drawsChange(files, 'card.ts', card, card.replace(each, `${each}    if (i > 1) lines.push({ divider: true })\n`)) : 'missing',
@@ -97,7 +126,13 @@ else
   [ "$quiet" -gt "$drawing" ] && check "most real .ts hook files draw nothing" ok || check "most real .ts hook files draw nothing" "$quiet quiet against $drawing drawing: $out"
   case "$out" in *'"divider":true'*) check "a divider added to the real cardLines is a look change" ok ;; *) check "a divider added to the real cardLines is a look change" "$out" ;; esac
   case "$out" in *'"waits":false'*) check "the real DROPPED_AFTER_MS is no look change" ok ;; *) check "the real DROPPED_AFTER_MS is no look change" "$out" ;; esac
-  case "$out" in *'"sentence":true'*) check "#1296: the real guard's blocked card sentence, handed to its drawCard, is a look change" ok ;; *) check "#1296: the real guard's blocked card sentence, handed to its drawCard, is a look change" "$out" ;; esac
+  case "$out" in *'"sentence":false'*) check "#1756: the real guard's blocked card sentence, handed to its drawCard, is no look change" ok ;; *) check "#1756: the real guard's blocked card sentence, handed to its drawCard, is no look change" "$out" ;; esac
+  case "$out" in *'"keysReason":false'*) check "#1756: a refusal's words in the real keystroke guard keys.ts are no look change" ok ;; *) check "#1756: a refusal's words in the real keystroke guard keys.ts are no look change" "$out" ;; esac
+  case "$out" in *'"halfOpen":true'*) check "#1756: the real #1747 Edit leaves the guard's register.ts with a bracket open" ok ;; *) check "#1756: the real #1747 Edit leaves the guard's register.ts with a bracket open" "$out" ;; esac
+  case "$out" in *'"wholeDraws":false'*) check "#1756: the real #1747 change, its brace closed, is no look change" ok ;; *) check "#1756: the real #1747 change, its brace closed, is no look change" "$out" ;; esac
+  case "$out" in *'"border":true'*) check "#1756 control: goal box's real card border is a look change" ok ;; *) check "#1756 control: goal box's real card border is a look change" "$out" ;; esac
+  case "$out" in *'"frame":true'*) check "#1756 control: scope modes' real held band row frame is a look change" ok ;; *) check "#1756 control: scope modes' real held band row frame is a look change" "$out" ;; esac
+  case "$out" in *'"colour":true'*) check "#1756 control: handoff's real heading colour is a look change" ok ;; *) check "#1756 control: handoff's real heading colour is a look change" "$out" ;; esac
   case "$out" in *'"pending":false'*) check "#1296: the real guard's store key for refused calls is no look change" ok ;; *) check "#1296: the real guard's store key for refused calls is no look change" "$out" ;; esac
 fi
 

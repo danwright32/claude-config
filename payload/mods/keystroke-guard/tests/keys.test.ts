@@ -81,6 +81,25 @@ describe('judge', () => {
   test('a target that is not running is refused', () => {
     expect(judge({ ...base, targetPids: [] })).toEqual({ reason: "Overture isn't running.", safeWay: 'Open it first, then type.' })
   })
+  // #1757: a PostRoll session on 2026-10-26 set TARGET_APP to the build's .app bundle while the build
+  // ran in front, and was told PostRoll isn't running. A bundle is a folder, never a running program,
+  // so it is still refused, but the reason says what is wrong and names the program inside it.
+  test('a target naming an app bundle is refused saying so, with the program inside it (#1757)', () => {
+    const BUNDLE = '/Users/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app'
+    for (const target of [BUNDLE, `${BUNDLE}/`])
+      expect(judge({ ...base, target, targetPids: [] })).toEqual({
+        reason: 'TARGET_APP names the PostRoll app bundle, not the program inside it.',
+        safeWay: `Name the program instead, usually ${BUNDLE}/Contents/MacOS/PostRoll.`,
+      })
+    const LR = '/Applications/Adobe Lightroom Classic.app'
+    expect(judge({ ...base, target: LR, targetPids: [], frontmost: undefined })).toEqual({
+      reason: 'TARGET_APP names the Adobe Lightroom Classic app bundle, not the program inside it.',
+      safeWay: `Name the program instead, usually ${LR}/Contents/MacOS/Adobe Lightroom Classic.`,
+    })
+    // The program inside a bundle is judged as before, running or not.
+    expect(judge({ ...base, target: `${BUNDLE}/Contents/MacOS/PostRoll`, targetPids: [] })).toEqual({ reason: "PostRoll isn't running.", safeWay: 'Open it first, then type.' })
+    expect(judge({ ...base, target: `${BUNDLE}/Contents/MacOS/PostRoll` })).toBeUndefined()
+  })
   test('a second running copy of the app is refused', () => {
     expect(judge({ ...base, otherPids: [11] })).toEqual({
       reason: 'Another copy of Overture is running (pid 11).',

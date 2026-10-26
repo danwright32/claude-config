@@ -69,6 +69,13 @@ export const judge = (f: {
     return { reason: "This doesn't say which app it types into.", safeWay: "Add TARGET_APP=<the app's executable path> to the command." }
   }
   const app = appNameOf(f.target)
+  // An .app bundle is a folder, never a running program, so no process ever matches it: say that and
+  // name the program inside it, rather than that the app isn't running while it is in front (#1757).
+  // Still refused. The program is usually named after the app; Info.plist's CFBundleExecutable says.
+  const bundle = /^((?:.*\/)?([^/]+)\.app)\/?$/.exec(f.target)
+  if (bundle) {
+    return { reason: `TARGET_APP names the ${bundle[2]} app bundle, not the program inside it.`, safeWay: `Name the program instead, usually ${bundle[1]}/Contents/MacOS/${bundle[2]}.` }
+  }
   if (f.targetPids.length === 0) return { reason: `${app} isn't running.`, safeWay: 'Open it first, then type.' }
   if (f.targetPids.length > 1) {
     return { reason: `${app} is running twice from the same place, so the input could land in either.`, safeWay: 'Quit one first.' }

@@ -1728,6 +1728,47 @@ test('#1275: undoing a logic edit to a line builder file with git restore passes
   expect(w.ran.length).toBe(1)
 })
 
+// #1756: on 2026-10-26 the #1747 builder gave a loop in the guard's own register.ts braces and a
+// `continue` in one Edit, to close the brace in the next, and the guard held the first: the text it
+// left had a brace open, which the reader cannot follow, and a file it cannot follow was held whole.
+// Such a text is no TypeScript at all (rules.ts bracketsOpen), so the Edit leaving it passes, and the
+// Edit closing it is judged against the file as it was before the first, so a look change made across
+// the two is still asked about. The demo mod's gate.ts draws nothing; its card.ts builds what it draws.
+const GATE = `${DEMO}/gate.ts`
+const GATE_TEXT = "export const gate = (xs: string[]) => {\n  for (const x of xs)\n    if (x) return x\n  return ''\n}\n"
+const OPEN_LOOP = { tool: 'Edit', file_path: GATE, old_string: '  for (const x of xs)\n', new_string: '  for (const x of xs) {\n    if (!x) continue\n' }
+const CLOSE_LOOP = { tool: 'Edit', file_path: GATE, old_string: '    if (x) return x\n', new_string: '    if (x) return x\n  }\n' }
+const edited = (text: string, e: { old_string: string; new_string: string }) => {
+  if (text.split(e.old_string).length !== 2) throw new Error(`the text holds ${e.old_string} other than once`)
+  return text.replace(e.old_string, e.new_string)
+}
+
+test('#1756: a logic change made across two Edits, the first leaving a brace open, passes both', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GATE]: GATE_TEXT } })
+  expect(refusalOf(await call($, OPEN_LOOP))).toBe('')
+  w.files[GATE] = edited(GATE_TEXT, OPEN_LOOP)
+  expect(refusalOf(await call($, CLOSE_LOOP))).toBe('')
+  w.files[GATE] = edited(w.files[GATE] as string, CLOSE_LOOP)
+  expect(w.ran.map(r => r.input.file_path)).toEqual([GATE, GATE])
+})
+
+test('#1756 controls: a look change made across two Edits is asked about at the second, and a brace open with no earlier text is held', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES } })
+  // The first leaves a brace open and changes a run's look; the second closes it.
+  const open = { tool: 'Edit', file_path: LINES, old_string: "    lines.push([{ text: `${i + 1}. ${s.title}`, bold: true }])\n", new_string: "    if (s.title) {\n    lines.push([{ text: `${i + 1}. ${s.title}`, bold: false }])\n" }
+  expect(refusalOf(await call($, open))).toBe('')
+  w.files[LINES] = edited(LINES_TEXT, open)
+  const close = { tool: 'Edit', file_path: LINES, old_string: '  })\n  return lines', new_string: '  }\n  })\n  return lines' }
+  expect(refusalOf(await call($, close))).toContain(SKIP_QUESTION)
+  // A file left with a brace open by something else, with no earlier text of it, is held as before.
+  const left = `${DEMO}/left.ts`
+  w.files[left] = edited(GATE_TEXT, OPEN_LOOP)
+  expect(refusalOf(await call($, { ...CLOSE_LOOP, file_path: left }))).toContain(SKIP_QUESTION)
+  // A text the reader cannot follow for another reason (an unclosed string) is held as before.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: `${DEMO}/keys.ts`, old_string: '`steps:${repo}`', new_string: "'steps:" }))).toContain(SKIP_QUESTION)
+  expect(w.ran.map(r => r.input.file_path)).toEqual([LINES])
+})
+
 // #1296: what a shell write leaves cannot be read before it runs, so one to a mod's .ts hook file that
 // draws nothing yet runs, and the file is read again after it (Dan, 2026-10-17: judge after, and
 // undo). One the command made draw, on an issue Dan has not answered for, is put back as it was, with
