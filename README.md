@@ -45,7 +45,9 @@ Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are
 Mac's config directory written as `__CLAUDE_HOME__`, and expanded to each Mac's own on the way in,
 so an absolute path inside one is correct on both machines. The top-level rules files are the
 exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
-in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split.
+in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split. Its suite
+lists the checkout's synced files, so the gate before a push (`scanners-before-push.sh`) runs it as
+well as CI, over the checkout with no allowance for this Mac's own home (#1734).
 
 A file stored that way never equals its payload copy byte for byte, so every comparison between the
 two sides goes through one view of the payload as it should look on THIS Mac. `claude-sync status`
@@ -2017,8 +2019,10 @@ is a setting, not a measurement. A stand in a suite writes runs as a process of 
 suite exports the ceiling as `FAKE_HANG_S` and the stand in bounds its clock by
 `${FAKE_HANG_S:-300}`. A wait the PASSING case is meant to run out (a window a fault is given to
 show itself in) is a different thing and calls `window_wait <seconds> "<condition>"` with its length
-stated. `hooks/test-hand-rolled-wait.sh` fails any suite that hand rolls a wait bounded by its own
-clock or tick count instead (#1679), with no list of suites excused from it.
+stated, captures its status in the same statement (`; NAME=$?`) and asserts NAME is 1, ran out.
+`hooks/test-hand-rolled-wait.sh` fails any suite that hand rolls a wait bounded by its own clock or
+tick count instead (#1679), and any `window_wait` whose running out is not asserted that way, which
+would be a short ceiling under another name (#1721), with no list of suites excused from either.
 
 ### Measuring the section time budget's margin
 

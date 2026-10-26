@@ -1,4 +1,4 @@
-// Written by Claude Code 2.1.307.
+// Written by Claude Code 2.1.310.
 
 declare module 'claude-code' {
   export type AgentCallRecord = {
@@ -2259,6 +2259,7 @@ declare module 'claude-code' {
       text: string;
       mode?: PromptFillMode;
       decorations?: PromptDecoration[];
+      cursor?: number;
   };
 
   export type PromptFilled = {
@@ -2273,6 +2274,7 @@ declare module 'claude-code' {
       mode: PromptFillMode;
       origin: PromptFillOrigin;
       decorations?: PromptDecoration[];
+      cursor?: number;
   };
 
   export type PromptFillMode = 'replace' | 'append' | 'insert';
@@ -3747,6 +3749,7 @@ declare module 'claude-code' {
 
   export type UiBlitResult = {
       deny?: string;
+      fix?: 'tmux-passthrough';
   };
 
   export type UiCopyArgs = {

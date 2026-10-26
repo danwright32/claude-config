@@ -22,6 +22,15 @@ end paces something (a server answering a byte at a time) and is not reported.
 A loop that waits on a condition with no bound of its own is not reported: the suite's own deadline
 (lib/suite-deadline.sh) bounds it. A comparison against a count the body does NOT advance (a count
 of calls the code under test makes) is a condition, not a clock, and is not reported either.
+A `window_wait` (lib/hang-wait.sh) is the other kind of wait, a window the PASSING case runs out,
+so its length is the caller's and short; called to wait for something the passing case DOES meet, it
+is the short ceiling this scan exists to stop (claude-config#1721). So it is reported unless the
+suite asserts the window ran out: its status captured in the same statement (`window_wait 2 "<cond>";
+NAME=$?`, the dollar escaped where it is written for another shell) and NAME compared with 1 on some
+code line of the file (`[ "$NAME" = 1 ]`, `-eq 1`, `(( NAME == 1 ))`). A constant condition (`true`,
+`false`, `:`) waits on nothing and is the helper's own test, so it is not reported. A suite that
+compares the capture with 1 and then ignores the comparison is not caught: the scan reads shape, not
+intent.
 Comment lines are skipped. A stand in a suite writes through a heredoc is shell, and is where half
 these waits lived (the fake claude's hold), so its lines are judged like the suite's own.
 
@@ -48,6 +57,18 @@ TICKS = re.compile(r'\bseq\b|\{\d+\.\.\d+\}|^\s*\d+(\s+\d+){2,}\s*$')
 PY_CLOCK = re.compile(r'^(\s*)while\b.*\btime\.(?:time|monotonic)\(\)\s*-\s*\w+\s*<\s*([^:]+):')
 PY_TICKS = re.compile(r'^(\s*)for\s+\w+\s+in\s+range\(([^)]*)\)\s*:')
 PY_SLEEP = re.compile(r'\btime\.sleep\(')
+# The window's length is a number, a variable or a printf slot: prose naming the helper in a check's
+# description (`window_wait is accepted ...`) is not a call.
+WW_CALL = re.compile(r'(?:^|[;&|({\s!]|\\n)window_wait\s+["\']?(?:\d+|\$\S+|%\w)\S*\s+(.*)$')
+WW_CONST = re.compile(r'''^["']?(?:true|false|:)["']?(?=[\s;)"']|$)''')
+WW_CAPTURE = re.compile(r'^[^;]*;\s*(?:local\s+)?(\w+)=\\?\$\?')
+
+
+def ww_ran_out_asserted(name, code):
+    """Whether the file's code compares the captured window_wait status NAME with 1 (#1721)."""
+    v = re.escape(name)
+    pat = r'\\?\$\{?%s\}?(?:\\?")?\s*(?:==?|-eq)\s*(?:\\?")?1(?!\d)|\(\(\s*\$?%s\s*==\s*1(?!\d)' % (v, v)
+    return re.search(pat, code) is not None
 
 
 def py_body(lines, i, indent):
@@ -82,10 +103,18 @@ def body_of(lines, i, rest):
 def judge(text):
     lines = text.split('\n')
     found = []
+    code = '\n'.join(ln for _, ln in code_lines(text))
     # Only the suite's own code: a comment, or a line inside a quoted string spanning lines (another
     # hook's input written as a fixture), is never judged (lib/shell_code_lines.py).
     for n, line in code_lines(text):
         i = n - 1
+        # A window_wait whose running out the suite never asserts (#1721).
+        w = WW_CALL.search(line)
+        if w and not WW_CONST.match(w.group(1)):
+            cap = WW_CAPTURE.match(w.group(1))
+            if not (cap and ww_ran_out_asserted(cap.group(1), code)):
+                found.append((i + 1, line.strip()))
+                continue
         m = LOOP.search(line)
         if m:
             cond, rest = m.group(2), m.group(3)

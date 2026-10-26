@@ -4,9 +4,6 @@
 # both are held to (mods/scope-modes/tests/sleep-fixtures.ts, L26). The mod's own suite holds
 # readSleep to the same states, so a reader that drifts fails here or there.
 set -uo pipefail
-# This suite is ABOUT where the sleep record is found, through HOME, so it sets aside the record
-# the test runner hands every other suite through CLAUDE_SLEEP_RECORD (lib/sleep.sh).
-unset CLAUDE_SLEEP_RECORD
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
   echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
@@ -14,6 +11,10 @@ unset CLAUDE_SLEEP_RECORD
   exit 1
 }
 suite_deadline_arm || exit $?
+# This suite is ABOUT where the sleep record is found, through HOME, so it sets aside the record
+# the test runner, and arming the deadline, hand every other suite through CLAUDE_SLEEP_RECORD
+# (lib/sleep.sh). After arming, which would otherwise hand it one again (claude-config#1729).
+unset CLAUDE_SLEEP_RECORD
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$DIR/lib/sleep.sh"
@@ -103,6 +104,14 @@ real_boot="$(sysctl -n kern.boottime 2>/dev/null | python3 -c 'import re, sys; m
 if [ -n "$real_boot" ]; then
   printf '{"v":1,"until":%s000,"bootTime":%s}' "$(( $(date +%s) + 3600 ))" "$real_boot" > "$WORK/home/.claude/state/sleep/current.json"
   check_eq "a record of this boot, ending in an hour, is asleep with every default read live" asleep "$(HOME="$WORK/home" sleep_state)"
+  # The same asleep record, read from inside a suite run DIRECTLY, with no runner to hand it a record
+  # of its own (claude-config#1729). Three suites that drive sleep aware hooks failed that way while
+  # the Mac was in sleep mode: the hooks went quiet because Dan was asleep. Arming the suite's
+  # deadline hands it what the runner hands every suite, a record that does not exist.
+  check_eq "#1729 a suite run directly is not silenced by the Mac being asleep" none \
+    "$(env -u CLAUDE_SLEEP_RECORD HOME="$WORK/home" SUITE_WALL_TIMEOUT=0 bash -c '. "$1"; suite_deadline_arm; . "$2"; sleep_state' _ "$DIR/lib/suite-deadline.sh" "$LIB")"
+  check_eq "#1729 and a record the runner names still wins over it" asleep \
+    "$(env HOME="$WORK/elsewhere" CLAUDE_SLEEP_RECORD="$WORK/home/.claude/state/sleep/current.json" SUITE_WALL_TIMEOUT=0 bash -c '. "$1"; suite_deadline_arm; . "$2"; sleep_state' _ "$DIR/lib/suite-deadline.sh" "$LIB")"
   printf '{"v":1,"until":%s000,"bootTime":%s}' "$(( $(date +%s) - 1 ))" "$real_boot" > "$WORK/home/.claude/state/sleep/current.json"
   check_eq "one that ended a second ago is expired" expired "$(HOME="$WORK/home" sleep_state)"
 else

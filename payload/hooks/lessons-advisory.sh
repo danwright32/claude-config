@@ -450,7 +450,10 @@ for i in "${!TRIG_IDS[@]}"; do
       # once silenced by (L183), and the repo's ratchet refuses a new one.
       grep -Eq -- "${TRIG_PATH[$i]}" <<< "$f" || continue
     fi
-    lines="$(printf '%s\n' "$added" | awk -F'\t' -v want="$f" '$1 == want { print $2 }')"
+    # The WHOLE rest of the row after the path's tab, never `$2`: a field split keeps only the text
+    # before the added line's own first tab, so tab indented code (Go, a Makefile recipe, tab
+    # indented shell) reached every trigger as an empty line (claude-config#1724, L536).
+    lines="$(printf '%s\n' "$added" | awk -F'\t' -v want="$f" '$1 == want { print substr($0, length($1) + 2) }')"
     # Written to a file and matched from there, rather than piped in from a printf. This runs under
     # `pipefail`, and `grep -q` leaves on its first match: a printf whose string is larger than the
     # pipe buffer is then killed by SIGPIPE, the pipeline reports failure, and `|| continue` reads

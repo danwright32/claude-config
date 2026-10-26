@@ -59,9 +59,6 @@
 # takes under a minute, so it runs in every local run; SLEEP_REAL_ENGINE=0 skips it. Wherever there
 # is no Claude Code or no macOS (CI's Linux runner), it says UNMEASURED and why.
 set -uo pipefail
-# This suite is ABOUT where the sleep record is found, through HOME, so it sets aside the record
-# the test runner hands every other suite through CLAUDE_SLEEP_RECORD (lib/sleep.sh).
-unset CLAUDE_SLEEP_RECORD
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
@@ -71,6 +68,10 @@ ROOT="$(cd "$DIR/.." && pwd)"
   exit 1
 }
 suite_deadline_arm || exit $?
+# This suite is ABOUT where the sleep record is found, through HOME, so it sets aside the record
+# the test runner, and arming the deadline, hand every other suite through CLAUDE_SLEEP_RECORD
+# (lib/sleep.sh). After arming, which would otherwise hand it one again (claude-config#1729).
+unset CLAUDE_SLEEP_RECORD
 
 # Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
 # claude-config#1679).

@@ -251,9 +251,11 @@ overrun_with pastshare LOAD_AVERAGE_CMD="$(mk_load seventeen 17)" LOAD_AVERAGE_C
 # fault, never fail a sound run. The suite idles in
 # builtins, so nothing defers its handler, and the reader stays alive after it starts, so the kill
 # finds it. The fix stops and kills first and flags last, so whatever the gap, the handler cannot
-# start until the kill is over.
-printf '. %q\nkill(){ builtin kill "$@"; local r=$?; if [ "${1:-}" = -USR1 ]; then window_wait 2 %q; fi; return "$r"; }\n' \
-  "$DIR/lib/hang-wait.sh" "[ -e '$TMPROOT/gap-reader-started' ]" > "$TMPROOT/slow-watchdog.env"
+# start until the kill is over. The window's outcome is recorded and asserted to be 1, ran out
+# (#1721): a 0 is the reader starting inside it, the fault itself, and no record at all is a
+# watchdog that never sent USR1, so the window this case depends on never opened (L98).
+printf '. %q\nkill(){ builtin kill "$@"; local r=$?; if [ "${1:-}" = -USR1 ]; then window_wait 2 %q; gap_ww=$?; echo "$gap_ww" > %q; fi; return "$r"; }\n' \
+  "$DIR/lib/hang-wait.sh" "[ -e '$TMPROOT/gap-reader-started' ]" "$TMPROOT/gap-window.rc" > "$TMPROOT/slow-watchdog.env"
 printf '#!/bin/sh\n: > %q\nsleep 2\necho 30.5\n' "$TMPROOT/gap-reader-started" > "$TMPROOT/load-slowbusy"; chmod +x "$TMPROOT/load-slowbusy"
 mk_armed "$TMPROOT/gap.sh" 'while :; do :; done'
 env -u HOOK_TESTS_SLOTS BASH_ENV="$TMPROOT/slow-watchdog.env" \
@@ -267,6 +269,10 @@ gp_out="$(cat "$TMPROOT/gap.out")"
 [ "$gp_rc" = 124 ] && said_mark "$gp_out" && ! said_fail "$gp_out" \
   && check "#1454 a watchdog slow between its steps does not kill the handler's own load reading" ok \
   || check "#1454 a watchdog slow between its steps does not kill the handler's own load reading" "exit=$gp_rc out=$gp_out"
+gap_ww="$(cat "$TMPROOT/gap-window.rc" 2>/dev/null)"
+[ "$gap_ww" = 1 ] \
+  && check "#1721 the slowed watchdog's window ran out with no load reader started inside it" ok \
+  || check "#1721 the slowed watchdog's window ran out with no load reader started inside it" "window_wait ended '${gap_ww:-no record, so USR1 was never sent}', where 1 (ran out) was wanted"
 
 # Nor may the time the handler is given be the POLL seam (claude-config#1454). The watchdog gave a
 # flagged suite twenty polls to finish its handler before TERM, so every test that shortens the poll
