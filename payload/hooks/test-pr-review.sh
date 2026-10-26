@@ -718,9 +718,46 @@ gone_pid(){ ! kill -0 "$1" 2>/dev/null || case "$(ps -o stat= -p "$1" 2>/dev/nul
 hang_wait "gone_pid '$rpid'" || bad "#1730 the killed reviewer was still running"
 check_eq "#1730 a reviewer killed outright is not believed busy" "" "$(reviews_busy)"
 : > "$HOLD"
-# A runner killed outright never removes its input, which is what the next case's reset waits on, so
-# it is removed here, as the killed runner would have.
-rm -f "$AI_REVIEW_STATE_DIR"/*.diff
+# A KILLED REVIEW'S INPUT (claude-config#1745). The reviewer removed its copy of the changes only in
+# its own `finally`, which a SIGKILL never reaches, so killed reviews left their inputs behind and the
+# next reset waited on them; this case used to remove it by hand. The runner around the reviewer now
+# removes it however the reviewer ended.
+hang_wait "! compgen -G '$AI_REVIEW_STATE_DIR/*.diff' >/dev/null"
+check_eq "#1745 a reviewer killed with SIGKILL leaves no input behind" "" "$(compgen -G "$AI_REVIEW_STATE_DIR/*.diff")"
+# The runner killed outright too: nothing of the review is left to clean up, so the next review to
+# start sweeps an input whose reviewer, judged by pid and start time, is gone.
+held_review(){ # held_review <hold file> -> prints the reviewer's pid once its phase record is up
+  rm -rf "$MWR_PHASE_DIR"; rm -f "$1"
+  FAKE_CLAUDE_HOLD="$1" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+  hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || return 1
+  local f; for f in "$MWR_PHASE_DIR"/[0-9]*; do printf '%s' "${f##*/}"; return 0; done
+}
+head_input="$AI_REVIEW_STATE_DIR/$(basename "$(final_of "$HEAD_SHA")" .txt).diff"
+reset_state; HOLD="$WORKDIR/hold-1745a"
+rpid="$(held_review "$HOLD")" || bad "#1745 the held review published no phase record"
+rrun="$(ps -o ppid= -p "$rpid" 2>/dev/null | tr -d ' ')"
+check "#1745 control: the held review's input is there while it runs" "yes" "$([ -e "$head_input" ] && echo yes)"
+kill -KILL "$rrun" "$rpid" 2>/dev/null
+hang_wait "gone_pid '$rpid' && gone_pid '$rrun'" || bad "#1745 the killed review was still running"
+check "#1745 control: with its runner killed too, the input is left" "yes" "$([ -e "$head_input" ] && echo yes)"
+prr start --dir "$REPO" --sha "$BASE_SHA" >/dev/null
+check_eq "#1745 the next review to start sweeps the input of a reviewer that is gone" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
+: > "$HOLD"
+# A reviewer still running keeps its input through another review's sweep, the other direction (L497).
+reset_state; HOLD="$WORKDIR/hold-1745b"
+rpid="$(held_review "$HOLD")" || bad "#1745 the second held review published no phase record"
+rm -f "$(final_of "$BASE_SHA")"*
+prr start --dir "$REPO" --sha "$BASE_SHA" >/dev/null
+check "#1745 a running reviewer's input survives another review's sweep" "yes" "$([ -e "$head_input" ] && echo yes)"
+# Stopped with SIGTERM after its runner was killed outright, the reviewer removes its own input.
+rrun="$(ps -o ppid= -p "$rpid" 2>/dev/null | tr -d ' ')"
+kill -KILL "$rrun" 2>/dev/null
+hang_wait "gone_pid '$rrun'" || bad "#1745 the runner was still running"
+kill -TERM "$rpid" 2>/dev/null
+hang_wait "gone_pid '$rpid'" || bad "#1745 the reviewer did not stop on SIGTERM"
+hang_wait "[ ! -e '$head_input' ]"
+check_eq "#1745 a reviewer stopped with SIGTERM removes its own input" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
+: > "$HOLD"
 
 # 3h. could not run: no claude on PATH. A PATH built from every tool but claude, so the case is
 #     produced on a machine that has one installed, which this suite used to report as UNMEASURED.

@@ -1000,6 +1000,8 @@ narrow_said() {
 }
 
 do_start() {
+  # Inputs of reviews killed with their runner, before anything else (claude-config#1745).
+  prr_sweep_inputs
   if [ -e "$final" ] || [ -e "$pending" ]; then
     echo "The lessons review of $repo_label $branch at $short has already been run, or is still running."
     return 0
@@ -1139,12 +1141,44 @@ run_reviewer() {   # $1 = state dir, $2 = name, $3 = diff file, $4 = base, $5 = 
     --diff-file "$3" --deadline "$6" --started "$7" \
     </dev/null >/dev/null 2>&1 &
   rpid=$!
+  prr_input_owner "$3" "$rpid"
   local what="the lessons review of $repo_label $branch at ${full_sha:0:7}"
   case "$2" in *-g[0-9]*) what="$what, group ${2##*-g}" ;; esac
   prr_phase review "$rpid" "$what" "$6" "$7"
   wait "$rpid"; rc=$?
   prr_phase clear "$rpid"
+  # However the reviewer ended, its input goes with it (claude-config#1745): it removes it itself in
+  # a finally and on SIGTERM, which a SIGKILL never reaches, so the runner removes it too.
+  rm -f "$3" "$3.reviewer" 2>/dev/null
   return "$rc"
+}
+
+# A KILLED REVIEW'S INPUT (claude-config#1745). A review input left behind piles up in the state
+# folder, and a suite's reset waits on it. Three exits remove it: the reviewer's own finally and its
+# SIGTERM handler (ai-review-run.py), and run_reviewer once the reviewer has ended however it did.
+# When the runner was killed outright as well, nothing of the review is left to do it, so each input
+# names its reviewer by pid AND start time in <input>.reviewer, and the next review to start sweeps an
+# input whose reviewer is no longer that process (a dead pid, or one reused by something else), the
+# test the #1730 phase records are believed by. An input with no owner record is never swept here
+# (it may be one still being written); the 14 day sweep of the state folder takes it.
+prr_input_owner() {   # $1 = review input, $2 = its reviewer's pid
+  local st
+  st="$( . "$PRR_LIB/merge-turn.sh" 2>/dev/null && turn_proc_start "$2" )"
+  [ -n "$st" ] || return 0
+  { printf '%s %s\n' "$2" "$st" > "$1.reviewer"; } 2>/dev/null || true
+}
+prr_sweep_inputs() {   # removes every review input whose recorded reviewer is gone
+  local f pid st cur
+  for f in "$AR_STATE_DIR"/*.diff.reviewer "$parts_root"/*/*.diff.reviewer; do
+    [ -f "$f" ] || continue
+    read -r pid st < "$f" 2>/dev/null || continue
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    [ -n "$st" ] || continue
+    cur="$( . "$PRR_LIB/merge-turn.sh" 2>/dev/null && turn_proc_start "$pid" )"
+    [ -n "$cur" ] && [ "$cur" = "$st" ] && continue
+    rm -f "${f%.reviewer}" "$f" 2>/dev/null
+  done
+  return 0
 }
 
 # The reviewer's phase record (see run_reviewer), written and removed through lib/merge-phase.sh in a

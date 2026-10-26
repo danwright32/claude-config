@@ -846,6 +846,25 @@ def usage_meta(res):
     return out
 
 
+def remove_input_when_stopped(diff_file):
+    """A review stopped by a signal removes its input, then dies of that signal as it would have
+    (claude-config#1745). The input is otherwise removed only in main's last finally, which a
+    termination never reaches. Only a signal still at its default is taken over: the runner starts
+    this under nohup, which ignores SIGHUP, and in the background, where SIGINT is ignored, and
+    handling either would end a review those leave running. SIGKILL cannot be caught; the runner
+    around this (pr-review.sh run_reviewer) and the next review's sweep remove the input then."""
+    def stopped(signum, _frame):
+        try:
+            os.remove(diff_file)
+        except OSError:
+            pass
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+    for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        if signal.getsignal(s) is signal.SIG_DFL:
+            signal.signal(s, stopped)
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
     for opt in ("--state-dir", "--key", "--sha", "--repo-label", "--branch", "--repo-dir",
@@ -860,6 +879,7 @@ def main(argv):
     ap.add_argument("--name", default="")
     ap.add_argument("--started", type=int, required=True)
     a = ap.parse_args(argv)
+    remove_input_when_stopped(a.diff_file)
 
     name = a.name or f"{a.key}-{a.sha}"
     meta = {
