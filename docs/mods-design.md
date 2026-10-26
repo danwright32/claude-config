@@ -87,7 +87,14 @@ and settles its own surfaces in rounds of its own before it is built.
    mod keeps in a module variable is gone after a reload. A fact about the session (what it has
    recorded, counted, been told or asked, whether a turn runs) is kept in `$.state`, which the
    engine holds for the session across a reload; one that more than one hook or copy of the module
-   changes is written by version and retried, so two writes at once lose neither. A module variable
+   changes is written by version and retried, so two writes at once lose neither. The retry lands
+   in the same hook run because no read in a run is a snapshot, whatever the engine's type file says
+   ("Every `get` of one dispatch reads one moment"): measured on 2026-10-25 on 2.1.310 (#1720), a
+   read sees the run's own write and another dispatch's, and of two versioned writers racing in one
+   tool.call hook run or one timer's dispatch the loser's second read saw the winner's write and its
+   retry landed. `tests/test-state-snapshot.sh` holds that on the real engine and fails the day a
+   later one makes a run's reads one snapshot, when a refused write would have to be carried to the
+   next run instead. A module variable
    stays only for what a reload may lose: a cache filled from `$.state` (or from disk) at each start
    and written through, a flag that holds a notice to once (a reload says it once more at most), a
    timer (the engine cancels the old module's waits and each start arms them again), or the

@@ -112,7 +112,9 @@ const world = (on: On, opts: WorldOpts = {}) => {
     if (!(e.path in files)) throw new Error(`no file ${e.path}`)
     return { value: { kind: 'file', size: 1, mtimeMs: stampOf(e.path), isLink: false } } as never
   })
+  const lists: string[] = []
   on('fs.list', ($, e) => {
+    lists.push(e.path)
     const names = new Map<string, 'file' | 'dir'>()
     for (const p of Object.keys(files)) {
       if (!p.startsWith(e.path + '/')) continue
@@ -200,7 +202,7 @@ const world = (on: On, opts: WorldOpts = {}) => {
   const own = (id = 's1') => JSON.parse(files[`${DIR}/${id}.json`] ?? 'null')
   // A file written by someone other than the registry (its owner in another session, or the test).
   const touch = put
-  return { files, writes, reads, finds, logs, removed, bounds, clock, own, touch, hang: (p: string) => void (hangs = p), vanish: (p: string) => void (vanishing = p), unhang: () => unhang(), hangReached, hold, release: () => gate.release() }
+  return { files, writes, reads, finds, lists, logs, removed, bounds, clock, own, touch, hang: (p: string) => void (hangs = p), vanish: (p: string) => void (vanishing = p), unhang: () => unhang(), hangReached, hold, release: () => gate.release() }
 }
 
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) =>
@@ -756,6 +758,31 @@ test('a check that fails on one place is passed over when the transcript is foun
   const r = await unreadOf($, 's2')
   expect(r?.transcriptPath).toBe(T)
   expect(r?.transcriptUnread).toBeUndefined()
+})
+
+// #1725: Claude Code spells a folder past 200 characters as its first 200, a hyphen and a hash of
+// the path (measured on the real engine, 2.1.310, 2026-10-25), so the cut spelling is looked for in
+// its own right, never left to the search by id, which can fail under load (#1636).
+const LONG_CWD =
+  '/private/var/folders/kd/98c3xw516598081hs59hbkt80000gn/T/measure-long.27sZoY/' +
+  Array.from({ length: 22 }, (_, i) => `segment.${String(i + 1).padStart(3, '0')}/`).join('') +
+  'end.x'
+const LONG_T =
+  '/Users/x/.claude/projects/-private-var-folders-kd-98c3xw516598081hs59hbkt80000gn-T-measure-long-27sZoY-segment-001-segment-002-segment-003-segment-004-segment-005-segment-006-segment-007-segment-008-segment-009-segment-010-seg-20wnth/s2.jsonl'
+test("a session in a folder past 200 characters has its transcript found under Claude Code's cut spelling, without the search by id (#1725)", withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', LONG_CWD), [LONG_T]: '' }, findFails: { deny: 'find did not answer within 5 seconds' } })
+  await start($)
+  const r = await unreadOf($, 's2')
+  expect(r?.transcriptPath).toBe(LONG_T)
+  expect(r?.transcriptUnread).toBeUndefined()
+  expect(w.finds.filter(f => f === 's2.jsonl')).toEqual([])
+})
+test('a session in a folder of ordinary length is never looked for by listing the folder of transcripts (#1725)', withConsumer, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-Users-x-app/s2.jsonl'
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app'), [T]: '' } })
+  await start($)
+  expect((await unreadOf($, 's2'))?.transcriptPath).toBe(T)
+  expect(w.lists.filter(p => p === '/Users/x/.claude/projects')).toEqual([])
 })
 
 test('a transcript that is truly nowhere carries no unread reason (#1636)', withConsumer, async ($, on) => {
