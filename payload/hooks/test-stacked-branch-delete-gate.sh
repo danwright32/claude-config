@@ -143,7 +143,7 @@ check_eq "#1723 inside bash -c" "2" "$rc"
 fresh
 echo '[{"number":9}]' > "$ST/stacked"
 judge "gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/feat/x"
-check_eq "#1723 {owner}/{repo} is read as the checkout's origin" "2" "$rc"
+check_eq "#1723 {owner}/{repo} is read as gh fills it, here the checkout's only GitHub remote, origin" "2" "$rc"
 check "#1723 and listed in that repository" "pr list --repo acme/widget --base feat/x" "$calls"
 
 # 5. The account the delete names is the account the list is read as.
