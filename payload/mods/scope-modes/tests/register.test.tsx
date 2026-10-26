@@ -402,6 +402,8 @@ type Opts = {
   refuseFrom?: string
   /** Paths whether a file is at cannot be checked (#1678): fs.exists fails for each. */
   existsFails?: string[]
+  /** Folders whose listing fails (#1725). */
+  listFails?: string[]
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -485,6 +487,20 @@ const world = (on: On, o: Opts = {}) => {
     if (o.unreadableFiles?.includes(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` } as never
     if (!(e.path in w.files)) throw new Error(`ENOENT: no such file or directory, open '${e.path}'`)
     return { value: w.files[e.path] as string } as never
+  })
+  // A folder's entries, from the files a test put there (#1725: the long folder spelling is found by
+  // listing ~/.claude/projects).
+  on('fs.list', ($, e) => {
+    if (w.refusing) return refused('fs.list')
+    if (o.listFails?.includes(e.path)) return { deny: `EACCES: permission denied, scandir '${e.path}'` } as never
+    const names = new Map<string, 'file' | 'dir'>()
+    for (const f of Object.keys(w.files)) {
+      if (!f.startsWith(`${e.path}/`)) continue
+      const rest = f.slice(e.path.length + 1)
+      const cut = rest.indexOf('/')
+      names.set(cut < 0 ? rest : rest.slice(0, cut), cut < 0 ? 'file' : 'dir')
+    }
+    return { value: [...names].map(([name, kind]) => ({ name, kind, size: 0, mtimeMs: 0, isLink: false })) } as never
   })
   // A checkout folder (/repo, the session's own) is there unless a test removed it (#1059).
   const isGone = (dir: string) => (o.gone ?? []).includes(dir)
@@ -2655,6 +2671,30 @@ test("a transcript that is not at its id's path is never guessed: the registry's
   await command($ as never, 'sleep')
   expect(w.goalReads).toEqual([])
   expect(w.asked).toEqual([UNREAD_SELF_Q])
+})
+
+// #1725: Claude Code spells a folder past 200 characters as its first 200, a hyphen and a hash of
+// the path (measured on the real engine, 2.1.310, 2026-10-25), so such a session's transcript is
+// found by listing for that start rather than missed. The folder below is the one that run wrote.
+const LONG_CWD =
+  '/private/var/folders/kd/98c3xw516598081hs59hbkt80000gn/T/measure-long.27sZoY/' +
+  Array.from({ length: 22 }, (_, i) => `segment.${String(i + 1).padStart(3, '0')}/`).join('') +
+  'end.x'
+const LONG_T =
+  '/Users/x/.claude/projects/-private-var-folders-kd-98c3xw516598081hs59hbkt80000gn-T-measure-long-27sZoY-segment-001-segment-002-segment-003-segment-004-segment-005-segment-006-segment-007-segment-008-segment-009-segment-010-seg-20wnth/s1.jsonl'
+test("a session in a folder past 200 characters finds its transcript under Claude Code's cut spelling of it (#1725)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: LONG_CWD, selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, files: { [LONG_T]: '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}' } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.goalReads).toEqual([LONG_T])
+  expect(w.asked).toEqual([])
+})
+test("a listing of the folder of transcripts that fails is said as why, never as not found (#1725)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { cwd: LONG_CWD, selfSession: { transcriptPath: null }, listFails: ['/Users/x/.claude/projects'] })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked[0]).toContain('its transcript could not be looked up: the folders under /Users/x/.claude/projects could not be listed (')
+  expect(r.text).not.toContain('its transcript was not found')
 })
 
 // A check at the id's path that fails is no answer (L10, L11): with the registry finding nothing, it
