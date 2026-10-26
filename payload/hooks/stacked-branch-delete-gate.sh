@@ -116,8 +116,13 @@ record_context() {   # $1 = record index
   # gh reads GH_TOKEN first, then GITHUB_TOKEN.
   tok_line="${gh_token:-$github_token}"
   if [ -n "$tok_line" ]; then
-    if [[ "$tok_line" =~ ^(GH|GITHUB)_TOKEN=\$\([[:space:]]*gh[[:space:]]+auth[[:space:]]+token[[:space:]]+(-u|--user)[[:space:]=]+([A-Za-z0-9_-]+)[[:space:]]*\)$ ]]; then
-      rec_acct="${BASH_REMATCH[3]}"
+    # The one account form the shared reader accepts (lib/shell-words.py DATA_TOKEN_PREFIX), compared
+    # as a literal rather than matched word by word (lib/word-position-scan.py); any other spelling
+    # of it cannot be read, so it refuses below.
+    local tok_val="${tok_line#*=}" acct_pre='$(gh auth token -u ' acct_try=""
+    if [[ "$tok_val" == "$acct_pre"*")" ]]; then acct_try="${tok_val#"$acct_pre"}"; acct_try="${acct_try%)}"; fi
+    if [ -n "$acct_try" ] && [ "${#acct_try}" -le 39 ] && [[ "$acct_try" =~ ^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$ ]]; then
+      rec_acct="$acct_try"
     else
       case "$tok_line" in
         *'$'*|*'`'*) [ -n "$rec_unread" ] || rec_unread="$tok_line" ;;
