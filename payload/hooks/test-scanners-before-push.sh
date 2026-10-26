@@ -701,6 +701,9 @@ R1734="$(mkrepo homepath1734)"
 : > "$R1734/claude-sync"
 cp "$DIR/check-home-paths.sh" "$DIR/test-check-home-paths.sh" "$R1734/payload/hooks/"
 cp -R "$DIR/lib" "$R1734/payload/hooks/lib"
+# A suite run earlier leaves lib/__pycache__ behind, ignored by the real repository but committed by
+# this one, which the home path check skips: a file listed and never read fails it (PR #1741's CI, 2026-10-25).
+find "$R1734/payload/hooks/lib" -name __pycache__ -type d -prune -exec rm -rf {} +
 printf '#!/usr/bin/env bash\necho quoted\n' > "$R1734/payload/hooks/quoted-refusal.sh"
 commit_all "$R1734"
 o1734c="$(fire "$R1734" "git push")"; c1734c=$?
