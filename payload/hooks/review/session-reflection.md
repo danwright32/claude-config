@@ -17,3 +17,5 @@ Anything with side effects (writing, installing, deploying, pushing) still needs
 Number points 1.1, 1.2 (this is section 1). Give every item, asides included, its own number. No dashes or bullets.
 
 EXCEPTION: if an ISSUE REVIEW fired this same turn, print no banner and no section here; hand your points to its SECOND PASS instead.
+
+EITHER WAY, last: with no /goal set and the goal_accomplished tool offered, if every part of the work I asked for is finished, call it now; its own checks refuse an early call. Not finished: say nothing of it.
