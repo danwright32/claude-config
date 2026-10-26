@@ -1903,13 +1903,29 @@ export const mentionsStore = (text: string): boolean => /plugins\/store/.test(te
  * checkout stands is mod-kit's one reading of it (`$.modkit.branch`), and `repo` the project's name
  * as `$.modkit.repo` gives it.
  */
-export const subjectsOf = (at: { main: string; repo: string; session: string } & ({ issue: number } | { branch: string; isDefault: boolean; issues: readonly number[] })): DesignRoundSubject[] => {
+export const subjectsOf = (at: { main: string; repo: string; session: string } & ({ issue: number } | { branch: string; isDefault: boolean; issues: readonly number[]; root?: string })): DesignRoundSubject[] => {
   const issue = (n: number): DesignRoundSubject => ({ key: `record:${at.main}|issue:${n}`, label: `issue #${n} in ${at.repo}` })
   if ('issue' in at) return [issue(at.issue)]
   if (at.isDefault) return [{ key: `record:${at.main}|branch:${at.branch}|session:${at.session}`, label: `${at.branch} in ${at.repo}, for this session` }]
-  if (at.issues.length) return at.issues.map(issue)
-  return [{ key: `record:${at.main}|branch:${at.branch}`, label: `branch ${at.branch} in ${at.repo}` }]
+  // A linked worktree's own key (#1740): written beside a skip on its builder's starting branch, and
+  // read for the issues a later branch of the same worktree names. The main working tree has none.
+  const own = at.root !== undefined && at.root !== at.main ? worktreeKey(at.main, at.root) : undefined
+  if (at.issues.length) return at.issues.map(n => (own === undefined ? issue(n) : { ...issue(n), carriedFrom: own }))
+  const branch: DesignRoundSubject = { key: `record:${at.main}|branch:${at.branch}`, label: `branch ${at.branch} in ${at.repo}` }
+  return [own !== undefined && isAgentBranch(at.branch) ? { ...branch, carryTo: own } : branch]
 }
+
+// A BUILDER'S SKIP CARRIED TO ITS RENAMED BRANCH (#1740). Claude Code starts an agent's worktree on a
+// branch named worktree-agent-<its random id>, which names no issue (#1306), so Dan's Skip them there
+// was kept under that branch. Twice on 2026-10-24/25 (#1563, #1727) the builder then renamed its
+// branch to name its issue, the guard read the issue, found no answer and asked him again. So a skip
+// on such a branch is also kept under the worktree's own folder, and an issue a later branch of THAT
+// worktree names reads it when the issue has no answer of its own. It is never kept under the issue,
+// so another worktree, the main checkout, and a later builder for the same issue are all still asked:
+// #1306's guarantee, that an agent's answer reaches no checkout but its own, holds. Only a skip is
+// carried: a settled round settles the design that branch built, which a rename does not change.
+export const isAgentBranch = (branch: string): boolean => /^worktree-agent-[0-9a-z]+$/i.test(branch)
+export const worktreeKey = (main: string, root: string): string => `record:${main}|worktree:${root}`
 
 // The branch reading an answer kept under an issue was written by (#1322). Before #1306 an agent
 // worktree's branch read as the issues its random id spelled, and Dan's Skip them there was kept

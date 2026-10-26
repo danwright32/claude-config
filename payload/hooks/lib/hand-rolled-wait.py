@@ -34,6 +34,22 @@ intent.
 Comment lines are skipped. A stand in a suite writes through a heredoc is shell, and is where half
 these waits lived (the fake claude's hold), so its lines are judged like the suite's own.
 
+A BARE FIXED SLEEP (claude-config#1743) is the same fault with no loop around it: the suite pauses a
+fixed time and then acts as though what it waited for has happened (`kill "$p"; sleep 2; check
+gone`). Fourteen such lines in seven suites escaped the rules above on 2026-10-25. A `sleep` is
+reported when it is a statement of the suite's own (at the start of a line, or after `;`, `&&`,
+`||`, `then`, `else` or `{`) with a written number of seconds, that runs in the foreground and
+carries on, unless:
+  - it is a poll tick: the loop around it, found by reading back to the `do` no `done` closes, is a
+    `while` or `until`, or a `for` over ticks, which the rules above judge;
+  - it is a holder, put in the background (`sleep 300 &`) or made the process itself (`exec sleep`),
+    which waits for nothing and is killed;
+  - it is in a heredoc's body: a stand in the suite writes, where it is how long the fake takes (a
+    slow lookup, a hang until killed), never a wait of the suite's.
+A duration held in a variable (`sleep "$SUITE_POLL_INTERVAL"`) is a poll interval or a test seam's
+pause named where it is set, and is not read here. No file or line is excused by name. A wait for something the passing case meets takes hang_wait; a
+window the passing case runs out takes window_wait with its status asserted, as above.
+
 Reads the paths to judge, relative to --root, one per line on stdin, and judges only the suite files
 among them. Prints `<path>:<line>: <text>` for each, and exits 1 when there is any.
 """
@@ -44,7 +60,7 @@ import sys
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from shell_code_lines import code_lines  # noqa: E402
+from shell_code_lines import code_lines, heredoc_body_lines  # noqa: E402
 
 SUITE = re.compile(r'(^|/)test-[^/]*\.sh$')
 LOOP = re.compile(r'(?:^|[;&|({\s]|\\n)(while|until)\s+(.*?)\s*;\s*do\b(.*)$')
@@ -62,6 +78,48 @@ PY_SLEEP = re.compile(r'\btime\.sleep\(')
 WW_CALL = re.compile(r'(?:^|[;&|({\s!]|\\n)window_wait\s+["\']?(?:\d+|\$\S+|%\w)\S*\s+(.*)$')
 WW_CONST = re.compile(r'''^["']?(?:true|false|:)["']?(?=[\s;)"']|$)''')
 WW_CAPTURE = re.compile(r'^[^;]*;\s*(?:local\s+)?(\w+)=\\?\$\?')
+# A foreground sleep statement that carries on (#1743): after a statement boundary, ended by one,
+# never by a lone `&`, so a holder in the background is not one.
+BARE = re.compile(r'(?:^|;|&&|\|\||\bthen\b|\belse\b|\{)\s*sleep\s+(["\']?)\d+(?:\.\d+)?\1\s*(?=;|&&|\|\||\}|$)')
+# The loop words read back from a sleep to the loop around it, if any.
+# A word written inside a quoted fixture or a printf stand in (`'while ...`, `\nwhile`) counts.
+LOOP_TOK = re.compile(r'(?:^|(?<=[;&|({\s\'"])|(?<=\\n))(?P<kw>while|until|for)(?=\s)'
+                      r'|(?:^|(?<=[;&|\s])|(?<=\\n))(?P<do>do)(?=[\s;\\]|$)'
+                      r'|(?:^|(?<=[;&|\s])|(?<=\\n))(?P<done>done)(?=[\s;)<>|&\\\'"]|$)')
+BARE_SAID = ('   <- a fixed sleep: wait on the condition itself with hang_wait, or, for a window the '
+             'passing case runs out, window_wait with its status asserted (lib/hang-wait.sh)')
+
+
+def in_tick_loop(code, k, pos, body):
+    """Whether the sleep at code[k] (a (line number, line) pair), column pos, is a poll tick: the loop
+    around it, read back at most 60 code lines to the `do` no `done` closes, is a while or until loop,
+    or a for loop over ticks. A heredoc's body between is a stand in's own and is not read."""
+    toks = []
+    for j in range(max(0, k - 60), k + 1):
+        n, line = code[j]
+        if n in body:
+            continue
+        text = line[:pos] if j == k else line
+        for m in LOOP_TOK.finditer(text):
+            toks.append((j, m))
+    depth = 0
+    for t in range(len(toks) - 1, -1, -1):
+        j, m = toks[t]
+        if m.group('done'):
+            depth += 1
+        elif m.group('do'):
+            if depth:
+                depth -= 1
+                continue
+            for u in range(t - 1, -1, -1):
+                kw = toks[u][1].group('kw')
+                if kw in ('while', 'until'):
+                    return True
+                if kw == 'for':
+                    f = FOR.search(code[toks[u][0]][1])
+                    return bool(f and TICKS.search(f.group(1)))
+            return False
+    return False
 
 
 def ww_ran_out_asserted(name, code):
@@ -104,6 +162,16 @@ def judge(text):
     lines = text.split('\n')
     found = []
     code = '\n'.join(ln for _, ln in code_lines(text))
+    body = heredoc_body_lines(text)
+    listed = list(code_lines(text))
+    # A bare fixed sleep of the suite's own (#1743).
+    for k, (n, line) in enumerate(listed):
+        if n in body:
+            continue
+        for b in BARE.finditer(line):
+            if not in_tick_loop(listed, k, b.start(), body):
+                found.append((n, line.strip() + BARE_SAID))
+                break
     # Only the suite's own code: a comment, or a line inside a quoted string spanning lines (another
     # hook's input written as a fixture), is never judged (lib/shell_code_lines.py).
     for n, line in code_lines(text):
@@ -143,7 +211,7 @@ def judge(text):
         body = py_body(lines, i, len(m.group(1))) if m else ''
         if m and 'HANG' not in m.group(2) and PY_SLEEP.search(body) and (m.re is PY_CLOCK or re.search(r'\b(break|return)\b', body)):
             found.append((i + 1, line.strip()))
-    return found
+    return sorted(found)
 
 
 def main():

@@ -4,6 +4,10 @@ export type DesignRoundSubject = {
   key: string
   /** How Dan and Claude read it: "issue #978 in claude-config". */
   label: string
+  /** A builder's worktree-agent branch: where a skip on it is also kept, its worktree's own key (#1740, rules.ts worktreeKey). */
+  carryTo?: string
+  /** An issue a linked worktree's branch names: the worktree's own key, whose skip counts when the issue has no answer (#1740). */
+  carriedFrom?: string
 }
 
 /** A look changing edit refused until Dan answers "Skip design rounds for this issue?" or settles a round (#978). */

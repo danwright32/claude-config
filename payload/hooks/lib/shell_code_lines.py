@@ -17,7 +17,8 @@ followed, so an apostrophe in a heredoc's prose cannot carry a quote past the he
 
 code_lines(text, with_heredocs=True) adds a third item: the heredoc operators the line opens as
 code, each (strip_tabs, word, inside_substitution), so heredoc-in-substitution.py reads the same
-quoting as the rest.
+quoting as the rest. heredoc_body_lines(text) names the lines that are a heredoc's body, from the
+same walk, so hand-rolled-wait.py can tell a stand in's own commands from the suite's (#1743).
 """
 import re
 
@@ -72,7 +73,9 @@ def scan(line, frames):
     return ops
 
 
-def code_lines(text, with_heredocs=False):
+def _walk(text):
+    """Every code line as (line_number, line, heredoc operators it opens, whether it is a heredoc's
+    body): the one walk code_lines and heredoc_body_lines both read."""
     frames = [None]
     pending = []  # heredocs opened and not yet read: (strip_tabs, word)
     for i, line in enumerate(text.split('\n')):
@@ -83,11 +86,22 @@ def code_lines(text, with_heredocs=False):
                 continue
             if line.lstrip().startswith('#'):
                 continue
-            yield (i + 1, line, []) if with_heredocs else (i + 1, line)
+            yield (i + 1, line, [], True)
             continue
         starts_quoted = frames[-1] is not None
         ops = scan(line, frames)
         pending.extend((s, w) for s, w, _ in ops)
         if starts_quoted or line.lstrip().startswith('#'):
             continue
-        yield (i + 1, line, ops) if with_heredocs else (i + 1, line)
+        yield (i + 1, line, ops, False)
+
+
+def code_lines(text, with_heredocs=False):
+    for n, line, ops, _ in _walk(text):
+        yield (n, line, ops) if with_heredocs else (n, line)
+
+
+def heredoc_body_lines(text):
+    """The numbers of the code lines that are a heredoc's body: a stand in the file writes, whose
+    commands are the stand in's own rather than the file's (claude-config#1743)."""
+    return {n for n, _, _, body in _walk(text) if body}

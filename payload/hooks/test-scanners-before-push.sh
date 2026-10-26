@@ -591,6 +591,34 @@ o16="$(fire "$R15" "git push")"; c16=$?
 case "$o16" in *"not a number"*) check "a floor that is not a number is said, not read as zero" ok ;;
   *) check "a floor that is not a number is said, not read as zero" "exit=$c16 out=$o16" ;; esac
 
+# --- A floor that NAMES its suites (claude-config#1744). A count can say only that fewer were
+#     selected, so on 2026-10-25 the floor recorded 6 while 21 were selected, 15 free to leave (L98,
+#     L182). Recorded as the suites' paths, a suite that stops being selected is named.
+R17="$(mkrepo floornames)"; add_scanner "$R17" alpha 0; add_scanner "$R17" beta2 0; commit_all "$R17"
+mkdir -p "$R17/.claude"
+printf '# the whole tree scanners this repo expects\npayload/hooks/test-alpha.sh\npayload/hooks/test-beta2.sh\n' > "$R17/.claude/scanners-floor.txt"
+git -C "$R17" add -A >/dev/null 2>&1; git -C "$R17" commit -q -m floor >/dev/null 2>&1
+o18="$(fire "$R17" "git push")"; c18=$?
+[ "$c18" -eq 0 ] && case "$o18" in *"floor of 2"*) true ;; *) false ;; esac \
+  && check "#1744 a floor naming every suite it selects lets the push through, saying the floor was met" ok \
+  || check "#1744 a floor naming every suite it selects lets the push through, saying the floor was met" "exit=$c18 out=$o18"
+# Adding a scanner never fails a push.
+add_scanner "$R17" gamma3 0; commit_all "$R17"
+o19="$(fire "$R17" "git push")"; c19=$?
+[ "$c19" -eq 0 ] \
+  && check "#1744 a scanner the floor does not name yet does not block the push" ok \
+  || check "#1744 a scanner the floor does not name yet does not block the push" "exit=$c19 out=$o19"
+# A named suite that stops reading the repository's files drops out of the selection: blocked, by name.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$R17/payload/hooks/test-beta2.sh"; commit_all "$R17"
+o20="$(fire "$R17" "git push")"; c20=$?
+[ "$c20" -eq 2 ] && grep -q 'payload/hooks/test-beta2.sh' <<< "$o20" && ! grep -q 'no longer selected.*test-alpha' <<< "$o20" \
+  && check "#1744 a named suite that is no longer selected blocks the push, naming it" ok \
+  || check "#1744 a named suite that is no longer selected blocks the push, naming it" "exit=$c20 out=$o20"
+case "$o20" in
+  *"scanners-floor.txt"*) check "#1744 and says to take it out of the floor if it was removed on purpose" ok ;;
+  *) check "#1744 and says to take it out of the floor if it was removed on purpose" "out=$o20" ;;
+esac
+
 # --- a scanner whose INPUTS have not changed since it passed is not run again (claude-config#531).
 #     Measured 2026-09-21: the scanners are 15.3 of the 20.1 seconds a push waits, and they re-read
 #     the whole repository on every push even when nothing they read has changed, which is most
@@ -719,6 +747,15 @@ if [ -n "$REAL" ] && [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
   grep -q '^SUITE payload/hooks/test-check-home-paths\.sh$' <<< "$_sel" \
     && check "#1734 and the home path check is among them" ok \
     || check "#1734 and the home path check is among them" "got=$_sel"
+  # The recorded floor names exactly the suites selected here, so it can never again sit far below
+  # the selection (claude-config#1744: on 2026-10-25 it recorded 6 while 21 were selected). A scanner added is
+  # named in the same change; one removed on purpose is taken out.
+  _real_sel="$(awk '{ print $2 }' <<< "$_sel" | sort -u)"
+  _real_floor="$(awk '/^[[:space:]]*#/ { next } NF { print $1 }' "$REAL/.claude/scanners-floor.txt" 2>/dev/null | sort -u)"
+  _real_n="$(grep -c . <<< "$_real_sel")"
+  [ "$_real_n" -ge 21 ] && [ "$_real_sel" = "$_real_floor" ] \
+    && check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" ok \
+    || check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" "selected and not named: $(comm -23 <(printf '%s\n' "$_real_sel") <(printf '%s\n' "$_real_floor") | tr '\n' ' ')/ named and not selected: $(comm -13 <(printf '%s\n' "$_real_sel") <(printf '%s\n' "$_real_floor") | tr '\n' ' ')"
   grep -q '^SECTION .*#145' <<< "$_sel" \
     && check "and the section that scans comments for undated numbers is selected" ok \
     || check "and the section that scans comments for undated numbers is selected" "got=$_sel"

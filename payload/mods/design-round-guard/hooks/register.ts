@@ -158,6 +158,11 @@ import { errorText } from './mod-kit/skew.ts'
 //   and is judged by what it leaves, by the rule its Edit is (afterShell), so the two routes agree; and
 //   a returned conditional is read as each value it may return (rules.ts drawnParts), so turning
 //   `return c ? undefined : x` into ifs returning the same values draws nothing new.
+// - Since #1740: Dan's Skip them on a builder's starting branch (worktree-agent-<id>) is also kept
+//   under that worktree's own folder, and an issue a later branch of the SAME worktree names reads it
+//   when the issue has no answer of its own (rules.ts worktreeKey, answerOf below), so renaming the
+//   branch to name its issue does not ask him again. Never kept under the issue: another worktree,
+//   the main checkout and any later builder are still asked (#1306). A settled round is not carried.
 // - Since #1586: a script file a command runs (`python3 gen.py`, `bash x.sh`, `./tool`, make-settled.py)
 //   writes what cannot be read before it runs, so each file it is handed as an argument (mod-kit's
 //   `runs`) is judged as a write of it, as an Edit would be, and the refusal says why (rules.ts
@@ -344,7 +349,7 @@ const swiftView = async ($: EngineInterface, t: Target, tool: string, input: Rec
   return isSwiftUI(texts.join('\n'))
 }
 
-type Place = { main: string; repo: string; branch: string; isDefault: boolean; issues: readonly number[] }
+type Place = { main: string; repo: string; branch: string; isDefault: boolean; issues: readonly number[]; root: string }
 // Where a checkout stands, by mod-kit's one reading of it (#978), and the project's name by its one
 // reading of a repository (#951); why not, with the project where git named it.
 const placeOf = async ($: EngineInterface, tree: string): Promise<Place | { why: string; main?: string; repo?: string }> => {
@@ -353,7 +358,7 @@ const placeOf = async ($: EngineInterface, tree: string): Promise<Place | { why:
   const main = b.main ?? tree
   const repo = (await $.modkit.repo({ root: main, remote: null })).name ?? main
   if ('unreadable' in b) return { why: b.unreadable, ...(b.main ? { main, repo } : {}) }
-  return { main, repo, branch: b.branch, isDefault: b.isDefault, issues: b.issues }
+  return { main, repo, branch: b.branch, isDefault: b.isDefault, issues: b.issues, root: b.root }
 }
 
 
@@ -376,6 +381,18 @@ const subjectsIn = async ($: EngineInterface, tree: string, issue?: number): Pro
 const recordOf = (v: unknown, key: string): DesignRoundRecord | undefined => {
   const r = v as Partial<DesignRoundRecord> | undefined
   return r && (r.kind === 'settled' || r.kind === 'skipped') && typeof r.label === 'string' && answerCounts(key, r.reading) ? (r as DesignRoundRecord) : undefined
+}
+
+// Dan's answer for a subject: its own, or, for an issue a linked worktree's later branch names, his
+// skip on that worktree's starting worktree-agent branch (#1740, rules.ts worktreeKey). Every reader
+// of whether a subject is answered asks here, so a carried skip never lets an edit through that the
+// pending list or the skip question would still call open. A store that cannot be read throws, as
+// each reader already handles.
+const answerOf = async ($: EngineInterface, s: DesignRoundSubject): Promise<DesignRoundRecord | undefined> => {
+  const own = recordOf(await $.store.get(s.key), s.key)
+  if (own || s.carriedFrom === undefined) return own
+  const carried = recordOf(await $.store.get(s.carriedFrom), s.carriedFrom)
+  return carried?.kind === 'skipped' ? carried : undefined
 }
 
 // Dan's Not a look change for this very call (#1010). A store that cannot be read here is read again
@@ -859,7 +876,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     const { subjects } = at
     const lacking: DesignRoundSubject[] = []
     try {
-      for (const s of subjects) if (!recordOf(await $.store.get(s.key), s.key)) lacking.push(s)
+      for (const s of subjects) if (!(await answerOf($, s))) lacking.push(s)
     } catch (err) {
       return { unreadable: { files: shown, subjects, why: message(err) } }
     }
@@ -1017,7 +1034,7 @@ const afterShell = async (
       unknown.why.push(at.why)
     } else
       try {
-        for (const s of at.subjects) if (!recordOf(await $.store.get(s.key), s.key)) open.push(s)
+        for (const s of at.subjects) if (!(await answerOf($, s))) open.push(s)
       } catch (err) {
         unread.files.push(file)
         unread.subjects.push(...at.subjects)
@@ -1088,7 +1105,7 @@ const unanswered = async ($: EngineInterface): Promise<DesignRoundPending[]> => 
   const open: DesignRoundPending[] = []
   for (const w of await waitingAll($)) {
     let lacking = false
-    for (const x of w.subjects) if (!recordOf(await $.store.get(x.key), x.key)) lacking = true
+    for (const x of w.subjects) if (!(await answerOf($, x))) lacking = true
     if (lacking) open.push(w)
   }
   return open
@@ -1294,6 +1311,9 @@ export const register: Register = on => {
       try {
         const now = await $.clock.now()
         for (const s of subjects) {
+          // A skip on a builder's starting branch is kept under its worktree too, first, so a subject
+          // is said as recorded only once both are (#1740).
+          if (kind === 'skipped' && s.carryTo !== undefined) await $.store.set(s.carryTo, { kind, at: now, label: s.label, reading: ISSUE_READING } satisfies DesignRoundRecord)
           await $.store.set(s.key, { kind, at: now, label: s.label, reading: ISSUE_READING } satisfies DesignRoundRecord)
           done.push(s)
         }
@@ -1355,7 +1375,7 @@ export const register: Register = on => {
         // settled keeps its settlement, never overwritten by a skip (lessons review of #991).
         // What the refused call waits on, as the settled question naming it reads it (#1046).
         const open: DesignRoundSubject[] = []
-        for (const x of waitsOn(waiting)) if (!recordOf(await $.store.get(x.key), x.key)) open.push(x)
+        for (const x of waitsOn(waiting)) if (!(await answerOf($, x))) open.push(x)
         if (!open.length) {
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
           return { deny: `Nothing to ask: ${listed(waiting.subjects.map(x => x.label))} already has his answer, so the edit goes through. Make it again.` }

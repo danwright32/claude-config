@@ -15,8 +15,8 @@
 #      time, so a holder whose process has gone is passed over at once (L409), and a live holder
 #      past LOAD_WINDOW_HOLD_SECONDS is passed over by whoever waits (L523). Two windows never run
 #      at once.
-#   2. Waits until no merge-when-ready.sh run and no full suite run (run-all-tests.sh) is active,
-#      for LOAD_WINDOW_WAIT_SECONDS at most, then refuses (exit 75) naming what was running.
+#   2. Waits until no merge-when-ready.sh run, no full suite run (run-all-tests.sh) and no lessons
+#      review (#1730) is active, for LOAD_WINDOW_WAIT_SECONDS at most, then refuses (exit 75) naming what was running.
 #      HOW THEY ARE SEEN, cheaply: one `ps` per look (lib/suite-pile.sh's table, the same seam the
 #      suite pile notice reads), matching a shell running a script NAMED merge-when-ready.sh or
 #      run-all-tests.sh, and, as a second source that does not depend on how a command line is
