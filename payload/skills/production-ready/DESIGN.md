@@ -113,9 +113,17 @@ from the user's list plus the operability gaps research surfaced.
 6. **Rate Limiting & Abuse Prevention**: rate limiting; abuse/bot prevention; DoS
    protection; per-request resource limits; quota enforcement.
 7. **Data Isolation & PII**: multi-tenancy data isolation (e.g. RLS); PII inventory &
-   handling; data retention & deletion policy; encryption at rest.
+   handling; data retention & deletion policy; encryption at rest; third party resources
+   that receive visitor IPs (fonts, scripts); trackers inside consent; session recording
+   that masks inputs (CIPA).
 8. **Compliance, Audit & Legal**: regulatory compliance (GDPR/CCPA/etc.); audit trails &
-   tamper-evident logging; privacy policy, cookie consent, ToS.
+   tamper-evident logging; privacy policy, cookie consent, ToS; commercial email
+   (CAN-SPAM) from every sender, outside systems included; calls and texts (TCPA);
+   Global Privacy Control; COPPA; auto renewal; user uploads and DMCA; sector rules
+   from the profile (GLBA, FCRA, TILA, UDAAP, HIPAA). Added by claude-config#1753
+   after a 2026-10-24 audit missed CAN-SPAM because the repo itself sent no email.
+   Kept by the script, not the profiler, whenever the product is public, holds personal
+   data or messages consumers; every finding carries the `law` it exposes.
 9. **Functional Testing**: unit, integration, e2e, regression tests; coverage thresholds
    enforced in CI.
 10. **Load, Stress & Chaos**: load/stress testing; chaos engineering; resilience testing;
@@ -135,13 +143,15 @@ from the user's list plus the operability gaps research surfaced.
     restores; DB migration safety; graceful shutdown (SIGTERM).
 17. **Cost, Capacity & Performance**: cost monitoring & budget alerts; capacity planning;
     autoscaling; performance/latency budgets.
-18. **Accessibility**: WCAG conformance; keyboard nav; screen-reader semantics; contrast;
-    focus management. (N/A for non-UI projects.)
+18. **Accessibility**: WCAG 2.1 AA conformance, graded as ADA legal exposure on a public
+    site; keyboard nav; screen-reader semantics; contrast; focus management. (N/A for
+    non-UI projects.)
 19. **Documentation & Architecture**: ADRs; architecture diagrams; API contracts &
     versioning; README/runbooks/onboarding docs.
 
-Auditors run concurrently up to the Workflow engine's cap (~min(16, cores−2)); the rest
-queue and still complete. Heavy by design (decision 4).
+Auditors and refuters run at most four at once, Dan's standing rule for every session
+(the engine's own cap, about min(16, cores minus 2), let up to 16 run before
+claude-config#1753); the rest queue and still complete. Heavy by design (decision 4).
 
 ---
 
