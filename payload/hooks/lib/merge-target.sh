@@ -42,15 +42,19 @@
 #   mt_gh_transient  whether a failed gh read is worth asking again: the
 #                      transport or GitHub's own server failed, rather than
 #                      GitHub answering no
+#   mt_gh_network_fault  whether gh's error names the network between this Mac
+#                      and GitHub failing, the one list of those shapes (#1735)
 #   mt_gh_read_class the one reading of a failed gh read every reader returns
 #                      through: transient, GitHub refusing the sign in (a 401
-#                      with no token, MT_SIGNIN_RC, #1615), gh not reaching
-#                      GitHub at all (MT_CONNECT_RC, #1675), or an answer to believe
+#                      with no token, MT_SIGNIN_RC, #1615), the network to
+#                      GitHub failing (MT_CONNECT_RC, #1675, #1735), or an answer
+#                      to believe
 #   mt_retry_read    asks a read again while it fails transiently, its sign in
-#                      is refused, or gh could not connect to GitHub at all,
-#                      through an injected sleep, and never on a refusal (#1081,
-#                      #1615, #1675); mt_signin_said says a sign in that stayed
-#                      refused, mt_connect_said a connection never made
+#                      is refused, or the network to GitHub failed, through an
+#                      injected sleep, and never on a refusal (#1081, #1615,
+#                      #1675); mt_signin_said says a sign in that stayed refused,
+#                      mt_connect_said a connection that kept failing, and
+#                      mt_unanswered_said either, for a caller holding a code
 #   mt_signin_record each refused sign in written to this Mac's ledger, counted
 #                      across runs, and mt_signin_trend the sentence once the
 #                      last day holds enough of them (#1626)
@@ -1365,9 +1369,10 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
 }
 
 # Is this failed gh read worth asking again? Returns 0 when its error text names a
-# transport fault (a timeout, a reset or refused connection, a lookup that failed,
-# a connection cut short) or GitHub's own server failing (HTTP 5xx, GraphQL's
-# "Something went wrong"), and 1 for everything else (claude-config#1061).
+# network fault (mt_gh_network_fault: a dial, a lookup, a handshake, a reset or a
+# connection cut short), a request GitHub took and did not answer in time, or
+# GitHub's own server failing (HTTP 5xx, GraphQL's "Something went wrong"), and 1
+# for everything else (claude-config#1061).
 #
 # It reads gh's error text because that is all gh gives: `gh api` and `gh pr view`
 # exit 1 for a 404 and for a dropped connection alike, and a transport fault has
@@ -1381,12 +1386,11 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
 # (claude-config#1482).
 mt_gh_transient() {  # $1 = the error text gh printed
   local t
+  mt_gh_network_fault "${1:-}" && return 0
   t=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
   [ -n "$t" ] || return 1
   case "$t" in
-    *"tls handshake timeout"*|*"i/o timeout"*|*"timed out"*|*"timeout awaiting"*|*"context deadline exceeded"*) return 0 ;;
-    *"connection reset"*|*"connection refused"*|*"broken pipe"*|*"network is unreachable"*|*"no such host"*) return 0 ;;
-    *"temporary failure in name resolution"*|*'": eof'*|*"unexpected eof"*) return 0 ;;
+    *"timed out"*|*"timeout awaiting"*|*"context deadline exceeded"*) return 0 ;;
     *"something went wrong while executing your query"*) return 0 ;;
   esac
   [[ "$t" =~ http\ 5[0-9][0-9] ]] && return 0
@@ -1429,7 +1433,7 @@ mt_gh_signin_refused() {  # $1 = the error text gh printed
   return 1
 }
 
-# A CONNECTION GH COULD NOT MAKE IS ITS OWN OUTCOME (claude-config#1675). On 2026-10-24
+# THE NETWORK TO GITHUB FAILING IS ITS OWN OUTCOME (claude-config#1675, #1735). On 2026-10-24
 # merge-when-ready.sh stopped #1640 at 41m 36s with "could not read pull request #1640 ... (error
 # connecting to api.github.com). Nothing was merged." and no retry line, and another builder's run
 # stopped the same way. "error connecting to <host>" is what gh prints, with no HTTP status, when it
@@ -1442,28 +1446,58 @@ mt_gh_signin_refused() {  # $1 = the error text gh printed
 # request GitHub could not show or a sign in it refused (L11). 7, because 2 to 6 already mean
 # something to a reader or a caller (see MT_SIGNIN_RC). Kept apart from mt_gh_transient, whose 2 its
 # callers say as GitHub not answering in time: there the request went out, here it never left.
+#
+# EVERY NETWORK FAILURE, NOT ONE WORDING (claude-config#1735). On 2026-10-25, with #1675 installed, the
+# helper stopped #1732 at once on "Post \"https://api.github.com/graphql\": dial tcp 140.82.113.6:443:
+# connect: can't assign requested address", and the same shape had stopped three earlier reads: this Mac had
+# no local port left to connect from, so the request never left, but only "error connecting to" was
+# known here, and none of the transport words matched, so it was believed. So every network failure gh
+# passes through from Go's network library is read HERE, in one list (L35), and split by what it
+# measured (L11), in MT_CONNECT_PHASE:
+#   unreached  no request reached GitHub: "error connecting to", any "dial tcp" failure (a refused,
+#              unreachable or timed out connect, a name lookup, no local port to connect from), a
+#              name lookup or route that failed, a TLS handshake that did not finish, or a request
+#              cancelled while still waiting for its connection;
+#   dropped    a connection was made and failed before GitHub's answer arrived: a reset, a read or
+#              write on it that timed out or broke, or an answer cut off (EOF).
+# Measured shapes, every network failure in the helper output this Mac still kept on 2026-10-25 (task
+# outputs and session transcripts): the dial failure above (four stops: #958 twice, #1003, #1732),
+# "error connecting to api.github.com" (three stops: #888, #1640, #1643), "net/http: TLS handshake
+# timeout" (one stop, #1043) and "read tcp ...: read: connection reset by peer" (one stop, #1047, and
+# one retry), the last two retried as transient until now. The
+# transport words mt_gh_transient carried since #1061 all moved here, so a failure it retried before is
+# still retried, now said as what it is. A request GitHub took and did not answer in time (headers it
+# never sent, "context deadline exceeded") and GitHub's own 5xx stay transient, said as GitHub not
+# answering: there the request reached it.
 MT_CONNECT_RC=7
-mt_gh_unreachable() {  # $1 = the error text gh printed
+mt_gh_network_fault() {  # $1 = the error text gh printed; sets MT_CONNECT_PHASE
   local t
   t=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+  [ -n "$t" ] || return 1
   case $'\n'"$t" in
-    *$'\n'"error connecting to "*) return 0 ;;
+    *$'\n'"error connecting to "*|*"dial tcp"*|*"dial udp"*|*"no such host"*|*"temporary failure in name resolution"*|\
+    *"network is unreachable"*|*"no route to host"*|*"can't assign requested address"*|*"connection refused"*|\
+    *"tls handshake"*|*"while waiting for connection"*)
+      MT_CONNECT_PHASE=unreached; return 0 ;;
+    *"read tcp"*|*"write tcp"*|*"connection reset"*|*"broken pipe"*|*"i/o timeout"*|*'": eof'*|*"unexpected eof"*)
+      MT_CONNECT_PHASE=dropped; return 0 ;;
   esac
   return 1
 }
 
 # How a failed gh read is asked again, the one reading every merge time reader returns through (L35):
-# 2 transient (mt_gh_transient), MT_SIGNIN_RC when GitHub refused the sign in, MT_CONNECT_RC when gh
-# could not connect to GitHub at all (#1675), 1 for everything else, which is believed. $2 is the
-# account that was asked (empty for the active one), kept in MT_SIGNIN_ACCOUNT for the token read
-# mt_retry_read makes after a refused sign in. A transport fault named in the same text is still read
-# first, as transient, so no error read before #1675 changes class.
+# MT_CONNECT_RC when the network to GitHub failed (mt_gh_network_fault, #1675, #1735), with
+# MT_CONNECT_PHASE saying how; 2 transient (mt_gh_transient: GitHub took the request and failed to
+# answer it); MT_SIGNIN_RC when GitHub refused the sign in; 1 for everything else, which is believed.
+# $2 is the account that was asked (empty for the active one), kept in MT_SIGNIN_ACCOUNT for the
+# token read mt_retry_read makes after a refused sign in. The network is read first since #1735, so a
+# transport fault the transient list used to answer for is now said as the connection it was.
 mt_gh_read_class() {  # $1 = the error text gh printed, $2 = account or empty
-  mt_gh_transient "$1" && return 2
-  if mt_gh_unreachable "$1"; then
+  if mt_gh_network_fault "$1"; then
     MT_CONNECT_ERR=$(printf '%s\n' "$1" | awk 'NF && !got { print; got = 1 }' | cut -c1-300)
     return "$MT_CONNECT_RC"
   fi
+  mt_gh_transient "$1" && return 2
   if mt_gh_signin_refused "$1"; then
     MT_SIGNIN_ACCOUNT="${2:-}"; MT_SIGNIN_KIND=refused
     MT_SIGNIN_ERR=$(printf '%s\n' "$1" | awk 'NF && !got { print; got = 1 }' | cut -c1-300)
@@ -1499,15 +1533,49 @@ mt_signin_said() {  # $1 = what was being read or empty, $2 = the last error or 
   return 0
 }
 
-# The sentence for a read gh could not connect to GitHub for on every try (claude-config#1675), from
+# The sentence for a read the network to GitHub failed on every try (claude-config#1675, #1735), from
 # what mt_retry_read counted. $1, when given, is what was being read; $2 the last error, else
-# MT_CONNECT_ERR, the one the reader saw. It claims only what the error measured: gh did not reach
-# GitHub, so GitHub neither refused the read nor answered it.
+# MT_CONNECT_ERR, the one the reader saw. It claims only what each error measured (L11): a try that
+# never reached GitHub (MT_CONNECT_UNREACHED) is said as gh not connecting, one whose connection failed
+# before the answer arrived (MT_CONNECT_DROPPED) as the connection lost, each with its own count, and
+# neither as GitHub refusing the read or being unable to show it.
 mt_connect_said() {  # $1 = what was being read or empty, $2 = the last error or empty
-  local n="${MT_CONNECT_FAILS:-0}" what="${1:-}" err="${2:-${MT_CONNECT_ERR:-}}" times
-  if [ "$n" = 1 ]; then times="1 time"; else times="$n times"; fi
-  printf "could not connect to GitHub %s%s%s: gh could not reach it from this Mac, so GitHub never answered. That is this Mac's connection or name lookup failing, not GitHub refusing the read or being unable to show it: check the connection, then run the same command again" \
-    "$times" "${what:+ reading $what}" "${err:+ ($err)}"
+  local n="${MT_CONNECT_FAILS:-0}" u="${MT_CONNECT_UNREACHED:-}" d="${MT_CONNECT_DROPPED:-}"
+  local what="${1:-}" err="${2:-${MT_CONNECT_ERR:-}}" lead="" tail
+  mt__ctimes() { if [ "$1" = 1 ]; then printf '1 time'; else printf '%s times' "$1"; fi; }
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  case "$u" in ''|*[!0-9]*) u=0 ;; esac
+  case "$d" in ''|*[!0-9]*) d=0 ;; esac
+  # Counts that do not add up to the total were not kept by mt_retry_read for this read (a caller that
+  # set only the total, or another read's left over): the total is read by the last error's phase.
+  if [ $((u + d)) -ne "$n" ]; then
+    if [ "${MT_CONNECT_PHASE:-unreached}" = dropped ]; then u=0; d="$n"; else u="$n"; d=0; fi
+  fi
+  [ "$u" -gt 0 ] && lead="could not connect to GitHub $(mt__ctimes "$u")"
+  [ "$d" -gt 0 ] && lead="${lead:+$lead, and }lost the connection to GitHub $(mt__ctimes "$d")"
+  [ -n "$lead" ] || lead="could not connect to GitHub $(mt__ctimes "$n")"
+  if [ "$d" -gt 0 ] && [ "$u" -gt 0 ]; then
+    tail="gh could not reach it from this Mac, or the connection failed before its answer arrived, so GitHub never answered. That is the network between this Mac and GitHub failing"
+  elif [ "$d" -gt 0 ]; then
+    tail="the connection from this Mac failed before GitHub's answer arrived, so GitHub never answered. That is the network between this Mac and GitHub failing"
+  else
+    tail="gh could not reach it from this Mac, so GitHub never answered. That is this Mac's connection or name lookup failing"
+  fi
+  printf "%s%s%s: %s, not GitHub refusing the read or being unable to show it: check the connection, then run the same command again" \
+    "$lead" "${what:+ reading $what}" "${err:+ ($err)}" "$tail"
+}
+
+# The sentence for a read that ended in a refused sign in or a failed network, from the code it ended
+# with ($1), what was being read ($2) and the last error ($3), for a caller that would otherwise say
+# GitHub refused or could not answer (claude-config#1728, L11). Prints mt_signin_said or
+# mt_connect_said and returns 0; returns 1, printing nothing, for any other code, so a caller's own
+# sentence follows. One place, so no gate can say one of the two and forget the other (L621).
+mt_unanswered_said() {  # $1 = the code the read ended with, $2 = what was being read, $3 = the last error
+  case "${1:-}" in
+    "$MT_SIGNIN_RC") mt_signin_said "${2:-}" "${3:-}" ;;
+    "$MT_CONNECT_RC") mt_connect_said "${2:-}" "${3:-}" ;;
+    *) return 1 ;;
+  esac
 }
 
 # REFUSED SIGN INS ARE COUNTED ACROSS RUNS (claude-config#1626). mt_retry_read asks a refused sign in
@@ -1671,12 +1739,13 @@ mt_gate_read_budget() {  # $1 = the gate's own setting or empty, $2 = its defaul
 }
 
 # Run a reader, and run it again while it answers 2 (a transient failure, mt_gh_transient),
-# MT_SIGNIN_RC (GitHub refused the sign in, mt_gh_read_class) or MT_CONNECT_RC (gh could not connect
-# to GitHub at all, counted in MT_CONNECT_FAILS, claude-config#1675), up to
+# MT_SIGNIN_RC (GitHub refused the sign in, mt_gh_read_class) or MT_CONNECT_RC (the network to GitHub
+# failed, counted in MT_CONNECT_FAILS and, by MT_CONNECT_PHASE, in MT_CONNECT_UNREACHED or
+# MT_CONNECT_DROPPED, claude-config#1675, #1735), up to
 # $1 tries in all with $2 seconds between them (both the caller's settings, not measured), slept
 # through the command $3 so a test never waits on a clock (L524). A reader returns 0 (answered), 1 (GitHub answered no, or failed in a way nobody
-# recognised: believed the first time, since asking again cannot turn a refusal into a yes), 2 or
-# MT_SIGNIN_RC. It
+# recognised: believed the first time, since asking again cannot turn a refusal into a yes), 2,
+# MT_SIGNIN_RC or MT_CONNECT_RC. It
 # is called in this shell, never a subshell, so the globals it sets reach the caller.
 #
 # $4, when not empty, is a deadline in the shell's own SECONDS: a retry whose wait would end past it
@@ -1690,7 +1759,8 @@ mt_gate_read_budget() {  # $1 = the gate's own setting or empty, $2 = its defaul
 # for the account asked (mt_signin_token_state), so what the keyring gave is recorded where the
 # refusal is: MT_SIGNIN_REFUSALS counts them and MT_SIGNIN_SEEN lists what each token read came to.
 # Tries spent, it returns the last outcome, so a refused sign in is never reported as an answer and
-# every caller's `-eq 0 ||` refusal holds exactly as before.
+# every caller's `-eq 0 ||` refusal holds exactly as before. That outcome is also kept in MT_RETRY_RC,
+# for a caller whose own code is not the read's (a probe of several paths, claude-config#1728).
 #
 # One implementation, shared by merge-when-ready.sh and block-red-merge.sh, which both learned it
 # (claude-config#1061, #1081): two copies of a retry rule drift in exactly the part that matters, which
@@ -1701,13 +1771,15 @@ mt_retry_read() {  # $1 = tries, $2 = wait seconds, $3 = sleep command, $4 = dea
   [ "$tries" -ge 1 ] || tries=1
   case "$wait" in ''|*[!0-9]*) wait=0 ;; esac
   MT_SIGNIN_REFUSALS=0; MT_SIGNIN_NOTOKENS=0; MT_SIGNIN_SEEN=""; MT_SIGNIN_TREND=""; MT_SIGNIN_RECORD_NOTE=""
-  MT_CONNECT_FAILS=0; MT_CONNECT_ERR=""
+  MT_CONNECT_FAILS=0; MT_CONNECT_ERR=""; MT_CONNECT_UNREACHED=0; MT_CONNECT_DROPPED=0; MT_RETRY_RC=""
   while :; do
-    MT_SIGNIN_ACCOUNT=""; MT_SIGNIN_KIND=""
+    MT_SIGNIN_ACCOUNT=""; MT_SIGNIN_KIND=""; MT_CONNECT_PHASE=""
     "$reader"; rc=$?
     if [ "$rc" -eq "$MT_CONNECT_RC" ]; then
-      # gh could not connect to GitHub at all, so GitHub never saw the request (claude-config#1675).
+      # The network to GitHub failed, so GitHub never answered (claude-config#1675, #1735).
       MT_CONNECT_FAILS=$((MT_CONNECT_FAILS + 1))
+      if [ "${MT_CONNECT_PHASE:-}" = dropped ]; then MT_CONNECT_DROPPED=$((MT_CONNECT_DROPPED + 1))
+      else MT_CONNECT_UNREACHED=$((MT_CONNECT_UNREACHED + 1)); fi
     elif [ "$rc" -eq "$MT_SIGNIN_RC" ]; then
       if [ "$MT_SIGNIN_KIND" = notoken ]; then MT_SIGNIN_NOTOKENS=$((MT_SIGNIN_NOTOKENS + 1))
       else MT_SIGNIN_REFUSALS=$((MT_SIGNIN_REFUSALS + 1)); fi
@@ -1716,8 +1788,9 @@ mt_retry_read() {  # $1 = tries, $2 = wait seconds, $3 = sleep command, $4 = dea
       # Counted across runs too (claude-config#1626, mt_signin_record).
       if [ "$MT_SIGNIN_KIND" = notoken ]; then mt_signin_record notoken "$MT_SIGNIN_TOKEN"; else mt_signin_record refused "$MT_SIGNIN_TOKEN"; fi
     elif [ "$rc" -ne 2 ]; then
-      return "$rc"
+      MT_RETRY_RC="$rc"; return "$rc"
     fi
+    MT_RETRY_RC="$rc"
     [ "$try" -lt "$tries" ] || return "$rc"
     if [ -n "$deadline" ] && [ $((SECONDS + wait)) -gt "$deadline" ]; then return "$rc"; fi
     [ -n "$announce" ] && "$announce" "$try" "$rc"

@@ -238,6 +238,22 @@ printf '%s\n' "$SIGNIN" > "$FAKE/areas.json.fail"
 out="$(VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
 expect_deny "areas.json refused on every try" "$out" "GitHub refused the sign in 3 times reading .claude/verification/areas.json at the base commit"
 
+echo "require-verification-run: a network to GitHub that failed every try is refused as that (claude-config#1728)"
+# Since #1675 a failed connection is asked again, but once the tries ran out the refusal said GitHub
+# "could not be read", which reads as GitHub refusing (L11). The dial failure is the one that stopped
+# #1732 on 2026-10-25, word for word.
+DIAL='Post "https://api.github.com/graphql": dial tcp 140.82.113.6:443: connect: can'"'"'t assign requested address'
+setup '{}'
+printf '%s\n' "$DIAL" > "$FAKE/view.json.fail"
+out="$(VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "a pull request read whose network failed every try" "$out" "could not connect to GitHub 3 times reading the pull request #7" "ALLOW_UNVERIFIED_MERGE=1"
+case "$out" in *"could not be read"*) fail "a failed connection was said as GitHub unreadable: $out" ;; *) pass ;; esac
+setup '{}'
+printf '%s\n' "$DIAL" > "$FAKE/areas.json.fail"
+out="$(VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "areas.json whose network failed every try" "$out" "could not connect to GitHub 3 times reading .claude/verification/areas.json at the base commit"
+case "$out" in *"could not be read"*) fail "a failed areas.json connection was said as GitHub unreadable: $out" ;; *) pass ;; esac
+
 echo "require-verification-run: asked by merge-when-ready.sh, it takes the helper's read budget (claude-config#1615)"
 # On 2026-10-23, at a load average of 342, its own 15 seconds were spent before it read areas.json, twice. Asked by
 # merge-when-ready.sh it runs under no harness timeout, so the helper names a longer budget: a retry

@@ -43,6 +43,8 @@ check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3
 # The state directory is the scratch directory's, never Dan's (L2). CLAUDECODE is set so the runner's
 # removal of it is exercised even in CI.
 export AI_REVIEW_STATE_DIR="$WORKDIR/state"
+# And the phase records a running review publishes for the load window (claude-config#1730).
+export MWR_PHASE_DIR="$WORKDIR/phases"
 export CLAUDECODE=1
 export PR_REVIEW_DEADLINE_SECONDS=30
 # The push review's host list names only the work Mac; the PR review must ignore it (the whole point
@@ -455,17 +457,22 @@ reset_state
 # Major, as every fixture here that must BLOCK is: since #1356 minor findings are advisory and allow.
 FAKE_CLAUDE_OUT="App/Sync.swift:3: x (L1). Should be: y. [severity: major]" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 wait_final "$HEAD_SHA"
-NOSHA="$WORKDIR/noshasum"; mkdir -p "$NOSHA"
-for t in awk tr od git bash cat date mkdir rm grep sed basename dirname env head mv touch wc sort printf python3 claude gh \
-         cksum cut uname hostname mktemp ls chmod readlink nohup tail xargs find stat sleep kill ps id; do
-  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$NOSHA/$t"
+# No od, which draws the key: since #1719 the key's line is an HMAC made in python3, so shasum is no
+# longer one of the tools a key needs.
+NOOD="$WORKDIR/nood"; mkdir -p "$NOOD"
+for t in awk tr git bash cat date mkdir rm grep sed basename dirname env head mv touch wc sort printf python3 claude gh \
+         cksum cut uname hostname mktemp ls chmod readlink nohup tail xargs find stat sleep kill ps id ln; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$NOOD/$t"
 done
-out="$(PATH="$NOSHA" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"; rc=$?
-check_eq "with no shasum the merge is still refused" "1" "$rc"
-check "and the refusal names the missing tool" "shasum" "$out"
-out="$(PR_REVIEW_READ=0123456789abcdef PATH="$NOSHA" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"
+out="$(PATH="$NOOD" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"; rc=$?
+check_eq "with no od the merge is still refused" "1" "$rc"
+check "and the refusal names the missing tool" "od, python3 or /dev/urandom is missing" "$out"
+out="$(PR_REVIEW_READ=0123456789abcdef PATH="$NOOD" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"
 check_not "a presented key is not blamed when no key can be checked at all" "not this review's key" "$out"
 check_not "and does not send it to re-run the review" "pr-review.sh restart --dir" "$out"
+# Nowhere to write, two causes (#1719): with the secret already made, the key's line cannot be
+# written beside the review; with none, the secret itself cannot be made, and each says which.
+bash -c '. "$1" && ar__helper_secret_make' _ "$DIR/lib/ai-review-common.sh" || bad "#1719 the secret could be made for the no-write cases"
 chmod a-w "$AI_REVIEW_STATE_DIR"
 if ( : > "$AI_REVIEW_STATE_DIR/.probe" ) 2>/dev/null; then
   # Root, or a filesystem ignoring modes: the case cannot be produced here, so it is said, not failed (L411).
@@ -476,6 +483,13 @@ else
   chmod u+w "$AI_REVIEW_STATE_DIR"
   check_eq "with nowhere to write a key the merge is still refused" "1" "$rc"
   check "and the refusal says nothing could be written beside the review" "could not be written" "$out"
+  rm -f "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+  chmod a-w "$AI_REVIEW_STATE_DIR"
+  out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+  chmod u+w "$AI_REVIEW_STATE_DIR"
+  check_eq "#1719 with nowhere to make the secret the merge is still refused" "1" "$rc"
+  check "#1719 and the refusal says the secret could not be made" "could not be made or read" "$out"
+  check_not "#1719 and does not say the key's line could not be written" "could not be written beside" "$out"
 fi
 
 # 3b. finished clean: allowed at once.
@@ -668,6 +682,102 @@ printf '{"session_id":"n9","cwd":"%s","hook_event_name":"UserPromptSubmit","prom
 check "the nudge's abandoned row carries the repository directory" $'\t'"$(git -C "$REPO" rev-parse --show-toplevel)"$'\t' "$(grep -F $'\tabandoned\t' "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
 : > "$HOLD"
 
+# 3g3. A running review publishes its own phase for the load window (claude-config#1730). A review
+#      merge-when-ready.sh starts outlives a helper that stops (on a red check, say), and the window saw
+#      it only through the helper. So the reviewer runner writes a "review" record for its own pid,
+#      good until its deadline plus slack, and removes it when it ends; one that crashes names a pid
+#      no longer running, which no reader believes (L409, L617).
+reviews_busy(){ bash -c ". '$DIR/lib/merge-turn.sh' && . '$DIR/lib/merge-phase.sh' && mp_reviews_busy \$(date +%s)"; }
+reset_state; rm -rf "$MWR_PHASE_DIR"
+HOLD="$WORKDIR/hold-3g3"; rm -f "$HOLD"
+FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 a running review published no phase record in ${HANG_S}s"
+rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
+rec="$(cat "$rec_file" 2>/dev/null)"
+check "#1730 the record says a review is running" "phase review" "$rec"
+check "#1730 and which" "what the lessons review of " "$rec"
+check "#1730 its pid is the reviewer's own" "ai-review-run.py" "$(ps -o command= -p "$rpid" 2>/dev/null)"
+st="$(meta "$(final_of "$HEAD_SHA").pending" started)"
+check_eq "#1730 good until its deadline plus the slack, never open ended" "$((st + PR_REVIEW_DEADLINE_SECONDS + 60))" "$(sed -n 's/^until //p' "$rec_file")"
+check "#1730 a reader believes it busy" "$rpid	" "$(reviews_busy)"
+: > "$HOLD"
+wait_final "$HEAD_SHA" || bad "#1730 the held review did not finish once let go"
+hang_wait "! compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 a review that finished left its phase record behind"
+check_eq "#1730 and once it has finished nothing is busy" "" "$(reviews_busy)"
+# A reviewer killed outright is not believed busy afterwards, whatever its record says.
+reset_state; rm -rf "$MWR_PHASE_DIR"
+HOLD="$WORKDIR/hold-3g3b"; rm -f "$HOLD"
+FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 the second review published no phase record in ${HANG_S}s"
+rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
+check "#1730 control: busy while it runs" "$rpid	" "$(reviews_busy)"
+kill -KILL "$rpid" 2>/dev/null
+# Gone: not running, or killed and not yet reaped (state Z), read whole rather than piped into a
+# matcher that can leave early under pipefail.
+gone_pid(){ ! kill -0 "$1" 2>/dev/null || case "$(ps -o stat= -p "$1" 2>/dev/null)" in *Z*) return 0 ;; *) return 1 ;; esac; }
+hang_wait "gone_pid '$rpid'" || bad "#1730 the killed reviewer was still running"
+check_eq "#1730 a reviewer killed outright is not believed busy" "" "$(reviews_busy)"
+: > "$HOLD"
+# A KILLED REVIEW'S INPUT (claude-config#1745). The reviewer removed its copy of the changes only in
+# its own `finally`, which a SIGKILL never reaches, so killed reviews left their inputs behind and the
+# next reset waited on them; this case used to remove it by hand. The runner around the reviewer now
+# removes it however the reviewer ended.
+hang_wait "! compgen -G '$AI_REVIEW_STATE_DIR/*.diff' >/dev/null"
+check_eq "#1745 a reviewer killed with SIGKILL leaves no input behind" "" "$(compgen -G "$AI_REVIEW_STATE_DIR/*.diff")"
+# The runner killed outright too: nothing of the review is left to clean up, so the next review to
+# start sweeps an input whose reviewer, judged by pid and start time, is gone.
+held_review(){ # held_review <hold file> -> prints the reviewer's pid once its phase record is up
+  rm -rf "$MWR_PHASE_DIR"; rm -f "$1"
+  FAKE_CLAUDE_HOLD="$1" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+  hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || return 1
+  local f; for f in "$MWR_PHASE_DIR"/[0-9]*; do printf '%s' "${f##*/}"; return 0; done
+}
+head_input="$AI_REVIEW_STATE_DIR/$(basename "$(final_of "$HEAD_SHA")" .txt).diff"
+reset_state; HOLD="$WORKDIR/hold-1745a"
+rpid="$(held_review "$HOLD")" || bad "#1745 the held review published no phase record"
+rrun="$(ps -o ppid= -p "$rpid" 2>/dev/null | tr -d ' ')"
+check "#1745 control: the held review's input is there while it runs" "yes" "$([ -e "$head_input" ] && echo yes)"
+kill -KILL "$rrun" "$rpid" 2>/dev/null
+hang_wait "gone_pid '$rpid' && gone_pid '$rrun'" || bad "#1745 the killed review was still running"
+check "#1745 control: with its runner killed too, the input is left" "yes" "$([ -e "$head_input" ] && echo yes)"
+prr start --dir "$REPO" --sha "$BASE_SHA" >/dev/null
+check_eq "#1745 the next review to start sweeps the input of a reviewer that is gone" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
+: > "$HOLD"
+# A reviewer still running keeps its input through another review's sweep, the other direction (L497).
+reset_state; HOLD="$WORKDIR/hold-1745b"
+rpid="$(held_review "$HOLD")" || bad "#1745 the second held review published no phase record"
+rm -f "$(final_of "$BASE_SHA")"*
+prr start --dir "$REPO" --sha "$BASE_SHA" >/dev/null
+check "#1745 a running reviewer's input survives another review's sweep" "yes" "$([ -e "$head_input" ] && echo yes)"
+# Stopped with SIGTERM after its runner was killed outright, the reviewer removes its own input.
+rrun="$(ps -o ppid= -p "$rpid" 2>/dev/null | tr -d ' ')"
+kill -KILL "$rrun" 2>/dev/null
+hang_wait "gone_pid '$rrun'" || bad "#1745 the runner was still running"
+kill -TERM "$rpid" 2>/dev/null
+hang_wait "gone_pid '$rpid'" || bad "#1745 the reviewer did not stop on SIGTERM"
+hang_wait "[ ! -e '$head_input' ]"
+check_eq "#1745 a reviewer stopped with SIGTERM removes its own input" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
+: > "$HOLD"
+# SIGINT at its default is Python's own default_int_handler, never SIG_DFL, so a check for SIG_DFL
+# alone left it unhandled. The child starts with SIGINT at its default, as a foreground run does.
+INT_INPUT="$WORKDIR/int-1745.diff"; : > "$INT_INPUT"
+python3 - "$DIR/lib/ai-review-run.py" "$INT_INPUT" > "$WORKDIR/int-1745.out" 2>&1 <<'PY'
+import importlib.util, signal, subprocess, sys
+child = (
+    "import importlib.util, os, signal, sys\n"
+    "spec = importlib.util.spec_from_file_location('arr', sys.argv[1])\n"
+    "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+    "m.remove_input_when_stopped(sys.argv[2])\n"
+    "os.kill(os.getpid(), signal.SIGINT)\n"
+    "print('survived')\n"
+)
+p = subprocess.run([sys.executable, "-c", child, sys.argv[1], sys.argv[2]], capture_output=True,
+                   preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+print(p.returncode)
+PY
+check_eq "#1745 a reviewer stopped with SIGINT dies of it" "-2" "$(head -1 "$WORKDIR/int-1745.out")"
+check_eq "#1745 and removes its own input" "no" "$([ -e "$INT_INPUT" ] && echo yes || echo no)"
+
 # 3h. could not run: no claude on PATH. A PATH built from every tool but claude, so the case is
 #     produced on a machine that has one installed, which this suite used to report as UNMEASURED.
 reset_state
@@ -772,24 +882,90 @@ check_eq "and the replaced review is read the same way, by its key" "0" "$rc"
 # Eight issuers at once each get a whole key that reads the review, none lost to another's write.
 fk="$WORKDIR/concurrent-review.txt"; printf 'status=ok\nfinished=42\n\n' > "$fk"; rm -f "$fk".readkey*
 for i in 1 2 3 4 5 6 7 8; do
-  bash -c '. "$1" && ar_review_issue_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
+  bash -c '. "$1" && ar_readkeys_issue "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
 done
 wait
 all_valid=1
 for i in 1 2 3 4 5 6 7 8; do
   k="$(cat "$WORKDIR/key.$i")"
-  { [ "${#k}" -eq 16 ] && bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$k"; } || all_valid=0
+  { [ "${#k}" -eq 16 ] && bash -c '. "$1" && ar_readkeys_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$k"; } || all_valid=0
 done
 [ "$all_valid" -eq 1 ] && ok \
   || bad "eight concurrent issuers each get a key that reads the review (got: $(for i in 1 2 3 4 5 6 7 8; do printf '[%s] ' "$(cat "$WORKDIR/key.$i")"; done))"
-bash -c '. "$1" && ar_review_key_valid "$2" 0123456789abcdef' _ "$DIR/lib/ai-review-common.sh" "$fk" && bad "a key never issued reads the review" || ok
+bash -c '. "$1" && ar_readkeys_valid "$2" 0123456789abcdef' _ "$DIR/lib/ai-review-common.sh" "$fk" && bad "a key never issued reads the review" || ok
 # Never rewritten, only appended: every key issued, first and seventieth, still reads (a trim raced
 # concurrent appends and dropped keys that had been shown; lessons review of #795).
-firstk="$(bash -c '. "$1"; ar_review_issue_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
-lastk="$(bash -c '. "$1"; for i in $(seq 1 70); do k="$(ar_review_issue_key "$2")"; done; printf %s "$k"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
-bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$firstk" && ok || bad "an early key stops reading after many showings"
-bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$lastk" && ok || bad "the newest key does not read"
+firstk="$(bash -c '. "$1"; ar_readkeys_issue "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
+lastk="$(bash -c '. "$1"; for i in $(seq 1 70); do k="$(ar_readkeys_issue "$2")"; done; printf %s "$k"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
+bash -c '. "$1" && ar_readkeys_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$firstk" && ok || bad "an early key stops reading after many showings"
+bash -c '. "$1" && ar_readkeys_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$lastk" && ok || bad "the newest key does not read"
 rm -f "$WORKDIR"/key.*
+# A READ FORGED BY HAND (claude-config#1719). The read keys file held each key's plain sha256 and an
+# acknowledgement held only the review's finish time, so a session's own shell could append the hash
+# of a key it made up, or write the acknowledgement, and merge with the findings never shown. Neither
+# counts now: a key's line is an HMAC under the gate's secret, and so is an acknowledgement.
+f7fin="$(awk 'index($0, "finished=") == 1 { print substr($0, 10); exit } /^$/ { exit }' "$f7")"
+rm -f "$f7.acknowledged"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1719 with its acknowledgement gone the review is unread again" "2" "$rc"
+shownk="$(key_in "$out")"
+made=5eed5eed5eed5eed
+printf '%s\n' "$(printf '%s' "$made" | shasum -a 256 | awk '{ print $1 }')" >> "$f7.readkeys-$f7fin"
+out="$(fire_gate "PR_REVIEW_READ=$made gh pr merge 7 --squash")"; rc=$?
+check_eq "#1719 a key whose plain hash was appended to the read keys file by hand does not read the review" "2" "$rc"
+check_eq "#1719 and records no acknowledgement" "no" "$([ -e "$f7.acknowledged" ] && echo yes || echo no)"
+printf 'finished=%s\n' "$f7fin" > "$f7.acknowledged"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1719 an acknowledgement written by hand does not read the review" "2" "$rc"
+rm -f "$f7.acknowledged"
+out="$(fire_gate "PR_REVIEW_READ=$shownk gh pr merge 7 --squash")"; rc=$?
+check_eq "#1719 the key the refusal showed still reads the review, beside the forged line" "0" "$rc"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1719 and the acknowledgement it recorded lets the next merge of that review through" "0" "$rc"
+# AN ACKNOWLEDGEMENT COPIED TO ANOTHER REVIEW (claude-config#1739). The MAC bound the finish time and
+# the action, not which review was read, so a valid acknowledgement copied beside another review that
+# finished in the same second read that review too. A second review of another head, same stamp, same
+# findings: the copy must not read it, and the key its own refusal shows still must.
+f7b="$(final_of "$BASE_SHA")"
+sed "s/^sha=.*/sha=$BASE_SHA/" "$f7" > "$f7b"
+cp "$f7.acknowledged" "$f7b.acknowledged"
+printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync"}\n' "$BASE_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 an acknowledgement copied from another review with the same finish time does not read this one" "2" "$rc"
+check "#1739 and the refusal shows this review's findings" "deleteEvent still swallows" "$out"
+out="$(fire_gate "PR_REVIEW_READ=$(key_in "$out") gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 this review's own key still reads it" "0" "$rc"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 and the acknowledgement that recorded lets its next merge through" "0" "$rc"
+rm -f "$f7b"*
+printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync"}\n' "$HEAD_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1739 the first review's own acknowledgement still reads it" "0" "$rc"
+# A COMMAND THAT NAMES THE READ KEYS (claude-config#1719), refused before it runs, as the typed helper
+# key's record is (#1700): the file in any case, the secret's path, and the functions that write them.
+for named in \
+  "printf '%s\\n' 0 >> ~/.claude/state/ai-review/1-pr-abc.txt.readkeys-1" \
+  "cat \"\$HOME\"/.claude/state/ai-review/*.TXT.READKEYS-*" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_readkeys_issue ~/.claude/state/ai-review/1-pr-abc.txt" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_readkeys_ack_write x.acknowledged x.txt 1 merge" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; cat \"\$(ar__helper_secret_file)\""; do
+  out="$(fire_gate "$named")"; rc=$?
+  check_eq "#1719 a command naming the read keys or what writes them is refused: $named" "2" "$rc"
+  check "#1719 saying only the review's own gates write them: $named" "only the lessons review's own gates write" "$out"
+done
+# Every function of the library that can reach the secret or a read keys file is one the gate refuses
+# by name, so a session cannot source the library and call it. Found by reading each function's body,
+# never from a list here, which would check only what somebody remembered to add (L96).
+reach_n=0
+while IFS= read -r fn; do
+  body="$(bash -c '. "$1"; declare -f "$2"' _ "$DIR/lib/ai-review-common.sh" "$fn")"
+  case "$body" in *ar__helper_secret*|*ar__helper_key_mac*|*helper-keys*|*readkeys*) ;; *) continue ;; esac
+  reach_n=$((reach_n + 1))
+  out="$(fire_gate "$fn")"; rc=$?
+  check_eq "#1719 the gate refuses a command calling $fn, which reaches the secret or the read keys" "2" "$rc"
+done < <(bash -c '. "$1"; declare -F' _ "$DIR/lib/ai-review-common.sh" | awk '{ print $3 }')
+[ "$reach_n" -ge 8 ] && ok \
+  || bad "#1719 the scan found $reach_n functions reaching the secret or the read keys, fewer than the 8 the library holds, so it read nothing"
 out="$(fire_gate "./scripts/merge-when-green.sh 7")"; rc=$?
 check_eq "a repo's own merge script is judged the same way" "0" "$rc"
 rm -f "$(final_of "$HEAD_SHA")"*
@@ -1323,6 +1499,92 @@ MG commit -q -am change; MH="$(MG rev-parse HEAD)"
 mcand="$(cd "$MREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$MB' '$MH'")"
 check "#583 a file the base already marked generated is a candidate" "old.gen" "$mcand"
 check_not "#583 a file marked generated only by this branch is not" "new.gen" "$mcand"
+
+# A settled design round page under docs/design (claude-config#1696). Slate's #4212 was refused whole
+# because docs/design/alerts-learning-retirement.html alone was 521 KB of diff, so its 58 KB of code
+# and a migration were never reviewed. The proof is the page's seal, checked by the design rounds
+# skill's own design_file.py --sealed (#1524), the same check the design round guard runs: the text is
+# exactly what make-settled.py wrote. A hand edited, unsealed or misplaced page is still read, and so
+# is every page when the check cannot run or answers in another shape.
+DESIGN_PY="$DIR/../skills/design-rounds/design_file.py"
+seal_page(){   # $1 = the page's words -> a settled design page, sealed by design_file.py's own seal()
+  python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import design_file
+page = "<html><body><p>" + sys.argv[2] + "</p>\n" \
+  + "<script type=\"application/json\" id=\"decision-map\">{\"decisions\": []}</script>\n" \
+  + "<script type=\"application/json\" id=\"design-frames\">{\"frames\": []}</script>\n" \
+  + "<script>try { load() } catch (e) { return [] }</script></body></html>\n"
+sys.stdout.write(design_file.seal(page))' "${DESIGN_PY%/*}" "$1"
+}
+DREPO="$WORKDIR/design"; git init -q "$DREPO"
+DG(){ git -C "$DREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+printf 'base\n' > "$DREPO/README.md"; DG add README.md; DG commit -q -m base; DB="$(DG rev-parse HEAD)"
+mkdir -p "$DREPO/docs/design/older" "$DREPO/src"
+seal_page "the picker" > "$DREPO/docs/design/picker.html"
+seal_page "an older round" > "$DREPO/docs/design/older/round.HTML"
+seal_page "the edited one" | sed 's/the edited one/the edited one, by hand/' > "$DREPO/docs/design/edited.html"
+seal_page "unsealed" | sed '$d' > "$DREPO/docs/design/unsealed.html"
+seal_page "outside docs/design" > "$DREPO/src/page.html"
+DG add docs src; DG commit -q -m pages; DH="$(DG rev-parse HEAD)"
+dcand="$(cd "$DREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check "#1696 a sealed design round page is a candidate" $'docs/design/picker.html\tdesign\t' "$dcand"
+check "#1696 named as a settled design round page in the left out note" "settled design round page" "$dcand"
+check "#1696 one in a folder under docs/design, of any case, too" "docs/design/older/round.HTML" "$dcand"
+check_not "#1696 a page edited by hand after its seal is not" "edited.html" "$dcand"
+check_not "#1696 a page with no seal is not" "unsealed.html" "$dcand"
+check_not "#1696 a sealed page outside docs/design is not" "src/page.html" "$dcand"
+# The check is always the design_file.py beside the hooks, with no setting to point it elsewhere: one
+# would let a caller name a program that calls every page sealed, so a branch over the cap skips
+# reading any docs/design page. So a test of a different checker copies the hooks lib into a scratch
+# tree with its stand-in at skills/design-rounds/design_file.py, as the layout puts it, and sources
+# that copy (the copy of lib/ the payload write gate suite makes for its broken reader).
+design_tree(){   # $1 = a name, $2 = the stand-in design_file.py or nothing for none -> the copy's lib
+  local t="$WORKDIR/designtree/$1"
+  mkdir -p "$t/hooks" "$t/skills/design-rounds"
+  cp -R "$DIR/lib" "$t/hooks/lib"
+  [ -z "$2" ] || cp "$2" "$t/skills/design-rounds/design_file.py"
+  printf '%s' "$t/hooks/lib"
+}
+DLIB="$(design_tree none "")"
+dcand="$(cd "$DREPO" && bash -c ". '$DLIB/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check_not "#1696 with no design_file.py to check the seal, no page is" "docs/design" "$dcand"
+printf 'import sys\nsys.exit(0)\n' > "$WORKDIR/silent_design_file.py"
+DLIB="$(design_tree silent "$WORKDIR/silent_design_file.py")"
+dcand="$(cd "$DREPO" && bash -c ". '$DLIB/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check_not "#1696 nor with an older design_file.py that exits 0 saying nothing" "docs/design" "$dcand"
+# A checker that calls every page sealed, beside a copy of the lib: the control that the scratch tree
+# is what decides, so the two checks above measure their stand-ins and not the real check.
+printf 'import sys\nsys.stdin.read()\nprint("sealed")\n' > "$WORKDIR/always_sealed.py"
+DLIB="$(design_tree always "$WORKDIR/always_sealed.py")"
+dcand="$(cd "$DREPO" && bash -c ". '$DLIB/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check "#1696 the checker beside the lib copy decides (control)" "docs/design/unsealed.html" "$dcand"
+# And no setting reaches past the installed check, under a test run's marker or not: the setting
+# #1711 added is exported with the same always sealed program, and the real lib still reads the
+# unsealed and hand edited pages and leaves out only the sealed one.
+dcand="$(cd "$DREPO" && AR_DESIGN_FILE_PY="$WORKDIR/always_sealed.py" CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-test-pr-review.$$}" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check_not "#1696 an exported AR_DESIGN_FILE_PY does not change the verdict, so an unsealed page is still read" "unsealed.html" "$dcand"
+check_not "#1696 and a page edited after its seal is still read" "edited.html" "$dcand"
+check "#1696 while the installed check still leaves out the sealed page" "docs/design/picker.html" "$dcand"
+# End to end, as the merge gate and the merge helper both run it (pr-review.sh start, then check): a
+# branch over the cap only because of its settled page is reviewed, its code read, the page named.
+reset_state
+G checkout -q -b feat/design main
+mkdir -p "$REPO/docs/design"
+seal_page "$(seq 1 600 | sed 's/^/drawn /' | tr '\n' ' ')" > "$REPO/docs/design/round.html"
+printf 'func designCode() {}\n' > "$REPO/Design.swift"
+G add docs/design/round.html Design.swift
+G commit -q -m "a settled round and its code"
+DSN_SHA="$(G rev-parse HEAD)"; DSN_BASE="$(G rev-parse main)"
+G checkout -q feat/sync
+out="$(PR_REVIEW_MAX_BYTES=$DCAP FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$DSN_SHA" --base-ref "$DSN_BASE")"
+check "#1696 a branch over the cap only because of a settled page is reviewed" "started" "$out"
+check_not "#1696 and is not refused as too large" "too large" "$out"
+wait_final "$DSN_SHA" || bad "#1696 the branch with its settled page left out was reviewed: $out"
+stdin="$(cat "$FAKE_LOG/stdin" 2>/dev/null)"
+check "#1696 its code is read" "+func designCode" "$stdin"
+check_not "#1696 the settled page is not in the diff" "drawn 1 drawn 2" "$stdin"
+out="$(PR_REVIEW_MAX_BYTES=$DCAP prr check --dir "$REPO" --sha "$DSN_SHA" --base-ref "$DSN_BASE")"; rc=$?
+check_eq "#1696 the clean review of the rest allows the merge" "0" "$rc"
+check "#1696 and the verdict names the page and why it was not read" "docs/design/round.html (a settled design round page, sealed by make-settled.py" "$out"
 
 # ===========================================================================================
 # 12. A branch still over the cap is reviewed in groups of files, each fitting, rather than refused

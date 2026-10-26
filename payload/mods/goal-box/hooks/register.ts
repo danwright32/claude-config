@@ -19,7 +19,9 @@ import { errorText } from './mod-kit/skew.ts'
 //    the tool enforces what can be read: no box while an agent the session started is running, a
 //    merge or a deploy is not confirmed (is it live's own record), or a pull request the session
 //    touched is still open (GitHub, asked as each account), and at most one box per request (a
-//    second needs a new message from Dan, mod-kit's one reader of his own words).
+//    second needs a new message from Dan, mod-kit's one reader of his own words). What reminds the
+//    session to call it is the SESSION REFLECTION's last line (hooks/review/session-reflection.md,
+//    #1749), which fires after every turn that changed something.
 //
 // The box is the tool's result: drawn as mod-kit's card, its heading in the success colour, and as
 // text the shape of the SESSION REFLECTION box wherever the card is not drawn.

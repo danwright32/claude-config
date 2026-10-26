@@ -524,6 +524,94 @@ test('Compact pressed while Claude is working is queued, shown, and runs when th
   await ui.unmount()
 })
 
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in
+// the middle of a turn. The turn is still running, so a Compact pressed after it is queued as before,
+// and one queued before it still runs when the turn ends.
+test('a reload in the middle of a turn keeps it running: a Compact pressed after it is queued, never refused (#1703)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  await step($, clock)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+  expect(toasts).toEqual([])
+  expect(await shown(ui as never)).toBe('context 80% Compact queued, runs when this reply ends ')
+  await ui.unmount()
+})
+
+// Push review of PR for #1703: a turn's start whose write failed is written again at the next request,
+// so a reload after it still finds the turn running.
+test("a turn's start whose write failed is written again at its next request, so a reload still finds it running (#1703)", withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  let refused = false
+  on('state.set', async ($, e, next) => {
+    if (!refused && (e as { key?: string }).key === 'turnRunning') {
+      refused = true
+      return { deny: 'state store unavailable' } as never
+    }
+    return next(e)
+  })
+  await start($, clock)
+  await measure($, 80)
+  await step($, clock)
+  expect(refused).toBe(true)
+  await step($, clock)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
+test('a Compact queued before a reload still runs when the turn ends (#1703)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await step($, clock)
+  const idle = w.compact
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  await start($, clock)
+  w.compact = idle
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
+test('a Compact whose queueing cannot be kept for a reload still runs when the turn ends (#1703)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'compactQueued' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await step($, clock)
+  const idle = w.compact
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  w.compact = idle
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
 test('a band that cannot be redrawn after a Compact press or its Cancel is logged, never left unhandled (#1278 lessons review)', withKit, async ($, on) => {
   const { clock, debug, w } = world(on)
   let unreadable = false
@@ -926,13 +1014,81 @@ test('a job watcher whose loaded copy lacks list shows no job item and is told o
   await ui.unmount()
 })
 
-test('a job watcher that fails to answer is named once in the debug log, and the rest still shows', { plugins: [modKit, brokenWatcher] }, async ($, on) => {
+// #1727: a job watcher that fails to answer was shown as no jobs (L10); the band now says the list
+// could not be read, in #1583's plain style, and like a quiet command only once Claude has stopped.
+const UNREADABLE = 'job list unreadable, ask Claude to check'
+test('a job watcher that fails to answer is named once in the debug log, said on the band, and the rest still shows', { plugins: [modKit, brokenWatcher] }, async ($, on) => {
   const { clock, debug } = world(on, { unpushed: '1\n' })
   await start($, clock)
   await clock.advance(MIN)
   const ui = await $.ui.mount(band)
-  expect(await shown(ui as never)).toBe('1 unpushed commit')
+  expect(await shown(ui as never)).toBe(`${UNREADABLE} | 1 unpushed commit`)
   expect(debug.filter(l => /jobs could not be read.*registry unreadable/.test(l))).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('a job list that cannot be read is said once Claude has stopped, not while it works (#1727)', { plugins: [modKit, brokenWatcher] }, async ($, on) => {
+  const { clock } = world(on)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  await step($, clock)
+  expect(await shown(ui as never)).toBe('engine band')
+  await turn($ as never)
+  await clock.settle()
+  expect(await shown(ui as never)).toBe(UNREADABLE)
+  await step($, clock)
+  expect(await shown(ui as never)).toBe('engine band')
+  await ui.unmount()
+})
+
+// A loaded watcher whose list answers something that is not a list is no more readable than one that
+// throws (push review of #1727): never read as no jobs.
+const shapelessWatcher: { name: string; register: Register } = {
+  name: 'job-watcher',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, jobs: { list: async () => ({ jobs: [] }), agents: async () => [] } }
+    })
+  },
+}
+test('a job list answered as something other than a list is said as unreadable, and named in the debug log (#1727)', { plugins: [modKit, shapelessWatcher] }, async ($, on) => {
+  const { clock, debug } = world(on)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe(UNREADABLE)
+  expect(debug.filter(l => /jobs could not be read.*not a list/.test(l))).toHaveLength(1)
+  await ui.unmount()
+})
+
+// A watcher whose list fails the first time it is asked, then answers with no jobs at all.
+const flakyWatcher: { name: string; register: Register } = {
+  name: 'job-watcher',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      let asked = 0
+      const list = async () => {
+        asked++
+        if (asked === 1) throw new Error('registry unreadable')
+        return []
+      }
+      return { ...built, jobs: { list, agents: async () => [] } }
+    })
+  },
+}
+test('a job list read and empty shows nothing, and a list read again after a failure takes the line away (#1727)', { plugins: [modKit, flakyWatcher] }, async ($, on) => {
+  const { clock } = world(on)
+  // The session's first reading fails: no turn has run, so it is said at once.
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe(UNREADABLE)
+  // The turn's end reads the list again (the minute's tick is armed once a process, so a later test
+  // cannot count on it): read and empty, it is no job and no line.
+  await step($, clock)
+  await turn($ as never)
+  await clock.settle()
+  expect(await shown(ui as never)).toBe('engine band')
   await ui.unmount()
 })
 

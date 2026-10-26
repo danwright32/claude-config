@@ -8,7 +8,8 @@
 # `$SECONDS` plus a few seconds, is reached by a loaded Mac with nothing broken (L290). #1577, #1620
 # and #1679 moved every such wait onto lib/hang-wait.sh; this fails the next one on the day it lands
 # (L613), with no list of suites excused from it. A wait whose PASSING case runs to its end (a window
-# in which a fault would show) is a different thing and says so by calling window_wait.
+# in which a fault would show) is a different thing: it calls window_wait, captures its status in the
+# same statement (`; NAME=$?`) and asserts that status is 1, or the scan reports it (#1721).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -45,7 +46,7 @@ trap 'rm -rf "$TMPROOT"' EXIT
 # The scan has to see every spelling of one, and none of the things that are not one, before the
 # tree is asked (L1). The loop words are ASSEMBLED, so this file holds no wait for the scan to find.
 # ---------------------------------------------------------------------------
-_W='whi''le'; _U='unt''il'; _F='fo''r'; _S='sle''ep'
+_W='whi''le'; _U='unt''il'; _F='fo''r'; _S='sle''ep'; _WW='window''_wait'
 mkdir -p "$TMPROOT/payload/hooks"
 {
   printf '#!/usr/bin/env bash\n'
@@ -58,7 +59,7 @@ mkdir -p "$TMPROOT/payload/hooks"
   printf '%s _ in $(seq 1 200); do [ -s "$f" ] && break; %s 0.05; done\n' "$_F" "$_S"
   # And nine that are not.
   printf 'hang_wait "[ -e %s ]"\n' "'\$f'"
-  printf 'window_wait 2 "[ -e %s ]"\n' "'\$f'"
+  printf '%s 2 "[ -e %s ]"; ww=$?; [ "$ww" = 1 ] || echo FAIL\n' "$_WW" "'\$f'"
   printf 't0=$SECONDS; %s [ ! -e "$h" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do %s 0.1; done\n' "$_W" "$_S"
   printf '%s [ ! -e "$f" ]; do %s 0.1; done\n' "$_U" "$_S"
   printf '%s [ "$(calls)" -lt 3 ]; do %s 0.1; done\n' "$_W" "$_S"
@@ -87,6 +88,83 @@ clean="$(printf 'payload/hooks/probe-helper.sh\n' | python3 "$SCAN" --root "$TMP
 [ "$clean_rc" = 0 ] && [ -z "$clean" ] \
   && check "and finding nothing, it says nothing and exits 0" ok \
   || check "and finding nothing, it says nothing and exits 0" "exit $clean_rc: $clean"
+
+# ---------------------------------------------------------------------------
+# window_wait is for a window the PASSING case runs out, so its length is the caller's and short
+# (claude-config#1721). Called to wait for something the passing case DOES meet, it is the short
+# wall clock ceiling this scan exists to stop (L290). So it is accepted only where the suite asserts
+# the window ran out: its status captured in the same statement and compared with 1 somewhere in
+# the file. A constant condition (true, false) waits on nothing and is the helper's own test.
+# ---------------------------------------------------------------------------
+{
+  printf '#!/usr/bin/env bash\n'
+  # Five misuses: the status thrown away, failing when it runs out, passing when it is met, a
+  # capture compared only with 0, and a capture never compared at all.
+  printf '%s 2 "[ -e %s ]"\n' "$_WW" "'\$f'"
+  printf '%s 2 "[ -e %s ]" || echo FAIL never came\n' "$_WW" "'\$f'"
+  printf 'if %s 5 "[ -s %s ]"; then echo ok; fi\n' "$_WW" "'\$f'"
+  printf '%s 2 "[ -e %s ]"; seen=$?; [ "$seen" = 0 ] && echo ok\n' "$_WW" "'\$f'"
+  printf '%s 3 "[ -e %s ]"; unread=$?\n' "$_WW" "'\$f'"
+  # And four that are not: a capture compared with 1 on a later line, one written for another shell
+  # with its dollar escaped, and the helper's own tests on a constant condition.
+  printf '%s 2 "[ -e %s ]"; held=$?\n[ "$held" -eq 1 ] && echo ran out\n' "$_WW" "'\$f'"
+  printf 'bash -c "%s 2 c; w2=\\$?; [ \\"\\$w2\\" = 1 ]"\n' "$_WW"
+  printf 'bash -c ". lib; %s 1 false 0.05; echo \\$?"\n' "$_WW"
+  printf '%s 1 true\n' "$_WW"
+} > "$TMPROOT/payload/hooks/test-window-probe.sh"
+wprobe="$(printf 'payload/hooks/test-window-probe.sh\n' | python3 "$SCAN" --root "$TMPROOT")"; wprobe_rc=$?
+wprobe_lines="$(printf '%s\n' "$wprobe" | awk -F: 'NF { printf "%s ", $2 }')"
+[ "$wprobe_rc" = 1 ] && [ "$wprobe_lines" = "2 3 4 5 6 " ] \
+  && check "#1721 window_wait is accepted only where the suite asserts the window ran out" ok \
+  || check "#1721 window_wait is accepted only where the suite asserts the window ran out" "exit $wprobe_rc, lines '$wprobe_lines' where 2 3 4 5 6 were wanted:
+$wprobe"
+
+# ---------------------------------------------------------------------------
+# A BARE FIXED SLEEP (claude-config#1743): a suite pausing a fixed time and then acting as though
+# what it waited for has happened asserts about the machine's load, as a short ceiling does (L290).
+# Fourteen such lines in seven suites escaped the loop rules above. A sleep is reported when it is a
+# statement of the suite's own that runs in the foreground and then carries on: not a poll tick in
+# the body of a while or until loop (or a for over ticks), which the loop rules judge; not a holder
+# put in the background (`&`) or made the process itself (`exec`); and not the body of a stand in
+# the suite writes through a heredoc, where it is how long the fake takes, never a wait of the
+# suite's. No list of excused files or lines.
+# ---------------------------------------------------------------------------
+{
+  printf '#!/usr/bin/env bash\n'
+  # Six that are: alone, between two commands, after &&, in an if, quoted, and in the body of a for
+  # loop over cases, which iterates cases rather than ticks.
+  printf '%s 1\n' "$_S"
+  printf 'kill "$p"; %s 2; check gone\n' "$_S"
+  printf 'kill "$p" && %s 0.5\n' "$_S"
+  printf 'if [ -n "$slow" ]; then %s 1; fi\n' "$_S"
+  printf '%s "2"\n' "$_S"
+  printf '%s mode in running stopped; do\n  start "$mode"\n  %s 2\n  check "$mode"\ndone\n' "$_F" "$_S"
+  # And ten that are not: a poll tick in a while loop over several lines and on one, a holder in
+  # the background, one made the process, a stand in's own duration in a heredoc, a comment, a for
+  # loop over ticks that paces output, a wait on the condition itself, a duration named where it is
+  # set, and a tick in a loop written inside a quoted fixture.
+  printf '%s [ ! -e "$f" ]; do\n  %s 0.1\ndone\n' "$_W" "$_S"
+  printf '%s ! kill -0 "$p"; do %s 0.1; done\n' "$_U" "$_S"
+  printf '%s 300 &\n' "$_S"
+  printf '(cd "$wt" && exec %s 120) &\n' "$_S"
+  printf "cat > stub <<'EOF'\n#!/bin/bash\n%s 1.2\nexec real \"\$@\"\nEOF\n" "$_S"
+  printf '# %s 1 here would be a guess\n' "$_S"
+  printf '%s i in $(seq 1 5); do\n  printf .\n  %s 0.1\ndone\n' "$_F" "$_S"
+  printf 'hang_wait %s\n' "'[ -e \"\$f\" ]'"
+  printf '%s "$POLL"\n' "$_S"
+  printf "mon '%s true; do git push && break; %s 30; done'\n" "$_W" "$_S"
+} > "$TMPROOT/payload/hooks/test-bare-probe.sh"
+bprobe="$(printf 'payload/hooks/test-bare-probe.sh\n' | python3 "$SCAN" --root "$TMPROOT")"; bprobe_rc=$?
+bprobe_lines="$(printf '%s\n' "$bprobe" | awk -F: 'NF { printf "%s ", $2 }')"
+[ "$bprobe_rc" = 1 ] && [ "$bprobe_lines" = "2 3 4 5 6 9 " ] \
+  && check "#1743 a bare fixed sleep is reported, and a tick, a holder or a stand in's own duration is not" ok \
+  || check "#1743 a bare fixed sleep is reported, and a tick, a holder or a stand in's own duration is not" "exit $bprobe_rc, lines '$bprobe_lines' where 2 3 4 5 6 9 were wanted:
+$bprobe"
+# The finding says what to do instead, so the next author is not left to guess.
+case "$bprobe" in
+  *"fixed sleep"*hang_wait*window_wait*) check "#1743 and the finding names the two ways on" ok ;;
+  *) check "#1743 and the finding names the two ways on" "it said: $bprobe" ;;
+esac
 
 # ---------------------------------------------------------------------------
 # The real tree: none at all, anywhere.

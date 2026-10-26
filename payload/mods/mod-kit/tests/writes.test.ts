@@ -527,6 +527,45 @@ describe('writes: a module run with python -m and a tool run through npx (#1682)
   })
 })
 
+// #1726: an option written with a space gave its value to `runs` as a file the run may write, so the
+// collision guard and the design round guard could hold `python3 -m http.server --bind 127.0.0.1` over
+// an address and `npx tsc -p tsconfig.json` over a config file it only reads. Measured over this
+// Mac's 103,099 distinct Bash commands on 2026-10-25: 9,858 had a run, handing on 24,644 words, 3,761
+// of them right after an option word. For a known tool the value of each option it reads a value for
+// is no longer handed on (tsc -p 60 times, http.server --bind 17, vitest --config 3, prettier
+// --stdin-filepath 4, pytest -n 3 and -p 2, ruff --config 1). A script file's own options are not
+// known, and on this Mac they carry the files it writes (--out, --out-html, --out-tsv, --log,
+// --results-dir), so a script's option values stay handed on, as the test above holds for -o.
+describe('writes: the value of a known option a tool reads is no file it writes (#1726)', () => {
+  const words = (command: string) => (read(command).runs ?? []).map(r => r.args.map(a => a.word))
+  test('a module run with -m: http.server --bind and --directory, pytest -n and -p, unittest -s and -k, ruff --config', () => {
+    expect(words('python3 -m http.server --bind 127.0.0.1')).toEqual([])
+    expect(words('python3 -m http.server 8000 --bind 127.0.0.1 --directory site')).toEqual([['8000']])
+    expect(words('python3 -m http.server -b 127.0.0.1 -d site 8000')).toEqual([['8000']])
+    expect(words('python3 -m pytest -n 4 -p no:cacheprovider tests/test_app.py')).toEqual([['tests/test_app.py']])
+    expect(words('python3 -m unittest -s tests -k parse')).toEqual([])
+    expect(words('python3 -m ruff check --config ruff.toml app')).toEqual([['check', 'app']])
+  })
+  test('a tool run through npx: tsc -p, vitest --config and --root, prettier --stdin-filepath, eslint -c', () => {
+    expect(words('npx tsc -p tsconfig.json')).toEqual([])
+    expect(words('npx tsc --project tools/tsconfig.json --noEmit')).toEqual([])
+    expect(words('npx vitest run --config vitest.config.ts --root app')).toEqual([['run']])
+    expect(words('npx prettier --stdin-filepath app/page.tsx')).toEqual([])
+    expect(words('npx eslint -c eslint.config.js --fix app/page.tsx')).toEqual([['app/page.tsx']])
+  })
+  test('an option a tool writes a file through keeps its value, and a flag takes no value', () => {
+    // tsc --outDir and eslint -o name what they write; prettier --write is a flag, so its next word
+    // is the file it writes.
+    expect(words('npx tsc -p tsconfig.json --outDir dist')).toEqual([['dist']])
+    expect(words('npx eslint -o report.txt app')).toEqual([['report.txt', 'app']])
+    expect(words('npx prettier --write app/page.tsx')).toEqual([['app/page.tsx']])
+  })
+  test("a script file's own options are not known, so their values are still handed on", () => {
+    expect(words('python3 gen.py --bind 127.0.0.1 --out report.html')).toEqual([['127.0.0.1', 'report.html']])
+    expect(words('node build.mjs -p tsconfig.json')).toEqual([['tsconfig.json']])
+  })
+})
+
 // #712: the collision guard and no build read writes here now, so what each kept that this did
 // not moved in: a file removed, stamped, emptied, made or changed in mode (`changes`, beside the
 // files content is put into, which is all ask before saving reads), a folder removal with its tree,

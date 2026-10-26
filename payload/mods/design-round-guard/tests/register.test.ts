@@ -20,7 +20,8 @@ import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 // mod-kit's own reader, and where a checkout stands by its branch reader (#978) and the project's
 // name by its repo reader (#951), each a byte for byte copy under tests/mod-kit that
 // tools/check-mod-shared-parts.sh holds to mod-kit's, asked through the world (`__modkit`). The checkouts: /w/slate (the project's
-// main working tree), /w/slate-wt (a linked worktree of it, where a subagent works), and /w/other.
+// main working tree), /w/slate-wt (a linked worktree of it, where a subagent works), /w/slate-wt2
+// (another linked worktree of it, another subagent's), and /w/other.
 // A folder under /w/locked is one the disk cannot answer for.
 const modKit: { name: string; register: Register } = {
   name: 'mod-kit',
@@ -37,7 +38,7 @@ const modKit: { name: string; register: Register } = {
         pipeline: async (input: { command: string }) => ask('pipeline', input),
         workingTree: async ({ path }: { path: string }) => {
           if (path.startsWith('/w/locked/')) throw new Error('EACCES: /w/locked')
-          for (const root of ['/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop']) if (path === root || path.startsWith(root + '/')) return root
+          for (const root of ['/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop']) if (path === root || path.startsWith(root + '/')) return root
           return null
         },
         branch: async (input: { path: string }) => ask('branch', input),
@@ -113,7 +114,7 @@ const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isSt
 // as `dialog` says), every call that ran, every card drawn and every git command asked.
 const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
-  const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
+  const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/slate-wt2': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
   const store: Record<string, unknown> = {}
   // `shell`: what a Bash command writes when it runs, by path (#1296); `writeFails`: the paths
   // $.fs.write refuses; `afterWrite`: run once a write lands (another writer arriving, say);
@@ -171,7 +172,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       if (branch === undefined || branch === 'UNREADABLE') return { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' }
       return { exitCode: 0, stdout: `${branch}\n`, stderr: '' }
     }
-    if (sub === 'worktree list --porcelain') return { exitCode: 0, stdout: `worktree ${tree === '/w/slate-wt' ? '/w/slate' : tree}\nHEAD abc\nbranch refs/heads/main\n\n`, stderr: '' }
+    if (sub === 'worktree list --porcelain') return { exitCode: 0, stdout: `worktree ${tree === '/w/slate-wt' || tree === '/w/slate-wt2' ? '/w/slate' : tree}\nHEAD abc\nbranch refs/heads/main\n\n`, stderr: '' }
     if (sub === 'symbolic-ref --short refs/remotes/origin/HEAD') return { exitCode: 0, stdout: 'origin/main\n', stderr: '' }
     throw new Error(`unexpected git: ${argv.join(' ')}`)
   }
@@ -201,7 +202,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     if (cmd === '__modkit' && args[0] === 'branch') {
       if (ctl.branchFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit: the branch reader failed', isStdoutTruncated: false, isStderrTruncated: false } } as never
       const { path } = JSON.parse(String(args[1])) as { path: string }
-      const root = ['/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop'].find(r => path === r || path.startsWith(r + '/'))
+      const root = ['/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop'].find(r => path === r || path.startsWith(r + '/'))
       return ok(JSON.stringify(root === undefined ? null : await readBranch(root, git)))
     }
     if (cmd === '__modkit' && args[0] === 'repo') {
@@ -794,6 +795,59 @@ test("an agent worktree's branch is keyed by its own name, so another agent's br
   expect(refusalOf(await call($, PAGE))).toBe('')
   w.branches['/w/slate'] = 'worktree-agent-a26c84e7831f0b1c2'
   expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+})
+
+// #1740: twice on 2026-10-24/25 (#1563, #1727) Dan's Skip them was kept under a builder's starting
+// branch, worktree-agent-<id>, the builder then renamed its branch to name the issue, and the guard
+// read that issue, found no answer and asked him again. His skip there now carries to the issues the
+// SAME worktree's later branch names, and only there: another worktree, the main checkout, and the
+// issue itself everywhere else are still asked (#1306's guarantee), and nothing is kept under the
+// issue.
+const WT2_PAGE = { tool: 'Edit', file_path: '/w/slate-wt2/app/page.tsx', old_string: 'p-4', new_string: 'p-6' }
+test("#1740: a skip on a builder's worktree-agent branch carries to the issue its renamed branch names, in that worktree only", withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = 'main'
+  w.branches['/w/slate-wt'] = 'worktree-agent-a7f3c2d1e0b9a8c7d'
+  const why = refusalOf(await call($, { ...WT_PAGE }))
+  expect(why).toContain('branch worktree-agent-a7f3c2d1e0b9a8c7d in slate')
+  await askSkip($, w, why, SKIP_YES)
+  // The builder renames its branch to name its issue: the same worktree is not asked again.
+  w.branches['/w/slate-wt'] = 'goal-box-1563'
+  expect(refusalOf(await call($, { ...WT_PAGE }))).toBe('')
+  // Nor after a second rename, to a branch naming two issues.
+  w.branches['/w/slate-wt'] = 'late-followups-1563-1727'
+  expect(refusalOf(await call($, { ...WT_PAGE }))).toBe('')
+  // Another worktree on a branch naming the same issue is asked, as is the main checkout.
+  w.branches['/w/slate-wt2'] = 'goal-box-1563'
+  const other = refusalOf(await call($, WT2_PAGE))
+  expect(other).toContain(SKIP_QUESTION)
+  expect(other).toContain('issue #1563 in slate')
+  w.branches['/w/slate'] = '1563-goal-box'
+  expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+  // Nothing is kept under the issue itself, where any checkout would read it.
+  expect(Object.keys(w.store).filter(k => k.startsWith('record:')).sort()).toEqual([
+    'record:/w/slate|branch:worktree-agent-a7f3c2d1e0b9a8c7d',
+    'record:/w/slate|worktree:/w/slate-wt',
+  ])
+})
+
+test('#1740: only a skip on a worktree-agent branch carries; a skip on any other branch, and a settled round, do not', withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = 'main'
+  // A skip on an ordinary branch of the worktree is that branch's, and a rename is asked again.
+  w.branches['/w/slate-wt'] = 'feat-empty-states'
+  await askSkip($, w, refusalOf(await call($, { ...WT_PAGE })), SKIP_YES)
+  w.branches['/w/slate-wt'] = 'empty-states-1563'
+  expect(refusalOf(await call($, { ...WT_PAGE }))).toContain(SKIP_QUESTION)
+  // A settled round on an agent branch settles that branch's design, and is not carried.
+  w.branches['/w/slate-wt2'] = 'worktree-agent-b8e4d3c2f1a0b9c8e'
+  const id = idIn(refusalOf(await call($, WT2_PAGE)))
+  if (!id) throw new Error('no refused call named')
+  await askSettled($, w, SETTLED_YES, {}, { call: id })
+  expect(refusalOf(await call($, WT2_PAGE))).toBe('')
+  w.branches['/w/slate-wt2'] = 'chart-1727'
+  expect(refusalOf(await call($, WT2_PAGE))).toContain(SKIP_QUESTION)
+  expect(Object.keys(w.store).some(k => k.includes('|worktree:'))).toBe(false)
 })
 
 // #1322: before #1306, an agent worktree's branch read as the issues its random id spelled, and Dan's
@@ -1674,6 +1728,47 @@ test('#1275: undoing a logic edit to a line builder file with git restore passes
   expect(w.ran.length).toBe(1)
 })
 
+// #1756: on 2026-10-26 the #1747 builder gave a loop in the guard's own register.ts braces and a
+// `continue` in one Edit, to close the brace in the next, and the guard held the first: the text it
+// left had a brace open, which the reader cannot follow, and a file it cannot follow was held whole.
+// Such a text is no TypeScript at all (rules.ts bracketsOpen), so the Edit leaving it passes, and the
+// Edit closing it is judged against the file as it was before the first, so a look change made across
+// the two is still asked about. The demo mod's gate.ts draws nothing; its card.ts builds what it draws.
+const GATE = `${DEMO}/gate.ts`
+const GATE_TEXT = "export const gate = (xs: string[]) => {\n  for (const x of xs)\n    if (x) return x\n  return ''\n}\n"
+const OPEN_LOOP = { tool: 'Edit', file_path: GATE, old_string: '  for (const x of xs)\n', new_string: '  for (const x of xs) {\n    if (!x) continue\n' }
+const CLOSE_LOOP = { tool: 'Edit', file_path: GATE, old_string: '    if (x) return x\n', new_string: '    if (x) return x\n  }\n' }
+const edited = (text: string, e: { old_string: string; new_string: string }) => {
+  if (text.split(e.old_string).length !== 2) throw new Error(`the text holds ${e.old_string} other than once`)
+  return text.replace(e.old_string, e.new_string)
+}
+
+test('#1756: a logic change made across two Edits, the first leaving a brace open, passes both', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GATE]: GATE_TEXT } })
+  expect(refusalOf(await call($, OPEN_LOOP))).toBe('')
+  w.files[GATE] = edited(GATE_TEXT, OPEN_LOOP)
+  expect(refusalOf(await call($, CLOSE_LOOP))).toBe('')
+  w.files[GATE] = edited(w.files[GATE] as string, CLOSE_LOOP)
+  expect(w.ran.map(r => r.input.file_path)).toEqual([GATE, GATE])
+})
+
+test('#1756 controls: a look change made across two Edits is asked about at the second, and a brace open with no earlier text is held', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES } })
+  // The first leaves a brace open and changes a run's look; the second closes it.
+  const open = { tool: 'Edit', file_path: LINES, old_string: "    lines.push([{ text: `${i + 1}. ${s.title}`, bold: true }])\n", new_string: "    if (s.title) {\n    lines.push([{ text: `${i + 1}. ${s.title}`, bold: false }])\n" }
+  expect(refusalOf(await call($, open))).toBe('')
+  w.files[LINES] = edited(LINES_TEXT, open)
+  const close = { tool: 'Edit', file_path: LINES, old_string: '  })\n  return lines', new_string: '  }\n  })\n  return lines' }
+  expect(refusalOf(await call($, close))).toContain(SKIP_QUESTION)
+  // A file left with a brace open by something else, with no earlier text of it, is held as before.
+  const left = `${DEMO}/left.ts`
+  w.files[left] = edited(GATE_TEXT, OPEN_LOOP)
+  expect(refusalOf(await call($, { ...CLOSE_LOOP, file_path: left }))).toContain(SKIP_QUESTION)
+  // A text the reader cannot follow for another reason (an unclosed string) is held as before.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: `${DEMO}/keys.ts`, old_string: '`steps:${repo}`', new_string: "'steps:" }))).toContain(SKIP_QUESTION)
+  expect(w.ran.map(r => r.input.file_path)).toEqual([LINES])
+})
+
 // #1296: what a shell write leaves cannot be read before it runs, so one to a mod's .ts hook file that
 // draws nothing yet runs, and the file is read again after it (Dan, 2026-10-17: judge after, and
 // undo). One the command made draw, on an issue Dan has not answered for, is put back as it was, with
@@ -2346,6 +2441,46 @@ test('#1586: a script handed no screen file, a test, a file in no checkout, or o
   w.store['record:/w/slate|issue:978'] = { kind: 'settled', at: 1, label: 'issue #978 in slate', reading: ISSUE_READING }
   expect(refusalOf(await call($, GEN('/w/slate/app/page.tsx')))).toBe('')
   expect(w.ran.length).toBe(6)
+})
+
+// #1747: on 2026-10-25 a builder recording a finding with the spool helper's note was refused as a
+// look change. Its text named payload/hooks/lib/__pycache__/*.pyc, so the text, handed to the script
+// as an argument (#1586), read as a pattern that may name a screen file. A note appends one record to
+// the issue spool, outside every project, and writes none of the words it is handed.
+const NOTE_1747 =
+  'test-scanners-before-push.sh #1734 control (from PR #1741) copies payload/hooks/lib with cp -R into a fixture repo and commits it with add -A, so any ignored payload/hooks/lib/__pycache__/*.pyc on the machine (left by test-pr-review.sh importing review-answered.py, or any script importing shell_code_lines without dont_write_bytecode) is committed too; the repository then lists 2 more files than check-home-paths reads (90 against 88) and the control fails. Copy only tracked files (git ls-files) into the fixture, or exclude __pycache__.'
+const SPOOL_NOTE = (text: string) => `bash ~/.claude/hooks/lib/issue-spool.sh note . "${text}" "late-followups builder"`
+
+test('#1747: a finding noted with the spool helper runs, whatever files its text names', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of [
+    SPOOL_NOTE(NOTE_1747),
+    SPOOL_NOTE('the button colour in app/globals.css'),
+    SPOOL_NOTE('app/page.tsx and app/(shop)/[id]/page.tsx both draw the header'),
+    `bash ${HOME}/.claude/hooks/lib/issue-spool.sh note . "tokens.json drifted from app/site.css" "a builder"`,
+    `${HOME}/.claude/hooks/lib/issue-spool.sh note . "app/page.tsx" "a builder"`,
+  ])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(5)
+})
+
+test('#1747 control: the same helper writing a screen file another way, another of its commands, or a lookalike is still held', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of [
+    // A redirect is the shell's write, whatever runs.
+    `${SPOOL_NOTE('a finding')} > app/page.tsx`,
+    // Only its note is known to write nothing it is handed.
+    'bash ~/.claude/hooks/lib/issue-spool.sh append app/page.tsx "{}"',
+    // A script of the same name anywhere else is any script.
+    'bash /w/slate/scripts/issue-spool.sh note . app/globals.css',
+    'bash ~/elsewhere/hooks/lib/issue-spool.sh note . app/globals.css',
+    // Another script in the same command is judged as before.
+    `${SPOOL_NOTE('a finding')} && python3 scripts/gen.py app/page.tsx`,
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  }
+  expect(w.ran).toEqual([])
 })
 
 test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {

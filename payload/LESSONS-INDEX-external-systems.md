@@ -5,6 +5,8 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L810. Check a saved credential by doing its real action on its real destination, never a login check alone: a wrong identity passes login.
+- L1031. A React app must survive browser translation: Translate swaps text nodes React owns and its next update crashes, so guard the DOM or opt out.
 - L794. Model an RPC binding double so every property read is a remote method, or .call on a method passes tests and throws live.
 - L775. Check a change made through another service's API by re-reading on a timer to a deadline; one immediate read calls a landed change a failure.
 - L1023. Classifying outside free text by its PREFIX reads any new option sharing it as the old one, so match each known wording whole and refuse the rest.

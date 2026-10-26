@@ -309,6 +309,17 @@ export const mentionedLookFiles = (text: string): string[] => {
 }
 
 /**
+ * Whether a script run is the issue spool helper's note (#1747): `~/.claude/hooks/lib/issue-spool.sh
+ * note <dir> <text> [who]` appends one record to the spool under ~/.claude-issue-spool, outside every
+ * project, and writes none of the words it is handed, so a file its text names is no write target.
+ * On 2026-10-25 a finding naming payload/hooks/lib/__pycache__/*.pyc was refused as a look change.
+ * Only that helper at its installed path, and only its note: its other commands, a script of the same
+ * name anywhere else, and anything else in the command are judged as any script run is (#1586).
+ */
+export const spoolNote = (run: { path?: string; args: readonly { word: string }[] }, home: string): boolean =>
+  home !== '' && run.path === `${home}/.claude/hooks/lib/issue-spool.sh` && run.args[0]?.word === 'note'
+
+/**
  * Whether a word's file name (its last part) is one the shell would expand as a pattern, as against
  * one built from a variable or a command's output: a `*`, `?`, bracket or brace, or a group, zsh's
  * `(a|b)` or bash's extglob `@(a|b)`. A name in brackets alone (`(shop)`, `x(1)`) is a name. Its
@@ -1011,14 +1022,42 @@ export const scriptUnread = (script: string, file: string): string =>
  */
 export const isModHookTs = (rel: string): boolean => /(^|\/)mods\/[^/]+\/hooks\/[^/]+\.(ts|mts|cts)$/i.test(rel) && !/\.d\.[mc]?ts$/i.test(rel)
 
+/**
+ * Whether a plain TypeScript text (a `.ts`, `.mts` or `.cts` file, which holds no JSX) is one the
+ * reader follows but for its brackets: a `(`, `[` or `{` left open, or a `)` or `]` shut that nothing
+ * opened or that shuts another kind (#1756). Strings, template literals, regular expressions and
+ * comments are read first, so a bracket inside one is not counted. Such a text is no TypeScript at
+ * all: it is what a change made in more than one edit leaves between them, as the #1747 builder's
+ * Edit giving a loop its opening brace, whose next Edit was to close it, left on 2026-10-26. False
+ * for a text the reader cannot follow for any other reason, an unclosed string or a `}` shutting
+ * nothing among them, which is held as before.
+ */
+export const bracketsOpen = (text: string): boolean => {
+  const spans = sourceSpans(text, false)
+  if (!spans) return false
+  const masked = new Uint8Array(text.length)
+  for (const [a, b] of [...spans.comments, ...spans.strings]) masked.fill(1, a, b)
+  const pair: Record<string, string> = { ')': '(', ']': '[', '}': '{' }
+  const open: string[] = []
+  for (let i = 0; i < text.length; i++) {
+    if (masked[i]) continue
+    const c = text[i] as string
+    if (c === '(' || c === '[' || c === '{') open.push(c)
+    else if (c in pair && open.pop() !== pair[c]) return true
+  }
+  return open.length > 0
+}
+
 /** One of a mod's hook files, by its name in the mod's hooks folder, and its text. */
 export type ModFile = { name: string; text: string }
 
 // The keys that make an object one of mod-kit's text runs, beside `text` (ModKitRun, ModKitBandText).
 const RUN_LOOKS = new Set(['color', 'bold', 'dim', 'italic', 'underline', 'strikethrough', 'inverse', 'indent', 'wrap', 'whole', 'href', 'dimColor', 'backgroundColor'])
-// What draws a mod's lines, with what it is handed: mod-kit's band row, pane and boxed card, a blocked
-// action's grey card, and a pane's size and title as Claude Code opens it.
-const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card|blocked)|ui\s*\.\s*open)\s*\(/g
+// What draws a mod's lines, with what it is handed: mod-kit's band row, pane and boxed card, and a
+// pane's size and title as Claude Code opens it. Not a blocked action's grey card (#1756): its look
+// is mod-kit's own (card.ts blockedCard), judged there, and a caller hands it only the words of a
+// refusal, shown as a tool result row, which are copy, held nowhere else (#1296 had followed them).
+const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card)|ui\s*\.\s*open)\s*\(/g
 const DECL = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(const|let|var|function\s*\*?|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/
 const IMPORT = /^import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]\.\/([^'"/]+)['"]/
 
@@ -1578,7 +1617,7 @@ const readMod = (f: ModFile): ModRead | null => {
     const out: Span[] = []
     for (const [o, c] of pairs) if (o >= a && o < b && o !== own && blank[o] === '(' && isCall(o)) out.push([o, c])
     out.push(...testsIn(a, b, own).map(([x, y]): Span => [x - 1, y]))
-    // What a drawing call is handed to say which surface it draws, never how (a blocked card's
+    // What a drawing call is handed to say which surface it draws, never how (a card's
     // `toolUseId`, a band row's `mod`, `id` and `slot`, a pane's `id`): not followed.
     const shut = own === undefined ? undefined : close.get(own)
     if (own !== undefined && shut !== undefined)
@@ -1659,8 +1698,8 @@ const readMod = (f: ModFile): ModRead | null => {
  * is a top level one; and every top level declaration any part, in this file or another of the mod's,
  * names, through the imports between them, and in turn what each of those names. A type draws nothing.
  * Since #1296 a value reaching a part through a local or a parameter is followed too: a local's
- * declaration, a parameter's argument at each call of its function in the mod's files (a guard's
- * blocked card sentence handed to its drawCard), the values a function returns where a followed value
+ * declaration, a parameter's argument at each call of its function in the mod's files (a card's
+ * sentence handed to a function that draws it), the values a function returns where a followed value
  * calls it, and the `xs` a callback's `xs.map(x => ...)` takes its values from; each compared with
  * what it treats as data or a test taken out (cutCode). Not followed, as no part of the look: what a
  * call it makes is handed, what a value is only tested for, what a method is called on, a called
@@ -1903,13 +1942,29 @@ export const mentionsStore = (text: string): boolean => /plugins\/store/.test(te
  * checkout stands is mod-kit's one reading of it (`$.modkit.branch`), and `repo` the project's name
  * as `$.modkit.repo` gives it.
  */
-export const subjectsOf = (at: { main: string; repo: string; session: string } & ({ issue: number } | { branch: string; isDefault: boolean; issues: readonly number[] })): DesignRoundSubject[] => {
+export const subjectsOf = (at: { main: string; repo: string; session: string } & ({ issue: number } | { branch: string; isDefault: boolean; issues: readonly number[]; root?: string })): DesignRoundSubject[] => {
   const issue = (n: number): DesignRoundSubject => ({ key: `record:${at.main}|issue:${n}`, label: `issue #${n} in ${at.repo}` })
   if ('issue' in at) return [issue(at.issue)]
   if (at.isDefault) return [{ key: `record:${at.main}|branch:${at.branch}|session:${at.session}`, label: `${at.branch} in ${at.repo}, for this session` }]
-  if (at.issues.length) return at.issues.map(issue)
-  return [{ key: `record:${at.main}|branch:${at.branch}`, label: `branch ${at.branch} in ${at.repo}` }]
+  // A linked worktree's own key (#1740): written beside a skip on its builder's starting branch, and
+  // read for the issues a later branch of the same worktree names. The main working tree has none.
+  const own = at.root !== undefined && at.root !== at.main ? worktreeKey(at.main, at.root) : undefined
+  if (at.issues.length) return at.issues.map(n => (own === undefined ? issue(n) : { ...issue(n), carriedFrom: own }))
+  const branch: DesignRoundSubject = { key: `record:${at.main}|branch:${at.branch}`, label: `branch ${at.branch} in ${at.repo}` }
+  return [own !== undefined && isAgentBranch(at.branch) ? { ...branch, carryTo: own } : branch]
 }
+
+// A BUILDER'S SKIP CARRIED TO ITS RENAMED BRANCH (#1740). Claude Code starts an agent's worktree on a
+// branch named worktree-agent-<its random id>, which names no issue (#1306), so Dan's Skip them there
+// was kept under that branch. Twice on 2026-10-24/25 (#1563, #1727) the builder then renamed its
+// branch to name its issue, the guard read the issue, found no answer and asked him again. So a skip
+// on such a branch is also kept under the worktree's own folder, and an issue a later branch of THAT
+// worktree names reads it when the issue has no answer of its own. It is never kept under the issue,
+// so another worktree, the main checkout, and a later builder for the same issue are all still asked:
+// #1306's guarantee, that an agent's answer reaches no checkout but its own, holds. Only a skip is
+// carried: a settled round settles the design that branch built, which a rename does not change.
+export const isAgentBranch = (branch: string): boolean => /^worktree-agent-[0-9a-z]+$/i.test(branch)
+export const worktreeKey = (main: string, root: string): string => `record:${main}|worktree:${root}`
 
 // The branch reading an answer kept under an issue was written by (#1322). Before #1306 an agent
 // worktree's branch read as the issues its random id spelled, and Dan's Skip them there was kept

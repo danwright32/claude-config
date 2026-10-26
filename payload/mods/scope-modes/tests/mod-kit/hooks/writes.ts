@@ -435,11 +435,37 @@ const SCRIPT_NAME = /\.(?:py|sh|bash|zsh|js|mjs|cjs|ts|mts|cts|rb|pl)$/
 const runsDirectly = (w: string | undefined) => w !== undefined && (SCRIPT_NAME.test(w) || /^\.\.?\//.test(w))
 // An address (https://x.dev/page.html) is no file here.
 const isAddress = (w: string) => /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(w)
+// The options of a known tool, run through npx or as a python module, that take the next word as a
+// value it only reads (#1726), so that word is no file the run writes. Measured over this Mac's
+// 103,099 distinct Bash commands on 2026-10-25: tsc -p 60 times, http.server --bind 17, prettier
+// --stdin-filepath 4, vitest --config 3, pytest -n 3 and -p 2, ruff --config 1. Where the tool's own
+// help could be read here (python3.14's http.server and unittest, pytest 8), its other options of
+// that kind are added from it; for tsc, vitest, prettier, eslint and ruff, which are not installed on
+// this Mac, only the measured option and its other spelling. An option whose value the tool writes
+// (tsc --outDir, eslint -o, pytest --basetemp) is never listed, so its value is still handed on. A
+// script file's own options are not known, and on this Mac they carry the files it writes (--out,
+// --out-html, --out-tsv, --log, --results-dir), so none is skipped for a script.
+const TOOL_READS: ReadonlyMap<string, ReadonlySet<string>> = new Map(Object.entries({
+  tsc: new Set(['-p', '--project']),
+  vitest: new Set(['-c', '--config', '-r', '--root']),
+  prettier: new Set(['--stdin-filepath']),
+  eslint: new Set(['-c', '--config']),
+  ruff: new Set(['--config']),
+  'http.server': new Set(['-b', '--bind', '-d', '--directory', '-p', '--protocol', '--tls-cert', '--tls-key', '--tls-password-file']),
+  unittest: new Set(['-k', '-s', '--start-directory', '-p', '--pattern', '-t', '--top-level-directory', '--durations']),
+  pytest: new Set(['-n', '-p', '-k', '-m', '-c', '--config-file', '--rootdir', '--deselect', '--ignore', '--maxfail', '--confcutdir']),
+}))
 // Each word a script is handed that may name a file (#1586): an option is none, and one written
 // --name=value gives its value; - is standard input; an address or another machine's path is none.
-const scriptArgs = (args: readonly string[]): string[] => {
+// `reads` is a known tool's options whose value is the next word and is only read (#1726).
+const scriptArgs = (args: readonly string[], reads: ReadonlySet<string> = new Set()): string[] => {
   const out: string[] = []
-  for (const a of args) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (reads.has(a)) {
+      i++
+      continue
+    }
     const value = /^--?[A-Za-z][\w-]*=(.*)$/.exec(a)?.[1]
     const w = value ?? a
     if (!w || w === '-' || (value === undefined && a.startsWith('-')) || isAddress(w) || isRemote(w)) continue
@@ -734,8 +760,8 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // The script's word as the command reads it, variables read as their values.
     const scriptFile = c.script && !c.script.stdin && !c.program ? expand(c.script.files[0] ?? '') : kind === undefined && runsDirectly(args[0]) ? args[0] : undefined
     // Each word a run is handed, as a path where its words name one.
-    const handedOf = (words: readonly string[]) =>
-      scriptArgs(words).map(w => {
+    const handedOf = (words: readonly string[], reads?: ReadonlySet<string>) =>
+      scriptArgs(words, reads).map(w => {
         const p = abs(w)
         const folder = p ? undefined : patternFolder(w, dir, home)
         return { word: asWritten.get(w) ?? w, ...(p ? { path: p } : {}), ...(folder ? { folder } : {}) }
@@ -753,7 +779,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // with no file of its own.
     const tool = kind === 'python' ? readProgram(args, undefined).module : name === 'npx' ? npxTool(args) : undefined
     if (tool) {
-      const handed = handedOf(args.slice(tool.args))
+      const handed = handedOf(args.slice(tool.args), TOOL_READS.get(tool.name))
       if (handed.length) runs.push({ what: kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx', script: tool.name, args: handed })
     }
     // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be

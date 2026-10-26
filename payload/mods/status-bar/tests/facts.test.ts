@@ -138,6 +138,21 @@ describe('lookParts', () => {
     const jobs = [{ label: 'npm test', runMs: MIN, kept: false, stuck: true }]
     expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('npm test not progressing, ask Claude to check')
   })
+  // #1727: a job list that could not be read is said, never shown as no jobs (L10), in #1583's plain
+  // style and, like a quiet command, only once Claude's turn has ended (Dan skipped the design round).
+  const UNREADABLE = { text: 'job list unreadable, ask Claude to check', color: 'warning' }
+  test('a job list that could not be read says so, in amber, once Claude has stopped (#1727)', () => {
+    const parts = lookParts({ modes: [], pr: null, jobs: [], jobsUnreadable: true, unpushed: { count: 1, readAt: now, isStale: false }, now, isWorking: false })
+    expect(texts(parts)).toBe('job list unreadable, ask Claude to check | 1 unpushed commit')
+    expect(parts).toContainEqual(UNREADABLE)
+  })
+  test('a job list that could not be read is not said while Claude is working (#1727)', () => {
+    expect(lookParts({ modes: [], pr: null, jobs: [], jobsUnreadable: true, unpushed: null, now, isWorking: true })).toEqual([])
+  })
+  test('a job list read and empty shows nothing, before and after the turn ends (#1727)', () => {
+    expect(lookParts({ modes: [], pr: null, jobs: [], jobsUnreadable: false, unpushed: null, now, isWorking: false })).toEqual([])
+    expect(lookParts({ modes: [], pr: null, jobs: [], unpushed: null, now, isWorking: false })).toEqual([])
+  })
   // #784: a poll loop waiting on something outside (a queued CI run) is waiting, never stuck.
   test('a waiting job says waiting, never stuck', () => {
     const jobs = [

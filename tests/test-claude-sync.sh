@@ -3228,7 +3228,9 @@ CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
 before_mtime="$(_suite_mtime "$CI/settings.json")"
 before_cl="$(_suite_mtime "$CI/CLAUDE.md")"
-sleep 1
+# A rewrite shows only once the clock has left the second both files were written in, so that is
+# waited for as the condition it is (#1743), never a fixed second (L290).
+hang_wait '[ "$(date +%s)" -gt "${before_mtime:-0}" ] && [ "$(date +%s)" -gt "${before_cl:-0}" ]'
 # second apply with identical payload must NOT touch settings.json or CLAUDE.md
 CLAUDE_HOME="$CI" SYNC_REPO="$RI" SYNC_NO_GIT=1 bash "$SCRIPT" pull >/dev/null 2>&1
 after_mtime="$(_suite_mtime "$CI/settings.json")"
@@ -8900,7 +8902,9 @@ check "#166 the fixture leaves a process that reads as this suite" \
 check "#166 and one that does not"  "kill -0 '$_or_bystander' 2>/dev/null"
 
 _or_take="$(_try_lock "$_or_lock")"; _or_take_rc=$?
-sleep 1
+# The leftover it killed is waited on until it is gone and reaped, the condition the passing case
+# meets, never a fixed second (#1743, L290); one never killed still fails, at the hang ceiling.
+hang_wait '! kill -0 "$_or_stray" 2>/dev/null' 0.1
 check "#166 the next run takes the dead run's lock over" "[ '$_or_take_rc' -eq 0 ]"
 check "#166 and says how many processes it cleared" \
   "line_has \"\$_or_take\" 'left running' '[0-9]+'"
@@ -8938,11 +8942,14 @@ printf '%s
 check "#174 the unkillable fixture is running before anything acts on it" \
   "kill -0 '$_or2_stray' 2>/dev/null"
 _or2_out="$(SUITE_CLEAR_KILL_FAILS=1 _try_lock "$_or2_lock")"
-sleep 1
+# A window the passing case runs out (#1743): a leftover wrongly killed or left frozen would show
+# inside it.
+_or2_gone_or_frozen(){ ! kill -0 "$_or2_stray" 2>/dev/null || case "$(ps -o stat= -p "$_or2_stray" 2>/dev/null)" in *T*) true ;; *) false ;; esac; }
+window_wait 1 _or2_gone_or_frozen; _or2_held=$?
 check "#174 a leftover that could not be killed is named, not dropped" \
   "line_has \"\$_or2_out\" 'could not' '$_or2_stray'"
 check "#174 and it is left RUNNING rather than frozen where nobody finds it" \
-  "kill -0 '$_or2_stray' 2>/dev/null && case \"\$(ps -o stat= -p '$_or2_stray' 2>/dev/null)\" in *T*) false ;; *) true ;; esac"
+  "[ \"\$_or2_held\" = 1 ] && kill -0 '$_or2_stray' 2>/dev/null && case \"\$(ps -o stat= -p '$_or2_stray' 2>/dev/null)\" in *T*) false ;; *) true ;; esac"
 check "#174 and the count does not include it" \
   "! case \"\$_or2_out\" in *'cleared 1 process'*) true ;; *) false ;; esac"
 kill -9 "$_or2_stray" 2>/dev/null || true

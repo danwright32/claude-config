@@ -165,6 +165,11 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-wrapped-commands.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/stacked-branch-delete-gate.sh",
+            "timeout": 30
           }
         ]
       },

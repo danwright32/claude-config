@@ -112,7 +112,9 @@ const world = (on: On, opts: WorldOpts = {}) => {
     if (!(e.path in files)) throw new Error(`no file ${e.path}`)
     return { value: { kind: 'file', size: 1, mtimeMs: stampOf(e.path), isLink: false } } as never
   })
+  const lists: string[] = []
   on('fs.list', ($, e) => {
+    lists.push(e.path)
     const names = new Map<string, 'file' | 'dir'>()
     for (const p of Object.keys(files)) {
       if (!p.startsWith(e.path + '/')) continue
@@ -200,7 +202,7 @@ const world = (on: On, opts: WorldOpts = {}) => {
   const own = (id = 's1') => JSON.parse(files[`${DIR}/${id}.json`] ?? 'null')
   // A file written by someone other than the registry (its owner in another session, or the test).
   const touch = put
-  return { files, writes, reads, finds, logs, removed, bounds, clock, own, touch, hang: (p: string) => void (hangs = p), vanish: (p: string) => void (vanishing = p), unhang: () => unhang(), hangReached, hold, release: () => gate.release() }
+  return { files, writes, reads, finds, lists, logs, removed, bounds, clock, own, touch, hang: (p: string) => void (hangs = p), vanish: (p: string) => void (vanishing = p), unhang: () => unhang(), hangReached, hold, release: () => gate.release() }
 }
 
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) =>
@@ -307,6 +309,53 @@ test('other mods keep their own keys on the record', withConsumer, async ($, on)
   await start($)
   await call($, 'extra job-1')
   expect(w.own().extra).toEqual({ jobs: ['job-1'] })
+})
+
+// #1703: the engine fires session.start again at every fresh load of the mod (once per process, then
+// once per fresh load, never at /clear), with the session going on. A start that wrote a blank record
+// then dropped this session's start time, its edits (which the collision guard warns other sessions
+// by) and every other mod's keys (the job watcher's jobs for the leftover judge, the goal tracker's
+// list) from the one record other sessions read.
+test("a reload of the mod keeps this session's record: its start, its edits and other mods' keys (#1703)", withConsumer, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await call($, 'edit /repo/a.ts')
+  await call($, 'extra job-1')
+  await w.clock.advance(3 * MIN)
+  // A hot reload: a second session.start in this process, the session going on.
+  await start($)
+  const own = w.own()
+  expect(own.startedAt).toBe(100 * MIN)
+  expect(own.edits).toEqual(['/repo/a.ts'])
+  expect(own.extra).toEqual({ jobs: ['job-1'] })
+  expect(own.closedAt).toBeNull()
+})
+
+// Quiet ten minutes, past the five that count as closed, but too recent for the cleanup to archive.
+const QUIET_RECORD = JSON.stringify({ v: 1, sessionId: 's1', cwd: '/repo/app', repoRoot: '/repo', startedAt: 80 * MIN, lastSeen: 90 * MIN, closedAt: null, transcriptPath: null, edits: ['/repo/old.ts'], extra: {} })
+for (const [what, text] of [
+  ['a damaged record', '{ not a record'],
+  ['a record a crashed process left quiet', QUIET_RECORD],
+] as const) {
+  test(`${what} under this id is never taken up: the start writes a record of its own (#1703)`, withConsumer, async ($, on) => {
+    const w = world(on, { files: { [`${DIR}/s1.json`]: text } })
+    await start($)
+    expect(w.own().startedAt).toBe(100 * MIN)
+    expect(w.own().edits).toEqual([])
+  })
+}
+
+test('a session started again under the id of a record that has closed starts a record of its own (#1703)', withConsumer, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await call($, 'edit /repo/a.ts')
+  await $.session.end({ reason: 'other', sessionId: 's1' } as never)
+  await w.clock.advance(3 * MIN)
+  await start($)
+  const own = w.own()
+  expect(own.startedAt).toBe(103 * MIN)
+  expect(own.edits).toEqual([])
+  expect(own.closedAt).toBeNull()
 })
 
 test('the list sorts sessions into open and closed, and names what it cannot read', withConsumer, async ($, on) => {
@@ -709,6 +758,31 @@ test('a check that fails on one place is passed over when the transcript is foun
   const r = await unreadOf($, 's2')
   expect(r?.transcriptPath).toBe(T)
   expect(r?.transcriptUnread).toBeUndefined()
+})
+
+// #1725: Claude Code spells a folder past 200 characters as its first 200, a hyphen and a hash of
+// the path (measured on the real engine, 2.1.310, 2026-10-25), so the cut spelling is looked for in
+// its own right, never left to the search by id, which can fail under load (#1636).
+const LONG_CWD =
+  '/private/var/folders/kd/98c3xw516598081hs59hbkt80000gn/T/measure-long.27sZoY/' +
+  Array.from({ length: 22 }, (_, i) => `segment.${String(i + 1).padStart(3, '0')}/`).join('') +
+  'end.x'
+const LONG_T =
+  '/Users/x/.claude/projects/-private-var-folders-kd-98c3xw516598081hs59hbkt80000gn-T-measure-long-27sZoY-segment-001-segment-002-segment-003-segment-004-segment-005-segment-006-segment-007-segment-008-segment-009-segment-010-seg-20wnth/s2.jsonl'
+test("a session in a folder past 200 characters has its transcript found under Claude Code's cut spelling, without the search by id (#1725)", withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', LONG_CWD), [LONG_T]: '' }, findFails: { deny: 'find did not answer within 5 seconds' } })
+  await start($)
+  const r = await unreadOf($, 's2')
+  expect(r?.transcriptPath).toBe(LONG_T)
+  expect(r?.transcriptUnread).toBeUndefined()
+  expect(w.finds.filter(f => f === 's2.jsonl')).toEqual([])
+})
+test('a session in a folder of ordinary length is never looked for by listing the folder of transcripts (#1725)', withConsumer, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-Users-x-app/s2.jsonl'
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app'), [T]: '' } })
+  await start($)
+  expect((await unreadOf($, 's2'))?.transcriptPath).toBe(T)
+  expect(w.lists.filter(p => p === '/Users/x/.claude/projects')).toEqual([])
 })
 
 test('a transcript that is truly nowhere carries no unread reason (#1636)', withConsumer, async ($, on) => {

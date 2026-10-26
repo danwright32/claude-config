@@ -234,6 +234,35 @@ live_store_only_gained(){ # <path> -> 0 when the change only added lines
   [ -z "$(diff "$copy" "$path" 2>/dev/null | grep '^<' || true)" ]
 }
 
+# Was a GENERATED lessons file rewritten because a lesson was recorded? (claude-config#1694)
+#
+# The lessons index and core files (LESSONS-INDEX-*.md, LESSONS-CORE-*.md, the table of contents
+# LESSONS-CORE-_TOC.md among them) are generated from LESSONS.md, and recording a lesson regenerates
+# them whole: a section's count in the table of contents goes up by one IN PLACE, the same number
+# of lines with one changed, which is the destructive shape to live_store_only_gained. On 2026-10-24
+# a full run failed on exactly that, while LESSONS.md and the section's index file beside it were
+# correctly excused. So a generated lessons file stands down only when its source, LESSONS.md beside
+# it, changed in the same window by gaining lines alone, and only when the file kept at least as
+# many lines as it had: a suite truncating one while a lesson happens to be recorded is still caught.
+# Narrow on purpose, since this widens what the guard excuses: no other store, and not a deletion.
+live_store_regenerated_with_lessons(){ # <path> -> 0 when that is the change it saw
+  local path="$1" lessons copy before now
+  case "${path##*/}" in LESSONS-CORE-*.md|LESSONS-INDEX-*.md) ;; *) return 1 ;; esac
+  lessons="${path%/*}/LESSONS.md"
+  [ -f "$path" ] && [ -f "$lessons" ] || return 1
+  [ -n "${_live_copies:-}" ] && [ -f "$_live_copies/index" ] || return 1
+  copy="$(awk -F"$(printf '\t')" -v f="$lessons" '$1 == f { print $2; exit }' "$_live_copies/index")"
+  [ -n "$copy" ] && [ -f "$copy" ] || return 1
+  cmp -s "$copy" "$lessons" && return 1             # LESSONS.md did not change, so nothing was recorded
+  live_store_only_gained "$lessons" || return 1    # and it changed by gaining lines alone
+  copy="$(awk -F"$(printf '\t')" -v f="$path" '$1 == f { print $2; exit }' "$_live_copies/index")"
+  [ -n "$copy" ] && [ -f "$copy" ] || return 1     # absent before, so this is a creation
+  before="$(wc -l < "$copy" 2>/dev/null | tr -d ' ')"
+  now="$(wc -l < "$path" 2>/dev/null | tr -d ' ')"
+  case "$before$now" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$now" -ge "$before" ]
+}
+
 # Did the SYNC apply config into this Mac while the run was going? (claude-config#277)
 #
 # The stores on the list above are the config the sync installs, and the watch daemon installs it
@@ -827,6 +856,13 @@ if [ "$ran" -gt 0 ]; then
   # ledger's reason.
   MT_SIGNIN_LEDGER_DIR="$WORK/gh-signin"
   export MT_SIGNIN_LEDGER_DIR
+
+  # And the phase records merge helpers and lessons reviews publish for the load window
+  # (lib/merge-phase.sh, claude-config#1676, #1730): a suite that starts a review without pointing it
+  # elsewhere publishes its fixture's phase here, never where tools/load-window.sh reads this Mac's.
+  # Not bracketed, for the push ledger's reason: real helpers write the live one all through a run.
+  MWR_PHASE_DIR="$WORK/merge-phases"
+  export MWR_PHASE_DIR
 
   # And claude-sync's log (claude-config#1486). claude-sync itself logs nowhere for a fixture home,
   # but a suite running it as a home's own config, with HOME left real, would append its lines to the
@@ -1658,6 +1694,11 @@ if [ -n "${_live_before:-}" ] && [ "$_live_before" != "$_live_after" ]; then
     fi
     if live_store_only_gained "$_lc_path"; then
       _lc_noted="$_lc_noted  $_lc_path: lines were added to it and none were removed or changed, which is what the sync and another session recording a lesson both do, and not what a suite bound to the real path does.
+"
+      continue
+    fi
+    if live_store_regenerated_with_lessons "$_lc_path"; then
+      _lc_noted="$_lc_noted  $_lc_path: regenerated from LESSONS.md, which gained lines in the same window, keeping at least as many lines as it had, which is what recording a lesson does to a generated lessons file.
 "
       continue
     fi

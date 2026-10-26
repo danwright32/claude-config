@@ -21,7 +21,10 @@
 # a refusal asks, or pasting the refusal, is not refused again (claude-config#1702).
 #
 # WHAT IT DOES on a contradiction: refuses the hand-back, quoting the claim and the commands, so the
-# agent corrects its report. A report the agent will not correct is let through on the third attempt
+# agent corrects its report. The refusal says to DELETE the false sentence, and not to withdraw it,
+# correct it in place or quote it: the check reads a denial wherever its words appear, so each of
+# those is refused again (#1702: in the #1674 probe a withdrawn and a quoted correction were both
+# refused; reading those shapes as not a denial was tried and kept letting stood-by denials through). A report the agent will not correct is let through on the third attempt
 # (HANDBACK_CHECK_MAX_REFUSALS, default 2), so a report is never stranded by a misreading here, and
 # then the contradiction is said to Dan and spooled for the main session's end of turn review
 # (lib/issue-spool.sh note), since a report delivered with a false claim must not arrive unremarked.
@@ -99,7 +102,7 @@ if [[ -n "$key" ]] && mkdir -p "$state" 2>/dev/null; then
   if [ "$count" -lt "$max" ] && printf '%s\n' "$((count + 1))" > "$state/$key" 2>/dev/null; then
     printf '%s\n' "REFUSED (handback-claims-gate.sh): your report contradicts your own commands.
 $found
-Correct the report before handing back: name each of these, say why it was done, and remove the claim that it was not. The main session acts on this report, so it has to say what happened (claude-config#1587)." >&2
+Correct the report before handing back: name each of these, say why it was done, and delete the sentence that says it was not. The main session acts on this report, so it has to say what happened (claude-config#1587, #1702)." >&2
     exit 2
   fi
   [ "$count" -lt "$max" ] && why="unrefused, because the gate could not keep count of its refusals in $state"

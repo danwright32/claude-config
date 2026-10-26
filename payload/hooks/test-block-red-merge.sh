@@ -1559,6 +1559,30 @@ out=$(GH_RUNS_FAILS="$f" run_hook "$dir" "$PINNED")
 if denied "$out" && holds "$out" "GitHub refused the sign in 3 times"; then pass; else fail "#1615 a runs read refused every time was not refused as a refused sign in: $out"; fi
 rm -f "$f"
 
+echo "block-red-merge: a network to GitHub that failed every try is refused as that (claude-config#1728)"
+# Since #1675 this gate asks a failed connection again, but once its tries ran out it refused in its
+# generic words ("gh pr view failed", "GitHub's comparison of the two did not answer"), which read as
+# GitHub refusing (L11). The dial failure is the one that stopped #1732 on 2026-10-25, word for word;
+# the reset is a connection made and then lost, said as lost.
+DIAL='Post "https://api.github.com/graphql": dial tcp 140.82.113.6:443: connect: can'"'"'t assign requested address'
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$DIAL" "$DIAL" "$DIAL" "$DIAL" "$DIAL")
+out=$(GH_VIEW_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "could not connect to GitHub 3 times reading the pull request #7"; then pass; else fail "#1728 a pull request read whose network failed every try was not refused as the connection: $out"; fi
+if holds "$out" "gh pr view failed"; then fail "#1728 a failed connection was said as gh failing to read the pull request: $out"; else pass; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$RESET" "$RESET" "$RESET")
+out=$(GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "lost the connection to GitHub 3 times reading whether PR #7 contains the current tip of its base branch"; then pass; else fail "#1728 a compare whose connection was lost every try was not refused as the connection lost: $out"; fi
+if holds "$out" "comparison of the two did not answer"; then fail "#1728 a lost connection was said as GitHub's comparison not answering: $out"; else pass; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$DIAL" "$DIAL" "$DIAL")
+out=$(GH_RUNS_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "could not connect to GitHub 3 times reading which workflow runs GitHub has"; then pass; else fail "#1728 a runs read whose network failed every try was not refused as the connection: $out"; fi
+rm -f "$f"
+
 echo "block-red-merge: asked by merge-when-ready.sh, it takes the helper's read budget (claude-config#1615)"
 # Asked by merge-when-ready.sh it runs under no harness timeout, so the helper names a longer budget: a
 # retry 20 seconds out is refused inside this gate's own 12 and made inside 60, settings the test
@@ -1627,6 +1651,14 @@ if denied "$out" && says "$out" "could not tell whether other/repo" && holds "$o
 else fail "#1615 a merge tool probe whose sign in was refused every time did not refuse as a refused sign in: $out"; fi
 if [ "$(sleeps)" = 2 ]; then pass; else fail "#1615 the refused probe was not tried three times in all ($(sleeps) waits)"; fi
 rm -f "$f"
+# And one whose network to GitHub failed every try says that, never that GitHub did not answer (#1728).
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$DIAL" "$DIAL" "$DIAL" "$DIAL" "$DIAL")
+out=$(GH_API_FAILS="$f" run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
+if denied "$out" && says "$out" "could not tell whether other/repo" && holds "$out" "could not connect to GitHub 3 times"; then pass
+else fail "#1728 a merge tool probe whose network failed every time did not refuse as the connection: $out"; fi
+if holds "$out" "GitHub did not answer that question"; then fail "#1728 a failed connection was said as GitHub not answering: $out"; else pass; fi
+rm -f "$f"
 rm -rf "$dir"
 # The workflows probe, asked when the pull request has no checks at all. The tool rule is skipped so
 # the only probe is this one.
@@ -1643,6 +1675,12 @@ out=$(GH_API_FAILS="$f" run_hook "$dir" "SKIP_MERGE_TOOL=1 gh pr merge 7 --repo 
 if denied "$out" && says "$out" "did not answer whether other/repo has any workflows" && holds "$out" "HTTP 502"; then pass
 else fail "#1096 a workflows probe that never answered did not refuse naming what gh said: $out"; fi
 if [ "$(sleeps)" = 2 ]; then pass; else fail "#1096 the workflows probe was not tried three times in all ($(sleeps) waits)"; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$DIAL" "$DIAL" "$DIAL")
+out=$(GH_API_FAILS="$f" run_hook "$dir" "SKIP_MERGE_TOOL=1 gh pr merge 7 --repo other/repo --squash")
+if denied "$out" && holds "$out" "could not connect to GitHub 3 times reading whether other/repo has any workflows"; then pass
+else fail "#1728 a workflows probe whose network failed every time did not refuse as the connection: $out"; fi
 rm -f "$f"
 rm -rf "$dir"
 unset FIXTURE GH_CALL_LOG

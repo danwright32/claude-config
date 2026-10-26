@@ -243,7 +243,9 @@ case "$read_key" in *[!a-f0-9]*) usage "PR_REVIEW_READ is not a read key (a key 
 # The key proves the findings were READ, so it has to come from whoever read them, typed in front of
 # this command, which pr-review-gate.sh records before the command runs (claude-config#1673). A key in
 # a variable, an export or a substitution was not typed: a Bash loop that greps it from this helper's
-# own refusal and runs it again would otherwise merge with nobody having read anything.
+# own refusal and runs it again would otherwise merge with nobody having read anything. The record is
+# keyed by a secret only the gate creates, so a file a session makes by hand is not one, and this
+# never creates that secret: with none, no key is taken (claude-config#1700).
 if [ -n "$read_key" ]; then
   # shellcheck source=ai-review-common.sh
   if ! . "$MWR_LIB/ai-review-common.sh" 2>/dev/null || [ "$(type -t ar_helper_key_typed)" != function ]; then
@@ -267,6 +269,8 @@ POLL_MAX="$(num_or "${MWR_POLL_MAX_SECONDS:-}" "$GHP_MAX_DEFAULT")"; [ "$POLL_MA
 interval="$POLL"
 # shellcheck source=merge-turn.sh
 . "$MWR_LIB/merge-turn.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/merge-turn.sh is missing, so the repository's turn to merge cannot be taken. Nothing was merged." >&2; exit 1; }
+# shellcheck source=stacked-prs.sh
+. "$MWR_LIB/stacked-prs.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/stacked-prs.sh is missing, so the pull requests stacked on a branch cannot be listed. Nothing was merged." >&2; exit 1; }
 # A DELIBERATE LOAD WINDOW is named beside every failure (claude-config#1618). On 2026-10-23 this
 # helper stopped five times on GitHub reads at a load average of 342 while a builder's load
 # reproduction ran, and nothing it said named that load. tools/load-window.sh records each window in
@@ -387,9 +391,9 @@ ask_gate(){   # $1 = gate script, $2 = command text
 # queued merges each waited 7 to 16 minutes for CI, then stopped on one "TLS handshake timeout" or
 # "connection reset by peer" reading the compare, and the wait was thrown away. So each read below
 # is a reader that sets its globals and returns 0 (answered), 1 (GitHub answered no, or failed in a
-# way nobody recognised), 2 (the transport or GitHub's server failed, mt_gh_transient) or
-# MT_SIGNIN_RC (GitHub refused the sign in, below), and with_retries asks again only on those last
-# two, READ_TRIES times in all with READ_WAIT between, through the
+# way nobody recognised), 2 (GitHub's server failed or did not answer in time, mt_gh_transient),
+# MT_SIGNIN_RC (GitHub refused the sign in, below) or MT_CONNECT_RC (the network to GitHub failed,
+# below), and with_retries asks again only on those last three, READ_TRIES times in all with READ_WAIT between, through the
 # same injected sleep (L524). A read still failing after that stops exactly as before, naming the
 # last error: nothing merges on an unconfirmed read. A write (update-branch, the merge) is never
 # asked again here: its failure can be a refusal, and it is judged by reading the state it left.
@@ -405,7 +409,10 @@ ask_gate(){   # $1 = gate script, $2 = command text
 # rule too (claude-config#1675): on 2026-10-24 it stopped #1640 at 41m 36s with no retry, and another
 # builder's run the same way, because it names none of the transport words and was believed. The
 # reading is lib/merge-target.sh's (MT_CONNECT_RC), each retry says it as this Mac not connecting, and
-# one that outlasts the tries stops as that, N times, never as GitHub not answering or refusing.
+# one that outlasts the tries stops as that, N times, never as GitHub not answering or refusing. Since
+# claude-config#1735 that is every network failure gh prints (a dial that failed stopped #1732 at once
+# on 2026-10-25), and one whose connection was made and then failed (a reset, a read timeout) is said
+# as the connection lost rather than never made (MT_CONNECT_PHASE).
 READ_TRIES="$(num_or "${MWR_READ_TRIES:-}" 4)"; [ "$READ_TRIES" -ge 1 ] || READ_TRIES=1
 READ_WAIT="$(num_or "${MWR_READ_RETRY_SECONDS:-}" 20)"
 read_err=""
@@ -415,6 +422,8 @@ announce_retry(){
     say "gh read no token to sign in with reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."
   elif [ "${2:-}" = "$MT_SIGNIN_RC" ]; then
     say "GitHub refused the sign in reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}; a token read straight after came back ${MT_SIGNIN_TOKEN:-unread}); asking again in ${READ_WAIT}s."
+  elif [ "${2:-}" = "$MT_CONNECT_RC" ] && [ "${MT_CONNECT_PHASE:-}" = dropped ]; then
+    say "Lost the connection to GitHub reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}): it failed before GitHub's answer arrived; asking again in ${READ_WAIT}s."
   elif [ "${2:-}" = "$MT_CONNECT_RC" ]; then
     say "Could not connect to GitHub reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}): gh could not reach it from this Mac, so GitHub never saw the read; asking again in ${READ_WAIT}s."
   else
@@ -642,14 +651,13 @@ read_ref(){   # sets ref_tip, or ref_gone when the branch is not there
 }
 # The open pull requests based on the branch, one number a line in stacked. An answer that is not a
 # list is a failed read, never an empty one: "could not list" must not read as "nothing stacked".
+# Read through lib/stacked-prs.sh, the one reading stacked-branch-delete-gate.sh refuses a typed
+# delete with too (claude-config#1723), so the two cannot disagree about what is stacked.
 read_stacked(){
   local out rc
   stacked=""
-  out="$(gh_as pr list --repo "$slug" --base "$branch" --state open --limit 1000 --json number 2>&1)"; rc=$?
-  if [ "$rc" -eq 0 ] && stacked="$(printf '%s' "$out" | jq -r 'if type == "array" then .[].number else error("not a list") end' 2>/dev/null)"; then
-    return 0
-  fi
-  stacked=""
+  if sp_read_stacked gh_as "$slug" "$branch"; then stacked="$SP_STACKED"; return 0; fi
+  out="$SP_OUT"; rc="$SP_RC"
   read_err="${out:0:300}, exit $rc"
   [ "$rc" -ne 0 ] && ghp_rate_limited "$out" && return 5
   [ "$rc" -ne 0 ] || return 1

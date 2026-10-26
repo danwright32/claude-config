@@ -1,6 +1,7 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
+  spoolNote,
   ISSUE_READING,
   isDesignRecord,
   sealCheck,
@@ -55,6 +56,7 @@ import {
   unreadable,
   commentOnlyChange,
   shellUnread,
+  bracketsOpen,
 } from '../hooks/rules.ts'
 
 // The design round guard's rules (claude-config#978), each on its own: which files change how a
@@ -708,7 +710,8 @@ test('changedRuns: each run of changed lines as its own step, the last step endi
 // every line the steps card draws, and the guard never saw it: only .tsx and .jsx files counted. A
 // mod's .ts hook file is judged by what in it reaches what the mod draws: a line builder (a function
 // making mod-kit's text runs, dividers or buttons), anything handed to a drawing call (mod-kit's
-// band, pane and card, a blocked card, a pane's size) or used inside JSX, and every name those use.
+// band, pane and card, a pane's size, and until #1756 a blocked card) or used inside JSX, and every
+// name those use.
 // The fixture is shaped after manual steps: card.ts builds the lines, register.tsx draws them.
 const LINES_TS = [
   "import type { StepsCard } from '../types/index.d.ts'",
@@ -872,8 +875,9 @@ test('#1275: the reader follows a .ts file with no JSX in it, a generic arrow wi
 })
 
 // #1296: a value reaching a drawing call through a local variable or a function's parameter is
-// followed too. The fixture is shaped after a guard: its blocked card sentences are handed to its own
-// drawCard, through a local holding a card's words and as literals at each call.
+// followed too. The fixture is shaped after a guard: its card sentences are handed to its own
+// drawCard, through a local holding a card's words and as literals at each call. Since #1756 it draws
+// a boxed card of its own, since the words of a blocked card are copy and no longer followed.
 const GUARD_TS = [
   "import { judge } from './judge.ts'",
   "const GUARD = 'Demo guard'",
@@ -881,7 +885,7 @@ const GUARD_TS = [
   "const unsureCard = (files: string[]) => ({ reason: `Could not tell ${files.join(', ')}.`, safeWay: 'Name the file.' })",
   'const drawCard = async ($: Engine, id: string, reason: string, safeWay: string) => {',
   '  try {',
-  '    await $.modkit.blocked({ toolUseId: id, guard: GUARD, reason, safeWay })',
+  '    await $.modkit.card({ toolUseId: id, title: [{ text: GUARD }], lines: [[{ text: reason }], [{ text: safeWay }]] })',
   '  } catch (err) {',
   '    log(err)',
   '  }',
@@ -894,7 +898,7 @@ const GUARD_TS = [
   '  const c = unsureCard(judge(all))',
   '  await drawCard($, id, c.reason, c.safeWay)',
   '  const note = `Held ${all.length} files.`',
-  "  await $.modkit.blocked({ toolUseId: id, guard: GUARD, reason: note, safeWay: 'Ask Dan.' })",
+  "  await $.modkit.card({ toolUseId: id, title: [{ text: GUARD }], lines: [[{ text: note }], [{ text: 'Ask Dan.' }]] })",
   "  for (const title of TITLES) await $.ui.open({ id: 'p', title })",
   "  ROWS.forEach(r => $.ui.open({ id: 'q', title: r }))",
   "  return 'unsure'",
@@ -957,7 +961,7 @@ test('#1296: which call a card attaches to, what a value is only tested for, and
     "  const id = raw.id ?? 'none'",
     "  const named = files.filter(f => f.endsWith('.ts'))",
     "  const note = away ? 'You are away.' : `Held ${named}.`",
-    "  await $.modkit.blocked({ toolUseId: id, guard: 'G', reason: note, safeWay: 'Ask.' })",
+    "  await $.modkit.card({ toolUseId: id, title: [{ text: 'G' }], lines: [[{ text: note }], [{ text: 'Ask.' }]] })",
     '}',
     '',
   ].join('\n')
@@ -1075,7 +1079,8 @@ test('#1576: a mod hook file a shell write cannot be judged after, since it coul
 // the edit turned `return inNotes(path) ? undefined : { what: ... }` into an if returning undefined
 // and a return of the same `{ what: ... }`, and the guard read the returned conditional whole, so its
 // `? undefined :` changed though the words drawn did not. A returned conditional is read as each value
-// it may return, and a value drawn twice the same is one value.
+// it may return, and a value drawn twice the same is one value. Since #1756 the fixture draws its
+// words on a boxed card of its own, since a blocked card's words are copy and no longer followed.
 const NOBUILD_TS = [
   "const inNotes = (p: string) => p.startsWith('/notes/')",
   "const base = (p: string) => p.split('/').pop() ?? p",
@@ -1092,7 +1097,7 @@ const NOBUILD_REGISTER = [
   'export const register = (on: On) => {',
   "  on('tool.check', async ($: Engine, e: { tool: string; path: string }) => {",
   '    const r = noBuildRefusal(e)',
-  "    if (r) await $.modkit.blocked({ toolUseId: 'x', guard: 'No build', reason: `No build is on, so it will not ${r.what}.`, safeWay: 'Turn it off.' })",
+  "    if (r) await $.modkit.card({ toolUseId: 'x', title: [{ text: 'No build' }], lines: [[{ text: `No build is on, so it will not ${r.what}.` }], [{ text: 'Turn it off.' }]] })",
   '  })',
   '}',
   '',
@@ -1127,6 +1132,95 @@ test('#1576: the #1483 edit, a returned conditional made into ifs returning the 
   expect(nobuild("  if (call.tool === 'Edit') {\n", "  if (call.tool === 'Edit') {\n    // Dan's picker answer: show the colour on screen.\n")).toBe(false)
 })
 
+// #1756: on 2026-10-26 the design round guard held the #1751 builder's Edit to keystroke guard's
+// keys.ts, a new refusal for a marker naming an app bundle, as a look change. Reproduced against the
+// real files, no word in it was why: the refusal's words reached `$.modkit.blocked`, which #1296 read
+// as drawing. A blocked card's look is mod-kit's own (blockedCard: its title, its dim safe way), and a
+// caller hands it only words, shown as a tool result row. Those words are copy in a result, which the
+// guard holds nowhere else (the recommended answer to #1756's open question), so they are not drawn.
+// The fixture is shaped after keystroke guard: keys.ts decides the refusal, register.ts shows it, and
+// also draws a card and a band row of its own, whose looks are still asked about.
+const REFUSE_TS = [
+  'export type Refusal = { reason: string; safeWay?: string }',
+  'export const judge = (target: string | undefined, pids: number[]): Refusal | undefined => {',
+  "  if (!target) return { reason: \"This doesn't say which app it types into.\", safeWay: 'Add TARGET_APP.' }",
+  "  const app = target.split('/').pop() ?? target",
+  "  if (pids.length === 0) return { reason: `${app} isn't running.`, safeWay: 'Open it first, then type.' }",
+  '  return undefined',
+  '}',
+  "export const refusalText = (r: Refusal): string => `Blocked: ${r.reason}${r.safeWay ? ` ${r.safeWay}` : ''}`",
+  '',
+].join('\n')
+const REFUSE_REGISTER = [
+  "import { judge, refusalText } from './keys.ts'",
+  "const GUARD = 'Keystroke guard'",
+  "const BORDER = 'warning'",
+  "const rows = (n: number) => [[{ text: `${n} held`, color: 'warning' }], { divider: true }]",
+  'export const register = (on: On) => {',
+  "  on('tool.call', async ($: Engine, e: { id: string; target?: string; pids: number[] }) => {",
+  '    const r = judge(e.target, e.pids)',
+  '    if (r) {',
+  '      await $.modkit.blocked({ toolUseId: e.id, guard: GUARD, reason: r.reason, safeWay: r.safeWay })',
+  '      return { deny: refusalText(r) }',
+  '    }',
+  "    await $.modkit.card({ toolUseId: e.id, border: BORDER, title: [{ text: 'Sent' }], lines: [] })",
+  "    await $.modkit.bandRow({ mod: 'keys', id: 'held', slot: 'held', frame: { kind: 'box' }, lines: rows(e.pids.length) })",
+  '  })',
+  '}',
+  '',
+].join('\n')
+const REFUSE_FILES = [
+  { name: 'keys.ts', text: REFUSE_TS },
+  { name: 'register.ts', text: REFUSE_REGISTER },
+]
+const refuseDraws = (name: string, from: string, to: string): boolean => {
+  const was = REFUSE_FILES.find(f => f.name === name)?.text ?? ''
+  if (was.split(from).length !== 2) throw new Error(`${name} holds ${from} other than once`)
+  return drawsChange(REFUSE_FILES, name, was, was.replace(from, to))
+}
+
+test('#1756: a refusal handed to a blocked card is copy, not drawing: its words, a new refusal, and the guard name pass', () => {
+  expect(refuseDraws('keys.ts', "`${app} isn't running.`", "`${app} is not running.`")).toBe(false)
+  expect(refuseDraws('keys.ts', "'Open it first, then type.'", "'Start it, then type.'")).toBe(false)
+  // The #1751 builder's held Edit, as its transcript holds it: a new refusal for a bundle.
+  expect(
+    refuseDraws(
+      'keys.ts',
+      "  const app = target.split('/').pop() ?? target\n",
+      "  const app = target.split('/').pop() ?? target\n  // A bundle is a folder, never a running program.\n  const bundle = /^(.*\\/([^/]+)\\.app)\\/?$/.exec(target)\n  if (bundle) {\n    return { reason: `TARGET_APP names the ${bundle[2]} app bundle, not the program inside it.`, safeWay: `Name the program, usually ${bundle[1]}/Contents/MacOS/${bundle[2]}.` }\n  }\n",
+    ),
+  ).toBe(false)
+  expect(refuseDraws('register.ts', "GUARD = 'Keystroke guard'", "GUARD = 'Key guard'")).toBe(false)
+})
+
+test('#1756 controls: in the same mod, a colour, a frame, a border and a row it draws itself are still asked about', () => {
+  expect(refuseDraws('register.ts', "BORDER = 'warning'", "BORDER = 'error'")).toBe(true)
+  expect(refuseDraws('register.ts', "frame: { kind: 'box' }", "frame: { kind: 'left-rule' }")).toBe(true)
+  expect(refuseDraws('register.ts', "held`, color: 'warning' }", "held`, color: 'error' }")).toBe(true)
+  expect(refuseDraws('register.ts', ", { divider: true }]", ']')).toBe(true)
+})
+
+// #1756: on 2026-10-26 the design round guard held the #1747 builder's Edit to its own register.ts,
+// which gave a loop braces and a `continue` in one Edit and was to close the brace in the next.
+// Reproduced against the real file, no word in it was why: the Edit left a brace open, so the reader
+// could not follow the file and held it whole. A text whose brackets do not balance is no TypeScript
+// at all, mid way through a change made in more than one edit (bracketsOpen); register.ts judges the
+// edit that closes it against the file before the first (rules.ts drawsChange, unchanged).
+test('#1756: bracketsOpen says a .ts text is read but for a bracket left open or shut wrongly, and nothing else', () => {
+  const t = "export const f = (xs: string[]) => {\n  for (const x of xs)\n    if (x) return x\n  return ''\n}\n"
+  expect(bracketsOpen(t)).toBe(false)
+  expect(bracketsOpen(t.replace('for (const x of xs)\n', 'for (const x of xs) {\n    if (!x) continue\n'))).toBe(true)
+  expect(bracketsOpen(t.replace('(xs: string[])', '(xs: string[]'))).toBe(true)
+  expect(bracketsOpen(t.replace('(xs: string[])', '(xs: string[]))'))).toBe(true)
+  expect(bracketsOpen(t.replace('(xs: string[])', '(xs: string[)'))).toBe(true)
+  // Brackets inside strings, template literals, regular expressions and comments are not counted.
+  expect(bracketsOpen("const a = '{'\nconst b = `(${a}`\nconst c = /\\[/\n// }\n/* ) */\n")).toBe(false)
+  // A text the reader cannot follow for another reason is not one of these, and is held as before:
+  // an unclosed string, and a brace shut that nothing opened, which the reader stops at.
+  expect(bracketsOpen("const a = 'open\n")).toBe(false)
+  expect(bracketsOpen(t.replace("  return ''\n}", "  return ''\n}\n}"))).toBe(false)
+})
+
 // #1322: an answer under an issue counts only from the fixed branch reading on; one under a branch or
 // a session counts whatever it carries.
 test('which kept answers count, by the branch reading they were written with (#1322)', () => {
@@ -1150,4 +1244,17 @@ test('a settled design is under docs/design at the top of its checkout, in any c
   for (const rel of ['docs/design/x.css', 'docs/design/Picker.tsx', 'docs/design/x.vue', 'docs/design/x.html.tsx', 'docs/design/', 'docs/designs/x.html', 'src/docs/design/x.html', 'app/settled.html', 'docs/design/../../app/x.html', '/w/slate/docs/design/x.html'])
     expect({ rel, record: isDesignRecord(rel) }).toEqual({ rel, record: false })
   expect(sealCheck('/Users/dan')).toEqual(['python3', '-I', '/Users/dan/.claude/skills/design-rounds/design_file.py', '--sealed'])
+})
+
+// #1747: only the spool helper at its installed path, and only its note, writes none of what it is handed.
+test('spoolNote is the installed spool helper running note, and nothing else', () => {
+  const HELPER = '/Users/dan/.claude/hooks/lib/issue-spool.sh'
+  const args = (...w: string[]) => w.map(word => ({ word }))
+  expect(spoolNote({ path: HELPER, args: args('note', '.', 'app/page.tsx', 'a builder') }, '/Users/dan')).toBe(true)
+  expect(spoolNote({ path: HELPER, args: args('append', 'app/page.tsx', '{}') }, '/Users/dan')).toBe(false)
+  expect(spoolNote({ path: '/w/slate/scripts/issue-spool.sh', args: args('note', '.', 'x') }, '/Users/dan')).toBe(false)
+  expect(spoolNote({ args: args('note', '.', 'x') }, '/Users/dan')).toBe(false)
+  expect(spoolNote({ path: HELPER, args: args('note', '.', 'x') }, '/Users/other')).toBe(false)
+  expect(spoolNote({ path: '/.claude/hooks/lib/issue-spool.sh', args: args('note', '.', 'x') }, '')).toBe(false)
+  expect(spoolNote({ path: HELPER, args: [] }, '/Users/dan')).toBe(false)
 })

@@ -53,7 +53,9 @@ fi
 
 # The derivation shape, outside a comment. A leading `#` is what separates the five prose mentions
 # in this tree from the nine real derivations.
-DERIVE_RE='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*\$\(cd .*/\.\./\.\.".*pwd'
+# The cd target may be quoted or not: `$(cd $DIR/../.. && pwd)` is the same derivation, and requiring
+# the quote let test-failure-handling.sh's unquoted one through unexamined (claude-config#1729).
+DERIVE_RE='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*\$\(cd .*/\.\./\.\.("|[[:space:]]).*pwd'
 
 files=0
 found=0
@@ -80,8 +82,11 @@ while IFS= read -r f; do
     var="${var%%=*}"
     guarded=0
     grep -q 'SUITE-NOT-RUN' "$f" 2>/dev/null && guarded=1
+    # A TEST of the marker under that name (`-f`, `-d` or `-e`), never a mere use: `"$REPO/payload"`
+    # read by a grep is the derivation being trusted, not checked, and counting it let an unguarded
+    # one through (claude-config#1729).
     if [ "$guarded" -eq 0 ] && [ -n "$var" ]; then
-      grep -qE "\\\$\{?$var\}?/(claude-sync|payload)" "$f" 2>/dev/null && guarded=1
+      grep -qE -- "-[fde][[:space:]]+\"?\\\$\{?$var\}?/(claude-sync|payload)" "$f" 2>/dev/null && guarded=1
     fi
     # The third shape, and the strongest: resolve the derived path through git and compare it with
     # what was derived. test-blank-check-cost.sh does this, and the first version of this scan

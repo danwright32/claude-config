@@ -1,35 +1,18 @@
+import type { GoalTrackerProgress, GoalTrackerStep, GoalTrackerStepStatus } from '../types/index.d.ts'
+
 // The goal tracker's rules, apart from the hooks (claude-config#612): one session's task list,
 // whichever tool keeps it, and which of Dan's states it is in. Never a bare spinner (Dan's
 // progress rule): working, stalled, failed, done, or waiting on him.
 
-export type StepStatus = 'pending' | 'in_progress' | 'completed'
+// The shapes are the mod's contract (types/index.d.ts), one home for them (L83), since the progress is
+// also kept in $.state across a reload (#1703).
+export type StepStatus = GoalTrackerStepStatus
 const STEP_STATUSES: readonly string[] = ['pending', 'in_progress', 'completed'] satisfies StepStatus[]
 // A status comes from the tool call's input, never trusted: one outside these would break the done
 // count (lessons review of #634).
 export const isStepStatus = (x: unknown): x is StepStatus => typeof x === 'string' && STEP_STATUSES.includes(x)
-export type Step = { id: string; subject: string; activeForm?: string; status: StepStatus }
-export type Progress = {
-  steps: Step[]
-  done: number
-  total: number
-  /** The step under way, as Claude Code's spinner names it. */
-  current: string | null
-  startedAt: number
-  /** When a step last finished. */
-  lastStepAt: number
-  /** When anything last happened: a step, or any tool call. */
-  lastActivityAt: number
-  /**
-   * Set while the session waits on Dan: a question (its text), or a permission prompt (what the
-   * permission is for, in `question`).
-   */
-  waiting?: { question: string; since: number; kind?: 'question' | 'permission' }
-  failed?: string
-  /** The /goal condition, while one is set (Dan, 2026-10-04: the pane's goal text). */
-  goal?: string
-  /** The session's first request, cut to a few words: the goal text when no /goal is set. */
-  request?: string
-}
+export type Step = GoalTrackerStep
+export type Progress = GoalTrackerProgress
 export type State = 'working' | 'stalled' | 'failed' | 'done' | 'waiting'
 
 const STALL_MS = 10 * 60_000

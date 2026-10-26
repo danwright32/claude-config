@@ -5689,6 +5689,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
 
 ## Security and privacy
+- **L809. A log line that quotes a value must escape the escape character and line breaks as well as the quote, because text from an unauthenticated caller can otherwise close the field early and append fields or whole lines that read as the system's own record.**
+  (slate#4237, 2026-10-26)
+  SHORT: A log line quoting a value escapes the backslash and line breaks too, or caller text closes the field and forges fields or lines.
 
 - **L799. A browser security report's named source is whatever script was running when the
   blocked load fired, not the code that added the element, so never treat a named source as
@@ -6146,6 +6149,29 @@ for reference; L6 was reviewed and deliberately not adopted.
   the browser actually loads.**
   (bidspoke#2695, 2026-10-22)
   SHORT: A lockfile fix reaches only resolved copies; a CDN-loaded or prebuilt bundled library keeps its own, so check the version the browser loads.
+
+- **L805. A self-hosted runner that serves pull_request jobs becomes a machine strangers can
+  run code on the moment its repository goes public, and no condition written in a workflow
+  file can prevent it, because a pull_request run uses the workflow files of the pull request's
+  own merge commit, which a fork can rewrite. Keep strangers off it with settings that live
+  outside the repository: the runner group refusing public repositories, and approval required
+  for every outside contributor.**
+  (bidspoke#2772, 2026-10-25; corrected by slate#4216, 2026-10-25, which found the first wording's
+  runs-on clause is deleted by the fork it guards against)
+  SHORT: A fork PR runs its own workflow file, so no runs-on clause keeps it off a self-hosted runner: refuse public repos in its group, approve outsiders.
+
+- **L806. Write every workflow log and Actions artifact as if the repository were public, because
+  a repository can be made public to unblock Actions and every past log, artifact and issue is then
+  downloadable at once, while the history scan that checks secrets never reads any of them.**
+  (slate#4216, 2026-10-25)
+  SHORT: Write workflow logs and artifacts as if public: a repo made public exposes every past log, artifact and issue, which no history scan reads.
+
+- **L807. A secret scanner's planted canary proves the scanner ran, never that its rules
+  recognise the credential shapes the project actually holds, and a pinned scanner version
+  ages while its green stays the same, so plant one canary per credential shape the project
+  stores and fail when any goes unreported.**
+  (bidspoke#2777, 2026-10-25)
+  SHORT: A scanner's canary proves it ran, not that its rules see your credential shapes; a pinned version ages, so plant one canary per shape you store.
 
 ## UX completeness
 - **L803. A search box over people's or places' names must fold accents on both the query and the
@@ -7463,6 +7489,17 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
 
 ## External systems
+- **L810. Check a saved credential by performing the action it exists for against its real
+  destination (posting to the alert channel, sending from the mailbox, writing to the bucket),
+  never only by a login check, because a valid credential for the wrong identity passes every
+  login check while every real use is refused.** (bidspoke#2808, 2026-10-26)
+  SHORT: Check a saved credential by doing its real action on its real destination, never a login check alone: a wrong identity passes login.
+- **L1031. A React web app must be built to survive the browser translating the page: Google
+  Translate replaces the text nodes React owns, so React's next update of that text throws
+  NotFoundError from removeChild or insertBefore and replaces the whole screen with the error
+  boundary. Decide at build time whether to guard those DOM calls or opt the page out of
+  translation, because the first visitor to find it is one who needed the translation.** (nursedex#1240, 2026-10-25)
+  SHORT: A React app must survive browser translation: Translate swaps text nodes React owns and its next update crashes, so guard the DOM or opt out.
 - **L794. A test double for a Cloudflare service binding or RPC stub must model that every property
   read is another remote method, because a plain object double lets code read a method off the stub
   and invoke it with .call or .apply, which throws on the real binding on every call.** (bidspoke#2570, 2026-10-20)
@@ -8795,6 +8832,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L808. A duplicate guard that claims a job when the work STARTS records only that an attempt began, so a later duplicate that finds the claim must learn whether that attempt FINISHED before it reports success, or a first attempt that crashed or was cut off silently swallows every retry and reads as done.**
+  (slate#4236, 2026-10-26)
+  SHORT: A start claim proves only that an attempt began, so a duplicate finding it must learn whether it FINISHED before reporting success.
 - **L804. A worker that waits in line for an exclusive turn must count its time limit from when it gets the turn, and must not take the turn with less time left than the work takes, because a worker that gives up mid turn holds everyone else's place and finishes nothing.**
   (claude-config#1604, 2026-10-23)
   SHORT: A worker queued for an exclusive turn counts its deadline from the turn and never takes a turn it cannot finish, or it holds the line for nothing.

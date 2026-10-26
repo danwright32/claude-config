@@ -133,6 +133,14 @@ declare module 'claude-code' {
       morningPut: { generation: string | null; calls: string[] } | null
       /** Whether this session's morning turn left a picker unanswered, asked again with Dan's next message (#1285). */
       morningUnanswered: boolean
+      /** The night this session last asked Dan whether he is up, by its generation: once a night (#837), across a reload (#1703). */
+      askedUp: string | null
+      /** The repositories first met after sleep began that this session noted, as "generation:owner/name": once a night (#843), across a reload (#1703). */
+      firstMet: string[]
+      /** The nights whose reminder to end sleep mode this session pinned on its card (#1283), by generation, across a reload (#1703). */
+      pinnedHere: string[]
+      /** The nights whose reminder this session took off its card (#1283), by generation, across a reload (#1703). */
+      takenOff: string[]
     }
   }
 }

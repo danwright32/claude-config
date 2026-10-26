@@ -2,6 +2,7 @@ import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
 import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
+import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
 import { PROSE_MARK, turnAt } from './turn.ts'
 import { waitingPhrase } from './waiting.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
@@ -10,16 +11,12 @@ import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 // rounds, docs/mods-design.md "Manual steps"). Claude hands steps over through the `steps` tool,
 // which refuses a step with no link or exact location and one Claude has not checked against the
 // current state. The card is a side pane when the terminal is wide enough for a pane opened unasked
-// (144 columns), else the steps row of the band, both drawn by mod-kit (the pane since #690). Done sends "step N done"; Claude
+// (144 columns), else the steps row of the band, both drawn by mod-kit (the pane since #690), and it
+// follows the window's width after the pin too (#1752, hooks/place.ts). Done sends "step N done"; Claude
 // checks it took where it can and answers through `steps_done`. Unfinished steps are kept per
 // project in $.store and held at the next session start there until Claude has re-checked them.
 
 const MOD = 'manual-steps'
-// The pane /steps opens, and the one a new card tries unasked: never the same id, since Claude Code
-// places an unasked pane from 110 columns rather than 144 once its id has been asked for (#708).
-const ASKED_PANE = 'steps' satisfies StepsPaneId
-const UNASKED_PANE = 'steps-card' satisfies StepsPaneId
-const PANES: readonly StepsPaneId[] = [ASKED_PANE, UNASKED_PANE]
 const PANE_TITLE = 'Manual steps'
 const TOOL = 'mcp__manual-steps__steps'
 const VERDICT_TOOL = 'mcp__manual-steps__steps_done'
@@ -141,11 +138,13 @@ const clearPane = async ($: EngineInterface, id: StepsPaneId) => {
 }
 
 // The side pane `id` with the card in it, published before the pane opens so it never opens empty.
-// True once placed, when it takes over from the band or the other pane. One Claude Code did not
-// place is closed rather than left waiting, so it can never appear later beside the same card in
-// the band, and one mod-kit refused to draw is not opened. Docked, it asks to be as wide as the
-// card's lines (#708).
-const openPane = async ($: EngineInterface, id: StepsPaneId, card: StepsCard): Promise<boolean> => {
+// True once placed, when it takes over from the band or the other pane, and closes that pane: the
+// one the card was in, or the unasked one a band card waited in (#1752). One mod-kit refused to draw
+// is not opened. One Claude Code did not place is closed, unless `keepWaiting`: the unasked pane a
+// new card tried is left open, undrawn and holding the card, for Claude Code to draw once the window
+// is wide enough, and the follower below then moves the card out of the band (#1752). Docked, it
+// asks to be as wide as the card's lines (#708).
+const openPane = async ($: EngineInterface, id: StepsPaneId, card: StepsCard, keepWaiting = false): Promise<boolean> => {
   if (await publishPane($, id, card)) return false
   const opened = await $.ui
     .open({ id, title: PANE_TITLE, columns: paneColumns(card, await drawnAt($)) })
@@ -153,13 +152,15 @@ const openPane = async ($: EngineInterface, id: StepsPaneId, card: StepsCard): P
   if (opened.isPlaced) {
     const was = (await $.state.get(placeRef)).value ?? null
     await $.state.set(placeRef, id)
-    if (isPane(was) && was !== id) {
-      await $.ui.close({ id: was }).catch(() => undefined)
-      await clearPane($, was)
+    for (const other of PANES) {
+      if (other === id || !(was === other || (was === 'band' && other === UNASKED_PANE))) continue
+      await $.ui.close({ id: other }).catch(() => undefined)
+      await clearPane($, other)
     }
     await clearBand($)
     return true
   }
+  if (keepWaiting) return false
   await $.ui.close({ id }).catch(() => undefined)
   await clearPane($, id)
   return false
@@ -174,17 +175,73 @@ const clearBand = async ($: EngineInterface) => {
 }
 
 // A new card: in the pane already showing one, else the side pane when a pane opened unasked fits
-// (Claude Code places one from 144 columns), else the band. A pane mod-kit will not draw the new
-// card in is closed, so it cannot go on showing the old one beside the band.
+// (Claude Code places one from 144 columns), else the band, with that pane left waiting and the
+// window's width followed from then on (#1752). A pane mod-kit will not draw the new card in is
+// closed, so it cannot go on showing the old one beside the band.
 const placeNew = async ($: EngineInterface, card: StepsCard): Promise<string | undefined> => {
   const place = (await $.state.get(placeRef)).value ?? null
   if (isPane(place)) {
     if (!(await publishPane($, place, card))) return undefined
     await leavePane($)
   }
-  if (await openPane($, UNASKED_PANE, card)) return undefined
+  const placed = await openPane($, UNASKED_PANE, card, true)
+  watch($)
+  if (placed) return undefined
   await $.state.set(placeRef, 'band')
   return publishBand($, card)
+}
+
+// #1752: where the card is follows the window's width, read from Claude Code's own pane list once a
+// second while a card is shown (hooks/place.ts says why it is read rather than heard). The timer is
+// this module's own, which a reload cancels, so session.start starts it again; `isFollowing` keeps
+// one reading from starting while the last is still answering.
+let follower: { cancel: () => void } | undefined
+let isFollowing = false
+const stopFollowing = () => {
+  follower?.cancel()
+  follower = undefined
+}
+const watch = ($: EngineInterface) => {
+  if (follower) return
+  try {
+    follower = $.clock.every(FOLLOW_MS, () => {
+      void followOnce($).catch(err => $.ui.log(`manual-steps: could not follow the window's width: ${message(err)}`, { to: 'debug' }))
+    })
+  } catch (err) {
+    $.ui.log(`manual-steps: could not start following the window's width, so the card stays where it is placed: ${message(err)}`, { to: 'debug' })
+  }
+}
+const followOnce = async ($: EngineInterface) => {
+  if (isFollowing) return
+  isFollowing = true
+  try {
+    const card = (await $.state.get(cardRef)).value ?? null
+    const shown = card !== null && !card.isCarried && nextStep(card) !== undefined
+    const place = shown ? ((await $.state.get(placeRef)).value ?? null) : null
+    let rows: Awaited<ReturnType<EngineInterface['ui']['panes']>>
+    try {
+      rows = await $.ui.panes()
+    } catch (err) {
+      $.ui.log(`manual-steps: could not read whether the steps pane is drawn, so the card stays where it is: ${message(err)}`, { to: 'debug' })
+      return
+    }
+    const move = follow(place, rows.find(p => p.id === UNASKED_PANE))
+    if (move === 'stop') return stopFollowing()
+    if (!card || move === 'stay') return
+    if (move === 'to-pane') {
+      // Published again first, so the pane holds the card as it is now; one mod-kit refuses leaves
+      // the card in the band, said in the debug log by publishPane.
+      if (await publishPane($, UNASKED_PANE, card)) return
+      await $.state.set(placeRef, UNASKED_PANE)
+      await clearBand($)
+      return
+    }
+    await $.state.set(placeRef, 'band')
+    const failed = await publishBand($, card)
+    if (failed) $.ui.toast(`The steps card could not be moved to the band: ${failed}.`)
+  } finally {
+    isFollowing = false
+  }
 }
 
 // Out of whichever pane holds the card, as it goes to the band, so it never shows in both.
@@ -196,13 +253,36 @@ const leavePane = async ($: EngineInterface) => {
   await clearPane($, place)
 }
 
-// Takes the card away: out of the band and the pane.
+// Takes the card away: out of the band and the pane, and the unasked pane a band card waited in
+// closed with it (#1752).
 const hide = async ($: EngineInterface) => {
+  stopFollowing()
   const place = (await $.state.get(placeRef)).value ?? null
   await $.state.set(placeRef, null)
   await clearBand($)
   if (isPane(place)) await $.ui.close({ id: place }).catch(() => undefined)
+  if (place === 'band') await $.ui.close({ id: UNASKED_PANE }).catch(() => undefined)
   for (const id of PANES) await clearPane($, id)
+}
+
+// Whether the unasked pane is open, waiting undrawn for a band card (#1752); a list that cannot be
+// read is taken as not, which only leaves the waiting pane a step behind until the follower moves it.
+const isWaiting = async ($: EngineInterface) => {
+  try {
+    return (await $.ui.panes()).some(p => p.id === UNASKED_PANE)
+  } catch (err) {
+    $.ui.log(`manual-steps: could not read whether a steps pane waits, so it was not updated: ${message(err)}`, { to: 'debug' })
+    return false
+  }
+}
+
+// Published again wherever it is shown, and to the pane a band card waits in, so that pane holds
+// the card as it is now the moment Claude Code draws it (#1752). The reason when it could not be.
+const publishWhere = async ($: EngineInterface, place: 'band' | StepsPaneId, card: StepsCard): Promise<string | undefined> => {
+  if (isPane(place)) return publishPane($, place, card)
+  const failed = await publishBand($, card)
+  if (await isWaiting($)) await publishPane($, UNASKED_PANE, card)
+  return failed
 }
 
 // After the card changed: published again wherever it is shown.
@@ -211,7 +291,7 @@ const refresh = async ($: EngineInterface) => {
   if (!card || nextStep(card) === undefined) return hide($)
   const place = (await $.state.get(placeRef)).value ?? null
   if (place === null) return
-  const failed = isPane(place) ? await publishPane($, place, card) : await publishBand($, card)
+  const failed = await publishWhere($, place, card)
   if (failed) $.ui.toast(`The steps card could not be updated: ${failed}.`)
 }
 
@@ -242,7 +322,27 @@ const giveDoneBack = async ($: EngineInterface, n: number) => {
 // the step still sent and its turn never started, Done comes back. Armed at the press and again at
 // each main turn's end; only the latest arming may act, so the one armed at the press cannot fire
 // seconds after the turn it waited behind ended, while the settings hooks still run.
-let runningTurn: string | null = null
+// The main turn running now is in $.state (#1703): a reload in the middle of a turn read it as none,
+// and a Done pressed then came back while the turn it waited behind still ran. Which arming is the
+// latest describes this module's own timer, which a reload cancels, so it stays here.
+const runningTurnRef = { plugin: 'manual-steps', key: 'runningTurn' } as const
+// This module also holds the latest turn event it saw itself, which decides over $.state while it
+// holds one: a write that fails (logged, and never failing the turn event it rides on) then strands
+// nothing in this module. An end not recorded would otherwise leave the ended turn in $.state, read
+// as running, so a Done dropped behind it never came back (push review of PR for #1703). Only a fresh
+// module after a reload reads $.state alone; a stale turn there holds a dropped Done until the next
+// turn's end, which records the turn and arms the fallback again.
+let turnSeen: { id: string | null } | undefined
+const setRunningTurn = async ($: EngineInterface, turnId: string | null) => {
+  turnSeen = { id: turnId }
+  try {
+    await $.state.set(runningTurnRef, turnId)
+  } catch (err) {
+    $.ui.log(`manual-steps: could not record that the main turn ${turnId === null ? 'ended' : 'started'}: ${message(err)}`, { to: 'debug' })
+  }
+}
+const runningTurnOf = async ($: EngineInterface): Promise<string | null> =>
+  turnSeen !== undefined ? turnSeen.id : ((await $.state.get(runningTurnRef)).value ?? null)
 let armed = 0
 let fallback: { cancel: () => void } | undefined
 const armFallback = ($: EngineInterface) => {
@@ -257,7 +357,9 @@ const armFallback = ($: EngineInterface) => {
   }
 }
 const giveBackDropped = async ($: EngineInterface, mine: number) => {
-  if (mine !== armed || runningTurn !== null) return
+  if (mine !== armed) return
+  // A turn running, or one that cannot be read, holds the Done: the next turn's end arms this again.
+  if ((await runningTurnOf($)) !== null) return
   const card = (await $.state.get(cardRef)).value ?? null
   // Several steps can be sent at once (#1239): each whose turn never started comes back.
   const waiting = (await $.state.get(waitingRef)).value?.step
@@ -457,7 +559,7 @@ const addStep: Hook<'manualSteps.add'> = async ($, e) => {
   if (!card) return { value: { isShown: false, reason: 'the card was taken away as it was added' } }
   // Where a card already shows it is drawn again; else it is placed as a new card is.
   const place = (await $.state.get(placeRef)).value ?? null
-  const failed = place === null ? await placeNew($, card) : isPane(place) ? await publishPane($, place, card) : await publishBand($, card)
+  const failed = place === null ? await placeNew($, card) : await publishWhere($, place, card)
   return { value: failed ? { isShown: false, reason: `the card could not be shown (${failed})` } : { isShown: true } }
 }
 
@@ -491,6 +593,9 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     interactive = e.isInteractive === true
+    // This module's own bookkeeping starts afresh, as a reload's fresh module has it (#1703): the
+    // running turn is then read from $.state.
+    turnSeen = undefined
     // Steps are for a person at the prompt; a -p run or the SDK has nobody to do them.
     if (!e.isInteractive) return next(e)
     await $.tool.register({
@@ -524,6 +629,9 @@ export const register: Register = on => {
     } catch (err) {
       $.ui.log(`Manual steps could not read the steps kept from an earlier session: ${message(err)}`)
     }
+    // A reload keeps the card where it is shown but not this module's timer (#1752): followed again.
+    const shownAt = (await $.state.get(placeRef)).value ?? null
+    if (shownAt === 'band' || shownAt === UNASKED_PANE) watch($)
     return next(e)
   })
 
@@ -538,7 +646,7 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
     // Only the main loop raises turn.start; a subagent's run raises none.
-    runningTurn = e.turnId
+    await setRunningTurn($, e.turnId)
     const n = /^step (\d+) done$/.exec(e.text.trim())?.[1]
     const card = (await $.state.get(cardRef)).value ?? null
     if (n !== undefined && card?.steps[Number(n) - 1]?.isSent) await $.state.set(waitingRef, { turnId: e.turnId, step: Number(n) })
@@ -551,7 +659,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId !== undefined) return r
-    runningTurn = null
+    await setRunningTurn($, null)
     const waiting = (await $.state.get(waitingRef)).value ?? null
     if (!waiting || waiting.turnId !== e.turnId) {
       // A step still sent whose turn has not started may be queued behind this one, or dropped

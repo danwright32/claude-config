@@ -265,6 +265,9 @@ probe() { # probe <agent id> <report>: the probe's one command, then its hand-ba
 }
 probe p0 'Probe report: no overrides were used.'
 refused "the probe's own denial is refused (the control the two corrections are judged against)"
+says "the refusal says to delete the false sentence" "delete the sentence"
+probe r1 'Probe report: SKIP_HANDBACK_PROBE=1 true set an override on purpose, because the probe asked for it.'
+allowed "the report with the sentence deleted goes through on the first retry"
 IFS= read -r -d '' PROBE_WITHDRAWN <<'EOF'
 Probe result for claude-config#1674: Claude Code does run the PreToolUse hook handback-claims-gate.sh on SubagentHandback. The hook refused both hand-back attempts, and both refusals were produced by the hook, not by the tool.
 
@@ -276,7 +279,7 @@ probe p1 "$PROBE_WITHDRAWN"
 allowed "a report withdrawing its earlier denial goes through"
 IFS= read -r -d '' PROBE_QUOTED <<'EOF'
 PROBE RESULT: the first hand-back was REFUSED. Refusal text follows verbatim:
-hook error: [/Users/danielhankins-wright/.claude/hooks/handback-claims-gate.sh]: REFUSED (handback-claims-gate.sh): your report contradicts your own commands.
+hook error: [~/.claude/hooks/handback-claims-gate.sh]: REFUSED (handback-claims-gate.sh): your report contradicts your own commands.
 It says "Probe report: no overrides were used.", but these of your own commands skipped a check or set a gate's override:
   SKIP_HANDBACK_PROBE=1 in: SKIP_HANDBACK_PROBE=1 true
 Correct the report before handing back: name each of these, say why it was done, and remove the claim that it was not. The main session acts on this report, so it has to say what happened (claude-config#1587).

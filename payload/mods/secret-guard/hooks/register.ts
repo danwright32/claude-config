@@ -15,6 +15,26 @@ import {
 // never in $.store or on disk: a copy kept to protect a secret would be one more place to leak it.
 // A reload starts the module over and session.start fires again, which reloads them.
 let known: string[] = []
+// #1703: the .env files written this session, by path, never their values, in $.state, which the
+// engine holds for the session across a hot reload. A reload loads the environment, the gh token and
+// the .env files at the top of the project again, but a secret Claude wrote into a .env file
+// anywhere else (a monorepo's apps/web/.env) was held only in the module, so after a reload it went
+// out unrefused. Each start reads these files again too. Added by version, so two writes at once
+// both land; a path that cannot be kept is said, as a source that cannot be read is.
+const writtenRef = { plugin: 'secret-guard', key: 'written' } as const
+const keepWritten = async ($: EngineInterface, path: string) => {
+  try {
+    for (let i = 0; i < 5; i++) {
+      const held = await $.state.get(writtenRef)
+      const all = held.value ?? []
+      if (all.includes(path)) return
+      if ((await $.state.set(writtenRef, [...all, path], { ifVersion: held.version })).isSet) return
+    }
+    throw new Error('the list kept changing underneath five writes in a row')
+  } catch (err) {
+    $.ui.log(`Secret guard couldn't keep ${path} for a reload of the mod (${err instanceof Error ? err.message : String(err)}), so after one the secrets written there are guarded by their shape only.`)
+  }
+}
 
 const WRITERS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 
@@ -70,6 +90,21 @@ const loadSecrets = async ($: EngineInterface, cwd: string): Promise<string[]> =
       } catch {
         missing.push(`${dir}/${ent.name}`)
       }
+    }
+  }
+  // The .env files written earlier this session (#1703), read again after a reload.
+  let written: string[] = []
+  try {
+    written = (await $.state.get(writtenRef)).value ?? []
+  } catch {
+    missing.push('the .env files written this session')
+  }
+  for (const path of written) {
+    try {
+      found.push(...secretsFromEnvText(await $.fs.read(path)))
+    } catch {
+      // A file removed since holds nothing left to guard; any other failure is named.
+      if (await $.fs.exists(path).catch(() => true)) missing.push(path)
     }
   }
   // One dim line per source it could not read, once per session (docs/mods-design.md).
@@ -146,7 +181,10 @@ export const register: Register = on => {
     if (refused) return refused
     // A secret written into a .env file is one to guard from now on.
     const path = String(input.file_path ?? input.notebook_path ?? '')
-    if (WRITERS.has(String(e.tool)) && isEnvFile(path)) known = [...new Set([...known, ...secretsFromEnvText(newTextOf(input))])]
+    if (WRITERS.has(String(e.tool)) && isEnvFile(path)) {
+      known = [...new Set([...known, ...secretsFromEnvText(newTextOf(input))])]
+      await keepWritten($, path)
+    }
     return next(e)
   }).catch(($, e, next) =>
     // A hook that fails is skipped and the call runs unscreened, so a check that throws (an older

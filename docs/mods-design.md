@@ -80,6 +80,31 @@ and settles its own surfaces in rounds of its own before it is built.
    twenty mod folders the look took about a tenth of a second. A mod whose touch fails is named in
    the session (by a turn's look only the first time) and tried again at the next look or mod-kit
    reload; a change in a folder beneath a module's `hooks` folder counts.
+6. **A session fact lives in `$.state`, never only in the module (#1695, #1703).** The engine fires
+   `session.start` once per process and then once per fresh load of a mod (a hot reload, which a
+   sync pull of a changed mod causes), never at `/clear`, and runs the code again in a fresh module
+   while the session goes on. So a second `session.start` is never a new session, and anything a
+   mod keeps in a module variable is gone after a reload. A fact about the session (what it has
+   recorded, counted, been told or asked, whether a turn runs) is kept in `$.state`, which the
+   engine holds for the session across a reload; one that more than one hook or copy of the module
+   changes is written by version and retried, so two writes at once lose neither. The retry lands
+   in the same hook run because no read in a run is a snapshot, whatever the engine's type file says
+   ("Every `get` of one dispatch reads one moment"): measured on 2026-10-25 on 2.1.310 (#1720), a
+   read sees the run's own write and another dispatch's, and of two versioned writers racing in one
+   tool.call hook run or one timer's dispatch the loser's second read saw the winner's write and its
+   retry landed. `tests/test-state-snapshot.sh` holds that on the real engine and fails the day a
+   later one makes a run's reads one snapshot, when a refused write would have to be carried to the
+   next run instead. A module variable
+   stays only for what a reload may lose: a cache filled from `$.state` (or from disk) at each start
+   and written through, a flag that holds a notice to once (a reload says it once more at most), a
+   timer (the engine cancels the old module's waits and each start arms them again), or the
+   bookkeeping of a call still in flight (only the module awaiting it can finish it). A secret's
+   value is never kept there: the secret guard keeps the paths of the `.env` files written, and
+   reads them again. A mod's `session.start` puts its own module bookkeeping back to how a fresh
+   module has it, so a test reloads a mod mid session by calling `session.start` a second time over
+   the same `$.state`, and every fact moved by #1703 has such a test, seen failing first. The sweep
+   of every mod, with each module variable that stays and why, is in the description of the pull
+   request that closed #1703.
 
 ## Guard surfaces (#607, #608, #609)
 
@@ -350,6 +375,11 @@ the spec rather than chosen afresh, and open to Dan changing:
   reads as though the conversation in front of Dan is hung: "agent fix CI: PR 776 rerun wait
   waiting 12m, 1 job running". No job item asks Dan to act. An entry whose process and output file
   are both gone is dropped rather than shown.
+- A job watcher that is loaded but whose list could not be read (#1727; since #1695 it also refuses
+  a malformed stored list) is said, never shown as no jobs (L10): "job list unreadable, ask Claude
+  to check", amber, in #1583's plain style and, like a quiet command, only once Claude's turn has
+  ended. The debug log names why, once. A watcher not loaded at all is no job item, and one whose
+  loaded copy lacks the list is told as the skew (#1281); neither is this.
 - A background agent listed as running whose tool calls have stopped for twenty minutes (#759) is
   named ahead of the jobs: "agent fix CI quiet 34m, left to Claude"; Claude is told once on its next
   tool result, with the agent, how long, and the last tool call it started and whether it returned.
@@ -515,7 +545,14 @@ plainest reading of the decisions above:
   reloaded" between the reminder and the refused keep; in the 2026-10-24 one the job was a
   foreground command started before the reload and moved to the background after it. So
   `session.start` clears only the module's own bookkeeping, never the list, and the list is written
-  by version, retried, so two copies writing at once lose neither change.
+  by version, retried, so two copies writing at once lose neither change. Since #1703 the watcher's
+  other session facts live there too, by the same versioned write: which agent started each piece
+  of background work, how often each agent's stop was refused, the notices queued for Claude, each
+  agent's last sign of life (which agents are live is read from it), whether this conversation has
+  a turn running, and what the watcher last measured of each job (cached in the module, filled at
+  each start). A reload had let a subagent's held stop through, reset its refusal count, dropped a
+  queued notice, dated a quiet agent from the reload, read a busy turn as idle (so a wake went to a
+  conversation mid turn), and said a job writing all along had had no new output since it started.
 - **Held output (#1583).** A command piped through `tail` or `head` is judged by whether its process
   group still runs, never by new output: `tail` writes nothing until its input ends, so a healthy
   merge helper piped through `tail -6` read as stalled. One whose group cannot be read is judged
@@ -1765,12 +1802,26 @@ not settled by either and are waiting on Dan; until he decides, the build does t
 - **Already done.** A step found done arrives finished, struck through with "already done". A card
   whose every step is already done is not pinned, and Claude is told so.
 - **Where.** A new card tries the side pane unasked. When Claude Code does not place it (under 144
-  columns) the waiting pane is closed and the card is the `steps` row of the band, so it can never
-  show in both. `/steps` opens the pane, which an asked pane gets at any width, and the band row
-  gives way to it. Closing the pane by hand while steps remain moves the card to the band (open:
-  whether closing should instead hide the card). Both are drawn by mod-kit with one drawing of a
-  card (#690): the pane is published before it opens, so it never opens empty, and a pane mod-kit
-  refuses is not opened at all; the card goes to the band.
+  columns) the card is the `steps` row of the band. `/steps` opens the pane, which an asked pane
+  gets at any width, and the band row gives way to it.
+- **Where, as the window changes** (#1752). Until #1752 the pane that did not fit was closed, so a
+  card pinned in a narrow window stayed in the band however wide the window was made afterwards
+  (Dan, 2026-10-26: a PostRoll card pinned at 121 columns sat in the middle of a much wider window).
+  Now that pane is left open, waiting undrawn and holding the card as it is now, and while a card is
+  shown its row in Claude Code's own pane list (`$.ui.panes()`) is read once a second
+  (`hooks/place.ts`, `follow`). Once Claude Code draws the pane (the window reached 144 columns) the
+  card leaves the band; should it stop drawing it (narrowed again) the card goes back to the band
+  and the pane waits again. So the card is where it would have gone had the window been that wide
+  when it was pinned, and for at most a second after a resize it shows in both or in neither. A
+  card Dan moved by hand stays: one in the pane `/steps` opened is never followed, and the unasked
+  pane is closed as `/steps` places its own; closing the pane by hand closes the only unasked pane,
+  so the card stays in the band (open: whether closing should instead hide the card). A pane list
+  that cannot be read leaves the card where it is, says so in the debug log, and is read again a
+  second later. Nothing is read while no card is shown. Unmeasured: whether Claude Code stops
+  drawing an unasked pane when the window narrows under 144 columns; if it never does, the
+  narrowing half never runs (#1759). Both are drawn by mod-kit with one drawing of a card (#690):
+  the pane is published before it opens, so it never opens empty, and a pane mod-kit refuses is not
+  opened at all; the card goes to the band.
 - **Asking does not lower the width** (#708). Claude Code places an unasked pane from 110 columns
   rather than 144 once its id has been asked for, in that session and later ones, until Dan closes
   it by hand, and the card closing its own pane does not count. So `/steps` opens the card under its

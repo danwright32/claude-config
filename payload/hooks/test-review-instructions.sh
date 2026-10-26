@@ -164,6 +164,21 @@ print(m.group(1) if m else "")
   fi
 done
 
+# With no /goal, the Goal accomplished box waits on the session calling the goal box's tool, and
+# nothing reminded it: on 2026-10-26 a Slate session finished, reported, and showed no box until
+# Dan asked whether it was done (claude-config#1749). The reflection fires after every turn that
+# changed something, which is the turn work finishes on, so it carries the reminder; the tool's own
+# checks stay the gate on a call made too early.
+refl="$(cat "$DIR/review/session-reflection.md")"
+[[ "$refl" == *"goal_accomplished"* && "$refl" == *"/goal"* ]] \
+  && check "#1749 the reflection asks for the Goal accomplished box when no /goal is set and the work is finished" ok \
+  || check "#1749 the reflection asks for the Goal accomplished box when no /goal is set and the work is finished" "session-reflection.md names neither goal_accomplished nor /goal"
+# And after the EXCEPTION, so a turn whose reflection is folded into the issue review still asks.
+tail_from_exception="${refl#*EXCEPTION:}"
+[[ "$tail_from_exception" != "$refl" && "$tail_from_exception" == *"goal_accomplished"* ]] \
+  && check "#1749 the box reminder holds when the reflection is folded into the issue review" ok \
+  || check "#1749 the box reminder holds when the reflection is folded into the issue review" "goal_accomplished is not after the EXCEPTION line"
+
 # ---------------------------------------------------------------------------
 # RELOCATION: the same hooks, run from somewhere else, must point at THEMSELVES.
 # This is the two Macs case, and a copy at a different path is the only way to

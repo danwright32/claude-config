@@ -169,6 +169,21 @@ R=$(make_repo tmpsql $'WORK="$(mktemp -d)"\nrm -rf "$WORK"\nDELETE FROM contacts
 out=$(run_hook "git push" "$R")
 assert_contains "a temp cleanup beside real SQL still fires on the SQL" 'destructive data operation' "$out"
 
+# --- 5c. A TAB indented added line is read whole (claude-config#1724) -------------------------
+# The added lines travel as `path<TAB>line` rows, and the reader once kept only the text before
+# the line's own first tab, so tab indented code (Go, a Makefile recipe, tab indented shell)
+# reached every trigger as an empty line and fired nothing (L536). The same line indented with
+# spaces is the control: it fires either way, so a red here can only be the tab.
+R=$(make_repo tabrm $'cleanup() {\n\trm -rf "$HOME/.claude/state"\n}' scripts/tabbed.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "a tab indented destructive line fires" 'destructive data operation' "$out"
+R=$(make_repo tabsql $'func purge() {\n\tdb.Exec("DELETE FROM contacts WHERE stale = true")\n}' store/purge.go)
+out=$(run_hook "git push" "$R")
+assert_contains "a tab indented DELETE FROM in Go fires" 'destructive data operation' "$out"
+R=$(make_repo spacerm $'cleanup() {\n  rm -rf "$HOME/.claude/state"\n}' scripts/spaced.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: the same line indented with spaces fires" 'destructive data operation' "$out"
+
 # --- 6. Silence where there is nothing to say --------------------------------
 R=$(make_repo docs 'Some prose about the feature.' docs/notes.md)
 out=$(run_hook "git push" "$R")

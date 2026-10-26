@@ -4,7 +4,10 @@
 export type Classified = { kind: 'input' | 'focus' | 'none'; target?: string; app?: string }
 export type Refusal = { reason: string; safeWay?: string }
 
-const MARKER = /\bTARGET_APP=(?:"([^"]+)"|'([^']+)'|(\S+))/
+// The unquoted form ends where the shell ends the word, at a control character as well as a space:
+// `TARGET_APP=<path>; cliclick` once read the `;` into the path, so pgrep found nothing and a running
+// build in front was refused as not running (#1751).
+const MARKER = /\bTARGET_APP=(?:"([^"]+)"|'([^']+)'|([^\s;&|<>()`]+))/
 
 // Commands are judged in COMMAND POSITION only (L673): the first version matched the words anywhere
 // and refused a heredoc that merely wrote a file mentioning an osascript keystroke, on 2026-10-03.
@@ -33,7 +36,7 @@ export const appNameOf = (path: string): string => {
 }
 
 const focusApp = (cmd: string): string | undefined => {
-  const open = /\bopen\s+(?:-\w+\s+)*-a\s+(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(cmd)
+  const open = /\bopen\s+(?:-\w+\s+)*-a\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|<>()`]+))/.exec(cmd)
   if (open) return open[1] ?? open[2] ?? open[3]
   const tell = /tell\s+application\s+"([^"]+)"\s+to\s+activate/.exec(cmd)
   if (tell) return tell[1]
@@ -66,6 +69,13 @@ export const judge = (f: {
     return { reason: "This doesn't say which app it types into.", safeWay: "Add TARGET_APP=<the app's executable path> to the command." }
   }
   const app = appNameOf(f.target)
+  // An .app bundle is a folder, never a running program, so no process ever matches it: say that and
+  // name the program inside it, rather than that the app isn't running while it is in front (#1757).
+  // Still refused. The program is usually named after the app; Info.plist's CFBundleExecutable says.
+  const bundle = /^((?:.*\/)?([^/]+)\.app)\/?$/.exec(f.target)
+  if (bundle) {
+    return { reason: `TARGET_APP names the ${bundle[2]} app bundle, not the program inside it.`, safeWay: `Name the program instead, usually ${bundle[1]}/Contents/MacOS/${bundle[2]}.` }
+  }
   if (f.targetPids.length === 0) return { reason: `${app} isn't running.`, safeWay: 'Open it first, then type.' }
   if (f.targetPids.length > 1) {
     return { reason: `${app} is running twice from the same place, so the input could land in either.`, safeWay: 'Quit one first.' }

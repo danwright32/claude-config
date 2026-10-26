@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L809. A log line quoting a value escapes the backslash and line breaks too, or caller text closes the field and forges fields or lines.
 - L799. A CSP report's named source is the script running when the load fired, not who added it; never read it as proof your code requested it.
 - L1026. A layout's access check does not guard its pages; every protected page checks access itself, with a test.
 - L761. A pattern keeping a secret file out of git or a sync must also match its .bak, .orig and ~ copies.
@@ -45,3 +46,6 @@ which is NOT loaded into the session.
 - L758. Never give the browser a third party credential, even from your own route: every visitor and caller gets it; keep it on the server.
 - L1022. An exception keyed on matched text that is constant (a key header) exempts every match; key it on location and whole value.
 - L802. A lockfile fix reaches only resolved copies; a CDN-loaded or prebuilt bundled library keeps its own, so check the version the browser loads.
+- L805. A fork PR runs its own workflow file, so no runs-on clause keeps it off a self-hosted runner: refuse public repos in its group, approve outsiders.
+- L806. Write workflow logs and artifacts as if public: a repo made public exposes every past log, artifact and issue, which no history scan reads.
+- L807. A scanner's canary proves it ran, not that its rules see your credential shapes; a pinned version ages, so plant one canary per shape you store.

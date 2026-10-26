@@ -157,8 +157,9 @@ sleep 300 &
 other_parent=$!
 ALL_PIDS="$ALL_PIDS $other_parent"
 bash "$TREE" "$other_parent" "" >/dev/null 2>&1
-sleep 1
-alive "$bystander" \
+# A window the passing case runs out (#1743): a wrong kill would show as the bystander gone.
+window_wait 1 '! alive "$bystander"'; kt_spared=$?
+[ "$kt_spared" = 1 ] && alive "$bystander" \
   && check "a process that is not a child of the named one is left alone" ok \
   || check "a process that is not a child of the named one is left alone" "pid $bystander was killed"
 kill -9 "$bystander" "$other_parent" 2>/dev/null
@@ -190,7 +191,10 @@ case "$r_first" in ''|*[!0-9]*) r_first="" ;; esac
 kill -STOP "$r_root" 2>/dev/null
 bash "$TREE" "$r_root" "" >/dev/null 2>&1
 kill -9 "$r_root" 2>/dev/null
-sleep 2
+# Waited on the condition the passing case meets, every child it spawned gone (#1743), never a fixed
+# two seconds that a loaded Mac can outlast with a killed child not yet reaped (L290).
+r_none_alive(){ local p; while IFS= read -r p; do case "$p" in ''|*[!0-9]*) continue ;; esac; alive "$p" && return 1; done < "$TMPROOT/spawned"; return 0; }
+hang_wait r_none_alive 0.1
 r_left=""
 while IFS= read -r p; do
   case "$p" in ''|*[!0-9]*) continue ;; esac
@@ -228,7 +232,14 @@ for mode in running stopped; do
   current="$(tail -1 "$list" 2>/dev/null || true)"
   case "$current" in ''|*[!0-9]*) current="" ;; esac
   [ -n "$current" ] && kill -9 "$current" 2>/dev/null
-  sleep 2
+  # Never a fixed two seconds (#1743, L290). A running root replaces the child, which is waited for
+  # as the condition it is; a stopped one must not, which is a window the passing case runs out.
+  p_held=1
+  if [ "$mode" = running ]; then
+    hang_wait '[ "$(spawn_count "$list")" -gt "$before" ]' 0.1
+  else
+    window_wait 2 '[ "$(spawn_count "$list")" -gt "$before" ]'; p_held=$?
+  fi
   after="$(spawn_count "$list")"
   kill -CONT "$p_root" 2>/dev/null
   kill -9 "$p_root" 2>/dev/null
@@ -238,7 +249,7 @@ for mode in running stopped; do
       && check "a RUNNING process replaces a child that is killed under it ($before then $after)" ok \
       || check "a RUNNING process replaces a child that is killed under it" "count stayed at $after, so this fixture cannot show the difference"
   else
-    [ "$after" -eq "$before" ] \
+    [ "$p_held" = 1 ] && [ "$after" -eq "$before" ] \
       && check "and a STOPPED one cannot, which is what the pause buys ($before then $after)" ok \
       || check "and a STOPPED one cannot, which is what the pause buys" "count went $before to $after while stopped"
   fi

@@ -96,6 +96,43 @@ all="$(TZ=America/New_York python3 "$REPORT" --state-dir "$STATE" 2>&1)"
 check "with no window every finished review counts" "reviews: 4 (pr 3, push 1)" "$all"
 check "and the earlier review's reason with it" "its Quote line was empty: 1" "$all"
 
+# How long the quotes are, for the ones placed by part of a line and the ones that matched nothing,
+# so the 20 character floor for part of a line can be judged (claude-config#1701). A placed finding
+# carries no quote, so its length comes from the `part_quote_lengths=` a review records; a miss
+# carries its whole quote and length in its mark, and a mark from before #1701 shows a quote of 60
+# characters or fewer whole and a longer one cut to its first 60, whose length is then unknown.
+LEN="$WORK/lengths"
+mkdir -p "$LEN"
+q85="the bedtime answer is written into the shared file so it is asked once, and kept there"
+{
+  printf 'repo=r\nsha=h\nstarted=5000\nfinished=5010\nstatus=ok\nkind=pr\nfindings=5\n'
+  printf 'placement=whole:0,marker:0,part:2,path:0,unplaced:3\npart_quote_lengths=24,75\n\n'
+  printf 'docs/a.md:3: one.%s\n' "$S"
+  printf 'docs/a.md:4: two.%s\n' "$S"
+  printf 'docs/a.md:5: three.%s%s\n' "$S" "$(mark "its quote matches no line of docs/a.md at the reviewed head, whole or in part, ${#q85} characters quoted: \"$q85\"" 5)"
+  printf 'src/a.ts:6: four.%s%s\n' "$S" "$(mark 'its quote matches no line of src/a.ts at the reviewed head, and is too short to be placed by part of a line, 9 characters quoted: "e.amount;"' 6)"
+  printf 'src/a.ts:7: five.%s%s\n' "$S" "$(mark 'it quoted no line' 7)"
+} > "$LEN/1-pr-h.txt"
+{
+  printf 'repo=r\nsha=i\nstarted=5100\nfinished=5110\nstatus=ok\nkind=pr\nfindings=2\n'
+  printf 'placement=whole:0,marker:0,part:0,path:0,unplaced:2\n\n'
+  printf 'src/a.ts:8: six.%s%s\n' "$S" "$(mark 'its quote matches no line of src/a.ts at the reviewed head: "total *= e.amount;"' 8)"
+  printf 'src/a.ts:9: seven.%s%s\n' "$S" "$(mark "its quote matches no line of src/a.ts at the reviewed head: \"$(printf 'w%.0s' $(seq 60))...\"" 9)"
+} > "$LEN/1-pr-i.txt"
+lens="$(python3 "$REPORT" --state-dir "$LEN" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok || bad "a folder of reviews with quote lengths exits 0 (got $rc): $lens"
+check "the lengths of quotes placed by part of a line, from the reviews that record them" \
+  "quote lengths placed by part of a line, from the 1 of 2 reviews that record them: under 10: 0, 10 to 19: 0, 20 to 29: 1, 30 to 39: 0, 40 to 59: 0, 60 to 99: 1, 100 or more: 0" "$lens"
+check "the lengths of quotes that matched no line, an older cut one counted on its own" \
+  "quote lengths matching no line: under 10: 1, 10 to 19: 1, 20 to 29: 0, 30 to 39: 0, 40 to 59: 0, 60 to 99: 1, 100 or more: 0, and longer than 60 but cut to 60 by a mark from before #1701: 1" "$lens"
+# The quotes themselves, one line each, to read when judging the floor.
+misses="$(python3 "$REPORT" --state-dir "$LEN" --misses 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok || bad "--misses exits 0 (got $rc): $misses"
+check "--misses lists a miss with its whole quote and its length" "1-pr-h.txt docs/a.md:5: ${#q85} characters: $q85" "$misses"
+check "--misses lists a short miss" "1-pr-h.txt src/a.ts:6: 9 characters: e.amount;" "$misses"
+check "--misses says when an older mark kept only the first 60" "1-pr-i.txt src/a.ts:9: longer than 60, only its first 60 kept: wwww" "$misses"
+check_not "--misses lists only quote misses" "src/a.ts:7:" "$misses"
+
 # A window can be given as a date and time, read on this Mac's clock.
 dated="$(TZ=America/New_York python3 "$REPORT" --state-dir "$STATE" --since "1969-12-31 19:40" 2>&1)"
 check "a window given as a local date and time is read as one" "reviews: 2 (pr 1, push 1)" "$dated"

@@ -56,16 +56,54 @@ export type WatchedJob = {
   owner?: { id: string; name: string }
 }
 
+/** Something the watcher will tell Claude, addressed to a background agent's loop by its id, or to this conversation without one. wake: start a turn of this idle conversation to say it (#1234). */
+export type WatcherNotice = { to?: string; text: string; wake?: true }
+/** A background agent's last sign of life (#759): when a tool call of its last started or finished, the last one it started and when, how many are still running, and whether its quiet spell was said. */
+export type AgentSeen = { at: number; lastTool?: string; startedAt?: number; inFlight: number; told: boolean }
+/**
+ * What the watcher last measured of one job (#706, #784, #1517, #1583): its output's size (null
+ * before the first look) and when it last changed, its state, whether Claude was told of the spell
+ * it is in and since when it has been healthy, the once told flags, what Claude Code last said of
+ * it, what its processes measured and how it stalled.
+ */
+export type JobWatch = {
+  lastSize: number | null
+  lastGrowth: number
+  state: 'running' | 'waiting' | 'stalled'
+  told: boolean
+  healthySince?: number
+  toldUnreadable: boolean
+  toldUntraced: boolean
+  toldLookFailed: boolean
+  harness?: string
+  measured?: 'runs' | 'unknown'
+  stalledBy?: 'silent' | 'repeating'
+}
 declare module 'claude-code' {
   interface EngineInterface {
     jobs: Jobs
   }
   interface PluginState {
     /**
-     * The one list of this session's background jobs (#1695): in $.state, which the engine holds
-     * for the session across a hot reload of the mod, so the reminder, the keep tool and the status
-     * bar read the same list whichever copy of the module recorded a job.
+     * The watcher's session facts (#1695, #1703), each in $.state, which the engine holds for the
+     * session across a hot reload of the mod: a reload runs the code again in a fresh module and
+     * fires session.start again, so none of these may live in a module variable.
      */
-    'job-watcher': { jobs: WatchedJob[] }
+    'job-watcher': {
+      /** The one list of this session's background jobs (#1695), the reminder's, the keep tool's and the status bar's. */
+      jobs: WatchedJob[]
+      /** Which agent started each piece of background work, by the task id Claude Code lists it under (#1326). */
+      startedBy: Record<string, string>
+      /** How many times running each agent's stop has been refused, by agent id (#1326). */
+      stopRefusals: Record<string, number>
+      /** What Claude has still to be told, oldest first. */
+      notices: WatcherNotice[]
+      /** Each agent whose loop has not ended, with its last sign of life, by agent id (#759). */
+      agents: Record<string, AgentSeen>
+      /** Whether this conversation's own loop has a turn running (#1234). */
+      mainTurn: 'idle' | 'busy'
+      /** What the watcher last measured of each job on the list, by job id. */
+      watch: Record<string, JobWatch>
+    }
   }
 }

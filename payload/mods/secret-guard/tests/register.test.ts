@@ -68,7 +68,9 @@ const GH_TOKEN = 'gho_' + 'Q'.repeat(36)
 // The world beneath the mod: the environment, the gh token and one project .env file. Every tool
 // call that gets past the mod is answered here, and recorded, so a test can tell a refusal (the
 // call never arrived) from a pass.
-const world = (on: On) => {
+// files: more files on disk, by path, beside the project .env.
+const world = (on: On, files: Record<string, string> = {}) => {
+  const logs: string[] = []
   const reached: string[] = []
   const toasts: string[] = []
   const cards: { toolUseId: string; guard: string; reason: string; safeWay?: string }[] = []
@@ -82,6 +84,8 @@ const world = (on: On) => {
   on('fs.list', ($, e) => ({ value: e.path === '/repo' ? [{ name: '.env', kind: 'file' as const }, { name: 'src', kind: 'dir' as const }] : [] }) as never)
   on('fs.read', ($, e) => {
     if (e.path === '/repo/.env') return { value: `SUPABASE_SERVICE_ROLE_KEY=${ENV_SECRET}\nPORT=3000\n` }
+    const more = files[e.path]
+    if (more !== undefined) return { value: more }
     throw new Error(`no file ${e.path}`)
   })
   on('ui.toast', ($, e) => {
@@ -90,6 +94,7 @@ const world = (on: On) => {
   })
   on('ui.log', ($, e) => {
     if (e.text.startsWith('CARD ')) cards.push(JSON.parse(e.text.slice(5)))
+    else logs.push(e.text)
     return { value: undefined }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -97,7 +102,7 @@ const world = (on: On) => {
     reached.push(e.tool)
     return { result: 'ran', text: 'ran' } as never
   })
-  return { reached, toasts, cards }
+  return { reached, toasts, cards, logs }
 }
 
 const appendRow = async ($: { session: { append: (e: never) => Promise<unknown> } }, row: unknown) => {
@@ -173,6 +178,34 @@ test('a secret MultiEdited into a .env file is guarded from then on', withKit, a
   const fresh = 'n3wly-wr1tten-v4lue-qq'
   await $.tool.call({ tool: 'MultiEdit', file_path: '/repo/.env', edits: [{ old_string: 'A=1', new_string: `API_TOKEN=${fresh}` }] } as never)
   expect(w.reached).toContain('MultiEdit')
+  await $.tool.call({ tool: 'Bash', command: `git commit -m "${fresh}"` } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
+// #1703: session.start fires again at every fresh load of the mod (once per process, then once per
+// fresh load, never at /clear), with the session going on, and loads the secrets again from the
+// environment, the gh token and the .env files at the top of the project. A secret Claude wrote this
+// session into a .env file anywhere else (a monorepo's apps/web/.env) was guarded only by the
+// module's memory, so after a reload it went out in a commit unrefused.
+test('a reload of the mod still guards a secret written this session into a .env file deeper in the project (#1703)', withKit, async ($, on) => {
+  const fresh = 'wr1tten-deep-v4lue-pp'
+  const w = world(on, { '/repo/apps/web/.env': `API_TOKEN=${fresh}\n` })
+  await start($)
+  await $.tool.call({ tool: 'Write', file_path: '/repo/apps/web/.env', content: `API_TOKEN=${fresh}\n` } as never)
+  expect(w.reached).toContain('Write')
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: `git commit -m "${fresh}"` } as never)
+  expect(w.reached).not.toContain('Bash')
+})
+
+test('a written .env file that cannot be kept for a reload is said, and its secret is still guarded now (#1703)', withKit, async ($, on) => {
+  const fresh = 'wr1tten-deep-v4lue-pp'
+  const w = world(on, { '/repo/apps/web/.env': `API_TOKEN=${fresh}\n` })
+  on('state.set', async ($, e, next) => ((e as { plugin?: string }).plugin === 'secret-guard' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await $.tool.call({ tool: 'Write', file_path: '/repo/apps/web/.env', content: `API_TOKEN=${fresh}\n` } as never)
+  expect(w.reached).toContain('Write')
+  expect(w.logs.filter(l => l.includes("couldn't keep /repo/apps/web/.env for a reload") && l.includes('state store unavailable')).length).toBe(1)
   await $.tool.call({ tool: 'Bash', command: `git commit -m "${fresh}"` } as never)
   expect(w.reached).not.toContain('Bash')
 })
