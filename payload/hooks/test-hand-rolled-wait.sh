@@ -45,7 +45,7 @@ trap 'rm -rf "$TMPROOT"' EXIT
 # The scan has to see every spelling of one, and none of the things that are not one, before the
 # tree is asked (L1). The loop words are ASSEMBLED, so this file holds no wait for the scan to find.
 # ---------------------------------------------------------------------------
-_W='whi''le'; _U='unt''il'; _F='fo''r'; _S='sle''ep'
+_W='whi''le'; _U='unt''il'; _F='fo''r'; _S='sle''ep'; _WW='window''_wait'
 mkdir -p "$TMPROOT/payload/hooks"
 {
   printf '#!/usr/bin/env bash\n'
@@ -58,7 +58,7 @@ mkdir -p "$TMPROOT/payload/hooks"
   printf '%s _ in $(seq 1 200); do [ -s "$f" ] && break; %s 0.05; done\n' "$_F" "$_S"
   # And nine that are not.
   printf 'hang_wait "[ -e %s ]"\n' "'\$f'"
-  printf 'window_wait 2 "[ -e %s ]"\n' "'\$f'"
+  printf '%s 2 "[ -e %s ]"; ww=$?; [ "$ww" = 1 ] || echo FAIL\n' "$_WW" "'\$f'"
   printf 't0=$SECONDS; %s [ ! -e "$h" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do %s 0.1; done\n' "$_W" "$_S"
   printf '%s [ ! -e "$f" ]; do %s 0.1; done\n' "$_U" "$_S"
   printf '%s [ "$(calls)" -lt 3 ]; do %s 0.1; done\n' "$_W" "$_S"
@@ -87,6 +87,36 @@ clean="$(printf 'payload/hooks/probe-helper.sh\n' | python3 "$SCAN" --root "$TMP
 [ "$clean_rc" = 0 ] && [ -z "$clean" ] \
   && check "and finding nothing, it says nothing and exits 0" ok \
   || check "and finding nothing, it says nothing and exits 0" "exit $clean_rc: $clean"
+
+# ---------------------------------------------------------------------------
+# window_wait is for a window the PASSING case runs out, so its length is the caller's and short
+# (claude-config#1721). Called to wait for something the passing case DOES meet, it is the short
+# wall clock ceiling this scan exists to stop (L290). So it is accepted only where the suite asserts
+# the window ran out: its status captured in the same statement and compared with 1 somewhere in
+# the file. A constant condition (true, false) waits on nothing and is the helper's own test.
+# ---------------------------------------------------------------------------
+{
+  printf '#!/usr/bin/env bash\n'
+  # Five misuses: the status thrown away, failing when it runs out, passing when it is met, a
+  # capture compared only with 0, and a capture never compared at all.
+  printf '%s 2 "[ -e %s ]"\n' "$_WW" "'\$f'"
+  printf '%s 2 "[ -e %s ]" || echo FAIL never came\n' "$_WW" "'\$f'"
+  printf 'if %s 5 "[ -s %s ]"; then echo ok; fi\n' "$_WW" "'\$f'"
+  printf '%s 2 "[ -e %s ]"; seen=$?; [ "$seen" = 0 ] && echo ok\n' "$_WW" "'\$f'"
+  printf '%s 3 "[ -e %s ]"; unread=$?\n' "$_WW" "'\$f'"
+  # And four that are not: a capture compared with 1 on a later line, one written for another shell
+  # with its dollar escaped, and the helper's own tests on a constant condition.
+  printf '%s 2 "[ -e %s ]"; held=$?\n[ "$held" -eq 1 ] && echo ran out\n' "$_WW" "'\$f'"
+  printf 'bash -c "%s 2 c; w2=\\$?; [ \\"\\$w2\\" = 1 ]"\n' "$_WW"
+  printf 'bash -c ". lib; %s 1 false 0.05; echo \\$?"\n' "$_WW"
+  printf '%s 1 true\n' "$_WW"
+} > "$TMPROOT/payload/hooks/test-window-probe.sh"
+wprobe="$(printf 'payload/hooks/test-window-probe.sh\n' | python3 "$SCAN" --root "$TMPROOT")"; wprobe_rc=$?
+wprobe_lines="$(printf '%s\n' "$wprobe" | awk -F: 'NF { printf "%s ", $2 }')"
+[ "$wprobe_rc" = 1 ] && [ "$wprobe_lines" = "2 3 4 5 6 " ] \
+  && check "#1721 window_wait is accepted only where the suite asserts the window ran out" ok \
+  || check "#1721 window_wait is accepted only where the suite asserts the window ran out" "exit $wprobe_rc, lines '$wprobe_lines' where 2 3 4 5 6 were wanted:
+$wprobe"
 
 # ---------------------------------------------------------------------------
 # The real tree: none at all, anywhere.

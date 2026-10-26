@@ -2004,8 +2004,10 @@ is a setting, not a measurement. A stand in a suite writes runs as a process of 
 suite exports the ceiling as `FAKE_HANG_S` and the stand in bounds its clock by
 `${FAKE_HANG_S:-300}`. A wait the PASSING case is meant to run out (a window a fault is given to
 show itself in) is a different thing and calls `window_wait <seconds> "<condition>"` with its length
-stated. `hooks/test-hand-rolled-wait.sh` fails any suite that hand rolls a wait bounded by its own
-clock or tick count instead (#1679), with no list of suites excused from it.
+stated, captures its status in the same statement (`; NAME=$?`) and asserts NAME is 1, ran out.
+`hooks/test-hand-rolled-wait.sh` fails any suite that hand rolls a wait bounded by its own clock or
+tick count instead (#1679), and any `window_wait` whose running out is not asserted that way, which
+would be a short ceiling under another name (#1721), with no list of suites excused from either.
 
 ### Measuring the section time budget's margin
 
