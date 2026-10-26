@@ -35,6 +35,8 @@ work through genuinely independent subagents.
 ├── SKILL.md                     # framing conversation, launch, present, file issues
 ├── production-audit.workflow.js # the multi-agent engine (Workflow tool)
 ├── healthcheck.sh               # validates frontmatter + that the workflow script parses
+├── production-audit.harness.cjs # runs the real workflow with every agent stood in
+├── test-production-audit.sh     # the checks on what the harness returns
 └── DESIGN.md                    # this file
 ```
 
@@ -47,8 +49,10 @@ Reuses `~/.claude/skills/milestone/create-milestone.sh` for the optional milesto
 
 ## Workflow phases (`production-audit.workflow.js`)
 
-The workflow receives `args = { projectDir, repo, date, mode }` and returns a structured
-result the SKILL renders + files.
+The workflow receives `args = { projectDir, repo, date, mode, focus, outsideSystems }`
+(`focus` adds emphasis and never removes a check; `outsideSystems` names the systems outside the
+repo that email, text or call consumers) and returns a structured result the SKILL renders +
+files.
 
 ### Phase 0: Profile & preflight
 One agent reads the repo (CLAUDE.md, package manifest, framework files, infra/deploy
@@ -56,7 +60,10 @@ config, CI config, env templates) and emits a **project profile**:
 
 - `type`: web-app | api | static-site | cli | library | mobile | other
 - `stack`, `hosting` (e.g. Cloudflare Workers, Supabase, Vercel), `hasDatabase`,
-  `multiTenant`, `handlesPII`, `sendsEmail`, `hasAuth`, `isPublic`, `usesCI`
+  `multiTenant`, `handlesPII`, `sendsEmail`, `sendsEmailFromRepo`, `hasAuth`, `isPublic`, `usesCI`
+- `consumerMessaging` (every system that emails, texts or calls consumers, the repo's or not),
+  and the sector flags `financialProduct`, `healthData`, `mayReachChildren`,
+  `sellsSubscriptions`, `acceptsUserUploads`
 - `applicableDomains`: which of the ~19 domains apply, and a one-line **reason** for each
   domain marked N/A.
 
@@ -72,7 +79,9 @@ Fan out one specialist auditor per **applicable** domain. Each receives the prof
 - Also surface gaps **beyond** its checklist (the checklist is a floor, not a ceiling).
 - Return findings against a fixed schema:
   `{ check, status: pass|partial|missing|na, severity: critical|high|medium|low,
-     evidence: "path:line or why", remediation, effort: S|M|L }`
+     evidence: "path:line or why", remediation, effort: S|M|L, law }`, where `law` names
+  the law a gap exposes the business to (empty when none), plus a `notInspected` list of the
+  systems or settings it could not look at, with why.
 
 ### Phase 2: Adversarial verification
 For every **high or critical** finding with status `missing` or `partial`, spawn a
@@ -113,9 +122,17 @@ from the user's list plus the operability gaps research surfaced.
 6. **Rate Limiting & Abuse Prevention**: rate limiting; abuse/bot prevention; DoS
    protection; per-request resource limits; quota enforcement.
 7. **Data Isolation & PII**: multi-tenancy data isolation (e.g. RLS); PII inventory &
-   handling; data retention & deletion policy; encryption at rest.
+   handling; data retention & deletion policy; encryption at rest; third party resources
+   that receive visitor IPs (fonts, scripts); trackers inside consent; session recording
+   that masks inputs (CIPA).
 8. **Compliance, Audit & Legal**: regulatory compliance (GDPR/CCPA/etc.); audit trails &
-   tamper-evident logging; privacy policy, cookie consent, ToS.
+   tamper-evident logging; privacy policy, cookie consent, ToS; commercial email
+   (CAN-SPAM) from every sender, outside systems included; calls and texts (TCPA);
+   Global Privacy Control; COPPA; auto renewal; user uploads and DMCA; sector rules
+   from the profile (GLBA, FCRA, TILA, UDAAP, HIPAA). Added by claude-config#1753
+   after a 2026-10-24 audit missed CAN-SPAM because the repo itself sent no email.
+   Kept by the script, not the profiler, whenever the product is public, holds personal
+   data or messages consumers; every finding carries the `law` it exposes.
 9. **Functional Testing**: unit, integration, e2e, regression tests; coverage thresholds
    enforced in CI.
 10. **Load, Stress & Chaos**: load/stress testing; chaos engineering; resilience testing;
@@ -135,13 +152,15 @@ from the user's list plus the operability gaps research surfaced.
     restores; DB migration safety; graceful shutdown (SIGTERM).
 17. **Cost, Capacity & Performance**: cost monitoring & budget alerts; capacity planning;
     autoscaling; performance/latency budgets.
-18. **Accessibility**: WCAG conformance; keyboard nav; screen-reader semantics; contrast;
-    focus management. (N/A for non-UI projects.)
+18. **Accessibility**: WCAG 2.1 AA conformance, graded as ADA legal exposure on a public
+    site; keyboard nav; screen-reader semantics; contrast; focus management. (N/A for
+    non-UI projects.)
 19. **Documentation & Architecture**: ADRs; architecture diagrams; API contracts &
     versioning; README/runbooks/onboarding docs.
 
-Auditors run concurrently up to the Workflow engine's cap (~min(16, cores−2)); the rest
-queue and still complete. Heavy by design (decision 4).
+Auditors and refuters run at most four at once, Dan's standing rule for every session
+(the engine's own cap, about min(16, cores minus 2), let up to 16 run before
+claude-config#1753); the rest queue and still complete. Heavy by design (decision 4).
 
 ---
 
@@ -153,9 +172,11 @@ queue and still complete. Heavy by design (decision 4).
 2. Plain-language summary in chat (PM-friendly): counts by severity, what's solid, top
    risks, any grounding caveats.
 3. On approval via **AskUserQuestion**, file one GitHub issue per finding (grouping tightly
-   related ones), in the **audited repo**, labeled by **domain** + **severity**
-   (`severity:critical`, etc.). Create missing labels first (`gh label create`). Never
-   apply any Claude/AI-attribution label.
+   related ones), in the **audited repo**, labeled `production-readiness`, the **domain**, the
+   `priority-pN` the audit severity maps to (critical p0, high p1, medium p2, low p3), and
+   `legal-risk` when the item carries a `law`. Create missing labels first. Never apply any
+   Claude/AI-attribution label. The report also carries `notInspected`, `unauditedDomains` and
+   `lawTagsLost`, each shown even when empty.
 4. Optionally offer a tracking **milestone** via the shared `create-milestone.sh`
    (`DRY_RUN=1` preview first).
 5. If `gh` is unavailable or the dir isn't a GitHub repo: skip filing, just deliver the
@@ -169,8 +190,10 @@ queue and still complete. Heavy by design (decision 4).
   `name: production-ready`, that `production-audit.workflow.js` parses (`node --check`),
   and that `meta.phases` is present. Written before the workflow, à la
   `plan-council/healthcheck.sh`. Runnable in CI / locally.
-- The workflow's agent logic is exercised by a real first run against an actual project
-  (the user's call which repo): treated as the prototype run, like plan-council.
+- **`test-production-audit.sh`** runs the real workflow through `production-audit.harness.cjs`
+  with every agent stood in: the legal domains kept, a dead auditor reported as unaudited, the
+  law tags carried, at most four agents at once. What the agents themselves find is still only
+  judged on a real run.
 - Issue-filing reuses the already-tested `create-milestone.sh` for milestones; the
   per-finding `gh issue create` path is thin and validated on the first real run with a
   dry preview.
