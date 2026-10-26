@@ -106,21 +106,30 @@ import {
   branchesTouched,
   choiceFor,
   CLEANUP_TOOL,
+  closingComments,
   filesSaid,
   filesWritten,
   isLeftClosed,
   LEAVE_BRANCH_TOOL,
   NEW_WORK,
+  neverMergeSaid,
+  neverMergeWhy,
   newBranchOf,
   newWork,
   outstanding,
   patchedPaths,
   porcelainFiles,
+  prRefs,
+  quoteOf,
+  refSaid,
   settledByBranchChoice,
   settledByDan,
   stashTaken,
   whoseFiles,
   type DeployState,
+  type NeverMerge,
+  type PrComment,
+  type PrRef,
   type Reading,
 } from './winddown.ts'
 
@@ -3391,7 +3400,16 @@ const isThere = async ($: EngineInterface, path: string): Promise<boolean> => {
   }
 }
 
-type PrJson = { number?: number; state?: string; url?: string; headRefName?: string; headRefOid?: string; closingIssuesReferences?: { number?: number }[] }
+type PrJson = {
+  number?: number
+  state?: string
+  url?: string
+  headRefName?: string
+  headRefOid?: string
+  closingIssuesReferences?: { number?: number }[]
+  closedAt?: string
+  comments?: PrComment[]
+}
 
 type IsItLiveNoun = { verdict: (q: { repo: string; pr: number }) => Promise<{ state: DeployState } | null> }
 
@@ -3426,7 +3444,8 @@ const readDeploy = async ($: EngineInterface, pr: { number: number; url?: string
 // The PR a reading found, and the issues it closes, which the caller keeps for later checks; its
 // link, when GitHub gave one, is what tells it apart from a PR this session opened (#856).
 type Found = { number: number; closes: number[]; url?: string }
-const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefOid'
+// closedAt and comments find a closed PR's recorded reason it will never merge (#1767).
+const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefOid,closedAt,comments'
 
 // What the finish check reads for one PR: the branch's own (found by its head) or one named by
 // number, in `repo` when given (a PR this session opened, read in the repository its link names).
@@ -3458,7 +3477,51 @@ const closesOf = (pr: PrJson | null) => (pr?.closingIssuesReferences ?? []).map(
 // Nothing about it can change: merged, with every issue it closes closed. Only a PR read by its
 // number: a lookup by branch asks which PR a branch has, which a new PR on that name changes.
 const allSettled = (s: PrSeen, byNumber: boolean) => byNumber && s.pr?.state === 'MERGED' && closesOf(s.pr).every(n => s.issues.get(n) === 'CLOSED')
-const seenSaid = (s: Pick<PrSeen, 'pr' | 'issues'>) => JSON.stringify([s.pr?.number, s.pr?.state, s.pr?.headRefOid, closesOf(s.pr), [...s.issues]])
+const seenSaid = (s: Pick<PrSeen, 'pr' | 'issues'>) =>
+  JSON.stringify([s.pr?.number, s.pr?.state, s.pr?.headRefOid, closesOf(s.pr), [...s.issues], s.pr?.closedAt, Array.isArray(s.pr?.comments) ? s.pr.comments.length : 0])
+
+// ---- A recorded reason a PR closed without merging will never merge (#1767) ----
+// Dan would rather merge a closed PR, so winding down reopens and finishes it unless its closing
+// comment, or his own earlier answer, names the PR that superseded it. A number in a comment may be an
+// issue (#1716's named only #1702), so GitHub is asked whether each is a PR. The finish check and
+// leave_pr_open both ask through closingReason and namedPr below, so they never disagree (L261).
+type GhRead = (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+// GitHub's words for a number that is an issue, or nothing at all (measured 2026-10-26).
+const NOT_A_PR = /Could not resolve to a PullRequest/
+// What GitHub answered, by repository and number: a number never stops being a PR or an issue, so
+// each is asked once a session. A read that failed is kept nowhere, so it is asked again. These are
+// rare reads (a closed PR's own comment, once), so they are not taken from the polling budget (#1482).
+const prNumbers = new Map<string, boolean>()
+const isPr = async (gh: GhRead, repo: string | undefined, n: number): Promise<boolean | { unreadable: string }> => {
+  const key = `${(repo ?? '').toLowerCase()}#${n}`
+  const known = prNumbers.get(key)
+  if (known !== undefined) return known
+  const res = await gh(['pr', 'view', String(n), ...(repo ? ['--repo', repo] : []), '--json', 'number'])
+  if (res.exitCode === 0) prNumbers.set(key, true)
+  else if (NOT_A_PR.test(res.stderr)) prNumbers.set(key, false)
+  else return { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` }
+  return prNumbers.get(key) as boolean
+}
+/** The first of `refs` GitHub says is a PR, undefined for none, or why that could not be read. */
+const namedPr = async (gh: GhRead, repo: string | undefined, refs: readonly PrRef[], where: string): Promise<PrRef | undefined | { unreadable: string }> => {
+  for (const ref of refs) {
+    const v = await isPr(gh, ref.repo ?? repo, ref.number)
+    if (typeof v === 'object') return { unreadable: `whether ${refSaid(ref)}, named in ${where}, is a PR: ${v.unreadable}` }
+    if (v) return ref
+  }
+  return undefined
+}
+/** A closed PR's closing comment naming a PR, newest first, quoted; undefined for none; or why it could not be read. */
+const closingReason = async (gh: GhRead, repo: string | undefined, pr: PrJson): Promise<NeverMerge | undefined | { unreadable: string }> => {
+  if (typeof pr.number !== 'number') return undefined
+  const comments = Array.isArray(pr.comments) ? pr.comments : []
+  for (const c of closingComments({ number: pr.number, ...(repo ? { repo } : {}), ...(typeof pr.closedAt === 'string' ? { closedAt: pr.closedAt } : {}), comments })) {
+    const named = await namedPr(gh, repo, c.refs, `PR #${pr.number}'s closing comment`)
+    if (named && 'unreadable' in named) return named
+    if (named) return { from: 'comment', pr: named, quote: quoteOf(c.body) }
+  }
+  return undefined
+}
 
 // THE ONE POLLING POLICY (#1482, hooks/lib/gh-poll.sh, reached through mod-kit's ghpoll.ts). On
 // 2026-10-22 GitHub's burst limit refused every session on the account for about 40 minutes while one
@@ -3610,6 +3673,13 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
       }
       prUrl = typeof pr.url === 'string' ? pr.url : undefined
       found = { number: pr.number as number, closes, url: prUrl }
+      // A closed PR is reopened and finished unless its closing comment names the PR that
+      // superseded it (#1767); a number GitHub cannot place is said, never read as no reason.
+      if (state === 'CLOSED') {
+        const reason = await closingReason(gh, slug, pr)
+        if (reason && 'unreadable' in reason) return { reading: { ...r, pr: { unreadable: reason.unreadable } }, found }
+        if (reason && r.pr && !('unreadable' in r.pr)) r.pr = { ...r.pr, neverMerge: reason }
+      }
     }
   }
   // The deploy and the cleanup are read only once the PR is merged, so an open PR costs one gh call a check.
@@ -3807,6 +3877,11 @@ const finish = async ($: EngineInterface, c: Checked) => {
 // merged (#856). Nothing is asked while Dan is asleep (#841), nor about a PR that cannot be read or
 // is merged, and then nothing is recorded. One table row per state, so both are asked and recorded
 // by the one function below.
+//
+// A closed PR is asked about only on a recorded reason it will never merge (#1767): its closing
+// comment, or Dan's own earlier words handed in as dan_said, naming a PR GitHub confirms is one. The
+// question quotes that reason, and it is what is recorded and listed. With none, nothing is asked and
+// Claude is told to reopen and finish it, as Dan would rather merge it.
 type AsIs = {
   /** His answer that leaves the PR as it is: the only one recorded. */
   keep: string
@@ -3837,7 +3912,7 @@ const AS_IS: Record<'OPEN' | 'CLOSED', AsIs> = {
     keep: 'Leave it closed',
     other: 'Reopen it',
     otherSaid: pr => `Dan said reopen it: winding down waits on ${pr} until it is reopened and merged.`,
-    question: (pr, why) => `Leave ${pr} closed without merging (${why})? Winding down stops waiting on it unless it is reopened.`,
+    question: (pr, why) => `Leave ${pr} closed without merging, as ${why}? Winding down stops waiting on it unless it is reopened.`,
     record: (repo, number, why) => ({ repo, number, closed: true, why }),
     keptSaid: pr => `Dan chose to leave ${pr} closed: winding down counts it settled unless it is reopened.`,
     as: 'closed',
@@ -3851,12 +3926,10 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   if (named && !/^[\w.-]+\/[\w.-]+$/.test(named)) return `"${named}" is not a repository (owner/name), so Dan was not asked and nothing was recorded.`
   const repo = named || (await sessionSlug($))
   if (!repo) return "This session's repository could not be read, so name the PR's repository (owner/name). Dan was not asked and nothing was recorded."
-  // Dan decides from the reason, so a PR is never put to him without one.
-  const why = String(input.why ?? '').trim().replace(/[.?]+$/, '')
-  if (!why) return `Say why PR #${number} would be left as it is (open for a reviewer, say, or closed because its work merged in another PR), so Dan can decide. He was not asked and nothing was recorded.`
   const pr = `PR #${number} in ${repo}`
   const unread = (reason: string) => `${pr} could not be read (${reason}), so Dan was not asked and nothing was recorded: winding down still waits on it.`
-  const res = await $.process.run(['gh', 'pr', 'view', String(number), '--repo', repo, '--json', 'number,state,url,headRefOid'], { timeoutMs: RUN_MS }).catch(err => ({ exitCode: -1, stdout: '', stderr: msg(err) }))
+  const gh: GhRead = args => $.process.run(['gh', ...args], { timeoutMs: RUN_MS }).catch(err => ({ exitCode: -1, stdout: '', stderr: msg(err) }))
+  const res = await gh(['pr', 'view', String(number), '--repo', repo, '--json', 'number,state,url,headRefOid,closedAt,comments'])
   if (res.exitCode !== 0) return unread(res.stderr.trim() || `gh exited ${res.exitCode}`)
   let read: PrJson
   try {
@@ -3869,7 +3942,32 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   if (!asIs) return `${pr} is ${String(read.state ?? 'in a state GitHub did not give')}, so there is nothing to leave as it is. Nothing was asked.`
   const head = typeof read.headRefOid === 'string' ? read.headRefOid : ''
   if (asIs.needsHead && !head) return unread('GitHub gave no head commit')
-  const question = asIs.question(pr, why)
+  // What Dan is asked about it and what is recorded: an open PR by the reason Claude gives, a closed
+  // one only by a recorded reason it will never merge (#1767).
+  let asked: string
+  let why: string
+  if (read.state === 'CLOSED') {
+    let reason = await closingReason(gh, repo, { ...read, number })
+    if (reason && 'unreadable' in reason) return unread(reason.unreadable)
+    const danSaid = String(input.dan_said ?? '').trim()
+    if (!reason && danSaid) {
+      const ref = await namedPr(gh, repo, prRefs(danSaid, { repo, number }), "Dan's words given as dan_said")
+      if (ref && 'unreadable' in ref) return unread(ref.unreadable)
+      if (ref) reason = { from: 'dan', pr: ref, quote: quoteOf(danSaid) }
+    }
+    if (!reason) {
+      const dan = danSaid ? "Dan's words given as dan_said name no PR" : "no words of Dan's naming one were given as dan_said"
+      return `${pr} has no recorded reason it will never merge (no closing comment names the PR that superseded it, and ${dan}), so Dan was not asked and nothing was recorded: reopen it (gh pr reopen ${number} --repo ${repo}) and finish it, as he would rather merge it.`
+    }
+    asked = neverMergeSaid(reason, true)
+    why = neverMergeWhy(reason)
+  } else {
+    // Dan decides from the reason, so a PR is never put to him without one.
+    why = String(input.why ?? '').trim().replace(/[.?]+$/, '')
+    if (!why) return `Say why PR #${number} would be left open (for a reviewer outside this session, say), so Dan can decide. He was not asked and nothing was recorded.`
+    asked = why
+  }
+  const question = asIs.question(pr, asked)
   const asleep = await askedWhileAsleep($, await sleepNow($), question, `winding down still waits on ${pr}`)
   if (asleep) return asleep
   let answer: string
@@ -4370,7 +4468,7 @@ const useCleanups = async ($: EngineInterface, cleanups: readonly ScopeModesClea
 // What winding down means, said the same way in its note, its command's context and the Stop
 // reason (#856): a session read "start nothing new" as permission to park a PR needing Dan.
 // #917: the one way a PR stays open, and only on Dan's own answer, never Claude's reading of one.
-const FINALIZE_ALL = `Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again. A PR closed without merging is settled only on his answer to the same tool, which then asks whether to leave it closed (its work merged in another PR, say). A branch, a worktree on it or uncommitted work stays as it is only on his answer to ${LEAVE_BRANCH_TOOL}, and a new branch to commit uncommitted work starts only on his answer to ${CLEANUP_TOOL}.`
+const FINALIZE_ALL = `Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again. A PR closed without merging is reopened and finished, as Dan would rather merge it, and left closed only on his answer to the same tool, asked only when its closing comment or his own earlier answer names the PR that superseded it. A branch, a worktree on it or uncommitted work stays as it is only on his answer to ${LEAVE_BRANCH_TOOL}, and a new branch to commit uncommitted work starts only on his answer to ${CLEANUP_TOOL}.`
 const ASK_THEN_MERGE = 'When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers; never end the turn waiting on him.'
 
 // Each mode's note opens with its one definition (hooks/modes.ts), the same words the
@@ -4495,15 +4593,16 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'leave_pr_open',
       description:
-        "Ask Dan whether a PR stays as it is rather than being merged, the question following the PR's state on GitHub: an open PR left open, for when he may want it left (a reviewer outside this session, say), or a PR closed without merging left closed (its work merged in another PR, say). Only his \"Leave it open\" (recorded against the PR's current head, and settled until it is pushed to again) or \"Leave it closed\" (settled unless it is reopened) is recorded. Every other PR is merged; never call this to end a turn sooner.",
+        "Ask Dan whether a PR stays as it is rather than being merged, the question following the PR's state on GitHub: an open PR left open, for when he may want it left (a reviewer outside this session, say), or a PR closed without merging left closed. Dan would rather merge a closed PR, so it is asked about only on a recorded reason it will never merge: its closing comment, or his own earlier words passed as dan_said, naming the PR that superseded it, quoted to him; with neither, nothing is asked, and you reopen it and finish it. Only his \"Leave it open\" (recorded against the PR's current head, and settled until it is pushed to again) or \"Leave it closed\" (settled unless it is reopened) is recorded. Every other PR is merged; never call this to end a turn sooner.",
       inputSchema: {
         type: 'object',
         properties: {
           pr: { type: 'number', description: 'The PR number' },
           repo: { type: 'string', description: "The PR's repository as owner/name; this session's own when left out" },
-          why: { type: 'string', description: 'Why it would be left as it is, as a short phrase ("awaiting Denys\'s review", "its work merged as #716")' },
+          why: { type: 'string', description: 'For an open PR, why it would be left open, as a short phrase ("awaiting Denys\'s review")' },
+          dan_said: { type: 'string', description: "For a closed PR, Dan's own earlier words naming the PR that superseded it, quoted exactly; used only when no closing comment names one" },
         },
-        required: ['pr', 'why'],
+        required: ['pr'],
       },
     })
     await $.tool.register({

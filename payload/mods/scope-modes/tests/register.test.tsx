@@ -212,9 +212,19 @@ type Session = { sessionId: string; repoRoot?: string; extra?: Record<string, un
 const DEFAULT_GOAL = 'Close #7'
 // The one PR GitHub holds, found by `gh pr list --head` only for its own branch (scope-modes-616
 // unless headRefName says otherwise) and by `gh pr view` only by its own number.
-type GhPr = { number: number; state: string; url?: string; headRefName?: string; headRefOid?: string; closingIssuesReferences: { number: number }[] }
-// `others` are PRs GitHub also holds, found only by `gh pr view` by number (#856).
-type Gh = { pr: GhPr | null; others?: GhPr[]; issues: Record<number, string>; fails?: string }
+type GhPr = {
+  number: number
+  state: string
+  url?: string
+  headRefName?: string
+  headRefOid?: string
+  closingIssuesReferences: { number: number }[]
+  closedAt?: string
+  comments?: { body: string; createdAt: string }[]
+}
+// `others` are PRs GitHub also holds, found only by `gh pr view` by number (#856). `notPrs` are
+// numbers that are issues, which `gh pr view` refuses as GitHub does (#1767).
+type Gh = { pr: GhPr | null; others?: GhPr[]; issues: Record<number, string>; fails?: string; notPrs?: number[] }
 type Opts = {
   /** What a `gh pr create` call prints, as gh does: the new PR's link. */
   created?: string
@@ -810,6 +820,8 @@ const world = (on: On, o: Opts = {}) => {
       if (a[0] === 'pr' && a[1] === 'view') {
         if (gh.pr && a[2] === String(gh.pr.number)) return ok(JSON.stringify({ headRefName: head, ...gh.pr }))
         const other = gh.others?.find(p => a[2] === String(p.number))
+        // GitHub's own words for a number that is an issue (measured 2026-10-26 on claude-config#1702).
+        if (!other && gh.notPrs?.includes(Number(a[2]))) return fail(1, `GraphQL: Could not resolve to a PullRequest with the number of ${a[2]}. (repository.pullRequest)`)
         return other ? ok(JSON.stringify(other)) : fail(1, 'no pull requests found')
       }
       if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
@@ -1691,7 +1703,7 @@ test('turned on from the default branch, winding down finishes the PRs this sess
   expect((await stop($ as never)).block).toBeUndefined()
   expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
   // GitHub was asked about PR #31 in the repository its link names.
-  expect(w.runs.some(r => r.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,closingIssuesReferences,headRefName,headRefOid')).toBe(true)
+  expect(w.runs.some(r => r.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,closingIssuesReferences,headRefName,headRefOid,closedAt,comments')).toBe(true)
 })
 
 // #856: winding down finalizes everything the session has open. A session whose own branch PR was
@@ -1702,8 +1714,9 @@ const FINALIZE = [
   /When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers/,
   // #917: the one way a PR stays open, and only on his answer.
   /A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open/,
-  // #1033: a PR closed without merging, settled the same way.
-  /A PR closed without merging is settled only on his answer to the same tool, which then asks whether to leave it closed/,
+  // #1033 and #1767: a PR closed without merging is finished, left closed only on his answer to the
+  // same tool, asked only on a recorded reason it will never merge.
+  /A PR closed without merging is reopened and finished, as Dan would rather merge it, and left closed only on his answer to the same tool, asked only when its closing comment or his own earlier answer names the PR that superseded it/,
 ]
 
 test('a session whose own PR is finished is not finished while a PR it opened is still open (#856)', withDeps, async ($, on) => {
@@ -1791,7 +1804,7 @@ test('a PR Dan chose to leave open settles winding down and is listed as left op
   expect(w.asked).toEqual(["Leave PR #31 in o/r open (awaiting Denys's review)? Winding down stops waiting on it until it is pushed to again."])
   expect(w.askedOptions).toEqual([['Leave it open', 'Merge it']])
   expect(r).toBe('Dan chose to leave PR #31 in o/r open at aaa1111: winding down counts it settled until it is pushed to again.')
-  expect(w.runs.some(a => a.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,headRefOid')).toBe(true)
+  expect(w.runs.some(a => a.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,headRefOid,closedAt,comments')).toBe(true)
   // Pushed to since he chose: not carried over to commits he never saw.
   w.o.gh = { ...merged(), others: [openPr(31, 'bbb2222')] }
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: PR #31 has new commits since Dan chose to leave it open: merge it, or ask him again \(mcp__scope-modes__leave_pr_open\)\./)
@@ -1947,14 +1960,15 @@ test("leave_pr_open with no repository named reads the session's from its origin
 
 test('leave_pr_open asks nothing about a PR it cannot read or that is not open, and records nothing (#917)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { ask: 'Leave it open' })
-  w.o.gh = { ...merged(), others: [{ ...openPr(31, 'aaa1111'), state: 'MERGED' }] }
+  w.o.gh = { ...merged(), others: [{ ...openPr(31, 'aaa1111'), state: 'MERGED' }, openPr(32, 'bbb2222')] }
   await start($ as never, clock)
   expect(await call($ as never, leave(31, { repo: 'o/r' }))).toBe('PR #31 in o/r is MERGED, so there is nothing to leave as it is. Nothing was asked.')
   expect(await call($ as never, leave(77, { repo: 'o/r' }))).toBe('PR #77 in o/r could not be read (no pull requests found), so Dan was not asked and nothing was recorded: winding down still waits on it.')
   expect(await call($ as never, leave(31, { repo: 'not a repo' }))).toBe('"not a repo" is not a repository (owner/name), so Dan was not asked and nothing was recorded.')
   expect(await call($ as never, leave(0, { repo: 'o/r' }))).toBe('"0" is not a PR number, so Dan was not asked and nothing was recorded.')
   // Dan is never asked to leave a PR open for no stated reason.
-  expect(await call($ as never, leave(31, { repo: 'o/r', why: '  ' }))).toBe('Say why PR #31 would be left as it is (open for a reviewer, say, or closed because its work merged in another PR), so Dan can decide. He was not asked and nothing was recorded.')
+  // A closed PR is asked about by its recorded reason instead (#1767), so only an open one needs a why.
+  expect(await call($ as never, leave(32, { repo: 'o/r', why: '  ' }))).toBe('Say why PR #32 would be left open (for a reviewer outside this session, say), so Dan can decide. He was not asked and nothing was recorded.')
   expect(w.asked).toEqual([])
 })
 
@@ -1963,13 +1977,19 @@ test('leave_pr_open asks nothing about a PR it cannot read or that is not open, 
 // work then merged as #716. Dan answered "leave it closed" twice, and winding down listed it on every
 // turn anyway: leave_pr_open asked nothing about a PR that is not open, so nothing could record his
 // answer. His own answer to it now settles a closed PR, by repository and number, and only that PR.
-const closedPr = (number: number, head: string) => ({ ...openPr(number, head), state: 'CLOSED' })
+// Since #1767 Dan is asked only on a recorded reason it will never merge, so these closed PRs carry
+// the closing comment such a close leaves, naming the PR that replaced them, which GitHub holds.
+const CLOSED_AT = '2026-10-09T15:00:00Z'
+const replacedBy = (n: number) => [{ body: `Replaced by #${n}.`, createdAt: CLOSED_AT }]
+const closedPr = (number: number, head: string, comments: { body: string; createdAt: string }[] = replacedBy(716)) => ({ ...openPr(number, head), state: 'CLOSED', closedAt: CLOSED_AT, comments })
+const pr716 = { ...openPr(716, 'ddd4444'), state: 'MERGED' }
 const WHY_CLOSED = 'its work merged as #716'
-const CLOSED_LEFT = (n: number) => new RegExp(`PR #${n} was closed without merging: ask Dan whether to leave it closed \\(mcp__scope-modes__leave_pr_open\\)`)
+const CLOSED_LEFT = (n: number) =>
+  new RegExp(`PR #${n} was closed without merging, and its closing comment names PR #716 \\("Replaced by #716\\."\\): ask Dan whether to leave it closed \\(mcp__scope-modes__leave_pr_open\\)`)
 
 test('a PR closed without merging that Dan chose to leave closed settles winding down from the next turn, and his answer settles no other PR (#1033)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, created: 'https://github.com/o/r/pull/711\n', ask: 'Leave it closed' })
-  w.o.gh = { ...merged(), others: [closedPr(711, 'aaa1111'), closedPr(712, 'bbb2222')] }
+  w.o.gh = { ...merged(), others: [closedPr(711, 'aaa1111'), closedPr(712, 'bbb2222'), pr716] }
   await start($ as never, clock)
   await $.tool.call({ tool: 'Bash', command: 'gh pr create --title stacked', tool_use_id: 'g1' } as never)
   w.o.created = 'https://github.com/o/r/pull/712\n'
@@ -1980,14 +2000,14 @@ test('a PR closed without merging that Dan chose to leave closed settles winding
   expect(before).toMatch(CLOSED_LEFT(711))
   expect(before).toMatch(CLOSED_LEFT(712))
   const r = await call($ as never, leave(711, { repo: 'o/r', why: WHY_CLOSED }))
-  expect(w.asked).toEqual(['Leave PR #711 in o/r closed without merging (its work merged as #716)? Winding down stops waiting on it unless it is reopened.'])
+  expect(w.asked).toEqual(['Leave PR #711 in o/r closed without merging, as its closing comment names PR #716 ("Replaced by #716.")? Winding down stops waiting on it unless it is reopened.'])
   expect(w.askedOptions).toEqual([['Leave it closed', 'Reopen it']])
   expect(r).toBe('Dan chose to leave PR #711 in o/r closed: winding down counts it settled unless it is reopened.')
   // From the next turn #711 is settled and listed apart; #712, the same repository, still waits.
   const after = (await stop($ as never)).block ?? ''
   expect(after).toMatch(/^Winding down is not finished: PR #712 was closed without merging/)
   expect(after).not.toMatch(CLOSED_LEFT(711))
-  expect(after).toMatch(/ Left closed by Dan's choice: PR #711 in o\/r \(its work merged as #716\)\. /)
+  expect(after).toMatch(/ Left closed by Dan's choice: PR #711 in o\/r \(its closing comment names PR #716\)\. /)
   // And on every turn after: the answer is kept, never asked for again.
   await clock.advance(MIN)
   expect((await stop($ as never)).block).not.toMatch(CLOSED_LEFT(711))
@@ -1996,14 +2016,14 @@ test('a PR closed without merging that Dan chose to leave closed settles winding
   // With #712 settled too, winding down finishes, saying what was left closed.
   await call($ as never, leave(712, { repo: 'o/r', why: 'superseded by #716' }, 'l2'))
   expect((await stop($ as never)).block).toBeUndefined()
-  expect(w.toasts).toEqual(['Wind down finished: safe to close this session. Left closed by your choice: PR #711 in o/r (its work merged as #716); PR #712 in o/r (superseded by #716).'])
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session. Left closed by your choice: PR #711 in o/r (its closing comment names PR #716); PR #712 in o/r (its closing comment names PR #716).'])
 })
 
 test('only his "Leave it closed" settles a closed PR: Reopen it or anything typed records nothing and withdraws an earlier answer, and reopened it is outstanding until merged (#1033)', withDeps, async ($, on) => {
   // The branch's own PR stays open throughout, so winding down never finishes and each turn end says
   // what it holds #711 for.
   const { w, clock } = world(on, { created: 'https://github.com/o/r/pull/711\n', ask: 'Reopen it' })
-  const withOwn = (pr711: ReturnType<typeof openPr>) => ({ ...merged('OPEN'), others: [pr711] })
+  const withOwn = (pr711: ReturnType<typeof openPr>) => ({ ...merged('OPEN'), others: [pr711, pr716] })
   w.o.gh = withOwn(closedPr(711, 'aaa1111'))
   await start($ as never, clock)
   await madeOwn($ as never)
@@ -2042,6 +2062,71 @@ test('only his "Leave it closed" settles a closed PR: Reopen it or anything type
   expect(done).toMatch(/PR #711 has no is it live card yet/)
   expect(done).not.toMatch(/PR #711 (was closed|is not merged)|Left closed by/)
   expect(w.toasts).toEqual([])
+})
+
+// ---- A PR closed without merging is finished unless it will never merge (#1767) ----
+// On 2026-10-26 winding down asked Dan whether to leave claude-config#1716 closed. He answered "finish
+// and merge it ... I'd always prefer to merge it unless we're never going to merge it". Its closing
+// comment named only an issue, #1702 (its words measured from GitHub, cut here). So a closed PR is
+// reopened and finished, and Dan is asked only on a recorded reason it will never merge: a closing
+// comment, or his own earlier words, naming a PR GitHub confirms is one, quoted in the question.
+const REOPEN = (n: number) =>
+  `PR #${n} was closed without merging: reopen it (gh pr reopen ${n}) and finish it, as Dan would rather merge it. Ask him whether to leave it closed (mcp__scope-modes__leave_pr_open) only when he said earlier that another PR superseded it, passing his words as dan_said`
+const NO_REASON = (n: number, dan: string) =>
+  `PR #${n} in o/r has no recorded reason it will never merge (no closing comment names the PR that superseded it, and ${dan}), so Dan was not asked and nothing was recorded: reopen it (gh pr reopen ${n} --repo o/r) and finish it, as he would rather merge it.`
+
+test('a PR closed without merging with no recorded reason it will never merge is reopened and finished, and Dan is asked only on his own earlier words naming the PR that superseded it (#1767)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, created: 'https://github.com/o/r/pull/1716\n', ask: 'Leave it closed' })
+  const said1716 = "Closed unmerged by Dan's choice on 2026-10-25: three review rounds each found another English phrasing that let a stood-by denial read as withdrawn, so #1702 is now fixed by changing the refusal message."
+  w.o.gh = { ...merged(), others: [closedPr(1716, 'aaa1111', [{ body: said1716, createdAt: CLOSED_AT }]), closedPr(1717, 'bbb2222', []), pr716], notPrs: [1702] }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title a', tool_use_id: 'g1' } as never)
+  w.o.created = 'https://github.com/o/r/pull/1717\n'
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title b', tool_use_id: 'g2' } as never)
+  await command($ as never, 'winddown')
+  // Neither has a recorded reason: #1716's comment names only an issue, #1717 has none. Each is to be
+  // reopened and finished, and the refusal never says to ask Dan about leaving it closed.
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toContain(REOPEN(1716))
+  expect(block).toContain(REOPEN(1717))
+  expect(block).not.toMatch(/, and its closing comment names/)
+  // Whether #1702 is a PR is asked of GitHub once: a number never stops being an issue.
+  await clock.advance(MIN)
+  await stop($ as never)
+  expect(w.runs.filter(r => r.join(' ').startsWith('gh pr view 1702 ')).length).toBe(1)
+  // Asked anyway, the tool asks Dan nothing and records nothing.
+  expect(await call($ as never, leave(1716, { repo: 'o/r' }))).toBe(NO_REASON(1716, "no words of Dan's naming one were given as dan_said"))
+  expect(await call($ as never, leave(1716, { repo: 'o/r', dan_said: 'that one fixed #1702 another way' }, 'l2'))).toBe(NO_REASON(1716, "Dan's words given as dan_said name no PR"))
+  expect(w.asked).toEqual([])
+  // His own earlier words naming the PR that superseded it are a recorded reason, quoted to him.
+  expect(await call($ as never, leave(1717, { repo: 'o/r', dan_said: 'leave 1717 closed, #716 replaced it' }, 'l3'))).toBe('Dan chose to leave PR #1717 in o/r closed: winding down counts it settled unless it is reopened.')
+  expect(w.asked).toEqual(['Leave PR #1717 in o/r closed without merging, as you named PR #716 earlier ("leave 1717 closed, #716 replaced it")? Winding down stops waiting on it unless it is reopened.'])
+  const after = (await stop($ as never)).block ?? ''
+  expect(after).toContain(REOPEN(1716))
+  expect(after).not.toContain('PR #1717 was closed')
+  expect(after).toMatch(/ Left closed by Dan's choice: PR #1717 in o\/r \(Dan named PR #716 earlier\)\. /)
+  // Reopened, #1716 is an open PR, outstanding until merged; merged, winding down finishes.
+  w.o.gh = { ...merged(), others: [openPr(1716, 'aaa1111'), closedPr(1717, 'bbb2222', []), pr716], notPrs: [1702] }
+  expect((await stop($ as never)).block).toMatch(/PR #1716 is not merged yet/)
+  w.o.gh = { ...merged(), others: [{ ...openPr(1716, 'aaa1111'), state: 'MERGED' }, closedPr(1717, 'bbb2222', []), pr716], notPrs: [1702] }
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session. Left closed by your choice: PR #1717 in o/r (Dan named PR #716 earlier).'])
+})
+
+test('whether a PR a closing comment names is one, when GitHub cannot say, is said as unread, never read as no reason (#1767)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, created: 'https://github.com/o/r/pull/1718\n' })
+  // #999 is neither a PR GitHub holds nor an issue it refuses as one: the read fails some other way.
+  w.o.gh = { ...merged(), others: [closedPr(1718, 'aaa1111', replacedBy(999))] }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title a', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toContain("the PR could not be read (whether #999, named in PR #1718's closing comment, is a PR: no pull requests found)")
+  expect(block).not.toContain(REOPEN(1718))
+  expect(await call($ as never, leave(1718, { repo: 'o/r' }))).toBe(
+    "PR #1718 in o/r could not be read (whether #999, named in PR #1718's closing comment, is a PR: no pull requests found), so Dan was not asked and nothing was recorded: winding down still waits on it.",
+  )
+  expect(w.asked).toEqual([])
 })
 
 test('a PR the session opened in another repository has its branch cleanup said to be uncheckable here, never read as done (lessons review of #714)', withDeps, async ($, on) => {
