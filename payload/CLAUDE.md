@@ -212,8 +212,9 @@ On Dans-MacBook-Pro:
 - `~/eavesly-web-app`: Vite + React + TypeScript + shadcn/ui + Supabase
 - `~/trypennie`: Next.js 15 + Prismic CMS + Google Maps
 - `~/Apps/PET`: the Project Enrollment Tracker (Node + Supabase + Cloudflare Pages). Moved here on 2026-10-23 from the iCloud synced `~/Documents/Documents - Dan’s MacBook Pro/Project Enrollment Tracker (PET)` so its `.env` credentials stop syncing to iCloud (PET #1924, #1627).
+- `~/Apps/Slate`: Next.js 16 + Cloudflare Workers + Supabase, Pennie's booking app. Moved here on 2026-10-26 from `~/Documents/Documents - Dan’s MacBook Pro/Slate`, out of the folder iCloud Desktop & Documents syncs, because iCloud's sync process ran at 91% of a core and drove load past 130 while the pre-push gate built (lesson L759).
 
-The four above are where they were recorded before this section was split by machine, and their
+The first four above are where they were recorded before this section was split by machine, and their
 absence from Daniels-MacBook-Pro-2 is the only evidence for putting them here. Nothing has
 confirmed them on Dans-MacBook-Pro yet; the first run of the check there is what confirms or
 corrects them.

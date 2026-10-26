@@ -4,7 +4,10 @@
 export type Classified = { kind: 'input' | 'focus' | 'none'; target?: string; app?: string }
 export type Refusal = { reason: string; safeWay?: string }
 
-const MARKER = /\bTARGET_APP=(?:"([^"]+)"|'([^']+)'|(\S+))/
+// The unquoted form ends where the shell ends the word, at a control character as well as a space:
+// `TARGET_APP=<path>; cliclick` once read the `;` into the path, so pgrep found nothing and a running
+// build in front was refused as not running (#1751).
+const MARKER = /\bTARGET_APP=(?:"([^"]+)"|'([^']+)'|([^\s;&|<>()`]+))/
 
 // Commands are judged in COMMAND POSITION only (L673): the first version matched the words anywhere
 // and refused a heredoc that merely wrote a file mentioning an osascript keystroke, on 2026-10-03.
@@ -33,7 +36,7 @@ export const appNameOf = (path: string): string => {
 }
 
 const focusApp = (cmd: string): string | undefined => {
-  const open = /\bopen\s+(?:-\w+\s+)*-a\s+(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(cmd)
+  const open = /\bopen\s+(?:-\w+\s+)*-a\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|<>()`]+))/.exec(cmd)
   if (open) return open[1] ?? open[2] ?? open[3]
   const tell = /tell\s+application\s+"([^"]+)"\s+to\s+activate/.exec(cmd)
   if (tell) return tell[1]
