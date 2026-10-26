@@ -857,6 +857,13 @@ if [ "$ran" -gt 0 ]; then
   MT_SIGNIN_LEDGER_DIR="$WORK/gh-signin"
   export MT_SIGNIN_LEDGER_DIR
 
+  # And the phase records merge helpers and lessons reviews publish for the load window
+  # (lib/merge-phase.sh, claude-config#1676, #1730): a suite that starts a review without pointing it
+  # elsewhere publishes its fixture's phase here, never where tools/load-window.sh reads this Mac's.
+  # Not bracketed, for the push ledger's reason: real helpers write the live one all through a run.
+  MWR_PHASE_DIR="$WORK/merge-phases"
+  export MWR_PHASE_DIR
+
   # And claude-sync's log (claude-config#1486). claude-sync itself logs nowhere for a fixture home,
   # but a suite running it as a home's own config, with HOME left real, would append its lines to the
   # log the real watcher writes. A suite that names its own still wins. Not bracketed like the stores

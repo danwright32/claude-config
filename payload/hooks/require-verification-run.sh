@@ -146,12 +146,17 @@ pr=$(mt_pr_number "$command")
 # being unreadable (claude-config#1615, L11). Asked by merge-when-ready.sh, which runs this under no
 # harness timeout, the budget is the one it names (mt_gate_read_budget): on 2026-10-23, at a load
 # average of 342, the 15 seconds kept for the harness were spent before areas.json could be read, twice.
+#
+# THE NETWORK TO GITHUB FAILING is asked again by the same loop (#1675, #1735), and one that outlasts
+# the tries refuses as the connection failing N times (mt_connect_said, through mt_unanswered_said),
+# never as GitHub being unreadable (claude-config#1728, L11), with the budget it was tried within.
 vr_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 READ_TRIES="$(vr_num "${VR_READ_TRIES:-}" 3)"
 READ_WAIT="$(vr_num "${VR_READ_RETRY_SECONDS:-}" 2)"
 READ_DEADLINE="$(mt_gate_read_budget "${VR_READ_BUDGET_SECONDS:-}" 15)"
 READ_SLEEP="${VR_SLEEP:-sleep}"
 BUDGET_SPENT="this hook's read budget of $READ_DEADLINE seconds was spent before it could be read"
+TRIED_WITHIN=". Tried within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)"
 read_again(){ mt_retry_read "$READ_TRIES" "$READ_WAIT" "$READ_SLEEP" "$READ_DEADLINE" "" "$1"; }
 
 read_view(){
@@ -175,7 +180,10 @@ if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" != "true
     deny "Refusing to merge: no $pr_label was found in $searched under any logged-in account, so there is nothing here to judge. It was looked for there because $searched_why. If it lives in another repository, name that repository with --repo owner/name on the merge, or cd into its checkout before the merge."
   fi
   gh_error=$(printf '%s' "$envelope" | jq -r '.error // ""' 2>/dev/null)
-  [ "$view_rc" = "$MT_SIGNIN_RC" ] && deny "Cannot tell whether this merge needs verification runs: $(mt_signin_said "the $pr_label in $searched" "$gh_error"), so whether its base branch asks for verification runs is unknown. $OVERRIDE"
+  if said="$(mt_unanswered_said "$view_rc" "the $pr_label in $searched" "$gh_error")"; then
+    [ "$view_rc" = "$MT_CONNECT_RC" ] && said="$said$TRIED_WITHIN"
+    deny "Cannot tell whether this merge needs verification runs: $said, so whether its base branch asks for verification runs is unknown. $OVERRIDE"
+  fi
   budget=""
   [ "$view_rc" = 2 ] && budget=", and GitHub did not answer within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)"
   deny "Cannot tell whether this merge needs verification runs: GitHub could not be read for the $pr_label in $searched under any logged-in account (${gh_error:-gh printed nothing})$budget, so whether its base branch asks for verification runs is unknown. $OVERRIDE"
@@ -193,8 +201,9 @@ if [ -z "$number" ] || [ -z "$base_oid" ] || [ -z "$api_slug" ]; then
 fi
 
 # One gh api read inside the budget, kept in $1. Returns 0 answered, 3 GitHub's own 404, 1 failed,
-# with VR_FAIL the sentence saying what could not be read and why.
-VR_OUT=""; VR_WHAT=""; VR_FAIL=""; VR_SIGNIN=""; VR_ARGS=()
+# with VR_FAIL the sentence saying what could not be read and why, and VR_UNANSWERED, when the sign
+# in was refused or the network to GitHub failed on every try, that in its own words (#1615, #1728).
+VR_OUT=""; VR_WHAT=""; VR_FAIL=""; VR_UNANSWERED=""; VR_ARGS=()
 vr__read(){
   if [ "$SECONDS" -gt "$READ_DEADLINE" ]; then
     MT_READ_STATE="unknown"; MT_READ_ERR="$BUDGET_SPENT"; return 1
@@ -203,12 +212,14 @@ vr__read(){
 }
 vr_get(){  # $1 = file for the answer, $2 = what is being read, $3.. = gh api arguments
   local rc
-  VR_OUT="$1"; VR_WHAT="$2"; shift 2; VR_ARGS=("$@"); VR_FAIL=""; VR_SIGNIN=""
+  VR_OUT="$1"; VR_WHAT="$2"; shift 2; VR_ARGS=("$@"); VR_FAIL=""; VR_UNANSWERED=""
   read_again vr__read; rc=$?
   case "$rc" in
     0) [ "$MT_READ_STATE" = absent ] && return 3; return 0 ;;
     2) VR_FAIL="$VR_WHAT: $MT_READ_ERR, and GitHub did not answer within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)" ;;
-    "$MT_SIGNIN_RC") VR_SIGNIN="$(mt_signin_said "$VR_WHAT" "$MT_READ_ERR")"; VR_FAIL="$VR_WHAT, because $VR_SIGNIN" ;;
+    "$MT_SIGNIN_RC") VR_UNANSWERED="$(mt_signin_said "$VR_WHAT" "$MT_READ_ERR")"; VR_FAIL="$VR_WHAT, because $VR_UNANSWERED" ;;
+    "$MT_CONNECT_RC") VR_UNANSWERED="$(mt_connect_said "$VR_WHAT" "$MT_READ_ERR")$TRIED_WITHIN"
+       VR_FAIL="$VR_WHAT: $(mt_connect_said "" "$MT_READ_ERR")$TRIED_WITHIN" ;;
     *) VR_FAIL="$VR_WHAT: $MT_READ_ERR" ;;
   esac
   return 1
@@ -224,7 +235,7 @@ case "$?" in
   0) ;;
   # The commonest answer by far: this repository has not opted in. Nothing to say.
   3) exit 0 ;;
-  *) [ -n "$VR_SIGNIN" ] && deny "Cannot tell whether this merge needs verification runs: $VR_SIGNIN. $OVERRIDE"
+  *) [ -n "$VR_UNANSWERED" ] && deny "Cannot tell whether this merge needs verification runs: $VR_UNANSWERED. $OVERRIDE"
      deny "Cannot tell whether this merge needs verification runs: GitHub could not be read for $VR_FAIL. $OVERRIDE" ;;
 esac
 

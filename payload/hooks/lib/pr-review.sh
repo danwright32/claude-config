@@ -1118,7 +1118,16 @@ do_start() {
 
 # One reviewer over one review input, waited for: the single review of a branch that fits, and
 # each group of one that does not (#601), so the two can never be run two ways (L613).
+#
+# While it runs, the reviewer's phase is published for tools/load-window.sh (claude-config#1730): a
+# review merge-when-ready.sh starts is detached and outlives a helper that stops, so the helper's
+# record cannot show it. The record names the reviewer's own pid (ai-review-run.py, which does the
+# work and dies with it), is good until the reviewer's deadline plus lib/merge-phase.sh's slack, and is
+# removed when the reviewer ends; a reviewer killed outright leaves one naming a pid no longer running,
+# which no reader believes. Publishing is never allowed to stop the review: a record that cannot be
+# written leaves the review running unseen, as every review ran before.
 run_reviewer() {   # $1 = state dir, $2 = name, $3 = diff file, $4 = base, $5 = model, $6 = deadline, $7 = started, $8 = since (#1358)
+  local rpid rc
   nohup python3 "$PRR_LIB/ai-review-run.py" \
     --state-dir "$1" --key "$key" --sha "$full_sha" --name "$2" --kind pr --base "$4" ${8:+--since "$8"} \
     --repo-label "$repo_label" --branch "$branch" --repo-dir "$top" \
@@ -1126,7 +1135,27 @@ run_reviewer() {   # $1 = state dir, $2 = name, $3 = diff file, $4 = base, $5 = 
     --scope-file "$PRR_LIB/ai-review-pr-scope.txt" \
     --lessons-dir "${AI_REVIEW_LESSONS_DIR:-$PRR_LIB/../..}" \
     --diff-file "$3" --deadline "$6" --started "$7" \
-    </dev/null >/dev/null 2>&1
+    </dev/null >/dev/null 2>&1 &
+  rpid=$!
+  local what="the lessons review of $repo_label $branch at ${full_sha:0:7}"
+  case "$2" in *-g[0-9]*) what="$what, group ${2##*-g}" ;; esac
+  prr_phase review "$rpid" "$what" "$6" "$7"
+  wait "$rpid"; rc=$?
+  prr_phase clear "$rpid"
+  return "$rc"
+}
+
+# The reviewer's phase record (see run_reviewer), written and removed through lib/merge-phase.sh in a
+# subshell of its own, so the merge turn's variables it sets never reach this script.
+prr_phase() {   # $1 = review or clear, $2 = the reviewer's pid, $3 = what, $4 = deadline, $5 = started
+  (
+    . "$PRR_LIB/merge-turn.sh" && . "$PRR_LIB/merge-phase.sh" || exit 0
+    TURN_PID="$2"; TURN_PID_START=""
+    if [ "$1" = clear ]; then mp_clear; exit 0; fi
+    case "$4" in ''|*[!0-9]*) exit 0 ;; esac
+    case "$5" in ''|*[!0-9]*) exit 0 ;; esac
+    mp_set review "$3" "$(date +%s)" $(( $5 + $4 + ${MP_SLACK_SECONDS:-60} ))
+  ) >/dev/null 2>&1 || true
 }
 
 # What each group is told about itself, after the complete file list.

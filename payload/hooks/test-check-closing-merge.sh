@@ -142,6 +142,13 @@ run_hook "$MERGE 7 --squash" FAKE_PR_ERR="HTTP 502: Bad Gateway (https://api.git
 expect_deny "a read that keeps failing is a refusal" "Cannot tell"
 tries="$(grep -c 'pr view' "$WORK/gh.log")"
 if [ "$tries" -ge 3 ]; then pass; else fail "a transient failure was asked $tries times, wanted 3"; fi
+# A network to GitHub that fails on every try is refused as that, never as GitHub unreadable
+# (claude-config#1728, L11). The dial failure is the one that stopped #1732 on 2026-10-25.
+run_hook "$MERGE 7 --squash" FAKE_PR_ERR='Post "https://api.github.com/graphql": dial tcp 140.82.113.6:443: connect: can'"'"'t assign requested address' CLOSING_READ_TRIES=3
+expect_deny "a read whose network failed every try is refused as the connection" "could not connect to GitHub 3 times reading the pull request #7"
+if says "GitHub could not be read"; then fail "a failed connection was said as GitHub unreadable: $hook_out"; else pass; fi
+run_hook "$MERGE 7 --squash" FAKE_PR_ERR='Post "https://api.github.com/graphql": read tcp 10.0.0.2:57411->140.82.112.6:443: read: connection reset by peer' CLOSING_READ_TRIES=3
+expect_deny "a read whose connection was lost every try is refused as the connection lost" "lost the connection to GitHub 3 times"
 run_hook "$MERGE 7 --squash" FAKE_PR_ERR="GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)"
 expect_deny "a pull request GitHub does not have is named, with where it was looked for" "acme/widget"
 pr_json "This does not close #4358." "4358" "https://github.com/someone/else/pull/7" > "$WORK/pr.json"
