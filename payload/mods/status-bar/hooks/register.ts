@@ -57,6 +57,9 @@ let unpushed: UnpushedReading | null = null
 let unpushedNoted = false
 let jobs: Job[] = []
 let jobsNoted = false
+// The job watcher is loaded and its list could not be read (#1727): said on the band, never shown as
+// no jobs (L10). A watcher not loaded, or one whose copy lacks list (#1281), is not this.
+let jobsUnreadable = false
 let agents: QuietAgent[] = []
 let agentsNoted = false
 let context: number | undefined
@@ -301,6 +304,7 @@ const readJobs = async ($: EngineInterface) => {
     const list = await ($ as unknown as { jobs: Jobs }).jobs.list()
     jobs = Array.isArray(list) ? list.filter(isJob) : []
     jobsNoted = false
+    jobsUnreadable = false
   } catch (err) {
     jobs = []
     agents = []
@@ -309,9 +313,12 @@ const readJobs = async ($: EngineInterface) => {
     const news = skewNews(err, MOD)
     if (news) $.ui.toast(news)
     const isAbsent = missingOf(err) !== null
+    // Loaded and failing (since #1695 it also throws on a malformed stored list): the band says the
+    // list could not be read once Claude has stopped (#1727), and the debug log names why, once.
+    jobsUnreadable = !isAbsent
     if (!isAbsent && !jobsNoted) {
       jobsNoted = true
-      $.ui.log(`status-bar: the job watcher's jobs could not be read, so no job shows: ${msg}`, { to: 'debug' })
+      $.ui.log(`status-bar: the job watcher's jobs could not be read, so the band says the job list is unreadable: ${msg}`, { to: 'debug' })
     }
     return
   }

@@ -368,6 +368,11 @@ the spec rather than chosen afresh, and open to Dan changing:
   reads as though the conversation in front of Dan is hung: "agent fix CI: PR 776 rerun wait
   waiting 12m, 1 job running". No job item asks Dan to act. An entry whose process and output file
   are both gone is dropped rather than shown.
+- A job watcher that is loaded but whose list could not be read (#1727; since #1695 it also refuses
+  a malformed stored list) is said, never shown as no jobs (L10): "job list unreadable, ask Claude
+  to check", amber, in #1583's plain style and, like a quiet command, only once Claude's turn has
+  ended. The debug log names why, once. A watcher not loaded at all is no job item, and one whose
+  loaded copy lacks the list is told as the skew (#1281); neither is this.
 - A background agent listed as running whose tool calls have stopped for twenty minutes (#759) is
   named ahead of the jobs: "agent fix CI quiet 34m, left to Claude"; Claude is told once on its next
   tool result, with the agent, how long, and the last tool call it started and whether it returned.

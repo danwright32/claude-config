@@ -1014,13 +1014,61 @@ test('a job watcher whose loaded copy lacks list shows no job item and is told o
   await ui.unmount()
 })
 
-test('a job watcher that fails to answer is named once in the debug log, and the rest still shows', { plugins: [modKit, brokenWatcher] }, async ($, on) => {
+// #1727: a job watcher that fails to answer was shown as no jobs (L10); the band now says the list
+// could not be read, in #1583's plain style, and like a quiet command only once Claude has stopped.
+const UNREADABLE = 'job list unreadable, ask Claude to check'
+test('a job watcher that fails to answer is named once in the debug log, said on the band, and the rest still shows', { plugins: [modKit, brokenWatcher] }, async ($, on) => {
   const { clock, debug } = world(on, { unpushed: '1\n' })
   await start($, clock)
   await clock.advance(MIN)
   const ui = await $.ui.mount(band)
-  expect(await shown(ui as never)).toBe('1 unpushed commit')
+  expect(await shown(ui as never)).toBe(`${UNREADABLE} | 1 unpushed commit`)
   expect(debug.filter(l => /jobs could not be read.*registry unreadable/.test(l))).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('a job list that cannot be read is said once Claude has stopped, not while it works (#1727)', { plugins: [modKit, brokenWatcher] }, async ($, on) => {
+  const { clock } = world(on)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  await step($, clock)
+  expect(await shown(ui as never)).toBe('engine band')
+  await turn($ as never)
+  await clock.settle()
+  expect(await shown(ui as never)).toBe(UNREADABLE)
+  await step($, clock)
+  expect(await shown(ui as never)).toBe('engine band')
+  await ui.unmount()
+})
+
+// A watcher whose list fails the first time it is asked, then answers with no jobs at all.
+const flakyWatcher: { name: string; register: Register } = {
+  name: 'job-watcher',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      let asked = 0
+      const list = async () => {
+        asked++
+        if (asked === 1) throw new Error('registry unreadable')
+        return []
+      }
+      return { ...built, jobs: { list, agents: async () => [] } }
+    })
+  },
+}
+test('a job list read and empty shows nothing, and a list read again after a failure takes the line away (#1727)', { plugins: [modKit, flakyWatcher] }, async ($, on) => {
+  const { clock } = world(on)
+  // The session's first reading fails: no turn has run, so it is said at once.
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe(UNREADABLE)
+  // The turn's end reads the list again (the minute's tick is armed once a process, so a later test
+  // cannot count on it): read and empty, it is no job and no line.
+  await step($, clock)
+  await turn($ as never)
+  await clock.settle()
+  expect(await shown(ui as never)).toBe('engine band')
   await ui.unmount()
 })
 
