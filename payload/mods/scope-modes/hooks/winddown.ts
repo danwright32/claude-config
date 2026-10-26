@@ -120,8 +120,10 @@ export type Reading = {
   branch: string
   /** Whether the branch is the repository's default branch, where no PR is expected. */
   isDefault: boolean
-  /** `head` is the commit the PR's branch is on now, as GitHub gave it; absent when it gave none. */
-  /** `neverMerge`, for a PR closed without merging, is a recorded reason it will never merge (#1767). */
+  /**
+   * `head` is the commit the PR's branch is on now, as GitHub gave it; absent when it gave none.
+   * `neverMerge`, for a PR closed without merging, is a recorded reason it will never merge (#1767).
+   */
   pr: { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; head?: string; issues: { number: number; state: 'OPEN' | 'CLOSED' }[]; neverMerge?: NeverMerge } | null | Unreadable
   /** Dan's choice to leave this PR open (#917) or closed (#1033), when he made one; never inferred. */
   choice?: LeftAsIs
