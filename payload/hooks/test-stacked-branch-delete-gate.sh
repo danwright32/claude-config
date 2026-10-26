@@ -47,6 +47,8 @@ cat > "$STUB/gh" <<'STUBEOF'
 #!/usr/bin/env bash
 printf 'GH_TOKEN=%s %s\n' "${GH_TOKEN:-}" "$*" >> "$ST/gh-calls"
 case "$*" in
+  # ghost is an account this Mac holds no token for: gh says so and fails.
+  "auth token -u ghost") echo "no oauth token found for github.com account ghost" >&2; exit 1 ;;
   "auth token -u "*) printf 'tok-%s\n' "${@: -1}" ;;
   "pr list"*"--head"*) cat "$ST/merged" 2>/dev/null || echo '[]' ;;
   "pr list"*"--base"*)
@@ -231,6 +233,54 @@ check "#1723 merge-when-ready.sh reads the stacked pull requests through lib/sta
 check "#1723 and so does this gate" "sp_read_stacked" "$(cat "$HOOK")"
 check_eq "#1723 and neither lists them with a gh pr list of its own" "0 0" \
   "$(grep -c 'pr list --repo "\$slug" --base' "$MWR") $(grep -c 'pr list --repo "\$slug" --base' "$HOOK")"
+
+# 12. Three ways the gate used to pass a delete unjudged (lessons review of this branch).
+# a. The method in lower case: gh sends it as written, and GitHub deletes all the same.
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+judge "gh api -X delete repos/acme/widget/git/refs/heads/feat/x"
+check_eq "#1723 -X delete in lower case is read" "2" "$rc"
+judge "gh api --method=delete repos/acme/widget/git/refs/heads/feat/x"
+check_eq "#1723 --method=delete in lower case is read" "2" "$rc"
+judge "gh api --method Delete repos/acme/widget/git/refs/heads/feat/x"
+check_eq "#1723 --method Delete in mixed case is read" "2" "$rc"
+
+# b. The account the command names has no token here: listing as the default account instead may
+# not see the pull requests at all, and its empty list would allow the delete.
+fresh
+echo '[]' > "$ST/stacked"
+judge 'GH_TOKEN=$(gh auth token -u ghost) gh api -X DELETE repos/acme/widget/git/refs/heads/feat/x'
+check_eq "#1723 a delete as an account whose token cannot be read is refused" "2" "$rc"
+check "#1723 naming that account" "ghost" "$out"
+check_not "#1723 and nothing is listed as some other account" "pr list" "$calls"
+fresh
+judge 'GH_TOKEN=$(gh auth token -u ghost) gh api -X DELETE repos/acme/widget/issues/comments/5'
+check_eq "#1723 control: the same account on a command that deletes no branch passes, its token never asked" "0||" "$rc|$out|$calls"
+
+# c. A remote that cannot be resolved is never read as one off GitHub.
+fresh
+echo '[]' > "$ST/stacked"
+judge "git push nosuch --delete feat/x"
+check_eq "#1723 a push to a remote the checkout does not have is refused" "2" "$rc"
+check "#1723 naming the remote it could not resolve" "nosuch" "$out"
+judge "git push --delete feat/x"
+check_eq "#1723 a push whose first word git reads as the remote, and which names none, is refused" "2" "$rc"
+judge "git -C $WORKDIR/missing push origin --delete feat/x" "/tmp"
+check_eq "#1723 a push from a checkout that is not there is refused" "2" "$rc"
+check_eq "#1723 and none of them asked GitHub anything" "" "$calls"
+# Controls: a remote that is plainly not GitHub (another host, a local path) still passes unasked.
+BARE="$WORKDIR/elsewhere.git"
+git init -q --bare "$BARE"
+for c in "git push mirror --delete feat/x" "git push $BARE --delete feat/x" "git push ./relative.git --delete feat/x" "git push file:///tmp/x.git --delete feat/x"; do
+  judge "$c"
+  check_eq "#1723 control: a remote plainly off GitHub passes in silence: $c" "0|" "$rc|$out"
+done
+check_eq "#1723 control: and asked GitHub nothing" "" "$calls"
+# The default remote, read where git reads it, still lists: origin through a configured remote name.
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+judge "git push origin --delete feat/x"
+check_eq "#1723 control: a resolvable origin is still judged" "2" "$rc"
 
 echo
 echo "passed: $pass, failed: $fail"

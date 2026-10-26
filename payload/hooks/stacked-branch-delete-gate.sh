@@ -40,14 +40,17 @@ payload="$(cat)"
 # before anything is loaded. What can: a DELETE method, a --delete or --delete-branch, a short flag
 # cluster holding d (git push -d, gh pr merge -sd), or a refspec that is a bare :branch.
 fast_re='(^|[[:space:]"'"'"'])(-[A-Za-z]*d|\+?:[A-Za-z0-9_./-]+)([[:space:]"'"'"']|$)'
+# The method is matched in any case (gh api -X delete deletes just the same), and so is --delete.
+shopt -s nocasematch
 case "$payload" in
-  *DELETE*|*--delete*) ;;
+  *delete*) ;;
   *) [[ "$payload" =~ $fast_re ]] || exit 0 ;;
 esac
+shopt -u nocasematch
 
 # The crude reading used only when the real one cannot run: does the payload LOOK like a delete?
 looks_like_delete() {
-  grep -Eq 'DELETE.*refs/heads|push.*(--delete|[[:space:]]-[A-Za-z]*d[[:space:]]|[[:space:]]\+?:[A-Za-z0-9_./-])|merge.*(--delete-branch|[[:space:]]-[A-Za-z]*d([[:space:]]|$))' <<< "$payload"
+  grep -Eiq 'DELETE.*refs/heads|push.*(--delete|[[:space:]]-[A-Za-z]*d[[:space:]]|[[:space:]]\+?:[A-Za-z0-9_./-])|merge.*(--delete-branch|[[:space:]]-[A-Za-z]*d([[:space:]]|$))' <<< "$payload"
 }
 cannot_read() {   # $1 = what is missing or failed, as a clause
   looks_like_delete || exit 0
@@ -77,17 +80,24 @@ case $? in
 esac
 
 # ---- the account and directory one command runs as ----
-rec_tok=""; rec_repo_env=""; rec_dir=""
+rec_tok=""; rec_acct=""; rec_repo_env=""; rec_dir=""
 run_gh() { if [ -n "$rec_tok" ]; then GH_TOKEN="$rec_tok" gh "$@"; else gh "$@"; fi; }
+# The token of the account the command names, read once a delete needs it. One that cannot be read
+# refuses: listing as whichever account is active instead may not see the pull requests at all, and
+# its empty list would let the delete through (lessons review of claude-config#1723).
+account_ready() {
+  [ -n "$rec_acct" ] && [ -z "$rec_tok" ] || return 0
+  rec_tok="$(gh auth token -u "$rec_acct" 2>/dev/null)" || rec_tok=""
+  [ -n "$rec_tok" ] || unknown "this runs as the GitHub account $rec_acct, and no token for $rec_acct could be read on this Mac (gh auth token -u $rec_acct failed), so the open pull requests based on the branch cannot be listed as that account"
+}
 record_context() {   # $1 = record index
-  local i="$1" line acct
-  rec_tok=""; rec_repo_env=""
+  local i="$1" line
+  rec_tok=""; rec_acct=""; rec_repo_env=""
   while IFS= read -r line; do
     case "$line" in
       GH_TOKEN=*)
         if [[ "$line" =~ ^GH_TOKEN=\$\([[:space:]]*gh[[:space:]]+auth[[:space:]]+token[[:space:]]+(-u|--user)[[:space:]=]+([A-Za-z0-9_-]+)[[:space:]]*\)$ ]]; then
-          acct="${BASH_REMATCH[2]}"
-          rec_tok="$(gh auth token -u "$acct" 2>/dev/null)" || rec_tok=""
+          rec_acct="${BASH_REMATCH[2]}"
         else
           case "$line" in *'$'*|*'`'*) ;; *) rec_tok="${line#GH_TOKEN=}" ;; esac
         fi ;;
@@ -178,9 +188,18 @@ push_target() {   # PS_RUN_ARGS of a git push
   done
   [ "${#pos[@]}" -gt 0 ] || return 0
   if [ -z "$remote" ]; then remote="${pos[0]}"; pos=("${pos[@]:1}"); fi
+  # git reads the first word as the remote, always: with no word there is nothing to delete, and a
+  # word it cannot resolve is never taken for a remote off GitHub, since a delete it cannot place
+  # is the delete this exists to see (lessons review of claude-config#1723). Plainly off GitHub: a
+  # URL to another host (sp_github_slug below), or a path on this disk.
   case "$remote" in
     *://*|*@*:*) url="$remote" ;;
-    *) url="$(git -C "$rec_dir" remote get-url "$remote" 2>/dev/null)" || return 0 ;;
+    /*|./*|../*|"~"*|.|..) return 0 ;;
+    *)
+      [ -d "$rec_dir" ] || unknown "this pushes a delete to $remote from $rec_dir, which is not there, so which repository $remote names cannot be read"
+      [ -e "$rec_dir/$remote" ] && return 0
+      url="$(git -C "$rec_dir" remote get-url "$remote" 2>/dev/null)" \
+        || unknown "this pushes a delete to $remote, which git in $rec_dir does not resolve to a remote, so whether it is on GitHub cannot be told" ;;
   esac
   slug="$(sp_github_slug "$url")"
   [ -n "$slug" ] || return 0
@@ -230,6 +249,7 @@ merge_target() {   # PS_RUN_ARGS of a gh pr merge
   [ -n "$repo" ] || repo="$rec_repo_env"
   [ -n "$sel" ] && view_args+=("$sel")
   [ -n "$repo" ] && view_args+=(--repo "$repo")
+  account_ready
   if ! out="$(cd "${rec_dir:-.}" 2>/dev/null && run_gh pr view ${view_args[@]+"${view_args[@]}"} --json number,url,headRefName,baseRefName,isCrossRepository 2>&1)" \
     || ! jq -e 'type == "object" and (.headRefName | type == "string")' >/dev/null 2>&1 <<< "$out"; then
     unknown "this merges with --delete-branch, and this gate could not read the pull request it merges (GitHub said: ${out:0:300}), so which branch it would delete is not known"
@@ -246,6 +266,7 @@ refusals=""
 judge_target() {   # $1 = a target
   local kind slug branch pr base methods nums n list="" moves="" merged_base out
   IFS=$'\x1f' read -r kind slug branch pr base methods <<< "$1"
+  account_ready
   if ! sp_read_stacked run_gh "$slug" "$branch"; then
     refusals+="BLOCKED: this deletes branch $branch in $slug, and this gate could not list the open pull requests based on it (GitHub said: ${SP_OUT:0:300}, exit $SP_RC), so whether deleting it would close any cannot be told. GitHub closes a pull request the moment its base branch is deleted, and a closed pull request's base can never be changed again (claude-config#1723). List them yourself with gh pr list --repo $slug --base $branch --state open, move any onto the branch the merged pull request went into, and then delete. If this refusal is wrong, say so and add SKIP_STACKED_CHECK=1 to that one command."$'\n'
     return
