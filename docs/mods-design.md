@@ -1815,13 +1815,13 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   when it was pinned, and for at most a second after a resize it shows in both or in neither. A
   card Dan moved by hand stays: one in the pane `/steps` opened is never followed, and the unasked
   pane is closed as `/steps` places its own; closing the pane by hand closes the only unasked pane,
-  so the card stays in the band. A pane list that cannot be read leaves the card where it is, says
-  so in the debug log, and is read again a second later. Nothing is read while no card is shown.
-  Unmeasured: whether Claude Code stops drawing an unasked pane when the window narrows under 144
-  columns; if it never does, the narrowing half never runs. Closing the pane by hand while steps remain moves the card to the band (open:
-  whether closing should instead hide the card). Both are drawn by mod-kit with one drawing of a
-  card (#690): the pane is published before it opens, so it never opens empty, and a pane mod-kit
-  refuses is not opened at all; the card goes to the band.
+  so the card stays in the band (open: whether closing should instead hide the card). A pane list
+  that cannot be read leaves the card where it is, says so in the debug log, and is read again a
+  second later. Nothing is read while no card is shown. Unmeasured: whether Claude Code stops
+  drawing an unasked pane when the window narrows under 144 columns; if it never does, the
+  narrowing half never runs (#1759). Both are drawn by mod-kit with one drawing of a card (#690):
+  the pane is published before it opens, so it never opens empty, and a pane mod-kit refuses is not
+  opened at all; the card goes to the band.
 - **Asking does not lower the width** (#708). Claude Code places an unasked pane from 110 columns
   rather than 144 once its id has been asked for, in that session and later ones, until Dan closes
   it by hand, and the card closing its own pane does not count. So `/steps` opens the card under its
