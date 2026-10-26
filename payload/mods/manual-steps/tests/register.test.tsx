@@ -4,6 +4,7 @@ import type { Mounted as KitMounted } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow, ModKitPane } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { DROPPED_AFTER_MS } from '../hooks/card.ts'
+import { ASKED_PANE, FOLLOW_MS, UNASKED_PANE } from '../hooks/place.ts'
 import { STEPS_DESCRIPTION, VERDICT_DESCRIPTION, VERDICT_INPUT } from '../hooks/register.tsx'
 import type { StepsCard } from '../types/index.d.ts'
 
@@ -175,11 +176,19 @@ const ROOT = '/repo'
 // Error the engine raises in its place.
 // `turn` is what the transcript reader prints for the turn (#1608): its records, or the reason the
 // read failed (exit 1 and that on stderr), or 'truncated' for output the engine cut short.
-type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; turn: string | { fails: string } | 'truncated' }
+// `columns` is the terminal's width when a test sets one, else 160 for `wide` and 120. A pane stays
+// open until closed and, as Claude Code does, is drawn only while the terminal is at its floor, or
+// at any width once asked for (#1752); `$.ui.panes()` lists them so, unless `panesFail`.
+type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; columns?: number; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; panesFail: boolean; turn: string | { fails: string } | 'truncated' }
 const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
-  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, turn: '', ...init }
+  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, panesFail: false, turn: '', ...init }
   const mem: Record<string, unknown> = { ...store }
   const asked = new Set<string>()
+  // Each open pane, and whether it was opened asked, which Claude Code places at any width.
+  const open = new Map<string, boolean>()
+  const width = () => w.columns ?? (w.wide ? 160 : 120)
+  const placedNow = (id: string) => !w.placesNoPanes && open.has(id) && (open.get(id) === true || width() >= (asked.has(id) ? 110 : 144))
+  const lists = { count: 0 }
   const opens: { id: string; columns?: number }[] = []
   const opened: string[] = []
   const closed: string[] = []
@@ -222,16 +231,23 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   on('ui.open', ($, e) => {
     opened.push(e.id)
     opens.push({ id: e.id, columns: e.columns })
+    open.set(e.id, open.get(e.id) === true || (w.isAsking && !w.placesNoPanes))
     if (w.placesNoPanes) return { value: { isPlaced: false, reason: 'the attached surfaces place no panes' } } as never
     if (w.isAsking) asked.add(e.id)
     const floor = asked.has(e.id) ? 110 : 144
-    const columns = w.wide ? 160 : 120
-    if (w.isAsking || columns >= floor) return { value: { isPlaced: true } } as never
-    return { value: { isPlaced: false, reason: `unasked panes need ${floor} columns; the terminal is ${columns}` } } as never
+    if (placedNow(e.id)) return { value: { isPlaced: true } } as never
+    return { value: { isPlaced: false, reason: `unasked panes need ${floor} columns; the terminal is ${width()}` } } as never
   })
   on('ui.close', ($, e) => {
     closed.push(e.id)
+    open.delete(e.id)
     return { value: undefined } as never
+  })
+  on('ui.panes', () => {
+    lists.count++
+    // Refused rather than thrown: a hook that throws is skipped, and the engine beneath answers.
+    if (w.panesFail) return { deny: 'the pane list could not be read' } as never
+    return { value: [...open.keys()].map(id => ({ id, title: 'Manual steps', isShown: placedNow(id), isFocused: false, isPlaced: placedNow(id) })) } as never
   })
   on('prompt.submit', ($, e) => {
     if (w.submitFails) throw new Error('the prompt queue is closed')
@@ -268,7 +284,7 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, mem, opened, opens, closed, prompts, toasts, copies, runs, tools, commands, logs }
+  return { w, mem, opened, opens, closed, prompts, toasts, copies, runs, tools, commands, logs, placedNow, lists }
 }
 
 type Mounted = Pick<KitMounted<'terminal'>, 'press' | 'find' | 'unmount'>
@@ -296,6 +312,12 @@ const paneShown = async ($: Engine) => {
   const mine = (JSON.parse(out.deny ?? out.text ?? '[]') as Row[]).filter(r => r.mod === 'manual-steps')
   expect(mine.length).toBeLessThanOrEqual(1)
   return mine[0]
+}
+// The card's pane as Dan sees it: held by mod-kit and drawn by Claude Code now. A pane opened unasked
+// on a narrow terminal holds the card while it waits undrawn (#1752), which Dan does not see.
+const paneDrawn = async ($: Engine, w: { placedNow: (id: string) => boolean }) => {
+  const pane = await paneShown($)
+  return pane && w.placedNow(pane.id) ? pane : undefined
 }
 const bandText = async ($: Engine) => ((await band($))?.lines ?? []).map(textOf)
 const stored = (mem: Record<string, unknown>) => mem[`card:${ROOT}`] as StepsCard | undefined
@@ -367,9 +389,11 @@ test('at laptop width the card is the steps row of the band, with the amber left
   await start($)
   const out = await hand($, [step(), step({ title: 'Purge the cache' })])
   expect(out).toMatch(/step 1 of 2 is next/)
-  // The pane was tried unasked and did not fit, so it was closed rather than left waiting.
-  expect(w.opened).toHaveLength(1)
-  expect(w.closed).toEqual(w.opened)
+  // The pane was tried unasked and did not fit, so it is left open, waiting undrawn for a wider
+  // window (#1752), and the card is not drawn there.
+  expect(w.opened).toEqual([UNASKED_PANE])
+  expect(w.closed).toEqual([])
+  expect(await paneDrawn($, w)).toBeUndefined()
   expect(await band($)).toMatchObject({ slot: 'steps', frame: { kind: 'left-rule', color: 'warning' } })
   expect(await bandText($)).toEqual([
     'Cloudflare WAF  waiting on you',
@@ -942,7 +966,7 @@ test('/steps does not lower the width a card opened unasked needs: the next one 
   // A later card, unasked, at 120 columns: the band, as at any laptop width.
   await hand($, [step({ title: 'Purge the cache' })])
   expect((await bandText($))[1]).toBe('1. Purge the cache  [done-1]')
-  expect(await paneShown($)).toBeUndefined()
+  expect(await paneDrawn($, w)).toBeUndefined()
 })
 
 test('/steps with the card in the pane opened unasked moves it to its own pane and closes the other, so there are never two', withKit, async ($, on) => {
@@ -1002,6 +1026,127 @@ test('a card pinned while /steps has the pane open replaces the card in that pan
   expect(w.opened).toHaveLength(opens)
   expect(await band($)).toBeUndefined()
   expect(words(await paneShown($))[1]?.[0]).toMatchObject({ text: '1. Purge the cache' })
+})
+
+// #1752, 2026-10-26: a PostRoll card pinned at 121 columns stayed in the band after Dan widened the
+// window, since where a card goes was decided only at the pin. Now the pane a new card opens unasked
+// waits open, holding the card, and Claude Code's own list says when it is drawn: the card then goes
+// where it would have gone had the window been that wide when it was pinned, and leaves the other.
+test('a card pinned at laptop width moves to the side pane once the window is widened to 144 columns, and leaves the band (#1752)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { wide: false })
+  await start($)
+  await hand($, [step()])
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
+  // Wider, but still under the floor for a pane opened unasked: the band, as before.
+  w.w.columns = 143
+  await clock.advance(FOLLOW_MS * 3)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
+  expect(await paneDrawn($, w)).toBeUndefined()
+  w.w.columns = 144
+  await clock.advance(FOLLOW_MS)
+  expect(await band($)).toBeUndefined()
+  expect(await paneDrawn($, w)).toMatchObject({ id: UNASKED_PANE, frame: { kind: 'left-rule', color: 'warning' } })
+  // Claude Code drew the pane it had waiting: nothing was opened again, and nothing closed.
+  expect(w.opened).toEqual([UNASKED_PANE])
+  expect(w.closed).toEqual([])
+  // Done in the pane does what it did in the band.
+  const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'Pane', requestId: UNASKED_PANE, props: { bodyColumns: 50 } } as never)
+  await ui.press({ key: 'manual-steps:done-1' })
+  await ui.unmount()
+  expect(w.prompts).toEqual(['step 1 done'])
+})
+
+test('a card in the side pane goes to the band if the window is narrowed under 144 columns, and back once it is widened (#1752)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { wide: true })
+  await start($)
+  await hand($, [step()])
+  expect(await paneDrawn($, w)).toBeDefined()
+  w.w.wide = false
+  await clock.advance(FOLLOW_MS)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
+  expect(await paneDrawn($, w)).toBeUndefined()
+  // The pane waits open for the window to widen again, rather than being closed.
+  expect(w.closed).toEqual([])
+  w.w.wide = true
+  await clock.advance(FOLLOW_MS)
+  expect(await band($)).toBeUndefined()
+  expect(await paneDrawn($, w)).toMatchObject({ id: UNASKED_PANE })
+  expect(w.opened).toEqual([UNASKED_PANE])
+})
+
+test('the pane a band card waits in holds the card as it is now, so it is current the moment the window widens (#1752)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { wide: false })
+  await start($)
+  await hand($, [step(), step({ title: 'Purge the cache' })])
+  await press($, 'done-1')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
+  expect(((await paneShown($))?.lines ?? []).map(textOf)[1]).toBe('1. Turn on the WAF rule  sent')
+})
+
+test('a card Dan moved with /steps stays in its own pane however the window changes, and the pane it waited in closes (#1752)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { wide: false })
+  await start($)
+  await hand($, [step()])
+  expect(await slashSteps($, w.w)).toBe('The steps card is open.')
+  expect(w.closed).toEqual([UNASKED_PANE])
+  expect(await paneDrawn($, w)).toMatchObject({ id: ASKED_PANE })
+  w.w.wide = true
+  await clock.advance(FOLLOW_MS)
+  w.w.wide = false
+  await clock.advance(FOLLOW_MS)
+  expect(await paneDrawn($, w)).toMatchObject({ id: ASKED_PANE })
+  expect(await band($)).toBeUndefined()
+  expect(w.opened).toEqual([UNASKED_PANE, ASKED_PANE])
+})
+
+test('a card /steps put in the band, when no pane could be placed, is not moved back once one can be (#1752)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { wide: true })
+  await start($)
+  await hand($, [step()])
+  w.w.placesNoPanes = true
+  expect(await slashSteps($, w.w)).toBe('The steps card is in the band above the prompt.')
+  w.w.placesNoPanes = false
+  await clock.advance(FOLLOW_MS * 3)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
+  expect(await paneShown($)).toBeUndefined()
+})
+
+test('the pane list is read only while a card is shown: never before one is pinned, nor once it is finished (#1752)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { wide: false })
+  await start($)
+  await clock.advance(FOLLOW_MS * 3)
+  expect(w.lists.count).toBe(0)
+  await hand($, [step()])
+  await clock.advance(FOLLOW_MS * 3)
+  expect(w.lists.count).toBeGreaterThan(0)
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
+  // The pane the card waited in goes with it.
+  expect(w.closed).toContain(UNASKED_PANE)
+  const read = w.lists.count
+  await clock.advance(FOLLOW_MS * 5)
+  expect(w.lists.count).toBe(read)
+})
+
+test('a pane list that cannot be read leaves the card where it is, says why in the debug log, and is read again (#1752)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { wide: false })
+  await start($)
+  await hand($, [step()])
+  w.w.panesFail = true
+  w.w.wide = true
+  await clock.advance(FOLLOW_MS)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
+  expect(w.logs.some(l => /manual-steps: could not read whether the steps pane is drawn.*the pane list could not be read/.test(l))).toBe(true)
+  w.w.panesFail = false
+  await clock.advance(FOLLOW_MS)
+  expect(await band($)).toBeUndefined()
+  expect(await paneDrawn($, w)).toMatchObject({ id: UNASKED_PANE })
 })
 
 test('the pane asks for a dock as wide as the card\'s lines, so a click path is not cut, up to 80 columns', withKit, async ($, on) => {
