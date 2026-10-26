@@ -359,13 +359,15 @@ fi
 #   FREE_SPACE_DISK_BYTES the disk's size, instead of df's
 swap_bytes=""; swap_why=""
 if [ -n "${FREE_SPACE_SWAP_CMD:-}" ]; then swap_out="$("$FREE_SPACE_SWAP_CMD" 2>&1)"; else swap_out="$(sysctl vm.swapusage 2>&1)"; fi
-swap_bytes="$(printf '%s\n' "$swap_out" | awk '{
+# Read from a here string rather than a pipe: awk stops at the first match, and a producer it stops
+# reading from is a failure under pipefail that never happened (L183).
+swap_bytes="$(awk '{
   for (i = 1; i < NF - 1; i++) if ($i == "used" && $(i + 1) == "=") {
     v = $(i + 2); u = substr(v, length(v)); n = substr(v, 1, length(v) - 1)
     m = (u == "K") ? 1024 : (u == "M") ? 1048576 : (u == "G") ? 1073741824 : (u == "T") ? 1099511627776 : 0
     if (m && n ~ /^[0-9]+(\.[0-9]+)?$/) printf "%.0f\n", n * m
     exit
-  } }' 2>/dev/null || true)"
+  } }' <<< "$swap_out" 2>/dev/null || true)"
 if ! is_number "$swap_bytes"; then
   _said="${swap_out:-<nothing>}"; _said="${_said//$'\n'/ }"
   swap_bytes=""; swap_why="sysctl vm.swapusage said '${_said:0:120}'"
@@ -404,6 +406,16 @@ if [ -n "$swap_bytes" ] && [ -n "$swap_day" ]; then
 fi
 
 swap_note(){
+  if [ -n "$swap_why" ] && [ -n "$swap_bytes" ]; then
+    # Swap WAS read; only the disk's size was not, so its share cannot be judged. Said as exactly
+    # that, never as swap being unread (L11).
+    echo ""
+    echo "Swap holds $((swap_bytes / GIB)) GB by sysctl vm.swapusage, but the disk's size could not be read, so whether that is a large share of this disk is not known and the processes holding it are not named here. Swap is kept on /System/Volumes/VM, which shares this disk and which no folder size reaches. To name them:"
+    echo '```'
+    echo "top -l 1 -o mem -n 10 -stats pid,command,mem,time"
+    echo '```'
+    return 0
+  fi
   if [ -n "$swap_why" ]; then
     echo ""
     echo "Could not read swap here ($swap_why), so whether memory is filling this disk is not known. Swap is kept on /System/Volumes/VM, which shares this disk and which no folder size reaches. To read it:"
@@ -434,14 +446,14 @@ swap_note(){
     else
       # After the PID COMMAND MEM header: the pid first, MEM last, and the command between them,
       # which can hold spaces ("Google Chrome He"). top marks a value that moved with + or -.
-      holders="$(printf '%s\n' "$BOUNDED_OUT" | awk '
+      holders="$(awk '
         found && $1 ~ /^[0-9]+$/ && NF >= 3 {
           mem = $NF; sub(/[+-]$/, "", mem); cmd = $2
           for (i = 3; i < NF; i++) cmd = cmd " " $i
           printf "  %s (pid %s): %s\n", cmd, $1, mem
           if (++n >= 5) exit
         }
-        $1 == "PID" && $2 == "COMMAND" { found = 1 }' 2>/dev/null || true)"
+        $1 == "PID" && $2 == "COMMAND" { found = 1 }' <<< "$BOUNDED_OUT" 2>/dev/null || true)"
       if [ -n "$holders" ]; then
         echo "Nothing here measured whose swap it is; these hold the most memory now by top's MEM, which counts pages swapped out to disk (ps's resident size cannot see them):"
         printf '%s\n' "$holders"

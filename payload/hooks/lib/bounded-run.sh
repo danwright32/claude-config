@@ -7,7 +7,7 @@
 # its Xcode cache sweep this way so the prompt hook stays inside its 10 second timeout, and
 # check-free-space.sh now runs `top` to name the processes holding memory, which needs the same
 # bound for the same reason. The rule that makes it work is not obvious, so it lives here once
-# (L30, L370).
+# (L30, L370). The 10 second timeout and every bound named here are settings, not measurements.
 #
 # THE WHOLE PROCESS GROUP IS KILLED, never only the command. Killing only the sweep left its
 # children (du, the plist reader) holding the caller's capture open until they finished, which the

@@ -213,7 +213,7 @@ check "and still fires, because zero is inside the horizon" \
   "$([ "$after_rc" -eq 4 ] && echo ok || echo "exit $after_rc, said: $after_msg")"
 # From the recovery at T0 - 4200 to the most free space seen in the last 30 minutes, the 90 GB at
 # T0 - 1400: 46 minutes. Measured from before the recovery (T0 - 5400) it would be 66, which reads
-# as 1 hour, so the figure tells the two apart (claude-config#1754).
+# as 1 hour, so the figure tells the two apart (claude-config#1754). Fixture times, not measured.
 check "and measures from the recovery, not from before it" \
   "$(grep -qi 'over 46 minute(s)' <<< "$after_msg" && echo ok || echo "said: $after_msg")"
 
@@ -254,7 +254,8 @@ done
 check "a push check's burst that comes back never projects zero, at any reading in the series" \
   "$([ -z "$burst_fired" ] && echo ok || echo "$burst_fired")"
 
-# The same burst seen from a shorter history, which is how the 17 GB an hour was reached: the first
+# The same burst seen from a shorter history, which is how the 17 GB an hour of 2026-10-26 was
+# reached (the times below are the fixture's, not measured): the first
 # reading in the window is 25 minutes before the dip's bottom. A fall seen for less time than a push
 # check lasts is not stated as a rate, and --report says that is why (L540).
 S_BURST2="$TMPROOT/state-burst-short"
@@ -594,6 +595,8 @@ check "and hands over the top command that lists them, alone in its block" \
 swap_probe "$((1 * GB))" "$TMPROOT/state-swap-small" "$SWAP_SMALL"; swap_small="$PROBE_MSG"
 check "a low disk with ordinary swap names no memory holders" \
   "$([ "$PROBE_RC" -eq 3 ] && ! grep -q 'bzserv' <<< "$swap_small" && ! grep -qi 'Swap holds' <<< "$swap_small" && echo ok || echo "exit $PROBE_RC, said: $swap_small")"
+check "and its first line still says nothing here measured what is using the disk" \
+  "$(grep -q 'Nothing here says what is using it' <<< "${swap_small%%$'\n'*}" && echo ok || echo "first line: ${swap_small%%$'\n'*}")"
 check "and never runs top, which costs a second on every warning" \
   "$([ ! -e "$TOP_CALLED" ] && echo ok || echo "top was run")"
 SWAP_19="$TMPROOT/swap-19"; swap_reader "$SWAP_19" 1945.60M   # 1.9 GB of a 100 GB disk
@@ -617,6 +620,12 @@ printf '#!/bin/sh\necho "sysctl: unknown oid vm.swapusage" >&2\nexit 1\n' > "$SW
 swap_probe "$((1 * GB))" "$TMPROOT/state-swap-broken" "$SWAP_BROKEN"
 check "swap that cannot be read is said to be unread on a low disk, and the verdict still stands" \
   "$([ "$PROBE_RC" -eq 3 ] && grep -qi 'could not read swap' <<< "$PROBE_MSG" && grep -qF 'sysctl vm.swapusage' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# Swap read but the disk's size not: the share cannot be judged, and that is what is said, never
+# that swap went unread.
+swap_probe "$((1 * GB))" "$TMPROOT/state-swap-nosize" "$SWAP_BIG" "" FREE_SPACE_DISK_BYTES=
+check "swap read with no disk size says how much swap and that its share is not known" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'Swap holds 92 GB' <<< "$PROBE_MSG" && grep -qi 'size could not be read' <<< "$PROBE_MSG" && ! grep -qi 'could not read swap' <<< "$PROBE_MSG" && [ ! -e "$TOP_CALLED" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
 # A top that prints nothing, or that hangs, still leaves the swap said and the command handed over.
 swap_probe "$((1 * GB))" "$TMPROOT/state-swap-top-empty" "$SWAP_BIG" "$TOP_SILENT"
@@ -649,7 +658,7 @@ S_SWD2="$TMPROOT/state-swap-days-many"; mkdir -p "$S_SWD2"
 awk 'BEGIN { for (i = 0; i < 200; i++) printf "2020-01-%03d 0 1\n", i }' > "$S_SWD2/_fixture.swap-days"
 swap_probe "$((200 * GB))" "$S_SWD2" "$SWAP_SMALL"
 check "and the record keeps a bounded number of days" \
-  "$([ "$(grep -c . "$S_SWD2/_fixture.swap-days")" -le 120 ] && tail -n 1 "$S_SWD2/_fixture.swap-days" | grep -q "^$swd_day " && echo ok || echo "$(grep -c . "$S_SWD2/_fixture.swap-days") line(s), last: $(tail -n 1 "$S_SWD2/_fixture.swap-days")")"
+  "$([ "$(grep -c . "$S_SWD2/_fixture.swap-days")" -le 120 ] && grep -q "^$swd_day " <<< "$(tail -n 1 "$S_SWD2/_fixture.swap-days")" && echo ok || echo "$(grep -c . "$S_SWD2/_fixture.swap-days") line(s), last: $(tail -n 1 "$S_SWD2/_fixture.swap-days")")"
 
 # ================== the nudge: WHEN the answer is spoken ==================
 # The check answers the question; the nudge decides when to say it. Same split as
