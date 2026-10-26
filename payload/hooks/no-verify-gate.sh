@@ -26,8 +26,8 @@
 # refused. The main session, which this gate does not judge, runs where Dan sees it.
 #
 # An agent's payload this cannot judge (no python3, or the reader missing or failing) is refused when
-# it names a skip's words at all: an agent can rerun without the skip, while a skip let through unread
-# is the defect this exists for (L42, L490).
+# it names a skip's words, or standard input's device path (the second rule below), at all: an agent
+# can rerun without them, while one let through unread is the defect this exists for (L42, L490).
 #
 # A SECOND RULE, THE SAME AGENTS' GIT COMMANDS: STANDARD INPUT BY ITS DEVICE PATH (claude-config#1765).
 # A worktree subagent's `git commit -F /dev/stdin <<EOF` hung 2 of 2 times (10,469 s on 2026-10-05
@@ -54,7 +54,7 @@ case "$payload" in *git*) ;; *) exit 0 ;; esac
 refuse() { printf '%s\n' "$1" >&2; exit 2; }
 
 # EVERY path that cannot read the command judges the same words the reading path acts on: a skip's
-# words. Three lessons review rounds on #1587 each found a degraded path judging fewer things than the
+# words and standard input's device path (#1765). Three lessons review rounds on #1587 each found a degraded path judging fewer things than the
 # normal one, so they share this one list (L370).
 refuse_unread() {   # $1 = the text to look in, $2 = why it could not be read
   case "$1" in
