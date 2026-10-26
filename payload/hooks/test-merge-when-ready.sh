@@ -719,7 +719,7 @@ printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/compare/main...x": 
 out="$(run 7 --squash)"; rc=$?
 check_eq "#1061 a compare that keeps failing still stops" "1" "$rc"
 check "#1061 naming the last error" "TLS handshake timeout" "$out"
-check "#1061 and saying it could not confirm the head contains main's tip" "could not read whether #7 contains the tip of main" "$out"
+check "#1061 and saying it could not confirm the head contains main's tip" "could not connect to GitHub 4 times reading whether #7 contains the tip of main" "$out"
 check_eq "#1061 nothing was merged on an unconfirmed read" "0" "$(count gh-calls 'pr merge')"
 check_eq "#1061 the compare was tried four times" "4" "$(count gh-calls 'compare/')"
 check_eq "#1061 with three retry waits between" "3" "$(count sleeps '^7$')"
@@ -837,6 +837,38 @@ out="$(run 7 --squash)"; rc=$?
 check_eq "#1675 a compare gh could never connect for stops" "1" "$rc"
 check "#1675 and says so" "could not connect to GitHub 4 times reading whether #7 contains the tip of main" "$out"
 check_eq "#1675 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# Every network failure gh prints is that outcome, not only "error connecting to" (claude-config#1735).
+# On 2026-10-25, with #1675 installed, #1732 stopped at 35m 35s with no retry line on this, word for
+# word: no local port was left to connect from, so the request never left this Mac.
+DIAL='Post "https://api.github.com/graphql": dial tcp 140.82.113.6:443: connect: can'"'"'t assign requested address'
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$DIAL" > "$ST/view-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1735 a pull request read whose dial failed once still merges" "0" "$rc"
+check "#1735 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1735 after one retry wait" "1" "$(count sleeps '^7$')"
+check "#1735 the retry is said as the connection" "Could not connect to GitHub reading pull request #7 (try 1 of 4: $DIAL)" "$out"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$DIAL" > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1735 a dial that fails on every try still stops" "1" "$rc"
+check "#1735 said as the connection, four times, with the error" "could not connect to GitHub 4 times reading pull request #7 in acme/widget from GitHub ($DIAL)" "$out"
+check_not "#1735 never as a pull request that could not be read" "could not read pull request" "$out"
+check_eq "#1735 the read was tried four times" "4" "$(count gh-calls 'pr view 7')"
+check_eq "#1735 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# A connection that was made and then reset is said as lost, never as one gh could not make (L11).
+RESET='Get "https://api.github.com/repos/acme/widget/compare/main...x": read tcp 10.0.0.2:57411->140.82.112.6:443: read: connection reset by peer'
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$RESET" > "$ST/compare-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1735 a compare whose connection is reset on every try stops" "1" "$rc"
+check "#1735 each retry says the connection was lost" "Lost the connection to GitHub reading whether #7 contains the tip of main (try 1 of 4" "$out"
+check "#1735 and the stop says it was lost four times" "lost the connection to GitHub 4 times reading whether #7 contains the tip of main" "$out"
+check_not "#1735 never that gh could not reach GitHub" "could not reach it" "$out"
+check_eq "#1735 and nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 # Refused sign ins are counted across runs too (claude-config#1626): each one this run sees is written
 # to this Mac's ledger, and once the last day holds five, the run says so as a rate across runs, once,

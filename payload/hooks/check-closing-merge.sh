@@ -121,6 +121,8 @@ pr=$(mt_pr_number "$command")
 
 # The read is asked again while GitHub fails transiently, inside a budget measured from the start of
 # this hook in the shell's own SECONDS, through mt_retry_read, the one retry loop the merge gates use.
+# A refused sign in, or a network to GitHub that failed on every try, refuses in its own words
+# (mt_unanswered_said), never as GitHub being unreadable (claude-config#1615, #1728, L11).
 ck_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 READ_TRIES="$(ck_num "${CLOSING_READ_TRIES:-}" 3)"
 READ_WAIT="$(ck_num "${CLOSING_READ_RETRY_SECONDS:-}" 2)"
@@ -149,7 +151,10 @@ if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" != "true
     deny "Refusing to merge: no $pr_label was found in $searched under any logged-in account, so there is no body here to judge. It was looked for there because $searched_why. If it lives in another repository, name that repository with --repo owner/name on the merge, or cd into its checkout before the merge."
   fi
   gh_error=$(printf '%s' "$envelope" | jq -r '.error // ""' 2>/dev/null)
-  [ "$view_rc" = "$MT_SIGNIN_RC" ] && deny "Cannot tell whether this merge closes an issue its body says stays open: $(mt_signin_said "the $pr_label in $searched" "$gh_error"). $OVERRIDE"
+  if said="$(mt_unanswered_said "$view_rc" "the $pr_label in $searched" "$gh_error")"; then
+    [ "$view_rc" = "$MT_CONNECT_RC" ] && said="$said. Tried within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)"
+    deny "Cannot tell whether this merge closes an issue its body says stays open: $said. $OVERRIDE"
+  fi
   budget=""
   [ "$view_rc" = 2 ] && budget=", and GitHub did not answer within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)"
   deny "Cannot tell whether this merge closes an issue its body says stays open: GitHub could not be read for the $pr_label in $searched under any logged-in account (${gh_error:-gh printed nothing})$budget. $OVERRIDE"

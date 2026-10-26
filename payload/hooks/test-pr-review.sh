@@ -43,6 +43,8 @@ check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3
 # The state directory is the scratch directory's, never Dan's (L2). CLAUDECODE is set so the runner's
 # removal of it is exercised even in CI.
 export AI_REVIEW_STATE_DIR="$WORKDIR/state"
+# And the phase records a running review publishes for the load window (claude-config#1730).
+export MWR_PHASE_DIR="$WORKDIR/phases"
 export CLAUDECODE=1
 export PR_REVIEW_DEADLINE_SECONDS=30
 # The push review's host list names only the work Mac; the PR review must ignore it (the whole point
@@ -679,6 +681,46 @@ PYEOF
 printf '{"session_id":"n9","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
 check "the nudge's abandoned row carries the repository directory" $'\t'"$(git -C "$REPO" rev-parse --show-toplevel)"$'\t' "$(grep -F $'\tabandoned\t' "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
 : > "$HOLD"
+
+# 3g3. A running review publishes its own phase for the load window (claude-config#1730). A review
+#      merge-when-ready.sh starts outlives a helper that stops (on a red check, say), and the window saw
+#      it only through the helper. So the reviewer runner writes a "review" record for its own pid,
+#      good until its deadline plus slack, and removes it when it ends; one that crashes names a pid
+#      no longer running, which no reader believes (L409, L617).
+reviews_busy(){ bash -c ". '$DIR/lib/merge-turn.sh' && . '$DIR/lib/merge-phase.sh' && mp_reviews_busy \$(date +%s)"; }
+reset_state; rm -rf "$MWR_PHASE_DIR"
+HOLD="$WORKDIR/hold-3g3"; rm -f "$HOLD"
+FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 a running review published no phase record in ${HANG_S}s"
+rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
+rec="$(cat "$rec_file" 2>/dev/null)"
+check "#1730 the record says a review is running" "phase review" "$rec"
+check "#1730 and which" "what the lessons review of " "$rec"
+check "#1730 its pid is the reviewer's own" "ai-review-run.py" "$(ps -o command= -p "$rpid" 2>/dev/null)"
+st="$(meta "$(final_of "$HEAD_SHA").pending" started)"
+check_eq "#1730 good until its deadline plus the slack, never open ended" "$((st + PR_REVIEW_DEADLINE_SECONDS + 60))" "$(sed -n 's/^until //p' "$rec_file")"
+check "#1730 a reader believes it busy" "$rpid	" "$(reviews_busy)"
+: > "$HOLD"
+wait_final "$HEAD_SHA" || bad "#1730 the held review did not finish once let go"
+hang_wait "! compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 a review that finished left its phase record behind"
+check_eq "#1730 and once it has finished nothing is busy" "" "$(reviews_busy)"
+# A reviewer killed outright is not believed busy afterwards, whatever its record says.
+reset_state; rm -rf "$MWR_PHASE_DIR"
+HOLD="$WORKDIR/hold-3g3b"; rm -f "$HOLD"
+FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 the second review published no phase record in ${HANG_S}s"
+rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
+check "#1730 control: busy while it runs" "$rpid	" "$(reviews_busy)"
+kill -KILL "$rpid" 2>/dev/null
+# Gone: not running, or killed and not yet reaped (state Z), read whole rather than piped into a
+# matcher that can leave early under pipefail.
+gone_pid(){ ! kill -0 "$1" 2>/dev/null || case "$(ps -o stat= -p "$1" 2>/dev/null)" in *Z*) return 0 ;; *) return 1 ;; esac; }
+hang_wait "gone_pid '$rpid'" || bad "#1730 the killed reviewer was still running"
+check_eq "#1730 a reviewer killed outright is not believed busy" "" "$(reviews_busy)"
+: > "$HOLD"
+# A runner killed outright never removes its input, which is what the next case's reset waits on, so
+# it is removed here, as the killed runner would have.
+rm -f "$AI_REVIEW_STATE_DIR"/*.diff
 
 # 3h. could not run: no claude on PATH. A PATH built from every tool but claude, so the case is
 #     produced on a machine that has one installed, which this suite used to report as UNMEASURED.

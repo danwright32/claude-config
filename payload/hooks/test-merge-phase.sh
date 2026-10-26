@@ -116,6 +116,36 @@ check_eq "#1676 while a record whose run has gone is swept away by the next writ
 check_eq "#1676 a record written with no start time given carries the run's own" "waiting" "$(verdict $$ 1000)"
 rm -f "$MWR_PHASE_DIR/$$"
 
+# =================================================================================================
+# 5. A lessons review publishes its own phase (claude-config#1730). One started by merge-when-ready.sh
+#    keeps running after the helper exits (a helper that stops on a red check), and the load window,
+#    which saw it only through the helper, could not see it at all. So the review writes a "review"
+#    record for its own pid, and mp_reviews_busy names every one believed: the pid running now with
+#    the start time recorded, and the until (its deadline plus slack) not passed. A review that
+#    crashed names a pid no longer running, so it says nothing (L409, L617), and a review record is
+#    never read as a helper waiting on GitHub.
+# =================================================================================================
+rm -rf "$MWR_PHASE_DIR"
+reviews(){ mp_reviews_busy "$1" | awk -F '\t' '{ print $1 }' | sort | tr '\n' ' ' | sed 's/ $//'; }
+as_run 1 "$LIVE_START" review "the lessons review of acme/widget feat/x at 1111111" 1000 1700
+check_eq "#1730 a running review is named busy" "1" "$(reviews 1000)"
+check_eq "#1730 with what it is" "1	the lessons review of acme/widget feat/x at 1111111" "$(mp_reviews_busy 1000)"
+check_eq "#1730 up to the time its record names" "1" "$(reviews 1700)"
+check_eq "#1730 and not after it, a review past its own deadline" "" "$(reviews 1701)"
+check_eq "#1730 a review record is never a helper waiting on GitHub" "busy" "$(verdict 1 1000)"
+as_run "$DEAD" "Thu Jan  1 00:00:00 1970" review "the lessons review of acme/widget feat/y at 2222222" 1000 1700
+check_eq "#1730 a review whose process has gone, a crash, is not named" "1" "$(reviews 1000)"
+as_run 1 "Thu Jan  1 00:00:00 1970" review "the lessons review of acme/widget feat/z at 3333333" 1000 1700
+check_eq "#1730 nor one whose pid now runs something else" "" "$(reviews 1000)"
+as_run 1 "$LIVE_START" local "asking block-red-merge.sh about the merge of #7" 1000 ""
+check_eq "#1730 a helper's own local record is not a review" "" "$(reviews 1000)"
+printf 'garbage\n' > "$MWR_PHASE_DIR/1"
+check_eq "#1730 nor is a record that cannot be read" "" "$(reviews 1000)"
+as_run 1 "$LIVE_START" review "the lessons review of acme/widget feat/x at 1111111" 1000 ""
+check_eq "#1730 nor a review record with no until, which could otherwise never lapse" "" "$(reviews 1000)"
+rm -rf "$MWR_PHASE_DIR"
+check_eq "#1730 and with no records at all, nothing" "" "$(reviews 1000)"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
