@@ -664,6 +664,33 @@ o23="$(fire_skip "$R18" "git push")"
 case "$o23" in *kappa*) check "and still blocks the push" ok ;;
   *) check "and still blocks the push" "out=$o23" ;; esac
 
+# --- the line PR #1732 took to CI holds the push here (claude-config#1734). A checkout carrying the
+#     real home path check and its suite, plus a fixture quoting a refusal whose hook path names
+#     THIS machine's own config directory: the shape that reads as fine on the Mac that wrote it
+#     (L177). The path is assembled from the running home, so this file names no machine. The same
+#     checkout without that line is the control, so a block can only be the line.
+R1734="$(mkrepo homepath1734)"
+: > "$R1734/claude-sync"
+cp "$DIR/check-home-paths.sh" "$DIR/test-check-home-paths.sh" "$R1734/payload/hooks/"
+cp -R "$DIR/lib" "$R1734/payload/hooks/lib"
+# A suite run earlier leaves lib/__pycache__ behind, ignored by the real repository but committed by
+# this one, which the home path check skips: a file listed and never read fails it (PR #1741's CI, 2026-10-25).
+find "$R1734/payload/hooks/lib" -name __pycache__ -type d -prune -exec rm -rf {} +
+printf '#!/usr/bin/env bash\necho quoted\n' > "$R1734/payload/hooks/quoted-refusal.sh"
+commit_all "$R1734"
+o1734c="$(fire "$R1734" "git push")"; c1734c=$?
+# Passing because the home path check RAN and passed, never because nothing was selected (L98).
+[ "$c1734c" -eq 0 ] && grep -q '1 whole tree scan(s) passed' <<< "$o1734c" \
+  && check "#1734 control: the checkout without the line runs the home path check and pushes" ok \
+  || check "#1734 control: the checkout without the line runs the home path check and pushes" "exit=$c1734c out=$o1734c"
+printf 'hook error: [%s/.claude/hooks/handback-claims-gate.sh]: REFUSED (handback-claims-gate.sh): your report contradicts your own commands.\n' \
+  "$HOME" >> "$R1734/payload/hooks/quoted-refusal.sh"
+commit_all "$R1734"
+o1734="$(fire "$R1734" "git push")"; c1734=$?
+[ "$c1734" -eq 2 ] && grep -q 'test-check-home-paths' <<< "$o1734" \
+  && check "#1734 a fixture naming this machine's own home blocks the push, named by the home path check" ok \
+  || check "#1734 a fixture naming this machine's own home blocks the push, named by the home path check" "exit=$c1734 out=$o1734"
+
 # --- the selection against THIS repository, read rather than assumed. Fixtures can only confirm
 #     the rule as written; what matters is which real suites it picks, and above all that it never
 #     picks the four minute suite as a whole (measured 2026-09-21: the selection below runs in 27
@@ -687,6 +714,11 @@ if [ -n "$REAL" ] && [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
   grep -q '^SUITE tests/test-payload-secret-scan\.sh$' <<< "$_sel" \
     && check "and the whole tree secret scan is among them" ok \
     || check "and the whole tree secret scan is among them" "got=$_sel"
+  # The home path check reads every synced file, and on 2026-10-25 only CI ran it, so a fixture
+  # naming one machine's home cost PR #1732 a whole CI round (claude-config#1734).
+  grep -q '^SUITE payload/hooks/test-check-home-paths\.sh$' <<< "$_sel" \
+    && check "#1734 and the home path check is among them" ok \
+    || check "#1734 and the home path check is among them" "got=$_sel"
   grep -q '^SECTION .*#145' <<< "$_sel" \
     && check "and the section that scans comments for undated numbers is selected" ok \
     || check "and the section that scans comments for undated numbers is selected" "got=$_sel"

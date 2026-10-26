@@ -2371,6 +2371,28 @@ printf "test('x', async (\$) => {\n  void \$.tool.call({ tool: 'Bash' } as never
 got="$(abandoned_calls "$M13")"
 [ -n "$got" ] && check "a mod test that leaves a tool call in flight with a bare void is found (#1297)" ok \
   || check "a mod test that leaves a tool call in flight with a bare void is found (#1297)" "nothing found in $M13"
+# A settled design's fixture is what the mod's tests draw (claude-config#1729). A mod's test runs
+# apart from the repository and loads only code, so it cannot read docs/design/<name>.fixture.json:
+# the mod keeps tests/<name>.fixture.ts beside its tests, that file's bytes behind `export default `,
+# and here every such copy is held byte for byte to the one the settled design draws, so the
+# design's wording and the mod's cannot drift apart. Zero copies found is a failure, never a clean
+# pass: the goal box keeps one (L98).
+if [ -d "$ROOT/payload/mods" ] && [ -d "$ROOT/docs/design" ]; then
+  fx_n=0; fx_bad=""
+  while IFS= read -r fx; do
+    [ -n "$fx" ] || continue
+    fx_n=$((fx_n + 1))
+    src="$ROOT/docs/design/$(basename "$fx" .ts).json"
+    { printf 'export default '; cat "$src"; } > "$TMPROOT/design-fixture-wanted.ts"
+    cmp -s "$TMPROOT/design-fixture-wanted.ts" "$fx" || fx_bad="$fx_bad ${fx#"$ROOT"/}"
+  done <<FIXTURES
+$(find "$ROOT/payload/mods" -path '*/tests/*.fixture.ts' -not -path '*/node_modules/*' 2>/dev/null | while IFS= read -r f; do [ -f "$ROOT/docs/design/$(basename "$f" .ts).json" ] && printf '%s\n' "$f"; done)
+FIXTURES
+  [ "$fx_n" -ge 1 ] && [ -z "$fx_bad" ] \
+    && check "#1729 every mod's copy of a settled design's fixture matches the design's ($fx_n)" ok \
+    || check "#1729 every mod's copy of a settled design's fixture matches the design's ($fx_n)" "found $fx_n, and these differ from docs/design:${fx_bad:- none}. Each is the design's fixture behind 'export default ': rewrite it from docs/design, or settle the change in a design round"
+fi
+
 if [ -d "$ROOT/payload/mods" ]; then
   got="$(abandoned_calls "$ROOT/payload/mods")"
   [ -z "$got" ] && check "no mod test in payload/mods leaves a tool call in flight with a bare void (#1297)" ok \

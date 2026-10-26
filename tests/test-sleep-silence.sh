@@ -19,9 +19,6 @@
 # A route asking Dan through Claude (a Stop hook whose instruction leads to a picker) is backstopped
 # by scope modes refusing AskUserQuestion while asleep, which the mod's own suite proves.
 set -uo pipefail
-# This suite is ABOUT where the sleep record is found, through HOME, so it sets aside the record
-# the test runner hands every other suite through CLAUDE_SLEEP_RECORD (lib/sleep.sh).
-unset CLAUDE_SLEEP_RECORD
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
@@ -31,6 +28,10 @@ ROOT="$(cd "$DIR/.." && pwd)"
   exit 1
 }
 suite_deadline_arm || exit $?
+# This suite is ABOUT where the sleep record is found, through HOME, so it sets aside the record
+# the test runner, and arming the deadline, hand every other suite through CLAUDE_SLEEP_RECORD
+# (lib/sleep.sh). After arming, which would otherwise hand it one again (claude-config#1729).
+unset CLAUDE_SLEEP_RECORD
 
 PAYLOAD="$ROOT/payload"
 HOOKS="$PAYLOAD/hooks"

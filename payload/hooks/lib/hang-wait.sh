@@ -44,7 +44,9 @@ hang_wait(){
 # fault, never fail a run with nothing broken. Returns 0 if the condition held inside the window, 1
 # once it passed without it, 2 for a length that is not a whole number of seconds. A wait for
 # something the passing case DOES meet takes hang_wait, and test-hand-rolled-wait.sh fails a suite
-# that hand rolls either.
+# that hand rolls either. It also fails a window_wait whose running out the suite does not assert
+# (#1721): capture its status in the same statement (`window_wait 2 "<cond>"; NAME=$?`) and compare
+# NAME with 1, or it is a short ceiling under another name.
 window_wait(){
   local _ww_t0=$SECONDS _ww_s="${1:-}" _ww_poll="${3:-0.1}"
   case "$_ww_s" in ''|*[!0-9]*) echo "window_wait: the window must be a whole number of seconds, not '$_ww_s'" >&2; return 2 ;; esac

@@ -145,6 +145,16 @@ suite_deadline_arm(){   # [$1] = the suite's own limit in seconds, when it is no
       echo "$_suite_deadline_label: SUITE_WALL_STARTED='$started' is not an epoch second. Refusing to run rather than counting from a time nobody can read." >&2
       return 2 ;;
   esac
+  # The runner hands every suite a sleep record of its own that does not exist (run-all-tests.sh,
+  # lib/sleep.sh), so a sleep aware hook a suite drives is never silenced by the Mac really being in
+  # sleep mode. A suite typed straight into a shell had no runner and read the live record: on
+  # 2026-10-24 three suites failed that way overnight (claude-config#1729). So arming hands it the
+  # same, unless something already named one; a suite ABOUT the record unsets it after arming.
+  # Here rather than at source time: only suites arm, and claude-sync sources this file too.
+  if [ -z "${CLAUDE_SLEEP_RECORD:-}" ]; then
+    CLAUDE_SLEEP_RECORD="${TMPDIR:-/tmp}/suite-no-sleep-record.$$/current.json"
+    export CLAUDE_SLEEP_RECORD
+  fi
   [ "$limit" -eq 0 ] && return 0
   _suite_deadline_limit="$limit"
   trap '_suite_deadline_expired' USR1
