@@ -31,3 +31,13 @@ global writing rule, and a rule contradicted by the prose around it loses to the
 ## Folding into the issue review
 When both Stop hooks fire on one turn, the reflection hands its points to the issue review's second
 pass, so there is one banner and one picker.
+
+## The Goal accomplished box, when there is no /goal
+With no /goal, the box (mods/goal-box) shows only when the session calls its tool, and nothing
+reminded it to: on 2026-10-26 a Slate session finished every part of a request, reported it, and
+showed no box until Dan asked whether it was done (claude-config#1749). The reflection fires after
+every turn that changed something, which is the turn requested work finishes on, so it carries the
+reminder at no extra turn; a chat only turn finishes no work, so missing it costs nothing. The line
+sits after the EXCEPTION so a reflection folded into the issue review still asks. The tool's own
+checks (agents running, a merge or deploy unconfirmed, a pull request still open, one box per
+request) stay the gate, so a call made too early is refused rather than shown.
