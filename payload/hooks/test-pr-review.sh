@@ -758,6 +758,25 @@ hang_wait "gone_pid '$rpid'" || bad "#1745 the reviewer did not stop on SIGTERM"
 hang_wait "[ ! -e '$head_input' ]"
 check_eq "#1745 a reviewer stopped with SIGTERM removes its own input" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
 : > "$HOLD"
+# SIGINT at its default is Python's own default_int_handler, never SIG_DFL, so a check for SIG_DFL
+# alone left it unhandled. The child starts with SIGINT at its default, as a foreground run does.
+INT_INPUT="$WORKDIR/int-1745.diff"; : > "$INT_INPUT"
+python3 - "$DIR/lib/ai-review-run.py" "$INT_INPUT" > "$WORKDIR/int-1745.out" 2>&1 <<'PY'
+import importlib.util, signal, subprocess, sys
+child = (
+    "import importlib.util, os, signal, sys\n"
+    "spec = importlib.util.spec_from_file_location('arr', sys.argv[1])\n"
+    "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+    "m.remove_input_when_stopped(sys.argv[2])\n"
+    "os.kill(os.getpid(), signal.SIGINT)\n"
+    "print('survived')\n"
+)
+p = subprocess.run([sys.executable, "-c", child, sys.argv[1], sys.argv[2]], capture_output=True,
+                   preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+print(p.returncode)
+PY
+check_eq "#1745 a reviewer stopped with SIGINT dies of it" "-2" "$(head -1 "$WORKDIR/int-1745.out")"
+check_eq "#1745 and removes its own input" "no" "$([ -e "$INT_INPUT" ] && echo yes || echo no)"
 
 # 3h. could not run: no claude on PATH. A PATH built from every tool but claude, so the case is
 #     produced on a machine that has one installed, which this suite used to report as UNMEASURED.

@@ -1109,7 +1109,8 @@ eq "$(MT_RUNS_MODE=done PATH="$ghstub:$PATH" mt_unfinished_runs acme/widget abc1
 
 echo "merge-target: mt_remote_path says what gh said, so a dropped connection can be asked again (claude-config#1096)"
 # It printed only present, absent or unknown, so a caller could not tell a dropped connection from a
-# refusal and refused on the first. Now it is a reader: 0 answered, 2 transient, 1 anything else.
+# refusal and refused on the first. Now it is a reader: 0 answered, 2 transient, MT_CONNECT_RC when
+# the network to GitHub failed (#1735), 1 anything else.
 cat > "$ghstub/gh" <<'EOS'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MT_GH_LOG"

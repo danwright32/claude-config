@@ -860,8 +860,9 @@ def remove_input_when_stopped(diff_file):
             pass
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
+    # SIGINT's default in Python is its own default_int_handler, never SIG_DFL.
     for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-        if signal.getsignal(s) is signal.SIG_DFL:
+        if signal.getsignal(s) in (signal.SIG_DFL, signal.default_int_handler):
             signal.signal(s, stopped)
 
 
