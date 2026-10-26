@@ -7489,6 +7489,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
 
 ## External systems
+- **L810. Check a saved credential by performing the action it exists for against its real
+  destination (posting to the alert channel, sending from the mailbox, writing to the bucket),
+  never only by a login check, because a valid credential for the wrong identity passes every
+  login check while every real use is refused.** (bidspoke#2808, 2026-10-26)
+  SHORT: Check a saved credential by doing its real action on its real destination, never a login check alone: a wrong identity passes login.
 - **L1031. A React web app must be built to survive the browser translating the page: Google
   Translate replaces the text nodes React owns, so React's next update of that text throws
   NotFoundError from removeChild or insertBefore and replaces the whole screen with the error
