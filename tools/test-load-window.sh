@@ -407,6 +407,16 @@ run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
 says "#1730 a lessons review that outlived its helper is waited for" "Waiting for a lessons review (the lessons review of acme/widget feat/x at 1111111)" "$OUT"
 eq "#1730 and the window runs once it has finished" 0 "$RC"
 says "#1730 and then the command ran" "the command ran" "$OUT"
+# Two reviews at once, as a branch read in groups runs them: both are waited for. The list once
+# reached awk through -v, where a newline is refused by macOS awk, so two reviews read as none.
+fresh reviewtwo
+PID1_START="$(ps -o lstart= -p 1 | sed -e 's/^ *//' -e 's/ *$//')"
+review $$ "$SELF_START" $((T0 + 600))
+review 1 "$PID1_START" $((T0 + 600))
+printf '%s\n' "rm -f \"$LOAD_WINDOW_MERGE_PHASES/$$\" \"$LOAD_WINDOW_MERGE_PHASES/1\"" > "$case_dir/hook.1"
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+says "#1730 two lessons reviews running at once are both waited for" "Waiting for 2 lessons reviews, among them a lessons review" "$OUT"
+eq "#1730 and the window runs once both have finished" 0 "$RC"
 # Controls (L497): a review that crashed, and one past its own deadline, are not waited for.
 fresh reviewdead
 review 99999999 "Thu Jan  1 00:00:00 1970" $((T0 + 600))

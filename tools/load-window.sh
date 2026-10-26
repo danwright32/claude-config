@@ -132,7 +132,10 @@ busy_now(){
     # fixture (test-run-all-tests.sh runs the runner, test-merge-when-ready.sh the helper), already
     # covered by whatever runs above it. On 2026-10-24 one builder's full run was listed as five full
     # suite runs by its fixtures, and a suite's stand in merge as a merge (#1620).
-    seen="$(printf '%s\n' "$table" | awk -v self="$$" -v reviews="$reviews" '
+    # The reviews reach awk through its environment, never -v: there a newline between two of them
+    # is refused by macOS awk ("newline in string") and backslashes are read as escapes, so two
+    # reviews running at once read as none (lessons review of #1730).
+    seen="$(printf '%s\n' "$table" | LW_REVIEWS="$reviews" awk -v self="$$" '
       function base(w) { sub(/.*\//, "", w); return w }
       function script_of(c,   m, w, j) {
         m = split(c, w, " ")
@@ -161,7 +164,7 @@ busy_now(){
         }
         # A review is counted unless this window started it: one whose line is not in the table at
         # all is counted, since its record was believed from the live process a moment ago.
-        nr = split(reviews, rv, "\n")
+        nr = split(ENVIRON["LW_REVIEWS"], rv, "\n")
         for (k = 1; k <= nr; k++) {
           if (rv[k] == "") continue
           tab = index(rv[k], "\t"); p = substr(rv[k], 1, tab - 1); w = substr(rv[k], tab + 1)
