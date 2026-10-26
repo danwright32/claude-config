@@ -1258,7 +1258,19 @@ a stacked pull request showing its parent's commits. A list or move that fails, 
 holds commits the merge did not, or a delete GitHub refuses leaves the branch in place and stops
 with exit 4, merged, saying which pull requests were not moved and why; running the same command
 again finds the merge done and finishes the branch. A branch GitHub already deleted, or one in a
-fork, is left alone. Since the merge the gates judge no longer carries `--delete-branch`, the helper
+fork, is left alone. Every OTHER way a command deletes a branch on GitHub is held by
+`stacked-branch-delete-gate.sh` (claude-config#1723): on 2026-10-25 a merged branch in bidspoke was
+deleted by hand with `gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<branch>`, and #2763,
+stacked on it, was closed with nothing said. The gate reads, in command position, that API delete in
+any spelling of its method (`{owner}/{repo}` read as the checkout's origin), `git push <remote>
+--delete <branch>`, `-d` or `:<branch>` to a GitHub remote, and `gh pr merge --delete-branch` (or
+`-d`), lists the open pull requests based on the branch through `lib/stacked-prs.sh`, the same
+reading the helper moves them with, as the account the command names in
+`GH_TOKEN=$(gh auth token -u <account>)`, and refuses while any is listed, naming them and the
+`gh pr edit <n> --base <branch>` that moves each onto the base the merged pull request went into (for
+a merge, the helper above instead). A list that fails, an answer that is not a list, or a merge
+whose branch cannot be read refuses too, since the next step is a delete that cannot see what it
+closes. `SKIP_STACKED_CHECK=1` in front of the one command overrides it. Since the merge the gates judge no longer carries `--delete-branch`, the helper
 runs them with `MWR_DELETE_BRANCH=1` when it was asked to delete, so the rerun command
 `block-red-merge.sh` suggests on sending the merge back still carries the flag (claude-config#1351).
 That command carries the merge method and the delete a typed merge asked for in any spelling gh
@@ -1550,7 +1562,7 @@ Three gates close the three parts of that, all reading commands through one libr
 
 ### What a push actually waits on
 
-Thirty PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-one PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1562,7 +1574,7 @@ they were timed:
 bash tools/time-push-gates.sh --repo <checkout>
 ```
 
-Twelve of them came after the 2026-09-21 timing further down, which measured the first seventeen:
+Thirteen of them came after the 2026-09-21 timing further down, which measured the first seventeen:
 
 | Gate | What it costs on a push |
 | --- | --- |
@@ -1576,6 +1588,7 @@ Twelve of them came after the 2026-09-21 timing further down, which measured the
 | `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
 | `check-rtk-init.sh` (#1468) | 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
 | `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3). Reading a declared script's quoted arguments (#1574) adds one python start to a command that reaches a script file refusal, and nothing to any other: 0.09 to 0.12 seconds before, 0.11 to 0.13 after, five readings each on 2026-10-23 (load average 17 to 23). Reading a script run by its path (#1623) left a plain push and a git command holding paths only as arguments at 0.006 to 0.008 seconds, as on main, and `./build.sh && git push` now starts the reader, 0.10 to 0.11 seconds, as `bash ./build.sh && git push` does; five readings each on 2026-10-23 (load average 56 to 101). Over 30 days of this Mac's real commands naming git, gh or rtk (30,078), the fast path answered 24,204 before the reader loaded where main answered 26,842; 2,638 now reach the reader through it, 863 of them refused |
+| `stacked-branch-delete-gate.sh` (#1723) | 0.025 to 0.028 seconds on a plain `git push` and on `git push -u origin feat/1723-stacked-delete`, five readings each on 2026-10-26 (load average 24 to 39), since a command holding no DELETE, `--delete`, short flag cluster with d or bare `:branch` is answered before anything loads; 0.46 to 0.51 seconds on an API delete of a branch nothing is based on, five readings through the real gh against claude-config, one list of the pull requests based on it |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 

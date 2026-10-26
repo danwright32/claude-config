@@ -269,6 +269,8 @@ POLL_MAX="$(num_or "${MWR_POLL_MAX_SECONDS:-}" "$GHP_MAX_DEFAULT")"; [ "$POLL_MA
 interval="$POLL"
 # shellcheck source=merge-turn.sh
 . "$MWR_LIB/merge-turn.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/merge-turn.sh is missing, so the repository's turn to merge cannot be taken. Nothing was merged." >&2; exit 1; }
+# shellcheck source=stacked-prs.sh
+. "$MWR_LIB/stacked-prs.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/stacked-prs.sh is missing, so the pull requests stacked on a branch cannot be listed. Nothing was merged." >&2; exit 1; }
 # A DELIBERATE LOAD WINDOW is named beside every failure (claude-config#1618). On 2026-10-23 this
 # helper stopped five times on GitHub reads at a load average of 342 while a builder's load
 # reproduction ran, and nothing it said named that load. tools/load-window.sh records each window in
@@ -649,14 +651,13 @@ read_ref(){   # sets ref_tip, or ref_gone when the branch is not there
 }
 # The open pull requests based on the branch, one number a line in stacked. An answer that is not a
 # list is a failed read, never an empty one: "could not list" must not read as "nothing stacked".
+# Read through lib/stacked-prs.sh, the one reading stacked-branch-delete-gate.sh refuses a typed
+# delete with too (claude-config#1723), so the two cannot disagree about what is stacked.
 read_stacked(){
   local out rc
   stacked=""
-  out="$(gh_as pr list --repo "$slug" --base "$branch" --state open --limit 1000 --json number 2>&1)"; rc=$?
-  if [ "$rc" -eq 0 ] && stacked="$(printf '%s' "$out" | jq -r 'if type == "array" then .[].number else error("not a list") end' 2>/dev/null)"; then
-    return 0
-  fi
-  stacked=""
+  if sp_read_stacked gh_as "$slug" "$branch"; then stacked="$SP_STACKED"; return 0; fi
+  out="$SP_OUT"; rc="$SP_RC"
   read_err="${out:0:300}, exit $rc"
   [ "$rc" -ne 0 ] && ghp_rate_limited "$out" && return 5
   [ "$rc" -ne 0 ] || return 1
