@@ -80,6 +80,7 @@ expect internal-tool "an internal tool with no public surface may still skip com
 
 # A dead auditor is never a clean domain.
 expect dead-auditor "a domain whose auditor died is reported unaudited" "r['report']['unauditedDomains'] == ['compliance-audit']"
+expect dead-auditor-null "an auditor the engine reports dead (null) is reported unaudited too" "r['report']['unauditedDomains'] == ['compliance-audit']"
 expect dead-auditor "and the run still finishes the other domains" "len(audits) == len(r['applicable'])"
 expect dead-auditor "and the outside CRM is reported as not inspected" "any(n['system'] == 'Larkspur CRM' for n in r['report']['notInspected'])"
 expect default "a run where every auditor answered reports none unaudited" "r['report']['unauditedDomains'] == []"

@@ -97,6 +97,11 @@ const scenarios = {
     profile: p => profileFor(p),
     'audit:compliance-audit': () => { throw new Error('agent died') },
   },
+  // The same death as the Workflow engine reports it: agent() returns null when a subagent dies.
+  'dead-auditor-null': {
+    profile: p => profileFor(p),
+    'audit:compliance-audit': () => null,
+  },
 }
 const scenario = scenarios[scenarioName]
 if (!scenario) {
