@@ -1148,14 +1148,16 @@ run_reviewer() {   # $1 = state dir, $2 = name, $3 = diff file, $4 = base, $5 = 
   wait "$rpid"; rc=$?
   prr_phase clear "$rpid"
   # However the reviewer ended, its input goes with it (claude-config#1745): it removes it itself in
-  # a finally and on SIGTERM, which a SIGKILL never reaches, so the runner removes it too.
+  # a finally and on SIGTERM, SIGHUP or SIGINT, which a SIGKILL never reaches, so the runner removes
+  # it too.
   rm -f "$3" "$3.reviewer" 2>/dev/null
   return "$rc"
 }
 
 # A KILLED REVIEW'S INPUT (claude-config#1745). A review input left behind piles up in the state
 # folder, and a suite's reset waits on it. Three exits remove it: the reviewer's own finally and its
-# SIGTERM handler (ai-review-run.py), and run_reviewer once the reviewer has ended however it did.
+# SIGTERM, SIGHUP and SIGINT handler (ai-review-run.py), and run_reviewer once the reviewer has
+# ended however it did.
 # When the runner was killed outright as well, nothing of the review is left to do it, so each input
 # names its reviewer by pid AND start time in <input>.reviewer, and the next review to start sweeps an
 # input whose reviewer is no longer that process (a dead pid, or one reused by something else), the
