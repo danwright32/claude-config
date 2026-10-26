@@ -36,27 +36,30 @@ payload="$(cat)"
 
 refuse() { printf '%s\n' "$1" >&2; exit 2; }
 
-# THE RECORD OF A TYPED HELPER KEY IS THIS GATE'S ALONE (claude-config#1700). A Bash command naming
-# the folder it lives in, its secret, or the functions that write them (all spelled helper-key or
-# helper_key, in any case, since the disk does not tell case apart) is refused before it runs, the
-# way the design round guard refuses a write to its own record: a session making that record by hand
-# is the merge without reading this gate exists to stop. The raw payload is matched first, so every
+# THE RECORDS OF WHO WAS SHOWN THE FINDINGS ARE THE GATES' ALONE (claude-config#1700, #1719). A Bash
+# command naming the typed helper key's folder, the secret it and the read keys are kept under, a
+# review's read keys file, or the functions that write or reach them (all spelled helper-key,
+# helper-secret or readkeys, with a hyphen or an underscore, in any case, since the disk does not
+# tell case apart) is refused before it runs, the way the design round guard refuses a write to its
+# own record: a session making such a record by hand is the merge without reading this gate exists to
+# stop. test-pr-review.sh reads every function of lib/ai-review-common.sh that reaches the secret or
+# a read keys file and fails on one this does not refuse by name. The raw payload is matched first, so every
 # other command leaves at once; one that matches is judged on its command text, read through the
 # shared reader once it is known to be installed. Where the library or the reader is missing, or the
 # text cannot be read, the command is refused, since a reader that cannot run must not pass what it
 # was asked to judge (L490). There is no override: an override is exactly what a session forging a
 # record would use.
-pr_review_names_record() { local rc=1; shopt -s nocasematch; case "$1" in *helper[-_]key*) rc=0 ;; esac; shopt -u nocasematch; return "$rc"; }
+pr_review_names_record() { local rc=1; shopt -s nocasematch; case "$1" in *helper[-_]key*|*helper[-_]secret*|*readkeys*) rc=0 ;; esac; shopt -u nocasematch; return "$rc"; }
 if pr_review_names_record "$payload"; then
   . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null \
-    || refuse "Refused: this command names the record of read keys typed in front of the merge helper, and lib/merge-target.sh is missing, so pr-review-gate.sh cannot read the command to tell whether it touches that record (claude-config#1700). Restore the hooks library and run it again."
+    || refuse "Refused: this command names a record the lessons review keeps of whose merge or push was shown its findings, and lib/merge-target.sh is missing, so pr-review-gate.sh cannot read the command to tell whether it touches that record (claude-config#1700, #1719). Restore the hooks library and run it again."
   if ps_reader_missing jq python3; then
-    refuse "Refused: $(ps_reader_absent_why "neither jq nor python3 is on PATH" "pr-review-gate.sh reads this command's text with one of them to tell whether it touches the record of read keys typed in front of the merge helper (claude-config#1700)." "jq")"
+    refuse "Refused: $(ps_reader_absent_why "neither jq nor python3 is on PATH" "pr-review-gate.sh reads this command's text with one of them to tell whether it touches a record the lessons review keeps of whose merge or push was shown its findings (claude-config#1700, #1719)." "jq")"
   fi
   named_parsed="$(ps_parse_payload "$payload" raw)" || named_parsed="$payload"
   named_command="${named_parsed%%$'\x1f'*}"
   if pr_review_names_record "$named_command"; then
-    refuse "Refused: this command names the record of read keys typed in front of the merge helper (the helper-keys folder under the lessons review's state, its secret, or the functions that write them), and only pr-review-gate.sh writes that record, when it sees a key typed in front of the helper (claude-config#1700). To merge, read the findings and type their key in front of the command: PR_REVIEW_READ=<key> bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> ... To read the code that keeps the record, use the Read or Grep tool rather than a shell command."
+    refuse "Refused: this command names a record the lessons review keeps of whose merge or push was shown its findings (the helper-keys folder under its state, the secret those records are kept under, a review's read keys file, or the functions that write them), and only the lessons review's own gates write those records, when they show the findings or see their key typed (claude-config#1700, #1719). To merge or push, read the findings and type their key in front of the command: PR_REVIEW_READ=<key> <the gh pr merge, git push or merge helper command>. To read the code that keeps the records, use the Read or Grep tool rather than a shell command."
   fi
 fi
 
