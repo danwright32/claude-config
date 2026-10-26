@@ -818,12 +818,22 @@ A session cannot make that record by hand (claude-config#1700). Each record is n
 HMAC-SHA256 of the key under a secret only the gate creates (`helper-keys.secret` beside the folder,
 mode 600), so an empty file a session's shell makes under the key's plain sha256, or any name it can
 compute without the secret, vouches for nothing; the helper reads the secret to check a record and
-never creates one. And the gate refuses, before it runs and with no override, any Bash command whose
-text names the folder, the secret, or the functions that write them (`helper-key` or `helper_key`,
-any case), as the design round guard refuses a write to its own record. To read that code, use the
-Read or Grep tool. What is left, since the gate and the session are one user: a command that hides
-the name from the gate (a glob, an escape, a script file written first and then run) can still read
-the secret or call the recorder, and a forged review acknowledgement is not covered here.
+never creates one. The review's own read keys work the same way (claude-config#1719): each line of
+`<review>.txt.readkeys-<finish stamp>` is the shown key's HMAC under that same secret, not its plain
+sha256, so a line a session appends for a key it made up matches nothing, and the acknowledgement a
+read leaves beside the review (`.acknowledged` for a merge, `.push-acknowledged` for a push) carries a
+MAC of the review's finish time and which of the two it is, so one written by hand reads as no read
+at all. Lines and acknowledgements written before #1719 are in the old form and stop counting, so a
+key shown just before the install is asked for again. And the gate refuses, before it runs and with
+no override, any Bash command whose text names the folder, the secret, a read keys file, or the
+functions that write or reach them (`helper-key`, `helper-secret` or `readkeys`, with a hyphen or an
+underscore, any case), as the design round guard refuses a write to its own record;
+`test-pr-review.sh` reads every function of `lib/ai-review-common.sh` that reaches the secret or a
+read keys file and fails on one the gate does not refuse by name. To read that code, use the Read or
+Grep tool. What is left, since the gate and the session are one user: a command that hides the name
+from the gate (a glob such as `*.secret`, an escape, a name built from pieces, a script file written
+first and then run) can still read the secret, compute a MAC and write a record, a line or an
+acknowledgement, and a session can pipe a made-up hook payload into `pr-review-gate.sh` itself.
 
 Minor findings are advisory (claude-config#1356). In a judged sample of 60 round 1 findings, those
 marked major were real 7 times in 10 and those marked minor 26 times in 50, and 11 of the 12 wrong
