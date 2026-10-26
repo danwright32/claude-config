@@ -201,14 +201,29 @@ test('the same build behind another app is still refused (#1751 control)', withK
   expect(w.reached).not.toContain('Bash')
   expect(refusal(r)).toBe("Blocked: PostRoll isn't the front app (Adobe Lightroom Classic is). Bring it forward first, then type.")
 })
-// A bundle is a folder, never the program that runs, so naming it is still refused, as before.
+// A bundle is a folder, never the program that runs, so naming it is still refused, as before, and
+// since #1757 the refusal says the marker names the bundle and gives the program inside it.
+const BUNDLE_REFUSAL = `Blocked: TARGET_APP names the PostRoll app bundle, not the program inside it. Name the program instead, usually ${BUILD}.`
 test('the same build named by its bundle rather than its program is still refused (#1751 control)', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world($, on, { front: 26710, running: { 26710: BUILD }, answer: 'Go ahead' })
   for (const cmd of [`TARGET_APP=${BUILD_BUNDLE}; cliclick c:95,188`, `TARGET_APP=${BUILD_BUNDLE} cliclick c:95,188`]) {
     const r = await $.tool.call(bash(cmd))
-    expect(refusal(r)).toBe("Blocked: PostRoll isn't running. Open it first, then type.")
+    expect(refusal(r)).toBe(BUNDLE_REFUSAL)
   }
+  expect(w.reached).not.toContain('Bash')
+  expect(w.asked.length).toBe(0)
+})
+// #1757: the marker naming a running build's bundle, not its program, as a PostRoll session sent it on
+// 2026-10-26. Still refused, nobody asked and nothing run, but the card and the refusal say why.
+test('a marker naming an app bundle is refused saying so, though the app runs in front (#1757)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 26710, running: { 26710: BUILD }, answer: 'Go ahead' })
+  const r = await $.tool.call(bash(`TARGET_APP=${BUILD_BUNDLE} cliclick c:95,188`, 'b1'))
+  expect(refusal(r)).toBe(BUNDLE_REFUSAL)
+  expect(w.cards).toEqual([
+    { toolUseId: 'b1', guard: 'Keystroke guard', reason: 'TARGET_APP names the PostRoll app bundle, not the program inside it.', safeWay: `Name the program instead, usually ${BUILD}.` },
+  ])
   expect(w.reached).not.toContain('Bash')
   expect(w.asked.length).toBe(0)
 })

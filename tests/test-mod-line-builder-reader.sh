@@ -75,12 +75,15 @@ const once = (s) => card.split(s).length === 2
 const guard = readdirSync(`${mods}/design-round-guard/hooks`).filter(f => /\.(ts|tsx)$/.test(f) && !/\.d\.ts$/.test(f)).map(name => ({ name, text: readFileSync(`${mods}/design-round-guard/hooks/${name}`, 'utf8') }))
 const reg = guard.find(f => f.name === 'register.ts')?.text ?? ''
 const swap = (a, b) => (reg.split(a).length === 2 ? drawsChange(guard, 'register.ts', reg, reg.replace(a, b)) : 'missing')
-// #1747's two halves: the loop given its brace and a continue, then the brace closed.
+// #1747's two halves, as they landed with #1761: the real loop as it is (whole), without the brace it
+// was given and its continue (before), and with the closing brace not yet added (half, what the
+// #1747 builder's first Edit left).
 const loop = '  for (const r of w.runs ?? [])\n    for (const a of r.args)'
 const opened = "  for (const r of w.runs ?? []) {\n    if (spoolNote(r, at.home)) continue\n    for (const a of r.args)"
 const pushed = 'run: r.path ?? r.script })\n'
-const half = reg.split(loop).length === 2 ? reg.replace(loop, opened) : undefined
-const whole = half !== undefined && half.split(pushed).length === 2 ? half.replace(pushed, `${pushed}  }\n`) : undefined
+const whole = reg.split(opened).length === 2 && reg.split(`${pushed}  }\n`).length === 2 ? reg : undefined
+const before = whole?.replace(opened, loop).replace(`${pushed}  }\n`, pushed)
+const half = whole?.replace(`${pushed}  }\n`, pushed)
 // A real file's text with one span swapped, judged beside its mod's other hook files.
 const real = (mod, name, a, b) => {
   const dir = `${mods}/${mod}/hooks`
@@ -93,7 +96,7 @@ console.log(JSON.stringify({
   pending: swap("key: 'pending' }", "key: 'waiting' }"),
   keysReason: real('keystroke-guard', 'keys.ts', "safeWay: 'Open it first, then type.'", "safeWay: 'Start it first, then type.'"),
   halfOpen: half === undefined ? 'missing' : bracketsOpen(half),
-  wholeDraws: whole === undefined ? 'missing' : drawsChange(guard, 'register.ts', reg, whole),
+  wholeDraws: whole === undefined ? 'missing' : drawsChange(guard, 'register.ts', before, whole),
   border: real('goal-box', 'box.ts', "border: 'success'", "border: 'warning'"),
   frame: real('scope-modes', 'away.ts', "slot: 'held', frame: { kind: 'box' }", "slot: 'held', frame: { kind: 'left-rule' }"),
   colour: real('handoff', 'handoff.ts', "color: 'warning', bold: true }, { text: input.title }", "color: 'error', bold: true }, { text: input.title }"),
