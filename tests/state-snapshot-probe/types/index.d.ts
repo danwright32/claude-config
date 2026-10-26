@@ -3,7 +3,7 @@ export type ProbeCount = number
 
 declare module 'claude-code' {
   interface PluginState {
-    /** The probe of tests/test-state-snapshot.sh (#1720): two counters, one per step. */
+    /** The probe of tests/test-state-snapshot.sh (#1720): one counter per kind of write the steps make (own, race, cross, timerRace). */
     'state-snapshot-probe': {
       /** Written by the step that reads its own write back. */
       own: ProbeCount

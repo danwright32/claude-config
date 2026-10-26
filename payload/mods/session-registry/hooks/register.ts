@@ -45,11 +45,6 @@ const dirOf = (h: string) => `${h}/.claude/state/sessions`
 const archiveOf = (h: string) => `${h}/.claude/state/sessions-archive`
 const DAY_NAME = /^\d{4}-\d{2}-\d{2}$/
 const projectsOf = (h: string) => `${h}/.claude/projects`
-// Claude Code files a session's transcript under its starting folder, spelled as mod-kit's
-// hooks/projects.ts says (measured against all 1451 transcripts on this Mac, 2026-10-04: the one miss
-// was a session that changed folder, found by its id instead; and on the real engine for a folder
-// past 200 characters, which is cut and given a hash, 2026-10-25, #1725).
-
 // The one writer of this session's record, made inside engine.create (the engine allows the built
 // $ to be used there, not passed out) and used by every hook. Every write goes through one queue, so
 // two hooks updating the record at once cannot interleave and lose either change (assume it runs
