@@ -10,7 +10,8 @@
 #
 #   no-verify-gate.sh        refuses an AGENT's git command that skips the repository's own git hooks
 #                            (--no-verify, commit -n, core.hooksPath, HUSKY=0), with no approval
-#                            that lets one through (claude-config#1666)
+#                            that lets one through (claude-config#1666), and one reading a file
+#                            from /dev/stdin, which hangs on a prompt nobody answers (#1765)
 #   monitor-action-gate.sh   refuses a Monitor whose command merges, pushes, commits or runs the merge
 #                            helper, because no PreToolUse(Bash) gate is ever run for a Monitor's
 #                            command, so a merge there meets no merge gate at all
