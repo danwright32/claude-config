@@ -397,6 +397,73 @@ run_hook "$HB_GATE" "$(python3 -c 'import json; print(json.dumps({"tool_name":"S
 allowed "a hand-back with no agent_id (not a subagent) is not judged"
 
 # ---------------------------------------------------------------------------------------------
+echo "agent-overrides.py stdin-device: a git command reading a file from the device path of standard input"
+
+stdin_says() { # stdin_says <label> <command> <expected exit>
+  local out rc
+  out="$(printf '%s' "$2" | python3 "$LIB" stdin-device 2>&1)"; rc=$?
+  if [ "$rc" = "$3" ]; then check "$1" ok; else check "$1" "exit $rc, wanted $3: $out"; fi
+}
+stdin_says "commit -F /dev/stdin" 'git commit -F /dev/stdin <<EOF
+x
+EOF' 0
+stdin_says "commit --file /dev/stdin" 'git commit --file /dev/stdin' 0
+stdin_says "commit --file=/dev/stdin" 'git commit --file=/dev/stdin' 0
+stdin_says "commit -F/dev/stdin, the value glued on" 'git commit -F/dev/stdin' 0
+stdin_says "commit -qF /dev/stdin, the flag at the end of a cluster" 'git commit -qF /dev/stdin' 0
+stdin_says "commit -F /dev/fd/0" 'git commit -F /dev/fd/0' 0
+stdin_says "tag -F /dev/stdin" 'git tag -a v1 -F /dev/stdin' 0
+stdin_says "behind rtk" 'rtk git commit -F /dev/stdin' 0
+stdin_says "commit -F - is not one" 'git commit -F - <<EOF
+x
+EOF' 1
+stdin_says "commit -F <file> is not one" 'git commit -F /tmp/msg.txt' 1
+stdin_says "a message naming the path is not one" 'git commit -m "/dev/stdin"' 1
+stdin_says "a message mentioning the path is not one" 'git commit -m "never commit from /dev/stdin"' 1
+stdin_says "a non git command naming the path is not one" 'python3 /dev/stdin <<EOF
+print(1)
+EOF' 1
+stdin_says "a heredoc body naming it is not one" 'git commit -F - <<EOF
+used to be -F /dev/stdin
+EOF' 1
+
+# ---------------------------------------------------------------------------------------------
+echo "no-verify-gate.sh: an agent's git command reading /dev/stdin is refused at once (claude-config#1765)"
+# The two commands that hung a worktree subagent on a permission prompt nobody could answer, first
+# lines as recorded in its transcripts (10,469 s on 2026-10-05 and 1,241 s on 2026-10-26).
+HUNG_1='git commit -q -F /dev/stdin <<'"'"'MSG'"'"'
+Refuse the thing
+
+Claude-Session: https://claude.ai/code/session_x
+MSG'
+HUNG_2='git -C /Users/danielhankins-wright/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-a91c75b370aec7ff8 commit -q -F /dev/stdin <<'"'"'EOF'"'"'
+Hold the guard
+
+Claude-Session: https://claude.ai/code/session_x
+EOF'
+run_hook "$NV_GATE" "$(bash_payload "$HUNG_1" a1b2c3d4)"
+refused "the 2026-10-05 hung commit is refused"
+says "the refusal names the file fix" "-F <file>"
+says "the refusal names -F -" "-F -"
+says "the refusal names the issue" "#1765"
+run_hook "$NV_GATE" "$(bash_payload "$HUNG_2" a1b2c3d4)"
+refused "the 2026-10-26 hung commit is refused"
+run_hook "$NV_GATE" "$(bash_payload 'git commit --file=/dev/fd/0 <<EOF
+x
+EOF' a1b2c3d4)"
+refused "an agent's commit --file=/dev/fd/0 is refused"
+run_hook "$NV_GATE" "$(bash_payload 'git commit -q -F - <<EOF
+x
+EOF' a1b2c3d4)"
+allowed "an agent's commit -F - goes through"
+run_hook "$NV_GATE" "$(bash_payload "$HUNG_2")"
+allowed "the main session's -F /dev/stdin goes through (Dan sees its prompt)"
+run_hook "$NV_GATE" "$(bash_payload 'python3 /dev/stdin <<EOF
+print(1)
+EOF' a1b2c3d4)"
+allowed "an agent's non git command naming /dev/stdin goes through"
+
+# ---------------------------------------------------------------------------------------------
 echo "with no python3: each gate says so rather than passing what it cannot read"
 NOPY="$WORK/nopy"; mkdir -p "$NOPY"
 for t in bash cat dirname sed head tail tr date mkdir rm mv grep cut wc printf env; do
@@ -412,6 +479,8 @@ refused "no-verify-gate.sh refuses an agent's skip it cannot read"
 says "naming python3" "python3"
 run_nopy "$NV_GATE" "$(bash_payload 'git commit -m wip' a1b2c3d4)"
 allowed "and lets a command naming no skip through"
+run_nopy "$NV_GATE" "$(bash_payload 'git commit -F /dev/stdin' a1b2c3d4)"
+refused "no-verify-gate.sh refuses an agent's /dev/stdin commit it cannot read"
 run_hook "$NV_GATE" '{"agent_id":"a1b2c3d4","tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m wip"'
 refused "an agent payload that cannot be parsed and names a skip is refused"
 run_nopy "$MON_GATE" "$(bash_payload 'until gh pr merge 7; do sleep 60; done' '' Monitor)"
