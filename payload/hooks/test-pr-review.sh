@@ -457,17 +457,22 @@ reset_state
 # Major, as every fixture here that must BLOCK is: since #1356 minor findings are advisory and allow.
 FAKE_CLAUDE_OUT="App/Sync.swift:3: x (L1). Should be: y. [severity: major]" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 wait_final "$HEAD_SHA"
-NOSHA="$WORKDIR/noshasum"; mkdir -p "$NOSHA"
-for t in awk tr od git bash cat date mkdir rm grep sed basename dirname env head mv touch wc sort printf python3 claude gh \
-         cksum cut uname hostname mktemp ls chmod readlink nohup tail xargs find stat sleep kill ps id; do
-  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$NOSHA/$t"
+# No od, which draws the key: since #1719 the key's line is an HMAC made in python3, so shasum is no
+# longer one of the tools a key needs.
+NOOD="$WORKDIR/nood"; mkdir -p "$NOOD"
+for t in awk tr git bash cat date mkdir rm grep sed basename dirname env head mv touch wc sort printf python3 claude gh \
+         cksum cut uname hostname mktemp ls chmod readlink nohup tail xargs find stat sleep kill ps id ln; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$NOOD/$t"
 done
-out="$(PATH="$NOSHA" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"; rc=$?
-check_eq "with no shasum the merge is still refused" "1" "$rc"
-check "and the refusal names the missing tool" "shasum" "$out"
-out="$(PR_REVIEW_READ=0123456789abcdef PATH="$NOSHA" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"
+out="$(PATH="$NOOD" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"; rc=$?
+check_eq "with no od the merge is still refused" "1" "$rc"
+check "and the refusal names the missing tool" "od, python3 or /dev/urandom is missing" "$out"
+out="$(PR_REVIEW_READ=0123456789abcdef PATH="$NOOD" bash "$LIB" check --dir "$REPO" --sha "$HEAD_SHA" 2>&1)"
 check_not "a presented key is not blamed when no key can be checked at all" "not this review's key" "$out"
 check_not "and does not send it to re-run the review" "pr-review.sh restart --dir" "$out"
+# Nowhere to write, two causes (#1719): with the secret already made, the key's line cannot be
+# written beside the review; with none, the secret itself cannot be made, and each says which.
+bash -c '. "$1" && ar__helper_secret_make' _ "$DIR/lib/ai-review-common.sh" || bad "#1719 the secret could be made for the no-write cases"
 chmod a-w "$AI_REVIEW_STATE_DIR"
 if ( : > "$AI_REVIEW_STATE_DIR/.probe" ) 2>/dev/null; then
   # Root, or a filesystem ignoring modes: the case cannot be produced here, so it is said, not failed (L411).
@@ -478,6 +483,13 @@ else
   chmod u+w "$AI_REVIEW_STATE_DIR"
   check_eq "with nowhere to write a key the merge is still refused" "1" "$rc"
   check "and the refusal says nothing could be written beside the review" "could not be written" "$out"
+  rm -f "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+  chmod a-w "$AI_REVIEW_STATE_DIR"
+  out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+  chmod u+w "$AI_REVIEW_STATE_DIR"
+  check_eq "#1719 with nowhere to make the secret the merge is still refused" "1" "$rc"
+  check "#1719 and the refusal says the secret could not be made" "could not be made or read" "$out"
+  check_not "#1719 and does not say the key's line could not be written" "could not be written beside" "$out"
 fi
 
 # 3b. finished clean: allowed at once.
@@ -814,24 +826,71 @@ check_eq "and the replaced review is read the same way, by its key" "0" "$rc"
 # Eight issuers at once each get a whole key that reads the review, none lost to another's write.
 fk="$WORKDIR/concurrent-review.txt"; printf 'status=ok\nfinished=42\n\n' > "$fk"; rm -f "$fk".readkey*
 for i in 1 2 3 4 5 6 7 8; do
-  bash -c '. "$1" && ar_review_issue_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
+  bash -c '. "$1" && ar_readkeys_issue "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
 done
 wait
 all_valid=1
 for i in 1 2 3 4 5 6 7 8; do
   k="$(cat "$WORKDIR/key.$i")"
-  { [ "${#k}" -eq 16 ] && bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$k"; } || all_valid=0
+  { [ "${#k}" -eq 16 ] && bash -c '. "$1" && ar_readkeys_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$k"; } || all_valid=0
 done
 [ "$all_valid" -eq 1 ] && ok \
   || bad "eight concurrent issuers each get a key that reads the review (got: $(for i in 1 2 3 4 5 6 7 8; do printf '[%s] ' "$(cat "$WORKDIR/key.$i")"; done))"
-bash -c '. "$1" && ar_review_key_valid "$2" 0123456789abcdef' _ "$DIR/lib/ai-review-common.sh" "$fk" && bad "a key never issued reads the review" || ok
+bash -c '. "$1" && ar_readkeys_valid "$2" 0123456789abcdef' _ "$DIR/lib/ai-review-common.sh" "$fk" && bad "a key never issued reads the review" || ok
 # Never rewritten, only appended: every key issued, first and seventieth, still reads (a trim raced
 # concurrent appends and dropped keys that had been shown; lessons review of #795).
-firstk="$(bash -c '. "$1"; ar_review_issue_key "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
-lastk="$(bash -c '. "$1"; for i in $(seq 1 70); do k="$(ar_review_issue_key "$2")"; done; printf %s "$k"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
-bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$firstk" && ok || bad "an early key stops reading after many showings"
-bash -c '. "$1" && ar_review_key_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$lastk" && ok || bad "the newest key does not read"
+firstk="$(bash -c '. "$1"; ar_readkeys_issue "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
+lastk="$(bash -c '. "$1"; for i in $(seq 1 70); do k="$(ar_readkeys_issue "$2")"; done; printf %s "$k"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
+bash -c '. "$1" && ar_readkeys_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$firstk" && ok || bad "an early key stops reading after many showings"
+bash -c '. "$1" && ar_readkeys_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$lastk" && ok || bad "the newest key does not read"
 rm -f "$WORKDIR"/key.*
+# A READ FORGED BY HAND (claude-config#1719). The read keys file held each key's plain sha256 and an
+# acknowledgement held only the review's finish time, so a session's own shell could append the hash
+# of a key it made up, or write the acknowledgement, and merge with the findings never shown. Neither
+# counts now: a key's line is an HMAC under the gate's secret, and so is an acknowledgement.
+f7fin="$(awk 'index($0, "finished=") == 1 { print substr($0, 10); exit } /^$/ { exit }' "$f7")"
+rm -f "$f7.acknowledged"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1719 with its acknowledgement gone the review is unread again" "2" "$rc"
+shownk="$(key_in "$out")"
+made=5eed5eed5eed5eed
+printf '%s\n' "$(printf '%s' "$made" | shasum -a 256 | awk '{ print $1 }')" >> "$f7.readkeys-$f7fin"
+out="$(fire_gate "PR_REVIEW_READ=$made gh pr merge 7 --squash")"; rc=$?
+check_eq "#1719 a key whose plain hash was appended to the read keys file by hand does not read the review" "2" "$rc"
+check_eq "#1719 and records no acknowledgement" "no" "$([ -e "$f7.acknowledged" ] && echo yes || echo no)"
+printf 'finished=%s\n' "$f7fin" > "$f7.acknowledged"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1719 an acknowledgement written by hand does not read the review" "2" "$rc"
+rm -f "$f7.acknowledged"
+out="$(fire_gate "PR_REVIEW_READ=$shownk gh pr merge 7 --squash")"; rc=$?
+check_eq "#1719 the key the refusal showed still reads the review, beside the forged line" "0" "$rc"
+out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1719 and the acknowledgement it recorded lets the next merge of that review through" "0" "$rc"
+# A COMMAND THAT NAMES THE READ KEYS (claude-config#1719), refused before it runs, as the typed helper
+# key's record is (#1700): the file in any case, the secret's path, and the functions that write them.
+for named in \
+  "printf '%s\\n' 0 >> ~/.claude/state/ai-review/1-pr-abc.txt.readkeys-1" \
+  "cat \"\$HOME\"/.claude/state/ai-review/*.TXT.READKEYS-*" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_readkeys_issue ~/.claude/state/ai-review/1-pr-abc.txt" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_readkeys_ack_write x.acknowledged 1 merge" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; cat \"\$(ar__helper_secret_file)\""; do
+  out="$(fire_gate "$named")"; rc=$?
+  check_eq "#1719 a command naming the read keys or what writes them is refused: $named" "2" "$rc"
+  check "#1719 saying only the review's own gates write them: $named" "only the lessons review's own gates write" "$out"
+done
+# Every function of the library that can reach the secret or a read keys file is one the gate refuses
+# by name, so a session cannot source the library and call it. Found by reading each function's body,
+# never from a list here, which would check only what somebody remembered to add (L96).
+reach_n=0
+while IFS= read -r fn; do
+  body="$(bash -c '. "$1"; declare -f "$2"' _ "$DIR/lib/ai-review-common.sh" "$fn")"
+  case "$body" in *ar__helper_secret*|*ar__helper_key_mac*|*helper-keys*|*readkeys*) ;; *) continue ;; esac
+  reach_n=$((reach_n + 1))
+  out="$(fire_gate "$fn")"; rc=$?
+  check_eq "#1719 the gate refuses a command calling $fn, which reaches the secret or the read keys" "2" "$rc"
+done < <(bash -c '. "$1"; declare -F' _ "$DIR/lib/ai-review-common.sh" | awk '{ print $3 }')
+[ "$reach_n" -ge 8 ] && ok \
+  || bad "#1719 the scan found $reach_n functions reaching the secret or the read keys, fewer than the 8 the library holds, so it read nothing"
 out="$(fire_gate "./scripts/merge-when-green.sh 7")"; rc=$?
 check_eq "a repo's own merge script is judged the same way" "0" "$rc"
 rm -f "$(final_of "$HEAD_SHA")"*

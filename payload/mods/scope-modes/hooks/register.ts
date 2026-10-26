@@ -73,6 +73,7 @@ import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
+import { transcriptPlaces } from './mod-kit/projects.ts'
 import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
@@ -1296,10 +1297,10 @@ const heardFor = (self: string) => (heard?.id === self ? heard.path : null)
 let startCwd: string | null = null
 // In a fresh session, or right after /clear, no classic hook has named the transcript yet (#1678), so
 // it is looked for where Claude Code keeps it: ~/.claude/projects/<the folder the session started in,
-// each character but a letter, a digit or a hyphen made a hyphen>/<session id>.jsonl (measured on this
-// Mac 2026-10-25, Claude Code 2.1.307). Only a file that is really there, never a guessed path, so a
-// session whose folder Claude Code spells otherwise (a very long one) falls back to the registry as
-// before. Its current folder is tried too, in case this load began after the session moved.
+// spelled as mod-kit's hooks/projects.ts says, a folder past 200 characters included (#1725)>/<session
+// id>.jsonl (measured on this Mac 2026-10-25, Claude Code 2.1.307 and 2.1.310). Only a file that is
+// really there, never a guessed path. Its current folder is tried too, in case this load began after
+// the session moved.
 // A check that fails is no answer (L10, L11): it is kept as `unread`, said beside the registry's
 // own why when the registry finds nothing either, never read as a transcript that is not there.
 type TranscriptFound = { path: string | null; unread?: string }
@@ -1315,12 +1316,20 @@ const atIdsPath = async ($: EngineInterface, self: string): Promise<TranscriptFo
     unread.push(`where it is kept could not be worked out (${msg(err)})`)
   }
   if (!home && !unread.length) unread.push('where it is kept could not be worked out (HOME is not set)')
+  const projects = `${home}/.claude/projects`
   for (const dir of home ? new Set([startCwd, here].filter((d): d is string => !!d)) : []) {
-    const path = `${home}/.claude/projects/${dir.replace(/[^A-Za-z0-9-]/g, '-')}/${self}.jsonl`
+    let places: string[] = []
     try {
-      if (await $.fs.exists(path)) return { path }
+      places = await transcriptPlaces(d => $.fs.list(d), projects, dir, self)
     } catch (err) {
-      unread.push(`whether it is at ${path} could not be checked (${msg(err)})`)
+      unread.push(`the folders under ${projects} could not be listed (${msg(err)})`)
+    }
+    for (const path of places) {
+      try {
+        if (await $.fs.exists(path)) return { path }
+      } catch (err) {
+        unread.push(`whether it is at ${path} could not be checked (${msg(err)})`)
+      }
     }
   }
   return { path: null, ...(unread.length ? { unread: unread.join('; ') } : {}) }

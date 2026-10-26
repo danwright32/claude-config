@@ -225,6 +225,21 @@ check "and says the findings were read" "this push presented their key" "$out"
 out="$(fire_push "git push")"; rc=$?
 check_eq "once read for a push, a later push of the same head is allowed" "0" "$rc"
 check_eq "and no second review ran" "1" "$(calls)"
+# A push acknowledgement or a read key written by hand counts for nothing (claude-config#1719): both
+# held only what a session's shell could compute, the finish time and a key's plain sha256.
+Ffin="$(meta "$F" finished)"
+cp "$F.push-acknowledged" "$WORKDIR/real-push-ack"
+printf 'finished=%s\n' "$Ffin" > "$F.push-acknowledged"
+out="$(fire_push "git push")"; rc=$?
+check_eq "#1719 a push acknowledgement written by hand does not read the review" "2" "$rc"
+rm -f "$F.push-acknowledged"
+made=5eed5eed5eed5eed
+printf '%s\n' "$(printf '%s' "$made" | shasum -a 256 | awk '{ print $1 }')" >> "$F.readkeys-$Ffin"
+out="$(fire_push "PR_REVIEW_READ=$made git push")"; rc=$?
+check_eq "#1719 a key whose plain hash was appended by hand does not let a push through" "2" "$rc"
+cp "$WORKDIR/real-push-ack" "$F.push-acknowledged"
+out="$(fire_push "git push")"; rc=$?
+check_eq "#1719 the acknowledgement the real key recorded still lets a later push through" "0" "$rc"
 
 # ===========================================================================================
 # 3. The merge gate is exactly as strict, and reuses the push's review rather than starting one.

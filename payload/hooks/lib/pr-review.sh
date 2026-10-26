@@ -821,8 +821,8 @@ ROWS
     { print }' "$rf" > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final" || { rm -f "$final.tmp"; return 1; }
   local fin
   fin="$(meta_of "$final" finished)"
-  [ -n "$fin" ] && [ "$(cat "$rf.acknowledged" 2>/dev/null)" = "finished=$fin" ] && cp "$rf.acknowledged" "$acknowledged" 2>/dev/null
-  [ -n "$fin" ] && [ "$(cat "$rf.push-acknowledged" 2>/dev/null)" = "finished=$fin" ] && cp "$rf.push-acknowledged" "$push_acknowledged" 2>/dev/null
+  [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.acknowledged" "$fin" merge && cp "$rf.acknowledged" "$acknowledged" 2>/dev/null
+  [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.push-acknowledged" "$fin" push && cp "$rf.push-acknowledged" "$push_acknowledged" 2>/dev/null
   [ -s "$rf.leftout" ] && cp "$rf.leftout" "$leftout" 2>/dev/null
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
   printf '%s' "$s"
@@ -1747,19 +1747,20 @@ do_check() {
       # them has already shown them to a session (claude-config#599).
       local read_by="" ack_file="$acknowledged"
       [ "$gate" = push ] && ack_file="$push_acknowledged"
-      if [ -n "$fin" ] && [ "$(cat "$acknowledged" 2>/dev/null)" = "finished=$fin" ]; then
+      # Each acknowledgement carries a MAC under the gate's secret (claude-config#1719), so one a
+      # session wrote by hand reads as no acknowledgement at all.
+      if [ -n "$fin" ] && ar_readkeys_ack_ok "$acknowledged" "$fin" merge; then
         read_by="merge"
-      elif [ -n "$fin" ] && [ "$gate" = push ] && [ "$(cat "$push_acknowledged" 2>/dev/null)" = "finished=$fin" ]; then
+      elif [ -n "$fin" ] && [ "$gate" = push ] && ar_readkeys_ack_ok "$push_acknowledged" "$fin" push; then
         read_by="push"
       fi
       if [ -n "$read_by" ]; then
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), already read by a $read_by that presented their key."
         return 0
       fi
-      if [ -n "$fin" ] && ar_review_key_valid "$final" "${PR_REVIEW_READ:-}"; then
-        # Braced, so a refused redirection is silenced too; a failed write is said, since the next
-        # attempt will then need the key again.
-        { printf 'finished=%s\n' "$fin" > "$ack_file"; } 2>/dev/null \
+      if [ -n "$fin" ] && ar_readkeys_valid "$final" "${PR_REVIEW_READ:-}"; then
+        # A failed write is said, since the next attempt will then need the key again.
+        ar_readkeys_ack_write "$ack_file" "$fin" "$gate" \
           || echo "(The read could not be recorded beside $final, so a later $act of this head will need the key again.)"
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), read: this $act presented their key."
         return 0
@@ -1798,7 +1799,7 @@ do_check() {
       prior_rounds="$(round_rows)"
       this_round=$(( $(printf '%s\n' "$prior_rounds" | grep -c .) + 1 ))
       local readkey keyrc=0
-      readkey="$(ar_review_issue_key "$final")" || keyrc=$?
+      readkey="$(ar_readkeys_issue "$final")" || keyrc=$?
       echo "Refusing to $act until these are read: the lessons review of $scope_words at $short finished ($took) with $block_n $noun. Here they are. Check each against the code, fix what is real or say why it is not in a comment on the pull request beginning \"Lessons review at $short\", quoting each finding it answers on a line of its own beginning \"> \", exactly as shown here. Every later review of it reads that comment on either Mac, and a finding raised again that it quotes, at lines unchanged since, counts as answered. Then $act with their read key in front of the $act command:"
       if [ "$keyrc" -eq 0 ] && [ -n "$readkey" ]; then
         echo "    PR_REVIEW_READ=$readkey <the $act command>"

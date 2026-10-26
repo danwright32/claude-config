@@ -100,7 +100,7 @@ ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars
 
 # The READ KEYS of one pull request review's findings (claude-config#788). The one message that
 # shows the findings, the merge gate's refusal, ISSUES a fresh random key each time it shows them and
-# prints it, and only its sha256 is kept, one per line, in <file>.readkeys-<finished stamp>. (The
+# prints it, and only a MAC of it is kept, one per line, in <file>.readkeys-<finished stamp>. (The
 # nudge issued one too while it showed these reviews; it stopped showing them in
 # claude-config#1090.) A merge presenting PR_REVIEW_READ=<key> then proves the findings reached
 # the session doing the merge, because the plain key exists nowhere but in a message that carried
@@ -110,25 +110,36 @@ ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars
 # the same head starts with no valid key. A line under PIPE_BUF is appended atomically, so
 # concurrent issuers never lose each other's key. A key that cannot be issued prints nothing and
 # fails, and the caller refuses, since no merge can present a key nobody was shown (L42).
-ar__review_keys_file() {   # $1 = finished review file -> the hash file for its current stamp
+#
+# A LINE A SESSION CANNOT MINT (claude-config#1719). Each line was the key's plain sha256, so a
+# session's own shell could append the hash of a key it made up and present that key, merging with
+# the findings never shown. Each line is now the key's HMAC under the secret the typed helper key's
+# record uses (#1700, below), and so is the acknowledgement a read leaves beside the review: it held
+# only the review's finish time, which a session could write as easily. pr-review-gate.sh refuses any
+# Bash command naming a read keys file or these functions, as it does the helper key's record. A
+# line or an acknowledgement written before this change is in the old form and no longer counts, so
+# a key shown just before an install is asked for again.
+ar__readkeys_file() {   # $1 = finished review file -> the MAC file for its current stamp
   local fin
   fin="$(awk 'index($0, "finished=") == 1 { print substr($0, 10); exit } /^$/ { exit }' "$1" 2>/dev/null)"
   case "$fin" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s' "$1.readkeys-$fin"
 }
-ar__key_hash() { printf '%s' "$1" | shasum -a 256 2>/dev/null | awk '{ print $1 }'; }
 #
 # Exits with WHY a key could not be issued, each its own cause and remedy (L11, L111), read back
 # into words by ar_review_key_failure: 2 the review records no finish time, 3 a tool it needs
-# (od, shasum, /dev/urandom) is missing, 4 nothing could be written beside the review.
-ar_review_issue_key() {   # $1 = finished review file -> prints a fresh key
+# (od, python3, /dev/urandom) is missing, 4 nothing could be written beside the review, 5 the
+# secret the key is kept under could not be made or read.
+ar_readkeys_issue() {   # $1 = finished review file -> prints a fresh key
   local kf k h
-  kf="$(ar__review_keys_file "$1")" || return 2
-  command -v od >/dev/null 2>&1 && command -v shasum >/dev/null 2>&1 && [ -r /dev/urandom ] || return 3
+  kf="$(ar__readkeys_file "$1")" || return 2
+  command -v od >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && [ -r /dev/urandom ] || return 3
   k="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
   [ "${#k}" -eq 16 ] || return 3
-  h="$(ar__key_hash "$k")"
-  [ -n "$h" ] || return 3
+  { mkdir -p "$AR_STATE_DIR"; } 2>/dev/null || return 5
+  ar__helper_secret_make || return 5
+  h="$(ar__helper_key_mac "$k")"
+  [ "${#h}" -eq 64 ] || return 5
   # Braced, so a refused redirection is silenced too: it fails before an inner 2> applies.
   # Only ever appended, never rewritten: a trim raced concurrent appends and dropped keys that had
   # been shown (lessons review of #795). The size is 65 bytes per showing of this one review, so
@@ -136,21 +147,42 @@ ar_review_issue_key() {   # $1 = finished review file -> prints a fresh key
   { printf '%s\n' "$h" >> "$kf"; } 2>/dev/null || return 4
   printf '%s' "$k"
 }
-# The sentence for an ar_review_issue_key failure: what went wrong and the remedy that fits it.
+# The sentence for an ar_readkeys_issue failure: what went wrong and the remedy that fits it.
 ar_review_key_failure() {   # $1 = its exit code, $2 = the review file, $3 = the restart command
   case "$1" in
     2) printf 'this review file records no finish time, so it cannot be given a read key and no merge can show these were read; run it again with: %s' "$3" ;;
-    3) printf 'no read key could be issued because od, shasum or /dev/urandom is missing on this machine, so no merge can show these were read; install the missing tool (re-running the review will not help), or merge with the override after telling Dan why' ;;
+    3) printf 'no read key could be issued because od, python3 or /dev/urandom is missing on this machine, so no merge can show these were read; install the missing tool (re-running the review will not help), or merge with the override after telling Dan why' ;;
     4) printf 'no read key could be issued because it could not be written beside %s, so no merge can show these were read; make that folder writable, or merge with the override after telling Dan why' "$2" ;;
+    5) printf 'no read key could be issued because the secret it is kept under, in %s, could not be made or read (the folder not writable, or another gate still replacing a damaged one), so no merge can show these were read; try the same command again, and if it is refused the same way make that folder writable, or merge with the override after telling Dan why' "$AR_STATE_DIR" ;;
     *) printf 'no read key could be issued (cause %s unknown), so no merge can show these were read; merge with the override after telling Dan why' "$1" ;;
   esac
 }
-ar_review_key_valid() {   # $1 = finished review file, $2 = presented key -> 0 when it was issued
+ar_readkeys_valid() {   # $1 = finished review file, $2 = presented key -> 0 when it was issued
   local kf h
   case "$2" in ''|*[!a-f0-9]*) return 1 ;; esac
-  kf="$(ar__review_keys_file "$1")" || return 1
-  h="$(ar__key_hash "$2")"
-  [ -n "$h" ] && grep -qxF "$h" "$kf" 2>/dev/null
+  kf="$(ar__readkeys_file "$1")" || return 1
+  h="$(ar__helper_key_mac "$2")" || return 1
+  [ "${#h}" -eq 64 ] && grep -qxF "$h" "$kf" 2>/dev/null
+}
+# The acknowledgement a read leaves (claude-config#788, #599): the review's finish time, which names
+# the review it read, and a MAC binding that time to the action that presented the key, so a push's
+# acknowledgement cannot stand for a merge's. $3 is merge or push. Written by lib/pr-review.sh once a
+# presented key is valid, and copied with the review when a later head carries it over.
+ar__readkeys_ack_mac() {   # $1 = finish time, $2 = merge or push -> its MAC, or return 1
+  ar__helper_key_mac "ack:$2:$1"
+}
+ar_readkeys_ack_write() {   # $1 = acknowledgement file, $2 = finish time, $3 = merge or push -> 0 once written
+  local m
+  case "$2" in ''|*[!0-9]*) return 1 ;; esac
+  m="$(ar__readkeys_ack_mac "$2" "$3")" || return 1
+  [ "${#m}" -eq 64 ] || return 1
+  { printf 'finished=%s\nmac=%s\n' "$2" "$m" > "$1"; } 2>/dev/null
+}
+ar_readkeys_ack_ok() {   # $1 = acknowledgement file, $2 = finish time, $3 = merge or push -> 0 when it is one
+  local m
+  case "$2" in ''|*[!0-9]*) return 1 ;; esac
+  m="$(ar__readkeys_ack_mac "$2" "$3")" || return 1
+  [ "${#m}" -eq 64 ] && [ "$(cat "$1" 2>/dev/null)" = "finished=$2"$'\n'"mac=$m" ]
 }
 
 # READ KEYS TYPED IN FRONT OF THE MERGE HELPER (claude-config#1673). A gate reads a typed merge's key

@@ -610,7 +610,7 @@ for forged in \
   ". ~/.claude/hooks/lib/ai-review-common.sh; touch \"\$(ar__helper_keys_dir)/x\""; do
   gate_out="$(present "$forged")"; grc=$?
   check_eq "#1700 a command naming the typed key record is refused: $forged" "2" "$grc"
-  check "#1700 saying only the gate writes it: $forged" "only pr-review-gate.sh writes" "$gate_out"
+  check "#1700 saying only the gate writes it: $forged" "only the lessons review's own gates write" "$gate_out"
 done
 check_eq "#1700 and nothing was recorded by any of them" "" "$(ls "$KEYS_DIR" 2>/dev/null)"
 gate_out="$(present "ls ~/.claude/state/ai-review")"; grc=$?

@@ -87,7 +87,14 @@ and settles its own surfaces in rounds of its own before it is built.
    mod keeps in a module variable is gone after a reload. A fact about the session (what it has
    recorded, counted, been told or asked, whether a turn runs) is kept in `$.state`, which the
    engine holds for the session across a reload; one that more than one hook or copy of the module
-   changes is written by version and retried, so two writes at once lose neither. A module variable
+   changes is written by version and retried, so two writes at once lose neither. The retry lands
+   in the same hook run because no read in a run is a snapshot, whatever the engine's type file says
+   ("Every `get` of one dispatch reads one moment"): measured on 2026-10-25 on 2.1.310 (#1720), a
+   read sees the run's own write and another dispatch's, and of two versioned writers racing in one
+   tool.call hook run or one timer's dispatch the loser's second read saw the winner's write and its
+   retry landed. `tests/test-state-snapshot.sh` holds that on the real engine and fails the day a
+   later one makes a run's reads one snapshot, when a refused write would have to be carried to the
+   next run instead. A module variable
    stays only for what a reload may lose: a cache filled from `$.state` (or from disk) at each start
    and written through, a flag that holds a notice to once (a reload says it once more at most), a
    timer (the engine cancels the old module's waits and each start arms them again), or the
@@ -368,6 +375,11 @@ the spec rather than chosen afresh, and open to Dan changing:
   reads as though the conversation in front of Dan is hung: "agent fix CI: PR 776 rerun wait
   waiting 12m, 1 job running". No job item asks Dan to act. An entry whose process and output file
   are both gone is dropped rather than shown.
+- A job watcher that is loaded but whose list could not be read (#1727; since #1695 it also refuses
+  a malformed stored list) is said, never shown as no jobs (L10): "job list unreadable, ask Claude
+  to check", amber, in #1583's plain style and, like a quiet command, only once Claude's turn has
+  ended. The debug log names why, once. A watcher not loaded at all is no job item, and one whose
+  loaded copy lacks the list is told as the skew (#1281); neither is this.
 - A background agent listed as running whose tool calls have stopped for twenty minutes (#759) is
   named ahead of the jobs: "agent fix CI quiet 34m, left to Claude"; Claude is told once on its next
   tool result, with the agent, how long, and the last tool call it started and whether it returned.
