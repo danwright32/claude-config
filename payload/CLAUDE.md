@@ -213,6 +213,7 @@ On Dans-MacBook-Pro:
 - `~/trypennie`: Next.js 15 + Prismic CMS + Google Maps
 - `~/Apps/PET`: the Project Enrollment Tracker (Node + Supabase + Cloudflare Pages). Moved here on 2026-10-23 from the iCloud synced `~/Documents/Documents - Dan’s MacBook Pro/Project Enrollment Tracker (PET)` so its `.env` credentials stop syncing to iCloud (PET #1924, #1627).
 - `~/Apps/Slate`: Next.js 16 + Cloudflare Workers + Supabase, Pennie's booking app. Moved here on 2026-10-26 from `~/Documents/Documents - Dan’s MacBook Pro/Slate`, out of the folder iCloud Desktop & Documents syncs, because iCloud's sync process ran at 91% of a core and drove load past 130 while the pre-push gate built (lesson L759).
+- `~/Apps/Pivot`: Cloudflare Workers + the Cloudflare agents SDK, the AI web chat that enrolls leads into debt resolution (repo pivot). PUBLIC for now, so nothing private is ever committed; the call transcripts and research notes in the folder are gitignored on purpose.
 
 The first four above are where they were recorded before this section was split by machine, and their
 absence from Daniels-MacBook-Pro-2 is the only evidence for putting them here. Nothing has
