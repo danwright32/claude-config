@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { Sessions, SessionsList, SessionsRecord } from '../types/index.d.ts'
 import { remember } from './bounded.ts'
+import { transcriptPlaces } from './mod-kit/projects.ts'
 
 // ONE record of the open sessions on this Mac, read by the collision guard (#605), the background
 // job watcher (#611) and the goal tracker (#612), which the milestone said must not each build
@@ -44,11 +45,6 @@ const dirOf = (h: string) => `${h}/.claude/state/sessions`
 const archiveOf = (h: string) => `${h}/.claude/state/sessions-archive`
 const DAY_NAME = /^\d{4}-\d{2}-\d{2}$/
 const projectsOf = (h: string) => `${h}/.claude/projects`
-// Claude Code files a session's transcript under its starting folder, every character but a
-// letter, a digit or a dash turned into a dash (measured against all 1451 transcripts on this Mac,
-// 2026-10-04: the one miss was a session that changed folder, found by its id instead).
-const folderOf = (cwd: string) => cwd.replace(/[^A-Za-z0-9-]/g, '-')
-
 // The one writer of this session's record, made inside engine.create (the engine allows the built
 // $ to be used there, not passed out) and used by every hook. Every write goes through one queue, so
 // two hooks updating the record at once cannot interleave and lose either change (assume it runs
@@ -429,17 +425,30 @@ export const register: Register = on => {
     const transcriptOf = async (h: string, r: SessionsRecord, now: number): Promise<{ path: string | null; unread?: string }> => {
       if (!SESSION_ID.test(r.sessionId)) return { path: null }
       const failures: string[] = []
-      for (const p of [found.get(r.sessionId), r.transcriptPath, `${projectsOf(h)}/${folderOf(r.cwd)}/${r.sessionId}.jsonl`]) {
-        if (!p) continue
-        let there = false
+      // Where its folder's spelling puts it: named outright for an ordinary folder, and for one past
+      // 200 characters only by listing the folders that begin the same way (#1725), so that listing
+      // is made only once the places already known have missed.
+      const spelled = async (): Promise<string[]> => {
         try {
-          there = await built.fs.exists(p)
+          return await transcriptPlaces(d => built.fs.list(d), projectsOf(h), r.cwd, r.sessionId)
         } catch (err) {
-          failures.push(`whether ${p} is there could not be checked (${errText(err)})`)
+          failures.push(`the folders under ${projectsOf(h)} could not be listed (${errText(err)})`)
+          return []
         }
-        if (there) {
-          remember(found, r.sessionId, p, CACHE_MAX)
-          return { path: p }
+      }
+      for (const p of [found.get(r.sessionId), r.transcriptPath, spelled]) {
+        for (const q of typeof p === 'function' ? await p() : [p]) {
+          if (!q) continue
+          let there = false
+          try {
+            there = await built.fs.exists(q)
+          } catch (err) {
+            failures.push(`whether ${q} is there could not be checked (${errText(err)})`)
+          }
+          if (there) {
+            remember(found, r.sessionId, q, CACHE_MAX)
+            return { path: q }
+          }
         }
       }
       const last = missed.get(r.sessionId)
