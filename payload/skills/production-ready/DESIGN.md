@@ -79,7 +79,9 @@ Fan out one specialist auditor per **applicable** domain. Each receives the prof
 - Also surface gaps **beyond** its checklist (the checklist is a floor, not a ceiling).
 - Return findings against a fixed schema:
   `{ check, status: pass|partial|missing|na, severity: critical|high|medium|low,
-     evidence: "path:line or why", remediation, effort: S|M|L }`
+     evidence: "path:line or why", remediation, effort: S|M|L, law }`, where `law` names
+  the law a gap exposes the business to (empty when none), plus a `notInspected` list of the
+  systems or settings it could not look at, with why.
 
 ### Phase 2: Adversarial verification
 For every **high or critical** finding with status `missing` or `partial`, spawn a
