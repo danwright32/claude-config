@@ -16,12 +16,14 @@
 # was used or nothing bypassed, against those and every SKIP_ or ALLOW_ override the commands set. A
 # command a hook refused never ran and does not count; one that ran and failed does. A clause that
 # qualifies itself ("no OTHER overrides") is not a denial, so a report naming its skip goes through.
+# Nor is a denial the report withdraws ("the earlier claim that no overrides were used is withdrawn")
+# or quotes after a reporting verb (It says "no overrides were used"), so a report corrected the way
+# a refusal asks, or pasting the refusal, is not refused again (claude-config#1702).
 #
 # WHAT IT DOES on a contradiction: refuses the hand-back, quoting the claim and the commands, so the
-# agent corrects its report. The refusal says to DELETE the false sentence, and not to withdraw it,
-# correct it in place or quote it: the check reads a denial wherever its words appear, so each of
-# those is refused again (#1702: in the #1674 probe a withdrawn and a quoted correction were both
-# refused; reading those shapes as not a denial was tried and kept letting stood-by denials through). A report the agent will not correct is let through on the third attempt
+# agent corrects its report. The refusal asks for the plainest correction, deleting the false
+# sentence (#1732); a withdrawal or a quotation of it, read as above, goes through too (#1716). A
+# report the agent will not correct is let through on the third attempt
 # (HANDBACK_CHECK_MAX_REFUSALS, default 2), so a report is never stranded by a misreading here, and
 # then the contradiction is said to Dan and spooled for the main session's end of turn review
 # (lib/issue-spool.sh note), since a report delivered with a false claim must not arrive unremarked.
@@ -99,7 +101,7 @@ if [[ -n "$key" ]] && mkdir -p "$state" 2>/dev/null; then
   if [ "$count" -lt "$max" ] && printf '%s\n' "$((count + 1))" > "$state/$key" 2>/dev/null; then
     printf '%s\n' "REFUSED (handback-claims-gate.sh): your report contradicts your own commands.
 $found
-Correct the report before handing back: name each of these, say why it was done, and delete the sentence that says it was not, entirely. Do not withdraw it, correct it in place, or quote it or this refusal: each of those still contains the denial, so the report is refused again. The main session acts on this report, so it has to say what happened (claude-config#1587, #1702)." >&2
+Correct the report before handing back: name each of these, say why it was done, and delete the sentence that says it was not. The main session acts on this report, so it has to say what happened (claude-config#1587, #1702)." >&2
     exit 2
   fi
   [ "$count" -lt "$max" ] && why="unrefused, because the gate could not keep count of its refusals in $state"

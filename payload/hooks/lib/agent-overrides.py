@@ -257,12 +257,97 @@ def _clauses(report):
 NAMED_OVERRIDE = re.compile(r"\b((?:skip|allow)_[a-z0-9_]*[a-z0-9])\b")
 
 
+# A denial the report WITHDRAWS or QUOTES is not a claim (claude-config#1702). In the #1674 probe on
+# 2026-10-24 an agent corrected its report exactly as the refusal asks, and was refused twice more:
+# once for "so the earlier claim that no overrides were used is withdrawn", once for pasting the
+# refusal, whose own words are It says "Probe report: no overrides were used.". Both readings are kept
+# narrow, so a denial merely NEAR either shape is still read:
+#   RETRACTED: "<the> claim/statement that <denial> is/was withdrawn, retracted, false, wrong, untrue or
+#     incorrect", or "I withdraw/retract the <earlier> claim that <denial>". Only the withdrawn span is
+#     removed (in the second shape, up to the end of the first denial after "that"), so a fresh denial
+#     after it in the same clause is still read; the word "withdrawn" anywhere else ("the withdrawn
+#     branch") retracts nothing. In the first shape the retraction must come STRAIGHT after the denial,
+#     nothing between: the denial ("no overrides"), at most its own passive verb ("were used"), then
+#     is/was/are/has been/have been, an optional "now", and the retraction word. So "the claim that no
+#     overrides were used stands as the count was wrong" still denies; a word list of what may sit
+#     between was patched twice by the lessons review of #1702 and was still incomplete.
+#   QUOTED: a span in double quotes (straight or curly) straight after a reporting verb (says, said,
+#     reads, quoted, quotes, stated, claimed, wrote, contains) whose speaker is somebody else: the
+#     refusal ('It says "..."'), another agent or another report ('The builder's report said "..."').
+#     A quote is the report's OWN words, and so still a claim, when its speaker is I or we, a first
+#     person possessive ('My report says', 'Our status says', 'My earlier hand-back said'), or the
+#     report itself ('The report says', 'This summary reads', 'The final summary says', 'This hand back
+#     says'). Dan, signing off #1716: a report must not hide its denial behind its own name. A denial
+#     in quotes nothing attributes ('Done. "No overrides."') and quotes around one word in a denial
+#     are still read too.
+CLAIM_THAT = re.compile(r"\b(?:claim|statement)s?\s+that\b")
+# Matched exactly at a denial's end. The only words allowed before the predicate are the denial's own
+# passive verb, which the denial patterns stop short of ("no overrides" | "were used"); nothing else.
+RETRACTED_BY = re.compile(
+    r"(?:\s+(?:was|were)\s+(?:used|set|passed|applied|run|needed|taken))?"
+    r"\s+(?:is|was|are|has\s+been|have\s+been)\s+(?:now\s+)?(?:withdrawn|retracted|false|wrong|untrue|incorrect)\b")
+WITHDRAWING = re.compile(
+    r"\b(?:withdraw|withdrawing|withdrew|retract|retracting)\s+(?:the|my|that)\s+"
+    r"(?:earlier\s+|previous\s+|original\s+|first\s+)?(?:claim|statement)s?\s+that\b")
+QUOTED = re.compile(
+    r"\b(says|said|reads|quoted|quotes|stated|claimed|wrote|contains)(\s*:?\s*)"
+    "[\"\u201c][^\"\u201c\u201d\\n]*[\"\u201d]", re.I)
+# The nouns a report calls itself by. "The <noun>" or "this <noun>", with up to two plain words between
+# ("the final summary") and never a possessive ("the probe's report" is somebody else's).
+_SELF_NOUN = (r"report|summary|hand[\s-]?back|message|status|update|reply|response|result|results|"
+              r"note|notes|write[\s-]?up|answer")
+_AUX = r"(?:\s+(?:has|had|have|also|already|just|once|earlier|previously|now|still|clearly|plainly|explicitly))*"
+SELF_SPEAKER = re.compile(
+    r"(?:\b(?:i|we)|\b(?:my|our)(?:\s+[a-z-]+){1,3}|\b(?:this|the)(?:\s+(?![a-z-]*'s\b)[a-z-]+){0,2}?\s+(?:"
+    + _SELF_NOUN + r"))" + _AUX + r"\s*$", re.I)
+
+
+def _unquote(report):
+    """The report with every quotation of SOMEBODY ELSE's words removed, its own kept."""
+    def repl(m):
+        before = report[max(0, m.start() - 120):m.start()].replace(chr(0x2019), "'")
+        before = re.split(r"[.!?\n]\s", before)[-1]
+        return m.group(0) if SELF_SPEAKER.search(before) else m.group(1) + m.group(2)
+    return QUOTED.sub(repl, report)
+
+
+def _denial_end(text):
+    """Where the first denial in text ends, or None when it holds none."""
+    ends = [d.end() for d in (re.search(p, text) for p in NV_DENIALS + GENERAL_DENIALS) if d]
+    return min(ends) if ends else None
+
+
+def _unretracted(low):
+    """The clause with every denial it withdraws removed."""
+    pos = 0
+    while True:
+        m = CLAIM_THAT.search(low, pos)
+        if not m:
+            break
+        rest = low[m.end():]
+        ends = sorted({d.end() for d in (re.search(p, rest) for p in NV_DENIALS + GENERAL_DENIALS) if d})
+        r = next((x for x in (RETRACTED_BY.match(rest, e) for e in ends) if x), None)
+        if r:
+            low = low[:m.start()] + " " + low[m.end() + r.end():]
+            pos = m.start() + 1
+        else:
+            pos = m.end()
+    while True:
+        m = WITHDRAWING.search(low)
+        if not m:
+            return low
+        e = _denial_end(low[m.end():])
+        # A withdrawal naming no denial withdraws nothing this check reads; drop only its own words.
+        cut = m.end() + (e or 0)
+        low = low[:m.start()] + " " + low[cut:]
+
+
 def claims(report):
     """(no-verify denials, general denials): the first a list of clauses, the second of (clause, the
     override names it is about, or None for every override)."""
     nv, gen = [], []
-    for c in _clauses(report):
-        low = c.lower()
+    for c in _clauses(_unquote(report)):
+        low = _unretracted(c.lower())
         if QUALIFIED.search(low):
             continue
         if any(re.search(p, low) for p in NV_DENIALS):

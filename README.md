@@ -1550,13 +1550,20 @@ Three gates close the three parts of that, all reading commands through one libr
   agent's own transcript shows it ran (one a hook refused never ran; one that ran and failed did), and
   refuses a report they contradict, quoting both, so the agent corrects it. A clause that qualifies
   itself ("no other overrides") is not a denial, and one naming an override in full is about that
-  override only. The refusal tells the agent to delete the false sentence outright, and not to
-  withdraw it ("the earlier claim that no overrides were used is withdrawn"), correct it in place, or
-  quote it or the refusal: the check reads a denial wherever its words appear, so each of those is
-  refused again, while a report with the sentence deleted goes through on the first retry (#1702).
-  Reading a withdrawn or quoted denial as no denial was tried (#1716) and dropped, because every
-  version still let some denial the report stood by through. A report the agent will not correct
-  goes through on the third attempt, said to Dan and spooled for the end of turn review, so a report is never stranded. Over the 911 hand-backs on
+  override only. Nor is a denial the report withdraws ("the earlier claim that no overrides were used
+  is withdrawn", "I withdraw the claim that ...", or one it calls false, wrong, untrue or incorrect),
+  nor one in double quotes straight after a reporting verb whose speaker is somebody else (It says "no
+  overrides were used", the builder's report said "..."). A quote whose speaker is I, we, my or our
+  something, or the report itself ("The report says", "This summary reads", "My earlier hand-back
+  said") is the report's own words and still a claim, so a report cannot hide its denial behind its
+  own name. So a report corrected as the refusal asks, or pasting the refusal, goes
+  through on its first correction (#1702); the refusal itself asks for the plainest correction, deleting
+  the false sentence (#1732). The retraction has to come straight after the denial, with
+  nothing between but the denial's own "were used", so "the claim that no overrides were used stands
+  as the count was wrong" still denies.
+  A denial merely near such words is still read: over the 977 distinct hand-backs on the personal
+  MacBook on 2026-10-25 this changed the reading of 5, each a withdrawn or quoted claim. A report the agent will not correct goes through on the third attempt, said to Dan
+  and spooled for the end of turn review, so a report is never stranded. Over the 911 hand-backs on
   the personal MacBook it found one real contradiction (a report saying "I never used
   `SKIP_PAYLOAD_WRITE_CHECK=1`" after two commands that set it) and no false one. Claude Code does
   run PreToolUse hooks for the SubagentHandback tool, measured on 2026-10-24 (#1674): a probe agent
