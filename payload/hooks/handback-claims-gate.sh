@@ -21,10 +21,9 @@
 # a refusal asks, or pasting the refusal, is not refused again (claude-config#1702).
 #
 # WHAT IT DOES on a contradiction: refuses the hand-back, quoting the claim and the commands, so the
-# agent corrects its report. The refusal says to DELETE the false sentence, and not to withdraw it,
-# correct it in place or quote it: the check reads a denial wherever its words appear, so each of
-# those is refused again (#1702: in the #1674 probe a withdrawn and a quoted correction were both
-# refused; reading those shapes as not a denial was tried and kept letting stood-by denials through). A report the agent will not correct is let through on the third attempt
+# agent corrects its report. The refusal asks for the plainest correction, deleting the false
+# sentence (#1732); a withdrawal or a quotation of it, read as above, goes through too (#1716). A
+# report the agent will not correct is let through on the third attempt
 # (HANDBACK_CHECK_MAX_REFUSALS, default 2), so a report is never stranded by a misreading here, and
 # then the contradiction is said to Dan and spooled for the main session's end of turn review
 # (lib/issue-spool.sh note), since a report delivered with a false claim must not arrive unremarked.
