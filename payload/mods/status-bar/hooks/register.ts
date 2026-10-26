@@ -297,7 +297,8 @@ const readPr = async ($: EngineInterface, root: string): Promise<boolean> => {
 }
 
 // The job watcher may not be loaded: that is no job item, never an error. One that is loaded and
-// fails to answer is named once in the debug log.
+// fails to answer, or answers something that is not a list, is named once in the debug log and
+// sets jobsUnreadable, so the band says "job list unreadable" once Claude's turn has ended (#1727).
 const readJobs = async ($: EngineInterface) => {
   // The noun is called in place each time, as the engine requires, never held in a variable.
   try {
