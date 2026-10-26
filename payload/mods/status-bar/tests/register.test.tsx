@@ -1041,6 +1041,26 @@ test('a job list that cannot be read is said once Claude has stopped, not while 
   await ui.unmount()
 })
 
+// A loaded watcher whose list answers something that is not a list is no more readable than one that
+// throws (push review of #1727): never read as no jobs.
+const shapelessWatcher: { name: string; register: Register } = {
+  name: 'job-watcher',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, jobs: { list: async () => ({ jobs: [] }), agents: async () => [] } }
+    })
+  },
+}
+test('a job list answered as something other than a list is said as unreadable, and named in the debug log (#1727)', { plugins: [modKit, shapelessWatcher] }, async ($, on) => {
+  const { clock, debug } = world(on)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe(UNREADABLE)
+  expect(debug.filter(l => /jobs could not be read.*not a list/.test(l))).toHaveLength(1)
+  await ui.unmount()
+})
+
 // A watcher whose list fails the first time it is asked, then answers with no jobs at all.
 const flakyWatcher: { name: string; register: Register } = {
   name: 'job-watcher',

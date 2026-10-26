@@ -132,6 +132,7 @@ const unreadableItem = (isUnreadable: boolean, isWorking: boolean): Item[] =>
  * The needs-a-look line, amber where something needs a look and lavender for work only going
  * along, most urgent first so a narrow window cuts off what can wait longest: the scope modes in bold (no build or winding down, and away, can be on at once, each its own
  * bold item divided like the rest), then a failing or running PR, background agents gone quiet,
+ * a job list that could not be read (`jobsUnreadable`, only once Claude's turn has ended, #1727),
  * this conversation's jobs (not progressing, then waiting, then running), each background agent's
  * jobs under its task's name, and unpushed commits. Empty when nothing needs a look and no mode is
  * on, so the band does not show.

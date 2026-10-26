@@ -301,8 +301,10 @@ const readPr = async ($: EngineInterface, root: string): Promise<boolean> => {
 const readJobs = async ($: EngineInterface) => {
   // The noun is called in place each time, as the engine requires, never held in a variable.
   try {
-    const list = await ($ as unknown as { jobs: Jobs }).jobs.list()
-    jobs = Array.isArray(list) ? list.filter(isJob) : []
+    const list: unknown = await ($ as unknown as { jobs: Jobs }).jobs.list()
+    // An answer that is not a list is no more readable than a throw, never no jobs (#1727, L10).
+    if (!Array.isArray(list)) throw new Error(`the watcher answered ${list === null ? 'null' : typeof list}, not a list`)
+    jobs = list.filter(isJob)
     jobsNoted = false
     jobsUnreadable = false
   } catch (err) {
