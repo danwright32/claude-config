@@ -208,7 +208,7 @@ On Daniels-MacBook-Pro-2 (personal MacBook):
 - `~/claude-config-sync`: the clone the scheduled sync actually runs from
 
 On Dans-MacBook-Pro:
-- `~/Documents/Documents - Dan’s MacBook Pro/Bidspoke`: Next.js 14 + Cloudflare Workers + Supabase. Moved here from `~/Documents/Bidspoke` on 2026-10-02 when the Documents folder was reorganised (the new parent is the folder iCloud Desktop & Documents creates), so quote the path: it has spaces and a curly apostrophe.
+- `~/Apps/Bidspoke`: Next.js 14 + Cloudflare Workers + Supabase. Moved here on 2026-10-25 from `~/Documents/Documents - Dan’s MacBook Pro/Bidspoke`, out of the folder iCloud Desktop & Documents syncs, whose sync churn starved file watching and loaded the machine (Bidspoke #2007, lesson L759).
 - `~/eavesly-web-app`: Vite + React + TypeScript + shadcn/ui + Supabase
 - `~/trypennie`: Next.js 15 + Prismic CMS + Google Maps
 - `~/Apps/PET`: the Project Enrollment Tracker (Node + Supabase + Cloudflare Pages). Moved here on 2026-10-23 from the iCloud synced `~/Documents/Documents - Dan’s MacBook Pro/Project Enrollment Tracker (PET)` so its `.env` credentials stop syncing to iCloud (PET #1924, #1627).
