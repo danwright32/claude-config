@@ -1649,6 +1649,16 @@ name with none of its text, and a push run from a subdirectory showed both judge
 that subdirectory, so it went through unjudged. `test-push-changes.sh` fails if either gate grows
 its own copy again.
 
+The simplify judge is shown the diff's hunks, never whole files, so it cannot see a use on an
+unchanged line away from them. On 2026-10-25 it blocked a bidspoke push calling an import unused
+because the diff replaced one of its uses, while an unchanged line further down still used it
+(#1722). So the judge is told the diff is not the whole file and asked to name the `file` and
+`symbol` of every `unused` finding, and the gate withdraws such a finding when the file as the push
+delivers it names that symbol, as a whole word, on more than one line. A finding naming no symbol,
+a file the push does not carry, or any other kind stands as the judge gave it. A withdrawn finding
+is listed under its own heading beside a block, and recorded in the row's detail as `withdrawn:`
+beside a pass, so how often it fires is read from the record.
+
 Every push either gate reaches is recorded, overrides included (#1075), one line each in
 `~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
 cleaning (the lessons review keeps its outcome ledger beside it for the same reason). Read it with:
