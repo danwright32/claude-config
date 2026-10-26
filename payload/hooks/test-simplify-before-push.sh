@@ -319,6 +319,79 @@ PUSH_GATE_LEDGER_DIR="$TMPROOT/ledger-file" STUB_CLAUDE_OUT="$PASS_OUT" run_hook
 want_code 1 "an unwritable record does not block the push"
 want_stderr "allowed this push \(pass\), but its record could not be written" "an unwritable record is said"
 
+# --- an "unused" finding is checked against the WHOLE file, not the diff (claude-config#1722) --------
+# On 2026-10-25 in bidspoke the judge called GOOGLE_PRODUCTS "newly imported but no longer used"
+# because the diff replaced one of its uses, while an unchanged line further down the file, which the
+# diff never showed, still built a dropdown from it; removing the import would have broken the build.
+# A finding naming its file and symbol is withdrawn when the pushed file names that symbol on another
+# line as well, since the judge could not have seen that use. This fixture is that case: the base
+# (already on the remote) imports the name and uses it twice; the push replaces the first use only.
+seed_display() {   # $1 = repo; the base is pushed, the change is left for the caller to commit or not
+  (
+    cd "$1" || exit 1
+    mkdir -p lib
+    {
+      printf 'from products import GOOGLE_PRODUCTS\n\n\ndef label(p):\n    return GOOGLE_PRODUCTS[p]\n'
+      for k in 1 2 3 4 5 6 7 8 9 10 11 12; do printf 'filler_%s = %s\n' "$k" "$k"; done
+      printf '\n\ndef options():\n    return [p for p in GOOGLE_PRODUCTS]\n'
+    } > lib/display.py
+    git add lib/display.py
+    git commit -qm "display"
+    git push -q
+    # The change: the import gains a helper, and only the first use is replaced by it. An unused
+    # import os comes with it, named on one line only, beside a name merely CONTAINING os.
+    {
+      printf 'import os\nfrom products import GOOGLE_PRODUCTS, google_product_of\n\n\ndef label(p):\n    return google_product_of(p)\n'
+      for k in 1 2 3 4 5 6 7 8 9 10 11 12; do printf 'filler_%s = %s\n' "$k" "$k"; done
+      printf 'cost = 1\n\n\ndef options():\n    return [p for p in GOOGLE_PRODUCTS]\n'
+    } > lib/display.py
+  ) >/dev/null 2>&1
+}
+commit_display() { ( cd "$1" && git add lib/display.py && git commit -qm "use google_product_of" ) >/dev/null 2>&1; }
+F_GP='{\"summary\":\"[unused] lib/display.py: GOOGLE_PRODUCTS is newly imported but no longer used\",\"kind\":\"unused\",\"file\":\"lib/display.py\",\"symbol\":\"GOOGLE_PRODUCTS\"}'
+F_OS='{\"summary\":\"unused import os in lib/display.py\",\"kind\":\"unused\",\"file\":\"lib/display.py\",\"symbol\":\"os\"}'
+verdict_of() { printf '{"result":"{\\"verdict\\":\\"block\\",\\"findings\\":[%s]}"}' "$1"; }
+
+W="$(mk_repo)"; seed_display "$W"; commit_display "$W"
+HK_ID=rec-1722-withdrawn STUB_CLAUDE_OUT="$(verdict_of "$F_GP")" run_hook "$W" "git push"
+want_code 0 "#1722 an unused finding whose symbol the file still uses elsewhere does not block"
+want_silent "#1722 and the push goes through in silence"
+want_row rec-1722-withdrawn pass "#1722 it is recorded as a pass" 'withdrawn.*GOOGLE_PRODUCTS'
+
+W="$(mk_repo)"; seed_display "$W"; commit_display "$W"
+STUB_CLAUDE_OUT="$(verdict_of "$F_GP,$F_OS")" run_hook "$W" "git push"
+want_code 2 "#1722 a true unused finding beside a withdrawn one still blocks"
+want_stderr "unused import os" "#1722 the block names the finding that stands"
+if grep -q 'no longer used' <<< "$(sed -n '/flagged:/,/^$/p' <<< "$ERR")"; then fail=$((fail+1)); echo "FAIL: #1722 the withdrawn finding is still listed among what blocks: [$ERR]"; else pass=$((pass+1)); fi
+want_stderr "Withdrawn, because the file as pushed still names the symbol on another line" "#1722 and says a finding was withdrawn, and why"
+if grep -q 'GOOGLE_PRODUCTS is newly imported' <<< "$(sed -n '/^Withdrawn/,/^$/p' <<< "$ERR")"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #1722 the withdrawn finding is not named under that heading: [$ERR]"; fi
+
+# The same, decided from the working tree when the command commits first: the push delivers what
+# the add takes, which no commit holds yet.
+W="$(mk_repo)"; seed_display "$W"
+STUB_CLAUDE_OUT="$(verdict_of "$F_GP")" run_hook "$W" "git add lib/display.py && git commit -m use && git push"
+want_code 0 "#1722 in an add, commit and push chain the file is read as the add will commit it"
+
+# Controls: what the file does NOT use elsewhere, or a finding naming no symbol or a file outside the
+# push, still blocks exactly as before.
+W="$(mk_repo)"; seed_source "$W"
+STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"block\",\"findings\":[{\"summary\":\"unused import sys in lib/calc.py\",\"kind\":\"unused\",\"file\":\"lib/calc.py\",\"symbol\":\"sys\"}]}"}' run_hook "$W" "git push"
+want_code 2 "#1722 control: a symbol named on its own line only is still unused, and blocks"
+W="$(mk_repo)"; seed_display "$W"; commit_display "$W"
+STUB_CLAUDE_OUT="$(verdict_of '{\"summary\":\"GOOGLE_PRODUCTS unused\",\"kind\":\"unused\"}')" run_hook "$W" "git push"
+want_code 2 "#1722 control: an unused finding naming no symbol is not second guessed"
+STUB_CLAUDE_OUT="$(verdict_of '{\"summary\":\"GOOGLE_PRODUCTS unused\",\"kind\":\"unused\",\"file\":\"lib/elsewhere.py\",\"symbol\":\"GOOGLE_PRODUCTS\"}')" run_hook "$W" "git push"
+want_code 2 "#1722 control: a file the push does not carry is not read"
+STUB_CLAUDE_OUT="$(verdict_of '{\"summary\":\"options is dead\",\"kind\":\"dead-code\",\"file\":\"lib/display.py\",\"symbol\":\"GOOGLE_PRODUCTS\"}')" run_hook "$W" "git push"
+want_code 2 "#1722 control: only an unused finding is checked this way"
+
+# The judge is asked for the file and symbol, and told the diff is not the whole file.
+W="$(mk_repo)"; seed_source "$W"
+rm -f "$ARGS_FILE"
+STUB_CLAUDE_ARGS="$ARGS_FILE" STUB_CLAUDE_OUT="$PASS_OUT" run_hook "$W" "git push"
+if grep -q '"symbol"' "$ARGS_FILE" 2>/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #1722 the rubric does not ask an unused finding for its symbol"; fi
+if grep -qi 'lines the diff does not show' "$ARGS_FILE" 2>/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #1722 the rubric does not tell the judge the diff is not the whole file"; fi
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
