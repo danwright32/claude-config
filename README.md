@@ -45,7 +45,9 @@ Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are
 Mac's config directory written as `__CLAUDE_HOME__`, and expanded to each Mac's own on the way in,
 so an absolute path inside one is correct on both machines. The top-level rules files are the
 exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
-in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split.
+in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split. Its suite
+lists the checkout's synced files, so the gate before a push (`scanners-before-push.sh`) runs it as
+well as CI, over the checkout with no allowance for this Mac's own home (#1734).
 
 A file stored that way never equals its payload copy byte for byte, so every comparison between the
 two sides goes through one view of the payload as it should look on THIS Mac. `claude-sync status`

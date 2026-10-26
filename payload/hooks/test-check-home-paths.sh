@@ -430,6 +430,38 @@ code_real=$?
   && check "the synced config here names no machine's home directory" ok \
   || check "the synced config here names no machine's home directory" "exit=$code_real out=$out_real"
 
+# ---------------------------------------------------------------------------
+# The checkout this copy is the payload of, scanned the way a push needs it (claude-config#1734).
+# On 2026-10-25 a fixture naming this machine's home reached CI in PR #1732 because only CI ran
+# this suite: the gate before a push (scanners-before-push.sh) runs the suites that list the
+# repository's own files, and this one only walked folders. So here it lists them, and is run there.
+#
+# Two things make this the form that flags ANY machine's home. CLAUDE_HOME points at nowhere, so
+# the live config allowance (a path under this Mac's own config directory) can never excuse a line,
+# however the folders are linked (L177). And the files the check read are counted against what the
+# repository holds in the synced folders, so a scan that read fewer than that cannot report clean
+# over the rest (L98). Installed in ~/.claude there is no checkout, and the line above is the scan.
+# ---------------------------------------------------------------------------
+CO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$CO" ]; then
+  out_co="$(CLAUDE_HOME="$TMPROOT/no-live-config" bash "$CHECK" "$CO/payload" 2>&1)"
+  code_co=$?
+  [ "$code_co" -eq 0 ] \
+    && check "#1734 the checkout's synced files name no machine's home, this one's included" ok \
+    || check "#1734 the checkout's synced files name no machine's home, this one's included" "exit=$code_co out=$out_co"
+  if co_files="$(bash "$DIR/lib/repo-files.sh" "$CO" payload/hooks payload/agents payload/commands payload/skills ':(glob)payload/*.md')"; then
+    co_n="$(printf '%s\n' "$co_files" | grep -c . || true)"
+    read_n="$(sed -n 's/^check-home-paths: \([0-9][0-9]*\) file(s) under .*/\1/p' <<< "$out_co")"
+    [ "$co_n" -gt 0 ] && [ -n "$read_n" ] && [ "$read_n" -ge "$co_n" ] \
+      && check "#1734 and it read every file the repository holds in the synced folders" ok \
+      || check "#1734 and it read every file the repository holds in the synced folders" "the repository lists ${co_n} there and the check read ${read_n:-no count}: $out_co"
+  else
+    check "#1734 and it read every file the repository holds in the synced folders" "lib/repo-files.sh could not list $CO, so what the check should have read is unknown"
+  fi
+else
+  echo "  (no claude-config checkout above $DIR, so only the scan above ran; the checkout form runs where the repository is)"
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
