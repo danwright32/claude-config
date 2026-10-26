@@ -5689,6 +5689,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
 
 ## Security and privacy
+- **L809. A log line that quotes a value must escape the escape character and line breaks as well as the quote, because text from an unauthenticated caller can otherwise close the field early and append fields or whole lines that read as the system's own record.**
+  (slate#4237, 2026-10-26)
+  SHORT: A log line quoting a value escapes the backslash and line breaks too, or caller text closes the field and forges fields or lines.
 
 - **L799. A browser security report's named source is whatever script was running when the
   blocked load fired, not the code that added the element, so never treat a named source as
