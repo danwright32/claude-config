@@ -5,8 +5,9 @@
 #
 # On 2026-10-25 in bidspoke, deleting the merged branch 2337-http-service with
 # `gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<branch>` closed #2763, stacked on it, with
-# nothing said. The three ways a command here deletes a branch on GitHub are covered: that API call,
-# `git push <remote> --delete <branch>` (or `:<branch>`), and `gh pr merge --delete-branch`.
+# nothing said. The four ways a command here deletes a branch on GitHub are covered: that API call,
+# a GraphQL deleteRef through `gh api graphql` (#1758), `git push <remote> --delete <branch>` (or
+# `:<branch>`), and `gh pr merge --delete-branch`.
 #
 # gh is stubbed on PATH, so nothing here reaches GitHub. Each case hands the hook a PreToolUse payload
 # and reads its exit code, what it said, and which gh calls it made.

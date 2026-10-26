@@ -183,7 +183,7 @@ host_ready() {   # $1 = the --hostname value as written, or empty  $2 = what the
   local h
   h="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   case "$h" in ""|github.com) return 0 ;; esac
-  unknown "this $2 on $1 (gh api --hostname), not on github.com, and this gate lists pull requests on github.com only, so it cannot ask $1 whether one is based on that branch"
+  unknown "this $2 on $1 (its --hostname), not on github.com, and this gate lists pull requests on github.com only, so it cannot ask $1 whether one is based on that branch"
 }
 
 api_target() {   # PS_RUN_ARGS of a gh api
@@ -355,7 +355,7 @@ for q in queries:
 for rid in ids:
     print('ID\t' + rid)
 PY
-  found="$(python3 -c "$py" "$rec_dir" "$cmd" ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"})" || unknown "this runs gh api graphql, and its mutation could not be read to tell whether it deletes a ref"
+  found="$(python3 -c "$py" "$rec_dir" "$cmd" ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"})" || unknown "this runs a GraphQL call, and its mutation could not be read to tell whether it deletes a ref"
   [ -n "$found" ] || return 0
   while IFS=$'\t' read -r kind rid; do
     [ "$kind" = UNKNOWN ] && unknown "this runs a GraphQL deleteRef, and $rid, so which branch it deletes cannot be told"
