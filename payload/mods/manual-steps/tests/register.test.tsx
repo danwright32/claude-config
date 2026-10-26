@@ -245,7 +245,8 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   })
   on('ui.panes', () => {
     lists.count++
-    if (w.panesFail) throw new Error('the pane list could not be read')
+    // Refused rather than thrown: a hook that throws is skipped, and the engine beneath answers.
+    if (w.panesFail) return { deny: 'the pane list could not be read' } as never
     return { value: [...open.keys()].map(id => ({ id, title: 'Manual steps', isShown: placedNow(id), isFocused: false, isPlaced: placedNow(id) })) } as never
   })
   on('prompt.submit', ($, e) => {
