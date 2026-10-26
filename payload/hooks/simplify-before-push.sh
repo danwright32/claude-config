@@ -146,7 +146,10 @@ simpler before it ships, and NOTHING else.
 Flag a change only when you are highly confident a competent reviewer would agree it should be
 simplified before merging. The categories, all judged on the ADDED or CHANGED code in this diff:
   - dead-code: unreachable code, or a function / branch that nothing can call or reach.
-  - unused: an imported name, variable, or parameter that is introduced and never used.
+  - unused: an imported name, variable, or parameter that is introduced and never used. The diff
+    shows only the changed hunks of each file, never the whole file, so a name can be used on
+    lines the diff does not show; a use you saw removed is not proof that no use is left. For
+    every unused finding give "file" (the path as the diff names it) and "symbol" (the bare name).
   - commented-out: blocks of real code left commented out.
   - debug-left: stray debugging output left in (console.log, print, dbg!, fmt.Println for tracing).
   - needless-complexity: logic with an OBVIOUSLY simpler equivalent of the same behavior, e.g. a
@@ -161,7 +164,7 @@ Do NOT flag, ever:
 When in doubt, PASS. It is far worse to block correct work than to let a small imperfection through.
 
 Output STRICT JSON on a single line, no prose and no code fence:
-{"verdict":"pass"|"block","findings":[{"summary":"<what, and which file>","kind":"dead-code|unused|commented-out|debug-left|needless-complexity"}]}
+{"verdict":"pass"|"block","findings":[{"summary":"<what, and which file>","kind":"dead-code|unused|commented-out|debug-left|needless-complexity","file":"<path, for unused>","symbol":"<name, for unused>"}]}
 Set verdict to "block" only if findings is non-empty. Keep summaries short and specific.
 EOF
 )"
@@ -173,22 +176,70 @@ judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\n%s\nSOURCE DIFF:\n%s\n' "$msgs" "
 # on each, saying which.
 pc_judge "$JUDGE_MODEL" "$JUDGE_TIMEOUT" "$RUBRIC" "$judge_input" || fail_open "$PC_JUDGE_ERR" judged
 
-verdict="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
-import sys, json
+# AN UNUSED FINDING IS CHECKED AGAINST THE WHOLE FILE (claude-config#1722). The judge sees the diff's
+# hunks, never the whole file, so it cannot see a use on an unchanged line far from them. On
+# 2026-10-25 it blocked a bidspoke push calling GOOGLE_PRODUCTS "newly imported but no longer used"
+# because the diff replaced one use, while line 91, unchanged and unshown, still used it; removing the
+# import as told would have broken the build, and the push went out on the override. So an unused
+# finding that names its file and symbol is WITHDRAWN when the file as pushed names that symbol, as a
+# whole word, on more than one line: the one that introduces it, and a use. The file is read as the
+# push delivers it (the commit, or the working tree when the command commits first), and only a file
+# the push carries. A finding naming no symbol, a file the push does not carry, or any other kind is
+# kept exactly as the judge gave it. A withdrawn finding is said beside a block and recorded beside a
+# pass, so how often it happens is read from the record rather than guessed.
+verdict="$(printf '%s' "$PC_JUDGE_OBJ" | SIMPLIFY_FILES="$(printf '%s\n' "${SRC_PATHSPEC[@]}")" SIMPLIFY_CHAIN="${PC_COMMIT_IN_CHAIN:-0}" python3 -c '
+import sys, json, os, re, subprocess
+
+files = set(os.environ.get("SIMPLIFY_FILES", "").split("\n")) - {""}
+chain = os.environ.get("SIMPLIFY_CHAIN") == "1"
+
+def pushed(path):
+    try:
+        if chain:
+            top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+            with open(os.path.join(top, path), encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        r = subprocess.run(["git", "show", "HEAD:" + path], capture_output=True, text=True, errors="replace")
+        return r.stdout if r.returncode == 0 else None
+    except Exception:
+        return None
+
+def used_elsewhere(f):
+    if not isinstance(f, dict) or f.get("kind") != "unused":
+        return False
+    sym, path = f.get("symbol"), f.get("file")
+    if not isinstance(sym, str) or not isinstance(path, str) or path not in files:
+        return False
+    if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", sym):
+        return False
+    text = pushed(path)
+    if text is None:
+        return False
+    word = re.compile(r"(?<![A-Za-z0-9_$])" + re.escape(sym) + r"(?![A-Za-z0-9_$])")
+    return sum(1 for line in text.splitlines() if word.search(line)) >= 2
+
+def said(f):
+    s = f.get("summary") if isinstance(f, dict) else str(f)
+    k = f.get("kind") if isinstance(f, dict) else ""
+    return (("[" + str(k) + "] ") if k else "") + str(s)
+
 try:
     obj = json.load(sys.stdin)
     findings = obj.get("findings") or []
-    if obj.get("verdict") == "block" and findings:
-        print("BLOCK")
-        for f in findings:
-            s = f.get("summary") if isinstance(f, dict) else str(f)
-            k = f.get("kind") if isinstance(f, dict) else ""
-            print("  - " + (("[" + str(k) + "] ") if k else "") + str(s))
-    else:
+    if obj.get("verdict") != "block" or not findings:
         print("PASS")
+        sys.exit(0)
+    kept = [f for f in findings if not used_elsewhere(f)]
+    print("BLOCK" if kept else "PASS")
+    for f in kept:
+        print("  - " + said(f))
+    for f in findings:
+        if f not in kept:
+            print("W\t" + said(f))
 except Exception:
     print("ERR_VERDICT")
 ' 2>/dev/null)"
+withdrawn="$(printf '%s\n' "$verdict" | sed -n $'s/^W\t//p')"
 
 case "$verdict" in
   BLOCK*)
@@ -196,8 +247,14 @@ case "$verdict" in
       echo "PUSH BLOCKED: this push carries source code that should be simplified before it ships."
       echo ""
       echo "What the simplification reviewer flagged:"
-      printf '%s\n' "$verdict" | sed '1d'
+      printf '%s\n' "$verdict" | sed -n '/^  - /p'
       echo ""
+      if [ -n "$withdrawn" ]; then
+        echo "Withdrawn, because the file as pushed still names the symbol on another line, which the"
+        echo "reviewer, shown only the diff, could not see (claude-config#1722):"
+        printf '%s\n' "$withdrawn" | sed 's/^/  - /'
+        echo ""
+      fi
       echo "Simplify these, re-run the tests (the push ships committed code, so the simplified code"
       echo "must pass its tests), recommit, and push again."
       echo ""
@@ -206,13 +263,13 @@ case "$verdict" in
       echo "BEFORE overriding you MUST explain to the user, in plain non-technical language, WHAT"
       echo "was flagged and WHY shipping it as-is is the right call, so they can judge. Never"
       echo "override silently."
-      pc_record block "$(printf '%s\n' "$verdict" | sed '1d; s/^  - //' | paste -sd '|' -)" judged \
+      pc_record block "$(printf '%s\n' "$verdict" | sed -n 's/^  - //p' | paste -sd '|' -)${withdrawn:+ | withdrawn: $(printf '%s\n' "$withdrawn" | paste -sd '|' -)}" judged \
         || echo "(This block could not be written to the gate's record, $(pc_ledger_path).)"
     } >&2
     exit 2
     ;;
-  PASS)
-    allow pass "" judged
+  PASS*)
+    allow pass "${withdrawn:+withdrawn: $(printf '%s\n' "$withdrawn" | paste -sd '|' -)}" judged
     ;;
   ERR_VERDICT|"")
     # The judge answered a JSON object this gate could not read, or this parser itself threw.
