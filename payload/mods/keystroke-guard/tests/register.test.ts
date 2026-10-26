@@ -183,6 +183,36 @@ test('two copies of an app with a long name are refused too (lessons review)', w
   expect(w.reached).not.toContain('Bash')
 })
 
+// #1751, the commands a PostRoll session sent on 2026-10-26 at a running build in front: the marker
+// followed by a semicolon, and the marker naming the bundle. Both were refused as not running.
+const BUILD = '/Users/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app/Contents/MacOS/PostRoll'
+const BUILD_BUNDLE = '/Users/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app'
+test('a running build products app in front, named before a semicolon, is asked about and runs (#1751)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 26710, running: { 26710: BUILD }, answer: 'Go ahead' })
+  await $.tool.call(bash(`TARGET_APP=${BUILD}; cliclick c:95,188`))
+  expect(w.asked.map(a => a.question)).toEqual(["I'm about to type into PostRoll. Ready?"])
+  expect(w.reached).toContain('Bash')
+})
+test('the same build behind another app is still refused (#1751 control)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 77, running: { 26710: BUILD, 77: LIGHTROOM }, answer: 'Go ahead' })
+  const r = await $.tool.call(bash(`TARGET_APP=${BUILD}; cliclick c:95,188`))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe("Blocked: PostRoll isn't the front app (Adobe Lightroom Classic is). Bring it forward first, then type.")
+})
+// A bundle is a folder, never the program that runs, so naming it is still refused, as before.
+test('the same build named by its bundle rather than its program is still refused (#1751 control)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 26710, running: { 26710: BUILD }, answer: 'Go ahead' })
+  for (const cmd of [`TARGET_APP=${BUILD_BUNDLE}; cliclick c:95,188`, `TARGET_APP=${BUILD_BUNDLE} cliclick c:95,188`]) {
+    const r = await $.tool.call(bash(cmd))
+    expect(refusal(r)).toBe("Blocked: PostRoll isn't running. Open it first, then type.")
+  }
+  expect(w.reached).not.toContain('Bash')
+  expect(w.asked.length).toBe(0)
+})
+
 test('two running copies of the app are refused', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world($, on, { front: 10, running: { 10: OVERTURE, 11: DEBUG }, answer: 'Go ahead' })

@@ -1,6 +1,7 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
+  spoolNote,
   ISSUE_READING,
   isDesignRecord,
   sealCheck,
@@ -1150,4 +1151,17 @@ test('a settled design is under docs/design at the top of its checkout, in any c
   for (const rel of ['docs/design/x.css', 'docs/design/Picker.tsx', 'docs/design/x.vue', 'docs/design/x.html.tsx', 'docs/design/', 'docs/designs/x.html', 'src/docs/design/x.html', 'app/settled.html', 'docs/design/../../app/x.html', '/w/slate/docs/design/x.html'])
     expect({ rel, record: isDesignRecord(rel) }).toEqual({ rel, record: false })
   expect(sealCheck('/Users/dan')).toEqual(['python3', '-I', '/Users/dan/.claude/skills/design-rounds/design_file.py', '--sealed'])
+})
+
+// #1747: only the spool helper at its installed path, and only its note, writes none of what it is handed.
+test('spoolNote is the installed spool helper running note, and nothing else', () => {
+  const HELPER = '/Users/dan/.claude/hooks/lib/issue-spool.sh'
+  const args = (...w: string[]) => w.map(word => ({ word }))
+  expect(spoolNote({ path: HELPER, args: args('note', '.', 'app/page.tsx', 'a builder') }, '/Users/dan')).toBe(true)
+  expect(spoolNote({ path: HELPER, args: args('append', 'app/page.tsx', '{}') }, '/Users/dan')).toBe(false)
+  expect(spoolNote({ path: '/w/slate/scripts/issue-spool.sh', args: args('note', '.', 'x') }, '/Users/dan')).toBe(false)
+  expect(spoolNote({ args: args('note', '.', 'x') }, '/Users/dan')).toBe(false)
+  expect(spoolNote({ path: HELPER, args: args('note', '.', 'x') }, '/Users/other')).toBe(false)
+  expect(spoolNote({ path: '/.claude/hooks/lib/issue-spool.sh', args: args('note', '.', 'x') }, '')).toBe(false)
+  expect(spoolNote({ path: HELPER, args: [] }, '/Users/dan')).toBe(false)
 })
