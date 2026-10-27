@@ -162,10 +162,34 @@ describe('the dialog', () => {
     expect(askOptions({ ...one, options: [] }, true)).toEqual([SKIP_QUESTION, GO_TO_SLEEP])
   })
 
-  test('choices a session suggested come first, at most two, so the dialog keeps to its four', () => {
+  // #1792: until then a question asked before the last kept two answers beside skip, so a third
+  // choice (#1505's) was hidden unless it happened to be asked last, and nothing said so.
+  test('a three choice question asked first shows all three, giving up skip rather than a choice (#1792)', () => {
     const one: OpenQuestion = { repo: 'o/r', text: 'Which?', issues: [3], options: ['A', 'B', 'C', GO_TO_SLEEP], at: 1 }
-    expect(askOptions(one)).toEqual(['A', 'B', SKIP_QUESTION, GO_TO_SLEEP])
+    expect(askOptions(one)).toEqual(['A', 'B', 'C', GO_TO_SLEEP])
+    expect(askOptions(one, true)).toEqual(['A', 'B', 'C', GO_TO_SLEEP])
     expect(askText(one)).toBe('o/r#3: Which?')
+  })
+
+  test('a two choice question keeps skip, except asked last (#1792)', () => {
+    const one: OpenQuestion = { repo: 'o/r', text: 'Which?', issues: [3], options: ['A', 'B'], at: 1 }
+    expect(askOptions(one)).toEqual(['A', 'B', SKIP_QUESTION, GO_TO_SLEEP])
+    expect(askOptions(one, true)).toEqual(['A', 'B', GO_TO_SLEEP])
+    expect(askOptions({ ...one, options: ['A'] })).toEqual(['A', SKIP_QUESTION, GO_TO_SLEEP])
+    expect(askText(one)).toBe('o/r#3: Which?')
+  })
+
+  test('a question with no choices is unchanged: skip and go to sleep, first or last (#1792)', () => {
+    const one: OpenQuestion = { repo: 'o/r', text: 'Keep the old flag?', issues: [3], options: [SKIP_QUESTION, GO_TO_SLEEP], at: 1 }
+    expect(askOptions(one)).toEqual([SKIP_QUESTION, GO_TO_SLEEP])
+    expect(askOptions(one, true)).toEqual([SKIP_QUESTION, GO_TO_SLEEP])
+    expect(askText(one)).toBe('o/r#3: Keep the old flag?')
+  })
+
+  test('a question with more choices than fit names the rest in its text, to be typed (#1792)', () => {
+    const one: OpenQuestion = { repo: 'o/r', text: 'Which?', issues: [3], options: ['A', 'B', 'C', 'D', 'E'], at: 1 }
+    expect(askOptions(one)).toEqual(['A', 'B', 'C', GO_TO_SLEEP])
+    expect(askText(one)).toBe('o/r#3: Which? (Or type one of: D / E)')
   })
 })
 

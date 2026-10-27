@@ -977,7 +977,8 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
       leave(q, !interactive ? 'not asked: nobody was at this session to ask' : round.slept ? 'not asked: you chose to go to sleep first' : 'not asked: the 10 minutes for bedtime questions ran out')
       continue
     }
-    // The last question offers no skip when it has answers (#1771): nothing follows it.
+    // The last question offers no skip when it has answers (#1771): nothing follows it. Nor does
+    // one with three answers or more, so none is hidden (#1792).
     const asked = await askOne($, askText(q), askOptions(q, i === ordered.length - 1), BEDTIME_HEADER, waitMs, async a => {
       // Answered after the wait: posted for the nights after; tonight its issues stay out.
       if (a === SKIP_QUESTION) return

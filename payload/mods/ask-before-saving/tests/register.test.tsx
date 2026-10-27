@@ -410,18 +410,6 @@ test("a subagent's write to lasting memory is refused and never asked about: not
   expect(w.ran.map(x => x.input.file_path)).toEqual(['README.md'])
 })
 
-// The test runner's own timers, which a mod's declarations (es2023, with no DOM and no Node) leave out.
-declare function setTimeout(run: () => void, ms: number): number
-declare function clearTimeout(id: number | undefined): void
-// A deadline on a wait for a condition, so one never met fails by name rather than hanging.
-const within = async <T,>(p: Promise<T>, what: string, ms = 2000): Promise<T> => {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} within ${ms} ms`)), ms)))])
-  } finally {
-    clearTimeout(timer)
-  }
-}
 // Lessons review of #783: a subagent's judged call is marked so the tool.check hook beneath, which
 // cannot see the loop, does not judge it again for the main session. With one mark per key, the
 // first of two identical calls to finish cleared it while the second was still on its way down, and
@@ -438,7 +426,11 @@ test("two identical subagent calls in flight: the first finishing never exposes 
   const second = call($, { tool: 'Bash', command, agentId: 'agent-a1' })
   let first: Result
   try {
-    await within(arrived, 'the held call never reached the guard')
+    // Waited on until the guard holds it, the condition itself rather than a time (#1789, L290): a
+    // two second real deadline here measured the Mac, and the hold is cut at the engine's 10,000 ms
+    // of real time whatever deadline a test sets. A call that comes back instead fails here, by name.
+    const how = await Promise.race([arrived.then(() => 'held at the guard'), second.then(() => 'came back', (err: unknown) => `refused: ${String(err)}`)])
+    expect(how).toBe('held at the guard')
     first = await call($, { tool: 'Bash', command, agentId: 'agent-a1' })
     // Now a profile sets the variable, so judged again the held call would count as a save.
     w.files[`${HOME}/.zshrc`] = `export XGATE=${HOME}/.claude\n`
@@ -446,7 +438,7 @@ test("two identical subagent calls in flight: the first finishing never exposes 
     open()
   }
   expect(first.deny).toBeUndefined()
-  const held = await within(second, 'the held call never came back')
+  const held = await second
   expect(refusalOf(held)).not.toContain(ASKS)
   expect(held.deny).toBeUndefined()
   expect(w.ran.length).toBe(2)
@@ -1845,4 +1837,111 @@ test('a save that cannot be noted while asleep is still not written, and Claude 
   expect(refusalOf(r)).toBe(
     'Not saved: this writes lasting memory (~/Apps/slate/CLAUDE.md), and Dan is asleep (sleep mode), so he is not asked tonight. It could not be noted for his morning report (sh: notes: Permission denied), so put the rule and ~/Apps/slate/CLAUDE.md in your final message. Do not write it any other way; carry on with the rest of the work.',
   )
+})
+
+// #1794: Dan approved saving a project memory file For good, then was asked again, minutes later, to
+// approve the one line linking to it in that folder's MEMORY.md (his words, 2026-10-26: "didn't I
+// already give permission to save this? how is this different than the last one?"). One For good on
+// a memory file now also covers that single index line, once, within the approval's window, by every
+// route the mod judges: Write, Edit, and a shell append. Anything else written to MEMORY.md is asked.
+const MEMDIR = `${HOME}/.claude/projects/-Users-dan-Apps-slate/memory`
+const MEMDIR_SHOWN = '~/.claude/projects/-Users-dan-Apps-slate/memory'
+const INDEX = `${MEMDIR}/MEMORY.md`
+const INDEX_SHOWN = `${MEMDIR_SHOWN}/MEMORY.md`
+// An index as Claude Code's auto memory keeps it: one line per file, a link and a short hook after a dash.
+const DASH = String.fromCharCode(0x2014)
+const INDEX_TEXT = `- [Live sync clone](live-sync.md) ${DASH} the scheduled clone\n- [Band size](band-size.md) ${DASH} global\n`
+const [INDEX_FIRST, INDEX_SECOND] = INDEX_TEXT.split('\n') as [string, string]
+const indexLine = (name: string, target = name) => `- [${name}](${target}) ${DASH} the rule it holds`
+// Claude saving a memory file as the refusal told it: asked, For good, sent again, saved.
+const saveMemoryFile = async ($: Caller, w: W, name: string) => {
+  const input = { tool: 'Write', file_path: `${MEMDIR}/${name}`, content: `---\nname: ${name}\n---\nAsk before merging.\n` }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', `${MEMDIR_SHOWN}/${name}`)
+  const saved = await call($, input)
+  expect(refusalOf(saved)).toBe('')
+  return saved
+}
+
+test('For good on a memory file also lets the one index line linking it through, once, by Write, Edit or a shell append (#1794)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [INDEX]: INDEX_TEXT } })
+  const routes: [string, (name: string) => Record<string, unknown>][] = [
+    ['Write appending it', n => ({ tool: 'Write', file_path: INDEX, content: `${INDEX_TEXT}${indexLine(n)}\n` })],
+    ['Write inserting it between two lines', n => ({ tool: 'Write', file_path: INDEX, content: `${INDEX_FIRST}\n${indexLine(n)}\n${INDEX_SECOND}\n` })],
+    ['Edit', n => ({ tool: 'Edit', file_path: INDEX, old_string: INDEX_SECOND, new_string: `${INDEX_SECOND}\n${indexLine(n)}` })],
+    ['echo', n => ({ tool: 'Bash', command: `echo '${indexLine(n)}' >> ${INDEX_SHOWN}` })],
+    ['printf with a format', n => ({ tool: 'Bash', command: `printf '%s\\n' '${indexLine(n)}' >> ${INDEX_SHOWN}` })],
+    ['printf alone', n => ({ tool: 'Bash', command: `printf '${indexLine(n)}\\n' >> "${INDEX}"` })],
+    ['a heredoc', n => ({ tool: 'Bash', command: `cat >> ${INDEX_SHOWN} <<'EOF'\n${indexLine(n)}\nEOF` })],
+    ['a variable the command set', n => ({ tool: 'Bash', command: `F=${INDEX_SHOWN}; printf '%s\\n' '${indexLine(n)}' >> "$F"` })],
+  ]
+  // Each route's line, then the same line sent again, as passing or asked; and what Claude was told.
+  const outcomes: string[] = []
+  const told: string[] = []
+  for (const [i, [route, write]] of routes.entries()) {
+    const name = `rule-${i}.md`
+    const saved = await saveMemoryFile($, w, name)
+    const r = await call($, write(name))
+    const again = await call($, write(name))
+    outcomes.push(`${route}: ${refusalOf(r) ? 'asked' : 'passed'}, then ${refusalOf(again).includes(ASKS) ? 'asked' : 'passed'}`)
+    // With the save, that the line may follow; with the line, that it was added under that answer.
+    told.push(contextOf(saved).includes(`The one line in ${INDEX_SHOWN} that links to ${name} may be added without asking him again`) ? 'told' : `not told: ${contextOf(saved)}`)
+    told.push(contextOf(r).includes(`Added the line linking ${name} to ${INDEX_SHOWN}, under Dan's For good on saving ${MEMDIR_SHOWN}/${name}.`) ? 'told' : `not told: ${contextOf(r)}`)
+  }
+  expect(outcomes).toEqual(routes.map(([route]) => `${route}: passed, then asked`))
+  expect(told).toEqual(routes.flatMap(() => ['told', 'told']))
+  // Dan was asked once per memory file, never about its index line.
+  expect(w.asked.length).toBe(routes.length)
+  expect(w.ran.length).toBe(routes.length * 2)
+  quietOnMain(w)
+})
+
+test('the index line an approval covers is the one line linking that file: anything else to MEMORY.md is asked about, and uses nothing up (#1794)', withKit, async ($, on) => {
+  const OTHER_INDEX = `${HOME}/.claude/projects/-Users-dan-Apps-other/memory/MEMORY.md`
+  const w = world($, on, { auto: true, files: { [INDEX]: INDEX_TEXT, [OTHER_INDEX]: INDEX_TEXT } })
+  // Before the memory file is saved, its line is asked about like any other.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: INDEX, content: `${INDEX_TEXT}${indexLine('rule.md')}\n` }))).toContain(ASKS)
+  await saveMemoryFile($, w, 'rule.md')
+  const asked = [
+    // A second line beside it.
+    { tool: 'Write', file_path: INDEX, content: `${INDEX_TEXT}${indexLine('rule.md')}\n- [Notes](notes.md) ${DASH} more\n` },
+    { tool: 'Bash', command: `cat >> ${INDEX_SHOWN} <<'EOF'\n${indexLine('rule.md')}\n- [Notes](notes.md)\nEOF` },
+    // An existing line changed beside it, or taken out.
+    { tool: 'Edit', file_path: INDEX, old_string: INDEX_SECOND, new_string: `- [Band size](band-size.md) ${DASH} per Mac\n${indexLine('rule.md')}` },
+    { tool: 'Write', file_path: INDEX, content: `${INDEX_FIRST}\n${indexLine('rule.md')}\n` },
+    // A line linking a different file, or the approved one and another.
+    { tool: 'Write', file_path: INDEX, content: `${INDEX_TEXT}${indexLine('rule.md', 'other.md')}\n` },
+    { tool: 'Bash', command: `echo '${indexLine('rule.md')} [see](other.md)' >> ${INDEX_SHOWN}` },
+    // The index in a different memory folder.
+    { tool: 'Write', file_path: OTHER_INDEX, content: `${INDEX_TEXT}${indexLine('rule.md')}\n` },
+    // A shell write that replaces the index, or whose text the shell may change.
+    { tool: 'Bash', command: `echo '${indexLine('rule.md')}' > ${INDEX_SHOWN}` },
+    { tool: 'Bash', command: `echo "${indexLine('rule.md')} $(whoami)" >> ${INDEX_SHOWN}` },
+    { tool: 'Bash', command: `cat >> ${INDEX_SHOWN} <<EOF\n${indexLine('rule.md')} $HOME\nEOF` },
+    // Two commands, the second writing elsewhere.
+    { tool: 'Bash', command: `echo '${indexLine('rule.md')}' >> ${INDEX_SHOWN}; echo x >> ${MEMDIR_SHOWN}/notes.md` },
+  ]
+  for (const input of asked) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  expect(w.ran.length).toBe(1)
+  // None of them used it up: the one line still goes through, then a second line is asked about.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: INDEX, content: `${INDEX_TEXT}${indexLine('rule.md')}\n` }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: INDEX, old_string: INDEX_SECOND, new_string: `${INDEX_SECOND}\n${indexLine('rule.md', './rule.md')}` }))).toContain(ASKS)
+  expect(w.ran.length).toBe(2)
+})
+
+test("the index line is covered only within the approval's window, and a write of it that fails gives the cover back (#1794)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [INDEX]: INDEX_TEXT } })
+  const lineFor = (name: string) => ({ tool: 'Edit', file_path: INDEX, old_string: INDEX_SECOND, new_string: `${INDEX_SECOND}\n${indexLine(name)}` })
+  // Past the window Dan's press opened, the line is asked about.
+  await saveMemoryFile($, w, 'rule.md')
+  await w.clock.advance(APPROVAL_MS)
+  expect(refusalOf(await call($, lineFor('rule.md')))).toContain(ASKS)
+  // Within it, an Edit that fails wrote nothing, so the line still goes through when sent again.
+  await saveMemoryFile($, w, 'next.md')
+  await w.clock.advance(APPROVAL_MS - 1)
+  w.ctl.failWrites = true
+  expect((await call($, lineFor('next.md'))).isError).toBe(true)
+  w.ctl.failWrites = false
+  expect(refusalOf(await call($, lineFor('next.md')))).toBe('')
+  // No lapse of a cover is said to Dan: he never answered about the index itself.
+  expect(w.toasts.join('\n')).not.toContain(`saving to ${INDEX_SHOWN}`)
 })

@@ -38,7 +38,10 @@
 # value, or the path as an argument) is refused at once, naming `-F <file>` or `-F -` instead. The
 # reading is lib/agent-overrides.py's `stdin-device`, over the same lib/shell-words.py reading, so a
 # message or a heredoc body naming the path is not one. A python3 that cannot run refuses a command
-# naming the path, as it does a skip's words.
+# naming the path, as it does a skip's words. Live, Claude Code raises that prompt BEFORE this hook
+# runs (checked 2026-10-26), so the hang itself is answered by the job-watcher mod at the permission
+# prompt, in the same words (lib/agent-overrides.py stdin-device-refusal); this rule stays for the
+# day the hooks run first.
 #
 # No override.
 
@@ -91,15 +94,15 @@ cmd="${parsed#*$'\x1f'}"
 [ -n "$agent" ] || agent="(no id given)"
 
 # Standard input by its device path first: it hangs the agent rather than skipping a check, and the
-# reading is the same one (claude-config#1765).
+# reading is the same one (claude-config#1765). The words come from the library's
+# stdin-device-refusal, which the job watcher mod also says at Claude Code's permission prompt (it
+# comes BEFORE this hook, so the live hang is answered there), so the two cannot drift (L263, L370).
 case "$cmd" in
   */dev/stdin*|*/dev/fd/0*)
-    dev="$(printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/agent-overrides.py" stdin-device 2>&1)"; drc=$?
+    dev="$(printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/agent-overrides.py" stdin-device-refusal "$agent" 2>&1)"; drc=$?
     case "$drc" in
       1) ;;
-      0) refuse "REFUSED (no-verify-gate.sh): agent $agent ran a git command that reads a file from standard input's device path:
-  ${dev//$'\n'/$'\n'  }
-From a subagent in a worktree, Claude Code turns that path into a permission prompt nobody can answer, and the call waits until the agent is stopped (claude-config#1765: 2 of 2 hung, for 20 minutes and almost 3 hours). Write the message to a file with the Write tool and pass -F <file>, or keep the heredoc and use -F - instead of the device path." ;;
+      0) refuse "REFUSED (no-verify-gate.sh): $dev" ;;
       *) refuse_unread "$cmd" "lib/agent-overrides.py could not read it (exit $drc: ${dev##*$'\n'})" ;;
     esac ;;
 esac
