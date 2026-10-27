@@ -143,10 +143,11 @@ export const neverMergeWhy = (n: NeverMerge): string => (n.from === 'comment' ? 
 // should finish and merge all work you started ... Just don't start any new work". So an issue the
 // session worked is finished, its owed verification included, and the refusal names what is left.
 
-// The words that name an issue a PR worked without closing it: Refs, Ref, References, Part of. A
-// closing keyword is GitHub's own to read (closingIssuesReferences); a reference to another
-// repository is not this repository's issue.
-const ISSUE_REFS = /\b(?:refs?|references|part of)\b:?\s+((?:(?:[\w.-]+\/[\w.-]+)?#\d+\b(?:\s*(?:,|\band\b)\s*)*)+)/gi
+// The words that name an issue a PR worked without closing it: Refs, Ref, References. A closing
+// keyword is GitHub's own to read (closingIssuesReferences); a reference to another repository is
+// not this repository's issue. "Part of" is left out (lessons review): it names an epic or tracking
+// issue as often as the issue worked, and one would hold winding down until the whole epic closed.
+const ISSUE_REFS = /\b(?:refs?|references)\b:?\s+((?:(?:[\w.-]+\/[\w.-]+)?#\d+\b(?:\s*(?:,|\band\b)\s*)*)+)/gi
 const ONE_REF = /(?:([\w.-]+\/[\w.-]+))?#(\d+)\b/g
 
 /**

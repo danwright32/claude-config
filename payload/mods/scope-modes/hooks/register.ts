@@ -3480,7 +3480,7 @@ const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefO
 // minute again, and a read that failed keeps nothing, so the next minute asks again.
 //
 // The issues a merged PR worked are those it closes and those its description refers to with Refs,
-// Ref, References or Part of (#1812), each read the same way. A number a Refs line names that GitHub
+// Ref or References (#1812), each read the same way. A number a Refs line names that GitHub
 // says is a pull request (`PR`) is no issue to finish, and is not read again. An open issue's last
 // comment is kept beside it (`last`), for what is left on it when the PR states no next step.
 type IssueSeen = 'OPEN' | 'CLOSED' | 'PR'

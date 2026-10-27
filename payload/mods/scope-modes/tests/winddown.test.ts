@@ -119,9 +119,11 @@ describe('outstanding: finished means merged, live, cleaned and closed', () => {
 })
 
 describe('the issues a merged PR worked, and what is left on each (#1812)', () => {
-  test('Refs, Ref, References and Part of name an issue the PR worked without closing it; a closing keyword or another repository does not', () => {
+  test('Refs, Ref and References name an issue the PR worked without closing it; a closing keyword, Part of or another repository does not', () => {
     expect(issueRefs('Refs #1765', 'o/r')).toEqual([1765])
-    expect(issueRefs('Ref: #10, #11 and #12\n\nReferences o/r#13. Part of #14', 'o/r')).toEqual([10, 11, 12, 13, 14])
+    expect(issueRefs('Ref: #10, #11 and #12\n\nReferences o/r#13.', 'o/r')).toEqual([10, 11, 12, 13])
+    // Part of names an epic as often as the issue worked, and an epic would hold winding down until it closed.
+    expect(issueRefs('Part of #14', 'o/r')).toEqual([])
     expect(issueRefs('refs O/R#15', 'o/r')).toEqual([15])
     expect(issueRefs('Closes #1765\nFixes #3', 'o/r')).toEqual([])
     expect(issueRefs('Refs other/repo#9, and see #8', 'o/r')).toEqual([])
