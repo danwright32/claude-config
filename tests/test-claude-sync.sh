@@ -7831,7 +7831,13 @@ _cir_re='(gh|"\$gh")[[:space:]]+(run[[:space:]]+list|pr[[:space:]]+checks|api)'
 # An ACCOUNT endpoint is about no repository at all, so naming one is not possible and its answer
 # cannot be about the wrong one: `gh api rate_limit`, which the CI gate asks when a read was refused
 # for a used up limit (claude-config#593), and `gh api user`. Exempted by that reason, as a shape.
-_cir_named='--repo|repos/\$slug|\$SYNC_REPO|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|api[[:space:]]+(rate_limit|user)([[:space:]]|$)'
+# Two exact calls in stacked-branch-delete-gate.sh are exempt too (claude-config#1758, signed off by
+# Dan on 2026-10-26), each because its answer NAMES the repository it is about: the call asking gh
+# which repository `repos/{owner}/{repo}` means where a delete runs (`--jq .full_name`, the fork
+# fix itself), and the GraphQL node(id:) lookup of a deleteRef's ref or an updateRefs repository,
+# which answers with nameWithOwner either way. Only those exact spellings; any other placeholder
+# path or GraphQL call is still caught.
+_cir_named='--repo|repos/\$slug|\$SYNC_REPO|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|api[[:space:]]+(rate_limit|user)([[:space:]]|$)|api '"'"'repos/\{owner\}/\{repo\}'"'"' --jq \.full_name 2>&1\)|api graphql -f query='"'"'query\(\$id: ID!\) \{ node\(id: \$id\) \{ \.\.\. on Ref \{ name prefix repository \{ nameWithOwner \} \} \.\.\. on Repository \{ nameWithOwner \} \} \}'"'"' -f id="\$rid"'
 _cir_lines(){   # $1 = a copy of the tool to read
   # Comments stripped and continuation lines joined, exactly as every other source scan here does
   # it, so a query split over two lines is judged as the one line it really is.
@@ -7870,6 +7876,24 @@ _CIRH="$WORK/ci-repo-placeholder-path.sh"
 printf '%s\n' 'gh api repos/{owner}/{repo}/actions/runs' 'gh api repos/$other/actions/runs' > "$_CIRH"
 check "#418 a gh api path that leaves the repository to the checkout is still caught" \
   "[ \"\$(_cir_bad '$_CIRH' | grep -c . || true)\" -eq 2 ]"
+# The two exact calls exempted for the stacked branch delete gate (#1758) pass, and the shapes
+# beside them do not: the same placeholder read for another field, or any other GraphQL call.
+_CIRG="$WORK/ci-repo-gate-exempt.sh"
+cat > "$_CIRG" <<'CIRGEOF'
+said="$(cd "$rec_dir" && run_gh api 'repos/{owner}/{repo}' --jq .full_name 2>&1)"
+node="$(run_gh api graphql -f query='query($id: ID!) { node(id: $id) { ... on Ref { name prefix repository { nameWithOwner } } ... on Repository { nameWithOwner } } }' -f id="$rid" 2>&1)"
+CIRGEOF
+check "#1758 the gate's {owner}/{repo} resolution and its ref lookup are not flagged" \
+  "[ \"\$(_cir_lines '$_CIRG' | grep -c . || true)\" -eq 2 ] && [ -z \"\$(_cir_bad '$_CIRG')\" ]"
+_CIRN="$WORK/ci-repo-gate-near.sh"
+cat > "$_CIRN" <<'CIRNEOF'
+x="$(run_gh api 'repos/{owner}/{repo}' --jq .default_branch 2>&1)"
+x="$(gh api 'repos/{owner}/{repo}/actions/runs' --jq .full_name 2>&1)"
+x="$(gh api graphql -f query='query { viewer { login } }')"
+x="$(gh api graphql -f query='query { repository(owner: "{owner}", name: "{repo}") { id } }')"
+CIRNEOF
+check "#1758 but the shapes beside them are still caught" \
+  "[ \"\$(_cir_bad '$_CIRN' | grep -c . || true)\" -eq 4 ]"
 
 # The hooks this tool ships are read by the same scan, because the next hand rolled copy of that
 # sentence is as likely to be written in one of them, and the component and the guard that stops

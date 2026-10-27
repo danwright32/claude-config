@@ -1262,9 +1262,21 @@ fork, is left alone. Every OTHER way a command deletes a branch on GitHub is hel
 `stacked-branch-delete-gate.sh` (claude-config#1723): on 2026-10-25 a merged branch in bidspoke was
 deleted by hand with `gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<branch>`, and #2763,
 stacked on it, was closed with nothing said. The gate reads, in command position, that API delete in
-any spelling of its method (`{owner}/{repo}` read as the checkout's origin), `git push <remote>
+any spelling of its method, a GraphQL `deleteRef` mutation through `gh api graphql` (claude-config#1758:
+its ref id, written as a literal, a `-f`/`-F` variable or in a query or `--input` file, is looked up
+on GitHub to name the branch and repository; one it cannot read, such as a body on standard input,
+refuses, and a GraphQL call naming no `deleteRef` passes unasked), an `updateRefs` mutation whose
+`afterOid` of all zeros deletes a branch (its repository id looked up the same way), the REST
+delete written as a full `https://` URL (read as the path it names, on the host it names), and
+`{branch}` or `:branch` in its path, read as the branch checked out where the command runs as gh
+fills it, and refused where none is, `git push <remote>
 --delete <branch>`, `-d` or `:<branch>` to a GitHub remote, and `gh pr merge --delete-branch` (or
-`-d`), lists the open pull requests based on the branch through `lib/stacked-prs.sh`, the same
+`-d`; a fork's pull request deletes no branch, as gh deletes none for one). `{owner}/{repo}` is
+asked of gh where the command runs, since gh fills it with the first of the remotes `upstream`,
+`github` and `origin`: in a fork's checkout that is the parent, where reading origin had listed
+the fork and let the delete through (#1758). A pull request from a fork based on the branch counts
+as stacked like any other, since GitHub closes it all the same. It lists the open pull requests
+based on the branch through `lib/stacked-prs.sh`, the same
 reading the helper moves them with, as the account the command names in
 `GH_TOKEN=$(gh auth token -u <account>)`, and refuses while any is listed, naming them and the
 `gh pr edit <n> --base <branch>` that moves each onto the base the merged pull request went into (for
@@ -1275,7 +1287,10 @@ command names whose token this Mac cannot read, a `GH_TOKEN`, `GITHUB_TOKEN`, `G
 set to anything it cannot read as a literal, a push remote git cannot resolve (git's configured
 remote is asked before a path of the same name), or a github.com URL naming no owner/name all
 refuse, since the next step is a delete that cannot see what it closes. Only a remote plainly off
-GitHub (another host, or a path on disk) passes unasked. The method is read in
+GitHub (another host, or a path on disk) passes unasked. A GitHub other than github.com, through
+`GH_HOST` or `gh api --hostname`, is still GitHub, where the delete closes stacked pull requests
+just the same, but the gate lists them on github.com only, so a delete there refuses, naming the
+host, and is never listed against a same named github.com repository (#1758). The method is read in
 any case, so `-X delete` is a delete as much as `-X DELETE`. `SKIP_STACKED_CHECK=1` in front of the one command overrides it. Since the merge the gates judge no longer carries `--delete-branch`, the helper
 runs them with `MWR_DELETE_BRANCH=1` when it was asked to delete, so the rerun command
 `block-red-merge.sh` suggests on sending the merge back still carries the flag (claude-config#1351).
@@ -1601,7 +1616,7 @@ Thirteen of them came after the 2026-09-21 timing further down, which measured t
 | `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
 | `check-rtk-init.sh` (#1468) | 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
 | `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3). Reading a declared script's quoted arguments (#1574) adds one python start to a command that reaches a script file refusal, and nothing to any other: 0.09 to 0.12 seconds before, 0.11 to 0.13 after, five readings each on 2026-10-23 (load average 17 to 23). Reading a script run by its path (#1623) left a plain push and a git command holding paths only as arguments at 0.006 to 0.008 seconds, as on main, and `./build.sh && git push` now starts the reader, 0.10 to 0.11 seconds, as `bash ./build.sh && git push` does; five readings each on 2026-10-23 (load average 56 to 101). Over 30 days of this Mac's real commands naming git, gh or rtk (30,078), the fast path answered 24,204 before the reader loaded where main answered 26,842; 2,638 now reach the reader through it, 863 of them refused |
-| `stacked-branch-delete-gate.sh` (#1723) | 0.035 to 0.058 seconds on a plain `git push`, five readings on 2026-10-26 (load average 15 to 31), since a command holding no `delete` in any case, no short flag cluster with d and no bare `:branch` is answered before anything loads; 0.14 to 0.17 seconds on `git push -u origin feat/1723-stacked-delete`, whose branch name holds the word and so starts the shared reader to find no delete; 0.46 to 0.51 seconds on an API delete of a branch nothing is based on, five readings through the real gh against claude-config, one list of the pull requests based on it |
+| `stacked-branch-delete-gate.sh` (#1723) | 0.035 to 0.058 seconds on a plain `git push`, five readings on 2026-10-26 (load average 15 to 31), since a command holding no `delete` or `graphql` in any case (#1758 added the second), no short flag cluster with d and no bare `:branch` is answered before anything loads; 0.14 to 0.17 seconds on `git push -u origin feat/1723-stacked-delete`, whose branch name holds the word and so starts the shared reader to find no delete; 0.46 to 0.51 seconds on an API delete of a branch nothing is based on, five readings through the real gh against claude-config, one list of the pull requests based on it |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 
@@ -2474,6 +2489,41 @@ the stop says UNMEASURED with the figures, since a suite starved of the processo
 from one that hangs; everywhere else, a figure that cannot be read included, it is the FAIL it
 always was, and says the load it was judged at (claude-config#1330).
 
+## The low free space warning
+
+`hooks/check-free-space.sh` measures the data volume's free space; `hooks/free-space-nudge.sh` runs
+it on every prompt and says its answer once per distinct answer per session (the verdict, the free
+space rounded down to 5 GB, and whether swap is over its share). The check answers by exit code: 0
+room, 2 could not measure (never the same as fine), 3 under the floor (`FREE_SPACE_FLOOR_GB`, 20),
+4 above the floor but falling fast enough to reach zero within `FREE_SPACE_HORIZON_HOURS` (6).
+`--report` always says how much is left and either the rate or why there is none; the disk-full
+skill reads it rather than measuring a rate a second way.
+
+The rate is a claim about a trend, so it is refused more often than given. Each run adds a reading
+to a six hour history under `$TMPDIR/claude-free-space`. No rate is stated over a span under
+`FREE_SPACE_MIN_SPAN_MIN` (10), and after free space went back up by more than
+`FREE_SPACE_RECOVERY_GB` (1) only the readings since then count, three of them at least
+(claude-config#436). And only a fall that has lasted is projected (claude-config#1754): the newer
+end of the rate is the most free space seen in the last `FREE_SPACE_PERSIST_MIN` minutes (30), so a
+pre push check or build that takes a few GB and gives it back within minutes never projects zero.
+Measured on 2026-10-26 on the work MacBook, two such bursts of 1.4 to 4.4 GB came and went inside 27
+minutes while the old rule said "zero in about 2 hour(s)". The cost is that a real fast fill is
+projected up to 30 minutes later; the floor does not wait. 0 turns the window off.
+
+When the verdict is 3 or 4 it names what it can. Swap first (claude-config#1770): swap lives on
+`/System/Volumes/VM`, which shares the disk and which no folder size reaches, and on 2026-10-26 95
+GB of it, held by two leaking processes, filled Daniels-MacBook-Pro-2. When `sysctl vm.swapusage`
+is over `FREE_SPACE_SWAP_SHARE_PCT` (2) percent of the disk, the warning says how much, names the
+processes holding the most memory by `top -l 1 -o mem` (bounded by `FREE_SPACE_TOP_SECONDS`, 2,
+through `hooks/lib/bounded-run.sh`, the bound the Xcode step below uses too), and says a restart of
+that process or of the Mac gives the space back and deleting files does not. Swap that cannot be
+read is said to be unread. The 2% rests on the readings found in this Mac's transcripts: 0 to 136
+MB on ordinary days, 34.6 to 94.7 GB on the days something leaked, nothing between. Every run
+records the day's highest swap reading and the disk's size in `<volume>.swap-days` beside the
+readings (120 days kept), so the share can be recalibrated from both Macs' records rather than
+re-argued. Then the macOS symbol cache, which only an administrator can size, so it is named as a
+suspect with the commands for Dan to size and clear it.
+
 ## Xcode build caches left behind by removed worktrees
 
 Xcode keeps one build cache per project path under `~/Library/Developer/Xcode/DerivedData`. Every
@@ -2526,7 +2576,7 @@ left) stops after `FREE_SPACE_DERIVED_DATA_SECONDS` (default 6), the process gro
 runs out killed, and then the notice says it did not finish. Both keep the prompt hook inside its 10 second timeout (all three are settings,
 not measurements), so the free space warning itself always arrives. A bound of 0 turns that step
 off (no sizing, or no Xcode step at all) rather than leaving it unbounded. The disk-full skill's
-step 6 runs the listing and `--last`.
+step 7 runs the listing and `--last`.
 
 ## Branches and agent worktrees that already shipped
 
