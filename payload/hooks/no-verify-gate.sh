@@ -2,7 +2,8 @@
 #
 # no-verify-gate.sh
 # Claude Code PreToolUse(Bash) hook: refuse an AGENT's git command that skips the repository's own
-# git hooks (claude-config#1587). Nothing lets one through (claude-config#1666).
+# git hooks (claude-config#1587). Nothing lets one through (claude-config#1666). Also refuses an
+# agent's git command reading a file from /dev/stdin, which hangs on a prompt (claude-config#1765).
 #
 # On 2026-10-23 a Bidspoke builder agent made two commits with `git commit --no-verify` because the
 # pre-commit typecheck and lint were slow under load, then handed back "no `--no-verify`, no
@@ -25,8 +26,19 @@
 # refused. The main session, which this gate does not judge, runs where Dan sees it.
 #
 # An agent's payload this cannot judge (no python3, or the reader missing or failing) is refused when
-# it names a skip's words at all: an agent can rerun without the skip, while a skip let through unread
-# is the defect this exists for (L42, L490).
+# it names a skip's words, or standard input's device path (the second rule below), at all: an agent
+# can rerun without them, while one let through unread is the defect this exists for (L42, L490).
+#
+# A SECOND RULE, THE SAME AGENTS' GIT COMMANDS: STANDARD INPUT BY ITS DEVICE PATH (claude-config#1765).
+# A worktree subagent's `git commit -F /dev/stdin <<EOF` hung 2 of 2 times (10,469 s on 2026-10-05
+# and 1,241 s on 2026-10-26): Claude Code's own worktree check turned the device path into a
+# permission prompt, which a background agent can never show, so the call waited until the agent was
+# stopped. The same heredoc through `-F -` ran 418 times and never hung, and no hook here asks. So an
+# agent's git command reading a file from /dev/stdin or /dev/fd/0 (-F, --file, --file=, a glued -F
+# value, or the path as an argument) is refused at once, naming `-F <file>` or `-F -` instead. The
+# reading is lib/agent-overrides.py's `stdin-device`, over the same lib/shell-words.py reading, so a
+# message or a heredoc body naming the path is not one. A python3 that cannot run refuses a command
+# naming the path, as it does a skip's words.
 #
 # No override.
 
@@ -42,12 +54,14 @@ case "$payload" in *git*) ;; *) exit 0 ;; esac
 refuse() { printf '%s\n' "$1" >&2; exit 2; }
 
 # EVERY path that cannot read the command judges the same words the reading path acts on: a skip's
-# words. Three lessons review rounds on #1587 each found a degraded path judging fewer things than the
+# words and standard input's device path (#1765). Three lessons review rounds on #1587 each found a degraded path judging fewer things than the
 # normal one, so they share this one list (L370).
 refuse_unread() {   # $1 = the text to look in, $2 = why it could not be read
   case "$1" in
     *no-verify*|*hooksPath*|*hookspath*|*HooksPath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*)
       refuse "REFUSED (no-verify-gate.sh): this agent's command names a way to skip the repository's git hooks, and $2, so the gate cannot tell what it does. Run the command without it." ;;
+    */dev/stdin*|*/dev/fd/0*)
+      refuse "REFUSED (no-verify-gate.sh): this agent's command names standard input's device path, and $2, so the gate cannot tell whether git reads it. Write the message to a file and pass -F <file>, or use -F - (claude-config#1765)." ;;
   esac
   exit 0
 }
@@ -75,6 +89,20 @@ sys.stdout.write(str(d.get("agent_id") or "") + "\x1f" + (cmd if isinstance(cmd,
 agent="${parsed%%$'\x1f'*}"
 cmd="${parsed#*$'\x1f'}"
 [ -n "$agent" ] || agent="(no id given)"
+
+# Standard input by its device path first: it hangs the agent rather than skipping a check, and the
+# reading is the same one (claude-config#1765).
+case "$cmd" in
+  */dev/stdin*|*/dev/fd/0*)
+    dev="$(printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/agent-overrides.py" stdin-device 2>&1)"; drc=$?
+    case "$drc" in
+      1) ;;
+      0) refuse "REFUSED (no-verify-gate.sh): agent $agent ran a git command that reads a file from standard input's device path:
+  ${dev//$'\n'/$'\n'  }
+From a subagent in a worktree, Claude Code turns that path into a permission prompt nobody can answer, and the call waits until the agent is stopped (claude-config#1765: 2 of 2 hung, for 20 minutes and almost 3 hours). Write the message to a file with the Write tool and pass -F <file>, or keep the heredoc and use -F - instead of the device path." ;;
+      *) refuse_unread "$cmd" "lib/agent-overrides.py could not read it (exit $drc: ${dev##*$'\n'})" ;;
+    esac ;;
+esac
 
 case "$cmd" in
   *commit*|*no-verify*|*hooksPath*|*hookspath*|*HooksPath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*) ;;

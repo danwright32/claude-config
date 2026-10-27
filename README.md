@@ -1552,6 +1552,14 @@ Three gates close the three parts of that, all reading commands through one libr
   judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
   was removed on Dan's decision of 2026-10-24 (claude-config#1666), since an agent could write the
   same file with the Write tool.
+  It also refuses an agent's git command that reads a file from standard input's DEVICE PATH
+  (`git commit -F /dev/stdin <<EOF`, `--file /dev/stdin`, `--file=/dev/stdin`, a glued `-F/dev/stdin`,
+  and `/dev/fd/0` the same), naming the fix: write the message to a file and pass `-F <file>`, or use
+  `-F -` (claude-config#1765). From a subagent in a worktree, Claude Code's own worktree check turns
+  that path into a permission prompt a background agent can never show, so the call waited until the
+  agent was stopped: 2 of 2 hung, for 1,241 and 10,469 seconds, while 418 heredoc commits through
+  `-F -` never did. The reading is the library's `stdin-device`, so a message or heredoc body naming
+  the path, a non git command such as `python3 /dev/stdin`, and the main session are untouched.
 - `monitor-action-gate.sh` (PreToolUse, Monitor) refuses a Monitor whose command merges a pull
   request, pushes, commits, or runs `lib/merge-when-ready.sh`. Every merge and push gate is registered
   for Bash, and Claude Code runs a hook only for the tools its matcher names, so a merge inside a

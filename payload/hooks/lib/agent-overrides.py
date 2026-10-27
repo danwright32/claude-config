@@ -6,6 +6,9 @@ the commands cannot come to disagree about what a skip is (L263, L370).
 
     agent-overrides.py skips                 stdin: one command line
         one line per git hook skip it runs, exit 0 when there is one, 1 when there is none.
+    agent-overrides.py stdin-device          stdin: one command line
+        one line per git command reading a file from standard input's device path (/dev/stdin,
+        /dev/fd/0), exit 0 when there is one, 1 when there is none (claude-config#1765).
     agent-overrides.py runs-script <name>    stdin: one command line
         exit 0 when a command in it runs the script <name> (by name or path, directly or through a
         shell), 1 when none does.
@@ -201,6 +204,54 @@ def overrides(s):
             if OVERRIDE_NAME.match(n) and v not in ("", "0") and n not in HOOK_SWITCHES:
                 found.append(n + "=" + v)
     return list(dict.fromkeys(found))
+
+
+# The device paths that name standard input as a file (claude-config#1765).
+STDIN_DEVICES = ("/dev/stdin", "/dev/fd/0")
+
+
+def _names_stdin_device(w):
+    """Whether one word of a git command's arguments hands git standard input's device path as a file:
+    the word itself, an option's value after =, or a short option's value glued on (-F/dev/stdin,
+    -qF/dev/stdin). A message's value is not one: -m/dev/stdin is its text."""
+    for dev in STDIN_DEVICES:
+        if w == dev:
+            return True
+        if w.startswith("--") and w.endswith("=" + dev):
+            return not w.startswith(("--message=",))
+        if w.startswith("-") and not w.startswith("--") and w.endswith(dev) and len(w) > len(dev) + 1:
+            return "m" not in w[1:len(w) - len(dev)]
+    return False
+
+
+def stdin_device_reads(s):
+    """Every git command s runs that reads a message or file from standard input's device path
+    (`git commit -F /dev/stdin`), as short descriptions. `-F -` reads the same input and is not one:
+    measured on 2026-10-26, a worktree subagent's commit naming the device path waited on a Claude Code
+    permission prompt nobody could answer (2 of 2, for 1,241 and 10,469 seconds), while 418 commits
+    through `-F -` never did (claude-config#1765)."""
+    found = []
+    for text, _pairs, words in _commands(s):
+        reading = sw.git_read(words)
+        if reading is None:
+            continue
+        sub, _front, after = reading
+        i = 0
+        while i < len(after):
+            w = after[i]
+            if w == "--":
+                i += 1
+                continue
+            # A message's value is its text, so `-m /dev/stdin` names nothing git opens.
+            if w in ("-m", "--message") or (w.startswith("-") and not w.startswith("--") and len(w) > 2
+                                            and w.endswith("m") and "/" not in w):
+                i += 2
+                continue
+            if _names_stdin_device(w):
+                found.append("git %s reading %s: %s" % (sub or "", w, text.strip().split("\n")[0]))
+                break
+            i += 1
+    return found
 
 
 def runs_script(s, name):
@@ -431,6 +482,11 @@ def main(argv):
         for f in found:
             print(f)
         return 0 if found else 1
+    if mode == "stdin-device":
+        found = stdin_device_reads(data)
+        for f in found:
+            print(f)
+        return 0 if found else 1
     if mode == "runs-script" and len(argv) > 2:
         return 0 if runs_script(data, argv[2]) else 1
     if mode == "check-report" and len(argv) > 2:
@@ -442,7 +498,7 @@ def main(argv):
         for line in lines:
             print(line)
         return 0 if lines else 1
-    sys.stderr.write("usage: agent-overrides.py skips | runs-script <name> | check-report <transcript>  (input on stdin)\n")
+    sys.stderr.write("usage: agent-overrides.py skips | stdin-device | runs-script <name> | check-report <transcript>  (input on stdin)\n")
     return 64
 
 
