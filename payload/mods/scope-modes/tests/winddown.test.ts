@@ -83,32 +83,6 @@ describe('outstanding: finished means merged, live, cleaned and closed', () => {
       'issue #1765 is still open: finish what is left on it now, as its last comment says ("Root cause found; the fix needs a live check")',
     ])
   })
-})
-
-describe('the issues a merged PR worked, and what is left on each (#1812)', () => {
-  test('Refs, Ref, References and Part of name an issue the PR worked without closing it; a closing keyword or another repository does not', () => {
-    expect(issueRefs('Refs #1765', 'o/r')).toEqual([1765])
-    expect(issueRefs('Ref: #10, #11 and #12\n\nReferences o/r#13. Part of #14', 'o/r')).toEqual([10, 11, 12, 13, 14])
-    expect(issueRefs('refs O/R#15', 'o/r')).toEqual([15])
-    expect(issueRefs('Closes #1765\nFixes #3', 'o/r')).toEqual([])
-    expect(issueRefs('Refs other/repo#9, and see #8', 'o/r')).toEqual([])
-    // A repository it cannot place names only the bare numbers.
-    expect(issueRefs('Refs #4 and o/r#5', undefined)).toEqual([4])
-    expect(issueRefs('Bumps the prefs #4 file', 'o/r')).toEqual([])
-  })
-  test("the PR body's stated next step, preferring the line naming the issue, a heading taking the line under it", () => {
-    expect(statedNextStep('Fixes the hang.\n\nRefs #1765: the live check in a fresh session is still owed after merge.', 1765)).toBe(
-      'Refs #1765: the live check in a fresh session is still owed after merge.',
-    )
-    expect(statedNextStep('Body.\n\n## Next step\n\n- Run the live check in a fresh headless session.\n', 1765)).toBe('Run the live check in a fresh headless session.')
-    expect(statedNextStep('Next step: measure the queue.\nNext step for #7: the live check.', 7)).toBe('Next step for #7: the live check.')
-    expect(statedNextStep('Fixes the hang. Refs #1765', 1765)).toBeUndefined()
-  })
-  test('what is left: the next step the PR states, else the last comment, else nothing', () => {
-    expect(whatIsLeft('Refs #5. Next step: the live check.', 5, 'An old note')).toEqual({ from: 'pr', quote: 'Refs #5. Next step: the live check.' })
-    expect(whatIsLeft('Refs #5', 5, 'Root cause found.\n\nThe fix needs a live check.')).toEqual({ from: 'comment', quote: 'Root cause found. The fix needs a live check.' })
-    expect(whatIsLeft('Refs #5', 5, '  ')).toBeUndefined()
-  })
   test("the deploy is judged by is it live's card (#687): only Live or no deploy step recorded finish it", () => {
     expect(outstanding({ ...merged, deploy: { state: 'no-deploy' } })).toEqual([])
     expect(outstanding({ ...merged, deploy: { state: 'deploying' } })).toEqual(['the deploy is still running (is it live says Merged, deploying)'])
@@ -141,6 +115,32 @@ describe('the issues a merged PR worked, and what is left on each (#1812)', () =
   test('a reading that failed is never read as done (L215)', () => {
     expect(outstanding({ ...merged, pr: { unreadable: 'gh: HTTP 502' } })).toEqual(['the PR could not be read (gh: HTTP 502)'])
     expect(outstanding({ ...merged, branchOnGitHub: { unreadable: 'could not reach origin' } })).toEqual(['whether scope-modes-616 is gone from GitHub could not be read (could not reach origin)'])
+  })
+})
+
+describe('the issues a merged PR worked, and what is left on each (#1812)', () => {
+  test('Refs, Ref, References and Part of name an issue the PR worked without closing it; a closing keyword or another repository does not', () => {
+    expect(issueRefs('Refs #1765', 'o/r')).toEqual([1765])
+    expect(issueRefs('Ref: #10, #11 and #12\n\nReferences o/r#13. Part of #14', 'o/r')).toEqual([10, 11, 12, 13, 14])
+    expect(issueRefs('refs O/R#15', 'o/r')).toEqual([15])
+    expect(issueRefs('Closes #1765\nFixes #3', 'o/r')).toEqual([])
+    expect(issueRefs('Refs other/repo#9, and see #8', 'o/r')).toEqual([])
+    // A repository it cannot place names only the bare numbers.
+    expect(issueRefs('Refs #4 and o/r#5', undefined)).toEqual([4])
+    expect(issueRefs('Bumps the prefs #4 file', 'o/r')).toEqual([])
+  })
+  test("the PR body's stated next step, preferring the line naming the issue, a heading taking the line under it", () => {
+    expect(statedNextStep('Fixes the hang.\n\nRefs #1765: the live check in a fresh session is still owed after merge.', 1765)).toBe(
+      'Refs #1765: the live check in a fresh session is still owed after merge.',
+    )
+    expect(statedNextStep('Body.\n\n## Next step\n\n- Run the live check in a fresh headless session.\n', 1765)).toBe('Run the live check in a fresh headless session.')
+    expect(statedNextStep('Next step: measure the queue.\nNext step for #7: the live check.', 7)).toBe('Next step for #7: the live check.')
+    expect(statedNextStep('Fixes the hang. Refs #1765', 1765)).toBeUndefined()
+  })
+  test('what is left: the next step the PR states, else the last comment, else nothing', () => {
+    expect(whatIsLeft('Refs #5. Next step: the live check.', 5, 'An old note')).toEqual({ from: 'pr', quote: 'Refs #5. Next step: the live check.' })
+    expect(whatIsLeft('Refs #5', 5, 'Root cause found.\n\nThe fix needs a live check.')).toEqual({ from: 'comment', quote: 'Root cause found. The fix needs a live check.' })
+    expect(whatIsLeft('Refs #5', 5, '  ')).toBeUndefined()
   })
 })
 
