@@ -2,6 +2,7 @@ import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   goalIssues,
+  answerChoices,
   answerKey,
   askOptions,
   askText,
@@ -28,8 +29,16 @@ const line = (n: Record<string, unknown>) => JSON.stringify({ v: 1, generation: 
 
 describe('questionsIn: the questions earlier nights noted about an issue', () => {
   test('a question note naming a repository, an issue and its text is one question', () => {
-    const r = questionsIn([line({ kind: 'question', repo: 'o/r', issue: 12, text: 'Keep the old flag?' })].join('\n'))
-    expect(r).toEqual({ questions: [{ repo: 'o/r', issue: 12, text: 'Keep the old flag?', options: [], at: 100 }], bad: 0 })
+    const r = questionsIn([line({ kind: 'question', repo: 'o/r', issue: 12, text: 'Which copy?' })].join('\n'))
+    expect(r).toEqual({ questions: [{ repo: 'o/r', issue: 12, text: 'Which copy?', options: [], at: 100 }], bad: 0 })
+  })
+
+  test('a note from before options were asked for, holding a yes or no question, is offered Yes and No (#1771)', () => {
+    const r = questionsIn([line({ kind: 'question', repo: 'o/r', issue: 12, text: 'Keep the old flag?' }), line({ kind: 'question', repo: 'o/r', issue: 13, text: 'Drop it?', options: ['Only one'] })].join('\n'))
+    expect(r.questions.map(q => q.options)).toEqual([
+      ['Yes', 'No'],
+      ['Yes', 'No'],
+    ])
   })
 
   test('an issue written as digits counts, and suggested choices are kept', () => {
@@ -104,11 +113,53 @@ describe('orderQuestions: the ones that unblock the most work first', () => {
   })
 })
 
+describe('answerChoices: the choices a question is offered with (#1771)', () => {
+  test('two or more choices it was given are its choices, each once, never skip or go to sleep', () => {
+    expect(answerChoices('Which copy?', ['Short', 'Long', 'Short', ' '])).toEqual(['Short', 'Long'])
+    expect(answerChoices('Keep it?', ['Keep', GO_TO_SLEEP, SKIP_QUESTION, 'Drop'])).toEqual(['Keep', 'Drop'])
+  })
+
+  test('a yes or no question given fewer than two is offered Yes and No', () => {
+    expect(answerChoices('Keep the old flag?', [])).toEqual(['Yes', 'No'])
+    expect(answerChoices("May the settled test's wording change so such a job is named as finished?", [])).toEqual(['Yes', 'No'])
+    expect(answerChoices('Is this design settled?', ['Settled'])).toEqual(['Yes', 'No'])
+    // The question is the sentence the question mark ends, read after what leads up to it.
+    expect(answerChoices("9.6: a builder's read was refused overnight. Its first half merged, and the rest waits. Run it now?", [])).toEqual(['Yes', 'No'])
+  })
+
+  test('a question between alternatives, or one asking which, what, how or when, is not yes or no, so it is given none', () => {
+    for (const t of [
+      'Should the last before bed question drop "Skip this one", or keep both options?',
+      'Slot shape: every Nth recommendation, one fixed option in each picker, or a weekly structural pick?',
+      'For a wait ending on a weekend or evening: keep the exact time, or move the reminder to the next working morning?',
+      'Which mechanism measures egress on macOS without a password prompt per run?',
+      'For the Mac apps: which Playwright should the design side use, a shared install or one per app?',
+      'How often should it run per repo?',
+      'Should the proof be the path, or the record? The record is stronger.',
+      'Not a question at all.',
+    ])
+      expect(answerChoices(t, [])).toEqual([])
+  })
+})
+
 describe('the dialog', () => {
-  test('the question names its issues, and every question offers to skip it and to go to sleep now', () => {
+  test('the question names its issues, and one with no choices offers to skip it and to go to sleep', () => {
     const one: OpenQuestion = { repo: 'o/r', text: 'Keep the old flag?', issues: [12, 14], options: [], at: 1 }
     expect(askText(one)).toBe('o/r#12 and #14: Keep the old flag?')
     expect(askOptions(one)).toEqual([SKIP_QUESTION, GO_TO_SLEEP])
+  })
+
+  test('skip and go to sleep say what each does: this one question, or every question left (#1771)', () => {
+    expect(SKIP_QUESTION).toBe('Skip this one')
+    expect(GO_TO_SLEEP).toBe('Go to sleep, no more questions')
+  })
+
+  test('the last question drops skip, which there does what going to sleep does, and has room for a third choice (#1771)', () => {
+    const one: OpenQuestion = { repo: 'o/r', text: 'Which?', issues: [3], options: ['A', 'B', 'C', 'D'], at: 1 }
+    expect(askOptions(one, true)).toEqual(['A', 'B', 'C', GO_TO_SLEEP])
+    expect(askOptions({ ...one, options: ['Yes', 'No'] }, true)).toEqual(['Yes', 'No', GO_TO_SLEEP])
+    // One with no choices keeps skip: the dialog shows two at least, and pads fewer with Yes and No.
+    expect(askOptions({ ...one, options: [] }, true)).toEqual([SKIP_QUESTION, GO_TO_SLEEP])
   })
 
   test('choices a session suggested come first, at most two, so the dialog keeps to its four', () => {

@@ -420,6 +420,16 @@
             "statusMessage": "Reflecting on uncertainties"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/pr-merge-quiz.sh --release-held",
+            "timeout": 60,
+            "statusMessage": "Checking whether a merge running in the background has landed"
+          }
+        ]
       }
     ],
     "TeammateIdle": [

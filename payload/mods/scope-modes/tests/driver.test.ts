@@ -67,8 +67,14 @@ describe('the block', () => {
     expect(RULES).toMatch(/never from what you say/)
   })
   test('a question for Dan is noted with its repository, issue and text, the fields the before bed questions read (#836)', () => {
-    expect(RULES).toContain('a question about an issue (kind question, with repo as owner/name, issue as its number, and text)')
+    expect(RULES).toContain('a question about an issue (kind question, with repo as owner/name, issue as its number, text, and options')
     expect(RULES).toMatch(/asked before bed next time/)
+  })
+  test('a question is noted with the answer choices Dan picks from, shown by an example that carries them (#1771)', () => {
+    expect(RULES).toContain('options as two or three answers Dan can pick, likeliest first (Yes and No for a yes or no question)')
+    const example = /sleep_note '(\{"kind":"question"[^']*\})'/.exec(RULES)?.[1] ?? ''
+    const note = JSON.parse(example.replace('<its number>', '12')) as { options?: unknown }
+    expect(Array.isArray(note.options) && note.options.length).toBe(2)
   })
   test('a proposed issue and lesson are noted with the fields the morning pickers read (#837)', () => {
     expect(RULES).toContain('a proposed issue (kind issue, with repo as owner/name, title, priority as p0 to p4, labels as a list, milestone, and text)')

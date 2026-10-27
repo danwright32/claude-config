@@ -5,9 +5,9 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
-import { goalQuestion, goalUnreadQuestion, NO_GOAL } from '../hooks/bedtime.ts'
+import { GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP_QUESTION } from '../hooks/bedtime.ts'
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
-import { REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
+import { overnightRules, REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
 import { CLAIM_MS, proposalPath } from '../hooks/proposals.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
@@ -2617,7 +2617,7 @@ test('/sleep asks for a goal for a worker that has none, and keeps the one Dan t
   const r = await command($ as never, 'sleep')
   expect(w.asked).toEqual([S2_GOAL_Q])
   expect(S2_GOAL_Q).toMatch(/^The session in o\/other \("Fix the parser"\) has no \/goal set, so it does no work tonight unless you give it one\./)
-  expect(w.askedOptions[0]).toEqual([NO_GOAL, 'Go to sleep now'])
+  expect(w.askedOptions[0]).toEqual([NO_GOAL, GO_TO_SLEEP])
   expect(recordOf(w).goals).toEqual({ s1: 'Close #7', s2: 'Close #12 and #14' })
   expect(r.text).toMatch(asRegExp(` Tonight's goals: this session, "Close #7"; the session in o/other ("Fix the parser"), "Close #12 and #14".`))
 })
@@ -2634,8 +2634,8 @@ test('a worker left without a goal is kept with none, said, and its repository i
   expect(r.text).toMatch(asRegExp(` Tonight's goals: this session, "Close #7". No goal, so no work tonight: the session in o/other ("Fix the parser") (you chose no work for it).`))
 })
 
-test('Go to sleep now on a goal question asks nothing more, and every worker it left has no goal (#1242)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, withOther({ goals: { s1: null, s2: null }, issueAnswers: { [goalQuestion('this session')]: 'Go to sleep now' } }))
+test('Going to sleep on a goal question asks nothing more, and every worker it left has no goal (#1242)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, withOther({ goals: { s1: null, s2: null }, issueAnswers: { [goalQuestion('this session')]: GO_TO_SLEEP } }))
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
   expect(w.asked).toEqual([goalQuestion('this session')])
@@ -5638,12 +5638,14 @@ test("the open questions on the queue's issues are asked one at a time after the
   // question two issues wait on; then issue 20's, its only one, before issue 12's second.
   expect(w.asked).toEqual([repoQuestion('o/r'), 'o/r#12 and #14: Keep the old flag?', 'o/r#20: Rename it?', 'o/r#12: Which copy?'])
   expect(w.askedOptions.slice(1)).toEqual([
-    ['Skip this one', 'Go to sleep now'],
-    ['Skip this one', 'Go to sleep now'],
-    ['Short', 'Long', 'Skip this one', 'Go to sleep now'],
+    // Two yes or no questions noted before options were asked for are offered Yes and No (#1771).
+    ['Yes', 'No', SKIP_QUESTION, GO_TO_SLEEP],
+    ['Yes', 'No', SKIP_QUESTION, GO_TO_SLEEP],
+    // The last, with the choices its session suggested, and no skip: nothing follows it (#1771).
+    ['Short', 'Long', GO_TO_SLEEP],
   ])
-  // Every question carries Go to sleep now, the repository question too.
-  expect(w.askedOptions[0]).toContain('Go to sleep now')
+  // Every question carries go to sleep, the repository question too.
+  expect(w.askedOptions[0]).toContain(GO_TO_SLEEP)
   expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#12', 'o/r#14', 'o/r#12'])
   expect(w.comments[0]?.body).toBe('**Decision from Dan, 1969-12-31 (ET)**, answered before bed as sleep mode started.\n\n> Keep the old flag?\n\nAnswer: Drop it')
   expect(w.comments[2]?.body).toMatch(/> Which copy\?\n\nAnswer: Short$/)
@@ -5676,11 +5678,11 @@ test('a question answered and posted on an earlier night is not asked again', wi
   expect(w.comments).toEqual([])
 })
 
-test('Go to sleep now asks nothing more: every question left is its issue skipped tonight, and nothing is posted', withDeps, async ($, on) => {
+test('Going to sleep asks nothing more: every question left is its issue skipped tonight, and nothing is posted', withDeps, async ($, on) => {
   const { w, clock } = world(on, {
     files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: OLD_NOTES },
     githubRepos: { default: ['o/r'] },
-    issueAnswers: { 'o/r#12 and #14: Keep the old flag?': 'Go to sleep now' },
+    issueAnswers: { 'o/r#12 and #14: Keep the old flag?': GO_TO_SLEEP },
   })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
@@ -5691,8 +5693,8 @@ test('Go to sleep now asks nothing more: every question left is its issue skippe
   expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#12 and o/r#14, "Keep the old flag?" (you chose to go to sleep); o/r#20, "Rename it?" (not asked: you chose to go to sleep first); o/r#12, "Which copy?" (not asked: you chose to go to sleep first).'))
 })
 
-test('Go to sleep now on the repository question asks no issue question either, and closes that repository tonight', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]), [NOTES_OLD]: OLD_NOTES }, githubRepos: { default: ['o/r'] }, repoAnswer: 'Go to sleep now' })
+test('Going to sleep on the repository question asks no issue question either, and closes that repository tonight', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]), [NOTES_OLD]: OLD_NOTES }, githubRepos: { default: ['o/r'] }, repoAnswer: GO_TO_SLEEP })
   await start($ as never, clock)
   await command($ as never, 'sleep')
   expect(w.asked).toEqual([repoQuestion('o/r')])
@@ -5833,6 +5835,71 @@ test("the open questions in a goal issue's section are asked before the night, a
   expect(w.edits).toEqual([{ repo: 'o/r', issue: 7, body: SECTIONED.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)') }])
   expect(w.files[UNANSWERED]).toBe('')
   expect(r.text).toMatch(asRegExp(' Before bed: 1 question answered and posted on o/r#7.'))
+})
+
+// #1771, Dan 2026-10-19: "when entering sleep mode the questions don't actually provide answer
+// choices. just skip and go to sleep now". No real source filled a question's choices in: the
+// overnight rules never asked a worker for them, and Open questions items were read with none. Each
+// real source is driven here as it really writes: the worker's note from the example the rules
+// themselves give, and the section's items as register.ts reads a goal issue's body.
+test('a question from each real source reaches the dialog with its answer choices: a worker note as the overnight rules show it, and Open questions items (#1771)', withDeps, async ($, on) => {
+  const example = /sleep_note '(\{"kind":"question"[^']*\})'/.exec(overnightRules('s7', '/r', DEFAULT_GOAL))?.[1]
+  expect(example).toBeDefined()
+  const fromWorker = JSON.parse(
+    (example as string).replace('owner/name', 'o/r').replace('<its number>', '12').replace('<the question>', 'Which copy?').replace('<an answer>', 'Short').replace('<another answer>', 'Long'),
+  ) as Record<string, unknown>
+  expect(fromWorker.issue).toBe(12)
+  const body = [
+    'The bug.',
+    '',
+    '## Open questions',
+    '',
+    '- [ ] Which mechanism measures it?',
+    '- [ ] Keep the old flag? (choices: Keep it / Drop it)',
+    '- [ ] Is the cache safe to clear?',
+    '',
+    'Claude-Session: https://claude.ai/code/session_01AbCdEf',
+  ].join('\n')
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: noted(fromWorker) },
+    githubRepos: { default: ['o/r'] },
+    issueBodies: { 7: body },
+    issueAnswers: { 'o/r#12: Which copy?': 'Short', 'o/r#7: Which mechanism measures it?': SKIP_QUESTION, 'o/r#7: Keep the old flag?': 'Drop it', 'o/r#7: Is the cache safe to clear?': 'Yes' },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#12: Which copy?', 'o/r#7: Which mechanism measures it?', 'o/r#7: Keep the old flag?', 'o/r#7: Is the cache safe to clear?'])
+  expect(w.askedOptions).toEqual([
+    // The worker's own choices.
+    ['Short', 'Long', SKIP_QUESTION, GO_TO_SLEEP],
+    // An item giving none that is not yes or no: only skip and go to sleep, which say what each does.
+    [SKIP_QUESTION, GO_TO_SLEEP],
+    // The choices the item names.
+    ['Keep it', 'Drop it', SKIP_QUESTION, GO_TO_SLEEP],
+    // A yes or no item, asked last, so without skip, which there would do what going to sleep does.
+    ['Yes', 'No', GO_TO_SLEEP],
+  ])
+  // The item that named its choices is checked off by its words, never added a second time.
+  expect(w.edits.map(x => x.body)).toEqual([
+    body.replace('- [ ] Keep the old flag? (choices: Keep it / Drop it)', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)'),
+    body
+      .replace('- [ ] Keep the old flag? (choices: Keep it / Drop it)', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')
+      .replace('- [ ] Is the cache safe to clear?', '- [x] Is the cache safe to clear? (answered 1969-12-31 ET: Yes)'),
+  ])
+  // The one skipped is noted for the morning as itself, so it is asked again.
+  expect(morningQuestions(w).map(n => [n.issue, n.text, n.options])).toEqual([[7, 'Which mechanism measures it?', []]])
+})
+
+test('a question left before bed is noted with its choices, so it is offered them again the next night (#1771)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: noted({ kind: 'question', repo: 'o/r', issue: 12, text: 'Which copy?', options: ['Short', 'Long'] }) },
+    githubRepos: { default: ['o/r'] },
+    issueAnswers: { 'o/r#12: Which copy?': GO_TO_SLEEP },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.askedOptions).toEqual([['Short', 'Long', GO_TO_SLEEP]])
+  expect(morningQuestions(w).map(n => [n.issue, n.text, n.options, n.why])).toEqual([[12, 'Which copy?', ['Short', 'Long'], 'you chose to go to sleep']])
 })
 
 test("a goal issue's question answered after the ten minutes is posted and checked off too (#1279 lessons review)", withDeps, async ($, on) => {
