@@ -2633,6 +2633,48 @@ not measurements), so the free space warning itself always arrives. A bound of 0
 off (no sizing, or no Xcode step at all) rather than leaving it unbounded. The disk-full skill's
 step 7 runs the listing and `--last`.
 
+`derived-data-sweep.sh --remove-one <folder>` removes one named folder for `disk-remove.sh` below.
+It takes the automatic sweep's own lock first (exit 75 and nothing touched while a sweep holds it),
+refuses anything not directly inside the DerivedData folder (exit 2), judges the folder again with
+the same rule, and exits 0 removed, 4 kept (the line says why) or 1 when it could not be removed.
+
+## Removing anything: disk-remove.sh
+
+`hooks/lib/disk-remove.sh` is the one place the disk-full skill, and the disk-clean skill being
+built in the Disk cleanup skill milestone, remove anything (claude-config#1805). It never takes a
+path to remove on its command line. `--plan <file>` reads a plan naming a scan and the ids of the
+items Dan chose in it, and takes every path, method and category from that scan's own record, so
+nothing is removed that a scan did not measure and offer. The record is `last-scan.json` (written
+by disk-clean's scan) or, for the disk-full skill, one written by `--propose <trash|delete|truncate>
+<path>...`, which measures the paths Dan named, refuses the ones it never removes, removes nothing,
+and prints the `--plan` command to run once Dan has decided. A plan is refused when its scan is over
+an hour old (exit 3) and when its scan is not the last scan (exit 4), with a message for each.
+
+Each item, in order: the identity deny list (sync and cloud stores, iCloud Drive, app packages,
+Photos and photo editor libraries, the Mail and Messages stores, keys and credentials, anything
+under `/Applications` or `/System`, and the home folder's standard folders and listed dotfolders
+themselves), whatever the category says; a symbolic link refused and the path resolved physically;
+the deny list again on where it really is; inside HOME or the temp folders; the category's own
+`judge`, run again now; an `lsof` check whose stderr means "could not tell", never "free"; its size;
+an INTENT line in `~/.claude/state/disk-clean/removals/<scan_id>.log`; the removal; a check that it
+is gone (or, for truncate, smaller); an OUTCOME line. The methods are `trash` (`/usr/bin/trash`,
+which ships with macOS 15, and never a fallback to deleting without it), `delete`, `truncate` (with
+`tee`, for a log a process holds open), `worktree` (`git worktree remove` without `--force`),
+`docker` (named images and stopped containers, and the build cache; volumes and both prunes are
+refused by name) and `derived-data` (the sweep's `--remove-one` above). The result is one line per
+item and the sum of the verified per item sizes, with trashed items counted apart because they free
+nothing until the Trash is emptied; the disk wide `df -m` change and any local Time Machine
+snapshots are printed as context only. Exit 0 when every item went, 5 when any was skipped or
+failed, 2 refused, 75 another run holds `remove.lock`. The record is marked from the log before it
+exits, so the low space warning never quotes a removed item, and a run killed midway leaves an
+INTENT with no OUTCOME that the next run for that scan reports and settles.
+
+The scan record layout is owned by `hooks/lib/disk-clean-record.sh`, and the rules for what a test
+root is by `hooks/lib/disk-clean-predicates.sh`, which the test harness sources too. Its suite,
+`hooks/test-disk-remove.sh`, runs it only through the harness's `dc_run`, with `/usr/bin/trash`,
+the judge and the sweep behind the seams `DISK_CLEAN_TRASH`, `DISK_CLEAN_JUDGE` and
+`DISK_CLEAN_DERIVED_DATA_SWEEP`, which `disk-remove.sh` honours only in test mode.
+
 ## Branches and agent worktrees that already shipped
 
 This repo squashes on merge, so a merged branch is never an ancestor of main and every local way of
