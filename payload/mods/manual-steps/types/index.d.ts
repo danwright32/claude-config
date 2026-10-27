@@ -84,6 +84,22 @@ export type ManualSteps = {
   finish: (input: { title: string }) => Promise<{ isFinished: boolean }>
 }
 
+/**
+ * #1811: the pages of steps for Dan published since the last turn end, whether the steps tool was
+ * called since then, and which pages the card shown now was pinned for, so publishing one of those
+ * again while its card still shows asks nothing.
+ */
+export type StepsPages = {
+  /** Pages of steps published since the last turn end, by the path each was published from. */
+  turn: string[]
+  /** The steps tool was called since the last turn end. */
+  isPinned: boolean
+  /** The pages the last refusal named, which the next card pinned covers. */
+  owed: string[]
+  /** The pages the card now shown was pinned for. */
+  covered: string[]
+}
+
 declare module 'claude-code' {
   interface EngineInterface {
     manualSteps: ManualSteps
@@ -92,8 +108,8 @@ declare module 'claude-code' {
     /**
      * The card the pane and band draw from, where it is shown (the band, or the pane by its id),
      * and the turn a Done waits on; and the main turn running now, by its id, or null (#734, #1703).
-     * In $.state so a reload keeps them.
+     * In $.state so a reload keeps them. And the pages of steps published this turn (#1811).
      */
-    'manual-steps': { card: StepsCard | null; place: StepsPaneId | 'band' | null; waiting: StepsWaiting | null; runningTurn: string | null }
+    'manual-steps': { card: StepsCard | null; place: StepsPaneId | 'band' | null; waiting: StepsWaiting | null; runningTurn: string | null; pages: StepsPages | null }
   }
 }

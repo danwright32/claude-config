@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { waitingPhrase } from '../hooks/waiting.ts'
+import { saysNoneNow, waitingPhrase } from '../hooks/waiting.ts'
 
 // #863: what in a message of Claude's says a step is waiting on Dan, judged on every message of the
 // turn since #1608. Narrow on purpose: each phrase was measured on real turns before it shipped
@@ -244,5 +244,53 @@ describe('waitingPhrase', () => {
       "you'd get no “waiting on you” mark and no notification.",
     ])
       expect(waitingPhrase(said)).toBeNull()
+  })
+})
+
+// #1811: numbered steps handed to Dan in a reply. Measured on 2026-10-27 over the 19,420 messages
+// Claude wrote in this Mac's transcripts: 20 held two or more numbered lines that begin with something
+// a person does at a screen, and every one of the 20 was steps for Dan. One such line alone, or
+// numbered lines of Claude's own plan, is not.
+describe('numbered steps in a reply (#1811)', () => {
+  test('two or more numbered lines that open, click, press or paste are steps for Dan', () => {
+    const said = "Here is the fix:\n\n1. Open the read workflow's run history.\n2. Open any of today's failures that took under a second.\n3. Tell me what the error says."
+    expect(waitingPhrase(said)).toMatch(/^1\. Open\b/)
+    expect(waitingPhrase('1. Type `/config`.\n2. Turn on **Enable Remote Control for all sessions**.')).toMatch(/^1\. Type\b/)
+    // The same actions a page of steps is judged by (hooks/page.ts ACTION), one list for both.
+    expect(waitingPhrase('1. Scroll to the Billing section.\n2. Untick **Auto renew**.')).toMatch(/^1\. Scroll\b/)
+  })
+
+  test('one numbered line alone, or a numbered plan of Claude\'s own work, is not', () => {
+    expect(waitingPhrase('1. Open the transcript and read the last turn.\n\nThat is all I need.')).toBeNull()
+    expect(waitingPhrase('My plan:\n1. Write the failing test.\n2. Add the reader.\n3. Run the suite.')).toBeNull()
+  })
+})
+
+describe('saysNoneNow (#1811)', () => {
+  test('the sentence the refusal asks for, and its plain variants, say none of the steps are Dan\'s now', () => {
+    for (const said of [
+      'None of these steps are yours to do now.',
+      'Published the page. None of the steps on the page are yours to do now: they wait on the merge.',
+      'none of them are yours to do now',
+      'Nothing on this page is yours to do now.',
+      'Nothing here is yours to do now.',
+      'None of its edits are yours to do now.',
+    ])
+      expect(saysNoneNow([said])).toBe(true)
+  })
+
+  test('the sentence quoted, or a sentence that hands over a step, does not', () => {
+    for (const said of [
+      'The refusal asks me to say "None of these steps are yours to do now" when that is true.',
+      'Nothing changed, but step 2 is yours to do now.',
+      'Step 2 is yours to do now.',
+      'The page is published.',
+    ])
+      expect(saysNoneNow([said])).toBe(false)
+  })
+
+  test('it is read across every message of the turn', () => {
+    expect(saysNoneNow(['The page is up.', 'None of these steps are yours to do now.'])).toBe(true)
+    expect(saysNoneNow([])).toBe(false)
   })
 })
