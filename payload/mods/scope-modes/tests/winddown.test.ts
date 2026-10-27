@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { branchesTouched, choiceFor, closingComments, filesWritten, neverMergeSaid, prRefs, quoteOf, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, whoseFiles, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { branchesTouched, choiceFor, closingComments, filesWritten, neverMergeSaid, prLinks, prRefs, quoteOf, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, whoseFiles, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 
@@ -220,6 +220,45 @@ describe('a PR closed without merging is finished unless a recorded reason says 
     expect(prRefs('o/r#711 is this one, o/other#711 is not', { repo: 'o/r', number: 711 })).toEqual([{ repo: 'o/other', number: 711 }])
     expect(prRefs('this is #711 again, &#35;12 and ## Heading 2', { number: 711 })).toEqual([])
     expect(prRefs('#716 #716', { number: 711 })).toEqual([{ number: 716 }])
+  })
+  // #1777: measured on 2026-10-26 across danwright32's closed unmerged PRs (read only gh calls): 9 in
+  // claude-config, 8 with comments, and 59 in ovation, overture, PostRoll, downbeat and backstage, 53
+  // with comments. Every comment saying why a PR closed was posted 0 to 2 seconds before the close or
+  // after it; the nearest discussion before a close came 477 seconds before (#1627's lessons review),
+  // then 524 (#964's). Ten minutes took in both, so the window is two minutes.
+  test('the window is two minutes before the close, set from the measured closes (#1777)', () => {
+    const closedAt = '2026-10-23T23:46:34Z'
+    const at = (secsBefore: number) => new Date(Date.parse(closedAt) - secsBefore * 1000).toISOString()
+    // A comment naming a PR, posted when #1627's were: its lessons review 477 seconds before it
+    // closed, #964's 524 before, its closing comment with the close; then each edge of the window.
+    const pr = (secsBefore: number) => ({ number: 1627, closedAt, comments: [{ body: 'Names #5.', createdAt: at(secsBefore) }] })
+    expect(closingComments(pr(477))).toEqual([])
+    expect(closingComments(pr(524))).toEqual([])
+    expect(closingComments(pr(121))).toEqual([])
+    expect(closingComments(pr(120)).map(c => c.refs)).toEqual([[{ number: 5 }]])
+    expect(closingComments(pr(2)).map(c => c.refs)).toEqual([[{ number: 5 }]])
+    expect(closingComments(pr(0)).map(c => c.refs)).toEqual([[{ number: 5 }]])
+    // ovation#711's reason was posted almost seven hours after it closed, and is still read.
+    expect(closingComments(pr(-24827)).map(c => c.refs)).toEqual([[{ number: 5 }]])
+  })
+  test("a PR named only by a github.com link is read once mod-kit's link reader has named its repository (#1777)", () => {
+    const text = 'Superseded by https://github.com/o/r/pull/716, and see #12.'
+    expect(prLinks(text)).toEqual([{ link: 'https://github.com/o/r/pull/716', number: 716 }])
+    const linked = new Map<string, string | null>([['https://github.com/o/r/pull/716', 'o/r']])
+    expect(prRefs(text, { repo: 'o/r', number: 711 }, linked)).toEqual([{ repo: 'o/r', number: 716 }, { number: 12 }])
+    // In the order the text names them.
+    expect(prRefs('#12, then https://github.com/o/r/pull/716', { number: 711 }, linked)).toEqual([{ number: 12 }, { repo: 'o/r', number: 716 }])
+    // Unread by mod-kit, or a link it says names no GitHub repository, names nothing.
+    expect(prRefs(text, { repo: 'o/r', number: 711 })).toEqual([{ number: 12 }])
+    expect(prRefs('see https://example.com/o/r/pull/716', { number: 711 }, new Map([['https://example.com/o/r/pull/716', null]]))).toEqual([])
+    // The PR's own link is never why it closed, and one PR linked twice is named once.
+    const own = new Map<string, string | null>([['https://github.com/o/r/pull/711', 'o/r']])
+    expect(prRefs('this is https://github.com/o/r/pull/711', { repo: 'o/r', number: 711 }, own)).toEqual([])
+    expect(prRefs('https://github.com/o/r/pull/716 and https://github.com/o/r/pull/716/files', { number: 711 }, linked)).toEqual([{ repo: 'o/r', number: 716 }])
+    // A closing comment naming its PR by link alone.
+    const pr711 = { number: 711, repo: 'o/r', closedAt: '2026-10-09T15:00:00Z', comments: [{ body: 'Superseded by https://github.com/o/r/pull/716', createdAt: '2026-10-09T21:53:47Z' }] }
+    expect(closingComments(pr711, linked).map(c => c.refs)).toEqual([[{ repo: 'o/r', number: 716 }]])
+    expect(closingComments(pr711).map(c => c.refs)).toEqual([[]])
   })
   test("#1716's closing comment names only an issue, so the caller asks GitHub which numbers are PRs", () => {
     const pr1716 = {

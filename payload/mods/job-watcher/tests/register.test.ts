@@ -1,5 +1,5 @@
 import { expect, mock } from 'claude-code/testing'
-import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { awaitAtEnd, endHeld, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import { shortCommand } from '../hooks/jobs.ts'
 
@@ -352,8 +352,9 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     if (e.origin.kind !== 'task-notification') w.submitted.push({ text: e.text, origin: e.origin })
     if (o.submit === 'throws') throw new Error('the prompt queue is closed')
     if (o.submit === 'drop') return { drop: 'held while Dan is away' } as never
-    // A submit that never answers: the turn it asks for never starts.
-    if (o.submit === 'hangs') return new Promise<never>(() => undefined)
+    // A submit that never answers while its test runs: the turn it asks for never starts. Entered
+    // as the test ends (#1778), so nothing the watcher does after it outlives the test.
+    if (o.submit === 'hangs') return never(() => ({ text: e.text })) as never
     if (o.submitFailsAfter) return o.submitFailsAfter.then(() => { throw new Error('the prompt queue is closed') }) as never
     return { text: e.text } as never
   })
@@ -410,10 +411,11 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       return { result: text, text } as never
     }
     if (e.tool === 'Bash' && input.command === 'false') return { result: 'exit 1', text: 'Exit code 1', isError: true } as never
-    // A commit reading a message from a stdin nobody writes: it never returns (#759).
+    // A commit reading a message from a stdin nobody writes: it never returns while its test runs
+    // (#759), and returns as its test ends (#1778).
     if (e.tool === 'Bash' && String(input.command).startsWith('git commit')) {
-      for (const held of hangWaiters.splice(0)) held()
-      return new Promise<never>(() => undefined)
+      for (const waiter of hangWaiters.splice(0)) waiter()
+      return never(() => ({ result: 'exit 0', text: '' })) as never
     }
     const j = list[Number(String(input.task_id ?? '').replace('job', '')) - 1]
     if (e.tool === 'TaskStop' && j?.goneOnStop) j.gone = true
@@ -430,8 +432,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       const text = `No task found with ID: ${String(input.task_id)}. Running background agents: none`
       return { result: text, text, isError: true } as never
     }
-    // A stop Claude Code never answers.
-    if (e.tool === 'TaskStop' && j?.stop === 'hangs') return new Promise<never>(() => undefined)
+    // A stop Claude Code never answers while its test runs (#1778).
+    if (e.tool === 'TaskStop' && j?.stop === 'hangs') return never() as never
     // A stop Claude Code answers only when the test says, as one answered late.
     if (e.tool === 'TaskStop' && j?.stop === 'held') {
       return new Promise(resolve => {
@@ -1628,7 +1630,8 @@ test('a job is traced only to a group that alone holds its output file, never to
 
 // The tests that are the clock themselves hold every clock.after wait: an answered one is the time
 // come, and a look whose ten minute deadline came at once would be given up before it acted (#706).
-const neverDue = () => new Promise<never>(() => undefined)
+// Refused as never having come once the test ends (#1778), so no wait outlives it.
+const neverDue = () => never<never>()
 
 test('a clock that cannot be read is said to Claude once, not every minute', withDeps, async ($, on) => {
   // The test is the clock here. Each answer to the watcher's clock.every is one minute passing, given
@@ -2296,6 +2299,8 @@ const asAgent = (input: Record<string, unknown>, agentId = 'a1') => ({ ...input,
 const sendHanging = async ($: { tool: { call: (e: never) => Promise<unknown> } }, w: { nextHang: () => Promise<void> }) => {
   const held = w.nextHang()
   const call = $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  // Waited on as its test ends, once its commit has returned, so it finishes in its own test (#1778).
+  awaitAtEnd(call)
   const how = await Promise.race([held.then(() => 'held'), call.then(() => 'returned', (err: unknown) => `refused: ${String(err)}`)])
   expect(how).toBe('held')
 }
@@ -2495,6 +2500,20 @@ test('an agent back to running after waiting on a person is dated from its retur
 // Idle, the quiet agent wakes the conversation with a prompt of its own, once per quiet spell.
 const HUNG = 'Bash (git commit -q -F /dev/stdin), started 20 minutes ago and has not finished'
 const quietSaid = (w: { submitted: { text: string }[] }) => w.submitted.filter(s => s.text.includes('has been quiet for'))
+
+// #1778: a call the world never answers is ended with the test that sent it (mod-kit's
+// tests/hang-ceiling.ts says why). Left hanging, it finished about five seconds later inside another
+// test and stamped its agent alive there, so that test's quiet agent was never said. What every
+// test's end does, done here in the middle, so the call is seen to finish inside its own test.
+test('a call left hanging is ended inside the test that sent it, so it can never finish in a later one (#1778)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await sendHanging($, w)
+  await endHeld()
+  await clock.advance(20 * MIN + 1)
+  expect(quietSaid(w).map(s => s.text).join('\n')).toContain('the last one it started, Bash (git commit -q -F /dev/stdin), finished 20 minutes ago')
+})
 
 test('an agent whose tool call never returns wakes this idle conversation exactly once, at the threshold (#1234)', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
