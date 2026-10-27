@@ -3370,6 +3370,27 @@ names no path), so a hook suite run during a night of sleep mode sees an awake M
 the first suite run made while asleep (2026-10-13) failed every suite driving a quiet hook, and CI,
 with no record, passed. The suites that are about where the record is found unset it.
 
+## The architecture pass
+
+`/architecture-pass` (`payload/skills/architecture-pass/`, #1504) is a read only pass over one
+repository that finds structural problems no single pull request can see, and proposes issues for
+them to Dan one picker question at a time, filing only what he picks. It runs only when Dan types
+it, never on a schedule or overnight, and suggests monthly: each repo's last pass date is kept on
+this Mac in `~/.claude-architecture-pass/last-pass.json`, outside `~/.claude` so the sync never
+carries or deletes it (an unreadable file is an error, never read as no passes).
+
+What it counts is in `measure.py`, tested by `test_measure.py` against a fixture repository:
+fixes by commit title only (never `git log --grep`, which matches bodies), fix titles sorted into
+kinds by rule with alerting features and "Stop X" titles kept out of the total, and each hot file's
+pure addition share and net growth, with renames followed and prose and lockfiles left out. What it
+judges is in `SKILL.md`: the four shapes it looks for directly with one agent each, a spot check of
+every agent claim against the code, and a look across repos for a pattern that already solves a
+finding. `test-architecture-pass-skill.sh` runs every `measure.py` line in the skill as written.
+
+The area check mod (#1506) counts fix titles too, roughly and per file, for a growth bar judged
+inside its edit time deadline; the pass asks a different question (which kinds of fix recur)
+with no deadline, so the two are deliberately separate rules (L342).
+
 ## Local state (per Mac, never synced)
 
 Every file in the table below holds state outside `payload/` and belongs to the Mac that wrote it. All are gitignored,
