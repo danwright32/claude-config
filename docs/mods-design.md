@@ -2146,8 +2146,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
     A marker on the publish cannot be added, since the Artifact tool is Claude Code's own and a mod
     cannot widen its input; a model judge would cost money on every turn that publishes. The page's
     signs are ticks (an HTML checkbox or a Markdown task box), Copy buttons (or a page writing the
-    clipboard), and list items or numbered lines that begin with something a person does at a
-    screen (open, click, press, tap, paste, type, go to, select, choose, sign in, turn on and the
+    clipboard), and list items, numbered or bulleted, HTML or Markdown, that begin with something
+    a person does at a screen (open, click, press, tap, paste, type, go to, select, choose, sign in, turn on and the
     like; never add, update or run, which lead Claude's own plans). A page is steps with two such
     actions, or any two kinds of sign together; one sign alone is not, since a design mock has a
     checkbox and a report may have a Copy beside a command. Measured with `signsOf` itself on

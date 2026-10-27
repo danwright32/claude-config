@@ -16,7 +16,7 @@ export type PageSigns = {
   ticks: number
   /** Copy buttons, or a page wired to write the clipboard. */
   copies: number
-  /** List items, or numbered Markdown lines, that begin with something a person does at a screen. */
+  /** List items, HTML or Markdown, numbered or bulleted, that begin with something a person does at a screen. */
   actions: number
 }
 

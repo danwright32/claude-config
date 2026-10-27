@@ -31,6 +31,8 @@ describe('signsOf', () => {
   test('a Markdown page counts its numbered steps and its task boxes', () => {
     const md = '# Changes\n\n1. Open Regal and find the journey.\n2. **Click** the node.\n3. The node is the third one.\n\n- [ ] journey 1\n- [x] journey 2\n'
     expect(signsOf(md)).toEqual({ ticks: 2, copies: 0, actions: 2 })
+    // A bulleted list of things to do counts as an HTML <ul> does.
+    expect(signsOf('- Open Regal.\n- Click **Save**.\n').actions).toBe(2)
   })
 })
 
