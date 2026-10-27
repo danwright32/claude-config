@@ -3137,6 +3137,16 @@ load failed 20 of 20 with nothing broken, and passed 20 of 20 on the shared ceil
 load. It is a ceiling for hangs, not a judgement of speed. `tools/check-mod-shared-parts.sh` fails a
 test file, in any mod, that takes `test` from `claude-code/testing` itself, naming the `cp` and the
 import to use instead.
+Since #1778 the same file also ends what each test held. A stand-in that never answers (a call
+that hangs, a question nobody answers, a wait that never comes) is not stopped when its test ends:
+Claude Code cuts the hook off about five seconds of real time later, and what the mod does after
+that answer then runs inside whichever test is running by then, with that test's state and clock.
+On 2026-10-26 that failed the job watcher's tests 1 run in 3 under load (a git commit left hanging
+by one test stamped its agent alive in a later one, whose quiet agent was then never said), and a
+retry passed. So every such stand-in comes from the hang ceiling's `never()`, which each test ends
+as it ends, answered or refused, and a call that waits on one is handed to `awaitAtEnd()`, which the
+test waits for before the next starts. `tools/check-mod-shared-parts.sh` fails a mod test that hand
+rolls a promise that never settles, pointing at `never()`.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),
