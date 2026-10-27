@@ -1360,6 +1360,13 @@ test('saying plainly that none of the steps are Dan\'s to do now passes, in the 
   expect((await turnStop($, 'The page is up. None of these steps are yours to do now: they wait on #3415 merging.')).block).toBeUndefined()
 })
 
+test('the plain sentence in an earlier message of the turn passes, read from the transcript (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [PAGE]: STEPS_PAGE }, turn: [prompt(), wrote('None of these steps are yours to do now.'), prompt(), wrote('Done.')].join('\n') })
+  await start($)
+  await publish($, PAGE)
+  expect((await turnStop($, 'Done.')).block).toBeUndefined()
+})
+
 test('the plain sentence also answers a step left in prose, so one acknowledgement satisfies both (#1811, L330)', withKit, async ($, on) => {
   world(on, { turn: [prompt(), wrote(DOWNBEAT_STEP), prompt(), wrote('None of these steps are yours to do now.')].join('\n') })
   await start($)
