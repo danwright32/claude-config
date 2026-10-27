@@ -79,7 +79,22 @@ def _comment_body_has_link(args, command, place):
     return False
 
 
-def _api_writes_with_link(command):
+def _file_has_link(word, cwd):
+    """Whether a file a gh api call reads its body from holds the link. Relative paths are read
+    against the payload's directory: a cd earlier in the command is not followed here."""
+    path = os.path.expanduser(word)
+    if not os.path.isabs(path):
+        if not cwd:
+            return False
+        path = os.path.join(cwd, path)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return LINK.search(f.read()) is not None
+    except OSError:
+        return False
+
+
+def _api_writes_with_link(command, cwd):
     """Whether a gh api call in the command writes the link to a comment endpoint, unless overridden."""
     pipelines, _bodies = scan._stages(command)
     for stages in pipelines:
@@ -99,6 +114,11 @@ def _api_writes_with_link(command):
             if not writes or not any(API_COMMENT_ENDPOINT.search(a) for a in args if not a.startswith("-")):
                 continue
             if any(LINK.search(a) for a in args):
+                return True
+            # A body read from a file: -F key=@path, or the whole request from --input path.
+            files = [v.split("=@", 1)[1] for v in scan.flag_values(args, "--field", "-F") if "=@" in v]
+            files += scan.flag_values(args, "--input")
+            if any(_file_has_link(p, cwd) for p in files if p != "-"):
                 return True
             # The shared reader keeps only whether each heredoc body is shown, never its text, so a
             # body fed by one is judged from the command text, as a comment's -F - is.
@@ -123,7 +143,7 @@ def judge_bash(command, cwd):
                 continue
             if _comment_body_has_link(args, command, place):
                 return "review" if kind == ("pr", "review") else "comment"
-        if _api_writes_with_link(command):
+        if _api_writes_with_link(command, cwd):
             return "comment or reply"
     except scan.Unreadable:
         # A command nobody could tokenize: refuse when its text carries the link and plainly posts a

@@ -86,6 +86,10 @@ allows "a command nobody can tokenize, posting a clean comment" "gh pr comment 5
 denies "gh api link in a heredoc body after the last argument" "gh api repos/a/b/issues/1/comments -F body=@- <<'EOF'
 $LINK
 EOF"
+denies "gh api body read from a file with @, relative to the payload's directory" "gh api repos/a/b/issues/1/comments -F body=@with-link.md"
+printf '{"body": "Done. %s"}' "$LINK" >"$TMP_DIR/with-link.json"
+denies "gh api body from --input" "gh api -X POST repos/a/b/issues/1/comments --input $TMP_DIR/with-link.json"
+allows "gh api body from a clean file" "gh api repos/a/b/issues/1/comments -F body=@$TMP_DIR/clean.md"
 denies "comment chained after a commit" "git add a.ts && gh pr comment 5 --body \"Pushed. $LINK\""
 
 # --- Everything that is allowed to carry it, and comments without it ---
