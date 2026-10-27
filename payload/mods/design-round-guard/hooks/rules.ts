@@ -554,12 +554,38 @@ const groupSpellings = (name: string, bars = true): string[] | null => {
 }
 
 /**
+ * Whether a word's file name, its last part, is filled in by a command's output (#1815): a command
+ * substitution, `$(...)` or backticks, in the part after the last slash outside any substitution, or
+ * one never closed. Its names are whatever the command prints (`$(git ls-files src)` is every file
+ * under src), which cannot be read before it runs. A substitution in the folder alone
+ * (`$(git rev-parse --show-toplevel)/notes.md`) leaves the name as the word spells it, and a variable
+ * is no command's output. Read from the word as mod-kit gives it, its quotes taken off.
+ */
+export const nameFromOutput = (word: string): boolean => {
+  let depth = 0
+  let tick = false
+  let name = 0
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i]
+    if (c === '`') tick = !tick
+    else if (c === '$' && word[i + 1] === '(') {
+      depth++
+      i++
+    } else if (depth && c === '(') depth++
+    else if (depth && c === ')') depth--
+    else if (c === '/' && !depth && !tick) name = i + 1
+  }
+  const last = word.slice(name)
+  return depth > 0 || tick || last.includes('$(') || last.includes('`')
+}
+
+/**
  * Whether a file name the shell expands as a pattern may name a look changing file (#1015): `look`
  * when some name it can expand to is one (`[t]ailwind.config.ts`, `app/[t]okens.json`, `page.ts[x]`,
  * `out.*`, `build/*`), `not` when its literal parts rule every one out (`run-*.log`, `x.{md,txt}`,
  * `x.[!c]ss`, a code snippet such as `if (a || b) {`, whose groups spell no such name however they
  * are read, groupSpellings, #1773), and `unread` for one no rule here reads (zsh's globbing flags,
- * a command substitution, or a brace expansion or groups past MAX_SPELLINGS spellings). Only the
+ * a command substitution, nameFromOutput, or a brace expansion or groups past MAX_SPELLINGS spellings). Only the
  * last part of a path is read: a pattern in a folder is followed by the caller, or not at all. Since
  * #1010 only a pattern in the extension was judged, so a pattern in the rest of the name passed.
  */
@@ -568,7 +594,8 @@ export const patternMayBeLook = (word: string): 'look' | 'not' | 'unread' => {
   // A name ending inside a command substitution (`$(git ls-files 'src/*.tsx')`) is its output, not
   // its own text, and is read by no rule, as before #1773, when its parenthesis alone made it
   // unreadable. One after a substitution has closed (`$(cat id)/events/?x`) is read as any name.
-  if (word.includes('$(') && /[()]/.test(base)) return 'unread'
+  // So is one a command's output fills in holding no pattern at all (#1815: `$(git ls-files src)`).
+  if ((word.includes('$(') && /[()]/.test(base)) || nameFromOutput(word)) return 'unread'
   const braced = spellings(base)
   if (!braced) return 'unread'
   const all: string[] = []
