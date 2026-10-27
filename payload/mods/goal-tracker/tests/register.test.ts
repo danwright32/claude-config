@@ -1,5 +1,5 @@
 import { expect, mock, type Engine } from 'claude-code/testing'
-import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import { isDans } from './mod-kit/hooks/origin.ts'
 import { standInCore } from './mod-kit/tests/core.ts'
@@ -1337,7 +1337,7 @@ test('a /clear landing while a running call is written leaves no record holding 
     })
     return { value: undefined } as never
   })
-  on('clock.after', () => new Promise<never>(() => undefined) as never)
+  on('clock.after', () => never() as never)
   const w = world($, on)
   await start($)
   const call = $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Run the test suite' } as never)

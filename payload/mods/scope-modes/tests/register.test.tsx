@@ -1,5 +1,5 @@
 import { expect, mock } from 'claude-code/testing'
-import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
@@ -925,12 +925,12 @@ const world = (on: On, o: Opts = {}) => {
         const given = o.issueAnswers[q]
         const qs = (e as unknown as { questions: unknown[] }).questions
         const reply = (a: string) => ({ result: { questions: qs, answers: { [q]: a } }, text: `answered ${a}` })
-        if (given === null || given === undefined) return new Promise(() => undefined) as never
+        if (given === null || given === undefined) return never() as never
         if (given === '__dismissed') throw new Error('the dialog was dismissed')
         if (typeof given === 'string') return reply(given) as never
         return given.then(reply) as never
       }
-      if (q.endsWith('what may Claude do?') && o.repoAnswer === null) return new Promise(() => undefined) as never
+      if (q.endsWith('what may Claude do?') && o.repoAnswer === null) return never() as never
       // An answer Dan gives only when the test lets it go: after the wait, as late as it likes (#843).
       if (q.endsWith('what may Claude do?') && o.repoAnswerLate) {
         const qs = (e as unknown as { questions: unknown[] }).questions
