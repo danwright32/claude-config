@@ -3160,6 +3160,24 @@ retry passed. So every such stand-in comes from the hang ceiling's `never()`, wh
 as it ends, answered or refused, and a call that waits on one is handed to `awaitAtEnd()`, which the
 test waits for before the next starts. `tools/check-mod-shared-parts.sh` fails a mod test that hand
 rolls a promise that never settles, pointing at `never()`.
+Since #1789 no mod test waits on real time. Claude Code's test runner gives every hook 10,000 ms of
+real time (`HookBudget.ms`), the test's own stand-ins included, and the test clock never moves it:
+a stand-in held past it was cut at 10,014 to 10,028 ms ("exceeded 10000ms budget"), whether it held
+on `never()`, on a wait of its own, or on the test clock's `sleep`, while a test clock moved 21
+minutes past a held call in 220 ms without cutting it. So a held stand-in lasts only as long as the
+test takes in real time, and the time the mod sees is moved with `mock.clock(on)` and
+`clock.advance`, never waited for. `tools/check-mod-shared-parts.sh` fails a mod test, mod-kit's own
+included, that waits on real time (a `setTimeout` or `setInterval` past 100 ms or with a delay that
+is not a number written in place, `Bun.sleep`, `Atomics.wait`, or timers from `timers/promises`),
+by file and line, through `tools/lib/ts_source.py real-waits`, which reads code only, so a comment or
+a command string naming one passes. Measured under `tools/load-window.sh` on 2026-10-26 (load
+average up to 237): the closest a held stand-in came was account room's sign out held through 64
+seconds of ticks, 3.7 to 4.1 s of real time at load 158 and the whole test 7.5 s at load 237, now
+held through 3 seconds of ticks (0.4 to 0.6 s). Next were account room's other Switch test (the
+whole test 4.6 s at load 237) and the job watcher's (its `never()` holds 1.8 s at load 123, its
+slowest test 3.7 s at load 237); every other mod test that holds a call took 2.3 s or less at load
+178. Ask before saving's two second real deadline on a held call was the one real wait, and now
+waits on the condition itself.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),
