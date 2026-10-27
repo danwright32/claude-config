@@ -1,5 +1,8 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { pipeline } from './mod-kit/hooks/commands.ts'
+import { editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, shellAppended } from '../hooks/rules.ts'
 import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 
@@ -592,4 +595,102 @@ test('an Edit that does more than insert one entry at a line boundary adds nothi
   expect(two !== undefined && addsLesson(two, L1030_RULE)).toBe(false)
   // No file to judge against.
   expect(lessonAddition('Edit', { file_path: 'x', old_string: L1015_SHORT, new_string: L1015_SHORT + L1030_ENTRY }, undefined)).toBeUndefined()
+})
+
+// #1794: one For good on a memory file also covers the one index line linking it.
+const MEMORY_DIR = '/Users/dan/.claude/projects/-Users-dan-Apps-slate/memory'
+const IDX = `${MEMORY_DIR}/MEMORY.md`
+const DASH = String.fromCharCode(0x2014)
+const IDX_TEXT = `- [Live sync clone](live-sync.md) ${DASH} the scheduled clone\n- [Band size](band-size.md) ${DASH} global\n`
+const LINE = `- [Rule](rule.md) ${DASH} the rule it holds`
+
+test('a memory file an approval can carry its index line for is one directly in a project memory folder, never the index itself', () => {
+  expect(memoryFileOf(`${MEMORY_DIR}/rule.md`, HOME)).toEqual({ index: IDX, name: 'rule.md' })
+  expect(memoryFileOf(`${MEMORY_DIR}/MEMORY.md`, HOME)).toBeUndefined()
+  // A file in a folder under the memory folder, the folder itself, a file elsewhere.
+  expect(memoryFileOf(`${MEMORY_DIR}/old/rule.md`, HOME)).toBeUndefined()
+  expect(memoryFileOf(MEMORY_DIR, HOME)).toBeUndefined()
+  expect(memoryFileOf('/Users/dan/Apps/slate/CLAUDE.md', HOME)).toBeUndefined()
+  expect(memoryFileOf('/Users/dan/.claude/projects/-Users-dan-Apps-slate/rule.md', HOME)).toBeUndefined()
+})
+
+test('an index write adds a line only when it leaves the index as it was with exactly one line inserted at a line boundary', () => {
+  const [first, second] = IDX_TEXT.split('\n')
+  expect(indexLineAdded(IDX_TEXT, `${IDX_TEXT}${LINE}\n`)).toBe(LINE)
+  expect(indexLineAdded(IDX_TEXT, `${LINE}\n${IDX_TEXT}`)).toBe(LINE)
+  expect(indexLineAdded(IDX_TEXT, `${first}\n${LINE}\n${second}\n`)).toBe(LINE)
+  // No index yet, or one with no newline after its last line, which the new line then gets.
+  expect(indexLineAdded(undefined, `${LINE}\n`)).toBe(LINE)
+  expect(indexLineAdded('', LINE)).toBe(LINE)
+  expect(indexLineAdded(IDX_TEXT.trimEnd(), `${IDX_TEXT}${LINE}`)).toBe(LINE)
+  expect(indexLineAdded(IDX_TEXT.trimEnd(), `${IDX_TEXT}${LINE}\n`)).toBe(LINE)
+  const refused = [
+    // Two lines, a blank line beside it, or nothing added.
+    `${IDX_TEXT}${LINE}\n${LINE}\n`,
+    `${IDX_TEXT}\n${LINE}\n`,
+    IDX_TEXT,
+    `${IDX_TEXT}\n`,
+    // An existing line changed or taken out beside it.
+    `${first}\n${LINE}\n`,
+    `${first} more\n${second}\n${LINE}\n`,
+    // Spliced into an existing line, at its start or its end.
+    `${LINE}${first}\n${second}\n`,
+    `${first}\n${second}${LINE}\n`,
+  ]
+  for (const next of refused) expect(`${JSON.stringify(next)}: ${indexLineAdded(IDX_TEXT, next)}`).toBe(`${JSON.stringify(next)}: undefined`)
+  // Appended onto a last line with no newline, which joins the two.
+  expect(indexLineAdded(IDX_TEXT.trimEnd(), `${IDX_TEXT.trimEnd()}${LINE}\n`)).toBeUndefined()
+})
+
+test('an index line covers a file only when its one markdown link is to that file by its name', () => {
+  expect(linksOnlyTo(LINE, 'rule.md')).toBe(true)
+  expect(linksOnlyTo(`- [Rule](./rule.md) ${DASH} x`, 'rule.md')).toBe(true)
+  expect(linksOnlyTo(LINE, 'other.md')).toBe(false)
+  expect(linksOnlyTo(`${LINE} [see](other.md)`, 'rule.md')).toBe(false)
+  expect(linksOnlyTo(`${LINE} [again](rule.md)`, 'rule.md')).toBe(false)
+  expect(linksOnlyTo('- rule.md: the rule', 'rule.md')).toBe(false)
+  expect(linksOnlyTo('- [Rule](old/rule.md)', 'rule.md')).toBe(false)
+})
+
+test('an Edit applied to a file leaves it with its old text replaced once, or nothing when that text is not found exactly once', () => {
+  expect(editedFile('a\nb\n', { old_string: 'a', new_string: 'a\nc' })).toBe('a\nc\nb\n')
+  expect(editedFile('a\na\n', { old_string: 'a', new_string: 'c' })).toBeUndefined()
+  expect(editedFile('a\nb\n', { old_string: 'x', new_string: 'c' })).toBeUndefined()
+  expect(editedFile('a\nb\n', { old_string: '', new_string: 'c' })).toBeUndefined()
+  expect(editedFile('a\nb\n', { old_string: 'a', new_string: 'c', replace_all: true })).toBeUndefined()
+  expect(editedFile(undefined, { old_string: 'a', new_string: 'c' })).toBeUndefined()
+})
+
+test('a shell append adds its text only as one echo, printf or cat of quoted text with >> into the index and nothing else', () => {
+  const shown = '~/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md'
+  const appended = (command: string) => shellAppended(command, pipeline(command), commandWrites(command, '/Users/dan/Apps/slate', HOME), IDX)
+  expect(appended(`echo '${LINE}' >> ${shown}`)).toBe(`${LINE}\n`)
+  expect(appended(`echo "${LINE}" >> "${IDX}"`)).toBe(`${LINE}\n`)
+  expect(appended(`printf '%s\\n' '${LINE}' >> ${shown}`)).toBe(`${LINE}\n`)
+  expect(appended(`printf '${LINE}\\n' >> ${shown}`)).toBe(`${LINE}\n`)
+  expect(appended(`cat >> ${shown} <<'EOF'\n${LINE}\nEOF`)).toBe(`${LINE}\n`)
+  expect(appended(`cat <<'EOF' >> ${shown}\n${LINE}\nEOF`)).toBe(`${LINE}\n`)
+  expect(appended(`F=${shown}; echo '${LINE}' >> "$F"`)).toBe(`${LINE}\n`)
+  const refused = [
+    // Replacing the index, or appending somewhere else.
+    `echo '${LINE}' > ${shown}`,
+    `echo '${LINE}' >> ${MEMORY_DIR}/notes.md`,
+    `echo '${LINE}' 2>> ${shown}`,
+    // Text the shell or the command may change: a variable, a substitution, an escape, a format.
+    `echo "${LINE} $HOME" >> ${shown}`,
+    `echo "${LINE} $(whoami)" >> ${shown}`,
+    `echo '${LINE}\\nmore' >> ${shown}`,
+    `echo -e '${LINE}' >> ${shown}`,
+    `printf '${LINE} %s\\n' x >> ${shown}`,
+    `printf '%s\\n' '${LINE}' 'more' >> ${shown}`,
+    `cat >> ${shown} <<EOF\n${LINE} $HOME\nEOF`,
+    // Unquoted text, whose brackets the shell reads as a pattern.
+    `echo - [Rule](rule.md) >> ${shown}`,
+    // More than one command, a pipe, or a file read in.
+    `echo '${LINE}' >> ${shown}; echo x > /tmp/y`,
+    `echo '${LINE}' | tee -a ${shown}`,
+    `cat notes.md >> ${shown}`,
+    `cat >> ${shown} <<<'${LINE}'`,
+  ]
+  for (const command of refused) expect(`${command}: ${appended(command)}`).toBe(`${command}: undefined`)
 })

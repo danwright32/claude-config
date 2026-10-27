@@ -313,6 +313,17 @@ it in the spec, with where it came from and where the round draws:
 what goes in the slot, with the product's own classes and controls. A round about a Claude Code mod
 asks for `"screen": "terminal"` instead, the terminal that ships with the tool.
 
+**Each option's frame is as tall as its page, and follows it** (claude-config#1795). The switcher
+watches the page's root and sizes the frame from it when the option is shown and whenever the page
+changes height, so a step revealing or a list opening after a click grows the frame, and closing it
+shrinks the frame again. A captured page whose root or body is `h-full` or `min-h-screen` (Slate's)
+has both given an automatic height in the frame, so it reports its content rather than the frame's own
+height. So a round needs no `html, body { height: auto }` override in its stylesheet and no builder
+resizing its own frame. An area inside the page as tall as its window (a `min-h-screen` panel under a
+header) grows whenever the frame does; the frame is not sized again for a growth its own resize caused,
+only when the page itself changes, so the part the header adds scrolls inside the frame, as it would in
+a window. A picture's frame is its picture's size.
+
 **A round whose options belong to different pages is still one round** (claude-config#1536): a panel
 in edit mode against a card in view mode, say. List every captured page in `"chromes"`, in place of
 `"chrome"`, each with a `"name"`, and have each option name the one it is drawn in, as a settled

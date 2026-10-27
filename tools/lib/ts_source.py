@@ -30,6 +30,10 @@ As a command:
       Prints, one per line as <file>:<line>, each import under the mod that takes `test` from
       'claude-code/testing' itself rather than from mod-kit's tests/hang-ceiling.ts (#1577). Exit 1
       when a file cannot be read, naming it.
+  ts_source.py real-waits <mod dir>
+      Prints, one per line as <file>:<line><TAB><what>, each wait on real time in the mod's tests: a
+      setTimeout or setInterval whose delay is not a number at or under REAL_WAIT_FLOOR_MS, Bun.sleep,
+      Atomics.wait, or timers taken from timers/promises (#1789). Exit 1 when a file cannot be read.
 """
 import os
 import re
@@ -553,6 +557,93 @@ def kit_test_takers(mod):
     return found, failed
 
 
+# A wait on REAL time in a mod's tests (claude-config#1789). Claude Code's test runner gives every hook
+# 10,000 ms of real time, which the test clock (mock.clock) never moves, and cuts a held stand-in off
+# there; so a test that waits on real time is judged by how busy the Mac is (L290). A timer whose delay
+# is a number at or under this floor only yields to the event loop; anything longer, or a delay that
+# is not a number written in place, is a wait on real time.
+REAL_WAIT_FLOOR_MS = 100
+REAL_TIMER = re.compile(
+    r"(?<![\w$.])(?:(?:window|globalThis|self)\s*\.\s*)?(setTimeout|setInterval)\s*\("
+    r"|(?<![\w$.])Bun\s*\.\s*(sleep|sleepSync)\s*\("
+    r"|(?<![\w$.])Atomics\s*\.\s*(wait|waitAsync)\s*\("
+)
+TIMERS_MODULE = re.compile(r"""(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)['"](?:node:)?timers/promises['"]""")
+NUMBER_LITERAL = re.compile(r"\d[\d_]*")
+
+
+def _arguments(code, open_at):
+    """The top level arguments of the call whose ( is at open_at in code (as code_only gives it), each
+    stripped, or None when the call never closes."""
+    end = closing(code, open_at)
+    if end is None:
+        return None
+    args, depth, start = [], 0, open_at + 1
+    for j in range(open_at + 1, end - 1):
+        c = code[j]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            args.append(code[start:j].strip())
+            start = j + 1
+    last = code[start : end - 1].strip()
+    if last or args:
+        args.append(last)
+    return args
+
+
+def real_waits(mod):
+    """Each wait on real time in a mod's tests, as <file>:<line><TAB><what> (claude-config#1789), and a
+    file that cannot be read as <file><TAB>cannot be read: why. Copies of mod-kit's files (any folder
+    named mod-kit) are mod-kit's own, read in mod-kit."""
+    tests = os.path.join(mod, "tests")
+    found, failed = [], 0
+    if not os.path.isdir(tests):
+        return found, failed
+    for top, dirs, files in os.walk(tests):
+        dirs[:] = sorted(x for x in dirs if x not in ("node_modules", ".claude-plugin", "mod-kit"))
+        for f in sorted(files):
+            if not f.endswith(SOURCE) or f.endswith(".d.ts"):
+                continue
+            path = os.path.join(top, f)
+            rel = os.path.relpath(path, mod)
+            try:
+                with open(path) as fh:
+                    text = fh.read()
+            except (OSError, UnicodeDecodeError) as e:
+                found.append(f"{rel}\tcannot be read: {e}")
+                failed = 1
+                continue
+            jsx = is_jsx(path)
+            code = code_only(text, jsx)
+            line_of = lambda i: code.count("\n", 0, i) + 1
+            for m in REAL_TIMER.finditer(code):
+                # A declaration of the timer's type (declare function setTimeout(...)) waits on nothing.
+                if m.group(1) and re.search(r"\bfunction\s*$", code[: m.start()]):
+                    continue
+                name = m.group(1) or ("Bun." + m.group(2) if m.group(2) else "Atomics." + m.group(3))
+                if m.group(3):
+                    found.append(f"{rel}:{line_of(m.start())}\t{name}, which blocks on real time")
+                    continue
+                args = _arguments(code, m.end() - 1)
+                if args is None:
+                    found.append(f"{rel}:{line_of(m.start())}\t{name}, a call that never closes, so its delay cannot be read")
+                    continue
+                delay = (args[1] if len(args) > 1 else "") if m.group(1) else (args[0] if args else "")
+                if delay == "" and m.group(1):
+                    continue
+                if NUMBER_LITERAL.fullmatch(delay) and int(delay.replace("_", "")) <= REAL_WAIT_FLOOR_MS:
+                    continue
+                said = f"{delay} ms" if NUMBER_LITERAL.fullmatch(delay) else f"a delay of {' '.join(delay.split()) or 'nothing'}, not a number"
+                found.append(f"{rel}:{line_of(m.start())}\t{name}, {said}")
+            clean = strip_comments(text, jsx)
+            for m in TIMERS_MODULE.finditer(clean):
+                found.append(f"{rel}:{clean.count(chr(10), 0, m.start()) + 1}\ttimers taken from timers/promises")
+    return found, failed
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "strip-hooks":
         sys.exit(strip_hooks(sys.argv[2], sys.argv[3]))
@@ -564,5 +655,10 @@ if __name__ == "__main__":
         if lines:
             print("\n".join(lines))
         sys.exit(bad)
-    print("usage: ts_source.py strip-hooks <mods dir> <out dir> | unscreened <hooks dir> | kit-test-takers <mod dir>", file=sys.stderr)
+    if len(sys.argv) == 3 and sys.argv[1] == "real-waits":
+        lines, bad = real_waits(sys.argv[2])
+        if lines:
+            print("\n".join(lines))
+        sys.exit(bad)
+    print("usage: ts_source.py strip-hooks <mods dir> <out dir> | unscreened <hooks dir> | kit-test-takers <mod dir> | real-waits <mod dir>", file=sys.stderr)
     sys.exit(2)

@@ -1,7 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
-import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingQuestion } from '../types/index.d.ts'
+import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingIndexCover, AskBeforeSavingQuestion } from '../types/index.d.ts'
 import {
   APPROVAL_MS,
   FOR_GOOD,
@@ -30,6 +30,11 @@ import {
   cannotCheck,
   dialogOptions,
   display,
+  editedFile,
+  indexLineAdded,
+  linksOnlyTo,
+  memoryFileOf,
+  shellAppended,
   lapseWait,
   lastingFiles,
   lastingMemory,
@@ -73,6 +78,7 @@ const pendingRef = { plugin: 'ask-before-saving', key: 'pending' } as const
 const rulesRef = { plugin: 'ask-before-saving', key: 'rules' } as const
 const promptRef = { plugin: 'ask-before-saving', key: 'lastPrompt' } as const
 const approvalsRef = { plugin: 'ask-before-saving', key: 'approvals' } as const
+const coversRef = { plugin: 'ask-before-saving', key: 'covers' } as const
 
 const TOOL_NAMES = ['Write', 'Edit', 'Bash'] as const
 const TOOLS: ReadonlySet<string> = new Set(TOOL_NAMES)
@@ -93,6 +99,9 @@ const fromAgent = new Map<string, number>()
 // matching call meanwhile is asked about, and read back by the tool.call hook above it in the same
 // dispatch, to say what became of it and give it back when the write did not land (#1691).
 const taken = new Map<string, AskBeforeSavingApproval>()
+// The index lines let through on a saved memory file's For good (#1794), by tool_use_id, read back
+// by the tool.call hook the same way, to say so and give the cover back when the write did not land.
+const coverTaken = new Map<string, AskBeforeSavingIndexCover>()
 
 // The arguments the tool takes, without the keys the engine carries beside them.
 const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
@@ -403,6 +412,61 @@ const takeLesson = async ($: EngineInterface, added: string) => {
   return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined }
 }
 
+// The line a call adds to `index` (#1794), read by every route this mod judges: a Write's content and
+// an Edit's result against the index as it is now, and a shell command that only appends text it
+// spells out (rules.ts shellAppended, by mod-kit's one reader of what it runs and writes) appended to
+// it. Undefined for anything else, which is asked about. An index that exists and cannot be read fails
+// the hook, and the hook fails closed.
+const indexLineOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, index: string): Promise<string | undefined> => {
+  const old = (await $.fs.exists(index)) ? await $.fs.read(index) : undefined
+  if (tool === 'Write') return indexLineAdded(old, String(input.content ?? ''))
+  if (tool === 'Edit') {
+    const edited = editedFile(old, input)
+    return edited === undefined ? undefined : indexLineAdded(old, edited)
+  }
+  const command = String(input.command ?? '')
+  const appended = shellAppended(command, await $.modkit.pipeline({ command }), await $.modkit.writes({ command, cwd: at.cwd, home: at.home }), index)
+  return appended === undefined ? undefined : indexLineAdded(old, (old ?? '') + appended)
+}
+
+// A For good on one memory file, once its save lands, also covers the one line in its folder's index
+// linking to it (#1794), until the approval itself would lapse. Answers what Claude is told of it, or
+// nothing when the save was no memory file's, or more than one file's, which covers no line.
+const coverFor = async ($: EngineInterface, used: AskBeforeSavingApproval): Promise<string | undefined> => {
+  if (used.files.length !== 1) return undefined
+  const { home } = await whereOf($)
+  const file = memoryFileOf(resolvePath(used.files[0] ?? '', '/', home), home)
+  if (!file) return undefined
+  const made: AskBeforeSavingIndexCover = { ...file, files: used.files, until: used.until }
+  await update($, coversRef, a => [...(a ?? []), made])
+  return `The one line in ${display(file.index, home)} that links to ${file.name} may be added without asking him again until this For good lapses; any other change to that index is asked about.`
+}
+
+// The cover a saved memory file's For good gives this call (#1794), taken as the call passes: a write
+// whose one target is the index of a cover that still stands, adding only the one line linking that
+// cover's file. Covers past their time are dropped in silence, here and wherever the list is written:
+// Dan never answered about the index, so there is nothing of his to say lapsed.
+const takeCover = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, { files, guessed, handed }: Targets): Promise<AskBeforeSavingIndexCover | undefined> => {
+  if (files.length !== 1 || guessed.length || handed.length) return undefined
+  const now = await $.clock.now()
+  const standing = ((await $.state.get(coversRef)).value ?? []).filter(c => stands(c.until, now) && display(c.index, at.home) === files[0])
+  const index = standing[0]?.index
+  if (index === undefined) return undefined
+  const line = await indexLineOf($, tool, input, at, index)
+  if (line === undefined) return undefined
+  let hit = undefined as AskBeforeSavingIndexCover | undefined
+  await update($, coversRef, a => {
+    hit = undefined
+    return (a ?? []).filter(c => {
+      if (!stands(c.until, now)) return false
+      if (hit || c.index !== index || !linksOnlyTo(line, c.name)) return true
+      hit = c
+      return false
+    })
+  })
+  return hit
+}
+
 // What Claude reads when the approval for the call it sent has lapsed (#764: never "unused" for one
 // it sent that another guard refused).
 const lapsedNote = (x: AskBeforeSavingApproval) =>
@@ -524,6 +588,7 @@ export const register: Register = on => {
     }
     let r: Awaited<ReturnType<typeof next>>
     let used: AskBeforeSavingApproval | undefined
+    let covered: AskBeforeSavingIndexCover | undefined
     try {
       r = await next(e)
     } finally {
@@ -531,6 +596,8 @@ export const register: Register = on => {
       if (key !== undefined) approved.delete(key)
       used = taken.get(id)
       taken.delete(id)
+      covered = coverTaken.get(id)
+      coverTaken.delete(id)
     }
     // A save sent on an approval, For good or Dan's Add to LESSONS.md in the durable lesson picker
     // (#867). The approval is spent only once the write lands (#1691, L30): one that did not (an Edit
@@ -542,7 +609,11 @@ export const register: Register = on => {
     if (used !== undefined) {
       const where = used.files.join(', ')
       const lesson = used.lesson !== undefined
-      if (r.deny === undefined && !r.isError) return { ...r, context: [...(r.context ?? []), `${lesson ? 'Added' : 'Saved'} to ${where}, as Dan answered ${pressed(used)}.`] }
+      if (r.deny === undefined && !r.isError) {
+        const saved = `${lesson ? 'Added' : 'Saved'} to ${where}, as Dan answered ${pressed(used)}.`
+        const cover = lesson ? undefined : await coverFor($, used)
+        return { ...r, context: [...(r.context ?? []), cover ? `${saved} ${cover}` : saved] }
+      }
       const why = String(r.deny ?? r.text ?? 'the tool reported an error')
       const not = lesson ? 'Not added' : 'Not saved'
       $.ui.toast(`${not} to ${where}: ${why}`, { timeoutMs: 10_000 })
@@ -557,6 +628,18 @@ export const register: Register = on => {
       if (r.deny !== undefined) return r
       const again = lesson ? 'correct the call and send it again, and it is added' : 'send the same call again once what failed is put right, and it is saved'
       return { ...r, context: [...(r.context ?? []), `${not} to ${where}. Dan's ${pressed(used)} still stands until it lapses: ${again} without asking him.`] }
+    }
+    // The index line a saved memory file's For good covered (#1794), spent once it lands. One that did
+    // not land gives its cover back for the rest of the approval's time, as the approval itself is
+    // given back, but a shell command that ran and failed may have appended part of it, so it is spent.
+    if (covered !== undefined) {
+      const index = display(covered.index, (await whereOf($)).home)
+      if (r.deny === undefined && !r.isError)
+        return { ...r, context: [...(r.context ?? []), `Added the line linking ${covered.name} to ${index}, under Dan's For good on saving ${covered.files.join(', ')}.`] }
+      if ((tool === 'Bash' && r.deny === undefined) || !stands(covered.until, await $.clock.now())) return r
+      const back = covered
+      await update($, coversRef, a => [...(a ?? []), back])
+      return r
     }
     // A save Dan answered For good, sent again, refused before the tool.check hook could take its
     // approval (#764): by another guard's tool.call hook (a deny), or by a settings hook, which since
@@ -628,6 +711,12 @@ export const register: Register = on => {
     const lesson = added === undefined ? { live: undefined, lapsed: undefined } : await takeLesson($, added)
     if (lesson.live) {
       taken.set(String(raw.tool_use_id ?? ''), lesson.live)
+      return next(e)
+    }
+    // The one index line a saved memory file's For good covers (#1794): on beneath the same way.
+    const cover = await takeCover($, tool, input, at, targets)
+    if (cover) {
+      coverTaken.set(String(raw.tool_use_id ?? ''), cover)
       return next(e)
     }
     // The settings hooks beneath (the payload write gate among them) decide first, so Dan is never
@@ -793,6 +882,7 @@ export const register: Register = on => {
     await $.state.set(pendingRef, [])
     await $.state.set(promptRef, null)
     await $.state.set(approvalsRef, [])
+    await $.state.set(coversRef, [])
     $.ui.invalidate('prompt.section')
     // Dan answered For good believing it saved; one Claude never sent again is said, not dropped quietly.
     // One Claude sent that another guard refused was used, and says why it was not saved (#764, L11).

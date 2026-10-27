@@ -185,6 +185,11 @@ type World = {
   turnEndThrows?: boolean
   /** Whether the guard below (refusesStops) refuses a TaskStop now; the test may change it as it goes (#1491). */
   guard?: { refuses: boolean }
+  /**
+   * How hooks/lib/agent-overrides.py answers stdin-device-refusal (#1765): the refusal (exit 0), no
+   * read of the device path (exit 1), a python that fails (exit 2, a traceback), or a run that throws.
+   */
+  reader?: 'refuses' | 'none' | 'crash' | 'throws'
 }
 const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
@@ -193,6 +198,10 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     reached: [] as { tool: string; input: Record<string, unknown> }[],
     extra: [] as unknown[],
     logs: [] as string[],
+    /** What went to the debug log only, which Dan never sees in the transcript (#1765). */
+    debug: [] as string[],
+    /** Each run of the shared reader hooks/lib/agent-overrides.py, with the text handed to it (#1765). */
+    readerRuns: [] as { argv: readonly string[]; stdin: string }[],
     toasts: [] as string[],
     kills: [] as string[][],
     asked: [] as { model: string; prompt: string }[],
@@ -244,6 +253,16 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       return ok(JSON.stringify({ open: s?.open ?? [], closed: s?.closed ?? [], unreadable: s?.unreadable ?? [], selfId: 'me' }))
     }
     if (cmd === '__guard') return ok(o.guard?.refuses ? 'refuse\n' : 'allow\n')
+    // The shared reader of a git command reading standard input's device path (#1765), stood in: a
+    // test has no processes. Its own wording, and the proof that no-verify-gate.sh says exactly it,
+    // live in hooks/test-agent-bypass-gates.sh.
+    if (cmd === 'python3' && (args[0] ?? '').endsWith('/agent-overrides.py')) {
+      w.readerRuns.push({ argv: e.argv, stdin: e.init?.stdin ?? '' })
+      if (o.reader === 'throws') throw new Error('python3: command not found')
+      if (o.reader === 'crash') return res(2, '', 'Traceback (most recent call last):\nModuleNotFoundError: No module named shell_words')
+      if (o.reader === 'none') return res(1, '')
+      return ok(`${READER_REFUSAL}\n`)
+    }
     if (cmd === '__asleep' && o.asleepAfter) await o.asleepAfter
     if (cmd === '__asleep') return o.asleep === 'throws' ? res(1, '', 'the sleep record could not be read') : ok(o.asleep ? 'yes\n' : 'no\n')
     if (cmd === '__sleepnote') {
@@ -340,6 +359,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     // Only what reaches the transcript is what Dan sees; the debug log is not.
     if (e.text.startsWith('EXTRA jobs ')) w.extra.push(JSON.parse(e.text.slice('EXTRA jobs '.length)))
     else if (e.to !== 'debug') w.logs.push(e.text)
+    else w.debug.push(e.text)
     return { value: undefined }
   })
   on('ui.toast', ($, e) => {
@@ -3377,4 +3397,110 @@ test("a record of who started what that cannot be read checks the agent's Bash j
   expect(r.block).toContain(`${HOLD} job1 (gh pr checks 9 --watch)`)
   expect(r.block).not.toContain('mon1')
   expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toContain('could not read which agent started which background work')
+})
+
+// #1765: a worktree subagent's `git commit -F /dev/stdin` waits on a permission prompt Claude Code
+// raises BEFORE any PreToolUse hook runs, so no-verify-gate.sh's refusal never got the chance (the
+// live check of 2026-10-26). The prompt itself is answered here: every request is recorded to the
+// debug log (tool, and whether an agent id came with it, never the command), and a subagent's git
+// command reading standard input's device path is denied with the shared reader's words.
+const READER_REFUSAL =
+  "agent a1 ran a git command that reads a file from standard input's device path:\n  git commit reading /dev/stdin: git -C /private/tmp/wt/.claude/worktrees/agent-x commit -q -F /dev/stdin <<'EOF'\nFrom a subagent in a worktree, Claude Code turns that path into a permission prompt nobody can answer, and the call waits until the agent is stopped (claude-config#1765: 2 of 2 hung, for 20 minutes and almost 3 hours). Write the message to a file with the Write tool and pass -F <file>, or keep the heredoc and use -F - instead of the device path."
+// The 2026-10-26 hung commit, first line as recorded, its home directory replaced.
+const HUNG_COMMIT = "git -C /private/tmp/wt/.claude/worktrees/agent-x commit -q -F /dev/stdin <<'EOF'\nHold the guard\n\nClaude-Session: https://claude.ai/code/session_x\nEOF"
+type Asked = { decision?: { behavior: string; message?: string } }
+type Asks = { classic: { PermissionRequest: (e: never) => Promise<unknown> } }
+const permissionRequest = async ($: unknown, tool_name: string, tool_input: Record<string, unknown>, agentId?: string) => {
+  const e: Record<string, unknown> = { hook_event_name: 'PermissionRequest', session_id: 's1', transcript_path: '/tmp/s1.jsonl', cwd: '/repo', tool_name, tool_input }
+  if (agentId !== undefined) e.agent_id = agentId
+  return (await ($ as Asks).classic.PermissionRequest(e as never)) as Asked
+}
+// What sits beneath (the goal tracker's notice, Claude Code's own dialog): counted, never deciding.
+const PROMPT_BENEATH = (on: On) => {
+  const beneath = { reached: 0 }
+  on('classic.PermissionRequest', () => {
+    beneath.reached += 1
+    return {} as never
+  })
+  return beneath
+}
+
+test("a subagent's git commit reading /dev/stdin is denied at the permission prompt, with the shared reader's words (#1765)", withDeps, async ($, on) => {
+  const w = world(on, [], { reader: 'refuses' })
+  const beneath = PROMPT_BENEATH(on)
+  const r = await permissionRequest($, 'Bash', { command: HUNG_COMMIT, description: 'commit' }, 'a1')
+  expect(r.decision).toEqual({ behavior: 'deny', message: `REFUSED (job-watcher, at the permission prompt): ${READER_REFUSAL}` })
+  expect(beneath.reached).toBe(0)
+  expect(w.readerRuns).toEqual([{ argv: ['python3', '/Users/dan/.claude/hooks/lib/agent-overrides.py', 'stdin-device-refusal', 'a1'], stdin: HUNG_COMMIT }])
+})
+
+test("the main session's same request is passed on untouched: Dan sees its prompt (#1765)", withDeps, async ($, on) => {
+  const w = world(on, [], { reader: 'refuses' })
+  const beneath = PROMPT_BENEATH(on)
+  const r = await permissionRequest($, 'Bash', { command: HUNG_COMMIT }, undefined)
+  expect(r.decision).toBeUndefined()
+  expect(beneath.reached).toBe(1)
+  expect(w.readerRuns).toEqual([])
+})
+
+test("a subagent's unrelated Bash request, and one the reader finds no git read of the device path in, are passed on (#1765)", withDeps, async ($, on) => {
+  const w = world(on, [], { reader: 'none' })
+  const beneath = PROMPT_BENEATH(on)
+  expect((await permissionRequest($, 'Bash', { command: 'npm test' }, 'a1')).decision).toBeUndefined()
+  // Named, but not read by git: the reader says so, and the prompt is left as it was.
+  expect((await permissionRequest($, 'Bash', { command: 'python3 /dev/stdin <<EOF\nprint(1)\nEOF' }, 'a1')).decision).toBeUndefined()
+  expect(beneath.reached).toBe(2)
+  // A command naming no device path never starts the reader.
+  expect(w.readerRuns.map(x => x.stdin)).toEqual(['python3 /dev/stdin <<EOF\nprint(1)\nEOF'])
+})
+
+test('a subagent request for another tool is passed on, and nothing is ever allowed (#1765)', withDeps, async ($, on) => {
+  const w = world(on, [], { reader: 'refuses' })
+  const beneath = PROMPT_BENEATH(on)
+  const r = await permissionRequest($, 'Write', { file_path: '/dev/stdin', content: 'x' }, 'a1')
+  expect(r.decision).toBeUndefined()
+  expect(beneath.reached).toBe(1)
+  expect(w.readerRuns).toEqual([])
+})
+
+test('every permission request is written to the debug log with its tool and whether an agent id came, never the command (#1765)', withDeps, async ($, on) => {
+  const w = world(on, [], { reader: 'refuses' })
+  PROMPT_BENEATH(on)
+  await permissionRequest($, 'Bash', { command: HUNG_COMMIT }, 'a1')
+  await permissionRequest($, 'Bash', { command: HUNG_COMMIT }, undefined)
+  await permissionRequest($, 'Read', { file_path: '/repo/secret-plan.md' }, 'a1')
+  expect(w.debug.filter(l => l.includes('permission request'))).toEqual([
+    'job-watcher: permission request: tool Bash, agent id present, denied (a git command reading standard input by its device path, #1765)',
+    'job-watcher: permission request: tool Bash, agent id absent, passed on',
+    'job-watcher: permission request: tool Read, agent id present, passed on',
+  ])
+  for (const l of w.debug) {
+    expect(l).not.toContain('/dev/stdin')
+    expect(l).not.toContain('agent-x')
+    expect(l).not.toContain('Hold the guard')
+    expect(l).not.toContain('secret-plan')
+  }
+  // Nothing of it reaches the transcript Dan reads.
+  expect(w.logs).toEqual([])
+})
+
+const deniedUnread = async ($: unknown, w: ReturnType<typeof world>, beneath: { reached: number }) => {
+  const r = await permissionRequest($, 'Bash', { command: HUNG_COMMIT }, 'a1')
+  expect(r.decision?.behavior).toBe('deny')
+  expect(r.decision?.message).toContain('could not be read')
+  expect(r.decision?.message).toContain('-F <file>')
+  expect(r.decision?.message).toContain('-F -')
+  expect(r.decision?.message).toContain('#1765')
+  expect(beneath.reached).toBe(0)
+  expect(w.debug).toContain('job-watcher: permission request: tool Bash, agent id present, denied unread (the reader of standard input by its device path could not run, #1765)')
+}
+
+test("a subagent's request naming the device path is still denied when the reader fails, saying why (#1765)", withDeps, async ($, on) => {
+  const w = world(on, [], { reader: 'crash' })
+  await deniedUnread($, w, PROMPT_BENEATH(on))
+})
+
+test("a subagent's request naming the device path is still denied when the reader cannot start, saying why (#1765)", withDeps, async ($, on) => {
+  const w = world(on, [], { reader: 'throws' })
+  await deniedUnread($, w, PROMPT_BENEATH(on))
 })

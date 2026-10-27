@@ -514,16 +514,26 @@ const entryBlock = (block: string): string | undefined => {
  */
 export const lessonAddition = (tool: string, input: Record<string, unknown>, file: string | undefined): string | undefined => {
   if (tool === 'Edit') {
-    const from = String(input.old_string ?? '')
-    if (file === undefined || input.replace_all === true || !from) return undefined
-    const at = file.indexOf(from)
-    if (at === -1 || file.indexOf(from, at + 1) !== -1) return undefined
-    return insertedEntry(file, file.slice(0, at) + String(input.new_string ?? '') + file.slice(at + from.length))
+    const edited = editedFile(file, input)
+    return file === undefined || edited === undefined ? undefined : insertedEntry(file, edited)
   }
   if (tool !== 'Write') return undefined
   const content = String(input.content ?? '')
   if (file === undefined) return entryBlock(content)
   return insertedEntry(file, content)
+}
+
+/**
+ * The file an Edit leaves: `file` with its old text replaced, when that text is found exactly once
+ * (never replace_all, never empty old text, never a file that is not there). Anything else is
+ * undefined, and is judged as no addition at all.
+ */
+export const editedFile = (file: string | undefined, input: Record<string, unknown>): string | undefined => {
+  const from = String(input.old_string ?? '')
+  if (file === undefined || input.replace_all === true || !from) return undefined
+  const at = file.indexOf(from)
+  if (at === -1 || file.indexOf(from, at + 1) !== -1) return undefined
+  return file.slice(0, at) + String(input.new_string ?? '') + file.slice(at + from.length)
 }
 
 // The entry block `content` is `file` with, inserted at one line boundary, or undefined.
@@ -573,6 +583,121 @@ export const addsLesson = (added: string, rule: string): boolean => {
   // the whole lessons file back (sixth lessons review of #869).
   const shown = shortAt === -1 ? ruleText(rule) : (lines[shortAt] ?? '').replace(/^\s*SHORT:\s*/, '')
   return `- L${m[1]}. ${shown}`.length <= MAX_SHORT
+}
+
+// One For good on a memory file also covers the one line in its folder's index linking to it (#1794,
+// Dan, 2026-10-26: "didn't I already give permission to save this? how is this different than the
+// last one?"). Everything below judges that line strictly, the side that asks: anything it cannot
+// read as exactly that one line added, and nothing else changed, is asked about as before.
+
+/**
+ * The index a For good on this memory file carries its line for, and the name that line links to: a
+ * file directly in a project's memory folder (<home>/.claude/projects/<project>/memory/<name>), never
+ * the index itself, nor one in a folder below it, which the index would link by a longer path.
+ */
+export const memoryFileOf = (abs: string, home: string): { index: string; name: string } | undefined => {
+  const projects = `${home.replace(/\/$/, '')}/.claude/projects/`
+  if (!abs.startsWith(projects)) return undefined
+  const [project, memory, name, ...below] = abs.slice(projects.length).split('/')
+  if (!project || memory !== 'memory' || !name || name === 'MEMORY.md' || below.length) return undefined
+  return { index: `${projects}${project}/memory/MEMORY.md`, name }
+}
+
+/**
+ * The one line a write to an index adds, when the index it leaves is the index as it is now with
+ * exactly one line of text inserted at a line boundary and nothing else changed: no second line, no
+ * blank line, no existing line changed, taken out or spliced into. An index with no newline after its
+ * last line may get one before the new line. No index yet (undefined or empty) takes the line alone.
+ * Anything else is undefined, and is asked about.
+ */
+export const indexLineAdded = (old: string | undefined, next: string): string | undefined => {
+  const was = old ?? ''
+  // The line, when `s` is one line of text with at most its newline after it.
+  const one = (s: string): string | undefined => {
+    const line = s.endsWith('\n') ? s.slice(0, -1) : s
+    return line.trim() && !line.includes('\n') ? line : undefined
+  }
+  if (was === '') return one(next)
+  if (!was.endsWith('\n') && next.startsWith(`${was}\n`)) return one(next.slice(was.length + 1))
+  const size = next.length - was.length
+  if (size < 2) return undefined
+  // What the two share at the start and at the end, as insertedEntry measures it: the line can sit
+  // only at a boundary b with b <= head and b >= was.length - tail, where both sides match.
+  let head = 0
+  while (head < was.length && was[head] === next[head]) head++
+  let tail = 0
+  while (tail < was.length && was[was.length - 1 - tail] === next[next.length - 1 - tail]) tail++
+  for (let b = Math.max(0, was.length - tail); b <= head; b++) {
+    if (b !== 0 && was[b - 1] !== '\n') continue
+    const block = next.slice(b, b + size)
+    const line = block.endsWith('\n') ? one(block) : undefined
+    if (line !== undefined) return line
+  }
+  return undefined
+}
+
+// A markdown link, and the target it names.
+const LINK = /\[[^\]\n]*\]\(([^()\s]*)\)/g
+
+/** Whether an index line's one markdown link is to `name`, by its name alone (`./` before it allowed). */
+export const linksOnlyTo = (line: string, name: string): boolean => {
+  const targets = [...line.matchAll(LINK)].map(m => m[1])
+  return targets.length === 1 && (targets[0] === name || targets[0] === `./${name}`)
+}
+
+/** One simple command as mod-kit's `pipeline` reads it, the parts of it judged here. */
+export type ShellCommand = {
+  words: string[]
+  heredocs?: { word: number; body: string; quoted: boolean; fd?: number; replaced?: true }[]
+  pipedFrom?: string[]
+  substitution?: true
+}
+/** What mod-kit's `writes` reads a command as changing, the parts of it judged here. */
+export type IndexWrites = {
+  files: { word: string; path?: string; edits?: true }[]
+  unnamed: unknown[]
+  runs?: unknown[]
+  changes?: unknown[]
+  byGit?: unknown[]
+}
+
+// Text neither the shell nor echo or printf can change, wherever it is quoted: no variable, command,
+// escape or second line.
+const UNCHANGED = /^[^\\$`\n]+$/
+
+/**
+ * The text a shell command appends to `index`, when it is one command that only appends text it
+ * spells out: `echo '<text>'`, `printf '%s\n' '<text>'`, `printf '<text>\n'` (no % in it), or `cat`
+ * fed a heredoc (its body as written: quoted, or holding no $, backtick or backslash), with `>>`
+ * into the index and no other redirect, pipe or command beside it, writing nothing else, by mod-kit's
+ * one reader of what a command writes and runs. echo's and printf's text must be quoted whole in the
+ * command, single or double, so the shell neither splits it nor reads its brackets as a pattern.
+ * Anything else is undefined, and is asked about. `command` is the command as written, `cmds` and
+ * `w` mod-kit's reading of it.
+ */
+export const shellAppended = (command: string, cmds: readonly ShellCommand[], w: IndexWrites, index: string): string | undefined => {
+  const into = w.files[0]
+  if (cmds.length !== 1 || w.files.length !== 1 || into?.path !== index || into.edits || w.unnamed.length || w.runs?.length || w.changes?.length || w.byGit?.length) return undefined
+  const c = cmds[0]
+  if (!c || c.substitution || c.pipedFrom) return undefined
+  const at = c.words.indexOf('>>')
+  if (at === -1 || c.words.lastIndexOf('>>') !== at || c.words[at + 1] !== into.word) return undefined
+  const rest = [...c.words.slice(0, at), ...c.words.slice(at + 2)]
+  const docs = c.heredocs ?? []
+  const quoted = (s: string) => (!s.includes("'") && command.includes(`'${s}'`)) || (!s.includes('"') && command.includes(`"${s}"`))
+  const spelled = (s: string | undefined) => (s !== undefined && UNCHANGED.test(s) && quoted(s) ? `${s}\n` : undefined)
+  if (rest[0] === 'echo' && rest.length === 2 && !docs.length) return spelled(rest[1])
+  if (rest[0] === 'printf' && rest.length === 3 && !docs.length && rest[1] === '%s\\n' && quoted(rest[1])) return spelled(rest[2])
+  if (rest[0] === 'printf' && rest.length === 2 && !docs.length) {
+    const format = rest[1] ?? ''
+    const text = format.slice(0, -2)
+    return format.endsWith('\\n') && !text.includes('%') && quoted(format) && UNCHANGED.test(text) ? `${text}\n` : undefined
+  }
+  const doc = docs[0]
+  if (rest[0] !== 'cat' || rest.length !== 2 || docs.length !== 1 || !doc) return undefined
+  const word = rest[1] ?? ''
+  if (!word.startsWith('<<') || word.startsWith('<<<') || word.startsWith('<<-') || c.words[doc.word] !== word || (doc.fd ?? 0) !== 0 || doc.replaced) return undefined
+  return doc.quoted || !/[\\$`]/.test(doc.body) ? `${doc.body}\n` : undefined
 }
 
 /**

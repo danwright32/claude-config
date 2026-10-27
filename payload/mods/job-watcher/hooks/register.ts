@@ -1331,6 +1331,27 @@ const judgeLeftovers = async ($: EngineInterface) => {
   if (line) $.ui.log(line)
 }
 
+// #1765: a command naming standard input's device path, as no-verify-gate.sh's own first look has it.
+// Only such a command starts the reader; every other one is passed on without a process.
+const NAMES_STDIN_DEVICE = /\/dev\/(?:stdin|fd\/0)/
+// What an agent's git command reading standard input's device path is told. The words are the
+// shared reader's (hooks/lib/agent-overrides.py stdin-device-refusal), the very ones
+// no-verify-gate.sh says, so the gate and this answer cannot drift (L263, L370); its test,
+// hooks/test-agent-bypass-gates.sh, holds the gate to them word for word.
+type StdinRead = { kind: 'refusal'; text: string } | { kind: 'none' } | { kind: 'unread'; why: string }
+const stdinDeviceRefusal = async ($: EngineInterface, agent: string, command: string): Promise<StdinRead> => {
+  const home = await $.env.get('HOME')
+  if (!home) return { kind: 'unread', why: 'HOME is not set, so the reader could not be found' }
+  try {
+    const r = await $.process.run(['python3', `${home}/.claude/hooks/lib/agent-overrides.py`, 'stdin-device-refusal', agent], { stdin: command, timeoutMs: 10_000 })
+    if (r.exitCode === 0 && r.stdout.trim()) return { kind: 'refusal', text: r.stdout.trim() }
+    if (r.exitCode === 1 && !r.stdout.trim()) return { kind: 'none' }
+    return { kind: 'unread', why: `it exited ${r.exitCode}: ${(r.stderr.trim().split('\n').pop() ?? '').slice(0, 160)}` }
+  } catch (err) {
+    return { kind: 'unread', why: `it could not run: ${errorText(err, MOD).slice(0, 160)}` }
+  }
+}
+
 export const register: Register = on => {
   // The job list the status bar (#610) reads: the one source for its running and kept jobs (spec item
   // 4). A clock that cannot be read refuses the list rather than answer without run times.
@@ -1536,6 +1557,47 @@ export const register: Register = on => {
       noteReminded(input.tool_use_id)
     }
     return said.length ? { ...result, context: [...(result.context ?? []), ...said] } : result
+  })
+
+  // #1765: a dispatched agent's command that waits on a prompt nobody can answer. A worktree
+  // subagent's `git commit -F /dev/stdin` raised a Claude Code permission prompt a background agent
+  // can never show, and waited until it was stopped (2 of 2, 20 minutes and almost 3 hours). Claude
+  // Code raises that prompt BEFORE the PreToolUse hooks, so no-verify-gate.sh's refusal of the same
+  // command never ran live (measured 2026-10-26); the prompt is answered here instead. Every request
+  // is recorded to the debug log, with its tool and whether an agent id came with it but never its
+  // command, which is what the next live check reads: whether this event fires for a subagent's
+  // prompt at all, and whether it carries agent_id there (the engine's types say every classic event
+  // fired from a subagent does). A subagent's Bash request whose git command reads standard input by
+  // its device path is denied with the gate's own words; one the reader cannot judge is denied too,
+  // as the gate refuses it (L42). Everything else, the main session's included (Dan sees its
+  // prompt), is passed on unchanged, and nothing is ever allowed here.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const tool = String(e.tool_name)
+    const agent = typeof e.agent_id === 'string' && e.agent_id ? e.agent_id : undefined
+    const said = (outcome: string) => $.ui.log(`${MOD}: permission request: tool ${tool}, agent id ${agent ? 'present' : 'absent'}, ${outcome}`, { to: 'debug' })
+    const input = (e.tool_input ?? {}) as Record<string, unknown>
+    const command = typeof input.command === 'string' ? input.command : ''
+    if (agent === undefined || tool !== 'Bash' || !NAMES_STDIN_DEVICE.test(command)) {
+      await said('passed on')
+      return next(e)
+    }
+    const read = await stdinDeviceRefusal($, agent, command)
+    if (read.kind === 'none') {
+      await said('passed on')
+      return next(e)
+    }
+    if (read.kind === 'refusal') {
+      await said('denied (a git command reading standard input by its device path, #1765)')
+      return { decision: { behavior: 'deny', message: `REFUSED (job-watcher, at the permission prompt): ${read.text}` } }
+    }
+    await said('denied unread (the reader of standard input by its device path could not run, #1765)')
+    $.ui.log(`${MOD}: hooks/lib/agent-overrides.py could not judge a permission request: ${read.why}`, { to: 'debug' })
+    return {
+      decision: {
+        behavior: 'deny',
+        message: `REFUSED (job-watcher, at the permission prompt): agent ${agent}'s command names standard input's device path, and hooks/lib/agent-overrides.py, which reads whether git opens it, could not be read for it (${read.why}). Write the message to a file and pass -F <file>, or use -F - (claude-config#1765).`,
+      },
+    }
   })
 
   // #1326 (Dan, 2026-10-19: "Hook and brief"): a dispatched agent's stop is refused while it still

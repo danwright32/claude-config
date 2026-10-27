@@ -5985,6 +5985,41 @@ test('a question left before bed is noted with its choices, so it is offered the
   expect(morningQuestions(w).map(n => [n.issue, n.text, n.options, n.why])).toEqual([[12, 'Which copy?', ['Short', 'Long'], 'you chose to go to sleep']])
 })
 
+// #1792: an item with three choices, like #1505's, lost its third whenever it was not asked last,
+// since skip kept its place, and nothing said one was hidden. Asked first here, before a two choice
+// item that keeps skip and a yes or no item asked last.
+test('a three choice Open questions item asked first offers all three; the two choice item after it keeps skip (#1792)', withDeps, async ($, on) => {
+  const body = [
+    'The bug.',
+    '',
+    '## Open questions',
+    '',
+    '- [ ] Slot shape? (choices: Every Nth / One fixed option / A weekly pick)',
+    '- [ ] Keep the old flag? (choices: Keep it / Drop it)',
+    '- [ ] Is the cache safe to clear?',
+    '',
+    'Claude-Session: https://claude.ai/code/session_01AbCdEf',
+  ].join('\n')
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED() },
+    githubRepos: { default: ['o/r'] },
+    issueBodies: { 7: body },
+    issueAnswers: { 'o/r#7: Slot shape?': 'A weekly pick', 'o/r#7: Keep the old flag?': SKIP_QUESTION, 'o/r#7: Is the cache safe to clear?': GO_TO_SLEEP },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Slot shape?', 'o/r#7: Keep the old flag?', 'o/r#7: Is the cache safe to clear?'])
+  expect(w.askedOptions).toEqual([
+    ['Every Nth', 'One fixed option', 'A weekly pick', GO_TO_SLEEP],
+    ['Keep it', 'Drop it', SKIP_QUESTION, GO_TO_SLEEP],
+    ['Yes', 'No', GO_TO_SLEEP],
+  ])
+  // The third choice, picked, is checked off as the answer.
+  expect(w.edits.map(x => x.body)).toEqual([
+    body.replace('- [ ] Slot shape? (choices: Every Nth / One fixed option / A weekly pick)', '- [x] Slot shape? (answered 1969-12-31 ET: A weekly pick)'),
+  ])
+})
+
 test("a goal issue's question answered after the ten minutes is posted and checked off too (#1279 lessons review)", withDeps, async ($, on) => {
   let answer = (_: string) => undefined as void
   const late = new Promise<string>(r => {

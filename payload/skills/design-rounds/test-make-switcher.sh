@@ -1631,6 +1631,106 @@ PY
   check_eq "the committed example draws its fixture's four rows inside the captured header, in both options" "Invoices:4,Invoices:4" "$ex"
 fi
 
+# --- an option's frame follows its page's height after a click (claude-config#1795) ---
+# A frame was sized from its page only when the option was shown, so a round whose page grew after a
+# click (a step revealing, a list opening) stayed clipped and scrolled inside it; and a captured page
+# whose root is h-full (Slate's) reports the frame's own height, so it never grew at all. Slate's
+# coordinator rounds (Slate #4205) worked around both by hand. The switcher now watches each option's
+# page and sizes the frame from it, with the root's h-full height blanked, and never feeds its own
+# resize back into a page whose height depends on the frame's (a min-height: 100vh area).
+FG="$TMP/framegrow"; mkdir -p "$FG"
+# A step that reveals 600px of content on a click and takes it away on the next.
+printf '%s\n' 'function buildScreen(variant) {' \
+  '  var d = document.createElement("div");' \
+  '  var b = document.createElement("button"); b.textContent = "More"; b.style.cssText = "display:block;height:30px;margin:0";' \
+  '  var extra = document.createElement("div"); extra.style.cssText = "height:600px;background:#eee"; extra.hidden = true;' \
+  '  b.addEventListener("click", function () { extra.hidden = !extra.hidden; });' \
+  '  d.append(b, extra); return d;' \
+  '}' > "$FG/builder.js"
+printf 'button { font: inherit; }\n' > "$FG/screen.css"
+cat > "$FG/grow.html" <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><style>body { margin: 0; } header { height: 40px; }</style></head>
+<body><header>Slate</header><main id="main"></main></body></html>
+HTML
+cat > "$FG/hfull.html" <<'HTML'
+<!doctype html><html class="h-full"><head><meta charset="utf-8"><style>.h-full { height: 100%; } .min-h-screen { min-height: 100vh; } body { margin: 0; } header { height: 40px; }</style></head>
+<body class="h-full min-h-screen"><header>Slate</header><main id="main"></main></body></html>
+HTML
+cat > "$FG/loop.html" <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><style>body { margin: 0; } header { height: 60px; } main { min-height: 100vh; }</style></head>
+<body><header>Slate</header><main id="main"></main></body></html>
+HTML
+for page in grow hfull loop; do
+  spec "$FG/$page.json" "$TWO" '{"chrome": {"captured": "'"$page"'.html", "from": "the suite, a page that grows", "slot": "#main", "width": 640}}'
+  out="$(run "$FG/$page.json" "$FG/$page-round.html")"; rc=$?
+  check_eq "a round on the $page page builds ($out)" "0" "$rc"
+done
+# Driven in a real Chrome through Playwright, never a --dump-dom run: headless Chrome under a virtual
+# time budget draws a new frame only now and then, never because a page asks for one, so a click
+# inside the frame was followed by no frame at all and no ResizeObserver was ever told (measured
+# 2026-10-27, Chrome 154: three animation frames in the first 1.4 seconds, none after the click, even
+# with the switcher page itself changing every 50ms). Playwright's Chrome draws frames as a window
+# does, and clicks as a person does. Each wait is a count of drawn frames, never a time (L290).
+cat > "$FG/probe.mjs" <<'JS'
+import { pathToFileURL } from "node:url";
+const [capture, ...asks] = process.argv.slice(2);
+const { findPlaywright, launchChrome, loadPlaywright } = await import(pathToFileURL(capture).href);
+let pw;
+try { pw = loadPlaywright(findPlaywright({ repo: process.cwd() })); } catch (e) { console.log("NO-PLAYWRIGHT " + String(e.message || e).split("\n")[0]); process.exit(0); }
+const browser = await launchChrome(pw, "chrome", ["--disable-gpu"]);
+try {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const drawn = (n) => page.evaluate((n) => new Promise((done) => { let k = 0; (function tick() { if (++k >= n) done(); else requestAnimationFrame(tick); })(); }), n);
+  const height = () => page.evaluate(() => String(parseFloat(document.querySelector("#dr-stage iframe").style.height)));
+  for (const ask of asks) {
+    const [how, file] = ask.split("=");
+    await page.goto(pathToFileURL(file).href);
+    await page.waitForFunction(() => { const f = document.querySelector("#dr-stage iframe"); return !!(f && f.contentWindow && f.contentWindow.DR_FRAME); }, null, { timeout: 15000 });
+    await drawn(20);
+    const out = [await height()];
+    if (how === "click") {
+      const button = page.frameLocator("#dr-stage iframe").first().locator("#main button");
+      await button.click();
+      await drawn(20);
+      out.push(await height());
+      out.push(await page.evaluate(() => { const f = document.querySelector("#dr-stage iframe"), d = f.contentDocument; return d.documentElement.scrollHeight <= f.clientHeight ? "fits" : "scrolls:" + d.documentElement.scrollHeight + ">" + f.clientHeight; }));
+      await button.click();
+      await drawn(20);
+      out.push(await height());
+    } else {
+      await drawn(60);
+      out.push(await height());
+    }
+    console.log("FRAMEGROW " + file.split("/").pop() + " " + out.join(","));
+  }
+} finally {
+  await browser.close();
+}
+JS
+if [[ ! -x "$CHROME" ]]; then
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so a frame following its page's height after a click was not measured"
+elif ! command -v node >/dev/null 2>&1; then
+  echo "SUITE-PART-UNMEASURED node is not on PATH, so a frame following its page's height after a click was not measured"
+else
+  grown="$( (cd "$FG" && exec node "$FG/probe.mjs" "$DIR/score/capture-web.mjs" "click=$FG/grow-round.html" "click=$FG/hfull-round.html" "settle=$FG/loop-round.html") 2>&1)"
+  case "$grown" in
+    NO-PLAYWRIGHT*)
+      echo "SUITE-PART-UNMEASURED no Playwright to drive Chrome with here (${grown:0:200}), so a frame following its page's height after a click was not measured" ;;
+    *)
+      said(){ printf '%s\n' "$grown" | sed -n "s/^FRAMEGROW $1 //p"; }
+      # 40px of header and a 30px button, then 600px more, then back.
+      check_eq "a page that grows after a click gets a taller frame, holding all of it, and a page that shrinks a shorter one (${grown:0:300})" \
+        "70,670,fits,70" "$(said grow-round.html)"
+      check_eq "a captured root and body of h-full height (and a min-h-screen body) report their content, so its frame grows and shrinks with it" \
+        "70,670,fits,70" "$(said hfull-round.html)"
+      # The 480px frame the page starts in and its 60px header, measured once, and then never again:
+      # a frame that grew on each of its own resizes reads 60px taller on every frame drawn.
+      settled="$(said loop-round.html)"
+      check_eq "a page whose height follows its frame's (min-height: 100vh under a header) settles, never growing on its own resize" \
+        "540,540" "$settled" ;;
+  esac
+fi
+
 # --- a round whose options belong to different captured pages (claude-config#1536) ---
 # A settled design names several captured pages in "chromes", each frame naming its own (#1474), and a
 # round took one "chrome", so a round whose options belong to different pages (a panel in edit mode, a

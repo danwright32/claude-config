@@ -380,7 +380,7 @@ done
 # refusal it did make is recorded and named, so a short count says why instead of only how many.
 CTRL="$WORK/control"; mkdir -p "$CTRL"
 CTRL_REFUSALS="$WORK/control-refusals"
-cp "$DIR/lib/sleep.sh" "$DIR/lib/sleep-queue.py" "$CTRL/"
+cp "$DIR/lib/sleep.sh" "$DIR/lib/sleep-queue.py" "$DIR/lib/session_registry.py" "$CTRL/"
 awk '{ if (index($0, "if err=\"$(ln \"$tmp\"")) sub("[(]ln ", "(_ctrl_overwrite "); print }' "$LIB" > "$CTRL/sleep-queue.sh"
 cat >> "$CTRL/sleep-queue.sh" <<'EOF'
 _ctrl_overwrite(){ local e; e="$( { cat "$1" >| "$2"; } 2>&1 )" && return 0; printf '%s\n' "${e:-the overwrite failed and said nothing}" >> "$CTRL_REFUSALS"; return 1; }
@@ -746,6 +746,8 @@ check_has "an agent worktree's random id names no issue, so 7831 is queued" "$(p
 # would queue an issue a branch is on: here sleep-queue.py stands where no mod-kit sits beside it.
 mkdir -p "$WORK/lonely/hooks/lib"
 cp "$DIR/lib/sleep-queue.py" "$WORK/lonely/hooks/lib/sleep-queue.py"
+# Its own reading of the session registry, which it imports from beside itself (#1787).
+cp "$DIR/lib/session_registry.py" "$WORK/lonely/hooks/lib/session_registry.py"
 cp "$DIR/lib/branch-issues.mjs" "$WORK/lonely/hooks/lib/branch-issues.mjs" 2>/dev/null
 out="$(named_queue "$WORK/lonely/hooks/lib/sleep-queue.py")"; rc=$?
 check_eq "a queue whose branch reader cannot run refuses" 3 "$rc"

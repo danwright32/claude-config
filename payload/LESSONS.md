@@ -4678,7 +4678,20 @@ for reference; L6 was reviewed and deliberately not adopted.
   (bidspoke#2457, 2026-10-18)
   SHORT: Suppress repeat pages in the alerter, never by omitting a still true finding, or an alerter reading empty as recovery sends a false all clear.
 
+- **L813. A rate monitor judging a window shorter than a day against a baseline of whole days must
+  compare it with the same clock hours, or prove the time of day does not move the rate, because
+  traffic mix changes by hour and a normal morning reads as a shift. It must also require the shift
+  to be improbable at the window's count, not only a ratio, because a ratio on a handful of events
+  is crossed by chance.** (bidspoke#2851, 2026-10-27)
+  SHORT: A rate monitor judging a sub-day window against whole days must match clock hours, and page only on a shift improbable at its count.
+
 ## State and identity
+
+- **L812. When events about separate records each write onto one shared profile (a CRM contact, a user
+  record), an event about an older or replaced record must not overwrite what a newer record set, so
+  write those profile fields only from the person's current record and test the replaced record
+  arriving last.** (slate#4273, 2026-10-27)
+  SHORT: Profile fields written from per-record events come only from the person's current record; test a replaced record's event arriving last.
 
 - **L782. A freshness margin enforced on a cached value must also be enforced on whatever refills
   it, because a shared cache tier can hand back a copy just as close to expiry, which then reads as

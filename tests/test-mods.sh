@@ -1093,6 +1093,63 @@ out="$(bash "$SHARED" "$M9NV" 2>&1)"; code=$?
 grep -qE 'return await body\(\$, on\)' "$HC" 2>/dev/null && grep -qE '^    await endHeld\(\)$' "$HC" 2>/dev/null \
   && check "#1778: mod-kit's tests/hang-ceiling.ts ends what every test held as that test ends" ok \
   || check "#1778: mod-kit's tests/hang-ceiling.ts ends what every test held as that test ends" "$(grep -n 'endHeld' "$HC" 2>&1)"
+
+# #1789: Claude Code's test runner gives every hook 10,000 ms of REAL time, the test clock never
+# moving it, and cuts a held stand-in off there (measured on 2026-10-26: 10,014 to 10,028 ms,
+# "exceeded 10000ms budget"), so a mod test that waits on real time is judged by how busy the Mac
+# is (L290). Time a
+# mod observes is moved on the test clock; a real timer past a small floor in any mod's tests, or
+# mod-kit's own, fails the run, by file and line, naming the test clock and the condition instead.
+M9RT="$TMPROOT/m9rt"
+mkmodsrc "$M9RT" mod-kit "export const reader = 1"
+mkdir -p "$M9RT/mod-kit/tests"
+cp "$HC" "$M9RT/mod-kit/tests/hang-ceiling.ts"
+printf "import { test } from './hang-ceiling.ts'\nawait new Promise<void>(r => setTimeout(r, 12_000))\n" > "$M9RT/mod-kit/tests/kit.test.ts"
+mkmodsrc "$M9RT" waits "export const register = () => {}"
+mkdir -p "$M9RT/waits/tests/mod-kit/tests"
+cp "$HC" "$M9RT/waits/tests/mod-kit/tests/hang-ceiling.ts"
+cat > "$M9RT/waits/tests/register.test.ts" <<'TS'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
+const within = <T,>(p: Promise<T>, ms = 2000) => Promise.race([p, new Promise<never>((_, no) => setTimeout(() => no(new Error('late')), ms))])
+await Bun.sleep(500)
+const tick = setInterval(() => {
+  poll()
+}, 5_000)
+import { setTimeout as wait } from 'node:timers/promises'
+Atomics.wait(cell, 0, 0, 100)
+TS
+mkdir -p "$M9RT/waits/tests/ui"
+printf "const t = window.setTimeout(done, 250)\n" > "$M9RT/waits/tests/ui/pane.test.tsx"
+mkmodsrc "$M9RT" quick "export const register = () => {}"
+mkdir -p "$M9RT/quick/tests/mod-kit/tests"
+cp "$HC" "$M9RT/quick/tests/mod-kit/tests/hang-ceiling.ts"
+cat > "$M9RT/quick/tests/register.test.ts" <<'TS'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
+// it used to wait with setTimeout(r, 12_000), and /* setInterval(f, 5_000) */ before that
+declare function setTimeout(run: () => void, ms: number): number
+await new Promise<void>(r => setTimeout(r, 0))
+await new Promise<void>(r => setTimeout(r))
+await new Promise<void>(r => setTimeout(r, 50))
+const loop = 'until curl -sf http://x; do sleep 30; setTimeout(9000); done'
+await clock.advance(21 * MIN)
+await $.clock.sleep(5_000)
+TS
+out="$(bash "$SHARED" "$M9RT" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#1789: a mod test waiting on real time fails the run" ok \
+  || check "#1789: a mod test waiting on real time fails the run" "exit=$code out=$out"
+for at in "waits's tests/register.test.ts:2" "waits's tests/register.test.ts:3" "waits's tests/register.test.ts:4" "waits's tests/register.test.ts:7" "waits's tests/register.test.ts:8" "waits's tests/ui/pane.test.tsx:1" "mod-kit's tests/kit.test.ts:2"; do
+  printf '%s\n' "$out" | grep -F "$at" | grep -q 'mock.clock' \
+    && check "#1789: $at is named, pointing at the test clock" ok \
+    || check "#1789: $at is named, pointing at the test clock" "$out"
+done
+printf '%s\n' "$out" | grep -F "waits's tests/register.test.ts:4" | grep -qF '5_000 ms' \
+  && check "#1789: a delay written past the line of the call is read" ok \
+  || check "#1789: a delay written past the line of the call is read" "$out"
+case "$out" in *"quick's"*|*"waits's tests/register.test.ts:5"*|*"waits's tests/register.test.ts:6"*) check "#1789: a yield under the floor, a declaration, comments, strings and the test clock pass" "$out" ;; *) check "#1789: a yield under the floor, a declaration, comments, strings and the test clock pass" ok ;; esac
+rm -f "$M9RT/mod-kit/tests/kit.test.ts" "$M9RT/waits/tests/register.test.ts" "$M9RT/waits/tests/ui/pane.test.tsx"
+out="$(bash "$SHARED" "$M9RT" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "#1789: with no real wait in any mod test, the run passes" ok \
+  || check "#1789: with no real wait in any mod test, the run passes" "exit=$code out=$out"
 # #698: the band and result row were caught in one literal form on one line; a probe of 11 hand
 # rolled forms caught 3. The engine takes an unfiltered ui.render hook that tests e.component, and a
 # filter however it is spelled, so each form a mod could write is caught, with the remedy for it.

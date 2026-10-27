@@ -39,6 +39,23 @@ export type AskBeforeSavingApproval = {
 }
 
 /**
+ * The one index line a For good on a memory file also covers (#1794): once that file is saved, the
+ * write that adds exactly one line to its folder's MEMORY.md linking to it, and changes nothing else,
+ * goes through unasked, once, until the approval Dan gave lapses. It lapses in silence: Dan never
+ * answered about the index, so its lapse is no answer of his gone unused.
+ */
+export type AskBeforeSavingIndexCover = {
+  /** The index, absolute: <home>/.claude/projects/<project>/memory/MEMORY.md. */
+  index: string
+  /** The memory file's name, which the line must link to. */
+  name: string
+  /** The memory file Dan approved, as he read it. */
+  files: string[]
+  /** When it lapses: the approval's own time, in milliseconds since the epoch. */
+  until: number
+}
+
+/**
  * Called from another mod (#1483: no build asks it before letting the one approved Edit of
  * ~/.claude/LESSONS.md through): await it.
  */
@@ -62,8 +79,9 @@ declare module 'claude-code' {
      * waiting for Claude to ask Dan in the dialog, the rules he gave for this session only, his
      * latest message, read for the words that already make a rule permanent, and the saves he
      * answered For good that Claude has yet to send again, beside the lessons he answered Add to
-     * LESSONS.md in the durable lesson picker (#867, `lesson` set) that Claude has yet to add.
+     * LESSONS.md in the durable lesson picker (#867, `lesson` set) that Claude has yet to add, and
+     * the index lines a saved memory file's For good still covers (#1794).
      */
-    'ask-before-saving': { pending: AskBeforeSavingQuestion[]; rules: string[]; lastPrompt: string | null; approvals: AskBeforeSavingApproval[] }
+    'ask-before-saving': { pending: AskBeforeSavingQuestion[]; rules: string[]; lastPrompt: string | null; approvals: AskBeforeSavingApproval[]; covers: AskBeforeSavingIndexCover[] }
   }
 }

@@ -180,7 +180,7 @@ done
 # shaped like Dan's: held repositories, an owner that waits, and repositories allowed to deploy.
 printf '%s\n' '{"v":1,"waitOwners":["Studio-Partner"],"mergeOnly":[{"repo":"Acme-Corp/storefront","mergeDeploys":true}],"mayDeploy":["danwright32/claude-config","Acme-Corp/enrollment-board"]}' \
   > "$HOME/.claude/mods/sleep-repos.local.json"
-for f in sleep.sh sleep-report.py sleep-queue.sh sleep-queue.py branch-issues.mjs; do cp "$ROOT/payload/hooks/lib/$f" "$HOME/.claude/hooks/lib/$f"; done
+for f in sleep.sh sleep-report.py sleep-queue.sh sleep-queue.py session_registry.py branch-issues.mjs; do cp "$ROOT/payload/hooks/lib/$f" "$HOME/.claude/hooks/lib/$f"; done
 
 # Stand-ins for what lies outside the engine.
 cat > "$WORK/bin/gh" <<EOF
