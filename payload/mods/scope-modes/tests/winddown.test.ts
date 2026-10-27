@@ -136,6 +136,8 @@ describe('the issues a merged PR worked, and what is left on each (#1812)', () =
     expect(statedNextStep('Body.\n\n## Next step\n\n- Run the live check in a fresh headless session.\n', 1765)).toBe('Run the live check in a fresh headless session.')
     expect(statedNextStep('Next step: measure the queue.\nNext step for #7: the live check.', 7)).toBe('Next step for #7: the live check.')
     expect(statedNextStep('Fixes the hang. Refs #1765', 1765)).toBeUndefined()
+    // A next step naming only another issue is that issue's, never this one's.
+    expect(statedNextStep('Refs #7, #8\n\nNext step for #7: the live check.', 8)).toBeUndefined()
   })
   test('what is left: the next step the PR states, else the last comment, else nothing', () => {
     expect(whatIsLeft('Refs #5. Next step: the live check.', 5, 'An old note')).toEqual({ from: 'pr', quote: 'Refs #5. Next step: the live check.' })

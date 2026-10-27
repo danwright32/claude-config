@@ -185,8 +185,10 @@ export const statedNextStep = (body: string, issue: number): string | undefined 
       if (under !== undefined && !/^\s*#{1,6}\s/.test(under)) found.push(under.replace(LINE_MARK, '').trim())
     } else found.push(raw.replace(LINE_MARK, '').trim())
   }
+  // One naming this issue first; else one naming no issue at all, which is the PR's as a whole. A
+  // line naming only another issue is that issue's, so this one's last comment is read instead.
   const naming = new RegExp(`#${issue}\\b`)
-  return found.find(l => naming.test(l)) ?? found[0]
+  return found.find(l => naming.test(l)) ?? found.find(l => !/#\d+\b/.test(l))
 }
 
 /** What is left on an open issue the session worked, and where that was read (#1812). */
