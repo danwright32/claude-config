@@ -9,6 +9,10 @@ the commands cannot come to disagree about what a skip is (L263, L370).
     agent-overrides.py stdin-device          stdin: one command line
         one line per git command reading a file from standard input's device path (/dev/stdin,
         /dev/fd/0), exit 0 when there is one, 1 when there is none (claude-config#1765).
+    agent-overrides.py stdin-device-refusal <agent>    stdin: one command line
+        exit 0 printing what agent <agent> is told for such a command, 1 printing nothing when there
+        is none. The one wording, said by no-verify-gate.sh before the call and by the job watcher
+        mod at Claude Code's permission prompt, which comes first (claude-config#1765).
     agent-overrides.py runs-script <name>    stdin: one command line
         exit 0 when a command in it runs the script <name> (by name or path, directly or through a
         shell), 1 when none does.
@@ -254,6 +258,18 @@ def stdin_device_reads(s):
     return found
 
 
+def stdin_device_refusal(agent, found):
+    """What an agent whose git command reads standard input's device path is told, after its caller's
+    own `REFUSED (<who>): `. One wording for both places that refuse it, the PreToolUse gate and the
+    job watcher mod's answer to the permission prompt, so the two cannot drift (L263, L370)."""
+    return ("agent %s ran a git command that reads a file from standard input's device path:\n  %s\n"
+            "From a subagent in a worktree, Claude Code turns that path into a permission prompt nobody "
+            "can answer, and the call waits until the agent is stopped (claude-config#1765: 2 of 2 hung, "
+            "for 20 minutes and almost 3 hours). Write the message to a file with the Write tool and pass "
+            "-F <file>, or keep the heredoc and use -F - instead of the device path."
+            % (agent, "\n  ".join(found)))
+
+
 def runs_script(s, name):
     for _text, _pairs, words in _commands(s):
         if not words:
@@ -487,6 +503,12 @@ def main(argv):
         for f in found:
             print(f)
         return 0 if found else 1
+    if mode == "stdin-device-refusal" and len(argv) > 2 and argv[2]:
+        found = stdin_device_reads(data)
+        if not found:
+            return 1
+        print(stdin_device_refusal(argv[2], found))
+        return 0
     if mode == "runs-script" and len(argv) > 2:
         return 0 if runs_script(data, argv[2]) else 1
     if mode == "check-report" and len(argv) > 2:
@@ -498,7 +520,7 @@ def main(argv):
         for line in lines:
             print(line)
         return 0 if lines else 1
-    sys.stderr.write("usage: agent-overrides.py skips | stdin-device | runs-script <name> | check-report <transcript>  (input on stdin)\n")
+    sys.stderr.write("usage: agent-overrides.py skips | stdin-device | stdin-device-refusal <agent> | runs-script <name> | check-report <transcript>  (input on stdin)\n")
     return 64
 
 
