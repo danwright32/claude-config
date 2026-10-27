@@ -54,8 +54,9 @@ fi
 WORK="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/per-prompt-cost.XXXXXXXX")" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Every UserPromptSubmit and Stop command, as "<event><TAB><name>", where name is the script under
-# hooks/ or, for a command that runs nothing of ours, the command's first word.
+# Every UserPromptSubmit and Stop command, as "<event><TAB><name><TAB><arguments>", where name is the
+# script under hooks/ or, for a command that runs nothing of ours, the command's first word, and
+# arguments are what the command passes the script (empty for most, and for an external command).
 HOOKS="$(python3 -c '
 import json, re, sys
 d = json.load(open(sys.argv[1]))["hooks"]
