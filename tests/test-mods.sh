@@ -998,8 +998,9 @@ grep -qE 'return await body\(\$, on\)' "$HC" 2>/dev/null && grep -qE '^    await
   || check "#1778: mod-kit's tests/hang-ceiling.ts ends what every test held as that test ends" "$(grep -n 'endHeld' "$HC" 2>&1)"
 
 # #1789: Claude Code's test runner gives every hook 10,000 ms of REAL time, the test clock never
-# moving it, and cuts a held stand-in off there (measured: 10,014 to 10,028 ms, "exceeded 10000ms
-# budget"), so a mod test that waits on real time is judged by how busy the Mac is (L290). Time a
+# moving it, and cuts a held stand-in off there (measured on 2026-10-26: 10,014 to 10,028 ms,
+# "exceeded 10000ms budget"), so a mod test that waits on real time is judged by how busy the Mac
+# is (L290). Time a
 # mod observes is moved on the test clock; a real timer past a small floor in any mod's tests, or
 # mod-kit's own, fails the run, by file and line, naming the test clock and the condition instead.
 M9RT="$TMPROOT/m9rt"

@@ -128,8 +128,9 @@
 # test ends as it ends, so a mod test hand rolling a promise that never settles fails, by file and
 # line, since such a hook outlives its test and finishes inside a later one.
 # And no mod test waits on REAL time (#1789): the runner gives every hook 10,000 ms of real time,
-# which the test clock never moves (a held stand-in was cut at 10,014 to 10,028 ms while a test
-# clock moved 21 minutes past one in 220 ms), so a real timer past a 100 ms floor, Bun.sleep,
+# which the test clock never moves (measured on 2026-10-26: a held stand-in was cut at 10,014 to
+# 10,028 ms, while a test clock moved 21 minutes past one in 220 ms), so a real timer past a 100 ms
+# floor (a setting, not a measurement), Bun.sleep,
 # Atomics.wait or timers from timers/promises in any mod's tests fails, by file and line, naming
 # mock.clock and the condition itself instead (L290, L524). Read by ts_source.py real-waits.
 #
@@ -247,8 +248,9 @@ for d in "$dir"/*/; do
     rel="${h#"${d%/}/"}"; file="${rel%%:*}"; rest="${rel#*:}"
     echo "check-mod-shared-parts: $name's $file:${rest%%:*} hand rolls a promise that never settles, which outlives its test and finishes inside a later one: use never() from $never_from, which every test ends as it ends."
   done <<< "$rolled"
-  # real waits (#1789): Claude Code's test runner gives every hook 10,000 ms of real time, which the
-  # test clock never moves, and cuts a held stand-in off there, so a mod test waiting on real time is
+  # real waits (#1789): Claude Code's test runner gives every hook 10,000 ms of real time (its
+  # HookBudget setting, not a measurement), which the test clock never moves, and cuts a held
+  # stand-in off there (seen on 2026-10-26), so a mod test waiting on real time is
   # judged by how busy the Mac is (L290). Read by ts_source.py real-waits, comments and strings out:
   # a timer past a small floor (a yield to the event loop passes), Bun.sleep, Atomics.wait, or timers
   # from timers/promises. Exit 1 is a file it could not read, named among the lines.

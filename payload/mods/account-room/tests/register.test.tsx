@@ -845,7 +845,8 @@ test("Switch's elapsed seconds keep counting while the other Macs are read from 
   await measure($, clock, limits(97, 50))
   // The minute a good read is kept passes BEFORE Switch is pressed (#1789): the held sign out is a
   // stand-in Claude Code cuts off at 10,000 ms of real time, which the test clock never moves, and
-  // pressed first it was held through 64 seconds of ticks, 3.7 to 4.1 s of real time at load 158
+  // pressed first it was held through 64 seconds of ticks, measured on 2026-10-26 at 3.7 to 4.1 s
+  // of real time at load 158
   // (the whole test 7.5 s at load 237). Pressed after, it is held through 3, 0.4 to 0.6 s.
   await clock.advance(61_000)
   await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
