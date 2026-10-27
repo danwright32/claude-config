@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
-import { bareIssuesIn, etDateOf, issueRefsIn, questionWords, withQuestion } from './mod-kit/openquestions.ts'
+import { bareIssuesIn, etDateOf, issueRefsIn, leavesUnanswered, questionWords, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 (docs/mods-design.md, "Picker manners (#615)").
@@ -57,7 +57,7 @@ const ghLine = (r: { stderr: string; exitCode: number }) => r.stderr.trim().spli
 const notFound = (r: GhRun) => /Could not resolve to a Repository/i.test(r.stderr)
 // What a failure says: the first one that is not another account's not found, as /sleep says it.
 const saidOf = (failures: GhRun[]) => ghLine(failures.find(f => !notFound(f)) ?? (failures[0] as GhRun))
-const recordOnIssues = async ($: EngineInterface, question: string, answer: string | null) => {
+const recordOnIssues = async ($: EngineInterface, question: string, answer: string | null, choices: readonly string[]) => {
   // The bare issue #N references by the shared reader's own rule, so what is said matches what is dropped.
   const bare = bareIssuesIn(question)
   const here = bare.length ? await sessionRepo($) : null
@@ -80,7 +80,7 @@ const recordOnIssues = async ($: EngineInterface, question: string, answer: stri
       // gh issue view answers for a pull request's number too: its description is left alone.
       if (String(j.state).toUpperCase() === 'CLOSED' || /\/pull\/\d+/.test(String(j.url ?? ''))) continue
       const body = typeof j.body === 'string' ? j.body : ''
-      const next = withQuestion(body, words, answer === null ? undefined : { answer, date: etDateOf(await $.clock.now()) })
+      const next = withQuestion(body, words, answer === null ? undefined : { answer, date: etDateOf(await $.clock.now()) }, choices)
       if (next === body) continue
       const edit = await askAnyAccount(gh, ['issue', 'edit', String(ref.issue), '--repo', ref.repo, '--body-file', '-'], notFound, next)
       if (!('stdout' in edit)) said(saidOf(edit.failures))
@@ -113,8 +113,13 @@ export const register: Register = on => {
     const answers = (r as { result?: { answers?: Record<string, unknown> } }).result?.answers
     // A multi-select answer arrives as a list, and is an answer all the same (lessons review).
     const given = answers?.[question]
-    const answer = typeof given === 'string' ? given : Array.isArray(given) && given.length ? given.map(String).join(', ') : null
-    if (!r.deny && question) offTheDialog($, () => recordOnIssues($, question, answer))
+    const picked = typeof given === 'string' ? given : Array.isArray(given) && given.length ? given.map(String).join(', ') : null
+    // #1774: /sleep's before bed dialog reaches this hook too, and its skip and go to sleep put the
+    // question off rather than answer it, so the item stays open to be asked another night.
+    const answer = picked !== null && leavesUnanswered(picked) ? null : picked
+    // #1775: an item added open carries the answers the dialog offered, so /sleep offers them too.
+    const choices = (e.questions?.[0]?.options ?? []).map(o => String(o.label ?? ''))
+    if (!r.deny && question) offTheDialog($, () => recordOnIssues($, question, answer, choices))
     return r
   })
 

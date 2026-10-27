@@ -1552,12 +1552,21 @@ are posted on the issue as dated decisions.
   item naming none, is offered Yes and No when it is a yes or no question (`isYesNo`: its question
   sentence holds no "or" and opens with no which, what, who, when, where, why or how; measured on
   all 42 items in claude-config's issues on 2026-10-26, it took the 17 yes or no ones and none of
-  the rest); with none of those Dan types. The dialog holds four: two answers beside skip and go to
-  sleep, or three on the last question, which leaves skip off when it has answers because nothing
-  follows it there and the two would do the same; one with no answers keeps both, since the dialog
-  pads fewer than two with Yes and No, which would post as his decision. Claude Code's dialog takes
+  the rest); with none of those Dan types. The dialog holds four. A question with three answers or
+  more shows three beside go to sleep and no skip (#1792): until then it kept skip and showed two,
+  so a third choice (#1505's) was hidden on every question but the last and nothing said so, and a
+  question's own choices outrank putting it off, which going to sleep also does. Any answers past
+  three are named in the question's text, `(Or type one of: D / E)`, so none is hidden. A question
+  with one or two answers shows them beside skip and go to sleep, and leaves skip off on the last
+  question because nothing follows it there and the two would do the same; one with no answers
+  keeps both, since the dialog pads fewer than two with Yes and No, which would post as his
+  decision. Claude Code's dialog takes
   no description from a mod, so the labels carry the difference: skip is this one, go to sleep is no
-  more questions. Each answer is posted on every issue waiting on
+  more questions. Both labels live in mod-kit's Open questions module (#1774), shown from there by
+  bedtime.ts, because picker manners sees this same dialog as an AskUserQuestion call and had
+  recorded "Skip this one" as the item's answer, checking it off for good; it now leaves either
+  unrecorded, so the item stays open. Picker manners also writes a new open item with the answers
+  its dialog offered as `(choices: ...)`, through the same shared writer (#1775). Each answer is posted on every issue waiting on
   it, as `**Decision from Dan, YYYY-MM-DD (ET)**` with the question quoted and the answer as given
   (L249), then recorded as answered; a write is retried as another account only on GitHub's own not
   found, so a comment that may have landed is never sent twice.

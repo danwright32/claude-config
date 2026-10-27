@@ -119,6 +119,7 @@ import {
   outstanding,
   patchedPaths,
   porcelainFiles,
+  prLinks,
   prRefs,
   quoteOf,
   refSaid,
@@ -976,7 +977,8 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
       leave(q, !interactive ? 'not asked: nobody was at this session to ask' : round.slept ? 'not asked: you chose to go to sleep first' : 'not asked: the 10 minutes for bedtime questions ran out')
       continue
     }
-    // The last question offers no skip when it has answers (#1771): nothing follows it.
+    // The last question offers no skip when it has answers (#1771): nothing follows it. Nor does
+    // one with three answers or more, so none is hidden (#1792).
     const asked = await askOne($, askText(q), askOptions(q, i === ordered.length - 1), BEDTIME_HEADER, waitMs, async a => {
       // Answered after the wait: posted for the nights after; tonight its issues stay out.
       if (a === SKIP_QUESTION) return
@@ -3489,34 +3491,91 @@ type GhRead = (args: string[]) => Promise<{ exitCode: number; stdout: string; st
 // GitHub's words for a number that is an issue, or nothing at all (measured 2026-10-26).
 const NOT_A_PR = /Could not resolve to a PullRequest/
 // What GitHub answered, by repository and number: a number never stops being a PR or an issue, so
-// each is asked once a session. A read that failed is kept nowhere, so it is asked again. These are
-// rare reads (a closed PR's own comment, once), so they are not taken from the polling budget (#1482).
+// each is asked once a session.
 const prNumbers = new Map<string, boolean>()
-const isPr = async (gh: GhRead, repo: string | undefined, n: number): Promise<boolean | { unreadable: string }> => {
+// A read of one that failed (#1777), by the same key: when, GitHub's words, and how long until the
+// minute's check or a turn end asks again. The wait starts at a minute and is then the polling
+// library's, doubled while the read keeps failing, up to winding down's ten minutes, so a number
+// GitHub keeps failing on costs a few reads an hour rather than one a minute. leave_pr_open, one call
+// Claude makes to put a question to Dan, asks anyway (`retry`).
+type PrNumberFailed = { at: number; wait: number; said: string }
+const prNumberFailed = new Map<string, PrNumberFailed>()
+type Lookup = { retry?: boolean }
+// Each read takes a look from the session's shared budget, as every winding down read does (#1482),
+// and a failed one's words are handed back to it, so a rate limit answer pauses every loop.
+const isPr = async ($: EngineInterface, gh: GhRead, repo: string | undefined, n: number, o: Lookup = {}): Promise<boolean | { unreadable: string }> => {
   const key = `${(repo ?? '').toLowerCase()}#${n}`
   const known = prNumbers.get(key)
   if (known !== undefined) return known
+  const now = await $.clock.now()
+  const failed = prNumberFailed.get(key)
+  if (failed && !o.retry && now < failed.at + failed.wait)
+    return { unreadable: `${failed.said}; GitHub is asked again in ${Math.ceil((failed.at + failed.wait - now) / 1000)}s` }
+  const poll = await pollOf($)
+  const held = await heldLook($, poll, now)
+  if (held !== undefined) return { unreadable: held }
   const res = await gh(['pr', 'view', String(n), ...(repo ? ['--repo', repo] : []), '--json', 'number'])
-  if (res.exitCode === 0) prNumbers.set(key, true)
-  else if (NOT_A_PR.test(res.stderr)) prNumbers.set(key, false)
-  else return { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` }
-  return prNumbers.get(key) as boolean
+  if (res.exitCode === 0 || NOT_A_PR.test(res.stderr)) {
+    prNumbers.set(key, res.exitCode === 0)
+    prNumberFailed.delete(key)
+    if (poll) await answeredLook(poll).catch(err => pollFailed($, err))
+    return res.exitCode === 0
+  }
+  const said = res.stderr.trim() || `gh exited ${res.exitCode}`
+  let wait = MIN
+  if (poll) {
+    await failedLook(poll, now, res.stderr).catch(err => pollFailed($, err))
+    if (failed)
+      wait = await nextWaitMs(poll, failed.wait, false, { baseMs: MIN, maxMs: IDLE_MAX_MS }).catch(err => {
+        pollFailed($, err)
+        return MIN
+      })
+  }
+  prNumberFailed.set(key, { at: now, wait, said })
+  return { unreadable: said }
 }
 /** The first of `refs` GitHub says is a PR, undefined for none, or why that could not be read. */
-const namedPr = async (gh: GhRead, repo: string | undefined, refs: readonly PrRef[], where: string): Promise<PrRef | undefined | { unreadable: string }> => {
+const namedPr = async ($: EngineInterface, gh: GhRead, repo: string | undefined, refs: readonly PrRef[], where: string, o: Lookup = {}): Promise<PrRef | undefined | { unreadable: string }> => {
   for (const ref of refs) {
-    const v = await isPr(gh, ref.repo ?? repo, ref.number)
+    const v = await isPr($, gh, ref.repo ?? repo, ref.number, o)
     if (typeof v === 'object') return { unreadable: `whether ${refSaid(ref)}, named in ${where}, is a PR: ${v.unreadable}` }
     if (v) return ref
   }
   return undefined
 }
+/**
+ * Which repository each pull request link in `texts` names (#1777), asked of mod-kit's one reader of
+ * a github.com link, which is async; or why one could not be read, never read as naming nothing.
+ */
+const linksIn = async ($: EngineInterface, texts: readonly string[], where: string): Promise<Map<string, string | null> | { unreadable: string }> => {
+  const linked = new Map<string, string | null>()
+  for (const text of texts)
+    for (const { link } of prLinks(text)) {
+      if (linked.has(link)) continue
+      try {
+        linked.set(link, await $.modkit.linkRepo({ link }))
+      } catch (err) {
+        return { unreadable: `which repository ${link}, linked in ${where}, names: ${msg(err)}` }
+      }
+    }
+  return linked
+}
+/** The PRs Dan's own words name (#1767), by number or link (#1777), or why a link could not be read. */
+const refsSaid = async ($: EngineInterface, text: string, own: PrRef, where: string): Promise<PrRef[] | { unreadable: string }> => {
+  const linked = await linksIn($, [text], where)
+  return 'unreadable' in linked ? linked : prRefs(text, own, linked)
+}
 /** A closed PR's closing comment naming a PR, newest first, quoted; undefined for none; or why it could not be read. */
-const closingReason = async (gh: GhRead, repo: string | undefined, pr: PrJson): Promise<NeverMerge | undefined | { unreadable: string }> => {
+const closingReason = async ($: EngineInterface, gh: GhRead, repo: string | undefined, pr: PrJson, o: Lookup = {}): Promise<NeverMerge | undefined | { unreadable: string }> => {
   if (typeof pr.number !== 'number') return undefined
   const comments = Array.isArray(pr.comments) ? pr.comments : []
-  for (const c of closingComments({ number: pr.number, ...(repo ? { repo } : {}), ...(typeof pr.closedAt === 'string' ? { closedAt: pr.closedAt } : {}), comments })) {
-    const named = await namedPr(gh, repo, c.refs, `PR #${pr.number}'s closing comment`)
+  const where = `PR #${pr.number}'s closing comment`
+  const read = { number: pr.number, ...(repo ? { repo } : {}), ...(typeof pr.closedAt === 'string' ? { closedAt: pr.closedAt } : {}), comments }
+  // Only the links in the comments that may say why it closed are read: discussion before is not.
+  const linked = await linksIn($, closingComments(read).map(c => c.body), where)
+  if ('unreadable' in linked) return linked
+  for (const c of closingComments(read, linked)) {
+    const named = await namedPr($, gh, repo, c.refs, where, o)
     if (named && 'unreadable' in named) return named
     if (named) return { from: 'comment', pr: named, quote: quoteOf(c.body) }
   }
@@ -3676,7 +3735,7 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
       // A closed PR is reopened and finished unless its closing comment names the PR that
       // superseded it (#1767); a number GitHub cannot place is said, never read as no reason.
       if (state === 'CLOSED') {
-        const reason = await closingReason(gh, slug, pr)
+        const reason = await closingReason($, gh, slug, pr)
         if (reason && 'unreadable' in reason) return { reading: { ...r, pr: { unreadable: reason.unreadable } }, found }
         if (reason && r.pr && !('unreadable' in r.pr)) r.pr = { ...r.pr, neverMerge: reason }
       }
@@ -3947,11 +4006,15 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   let asked: string
   let why: string
   if (read.state === 'CLOSED') {
-    let reason = await closingReason(gh, repo, { ...read, number })
+    // Claude asks once, to put a question to Dan, so a read that failed is asked again now (#1777).
+    let reason = await closingReason($, gh, repo, { ...read, number }, { retry: true })
     if (reason && 'unreadable' in reason) return unread(reason.unreadable)
     const danSaid = String(input.dan_said ?? '').trim()
     if (!reason && danSaid) {
-      const ref = await namedPr(gh, repo, prRefs(danSaid, { repo, number }), "Dan's words given as dan_said")
+      const where = "Dan's words given as dan_said"
+      const refs = await refsSaid($, danSaid, { repo, number }, where)
+      if ('unreadable' in refs) return unread(refs.unreadable)
+      const ref = await namedPr($, gh, repo, refs, where, { retry: true })
       if (ref && 'unreadable' in ref) return unread(ref.unreadable)
       if (ref) reason = { from: 'dan', pr: ref, quote: quoteOf(danSaid) }
     }

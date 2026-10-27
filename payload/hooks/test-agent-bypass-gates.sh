@@ -466,6 +466,26 @@ EOF' a1b2c3d4)"
 allowed "an agent's non git command naming /dev/stdin goes through"
 
 # ---------------------------------------------------------------------------------------------
+echo "agent-overrides.py stdin-device-refusal: the one wording, shared by the gate and the job watcher mod (#1765)"
+# The refusal is said in two places: this PreToolUse gate, and the job watcher mod's answer to the
+# permission prompt Claude Code raises BEFORE the gate runs (the live hang of 2026-10-26). Both take
+# the words from this one mode, so they cannot drift (L263, L370).
+REFUSAL="$(printf '%s' "$HUNG_2" | python3 "$LIB" stdin-device-refusal a1b2c3d4 2>&1)"; rrc=$?
+if [ "$rrc" = 0 ]; then check "the hung commit has a refusal" ok; else check "the hung commit has a refusal" "exit $rrc: $REFUSAL"; fi
+case "$REFUSAL" in "agent a1b2c3d4 ran a git command that reads a file from standard input's device path:"*) check "it names the agent first" ok ;; *) check "it names the agent first" "$REFUSAL" ;; esac
+case "$REFUSAL" in *"-F <file>"*"-F -"*) check "it names both fixes" ok ;; *) check "it names both fixes" "$REFUSAL" ;; esac
+case "$REFUSAL" in *"#1765"*) check "it names the issue" ok ;; *) check "it names the issue" "$REFUSAL" ;; esac
+run_hook "$NV_GATE" "$(bash_payload "$HUNG_2" a1b2c3d4)"
+if [ "$ERR" = "REFUSED (no-verify-gate.sh): $REFUSAL" ]; then check "the gate's refusal is that wording, word for word" ok
+else check "the gate's refusal is that wording, word for word" "gate said: ${ERR:0:300}"; fi
+out="$(printf '%s' 'git commit -q -F - <<EOF
+x
+EOF' | python3 "$LIB" stdin-device-refusal a1b2c3d4 2>&1)"; rrc=$?
+if [ "$rrc" = 1 ] && [ -z "$out" ]; then check "-F - has no refusal, and says nothing" ok; else check "-F - has no refusal, and says nothing" "exit $rrc: $out"; fi
+out="$(printf '%s' 'git commit -F /dev/stdin' | python3 "$LIB" stdin-device-refusal 2>&1)"; rrc=$?
+if [ "$rrc" = 64 ]; then check "with no agent named it refuses to guess one" ok; else check "with no agent named it refuses to guess one" "exit $rrc: $out"; fi
+
+# ---------------------------------------------------------------------------------------------
 echo "with no python3: each gate says so rather than passing what it cannot read"
 NOPY="$WORK/nopy"; mkdir -p "$NOPY"
 for t in bash cat dirname sed head tail tr date mkdir rm mv grep cut wc printf env; do
