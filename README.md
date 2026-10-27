@@ -1712,6 +1712,33 @@ two calls ran at the same time (#1077). A rate over fewer than five pushes print
 suites point the gates at a throwaway ledger (`PUSH_GATE_LEDGER_DIR`, which `run-all-tests.sh` and
 `tools/time-push-gates.sh` also set), so no test push is ever counted.
 
+### The quiz after a merge
+
+`hooks/pr-merge-quiz.sh` runs after every Bash call. When the call ran a merge (`gh pr merge`, or a
+repository's own merge tool, read by `lib/merge-target.sh`), it asks Claude for a short quiz about
+how the product behaves now that the change shipped, and Claude skips it, in one line, for anything
+nobody using the product would notice. It also stands down for a repository with `.no-pr-quiz` at
+its root, a session snoozed with `pr-merge-quiz.sh --snooze-session <id>`, a pull request whose
+changelog label says it is not visible, sleep mode, and a headless run. What it decided is counted in
+`~/.claude-quiz-verdicts/counts`.
+
+A merge command still running in the background is not quizzed yet (#1768). A command that passes
+the Bash tool's 600 s limit is moved to the background, and the hook runs at that moment, before
+anything has merged (seen in PostRoll on 2026-10-26, quizzed two minutes before the merge landed);
+so does one started with `run_in_background`. Claude Code marks both with a
+`backgroundTaskId` in the call's result, and for those the quiz is held: kept, one line per command,
+in `~/.claude-quiz-verdicts/held/<session id>`, and said in one line. The same script, registered as a
+Stop hook with `--release-held`, asks GitHub at each turn end (`gh pr view <n> --json
+number,state,mergedAt,url`) and, at the first one after it says the pull request MERGED, runs the
+held merge through the ordinary path, so the opt out, the snooze and the label gate still decide, and
+the quiz is asked then. A pull request GitHub says was CLOSED drops its hold, said in one line.
+While it is OPEN, or GitHub does not answer, the hold waits, however long that takes: a hold is
+never dropped for its age (Dan, 2026-10-26). The only cleanup is of a file untouched for two days,
+which only a session that has ended leaves, since each turn end of a live session rewrites its own.
+A finished merge in the foreground is quizzed at once, as before. Without a session id, or
+when the command runs several merges nothing can name, a hold could never be released, so the quiz
+fires at once and says the merge may still be running.
+
 ## Lesson numbers
 
 Each Mac mints lesson numbers from a band it owns, so two lessons written between syncs can never
@@ -3110,6 +3137,16 @@ load failed 20 of 20 with nothing broken, and passed 20 of 20 on the shared ceil
 load. It is a ceiling for hangs, not a judgement of speed. `tools/check-mod-shared-parts.sh` fails a
 test file, in any mod, that takes `test` from `claude-code/testing` itself, naming the `cp` and the
 import to use instead.
+Since #1778 the same file also ends what each test held. A stand-in that never answers (a call
+that hangs, a question nobody answers, a wait that never comes) is not stopped when its test ends:
+Claude Code cuts the hook off about five seconds of real time later, and what the mod does after
+that answer then runs inside whichever test is running by then, with that test's state and clock.
+On 2026-10-26 that failed the job watcher's tests 1 run in 3 under load (a git commit left hanging
+by one test stamped its agent alive in a later one, whose quiet agent was then never said), and a
+retry passed. So every such stand-in comes from the hang ceiling's `never()`, which each test ends
+as it ends, answered or refused, and a call that waits on one is handed to `awaitAtEnd()`, which the
+test waits for before the next starts. `tools/check-mod-shared-parts.sh` fails a mod test that hand
+rolls a promise that never settles, pointing at `never()`.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),

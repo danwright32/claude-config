@@ -71,7 +71,7 @@ mod:keystroke-guard/hooks/register.ts:headsUp:ask	Asked only after holdWhileAway
 EOF
 
 # ---- 1. the routes, derived ----
-ROUTES="$WORK/routes.tsv"   # route <TAB> consults (yes/no) <TAB> where
+ROUTES="$WORK/routes.tsv"   # route <TAB> consults (yes/no) <TAB> where <TAB> arguments (settings routes)
 python3 - "$SETTINGS" "$HOOKS" "$MODS" "$SYNC" > "$ROUTES" <<'PY'
 import json, os, re, sys
 
@@ -91,7 +91,10 @@ for ev in EVENTS:
                 continue
             path = os.path.join(hooks, m.group(1))
             text = open(path).read() if os.path.isfile(path) else ""
-            print("settings:%s:%s\t%s\t%s" % (ev, m.group(1), "yes" if "sleep_active" in text else "no", path))
+            # The arguments it is registered with, so section 2 runs it as Claude Code does: one
+            # script can be two routes (pr-merge-quiz.sh is a PostToolUse hook, and with
+            # --release-held a Stop one, #1768).
+            print("settings:%s:%s\t%s\t%s\t%s" % (ev, m.group(1), "yes" if "sleep_active" in text else "no", path, c[m.end():].strip()))
 
 # Mods: each block (a top level declaration, or a hook registered with on() inside register) that
 # sends a notification, plays a sound, asks Dan, or is a classic hook on a turn end or a wait on Dan.
@@ -153,7 +156,7 @@ grep -q $'^mod:manual-steps/hooks/register.tsx:tellDan:noun\t' "$ROUTES" \
   && check "manual steps asking the goal tracker to notify is found as a route (#1245)" ok \
   || check "manual steps asking the goal tracker to notify is found as a route (#1245)" "not found; routes: $(cut -f1 "$ROUTES" | tr '\n' ' ')"
 
-while IFS=$'\t' read -r route consults where; do
+while IFS=$'\t' read -r route consults where _args; do
   [ -n "$route" ] || continue
   reason="$(awk -F'\t' -v r="$route" '$1 == r { print $2 }' "$EXEMPT")"
   if [ "$consults" = yes ]; then
@@ -201,24 +204,46 @@ transcript() {   # a turn that did real work, so the end of turn hooks take thei
     '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}' \
     '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}' > "$1"
 }
-run_route() {   # run_route <script> <event> -> stdout of the hook, run in the current world
+run_route() {   # run_route <script> <event> [arguments...] -> stdout of the hook, run in the current world
   local t="$WORK/t.$RANDOM.jsonl"; transcript "$t"
   local proj; proj="$(mktemp -d "$WORK/proj.XXXXXX")"
-  printf '{"session_id":"s1","transcript_path":"%s","cwd":"%s","hook_event_name":"%s","stop_hook_active":false}' "$t" "$proj" "$2" \
-    | env HOME="$H" CLAUDE_HOME="$H/.claude" TMPDIR="$WORK/tmp" CLAUDE_PROJECT_DIR="$proj" PATH="$STUBS:$PATH" \
-        STOP_HOOK_NOTICE_DIR="$WORK/notices" bash "$HOOKS/$1" 2>/dev/null
+  local script="$1" ev="$2"; shift 2
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","hook_event_name":"%s","stop_hook_active":false}' "${RUN_SESSION:-s1}" "$t" "$proj" "$ev" \
+    | env HOME="$H" CLAUDE_HOME="$H/.claude" TMPDIR="$WORK/tmp" CLAUDE_PROJECT_DIR="$proj" PATH="$H/bin:$STUBS:$PATH" \
+        STOP_HOOK_NOTICE_DIR="$WORK/notices" bash "$HOOKS/$script" "$@" 2>/dev/null
+}
+# A route that speaks only about state it holds is given that state in each world, so its awake
+# control has something to say. Anything a route needs on PATH goes in "$H/bin", the world's own.
+seed_route() {   # seed_route <script> <arguments>
+  RUN_SESSION=""
+  case "$1 $2" in
+    "pr-merge-quiz.sh --release-held")
+      # A merge held while it ran in the background (#1768), which GitHub now says merged.
+      RUN_SESSION="sleep-silence-held-1"
+      mkdir -p "$H/bin" "$H/.claude-quiz-verdicts/held"
+      printf '#!/bin/sh\ncase "$*" in *"pr view"*) printf %s ;; esac\n' \
+        "'{\"number\":12,\"url\":\"https://github.com/acme/widget/pull/12\",\"state\":\"MERGED\",\"mergedAt\":\"2026-10-26T19:43:00Z\",\"labels\":[]}'" > "$H/bin/gh"
+      chmod +x "$H/bin/gh"
+      jq -nc --arg dir "$H" --arg sid "$RUN_SESSION" --argjson at "$(date +%s)" \
+        '{heldAt: $at, merges: [{dir: $dir, repo: "", slug: "", pr: "12"}],
+          payload: {session_id: $sid, cwd: $dir, tool_name: "Bash", tool_input: {command: "gh pr merge 12 --squash"}}}' \
+        > "$H/.claude-quiz-verdicts/held/$RUN_SESSION"
+      ;;
+  esac
 }
 
 mkdir -p "$WORK/tmp"
-while IFS=$'\t' read -r route consults where; do
+while IFS=$'\t' read -r route consults where args; do
   case "$route" in settings:*) ;; *) continue ;; esac
   [ "$consults" = yes ] || continue
   ev="${route#settings:}"; ev="${ev%%:*}"
   script="${route#settings:*:}"
-  world "$script" awake; out="$(run_route "$script" "$ev")"
+  # shellcheck disable=SC2086 # the registered arguments, split as the hook's command line splits them
+  world "$script" awake; seed_route "$script" "$args"; out="$(run_route "$script" "$ev" $args)"
   if [ -n "$out" ] || [ -s "$STUB_LOG" ]; then check "$script on $ev reaches Dan while awake (the control)" ok
   else check "$script on $ev reaches Dan while awake (the control)" "it did nothing awake either, so the silence below proves nothing"; fi
-  world "$script" asleep; out="$(run_route "$script" "$ev")"
+  # shellcheck disable=SC2086
+  world "$script" asleep; seed_route "$script" "$args"; out="$(run_route "$script" "$ev" $args)"
   [ -z "$out" ] && [ ! -s "$STUB_LOG" ] && check "$script on $ev is silent while asleep" ok \
     || check "$script on $ev is silent while asleep" "printed '${out:0:200}', ran: $(cat "$STUB_LOG")"
 done < "$ROUTES"
