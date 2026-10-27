@@ -505,6 +505,7 @@ describe('writes: a module run with python -m and a tool run through npx (#1682)
       {
         what: 'a python3 module run with -m',
         script: 'json.tool',
+        tool: true,
         args: [
           { word: 'in.json', path: `${CWD}/in.json` },
           { word: 'out.json', path: `${CWD}/out.json` },
@@ -520,7 +521,7 @@ describe('writes: a module run with python -m and a tool run through npx (#1682)
       expect({ command, runs: runs(command) }).toEqual({ command, runs: [] })
   })
   test('a tool run through npx names the tool and each argument after it, past npx options and their values', () => {
-    expect(runs('npx prettier --write app/page.tsx')).toEqual([{ what: 'a tool run through npx', script: 'prettier', args: [{ word: 'app/page.tsx', path: `${CWD}/app/page.tsx` }] }])
+    expect(runs('npx prettier --write app/page.tsx')).toEqual([{ what: 'a tool run through npx', script: 'prettier', tool: true, args: [{ word: 'app/page.tsx', path: `${CWD}/app/page.tsx` }] }])
     for (const command of [
       'npx --yes prettier@3 --write app/page.tsx',
       'npx -y eslint --fix app/page.tsx',
@@ -533,6 +534,14 @@ describe('writes: a module run with python -m and a tool run through npx (#1682)
     expect(runs('npx -p @biomejs/biome biome format --write app/page.tsx').map(r => r.script)).toEqual(['biome'])
     expect(runs('cd /w/shop && npx prettier --write app/page.tsx').map(r => r.args[0]?.path)).toEqual(['/w/shop/app/page.tsx'])
     expect(runs("npx prettier --write 'app/*.tsx'").map(r => r.args)).toEqual([[{ word: 'app/*.tsx', folder: `${CWD}/app` }]])
+  })
+  // #1815: a tool's operands are, by its own convention, the files it works on, where a script file's
+  // arguments are its own (a commit, a test's name), so a guard can tell the two apart by `tool`.
+  test('a tool or a module is marked as one; a script file, run by an interpreter or by its own name, is not', () => {
+    for (const command of ['npx prettier --write $(git ls-files src)', 'python3 -m black $(git ls-files src)'])
+      expect({ command, tool: runs(command).map(r => r.tool) }).toEqual({ command, tool: [true] })
+    for (const command of ['python3 gen.py $(git ls-files src)', './tools/fix app/page.tsx', 'bash ~/.claude/hooks/lib/pr-review.sh start --sha $(git rev-parse HEAD)'])
+      expect({ command, tool: runs(command).map(r => r.tool) }).toEqual({ command, tool: [undefined] })
   })
   test('npx with no tool, a tool handed nothing, or a command line given by -c names no run', () => {
     for (const command of ['npx', 'npx --yes', 'npx vitest', "npx -c 'prettier --write app/page.tsx'", 'npx --call=x'])
