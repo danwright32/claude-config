@@ -68,6 +68,8 @@ rule and its evidence live in LESSONS.md as L604 to L611 and L613; these are the
 - **The page's purpose is always open (L610).** No toggles, disclosures or lazy fetches over the content the reader came for, and a positive statement on the healthy day. The rare is demoted or deleted; a page empty by construction is a panel on the landing page, not a route.
 - **A vocabulary in code is a picker, never a text box (L611).** Enumerate from the same constant the reader uses, refuse anything outside it on the server, and show identifiers by name.
 - **Consolidation is the component plus the guard, in one change (L613).** Convert every site, ship a scan that fails on the next hand rolled copy, and delete the superseded thing with its docstring rather than rewriting its justification.
+- **A control someone cannot use is not shown to them** (Dan, 2026-10-27, Pivot #66). Never state on screen who is allowed to do something; hide the button from everyone who isn't, and enforce the same rule on the server.
+- **No internal shorthand reaches the screen** (Dan, 2026-10-27, Pivot #66: "approved 3 makes no sense"). A bare number or code name always carries its noun ("live version 3", "draft 4"), and one name is used for it everywhere it appears.
 
 ## Build-Time Reliability Rules
 
