@@ -960,6 +960,113 @@ run().then(function (doc) { var pre = document.createElement("pre"); pre.id = "P
     check("naming the stylesheet it could not read, rather than leaving it out silently",
           "NOT inlined" in captured and "linked.css" in captured, captured[:400])
 
+# --- a settled frame follows its page's height, as a round's option does (claude-config#1816) --------
+# A settled frame was sized once, as it loaded, from its page root's scroll height, which never reads less
+# than the frame it sits in, so a short page kept the 400px it started at; a root of h-full height (Slate's)
+# reports the frame's own height whatever it holds; and a page that grew after a click stayed clipped. The
+# switcher fixed all three for a round's options (#1795); a settled design now sizes its frames by the same
+# code, chrome_frame.FRAME_FOLLOWS_PAGE, rather than a copy of it.
+write("grow.js", """function buildScreen(variant) {
+  var d = document.createElement("div");
+  var b = document.createElement("button"); b.textContent = "More"; b.style.cssText = "display:block;height:30px;margin:0;font:inherit";
+  var extra = document.createElement("div"); extra.style.cssText = "height:600px;background:#eee"; extra.hidden = true;
+  b.addEventListener("click", function () { extra.hidden = !extra.hidden; });
+  d.append(b, extra); return d;
+}
+""")
+write("grow.html", """<!doctype html><html><head><meta charset="utf-8"><style>body { margin: 0; } header { height: 40px; }</style></head>
+<body><header>Slate</header><main id="main"></main></body></html>
+""")
+write("hfull.html", """<!doctype html><html class="h-full"><head><meta charset="utf-8"><style>.h-full { height: 100%; } .min-h-screen { min-height: 100vh; } body { margin: 0; } header { height: 40px; }</style></head>
+<body class="h-full min-h-screen"><header>Slate</header><main id="main"></main></body></html>
+""")
+write("loop.html", """<!doctype html><html><head><meta charset="utf-8"><style>body { margin: 0; } header { height: 60px; } main { min-height: 100vh; }</style></head>
+<body><header>Slate</header><main id="main"></main></body></html>
+""")
+GROW_CHROMES = [{"name": name, "captured": name + ".html", "from": "the suite, a page that grows", "slot": "#main", "width": 640}
+                for name in ("grow", "hfull", "loop")]
+GROW_FRAMES = [{"id": "g", "title": "Grows", "width": 640, "chrome": "grow", "variant": {}},
+               {"id": "h", "title": "Full height root", "width": 640, "chrome": "hfull", "variant": {}},
+               {"id": "l", "title": "Window tall area", "width": 640, "chrome": "loop", "variant": {}},
+               {"id": "x", "title": "Fixed", "width": 640, "height": 300, "chrome": "grow", "variant": {}}]
+rc, out, grow_path = make("grow", spec(chrome=None, chromes=GROW_CHROMES, builder="grow.js", styles=None, frames=GROW_FRAMES,
+                                       decisions=[{"id": "D1", "decision": "More opens the step", "requirement": "1",
+                                                   "frames": ["g"], "check": "main button reads More"}]))
+check("a design whose pages grow after a click is written", rc == 0 and os.path.isfile(grow_path), out)
+# One sizing for both, never a copy (L613): the switcher and the settled page each take it from
+# chrome_frame.py, so neither tool's own source writes a frame's sizing itself.
+_copies = [name for name in ("make-switcher.py", "make-settled.py")
+           if re.search(r"function drSize\(|function drWatch\(|scrollHeight \+ \"px\"", open(os.path.join(SKILL, name), encoding="utf-8").read())]
+check("neither make-switcher.py nor make-settled.py sizes a frame with its own copy of the code", not _copies, repr(_copies))
+check("the settled page carries the sizing chrome_frame.py gives the switcher",
+      os.path.isfile(grow_path) and "function drSize(frame)" in open(grow_path, encoding="utf-8").read(), out)
+# Driven in a real Chrome through Playwright, never a --dump-dom run: headless Chrome under a virtual time
+# budget draws almost no frames after load and none after a click, so no ResizeObserver is ever told
+# (measured for #1795). Every wait is a count of drawn frames, never a time (L290).
+write("grow-probe.mjs", """import { pathToFileURL } from "node:url";
+const [capture, design] = process.argv.slice(2);
+const { findPlaywright, launchChrome, loadPlaywright } = await import(pathToFileURL(capture).href);
+let pw;
+try { pw = loadPlaywright(findPlaywright({ repo: process.cwd() })); } catch (e) { console.log("NO-PLAYWRIGHT " + String(e.message || e).split("\\n")[0]); process.exit(0); }
+const browser = await launchChrome(pw, "chrome", ["--disable-gpu"]);
+try {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const drawn = (n) => page.evaluate((n) => new Promise((done) => { let k = 0; (function tick() { if (++k >= n) done(); else requestAnimationFrame(tick); })(); }), n);
+  const frame = (id) => 'iframe[data-frame="' + id + '"]';
+  const height = (id) => page.evaluate((sel) => String(parseFloat(document.querySelector(sel).style.height)), frame(id));
+  const fits = (id) => page.evaluate((sel) => { const f = document.querySelector(sel), d = f.contentDocument; return d.documentElement.scrollHeight <= f.clientHeight ? "fits" : "scrolls:" + d.documentElement.scrollHeight + ">" + f.clientHeight; }, frame(id));
+  await page.goto(pathToFileURL(design).href);
+  await page.waitForFunction(() => Array.prototype.every.call(document.querySelectorAll("iframe[data-frame]"), (f) => !!(f.contentWindow && f.contentWindow.DR_FRAME)), null, { timeout: 60000 });
+  for (const id of ["g", "h", "x"]) {
+    await page.locator(frame(id)).scrollIntoViewIfNeeded();
+    await drawn(20);
+    const out = [await height(id)];
+    const button = page.frameLocator(frame(id)).locator("#main button");
+    await button.click();
+    await drawn(20);
+    out.push(await height(id), await fits(id));
+    await button.click();
+    await drawn(20);
+    out.push(await height(id));
+    console.log("FRAMEGROW " + id + " " + out.join(","));
+  }
+  await page.locator(frame("l")).scrollIntoViewIfNeeded();
+  await drawn(20);
+  const first = await height("l");
+  await drawn(60);
+  console.log("FRAMEGROW l " + first + "," + await height("l"));
+} finally {
+  await browser.close();
+}
+""")
+if not TEST_CHROME:
+    print("SUITE-PART-UNMEASURED no Chrome at %s or on PATH, so a settled frame following its page's height was not measured" % MAC_CHROME)
+elif not shutil.which("node"):
+    print("SUITE-PART-UNMEASURED node is not on PATH, so a settled frame following its page's height was not measured")
+elif rc == 0:
+    proc = subprocess.run(["node", os.path.join(T, "grow-probe.mjs"), os.path.join(SKILL, "score", "capture-web.mjs"), grow_path],
+                          capture_output=True, text=True, cwd=T)
+    grown = proc.stdout + proc.stderr
+    if grown.startswith("NO-PLAYWRIGHT"):
+        print("SUITE-PART-UNMEASURED no Playwright to drive Chrome with here (%s), so a settled frame following its page's height was not measured" % grown[:200].strip())
+    elif proc.returncode != 0:
+        # A probe that crashed (Chrome would not start, a click timed out) is a failure, said with its own
+        # words, never a set of heights read as missing.
+        check("the probe driving a settled design in Chrome ran to its end", False, "exit %d\n%s" % (proc.returncode, grown[-1500:]))
+    else:
+        said = dict(re.findall(r"^FRAMEGROW (\w+) (\S+)$", proc.stdout, re.M))
+        # 40px of header and a 30px button, then 600px more, then back.
+        check("a settled frame is as tall as its page, grows when a click reveals more, holding all of it, and shrinks back",
+              said.get("g") == "70,670,fits,70", repr(said) + "\n" + grown[-1500:])
+        check("a captured root and body of h-full height (and a min-h-screen body) report their content, so its settled frame follows it",
+              said.get("h") == "70,670,fits,70", repr(said))
+        # The 400px frame the page starts in and its 60px header, measured once, and then never again: a
+        # frame that grew on each of its own resizes reads 60px taller on every frame drawn.
+        check("a settled page whose height follows its frame's (min-height: 100vh under a header) settles, never growing on its own resize",
+              said.get("l") == "460,460", repr(said))
+        check("a settled frame given its own height keeps it, whatever its page does",
+              said.get("x") == "300,300,scrolls:670>300,300", repr(said))
+
 shutil.rmtree(T, ignore_errors=True)
 print()
 print("passed: %d, failed: %d" % (passed, failed))

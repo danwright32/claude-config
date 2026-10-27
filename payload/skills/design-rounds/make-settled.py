@@ -458,12 +458,13 @@ function designFrameDocument(id) {
 """ % (chrome_frame.script_text(json.dumps(template)), chrome_frame.script_text(json.dumps(variants)),
        json.dumps(json.dumps(TOKEN)))
     # A frame its builder did not draw whole is said right above it, in designFrameTrouble's words, the
-    # ones the score says too (claude-config#1539).
-    script += chrome_frame.FRAME_TROUBLE + """Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), function (frame) {
+    # ones the score says too (claude-config#1539). Each frame is as tall as its page and follows it, sized
+    # by the code the switcher sizes a round's options with (claude-config#1816), unless the spec gave
+    # the frame a height of its own.
+    script += chrome_frame.FRAME_TROUBLE + chrome_frame.frame_follows_page("DR_FIXED[frame.dataset.frame]") + """var DR_FIXED = %s;
+Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), function (frame) {
   frame.addEventListener("load", function () {
-    var fixed = %s;
-    var d = frame.contentDocument;
-    if (d && !fixed[frame.dataset.frame]) frame.style.height = d.documentElement.scrollHeight + "px";
+    drSize(frame);
     var trouble = designFrameTrouble(frame.contentWindow && frame.contentWindow.DR_FRAME);
     var said = frame.previousElementSibling;
     if (said && said.classList.contains("dr-trouble")) said.remove();
