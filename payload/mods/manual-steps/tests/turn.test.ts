@@ -1,5 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { PAGE_MARK } from '../hooks/page.ts'
 import { PROSE_MARK, TURN_BYTES, turnAt, turnIn, type TurnRun } from '../hooks/turn.ts'
 
 // #1608: every message Claude wrote since the turn began, read from the tail of the transcript, so a
@@ -69,12 +70,15 @@ describe('turnAt', () => {
   }
   const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false })
 
-  test('reads the transcript\'s last bytes through perl, the path and the mark as arguments, never in the program', async () => {
+  // #1811: both of this mod's blocks are marks, the step left in prose and the page of steps, so a
+  // turn holding either is never blocked by this mod again.
+  test('reads the transcript\'s last bytes through perl, the path and each mark as arguments, never in the program', async () => {
     const { asked, run } = runs(ok([user('p1'), said('hello')].join('\n')))
     expect(await turnAt(T, run)).toEqual({ state: 'read', texts: ['hello'], isOurs: false, promptId: 'p1' })
     const argv = asked[0] ?? []
     expect(argv.slice(0, 2)).toEqual(['perl', '-e'])
-    expect(argv.slice(3)).toEqual(['--', String(TURN_BYTES), T, PROSE_MARK])
+    expect(argv.slice(3)).toEqual(['--', String(TURN_BYTES), T, PROSE_MARK, PAGE_MARK])
+    expect(argv[2]).toContain('@marks')
     expect(argv[2]).not.toContain(T)
   })
 
