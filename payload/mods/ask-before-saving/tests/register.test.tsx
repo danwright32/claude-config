@@ -172,7 +172,9 @@ type Asked = { questions: { question: string; header: string; options: { label: 
 // `gate` holds the guard's first read of its gate until `opened` settles, calling `reached` as it starts.
 // `fifos`: paths there that are no regular file (a fifo, a link to a device). A read of one, or of
 // any device, never answers, as the real one does (#1765), and resolves `readAttempted`.
-const world = (engine: Engine, on: On, init: { files?: Record<string, string>; fifos?: string[]; failWrites?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
+// `stdinLinks`: links to /dev/stdin, read as `fifos` are, whose stat with links followed THROWS
+// EBADF, as Claude Code 2.1.312's does (#1814, measured headless).
+const world = (engine: Engine, on: On, init: { files?: Record<string, string>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
   let gateReads = 0
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
@@ -224,7 +226,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     return { value: at.cwd } as never
   })
   on('agent.list', () => ({ value: (init.agents ?? []).map(id => ({ id, description: 'a task', agentType: 'general-purpose' })) }) as never)
-  const isOther = (path: string) => path.startsWith('/dev/') || (init.fifos ?? []).includes(path)
+  const isOther = (path: string) => path.startsWith('/dev/') || (init.fifos ?? []).includes(path) || (init.stdinLinks ?? []).includes(path)
   const opened: string[] = []
   let attempted: () => void = () => undefined
   const readAttempted = new Promise<'read attempted'>(resolve => {
@@ -232,6 +234,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
   })
   on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined || isOther(e.path) }) as never)
   on('fs.stat', ($, e) => {
+    if ((init.stdinLinks ?? []).includes(e.path) && e.resolve) throw new Error(`EBADF: bad file descriptor, stat '${e.path}'`)
     if (isOther(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: false } } as never
     if (files[e.path] === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } } as never
@@ -915,6 +918,25 @@ test('a Write or Edit to /dev/stdin, /dev/fd/0 or a fifo never opens it, and a l
   const lesson = settled(await settles(w, call($, addLesson)), 'Edit LESSONS.md fifo')
   expect(refusalOf(lesson)).toContain(ASKS)
   expect(w.ran.length).toBe(4)
+  expect(w.opened).toEqual([])
+})
+// Claude Code 2.1.312 (measured headless): a stat with links followed of a link to /dev/stdin THROWS
+// EBADF. That throw is unreadable with the error named, so the save is asked about as any other,
+// never refused as a guard that could not check, and the memory writer's note names the error.
+test('a lasting memory file that is a link to /dev/stdin, whose look throws EBADF, is still asked about, saying so (#1814)', withKit, async ($, on) => {
+  const path = `${HOME}/.claude/projects/-Users-dan-Apps-slate/memory/feedback.md`
+  const w = world($, on, { agents: ['agent-a1'], stdinLinks: [`${CWD}/CLAUDE.md`, path] })
+  const memory = settled(await settles(w, call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' })), 'Write CLAUDE.md link')
+  expect(refusalOf(memory)).toContain(ASKS)
+  const r = settled(await settles(w, call($, { tool: 'Write', file_path: path, content: 'Skip the merge quiz.\n', agentId: 'fork-memory' })), 'memory writer link')
+  expect(refusalOf(r)).toContain('a subagent never asks him')
+  // The test kit skips a stand-in hook that throws and hands the mod its own error in place of EBADF
+  // (mod-kit's inputs test pins the EBADF text), so the note is checked for naming the look's failure.
+  expect(notesOf(w)).toContain(
+    'What it would have saved: Skip the merge quiz. (the whole of what it writes: ~/.claude/projects/-Users-dan-Apps-slate/memory/feedback.md could not be read before it, as it could not be looked at (',
+  )
+  expect(notesOf(w)).toContain('), so which lines are new could not be told).')
+  expect(w.ran).toEqual([])
   expect(w.opened).toEqual([])
 })
 test("the memory writer's save to a fifo is refused, and the main session is told it whole, with why its new lines could not be told (#1814)", withKit, async ($, on) => {

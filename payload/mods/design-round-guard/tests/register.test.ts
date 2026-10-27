@@ -108,7 +108,9 @@ type Asked = { questions: { question: string; header: string; options: { label: 
 // `env`: the variables Claude Code runs with beside HOME (CLAUDE_CODE_TMPDIR, #1191).
 // `fifos`: paths there that are no regular file (a fifo, a link to a device). A read of one, or of
 // any device, never answers, as the real one does (#1765), and resolves `readAttempted`.
-type Init = { cwd?: string; files?: Record<string, string>; fifos?: string[]; agents?: string[]; blobs?: Record<string, string>; env?: Record<string, string> }
+// `stdinLinks`: links to /dev/stdin, read as `fifos` are, whose stat with links followed THROWS
+// EBADF, as Claude Code 2.1.312's does (#1814, measured headless).
+type Init = { cwd?: string; files?: Record<string, string>; fifos?: string[]; stdinLinks?: string[]; agents?: string[]; blobs?: Record<string, string>; env?: Record<string, string> }
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
 
 // The Mac and Claude Code beneath the mod: each checkout's branch (a test may change it, or make it
@@ -240,7 +242,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     return { value: undefined } as never
   })
   // A file is there when the test put it there, and a folder when a file the test put is under it.
-  const isOther = (path: string) => path.startsWith('/dev/') || (init.fifos ?? []).includes(path)
+  const isOther = (path: string) => path.startsWith('/dev/') || (init.fifos ?? []).includes(path) || (init.stdinLinks ?? []).includes(path)
   const opened: string[] = []
   let attempted: () => void = () => undefined
   const readAttempted = new Promise<'read attempted'>(resolve => {
@@ -252,6 +254,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   })
   // What is at a path: a file the test put, a folder above one, or something else (#1765).
   on('fs.stat', ($, e) => {
+    if ((init.stdinLinks ?? []).includes(e.path) && e.resolve) throw new Error(`EBADF: bad file descriptor, stat '${e.path}'`)
     if (isOther(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: T0, isLink: false } } as never
     if (files[e.path] !== undefined) return { value: { kind: 'file', size: 1, mtimeMs: T0, isLink: false } } as never
     if (Object.keys(files).some(f => f.startsWith(`${e.path}/`))) return { value: { kind: 'dir', size: 0, mtimeMs: T0, isLink: false } } as never
@@ -2241,6 +2244,39 @@ test('a Write or Edit to /dev/stdin, /dev/fd/0 or a fifo never opens it, and a l
   expect(copied).toContain(SKIP_QUESTION)
   expect(copied).toContain('/dev/stdin, which it copies, could not be read: it is a device, not a file')
   expect(w.ran.length).toBe(4)
+  expect(w.opened).toEqual([])
+})
+
+// Claude Code 2.1.312 (measured headless): a stat with links followed of a link to /dev/stdin THROWS
+// EBADF. The throw is unreadable with the error named, never empty: each file is held whole, and the
+// refusal names the error. Every case is gathered before one comparison, so a red shows them all.
+// The test kit skips a stand-in hook that throws and hands the mod its own error in place of EBADF
+// (mod-kit's inputs test pins the EBADF text), so the refusal is checked for naming the look's failure.
+test('a look file that is a link to /dev/stdin, whose look throws EBADF, is held whole, naming the error (#1814)', withKit, async ($, on) => {
+  const SWIFT = '/w/slate/Sources/Row.swift'
+  const PAGE_LINK = '/w/slate/app/page.tsx'
+  const SOURCE = '/w/slate/in.html'
+  const w = world($, on, { stdinLinks: [PAGE_LINK, SWIFT, RECORD, MOD_HOOK, SOURCE], files: { ...MOD_PLUGIN } })
+  const failed = 'it could not be looked at ('
+  const cases: [string, Record<string, unknown>, string][] = [
+    ['Edit page.tsx', { tool: 'Edit', file_path: PAGE_LINK, old_string: 'p-4', new_string: 'p-6' }, `could not read what app/page.tsx holds before this call (${failed}`],
+    ['Edit Row.swift', { tool: 'Edit', file_path: SWIFT, old_string: 'a', new_string: 'b' }, `could not read what Sources/Row.swift holds before this call (${failed}`],
+    ['Edit settled design', { tool: 'Edit', file_path: RECORD, old_string: 'a', new_string: 'b' }, `the file could not be read: ${failed}`],
+    ['shell write to a mod hook', { tool: 'Bash', command: `echo x > ${MOD_HOOK}` }, `could not read ${MOD_REL} before the command ran (${failed}`],
+    ['cp onto a settled design', { tool: 'Bash', command: `cp ${SOURCE} ${RECORD}` }, `${SOURCE}, which it copies, could not be read: ${failed}`],
+  ]
+  const seen: string[] = []
+  for (const [what, input, says] of cases) {
+    const r = await Promise.race([awaitAtEnd(call($, input)).then(x => ({ settled: x })), w.readAttempted])
+    if (r === 'read attempted') {
+      seen.push(`${what}: read attempted`)
+      continue
+    }
+    const why = refusalOf(r.settled)
+    seen.push(`${what}: ${why.includes(SKIP_QUESTION) ? 'held' : 'not held'}, ${why.includes(says) ? 'names it' : `says: ${why}`}`)
+  }
+  expect(seen).toEqual(cases.map(([what]) => `${what}: held, names it`))
+  expect(w.ran).toEqual([])
   expect(w.opened).toEqual([])
 })
 

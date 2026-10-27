@@ -10,12 +10,12 @@ import { currentText, inputTexts, isDevice, type InputFs } from '../hooks/inputs
 // path that is not a regular file never answers, as the real one does, so a test that opened one
 // would hang; every read is counted.
 type Disk = Record<string, string | 'FIFO' | 'DIR' | 'DEVICE'>
-const disk = (entries: Disk, fail?: { stat?: string; read?: string }) => {
+const disk = (entries: Disk, fail?: { stat?: string; statError?: string; read?: string }) => {
   const reads: string[] = []
   const fs: InputFs = {
     exists: async path => entries[path] !== undefined,
     stat: async path => {
-      if (fail?.stat === path) throw new Error(`EACCES: ${path}`)
+      if (fail?.stat === path) throw new Error(fail.statError ?? `EACCES: ${path}`)
       const e = entries[path]
       if (e === undefined) throw new Error(`ENOENT: ${path}`)
       return { kind: e === 'DIR' ? 'dir' : e === 'FIFO' || e === 'DEVICE' ? 'other' : 'file' }
@@ -89,9 +89,18 @@ describe('inputs: what a file a call writes holds now', () => {
     expect(await currentText(fs, '/repo/gone.md')).toEqual({ absent: true })
     expect(reads).toEqual(['/repo/CLAUDE.md'])
   })
-  test('a file there that cannot be judged or read throws, so a guard fails closed', async () => {
-    const statFails = disk({ '/repo/a.md': 'A' }, { stat: '/repo/a.md' })
-    await expect(currentText(statFails.fs, '/repo/a.md')).rejects.toThrow('EACCES: /repo/a.md')
+  // Claude Code 2.1.312 (measured headless by #1830's builder): a stat with links followed of
+  // /dev/stdin, or of a link to it, THROWS EBADF rather than answering 'other', so a Write to a link
+  // to /dev/stdin threw out of this reader and each guard's own catch decided what happened. Any
+  // throw from the look is unreadable, the error named, never empty and never escaping; nothing is read.
+  test('a file whose look throws (EBADF for a link to /dev/stdin) is unreadable, the error named, and never read', async () => {
+    const { fs, reads } = disk({ '/repo/CLAUDE.md': 'x' }, { stat: '/repo/CLAUDE.md', statError: 'EBADF: bad file descriptor, stat' })
+    expect(await currentText(fs, '/repo/CLAUDE.md')).toEqual({ unreadable: 'it could not be looked at (EBADF: bad file descriptor, stat)' })
+    const denied = disk({ '/repo/a.md': 'A' }, { stat: '/repo/a.md' })
+    expect(await currentText(denied.fs, '/repo/a.md')).toEqual({ unreadable: 'it could not be looked at (EACCES: /repo/a.md)' })
+    expect([...reads, ...denied.reads]).toEqual([])
+  })
+  test('a file there that cannot be read throws, so a guard fails closed', async () => {
     const readFails = disk({ '/repo/a.md': 'A' }, { read: '/repo/a.md' })
     await expect(currentText(readFails.fs, '/repo/a.md')).rejects.toThrow('EIO: /repo/a.md')
   })
