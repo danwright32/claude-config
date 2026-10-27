@@ -2205,6 +2205,45 @@ test('a patch read from /dev/stdin, /dev/fd/0 or a fifo is never opened, and set
   expect(w.reads).toContain('/w/slate/ui.patch')
 })
 
+// #1814: a Write or Edit whose target is a device or a fifo. The guard reads a look file's text now
+// to judge an edit by its lines, a Swift file for SwiftUI, a settled design to check its seal, and a
+// mod hook file a shell write changes; a read of a fifo there waited for ever, so the call never ran.
+// Its text now is unreadable, never empty: the file is held whole, and the refusal says why. Raced
+// against any such read, as above.
+test('a Write or Edit to /dev/stdin, /dev/fd/0 or a fifo never opens it, and a look file that is one is held whole, saying why (#1814)', withKit, async ($, on) => {
+  const SWIFT = '/w/slate/Sources/Row.swift'
+  const w = world($, on, { fifos: ['/w/slate/app/page.tsx', SWIFT, RECORD, MOD_HOOK], files: { ...MOD_PLUGIN } })
+  const settled = async (input: Record<string, unknown>, what: string) => {
+    const r = await Promise.race([awaitAtEnd(call($, input)).then(x => ({ settled: x })), w.readAttempted])
+    expect(`${what}: ${r === 'read attempted' ? r : 'settled'}`).toBe(`${what}: settled`)
+    return refusalOf((r as { settled: Result }).settled)
+  }
+  for (const path of ['/dev/stdin', '/dev/fd/0']) {
+    expect(await settled({ tool: 'Write', file_path: path, content: 'x\n' }, `Write ${path}`)).toBe('')
+    expect(await settled({ tool: 'Edit', file_path: path, old_string: 'x', new_string: 'y' }, `Edit ${path}`)).toBe('')
+  }
+  expect(w.ran.map(r => r.input.file_path)).toEqual(['/dev/stdin', '/dev/stdin', '/dev/fd/0', '/dev/fd/0'])
+  const NOT_FILE = 'it is not an ordinary file (a fifo, a socket or a link to a device)'
+  const page = await settled({ tool: 'Edit', file_path: '/w/slate/app/page.tsx', old_string: 'p-4', new_string: 'p-6' }, 'Edit page.tsx fifo')
+  expect(page).toContain(SKIP_QUESTION)
+  expect(page).toContain(`could not read what app/page.tsx holds before this call (${NOT_FILE}), so it judged the whole file as a look change`)
+  const swift = await settled({ tool: 'Edit', file_path: SWIFT, old_string: 'a', new_string: 'b' }, 'Edit Row.swift fifo')
+  expect(swift).toContain(SKIP_QUESTION)
+  expect(swift).toContain(`could not read what Sources/Row.swift holds before this call (${NOT_FILE})`)
+  const record = await settled({ tool: 'Edit', file_path: RECORD, old_string: 'a', new_string: 'b' }, 'Edit settled design fifo')
+  expect(record).toContain(SKIP_QUESTION)
+  expect(record).toContain(NOT_FILE)
+  const shell = await settled({ tool: 'Bash', command: `echo x > ${MOD_HOOK}` }, 'shell write to a mod hook fifo')
+  expect(shell).toContain(SKIP_QUESTION)
+  expect(shell).toContain(`could not read ${MOD_REL} before the command ran (${NOT_FILE})`)
+  // A settled design copied in whole from /dev/stdin: what it copies is never opened, and is said.
+  const copied = await settled({ tool: 'Bash', command: `cp /dev/stdin ${RECORD}` }, 'cp /dev/stdin onto a settled design')
+  expect(copied).toContain(SKIP_QUESTION)
+  expect(copied).toContain('/dev/stdin, which it copies, could not be read: it is a device, not a file')
+  expect(w.ran.length).toBe(4)
+  expect(w.opened).toEqual([])
+})
+
 test("#1191: the product's own files stay held, alone or in one command with a round's files", withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate-wt', files: { '/w/slate-wt/src/app/globals.css': 'a{}', '/w/slate-wt/src/app/page.tsx': 'x' } })
   w.branches['/w/slate-wt'] = 'feat/3718-inline-booker'

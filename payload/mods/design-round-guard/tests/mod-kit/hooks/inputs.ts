@@ -7,6 +7,8 @@
 // (hooks/mod-kit/inputs.ts, which tools/check-mod-shared-parts.sh holds to this one), since a mod
 // cannot import another mod's files. Mod-kit's write reader takes a device out of every input it
 // names with the same isDevice, so a guard reading those inputs some other way still never meets one.
+// The file a call WRITES is read the same way (#1814, currentText): a guard reading a Write or Edit
+// target's text now, to judge what the call adds, met /dev/stdin or a fifo there just as often.
 
 /** Whether a path names a device or the kernel's own folder: nothing there is a file to read. */
 export const isDevice = (path: string): boolean => /^\/(?:dev|proc)(?:\/|$)/.test(path)
@@ -22,6 +24,14 @@ export type InputFs = {
   read: (path: string) => Promise<string>
 }
 
+// What is at a path, asked without opening it: a device by its name alone, with no call at all;
+// otherwise whether anything is there, and what it is once its links are followed.
+const kindAt = async (fs: InputFs, path: string): Promise<'device' | 'absent' | 'file' | 'dir' | 'other'> => {
+  if (isDevice(path)) return 'device'
+  if (!(await fs.exists(path))) return 'absent'
+  return (await fs.stat(path, { resolve: true })).kind
+}
+
 /**
  * The text of each file among `paths` that is an ordinary file, in order. A device is never touched,
  * by its name alone. A path that is not there, or is not a regular file once its links are followed
@@ -32,10 +42,27 @@ export type InputFs = {
  */
 export const inputTexts = async (fs: InputFs, paths: readonly string[]): Promise<string[]> => {
   const out: string[] = []
-  for (const path of paths) {
-    if (isDevice(path) || !(await fs.exists(path))) continue
-    if ((await fs.stat(path, { resolve: true })).kind !== 'file') continue
-    out.push(await fs.read(path))
-  }
+  for (const path of paths) if ((await kindAt(fs, path)) === 'file') out.push(await fs.read(path))
   return out
+}
+
+/** What a file a call writes holds now (currentText): its text, nothing there, or why it cannot be read. */
+export type Current = { text: string } | { absent: true } | { unreadable: string }
+
+/**
+ * What the file a Write or Edit names (or a shell write's target) holds now, read before the call
+ * runs, by the same refusal as inputTexts (#1814): a guard judging what a call adds read the target
+ * first, and a target that was /dev/stdin or a fifo held the call for ever. A device, a fifo, a
+ * socket, a link to a device or a folder is never opened, and is `unreadable`, with why in words a
+ * refusal can carry. That is never the same as `absent` (nothing there, so all a Write holds is new)
+ * nor as empty text: each guard says it could not read the file and judges the call whole. A look or
+ * read that fails otherwise throws, so a guard fails closed.
+ */
+export const currentText = async (fs: InputFs, path: string): Promise<Current> => {
+  const kind = await kindAt(fs, path)
+  if (kind === 'absent') return { absent: true }
+  if (kind === 'file') return { text: await fs.read(path) }
+  if (kind === 'device') return { unreadable: 'it is a device, not a file' }
+  if (kind === 'dir') return { unreadable: 'it is a folder, not a file' }
+  return { unreadable: 'it is not an ordinary file (a fifo, a socket or a link to a device)' }
 }

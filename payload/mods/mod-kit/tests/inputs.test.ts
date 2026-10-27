@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { never, test } from './hang-ceiling.ts'
-import { inputTexts, isDevice, type InputFs } from '../hooks/inputs.ts'
+import { currentText, inputTexts, isDevice, type InputFs } from '../hooks/inputs.ts'
 
 // The one reader of a file a command names as what it reads (#1765): a patch file, a script fed on
 // standard input, a commit message's -F file. A device or a fifo there is never opened, since reading
@@ -64,5 +64,35 @@ describe('inputs: reading what a command reads', () => {
     await expect(inputTexts(statFails.fs, ['/repo/a.patch'])).rejects.toThrow('EACCES: /repo/a.patch')
     const readFails = disk({ '/repo/a.patch': 'A' }, { read: '/repo/a.patch' })
     await expect(inputTexts(readFails.fs, ['/repo/a.patch'])).rejects.toThrow('EIO: /repo/a.patch')
+  })
+})
+
+// The same refusal for a file a Write or Edit names as its target (#1814): a guard reading what the
+// file holds now, to judge what the call adds, waited for ever on a fifo or on /dev/stdin. What it
+// holds is then unreadable, said with why, and never read as empty or as a file not there.
+describe('inputs: what a file a call writes holds now', () => {
+  test('a device is unreadable by its name alone: no look, no read', async () => {
+    const { fs, reads } = disk({ '/dev/stdin': 'x', '/dev/fd/0': 'x', '/proc/self/fd/0': 'x' })
+    for (const path of ['/dev/stdin', '/dev/fd/0', '/proc/self/fd/0']) expect(await currentText(fs, path)).toEqual({ unreadable: 'it is a device, not a file' })
+    expect(reads).toEqual([])
+  })
+  test('a fifo, a link to a device or a folder is unreadable without being opened', async () => {
+    const { fs, reads } = disk({ '/repo/CLAUDE.md': 'FIFO', '/repo/in.md': 'DEVICE', '/repo/src': 'DIR' })
+    expect(await currentText(fs, '/repo/CLAUDE.md')).toEqual({ unreadable: 'it is not an ordinary file (a fifo, a socket or a link to a device)' })
+    expect(await currentText(fs, '/repo/in.md')).toEqual({ unreadable: 'it is not an ordinary file (a fifo, a socket or a link to a device)' })
+    expect(await currentText(fs, '/repo/src')).toEqual({ unreadable: 'it is a folder, not a file' })
+    expect(reads).toEqual([])
+  })
+  test('an ordinary file is read, and one not there is absent, never empty', async () => {
+    const { fs, reads } = disk({ '/repo/CLAUDE.md': '# Rules\n' })
+    expect(await currentText(fs, '/repo/CLAUDE.md')).toEqual({ text: '# Rules\n' })
+    expect(await currentText(fs, '/repo/gone.md')).toEqual({ absent: true })
+    expect(reads).toEqual(['/repo/CLAUDE.md'])
+  })
+  test('a file there that cannot be judged or read throws, so a guard fails closed', async () => {
+    const statFails = disk({ '/repo/a.md': 'A' }, { stat: '/repo/a.md' })
+    await expect(currentText(statFails.fs, '/repo/a.md')).rejects.toThrow('EACCES: /repo/a.md')
+    const readFails = disk({ '/repo/a.md': 'A' }, { read: '/repo/a.md' })
+    await expect(currentText(readFails.fs, '/repo/a.md')).rejects.toThrow('EIO: /repo/a.md')
   })
 })

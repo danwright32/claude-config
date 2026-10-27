@@ -893,6 +893,41 @@ test('a patch read from /dev/stdin, /dev/fd/0 or a fifo is never opened, and set
   expect(w.opened).toEqual([])
 })
 
+// #1814: a Write or Edit whose target is a device or a fifo. The guard reads what a lasting memory
+// file holds now to say which lines a Write adds, and the lessons file and a covered index to judge
+// what a call adds to them; a read of a fifo there waited for ever, so the call never ran. Its text
+// now is unreadable, never empty: the save is still asked about, and what would be saved is said
+// whole, with why its new lines could not be told. Raced against any such read, as above.
+const settled = (r: { settled: Result } | 'read attempted', what: string) => {
+  expect(`${what}: ${r === 'read attempted' ? r : 'settled'}`).toBe(`${what}: settled`)
+  return (r as { settled: Result }).settled
+}
+test('a Write or Edit to /dev/stdin, /dev/fd/0 or a fifo never opens it, and a lasting memory one is still asked about (#1814)', withKit, async ($, on) => {
+  const w = world($, on, { fifos: [`${CWD}/CLAUDE.md`, LESSONS] })
+  for (const path of ['/dev/stdin', '/dev/fd/0']) {
+    expect(refusalOf(settled(await settles(w, call($, { tool: 'Write', file_path: path, content: 'x\n' })), `Write ${path}`))).toBe('')
+    expect(refusalOf(settled(await settles(w, call($, { tool: 'Edit', file_path: path, old_string: 'x', new_string: 'y' })), `Edit ${path}`))).toBe('')
+  }
+  expect(w.ran.map(r => r.input.file_path)).toEqual(['/dev/stdin', '/dev/stdin', '/dev/fd/0', '/dev/fd/0'])
+  const memory = settled(await settles(w, call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' })), 'Write CLAUDE.md fifo')
+  expect(refusalOf(memory)).toContain(ASKS)
+  // The lessons file as a fifo: an Edit adding a lesson is never judged a pure addition unread.
+  const lesson = settled(await settles(w, call($, addLesson)), 'Edit LESSONS.md fifo')
+  expect(refusalOf(lesson)).toContain(ASKS)
+  expect(w.ran.length).toBe(4)
+  expect(w.opened).toEqual([])
+})
+test("the memory writer's save to a fifo is refused, and the main session is told it whole, with why its new lines could not be told (#1814)", withKit, async ($, on) => {
+  const path = `${HOME}/.claude/projects/-Users-dan-Apps-slate/memory/feedback.md`
+  const w = world($, on, { agents: ['agent-a1'], fifos: [path] })
+  const r = settled(await settles(w, call($, { tool: 'Write', file_path: path, content: 'Skip the merge quiz.\n', agentId: 'fork-memory' })), 'memory writer')
+  expect(refusalOf(r)).toContain('a subagent never asks him')
+  expect(notesOf(w)).toContain(
+    'What it would have saved: Skip the merge quiz. (the whole of what it writes: ~/.claude/projects/-Users-dan-Apps-slate/memory/feedback.md could not be read before it, as it is not an ordinary file (a fifo, a socket or a link to a device), so which lines are new could not be told).',
+  )
+  expect(w.opened).toEqual([])
+})
+
 test('a write anywhere else, a patch that touches no lasting memory, a backup in a temporary folder, and a Bash call that writes nothing go straight through', withKit, async ($, on) => {
   const w = world($, on, { files: { [`${CWD}/other.patch`]: '--- a/README.md\n+++ b/README.md\n' } })
   await call($, { tool: 'Write', file_path: 'README.md', content: 'x' })
@@ -1869,6 +1904,22 @@ test('while asleep a save to lasting memory is not asked about: it is noted for 
   expect(refusalOf(again)).toContain(ASKS)
 })
 
+// #1814: a lasting memory file that is a fifo is never opened; the morning report carries the whole
+// of what the save writes, and says its new lines could not be told, never reading it as empty.
+test('while asleep a save to a lasting memory fifo is noted whole, saying why, without opening it (#1814)', withSleeper, async ($, on) => {
+  const w = world($, on, { files: { '/night/asleep': '' }, fifos: [`${CWD}/CLAUDE.md`] })
+  const r = settled(await settles(w, call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' })), 'asleep fifo')
+  expect(refusalOf(r)).toContain('Dan is asleep (sleep mode)')
+  expect(nightNotes(w)).toEqual([
+    {
+      kind: 'save',
+      files: ['~/Apps/slate/CLAUDE.md'],
+      rule: '- Ask before merging. (the whole of what it writes: ~/Apps/slate/CLAUDE.md could not be read before it, as it is not an ordinary file (a fifo, a socket or a link to a device), so which lines are new could not be told)',
+    },
+  ])
+  expect(w.opened).toEqual([])
+})
+
 test('a save that cannot be noted while asleep is still not written, and Claude is told to carry it in its final message (#841)', withSleeper, async ($, on) => {
   const w = world($, on, { files: { '/night/asleep': '', '/night/note-fails': 'sh: notes: Permission denied' } })
   const r = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '# Slate\n\n- Ask before merging.\n' })
@@ -1965,6 +2016,20 @@ test('the index line an approval covers is the one line linking that file: anyth
   expect(refusalOf(await call($, { tool: 'Write', file_path: INDEX, content: `${INDEX_TEXT}${indexLine('rule.md')}\n` }))).toBe('')
   expect(refusalOf(await call($, { tool: 'Edit', file_path: INDEX, old_string: INDEX_SECOND, new_string: `${INDEX_SECOND}\n${indexLine('rule.md', './rule.md')}` }))).toContain(ASKS)
   expect(w.ran.length).toBe(2)
+})
+
+// #1814: an index that is a fifo is never opened, so the line a call adds to it cannot be told, and
+// the call is asked about rather than let through on the cover, or held for ever.
+test('an index that is a fifo is never opened: a write of the covered line to it is asked about, and settles (#1814)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, fifos: [INDEX] })
+  await saveMemoryFile($, w, 'rule.md')
+  for (const input of [
+    { tool: 'Write', file_path: INDEX, content: `${indexLine('rule.md')}\n` },
+    { tool: 'Edit', file_path: INDEX, old_string: INDEX_SECOND, new_string: `${INDEX_SECOND}\n${indexLine('rule.md')}` },
+  ])
+    expect(refusalOf(settled(await settles(w, call($, input)), `${input.tool} to the index fifo`))).toContain(ASKS)
+  expect(w.ran.length).toBe(1)
+  expect(w.opened).toEqual([])
 })
 
 test("the index line is covered only within the approval's window, and a write of it that fails gives the cover back (#1794)", withKit, async ($, on) => {
