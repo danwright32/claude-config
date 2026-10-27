@@ -224,3 +224,4 @@ report over any sentence here.
 - No dashes as punctuation: never use em dashes, and never use hyphens or regular dashes as parenthetical breaks or sentence connectors, anywhere (conversation, code comments, file content, commit messages, any output). Hyphens are allowed only inside a word ("self-aware", "well-known", "twenty-one"); write connector phrases as separate words ("new booking", not "new-booking") or rephrase.
 - Use parentheses, commas, colons, or new sentences instead.
 - These rules apply to ALL generated output, not just conversation: HTML mockups, app copy, alert and email templates, Slack messages, reports, and test data. No emojis in user-facing copy or alerts unless Dan asks for them.
+- **Run `/no-ai-tells` on anything other people will read before it is posted or sent:** PR and issue comments, PR descriptions, Slack messages, emails (Dan, 2026-10-27: "always use that for communication that others will read, like comments on PRs").
