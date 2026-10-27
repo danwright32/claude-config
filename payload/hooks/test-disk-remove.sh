@@ -384,7 +384,7 @@ check "a trash that says it worked but moved nothing is reported failed, never t
 # ================================================================================================
 fresh
 head -c 50000 /dev/zero > "$H/w/run.log"; mkdir -p "$H/w/logdir"
-dc_stub du 'for a in "$@"; do case "$a" in -*) ;; *) s=$(/usr/bin/stat -f %z "$a" 2>/dev/null || /usr/bin/stat -c %s "$a"); printf "%s\t%s\n" "$(( (s + 1023) / 1024 ))" "$a" ;; esac; done'
+dc_stub du 'for a in "$@"; do case "$a" in -*) ;; *) s=$(/usr/bin/stat -c %s "$a" 2>/dev/null || /usr/bin/stat -f %z "$a"); printf "%s\t%s\n" "$(( (s + 1023) / 1024 ))" "$a" ;; esac; done'
 item r1 fixture truncate "$H/w/run.log"; item r2 fixture truncate "$H/w/logdir"
 record s1 10; plan "$H/plan" s1 r1 r2
 run --plan "$H/plan"
@@ -584,6 +584,10 @@ run --plan "$named_plan"
 check "running the plan trashes the folder that was proposed" "$(gone "$H/Downloads/old-installer")"
 check "and skips a file replaced since it was proposed" "$(has "$OUT_TEXT" "it is not the item that was proposed")"
 check "which is still there" "$(there "$H/w/swap")"
+# GNU stat (the Ubuntu CI runner) takes -f as "file system status" and exits 0 with a meaningless
+# answer, while BSD stat refuses GNU's -c, so the identity and size readers must ask -c first.
+bsd_first="$(awk '/stat -f/ && !/stat -c[^|]*\|\|[^|]*stat -f/ && !/^[[:space:]]*#/ { print FNR ": " $0 }' "$DR")"
+check "every stat in disk-remove.sh asks GNU's -c before BSD's -f" "$([ -z "$bsd_first" ] && echo ok || echo "BSD first: $bsd_first")"
 run --propose shred "$H/w/swap"
 check "--propose with a method it does not offer is refused with exit 2" "$(eq "$RC" 2)"
 run --propose truncate "$H/Downloads"

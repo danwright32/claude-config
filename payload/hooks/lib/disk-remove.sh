@@ -232,10 +232,10 @@ measure() { # <path>
 }
 
 file_identity() { # <path> -> device:inode
-  stat -f '%d:%i' "$1" 2>/dev/null || stat -c '%d:%i' "$1" 2>/dev/null
+  stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null
 }
 file_bytes() { # <path>
-  stat -f '%z' "$1" 2>/dev/null || stat -c '%s' "$1" 2>/dev/null
+  stat -c '%s' "$1" 2>/dev/null || stat -f '%z' "$1" 2>/dev/null
 }
 
 # Sets OPEN_VERDICT to free, or to the reason the item is skipped.
