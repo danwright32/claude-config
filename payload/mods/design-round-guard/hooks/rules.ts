@@ -994,29 +994,42 @@ export const changedSpan = (before: string, after: string): { at: number; before
  * judged so. A size held in a constant whose name says nothing of it (`const MAX = 40`) is a gap this
  * reading leaves, as a mod's `.ts` files, never held, leave every one.
  */
-export const modHookLogicOnly = (before: string, after: string): boolean => {
-  if (before === after) return false
+export const modHookLogicOnly = (before: string, after: string): boolean => modHookReading(before, after)?.verdict === 'logic'
+
+/**
+ * How the lines a change to a mod's hook file touches read (#1138, #1823): 'drawn' where they hold a
+ * JSX element or spell a colour, 'words' where they only name a word a mod's drawing is spelled in,
+ * 'logic' where neither; and in each text, before and after, where those lines lie (`from` to `to`,
+ * equal where the change only adds to the other text). Undefined for no change, or a text the reader
+ * cannot follow.
+ */
+const modHookReading = (before: string, after: string): { verdict: 'logic' | 'words' | 'drawn'; lines: [Span, Span] } | undefined => {
+  if (before === after) return undefined
   const span = changedSpan(before, after)
+  let verdict: 'logic' | 'words' | 'drawn' = 'logic'
+  const lines: Span[] = []
   for (const [text, end] of [
     [before, span.before],
     [after, span.after],
   ] as const) {
     const spans = sourceSpans(text)
-    if (!spans) return false
+    if (!spans) return undefined
     // The lines the change touches in this text, ending where it ends, never on the unchanged line
     // after them (#1248). Where it only adds to the other text, none, so all this text is asked is
     // whether an element spans the place the lines go.
     const from = text.lastIndexOf('\n', span.at - 1) + 1
     const nl = end === span.at ? from : text[end - 1] === '\n' ? end - 1 : text.indexOf('\n', end)
     const to = nl < 0 ? text.length : nl
-    if (spans.jsx.some(([a, b]) => a < to && from < b)) return false
+    lines.push([from, to])
+    if (spans.jsx.some(([a, b]) => a < to && from < b)) verdict = 'drawn'
     let shown = ''
     for (let i = from; i < to; i++) if (!spans.comments.some(([a, b]) => a <= i && i < b)) shown += text[i]
-    if (MOD_LOOK_LITERAL.test(shown)) return false
-    for (const w of shown.match(/[A-Za-z]+/g) ?? [])
-      for (const part of w.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')) if (MOD_LOOK_WORDS.has(part)) return false
+    if (MOD_LOOK_LITERAL.test(shown)) verdict = 'drawn'
+    if (verdict === 'logic')
+      for (const w of shown.match(/[A-Za-z]+/g) ?? [])
+        for (const part of w.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')) if (MOD_LOOK_WORDS.has(part)) verdict = 'words'
   }
-  return true
+  return { verdict, lines: lines as [Span, Span] }
 }
 
 // The spacing the language and JSX read alike: spaces, tabs and line breaks, never a no break space,
@@ -1827,6 +1840,18 @@ const readMod = (f: ModFile): ModRead | null => {
  * function's or line builder's own parameters, and which surface a drawing call names (toolUseId).
  */
 export const drawnParts = (files: readonly ModFile[], name: string): string[] | null => {
+  const d = drawnOf(files, name)
+  if (!d) return null
+  if (!d.r) return []
+  const { r, parts, followed } = d
+  return [...parts.map(u => r.code(u)), ...new Set(followed.map(s => r.cutCode(s)))].sort()
+}
+
+// What drawnParts reads, as places in the file `name`: its parts (each drawing call, JSX element and
+// line builder, and each top level declaration drawn) and the values followed into them, apart, with
+// the file as read (no `r` for a file not among `files`). Null where any of the mod's files cannot be
+// read.
+const drawnOf = (files: readonly ModFile[], name: string): { r?: ModRead; parts: Span[]; followed: Span[] } | null => {
   const read = new Map<string, ModRead>()
   for (const f of files) {
     const r = readMod(f)
@@ -1996,13 +2021,91 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
     for (const s of r.statements) if (s.name === x && !s.isType) for (const y of r.refs([s.from, s.to])) reach(file, y)
   }
   const r = read.get(name)
-  if (!r) return []
+  if (!r) return { parts: [], followed: [] }
   const parts = new Map(r.units.map(u => [`${u[0]}:${u[1]}`, u]))
   for (const s of r.statements) if (s.name !== undefined && drawn.has(`${name}\n${s.name}`)) parts.set(`${s.from}:${s.to}`, [s.from, s.to])
   const followed = new Map(extra.get(name) ?? [])
   for (const key of parts.keys()) followed.delete(key)
-  // A followed value given the same way twice (two returns of `undefined`) is one value (#1576).
-  return [...[...parts.values()].map(u => r.code(u)), ...new Set([...followed.values()].map(s => r.cutCode(s)))].sort()
+  // A followed value given the same way twice (two returns of `undefined`) is one value (#1576),
+  // which drawnParts reads as one.
+  return { r, parts: [...parts.values()], followed: [...followed.values()] }
+}
+
+// The names each import in `text` binds, as the file and the name it takes them from; type only
+// imports aside, since a type draws nothing. Null where one name is bound twice, which this reading
+// cannot tell apart (an import in a comment, say), so the change is held.
+const importBindings = (text: string): Map<string, string> | null => {
+  const out = new Map<string, string>()
+  for (const m of text.matchAll(/(?:^|\n)[ \t]*import\s+(type\s+)?([\s\S]*?)\s+from\s+(['"])([^'"\n]+)\3/g)) {
+    if (m[1]) continue
+    const from = m[4] as string
+    const clause = (m[2] as string).trim()
+    const bind = (local: string, what: string) => {
+      if (out.has(local)) throw importBindings
+      out.set(local, `${from}#${what}`)
+    }
+    try {
+      const ns = /\*\s*as\s+([A-Za-z_$][\w$]*)/.exec(clause)
+      if (ns) bind(ns[1] as string, '*')
+      const lead = /^([A-Za-z_$][\w$]*)\s*(?:,|$)/.exec(clause)
+      if (lead) bind(lead[1] as string, 'default')
+      const named = /\{([^}]*)\}/.exec(clause)
+      for (const part of named ? (named[1] as string).split(',') : []) {
+        const p = /^\s*(type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/.exec(part)
+        if (p && !p[1]) bind((p[3] ?? p[2]) as string, p[2] as string)
+      }
+    } catch (err) {
+      if (err === importBindings) return null
+      throw err
+    }
+  }
+  return out
+}
+
+/**
+ * Whether a change to a mod's hook file in TSX or JSX that modHookLogicOnly holds only for a drawing
+ * word draws nothing new, read as drawsChange reads the mod's `.ts` hook files (#1823): the manual
+ * steps builder's #1811 Edit adding names to its imports was held for "card" and "StepsCard" there.
+ * True when, in the text before and the text after, the lines the change touches lie outside every
+ * place drawnOf reads as drawn (a drawing call, JSX element or line builder, a top level declaration
+ * drawn, a value followed into one, whole, the data it hands a call included) and outside every
+ * function that draws (the innermost one around a drawing call or element, a render hook's handler
+ * among them, where a new local naming the card is asked about as Dan chose for #1248); every name
+ * what is drawn uses is imported from the same file under the same name as before; and drawsChange
+ * finds the drawn parts unchanged. A JSX element or a colour in those lines, a text or mod file the
+ * reader cannot follow, and no change at all are never so.
+ */
+export const modHookDrawingUntouched = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
+  const reading = modHookReading(before, after)
+  if (!reading || reading.verdict === 'drawn') return false
+  const others = files.filter(f => f.name !== name)
+  const names = new Set<string>()
+  for (const [text, [from, to]] of [
+    [before, reading.lines[0]],
+    [after, reading.lines[1]],
+  ] as const) {
+    const d = drawnOf([...others, { name, text }], name)
+    if (!d?.r) return false
+    const r = d.r
+    const drawn = [...d.parts, ...d.followed]
+    // The function that draws around each drawing call or element: the innermost one around it that
+    // is not itself inside an element (a `.map` callback in JSX is part of the element).
+    const units = r.units
+    for (const u of units) {
+      let best: Fn | undefined
+      for (const f of r.fns)
+        if (f.from <= u[0] && u[1] <= f.to && !units.some(v => v[0] <= f.from && f.to <= v[1]) && (!best || f.from > best.from)) best = f
+      if (best) drawn.push([best.from, best.to])
+    }
+    const touches = ([a, b]: Span) => (from < to ? a < to && from < b : a < from && from < b)
+    if (drawn.some(touches)) return false
+    for (const s of drawn) for (const x of r.refs(s)) names.add(x)
+  }
+  const was = importBindings(before)
+  const now = importBindings(after)
+  if (!was || !now) return false
+  for (const x of names) if (was.get(x) !== now.get(x)) return false
+  return !drawsChange(others, name, before, after)
 }
 
 /**

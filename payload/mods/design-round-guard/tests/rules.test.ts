@@ -21,6 +21,7 @@ import {
   isModHookTs,
   drawsChange,
   modHookLogicOnly,
+  modHookDrawingUntouched,
   onScreenProblem,
   sourceSpans,
   settledNotYet,
@@ -700,7 +701,10 @@ const STEPS_NEW = [
 test("#1248: the refused helper is still asked about, by Dan's choice, for the card it reads; one naming no drawing word passes", () => {
   if (STEPS_BEFORE.split(STEPS_OLD).length !== 2) throw new Error('the fixture holds the refused old_string other than once')
   // Dan, 2026-10-16: the line fix only, no word exempted, so the helper reading the card is asked.
+  // Still so by its words; since #1823 the guard reads it again by what the mod draws, and the
+  // helper, drawing nothing, passes there (modHookDrawingUntouched, the test below).
   expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(false)
+  expect(modHookDrawingUntouched([], 'register.tsx', STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(true)
   // Added directly above the line naming the card, a helper naming no drawing word passes: the
   // untouched line below it is no longer read.
   expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, `const nextOf = (n: number) => n + 1\n\n${STEPS_OLD}`))).toBe(true)
@@ -722,6 +726,109 @@ test('#1248: lines added above, or removed from above, an unchanged line that dr
   // A line taken from above one that draws, alike.
   expect(modHookLogicOnly(STEPS_BEFORE.replace(line, `  void nextStep\n${line}`), STEPS_BEFORE)).toBe(true)
   expect(modHookLogicOnly(STEPS_BEFORE.replace(line, `  void card\n${line}`), STEPS_BEFORE)).toBe(false)
+})
+
+// #1823: on 2026-10-27 the #1811 builder's Edit to manual steps' register.tsx (held call
+// toolu_01F5RzQjX5PsNPoecZroB4fp) only added names to its imports, and was held for the words "card"
+// and "StepsCard" in them. The six import lines are the call's old_string and new_string word for
+// word; the rest is cut down from the file as it stood: a band row drawn from cardLines, a reply
+// sentence Claude reads, and a render hook drawing JSX. card.ts beside it builds the card's lines.
+const MS_IMPORTS_OLD = [
+  "import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'",
+  "import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'",
+  "import type { DrawnAt, StepsVerdict } from './card.ts'",
+  "import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'",
+  "import { PROSE_MARK, turnAt } from './turn.ts'",
+  "import { waitingPhrase } from './waiting.ts'",
+].join('\n')
+const MS_IMPORTS_NEW = [
+  "import type { ManualSteps, StepsCard, StepsPages, StepsPaneId } from '../types/index.d.ts'",
+  "import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'",
+  "import type { DrawnAt, StepsVerdict } from './card.ts'",
+  "import { isStepsPage, pageRefusal, signsOf } from './page.ts'",
+  "import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'",
+  "import { PROSE_MARK, turnAt } from './turn.ts'",
+  "import { saysNoneNow, waitingPhrase } from './waiting.ts'",
+].join('\n')
+const MS_TSX = [
+  "import type { EngineInterface, Register } from 'claude-code'",
+  MS_IMPORTS_OLD,
+  '',
+  "const TOOL = 'steps'",
+  '',
+  'const proseStep = (phrase: string) =>',
+  '  `${PROSE_MARK} ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Put it on the card with the ${TOOL} tool.`',
+  '',
+  'const publishBand = async ($: EngineInterface, card: StepsCard) => {',
+  "  const lines = cardLines(card, 'band')",
+  "  await $.modkit.bandRow({ mod: 'manual-steps', id: 'steps', lines })",
+  '}',
+  '',
+  'export const register: Register = on => {',
+  "  on('classic.Stop', async ($, e, next) => {",
+  '    const phrase = waitingPhrase(String(e.last_assistant_message))',
+  "    return phrase ? { decision: 'block', reason: proseStep(phrase) } : next(e)",
+  '  })',
+  "  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {",
+  '    const { Box, Text } = $.ui.resolve(e)',
+  '    const left = String(e.props.text).length',
+  '    return (',
+  '      <Box flexDirection="column">',
+  '        <Text dimColor>{left} left</Text>',
+  '        {await next(e)}',
+  '      </Box>',
+  '    )',
+  '  })',
+  '}',
+  '',
+].join('\n')
+const MS_FILES = [
+  {
+    name: 'card.ts',
+    text: [
+      'export const DROPPED_AFTER_MS = 2 * 60_000',
+      'export const cardLines = (card: { heading: string }, at: string) => [[{ text: `${card.heading} (${at})`, bold: true }]]',
+      'export const nextStep = (card: { steps: unknown[] }) => (card.steps.length ? 0 : undefined)',
+      '',
+    ].join('\n'),
+  },
+]
+const msEdit = (from: string, to: string, text = MS_TSX) => {
+  if (text.split(from).length !== 2) throw new Error(`the fixture holds ${from} other than once`)
+  return text.replace(from, to)
+}
+
+test('#1823: the held Edit adding names to the imports draws nothing new, though it names the card', () => {
+  const after = msEdit(MS_IMPORTS_OLD, MS_IMPORTS_NEW)
+  // Held today for its words, which is the hold #1823 reports.
+  expect(modHookLogicOnly(MS_TSX, after)).toBe(false)
+  expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, after)).toBe(true)
+  // A reply sentence Claude reads, naming the card, and a new helper that reads the card's heading
+  // for no surface (#1245's notification, held by #1248's words) draw nothing either.
+  expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, msEdit('Put it on the card with', 'Pin it on the steps card with'))).toBe(true)
+  const helper = 'const heading = (card: StepsCard): string => card.heading.trim()\n\n'
+  expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, msEdit('const publishBand', `${helper}const publishBand`))).toBe(true)
+})
+
+test('#1823: an edit naming the card that changes what is drawn is still held', () => {
+  const held = (after: string) => expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, after)).toBe(false)
+  // The words drawn: JSX text, and what a band row is handed.
+  held(msEdit('{left} left</Text>', '{left} steps left on the card</Text>'))
+  held(msEdit("cardLines(card, 'band')", "cardLines(card, 'pane')"))
+  // What a drawn value's call is handed, which the parts compared take out as data.
+  held(msEdit("cardLines(card, 'band')", "cardLines({ ...card, heading: 'Card' }, 'band')"))
+  // A drawing word inside a function that draws, though nothing reads the new line.
+  held(msEdit('    const left = String', '    const card = e.props.text\n    const left = String'))
+  // An import now naming another file for a name what is drawn uses.
+  held(msEdit("keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'", "keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card2.ts'"))
+  held(msEdit('import { cardFrom, cardLines,', 'import { cardFrom, stepLines as cardLines,'))
+  // A colour spelled outright, JSX touched, no change, and a text the reader cannot follow.
+  held(msEdit("const TOOL = 'steps'", "const TOOL = 'steps'\nconst EDGE = '#ff0000'"))
+  held(msEdit('<Text dimColor>', '<Text dimColor bold>'))
+  expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, MS_TSX)).toBe(false)
+  held(msEdit("const TOOL = 'steps'", "const TOOL = 'steps'\nconst card = <Box>"))
+  // A mod file beside it that cannot be read holds every edit.
+  expect(modHookDrawingUntouched([...MS_FILES, { name: 'place.ts', text: "const x = 'open" }], 'register.tsx', MS_TSX, msEdit(MS_IMPORTS_OLD, MS_IMPORTS_NEW))).toBe(false)
 })
 
 // #1158: a git checkout or restore puts back every edit since its source at once, each of which was

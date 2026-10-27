@@ -1579,6 +1579,59 @@ test('#1248: a logic line added above one that draws passes unasked; changing th
   expect(w.ran.length).toBe(1)
 })
 
+// #1823: the #1811 builder's Edit to manual steps' register.tsx (held call
+// toolu_01F5RzQjX5PsNPoecZroB4fp) only added names to its imports, word for word below, and was held
+// for "card" and "StepsCard" in them. Through the whole guard, beside the mod's card.ts.
+const STEPS_HOOK = '/w/slate/payload/mods/manual-steps/hooks/register.tsx'
+const STEPS_IMPORTS_OLD = `import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
+import type { DrawnAt, StepsVerdict } from './card.ts'
+import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
+import { PROSE_MARK, turnAt } from './turn.ts'
+import { waitingPhrase } from './waiting.ts'`
+const STEPS_IMPORTS_NEW = `import type { ManualSteps, StepsCard, StepsPages, StepsPaneId } from '../types/index.d.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
+import type { DrawnAt, StepsVerdict } from './card.ts'
+import { isStepsPage, pageRefusal, signsOf } from './page.ts'
+import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
+import { PROSE_MARK, turnAt } from './turn.ts'
+import { saysNoneNow, waitingPhrase } from './waiting.ts'`
+const STEPS_TEXT = `import type { EngineInterface, Register } from 'claude-code'
+${STEPS_IMPORTS_OLD}
+
+const publishBand = async ($: EngineInterface, card: StepsCard) => {
+  await $.modkit.bandRow({ mod: 'manual-steps', id: 'steps', lines: cardLines(card) })
+}
+
+export const register: Register = on => {
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>steps left</Text>
+        {await next(e)}
+      </Box>
+    )
+  })
+}
+`
+
+test('#1823: the held Edit adding names to a mod hook file imports passes unasked; one changing what its card draws is still asked', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: {
+      [STEPS_HOOK]: STEPS_TEXT,
+      '/w/slate/payload/mods/manual-steps/hooks/card.ts': 'export const cardLines = (card: { heading: string }) => [[{ text: card.heading, bold: true }]]\n',
+      '/w/slate/payload/mods/manual-steps/.claude-plugin/plugin.json': '{ "name": "manual-steps" }',
+    },
+  })
+  const edit = (old_string: string, new_string: string) => ({ tool: 'Edit', file_path: STEPS_HOOK, old_string, new_string })
+  expect(refusalOf(await call($, edit(STEPS_IMPORTS_OLD, STEPS_IMPORTS_NEW)))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // What the card's band row is handed, which names the card too, is still asked.
+  expect(refusalOf(await call($, edit('lines: cardLines(card) })', 'lines: cardLines(card).slice(1) })')))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
 // #1275: the #1263 divider was added to manual steps' card.ts, which builds every line the steps card
 // draws, and the guard never saw it, since only a mod's .tsx and .jsx files counted. A mod's .ts hook
 // file is judged by what in it reaches what the mod draws (rules.ts drawsChange), read beside the
