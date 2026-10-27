@@ -958,13 +958,18 @@ holds "$out" '"block"'; check $((! $?)) "a pull request closed without merging w
 holds "$out" "closed without merging"; check $? "a dropped hold for a closed pull request is not said (got: ${out:0:200})"
 [ ! -s "$(held_file "$SID_H")" ]; check $? "a closed pull request's hold was kept"
 
-# A hold older than its expiry is dropped, said in one line, without asking GitHub (L523).
+# A hold is never dropped for its age (Dan, 2026-10-26: "Never drop it"): a pull request still open
+# days later keeps its hold, says nothing, and is still quizzed once GitHub says it merged.
 post_merge "$SID_H" bg >/dev/null
-jq -c '.heldAt = (.heldAt - 90000)' "$(held_file "$SID_H")" > "$FIXTURE/held.tmp" && mv "$FIXTURE/held.tmp" "$(held_file "$SID_H")"
+jq -c '.heldAt = (.heldAt - 864000)' "$(held_file "$SID_H")" > "$FIXTURE/held.tmp" && mv "$FIXTURE/held.tmp" "$(held_file "$SID_H")"
 pr_state OPEN
 out="$(turn_end "$SID_H")"
-holds "$out" "never confirmed"; check $? "an expired hold was not announced as dropped (got: ${out:0:200})"
-[ ! -s "$(held_file "$SID_H")" ]; check $? "an expired hold was kept"
+[ -z "$out" ]; check $? "a ten day old hold on an open pull request said something (got: ${out:0:200})"
+[ -s "$(held_file "$SID_H")" ]; check $? "a ten day old hold on an open pull request was dropped for its age"
+pr_state MERGED
+out="$(turn_end "$SID_H")"
+holds "$out" '"block"'; check $? "a ten day old hold was not quizzed once it merged (got: ${out:0:200})"
+[ ! -s "$(held_file "$SID_H")" ]; check $? "a ten day old hold was kept after its quiz was released"
 
 # The incident itself, replayed: PostRoll's merge tool in a worktree, moved to the background with the
 # tool_response its transcript recorded. Held under its own number, and released after the worktree it

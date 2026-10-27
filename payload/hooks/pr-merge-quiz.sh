@@ -137,15 +137,17 @@ fi
 # A released hold is run through this script's ordinary path, with the payload the merge came in on,
 # so the opt out, the snooze and the label gate all judge it as they judge any merge, at the time it
 # actually merged. Released only when GitHub says MERGED; dropped, said in one line, when it says
-# CLOSED or when the hold passes HOLD_KEEP_SECONDS with nothing confirmed (L523); kept, silently,
-# while it is OPEN or GitHub does not answer, since that is a quiz delayed, never one lost.
-HOLD_KEEP_SECONDS=86400
+# CLOSED; kept, silently, while it is OPEN or GitHub does not answer, since that is a quiz delayed,
+# never one lost. NEVER dropped for its age (Dan, 2026-10-26, "Never drop it"): a pull request that
+# merges days later still gets its quiz. The one thing that ends a hold unasked is the sweep in
+# quiz_hold of a session's file untouched for two days, which only a session that has ended leaves,
+# since every turn end of a live session rewrites its own file.
 held_dir() { printf '%s/held' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
 
 release_held() {
   command -v jq >/dev/null 2>&1 || return 0
-  local stop sid f g now rec at keep="" reasons="" notes="" open unknown merged closed
-  local m_dir m_repo m_slug m_pr envelope state num child r msg labels
+  local stop sid f g rec keep="" reasons="" notes="" open unknown merged closed
+  local m_dir m_repo m_slug m_pr envelope state num child r msg
   stop="$(cat)"
   sid="$(printf '%s' "$stop" | jq -r '.session_id // ""' 2>/dev/null)"
   valid_session_id "$sid" || return 0
@@ -161,16 +163,8 @@ release_held() {
 
   . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || return 0
   . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || return 0
-  now="$(date +%s)"
   while IFS= read -r rec <&5; do
     [ -n "$rec" ] || continue
-    at="$(printf '%s' "$rec" | jq -r '.heldAt // 0' 2>/dev/null)"
-    case "$at" in ''|*[!0-9]*) at=0 ;; esac
-    labels="$(printf '%s' "$rec" | jq -r '[.merges[]? | if (.pr // "") != "" then "#" + .pr else "the pull request for its branch" end] | join(", ")' 2>/dev/null)"
-    if [ $((now - at)) -gt "$HOLD_KEEP_SECONDS" ]; then
-      notes="${notes:+$notes }PR quiz dropped: the merge of ${labels:-a pull request} ran in the background and GitHub never confirmed it merged within $((HOLD_KEEP_SECONDS / 3600)) hours. Ask for the quiz if it did ship."
-      continue
-    fi
     open=0; unknown=0; merged=""; closed=""
     # One line per merge, its fields split on 0x1f, never a tab: a tab is whitespace to read, so an
     # empty field between two would vanish and shift the pull request number into the repository.

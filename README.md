@@ -1723,9 +1723,11 @@ in `~/.claude-quiz-verdicts/held/<session id>`, and said in one line. The same s
 Stop hook with `--release-held`, asks GitHub at each turn end (`gh pr view <n> --json
 number,state,mergedAt,url`) and, at the first one after it says the pull request MERGED, runs the
 held merge through the ordinary path, so the opt out, the snooze and the label gate still decide, and
-the quiz is asked then. A pull request GitHub says was CLOSED drops its hold, said in one line, as
-does a hold nothing confirmed within 24 hours. While it is OPEN, or GitHub does not answer, the hold
-waits. A finished merge in the foreground is quizzed at once, as before. Without a session id, or
+the quiz is asked then. A pull request GitHub says was CLOSED drops its hold, said in one line.
+While it is OPEN, or GitHub does not answer, the hold waits, however long that takes: a hold is
+never dropped for its age (Dan, 2026-10-26). The only cleanup is of a file untouched for two days,
+which only a session that has ended leaves, since each turn end of a live session rewrites its own.
+A finished merge in the foreground is quizzed at once, as before. Without a session id, or
 when the command runs several merges nothing can name, a hold could never be released, so the quiz
 fires at once and says the merge may still be running.
 
