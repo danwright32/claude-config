@@ -81,6 +81,11 @@ denies "issue comment through gh api" "gh api -X POST repos/Try-Pennie/pivot/iss
 denies "issue close with a closing comment" "gh issue close 14 --reason completed --comment \"Done. $LINK\""
 denies "pr close with -c" "gh pr close 76 -c \"Not merging. $LINK\""
 allows "issue close with a clean comment" "gh issue close 14 --comment \"Done.\""
+denies "a command nobody can tokenize, posting the link" "gh pr comment 5 --body \"Agreed $LINK"
+allows "a command nobody can tokenize, posting a clean comment" "gh pr comment 5 --body \"Agreed"
+denies "gh api link in a heredoc body after the last argument" "gh api repos/a/b/issues/1/comments -F body=@- <<'EOF'
+$LINK
+EOF"
 denies "comment chained after a commit" "git add a.ts && gh pr comment 5 --body \"Pushed. $LINK\""
 
 # --- Everything that is allowed to carry it, and comments without it ---
@@ -120,6 +125,10 @@ done
 err="$(bash_payload "gh pr comment 5 --body \"$LINK\"" | PATH="$TMP_DIR/bin" bash "$HOOK" 2>&1 >/dev/null)"
 if [[ "$err" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a broken gate must say so on stderr (got: ${err:-<nothing>})"; fi
+
+err="$(printf 'gh not json' | bash "$HOOK" 2>&1 >/dev/null)"
+if [[ "$err" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: a payload that is not JSON must say the gate did not run (got: ${err:-<nothing>})"; fi
 
 # --- Wired: the installed settings route Bash and the Slack send tools to the hook ---
 if python3 - "$DIR/../settings.hooks.json" <<'PY'

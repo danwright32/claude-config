@@ -81,7 +81,7 @@ def _comment_body_has_link(args, command, place):
 
 def _api_writes_with_link(command):
     """Whether a gh api call in the command writes the link to a comment endpoint, unless overridden."""
-    pipelines, bodies = scan._stages(command)
+    pipelines, _bodies = scan._stages(command)
     for stages in pipelines:
         if not isinstance(stages, list):
             continue
@@ -98,8 +98,11 @@ def _api_writes_with_link(command):
                 for a in args)
             if not writes or not any(API_COMMENT_ENDPOINT.search(a) for a in args if not a.startswith("-")):
                 continue
-            text = " ".join(args) + " ".join(str(bodies[i]) for i in heredocs if i < len(bodies))
-            if LINK.search(text):
+            if any(LINK.search(a) for a in args):
+                return True
+            # The shared reader keeps only whether each heredoc body is shown, never its text, so a
+            # body fed by one is judged from the command text, as a comment's -F - is.
+            if heredocs and LINK.search(command):
                 return True
     return False
 
@@ -123,8 +126,9 @@ def judge_bash(command, cwd):
         if _api_writes_with_link(command):
             return "comment or reply"
     except scan.Unreadable:
-        # A command nobody could tokenize: refuse when its text plainly posts a comment.
-        if OVERRIDE not in command and re.search(r"\bgh\b[^\n]*\b(?:comment|review|comments|replies)\b", command):
+        # A command nobody could tokenize: refuse when its text carries the link and plainly posts a
+        # comment.
+        if OVERRIDE not in command and LINK.search(command) and re.search(r"\bgh\b[^\n]*\b(?:comment|review|comments|replies)\b", command):
             return "comment"
     return None
 
@@ -132,8 +136,10 @@ def judge_bash(command, cwd):
 def main():
     try:
         data = json.loads(sys.stdin.read())
-    except Exception:
-        return 0
+    except ValueError as e:
+        # Exit non zero so the wrapper says the gate did not run, rather than passing unjudged.
+        print("the hook payload is not JSON: %s" % e, file=sys.stderr)
+        return 1
     tool = data.get("tool_name") or ""
     tool_input = data.get("tool_input") or {}
     if tool == "Bash":
