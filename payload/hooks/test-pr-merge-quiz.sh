@@ -850,6 +850,9 @@ fi
 # tool_response (measured with a headless run, 2026-10-26). So the quiz is HELD, per session, and
 # asked by the Stop hook (--release-held) at the first turn end after GitHub says it merged.
 forget_verdicts
+# The session registry the sweep of old holds asks (#1787), pointed at a fixture so no case here
+# reads the registry of the sessions really running on this Mac.
+export CLAUDE_SESSION_REGISTRY_DIR="$FIXTURE/registry"
 SID_H="5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"
 SID_H2="6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e"
 held_file() { printf '%s/held/%s' "$CLAUDE_QUIZ_VERDICT_DIR" "$1"; }
@@ -970,6 +973,75 @@ pr_state MERGED
 out="$(turn_end "$SID_H")"
 holds "$out" '"block"'; check $? "a ten day old hold was not quizzed once it merged (got: ${out:0:200})"
 [ ! -s "$(held_file "$SID_H")" ]; check $? "a ten day old hold was kept after its quiz was released"
+
+# The sweep of old hold files removes a file only once its SESSION has ended (#1787). A session left
+# open with no turn end for days never rewrites its file, so the file's age says nothing about whether
+# the session is still there; the session registry does (open: not closed, and beating within five
+# minutes). Every other session's hold written meanwhile runs the sweep, here SID_H's.
+SID_IDLE="7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f"     # open, idle three days: kept
+SID_CLOSED="8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a"   # closed cleanly: removed
+SID_SILENT="9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b"   # crashed, silent for an hour: removed
+SID_GONE="0f1a2b3c-4d5e-4f6a-9b7c-8d9e0f1a2b3c"     # ended long ago, its record archived: removed
+SID_DAMAGED="1a2b3c4d-5e6f-4a7b-8c8d-9e0f1a2b3c4d"  # its record cannot be read: kept
+NOW_MS="$(( $(date +%s) * 1000 ))"
+reg_record() {  # $1 = session id, $2 = lastSeen ms, $3 = closedAt ms or null
+  mkdir -p "$CLAUDE_SESSION_REGISTRY_DIR"
+  printf '{"v":1,"sessionId":"%s","cwd":"%s","repoRoot":null,"startedAt":1,"lastSeen":%s,"closedAt":%s,"transcriptPath":null,"edits":[]}' \
+    "$1" "$FIXTURE/repo" "$2" "$3" > "$CLAUDE_SESSION_REGISTRY_DIR/$1.json"
+}
+old_hold() {  # $1 = file name under held/ ; a hold untouched for three days
+  mkdir -p "$CLAUDE_QUIZ_VERDICT_DIR/held"
+  printf '{"heldAt":1,"merges":[{"dir":"","repo":"","slug":"acme/widget","pr":"42"}],"payload":{}}\n' > "$CLAUDE_QUIZ_VERDICT_DIR/held/$1"
+  touch -t "$(date -v-3d +%Y%m%d%H%M 2>/dev/null || date -d '3 days ago' +%Y%m%d%H%M)" "$CLAUDE_QUIZ_VERDICT_DIR/held/$1"
+}
+seed_old_holds() {
+  rm -rf "$CLAUDE_QUIZ_VERDICT_DIR/held" "$CLAUDE_SESSION_REGISTRY_DIR"
+  old_hold "$SID_IDLE"; old_hold "$SID_CLOSED"; old_hold "$SID_SILENT"; old_hold "$SID_GONE"; old_hold "$SID_DAMAGED"
+  old_hold "$SID_CLOSED.releasing.4242"; old_hold "$SID_IDLE.releasing.4243"
+  reg_record "$SID_H" "$NOW_MS" null
+  reg_record "$SID_IDLE" "$((NOW_MS - 30000))" null
+  reg_record "$SID_CLOSED" "$((NOW_MS - 3600000))" "$((NOW_MS - 3600000))"
+  reg_record "$SID_SILENT" "$((NOW_MS - 3600000))" null
+  printf '{"v":1,"sessionId":' > "$CLAUDE_SESSION_REGISTRY_DIR/$SID_DAMAGED.json"
+}
+pr_state OPEN
+seed_old_holds
+post_merge "$SID_H" bg >/dev/null
+[ -s "$(held_file "$SID_IDLE")" ]; check $? "the sweep removed the old hold of a session that is open but idle (#1787)"
+[ -s "$(held_file "$SID_IDLE.releasing.4243")" ]; check $? "the sweep removed an open session's part released hold"
+[ ! -e "$(held_file "$SID_CLOSED")" ]; check $? "the sweep kept the old hold of a session that has closed"
+[ ! -e "$(held_file "$SID_CLOSED.releasing.4242")" ]; check $? "the sweep kept a closed session's part released hold"
+[ ! -e "$(held_file "$SID_SILENT")" ]; check $? "the sweep kept the old hold of a session silent for an hour"
+[ ! -e "$(held_file "$SID_GONE")" ]; check $? "the sweep kept the old hold of a session no longer in the registry"
+[ -s "$(held_file "$SID_DAMAGED")" ]; check $? "the sweep removed a hold whose session's record cannot be read"
+[ -s "$(held_file "$SID_H")" ]; check $? "the sweeping session's own new hold is missing"
+
+# An unreadable answer about liveness keeps everything: no registry folder at all, and a registry that
+# does not show the sweeping session itself open (so its absences are not evidence anything ended).
+seed_old_holds
+rm -rf "$CLAUDE_SESSION_REGISTRY_DIR"
+post_merge "$SID_H" bg >/dev/null
+[ -s "$(held_file "$SID_CLOSED")" ] && [ -s "$(held_file "$SID_GONE")" ]; check $? "the sweep removed holds with no session registry to ask"
+seed_old_holds
+rm -f "$CLAUDE_SESSION_REGISTRY_DIR/$SID_H.json"
+post_merge "$SID_H" bg >/dev/null
+[ -s "$(held_file "$SID_GONE")" ] && [ -s "$(held_file "$SID_SILENT")" ]; check $? "the sweep believed a registry that does not show the sweeping session open"
+# No python3 to ask the registry with: nothing is removed, and the new hold is still kept.
+. "$DIR/lib/no-python-path.sh"
+NOPY="$FIXTURE/nopy-bin"
+npp_build_bin "$NOPY" jq
+ln -s "$FIXTURE/bin/gh" "$NOPY/gh"
+if npp_reaches_python3 "$NOPY"; then check 1 "the no python3 PATH still reaches python3, so the case below measures nothing"; fi
+seed_old_holds
+python3 -c '
+import json, sys
+print(json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": sys.argv[2], "cwd": sys.argv[1],
+  "tool_input": {"command": "gh pr merge 42 --squash"},
+  "tool_response": {"stdout": "", "stderr": "", "backgroundTaskId": "b1y5zlrqd", "timedOutAfterMs": 600000}}))
+' "$FIXTURE/repo" "$SID_H" | ( cd "$FIXTURE/repo" && PATH="$NOPY" "$NOPY/bash" "$HOOK" ) >/dev/null 2>&1
+[ -s "$(held_file "$SID_H")" ]; check $? "with no python3 the backgrounded merge was not held, so the sweep below was never reached"
+[ -s "$(held_file "$SID_CLOSED")" ]; check $? "with no python3 to ask the registry, the sweep removed a hold"
+rm -rf "$CLAUDE_QUIZ_VERDICT_DIR/held" "$CLAUDE_SESSION_REGISTRY_DIR"
 
 # The incident itself, replayed: PostRoll's merge tool in a worktree, moved to the background with the
 # tool_response its transcript recorded. Held under its own number, and released after the worktree it
