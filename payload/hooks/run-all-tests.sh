@@ -41,6 +41,9 @@
 #   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
 #   HOOK_TESTS_TIMINGS        where each suite's measured wall clock is kept between runs.
 #                             Empty turns the record off entirely: nothing is read, nothing written.
+#   HOOK_TESTS_FLAKY_OUTPUT   where the first, failing run of a suite marked FLAKY is kept, its
+#                             path named on the FAIL line (default
+#                             ~/.cache/claude-config/flaky-suite-output, newest 20; empty: none, #1788)
 #   HOOK_TESTS_LOCK_WAIT      seconds a suite may wait for a lock another run holds, handed to
 #                             each suite as SUITE_LOCK_WAIT (default 1200; always 0 under CI, #1297)
 #   CI                        "true" makes a suite refused its lock a FAIL rather than NOT RUN (#1083)
@@ -78,6 +81,13 @@ if [ -f "$SELF_DIR/lib/load-average.sh" ]; then
 else
   load_average_one_minute(){ :; }
   load_average_note(){ printf 'load average could not be read: %s/lib/load-average.sh is missing' "$SELF_DIR"; }
+fi
+# Where a FLAKY suite's first, failing run is kept (claude-config#1788, L297), through the one shared
+# keeper that tools/check-mods.sh uses too. Missing, a flake says so on its FAIL line.
+if [ -f "$SELF_DIR/lib/kept-output.sh" ]; then
+  . "$SELF_DIR/lib/kept-output.sh"
+else
+  kept_output_save(){ cat > /dev/null; KEPT_OUTPUT_PATH=""; KEPT_OUTPUT_WHY="$SELF_DIR/lib/kept-output.sh is missing"; return 1; }
 fi
 
 # This script's own directory holds `test-*.sh` files, and one of them tests this
@@ -399,6 +409,13 @@ fi
 # must leave no trace needs. `-` and not `:-`, so an empty value means off rather than default.
 _timings_default="${XDG_CACHE_HOME:-$HOME/.cache}/claude-config/suite-timings"
 TIMINGS="${HOOK_TESTS_TIMINGS-$_timings_default}"
+
+# Where the first, failing run of each suite marked FLAKY is kept (claude-config#1788, L297). That
+# output lived in this run's work folder, which is removed at the end, so a flake left nothing to
+# diagnose it from but the few lines printed. Beside the timings, for the same reason: what failed on
+# this machine is not configuration. Pruned to the newest 20 (lib/kept-output.sh). Set
+# HOOK_TESTS_FLAKY_OUTPUT to move it, or to EMPTY to keep nothing; `-`, not `:-`, as above.
+FLAKY_OUTPUT="${HOOK_TESTS_FLAKY_OUTPUT-${XDG_CACHE_HOME:-$HOME/.cache}/claude-config/flaky-suite-output}"
 
 # A record is keyed on the suite's path WITHIN the repo, so the same suite is recognised in a
 # worktree, in a second clone, and on the other Mac. A suite that is not under the repo has no such
@@ -1415,6 +1432,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       # runner mid report. The subshell puts a throwaway process in the way, and the deadline means
       # a suite that hangs on the second run costs a bounded wait rather than the whole run (L110).
       _flake=""
+      _fl_kept=""
       if [ "$FLAKE_RECHECK" = "1" ]; then
         _fl_max="$FLAKE_RECHECK_MAX"
         case "$secs" in
@@ -1451,6 +1469,15 @@ run-all-tests: this suite left no exit status, so it was killed or never started
             _flake=" FLAKY"
             flaky=$((flaky + 1))
             flaky_names="$flaky_names $name"
+            # The first run's whole output, kept past this run's work folder (#1788, L297): the
+            # recheck passed, so that output is the only record of what went wrong.
+            if [ -z "$FLAKY_OUTPUT" ]; then
+              _fl_kept="first run's whole output not kept: HOOK_TESTS_FLAKY_OUTPUT is empty"
+            elif kept_output_save "$FLAKY_OUTPUT" "$name" <<< "$out"; then
+              _fl_kept="first run's whole output kept in $KEPT_OUTPUT_PATH"
+            else
+              _fl_kept="first run's whole output could not be kept: $KEPT_OUTPUT_WHY"
+            fi
           elif [ -n "$_fl_holder" ]; then
             # Refused its lock, so it never ran and reproduced nothing (#1312). Asked to wait for
             # none, it meets any other run of the suite this way, and a bare FAIL read as a failure
@@ -1463,6 +1490,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       # How busy the machine was when it finished, beside the failure rather than in a log nobody
       # reads with it, so a failure caused by load reads as one (claude-config#1083, L356).
       printf '          %s\n' "$(load_average_note "$load_now")"
+      [ -z "$_fl_kept" ] || printf '          %s\n' "$_fl_kept"
       # The missing command, named first because it is why a suite with a clean score is red.
       if [ -n "$cnf_lines" ]; then
         printf '          It said command not found, so something it called does not exist and whatever called it never ran:\n'
