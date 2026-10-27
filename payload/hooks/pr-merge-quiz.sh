@@ -140,8 +140,9 @@ fi
 # CLOSED; kept, silently, while it is OPEN or GitHub does not answer, since that is a quiz delayed,
 # never one lost. NEVER dropped for its age (Dan, 2026-10-26, "Never drop it"): a pull request that
 # merges days later still gets its quiz. The one thing that ends a hold unasked is the sweep in
-# quiz_hold of a session's file untouched for two days, which only a session that has ended leaves,
-# since every turn end of a live session rewrites its own file.
+# quiz_hold (sweep_ended_holds) of a file untouched for two days whose session the session registry
+# says has ended (#1787). An idle session keeps its file however old it is, since a session with no
+# turn end never rewrites it.
 held_dir() { printf '%s/held' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
 
 release_held() {
@@ -580,8 +581,32 @@ quiz_hold() {
     '{heldAt: $at, merges: $merges, payload: del(.tool_response)}' 2>/dev/null)" || return 1
   [ -n "$rec" ] || return 1
   printf '%s\n' "$rec" >> "$dir/$session_id" 2>/dev/null || return 1
-  # A session that ended with a hold never released leaves its file; anything this old is swept.
-  find "$dir" -type f -mtime +2 -delete 2>/dev/null || true
+  sweep_ended_holds "$dir"
+  return 0
+}
+# A session that ended with a hold never released leaves its file behind, so files untouched for two
+# days are looked at, and one is removed only when the session registry says its SESSION has ended
+# (claude-config#1787). Age alone is not evidence: a session left open with no turn end for days
+# never rewrites its file, and its quiz must still come (Dan, 2026-10-26, "Never drop it"). The
+# registry's own rule decides, through lib/session_registry.py, the one reading the sleep queue uses
+# too: ended means closed, silent past five minutes, or no longer in the registry. Any doubt keeps
+# the file: no python3, a registry that cannot be read, a record that cannot be read, or a registry
+# that does not show THIS session open (then it is not keeping track, and its absences prove nothing).
+# A `.releasing.<pid>` file a stopped release left belongs to the session its name begins with.
+sweep_ended_holds() {
+  local dir="$1" stale ended f sid
+  stale="$(find "$dir" -type f -mtime +2 2>/dev/null)"
+  [ -n "$stale" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  ended="$(printf '%s\n' "$stale" | sed -e 's#.*/##' -e 's#\.releasing\..*$##' | sort -u \
+    | python3 "$HOOK_DIR/lib/session_registry.py" ended "$(( $(date +%s) * 1000 ))" "$session_id" 2>/dev/null)" || return 0
+  [ -n "$ended" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    sid="${f##*/}"
+    sid="${sid%%.releasing.*}"
+    grep -qxF -- "$sid" <<< "$ended" && rm -f -- "$f"
+  done <<< "$stale"
   return 0
 }
 background_note=""
