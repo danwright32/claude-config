@@ -2510,6 +2510,28 @@ and the band question is removed rather than kept beside it (L29). Three defects
   refuses, gives it back for the same call sent again; a shell command that ran and failed spends
   it, since it may have written part of what it does. Project memory instead and Skip
   approve nothing, and a subagent's picker records nothing.
+- **For good on a memory file covers its one index line** (#1794, built 2026-10-26; Dan, the same
+  day, asked again about the line linking a file he had just approved: "didn't I already give
+  permission to save this? how is this different than the last one?"). L330 again: the index line
+  is part of the save he answered. Once a For good save of one file directly in a project's memory
+  folder lands, the mod records a cover: that folder's `MEMORY.md`, the file's name, and the
+  approval's own lapse time, so the window is the one Dan's press opened, never a fresh one. The
+  write it lets through, once, is one whose only target is that index and which leaves it as it is
+  now with exactly one line inserted at a line boundary, whose one markdown link is to the file by
+  its name; nothing else changed (rules.ts `indexLineAdded`, `linksOnlyTo`). Judged by every route
+  the mod judges: a Write's content and an Edit's result (the same `editedFile` the lesson approval
+  reads), and a shell append, read with mod-kit's own readers as one command only: `echo`, `printf
+  '%s\n'` or `printf '<text>\n'` of text quoted whole, or `cat` fed a heredoc (quoted, or holding no
+  `$`, backtick or backslash), with `>>` into the index and no other redirect, pipe, command or file
+  written (rules.ts `shellAppended`). Anything else to `MEMORY.md` (a second line, a changed line, a
+  line linking another file, another folder's index, `tee -a`, a write after the window, a write
+  before the memory file is saved) is asked about as before. Chosen: the cover is made when the
+  memory file's save lands, not at the press, so the line can never point at a file that was not
+  saved; and it lapses in silence, since Dan never answered about the index and a toast saying it
+  went unused would be noise. A write of the line that does not land gives the cover back for the
+  rest of the window, as an approval is given back; a shell command that failed spends it. A Bash
+  For good covering more than one file, and Dan's own permanent words, record no cover. The noun
+  (`isApproved`, #1483) does not answer for a cover: its one caller asks only about the lessons file.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
   which for a heredoc or a script was unreadable.
