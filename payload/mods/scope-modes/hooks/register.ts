@@ -3448,7 +3448,8 @@ const readDeploy = async ($: EngineInterface, pr: { number: number; url?: string
   }
 }
 
-// The PR a reading found, and the issues it closes, which the caller keeps for later checks; its
+// The PR a reading found, and the issues it closes or refers to with Refs (#1812), which the caller
+// keeps for later checks and the agent rule; its
 // link, when GitHub gave one, is what tells it apart from a PR this session opened (#856).
 type Found = { number: number; closes: number[]; url?: string }
 // closedAt and comments find a closed PR's recorded reason it will never merge (#1767).
