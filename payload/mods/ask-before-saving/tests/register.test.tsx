@@ -410,18 +410,6 @@ test("a subagent's write to lasting memory is refused and never asked about: not
   expect(w.ran.map(x => x.input.file_path)).toEqual(['README.md'])
 })
 
-// The test runner's own timers, which a mod's declarations (es2023, with no DOM and no Node) leave out.
-declare function setTimeout(run: () => void, ms: number): number
-declare function clearTimeout(id: number | undefined): void
-// A deadline on a wait for a condition, so one never met fails by name rather than hanging.
-const within = async <T,>(p: Promise<T>, what: string, ms = 2000): Promise<T> => {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`${what} within ${ms} ms`)), ms)))])
-  } finally {
-    clearTimeout(timer)
-  }
-}
 // Lessons review of #783: a subagent's judged call is marked so the tool.check hook beneath, which
 // cannot see the loop, does not judge it again for the main session. With one mark per key, the
 // first of two identical calls to finish cleared it while the second was still on its way down, and
@@ -438,7 +426,11 @@ test("two identical subagent calls in flight: the first finishing never exposes 
   const second = call($, { tool: 'Bash', command, agentId: 'agent-a1' })
   let first: Result
   try {
-    await within(arrived, 'the held call never reached the guard')
+    // Waited on until the guard holds it, the condition itself rather than a time (#1789, L290): a
+    // two second real deadline here measured the Mac, and the hold is cut at the engine's 10,000 ms
+    // of real time whatever deadline a test sets. A call that comes back instead fails here, by name.
+    const how = await Promise.race([arrived.then(() => 'held at the guard'), second.then(() => 'came back', (err: unknown) => `refused: ${String(err)}`)])
+    expect(how).toBe('held at the guard')
     first = await call($, { tool: 'Bash', command, agentId: 'agent-a1' })
     // Now a profile sets the variable, so judged again the held call would count as a save.
     w.files[`${HOME}/.zshrc`] = `export XGATE=${HOME}/.claude\n`
@@ -446,7 +438,7 @@ test("two identical subagent calls in flight: the first finishing never exposes 
     open()
   }
   expect(first.deny).toBeUndefined()
-  const held = await within(second, 'the held call never came back')
+  const held = await second
   expect(refusalOf(held)).not.toContain(ASKS)
   expect(held.deny).toBeUndefined()
   expect(w.ran.length).toBe(2)
