@@ -455,6 +455,59 @@ const TOOL_READS: ReadonlyMap<string, ReadonlySet<string>> = new Map(Object.entr
   unittest: new Set(['-k', '-s', '--start-directory', '-p', '--pattern', '-t', '--top-level-directory', '--durations']),
   pytest: new Set(['-n', '-p', '-k', '-m', '-c', '--config-file', '--rootdir', '--deselect', '--ignore', '--maxfail', '--confcutdir']),
 }))
+// A known tool that changes the files it is handed only when a flag tells it to (#1827), read from
+// each tool's own documentation. prettier rewrites them in place only with --write (-w, alone or in a
+// cluster of short flags); otherwise it prints them, or with --check (-c) or --list-different (-l)
+// names the ones that differ. eslint changes them only with --fix (--fix-dry-run fixes in memory and
+// prints), or writes a config with --init. Without such a flag a run hands on only the value of an
+// option it writes a file through (`outputs`): eslint's report (-o) and either tool's cache. In the
+// #1815 replay of 104,832 distinct Bash commands, prettier ran 102 times (61 --write, 34 --check) and
+// eslint 28, none with --fix. ruff is not listed: `fix = true` in its config makes `ruff check` fix
+// with no flag, so its flags alone cannot say it writes nothing; nor is black, run once.
+const TOOL_EDITS: ReadonlyMap<string, { edits: ReadonlySet<string>; outputs: ReadonlySet<string> }> = new Map(Object.entries({
+  prettier: { edits: new Set(['--write', '-w']), outputs: new Set(['--cache-location']) },
+  eslint: { edits: new Set(['--fix', '--init']), outputs: new Set(['-o', '--output-file', '--cache-location', '--cache-file']) },
+}))
+// A tool's name as npx is given it, without the version it asks for (prettier@3, @scope/pkg@1).
+const toolName = (name: string) => name.replace(/(?<=.)@[^/@]*$/, '')
+// Whether a word may become a flag the reader cannot see: past its command substitutions, which give
+// the files a tool works on (#1815), it holds a variable the reader could not read ($MODE, "$@", a
+// loop's $f), a backquoted command, or a space, where a value the command set is split into words.
+const withoutSubstitutions = (w: string) => {
+  let out = ''
+  for (let i = 0; i < w.length; i++) {
+    if (w[i] !== '$' || w[i + 1] !== '(') {
+      out += w[i]
+      continue
+    }
+    let depth = 0
+    for (i++; i < w.length; i++) {
+      if (w[i] === '(') depth++
+      else if (w[i] === ')' && --depth === 0) break
+    }
+  }
+  return out
+}
+const mayHoldFlag = (w: string) => /[$`\s]/.test(withoutSubstitutions(w))
+// The words a known tool's run hands on: none but its output options' values when it is in a mode
+// that changes no file it is handed (#1827), otherwise every word but the values it only reads.
+const toolArgs = (name: string, args: readonly string[]): string[] => {
+  const tool = toolName(name)
+  const modes = TOOL_EDITS.get(tool)
+  if (!modes) return scriptArgs(args, TOOL_READS.get(tool))
+  const short = [...modes.edits].filter(e => /^-[A-Za-z]$/.test(e)).map(e => e.slice(1))
+  // An edit flag, written alone, with a value (--write=true), or in a cluster of short flags (-uw).
+  const edits = (a: string) => modes.edits.has(a.split('=')[0] as string) || (/^-[A-Za-z]{2,}$/.test(a) && short.some(l => a.includes(l)))
+  if (args.some(a => edits(a) || mayHoldFlag(a))) return scriptArgs(args, TOOL_READS.get(tool))
+  const out: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    const eq = a.indexOf('=')
+    if (modes.outputs.has(a) && args[i + 1] !== undefined) out.push(args[++i] as string)
+    else if (eq > 0 && modes.outputs.has(a.slice(0, eq))) out.push(a.slice(eq + 1))
+  }
+  return scriptArgs(out)
+}
 // Each word a script is handed that may name a file (#1586): an option is none, and one written
 // --name=value gives its value; - is standard input; an address or another machine's path is none.
 // `reads` is a known tool's options whose value is the next word and is only read (#1726).
@@ -760,15 +813,15 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // The script's word as the command reads it, variables read as their values.
     const scriptFile = c.script && !c.script.stdin && !c.program ? expand(c.script.files[0] ?? '') : kind === undefined && runsDirectly(args[0]) ? args[0] : undefined
     // Each word a run is handed, as a path where its words name one.
-    const handedOf = (words: readonly string[], reads?: ReadonlySet<string>) =>
-      scriptArgs(words, reads).map(w => {
+    const handedOf = (words: readonly string[]) =>
+      words.map(w => {
         const p = abs(w)
         const folder = p ? undefined : patternFolder(w, dir, home)
         return { word: asWritten.get(w) ?? w, ...(p ? { path: p } : {}), ...(folder ? { folder } : {}) }
       })
     if (scriptFile) {
       const at = kind === undefined ? 0 : args.indexOf(scriptFile, 1)
-      const handed = at < 0 ? [] : handedOf(args.slice(at + 1))
+      const handed = at < 0 ? [] : handedOf(scriptArgs(args.slice(at + 1)))
       if (handed.length) {
         const path = abs(scriptFile)
         runs.push({ what: kind === undefined ? 'a script file run directly' : `a ${name} script file`, script: asWritten.get(scriptFile) ?? scriptFile, ...(path ? { path } : {}), args: handed })
@@ -779,7 +832,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // with no file of its own.
     const tool = kind === 'python' ? readProgram(args, undefined).module : name === 'npx' ? npxTool(args) : undefined
     if (tool) {
-      const handed = handedOf(args.slice(tool.args), TOOL_READS.get(tool.name))
+      const handed = handedOf(toolArgs(tool.name, args.slice(tool.args)))
       if (handed.length) runs.push({ what: kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx', script: tool.name, tool: true, args: handed })
     }
     // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be

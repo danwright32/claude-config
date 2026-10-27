@@ -492,7 +492,8 @@ describe('whose uncommitted files they are (#1108)', () => {
     const module = { ...none, runs: commandWrites('python3 -m tool src/a.ts', '/repo', '/Users/x').runs }
     expect(module.runs?.length).toBe(1)
     expect(filesWritten({ tool: 'Bash', input: {}, writes: module })).toEqual(['/repo/src/a.ts'])
-    const npx = { ...none, runs: commandWrites('npx prettier src/b.ts', '/repo', '/Users/x').runs }
+    // Through --write: without it prettier prints the file and changes nothing (#1827).
+    const npx = { ...none, runs: commandWrites('npx prettier --write src/b.ts', '/repo', '/Users/x').runs }
     expect(npx.runs?.length).toBe(1)
     expect(filesWritten({ tool: 'Bash', input: {}, writes: npx })).toContain('/repo/src/b.ts')
   })
