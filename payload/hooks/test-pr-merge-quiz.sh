@@ -1068,6 +1068,116 @@ out="$(turn_end "$SID_H2")"
 holds "$out" '"block"'; check $? "a held merge whose worktree was removed was never released (got: ${out:0:200})"
 [ ! -s "$(held_file "$SID_H2")" ]; check $? "a held merge whose worktree was removed kept its hold"
 
+# EACH GITHUB QUESTION HAS ITS OWN DEADLINE (#1786). The release is a Stop hook with a 60 second
+# timeout (a setting, not measured), and a hook the harness kills says nothing: every hold behind a hung answer waited a turn
+# too. So each question is asked through lib/bounded-run.sh. Pull request 41 hangs (it and a child
+# it starts, so the kill of the whole process tree is seen), and would say MERGED if it were ever
+# waited for, so a release that waited would quiz #41 and drop its hold: that is what the cut is
+# seen by, never by how long the turn end took (L290). Pull request 42 answers MERGED at once.
+# The hang's own ceiling is the suite's one hang ceiling, which only a missing bound reaches. The
+# child does not hold the answer's capture open, so a bound that killed only gh would return at once
+# with the child still running, rather than wait for it and hide the fault (as test-bounded-run.sh).
+. "$DIR/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; fail=$((fail+1)); }
+HANGBIN="$FIXTURE/hangbin"; mkdir -p "$HANGBIN"
+cat > "$HANGBIN/gh" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
+  *"auth token -u "*) printf 'tok\n' ;;
+  *"pr view 41 "*|*"pr view 43 "*)
+    a="\$*"; n="\${a#*pr view }"; n="\${n%% *}"
+    echo "\$n" >> "$FIXTURE/hang-asked"
+    ( t=\$SECONDS; while [ ! -e "$FIXTURE/hang-release" ] && [ \$((SECONDS - t)) -lt $HANG_S ]; do sleep 0.1; done ) > /dev/null 2>&1 &
+    echo "\$!" > "$FIXTURE/hang-child-\$n.pid"
+    echo "\$\$" > "$FIXTURE/hang-gh-\$n.pid"
+    t=\$SECONDS; while [ ! -e "$FIXTURE/hang-release" ] && [ \$((SECONDS - t)) -lt $HANG_S ]; do sleep 0.1; done
+    printf '{"number":%s,"url":"https://github.com/acme/widget/pull/%s","state":"MERGED","mergedAt":"2026-10-26T19:43:00Z","labels":[{"name":"changelog/visible"}]}' "\$n" "\$n"
+    ;;
+  *"pr view"*) cat "$FAKE_PR_JSON" ;;
+esac
+SH
+chmod +x "$HANGBIN/gh"
+hang_turn_end() {  # $1 = session id, then any VAR=value settings ; the Stop hook's output, gh hanging on 41 and 43
+  local sid="$1"; shift
+  python3 -c '
+import json, sys
+print(json.dumps({"hook_event_name": "Stop", "session_id": sys.argv[2], "stop_hook_active": False, "cwd": sys.argv[1]}))
+' "$FIXTURE/repo" "$sid" | ( cd "$FIXTURE/repo" && env "PATH=$HANGBIN:$PATH" "$@" "$HOOK" --release-held ) 2>/dev/null
+}
+# Rewritten through awk and a rename, never sed -i, whose suffix argument BSD and GNU read
+# differently: on Linux `sed -i '' -e '$d' f` reads '' as a file, fails, and still edits f, so the
+# fallback after it deleted a second line and CI saw these holds vanish (PR #1803).
+hold_for() {  # $1 = pull request number ; appends a hold for it to SID_H's file, made from a real one for 42
+  local f last
+  f="$(held_file "$SID_H")"
+  post_merge "$SID_H" bg >/dev/null
+  last="$(tail -n 1 "$f")"
+  awk 'NR > 1 { print prev } { prev = $0 }' "$f" > "$f.fixture" && mv "$f.fixture" "$f"
+  printf '%s' "$last" | jq -c --arg n "$1" '.merges[0].pr = $n | .payload.tool_input.command = "gh pr merge \($n) --squash"' >> "$f"
+}
+held_prs() { jq -r '.merges[].pr' "$(held_file "$SID_H")" 2>/dev/null | tr '\n' ' '; }
+alive() {  # the pids in the named files still running, if any
+  local f p r=""
+  for f in "$@"; do p="$(cat "$f" 2>/dev/null)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null && r="$r $p"; done
+  printf '%s' "$r"
+}
+rm -f "$(held_file "$SID_H")" "$FIXTURE/hang-release" "$FIXTURE/hang-asked" "$FIXTURE"/hang-*.pid
+pr_state MERGED
+hold_for 41; hold_for 42
+# A fixture that did not come out as built makes every case below measure something else, so it
+# is ONE loud failure and the cases are skipped, rather than a cascade that reads as eight faults.
+if [ "$(held_prs)" != "41 42 " ]; then
+  check 1 "FIXTURE BROKEN, the deadline cases were skipped: the holds came out as '$(held_prs)', not '41 42 '"
+else
+out="$(hang_turn_end "$SID_H" QUIZ_RELEASE_ASK_SECONDS=5)"
+still="$(alive "$FIXTURE/hang-gh-41.pid" "$FIXTURE/hang-child-41.pid")"
+: > "$FIXTURE/hang-release"
+grep -qx 41 "$FIXTURE/hang-asked" 2>/dev/null; check $? "the hung question for #41 was never asked, so nothing below measures its deadline"
+[ -f "$FIXTURE/hang-child-41.pid" ] && [ -z "$still" ]; check $? "a hung GitHub answer, and the child it started, were still running after the release returned:${still:- no child pid was written}"
+reason="$(printf '%s' "$out" | jq -r '.reason // ""' 2>/dev/null)"
+holds "$reason" "#41"; check $((! $?)) "a GitHub answer cut at its deadline was waited for and believed: #41 was quizzed (got: ${reason:0:200})"
+[ "$(held_prs)" = "41 " ]; check $? "a hung GitHub answer did not keep its hold, or the next hold was kept (holds: $(held_prs))"
+holds "$reason" "#42"; check $? "the hold after a hung GitHub answer was not released (got: ${out:0:200})"
+holds "$reason" "comprehension quiz"; check $? "the hold released after a hung answer is not the quiz instruction (got: ${reason:0:200})"
+# And the kept hold is released at the next turn end once GitHub answers: delayed, never lost.
+printf '{"number":41,"url":"https://github.com/acme/widget/pull/41","state":"MERGED","mergedAt":"2026-10-26T19:43:00Z","labels":[{"name":"changelog/visible"}]}' > "$FAKE_PR_JSON"
+out="$(turn_end "$SID_H")"
+holds "$out" "#41"; check $? "the hold kept past a hung answer was released without naming #41 (got: ${out:0:200})"
+holds "$out" '"block"'; check $? "a hold kept past a hung answer was not released at the next turn end (got: ${out:0:200})"
+[ ! -s "$(held_file "$SID_H")" ]; check $? "a hold kept past a hung answer was still held after GitHub answered (holds: $(held_prs))"
+fi
+
+# THE RELEASE AS A WHOLE HAS A BUDGET (#1786), so however many holds hang, the hook ends inside its
+# timeout. Once the budget is spent nothing more is asked and every hold not asked is kept, written
+# back AHEAD of the ones that were, so a hold that keeps hanging cannot starve the ones behind it.
+# A budget of 2 with a 5 second question (both set here, not measured): #41 is cut when the budget runs out, and #43 and #42 are
+# never asked. Judged by what was asked and what was kept (L290).
+rm -f "$(held_file "$SID_H")" "$FIXTURE/hang-release" "$FIXTURE/hang-asked" "$FIXTURE"/hang-*.pid
+pr_state MERGED
+hold_for 41; hold_for 43; hold_for 42
+if [ "$(held_prs)" != "41 43 42 " ]; then
+  check 1 "FIXTURE BROKEN, the budget cases were skipped: the holds came out as '$(held_prs)', not '41 43 42 '"
+else
+out="$(hang_turn_end "$SID_H" QUIZ_RELEASE_ASK_SECONDS=5 QUIZ_RELEASE_BUDGET_SECONDS=2)"
+still="$(alive "$FIXTURE/hang-gh-41.pid" "$FIXTURE/hang-child-41.pid")"
+: > "$FIXTURE/hang-release"
+asked="$(tr '\n' ' ' < "$FIXTURE/hang-asked" 2>/dev/null)"
+[ -z "$still" ]; check $? "a question cut by the release's budget was still running after the release returned:$still"
+! grep -qx 43 "$FIXTURE/hang-asked" 2>/dev/null; check $? "the release went on asking GitHub after its budget was spent (asked: $asked)"
+holds "$out" '"block"'; check $((! $?)) "a release whose budget ran out quizzed a hold it never asked about (got: ${out:0:200})"
+case "$(held_prs)" in
+  "43 42 41 ") check 0 "" ;;
+  "41 43 42 ")
+    check "$(grep -qx 41 "$FIXTURE/hang-asked" 2>/dev/null && echo 1 || echo 0)" "a hold asked and kept was written back ahead of the holds never asked, so it can starve them (holds: $(held_prs))"
+    # A Mac loaded enough that the hook spent its budget (2 s, set above, not measured) before the
+    # first question leaves the order unmeasured rather than failed (L411).
+    grep -qx 41 "$FIXTURE/hang-asked" 2>/dev/null || echo "SUITE-PART-UNMEASURED the order of kept holds after a spent budget: the hook spent its 2 s before #41 was asked" ;;
+  *) check 1 "a release whose budget ran out did not keep every hold (holds: $(held_prs), asked: $asked)" ;;
+esac
+fi
+: > "$FIXTURE/hang-release"
+rm -f "$(held_file "$SID_H")"
+
 # A Stop payload that cannot be read is quiet, never a crash or a block.
 out="$(printf 'not json' | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH" "$HOOK" --release-held ) 2>/dev/null)"; rc=$?
 [ "$rc" = 0 ] && [ -z "$out" ]; check $? "an unreadable Stop payload was not quiet (rc=$rc, got: ${out:0:200})"
