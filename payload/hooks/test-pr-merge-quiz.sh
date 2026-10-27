@@ -1069,7 +1069,7 @@ holds "$out" '"block"'; check $? "a held merge whose worktree was removed was ne
 [ ! -s "$(held_file "$SID_H2")" ]; check $? "a held merge whose worktree was removed kept its hold"
 
 # EACH GITHUB QUESTION HAS ITS OWN DEADLINE (#1786). The release is a Stop hook with a 60 second
-# timeout, and a hook the harness kills says nothing: every hold behind a hung answer waited a turn
+# timeout (a setting, not measured), and a hook the harness kills says nothing: every hold behind a hung answer waited a turn
 # too. So each question is asked through lib/bounded-run.sh. Pull request 41 hangs (it and a child
 # it starts, so the kill of the whole process tree is seen), and would say MERGED if it were ever
 # waited for, so a release that waited would quiz #41 and drop its hold: that is what the cut is
@@ -1141,7 +1141,7 @@ holds "$out" '"block"'; check $? "a hold kept past a hung answer was not release
 # THE RELEASE AS A WHOLE HAS A BUDGET (#1786), so however many holds hang, the hook ends inside its
 # timeout. Once the budget is spent nothing more is asked and every hold not asked is kept, written
 # back AHEAD of the ones that were, so a hold that keeps hanging cannot starve the ones behind it.
-# A budget of 2 with a 5 second question: #41 is cut when the budget runs out, and #43 and #42 are
+# A budget of 2 with a 5 second question (both set here, not measured): #41 is cut when the budget runs out, and #43 and #42 are
 # never asked. Judged by what was asked and what was kept (L290).
 rm -f "$(held_file "$SID_H")" "$FIXTURE/hang-release" "$FIXTURE/hang-asked" "$FIXTURE"/hang-*.pid
 pr_state MERGED
@@ -1157,9 +1157,9 @@ case "$(held_prs)" in
   "43 42 41 ") check 0 "" ;;
   "41 43 42 ")
     check "$(grep -qx 41 "$FIXTURE/hang-asked" 2>/dev/null && echo 1 || echo 0)" "a hold asked and kept was written back ahead of the holds never asked, so it can starve them (holds: $(held_prs))"
-    # A Mac loaded enough that the hook spent its 2 s before the first question leaves the order
-    # unmeasured rather than failed (L411).
-    grep -qx 41 "$FIXTURE/hang-asked" 2>/dev/null || echo "UNMEASURED: the budget ran out before #41 was asked, so the order of kept holds was not seen" ;;
+    # A Mac loaded enough that the hook spent its budget (2 s, set above, not measured) before the
+    # first question leaves the order unmeasured rather than failed (L411).
+    grep -qx 41 "$FIXTURE/hang-asked" 2>/dev/null || echo "SUITE-PART-UNMEASURED the order of kept holds after a spent budget: the hook spent its 2 s before #41 was asked" ;;
   *) check 1 "a release whose budget ran out did not keep every hold (holds: $(held_prs), asked: $asked)" ;;
 esac
 rm -f "$(held_file "$SID_H")"
