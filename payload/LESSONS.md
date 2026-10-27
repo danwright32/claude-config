@@ -8855,6 +8855,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L815. A scheduled send that is due anywhere inside a time window must also carry a minimum lead time, because its first run after shipping, or after any outage, sends to everyone already inside the window, including people for whom it is now too late.**
+  (slate#4287, 2026-10-27)
+  SHORT: A scheduled send due anywhere inside a window needs a minimum lead time, or its first run after shipping or an outage sends to everyone already inside.
 - **L808. A duplicate guard that claims a job when the work STARTS records only that an attempt began, so a later duplicate that finds the claim must learn whether that attempt FINISHED before it reports success, or a first attempt that crashed or was cut off silently swallows every retry and reads as done.**
   (slate#4236, 2026-10-26)
   SHORT: A start claim proves only that an attempt began, so a duplicate finding it must learn whether it FINISHED before reporting success.

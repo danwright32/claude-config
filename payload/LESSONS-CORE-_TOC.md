@@ -7,7 +7,7 @@ lessons review before any merge; read any one in full with
 
 - Building with AI (building-with-ai): 16 lessons, 8 in the core
 - Codebase hygiene (codebase-hygiene): 51 lessons, 30 in the core
-- Cross-system reliability (cross-system-reliability): 107 lessons, 35 in the core
+- Cross-system reliability (cross-system-reliability): 108 lessons, 35 in the core
 - Data safety (data-safety): 45 lessons, 26 in the core
 - External systems (external-systems): 42 lessons, 17 in the core
 - Honest failure (honest-failure): 110 lessons, 33 in the core
