@@ -92,6 +92,7 @@ import {
   unsure,
 } from './rules.ts'
 import { errorText } from './mod-kit/skew.ts'
+import { inputTexts } from './mod-kit/inputs.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something
 // without my input. If we can make this something that can't be ignored rather than just a memory,
@@ -335,9 +336,10 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       }
       continue
     }
-    // Otherwise what the command, and any patch or script file it reads, mentions is the guess.
-    const texts = [command]
-    for (const f of u.inputs) if (await $.fs.exists(f)) texts.push(await $.fs.read(f))
+    // Otherwise what the command, and any patch or script file it reads, mentions is the guess. One it
+    // reads from a device or a fifo is never opened (#1765), as a missing one never was: the read
+    // waits for ever, and one fed on standard input is the heredoc, already in the command.
+    const texts = [command, ...(await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs))]
     const named = scratch || texts.slice(1).some(t => namesScratchpad(t, at.session, at.temps))
     for (const t of texts)
       for (const m of mentionedLookFiles(t)) {

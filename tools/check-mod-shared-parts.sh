@@ -141,6 +141,11 @@
 # and no mod reads a TypeError itself (the missing-reader part). Files under a mod's hooks/mod-kit
 # are copies of mod-kit's hooks, held byte for byte like the tests' copies, and are not scanned for
 # the parts above, since they ARE them; a copy no hooks file imports fails, since it reads nothing.
+# Another such run time part (#1765), the input-reader: reading each file a command reads (the write
+# reader's `inputs`) by hand, a loop over `.inputs`. Three guards did, and one meeting /dev/stdin or
+# a fifo waited for ever on it, so the call never ran; inputTexts in hooks/mod-kit/inputs.ts never
+# opens a device or anything but a regular file. Reading only the inputs' names (a spread, a some)
+# is not a read, and passes.
 #
 # And one shared part every mod must USE rather than must not copy (#707):
 #   screen    a mod that answers a tool call itself (returns     ask $.modkit.screen(e) first, and answer with
@@ -204,6 +209,7 @@ PARTS=(
   "login-file|[\"'\`/]\\.claude\\.json[\"'\`]|\$.modkit.account()"
   "login-follower|command: *[\"'\`]login[\"'\`]|on('modkit.login', ...), which mod-kit raises with the account a /login landed on"
   "missing-reader|instanceof TypeError|missingOf(err) (errorText, skewNews) from the copy of hooks/skew.ts kept at hooks/mod-kit/skew.ts"
+  "input-reader|of [^ ;()]*\\.inputs\\)|inputTexts from the copy of hooks/inputs.ts kept at hooks/mod-kit/inputs.ts, which never opens a device or a fifo"
 )
 
 n=0

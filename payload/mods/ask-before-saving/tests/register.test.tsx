@@ -1,5 +1,5 @@
 import { expect, mock, type Engine } from 'claude-code/testing'
-import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { APPROVAL_MS } from '../hooks/rules.ts'
@@ -170,7 +170,9 @@ type Asked = { questions: { question: string; header: string; options: { label: 
 // `auto` stands for auto mode (#738): its classifier refuses a call no model request asked for, which
 // a call a plugin makes for itself is. `ownClock` leaves the clock to the test.
 // `gate` holds the guard's first read of its gate until `opened` settles, calling `reached` as it starts.
-const world = (engine: Engine, on: On, init: { files?: Record<string, string>; failWrites?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
+// `fifos`: paths there that are no regular file (a fifo, a link to a device). A read of one, or of
+// any device, never answers, as the real one does (#1765), and resolves `readAttempted`.
+const world = (engine: Engine, on: On, init: { files?: Record<string, string>; fifos?: string[]; failWrites?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
   let gateReads = 0
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
@@ -222,8 +224,24 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     return { value: at.cwd } as never
   })
   on('agent.list', () => ({ value: (init.agents ?? []).map(id => ({ id, description: 'a task', agentType: 'general-purpose' })) }) as never)
-  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
+  const isOther = (path: string) => path.startsWith('/dev/') || (init.fifos ?? []).includes(path)
+  const opened: string[] = []
+  let attempted: () => void = () => undefined
+  const readAttempted = new Promise<'read attempted'>(resolve => {
+    attempted = () => resolve('read attempted')
+  })
+  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined || isOther(e.path) }) as never)
+  on('fs.stat', ($, e) => {
+    if (isOther(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: false } } as never
+    if (files[e.path] === undefined) throw new Error(`ENOENT: ${e.path}`)
+    return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } } as never
+  })
   on('fs.read', async ($, e) => {
+    if (isOther(e.path)) {
+      opened.push(e.path)
+      attempted()
+      return { value: await never<string>() } as never
+    }
     if (e.path === '/gate/guard') {
       if (++gateReads === 1 && init.gate) {
         init.gate.reached()
@@ -286,7 +304,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     notes.push(content.map(c => c.text ?? '').join(''))
     return appended
   })
-  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes, logs }
+  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes, logs, opened, readAttempted }
 }
 type W = ReturnType<typeof world>
 
@@ -852,6 +870,27 @@ test('a write whose file cannot be read from the command is still asked about, a
   expect(named).toContain('this writes lasting memory (~/.claude/CLAUDE.md)')
   expect(named).not.toContain('may write')
   expect(w.ran).toEqual([])
+})
+
+// #1765: a command reading a device (/dev/stdin, /dev/fd/0) or a fifo as its patch never has it
+// opened: a read of one waits for ever, so the call hung before any hook or prompt. The call is raced
+// against any such read, so one attempted fails at once rather than at the hang ceiling. A patch fed
+// on standard input is the heredoc, read in the command itself, so one touching lasting memory is
+// still asked about and one touching nothing of it runs.
+const settles = async (w: W, call: Promise<Result>) => Promise.race([awaitAtEnd(call).then(r => ({ settled: r })), w.readAttempted])
+const PATCH_AGENTS = "<<'EOF'\n--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n x\n+- rule\nEOF"
+const PATCH_README = "<<'EOF'\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n x\n+y\nEOF"
+test('a patch read from /dev/stdin, /dev/fd/0 or a fifo is never opened, and settles with the right verdict (#1765)', withKit, async ($, on) => {
+  const w = world($, on, { fifos: [`${CWD}/rules.fifo`] })
+  for (const source of ['/dev/stdin', '/dev/fd/0', 'rules.fifo']) {
+    const memory = await settles(w, call($, { tool: 'Bash', command: `git apply ${source} ${PATCH_AGENTS}` }))
+    expect(`${source}: ${memory === 'read attempted' ? memory : 'settled'}`).toBe(`${source}: settled`)
+    expect(refusalOf((memory as { settled: Result }).settled)).toContain(ASKS)
+    const other = await settles(w, call($, { tool: 'Bash', command: `patch -p1 < ${source} ${PATCH_README}` }))
+    expect(`${source}: ${other === 'read attempted' ? other : 'settled'}`).toBe(`${source}: settled`)
+  }
+  expect(w.ran.map(r => r.tool)).toEqual(['Bash', 'Bash', 'Bash'])
+  expect(w.opened).toEqual([])
 })
 
 test('a write anywhere else, a patch that touches no lasting memory, a backup in a temporary folder, and a Bash call that writes nothing go straight through', withKit, async ($, on) => {

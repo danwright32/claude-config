@@ -1,5 +1,5 @@
 import { expect, mock } from 'claude-code/testing'
-import { never, test } from './mod-kit/tests/hang-ceiling.ts'
+import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
@@ -321,6 +321,11 @@ type Opts = {
   stash?: string[] | { fails: string }
   /** Files that are there but cannot be read (#1123 lessons review). */
   unreadableFiles?: string[]
+  /**
+   * Paths that are there and are no regular file (a fifo, a link to a device, #1765). A read of one,
+   * or of any device, never answers, as the real one does, and resolves the world's readAttempted.
+   */
+  fifos?: string[]
   /** A `git switch -c` or `git checkout -b` that runs but leaves the checkout where it was (#1051). */
   switchFails?: boolean
   /** mod-kit's branch reader fails (#980), with what it threw. */
@@ -421,6 +426,10 @@ const fail = (exitCode: number, stderr = '') => ({ value: { exitCode, stdout: ''
 
 // The Mac, GitHub and the person beneath the mod. Everything that gets past the mod is recorded.
 const world = (on: On, o: Opts = {}) => {
+  let attempted: () => void = () => undefined
+  const readAttempted = new Promise<'read attempted'>(resolve => {
+    attempted = () => resolve('read attempted')
+  })
   const w = {
     o,
     reached: [] as string[],
@@ -473,6 +482,8 @@ const world = (on: On, o: Opts = {}) => {
     polls: [] as { argv: string[]; env?: Record<string, string> }[],
     /** Whether the engine is refusing every call, once `refuseFrom` was met (#1677). */
     refusing: false,
+    /** Each device or fifo a hook opened (#1765), which should stay empty. */
+    devicesOpened: [] as string[],
   }
   // The engine's refusal, which reaches the mod as the call failing with these words.
   const refused = (call: string) => ({ deny: `$.${call} aborted` }) as never
@@ -492,8 +503,14 @@ const world = (on: On, o: Opts = {}) => {
     w.files[e.path] = e.text
     return { value: undefined }
   })
-  on('fs.read', ($, e) => {
+  const isOther = (path: string) => path.startsWith('/dev/') || (o.fifos ?? []).includes(path)
+  on('fs.read', async ($, e) => {
     if (w.refusing) return refused('fs.read')
+    if (isOther(e.path)) {
+      w.devicesOpened.push(e.path)
+      attempted()
+      return { value: await never<string>() } as never
+    }
     if (o.unreadableFiles?.includes(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` } as never
     if (!(e.path in w.files)) throw new Error(`ENOENT: no such file or directory, open '${e.path}'`)
     return { value: w.files[e.path] as string } as never
@@ -515,7 +532,16 @@ const world = (on: On, o: Opts = {}) => {
   // A checkout folder (/repo, the session's own) is there unless a test removed it (#1059).
   const isGone = (dir: string) => (o.gone ?? []).includes(dir)
   const isCheckout = (dir: string) => dir === '/repo' || dir === (o.cwd ?? '/repo')
-  on('fs.exists', ($, e) => w.refusing ? refused('fs.exists') : o.existsFails?.includes(e.path) ? ({ deny: `EACCES: permission denied, stat '${e.path}'` } as never) : ({ value: (isCheckout(e.path) && !isGone(e.path)) || e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
+  on('fs.exists', ($, e) => w.refusing ? refused('fs.exists') : o.existsFails?.includes(e.path) ? ({ deny: `EACCES: permission denied, stat '${e.path}'` } as never) : ({ value: (isCheckout(e.path) && !isGone(e.path)) || isOther(e.path) || e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
+  // What is at a path (#1765): a file the test put, a folder (a checkout, or one above a file), or
+  // something else.
+  on('fs.stat', ($, e) => {
+    if (w.refusing) return refused('fs.stat')
+    if (isOther(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: false } } as never
+    if (e.path in w.files) return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } } as never
+    if ((isCheckout(e.path) && !isGone(e.path)) || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`))) return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } } as never
+    throw new Error(`ENOENT: no such file or directory, stat '${e.path}'`)
+  })
   // Each wake check read already moved on the engine's clock, so answering it moves it no further.
   const timed = new WeakSet<object>()
   on('process.run', function answer($, e) {
@@ -958,7 +984,7 @@ const world = (on: On, o: Opts = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
-  return { w, clock }
+  return { w, clock, readAttempted }
 }
 
 type $T = {
@@ -6402,6 +6428,23 @@ for (const [how, line, extra] of [
     const block = (await stop($ as never)).block ?? ''
     expect(block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
     expect(block).not.toContain('other/plan.md')
+  })
+
+// #1765: a patch git applies from a device (/dev/stdin, /dev/fd/0) or a fifo is never opened to find
+// the files it changes: a read of one waits for ever, so the call's result never came back. The call
+// is raced against any such read, so one attempted fails at once rather than at the hang ceiling.
+// Its files cannot be told, as a missing patch's cannot, and the file the call wrote by a redirect is
+// still the session's.
+for (const source of ['/dev/stdin', '/dev/fd/0', '/tmp/fix.fifo'])
+  test(`a patch git applies from ${source} is never opened, and the call settles (#1765)`, withDeps, async ($, on) => {
+    const { w, clock, readAttempted } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], fifos: ['/tmp/fix.fifo'] })
+    await start($ as never, clock)
+    const r = await Promise.race([awaitAtEnd(call($ as never, bash(`echo x > app.ts && git apply ${source} <<'EOF'\n${PATCH}EOF`, 'g1'))), readAttempted])
+    expect(r).toBe('ran')
+    expect(w.devicesOpened).toEqual([])
+    expect(w.toasts.filter(t => t.includes('the patch this call applied'))).toEqual([])
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
   })
 
 test("a patch that cannot be read is said, and the files the same call wrote by other routes are still the session's (#1123 lessons review)", withDeps, async ($, on) => {

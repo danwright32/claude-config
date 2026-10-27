@@ -1,5 +1,5 @@
 import { expect, mock } from 'claude-code/testing'
-import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 
 // A stand-in for mod-kit: an inline plugin cannot reach this file's variables, so it reports each
@@ -83,8 +83,15 @@ const BAD = `const label = "Loading ${DASH} please wait"`
 
 type Run = { argv: readonly string[]; stdin: string }
 
-const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Record<string, string>; store?: Record<string, unknown>; reads?: ReadonlyMap<string, string[][]> } = {}) => {
+// `fifos`: paths that are there and are no regular file (a fifo, a link to a device). A read of one,
+// or of any device, never answers, as the real one does (#1765), and says it was attempted.
+const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Record<string, string>; fifos?: string[]; store?: Record<string, unknown>; reads?: ReadonlyMap<string, string[][]> } = {}) => {
   const runs: Run[] = []
+  const opened: string[] = []
+  let attempted: () => void = () => undefined
+  const readAttempted = new Promise<'read attempted'>(resolve => {
+    attempted = () => resolve('read attempted')
+  })
   const reached: string[] = []
   const toasts: string[] = []
   const logs: string[] = []
@@ -113,7 +120,19 @@ const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Rec
     const hits = lines.map((l, i) => (l.includes(DASH) ? `line ${i + 1}: ${l}` : '')).filter(Boolean)
     return { value: { exitCode: hits.length ? 1 : 0, stdout: hits.join('\n'), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('fs.read', ($, e) => {
+  const isOther = (path: string) => path.startsWith('/dev/') || (opts.fifos ?? []).includes(path)
+  on('fs.exists', ($, e) => ({ value: opts.files?.[e.path] !== undefined || isOther(e.path) }))
+  on('fs.stat', ($, e) => {
+    if (isOther(e.path)) return { value: { kind: 'other' as const, size: 0, mtimeMs: 0, isLink: false } }
+    if (opts.files?.[e.path] === undefined) throw new Error(`no file ${e.path}`)
+    return { value: { kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false } }
+  })
+  on('fs.read', async ($, e) => {
+    opened.push(e.path)
+    if (isOther(e.path)) {
+      attempted()
+      return { value: await never<string>() }
+    }
     const f = opts.files?.[e.path]
     if (f === undefined) throw new Error(`no file ${e.path}`)
     return { value: f }
@@ -134,7 +153,7 @@ const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Rec
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: undefined }) as never)
-  return { runs, reached, toasts, logs, debug, cards }
+  return { runs, reached, toasts, logs, debug, cards, opened, readAttempted }
 }
 
 const refused = (r: unknown): string => {
@@ -190,6 +209,34 @@ test('a commit message read from a file is judged too', withKit, async ($, on) =
   const w = world(on, { files: { '/tmp/msg.txt': `Subject ${DASH} body\n` } })
   await $.tool.call({ tool: 'Bash', command: 'git commit -F /tmp/msg.txt' } as never)
   expect(w.reached).not.toContain('Bash')
+})
+
+// #1765: a git commit -F /dev/stdin <<EOF hung before any hook or prompt, 2 of 2 times (10,469 and
+// 1,241 seconds): this mod read /dev/stdin as the message file, which waits for ever on the mod
+// worker's own standard input. The call is raced against any such read, so a read attempted fails the
+// test at once rather than at the hang ceiling. The message on standard input is the heredoc, which
+// is in the command and judged with it.
+const settles = async (w: { readAttempted: Promise<'read attempted'> }, call: Promise<unknown>) =>
+  Promise.race([awaitAtEnd(call).then(r => ({ settled: r })), w.readAttempted])
+for (const device of ['/dev/stdin', '/dev/fd/0']) {
+  test(`a commit message read from ${device} is never opened, and its heredoc is judged (#1765)`, withKit, async ($, on) => {
+    const w = world(on)
+    const clean = await settles(w, $.tool.call({ tool: 'Bash', command: `git -C /repo commit -q -F ${device} <<'EOF'\nFix the reader\nEOF` } as never))
+    expect(clean).not.toBe('read attempted')
+    expect(w.reached).toEqual(['Bash'])
+    const dashed = await settles(w, $.tool.call({ tool: 'Bash', command: `git commit -F ${device} <<'EOF'\nFix ${DASH} again\nEOF` } as never))
+    expect(dashed).not.toBe('read attempted')
+    expect(refused((dashed as { settled: unknown }).settled)).toContain('Blocked: this text has a dash or emoji')
+    expect(w.reached).toEqual(['Bash'])
+    expect(w.opened).toEqual([])
+  })
+}
+test('a message file that is a fifo is never opened (#1765)', withKit, async ($, on) => {
+  const w = world(on, { fifos: ['/tmp/msg.fifo'] })
+  const r = await settles(w, $.tool.call({ tool: 'Bash', command: 'git commit -F /tmp/msg.fifo' } as never))
+  expect(r).not.toBe('read attempted')
+  expect(w.reached).toEqual(['Bash'])
+  expect(w.opened).toEqual([])
 })
 
 test('a git command that only mentions commit is not scanned (lessons review)', withKit, async ($, on) => {

@@ -2,6 +2,7 @@ import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.t
 import { git, placed, readLine, type Command, type Line } from './commands.ts'
 import { codeOnly, codeTargets } from './code.ts'
 import { kindOf, readProgram } from './program.ts'
+import { isDevice } from './inputs.ts'
 
 // The one reader of which files a Bash call changes (#705, L613), over the simple commands the
 // shared reader gives. Ask before saving kept its own copy and missed inline scripts, rsync,
@@ -42,7 +43,6 @@ const ROUTE_PART = /^\[(?:\[\.\.\.[A-Za-z0-9_=]+\]|(?:\.\.\.)?[A-Za-z0-9_=]+)\](
 const patternIn = (p: string) => UNNAMEABLE.test(p.split('/').map(part => (ROUTE_PART.test(part) ? part.replace(/[[\]]/g, '') : part)).join('/'))
 const HOME_VAR = /^\$(?:HOME|\{HOME\})(?=\/|$)/
 
-const isDevice = (p: string) => p === '/dev' || p.startsWith('/dev/')
 // A process substitution given as an operand (`tee >(cmd)`) is a pipe the shell names under /dev/fd,
 // never a file; what it runs is read apart (#975).
 const isPipe = (word: string) => /^[<>]\(/.test(word)
@@ -813,7 +813,11 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // A command given its operands by xargs changes files no word names (#730).
     if (c.xargs && writer) unnamed.push({ what: `${name} given its files by xargs`, words: written, inputs: [] })
   }
-  return { files, changes, unnamed, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}) }
+  // A device a command reads (/dev/stdin, /dev/fd/0) is never an input (#1765): a guard reading one
+  // waits for ever, so the call never runs. Taken out here, where every input is gathered, rather than
+  // at each place one is named; the write stays, as one whose input cannot be known before it runs.
+  const readable = unnamed.map(u => (u.inputs.some(isDevice) ? { ...u, inputs: u.inputs.filter(p => !isDevice(p)) } : u))
+  return { files, changes, unnamed: readable, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}) }
 }
 
 // The options of git mv, rm, checkout and restore that take the next word as their value.

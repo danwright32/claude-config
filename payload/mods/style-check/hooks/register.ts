@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { inputTexts } from './mod-kit/inputs.ts'
 
 // Style check at write time (claude-config#609). One rule, not two: the verdict is always the push
 // hook's own scanner, hooks/lib/style-scan.py, run on the text about to be written (L370, L613).
@@ -76,11 +77,13 @@ const outgoing = async ($: EngineInterface, tool: string, e: Record<string, unkn
       }
       if (msgs.length === 0) return undefined
       // The message as written in the command, plus any file it is read from. Quotes are already
-      // gone, so a -F inside a quoted message is words, never a flag (lessons review).
+      // gone, so a -F inside a quoted message is words, never a flag (lessons review). A message
+      // file that is a device or a fifo (-F /dev/stdin) is never opened, since the read waits for
+      // ever and the commit never runs (#1765): its text is the heredoc, which is in the command.
       const parts = [cmd]
       for (const f of msgs.flatMap(messageFiles)) {
         try {
-          parts.push(await $.fs.read(f))
+          parts.push(...(await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, [f])))
         } catch {
           // A file that cannot be read is left to the command, which will fail on it itself.
         }

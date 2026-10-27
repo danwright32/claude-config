@@ -1,5 +1,5 @@
 import { expect, mock, type Engine } from 'claude-code/testing'
-import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { CONTRACT, HEADER, ISSUE_READING, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES, settledNotYet } from '../hooks/rules.ts'
@@ -106,7 +106,9 @@ type Dialog = { answer?: string; afk?: boolean }
 type Asked = { questions: { question: string; header: string; options: { label: string; description?: string }[]; multiSelect: boolean }[]; metadata?: Record<string, unknown> }
 // `blobs`: what git holds, by the checkout and the `<from>:<path>` that reads it (#1158).
 // `env`: the variables Claude Code runs with beside HOME (CLAUDE_CODE_TMPDIR, #1191).
-type Init = { cwd?: string; files?: Record<string, string>; agents?: string[]; blobs?: Record<string, string>; env?: Record<string, string> }
+// `fifos`: paths there that are no regular file (a fifo, a link to a device). A read of one, or of
+// any device, never answers, as the real one does (#1765), and resolves `readAttempted`.
+type Init = { cwd?: string; files?: Record<string, string>; fifos?: string[]; agents?: string[]; blobs?: Record<string, string>; env?: Record<string, string> }
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
 
 // The Mac and Claude Code beneath the mod: each checkout's branch (a test may change it, or make it
@@ -238,9 +240,22 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     return { value: undefined } as never
   })
   // A file is there when the test put it there, and a folder when a file the test put is under it.
+  const isOther = (path: string) => path.startsWith('/dev/') || (init.fifos ?? []).includes(path)
+  const opened: string[] = []
+  let attempted: () => void = () => undefined
+  const readAttempted = new Promise<'read attempted'>(resolve => {
+    attempted = () => resolve('read attempted')
+  })
   on('fs.exists', ($, e) => {
     if (ctl.existsFails) throw new Error(`EIO: ${e.path}`)
-    return { value: files[e.path] !== undefined || Object.keys(files).some(f => f.startsWith(`${e.path}/`)) } as never
+    return { value: files[e.path] !== undefined || isOther(e.path) || Object.keys(files).some(f => f.startsWith(`${e.path}/`)) } as never
+  })
+  // What is at a path: a file the test put, a folder above one, or something else (#1765).
+  on('fs.stat', ($, e) => {
+    if (isOther(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: T0, isLink: false } } as never
+    if (files[e.path] !== undefined) return { value: { kind: 'file', size: 1, mtimeMs: T0, isLink: false } } as never
+    if (Object.keys(files).some(f => f.startsWith(`${e.path}/`))) return { value: { kind: 'dir', size: 0, mtimeMs: T0, isLink: false } } as never
+    throw new Error(`ENOENT: ${e.path}`)
   })
   // A folder's entries: the files the test put directly in it (#1275, a mod's hooks folder).
   on('fs.list', ($, e) => {
@@ -256,8 +271,13 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       ],
     } as never
   })
-  on('fs.read', ($, e) => {
+  on('fs.read', async ($, e) => {
     reads.push(e.path)
+    if (isOther(e.path)) {
+      opened.push(e.path)
+      attempted()
+      return { value: await never<string>() } as never
+    }
     if (ctl.unreadable === e.path) throw new Error(`EIO: ${e.path}`)
     const t = files[e.path]
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
@@ -311,7 +331,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     if (tool === 'Bash' && ctl.readFailsAfterRun) ctl.unreadable = ctl.readFailsAfterRun
     return { result: 'written', text: 'written' } as never
   })
-  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts, blobs, writes, removed, sealChecks }
+  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts, blobs, writes, removed, sealChecks, opened, readAttempted }
 }
 type W = ReturnType<typeof world>
 
@@ -2162,6 +2182,27 @@ test("#1191: a folder shaped like the session's scratchpad anywhere but Claude C
   // A folder merely called scratchpad is no session's scratchpad.
   expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/scratchpad/screen.css', content: 'a{}' }))).toContain(SKIP_QUESTION)
   expect(w.ran).toEqual([])
+})
+
+// #1765: a command reading a device (/dev/stdin, /dev/fd/0) or a fifo as its patch never has it
+// opened: a read of one waits for ever, so the call hung before any hook or prompt. The call is raced
+// against any such read, so one attempted fails at once rather than at the hang ceiling. A patch fed
+// on standard input is the heredoc, read in the command itself; a patch file is still read.
+test('a patch read from /dev/stdin, /dev/fd/0 or a fifo is never opened, and settles with the right verdict; a patch file is still read (#1765)', withKit, async ($, on) => {
+  const w = world($, on, { fifos: ['/w/slate/ui.fifo'], files: { '/w/slate/ui.patch': '--- app/page.tsx\n+++ app/page.tsx\n@@ -1 +1 @@\n-x\n+y\n' } })
+  const settles = async (command: string) => Promise.race([awaitAtEnd(call($, { tool: 'Bash', command })).then(r => ({ settled: r })), w.readAttempted])
+  for (const source of ['/dev/stdin', '/dev/fd/0', 'ui.fifo']) {
+    const page = await settles(`git apply ${source} <<'EOF'\n--- app/page.tsx\n+++ app/page.tsx\n@@ -1 +1 @@\n-x\n+y\nEOF`)
+    expect(`${source}: ${page === 'read attempted' ? page : 'settled'}`).toBe(`${source}: settled`)
+    expect(refusalOf((page as { settled: Result }).settled)).toContain('app/page.tsx')
+    const other = await settles(`git apply ${source} <<'EOF'\n--- README.md\n+++ README.md\n@@ -1 +1 @@\n-x\n+y\nEOF`)
+    expect(`${source}: ${other === 'read attempted' ? other : 'settled'}`).toBe(`${source}: settled`)
+    expect(refusalOf((other as { settled: Result }).settled)).toBe('')
+  }
+  expect(w.opened).toEqual([])
+  // A patch file is read, and what it names is held.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git apply ui.patch' }))).toContain('app/page.tsx')
+  expect(w.reads).toContain('/w/slate/ui.patch')
 })
 
 test("#1191: the product's own files stay held, alone or in one command with a round's files", withKit, async ($, on) => {

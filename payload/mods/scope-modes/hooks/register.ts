@@ -75,6 +75,7 @@ import { itemChoices, openQuestionsIn, withQuestion } from './mod-kit/openquesti
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
+import { inputTexts } from './mod-kit/inputs.ts'
 import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
@@ -4304,7 +4305,9 @@ const gitCheckout = async ($: EngineInterface, dir: string | undefined): Promise
 }
 
 // The files a patch git applies in a call changes (#1123), read from each patch file the write
-// reader names, as paths in the checkout git applies it in.
+// reader names, as paths in the checkout git applies it in. A patch read from a device or a fifo is
+// never opened (#1765), as a missing one never was: the read waits for ever, so the call's result
+// never came back. Its files cannot be told, and those the call wrote by other routes still count.
 const patchedFiles = async ($: EngineInterface, writes: ModKitWrites): Promise<string[]> => {
   const out: string[] = []
   for (const u of writes.unnamed) {
@@ -4313,7 +4316,8 @@ const patchedFiles = async ($: EngineInterface, writes: ModKitWrites): Promise<s
     if (g?.sub !== 'apply' && g?.sub !== 'am') continue
     const root = await gitCheckout($, g.dir)
     if (!root) continue
-    for (const f of u.inputs) if (await $.fs.exists(f)) for (const p of patchedPaths(g.args, await $.fs.read(f))) out.push(`${root}/${p}`)
+    const texts = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
+    for (const t of texts) for (const p of patchedPaths(g.args, t)) out.push(`${root}/${p}`)
   }
   return out
 }
