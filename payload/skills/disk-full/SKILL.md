@@ -15,7 +15,7 @@ On 2026-10-04 the disk fell from 25 GB to 8 GB free more than once while several
 sessions built and crash tested. Neither the low space warning, nor this sequence, nor Overture's
 DerivedData reclaim could see why, because the cause is a root only folder that no command here
 could read: `/System/Library/Caches/com.apple.coresymbolicationd`, macOS's symbol cache, at 194 GB.
-Dan's cleaner app found it. That is step 5.
+Dan's cleaner app found it. That is step 6.
 
 ## Before anything else
 
@@ -53,14 +53,49 @@ bash ~/.claude/hooks/check-free-space.sh --report; echo "exit $?"
 ```
 
 It adds a reading to that history and says how much is left, then either the rate and how long
-until zero, or why it states no rate yet (the first reading, readings too close together, free
-space having gone back up, or not falling at all). Judge it by the exit code, not the wording:
+until zero, or why it states no rate yet (the first reading, readings too close together, a fall
+that has not yet lasted 30 minutes, free space having gone back up, or not falling at all). It
+projects only space that has stayed gone for 30 minutes, because a build or pre push check takes a
+few GB and gives it back within minutes (#1754). Judge it by the exit code, not the wording:
 0 means there is room and no fall reaching zero within six hours was measured (with no rate stated, nothing about the trend was measured yet), 3 under the 20 GB floor, 4 falling fast
 enough to reach zero within six hours, and 2 that it could not measure, which is not the same as
 fine. When it says no rate yet, take the next reading on a later turn, ten or more minutes on,
 rather than waiting inside a command.
 
-### 3. Where the weight is
+### 3. Swap, which no folder size reaches
+
+On 2026-10-26 the disk on Daniels-MacBook-Pro-2 reached 1.1 GB free and the cause was 95 GB of
+swap. Swap is kept on `/System/Volumes/VM`, a volume of its own that shares the disk's space, so no
+`du` of any folder ever reaches it and every later step came back clean. It took six rounds to find,
+so look at it before ranking a single folder:
+
+```bash
+sysctl vm.swapusage
+```
+
+```bash
+df -h /System/Volumes/VM
+```
+
+On an ordinary day swap on that Mac was 0 to 136 MB; on the days something was leaking it was 35 to
+95 GB. When it is tens of gigabytes, name what holds the memory:
+
+```bash
+top -l 1 -o mem -n 10 -stats pid,command,mem,time
+```
+
+Read `top`'s MEM, not `ps`. The resident size `ps` reports cannot see pages swapped out to disk, and
+that day it showed nothing above 3.5 GB while `top` showed Backblaze's `bzserv` at 117 GB and
+`fseventsd` at 105 GB, both running since boot six days earlier. TIME says how long a process has
+been accumulating.
+
+The remedy is a restart: restarting the leaking service (quitting its app, or restarting its
+service), or restarting the Mac, which gave all 95 GB back that day. Never deleting files: swap is
+given back only when the memory is, and nothing deleted elsewhere on the disk touches it. The low
+space warning names these holders itself when swap is more than 2% of the disk and the warning is
+already firing.
+
+### 4. Where the weight is
 
 ```bash
 du -x -d 2 -g ~ 2>/dev/null | sort -rn | head -30
@@ -94,10 +129,10 @@ one (`--disable-features=MacAppCodeSignClone`, in `skills/design-rounds/headless
 2026-10-22) came from the design score's Playwright runs, which since claude-config#1537 start
 Chrome through that same file.
 
-### 4. The sync and backup clients, before anything else you find
+### 5. The sync and backup clients, before anything else you find
 
 These are the ones that fill a disk while looking idle, and they are the first place to look
-whatever step 3 said, because their staging areas are often outside the home directory and often
+whatever step 4 said, because their staging areas are often outside the home directory and often
 newer than anything `du` ranks highly.
 
 **Synology Drive.** The 2026-09-10 cause: a backup task with the whole home folder in scope,
@@ -135,7 +170,7 @@ downloaded:
 brctl quota 2>/dev/null; du -x -d 1 -g ~/Library/Mobile\ Documents 2>/dev/null | sort -rn | head
 ```
 
-### 5. The macOS symbol cache, which only an administrator can measure
+### 6. The macOS symbol cache, which only an administrator can measure
 
 `/System/Library/Caches/com.apple.coresymbolicationd` is filled by `coresymbolicationd` whenever a
 crash report is written or a process is sampled (`sample`, spindump, Instruments). It keeps symbols
@@ -143,7 +178,7 @@ per build, so every fresh build of an app that crashes or is sampled adds anothe
 agents building and crash testing can put well over a hundred gigabytes there. It lives on the data
 volume, not the read only system snapshot, so it counts against the free space step 1 reports.
 
-It is owned by root with no access for anyone else, so `du` without `sudo` reads nothing, and step 3
+It is owned by root with no access for anyone else, so `du` without `sudo` reads nothing, and step 4
 never sees it. Say that plainly rather than reporting it as small or absent. What can be read
 without a password is when a file was last added to it or removed from it, which says it is in use
 and nothing about its size:
@@ -172,7 +207,7 @@ sudo find /System/Library/Caches/com.apple.coresymbolicationd -mindepth 1 -delet
 The low space warning names this folder and both commands itself when its verdict is low or falling
 and the folder exists, so if it has already fired that way, those are the same ones.
 
-### 6. The usual large caches, once the above are ruled out
+### 7. The usual large caches, once the above are ruled out
 
 ```bash
 du -x -d 1 -g ~/Library/Caches ~/Library/Containers ~/Library/Developer 2>/dev/null | sort -rn | head -20
@@ -215,7 +250,7 @@ only the orphans nothing is using, judging each again just before removing it, a
 bash ~/.claude/hooks/derived-data-sweep.sh --delete
 ```
 
-### 7. Snapshots, which `du` cannot see at all
+### 8. Snapshots, which `du` cannot see at all
 
 Space held by local Time Machine snapshots does not appear in any directory listing, so a disk can
 be full with nothing to find.
@@ -233,18 +268,18 @@ too.
 
 Name no cause you have not measured. A folder being large is not evidence it is the one filling the
 disk; a folder growing between two readings is, once `df` shows the disk lost about the same amount
-over the same interval (step 3 says why `du`'s growth alone can be no growth at all).
+over the same interval (step 4 says why `du`'s growth alone can be no growth at all).
 
 ## Deleting anything
 
 Everything above is read only on purpose, except two deleting commands: the clearing command in
-step 5, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 6, which
+step 6, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 7, which
 the low space warning runs on its own (Dan's decision of 2026-10-20) and which by hand runs only
 once Dan has decided to clear the orphaned Xcode caches it listed. Before removing anything:
 
 - Say what you propose to delete, how much you predict it frees, and what regenerates it. The
   prediction is a claim about `df`, not about `du`, which overstates anything holding clones or
-  hard links (step 3).
+  hard links (step 4).
 - Stop the thing that is writing first. Deleting under an active writer frees space that is
   reclaimed within minutes and hides the cause.
 - Never delete from a sync or backup client's own store to free space. Change its scope or pause it

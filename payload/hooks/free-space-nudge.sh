@@ -76,6 +76,10 @@ case "$answer" in
     ;;
 esac
 case "$gb" in ''|*[!0-9]*) key="$verdict" ;; *) key="$verdict-$((gb / 5))" ;; esac
+# Swap crossing its share of the disk is a different answer even when the free space figure has not
+# moved, so the memory holders the check names are said once when swap appears, and then not on
+# every prompt (claude-config#1770). Keyed on the check's own sentence, like the figure above.
+case "$answer" in *"Swap holds "*) key="$key-swap" ;; esac
 
 if [ -f "$STATE" ] && [ "$(cat "$STATE" 2>/dev/null || true)" = "$key" ]; then
   exit 0
@@ -118,19 +122,14 @@ case "$SWEEP_SECONDS" in ''|*[!0-9]*) SWEEP_SECONDS=6 ;; esac
 AUTO_DELETE="${FREE_SPACE_DERIVED_DATA_AUTO_DELETE-1}"
 LIST_CMD="bash ~/.claude/hooks/derived-data-sweep.sh"
 
+# The bound, and the process group kill that makes it hold, live in lib/bounded-run.sh, the one copy
+# this and check-free-space.sh's `top` share (claude-config#1770). Missing, the step says so and runs
+# nothing, rather than running unbounded.
+. "$DIR/lib/bounded-run.sh" 2>/dev/null || bounded_run() { BOUNDED_OUT="lib/bounded-run.sh is missing, so nothing was run"; BOUNDED_RC=127; }
 bounded_sweep() {   # bounded_sweep <seconds> <args...> -> sets SWEEP_OUT and SWEEP_RC (124 when the bound ran out)
   local seconds="$1"; shift
-  SWEEP_RC=0
-  SWEEP_OUT="$(perl -e '
-    my $t = shift @ARGV;
-    my $pid = fork();
-    exit 127 unless defined $pid;
-    if ($pid == 0) { setpgrp(0, 0); exec @ARGV or exit 127; }
-    local $SIG{ALRM} = sub { kill "KILL", -$pid; waitpid($pid, 0); exit 124; };
-    alarm $t;
-    waitpid($pid, 0);
-    alarm 0;
-    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' "$seconds" bash "$SWEEP" "$@" 2>&1)" || SWEEP_RC=$?
+  bounded_run "$seconds" bash "$SWEEP" "$@"
+  SWEEP_OUT="$BOUNDED_OUT"; SWEEP_RC="$BOUNDED_RC"
 }
 
 summary() {

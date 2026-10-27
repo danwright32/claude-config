@@ -10,8 +10,10 @@
 //   ## Open questions
 //
 //   - [ ] Keep the old flag?
+//   - [ ] Which copy? (choices: Short / Long)
 //   - [x] Rename it? (answered 2026-10-16 ET: Yes)
-// An unchecked box or a plain bullet is open; a checked box is answered; None means none.
+// An unchecked box or a plain bullet is open; a checked box is answered; None means none. An item
+// may end with the answers Dan can pick (#1771), which /sleep offers as its dialog's choices.
 
 // The whole heading, so "## Open questions about the API" is another section (lessons review); the
 // filing gate reads a markdown body by the same whole line (HEADING_LINE), and create-milestone.sh
@@ -67,7 +69,20 @@ const oneLine = (q: string) => q.split(/\s+/).filter(Boolean).join(' ')
 // written by hand with other spacing is still the same question (lessons review).
 // The suffix is matched from its dated start, so an answer with brackets of its own ("Keep it
 // (recommended)") is taken off whole (lessons review).
-const wordsOf = (text: string) => oneLine(text.replace(/ \(answered \d{4}-\d{2}-\d{2} ET: .*\)$/, ''))
+const wordsOf = (text: string) => itemChoices(text.replace(/ \(answered \d{4}-\d{2}-\d{2} ET: .*\)$/, '')).words
+
+// The answers an item offers Dan (#1771), named at its end: "- [ ] Keep the old flag? (choices: Keep
+// it / Drop it)". /sleep's dialog offers them as its choices. They are not the question's words, so
+// the same question with or without them is one item, checked off by its words alone.
+const CHOICES = /\s*\(choices:\s*(.*)\)\s*$/i
+
+/** An item's question and the answers it names, each once; none when it names none. */
+export const itemChoices = (item: string): { words: string; choices: string[] } => {
+  const m = CHOICES.exec(item)
+  if (!m) return { words: oneLine(item), choices: [] }
+  const choices = [...new Set((m[1] ?? '').split(' / ').map(oneLine).filter(Boolean))]
+  return { words: oneLine(item.slice(0, m.index)), choices }
+}
 
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 
