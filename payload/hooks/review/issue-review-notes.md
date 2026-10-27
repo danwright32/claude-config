@@ -67,5 +67,7 @@ reflection's points go into this review's second pass and one picker.
 
 ## The Open questions section
 Every issue body ends with a "## Open questions" section (claude-config#1279, Dan 2026-10-17): one "- [ ]"
-line for each decision only Dan can make, or None, so /sleep asks each before the night begins. The
+line for each decision only Dan can make, or None, so /sleep asks each before the night begins. Each
+line ends with the answers he can pick, as "(choices: Keep it / Drop it)", which /sleep offers in its
+dialog (claude-config#1771); a yes or no question is offered Yes and No without them. The
 filing gate refuses a create without it, and its refusal says what to write; NAMING.md has the rule.

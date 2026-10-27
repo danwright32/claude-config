@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import { bareIssuesIn, etDateOf, issueRefsIn, openQuestionsIn, questionWords, withQuestion } from '../hooks/openquestions.ts'
+import { bareIssuesIn, etDateOf, issueRefsIn, itemChoices, openQuestionsIn, questionWords, withQuestion } from '../hooks/openquestions.ts'
 import { FENCE_FIXTURES } from './openquestions-fixtures.ts'
 
 // #1279, Dan 2026-10-17: every issue's body holds an "Open questions" section (the filing gate
@@ -59,6 +59,24 @@ test('an answer holding brackets of its own still leaves the item the same quest
   const answered = withQuestion(body, 'Keep the old flag?', { answer: 'Keep it (recommended)', date: '2026-10-17' })
   expect(answered).toBe('B\n\n## Open questions\n\n- [x] Keep the old flag? (answered 2026-10-17 ET: Keep it (recommended))')
   expect(withQuestion(answered, 'Keep the old flag?')).toBe(answered)
+})
+
+// #1771: an item may end with the answers Dan can pick, "(choices: A / B)", so /sleep's dialog offers
+// them rather than only skip and go to sleep. The choices are not part of the question's words.
+test("an item's choices are read off its end, and its words are the question alone (#1771)", () => {
+  expect(itemChoices('Keep the old flag? (choices: Keep it / Drop it)')).toEqual({ words: 'Keep the old flag?', choices: ['Keep it', 'Drop it'] })
+  expect(itemChoices('Slot shape? (Choices:  Every Nth / One in each picker /  Weekly )')).toEqual({ words: 'Slot shape?', choices: ['Every Nth', 'One in each picker', 'Weekly'] })
+  // A choice may hold brackets of its own; one with no slash between choices is one choice.
+  expect(itemChoices('Run it? (choices: Run it (recommended) / Hold it)')).toEqual({ words: 'Run it?', choices: ['Run it (recommended)', 'Hold it'] })
+  expect(itemChoices('Keep the old flag?')).toEqual({ words: 'Keep the old flag?', choices: [] })
+  // Brackets that do not open with "choices:" are words of the question.
+  expect(itemChoices('Keep it (the old one)?')).toEqual({ words: 'Keep it (the old one)?', choices: [] })
+})
+
+test('an item carrying choices is the same question as its words alone: checked off by them, never added twice (#1771)', () => {
+  const body = 'B\n\n## Open questions\n\n- [ ] Keep the old flag? (choices: Keep it / Drop it)'
+  expect(withQuestion(body, 'Keep the old flag?', { answer: 'Drop it', date: '2026-10-26' })).toBe('B\n\n## Open questions\n\n- [x] Keep the old flag? (answered 2026-10-26 ET: Drop it)')
+  expect(withQuestion(body, 'Keep the old flag?')).toBe(body)
 })
 
 test('a body GitHub saved with CRLF line endings is read, and written back with its own endings (lessons review)', () => {
