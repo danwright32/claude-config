@@ -416,7 +416,12 @@ if [ -f "$LOG" ]; then
     END { for (i = 1; i <= n; i++) if (order[i] in open) { print open[order[i]]; delete open[order[i]] } }' "$LOG" > "$WORK/interrupted"
   while IFS="$(printf '\t')" read -r _ _ irun iid imethod itarget _; do
     [ -n "$iid" ] || continue
-    if [ "$imethod" != docker ] && [ ! -e "$itarget" ] && [ ! -L "$itarget" ]; then
+    if [ "$imethod" = docker ]; then
+      # Nothing here can look a Docker target up; its own item, if it is in this plan, is judged
+      # again below, which is where whether it went is checked.
+      echo "An earlier run ($irun) stopped partway while removing docker $itarget; whether it went is not checked here."
+      printf 'OUTCOME\t%s\t%s\t%s\tfailed\t\tinterrupted run; whether it went was not checked\n' "$((T0 + SECONDS))" "$irun" "$iid" >> "$LOG"
+    elif [ ! -e "$itarget" ] && [ ! -L "$itarget" ]; then
       echo "An earlier run ($irun) stopped partway while removing $itarget; it is gone now."
       printf 'OUTCOME\t%s\t%s\t%s\tgone\t\tfound gone after an interrupted run\n' "$((T0 + SECONDS))" "$irun" "$iid" >> "$LOG"
     else

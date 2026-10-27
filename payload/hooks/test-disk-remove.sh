@@ -527,6 +527,14 @@ check "the next run takes over the dead run's lock and finishes" "$([ "$RC" -eq 
 check "and reports what the killed run had in hand, and that it is gone now" "$(has "$OUT_TEXT" "stopped partway while removing $H/w/k3; it is gone now")"
 check "the two it never reached are trashed now" "$([ ! -e "$H/w/k4" ] && [ ! -e "$H/w/k5" ] && echo ok || echo "still there")"
 check "the record marks all five settled" "$(eq "$(grep -cE '"state":"(trashed|gone)"' "$STATE/last-scan.json")" 5)"
+# A killed run that was removing a Docker target: nothing here can look it up, so the next run says
+# that rather than claiming it is still there.
+fresh
+printf 'x\n' > "$H/w/z1"; item z1 fixture delete "$H/w/z1"; record s1 10; plan "$H/plan" s1 z1
+mkdir -p "$STATE/removals"; printf 'INTENT\t%s\t1-1\tdk\tdocker\timage sha256:abc\t\n' "$NOW" > "$(LOGF s1)"
+run --plan "$H/plan"
+check "an interrupted Docker removal is reported as not checked, never as still there" \
+  "$(has "$OUT_TEXT" "stopped partway while removing docker image sha256:abc; whether it went is not checked here")"
 
 # ================================================================================================
 # 15. Thousands of items (L101): every one handled, the record and log whole, in bounded time
