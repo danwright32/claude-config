@@ -221,6 +221,17 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Bash|mcp__.*slack.*__slack_(send_message|send_message_draft|schedule_message)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/no-session-link-in-comments.sh",
+            "timeout": 15,
+            "statusMessage": "Checking the comment carries no Claude session link"
+          }
+        ]
       }
     ],
     "PostToolUse": [
