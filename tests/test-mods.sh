@@ -147,7 +147,9 @@ run3c(){   # $1 = mods dir  $2 = kept output folder -> sets out and code
   out="$(CHECK_MODS_FAILURE_OUTPUT="$2" CLAUDE_BIN="$FAKE3C" TSC_BIN="$TSC_PASS" bash "$CHECK" "$1" 2>&1)"; code=$?
 }
 kept_path(){   # $1 = mod name -> the path its failure line names
-  printf '%s\n' "$out" | grep "check-mods: $1 " | sed -n 's/.*whole output kept in \(.*\.log\).*/\1/p' | head -n 1
+  local k
+  k="$(printf '%s\n' "$out" | sed -n "/check-mods: $1 /s/.*whole output kept in \(.*\.log\).*/\1/p")"
+  printf '%s' "${k%%$'\n'*}"
 }
 M3C="$TMPROOT/m3c"; mkmod "$M3C" redtest-long; printf 'x\n' > "$M3C/redtest-long/hooks/a.test.ts"
 mkmod "$M3C" broken-kept; mkmod "$M3C" fine

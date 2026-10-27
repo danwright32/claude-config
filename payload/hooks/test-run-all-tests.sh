@@ -2619,7 +2619,8 @@ case "$out_fl" in
 esac
 # The first, failing run's whole output is kept, and its FAIL line names where (#1788, L297). It
 # lived in the run's work folder, which is removed at the end, so a flake left nothing to read.
-fl_kept="$(printf '%s\n' "$out_fl" | sed -n "s/.*first run's whole output kept in \(.*\.log\).*/\1/p" | head -n 1)"
+fl_kept="$(printf '%s\n' "$out_fl" | sed -n "s/.*first run's whole output kept in \(.*\.log\).*/\1/p")"
+fl_kept="${fl_kept%%$'\n'*}"
 case "$fl_kept" in
   "$HOOK_TESTS_FLAKY_OUTPUT"/*) check "#1788 a FLAKY suite's FAIL line names where its first run's output is kept" ok ;;
   *) check "#1788 a FLAKY suite's FAIL line names where its first run's output is kept" "named '$fl_kept'; out=$out_fl" ;;
