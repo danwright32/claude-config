@@ -22,6 +22,11 @@ check(){   # $1 = name  $2 = "ok" or the evidence of failure
 }
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/test-mods.XXXXXX")"
 trap 'rm -rf "$TMPROOT"' EXIT
+# A refused or failed mod's whole output is kept on disk (#1788), so every fixture here that fails a
+# mod on purpose keeps its output in this run's own folder, never in this Mac's real record. Only the
+# real tree (case 8) keeps its failures where the caller said, or in the default place.
+REAL_KEPT_SET="${CHECK_MODS_FAILURE_OUTPUT+set}"; REAL_KEPT="${CHECK_MODS_FAILURE_OUTPUT-}"
+export CHECK_MODS_FAILURE_OUTPUT="$TMPROOT/kept-output"
 # The sections below that run the real pinned compiler look for it in this checkout, which in a new
 # worktree has none until it is linked or installed (#1496), so that is done first, here, and why it
 # could not be is carried on every line that says those sections were not measured. From the npm
@@ -118,6 +123,92 @@ printf '%s\n' "$out" | grep 'broken-mod' | grep -q 'load average 41.5 on 8 cores
 printf '%s\n' "$out" | grep ' ok ' | grep -q 'load average' \
   && check "#1083 while a mod that passed carries none" "$out" \
   || check "#1083 while a mod that passed carries none" ok
+
+# 3c. A refused or failed mod's WHOLE engine output is kept where it can be read after the run, and
+#     its failure line names the file (#1788, L297). The line itself carries three verdict lines at
+#     most, and a failure seen once (the ones behind #1778) left nothing else to diagnose from.
+#     The stub here prints twelve failing lines and a last line no reason filter keeps, so only the
+#     kept file can hold all of it.
+FAKE3C="$TMPROOT/claude-3c"
+cat > "$FAKE3C" <<'STUB'
+#!/bin/bash
+[ "$1" = --version ] && { echo "2.1.291 (Claude Code)"; exit 0; }
+case "$1 $2" in
+  "plugin validate") case "$3" in *broken*) printf 'hooks: bad event\nValidation failed\nthe last validate line\n'; exit 1 ;; esac; echo 'Validation passed' ;;
+  "plugin test") case "$3" in
+      *redtest*) for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf 'case %s fail: expected %s\n' "$i" "$i"; done
+        printf 'the very last line of the engine output\n'; exit 1 ;;
+    esac; printf ' 1 pass\n 0 fail\n' ;;
+  *) exit 2 ;;
+esac
+STUB
+chmod +x "$FAKE3C"
+run3c(){   # $1 = mods dir  $2 = kept output folder -> sets out and code
+  out="$(CHECK_MODS_FAILURE_OUTPUT="$2" CLAUDE_BIN="$FAKE3C" TSC_BIN="$TSC_PASS" bash "$CHECK" "$1" 2>&1)"; code=$?
+}
+kept_path(){   # $1 = mod name -> the path its failure line names
+  printf '%s\n' "$out" | grep "check-mods: $1 " | sed -n 's/.*whole output kept in \(.*\.log\).*/\1/p' | head -n 1
+}
+M3C="$TMPROOT/m3c"; mkmod "$M3C" redtest-long; printf 'x\n' > "$M3C/redtest-long/hooks/a.test.ts"
+mkmod "$M3C" broken-kept; mkmod "$M3C" fine
+K3C="$TMPROOT/kept-3c"
+run3c "$M3C" "$K3C"
+[ "$code" -eq 1 ] && check "#1788 a failing mod still fails the run" ok || check "#1788 a failing mod still fails the run" "exit=$code out=$out"
+p="$(kept_path redtest-long)"
+case "$p" in
+  "$K3C"/*) check "#1788 a failed mod test's line names where its whole output is kept" ok ;;
+  *) check "#1788 a failed mod test's line names where its whole output is kept" "named '$p'; out=$out" ;;
+esac
+if [ -n "$p" ] && [ -f "$p" ]; then
+  grep -q 'case 12 fail: expected 12' "$p" && grep -q 'the very last line of the engine output' "$p" \
+    && check "#1788 and that file holds the whole output, past the three lines the line carries" ok \
+    || check "#1788 and that file holds the whole output, past the three lines the line carries" "$(cat "$p")"
+else
+  check "#1788 and that file holds the whole output, past the three lines the line carries" "no file at '$p'"
+fi
+p="$(kept_path broken-kept)"
+{ [ -n "$p" ] && [ -f "$p" ] && grep -q 'the last validate line' "$p"; } \
+  && check "#1788 a mod validate refuses has its whole output kept too" ok \
+  || check "#1788 a mod validate refuses has its whole output kept too" "named '$p'; out=$out"
+n3c="$(find "$K3C" -type f | wc -l | tr -d ' ')"
+[ "$n3c" = 2 ] && check "#1788 and the mod that passed kept nothing" ok \
+  || check "#1788 and the mod that passed kept nothing" "$n3c files: $(ls "$K3C" 2>&1)"
+# A run where every mod passes writes nothing at all, not even the folder.
+K3P="$TMPROOT/kept-3c-pass"
+run3c "$M1" "$K3P"
+[ "$code" -eq 0 ] && [ ! -e "$K3P" ] && check "#1788 a passing run keeps nothing" ok \
+  || check "#1788 a passing run keeps nothing" "exit=$code; $(ls -R "$K3P" 2>&1)"
+# Old copies are pruned to the newest 20, oldest first by the time in their names, and a file the
+# record did not write is never touched.
+K3R="$TMPROOT/kept-3c-prune"; mkdir -p "$K3R"
+for i in 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31; do
+  printf 'old\n' > "$K3R/202001${i}T000000Z-seeded-$i.log"
+done
+printf 'mine\n' > "$K3R/notes.txt"
+M3R="$TMPROOT/m3r"; mkmod "$M3R" redtest-prune; printf 'x\n' > "$M3R/redtest-prune/hooks/a.test.ts"
+run3c "$M3R" "$K3R"
+p="$(kept_path redtest-prune)"
+nlog="$(find "$K3R" -name '*.log' -type f | wc -l | tr -d ' ')"
+[ "$nlog" = 20 ] && check "#1788 pruning keeps 20 copies" ok || check "#1788 pruning keeps 20 copies" "$nlog: $(ls "$K3R")"
+{ [ -n "$p" ] && [ -f "$p" ]; } && check "#1788 and the newest, this run's, is one of them" ok \
+  || check "#1788 and the newest, this run's, is one of them" "named '$p': $(ls "$K3R")"
+[ -f "$K3R/20200131T000000Z-seeded-31.log" ] && [ -f "$K3R/20200113T000000Z-seeded-13.log" ] \
+  && check "#1788 and the newest seeded copies stay" ok || check "#1788 and the newest seeded copies stay" "$(ls "$K3R")"
+[ ! -e "$K3R/20200110T000000Z-seeded-10.log" ] && [ ! -e "$K3R/20200112T000000Z-seeded-12.log" ] \
+  && check "#1788 while the three oldest are removed" ok || check "#1788 while the three oldest are removed" "$(ls "$K3R")"
+[ -f "$K3R/notes.txt" ] && check "#1788 and a file the record did not write is left alone" ok \
+  || check "#1788 and a file the record did not write is left alone" "$(ls "$K3R")"
+# A folder that cannot be written is said on the line, never a silent loss, and the mod still fails
+# with its reason.
+run3c "$M3R" "/dev/null/kept"
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'redtest-prune' | grep 'case 1 fail' | grep -q 'whole output could not be kept' \
+  && check "#1788 a folder that cannot be written is said on the failure line" ok \
+  || check "#1788 a folder that cannot be written is said on the failure line" "exit=$code out=$out"
+# Set empty, the record is off, and the line says so rather than naming nothing.
+run3c "$M3R" ""
+printf '%s\n' "$out" | grep 'redtest-prune' | grep -q 'whole output not kept: CHECK_MODS_FAILURE_OUTPUT is empty' \
+  && check "#1788 set empty, nothing is kept and the line says so" ok \
+  || check "#1788 set empty, nothing is kept and the line says so" "out=$out"
 
 # 3b. Every mod ships its own tsconfig.json (Dan, 2026-10-04, after #638): one without it gets the
 #     copy Claude Code generates, which the sync then sends up as a local edit.
@@ -757,7 +848,11 @@ if [ ! -d "$ROOT/payload/mods" ]; then
   # Not a pass over mods, so not counted as one (claude-config#1452, L98): said by the agreed line.
   echo "SUITE-PART-UNMEASURED the real mods, because payload/mods does not exist yet (no Mac has sent a mod), so there is nothing to check"
 else
-  out="$(CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
+  if [ "$REAL_KEPT_SET" = set ]; then
+    out="$(CHECK_MODS_FAILURE_OUTPUT="$REAL_KEPT" CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
+  else
+    out="$(env -u CHECK_MODS_FAILURE_OUTPUT CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
+  fi
   if [ "$code" -eq 3 ]; then
     # Said once, by the agreed line, and counted as nothing (claude-config#1452, L98).
     echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because there is no claude command on this machine"

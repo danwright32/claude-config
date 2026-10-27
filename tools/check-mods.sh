@@ -20,6 +20,8 @@
 # TSC_BIN names a TypeScript compiler for the strict type check; left unset it is the compiler pinned
 # in tools/typescript (#803), which a checkout without it gets automatically from the clone's shared
 # install (tools/lib/pinned-compiler.sh, #1496), else tsc on PATH.
+# CHECK_MODS_FAILURE_OUTPUT moves where each refused or failed mod's whole output is kept, or set
+# empty turns that off (#1788, below).
 # CHECK_MODS_TS_DIR moves where the pin, the pinned Claude Code types (claude-code-types/) and the
 # record of known type errors are read from, for tests. Nothing is read from an installed copy of a
 # mod (#953), so the same tree gives the same verdict on any machine and in CI.
@@ -33,6 +35,28 @@ if [ -f "$_cm_load_lib" ]; then
 else
   load_average_note(){ printf 'load average could not be read: %s is missing' "$_cm_load_lib"; }
 fi
+# A refused or failed mod's WHOLE engine output is kept, and its line names the file (#1788, L297):
+# the line carries three verdict lines at most, and a failure seen once (the ones behind #1778) left
+# nothing else to diagnose from. CHECK_MODS_FAILURE_OUTPUT moves the folder, or set EMPTY turns the
+# record off (`-`, not `:-`). The default sits beside the runner's suite timings, outside the config
+# directory, which mirrors itself to the other Mac. Pruned to the newest 20 (hooks/lib/kept-output.sh).
+KEPT_DIR="${CHECK_MODS_FAILURE_OUTPUT-${XDG_CACHE_HOME:-$HOME/.cache}/claude-config/mod-test-failures}"
+_cm_kept_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../payload/hooks/lib/kept-output.sh"
+if [ -f "$_cm_kept_lib" ]; then
+  . "$_cm_kept_lib"
+else
+  kept_output_save(){ cat > /dev/null; KEPT_OUTPUT_PATH=""; KEPT_OUTPUT_WHY="$_cm_kept_lib is missing"; return 1; }
+fi
+# kept_note <mod> <what refused it> <output>: where its whole output was kept, or why it was not.
+kept_note(){
+  if [ -z "$KEPT_DIR" ]; then
+    printf 'whole output not kept: CHECK_MODS_FAILURE_OUTPUT is empty'
+  elif kept_output_save "$KEPT_DIR" "$1-$2" <<< "$3"; then
+    printf 'whole output kept in %s' "$KEPT_OUTPUT_PATH"
+  else
+    printf 'whole output could not be kept: %s' "$KEPT_OUTPUT_WHY"
+  fi
+}
 
 dir="${1:-}"
 if [ -z "$dir" ] || [ ! -d "$dir" ]; then
@@ -534,7 +558,7 @@ for i in "${!mods[@]}"; do
     continue
   fi
   if [ "$rc" -ne 0 ]; then
-    echo "check-mods: $name refused by claude plugin validate: $(reason "$out" "$rc") ($(load_average_note))"
+    echo "check-mods: $name refused by claude plugin validate: $(reason "$out" "$rc") ($(load_average_note)); $(kept_note "$name" plugin-validate "$out")"
     failed=1
     continue
   fi
@@ -549,7 +573,7 @@ for i in "${!mods[@]}"; do
       continue
     fi
     if [ "$rc" -ne 0 ]; then
-      echo "check-mods: $name failed claude plugin test: $(reason "$out" "$rc") ($(load_average_note))"
+      echo "check-mods: $name failed claude plugin test: $(reason "$out" "$rc") ($(load_average_note)); $(kept_note "$name" plugin-test "$out")"
       failed=1
       continue
     fi

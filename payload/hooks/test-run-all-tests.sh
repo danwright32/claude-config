@@ -57,6 +57,9 @@ case "${TMPROOT%/}" in
   ''|/|"${HOME%/}") echo "test-run-all-tests: refusing to run: throwaway directory came back as '$TMPROOT'." >&2; exit 2 ;;
 esac
 trap 'rm -rf "$TMPROOT"' EXIT
+# Every launch below that sees a FLAKY suite keeps its first run's output here, never in this Mac's
+# real record of flakes (#1788).
+export HOOK_TESTS_FLAKY_OUTPUT="$TMPROOT/flaky-output"
 
 # EVERY launch below reads a throwaway spool, not Dan's real one. 65 of the 69 launches in this
 # file named no spool, so they bracketed the live one, and the cost of a launch was then set by how
@@ -2614,6 +2617,23 @@ case "$out_fl" in
   *"test-flaky.sh"*) check "#245 and the flake is named, not just counted" ok ;;
   *) check "#245 and the flake is named, not just counted" "out=$out_fl" ;;
 esac
+# The first, failing run's whole output is kept, and its FAIL line names where (#1788, L297). It
+# lived in the run's work folder, which is removed at the end, so a flake left nothing to read.
+fl_kept="$(printf '%s\n' "$out_fl" | sed -n "s/.*first run's whole output kept in \(.*\.log\).*/\1/p" | head -n 1)"
+case "$fl_kept" in
+  "$HOOK_TESTS_FLAKY_OUTPUT"/*) check "#1788 a FLAKY suite's FAIL line names where its first run's output is kept" ok ;;
+  *) check "#1788 a FLAKY suite's FAIL line names where its first run's output is kept" "named '$fl_kept'; out=$out_fl" ;;
+esac
+{ [ -n "$fl_kept" ] && [ -f "$fl_kept" ] && grep -q 'it failed the first time only' "$fl_kept"; } \
+  && check "#1788 and that file holds the first run's output, after the run's work folder is gone" ok \
+  || check "#1788 and that file holds the first run's output, after the run's work folder is gone" "file '$fl_kept': $(cat "$fl_kept" 2>&1)"
+# A run whose suite passes keeps nothing, not even the folder.
+FLP="$TMPROOT/flaky-pass"; mkdir -p "$FLP"
+mk_suite "$FLP" fine 0
+FLP_KEPT="$TMPROOT/flaky-pass-kept"
+HOOK_TESTS_FLAKY_OUTPUT="$FLP_KEPT" HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 bash "$RUNNER" "$FLP" >/dev/null 2>&1
+[ ! -e "$FLP_KEPT" ] && check "#1788 a passing run keeps no output" ok \
+  || check "#1788 a passing run keeps no output" "$(ls -R "$FLP_KEPT" 2>&1)"
 
 # A recheck that HANGS is a third outcome, and it has its own words (L11). A suite that fails and
 # then hangs on the second run is not a flake and is not a clean failure, and without a deadline it
