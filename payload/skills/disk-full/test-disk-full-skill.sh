@@ -66,8 +66,11 @@ STATE="$TMP/state"; mkdir -p "$STATE"
 GB=$((1024 * 1024 * 1024)); T0=1757500000
 printf '%s %s\n' "$((T0 - 10800))" "$((300 * GB))" > "$STATE/_fixture"
 runnable="${rate_line//\~\/.claude\/hooks\//$HOOKS/}"
+# The check reads swap too (claude-config#1770); a reader of the suite's own, never this Mac's.
+printf '#!/bin/sh\necho "vm.swapusage: total = 0.00M  used = 0.00M  free = 0.00M  (encrypted)"\n' > "$TMP/swap"; chmod +x "$TMP/swap"
 out="$(FREE_SPACE_BYTES="$((240 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$STATE" \
-  FREE_SPACE_PATH=/fixture FREE_SPACE_SYMBOL_CACHE="$TMP/no-symbol-cache" bash -c "$runnable" 2>&1)"
+  FREE_SPACE_PATH=/fixture FREE_SPACE_SYMBOL_CACHE="$TMP/no-symbol-cache" FREE_SPACE_SWAP_CMD="$TMP/swap" \
+  FREE_SPACE_DISK_BYTES=$((926 * GB)) bash -c "$runnable" 2>&1)"
 check "the rate command, run as written, states the rate it measured" \
   "$(grep -q 'about 20 GB per hour' <<< "$out" && echo ok || echo "said: $out")"
 check "and the exit code beside it" \
@@ -140,7 +143,7 @@ check "the command that deletes them is introduced as Dan's decision" \
   "$([ -z "$unhanded_delete" ] && grep -qF 'derived-data-sweep.sh --delete' <<< "$CODE" && echo ok || echo "not handed to Dan, or missing: $unhanded_delete")"
 # Since Dan's decision of 2026-10-20 the low space warning clears them on its own, so the skill has
 # to say so, hand over the command that reads what the last sweep did (run as written, L442), and
-# name the switch that turns it off on one Mac, or a reader takes step 6 for the only way they go.
+# name the switch that turns it off on one Mac, or a reader takes step 7 for the only way they go.
 check "the skill says the low space warning clears them on its own, naming the off switch" \
   "$(grep -qF 'FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0' "$SKILL" && grep -qi 'on its own' "$SKILL" && echo ok || echo "no paragraph names the automatic sweep and its off switch")"
 last_line="$(grep -m 1 -xF 'bash ~/.claude/hooks/derived-data-sweep.sh --last' <<< "$CODE")"
@@ -151,6 +154,27 @@ printf 'started=1\nfinished=2\nexit=1\norphans=3\ndeleted=2\nfailed=1\nlog=%s\n'
 last_out="$(DERIVED_DATA_SWEEP_STATE_DIR="$LS" bash -c "${last_line//\~\/.claude\/hooks\//$HOOKS/}" 2>&1)"
 check "and that command, run as written, reports a failed sweep as failed" \
   "$(grep -qF 'FAILED' <<< "$last_out" && grep -qF 'could not delete 1 of 3' <<< "$last_out" && echo ok || echo "said: $last_out")"
+
+# ---- 7. swap is checked before any folder is ranked (claude-config#1769) ----
+# On 2026-10-26 the disk reached 1.1 GB free and the cause was 95 GB of swap, kept on its own volume,
+# /System/Volumes/VM, which shares the disk and which no `du` of a folder reaches. The skill had no
+# step that looked at swap, every step came back clean, and it took six rounds to find. The step
+# must come before the folder rankings, carry the three commands that found it, say why `ps` cannot
+# see it, and name a restart as the remedy, never deleting files.
+swap_heading="$(grep -n -m 1 -iE '^### [0-9]+\..*swap' "$SKILL" | cut -d: -f1)"
+weight_heading="$(grep -n -m 1 -E '^### [0-9]+\. Where the weight is' "$SKILL" | cut -d: -f1)"
+check "a step about swap comes before the folder rankings" \
+  "$([ -n "$swap_heading" ] && [ -n "$weight_heading" ] && [ "$swap_heading" -lt "$weight_heading" ] && echo ok || echo "swap step at line '${swap_heading}', folder rankings at '${weight_heading}'")"
+swap_section="$(awk -v s="${swap_heading:-0}" 'NR > s && /^### / { exit } NR > s' "$SKILL")"
+swap_code="$(awk '/^```/ { inside = !inside; next } inside' <<< "$swap_section")"
+for swap_cmd in 'sysctl vm.swapusage' 'df -h /System/Volumes/VM' 'top -l 1 -o mem -n 10 -stats pid,command,mem,time'; do
+  check "the swap step runs: $swap_cmd" \
+    "$(grep -qxF "$swap_cmd" <<< "$swap_code" && echo ok || echo "not a line in a block of the swap step")"
+done
+check "and says ps's resident size cannot see swapped out pages" \
+  "$(grep -qF '`ps`' <<< "$swap_section" && grep -qi 'swapped out' <<< "$swap_section" && echo ok || echo "the swap step does not say why ps misses it")"
+check "and names a restart as the remedy, never deleting files" \
+  "$(grep -qi 'restart' <<< "$swap_section" && grep -qi 'never deleting files' <<< "$swap_section" && echo ok || echo "the swap step does not name the remedy")"
 
 echo ""
 echo "passed: $pass, failed: $fail"

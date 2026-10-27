@@ -16,6 +16,12 @@ import { EDITORS, type Cmd } from './nobuild.ts'
 // carried its work, a closing reference belongs to the issue rather than to either PR, and a squash
 // merge leaves the closed PR's commits out of the base branch's history (L642), so nothing it gives
 // says so reliably.
+//
+// And Dan would rather merge it (#1767: "I'd always prefer to merge it unless we're never going to
+// merge it", about #1716). So a closed PR is reopened and finished by default, and he is asked about
+// leaving it closed only on a recorded reason it will never merge: its closing comment, or his own
+// earlier answer, naming a PR GitHub confirms is one (the PR that superseded it), quoted to him. A
+// comment naming only an issue, as #1716's did, is no such reason.
 
 export type Refusal = { what: string }
 
@@ -41,13 +47,84 @@ export const branchChoiceFor = (all: readonly LeftBranch[], repo: string, branch
 type Unreadable = { unreadable: string }
 const isUnreadable = (v: unknown): v is Unreadable => !!v && typeof v === 'object' && 'unreadable' in v
 
+/** A PR another names: by number, in the repository it names, or the one it is in when it names none. */
+export type PrRef = { repo?: string; number: number }
+/**
+ * A recorded reason a PR closed without merging will never merge (#1767): a closing comment, or Dan's
+ * own earlier answer, naming a PR GitHub confirmed is one (the PR that superseded it), quoted.
+ */
+export type NeverMerge = { from: 'comment' | 'dan'; pr: PrRef; quote: string }
+
+// What names a PR in a comment (#1767): owner/name#N, or #N, as every closing comment measured on
+// claude-config's closed PRs did ("Replaced by #1645"). A # after a word character, an & (an HTML
+// entity) or another # (a heading) names nothing. A link is not read here: mod-kit owns reading one
+// (check-mod-shared-parts.sh), and a closing comment naming its PR only by link is read as no reason,
+// so Claude is told to reopen it and Dan's own words can still be handed in.
+const PR_NAMED = /(?<![\w/.-])([\w.-]+\/[\w.-]+)#(\d+)\b|(?<![\w&#/])#(\d+)\b/g
+
+/** The PRs a text may name (#1767), in order, each once, never `own` itself. Which are PRs is GitHub's to say. */
+export const prRefs = (text: string, own: PrRef): PrRef[] => {
+  const out: PrRef[] = []
+  for (const m of text.matchAll(PR_NAMED)) {
+    const repo = m[1]
+    const number = Number(m[2] ?? m[3])
+    const sameRepo = !repo || !own.repo || repo.toLowerCase() === own.repo.toLowerCase()
+    if (number === own.number && sameRepo) continue
+    if (out.some(r => r.number === number && (r.repo ?? '').toLowerCase() === (repo ?? '').toLowerCase())) continue
+    out.push(repo ? { repo, number } : { number })
+  }
+  return out
+}
+
+// How long before a PR closed a comment may be posted and still be its closing comment (#1767). `gh pr
+// close --comment` posts it the second before the close; discussion from earlier (a conflict note
+// naming the PR that merged first, posted 39 minutes before #1595 closed) is not why it closed.
+const CLOSING_WINDOW_MS = 10 * 60_000
+
+export type PrComment = { body?: string; createdAt?: string }
+/**
+ * The comments that may say why a PR closed (#1767), newest first, each with the PRs it may name:
+ * those posted no earlier than ten minutes before it closed, or after. With no close time GitHub gave,
+ * every comment, so a reason is never missed (asking Dan is the harmless side, L648).
+ */
+export const closingComments = (pr: { number: number; repo?: string; closedAt?: string; comments?: readonly PrComment[] }): { body: string; refs: PrRef[] }[] => {
+  const closed = pr.closedAt ? Date.parse(pr.closedAt) : NaN
+  const own: PrRef = pr.repo ? { repo: pr.repo, number: pr.number } : { number: pr.number }
+  return (pr.comments ?? [])
+    .filter(c => {
+      if (Number.isNaN(closed)) return true
+      const at = c.createdAt ? Date.parse(c.createdAt) : NaN
+      return Number.isNaN(at) || at >= closed - CLOSING_WINDOW_MS
+    })
+    .map(c => ({ body: String(c.body ?? ''), at: c.createdAt ? Date.parse(c.createdAt) : NaN }))
+    .sort((a, b) => (Number.isNaN(b.at) ? 0 : b.at) - (Number.isNaN(a.at) ? 0 : a.at))
+    .map(c => ({ body: c.body, refs: prRefs(c.body, own) }))
+}
+
+const QUOTE_MAX = 200
+/** Text quoted to Dan or Claude: one line, at most 200 characters. */
+export const quoteOf = (text: string): string => {
+  const line = text.replace(/\s+/g, ' ').trim()
+  return line.length <= QUOTE_MAX ? line : `${line.slice(0, QUOTE_MAX - 3).trimEnd()}...`
+}
+
+export const refSaid = (r: PrRef) => (r.repo ? `${r.repo}#${r.number}` : `#${r.number}`)
+/** A recorded reason a PR will never merge, quoted, as said to Claude or, `toDan`, to Dan himself (#1767). */
+export const neverMergeSaid = (n: NeverMerge, toDan = false): string =>
+  n.from === 'comment' ? `its closing comment names PR ${refSaid(n.pr)} ("${n.quote}")` : `${toDan ? 'you' : 'Dan'} named PR ${refSaid(n.pr)} earlier ("${n.quote}")`
+/** What is recorded as the reason when Dan leaves it closed, and listed after (#1767). */
+export const neverMergeWhy = (n: NeverMerge): string => (n.from === 'comment' ? `its closing comment names PR ${refSaid(n.pr)}` : `Dan named PR ${refSaid(n.pr)} earlier`)
+
 /** What the finish check read, each part its own reading so a failed read is said apart from a no. */
 export type Reading = {
   branch: string
   /** Whether the branch is the repository's default branch, where no PR is expected. */
   isDefault: boolean
-  /** `head` is the commit the PR's branch is on now, as GitHub gave it; absent when it gave none. */
-  pr: { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; head?: string; issues: { number: number; state: 'OPEN' | 'CLOSED' }[] } | null | Unreadable
+  /**
+   * `head` is the commit the PR's branch is on now, as GitHub gave it; absent when it gave none.
+   * `neverMerge`, for a PR closed without merging, is a recorded reason it will never merge (#1767).
+   */
+  pr: { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; head?: string; issues: { number: number; state: 'OPEN' | 'CLOSED' }[]; neverMerge?: NeverMerge } | null | Unreadable
   /** Dan's choice to leave this PR open (#917) or closed (#1033), when he made one; never inferred. */
   choice?: LeftAsIs
   /**
@@ -305,8 +382,13 @@ export const outstanding = (r: Reading): string[] => {
   }
   if (r.pr.state === 'CLOSED') {
     if (settledByDan(r)) return []
-    // His answer to leave it open was about an open PR, so it settles nothing once closed.
-    return [`PR #${r.pr.number} was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)`]
+    // His answer to leave it open was about an open PR, so it settles nothing once closed. Dan would
+    // rather merge it (#1767), so he is asked only on a recorded reason it will never merge.
+    const n = r.pr.neverMerge
+    if (n) return [`PR #${r.pr.number} was closed without merging, and ${neverMergeSaid(n)}: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)`]
+    return [
+      `PR #${r.pr.number} was closed without merging: reopen it (gh pr reopen ${r.pr.number}) and finish it, as Dan would rather merge it. Ask him whether to leave it closed (mcp__scope-modes__leave_pr_open) only when he said earlier that another PR superseded it, passing his words as dan_said`,
+    ]
   }
   const d = r.deploy
   if (d === null) out.push(`PR #${r.pr.number} has no is it live card yet: check the deploy and make the card (mcp__is-it-live__card)`)
