@@ -90,6 +90,9 @@ denies "gh api body read from a file with @, relative to the payload's directory
 printf '{"body": "Done. %s"}' "$LINK" >"$TMP_DIR/with-link.json"
 denies "gh api body from --input" "gh api -X POST repos/a/b/issues/1/comments --input $TMP_DIR/with-link.json"
 allows "gh api body from a clean file" "gh api repos/a/b/issues/1/comments -F body=@$TMP_DIR/clean.md"
+denies "gh api with a flag in front of the subcommand" "gh -R acme/widgets api repos/acme/widgets/issues/22/comments -f body=\"Done. $LINK\""
+denies "gh api run through rtk" "rtk gh api repos/acme/widgets/issues/22/comments -f body=\"Done. $LINK\""
+allows "gh api with the override, for that one command" "ALLOW_SESSION_LINK_IN_COMMENT=1 gh api repos/acme/widgets/issues/22/comments -f body=\"Done. $LINK\""
 denies "comment chained after a commit" "git add a.ts && gh pr comment 5 --body \"Pushed. $LINK\""
 
 # --- Everything that is allowed to carry it, and comments without it ---

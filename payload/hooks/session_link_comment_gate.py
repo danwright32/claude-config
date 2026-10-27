@@ -127,7 +127,8 @@ def _api_writes_with_link(command, cwd):
 
 
 def judge_bash(command, cwd):
-    """The kind of post that would carry the link ("comment", "review", "reply"), or None."""
+    """The kind of post that would carry the link ("comment", "review", "closing comment" or
+    "comment or reply"), or None."""
     # Only a command naming gh can post; a body file may hold the link the command text does not.
     if not re.search(r"\bgh\b", command):
         return None
