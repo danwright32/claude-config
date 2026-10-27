@@ -1745,7 +1745,10 @@ never dropped for its age (Dan, 2026-10-26). Each of those questions has its own
 release (`QUIZ_RELEASE_BUDGET_SECONDS`), both well inside the Stop hook's 60 s timeout, which
 would otherwise kill the hook and cost every hold a turn. An answer cut at its deadline, with
 everything it started, counts as no answer, so that hold waits for the next turn end and the release
-goes on to the next one. Once the 40 s are spent nothing more is asked, and the holds not asked are
+goes on to the next one. Each such cut, at the question's own deadline or at what was left of the
+budget, is counted as `cut` in `~/.claude-quiz-verdicts/counts` (#1817), so a release that keeps
+cutting shows there rather than as quizzes that never came; the label gate's notice leaves it out,
+since the gate did not record it. Once the 40 s are spent nothing more is asked, and the holds not asked are
 written back ahead of the rest, so one pull request whose answer keeps hanging cannot starve the
 others. The only cleanup runs when any session holds a merge:
 a held file untouched for two days is removed only if its session has ended, as the session registry
