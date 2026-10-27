@@ -307,7 +307,16 @@ take_lock() {
   holder="$(readlink "$LOCK" 2>/dev/null)"
   case "$holder" in ''|*[!0-9]*) refuse 75 "its lock $LOCK is held but names no process, so it removed nothing; if no disk-remove is running, remove that file." ;; esac
   kill -0 "$holder" 2>/dev/null && refuse 75 "another disk-remove run (pid $holder) is removing things now, so this one removed nothing."
-  rm -f "$LOCK"
+  # Taking over is a rename, never rm then ln: two runs can both see the dead holder, and an rm by
+  # the slower one would delete the lock the faster one had just taken. Whoever renames away a link
+  # that no longer names the dead holder has moved a live run's lock, so puts it back and refuses.
+  local moved
+  mv "$LOCK" "$WORK/stale-lock" 2>/dev/null || refuse 75 "another disk-remove run took its lock first, so this one removed nothing."
+  moved="$(readlink "$WORK/stale-lock" 2>/dev/null)"
+  if [ "$moved" != "$holder" ]; then
+    ln -s "$moved" "$LOCK" 2>/dev/null
+    refuse 75 "another disk-remove run (pid $moved) took its lock first, so this one removed nothing."
+  fi
   ln -s "$$" "$LOCK" 2>/dev/null || refuse 75 "another disk-remove run took its lock first, so this one removed nothing."
   LOCK_HELD=1
   echo "A disk-remove run (pid $holder) had stopped without releasing its lock; this run took it over."
@@ -356,14 +365,15 @@ fi
 plan_check="$(awk -v out="$WORK/ids" '
   { sub(/\r$/, "") }
   /^[ \t]*$/ || /^#/ { next }
-  $1 == "scan_id" && NF == 2 { if (sid != "") { print "bad\tit names scan_id twice"; exit } sid = $2; next }
-  $1 == "count" && NF == 2 && $2 ~ /^[0-9]+$/ { if (count != "") { print "bad\tit gives count twice"; exit } count = $2; next }
+  $1 == "scan_id" && NF == 2 { if (sid != "") { print "bad\tit names scan_id twice"; bad = 1; exit } sid = $2; next }
+  $1 == "count" && NF == 2 && $2 ~ /^[0-9]+$/ { if (count != "") { print "bad\tit gives count twice"; bad = 1; exit } count = $2; next }
   $1 == "item" && NF == 2 && $2 ~ /^[A-Za-z0-9._:-]+$/ {
-    if ($2 in seen) { print "bad\tit names item " $2 " twice"; exit }
+    if ($2 in seen) { print "bad\tit names item " $2 " twice"; bad = 1; exit }
     seen[$2] = 1; n++; print $2 > out; next
   }
-  { print "bad\tline " NR " is not one a plan holds (scan_id <id>, count <n> or item <id>): " $0; exit }
+  { print "bad\tline " NR " is not one a plan holds (scan_id <id>, count <n> or item <id>): " $0; bad = 1; exit }
   END {
+    if (bad) exit
     if (sid == "") { print "bad\tit names no scan_id"; exit }
     if (sid !~ /^[A-Za-z0-9._:-]+$/) { print "bad\tits scan_id is not one a scan writes"; exit }
     if (count == "") { print "bad\tit gives no count"; exit }

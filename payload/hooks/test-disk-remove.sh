@@ -166,6 +166,7 @@ plan_bad $'scan_id s1\ncount 0\n'
 check "a plan naming no items is refused with exit 2, never an empty success" "$(eq "$RC" 2)"
 plan_bad $'scan_id s1\ncount 2\nitem i1\nitem i1\n'
 check "a plan naming one item twice is refused with exit 2" "$(eq "$RC" 2)"
+check "and the refusal is one line, with no second verdict after it" "$(eq "$(printf '%s\n' "$OUT_TEXT" | awk 'END { print NR }')" 1)"
 plan_bad $'scan_id s1\ncount 1\nitem i1\npath /etc/passwd\n'
 check "a plan carrying a line it does not hold, a path among them, is refused with exit 2" "$(eq "$RC" 2)"
 plan_bad $'count 1\nitem i1\n'
