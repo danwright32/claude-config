@@ -49,10 +49,10 @@ REASON = (
     "This would post the Claude session link in a %s. The link goes on commits, pull request "
     "descriptions and issue bodies only, never in a comment, review, reply or message addressed to "
     "people (Dan, 2026-10-27).\n"
-    "Remove the Claude-Session line (or the bare claude.ai/code/session link) from the body and re-run.\n"
-    "If Dan has asked for the link in this one comment, say so and re-run with "
-    + OVERRIDE + " <the same command>, good for that one command only."
+    "Remove the Claude-Session line (or the bare claude.ai/code/session link) from the body and re-run."
 )
+BASH_OVERRIDE = ("\nIf Dan has asked for the link in this one comment, say so and re-run with "
+                 + OVERRIDE + " <the same command>, good for that one command only.")
 
 
 def _comment_body_has_link(args, command, place):
@@ -170,7 +170,8 @@ def main():
     else:
         what = None
     if what:
-        json.dump(scan.deny_payload(REASON % what), sys.stdout)
+        reason = REASON % what + (BASH_OVERRIDE if tool == "Bash" else "")
+        json.dump(scan.deny_payload(reason), sys.stdout)
     return 0
 
 

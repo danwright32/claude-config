@@ -125,6 +125,10 @@ for needle in "Remove" "commits" "ALLOW_SESSION_LINK_IN_COMMENT=1"; do
     fail=$((fail + 1)); echo "FAIL: the refusal should say '$needle' (got: $out)"; fi
 done
 
+out="$(tool_payload mcp__plugin_slack_slack__slack_send_message "Shipped. $LINK" | bash "$HOOK" 2>/dev/null)"
+if [[ "$out" == *"Remove"* && "$out" != *"ALLOW_SESSION_LINK_IN_COMMENT"* ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: a Slack refusal offers no command override (got: $out)"; fi
+
 # --- A gate that cannot run says so on stderr and lets the command through ---
 err="$(bash_payload "gh pr comment 5 --body \"$LINK\"" | PATH="$TMP_DIR/bin" bash "$HOOK" 2>&1 >/dev/null)"
 if [[ "$err" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
