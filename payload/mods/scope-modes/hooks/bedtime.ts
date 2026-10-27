@@ -169,19 +169,33 @@ export const orderQuestions = (qs: OpenQuestion[], rank: (repo: string, issue: n
   return [...qs].sort((a, b) => b.issues.length - a.issues.length || fewest(a) - fewest(b) || best(a) - best(b) || a.at - b.at)
 }
 
-/** The question as the dialog shows it: its issues first, so Dan knows what it is about. */
-export const askText = (q: OpenQuestion) => `${q.repo}#${q.issues.join(' and #')}: ${q.text}`
+// The question's own answers, each once, leaving out skip and go to sleep, and how many of them the
+// dialog shows: every place but going to sleep's (#1792).
+const answersOf = (q: OpenQuestion) => [...new Set(q.options)].filter(o => !leavesUnanswered(o))
+const ANSWERS_SHOWN = DIALOG_MAX - 1
 
 /**
- * The question's answers first, then skip and go to sleep; anything else Dan types. On the `last`
- * question skip is left off (#1771), since there nothing follows and it does what going to sleep
- * does, which leaves room for a third answer; unless the question has no answers, as the dialog
- * shows two choices at least and pads fewer with Yes and No, which would post as his decision.
+ * The question as the dialog shows it: its issues first, so Dan knows what it is about; and any
+ * answers past the ones the dialog shows named after it, to be typed (#1792), so none is hidden.
+ */
+export const askText = (q: OpenQuestion) => {
+  const more = answersOf(q).slice(ANSWERS_SHOWN)
+  return `${q.repo}#${q.issues.join(' and #')}: ${q.text}${more.length ? ` (Or type one of: ${more.join(' / ')})` : ''}`
+}
+
+/**
+ * The question's answers first, then skip and go to sleep; anything else Dan types. A question with
+ * three answers or more shows three and no skip (#1792): until then it kept skip and showed two, so
+ * a third choice was hidden on every question but the last, and nothing said so; a question's
+ * choices are what it asks, while skip only puts it off, which going to sleep also does. On the
+ * `last` question skip is left off too (#1771), since there nothing follows and it does what going
+ * to sleep does; unless the question has no answers, as the dialog shows two choices at least and
+ * pads fewer with Yes and No, which would post as his decision.
  */
 export const askOptions = (q: OpenQuestion, last = false) => {
-  const answers = [...new Set(q.options)].filter(o => !leavesUnanswered(o))
-  const skip = last && answers.length ? [] : [SKIP_QUESTION]
-  return [...answers.slice(0, DIALOG_MAX - 1 - skip.length), ...skip, GO_TO_SLEEP]
+  const answers = answersOf(q)
+  if (answers.length >= ANSWERS_SHOWN) return [...answers.slice(0, ANSWERS_SHOWN), GO_TO_SLEEP]
+  return [...answers, ...(last && answers.length ? [] : [SKIP_QUESTION]), GO_TO_SLEEP]
 }
 
 /** The decision as posted on the issue: dated in ET, the question quoted, the answer as given (L249). */
