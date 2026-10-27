@@ -423,12 +423,18 @@ mkdir -p "$DC_ROOT/empty-repo/payload/hooks/lib"
 out="$(DC_REPO="$DC_ROOT/empty-repo" dc_check_commands 2>&1)"; rc=$?
 check "with no disk-clean scripts present it says so with its own exit code, never a pass (L98)" \
   "$([ "$rc" -eq 3 ] && grep -qF 'no disk-clean scripts' <<< "$out" && echo ok || echo "exit $rc: $out")"
+out="$(DC_REPO="$DC_ROOT/no-such-repo" dc_check_commands 2>&1)"; rc=$?
+check "a repository it cannot read is exit 2, could not run, never read as nothing present yet (L11)" \
+  "$([ "$rc" -eq 2 ] && grep -qF 'could not' <<< "$out" && echo ok || echo "exit $rc: $out")"
 
-# 4g. The real repository, today.
+# 4g. The real repository, today. An installed copy (~/.claude/hooks) has no repository above it,
+# which is a part not measured there; in a checkout an unreadable repository is a failure.
 out="$(dc_check_commands 2>&1)"; rc=$?
-case "$rc" in
-  0) check "every command the disk-clean scripts call is stubbed or a core tool" ok ;;
-  3) echo "SUITE-PART-UNMEASURED the command check of the real disk-clean scripts: none exist yet in this repository (phases #1805 to #1809 add them), so it listed nothing" ;;
+case "$rc:$DIR" in
+  0:*) check "every command the disk-clean scripts call is stubbed or a core tool" ok ;;
+  3:*) echo "SUITE-PART-UNMEASURED the command check of the real disk-clean scripts: none exist yet in this repository (phases #1805 to #1809 add them), so it listed nothing" ;;
+  2:*/payload/hooks) check "every command the disk-clean scripts call is stubbed or a core tool" "could not run: $out" ;;
+  2:*) echo "SUITE-PART-UNMEASURED the command check of the real disk-clean scripts: this copy at $DIR is not inside a repository checkout, so there are no scripts to read" ;;
   *) check "every command the disk-clean scripts call is stubbed or a core tool" "exit $rc: $(grep '^fail' <<< "$out")" ;;
 esac
 

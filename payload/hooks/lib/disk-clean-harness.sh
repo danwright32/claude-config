@@ -270,12 +270,22 @@ _dc_repo() {
 # The disk-clean scripts present, one per line: every file under payload/skills/disk-clean except
 # its suites (test-*.sh), anything under a tests folder, and markdown, HTML and JSON, plus
 # payload/hooks/lib/disk-remove.sh. Read from disk, so a script written today is in it today.
+# Fails (exit 1, saying why) when the repository cannot be read, which is not the same answer as a
+# repository holding no disk-clean scripts yet (L11).
 dc_scope_files() {
-  local repo
-  repo="$(_dc_repo)" || return 1
+  local repo found
+  repo="$(_dc_repo)" || { echo "dc_scope_files: could not find the repository above $DC_LIB" >&2; return 1; }
+  if [ ! -d "$repo/payload/hooks" ]; then
+    echo "dc_scope_files: could not read $repo as this repository: it has no payload/hooks folder" >&2
+    return 1
+  fi
   if [ -d "$repo/payload/skills/disk-clean" ]; then
-    find "$repo/payload/skills/disk-clean" -type f \
-      ! -path '*/tests/*' ! -name 'test-*.sh' ! -name '*.md' ! -name '*.html' ! -name '*.json' -print | sort
+    found="$(find "$repo/payload/skills/disk-clean" -type f \
+      ! -path '*/tests/*' ! -name 'test-*.sh' ! -name '*.md' ! -name '*.html' ! -name '*.json' -print)" || {
+      echo "dc_scope_files: could not list every file under $repo/payload/skills/disk-clean" >&2
+      return 1
+    }
+    [ -n "$found" ] && printf '%s\n' "$found" | sort
   fi
   [ -f "$repo/payload/hooks/lib/disk-remove.sh" ] && printf '%s\n' "$repo/payload/hooks/lib/disk-remove.sh"
   return 0
@@ -288,8 +298,9 @@ dc_check_commands() { # [<file>...]
   local py repo d roots=""
   py="$(command -v python3 2>/dev/null)" || { echo "dc_check_commands: python3 is not on PATH, so no script could be read" >&2; return 2; }
   if [ $# -eq 0 ]; then
-    local f files=()
-    while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<< "$(dc_scope_files)"
+    local f files=() scope
+    scope="$(dc_scope_files)" || { echo "dc_check_commands: could not tell which disk-clean scripts are present, so nothing was listed"; return 2; }
+    while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<< "$scope"
     if [ "${#files[@]}" -eq 0 ]; then
       echo "dc_check_commands: no disk-clean scripts are present under $(_dc_repo) yet, so nothing was listed"
       return 3
