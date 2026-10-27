@@ -57,17 +57,32 @@ export type NeverMerge = { from: 'comment' | 'dan'; pr: PrRef; quote: string }
 
 // What names a PR in a comment (#1767): owner/name#N, or #N, as every closing comment measured on
 // claude-config's closed PRs did ("Replaced by #1645"). A # after a word character, an & (an HTML
-// entity) or another # (a heading) names nothing. A link is not read here: mod-kit owns reading one
-// (check-mod-shared-parts.sh), and a closing comment naming its PR only by link is read as no reason,
-// so Claude is told to reopen it and Dan's own words can still be handed in.
+// entity) or another # (a heading) names nothing.
 const PR_NAMED = /(?<![\w/.-])([\w.-]+\/[\w.-]+)#(\d+)\b|(?<![\w&#/])#(\d+)\b/g
+// A pull request's link (#1777): its number is read here, and which repository it is in, and whether
+// it is a github.com link at all, is mod-kit's link reader's to say ($.modkit.linkRepo, which
+// check-mod-shared-parts.sh holds every mod to). That reader is async, so the caller asks it of each
+// link prLinks finds and hands the answers to prRefs.
+const PR_LINK = /https?:\/\/\S+?\/pull\/(\d+)\b/gi
 
-/** The PRs a text may name (#1767), in order, each once, never `own` itself. Which are PRs is GitHub's to say. */
-export const prRefs = (text: string, own: PrRef): PrRef[] => {
+/** The pull request links a text holds (#1777), each with the number it ends in, in order. */
+export const prLinks = (text: string): { link: string; number: number }[] =>
+  [...text.matchAll(PR_LINK)].map(m => ({ link: m[0], number: Number(m[1]) }))
+
+/**
+ * The PRs a text may name (#1767), in order, each once, never `own` itself. Which are PRs is GitHub's
+ * to say. A link names its PR only once `linked` holds mod-kit's answer for it, the repository it names
+ * (#1777); one it has no answer for, or that names no GitHub repository, names nothing.
+ */
+export const prRefs = (text: string, own: PrRef, linked: ReadonlyMap<string, string | null> = new Map()): PrRef[] => {
+  const found: { at: number; repo?: string; number: number }[] = []
+  for (const m of text.matchAll(PR_NAMED)) found.push({ at: m.index ?? 0, ...(m[1] ? { repo: m[1] } : {}), number: Number(m[2] ?? m[3]) })
+  for (const m of text.matchAll(PR_LINK)) {
+    const repo = linked.get(m[0])
+    if (repo) found.push({ at: m.index ?? 0, repo, number: Number(m[1]) })
+  }
   const out: PrRef[] = []
-  for (const m of text.matchAll(PR_NAMED)) {
-    const repo = m[1]
-    const number = Number(m[2] ?? m[3])
+  for (const { repo, number } of found.sort((a, b) => a.at - b.at)) {
     const sameRepo = !repo || !own.repo || repo.toLowerCase() === own.repo.toLowerCase()
     if (number === own.number && sameRepo) continue
     if (out.some(r => r.number === number && (r.repo ?? '').toLowerCase() === (repo ?? '').toLowerCase())) continue
@@ -76,18 +91,25 @@ export const prRefs = (text: string, own: PrRef): PrRef[] => {
   return out
 }
 
-// How long before a PR closed a comment may be posted and still be its closing comment (#1767). `gh pr
-// close --comment` posts it the second before the close; discussion from earlier (a conflict note
-// naming the PR that merged first, posted 39 minutes before #1595 closed) is not why it closed.
-const CLOSING_WINDOW_MS = 10 * 60_000
+// How long before a PR closed a comment may be posted and still be its closing comment. Measured on
+// 2026-10-26 (#1777) across danwright32's closed unmerged PRs, 68 of them, 61 with comments: every
+// comment saying why a PR closed was posted 0 to 2 seconds before the close (`gh pr close --comment`)
+// or after it, and the nearest discussion before a close came 477 seconds before (claude-config#1627's
+// lessons review), then 524 (#964's). The ten minutes #1767 set took in both, so two minutes: sixty
+// times the widest closing gap, a quarter of the nearest discussion (L172).
+export const CLOSING_WINDOW_MS = 2 * 60_000
 
 export type PrComment = { body?: string; createdAt?: string }
 /**
  * The comments that may say why a PR closed (#1767), newest first, each with the PRs it may name:
- * those posted no earlier than ten minutes before it closed, or after. With no close time GitHub gave,
- * every comment, so a reason is never missed (asking Dan is the harmless side, L648).
+ * those posted no earlier than two minutes before it closed, or after. With no close time GitHub gave,
+ * every comment, so a reason is never missed (asking Dan is the harmless side, L648). `linked` is
+ * mod-kit's answer for each link the comments hold (#1777).
  */
-export const closingComments = (pr: { number: number; repo?: string; closedAt?: string; comments?: readonly PrComment[] }): { body: string; refs: PrRef[] }[] => {
+export const closingComments = (
+  pr: { number: number; repo?: string; closedAt?: string; comments?: readonly PrComment[] },
+  linked: ReadonlyMap<string, string | null> = new Map(),
+): { body: string; refs: PrRef[] }[] => {
   const closed = pr.closedAt ? Date.parse(pr.closedAt) : NaN
   const own: PrRef = pr.repo ? { repo: pr.repo, number: pr.number } : { number: pr.number }
   return (pr.comments ?? [])
@@ -98,7 +120,7 @@ export const closingComments = (pr: { number: number; repo?: string; closedAt?: 
     })
     .map(c => ({ body: String(c.body ?? ''), at: c.createdAt ? Date.parse(c.createdAt) : NaN }))
     .sort((a, b) => (Number.isNaN(b.at) ? 0 : b.at) - (Number.isNaN(a.at) ? 0 : a.at))
-    .map(c => ({ body: c.body, refs: prRefs(c.body, own) }))
+    .map(c => ({ body: c.body, refs: prRefs(c.body, own, linked) }))
 }
 
 const QUOTE_MAX = 200
