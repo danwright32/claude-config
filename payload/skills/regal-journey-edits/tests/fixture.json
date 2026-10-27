@@ -1,0 +1,35 @@
+{
+ "title": "Fixture journey edits",
+ "subtitle": "One journey, one node change, for the skill's tests.",
+ "storageKey": "fixture-edits-v1",
+ "legend": [{"term": "Yes, No", "text": "a Conditional Match's two exits"}],
+ "pattern": {"title": "The pattern, once", "steps": ["Press Open in Regal.", "Save as Draft, then Save as Live."]},
+ "notesTop": [{"id": "safe", "title": "Safe to build", "body": ["Every new branch reads [[properties.flag]]; see <<100:4>>.", {"list": ["One point."]}]}],
+ "groups": [{"key": "edit", "title": "Your edits", "tickable": true, "lead": "One journey."},
+            {"key": "nochange", "title": "No change", "tickable": false}],
+ "journeys": [
+  {"id": 100, "name": "Example Journey", "uuid": "00000000-0000-4000-8000-000000000100", "version": 3, "read": "1 Jan 2026",
+   "trigger": "Example Event", "group": "edit",
+   "nodes": {"3": {"type": "conditional", "label": "Double Booking (Reschedule)?"},
+             "4": {"type": "conditional", "label": "Agent Assigned?"},
+             "5": {"type": "delay", "label": "", "detail": "5 seconds"},
+             "9": {"type": "updateContact", "label": "Add Attributes"}},
+   "changes": [{
+     "key": "a", "node": 4, "do": "Add before", "current": "Contact Attribute: handler_email contains @example.com",
+     "title": "Put a branch in front of <<4>>",
+     "new": [{"name": "Flag call?", "type": "Conditional Match", "fields": [
+               {"field": "Property", "value": "[[properties.flag]]"}, {"field": "Value", "value": "[[true]]"}]},
+             {"copyOf": 9, "name": "Add Attributes (Flag)", "type": "Update Contact", "rows": [
+               {"tag": "Keep", "attr": "customProperties.kept", "value": "x"},
+               {"tag": "Change", "attr": "customProperties.ai_agent_eligible", "was": "FALSE", "value": "TRUE"},
+               {"tag": "Remove", "attr": "customProperties.owner", "value": "{{event.owner}}"},
+               {"tag": "Add", "attr": "customProperties.agentFirstName", "value": "{{event.properties.agentFirstName}}"}]},
+             {"copyOf": 5, "type": "Delay"}],
+     "steps": ["On the No exit of <<3>>, remove the line to <<4>> and draw it to <<new:Flag call?>> instead.",
+               "From <<5>>, draw a line to <<copy:5>>."],
+     "test": "The run takes the Yes exit of <<new:Flag call?>>.",
+     "after": "The next runs reach <<4>>."}]},
+  {"id": 101, "name": "Traced Journey", "uuid": "00000000-0000-4000-8000-000000000101", "version": 1, "trigger": "Other Event",
+   "group": "nochange", "nodes": {"2": {"type": "webhook", "label": "Send"}}, "note": ["No change: <<2>> already handles it."]}
+ ]
+}
