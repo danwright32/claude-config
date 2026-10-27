@@ -1,0 +1,235 @@
+<title>__TITLE__</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* The Slate Journey Edits layout (2026-09-23), which Dan named as the format for every Regal journey
+   edit page: a sticky header with progress, the pattern once, then one card per journey holding one
+   ticked row per node change, every value he types beside its own Copy button. */
+:root{
+  --bg:#F9F6F0; --surface:#FFFFFF; --ink:#343434; --muted:#6E6A62; --line:#E4DFD4;
+  --accent:#82D0FF; --accent-ink:#1D212F; --done-bg:#DDF2E6; --done-ink:#1F5E3E;
+  --wait-bg:#FBE3CF; --wait-ink:#7A431E; --mono-bg:#F3EFE7; --focus:#1D212F;
+  --add-bg:#E3F3E7; --add-ink:#1D6B35; --chg-bg:#FDF1D8; --chg-ink:#7A5200; --rm-bg:#FBE6EA; --rm-ink:#8E2440;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#1D212F; --surface:#262B3B; --ink:#F3EFE7; --muted:#A9ADB9; --line:#3A4052;
+  --accent:#82D0FF; --accent-ink:#1D212F; --done-bg:#244A38; --done-ink:#BFE8D2;
+  --wait-bg:#5A3A22; --wait-ink:#F6C7A1; --mono-bg:#1F2331; --focus:#82D0FF;
+  --add-bg:#1E3A28; --add-ink:#9FDDB2; --chg-bg:#3D3115; --chg-ink:#F2D08A; --rm-bg:#43212B; --rm-ink:#F4A9BC;
+}}
+:root[data-theme="dark"]{
+  --bg:#1D212F; --surface:#262B3B; --ink:#F3EFE7; --muted:#A9ADB9; --line:#3A4052;
+  --accent:#82D0FF; --accent-ink:#1D212F; --done-bg:#244A38; --done-ink:#BFE8D2;
+  --wait-bg:#5A3A22; --wait-ink:#F6C7A1; --mono-bg:#1F2331; --focus:#82D0FF;
+  --add-bg:#1E3A28; --add-ink:#9FDDB2; --chg-bg:#3D3115; --chg-ink:#F2D08A; --rm-bg:#43212B; --rm-ink:#F4A9BC;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;padding-inline:max(16px, env(safe-area-inset-left, 0px));padding-block:0 48px}
+a{color:inherit}
+a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.wrap{max-width:1040px;margin:0 auto}
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:18px 14px;border-bottom:1px solid var(--line)}
+h1{font-size:22px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--muted);margin:0 0 12px;max-width:70ch}
+.progress{display:grid;grid-template-columns:1fr auto;gap:8px 16px;align-items:center}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}
+.bar > i{display:block;height:100%;background:var(--accent);width:0;transition:width .25s}
+.count{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
+.state{font-size:12px;color:var(--muted);margin-top:6px}
+.legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:10px;font-size:13px;color:var(--muted)}
+.legend b{color:var(--ink);font-weight:500}
+section.group,section.notes{margin-top:28px}
+.group h2,.notes h2{font-size:17px;font-weight:600;margin:0 0 4px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.group h2 .n{font-variant-numeric:tabular-nums;color:var(--muted);font-weight:400;font-size:14px}
+.group p.lead{margin:0 0 14px;color:var(--muted);max-width:75ch}
+.panel,.howto{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:14px 16px;margin-bottom:14px}
+.howto h3,.panel h3{margin:0 0 6px;font-size:14px;font-weight:600}
+.howto ol,.panel ol,.panel ul{margin:0;padding-left:20px}
+.howto li,.panel li{margin:3px 0}
+.panel p{margin:0 0 8px;max-width:75ch}
+.panel p:last-child{margin-bottom:0}
+.journey{background:var(--surface);border:1px solid var(--line);border-radius:16px;margin-bottom:10px;overflow:hidden;scroll-margin-top:170px}
+.journey.is-done{border-color:transparent;background:var(--done-bg);color:var(--done-ink)}
+.journey.is-done .pill{color:inherit;opacity:.85}
+.jhead{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px 12px;align-items:center;padding:12px 14px}
+.jhead .name{font-weight:600;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;min-width:0}
+.fid{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.jhead .meta{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:13px;color:var(--muted);margin-top:2px}
+.pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.wait{background:var(--wait-bg);color:var(--wait-ink);border-color:transparent}
+.open{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:12px;border:0;background:var(--accent);color:var(--accent-ink);text-decoration:none;font:inherit;font-weight:600;font-size:13px;min-height:36px;white-space:nowrap;cursor:pointer}
+.open:hover{filter:brightness(.96)}
+.check{width:22px;height:22px;accent-color:#1D212F;cursor:pointer;margin:0}
+:root[data-theme="dark"] .check{accent-color:#82D0FF}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .check{accent-color:#82D0FF} }
+.jnote{padding:0 14px 12px;color:var(--muted);font-size:14px;max-width:80ch}
+.journey.is-done .jnote{color:inherit}
+.nodes{border-top:1px solid var(--line);padding:6px 14px 12px 14px;display:grid;gap:8px}
+.node{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px 12px;padding:10px 0;border-bottom:1px dashed var(--line)}
+.node:last-child{border-bottom:0}
+.node > div{min-width:0}
+.node .t{font-weight:600}
+.quiet{color:var(--muted);font-weight:400}
+.cond{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:12.5px;background:var(--mono-bg);border-radius:6px;padding:2px 6px;display:inline-block;max-width:100%;overflow-x:auto;white-space:pre-wrap;word-break:break-word;margin-top:4px}
+.node ol{margin:6px 0 0;padding-left:20px}
+.node li{margin:4px 0}
+.nref{font-weight:600}
+.sub-h{font-size:12px;font-weight:600;margin:12px 0 4px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+code{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:12.5px;background:var(--mono-bg);border-radius:6px;padding:1px 6px;overflow-wrap:anywhere}
+.cv{display:inline-flex;align-items:center;gap:4px;max-width:100%;vertical-align:baseline;flex-wrap:wrap}
+.cv code{white-space:pre-wrap}
+.cp{font:inherit;font-size:11.5px;font-weight:600;padding:1px 7px;min-height:24px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;white-space:nowrap}
+.cp.is-copied{background:var(--done-bg);color:var(--done-ink);border-color:transparent}
+.tablewrap{overflow-x:auto;margin-top:4px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;vertical-align:top;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{font-size:12px;color:var(--muted);font-weight:600}
+td.tagcell{width:1%;white-space:nowrap}
+.tag{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px}
+.tag-keep{color:var(--muted);border:1px solid var(--line)}
+.tag-change{background:var(--chg-bg);color:var(--chg-ink)}
+.tag-add{background:var(--add-bg);color:var(--add-ink)}
+.tag-remove{background:var(--rm-bg);color:var(--rm-ink)}
+tr.r-keep td{color:var(--muted)}
+.line{margin:8px 0 0}
+.line b{font-weight:600}
+@media (max-width:560px){
+  .jhead{grid-template-columns:auto minmax(0,1fr)} .jhead .open{grid-column:1 / -1;justify-content:center}
+  header.top{position:static}
+  .journey{scroll-margin-top:16px}
+  /* Each attribute row stacks: the tag and attribute on one line, its value under them. */
+  table.attrs thead{display:none}
+  table.attrs tr{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;padding:6px 0;border-bottom:1px solid var(--line)}
+  table.attrs td{border:0;padding:0}
+  table.attrs td:last-child{grid-column:1 / -1}
+}
+@media (prefers-reduced-motion: reduce){ .bar > i{transition:none} }
+</style>
+<div class="wrap">
+<header class="top">
+  <h1>__TITLE__</h1>
+  <p class="sub">__SUBTITLE__</p>
+  <div class="progress"><div class="bar" aria-hidden="true"><i id="bar"></i></div><div class="count" id="count" aria-live="polite"></div></div>
+  <div class="state" id="state">Loading saved ticks.</div>
+  __LEGEND__
+</header>
+<main id="main">
+__MAIN__
+</main>
+</div>
+<script>
+(function(){
+  var KEY = __STORAGE_KEY__, DOC = __DB_DOC__;
+  var state = {journeys:{}};
+  var db = null, canWrite = true, saving = null;
+
+  // Per journey, the newer `at` stamp wins; a snapshot that echoes our own save changes
+  // nothing, and a tick made while that echo was in flight survives it (Slate Journey Edits, 2026-09-23).
+  function mergeJourneys(local, remote){
+    var out = {}, keys = {};
+    Object.keys(local||{}).forEach(function(k){ keys[k]=1; });
+    Object.keys(remote||{}).forEach(function(k){ keys[k]=1; });
+    Object.keys(keys).forEach(function(k){
+      var a = (local||{})[k], b = (remote||{})[k];
+      if (!a) { out[k] = b; return; }
+      if (!b) { out[k] = a; return; }
+      out[k] = String(b.at||'') > String(a.at||'') ? b : a;
+    });
+    return out;
+  }
+  function journeys(){ return Array.prototype.slice.call(document.querySelectorAll('article.journey[data-tick="1"]')); }
+  function changeBoxes(art){ return Array.prototype.slice.call(art.querySelectorAll('input.check[data-c]')); }
+  function jstate(j){ return state.journeys[j] || (state.journeys[j] = {done:false, nodes:{}}); }
+  function paint(){
+    var jt = 0, jd = 0, ct = 0, cd = 0;
+    journeys().forEach(function(art){
+      var j = art.dataset.j, s = state.journeys[j] || {nodes:{}};
+      var boxes = changeBoxes(art), all = boxes.length > 0;
+      boxes.forEach(function(b){ var on = !!(s.done || (s.nodes||{})[b.dataset.c]); b.checked = on; ct++; if (on) cd++; else all = false; });
+      var done = !!s.done || all;
+      art.classList.toggle('is-done', done);
+      var jb = art.querySelector('input.check[data-jbox]'); if (jb) jb.checked = done;
+      jt++; if (done) jd++;
+    });
+    document.getElementById('bar').style.width = (jt ? Math.round(100*jd/jt) : 0) + '%';
+    document.getElementById('count').textContent = jd + ' of ' + jt + ' journeys, ' + cd + ' of ' + ct + ' node changes';
+  }
+  function setState(msg){ document.getElementById('state').textContent = msg; }
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+    if (!db || !canWrite) return;
+    // One write at a time: a tick made during a write is picked up by the write that follows it.
+    if (saving) { saving.then(save); return; }
+    setState('Saving.');
+    var snapshot = JSON.parse(JSON.stringify(state.journeys));
+    saving = db.doc(DOC).set({journeys: snapshot, savedAt: new Date().toISOString()})
+      .then(function(){ setState('Saved. Ticks save for everyone who opens this page.'); })
+      .catch(function(err){ if (err && err.code === 'invalid_argument') { canWrite = false; setState('You can tick here, but this account cannot save ticks for others.'); } else { setState('Could not save the last tick. It is kept on this browser; try again later.'); } })
+      .then(function(){ saving = null; });
+  }
+  document.addEventListener('change', function(e){
+    var cb = e.target; if (!cb.classList || !cb.classList.contains('check')) return;
+    var art = cb.closest('article.journey'); if (!art) return;
+    var j = art.dataset.j, s = jstate(j);
+    s.nodes = s.nodes || {};
+    if (cb.hasAttribute('data-jbox')) { s.done = cb.checked; changeBoxes(art).forEach(function(b){ s.nodes[b.dataset.c] = cb.checked; }); }
+    else { s.nodes[cb.dataset.c] = cb.checked; var boxes = changeBoxes(art); s.done = boxes.length > 0 && boxes.every(function(b){ return s.nodes[b.dataset.c]; }); }
+    s.at = new Date().toISOString();
+    paint(); save();
+  });
+
+  // Copy: the clipboard API, then a hidden textarea, then the text selected for Cmd+C.
+  function flash(btn, text){ var was = btn.dataset.label || btn.textContent; btn.dataset.label = was; btn.textContent = text; btn.classList.add('is-copied'); setTimeout(function(){ btn.textContent = was; btn.classList.remove('is-copied'); }, 1600); }
+  function fallback(btn, value){
+    var ok = false;
+    try { var ta = document.createElement('textarea'); ta.value = value; ta.setAttribute('readonly',''); ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.remove(); } catch (e) { ok = false; }
+    if (ok) { flash(btn, 'Copied'); return; }
+    var code = btn.previousElementSibling;
+    try { var r = document.createRange(); r.selectNodeContents(code); var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); } catch (e) {}
+    flash(btn, 'Press Cmd+C');
+  }
+  document.addEventListener('click', function(e){
+    var btn = e.target.closest && e.target.closest('button.cp'); if (!btn) return;
+    var value = btn.dataset.copy;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(function(){ flash(btn, 'Copied'); }, function(){ fallback(btn, value); });
+    } else { fallback(btn, value); }
+  });
+
+  // One reusable Regal window: the first click opens a window on the right half of the screen, every
+  // later click loads the next journey into it. A button, not a link: the artifact host opens a clicked
+  // link in a new tab itself, so a link opened every journey twice.
+  var regalWin = null;
+  document.addEventListener('click', function(e){
+    var b = e.target.closest && e.target.closest('button.open'); if (!b) return;
+    var href = b.dataset.href, w = null;
+    try {
+      if (e.metaKey || e.ctrlKey || e.shiftKey) { w = window.open(href, '_blank', 'noopener'); }
+      else if (regalWin && !regalWin.closed) { regalWin.location.href = href; w = regalWin; }
+      else { var sw = screen.availWidth, sh = screen.availHeight, sl = screen.availLeft||0, st = screen.availTop||0, half = Math.round(sw/2);
+        w = window.open(href, 'regal-journeys', 'popup=yes,width=' + half + ',height=' + sh + ',left=' + (sl+half) + ',top=' + st); }
+    } catch (err) { w = null; }
+    if (w) { if (!(e.metaKey||e.ctrlKey||e.shiftKey)) regalWin = w; try { w.focus(); } catch (err) {} }
+    else { setState('Your browser blocked the Regal window. Allow pop ups for this page and click again.'); }
+  });
+
+  // Boot: this browser's ticks first so the page is never blank, then the shared record.
+  try { var raw = localStorage.getItem(KEY); if (raw) { var s0 = JSON.parse(raw); if (s0 && s0.journeys) state.journeys = s0.journeys; } } catch (e) {}
+  paint();
+  (async function(){
+    if (!window.claude || !window.claude.use) { setState('Ticks are kept on this browser only.'); return; }
+    try { db = await window.claude.use('db'); } catch (e) { db = null; }
+    if (!db) { setState('Ticks are kept on this browser only.'); return; }
+    try {
+      var ref = db.doc(DOC);
+      var snap = await ref.get();
+      var apply = function(body){ if (!body || !body.journeys) return; var merged = mergeJourneys(state.journeys, body.journeys); if (JSON.stringify(merged) !== JSON.stringify(state.journeys)) { state.journeys = merged; paint(); } };
+      if (snap.exists) apply(snap.data());
+      setState('Ticks save for everyone who opens this page.');
+      ref.onSnapshot(function(s){ if (s.exists) apply(s.data()); }, function(){});
+    } catch (err) { setState('Could not load shared ticks; this browser\'s ticks are shown.'); }
+  })();
+})();
+</script>
