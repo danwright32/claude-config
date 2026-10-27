@@ -4,6 +4,7 @@ import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
 import { offTheDialog } from '../hooks/register.ts'
+import { GO_TO_SLEEP, itemChoices, openQuestionsIn, SKIP_QUESTION } from '../hooks/mod-kit/openquestions.ts'
 
 // Picker manners (#615) leaves the asking to Claude Code's own dialog (#744, decided with Dan on
 // 2026-10-05): its band question waited for a press through the mod's own $ noun, which Claude Code
@@ -217,13 +218,13 @@ const kitWithRepo: { name: string; register: Register } = {
     })
   },
 }
-type IssueWorld = { bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; noRepo?: boolean; onlyAccount?: string; pulls?: number[]; settle: () => Promise<void> }
+type IssueWorld = { answer: string | string[] | null; bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; noRepo?: boolean; onlyAccount?: string; pulls?: number[]; settle: () => Promise<void> }
 const issueWorld = (on: On, answer: string | string[] | null, bodies: Record<number, string> = {}): IssueWorld => {
   const clock = mock.clock(on, { now: 0 })
-  const w: IssueWorld = { bodies: { ...bodies }, edits: [], logs: [], settle: () => clock.settle() }
+  const w: IssueWorld = { answer, bodies: { ...bodies }, edits: [], logs: [], settle: () => clock.settle() }
   on('tool.call', ($, e) => {
     const q = String((e as unknown as { questions: { question: string }[] }).questions[0]?.question)
-    return { result: { questions: [], answers: answer === null ? {} : { [q]: answer } }, text: 'answered' } as never
+    return { result: { questions: [], answers: w.answer === null ? {} : { [q]: w.answer } }, text: 'answered' } as never
   })
   on('session.repo', () => ({ value: w.noRepo ? null : { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
   on('ui.log', ($, e) => {
@@ -277,9 +278,58 @@ test('a question answered with several choices is checked off with all of them (
 
 test("one he did not answer is added open, and issue #N is read in the session's repository (#1279)", { plugins: [kitWithRepo] }, async ($, on) => {
   const w = issueWorld(on, null, { 12: SECTION })
-  await askAbout($ as never, 'Skip design rounds for issue #12?')
+  await askAbout($ as never, 'How long should issue #12 keep a record?')
   await w.settle()
-  expect(w.edits).toEqual([{ issue: 12, repo: 'o/r', body: 'The bug.\n\n## Open questions\n\n- [ ] Skip design rounds for issue #12?' }])
+  expect(w.edits).toEqual([{ issue: 12, repo: 'o/r', body: 'The bug.\n\n## Open questions\n\n- [ ] How long should issue #12 keep a record? (choices: 1 day / 7 days)' }])
+})
+
+// #1775: an item added open carries the answers its dialog offered, as mod-kit's reader reads them,
+// so /sleep offers Dan the same ones when it asks it again.
+test('one he did not answer is added with the choices its dialog offered, read back by the shared reader (#1775)', { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, null, { 12: SECTION })
+  await $.tool.call({
+    tool: 'AskUserQuestion',
+    tool_use_id: 'q3',
+    questions: [{ question: 'Which copy should issue #12 use?', header: 'Copy', multiSelect: false, options: [{ label: 'Short', description: 'x' }, { label: 'Long', description: 'y' }, { label: 'Both', description: 'z' }] }],
+  } as never)
+  await w.settle()
+  expect(w.edits.map(x => x.body)).toEqual(['The bug.\n\n## Open questions\n\n- [ ] Which copy should issue #12 use? (choices: Short / Long / Both)'])
+  expect(openQuestionsIn(w.bodies[12] as string).open.map(itemChoices)).toEqual([{ words: 'Which copy should issue #12 use?', choices: ['Short', 'Long', 'Both'] }])
+})
+
+// #1774: /sleep's before bed dialog (scope-modes, $.ui.ask) reaches this hook as an AskUserQuestion
+// call like any other. Its skip and go to sleep leave the question unanswered, so the item stays
+// open to be asked another night; a real answer still checks it off. The dialog is raised here the
+// way scope-modes raises it, with the labels it shows, taken from the one place both mods read them.
+// A plugin in a test runs in its own environment, so the stand-in is handed the question and its
+// options as the command's arguments rather than reading this file's imports.
+const bedtime: { name: string; register: Register } = {
+  name: 'bedtime-stand-in',
+  register: on => {
+    on('command.run', { command: 'bedtime' }, async ($, e) => {
+      const { question, options } = JSON.parse(e.args) as { question: string; options: string[] }
+      return { text: await $.ui.ask(question, { options, header: 'Before bed' }) }
+    })
+  },
+}
+const BEDTIME_ASK = JSON.stringify({ question: 'o/r#7: Keep the old flag?', options: ['Keep it', 'Drop it', SKIP_QUESTION, GO_TO_SLEEP] })
+test("the before bed dialog's skip and go to sleep leave the issue's item open; a real answer checks it off (#1774)", { plugins: [kitWithRepo, bedtime] }, async ($, on) => {
+  const OPEN = 'The bug.\n\n## Open questions\n\n- [ ] Keep the old flag? (choices: Keep it / Drop it)'
+  const w = issueWorld(on, null, { 7: OPEN })
+  for (const leave of [SKIP_QUESTION, GO_TO_SLEEP]) {
+    w.answer = leave
+    const r = (await $.command.run({ command: 'bedtime', args: BEDTIME_ASK } as never)) as { text?: string }
+    // The dialog really was answered with it, and the issue's body is as it was.
+    expect(r.text).toBe(leave)
+    await w.settle()
+    expect(w.edits).toEqual([])
+    expect(w.bodies[7]).toBe(OPEN)
+    expect(w.logs).toEqual([])
+  }
+  w.answer = 'Drop it'
+  await $.command.run({ command: 'bedtime', args: BEDTIME_ASK } as never)
+  await w.settle()
+  expect(w.edits.map(x => x.body)).toEqual(['The bug.\n\n## Open questions\n\n- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)'])
 })
 
 // #1299 (lessons review): a mod-kit loaded before it had repo cannot say the session's repository; the

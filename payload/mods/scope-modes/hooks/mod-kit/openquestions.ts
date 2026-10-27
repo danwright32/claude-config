@@ -84,6 +84,25 @@ export const itemChoices = (item: string): { words: string; choices: string[] } 
   return { words: oneLine(item.slice(0, m.index)), choices }
 }
 
+// The two ways /sleep's before bed dialog leaves a question unanswered (#1771, Dan 2026-10-19: "just
+// skip and go to sleep now which are basically the same thing"): skip leaves this one and goes on to
+// the next; going to sleep asks nothing more. Claude Code's dialog draws a label and no description
+// from a mod, so the label carries the difference. Named here, once, since scope-modes shows them
+// (hooks/bedtime.ts) and picker manners, which sees the same dialog, must never record either as
+// Dan's answer (#1774): a skipped question stays open, to be asked another night.
+export const GO_TO_SLEEP = 'Go to sleep, no more questions'
+export const SKIP_QUESTION = 'Skip this one'
+/** Whether an answer to the before bed dialog is one of its ways of leaving the question unanswered. */
+export const leavesUnanswered = (answer: string): boolean => answer === GO_TO_SLEEP || answer === SKIP_QUESTION
+
+// The suffix an open item is written with (#1775), the inverse of itemChoices: each choice once, on
+// one line, leaving out the dialog's ways of not answering and any choice holding the " / " between
+// choices, which would read back as two; none at all when fewer than two are left.
+const choicesSuffix = (choices: readonly string[]): string => {
+  const kept = [...new Set(choices.map(oneLine))].filter(c => c && !leavesUnanswered(c) && !c.includes(' / '))
+  return kept.length >= 2 ? ` (choices: ${kept.join(' / ')})` : ''
+}
+
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 
 /**
@@ -145,11 +164,12 @@ export const openQuestionsIn = (body: string): { found: boolean; open: string[] 
  * The body with the question in its section: added as an open item, or checked off with its answer
  * and date (ET) when one is given. A question already there, open or answered, is left as it is
  * unless this answers an open one, so asking twice adds nothing twice. A body with no section gets
- * one, before its session line when it ends with one.
+ * one, before its session line when it ends with one. An item added open carries the `choices` the
+ * question was asked with (#1775), as itemChoices reads them, so /sleep offers the same answers.
  */
-export const withQuestion = (body: string, question: string, answered?: { answer: string; date: string }): string => {
+export const withQuestion = (body: string, question: string, answered?: { answer: string; date: string }, choices: readonly string[] = []): string => {
   const q = oneLine(question)
-  const item = answered ? `- [x] ${q} (answered ${answered.date} ET: ${oneLine(answered.answer)})` : `- [ ] ${q}`
+  const item = answered ? `- [x] ${q} (answered ${answered.date} ET: ${oneLine(answered.answer)})` : `- [ ] ${q}${choicesSuffix(choices)}`
   // A body edited on GitHub's web page has CRLF endings: read either, and written back with its own.
   const eol = body.includes('\r\n') ? '\r\n' : '\n'
   const lines = body.split(/\r?\n/)
