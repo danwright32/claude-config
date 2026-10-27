@@ -179,9 +179,11 @@ const ROOT = '/repo'
 // `columns` is the terminal's width when a test sets one, else 160 for `wide` and 120. A pane stays
 // open until closed and, as Claude Code does, is drawn only while the terminal is at its floor, or
 // at any width once asked for (#1752); `$.ui.panes()` lists them so, unless `panesFail`.
-type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; columns?: number; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; panesFail: boolean; turn: string | { fails: string } | 'truncated' }
+// `files` is the disk the mod reads a published page from (#1811); a path not in it is missing. The
+// Artifact tool beneath publishes any page, and refuses one whose path holds REFUSED.
+type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; columns?: number; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; panesFail: boolean; turn: string | { fails: string } | 'truncated'; files: Record<string, string> }
 const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
-  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, panesFail: false, turn: '', ...init }
+  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, panesFail: false, turn: '', files: {}, ...init }
   const mem: Record<string, unknown> = { ...store }
   const asked = new Set<string>()
   // Each open pane, and whether it was opened asked, which Claude Code places at any width.
@@ -278,6 +280,15 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
     return { value: undefined } as never
   })
   on('prompt.context', ($, e) => ({ blocks: e.blocks }))
+  on('fs.read', ($, e) => {
+    const text = w.files[e.path]
+    if (text === undefined) throw Object.assign(new Error(`ENOENT: no such file, '${e.path}'`), { code: 'ENOENT' })
+    return { value: text } as never
+  })
+  on('tool.call', { tool: 'Artifact' }, ($, e) => {
+    if (String((e as { file_path?: string }).file_path ?? '').includes('REFUSED')) return { deny: 'Publishing was refused.' }
+    return { result: 'Published to https://claude.ai/code/artifact/a1', text: 'Published' } as never
+  })
   // The settings Stop hooks beneath the mods: they block nothing, unless STOP_BLOCK names a block.
   on('classic.Stop', () => (env.STOP_BLOCK ? { block: env.STOP_BLOCK } : {}) as never)
   on('ui.render', ($, e) => {
@@ -1285,6 +1296,153 @@ test('output the engine cut short is said in the log rather than read as the who
   await start($)
   expect((await turnStop($, 'The tests pass.')).block).toBeUndefined()
   expect(w.logs.some(l => /more than could be read whole/.test(l))).toBe(true)
+})
+
+// ---- #1811: a page of steps for Dan is published with a card, or with a plain word that none are his now ----
+
+// Slate's "Regal changes for Marcia" (2026-10-27) in small: numbered things to do at a screen, ticks
+// and Copy buttons. The report is shaped after the overnight reports: numbered facts and nothing to do.
+const STEPS_PAGE = '<html><body><h1>Regal changes</h1><ol><li>Open the <b>Booking</b> journey.</li><li>Click the No exit of node 3.</li></ol><label><input type="checkbox"> Done</label><button class="cp">Copy</button></body></html>'
+const REPORT_PAGE = '<html><body><h1>Overnight report</h1><ol><li>Merged #812.</li><li>#813 waits on CI.</li></ol></body></html>'
+const PAGE = '/s/regal-changes.html'
+const REPORT = '/s/overnight.html'
+const publish = ($: Engine, file_path: string, extra: object = {}) => $.tool.call({ tool: 'Artifact', tool_use_id: 'a1', file_path, ...extra } as never)
+const PUBLISHED = 'The page is up for Dan to work through.'
+
+test('a page of steps published with no card is refused once, naming the page, the steps tool and the sentence that answers it (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [PAGE]: STEPS_PAGE } })
+  await start($)
+  await publish($, PAGE)
+  const r = await turnStop($, PUBLISHED)
+  expect(r.block).toMatch(/^You published a page that gives Dan steps/)
+  expect(r.block).toContain('regal-changes.html')
+  expect(r.block).toMatch(/mcp__manual-steps__steps\b/)
+  expect(r.block).toContain('None of these steps are yours to do now')
+  // The same chain's next turn end is never refused again, whatever Claude did, so it cannot trap the turn.
+  expect((await turnStop($, PUBLISHED, true)).block).toBeUndefined()
+  // Nor is the turn after it, which published nothing.
+  expect((await turnStop($, 'Merged #12.')).block).toBeUndefined()
+})
+
+test('a second end in the same turn passes when the transcript shows the page refusal already given (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [PAGE]: STEPS_PAGE }, turn: [prompt(), wrote(PUBLISHED), prompt(true), wrote('Done.')].join('\n') })
+  await start($)
+  await publish($, PAGE)
+  expect((await turnStop($, 'Done.', true)).block).toBeUndefined()
+})
+
+test('the same page published with a card pinned in the same turn passes, the card before the page or after it (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [PAGE]: STEPS_PAGE } })
+  await start($)
+  await publish($, PAGE)
+  await hand($, [step()])
+  expect((await turnStop($, PUBLISHED)).block).toBeUndefined()
+  await hand($, [step({ title: 'Purge the cache' })])
+  await publish($, PAGE)
+  expect((await turnStop($, PUBLISHED)).block).toBeUndefined()
+})
+
+test('a report Dan only reads passes, and so does a published page whose steps are all already done on the card (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [REPORT]: REPORT_PAGE, [PAGE]: STEPS_PAGE } })
+  await start($)
+  await publish($, REPORT)
+  expect((await turnStop($, PUBLISHED)).block).toBeUndefined()
+  // The steps tool found every step done and pinned nothing: Claude checked, so the page is answered.
+  await publish($, PAGE)
+  await hand($, [step({ checked: 'already-done' })])
+  expect((await turnStop($, PUBLISHED)).block).toBeUndefined()
+})
+
+test('saying plainly that none of the steps are Dan\'s to do now passes, in the last message or an earlier one (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [PAGE]: STEPS_PAGE } })
+  await start($)
+  await publish($, PAGE)
+  expect((await turnStop($, 'The page is up. None of these steps are yours to do now: they wait on #3415 merging.')).block).toBeUndefined()
+})
+
+test('the plain sentence also answers a step left in prose, so one acknowledgement satisfies both (#1811, L330)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), wrote(DOWNBEAT_STEP), prompt(), wrote('None of these steps are yours to do now.')].join('\n') })
+  await start($)
+  expect((await turnStop($, 'None of these steps are yours to do now.')).block).toBeUndefined()
+})
+
+test('a page republished while the card pinned for it still shows passes; once the card is finished it is asked again (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [PAGE]: STEPS_PAGE } })
+  await start($)
+  await publish($, PAGE)
+  expect((await turnStop($, PUBLISHED)).block).toMatch(/^You published a page/)
+  // The refusal is answered in the chain's next step by pinning the card, which covers the page.
+  await hand($, [step()])
+  expect((await turnStop($, 'Pinned.', true)).block).toBeUndefined()
+  // A later turn fixes a typo on the page and publishes it again: the card for it still shows.
+  await publish($, PAGE)
+  expect((await turnStop($, 'Fixed the typo.')).block).toBeUndefined()
+  // Every step finished, the card is gone, and the page published again is asked about again.
+  await call($, VERDICT, { step: 1, checked: 'checked' })
+  await publish($, PAGE)
+  expect((await turnStop($, PUBLISHED)).block).toMatch(/^You published a page/)
+})
+
+test('another card pinned later does not cover a page it was not pinned for (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [PAGE]: STEPS_PAGE, '/s/other.html': STEPS_PAGE } })
+  await start($)
+  await publish($, PAGE)
+  await hand($, [step()])
+  expect((await turnStop($, PUBLISHED)).block).toBeUndefined()
+  await publish($, '/s/other.html')
+  expect((await turnStop($, PUBLISHED)).block).toContain('other.html')
+})
+
+test('only a publish that went through is judged: a read, a list, an asset upload and a refused publish are not (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [PAGE]: STEPS_PAGE, '/s/REFUSED.html': STEPS_PAGE } })
+  await start($)
+  await publish($, PAGE, { action: 'read', url: 'https://claude.ai/code/artifact/a1' })
+  await publish($, PAGE, { action: 'publish', url: 'https://claude.ai/code/artifact/a1', asset: true })
+  await $.tool.call({ tool: 'Artifact', tool_use_id: 'a2', action: 'list' } as never)
+  await publish($, '/s/REFUSED.html')
+  expect((await turnStop($, PUBLISHED)).block).toBeUndefined()
+})
+
+test('a page published in a turn that never reached its end is not judged in the next turn (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [PAGE]: STEPS_PAGE } })
+  await start($)
+  await publish($, PAGE)
+  // Esc: the turn ends with no Stop, and Dan's next prompt starts another.
+  await turnStart($, 'something else', 'T2')
+  expect((await turnStop($, 'Done.')).block).toBeUndefined()
+})
+
+test('a page that cannot be read is said in the log and refuses nothing (#1811)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await publish($, '/s/gone.html')
+  expect((await turnStop($, PUBLISHED)).block).toBeUndefined()
+  expect(w.logs.some(l => /could not read the page/.test(l) && l.includes('/s/gone.html'))).toBe(true)
+})
+
+test('a page published with a relative path is read from the session\'s folder (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [`${ROOT}/docs/steps.html`]: STEPS_PAGE } })
+  await start($)
+  await publish($, 'docs/steps.html')
+  expect((await turnStop($, PUBLISHED)).block).toContain('steps.html')
+})
+
+test('a step in prose and a page of steps in one turn are one refusal, beside a block from beneath (#1811)', withKit, async ($, on) => {
+  world(on, { files: { [PAGE]: STEPS_PAGE } }, {}, { STOP_BLOCK: 'Winding down is not finished.' })
+  await start($)
+  await publish($, PAGE)
+  const r = await turnStop($, PROSE_STEP)
+  expect(r.block).toMatch(/^Winding down is not finished\./)
+  expect(r.block).toContain('Your reply leaves Dan a step in prose')
+  expect(r.block).toContain('You published a page that gives Dan steps')
+})
+
+test('a -p run or the SDK never judges a published page (#1811)', withKit, async ($, on) => {
+  const w = world(on, { files: { [PAGE]: STEPS_PAGE } })
+  await $.session.start({ cwd: ROOT, surface: null, isInteractive: false } as never)
+  await publish($, PAGE)
+  expect((await turnStop($, PUBLISHED)).block).toBeUndefined()
+  expect(w.logs).toEqual([])
 })
 
 test('the band says the card is waiting on Dan while any step is his to do, and clears once none is (#863, #1239)', withKit, async ($, on) => {

@@ -2135,6 +2135,52 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   those two, so they are fitted on the held out turns and no unseen reading of them remains; the
   transcripts hold only 186 turns from the 30 days before, in which none of the four fires. Together:
   16 turns to 11, all 11 real, none of the 5 false.
+- **A page of steps needs a card too** (#1811). On 2026-10-27 a Slate session published "Regal
+  changes for Marcia", a page of 13 journey edits for Dan, and pinned no card; Dan had to ask for
+  one, then ask why he had to. The rule lived only in memory and prose (L27). So a page published
+  with the Artifact tool is judged as it is published, from the file it was published from
+  (`hooks/page.ts`, `hooks/pages.ts`), and a turn that published a page of steps does not end until
+  the steps tool was called in it, or Claude says none of the steps are Dan's to do now.
+  - **How a page of steps is told from a report**, the issue's open question, settled by the
+    recommended answer under Dan's standing instruction for this repository: a pattern in the page.
+    A marker on the publish cannot be added, since the Artifact tool is Claude Code's own and a mod
+    cannot widen its input; a model judge would cost money on every turn that publishes. The page's
+    signs are ticks (an HTML checkbox or a Markdown task box), Copy buttons (or a page writing the
+    clipboard), and list items or numbered lines that begin with something a person does at a
+    screen (open, click, press, tap, paste, type, go to, select, choose, sign in, turn on and the
+    like; never add, update or run, which lead Claude's own plans). A page is steps with two such
+    actions, or any two kinds of sign together; one sign alone is not, since a design mock has a
+    checkbox and a report may have a Copy beside a command. Measured with `signsOf` itself on
+    2026-10-27 over the 16 HTML pages this Mac's transcripts wrote (5 of them published) and a Regal
+    edits page built from that skill's own fixture: both pages of steps for Dan (the mods live
+    checks page, 14 ticks, 8 Copy signs, 6 actions; the Regal page, 2 ticks, 10 Copy signs) are
+    steps, and every other page (overnight reports, an audit, an issue run, design mocks) read no
+    sign at all. The sample is small, so the refusal is made cheap to answer rather than the rule
+    made wider.
+  - **What answers it**: the steps tool called in the turn without being refused (one that finds
+    every step already done counts, since Claude checked), or Claude saying in any message of the
+    turn "None of these steps are yours to do now." or a plain variant ("none of them", "none of
+    the steps on the page", "nothing here is yours to do now"), never quoted (`saysNoneNow`). The
+    same sentence answers the prose check above, one acknowledgement read by both rules (L330). A
+    page published again while the card pinned for it still shows unfinished steps asks nothing:
+    pages are republished often (39 publishes of 6 pages in this Mac's transcripts), and the card
+    pinned in the turn, or in the chain's next step after a refusal, covers the pages that turn
+    named. Once that card is finished, or replaced by one pinned for something else, publishing
+    the page again asks again.
+  - **At most once per chain of turn ends**: the page refusal is a second mark the transcript
+    reader looks for (`hooks/turn.ts`), so a turn holding either this mod's prose block or its page
+    block is never refused by it again, and `stop_hook_active` stands in where the transcript cannot
+    be read. Both refusals given at one turn end are one block, beside any block from beneath. The
+    engine takes one `classic.Stop` hook per mod, so the prose hook starts from the page check's
+    answer (`pagesAtStop`).
+  - A page that cannot be read is said in the log and refuses nothing; a publish that was refused,
+    an asset upload, a read or a list is not judged; a page published in a turn that never reached
+    its end (Esc) is cleared when the next turn starts; nothing is judged in a -p run.
+  - **Numbered steps in a reply**, the same class in prose: two or more numbered lines that each
+    begin with an action at a screen now count as a step left in prose. Measured over the 19,420
+    messages Claude wrote in this Mac's transcripts to 2026-10-27: 20 hold two or more, and every
+    one of the 20 hands Dan steps (a Pipedream run to open, a script to paste and deploy, a token
+    to make). One such line alone, or a numbered plan of Claude's own work, does not count.
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On

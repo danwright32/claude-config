@@ -94,6 +94,13 @@ const NEEDS_YOU_TO = /\bneeds? you to (?:run|paste|apply|click|approve|enter|sig
 const YOUR_STEP = /\byour (?:manual )?step\b/gi
 const notQuoted = (plain: string, at: number): boolean => !quotedOnLine(plain.slice(0, at))
 
+// #1811: numbered steps handed to Dan, a numbered line that begins with something a person does at a
+// screen, counted only where the message holds two or more. Measured on 2026-10-27 over the 19,420
+// messages Claude wrote in this Mac's transcripts: 20 held two or more such lines, and every one of
+// the 20 was steps for Dan. "add", "update" and "run" are left out, since they lead Claude's own plans.
+const NUMBERED = /^[ \t]*(?:\d+[.)]|step \d+[.:])[ \t]+(?:\*\*)?(?:open|click|press|tap|paste|copy|type|go to|select|choose|tick|sign in|log in|drag|toggle|turn (?:on|off)|enter|fill in|navigate to|visit)\b/gim
+const numberedTwice = (plain: string): boolean => (plain.match(NUMBERED) ?? []).length >= 2
+
 // What a phrase must also be, beyond being there, to count.
 const ALSO: ReadonlyMap<RegExp, (plain: string, at: number, end: number) => boolean> = new Map([
   [WAITING, handsOverAStep],
@@ -101,6 +108,7 @@ const ALSO: ReadonlyMap<RegExp, (plain: string, at: number, end: number) => bool
   [YOU_NEED_TO, youNeedToIsAStep],
   [NEEDS_YOU_TO, notQuoted],
   [YOUR_STEP, notQuoted],
+  [NUMBERED, numberedTwice],
 ])
 
 // Each says a step is Dan's to do. "waiting on you" never matches "waiting on your", and a step is
@@ -132,7 +140,23 @@ export const PHRASES: readonly RegExp[] = [
   new RegExp(`${LEAD}in (?:System )?Settings(?=\\s*(?:,|>|\u203a|\u2192))`, 'gim'),
   // "Go to the **Venues** tab and select **Carnegie Hall**."
   /\bgo to\b[^.!?\n]{1,100}\b(?:and|then) (?:click|tap|press|select|choose|type|paste|turn (?:on|off)|toggle)\b/gi,
+  // #1811: two or more numbered steps that each begin with an action at a screen.
+  NUMBERED,
 ]
+
+// #1811: Claude saying plainly that none of the steps it handed over are Dan's to do now, which
+// answers both this mod's refusals (a step left in prose and a page of steps), since an acknowledgement
+// must be read by every rule that asks for it (L330). The refusals ask for "None of these steps are
+// yours to do now."; a few plain variants of it count too, and none quoted. Anchored on "yours to do
+// now" led by "none of" or "nothing", so a sentence that hands a step over never reads as one.
+const NONE_NOW = /\b(?:none of (?:these|those|the|its|them|this page's|the page's)(?: (?:steps?|edits?|changes?|items?|checks?))?(?: on (?:the|this|that) page)?|nothing(?: here| on (?:the|this|that) page)?) (?:is|are) (?:still )?yours to do now\b/gi
+
+/** Whether any of `texts`, Claude's messages of the turn, says none of the steps are Dan's to do now. */
+export const saysNoneNow = (texts: readonly string[]): boolean =>
+  texts.some(text => {
+    const plain = text.replace(/’/g, "'")
+    return [...plain.matchAll(NONE_NOW)].some(m => !quotedOnLine(plain.slice(0, m.index ?? 0)))
+  })
 
 // The phrase said the other way round: "nothing else is waiting on you", "this is no longer
 // waiting on you". Only a negation attached to the phrase counts, in the same clause and within
