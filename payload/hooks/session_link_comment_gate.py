@@ -10,6 +10,7 @@ copying the commit and pull request rule, and the written rule alone did not sto
 Judged here:
   gh issue comment, gh pr comment, gh pr review: --body/-b, and a --body-file/-F the gate can read
     (a file on disk, or a heredoc on standard input with -F -)
+  gh issue close, gh pr close: --comment/-c
   gh api writing to a comments, replies or reviews endpoint (a review comment reply has no gh
     subcommand of its own)
   the Slack send, draft and schedule tools
@@ -37,6 +38,8 @@ _spec.loader.exec_module(scan)
 LINK = re.compile(r"Claude-Session:|claude\.ai/code/session_")
 OVERRIDE = "ALLOW_SESSION_LINK_IN_COMMENT=1"
 COMMENT_KINDS = frozenset({("issue", "comment"), ("pr", "comment"), ("pr", "review")})
+# A close posts its --comment as an ordinary comment.
+CLOSE_KINDS = frozenset({("issue", "close"), ("pr", "close")})
 SLACK_SENDS = re.compile(r"mcp__.*slack.*__slack_(send_message|send_message_draft|schedule_message)")
 API_COMMENT_ENDPOINT = re.compile(r"(?:^|/)(?:comments|replies|reviews)(?:/|\?|$)")
 API_WRITE_FLAGS = {"-f", "-F", "--field", "--raw-field", "--input"}
@@ -107,9 +110,13 @@ def judge_bash(command, cwd):
     if not re.search(r"\bgh\b", command):
         return None
     try:
-        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), COMMENT_KINDS)
+        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), COMMENT_KINDS | CLOSE_KINDS)
         for kind, args, envs, place in found:
             if OVERRIDE in envs:
+                continue
+            if kind in CLOSE_KINDS:
+                if any(LINK.search(a) for a in scan.flag_values(args, "--comment", "-c")):
+                    return "closing comment"
                 continue
             if _comment_body_has_link(args, command, place):
                 return "review" if kind == ("pr", "review") else "comment"

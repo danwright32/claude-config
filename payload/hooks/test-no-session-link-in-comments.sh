@@ -78,6 +78,9 @@ $LINK
 EOF"
 denies "review comment reply through gh api" "gh api repos/Try-Pennie/pivot/pulls/50/comments/123/replies -f body=\"Fixed. $LINK\""
 denies "issue comment through gh api" "gh api -X POST repos/Try-Pennie/pivot/issues/22/comments -f body='Done. $LINK'"
+denies "issue close with a closing comment" "gh issue close 14 --reason completed --comment \"Done. $LINK\""
+denies "pr close with -c" "gh pr close 76 -c \"Not merging. $LINK\""
+allows "issue close with a clean comment" "gh issue close 14 --comment \"Done.\""
 denies "comment chained after a commit" "git add a.ts && gh pr comment 5 --body \"Pushed. $LINK\""
 
 # --- Everything that is allowed to carry it, and comments without it ---
