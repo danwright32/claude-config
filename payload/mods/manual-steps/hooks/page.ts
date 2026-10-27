@@ -50,7 +50,7 @@ export const signsOf = (page: string): PageSigns => {
 }
 
 /**
- * Whether the signs make a page of steps: two numbered things to do at a screen, or any two kinds of
+ * Whether the signs make a page of steps: two list items that each begin with a thing to do at a screen, or any two kinds of
  * sign together. One sign alone is not: a design mock has a checkbox, a report a Copy beside a command.
  */
 export const isStepsPage = (s: PageSigns): boolean => s.actions >= 2 || [s.ticks, s.copies, s.actions].filter(n => n > 0).length >= 2

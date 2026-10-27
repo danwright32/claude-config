@@ -45,7 +45,7 @@ describe('isStepsPage', () => {
     expect(isStepsPage({ ticks: 2, copies: 10, actions: 1 })).toBe(true)
   })
 
-  test('two numbered things to do at a screen make a page of steps on their own', () => {
+  test('two list items that each begin with a thing to do at a screen make a page of steps on their own', () => {
     expect(isStepsPage(signsOf(html('<ol><li>Open Settings.</li><li>Turn on <b>Remote control</b>.</li></ol>')))).toBe(true)
   })
 
