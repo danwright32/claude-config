@@ -391,9 +391,10 @@ OPEN_QUESTIONS_RULE = {
     "check": lambda args, command, place: has_open_questions(args, command, place),
     "fix": ("OPEN QUESTIONS. The body ends its prose with a section listing what only Dan can decide about "
             "this issue, so /sleep asks each before the night begins instead of a worker finding it "
-            "overnight. One unchecked item a question; if there are none, write None under it:\n"
+            "overnight. One unchecked item a question, ending with the answers he can pick (a yes or no "
+            "question needs none; claude-config#1771); if there are none, write None under it:\n"
             "   ## Open questions\n"
-            "   - [ ] <a decision only Dan can make>\n"
+            "   - [ ] <a decision only Dan can make> (choices: <an answer> / <another answer>)\n"
             "   (or: None)\n"
             "   It goes in --body or the --body-file, before the session line."),
     "override": "SKIP_OPEN_QUESTIONS_CHECK=1",

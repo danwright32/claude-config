@@ -1515,7 +1515,8 @@ the ban list knowing that an action it does not name is approved.
 
 Dan's decision 8 (2026-10-06): turning sleep on gathers the open questions across the queue's
 issues and asks them one at a time in Claude Code's own dialog, the ones that unblock the most work
-first, each with "Go to sleep now"; answers are posted on the issue as dated decisions.
+first, each with "Go to sleep now" (worded "Go to sleep, no more questions" since #1771); answers
+are posted on the issue as dated decisions.
 
 - Where the questions come from: the night's notes. An overnight worker that meets a decision only
   Dan can make notes it with `sleep_note` as a `question` with `repo` (owner/name), `issue` and
@@ -1535,13 +1536,32 @@ first, each with "Go to sleep now"; answers are posted on the issue as dated dec
   answer is written into the shared lists and covers every issue there on every night after, while
   an issue's answer covers one issue, and a repository question exists only for a worker repository
   on neither list, so it is rare once a repository has been asked once.
-- The dialog offers up to two choices the worker suggested (`options` on the note), then "Skip this
-  one" and "Go to sleep now"; anything else Dan types under Other is his answer. "Go to sleep now"
-  (on a repository question too) asks nothing more. Each answer is posted on every issue waiting on
+- The dialog offers the question's answers, then "Skip this one" and "Go to sleep, no more
+  questions" (the label "Go to sleep now" until #1771); anything else Dan types under Other is his
+  answer. Going to sleep (on a repository question too) asks nothing more.
+- Answers to pick (#1771, Dan 2026-10-19: "the questions don't actually provide answer choices. just
+  skip and go to sleep now which are basically the same thing"). Until then no real source filled
+  `options` in: the overnight rules never asked for them and Open questions items were read with
+  none, so the dialog showed only skip and go to sleep, while the tests fed options nothing wrote.
+  Now each source carries them. A worker's note has `options`, shown in the overnight rules by an
+  example that carries them, and `sleep_note` (sleep-report.py) refuses a question about an issue
+  with fewer than two, except the round's own record of a question it left, which says `why` and
+  carries whatever the question had. An Open questions item may end with `(choices: A / B)`, read by
+  mod-kit's shared reader (`itemChoices`), whose words alone are the question, so it is recorded,
+  matched and checked off as before. A question given fewer than two, a note from before or an
+  item naming none, is offered Yes and No when it is a yes or no question (`isYesNo`: its question
+  sentence holds no "or" and opens with no which, what, who, when, where, why or how; measured on
+  all 42 items in claude-config's issues on 2026-10-26, it took the 17 yes or no ones and none of
+  the rest); with none of those Dan types. The dialog holds four: two answers beside skip and go to
+  sleep, or three on the last question, which leaves skip off when it has answers because nothing
+  follows it there and the two would do the same; one with no answers keeps both, since the dialog
+  pads fewer than two with Yes and No, which would post as his decision. Claude Code's dialog takes
+  no description from a mod, so the labels carry the difference: skip is this one, go to sleep is no
+  more questions. Each answer is posted on every issue waiting on
   it, as `**Decision from Dan, YYYY-MM-DD (ET)**` with the question quoted and the answer as given
   (L249), then recorded as answered; a write is retried as another account only on GitHub's own not
   found, so a comment that may have landed is never sent twice.
-- Every issue a question was left on (skipped, unanswered in the round, dismissed, Go to sleep now,
+- Every issue a question was left on (skipped, unanswered in the round, dismissed, gone to sleep,
   nobody at the session to ask, or an answer that could not be posted) goes into
   `state/sleep/unanswered/<generation>`, one `owner/repo#N` a line, written whole before the record
   is placed, so `sleep-queue.sh` leaves it out of the night's queue. A list that cannot be written
@@ -1591,7 +1611,7 @@ is still asked once at bedtime and closed if unanswered.
   repository not reached in it is closed, saying so), so `/sleep` never blocks longer. Each option means
   exactly what it says: "Merge, never deploy" (chosen only where a merge does not itself deploy, as
   the question says; `mergeDeploys: false`), "Hold merges, never deploy" (`mergeDeploys: true`) and
-  "Allowed to deploy"; "Go to sleep now" (#836) closes that repository and asks nothing more. An answer is written into the installed file under the answers lock
+  "Allowed to deploy"; "Go to sleep, no more questions" (#836, worded so since #1771) closes that repository and asks nothing more. An answer is written into the installed file under the answers lock
   (`state/sleep/repos.lock`, the marker below), whole beside it and then moved, so a late answer and
   another never write over each other; an answer given after the 10 minutes is still written, for
   later nights. A writer waits up to 30 seconds on a live holder, then refuses, naming it. A
