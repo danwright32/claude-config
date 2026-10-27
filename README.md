@@ -1733,7 +1733,14 @@ number,state,mergedAt,url`) and, at the first one after it says the pull request
 held merge through the ordinary path, so the opt out, the snooze and the label gate still decide, and
 the quiz is asked then. A pull request GitHub says was CLOSED drops its hold, said in one line.
 While it is OPEN, or GitHub does not answer, the hold waits, however long that takes: a hold is
-never dropped for its age (Dan, 2026-10-26). The only cleanup runs when any session holds a merge:
+never dropped for its age (Dan, 2026-10-26). Each of those questions has its own deadline, through
+`lib/bounded-run.sh` (#1786): 10 s a question (`QUIZ_RELEASE_ASK_SECONDS`) and 40 s for the whole
+release (`QUIZ_RELEASE_BUDGET_SECONDS`), both well inside the Stop hook's 60 s timeout, which
+would otherwise kill the hook and cost every hold a turn. An answer cut at its deadline, with
+everything it started, counts as no answer, so that hold waits for the next turn end and the release
+goes on to the next one. Once the 40 s are spent nothing more is asked, and the holds not asked are
+written back ahead of the rest, so one pull request whose answer keeps hanging cannot starve the
+others. The only cleanup runs when any session holds a merge:
 a held file untouched for two days is removed only if its session has ended, as the session registry
 (`~/.claude/state/sessions`, the `session-registry` mod) tells it through `lib/session_registry.py`,
 the same reading the sleep queue uses: closed, silent for over five minutes, or no longer in the
