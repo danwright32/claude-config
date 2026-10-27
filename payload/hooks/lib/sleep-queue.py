@@ -29,7 +29,7 @@ claim and each end is also written to the night's notes for the report, by sleep
 A claim's session is judged by the session registry (~/.claude/state/sessions, one file per
 session): closed, silent past five minutes, or never recorded means the session is gone and the
 claim is free to take. A record that cannot be read is never read as no session (L215): the claim
-stays held and the reason is said.
+stays held and the reason is said. That reading lives in session_registry.py, beside this file.
 """
 import json
 import os
@@ -37,81 +37,14 @@ import re
 import subprocess
 import sys
 
-DEAD_MS = 5 * 60_000  # the session registry's own rule for a session that has gone quiet
-SESSION_ID = re.compile(r"^[A-Za-z0-9-]+$")
+# The session registry's one reading, shared with the merge quiz's sweep of old holds (#1787).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from session_registry import Registry, num  # noqa: E402
+
 # The priority a next line shows; it orders nothing, since the goal gives the order (#1242).
 PRIORITIES = ["priority-p0", "priority-p1", "priority-p2", "priority-p3", "priority-p4"]
 # unstarted: given back because its worktree could not be made just now; free again, and no attempt.
 ENDS = ("free", "unstarted", "done", "parked", "failed")
-
-
-def num(x):
-    return isinstance(x, (int, float)) and not isinstance(x, bool)
-
-
-# ---- the session registry ----
-
-class Registry:
-    """The registry read once per call. `missing` names a directory that cannot be read at all."""
-
-    def __init__(self, path, now):
-        self.path, self.now = path, now
-        self.missing = None
-        try:
-            self.names = set(os.listdir(path))
-        except OSError as e:
-            self.names = set()
-            self.missing = "the session registry %s could not be read (%s)" % (path, e.strerror or e)
-
-    def session(self, sid):
-        """('open' | 'gone' | 'unknown', why) for one session id."""
-        if self.missing:
-            return "unknown", self.missing
-        if not SESSION_ID.match(sid or ""):
-            return "unknown", "the claim names no session id this reader accepts"
-        name = sid + ".json"
-        if name not in self.names:
-            return "gone", "session %s is not in the session registry" % sid
-        try:
-            with open(os.path.join(self.path, name)) as fh:
-                r = json.load(fh)
-        except Exception:
-            return "unknown", "session %s has a registry record that cannot be read" % sid
-        if not isinstance(r, dict) or not num(r.get("lastSeen")) or not (r.get("closedAt") is None or num(r.get("closedAt"))):
-            return "unknown", "session %s has a registry record that cannot be read" % sid
-        if r.get("closedAt") is not None:
-            return "gone", "session %s has ended" % sid
-        if self.now - r["lastSeen"] > DEAD_MS:
-            return "gone", "session %s has been silent for %d minutes" % (sid, (self.now - r["lastSeen"]) // 60_000)
-        return "open", ""
-
-    def open_records(self, self_id):
-        """Every open session's record but this one's, and the names of records that may be live and cannot be read."""
-        out, damaged = [], []
-        if self.missing:
-            return out, [self.missing]
-        for name in sorted(self.names):
-            if not name.endswith(".json") or name.startswith("."):
-                continue
-            path = os.path.join(self.path, name)
-            try:
-                with open(path) as fh:
-                    r = json.load(fh)
-                if not isinstance(r, dict) or not num(r.get("lastSeen")):
-                    raise ValueError("shape")
-            except Exception:
-                # A damaged record changed in the last five minutes may be a live session's (the
-                # registry's own prune keeps such a record for the same reason); an older one is not.
-                try:
-                    if self.now - os.stat(path).st_mtime * 1000 <= DEAD_MS:
-                        damaged.append(name)
-                except OSError:
-                    pass
-                continue
-            if r.get("sessionId") == self_id or r.get("closedAt") is not None or self.now - r["lastSeen"] > DEAD_MS:
-                continue
-            out.append(r)
-        return out, damaged
 
 
 # ---- one issue's claim ----
