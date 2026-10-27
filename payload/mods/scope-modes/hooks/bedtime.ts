@@ -19,12 +19,13 @@
 // posts each answer and writes ~/.claude/state/sleep/unanswered/<generation>, which
 // sleep-queue.sh reads to leave every issue whose question went unanswered out of the night's queue.
 
-// The two ways of leaving a question unanswered, each saying what it does (#1771, Dan 2026-10-19:
-// "just skip and go to sleep now which are basically the same thing"): skip leaves this one and goes
-// on to the next; going to sleep asks nothing more. Claude Code's dialog draws a label and no
-// description from a mod, so the label carries the difference.
-export const GO_TO_SLEEP = 'Go to sleep, no more questions'
-export const SKIP_QUESTION = 'Skip this one'
+import { GO_TO_SLEEP, leavesUnanswered, SKIP_QUESTION } from './mod-kit/openquestions.ts'
+
+// The two ways of leaving a question unanswered, each saying what it does (#1771): skip leaves this
+// one and goes on to the next; going to sleep asks nothing more. Named in mod-kit's Open questions
+// module (#1774), since picker manners sees this same dialog and must never record either as Dan's
+// answer; shown from here.
+export { GO_TO_SLEEP, SKIP_QUESTION }
 /** The dialog's header: Claude Code keeps it to 12 characters. */
 export const BEDTIME_HEADER = 'Before bed'
 
@@ -52,7 +53,7 @@ export const isYesNo = (text: string): boolean => {
  * at least two; else Yes and No for a yes or no question; else none, and Dan types his answer.
  */
 export const answerChoices = (text: string, given: readonly string[]): string[] => {
-  const own = [...new Set(given.map(sameText).filter(o => o && o !== GO_TO_SLEEP && o !== SKIP_QUESTION))]
+  const own = [...new Set(given.map(sameText).filter(o => o && !leavesUnanswered(o)))]
   if (own.length >= 2) return own
   return isYesNo(text) ? ['Yes', 'No'] : []
 }
@@ -178,7 +179,7 @@ export const askText = (q: OpenQuestion) => `${q.repo}#${q.issues.join(' and #')
  * shows two choices at least and pads fewer with Yes and No, which would post as his decision.
  */
 export const askOptions = (q: OpenQuestion, last = false) => {
-  const answers = [...new Set(q.options)].filter(o => o !== GO_TO_SLEEP && o !== SKIP_QUESTION)
+  const answers = [...new Set(q.options)].filter(o => !leavesUnanswered(o))
   const skip = last && answers.length ? [] : [SKIP_QUESTION]
   return [...answers.slice(0, DIALOG_MAX - 1 - skip.length), ...skip, GO_TO_SLEEP]
 }

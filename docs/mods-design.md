@@ -1557,7 +1557,11 @@ are posted on the issue as dated decisions.
   follows it there and the two would do the same; one with no answers keeps both, since the dialog
   pads fewer than two with Yes and No, which would post as his decision. Claude Code's dialog takes
   no description from a mod, so the labels carry the difference: skip is this one, go to sleep is no
-  more questions. Each answer is posted on every issue waiting on
+  more questions. Both labels live in mod-kit's Open questions module (#1774), shown from there by
+  bedtime.ts, because picker manners sees this same dialog as an AskUserQuestion call and had
+  recorded "Skip this one" as the item's answer, checking it off for good; it now leaves either
+  unrecorded, so the item stays open. Picker manners also writes a new open item with the answers
+  its dialog offered as `(choices: ...)`, through the same shared writer (#1775). Each answer is posted on every issue waiting on
   it, as `**Decision from Dan, YYYY-MM-DD (ET)**` with the question quoted and the answer as given
   (L249), then recorded as answered; a write is retried as another account only on GitHub's own not
   found, so a comment that may have landed is never sent twice.

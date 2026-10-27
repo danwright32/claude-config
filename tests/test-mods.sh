@@ -1058,6 +1058,41 @@ HC="$ROOT/payload/mods/mod-kit/tests/hang-ceiling.ts"
 grep -qE '^export const HANG_MS = 120_000$' "$HC" 2>/dev/null \
   && check "#1577: mod-kit's tests/hang-ceiling.ts sets two minutes, which only a hang reaches" ok \
   || check "#1577: mod-kit's tests/hang-ceiling.ts sets two minutes, which only a hang reaches" "$(grep -n 'HANG_MS =' "$HC" 2>&1)"
+
+# #1778: a stand-in that never answers outlived its test by the engine's five second linger and
+# finished inside a later one, which failed the job watcher's tests at random under load. Each comes
+# from the hang ceiling's never(), which every test ends as it ends, so a hand rolled promise that
+# never settles, in any mod's tests or mod-kit's own, fails the run, pointing at never().
+M9NV="$TMPROOT/m9nv"
+mkmodsrc "$M9NV" mod-kit "export const reader = 1"
+mkdir -p "$M9NV/mod-kit/tests"
+cp "$HC" "$M9NV/mod-kit/tests/hang-ceiling.ts"
+printf "import { test } from './hang-ceiling.ts'\nconst wait = () => new Promise<void>(() => {})\n" > "$M9NV/mod-kit/tests/kit.test.ts"
+mkmodsrc "$M9NV" rolls "export const register = () => {}"
+mkdir -p "$M9NV/rolls/tests/mod-kit/tests"
+cp "$HC" "$M9NV/rolls/tests/mod-kit/tests/hang-ceiling.ts"
+printf "import { test } from './mod-kit/tests/hang-ceiling.ts'\non('tool.call', () => new Promise<never>(() => undefined) as never)\nconst q = () => new Promise( () => undefined )\n" > "$M9NV/rolls/tests/register.test.ts"
+mkmodsrc "$M9NV" asks "export const register = () => {}"
+mkdir -p "$M9NV/asks/tests/mod-kit/tests"
+cp "$HC" "$M9NV/asks/tests/mod-kit/tests/hang-ceiling.ts"
+printf "import { never, test } from './mod-kit/tests/hang-ceiling.ts'\non('tool.call', () => never() as never)\nconst held = new Promise<void>(r => (release = r))\n" > "$M9NV/asks/tests/register.test.ts"
+out="$(bash "$SHARED" "$M9NV" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#1778: a hand rolled promise that never settles in a mod's tests fails the run" ok \
+  || check "#1778: a hand rolled promise that never settles in a mod's tests fails the run" "exit=$code out=$out"
+for at in "rolls's tests/register.test.ts:2" "rolls's tests/register.test.ts:3" "mod-kit's tests/kit.test.ts:2"; do
+  printf '%s\n' "$out" | grep -F "$at" | grep -q 'never()' \
+    && check "#1778: $at is named, pointing at the hang ceiling's never()" ok \
+    || check "#1778: $at is named, pointing at the hang ceiling's never()" "$out"
+done
+case "$out" in *"asks's"*|*"hang-ceiling.ts:"*) check "#1778: never() itself, a promise the test settles, and the shared file pass" "$out" ;; *) check "#1778: never() itself, a promise the test settles, and the shared file pass" ok ;; esac
+rm -f "$M9NV/mod-kit/tests/kit.test.ts" "$M9NV/rolls/tests/register.test.ts"
+out="$(bash "$SHARED" "$M9NV" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "#1778: with every stand-in from never(), the run passes" ok \
+  || check "#1778: with every stand-in from never(), the run passes" "exit=$code out=$out"
+# And the shared file ends what each test held, waiting for the calls handed to it, as the test ends.
+grep -qE 'return await body\(\$, on\)' "$HC" 2>/dev/null && grep -qE '^    await endHeld\(\)$' "$HC" 2>/dev/null \
+  && check "#1778: mod-kit's tests/hang-ceiling.ts ends what every test held as that test ends" ok \
+  || check "#1778: mod-kit's tests/hang-ceiling.ts ends what every test held as that test ends" "$(grep -n 'endHeld' "$HC" 2>&1)"
 # #698: the band and result row were caught in one literal form on one line; a probe of 11 hand
 # rolled forms caught 3. The engine takes an unfiltered ui.render hook that tests e.component, and a
 # filter however it is spelled, so each form a mod could write is caught, with the remedy for it.
