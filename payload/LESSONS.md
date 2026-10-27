@@ -7990,6 +7990,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   which asks the server for the page again first)
 
 ## Building with AI
+- **L814. A record that a person was shown fixed regulated text (a consent, a disclosure) must be written from the page's own confirmation that it displayed that text at that version, and every blank in that text must be filled from a source no model or chat input can write, because a screen the server built is not a screen anyone saw, and a blank the model can fill puts model output into fixed wording.**
+  (pivot#75, pivot#76, 2026-10-27)
+  SHORT: Record fixed consent text as shown only on the page's confirmed render, and fill its blanks from sources no model or chat input can write.
 - **L1029. In a prompt sent to a model with prompt caching, put everything identical across calls first and anything that varies per call after it, because the cache only reuses an unchanged opening, so one varying line ahead of a large fixed block makes every call pay for the whole block again.**
   (claude-config#1599, 2026-10-23)
   SHORT: Put a prompt's fixed text first and the per call parts after: the cache reuses only an unchanged opening, so one early varying line re-bills it all.
