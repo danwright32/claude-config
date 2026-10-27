@@ -51,7 +51,10 @@ report knows, and the fields each reads (every other field is kept, and shown no
   done       repo, issue?, pr?, text        finished; checked against GitHub at wake
   parked     repo, issue, branch?, text     set aside with why (phase 8: 2 hours or 2 attempts)
   failed     repo, issue?, text             could not be done (a refusal, an error)
-  question   repo, issue, text              something only Dan can answer; or cwd, questions (a
+  question   repo, issue, text, options     something only Dan can answer, asked before bed in a
+                                            dialog, so options (at least two answers he can pick)
+                                            are required (#1771) unless the note says why the
+                                            before bed round left it; or cwd, questions (a
                                             list), as scope modes notes a refused question (#841)
   save       files, rule                    a save ask before saving held for Dan (#841)
   issue      repo, title, priority?, labels?, milestone?, text
@@ -272,6 +275,16 @@ def append_note(record_path, record, line):
             raise Refused("the note's %s must be a number, got %s" % (k, json.dumps(v)))
     if note.get("repo") is not None and not isinstance(note["repo"], str):
         raise Refused("the note's repo must be owner/name text, got %s" % json.dumps(note["repo"]))
+    # A question about an issue is asked before bed in a dialog (#1771): without answers to pick it
+    # showed only "Skip this one" and "Go to sleep now". The one exempt is the before bed round's own
+    # record of a question it left, which carries `why` and whatever choices the question had, since
+    # an older note had none; the round, in scope-modes' register.ts, is its reviewer.
+    why = note.get("why")
+    if kind == "question" and note.get("issue") is not None and not (isinstance(why, str) and why.strip()):
+        options = note.get("options")
+        answers = {" ".join(o.split()) for o in options if isinstance(o, str) and o.strip()} if isinstance(options, list) else set()
+        if len(answers) < 2:
+            raise Refused("a question about an issue must carry options, at least two answers Dan can pick (Yes and No for a yes or no question), got %s" % json.dumps(options))
     note["v"] = 1
     note["generation"] = record["generation"]
     # The claude.ai link of the session writing the note, from the environment Claude Code gives its

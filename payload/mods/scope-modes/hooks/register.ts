@@ -43,6 +43,7 @@ import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type Githu
 import { wakeCheck } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
+  answerChoices,
   answerKey,
   askOptions,
   askText,
@@ -70,7 +71,7 @@ import {
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
-import { openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
+import { itemChoices, openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
@@ -553,7 +554,7 @@ const recordAnswer = async ($: EngineInterface, path: string, repo: string, answ
 
 // The before bed round (#843, #836): every question at /sleep, the repositories' and the issues',
 // shares one QUESTION_MS from the first, so /sleep never waits on Dan longer than that in all; and
-// once Dan picks "Go to sleep now" on any of them, nothing more is asked.
+// once Dan picks going to sleep (GO_TO_SLEEP) on any of them, nothing more is asked.
 type Round = { until: number; slept: boolean }
 
 // One bedtime question, waiting `waitMs`, what is left of the round. An answer given after the
@@ -781,7 +782,7 @@ const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string,
 // Which questions, in what order, and what is posted are bedtime.ts's; here they are read, asked,
 // posted and written down.
 
-type Left = { repo: string; issue: number; text: string; why: string }
+type Left = { repo: string; issue: number; text: string; options: string[]; why: string }
 type IssueRound = {
   /** Every issue whose question went unanswered tonight, for sleep-queue.sh to leave out. */
   left: Left[]
@@ -897,7 +898,12 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
       problems.push(`${g.repo}#${g.issue} has no Open questions section, so nothing in it was asked.`)
       continue
     }
-    for (const text of section.open) found.push({ repo: g.repo, issue: g.issue, text: oneSpaced(text), options: [], at: 0, inSection: [g.issue] })
+    // Each item with the answers it names, or Yes and No for a yes or no question (#1771); its words
+    // without them are the question, as an answer is recorded and checked off by.
+    for (const item of section.open) {
+      const { words, choices } = itemChoices(item)
+      found.push({ repo: g.repo, issue: g.issue, text: oneSpaced(words), options: answerChoices(words, choices), at: 0, inSection: [g.issue] })
+    }
   }
   const open: IssueQuestion[] = []
   for (const q of found) {
@@ -962,16 +968,17 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
   // way they went.
   const leftSaid: string[] = []
   const leave = (q: OpenQuestion, why: string, issues = q.issues) => {
-    left.push(...issues.map(issue => ({ repo: q.repo, issue, text: q.text, why })))
+    left.push(...issues.map(issue => ({ repo: q.repo, issue, text: q.text, options: q.options, why })))
     leftSaid.push(`${issues.map(issue => `${q.repo}#${issue}`).join(' and ')}, "${q.text}" (${why})`)
   }
-  for (const q of ordered) {
+  for (const [i, q] of ordered.entries()) {
     const waitMs = round.until - (await $.clock.now())
     if (!interactive || round.slept || waitMs <= 0) {
       leave(q, !interactive ? 'not asked: nobody was at this session to ask' : round.slept ? 'not asked: you chose to go to sleep first' : 'not asked: the 10 minutes for bedtime questions ran out')
       continue
     }
-    const asked = await askOne($, askText(q), askOptions(q), BEDTIME_HEADER, waitMs, async a => {
+    // The last question offers no skip when it has answers (#1771): nothing follows it.
+    const asked = await askOne($, askText(q), askOptions(q, i === ordered.length - 1), BEDTIME_HEADER, waitMs, async a => {
       // Answered after the wait: posted for the nights after; tonight its issues stay out.
       if (a === SKIP_QUESTION) return
       for (const issue of q.issues) {
@@ -1024,8 +1031,9 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
     }
     if (landed) answered++
   }
-  // The questions left are noted for the morning report as the same words, so they are asked again.
-  for (const l of left) notes.push({ kind: 'question', repo: l.repo, issue: l.issue, text: l.text, why: l.why })
+  // The questions left are noted for the morning report as the same words, with the same answers to
+  // pick (#1771), so they are asked again as they were tonight.
+  for (const l of left) notes.push({ kind: 'question', repo: l.repo, issue: l.issue, text: l.text, options: l.options, why: l.why })
   let said = ''
   if (answered) said += ` Before bed: ${plural(answered, 'question')} answered and posted on ${andList([...new Set(posted)])}.`
   if (leftSaid.length) said += ` Left for the morning, so tonight the queue skips them: ${leftSaid.join('; ')}.`

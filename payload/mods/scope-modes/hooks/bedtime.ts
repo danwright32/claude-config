@@ -2,11 +2,12 @@
 //
 // Dan's decision 8 (2026-10-06): turning sleep on gathers the open questions across the queue's
 // issues and asks them one at a time in Claude Code's own dialog, the ones that unblock the most
-// work first, each with "Go to sleep now"; answers are posted on the issue as dated decisions.
+// work first, each with "Go to sleep now" (worded GO_TO_SLEEP since #1771); answers are posted on the
+// issue as dated decisions. Each offers its answers to pick (#1771, answerChoices below).
 //
 // Where the questions come from: the night's notes, and since #1279 the Open questions section of
 // each issue a worker's goal names. An overnight session that meets a decision only Dan can make
-// writes it with sleep_note as a `question` naming its repository, issue and text (the overnight
+// writes it with sleep_note as a `question` naming its repository, issue, text and options (the overnight
 // rules tell it to), and the morning report lists it. Every issue's body also carries an Open
 // questions section (the filing gate refuses one without it, and picker manners adds a question
 // Dan is asked about an issue), whose open items are asked beside the notes, each once, and checked
@@ -18,14 +19,43 @@
 // posts each answer and writes ~/.claude/state/sleep/unanswered/<generation>, which
 // sleep-queue.sh reads to leave every issue whose question went unanswered out of the night's queue.
 
-export const GO_TO_SLEEP = 'Go to sleep now'
+// The two ways of leaving a question unanswered, each saying what it does (#1771, Dan 2026-10-19:
+// "just skip and go to sleep now which are basically the same thing"): skip leaves this one and goes
+// on to the next; going to sleep asks nothing more. Claude Code's dialog draws a label and no
+// description from a mod, so the label carries the difference.
+export const GO_TO_SLEEP = 'Go to sleep, no more questions'
 export const SKIP_QUESTION = 'Skip this one'
 /** The dialog's header: Claude Code keeps it to 12 characters. */
 export const BEDTIME_HEADER = 'Before bed'
 
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
-// The dialog carries four choices at most: two a session suggested, then skip and go to sleep.
-const SUGGESTED_MAX = 2
+// The dialog carries four choices at most: the question's answers, then skip and go to sleep.
+const DIALOG_MAX = 4
+
+// A question its asker can answer yes or no to (#1771): its question sentence, the one its question
+// mark ends, read after any lead in ("Slot shape: ...", "It merged. Run it now?"), neither offers
+// alternatives (an "or") nor asks which, what, who, when, where, why or how in its first words.
+// Measured on 2026-10-26 over all 42 Open questions items in claude-config's issues, open and
+// answered: 17 read as yes or no, each rightly (13 the design rounds question picker manners
+// writes, "Skip design rounds for this issue?"), and none of the other 25, every one of which offers
+// alternatives or asks which, how or when.
+const WH = /^(?:\S+\s+){0,2}?(?:what|which|who|whom|whose|when|where|why|how)\b/i
+export const isYesNo = (text: string): boolean => {
+  const end = text.indexOf('?')
+  if (end < 0) return false
+  const sentence = (text.slice(0, end).split(/[.!:;]\s+/).pop() ?? '').trim()
+  return !!sentence && !/\bor\b/i.test(sentence) && !WH.test(sentence)
+}
+
+/**
+ * The answers a question is offered with (#1771): the ones its asker gave, each once, when there are
+ * at least two; else Yes and No for a yes or no question; else none, and Dan types his answer.
+ */
+export const answerChoices = (text: string, given: readonly string[]): string[] => {
+  const own = [...new Set(given.map(sameText).filter(o => o && o !== GO_TO_SLEEP && o !== SKIP_QUESTION))]
+  if (own.length >= 2) return own
+  return isYesNo(text) ? ['Yes', 'No'] : []
+}
 
 /**
  * A question one note asked about one issue, or one open item in the issue's Open questions section
@@ -90,8 +120,8 @@ export const questionsIn = (text: string): { questions: IssueQuestion[]; bad: nu
     const issue = issueOf(n.issue)
     const words = typeof n.text === 'string' ? sameText(n.text) : ''
     if (issue === null || !words) continue
-    const options = Array.isArray(n.options) ? n.options.filter((o): o is string => typeof o === 'string' && !!o.trim()) : []
-    questions.push({ repo: n.repo, issue, text: words, options, at: typeof n.at === 'number' && Number.isFinite(n.at) ? n.at : 0 })
+    const given = Array.isArray(n.options) ? n.options.filter((o): o is string => typeof o === 'string' && !!o.trim()) : []
+    questions.push({ repo: n.repo, issue, text: words, options: answerChoices(words, given), at: typeof n.at === 'number' && Number.isFinite(n.at) ? n.at : 0 })
   }
   return { questions, bad }
 }
@@ -141,12 +171,17 @@ export const orderQuestions = (qs: OpenQuestion[], rank: (repo: string, issue: n
 /** The question as the dialog shows it: its issues first, so Dan knows what it is about. */
 export const askText = (q: OpenQuestion) => `${q.repo}#${q.issues.join(' and #')}: ${q.text}`
 
-/** Up to two choices the session suggested, then skip and go to sleep; anything else Dan types. */
-export const askOptions = (q: OpenQuestion) => [
-  ...[...new Set(q.options)].filter(o => o !== GO_TO_SLEEP && o !== SKIP_QUESTION).slice(0, SUGGESTED_MAX),
-  SKIP_QUESTION,
-  GO_TO_SLEEP,
-]
+/**
+ * The question's answers first, then skip and go to sleep; anything else Dan types. On the `last`
+ * question skip is left off (#1771), since there nothing follows and it does what going to sleep
+ * does, which leaves room for a third answer; unless the question has no answers, as the dialog
+ * shows two choices at least and pads fewer with Yes and No, which would post as his decision.
+ */
+export const askOptions = (q: OpenQuestion, last = false) => {
+  const answers = [...new Set(q.options)].filter(o => o !== GO_TO_SLEEP && o !== SKIP_QUESTION)
+  const skip = last && answers.length ? [] : [SKIP_QUESTION]
+  return [...answers.slice(0, DIALOG_MAX - 1 - skip.length), ...skip, GO_TO_SLEEP]
+}
 
 /** The decision as posted on the issue: dated in ET, the question quoted, the answer as given (L249). */
 export const decisionComment = (question: string, answer: string, date: string) =>

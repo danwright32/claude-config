@@ -141,7 +141,7 @@ CUR="$SLEEPDIR/current.json"
 record g5 '["aaaa1111"]' "$CUR"
 NOW_ASLEEP=$((SINCE + 1000))
 note(){ HOME="$WORK/hm" SLEEP_REPORT_NOW_MS="${NOW:-$NOW_ASLEEP}" sleep_note "$1" "$CUR" "$NOW_ASLEEP" 1759800000; }
-out="$(note '{"kind":"question","by":"aaaa1111","repo":"o/r","issue":12,"text":"Should the cache be per account?"}' 2>&1)"; rc=$?
+out="$(note '{"kind":"question","by":"aaaa1111","repo":"o/r","issue":12,"text":"Should the cache be per account?","options":["Yes","No"]}' 2>&1)"; rc=$?
 check_eq "a note while asleep is written" 0 "$rc"
 has "the report is rendered after the note" "Should the cache be per account?" "$(report_of g5)"
 has "a question sits under its heading with its issue" "o/r#12" "$(report_of g5)"
@@ -263,7 +263,26 @@ check_eq "a PR that is not a number is refused at the writer" 1 "$rc"
 has "naming the field" "the note's pr must be a number" "$out"
 out="$(note '{"kind":"done","issue":3,"repo":["o","r"]}' 2>&1)"; rc=$?
 check_eq "a repo that is not text is refused at the writer" 1 "$rc"
+# #1771: a question about an issue is asked before bed in a dialog, so it carries the answers Dan
+# picks from. Fewer than two (none, one, blanks, or one answer twice) is refused at the writer.
+out="$(note '{"kind":"question","repo":"o/r","issue":12,"text":"Which copy?"}' 2>&1)"; rc=$?
+check_eq "#1771 a question about an issue with no options is refused" 1 "$rc"
+has "#1771 naming what it needs" "at least two answers Dan can pick" "$out"
+out="$(note '{"kind":"question","repo":"o/r","issue":12,"text":"Which copy?","options":["Short"," ","Short"]}' 2>&1)"; rc=$?
+check_eq "#1771 one answer, a blank and the same answer again is refused" 1 "$rc"
+out="$(note '{"kind":"question","repo":"o/r","issue":12,"text":"Which copy?","options":"Short or Long"}' 2>&1)"; rc=$?
+check_eq "#1771 options that are not a list are refused" 1 "$rc"
 check_eq "no refused note was written" "$before" "$(notes_of g5 | wc -l | tr -d ' ')"
+# What may still go without: a question naming no issue (a refused question, #841, and a repository
+# closed for the night, #843), which no dialog asks; and one the before bed round left, which says
+# why and carries whatever choices the question had (an older note had none).
+note '{"kind":"question","cwd":"/r","questions":["Merge PR #31?"]}' >/dev/null 2>&1; rc=$?
+check_eq "#1771 a question naming no issue needs no options" 0 "$rc"
+note '{"kind":"question","repo":"o/r","issue":14,"text":"Which copy?","why":"you skipped it"}' >/dev/null 2>&1; rc=$?
+check_eq "#1771 a question the before bed round left, with why, needs no options" 0 "$rc"
+note '{"kind":"question","repo":"o/r","issue":12,"text":"Which copy?","options":["Short","Long"]}' >/dev/null 2>&1; rc=$?
+check_eq "#1771 a question with two answers is written" 0 "$rc"
+before="$(notes_of g5 | wc -l | tr -d ' ')"
 out="$(HOME="$WORK/hm" sleep_note '{"kind":"finding","text":"late"}' "$CUR" "$((SINCE + 86400000))" 1759800000 2>&1)"; rc=$?
 check_eq "a note when the Mac is not asleep is refused" 1 "$rc"
 has "naming the state the record is in" "expired" "$out"
