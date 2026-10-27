@@ -62,7 +62,7 @@ denies "pr comment, inline body" "gh pr comment 5 --body \"Agreed.
 $LINK\""
 denies "issue comment, -b short flag" "gh issue comment 22 -b \"Agreed. $LINK\""
 denies "issue comment, the bare url without the label" "gh issue comment 22 --body \"Agreed. https://claude.ai/code/session_01AbCdEf\""
-denies "issue comment, heredoc in a substitution" "gh issue comment 22 --repo Try-Pennie/pivot --body \"\$(cat <<'EOF'
+denies "issue comment, heredoc in a substitution" "gh issue comment 22 --repo acme/widgets --body \"\$(cat <<'EOF'
 Agreed on all of it.
 
 $LINK
@@ -76,8 +76,8 @@ Agreed.
 
 $LINK
 EOF"
-denies "review comment reply through gh api" "gh api repos/Try-Pennie/pivot/pulls/50/comments/123/replies -f body=\"Fixed. $LINK\""
-denies "issue comment through gh api" "gh api -X POST repos/Try-Pennie/pivot/issues/22/comments -f body='Done. $LINK'"
+denies "review comment reply through gh api" "gh api repos/acme/widgets/pulls/50/comments/123/replies -f body=\"Fixed. $LINK\""
+denies "issue comment through gh api" "gh api -X POST repos/acme/widgets/issues/22/comments -f body='Done. $LINK'"
 denies "issue close with a closing comment" "gh issue close 14 --reason completed --comment \"Done. $LINK\""
 denies "pr close with -c" "gh pr close 76 -c \"Not merging. $LINK\""
 allows "issue close with a clean comment" "gh issue close 14 --comment \"Done.\""
@@ -139,7 +139,9 @@ if [[ "$err" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); e
   fail=$((fail + 1)); echo "FAIL: a payload that is not JSON must say the gate did not run (got: ${err:-<nothing>})"; fi
 
 # --- Wired: the installed settings route Bash and the Slack send tools to the hook ---
-if python3 - "$DIR/../settings.hooks.json" <<'PY'
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")" || SETTINGS="$DIR/../no-settings-file-found"
+if python3 - "$SETTINGS" <<'PY'
 import json, re, sys
 pre = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
 want = {"Bash": False, "mcp__plugin_slack_slack__slack_send_message": False,
@@ -152,7 +154,7 @@ for entry in pre:
                 want[tool] = True
 sys.exit(0 if all(want.values()) else 1)
 PY
-then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: settings.hooks.json must route Bash and the three Slack send tools to the hook"; fi
+then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $SETTINGS must route Bash and the three Slack send tools to the hook"; fi
 
 echo
 echo "passed: $pass, failed: $fail"

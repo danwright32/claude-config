@@ -101,12 +101,11 @@ def _api_writes_with_link(command, cwd):
         if not isinstance(stages, list):
             continue
         for words, _redirects, heredocs in stages:
-            name, rest = scan._name(words)
-            if not name or name.split("/")[-1] != "gh" or not rest or rest[0] != "api":
+            # Which gh subcommand runs is read by the shared reader, never by word position (#1188).
+            found = scan.gh_command(words)
+            if not found or found[0] != "api" or OVERRIDE in words:
                 continue
-            if OVERRIDE in words[: len(words) - len(rest) - 1]:
-                continue
-            args = rest[1:]
+            args = list(found[2]) + list(found[3])
             method = {v.upper() for v in scan.flag_values(args, "--method", "-X")}
             writes = method & API_WRITE_METHODS or any(
                 a in API_WRITE_FLAGS or any(a.startswith(f + "=") for f in API_WRITE_FLAGS if f.startswith("--"))
