@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L815. A scheduled send due anywhere inside a window needs a minimum lead time, or its first run after shipping or an outage sends to everyone already inside.
 - L808. A start claim proves only that an attempt began, so a duplicate finding it must learn whether it FINISHED before reporting success.
 - L804. A worker queued for an exclusive turn counts its deadline from the turn and never takes a turn it cannot finish, or it holds the line for nothing.
 - L793. A job that rechecks the rule its scheduler applied must receive the scheduler's readings, or it refuses on thinner evidence and waits.
