@@ -196,6 +196,7 @@ which is NOT loaded into the session.
 - L479. A line reference in an issue that has DRIFTED is the signal to re-derive the claim around it, never to confirm it.
 - L712. Measure a new derived figure's FILL RATE over the live population; null on every record is a derivation defect a sample check cannot see.
 - L714. A throwaway local database must reproduce the hosted platform's DEFAULT GRANTS, or a permission check passes on the mistake it exists to catch.
+- L811. An insert only role cannot name an ON CONFLICT target (that needs SELECT): use a bare DO NOTHING, and run new SQL once as the real role.
 - L487. Comparing two implementations against a live store measures the population change too, so snapshot the data once and run both halves against that.
 - L491. A short pattern occurs by chance in binary content, so a scanner reading build output refuses healthy runs at random as that output is regenerated.
 - L718. A view given its state as a prop is proved by tests that supply it, never by a caller doing so, so assert the production call site can reach each state.
