@@ -198,6 +198,7 @@ dc_setup() {
   done
   for t in $DC_STUB_NAMES; do dc_stub "$t" || return 1; done
   DC_PATH="$DC_STUBS:$DC_CORE"
+  # Read in a substitution, which bash 3.2.57 answers with the caller's trap (measured 2026-10-27).
   [ -n "$(trap -p EXIT)" ] || trap dc_cleanup EXIT
   return 0
 }
@@ -291,18 +292,19 @@ dc_scope_files() {
   return 0
 }
 
-# Lists every command the named files (default: dc_scope_files) call, one per line as
+# Lists every command the named files (default: dc_scope_files) call, one per line on stdout as
 # kind<TAB>name<TAB>file:line<TAB>detail, kind one of builtin function core stub seam follow fail.
-# Exit 0 none failed, 1 at least one did, 2 it could not run, 3 there was nothing to read.
+# Anything else it has to say goes to stderr. Exit 0 none failed, 1 at least one did, 2 it could
+# not run, 3 there was nothing to read.
 dc_check_commands() { # [<file>...]
   local py repo d roots=""
   py="$(command -v python3 2>/dev/null)" || { echo "dc_check_commands: python3 is not on PATH, so no script could be read" >&2; return 2; }
   if [ $# -eq 0 ]; then
     local f files=() scope
-    scope="$(dc_scope_files)" || { echo "dc_check_commands: could not tell which disk-clean scripts are present, so nothing was listed"; return 2; }
+    scope="$(dc_scope_files)" || { echo "dc_check_commands: could not tell which disk-clean scripts are present, so nothing was listed" >&2; return 2; }
     while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<< "$scope"
     if [ "${#files[@]}" -eq 0 ]; then
-      echo "dc_check_commands: no disk-clean scripts are present under $(_dc_repo) yet, so nothing was listed"
+      echo "dc_check_commands: no disk-clean scripts are present under $(_dc_repo) yet, so nothing was listed" >&2
       return 3
     fi
     set -- "${files[@]}"

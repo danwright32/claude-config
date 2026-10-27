@@ -74,6 +74,15 @@ trap 'dc_cleanup; chmod -R u+rwx "$OUT" 2>/dev/null; rm -rf "$OUT"' EXIT
 # ================================================================================================
 # 1. The harness's own directory, PATH and HOME
 # ================================================================================================
+# dc_setup sets its own EXIT trap only when the suite has none, and never replaces one. Asked of a
+# second shell, so this suite's own trap is not the one at stake.
+kept="$(bash -c 'trap "echo suite-trap" EXIT; . "$1" || exit 9; dc_setup >/dev/null 2>&1 || exit 8; r="$DC_ROOT"; trap -p EXIT; dc_cleanup; [ -d "$r" ] && echo "root left"' _ "$HARNESS" 2>&1)"
+check "dc_setup leaves an EXIT trap the suite already set in place" \
+  "$(grep -qF 'echo suite-trap' <<< "$kept" && ! grep -qF 'dc_cleanup' <<< "$kept" && ! grep -qF 'root left' <<< "$kept" && echo ok || echo "said: $kept")"
+added="$(bash -c '. "$1" || exit 9; dc_setup >/dev/null 2>&1 || exit 8; trap -p EXIT; dc_cleanup' _ "$HARNESS" 2>&1)"
+check "and sets one running dc_cleanup when there was none" \
+  "$(grep -qF 'dc_cleanup' <<< "$added" && echo ok || echo "said: $added")"
+
 check "the throwaway root is named by the harness's template" \
   "$(case "${DC_ROOT##*/}" in (disk-clean-harness.?*) echo ok ;; (*) echo "root is $DC_ROOT" ;; esac)"
 check "HOME lives inside the throwaway root" \
@@ -423,6 +432,9 @@ mkdir -p "$DC_ROOT/empty-repo/payload/hooks/lib"
 out="$(DC_REPO="$DC_ROOT/empty-repo" dc_check_commands 2>&1)"; rc=$?
 check "with no disk-clean scripts present it says so with its own exit code, never a pass (L98)" \
   "$([ "$rc" -eq 3 ] && grep -qF 'no disk-clean scripts' <<< "$out" && echo ok || echo "exit $rc: $out")"
+stdout_only="$(DC_REPO="$DC_ROOT/empty-repo" dc_check_commands 2>/dev/null)$(DC_REPO="$DC_ROOT/no-such-repo" dc_check_commands 2>/dev/null)"
+check "those two answers are said on stderr, so stdout holds only listing lines" \
+  "$([ -z "$stdout_only" ] && echo ok || echo "stdout: $stdout_only")"
 out="$(DC_REPO="$DC_ROOT/no-such-repo" dc_check_commands 2>&1)"; rc=$?
 check "a repository it cannot read is exit 2, could not run, never read as nothing present yet (L11)" \
   "$([ "$rc" -eq 2 ] && grep -qF 'could not' <<< "$out" && echo ok || echo "exit $rc: $out")"
