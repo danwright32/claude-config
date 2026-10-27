@@ -140,13 +140,53 @@ fi
 # CLOSED; kept, silently, while it is OPEN or GitHub does not answer, since that is a quiz delayed,
 # never one lost. NEVER dropped for its age (Dan, 2026-10-26, "Never drop it"): a pull request that
 # merges days later still gets its quiz. The one thing that ends a hold unasked is the sweep in
-# quiz_hold of a session's file untouched for two days, which only a session that has ended leaves,
-# since every turn end of a live session rewrites its own file.
+# quiz_hold (sweep_ended_holds) of a file untouched for two days whose session the session registry
+# says has ended (#1787). An idle session keeps its file however old it is, since a session with no
+# turn end never rewrites it.
 held_dir() { printf '%s/held' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
+
+# EACH GITHUB QUESTION HAS ITS OWN DEADLINE, AND THE RELEASE A BUDGET (claude-config#1786). The release
+# is a Stop hook with a 60 second timeout (settings.hooks.json), and a hook the harness kills says
+# nothing: before this, one hung answer from GitHub cost every hold in the file a turn. So each
+# question is asked through lib/bounded-run.sh, which kills the whole process tree it started (gh,
+# and the accounts walk mt_pr_view makes), and an answer cut at its deadline counts as no answer:
+# that hold is kept for the next turn end, and the release goes on to the next one.
+#
+# THE NUMBERS, settings rather than measured limits:
+#   - QUIZ_RELEASE_ASK_SECONDS, 10 a question. A healthy read of a merged pull request took 0.29,
+#     0.30 and 0.31 s on 2026-10-27 (load 15 on 12 cores), and a read that walks the other logged in
+#     accounts adds about 2 s an account (merge-target.sh, #1173), so 10 s is far past a slow healthy
+#     answer, and a hung one costs the hook a sixth of its timeout.
+#   - QUIZ_RELEASE_BUDGET_SECONDS, 40 for the whole release. Past it nothing more is asked, and each
+#     question is cut to what is left, so however many holds hang, the last question ends by 40 s.
+#     The one released quiz that can follow runs the label gate under its own 8 s deadline
+#     (QUIZ_LABEL_DEADLINE_SECONDS, below), which still ends inside 60.
+# A hold NOT asked because the budget ran out is written back AHEAD of the ones that were asked, so
+# a pull request whose answer keeps hanging cannot starve the holds behind it turn after turn.
+#
+# Asked in a child bash because bounded_run runs a command, never a shell function, and mt_pr_view
+# is one. Its standard error is dropped there, since bounded_run hands back both streams as one and
+# the envelope is read as JSON.
+RELEASE_ASK_SECONDS="${QUIZ_RELEASE_ASK_SECONDS:-10}"
+case "$RELEASE_ASK_SECONDS" in ''|*[!0-9]*|0) RELEASE_ASK_SECONDS=10 ;; esac
+RELEASE_BUDGET_SECONDS="${QUIZ_RELEASE_BUDGET_SECONDS:-40}"
+case "$RELEASE_BUDGET_SECONDS" in ''|*[!0-9]*|0) RELEASE_BUDGET_SECONDS=40 ;; esac
+held_ask() {  # $1 = folder to ask in, $2 = pr, $3 = remote slug, $4 = --repo value ; prints mt_pr_view's envelope, or nothing
+  local left secs
+  left=$((RELEASE_BUDGET_SECONDS - SECONDS))
+  [ "$left" -gt 0 ] || return 1
+  secs="$RELEASE_ASK_SECONDS"; [ "$left" -lt "$secs" ] && secs="$left"
+  bounded_run "$secs" bash -c '
+    exec 2>/dev/null </dev/null
+    . "$1/lib/push-scope.sh" && . "$1/lib/merge-target.sh" && cd "$2" && mt_pr_view "$3" "number,state,mergedAt,url" "$4" "$5"
+  ' held-ask "$HOOK_DIR" "$1" "$2" "$3" "$4"
+  [ "$BOUNDED_RC" = 124 ] && return 1
+  printf '%s' "$BOUNDED_OUT"
+}
 
 release_held() {
   command -v jq >/dev/null 2>&1 || return 0
-  local stop sid f g rec keep="" reasons="" notes="" open unknown merged closed
+  local stop sid f g rec keep="" unasked="" reasons="" notes="" open unknown merged closed
   local m_dir m_repo m_slug m_pr envelope state num child r msg
   stop="$(cat)"
   sid="$(printf '%s' "$stop" | jq -r '.session_id // ""' 2>/dev/null)"
@@ -161,10 +201,15 @@ release_held() {
   if [ -f "$f" ] && mv "$f" "$f.releasing.$$" 2>/dev/null; then parts+=("$f.releasing.$$"); fi
   [ "${#parts[@]}" -gt 0 ] || return 0
 
-  . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || return 0
-  . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || return 0
+  # The one bound every hook shares. Missing, every question is refused, so every hold is kept.
+  . "$HOOK_DIR/lib/bounded-run.sh" 2>/dev/null || bounded_run() { BOUNDED_OUT=""; BOUNDED_RC=127; }
   while IFS= read -r rec <&5; do
     [ -n "$rec" ] || continue
+    # The budget spent: kept without asking, and asked first at the next turn end.
+    if [ $((RELEASE_BUDGET_SECONDS - SECONDS)) -le 0 ]; then
+      unasked+="$rec"$'\n'
+      continue
+    fi
     open=0; unknown=0; merged=""; closed=""
     # One line per merge, its fields split on 0x1f, never a tab: a tab is whitespace to read, so an
     # empty field between two would vanish and shift the pull request number into the repository.
@@ -172,9 +217,9 @@ release_held() {
       # Asked in the folder the merge ran in, or, when that folder is gone (a worktree removed after
       # its merge), anywhere with the repository named, as long as there is a number to ask about.
       if [ -d "$m_dir" ]; then
-        envelope="$(cd "$m_dir" && mt_pr_view "$m_pr" "number,state,mergedAt,url" "${m_repo:-$m_slug}" "$m_repo" </dev/null)"
+        envelope="$(held_ask "$m_dir" "$m_pr" "${m_repo:-$m_slug}" "$m_repo")"
       elif [ -n "$m_pr" ] && [ -n "$m_slug" ]; then
-        envelope="$(cd "$HOME" && mt_pr_view "$m_pr" "number,state,mergedAt,url" "$m_slug" "$m_slug" </dev/null)"
+        envelope="$(held_ask "$HOME" "$m_pr" "$m_slug" "$m_slug")"
       else
         envelope=""
       fi
@@ -209,9 +254,9 @@ $r"
     [ -n "$msg" ] && notes="${notes:+$notes }$msg"
   done 5< <(cat "${parts[@]}" 2>/dev/null)
 
-  if [ -n "$keep" ]; then
+  if [ -n "$unasked$keep" ]; then
     mkdir -p "$(held_dir)" 2>/dev/null
-    printf '%s' "$keep" >> "$f" 2>/dev/null
+    printf '%s' "$unasked$keep" >> "$f" 2>/dev/null
   fi
   rm -f "${parts[@]}" 2>/dev/null
 
@@ -580,8 +625,32 @@ quiz_hold() {
     '{heldAt: $at, merges: $merges, payload: del(.tool_response)}' 2>/dev/null)" || return 1
   [ -n "$rec" ] || return 1
   printf '%s\n' "$rec" >> "$dir/$session_id" 2>/dev/null || return 1
-  # A session that ended with a hold never released leaves its file; anything this old is swept.
-  find "$dir" -type f -mtime +2 -delete 2>/dev/null || true
+  sweep_ended_holds "$dir"
+  return 0
+}
+# A session that ended with a hold never released leaves its file behind, so files untouched for two
+# days are looked at, and one is removed only when the session registry says its SESSION has ended
+# (claude-config#1787). Age alone is not evidence: a session left open with no turn end for days
+# never rewrites its file, and its quiz must still come (Dan, 2026-10-26, "Never drop it"). The
+# registry's own rule decides, through lib/session_registry.py, the one reading the sleep queue uses
+# too: ended means closed, silent past five minutes, or no longer in the registry. Any doubt keeps
+# the file: no python3, a registry that cannot be read, a record that cannot be read, or a registry
+# that does not show THIS session open (then it is not keeping track, and its absences prove nothing).
+# A `.releasing.<pid>` file a stopped release left belongs to the session its name begins with.
+sweep_ended_holds() {
+  local dir="$1" stale ended f sid
+  stale="$(find "$dir" -type f -mtime +2 2>/dev/null)"
+  [ -n "$stale" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  ended="$(printf '%s\n' "$stale" | sed -e 's#.*/##' -e 's#\.releasing\..*$##' | sort -u \
+    | python3 "$HOOK_DIR/lib/session_registry.py" ended "$(( $(date +%s) * 1000 ))" "$session_id" 2>/dev/null)" || return 0
+  [ -n "$ended" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    sid="${f##*/}"
+    sid="${sid%%.releasing.*}"
+    grep -qxF -- "$sid" <<< "$ended" && rm -f -- "$f"
+  done <<< "$stale"
   return 0
 }
 background_note=""

@@ -124,6 +124,15 @@
 # wide or global setting, so a file
 # taking it from 'claude-code/testing' is judged by how busy the Mac is. Read by ts_source.py
 # kit-test-takers, comments taken out, in any spelling of the import.
+# With it (#1778), a stand-in that never answers: it comes from the same file's never(), which every
+# test ends as it ends, so a mod test hand rolling a promise that never settles fails, by file and
+# line, since such a hook outlives its test and finishes inside a later one.
+# And no mod test waits on REAL time (#1789): the runner gives every hook 10,000 ms of real time,
+# which the test clock never moves (measured on 2026-10-26: a held stand-in was cut at 10,014 to
+# 10,028 ms, while a test clock moved 21 minutes past one in 220 ms), so a real timer past a 100 ms
+# floor (a setting, not a measurement), Bun.sleep,
+# Atomics.wait or timers from timers/promises in any mod's tests fails, by file and line, naming
+# mock.clock and the condition itself instead (L290, L524). Read by ts_source.py real-waits.
 #
 # One part of mod-kit a mod must hold at RUN time, not ask for (#1281): hooks/skew.ts, the reader of
 # a call to another mod's noun that failed because the noun or member is not there. It cannot be a
@@ -225,6 +234,40 @@ for d in "$dir"/*/; do
       echo "check-mod-shared-parts: $name's $h takes test from 'claude-code/testing' itself, so its 5,000 ms per test judges how busy the Mac is: take it from a copy of mod-kit's tests/hang-ceiling.ts, whose limit only a hang reaches (cp \"$dir/mod-kit/tests/hang-ceiling.ts\" \"${d%/}/tests/mod-kit/tests/hang-ceiling.ts\", then import { test } from './mod-kit/tests/hang-ceiling.ts')."
     fi
   done <<< "$takers"
+  # never (#1778): a stand-in that never answers comes from the hang ceiling's never(), which every
+  # test ends as it ends. A hand rolled promise that never settles outlives its test: the engine cuts
+  # its hook off about five seconds of real time later, and what the mod does then runs inside
+  # whichever test is running, which failed the job watcher's tests at random under load. The copies
+  # under a mod's tests/mod-kit are mod-kit's own, read there.
+  never_from=./mod-kit/tests/hang-ceiling.ts
+  [ "$name" = mod-kit ] && never_from=./hang-ceiling.ts
+  rolled="$(grep -rnE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit -- 'new Promise(<[^>]*>)?\( *\( *\) *=> *(undefined|\{ *\}) *\)' "${d%/}/tests" 2>/dev/null)"
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    failed=1
+    rel="${h#"${d%/}/"}"; file="${rel%%:*}"; rest="${rel#*:}"
+    echo "check-mod-shared-parts: $name's $file:${rest%%:*} hand rolls a promise that never settles, which outlives its test and finishes inside a later one: use never() from $never_from, which every test ends as it ends."
+  done <<< "$rolled"
+  # real waits (#1789): Claude Code's test runner gives every hook 10,000 ms of real time (its
+  # HookBudget setting, not a measurement), which the test clock never moves, and cuts a held
+  # stand-in off there (seen on 2026-10-26), so a mod test waiting on real time is
+  # judged by how busy the Mac is (L290). Read by ts_source.py real-waits, comments and strings out:
+  # a timer past a small floor (a yield to the event loop passes), Bun.sleep, Atomics.wait, or timers
+  # from timers/promises. Exit 1 is a file it could not read, named among the lines.
+  waits="$(python3 "$TS_SOURCE" real-waits "${d%/}")"; rc=$?
+  if [ "$rc" -gt 1 ]; then
+    failed=1
+    echo "check-mod-shared-parts: $name's tests could not be read for waits on real time (the reader exited $rc), so they were not checked."
+  fi
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    failed=1
+    at="${h%%$'\t'*}"; what="${h#*$'\t'}"
+    case "$what" in
+      'cannot be read:'*) echo "check-mod-shared-parts: $name's $at $what, so whether it waits on real time was not checked." ;;
+      *) echo "check-mod-shared-parts: $name's $at waits on real time ($what), which a busy Mac stretches toward the 10,000 ms of real time Claude Code gives each hook and the test clock never moves: move the time the mod sees with mock.clock(on) and clock.advance, and wait on the condition itself, never a time (L290)." ;;
+    esac
+  done <<< "$waits"
   [ "$name" = mod-kit ] && continue
   [ -d "$d/hooks" ] || continue
   sd="$stripped/$name/"

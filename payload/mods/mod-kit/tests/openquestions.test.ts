@@ -1,6 +1,17 @@
 import { expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import { bareIssuesIn, etDateOf, issueRefsIn, itemChoices, openQuestionsIn, questionWords, withQuestion } from '../hooks/openquestions.ts'
+import {
+  bareIssuesIn,
+  etDateOf,
+  GO_TO_SLEEP,
+  issueRefsIn,
+  itemChoices,
+  leavesUnanswered,
+  openQuestionsIn,
+  questionWords,
+  SKIP_QUESTION,
+  withQuestion,
+} from '../hooks/openquestions.ts'
 import { FENCE_FIXTURES } from './openquestions-fixtures.ts'
 
 // #1279, Dan 2026-10-17: every issue's body holds an "Open questions" section (the filing gate
@@ -77,6 +88,40 @@ test('an item carrying choices is the same question as its words alone: checked 
   const body = 'B\n\n## Open questions\n\n- [ ] Keep the old flag? (choices: Keep it / Drop it)'
   expect(withQuestion(body, 'Keep the old flag?', { answer: 'Drop it', date: '2026-10-26' })).toBe('B\n\n## Open questions\n\n- [x] Keep the old flag? (answered 2026-10-26 ET: Drop it)')
   expect(withQuestion(body, 'Keep the old flag?')).toBe(body)
+})
+
+// #1775: a new open item is written with the answers its dialog offered, in the form itemChoices
+// reads, so /sleep offers the same answers when it asks it again.
+test('a new open item is written with its choices, which itemChoices reads back (#1775)', () => {
+  const body = 'B\n\n## Open questions\n\nNone'
+  const added = withQuestion(body, 'Keep the old flag?', undefined, ['Keep it', 'Drop it'])
+  expect(added).toBe('B\n\n## Open questions\n\n- [ ] Keep the old flag? (choices: Keep it / Drop it)')
+  expect(openQuestionsIn(added).open.map(itemChoices)).toEqual([{ words: 'Keep the old flag?', choices: ['Keep it', 'Drop it'] }])
+  // Asked again, with choices or without, it is the same item and is left as it is.
+  expect(withQuestion(added, 'Keep the old flag?', undefined, ['Other', 'Answers'])).toBe(added)
+  // Answered, it is checked off by its words, the choices going with what it was asked.
+  expect(withQuestion(added, 'Keep the old flag?', { answer: 'Drop it', date: '2026-10-26' }, ['Keep it', 'Drop it'])).toBe('B\n\n## Open questions\n\n- [x] Keep the old flag? (answered 2026-10-26 ET: Drop it)')
+})
+
+test("the choices written leave out the before bed dialog's own ways of not answering, and any itemChoices could not read back (#1775)", () => {
+  const body = 'B\n\n## Open questions\n\nNone'
+  const item = (choices: string[]) => withQuestion(body, 'Which copy?', undefined, choices).split('\n').pop()
+  expect(item(['Short', SKIP_QUESTION, 'Long', GO_TO_SLEEP])).toBe('- [ ] Which copy? (choices: Short / Long)')
+  // Each once, each on one line; a choice holding " / " would read back as two, so it is left out.
+  expect(item(['Short', ' Short ', 'Long\n form', 'Either / or'])).toBe('- [ ] Which copy? (choices: Short / Long form)')
+  // Fewer than two left is no choice at all: the item is its words alone.
+  expect(item(['Short', SKIP_QUESTION, GO_TO_SLEEP])).toBe('- [ ] Which copy?')
+  expect(item([])).toBe('- [ ] Which copy?')
+})
+
+// #1774: the before bed dialog's skip and go to sleep leave a question unanswered, said once here,
+// where every mod that reads an answer takes them from.
+test('the two ways of leaving a before bed question unanswered are named once, and nothing else is one (#1774)', () => {
+  expect(SKIP_QUESTION).toBe('Skip this one')
+  expect(GO_TO_SLEEP).toBe('Go to sleep, no more questions')
+  expect(leavesUnanswered(SKIP_QUESTION)).toBe(true)
+  expect(leavesUnanswered(GO_TO_SLEEP)).toBe(true)
+  for (const a of ['Yes', 'Skip it', 'skip this one ', 'Go to sleep now', '']) expect(leavesUnanswered(a)).toBe(false)
 })
 
 test('a body GitHub saved with CRLF line endings is read, and written back with its own endings (lessons review)', () => {

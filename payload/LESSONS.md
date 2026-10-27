@@ -2619,6 +2619,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   mutation failed with "anon on reps_leave_remove(text,text): expected false, got true".
   Related to L124 and L541 on platform grants, and to L472 on a rig that measures itself.)
 
+- **L811. A database role meant only to insert cannot name an ON CONFLICT target, because naming
+  the conflict columns needs read access to them, so write ON CONFLICT DO NOTHING with no target
+  where the primary key is the only unique constraint, and run every new statement once as the
+  real least privilege role, since a stand in for the database has no permissions to refuse it.**
+  (pivot#45, 2026-10-26)
+  SHORT: An insert only role cannot name an ON CONFLICT target (that needs SELECT): use a bare DO NOTHING, and run new SQL once as the real role.
+
 - **L487. Two implementations compared against a LIVE store are compared against two different
   populations, because the store moves between the runs, so what you measure is everything that
   changed in it as well as the change you made. Take ONE fixed snapshot and run both halves against
@@ -4672,6 +4679,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Suppress repeat pages in the alerter, never by omitting a still true finding, or an alerter reading empty as recovery sends a false all clear.
 
 ## State and identity
+
+- **L812. When events about separate records each write onto one shared profile (a CRM contact, a user
+  record), an event about an older or replaced record must not overwrite what a newer record set, so
+  write those profile fields only from the person's current record and test the replaced record
+  arriving last.** (slate#4273, 2026-10-27)
+  SHORT: Profile fields written from per-record events come only from the person's current record; test a replaced record's event arriving last.
 
 - **L782. A freshness margin enforced on a cached value must also be enforced on whatever refills
   it, because a shared cache tier can hand back a copy just as close to expiry, which then reads as

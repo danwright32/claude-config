@@ -1,5 +1,5 @@
 import { expect, mock } from 'claude-code/testing'
-import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
@@ -925,12 +925,12 @@ const world = (on: On, o: Opts = {}) => {
         const given = o.issueAnswers[q]
         const qs = (e as unknown as { questions: unknown[] }).questions
         const reply = (a: string) => ({ result: { questions: qs, answers: { [q]: a } }, text: `answered ${a}` })
-        if (given === null || given === undefined) return new Promise(() => undefined) as never
+        if (given === null || given === undefined) return never() as never
         if (given === '__dismissed') throw new Error('the dialog was dismissed')
         if (typeof given === 'string') return reply(given) as never
         return given.then(reply) as never
       }
-      if (q.endsWith('what may Claude do?') && o.repoAnswer === null) return new Promise(() => undefined) as never
+      if (q.endsWith('what may Claude do?') && o.repoAnswer === null) return never() as never
       // An answer Dan gives only when the test lets it go: after the wait, as late as it likes (#843).
       if (q.endsWith('what may Claude do?') && o.repoAnswerLate) {
         const qs = (e as unknown as { questions: unknown[] }).questions
@@ -2127,6 +2127,89 @@ test('whether a PR a closing comment names is one, when GitHub cannot say, is sa
     "PR #1718 in o/r could not be read (whether #999, named in PR #1718's closing comment, is a PR: no pull requests found), so Dan was not asked and nothing was recorded: winding down still waits on it.",
   )
   expect(w.asked).toEqual([])
+})
+
+// ---- The PR that superseded it named by link, and the lookups budgeted (#1777) ----
+// #1767 left a closing comment naming its PR only by a github.com link unread, and asked GitHub
+// whether each number is a PR outside the shared polling budget, again on every minute's check while
+// the read kept failing.
+test("a closing comment, or Dan's words, naming the PR that superseded it only by a github.com link is a recorded reason, read through mod-kit's link reader (#1777)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, created: 'https://github.com/o/r/pull/1719\n', ask: 'Leave it closed' })
+  const byLink = [{ body: 'Superseded by https://github.com/o/r/pull/716, which carries this work.', createdAt: CLOSED_AT }]
+  w.o.gh = { ...merged(), others: [closedPr(1719, 'aaa1111', byLink), closedPr(1720, 'bbb2222', []), pr716] }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title a', tool_use_id: 'g1' } as never)
+  w.o.created = 'https://github.com/o/r/pull/1720\n'
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title b', tool_use_id: 'g2' } as never)
+  await command($ as never, 'winddown')
+  const said = 'its closing comment names PR o/r#716 ("Superseded by https://github.com/o/r/pull/716, which carries this work.")'
+  expect((await stop($ as never)).block ?? '').toContain(`PR #1719 was closed without merging, and ${said}: ask Dan whether to leave it closed`)
+  // GitHub is asked whether #716 is a PR in the repository the link names.
+  expect(w.runs.some(r => r.join(' ').startsWith('gh pr view 716 --repo o/r '))).toBe(true)
+  await call($ as never, leave(1719, { repo: 'o/r' }))
+  await call($ as never, leave(1720, { repo: 'o/r', dan_said: 'leave it closed, https://github.com/o/r/pull/716 replaced it' }, 'l2'))
+  expect(w.asked).toEqual([
+    `Leave PR #1719 in o/r closed without merging, as ${said}? Winding down stops waiting on it unless it is reopened.`,
+    'Leave PR #1720 in o/r closed without merging, as you named PR o/r#716 earlier ("leave it closed, https://github.com/o/r/pull/716 replaced it")? Winding down stops waiting on it unless it is reopened.',
+  ])
+})
+
+test('a link whose repository mod-kit cannot read is said as unread, never read as no reason (#1777)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, created: 'https://github.com/o/r/pull/1719\n', linkReaderFailsOn: '/pull/716' })
+  w.o.gh = { ...merged(), others: [closedPr(1719, 'aaa1111', [{ body: 'Superseded by https://github.com/o/r/pull/716', createdAt: CLOSED_AT }]), pr716] }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title a', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toContain("the PR could not be read (which repository https://github.com/o/r/pull/716, linked in PR #1719's closing comment, names: mod-kit is not loaded)")
+  expect(block).not.toContain(REOPEN(1719))
+  expect(await call($ as never, leave(1719, { repo: 'o/r' }))).toBe(
+    "PR #1719 in o/r could not be read (which repository https://github.com/o/r/pull/716, linked in PR #1719's closing comment, names: mod-kit is not loaded), so Dan was not asked and nothing was recorded: winding down still waits on it.",
+  )
+  expect(w.asked).toEqual([])
+})
+
+test('whether a number is a PR is asked of GitHub only with a look from the shared budget, and a failed answer is handed to it (#1777)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, created: 'https://github.com/o/r/pull/1718\n' })
+  w.o.gh = { ...merged(), others: [closedPr(1718, 'aaa1111', replacedBy(999))] }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title a', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  const asked = () => w.runs.filter(r => r.join(' ').startsWith('gh pr view 999 ')).length
+  await stop($ as never)
+  expect(asked()).toBe(1)
+  expect(pollsOf(w, 'failed').map(f => f[1])).toContain('no pull requests found')
+  // The policy holds every look: the minute's check keeps its reading and asks GitHub nothing about #999.
+  w.o.poll = { take: 'wait\tcap\t40\t' }
+  w.o.gh = { ...merged(), others: [closedPr(1718, 'aaa1111', replacedBy(999)), { ...openPr(999, 'ccc3333'), state: 'MERGED' }] }
+  await clock.advance(3 * MIN)
+  expect(asked()).toBe(1)
+  // Looks taken again, #999 is read, found a PR, and named as the reason.
+  w.o.poll = {}
+  await clock.advance(MIN)
+  expect(asked()).toBe(2)
+  expect((await stop($ as never)).block ?? '').toContain('PR #1718 was closed without merging, and its closing comment names PR #999 ("Replaced by #999.")')
+})
+
+test('a failed read of whether a number is a PR is asked again only once its wait is over, which doubles while it keeps failing, on the engine clock (#1777)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, created: 'https://github.com/o/r/pull/1718\n' })
+  w.o.gh = { ...merged(), others: [closedPr(1718, 'aaa1111', replacedBy(999))] }
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title a', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  const asked = () => w.runs.filter(r => r.join(' ').startsWith('gh pr view 999 ')).length
+  expect((await stop($ as never)).block ?? '').toContain("the PR could not be read (whether #999, named in PR #1718's closing comment, is a PR: no pull requests found)")
+  expect(asked()).toBe(1)
+  // Half a minute on, a turn end does not ask again, and says when GitHub will be.
+  await clock.advance(MIN / 2)
+  expect((await stop($ as never)).block ?? '').toContain("whether #999, named in PR #1718's closing comment, is a PR: no pull requests found; GitHub is asked again in 30s")
+  expect(asked()).toBe(1)
+  // Failing on, it is asked after one minute, then two, then four: three more reads in ten minutes, not ten.
+  await clock.advance(10 * MIN)
+  expect(asked()).toBe(4)
+  // Claude asking through leave_pr_open is one read, and is answered.
+  await call($ as never, leave(1718, { repo: 'o/r' }))
+  expect(asked()).toBe(5)
 })
 
 test('a PR the session opened in another repository has its branch cleanup said to be uncheckable here, never read as done (lessons review of #714)', withDeps, async ($, on) => {
@@ -5900,6 +5983,41 @@ test('a question left before bed is noted with its choices, so it is offered the
   await command($ as never, 'sleep')
   expect(w.askedOptions).toEqual([['Short', 'Long', GO_TO_SLEEP]])
   expect(morningQuestions(w).map(n => [n.issue, n.text, n.options, n.why])).toEqual([[12, 'Which copy?', ['Short', 'Long'], 'you chose to go to sleep']])
+})
+
+// #1792: an item with three choices, like #1505's, lost its third whenever it was not asked last,
+// since skip kept its place, and nothing said one was hidden. Asked first here, before a two choice
+// item that keeps skip and a yes or no item asked last.
+test('a three choice Open questions item asked first offers all three; the two choice item after it keeps skip (#1792)', withDeps, async ($, on) => {
+  const body = [
+    'The bug.',
+    '',
+    '## Open questions',
+    '',
+    '- [ ] Slot shape? (choices: Every Nth / One fixed option / A weekly pick)',
+    '- [ ] Keep the old flag? (choices: Keep it / Drop it)',
+    '- [ ] Is the cache safe to clear?',
+    '',
+    'Claude-Session: https://claude.ai/code/session_01AbCdEf',
+  ].join('\n')
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED() },
+    githubRepos: { default: ['o/r'] },
+    issueBodies: { 7: body },
+    issueAnswers: { 'o/r#7: Slot shape?': 'A weekly pick', 'o/r#7: Keep the old flag?': SKIP_QUESTION, 'o/r#7: Is the cache safe to clear?': GO_TO_SLEEP },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Slot shape?', 'o/r#7: Keep the old flag?', 'o/r#7: Is the cache safe to clear?'])
+  expect(w.askedOptions).toEqual([
+    ['Every Nth', 'One fixed option', 'A weekly pick', GO_TO_SLEEP],
+    ['Keep it', 'Drop it', SKIP_QUESTION, GO_TO_SLEEP],
+    ['Yes', 'No', GO_TO_SLEEP],
+  ])
+  // The third choice, picked, is checked off as the answer.
+  expect(w.edits.map(x => x.body)).toEqual([
+    body.replace('- [ ] Slot shape? (choices: Every Nth / One fixed option / A weekly pick)', '- [x] Slot shape? (answered 1969-12-31 ET: A weekly pick)'),
+  ])
 })
 
 test("a goal issue's question answered after the ten minutes is posted and checked off too (#1279 lessons review)", withDeps, async ($, on) => {

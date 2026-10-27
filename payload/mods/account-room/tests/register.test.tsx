@@ -843,14 +843,19 @@ test("Switch's elapsed seconds keep counting while the other Macs are read from 
   await start($, clock)
   const ui = await mountBand($ as never)
   await measure($, clock, limits(97, 50))
+  // The minute a good read is kept passes BEFORE Switch is pressed (#1789): the held sign out is a
+  // stand-in Claude Code cuts off at 10,000 ms of real time, which the test clock never moves, and
+  // pressed first it was held through 64 seconds of ticks, measured on 2026-10-26 at 3.7 to 4.1 s
+  // of real time at load 158
+  // (the whole test 7.5 s at load 237). Pressed after, it is held through 3, 0.4 to 0.6 s.
+  await clock.advance(61_000)
   await ui.press({ key: 'account-room:switch', plugin: 'mod-kit' })
   // Past the minute a good read is kept, the same figures arrive: nothing to write, but the other
   // Macs are read again, and GitHub takes 30 seconds to answer.
-  await clock.advance(61_000)
   w.ghDelayMs = 30_000
   await measure($, clock, limits(97, 50))
   await clock.advance(3_000)
-  expect(await shown(ui)).toMatch(/^Switching to Work: signing claude\.ai out in the browser… 64s/)
+  expect(await shown(ui)).toMatch(/^Switching to Work: signing claude\.ai out in the browser… 3s/)
   release()
   w.ghDelayMs = 0
   await clock.advance(30_000)
