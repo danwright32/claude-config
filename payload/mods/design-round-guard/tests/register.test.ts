@@ -1188,12 +1188,17 @@ test('#1123: a relative pattern after a cd is placed in its folder: in a checkou
 
 test('#1015: a pattern the guard cannot read is held, saying so, and in a known checkout waits on its issue', withKit, async ($, on) => {
   world($, on)
-  const why = refusalOf(await call($, { tool: 'Bash', command: `cd "$D" && echo x > 'x.@(css|md)'` }))
+  // zsh's globbing flags are read by no rule (a group was until #1773, which reads groups).
+  const why = refusalOf(await call($, { tool: 'Bash', command: `cd "$D" && echo x > '(#i)*.md'` }))
   expect(why).toContain('a pattern the design round guard cannot read')
-  // The folder followed (mod-kit reads the group as a name, a cd included), it is that issue's to answer.
-  const known = refusalOf(await call($, { tool: 'Bash', command: "echo x > 'app/x.@(css|md)'" }))
-  expect(known).toContain('app/x.@(css|md)')
+  // The folder followed (mod-kit places a pattern in the folder it names), it is that issue's to answer.
+  const known = refusalOf(await call($, { tool: 'Bash', command: "echo x > 'app/(#i)*.md'" }))
+  expect(known).toContain('app/(#i)*.md')
   expect(known).toContain('issue #978 in slate')
+  // A group is read as the names it can spell (#1773), so one that may spell a screen file is held as
+  // that issue's, and one that cannot runs.
+  expect(refusalOf(await call($, { tool: 'Bash', command: "echo x > 'app/x.@(css|md)'" }))).toContain('issue #978 in slate')
+  expect(refusalOf(await call($, { tool: 'Bash', command: "echo x > 'app/x.@(txt|md)'" }))).toBe('')
 })
 
 // claude-config#1046, from a pet session: the session in the project's main checkout, the edit in a
@@ -2479,6 +2484,50 @@ test('#1747 control: the same helper writing a screen file another way, another 
   ]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect({ command, held: why.includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  }
+  expect(w.ran).toEqual([])
+})
+
+// #1773: on 2026-10-26 a Worker only Bidspoke change ran a throwaway mutation script with quoted code
+// snippets as its arguments, and the guard held it twice. Each argument a script is handed is judged
+// as a file it may write (#1586), and a snippet holding parentheses or a `|` was read as a pattern
+// group, which no rule read, so it was held as one that may name a screen file. A group is now read
+// as the names it can spell, so a snippet whose every spelling ends in no look changing name runs.
+const MUTATE = (find: string, put: string) => `node /tmp/mutate.mjs src/lib/engine.ts '${find}' '${put}'`
+
+test('#1773: a script handed quoted code snippets as its arguments runs, whatever parentheses or bars they hold', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate/apps/worker' })
+  for (const command of [
+    MUTATE('if (a || b) {', 'if (a && b) {'),
+    MUTATE('if (!(a)) return', 'if (a) return'),
+    MUTATE('if (ms > CONTINUATION_WINDOW_MS) {', 'if (ms >= CONTINUATION_WINDOW_MS) {'),
+    MUTATE('children.filter(c => c.failed)', 'children.filter(c => !c.failed)'),
+    MUTATE('return retries > 0 ? (n | 1) : 0', 'return 0'),
+  ])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(5)
+})
+
+test('#1773 control: a screen file written by the shell, handed to a script, or named by a pattern a group may spell is still held', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    // The shell's own writes, beside a run of the same script.
+    `${MUTATE('if (a || b) {', 'x')} > app/page.tsx`,
+    `${MUTATE('if (a || b) {', 'x')} | tee app/globals.css`,
+    "sed -i '' 's/(a|b)/c/' app/page.tsx",
+    'cp /tmp/page.tsx app/page.tsx',
+    // A script handed the screen file it edits, beside a snippet.
+    "node /tmp/mutate.mjs app/page.tsx 'if (a || b) {' 'x'",
+    // A pattern a group in it may spell as a screen file, quoted for a tool that expands it itself.
+    "npx prettier --write 'app/page.(tsx|md)'",
+    "npx prettier --write 'app/**/*.@(ts|tsx)'",
+    "python3 scripts/gen.py 'app/(shop)/page.?(tsx)'",
+    // The names a command substitution gives a tool, which its own text does not spell.
+    "npx prettier --write $(git ls-files 'app/*.tsx')",
+  ]) {
+    // Held asking Dan, or, where the folder a pattern lands in cannot be followed, held as unsure.
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION) || why.includes('could not be followed') }).toEqual({ command, held: true })
   }
   expect(w.ran).toEqual([])
 })
