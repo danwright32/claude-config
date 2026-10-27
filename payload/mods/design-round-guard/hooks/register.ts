@@ -179,6 +179,12 @@ import { errorText } from './mod-kit/skew.ts'
 //   card's look is mod-kit's own, judged in its card.ts (rules.ts DRAW_CALL). And an Edit, MultiEdit
 //   or Write leaving a mod's .ts hook file with a bracket open, half of a change made in two edits,
 //   passes, the edit closing it judged against the file before the first (drawingChange, midEdits).
+// - Since #1773: a pattern's groups (bash's extglob, zsh's alternation and qualifiers, a bar) are
+//   read as the names they can spell, the characters as written among them (rules.ts
+//   groupSpellings), where every group was unreadable and held. So a quoted code snippet a script is
+//   handed (`'if (a || b) {'`), which spells no look changing name however it is read, runs, while a
+//   group that may spell one (`'app/page.(tsx|md)'`) is held as before. A name ending inside a
+//   command substitution is still unreadable, and zsh's globbing flags are read by no rule.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const

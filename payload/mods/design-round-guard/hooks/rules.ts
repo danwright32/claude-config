@@ -397,15 +397,15 @@ const spellings = (name: string): string[] | null => {
   return [name]
 }
 
-// One spelling as atoms; null for a pattern no rule here reads. A pattern matches a name's characters
-// as they are, case and all; a look changing name (`caseless`) matches any case, since shapeKind reads
-// a name in lower case, and the Mac's disk takes a name in capitals for the same file.
-const atomsOf = (spelling: string, caseless = false): Atom[] | null => {
+// One spelling as atoms. A pattern matches a name's characters as they are, case and all; a look
+// changing name (`caseless`) matches any case, since shapeKind reads a name in lower case, and the
+// Mac's disk takes a name in capitals for the same file. A parenthesis or a bar left in a spelling is
+// itself: groupSpellings has already read every group as the names it can spell (#1773).
+const atomsOf = (spelling: string, caseless = false): Atom[] => {
   const out: Atom[] = []
   const fold = (c: string) => (caseless ? [c.toLowerCase()] : [c])
   for (let i = 0; i < spelling.length; i++) {
     const c = spelling[i] as string
-    if (c === '(' || c === ')' || c === '|') return null
     if (c === '\\') {
       const lit = spelling[++i] ?? '\\'
       out.push({ one: x => fold(x).includes(lit) })
@@ -471,28 +471,114 @@ const overlap = (a: readonly Atom[], b: readonly Atom[]): boolean => {
   return walk(0, 0)
 }
 
-const LOOK_ATOMS = LOOK_NAMES.map(n => atomsOf(n, true) as Atom[])
+const LOOK_ATOMS = LOOK_NAMES.map(n => atomsOf(n, true))
+
+// Where the bracket expression opening at `at` closes, read as atomsOf reads one (`]` first in the
+// set is one of it), or -1 for a `[` never closed, which is a literal `[`.
+const bracketEnd = (name: string, at: number): number => {
+  let j = at + 1
+  if (name[j] === '!' || name[j] === '^') j++
+  if (name[j] === ']') j++
+  return name.indexOf(']', j)
+}
+
+// Each place in `name` where `stop` says to stop, outside an escape, a bracket expression and any
+// parenthesis: the bars splitting alternatives, or the parenthesis closing a group (depth 0 there).
+const topLevel = (name: string, from: number, stop: (c: string, depth: number) => boolean): number[] => {
+  const at: number[] = []
+  let depth = 0
+  for (let i = from; i < name.length; i++) {
+    const c = name[i] as string
+    if (c === '\\') i++
+    else if (c === '[') i = Math.max(i, bracketEnd(name, i))
+    else if (stop(c, depth)) at.push(i)
+    if (c === '(') depth++
+    else if (c === ')' && depth > 0) depth--
+  }
+  return at
+}
+
+// The parts of `name` between its bars at depth 0.
+const alternatives = (name: string): string[] => {
+  const bars = topLevel(name, 0, (c, d) => c === '|' && d === 0)
+  return [...bars, name.length].map((end, k) => name.slice(k ? (bars[k - 1] as number) + 1 : 0, end))
+}
+
+// A brace spelling's groups (#1773), read as every name each can spell, so a group is never a reason
+// to hold a name the shell or a program reads in any of these ways: `(a|b)` and bash's `@(a|b)` as
+// each alternative, `?(a)` as nothing or it, `!(a)`, `*(a)` and `+(a)` as `*` (wider than they are,
+// never narrower), a group ending the name also as nothing (zsh's qualifier, `*.css(N)`), a bar
+// outside any group as splitting the name into alternatives, and every group and bar also as the
+// characters written, as a script that globs nothing receives a quoted argument. A parenthesis that
+// closes nothing, or is never closed, is itself. Null for zsh's globbing flags (`(#i)`, `(#a1)`),
+// which change how the rest matches, and past MAX_SPELLINGS spellings. Until #1773 every group was
+// read by no rule, so a code snippet a script was handed (`'if (a || b) {'`) was held as a name that
+// may be a screen file.
+const groupSpellings = (name: string, bars = true): string[] | null => {
+  if (/\(#/.test(name)) return null
+  const out: string[] = []
+  const add = (xs: readonly string[] | null): boolean => {
+    if (!xs) return false
+    out.push(...xs)
+    return out.length <= MAX_SPELLINGS
+  }
+  if (bars && topLevel(name, 0, (c, d) => c === '|' && d === 0).length) {
+    if (!add(groupSpellings(name, false))) return null
+    for (const alt of alternatives(name)) if (!add(groupSpellings(alt))) return null
+    return out
+  }
+  const opens = topLevel(name, 0, (c, d) => c === '(' && d === 0)
+  for (const open of opens) {
+    const close = topLevel(name, open + 1, (c, d) => c === ')' && d === 0)[0]
+    if (close === undefined) continue
+    const before = name[open - 1] ?? ''
+    const prefix = open > 0 && '@!+*?'.includes(before) && name[open - 2] !== '\\' ? before : ''
+    const head = name.slice(0, open - prefix.length)
+    const body = name.slice(open + 1, close)
+    const rest = name.slice(close + 1)
+    const parts: (string[] | null)[] = [[`${prefix}(${body})`]]
+    if (prefix === '!' || prefix === '*' || prefix === '+') parts.push(['*'])
+    else {
+      if (prefix === '?' || (prefix === '' && rest === '')) parts.push([''])
+      for (const alt of alternatives(body)) parts.push(groupSpellings(alt))
+    }
+    const tails = groupSpellings(rest)
+    if (!tails) return null
+    for (const p of parts) {
+      if (!p) return null
+      for (const x of p) if (!add(tails.map(t => head + x + t))) return null
+    }
+    return out
+  }
+  return [name]
+}
 
 /**
  * Whether a file name the shell expands as a pattern may name a look changing file (#1015): `look`
  * when some name it can expand to is one (`[t]ailwind.config.ts`, `app/[t]okens.json`, `page.ts[x]`,
  * `out.*`, `build/*`), `not` when its literal parts rule every one out (`run-*.log`, `x.{md,txt}`,
- * `x.[!c]ss`), and `unread` for one no rule here reads (a group, as bash's extglob and zsh's
- * alternation and qualifiers write it, or a brace expansion past MAX_SPELLINGS spellings). Only the
+ * `x.[!c]ss`, a code snippet such as `if (a || b) {`, whose groups spell no such name however they
+ * are read, groupSpellings, #1773), and `unread` for one no rule here reads (zsh's globbing flags,
+ * a command substitution, or a brace expansion or groups past MAX_SPELLINGS spellings). Only the
  * last part of a path is read: a pattern in a folder is followed by the caller, or not at all. Since
  * #1010 only a pattern in the extension was judged, so a pattern in the rest of the name passed.
  */
 export const patternMayBeLook = (word: string): 'look' | 'not' | 'unread' => {
   const base = word.split('/').pop() ?? ''
-  const all = spellings(base)
-  if (!all) return 'unread'
-  let may = false
-  for (const s of all) {
-    const atoms = atomsOf(s)
-    if (!atoms) return 'unread'
-    if (!may && LOOK_ATOMS.some(l => overlap(atoms, l))) may = true
+  // A name ending inside a command substitution (`$(git ls-files 'src/*.tsx')`) is its output, not
+  // its own text, and is read by no rule, as before #1773, when its parenthesis alone made it
+  // unreadable. One after a substitution has closed (`$(cat id)/events/?x`) is read as any name.
+  if (word.includes('$(') && /[()]/.test(base)) return 'unread'
+  const braced = spellings(base)
+  if (!braced) return 'unread'
+  const all: string[] = []
+  for (const b of braced) {
+    const spelt = groupSpellings(b)
+    if (!spelt) return 'unread'
+    all.push(...spelt)
+    if (all.length > MAX_SPELLINGS) return 'unread'
   }
-  return may ? 'look' : 'not'
+  return all.some(s => LOOK_ATOMS.some(l => overlap(atomsOf(s), l))) ? 'look' : 'not'
 }
 
 /**

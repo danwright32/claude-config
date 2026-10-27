@@ -191,9 +191,50 @@ test('a name holding a pattern may be a look changing file exactly where some na
     'a\\*.log',
   ])
     expect([w, patternMayBeLook(w)]).toEqual([w, 'not'])
-  // A pattern with a group in it (bash's extglob, zsh's alternation and qualifiers) is read by no
-  // rule here, so it is said to be one that cannot be read.
-  for (const w of ['x.@(css|md)', '*.css(N)', 'x.(css|md)', 'x.*(.)']) expect([w, patternMayBeLook(w)]).toEqual([w, 'unread'])
+  // A group (bash's extglob, zsh's alternation and a zsh qualifier at the end) is read as every name
+  // it can spell, the group taken literally included, as a script that globs nothing receives it
+  // (#1773; until then every group was said to be unreadable, and held).
+  for (const w of [
+    'x.@(css|md)',
+    'x.(css|md)',
+    // A zsh qualifier at the end filters, so the name is what comes before it.
+    '*.css(N)',
+    'x.*(.)',
+    'page.?(tsx)',
+    // A group that may spell nothing, or anything, is read as such before a look changing name.
+    '!(x)tokens.json',
+    '?(a)tailwind.config.ts',
+    '+(a).tsx',
+    'fn(x.tsx)',
+    'x.(md|(c|t)ss)',
+    // A parenthesis inside a bracket is one of its set, never a group.
+    '[(]x.css',
+  ])
+    expect([w, patternMayBeLook(w)]).toEqual([w, 'look'])
+  for (const w of [
+    'x.(md|txt)',
+    'x.@(md|txt)',
+    '\\(x\\).md',
+    // #1773: code snippets a mutation script was handed, which spell no look changing name however
+    // their parentheses and bars are read.
+    'if (a || b) {',
+    'if (!(a)) return',
+    'if (ms > CONTINUATION_WINDOW_MS) {',
+    'children.filter(c => c.failed)',
+    'return retries > 0 ? (n | 1) : 0',
+    'a || b',
+    'foo(',
+    'foo)',
+    // A name after a command substitution has closed is read as any name.
+    '/api/issues/$(cat id)/events/?full=true',
+  ])
+    expect([w, patternMayBeLook(w)]).toEqual([w, 'not'])
+  // zsh's globbing flags (`(#i)`, `(#a1)`, `(#q...)`) change how the rest matches, and are read by no
+  // rule here; nor is a name spelling more ways than are worth reading.
+  // A command substitution's output is the names, whatever its own text spells (`$(git ls-files
+  // 'src/*.tsx')`, measured on 2026-10-27 among the commands #1773 would otherwise have let through).
+  for (const w of ['(#i)x.css', 'x(#a1).tsz', `${'f(a|b|c)'.repeat(6)}.md`, "$(git ls-files 'src/*.tsx')", "$(ls 'app/(shop)')"])
+    expect([w, patternMayBeLook(w)]).toEqual([w, 'unread'])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {
