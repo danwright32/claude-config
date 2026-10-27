@@ -1716,7 +1716,8 @@ changelog label says it is not visible, sleep mode, and a headless run. What it 
 
 A merge command still running in the background is not quizzed yet (#1768). A command that passes
 the Bash tool's 600 s limit is moved to the background, and the hook runs at that moment, before
-anything has merged; so does one started with `run_in_background`. Claude Code marks both with a
+anything has merged (seen in PostRoll on 2026-10-26, quizzed two minutes before the merge landed);
+so does one started with `run_in_background`. Claude Code marks both with a
 `backgroundTaskId` in the call's result, and for those the quiz is held: kept, one line per command,
 in `~/.claude-quiz-verdicts/held/<session id>`, and said in one line. The same script, registered as a
 Stop hook with `--release-held`, asks GitHub at each turn end (`gh pr view <n> --json

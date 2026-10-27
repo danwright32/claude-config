@@ -974,7 +974,7 @@ mkdir -p "$WT/tools" && ( cd "$WT" && git init -q && git remote add origin "http
 incident="$(python3 -c '
 import json, sys
 wt = sys.argv[1]
-cmd = "cd \"%s\" && venv/bin/python tools/wait_for_checks.py 1582 --merge > /tmp/merge.log 2>&1; echo \"exit=$?\"; tail -15 /tmp/merge.log" % wt
+cmd = "cd \"%s\" && venv/bin/python tools/wait_for_checks.py 1582 --merge > \"%s/merge.log\" 2>&1; echo \"exit=$?\"; tail -15 \"%s/merge.log\"" % (wt, wt, wt)
 print(json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": sys.argv[2], "cwd": sys.argv[3],
   "tool_input": {"command": cmd, "description": "Wait for CI on PR 1582 and merge it"},
   "tool_response": {"stdout": "", "stderr": "", "interrupted": False, "isImage": False, "noOutputExpected": False,
@@ -996,7 +996,7 @@ out="$(printf 'not json' | ( cd "$FIXTURE/repo" && env "PATH=$FIXTURE/bin:$PATH"
 [ "$rc" = 0 ] && [ -z "$out" ]; check $? "an unreadable Stop payload was not quiet (rc=$rc, got: ${out:0:200})"
 
 # The Stop hook is registered, so the release runs at all (L3: built is not wired).
-grep -q 'pr-merge-quiz.sh --release-held' "$DIR/../settings.hooks.json"; check $? "settings.hooks.json does not run pr-merge-quiz.sh --release-held"
+grep -q 'pr-merge-quiz.sh --release-held' "$(. "$DIR/lib/settings-file.sh"; hook_settings_file "$DIR/..")"; check $? "the hooks settings do not run pr-merge-quiz.sh --release-held"
 
 rm -rf "$FIXTURE"
 

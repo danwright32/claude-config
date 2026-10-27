@@ -64,7 +64,9 @@ for ev in ("UserPromptSubmit", "Stop"):
         for h in m.get("hooks", []):
             c = h.get("command", "")
             hit = re.search(r"/hooks/([^\s\"]+)", c)
-            print("%s\t%s" % (ev, hit.group(1) if hit else "external:" + c.split()[0]))
+            # The arguments it is registered with ride along, so it is run as Claude Code runs it:
+            # pr-merge-quiz.sh is a Stop hook only with --release-held (#1768).
+            print("%s\t%s\t%s" % (ev, hit.group(1) if hit else "external:" + c.split()[0], c[hit.end():].strip() if hit else ""))
 ' "$SETTINGS")"
 [ -n "$HOOKS" ] && check "settings name per prompt hooks to measure" ok \
   || check "settings name per prompt hooks to measure" "none were read, so nothing below measures anything"
@@ -112,14 +114,16 @@ run_hook(){ # run_hook <event> <name> -> runs it once in the current world, shim
     *) cmd=("$REAL_BASH" "$DIR/$2") ;;
   esac
   payload "$1" | ( cd "$F/proj" && env HOME="$F/home" TMPDIR="$F/tmp" CLAUDE_HOME="$F/home/.claude" \
-    PATH="$SHIMBIN:$REAL_PATH" "${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}" "${cmd[@]}" ) >/dev/null 2>&1
+    PATH="$SHIMBIN:$REAL_PATH" "${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}" "${cmd[@]}" "${RUN_ARGS[@]+"${RUN_ARGS[@]}"}" ) >/dev/null 2>&1
   return 0
 }
 
 # ---- what each hook reads that grows, populated N deep ----
 # Each entry sets EXTRA_ENV and fills the world with N of whatever piles up for that hook. "none"
-# entries carry the reason they read nothing that accumulates.
+# entries carry the reason they read nothing that accumulates. RUN_ARGS are the arguments the hook
+# being measured is registered with, set by the loop below and empty for every other run.
 EXTRA_ENV=()
+RUN_ARGS=()
 populate(){ # populate <name> <N> -> 0, or 1 with REASON set when the hook reads nothing that piles up
   local name="$1" n="$2" i
   EXTRA_ENV=()
@@ -198,6 +202,18 @@ with open(sys.argv[1], "w") as f:
     f.write(json.dumps({"type": "user", "message": {"content": "last"}}) + "\n")
     f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/y"}}]}}) + "\n")
 ' "$F/t.jsonl" "$n" ;;
+    pr-merge-quiz.sh)
+      # With --release-held, at every turn end (#1768). What piles up is every OTHER session's held
+      # merges, one file each in the one shared folder, plus any a stopped release left part taken;
+      # this session holds none, which is every turn end but the few after a backgrounded merge. It
+      # must read its own file alone, never list the folder.
+      mkdir -p "$F/home/.claude-quiz-verdicts/held"
+      i=0; while [ "$i" -lt "$n" ]; do
+        printf '{"heldAt":%s,"merges":[{"dir":"/x","repo":"","slug":"a/b","pr":"%d"}],"payload":{}}\n' "$(date +%s)" "$i" \
+          > "$F/home/.claude-quiz-verdicts/held/other-session-$i"
+        : > "$F/home/.claude-quiz-verdicts/held/other-session-$i.releasing.$i"
+        i=$((i + 1))
+      done ;;
     *)
       REASON="UNKNOWN"; return 2 ;;
   esac
@@ -217,8 +233,10 @@ launches(){ # launches <event> <name> <N> -> processes started by one settled ru
 SMALL=2
 LARGE=200
 measured=0
-while IFS="$(printf '\t')" read -r ev name; do
+while IFS="$(printf '\t')" read -r ev name args; do
   [ -n "$name" ] || continue
+  # shellcheck disable=SC2206 # the registered arguments, split as the hook's command line splits them
+  RUN_ARGS=($args)
   fresh probe; populate "$name" 1; rc=$?
   if [ "$rc" -eq 2 ]; then
     check "$ev hook $name has an entry saying what piles up for it" "it has none: add one to populate() in $(basename "$0")"
@@ -243,6 +261,7 @@ while IFS="$(printf '\t')" read -r ev name; do
 done <<EOF
 $HOOKS
 EOF
+RUN_ARGS=()
 
 # The control: the shims see a hook start anything at all, or every equal pair above is two zeros.
 fresh control; populate rule-files-changed.sh 3
