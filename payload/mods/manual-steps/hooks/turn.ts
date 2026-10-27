@@ -8,8 +8,12 @@
 // on the next prompt (measured on every transcript of the 30 days to 2026-10-23 on this Mac), so the
 // turn is the records after the last user record carrying a different one.
 
-/** The words this mod's own block begins with, so a turn that already holds it is never blocked twice. */
+import { PAGE_MARK } from './page.ts'
+
+/** The words this mod's prose block begins with, so a turn that already holds it is never blocked twice. */
 export const PROSE_MARK = 'Your reply leaves Dan a step in prose'
+/** Every block this mod gives, the prose one and the page one (#1811): a turn holding either is never blocked by it again. */
+const MARKS = [PROSE_MARK, PAGE_MARK]
 
 /**
  * How many bytes from the transcript's end are read. Measured over the 12,514 turns in this Mac's
@@ -18,22 +22,28 @@ export const PROSE_MARK = 'Your reply leaves Dan a step in prose'
  */
 export const TURN_BYTES = 4_000_000
 
+/**
+ * How long the turn's transcript may take to read at a turn end: chosen, not measured, at well over
+ * the 15 ms the largest transcript on this Mac took (200 MB, measured 2026-10-23).
+ */
+export const TURN_TIMEOUT_MS = 2_000
+
 // What perl runs: the window, read by seeking to its start, cut to Claude's text records whole and each
 // user record cut to its promptId and whether it is this mod's own block, so the answer stays small
 // however large the tool results in the window are. Only an unescaped key matches, so the same words
 // inside a tool result, which a transcript holds escaped, do not. Perl, not tail and awk: on the last
 // 4 MB of a 200 MB transcript macOS's `tail -c` took 140 ms, reading the whole file, and awk 90 to 125
 // ms over its long lines, where perl reads and filters it in 15 (measured 2026-10-23). The byte count,
-// the file and the mark are its arguments, never part of its text.
+// the file and the marks are its arguments, never part of its text.
 const TURN_READ = [
-  'my ($n, $f, $mark) = @ARGV;',
+  'my ($n, $f, @marks) = @ARGV;',
   'open(my $h, "<", $f) or die "$f: $!\n";',
   'my $size = -s $h;',
   'seek($h, $size > $n ? $size - $n : 0, 0) or die "$f: $!\n";',
   'while (my $l = <$h>) {',
   '  if (index($l, q{"type":"user"}) >= 0) {',
   '    my $id = $l =~ /("promptId":"[^"]*")/ ? ",$1" : "";',
-  '    my $ours = index($l, q{"content":"Stop hook feedback:}) >= 0 && index($l, $mark) >= 0 ? "true" : "false";',
+  '    my $ours = index($l, q{"content":"Stop hook feedback:}) >= 0 && grep({ index($l, $_) >= 0 } @marks) ? "true" : "false";',
   '    print qq({"type":"user"$id,"isOurs":$ours}\n);',
   '  } elsif (index($l, q{"type":"assistant"}) >= 0 && index($l, q{"type":"text"}) >= 0) {',
   '    print $l;',
@@ -45,7 +55,7 @@ const TURN_READ = [
 export type TurnRead = {
   /** What Claude wrote in the turn, one entry per record, oldest first. */
   texts: string[]
-  /** This mod's own block is already in the turn. */
+  /** One of this mod's own blocks is already in the turn. */
   isOurs: boolean
   /** The prompt the turn answers, or null when the window held no record of it. */
   promptId: string | null
@@ -109,7 +119,7 @@ export const turnAt = async (transcript: string, run: TurnRun): Promise<TurnAt> 
   if (!transcript) return { state: 'unreadable', why: 'no transcript was given' }
   let r: Awaited<ReturnType<TurnRun>>
   try {
-    r = await run(['perl', '-e', TURN_READ, '--', String(TURN_BYTES), transcript, PROSE_MARK])
+    r = await run(['perl', '-e', TURN_READ, '--', String(TURN_BYTES), transcript, ...MARKS])
   } catch (err) {
     return { state: 'unreadable', why: err instanceof Error ? err.message : String(err) }
   }

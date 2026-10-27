@@ -3,8 +3,9 @@ import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
 import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
-import { PROSE_MARK, turnAt } from './turn.ts'
-import { waitingPhrase } from './waiting.ts'
+import { clearTurnPages, notePinned, pagesAtStop, registerPages } from './pages.ts'
+import { PROSE_MARK, TURN_TIMEOUT_MS, turnAt } from './turn.ts'
+import { saysNoneNow, waitingPhrase } from './waiting.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // The manual steps card (#614), settled with Dan on 2026-10-03 (spec) and 2026-10-04 (design
@@ -528,9 +529,6 @@ export const VERDICT_INPUT = {
 // on him (any message of the turn since #1608), with no unfinished step on the card he can see,
 // sends Claude back to pin it. Once a turn, so it can never loop, and only where the steps tool exists.
 let interactive = false
-// How long the turn's transcript may take to read at a turn end: chosen, not measured, at well over
-// the 15 ms the largest transcript on this Mac took (200 MB, measured 2026-10-23).
-const TURN_TIMEOUT_MS = 2_000
 
 const proseStep = (phrase: string) =>
   `${PROSE_MARK} ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Check it against the current state, then put it on the card with the ${TOOL} tool: its direct link or a location Dan can find, its actions one per item, and any value to paste. Then say in one line that it is on the card. Only a step he can do now goes on the card; one waiting on something else stays in the issue. If nothing is actually left for Dan to do now, say so in one line instead.`
@@ -647,6 +645,8 @@ export const register: Register = on => {
     const r = await next(e)
     // Only the main loop raises turn.start; a subagent's run raises none.
     await setRunningTurn($, e.turnId)
+    // #1811: a page published in a turn that ended with no turn end is not judged in this one.
+    if (interactive) await clearTurnPages($)
     const n = /^step (\d+) done$/.exec(e.text.trim())?.[1]
     const card = (await $.state.get(cardRef)).value ?? null
     if (n !== undefined && card?.steps[Number(n) - 1]?.isSent) await $.state.set(waitingRef, { turnId: e.turnId, step: Number(n) })
@@ -681,6 +681,8 @@ export const register: Register = on => {
     if (refused) return refused
     const made = cardFrom(e)
     if ('refusal' in made) return { deny: made.refusal }
+    // #1811: called and not refused, it answers a page of steps published this turn (hooks/pages.ts).
+    await notePinned($)
     // A step found done keeps how and when it finished on the card this one replaces (#886), and an
     // unfinished step another mod added stays on it (#1107).
     const prior = (await $.state.get(cardRef)).value ?? null
@@ -765,7 +767,7 @@ export const register: Register = on => {
   // turn itself says whether this mod already blocked in it, so it blocks at most once per turn even
   // in a chain another Stop hook started; unread, it falls back to the last message and to that chain.
   on('classic.Stop', async ($, e, next) => {
-    const r = await next(e)
+    const r = await pagesAtStop($, e, next, interactive)
     if (!interactive) return r
     const last = typeof e.last_assistant_message === 'string' ? e.last_assistant_message : null
     const turn = await turnAt(typeof e.transcript_path === 'string' ? e.transcript_path : '', argv => $.process.run(argv, { timeoutMs: TURN_TIMEOUT_MS }))
@@ -775,6 +777,9 @@ export const register: Register = on => {
     const texts = turn.state === 'read' ? turn.texts : []
     // The transcript may not yet hold the last message when the turn ends, so it is added unless it is there.
     const said = last !== null && texts.at(-1) !== last ? [...texts, last] : texts
+    // #1811: Claude saying plainly that none of the steps are Dan's to do now answers this check as it
+    // answers the page check, one acknowledgement read by both rules that ask for it (L330).
+    if (saysNoneNow(said)) return r
     const phrase = said.map(waitingPhrase).find(p => p !== null) ?? null
     if (!phrase) return r
     let card: StepsCard | null
@@ -790,6 +795,10 @@ export const register: Register = on => {
     const ours = proseStep(phrase)
     return { ...r, block: r.block ? `${r.block}\n\n${ours}` : ours }
   })
+
+  // #1811: each page published is judged for steps (hooks/pages.ts); the turn's end above starts from
+  // pagesAtStop, which refuses a page of steps nothing answered, beside the prose step.
+  registerPages(on, () => interactive)
 
   // Dan closing either pane does not finish the steps: the card stays pinned, in the band. One hook
   // answering for every id in PANES, so a pane id added there cannot be left without it.
