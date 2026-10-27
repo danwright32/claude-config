@@ -1,6 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
+import { inputTexts } from './mod-kit/inputs.ts'
 import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingIndexCover, AskBeforeSavingQuestion } from '../types/index.d.ts'
 import {
   APPROVAL_MS,
@@ -272,15 +273,15 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
       continue
     }
     // What the command mentions is a guess at the file; what a patch it reads names is what it writes.
+    // A patch it reads from a device or a fifo is never opened (#1765), as a missing one never was:
+    // the read waits for ever, and one fed on standard input is the heredoc, read in the command.
     for (const m of await mentioned(text, home, inCheckout, isSet))
       if (!out.includes(m)) {
         out.push(m)
         guessed.push(m)
       }
-    for (const f of u.inputs) {
-      if (!(await $.fs.exists(f))) continue
-      for (const m of await mentioned(await $.fs.read(f), home, inCheckout, isSet)) if (!out.includes(m)) out.push(m)
-    }
+    const read = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
+    for (const t of read) for (const m of await mentioned(t, home, inCheckout, isSet)) if (!out.includes(m)) out.push(m)
   }
   return { files: out, guessed, handed }
 }

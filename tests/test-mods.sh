@@ -1501,6 +1501,21 @@ for m in text-repeat text-triple text-prefix; do
     || check "and names $m, pointing it at modkit.pythonText" "$out"
 done
 case "$out" in *clean-asks-text*) check "a mod asking the kit where python holds text passes" "$out" ;; *) check "a mod asking the kit where python holds text passes" ok ;; esac
+# #1765: three guards read each file a command reads by hand, looping over the write reader's inputs,
+# and one meeting /dev/stdin or a fifo waited for ever, so the call never ran. Each hand rolled loop
+# fails the run, pointed at inputTexts in the copy of mod-kit's hooks/inputs.ts; a mod handing the
+# inputs to it, or reading only their names, passes.
+M9I="$TMPROOT/m9-input-reader"
+mkmodsrc "$M9I" clean-asks-inputs "const texts = await inputTexts({ exists: p => \$.fs.exists(p), stat: (p, o) => \$.fs.stat(p, o), read: p => \$.fs.read(p) }, u.inputs); const named = [...u.words, ...u.inputs].some(isLessons)"
+mkmodsrc "$M9I" inputs-one-line "for (const f of u.inputs) if (await \$.fs.exists(f)) texts.push(await \$.fs.read(f))"
+mkmodsrc "$M9I" inputs-block "for (const f of w.unnamed[0]?.inputs) {"
+out="$(bash "$SHARED" "$M9I" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#1765: a mod reading a command's inputs by hand fails the run" ok || check "#1765: a mod reading a command's inputs by hand fails the run" "exit=$code out=$out"
+for m in inputs-one-line inputs-block; do
+  printf '%s\n' "$out" | grep "$m keeps its own input-reader" | grep -q 'inputTexts' && check "#1765: and names $m, pointing it at inputTexts" ok \
+    || check "#1765: and names $m, pointing it at inputTexts" "$out"
+done
+case "$out" in *clean-asks-inputs*) check "#1765: a mod handing a command's inputs to inputTexts, or reading only their names, passes" "$out" ;; *) check "#1765: a mod handing a command's inputs to inputTexts, or reading only their names, passes" ok ;; esac
 # #1205: the status bar and the account room each followed a /login with their own copy of the
 # reading and its half minute wait. A mod hooking the login command itself fails the run, pointed at
 # modkit.login; a mod hooking the event mod-kit raises passes.

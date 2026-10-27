@@ -330,6 +330,19 @@ describe('writes: what the words do not name', () => {
     expect(read('patch -p1 < fix.diff').unnamed).toEqual([{ what: 'a patch', words: ['patch', '-p1', '<', 'fix.diff'], inputs: [`${CWD}/fix.diff`] }])
     expect(read('git -C /repo apply fix.patch').unnamed).toEqual([{ what: 'a patch', words: ['git', '-C', '/repo', 'apply', 'fix.patch'], inputs: ['/repo/fix.patch'] }])
   })
+  // #1765: a device named as what a command reads (/dev/stdin, /dev/fd/0, /proc/self/fd/0) is never
+  // an input, so no guard opens it: a read of one waits for ever on the mod worker's own standard
+  // input, and the call it judges never runs. The write is still named, as one whose input is unknown.
+  test('a device a command reads is never an input to read', () => {
+    expect(read('git apply /dev/stdin').unnamed).toEqual([{ what: 'a patch', words: ['git', 'apply', '/dev/stdin'], inputs: [] }])
+    expect(read('patch -p1 < /dev/fd/0').unnamed).toEqual([{ what: 'a patch', words: ['patch', '-p1', '<', '/dev/fd/0'], inputs: [] }])
+    expect(read('bash < /dev/stdin').unnamed).toEqual([{ what: 'a bash script on standard input', words: ['bash', '<', '/dev/stdin'], inputs: [], script: true }])
+    expect(read('git -C /repo apply /proc/self/fd/0').unnamed.map(u => u.inputs)).toEqual([[]])
+    // A relative name is judged where it resolves.
+    expect(read('cd /dev && git apply stdin').unnamed.map(u => u.inputs)).toEqual([[]])
+    // An ordinary file beside one is still read.
+    expect(read('git apply /dev/stdin fix.patch').unnamed.map(u => u.inputs)).toEqual([[`${CWD}/fix.patch`]])
+  })
   test('a patch only checked writes nothing', () => {
     expect(read('git apply --check fix.patch').unnamed).toEqual([])
     expect(read('git apply --stat fix.patch').unnamed).toEqual([])
