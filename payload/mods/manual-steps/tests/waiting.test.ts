@@ -256,6 +256,8 @@ describe('numbered steps in a reply (#1811)', () => {
     const said = "Here is the fix:\n\n1. Open the read workflow's run history.\n2. Open any of today's failures that took under a second.\n3. Tell me what the error says."
     expect(waitingPhrase(said)).toMatch(/^1\. Open\b/)
     expect(waitingPhrase('1. Type `/config`.\n2. Turn on **Enable Remote Control for all sessions**.')).toMatch(/^1\. Type\b/)
+    // The same actions a page of steps is judged by (hooks/page.ts ACTION), one list for both.
+    expect(waitingPhrase('1. Scroll to the Billing section.\n2. Untick **Auto renew**.')).toMatch(/^1\. Scroll\b/)
   })
 
   test('one numbered line alone, or a numbered plan of Claude\'s own work, is not', () => {

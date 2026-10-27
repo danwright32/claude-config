@@ -21,8 +21,9 @@ export type PageSigns = {
 }
 
 // Something a person does at a screen, never work Claude does itself ("add", "update", "run" lead
-// Claude's own plans as often as Dan's steps, so they are left out).
-const ACTION = String.raw`(?:open|click|press|tap|paste|copy|type|go to|select|choose|tick|untick|sign in|log in|drag|toggle|turn (?:on|off)|enter|fill in|navigate to|visit|scroll)`
+// Claude's own plans as often as Dan's steps, so they are left out). One list for a page and for a
+// reply's numbered steps (hooks/waiting.ts), so the two never judge the same line differently.
+export const ACTION =String.raw`(?:open|click|press|tap|paste|copy|type|go to|select|choose|tick|untick|sign in|log in|drag|toggle|turn (?:on|off)|enter|fill in|navigate to|visit|scroll)`
 // A step's own number in its words ("Step 2:", "Step 3."), which leads the action rather than being it.
 const STEP_NUMBER = String.raw`(?:step\s+\d+\s*[.:)]?\s*)?`
 const LEADS_ACTION = new RegExp(String.raw`^\s*${STEP_NUMBER}${ACTION}\b`, 'i')

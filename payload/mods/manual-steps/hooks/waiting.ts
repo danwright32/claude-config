@@ -5,6 +5,8 @@
 // on this Mac (docs/mods-design.md "Manual steps"), so a phrase is added only with a measurement
 // behind it (L172, L36).
 
+import { ACTION } from './page.ts'
+
 // Where a sentence, or a numbered or bulleted line, begins, so an imperative is one said to Dan
 // ("Click **Deploy**", "2. Choose **Carnegie Hall**"), not the word inside a sentence about code.
 const LEAD = String.raw`(?<=^|[.!?]["')\]*_]*\s+|^\s*(?:\d+[.)]\s*|[-*]\s+)?(?:\*\*)?)`
@@ -98,7 +100,7 @@ const notQuoted = (plain: string, at: number): boolean => !quotedOnLine(plain.sl
 // screen, counted only where the message holds two or more. Measured on 2026-10-27 over the 19,420
 // messages Claude wrote in this Mac's transcripts: 20 held two or more such lines, and every one of
 // the 20 was steps for Dan. "add", "update" and "run" are left out, since they lead Claude's own plans.
-const NUMBERED = /^[ \t]*(?:\d+[.)]|step \d+[.:])[ \t]+(?:\*\*)?(?:open|click|press|tap|paste|copy|type|go to|select|choose|tick|sign in|log in|drag|toggle|turn (?:on|off)|enter|fill in|navigate to|visit)\b/gim
+const NUMBERED = new RegExp(String.raw`^[ \t]*(?:\d+[.)]|step \d+[.:])[ \t]+(?:\*\*)?${ACTION}\b`, 'gim')
 const numberedTwice = (plain: string): boolean => (plain.match(NUMBERED) ?? []).length >= 2
 
 // What a phrase must also be, beyond being there, to count.
