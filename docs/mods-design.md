@@ -951,7 +951,10 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   `tools/check-mod-shared-parts.sh` holds to mod-kit's own, naming the `cp` that brings a stale one
   back.
 - Winding down finds what to finish from the branch the session is on when it turns on: its PR, the
-  issues the PR closes, and the branch and worktree. The deploy is the is it live mod's verdict for
+  issues the PR closes or refers to (Refs, Ref, References or Part of, #1812), and the branch and
+  worktree. An open one is finished, the verification its fix still owes included, and the refusal
+  names what is left on it (the merged PR's stated next step, else the issue's last comment) and
+  tells Claude to do it, never to ask Dan whether to turn winding down off or close it unfinished. The deploy is the is it live mod's verdict for
   that PR (#687), read through `$.isItLive.verdict` in the repository GitHub's own link for the PR
   names, never Claude's word: only Live or "no deploy step recorded" finishes it; deploying, could
   not confirm live, no card yet, and a verdict that cannot be read each keep the turn end refused
