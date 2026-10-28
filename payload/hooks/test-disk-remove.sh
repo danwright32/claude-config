@@ -539,15 +539,26 @@ check "an interrupted Docker removal is reported as not checked, never as still 
   "$(has "$OUT_TEXT" "stopped partway while removing docker image sha256:abc; whether it went is not checked here")"
 
 # ================================================================================================
-# 15. Thousands of items (L101): every one handled, the record and log whole, in bounded time
+# 15. A large plan (L101): every item judged, checked, measured, trashed and logged, nothing skipped
 # ================================================================================================
+# Why 200 and not thousands (claude-config#1843). Nothing in disk-remove.sh branches on how many
+# items a plan holds: the plan, the record, the log and the marks all go through files read a line
+# at a time, never an argument list or an in memory limit. Its cost is per item, about 22 to 30 ms
+# here, almost all of it the four tools each item runs (judge, lsof, du, trash) plus its own
+# substitutions, and measured flat from 200 to 2000 items (2026-10-27: 24 to 30 ms an item at 200,
+# 22 to 23 ms at 2000, load average 14 to 15 on 12 cores), so 2000 items spent 36 to 104 seconds
+# proving what 200 do. The one count dependent branch is the total's unit: the du stub reports
+# 12 KB an item, so the "MB" words need at least 86 items, and the total is asserted below so a
+# smaller BIG fails here rather than quietly testing the KB branch. Every item running each tool
+# exactly once is asserted from the stubs' own call log, so a per item step that starts being
+# skipped, or repeated, at size is caught structurally rather than by a timing.
 if [ -n "${DR_UNDER_TEST:-}" ] && [ -n "${DR_SKIP_BIG:-}" ]; then
-  # Only for a run against a deliberately broken copy, where the thousands case would add a minute
-  # to every mutant and prove nothing the cases above do not.
-  echo "SUITE-PART-UNMEASURED the thousands of items case: skipped for a copy under test (DR_SKIP_BIG)"
+  # Only for a run against a deliberately broken copy, where the large case adds seconds to every
+  # mutant and proves nothing the cases above do not.
+  echo "SUITE-PART-UNMEASURED the large plan case: skipped for a copy under test (DR_SKIP_BIG)"
 else
 fresh
-BIG=2000
+BIG=200
 mkdir -p "$H/w/big"
 i=1; while [ "$i" -le "$BIG" ]; do : > "$H/w/big/f$i"; printf '%s\n' "b$i${S}fixture${S}trash${S}$H/w/big/f$i${S}${S}offerable${S}" >> "$DC_ROOT/items"; i=$((i + 1)); done
 record big 10
@@ -559,6 +570,13 @@ echo "  ($BIG items took ${big_took}s)"
 check "a plan of $BIG items exits 0" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $(tail -5 <<< "$OUT_TEXT")")"
 check "every one of them is gone" "$(eq "$(find "$H/w/big" -type f | wc -l | tr -d ' ')" 0)"
 check "the report counts all of them" "$(has "$OUT_TEXT" "moved $BIG item(s) to the Trash")"
+check "the total is every item's own size summed, in MB (the unit the count must reach)" \
+  "$(has "$OUT_TEXT" "moved $BIG item(s) to the Trash, $((BIG * 12 / 1024)) MB, which")"
+# Each per item tool ran once for every item and for no item twice: <calls> <distinct targets>.
+for big_tool in judge lsof du trash; do
+  check "every item ran $big_tool exactly once" \
+    "$(eq "$(dc_calls "$big_tool" | awk '{ n++; if (!seen[$NF]++) d++ } END { print n + 0, d + 0 }')" "$BIG $BIG")"
+done
 check "the log holds $BIG INTENT and $BIG OUTCOME lines" "$(eq "$(grep -c '^INTENT' "$(LOGF big)") $(grep -c '^OUTCOME' "$(LOGF big)")" "$BIG $BIG")"
 check "the record marks all $BIG trashed and is still complete" \
   "$([ "$(grep -c '"state":"trashed"' "$STATE/last-scan.json")" -eq "$BIG" ] && dcr_complete "$STATE/last-scan.json" && echo ok || echo "marked $(grep -c '"state":"trashed"' "$STATE/last-scan.json")")"
