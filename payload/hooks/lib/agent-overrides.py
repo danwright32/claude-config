@@ -15,8 +15,9 @@ the commands cannot come to disagree about what a skip is (L263, L370).
         mod at Claude Code's permission prompt, which comes first (claude-config#1765).
     agent-overrides.py rewrite-refusal <agent>    stdin: one command line
         exit 0 printing what agent <agent> is told for a git command that rewrites a commit already
-        made (commit --amend, push --force, -f, --force-with-lease, a +refspec), 1 printing nothing
-        when there is none. Said by amend-force-push-gate.sh (claude-config#1856).
+        made (commit --amend, push --force, -f, --force-with-lease, a +refspec), 10 printing nothing
+        when there is none, never 1, which is what Python exits on a crash. Said by
+        amend-force-push-gate.sh (claude-config#1856).
     agent-overrides.py runs-script <name>    stdin: one command line
         exit 0 when a command in it runs the script <name> (by name or path, directly or through a
         shell), 1 when none does.
@@ -636,7 +637,8 @@ def main(argv):
     if mode == "rewrite-refusal" and len(argv) > 2 and argv[2]:
         found = rewrites(data)
         if not found:
-            return 1
+            # Not 1: Python exits 1 on an uncaught exception, and a crash must never read as clean.
+            return 10
         print(rewrite_refusal(argv[2], found))
         return 0
     if mode == "runs-script" and len(argv) > 2:

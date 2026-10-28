@@ -72,8 +72,9 @@ cmd="${parsed#*$'\x1f'}"
 case "$cmd" in *amend*|*push*) ;; *) exit 0 ;; esac
 
 said="$(printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/agent-overrides.py" rewrite-refusal "$agent" 2>&1)"; rc=$?
+# 10 is the reader's "nothing to refuse"; 1 is what Python exits on a crash, so it is unread.
 case "$rc" in
-  1) exit 0 ;;
+  10) exit 0 ;;
   0) refuse "REFUSED (amend-force-push-gate.sh): $said" ;;
   *) refuse_unread "$cmd" "lib/agent-overrides.py could not read it (exit $rc: ${said##*$'\n'})" ;;
 esac

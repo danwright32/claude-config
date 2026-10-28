@@ -163,6 +163,22 @@ says "naming python3" "python3"
 run_nopy "$(bash_payload 'git commit -F /tmp/msg.txt' a1b2c3d4)"
 if [ "$RC" -eq 0 ]; then check "with no python3 a plain commit goes through" ok; else check "with no python3 a plain commit goes through" "exit $RC: ${ERR:0:300}"; fi
 
+# A reader that crashes exits 1, as Python does on an uncaught exception, and that must never read
+# as "nothing to refuse": the payload is read for real, the command reader is made to crash.
+CRASHPY="$WORK/crashpy"; mkdir -p "$CRASHPY"
+REALPY="$(command -v python3)"
+printf '#!/bin/bash\ncase "$*" in *agent-overrides.py*) echo "Traceback: boom" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' "$REALPY" > "$CRASHPY/python3"
+chmod +x "$CRASHPY/python3"
+run_crashpy() { # run_crashpy <payload>
+  local errf; errf="$(mktemp "$WORK/err.XXXXXXXX")"
+  OUT="$(printf '%s' "$1" | PATH="$CRASHPY:$PATH" bash "$GATE" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+run_crashpy "$(bash_payload 'git commit --amend --no-edit' a1b2c3d4)"
+if [ "$RC" -eq 2 ]; then check "a reader that crashes still refuses an agent's amend" ok; else check "a reader that crashes still refuses an agent's amend" "exit $RC: ${ERR:0:300}"; fi
+run_crashpy "$(bash_payload 'git push --force origin x' a1b2c3d4)"
+if [ "$RC" -eq 2 ]; then check "a reader that crashes still refuses an agent's force push" ok; else check "a reader that crashes still refuses an agent's force push" "exit $RC: ${ERR:0:300}"; fi
+
 # ---------------------------------------------------------------------------------------------
 echo "the rule is said where every dispatched builder reads it, in the same words"
 # The rule file cites its issue before the full stop, as its neighbours do, so the refusal's
