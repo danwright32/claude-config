@@ -1,6 +1,6 @@
 ---
 name: disk-full
-description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from two clearing commands that run on Dan's decision (one, the Xcode build cache sweep, he has let the low space warning run on its own), in the order that finds the cause fastest.
+description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from two clearing commands that run on Dan's decision (one, the Xcode build cache sweep, he has let the low space warning run on its own) and removals Dan decides on, made through disk-remove.sh, in the order that finds the cause fastest.
 ---
 
 # disk-full
@@ -275,7 +275,12 @@ over the same interval (step 4 says why `du`'s growth alone can be no growth at 
 Everything above is read only on purpose, except two deleting commands: the clearing command in
 step 6, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 7, which
 the low space warning runs on its own (Dan's decision of 2026-10-20) and which by hand runs only
-once Dan has decided to clear the orphaned Xcode caches it listed. Before removing anything:
+once Dan has decided to clear the orphaned Xcode caches it listed. Anything else goes through
+`disk-remove.sh`, never a hand typed `rm`, `mv` or `trash`. It never removes a sync or cloud
+client's store, iCloud Drive, an app package, a Photos or photo editor library, the Mail or Messages
+stores, keys and credentials, or anything under /Applications or /System; it checks each item again
+just before removing it, writes what it is about to do to a log first, and checks afterwards that
+each item really went. Before removing anything:
 
 - Say what you propose to delete, how much you predict it frees, and what regenerates it. The
   prediction is a claim about `df`, not about `du`, which overstates anything holding clones or
@@ -285,6 +290,30 @@ once Dan has decided to clear the orphaned Xcode caches it listed. Before removi
 - Never delete from a sync or backup client's own store to free space. Change its scope or pause it
   in its own interface, because its store is the client's record of what it has done and removing
   it by hand leaves the client repairing itself, which writes more.
+
+Propose what you mean to remove, by path, with one method for the lot: `trash` for anything Dan may
+want back, `delete` for a cache that regenerates, and `truncate` for a log a running process still
+holds open (it is emptied in place, since deleting a file that is held open frees nothing until the
+process lets go). This measures each path, refuses the ones it never removes, removes nothing, and
+writes a plan:
+
+```bash
+bash ~/.claude/hooks/lib/disk-remove.sh --propose trash ~/Downloads/old-installer.dmg
+```
+
+Show Dan what it offered and refused, with the sizes. Once Dan has decided, run the `--plan` command
+it printed, within the hour, after which the plan is refused as stale:
+
+```bash
+bash ~/.claude/hooks/lib/disk-remove.sh --plan ~/.claude/state/disk-clean/named/<the id it printed>.plan
+```
+
+It prints one line per item (removed, trashed, truncated, skipped with the reason, or failed with the
+error) and the verified total, which is the sum of each item's own size, measured just before it
+went and checked gone after. Moving to the Trash frees nothing until the Trash is emptied, and the
+report counts trashed items apart for that reason. Exit 0 means every item went; 5 means at least
+one was skipped or failed, and the lines say which and why; 3 and 4 mean the plan is stale or for
+another scan, so propose again.
 
 Then confirm the gain. Take this reading just before the delete and again just after, and compare
 the difference with the prediction. It is in megabytes because whole gigabytes cannot tell a gain

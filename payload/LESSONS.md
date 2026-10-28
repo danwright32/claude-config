@@ -6,6 +6,12 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L818. A feature that runs across several deployed services gets its live end-to-end check as its first deliverable, run after every deploy, before any screen is built on top, because unit tests with stand-ins, a build check and a sign-in smoke check each prove one layer and the first person to run the whole thing otherwise finds every fault one at a time.**
+  (pivot#126, 2026-10-28)
+  SHORT: A multi-service feature's live end-to-end check is its first deliverable, run every deploy; layer checks leave a user to find each fault.
+- **L817. A deploy smoke check against an app behind a sign-in proxy (Cloudflare Access, an SSO gateway) measures only the proxy, because the proxy answers a signed-out request before the app runs, so a build that crashes on every request passes it; load a page from the built app itself before deploying.**
+  (pivot#122, 2026-10-28)
+  SHORT: A smoke check behind a sign-in proxy tests only the proxy, so a crashing build passes; load a page from the built app itself before deploying.
 
 - **L801. When counting commits by what their message says (fixes, reverts, a ticket number), match
   the title line only, because git log --grep searches the whole message including the body, and a
@@ -3291,6 +3297,9 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L821. A deadline raced against work must report a timeout only when the deadline actually won, because a timer that resolves when cancelled runs every .then attached to it, so a timeout message or side effect hung there fires on the path where the work answered in time and reads as a failure that never happened.** (bidspoke#2968, 2026-10-28)
+  SHORT: Report a raced deadline's timeout only if it won; a timer resolving on cancel runs its .then on the path that answered in time.
+
 - **L800. A monitor warning that an operation is nearing its limit must not read only what is recorded when an operation finishes, because one killed at the limit never finishes and so never appears, and the failure the warning exists for reads as absent; count the kills from a source that sees them.** (bidspoke#2651, 2026-10-22)
   SHORT: A near-limit monitor reading only what finished cannot see an operation killed at the limit, so count the kills from a source that sees them.
 - **L795. An alert opened from state held inside one short-lived process (a Worker isolate, a serverless instance, a pod) must be clearable from a healthy reading any process can take, because the process that opened it can be evicted before it ever sees the recovery, and the alert then stays open and repeats a false outage.** (slate#4008, 2026-10-21)
@@ -4686,6 +4695,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A rate monitor judging a sub-day window against whole days must match clock hours, and page only on a shift improbable at its count.
 
 ## State and identity
+
+- **L1032. A check that a file is still the one it was before must not rest on its device and inode
+  alone, because a filesystem reuses a deleted file's inode for the next file created, so a
+  replacement passes as the original; pair the inode with something a replacement changes, such as
+  birth time or ctime and size.** (claude-config#1840, 2026-10-28)
+  SHORT: A file identity check must not rest on device and inode alone, which a replacement can reuse; pair it with birth time or ctime and size.
 
 - **L812. When events about separate records each write onto one shared profile (a CRM contact, a user
   record), an event about an older or replaced record must not overwrite what a newer record set, so
@@ -7509,6 +7524,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
 
 ## External systems
+- **L819. Connecting two managed services (a database pool like Hyperdrive and a host like Supabase) follows the integration guide written for that exact pair before any setting is chosen, because the host's default connection string is often the one the guide says not to use, and the wrong choice works under light load and hangs under real concurrency.**
+  (pivot#126, 2026-10-28)
+  SHORT: Wire two managed services by the guide for that exact pair; the host's default string can work lightly and hang under concurrency.
 - **L810. Check a saved credential by performing the action it exists for against its real
   destination (posting to the alert channel, sending from the mailbox, writing to the bucket),
   never only by a login check, because a valid credential for the wrong identity passes every
@@ -7990,6 +8008,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   which asks the server for the page again first)
 
 ## Building with AI
+- **L820. Any AI call that writes, reads or reasons about a date must be given today's date, and the time zone it means, as a fact in its context, because a model with no date resolves 'last Friday' or 'next month' to a guess from its training and a well formed guess passes every format check.**
+  (pivot#155, 2026-10-28)
+  SHORT: An AI call handling dates must be given today's date and time zone in its context; without it a guessed date passes every format check.
+- **L816. A streamed model reply is complete only when its stream reports a finish: an error part or a missing finish must fail the call, because the AI SDK still resolves the text written so far and a half sentence reads as a whole reply.**
+  (pivot#113, 2026-10-27)
+  SHORT: A streamed model reply ending in an error or with no finish must fail the call; the SDK still returns the partial text as if whole.
 - **L814. A record that a person was shown fixed regulated text (a consent, a disclosure) must be written from the page's own confirmation that it displayed that text at that version, and every blank in that text must be filled from a source no model or chat input can write, because a screen the server built is not a screen anyone saw, and a blank the model can fill puts model output into fixed wording.**
   (pivot#75, pivot#76, 2026-10-27)
   SHORT: Record fixed consent text as shown only on the page's confirmed render, and fill its blanks from sources no model or chat input can write.

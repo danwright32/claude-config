@@ -362,6 +362,21 @@ again="$(reason_of "$MERGE_CMD 42")"
 if holds "$again" "without once silencing"; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: the notice never fired again after the gate stopped working a second time"; fi
 
+# A CUT is not something the label gate recorded (#1817): it is the held quiz release giving up on a
+# GitHub answer. So the notice, which names what the GATE recorded, never lists it, or a slow
+# GitHub at turn end would read as a reason the gate is failing (L11).
+forget_verdicts
+mkdir -p "$CLAUDE_QUIZ_VERDICT_DIR"
+printf 'cut 3\nno-label 9\nfired_since_quiet 9\nwarned 0\n' > "$CLAUDE_QUIZ_VERDICT_DIR/counts"
+record '[{"name":"priority-p2"}]'
+tenth="$(reason_of "$MERGE_CMD 42")"
+if holds "$tenth" "without once silencing" && holds "$tenth" "no-label 10"; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: the seeded notice did not fire, so the cut case below measures nothing"; fi
+if holds "$tenth" "cut 3"; then
+  fail=$((fail+1)); echo "FAIL: the label gate's notice lists the release's cut answers as something the gate recorded"
+else pass=$((pass+1)); fi
+saw cut 3 "a merge quizzed after earlier cut answers"
+
 # A store it cannot write must never stop a quiz. The counter exists to report on the
 # gate, so a counter that could block the gate would be the tail wagging the dog, and the
 # failure is silent by design: there is nowhere for it to complain to.
@@ -1129,9 +1144,14 @@ hold_for 41; hold_for 42
 if [ "$(held_prs)" != "41 42 " ]; then
   check 1 "FIXTURE BROKEN, the deadline cases were skipped: the holds came out as '$(held_prs)', not '41 42 '"
 else
+cut_before="$(count_of cut)"
 out="$(hang_turn_end "$SID_H" QUIZ_RELEASE_ASK_SECONDS=5)"
 still="$(alive "$FIXTURE/hang-gh-41.pid" "$FIXTURE/hang-child-41.pid")"
 : > "$FIXTURE/hang-release"
+# A CUT ANSWER IS COUNTED (#1817). The release used to run before the counters were defined, so a
+# question cut at its deadline left no trace in the counts and read as fewer quizzes, not quizzes cut
+# (L357). Exactly one: #41 was cut, #42 answered.
+saw cut "$((cut_before + 1))" "a GitHub answer cut at its deadline by the release"
 grep -qx 41 "$FIXTURE/hang-asked" 2>/dev/null; check $? "the hung question for #41 was never asked, so nothing below measures its deadline"
 [ -f "$FIXTURE/hang-child-41.pid" ] && [ -z "$still" ]; check $? "a hung GitHub answer, and the child it started, were still running after the release returned:${still:- no child pid was written}"
 reason="$(printf '%s' "$out" | jq -r '.reason // ""' 2>/dev/null)"
@@ -1145,6 +1165,8 @@ out="$(turn_end "$SID_H")"
 holds "$out" "#41"; check $? "the hold kept past a hung answer was released without naming #41 (got: ${out:0:200})"
 holds "$out" '"block"'; check $? "a hold kept past a hung answer was not released at the next turn end (got: ${out:0:200})"
 [ ! -s "$(held_file "$SID_H")" ]; check $? "a hold kept past a hung answer was still held after GitHub answered (holds: $(held_prs))"
+# An answer that came back in time is not a cut.
+saw cut "$((cut_before + 1))" "a release whose every answer came back in time"
 fi
 
 # THE RELEASE AS A WHOLE HAS A BUDGET (#1786), so however many holds hang, the hook ends inside its
@@ -1158,10 +1180,18 @@ hold_for 41; hold_for 43; hold_for 42
 if [ "$(held_prs)" != "41 43 42 " ]; then
   check 1 "FIXTURE BROKEN, the budget cases were skipped: the holds came out as '$(held_prs)', not '41 43 42 '"
 else
+cut_before="$(count_of cut)"
 out="$(hang_turn_end "$SID_H" QUIZ_RELEASE_ASK_SECONDS=5 QUIZ_RELEASE_BUDGET_SECONDS=2)"
 still="$(alive "$FIXTURE/hang-gh-41.pid" "$FIXTURE/hang-child-41.pid")"
 : > "$FIXTURE/hang-release"
 asked="$(tr '\n' ' ' < "$FIXTURE/hang-asked" 2>/dev/null)"
+# The question the budget cut is counted (#1817); the holds never asked are not cuts, since nothing
+# was cut short for them. When the budget was spent before #41 was asked, nothing was cut either.
+if grep -qx 41 "$FIXTURE/hang-asked" 2>/dev/null; then
+  saw cut "$((cut_before + 1))" "a GitHub answer cut short by the release's budget"
+else
+  saw cut "$cut_before" "a release whose budget ran out before it asked anything"
+fi
 [ -z "$still" ]; check $? "a question cut by the release's budget was still running after the release returned:$still"
 ! grep -qx 43 "$FIXTURE/hang-asked" 2>/dev/null; check $? "the release went on asking GitHub after its budget was spent (asked: $asked)"
 holds "$out" '"block"'; check $((! $?)) "a release whose budget ran out quizzed a hold it never asked about (got: ${out:0:200})"

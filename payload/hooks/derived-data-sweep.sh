@@ -35,6 +35,12 @@
 #                                    failed, or that it died before recording; nothing when none has run
 #   derived-data-sweep.sh --auto     the detached sweep itself, only ever started by --start, which
 #                                    holds the lock it runs under; run by hand it refuses
+#   derived-data-sweep.sh --remove-one <folder>
+#                                    remove ONE folder, for lib/disk-remove.sh (#1805): takes the
+#                                    same lock, refuses a folder not directly inside DerivedData, and
+#                                    judges it again with the same rule. Exit 0 removed, 4 kept (the
+#                                    line says why), 1 could not remove it, 2 refused, 75 a sweep
+#                                    holds the lock, so nothing was touched
 #
 # Two automatic sweeps never run at once ("assume it runs twice"): --start takes an flock on
 # STATE/lock BEFORE handing off, and the detached sweep inherits that lock, so it is held exactly as
@@ -92,14 +98,20 @@ human_size() {
   fi
 }
 
-MODE=list
-for arg in "$@"; do
+MODE=list ONE=""
+while [ "$#" -gt 0 ]; do
+  arg="$1"; shift
   case "$arg" in
-    --delete|--summary|--start|--last|--auto)
-      [ "$MODE" = list ] || refuse "only one of --delete, --summary, --start, --last and --auto can be given, so it did nothing."
-      MODE="${arg#--}" ;;
+    --delete|--summary|--start|--last|--auto|--remove-one|--remove-one-locked)
+      [ "$MODE" = list ] || refuse "only one of --delete, --summary, --start, --last, --auto and --remove-one can be given, so it did nothing."
+      MODE="${arg#--}"
+      case "$MODE" in
+        remove-one|remove-one-locked)
+          [ "$#" -gt 0 ] && [ -n "$1" ] || refuse "--remove-one needs the one folder to remove, so it removed nothing."
+          ONE="$1"; shift ;;
+      esac ;;
     -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d'; exit 0 ;;
-    *) refuse "it does not know the argument '$arg' (the only ones are --delete, --summary, --start, --last and --auto), so it listed and deleted nothing." ;;
+    *) refuse "it does not know the argument '$arg' (the only ones are --delete, --summary, --start, --last, --auto and --remove-one), so it listed and deleted nothing." ;;
   esac
 done
 
@@ -309,12 +321,57 @@ if [ ! -e "$ROOT" ]; then
   # Finding nothing to look at is its own outcome, never a clean sweep (L98). The summary says
   # nothing, because a Mac without Xcode output has nothing to add to a disk warning.
   [ "$MODE" = summary ] && exit 0
+  # Asked to remove one named folder, "nothing to look at" is not "removed" (L98).
+  case "$MODE" in remove-one*) refuse "there is no Xcode build output on this Mac (nothing at $ROOT), so $ONE is not a build cache it may remove, and it removed nothing." ;; esac
   NO_ROOT=1
   echo "There is no Xcode build output on this Mac to look at (nothing at $ROOT)."
   exit 0
 fi
 if [ ! -d "$ROOT" ] || [ ! -r "$ROOT" ] || [ ! -x "$ROOT" ]; then
   refuse "could not read $ROOT, so nothing here says which build caches are orphaned."
+fi
+
+# ---------- --remove-one: one folder, for lib/disk-remove.sh (claude-config#1805) ----------
+# disk-remove.sh removes the folders Dan ticked one at a time, so --delete, which takes every orphan,
+# is not what it needs. This takes the automatic sweep's own lock first, so the two never delete at
+# once (exit 75 when a sweep holds it, having touched nothing), and then judges the one folder again
+# with the same rule --delete uses, immediately before removing it. Exit 0 removed, 4 kept (the line
+# says why), 1 it could not be removed, 2 refused: a folder that is not directly inside the
+# DerivedData folder is never this mode's to remove, whatever is asked.
+if [ "$MODE" = remove-one ]; then
+  mkdir -p "$STATE_DIR" 2>/dev/null || refuse "could not make $STATE_DIR for its lock, so it removed nothing."
+  perl -e '
+    use Fcntl qw(:flock);
+    my ($lock, @cmd) = @ARGV;
+    open(my $fh, ">>", $lock) or do { print "derived-data-sweep: could not open its lock $lock ($!), so it removed nothing.\n"; exit 2 };
+    flock($fh, LOCK_EX | LOCK_NB) or exit 75;
+    $ENV{DERIVED_DATA_SWEEP_ONE_LOCKED} = 1;
+    my $rc = system(@cmd);
+    exit(($rc == -1 || ($rc & 127)) ? 2 : ($rc >> 8));' "$LOCK" bash "$0" --remove-one-locked "$ONE"
+  rc=$?
+  [ "$rc" -eq 75 ] && { echo "derived-data-sweep: a sweep is already running (it holds $LOCK), so it removed nothing."; exit 75; }
+  exit "$rc"
+fi
+if [ "$MODE" = remove-one-locked ]; then
+  [ "${DERIVED_DATA_SWEEP_ONE_LOCKED:-}" = 1 ] || refuse "--remove-one-locked runs only under the lock --remove-one takes, so it removed nothing."
+  one="${ONE%/}"
+  root_phys="$(cd -P "$ROOT" 2>/dev/null && pwd -P)" || refuse "could not read $ROOT, so it removed nothing."
+  one_parent="$(cd -P "${one%/*}" 2>/dev/null && pwd -P)" || one_parent=""
+  case "${one##*/}" in ''|.|..) one_parent="" ;; esac
+  [ -n "$one_parent" ] && [ "$one_parent" = "$root_phys" ] || \
+    refuse "$ONE is not a folder directly inside $ROOT, so it is not a build cache this sweep may remove, and it removed nothing."
+  if [ -L "$one" ]; then echo "kept $one: it is a link, not a build cache"; exit 4; fi
+  if [ ! -d "$one" ]; then echo "kept $one: it is not there"; exit 4; fi
+  case "$(derived_data_classify "$one")" in
+    shared-cache) echo "kept $one: it is a cache every project shares"; exit 4 ;;
+    live) echo "kept $one: its project is still on disk ($(derived_data_workspace_path "$one"))"; exit 4 ;;
+    orphan) ;;
+    *) echo "kept $one: nothing can say whose it is ($(derived_data_unreadable_reason "$one"))"; exit 4 ;;
+  esac
+  if reason="$(derived_data_in_use "$one")"; then echo "kept $one: $reason"; exit 4; fi
+  if rm -rf "$one" 2>/dev/null && [ ! -e "$one" ]; then echo "removed $one"; exit 0; fi
+  echo "could not remove $one: some of it could not be removed, so part of it may be left"
+  exit 1
 fi
 
 # The newest of the folder's own date and its info.plist's, as a local date and time. GNU stat

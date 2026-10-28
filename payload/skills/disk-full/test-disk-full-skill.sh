@@ -176,6 +176,33 @@ check "and says ps's resident size cannot see swapped out pages" \
 check "and names a restart as the remedy, never deleting files" \
   "$(grep -qi 'restart' <<< "$swap_section" && grep -qi 'never deleting files' <<< "$swap_section" && echo ok || echo "the swap step does not name the remedy")"
 
+# ---- 8. anything removed goes through disk-remove.sh (claude-config#1805) ----
+# disk-remove.sh is the one place anything is removed: it refuses sync stores, app packages and
+# credentials, judges each item again just before it goes, logs INTENT before and OUTCOME after, and
+# checks each item really went. The section on deleting must hand Claude its commands rather than a
+# hand typed rm, and the propose command is RUN as written (L442), through the disk-clean harness so
+# HOME is a throwaway one and nothing real is read or written.
+propose_line="$(grep -m 1 -E '^bash ~/\.claude/hooks/lib/disk-remove\.sh --propose ' <<< "$delete_code")"
+check "the section on deleting proposes removals with disk-remove.sh" \
+  "$([ -n "$propose_line" ] && echo ok || echo "no block line under ## Deleting anything starts: bash ~/.claude/hooks/lib/disk-remove.sh --propose")"
+delete_section="$(awk '/^## / { on = ($0 ~ /^## Deleting anything/); next } on' "$SKILL")"
+check "and runs the plan it writes only once Dan has decided" \
+  "$(grep -qF 'disk-remove.sh --plan' <<< "$delete_section" && grep -q 'Dan' <<< "$(grep -F -B3 -e '--plan' <<< "$delete_section")" && echo ok || echo "no --plan handed over on Dan's decision")"
+check "and carries no hand typed rm, trash or mv in its commands" \
+  "$(awk '/(^|[;&|][[:space:]]*)(sudo )?(rm|trash|mv|\/usr\/bin\/trash) /' <<< "$delete_code" | awk 'END { exit NR > 0 }' && echo ok || echo "found: $(awk '/(^|[;&|][[:space:]]*)(sudo )?(rm|trash|mv) /' <<< "$delete_code")")"
+check "and says moving to the Trash frees nothing until the Trash is emptied" \
+  "$(grep -qi 'until the Trash is emptied' <<< "$delete_section" && echo ok || echo "the section does not say so")"
+if . "$HOOKS/lib/disk-clean-harness.sh" && dc_setup; then
+  trap 'rm -rf "$TMP"; dc_cleanup' EXIT
+  mkdir -p "$DC_HOME/Downloads"; printf 'x\n' > "$DC_HOME/Downloads/old-installer.dmg"
+  dc_stub du 'printf "8\t%s\n" "$2"'
+  propose_out="$(dc_run bash -c "${propose_line//\~\/.claude\/hooks\//$HOOKS/}" 2>&1)"; propose_rc=$?
+  check "and that propose command, run as written, offers the file and writes a plan, removing nothing" \
+    "$([ "$propose_rc" -eq 0 ] && grep -qF 'Plan: ' <<< "$propose_out" && [ -f "$DC_HOME/Downloads/old-installer.dmg" ] && echo ok || echo "exit $propose_rc, said: $propose_out")"
+else
+  check "the disk-clean harness sets up to run the propose command" "it could not"
+fi
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

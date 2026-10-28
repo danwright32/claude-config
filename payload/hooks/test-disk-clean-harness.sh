@@ -53,6 +53,14 @@ if ! . "$HARNESS"; then
 fi
 check "the write guard and the command scanner are beside it" \
   "$([ -f "$GUARD" ] && [ -f "$SCANNER" ] && echo ok || echo "missing: $([ -f "$GUARD" ] || echo "$GUARD") $([ -f "$SCANNER" ] || echo "$SCANNER")")"
+# The predicates live in ONE file the harness, the guard and disk-remove.sh all source (#1805, L261):
+# disk-remove's test mode refusal must read the very rule dc_run enforces, never a copy of it.
+PREDICATES="$DIR/lib/disk-clean-predicates.sh"
+pred_defs="$(grep -l -E '^(dc_home_isolated|dc_root_valid|dc_inside|dc_resolve)\(\)' "$DIR"/*.sh "$DIR"/lib/*.sh 2>/dev/null | tr '\n' ' ')"
+check "the predicates are defined in disk-clean-predicates.sh and nowhere else" \
+  "$([ "$pred_defs" = "$PREDICATES " ] && echo ok || echo "defined in: $pred_defs")"
+check "and disk-remove.sh sources that file for its test mode refusal" \
+  "$(grep -qF '. "$LIB/disk-clean-predicates.sh"' "$DIR/lib/disk-remove.sh" && grep -qF 'dc_home_isolated "${HOME:-}" "$TEST_ROOT"' "$DIR/lib/disk-remove.sh" && echo ok || echo "disk-remove.sh does not source it, or does not ask dc_home_isolated")"
 
 # A second throwaway directory OUTSIDE the harness's own, standing in for the real Mac. Every
 # refusal below is aimed at a sentinel in here, never at anything real, so a guard that fails to

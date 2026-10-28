@@ -108,7 +108,9 @@ type Asked = { questions: { question: string; header: string; options: { label: 
 // `env`: the variables Claude Code runs with beside HOME (CLAUDE_CODE_TMPDIR, #1191).
 // `fifos`: paths there that are no regular file (a fifo, a link to a device). A read of one, or of
 // any device, never answers, as the real one does (#1765), and resolves `readAttempted`.
-type Init = { cwd?: string; files?: Record<string, string>; fifos?: string[]; agents?: string[]; blobs?: Record<string, string>; env?: Record<string, string> }
+// `stdinLinks`: links to /dev/stdin, read as `fifos` are, whose stat with links followed THROWS
+// EBADF, as Claude Code 2.1.312's does (#1814, measured headless).
+type Init = { cwd?: string; files?: Record<string, string>; fifos?: string[]; stdinLinks?: string[]; agents?: string[]; blobs?: Record<string, string>; env?: Record<string, string> }
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
 
 // The Mac and Claude Code beneath the mod: each checkout's branch (a test may change it, or make it
@@ -240,7 +242,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     return { value: undefined } as never
   })
   // A file is there when the test put it there, and a folder when a file the test put is under it.
-  const isOther = (path: string) => path.startsWith('/dev/') || (init.fifos ?? []).includes(path)
+  const isOther = (path: string) => path.startsWith('/dev/') || (init.fifos ?? []).includes(path) || (init.stdinLinks ?? []).includes(path)
   const opened: string[] = []
   let attempted: () => void = () => undefined
   const readAttempted = new Promise<'read attempted'>(resolve => {
@@ -252,6 +254,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   })
   // What is at a path: a file the test put, a folder above one, or something else (#1765).
   on('fs.stat', ($, e) => {
+    if ((init.stdinLinks ?? []).includes(e.path) && e.resolve) throw new Error(`EBADF: bad file descriptor, stat '${e.path}'`)
     if (isOther(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: T0, isLink: false } } as never
     if (files[e.path] !== undefined) return { value: { kind: 'file', size: 1, mtimeMs: T0, isLink: false } } as never
     if (Object.keys(files).some(f => f.startsWith(`${e.path}/`))) return { value: { kind: 'dir', size: 0, mtimeMs: T0, isLink: false } } as never
@@ -1576,6 +1579,97 @@ test('#1248: a logic line added above one that draws passes unasked; changing th
   expect(w.ran.length).toBe(1)
 })
 
+// #1823: the #1811 builder's Edit to manual steps' register.tsx (held call
+// toolu_01F5RzQjX5PsNPoecZroB4fp) only added names to its imports, word for word below, and was held
+// for "card" and "StepsCard" in them. Through the whole guard, beside the mod's card.ts.
+const STEPS_HOOK = '/w/slate/payload/mods/manual-steps/hooks/register.tsx'
+const STEPS_IMPORTS_OLD = `import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
+import type { DrawnAt, StepsVerdict } from './card.ts'
+import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
+import { PROSE_MARK, turnAt } from './turn.ts'
+import { waitingPhrase } from './waiting.ts'`
+const STEPS_IMPORTS_NEW = `import type { ManualSteps, StepsCard, StepsPages, StepsPaneId } from '../types/index.d.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
+import type { DrawnAt, StepsVerdict } from './card.ts'
+import { isStepsPage, pageRefusal, signsOf } from './page.ts'
+import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
+import { PROSE_MARK, turnAt } from './turn.ts'
+import { saysNoneNow, waitingPhrase } from './waiting.ts'`
+const STEPS_TEXT = `import type { EngineInterface, Register } from 'claude-code'
+${STEPS_IMPORTS_OLD}
+
+const publishBand = async ($: EngineInterface, card: StepsCard) => {
+  await $.modkit.bandRow({ mod: 'manual-steps', id: 'steps', lines: cardLines(card) })
+}
+
+export const register: Register = on => {
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>steps left</Text>
+        {await next(e)}
+      </Box>
+    )
+  })
+}
+`
+
+test('#1823: the held Edit adding names to a mod hook file imports passes unasked; one changing what its card draws is still asked', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: {
+      [STEPS_HOOK]: STEPS_TEXT,
+      '/w/slate/payload/mods/manual-steps/hooks/card.ts': 'export const cardLines = (card: { heading: string }) => [[{ text: card.heading, bold: true }]]\n',
+      '/w/slate/payload/mods/manual-steps/.claude-plugin/plugin.json': '{ "name": "manual-steps" }',
+    },
+  })
+  const edit = (old_string: string, new_string: string) => ({ tool: 'Edit', file_path: STEPS_HOOK, old_string, new_string })
+  expect(refusalOf(await call($, edit(STEPS_IMPORTS_OLD, STEPS_IMPORTS_NEW)))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // What the card's band row is handed, which names the card too, is still asked.
+  expect(refusalOf(await call($, edit('lines: cardLines(card) })', 'lines: cardLines(card).slice(1) })')))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
+// #1823, Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked about".
+// A change judged a run of lines at a time must not carry a toast's new words through beside a run
+// only the #1823 reading let through (as manual steps' pressCopy rewording did, 2026-10-05).
+test("#1823: a placement change passes; the same Write also rewording a toast is asked, though the toast's run names no drawing word", withKit, async ($, on) => {
+  const text = `import type { EngineInterface, Register } from 'claude-code'
+
+const PANE_COLUMNS = 144
+export const placeFor = (columns: number) => (columns >= PANE_COLUMNS ? 'pane' : 'band')
+
+// Step numbers are counted from one where they are said.
+const shown = (n: number) => n + 1
+
+const copied = ($: EngineInterface, n: number) => {
+  $.ui.toast(\`Copied the value for step \${shown(n)}.\`)
+}
+
+export const register: Register = on => {
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text dimColor>steps</Text>
+  })
+}
+`
+  const w = world($, on, {
+    files: {
+      [STEPS_HOOK]: text,
+      '/w/slate/payload/mods/manual-steps/hooks/card.ts': 'export const cardLines = () => []\n',
+      '/w/slate/payload/mods/manual-steps/.claude-plugin/plugin.json': '{ "name": "manual-steps" }',
+    },
+  })
+  const write = (content: string) => ({ tool: 'Write', file_path: STEPS_HOOK, content })
+  const placed = text.replace('const PANE_COLUMNS = 144', 'const PANE_COLUMNS = 110')
+  expect(refusalOf(await call($, write(placed)))).toBe('')
+  expect(w.ran.length).toBe(1)
+  expect(refusalOf(await call($, write(placed.replace('Copied the value for step', 'Copied that value for step'))))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
 // #1275: the #1263 divider was added to manual steps' card.ts, which builds every line the steps card
 // draws, and the guard never saw it, since only a mod's .tsx and .jsx files counted. A mod's .ts hook
 // file is judged by what in it reaches what the mod draws (rules.ts drawsChange), read beside the
@@ -2205,6 +2299,78 @@ test('a patch read from /dev/stdin, /dev/fd/0 or a fifo is never opened, and set
   expect(w.reads).toContain('/w/slate/ui.patch')
 })
 
+// #1814: a Write or Edit whose target is a device or a fifo. The guard reads a look file's text now
+// to judge an edit by its lines, a Swift file for SwiftUI, a settled design to check its seal, and a
+// mod hook file a shell write changes; a read of a fifo there waited for ever, so the call never ran.
+// Its text now is unreadable, never empty: the file is held whole, and the refusal says why. Raced
+// against any such read, as above.
+test('a Write or Edit to /dev/stdin, /dev/fd/0 or a fifo never opens it, and a look file that is one is held whole, saying why (#1814)', withKit, async ($, on) => {
+  const SWIFT = '/w/slate/Sources/Row.swift'
+  const w = world($, on, { fifos: ['/w/slate/app/page.tsx', SWIFT, RECORD, MOD_HOOK], files: { ...MOD_PLUGIN } })
+  const settled = async (input: Record<string, unknown>, what: string) => {
+    const r = await Promise.race([awaitAtEnd(call($, input)).then(x => ({ settled: x })), w.readAttempted])
+    expect(`${what}: ${r === 'read attempted' ? r : 'settled'}`).toBe(`${what}: settled`)
+    return refusalOf((r as { settled: Result }).settled)
+  }
+  for (const path of ['/dev/stdin', '/dev/fd/0']) {
+    expect(await settled({ tool: 'Write', file_path: path, content: 'x\n' }, `Write ${path}`)).toBe('')
+    expect(await settled({ tool: 'Edit', file_path: path, old_string: 'x', new_string: 'y' }, `Edit ${path}`)).toBe('')
+  }
+  expect(w.ran.map(r => r.input.file_path)).toEqual(['/dev/stdin', '/dev/stdin', '/dev/fd/0', '/dev/fd/0'])
+  const NOT_FILE = 'it is not an ordinary file (a fifo, a socket or a link to a device)'
+  const page = await settled({ tool: 'Edit', file_path: '/w/slate/app/page.tsx', old_string: 'p-4', new_string: 'p-6' }, 'Edit page.tsx fifo')
+  expect(page).toContain(SKIP_QUESTION)
+  expect(page).toContain(`could not read what app/page.tsx holds before this call (${NOT_FILE}), so it judged the whole file as a look change`)
+  const swift = await settled({ tool: 'Edit', file_path: SWIFT, old_string: 'a', new_string: 'b' }, 'Edit Row.swift fifo')
+  expect(swift).toContain(SKIP_QUESTION)
+  expect(swift).toContain(`could not read what Sources/Row.swift holds before this call (${NOT_FILE})`)
+  const record = await settled({ tool: 'Edit', file_path: RECORD, old_string: 'a', new_string: 'b' }, 'Edit settled design fifo')
+  expect(record).toContain(SKIP_QUESTION)
+  expect(record).toContain(NOT_FILE)
+  const shell = await settled({ tool: 'Bash', command: `echo x > ${MOD_HOOK}` }, 'shell write to a mod hook fifo')
+  expect(shell).toContain(SKIP_QUESTION)
+  expect(shell).toContain(`could not read ${MOD_REL} before the command ran (${NOT_FILE})`)
+  // A settled design copied in whole from /dev/stdin: what it copies is never opened, and is said.
+  const copied = await settled({ tool: 'Bash', command: `cp /dev/stdin ${RECORD}` }, 'cp /dev/stdin onto a settled design')
+  expect(copied).toContain(SKIP_QUESTION)
+  expect(copied).toContain('/dev/stdin, which it copies, could not be read: it is a device, not a file')
+  expect(w.ran.length).toBe(4)
+  expect(w.opened).toEqual([])
+})
+
+// Claude Code 2.1.312 (measured headless): a stat with links followed of a link to /dev/stdin THROWS
+// EBADF. The throw is unreadable with the error named, never empty: each file is held whole, and the
+// refusal names the error. Every case is gathered before one comparison, so a red shows them all.
+// The test kit skips a stand-in hook that throws and hands the mod its own error in place of EBADF
+// (mod-kit's inputs test pins the EBADF text), so the refusal is checked for naming the look's failure.
+test('a look file that is a link to /dev/stdin, whose look throws EBADF, is held whole, naming the error (#1814)', withKit, async ($, on) => {
+  const SWIFT = '/w/slate/Sources/Row.swift'
+  const PAGE_LINK = '/w/slate/app/page.tsx'
+  const SOURCE = '/w/slate/in.html'
+  const w = world($, on, { stdinLinks: [PAGE_LINK, SWIFT, RECORD, MOD_HOOK, SOURCE], files: { ...MOD_PLUGIN } })
+  const failed = 'it could not be looked at ('
+  const cases: [string, Record<string, unknown>, string][] = [
+    ['Edit page.tsx', { tool: 'Edit', file_path: PAGE_LINK, old_string: 'p-4', new_string: 'p-6' }, `could not read what app/page.tsx holds before this call (${failed}`],
+    ['Edit Row.swift', { tool: 'Edit', file_path: SWIFT, old_string: 'a', new_string: 'b' }, `could not read what Sources/Row.swift holds before this call (${failed}`],
+    ['Edit settled design', { tool: 'Edit', file_path: RECORD, old_string: 'a', new_string: 'b' }, `the file could not be read: ${failed}`],
+    ['shell write to a mod hook', { tool: 'Bash', command: `echo x > ${MOD_HOOK}` }, `could not read ${MOD_REL} before the command ran (${failed}`],
+    ['cp onto a settled design', { tool: 'Bash', command: `cp ${SOURCE} ${RECORD}` }, `${SOURCE}, which it copies, could not be read: ${failed}`],
+  ]
+  const seen: string[] = []
+  for (const [what, input, says] of cases) {
+    const r = await Promise.race([awaitAtEnd(call($, input)).then(x => ({ settled: x })), w.readAttempted])
+    if (r === 'read attempted') {
+      seen.push(`${what}: read attempted`)
+      continue
+    }
+    const why = refusalOf(r.settled)
+    seen.push(`${what}: ${why.includes(SKIP_QUESTION) ? 'held' : 'not held'}, ${why.includes(says) ? 'names it' : `says: ${why}`}`)
+  }
+  expect(seen).toEqual(cases.map(([what]) => `${what}: held, names it`))
+  expect(w.ran).toEqual([])
+  expect(w.opened).toEqual([])
+})
+
 test("#1191: the product's own files stay held, alone or in one command with a round's files", withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate-wt', files: { '/w/slate-wt/src/app/globals.css': 'a{}', '/w/slate-wt/src/app/page.tsx': 'x' } })
   w.branches['/w/slate-wt'] = 'feat/3718-inline-booker'
@@ -2598,21 +2764,40 @@ test('#1815: a tool or module handed a name a command substitution fills in is h
   expect(w.ran).toEqual([])
 })
 
-test('#1815 control: a script file handed a substitution, or a tool handed one only in a folder, is judged as before', withKit, async ($, on) => {
+test('#1815 control: a script file handed a git rev-parse substitution, or a tool handed one only in a folder, passes', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate/apps/worker' })
   for (const command of [
     // #1802's releases: code, a query string after a closed substitution.
     MUTATE('if (a || b) {', 'if (a && b) {'),
     'python3 sentry.py "/api/0/issues/$(cat id)/events/?full=true"',
-    // A script file's own arguments, as measured: a commit, a test scope.
+    // A script file handed a commit git rev-parse prints (#1832 keeps trusting that one).
     'bash ~/.claude/hooks/lib/pr-review.sh start --dir "$PWD" --sha "$(git rev-parse HEAD)"',
-    'mac/scripts/run-tests-locked.sh $(cat /tmp/scope.txt)',
     // A name the command spells itself, in a folder a substitution gives.
     'npx prettier --write "$(git rev-parse --show-toplevel)/notes.md"',
     'npx prettier --write src/lib/engine.ts',
   ])
     expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
-  expect(w.ran.length).toBe(6)
+  expect(w.ran.length).toBe(5)
+})
+
+// #1832: after #1815 a script file handed a name a substitution fills in still passed, so
+// `python3 scripts/gen.py $(git diff --name-only main)` could write screen files unasked. Dan decided
+// on 2026-10-27 (picker answer "git rev-parse only") that only `git rev-parse`'s output is trusted
+// to name no file; every other substitution handed to a script is held, test scope lists included.
+test('#1832: a script handed a name a substitution fills in is held unless git rev-parse alone fills it', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    'python3 scripts/gen.py $(git diff --name-only main)',
+    'mac/scripts/run-tests-locked.sh $(cat /tmp/scope.txt)',
+    'bash scripts/fmt.sh `git ls-files src`',
+    'node build.js "$(git rev-parse HEAD; cat names)"',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes('could not be followed') && why.includes('cannot read') }).toEqual({ command, held: true })
+  }
+  for (const command of ['python3 scripts/stamp.py $(git rev-parse HEAD)', 'bash scripts/tag.sh `git rev-parse --short HEAD`'])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(2)
 })
 
 test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {
