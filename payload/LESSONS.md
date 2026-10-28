@@ -6,6 +6,9 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L817. A deploy smoke check against an app behind a sign-in proxy (Cloudflare Access, an SSO gateway) measures only the proxy, because the proxy answers a signed-out request before the app runs, so a build that crashes on every request passes it; load a page from the built app itself before deploying.**
+  (pivot#122, 2026-10-28)
+  SHORT: A smoke check behind a sign-in proxy tests only the proxy, so a crashing build passes; load a page from the built app itself before deploying.
 
 - **L801. When counting commits by what their message says (fixes, reverts, a ticket number), match
   the title line only, because git log --grep searches the whole message including the body, and a
