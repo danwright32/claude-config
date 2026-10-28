@@ -701,10 +701,13 @@ const STEPS_NEW = [
 test("#1248: the refused helper is still asked about, by Dan's choice, for the card it reads; one naming no drawing word passes", () => {
   if (STEPS_BEFORE.split(STEPS_OLD).length !== 2) throw new Error('the fixture holds the refused old_string other than once')
   // Dan, 2026-10-16: the line fix only, no word exempted, so the helper reading the card is asked.
-  // Still so by its words; since #1823 the guard reads it again by what the mod draws, and the
-  // helper, drawing nothing, passes there (modHookDrawingUntouched, the test below).
+  // Still so since #1823 (Dan, 2026-10-27: "message wording should be asked about"): the helper
+  // draws nothing, but the notification it sends Dan is new wording, so it stays held.
   expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(false)
-  expect(modHookDrawingUntouched([], 'register.tsx', STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(true)
+  expect(modHookDrawingUntouched([], 'register.tsx', STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(false)
+  // And once it is there, rewording the notification is held too.
+  const withHelper = STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW)
+  expect(modHookDrawingUntouched([], 'register.tsx', withHelper, withHelper.replace('is pinned. Next, step', 'is on the card. Next, step'))).toBe(false)
   // Added directly above the line naming the card, a helper naming no drawing word passes: the
   // untouched line below it is no longer read.
   expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, `const nextOf = (n: number) => n + 1\n\n${STEPS_OLD}`))).toBe(true)
@@ -755,6 +758,16 @@ const MS_TSX = [
   MS_IMPORTS_OLD,
   '',
   "const TOOL = 'steps'",
+  "const STEPS_DESCRIPTION = 'Pin manual steps for Dan as a card he works through.'",
+  'const PANE_COLUMNS = 144',
+  "const placeFor = (columns: number) => (columns >= PANE_COLUMNS ? 'pane' : 'band')",
+  '',
+  'const movedToBand = ($: EngineInterface, failed: string | undefined) => {',
+  '  if (failed) $.ui.toast(`The steps card could not be moved to the band: ${failed}.`)',
+  "  $.ui.log('manual-steps: the card went to the band', { to: 'debug' })",
+  "  $.ui.log('Manual steps moved the card to the band.')",
+  '}',
+  'const pinned = (heading: string) => ({ result: `Pinned the card "${heading}".` })',
   '',
   'const proseStep = (phrase: string) =>',
   '  `${PROSE_MARK} ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Put it on the card with the ${TOOL} tool.`',
@@ -765,6 +778,11 @@ const MS_TSX = [
   '}',
   '',
   'export const register: Register = on => {',
+  "  on('session.start', async ($, e, next) => {",
+  '    await $.tool.register({ name: TOOL, description: STEPS_DESCRIPTION })',
+  '    return next(e)',
+  '  })',
+  "  on('command.run', { command: 'steps' }, async () => ({ text: 'No steps card is pinned for this project.' }))",
   "  on('classic.Stop', async ($, e, next) => {",
   '    const phrase = waitingPhrase(String(e.last_assistant_message))',
   "    return phrase ? { decision: 'block', reason: proseStep(phrase) } : next(e)",
@@ -803,11 +821,56 @@ test('#1823: the held Edit adding names to the imports draws nothing new, though
   // Held today for its words, which is the hold #1823 reports.
   expect(modHookLogicOnly(MS_TSX, after)).toBe(false)
   expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, after)).toBe(true)
-  // A reply sentence Claude reads, naming the card, and a new helper that reads the card's heading
-  // for no surface (#1245's notification, held by #1248's words) draw nothing either.
-  expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, msEdit('Put it on the card with', 'Pin it on the steps card with'))).toBe(true)
+  // A new helper that reads the card's heading for no surface and no message draws nothing either.
   const helper = 'const heading = (card: StepsCard): string => card.heading.trim()\n\n'
   expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, msEdit('const publishBand', `${helper}const publishBand`))).toBe(true)
+})
+
+// #1823, Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked
+// about". Where or when the card shows, and words only Claude reads, pass; the wording of a message
+// a person sees (a toast, a transcript line, a stop reason, a notification, a tool result) is held.
+test('#1823: a placement change and a tool description pass; the wording of a message Dan sees is held', () => {
+  const judged = (from: string, to: string) => modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, msEdit(from, to))
+  // Where the card goes, and a description of the tool, which only Claude reads.
+  expect(judged('const PANE_COLUMNS = 144', 'const PANE_COLUMNS = 110')).toBe(true)
+  expect(judged('as a card he works through.', 'as a card Dan works through, one step at a time.')).toBe(true)
+  // A debug log line, which nobody sees in the session, and when the toast is shown, its words alike.
+  expect(judged('the card went to the band', 'the steps card went to the band')).toBe(true)
+  expect(judged('  if (failed) $.ui.toast(', '  if (failed && failed.length) $.ui.toast(')).toBe(true)
+  // A toast's words, a transcript line's, and a stop reason's, each held for its wording.
+  expect(judged('could not be moved to the band', 'could not go back to the band')).toBe(false)
+  expect(judged('Manual steps moved the card to the band.', 'Manual steps put the card in the band.')).toBe(false)
+  expect(judged('Put it on the card with', 'Pin it on the steps card with')).toBe(false)
+  // A tool result Claude hands back, which shows in Dan's transcript.
+  expect(judged('Pinned the card "', 'Put the card up: "')).toBe(false)
+  // What a slash command answers Dan with.
+  expect(judged('No steps card is pinned for this project.', 'No steps card is up in this project.')).toBe(false)
+})
+
+// #1823: the goal tracker pages Dan by running terminal-notifier, its title reaching it through a
+// promise (`title().then(t => notify($, t, ...))`), which the values followed do not cross. Cut down
+// from mods/goal-tracker/hooks/register.tsx as it stood on 2026-10-05.
+const NOTIFY_TSX = [
+  "import type { EngineInterface, Register } from 'claude-code'",
+  'const notify = async ($: EngineInterface, title: string, message: string) => {',
+  "  await $.process.run(['terminal-notifier', '-title', title, '-message', message], { timeoutMs: 10_000 })",
+  '}',
+  'const notifySoon = ($: EngineInterface, title: () => Promise<string>, message: string) => {',
+  '  void title().then(t => notify($, t, message))',
+  '}',
+  'const waitingOnYou = ($: EngineInterface, text: string) => notifySoon($, async () => `the steps card is waiting on you`, text)',
+  'export const register: Register = on => {',
+  "  on('ui.render', { component: 'Pane' }, async ($, e) => {",
+  '    const { Text } = $.ui.resolve(e)',
+  '    return <Text>goals</Text>',
+  '  })',
+  '}',
+  '',
+].join('\n')
+test("#1823: a notification's title reaching terminal-notifier through a promise is wording, held when it changes", () => {
+  expect(modHookDrawingUntouched([], 'register.tsx', NOTIFY_TSX, NOTIFY_TSX.replace('the steps card is waiting on you', 'the steps card needs you'))).toBe(false)
+  // When it is sent is no wording.
+  expect(modHookDrawingUntouched([], 'register.tsx', NOTIFY_TSX, NOTIFY_TSX.replace('{ timeoutMs: 10_000 }', '{ timeoutMs: 20_000 }'))).toBe(true)
 })
 
 test('#1823: an edit naming the card that changes what is drawn is still held', () => {

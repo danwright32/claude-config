@@ -65,6 +65,7 @@ import {
   namesScratchpad,
   modHookLogicOnly,
   modHookDrawingUntouched,
+  messageWordingSame,
   modManifestOf,
   onScreenProblem,
   pathsOf,
@@ -197,8 +198,11 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 // - Since #1823: an Edit to a mod's .tsx or .jsx hook file held only for a drawing word (an import
 //   naming StepsCard, a sentence naming the card) is read beside the mod's other hook files, as a .ts
 //   one is, and passes where the lines it touches lie outside everything the mod draws and every
-//   function that draws, and no name what is drawn uses is imported anew (rules.ts
-//   modHookDrawingUntouched, in nothingShown). A JSX element or a colour in those lines is held as before.
+//   function that draws, no name what is drawn uses is imported anew, and the wording of every message
+//   a person reads (a toast, a notification, a transcript line, a stop or refusal reason, a tool
+//   result, a command's reply) is unchanged (rules.ts modHookDrawingUntouched and
+//   messageWordingSame, in nothingShown; Dan, 2026-10-27: "Timing wording can go through, but
+//   message wording should be asked about"). A JSX element or a colour in those lines is held as before.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -538,8 +542,8 @@ const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: 
 // modHookLogicOnly, #1138); judged whole, else one run of changed lines at a time (rules.ts
 // changedRuns), as the separate edits a restore puts back were each judged. Since #1823 a change to a
 // mod's hook file held only for a drawing word is read beside the mod's other hook files, as a .ts
-// one is, and passes where it touches nothing the mod draws (rules.ts modHookDrawingUntouched); hook
-// files that cannot be listed or read leave it held.
+// one is, and passes where it touches nothing the mod draws and changes no message's words (rules.ts
+// modHookDrawingUntouched); hook files that cannot be listed or read leave it held.
 const nothingShown = async ($: EngineInterface, path: string, tree: string, before: string, after: string): Promise<boolean> => {
   // Only a real Claude Code mod's folder, whose plugin.json says so; one that cannot be read is asked.
   const modHook = isModHook(relTo(path, tree)) && (await $.fs.exists(modManifestOf(path)).catch(() => false))
@@ -558,18 +562,27 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
     }
     return files
   }
+  // Whether a run passed only by the #1823 reading, so the whole change's message wording is asked.
+  let readByDrawing = false
   const shows = async (b: string, a: string) => {
     if (dataOnlyChange(b, a)) return false
     if (!modHook) return true
     if (modHookLogicOnly(b, a) || commentOnlyChange(b, a, true)) return false
     const others = await modFiles()
-    return !others || !modHookDrawingUntouched(others, name, b, a)
+    if (!others || !modHookDrawingUntouched(others, name, b, a)) return true
+    readByDrawing = true
+    return false
   }
   if (before === after || !(await shows(before, after))) return true
   const runs = changedRuns(before, after)
   if (runs.length < 2) return false
+  readByDrawing = false
   for (const [b, a] of runs) if (await shows(b, a)) return false
-  return true
+  // Judged a run at a time, a message's new words in a run the word reading passes would slip
+  // beside a run only #1823's reading let through, so the change as a whole keeps its wording.
+  if (!readByDrawing) return true
+  const others = await modFiles()
+  return !!others && messageWordingSame(others, name, before, after)
 }
 
 // Whether a call's change to a mod's plain TypeScript hook file (rules.ts isModHookTs) changes what the

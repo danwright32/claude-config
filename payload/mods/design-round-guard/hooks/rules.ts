@@ -1192,6 +1192,15 @@ const RUN_LOOKS = new Set(['color', 'bold', 'dim', 'italic', 'underline', 'strik
 // is mod-kit's own (card.ts blockedCard), judged there, and a caller hands it only the words of a
 // refusal, shown as a tool result row, which are copy, held nowhere else (#1296 had followed them).
 const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card)|ui\s*\.\s*open)\s*\(/g
+// #1823 (Dan, 2026-10-27: "message wording should be asked about"): where a message a person reads is
+// handed its words. A toast, a notification, a transcript line (a debug one aside, read where it is
+// found), a pane's status, a question, a blocked action's card, and the goal tracker's notifier, which
+// pages Dan (#1245); and the keys a hook's or tool's answer is read out by: a stop's or refusal's
+// reason, a block, a deny, a tool's result, a system message and a slash command's text (a drawn
+// run's text is held as drawn already). A tool's description is read only by Claude, and is no
+// message.
+const MESSAGE_CALL = /\$\s*\.\s*(?:ui\s*\.\s*(?:toast|notify|notice|status|ask|log)|modkit\s*\.\s*blocked)\s*\(|\.\s*waitingOnYou\s*\(/g
+const MESSAGE_KEY = /([{,]\s*)(reason|block|deny|result|systemMessage|text)(\s*:|(?=\s*[,}]))/g
 const DECL = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(const|let|var|function\s*\*?|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/
 const IMPORT = /^import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]\.\/([^'"/]+)['"]/
 
@@ -1210,6 +1219,10 @@ type ModRead = {
   imports: Map<string, { file: string; name: string }>
   // What the file draws by itself: each drawing call, JSX element, and function building a text run.
   units: Span[]
+  // #1823: where a message a person reads is handed its words (MESSAGE_CALL, MESSAGE_KEY), and the
+  // text of each string, template text and JSX text inside a span.
+  messages: Span[]
+  stringsIn: (s: Span) => string[]
   code: (s: Span) => string
   refs: (s: Span) => string[]
   isTop: (name: string) => boolean
@@ -1635,10 +1648,15 @@ const readMod = (f: ModFile): ModRead | null => {
     return out
   }
   const drawParen = new RegExp(DRAW_CALL.source, 'y')
+  const messageParen = new RegExp(MESSAGE_CALL.source, 'y')
+  const notifierParen = /\$\s*\.\s*process\s*\.\s*run\s*\(/y
   const ownParen = (u: Span): number | undefined => {
-    drawParen.lastIndex = u[0]
-    const m = drawParen.exec(blank)
-    return m ? u[0] + m[0].length - 1 : undefined
+    for (const p of [drawParen, messageParen, notifierParen]) {
+      p.lastIndex = u[0]
+      const m = p.exec(blank)
+      if (m) return u[0] + m[0].length - 1
+    }
+    return undefined
   }
   // Where in [a, b) a value is only tested, never itself the value: a ternary's condition, each
   // operand of `&&` but the last, an operand holding a comparison or led by `!` or `typeof` (#1296).
@@ -1821,7 +1839,38 @@ const readMod = (f: ModFile): ModRead | null => {
     }
     return g.returns
   }
-  return { name: f.name, statements, imports, units, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode }
+  // #1823: where a message a person reads is handed its words (MESSAGE_CALL, a transcript line but
+  // not a debug one), and the value of each key a hook's or tool's answer is read out by
+  // (MESSAGE_KEY), or the key alone where it is shorthand for a local.
+  const messages: Span[] = []
+  // A desktop notification sent by running a notifier (the goal tracker's terminal-notifier, #706).
+  for (const m of blank.matchAll(/\$\s*\.\s*process\s*\.\s*run\s*\(/g)) {
+    const paren = (m.index as number) + m[0].length - 1
+    const end = close.get(paren)
+    if (end !== undefined && /terminal-notifier|display notification/.test(text.slice(paren, end))) messages.push([m.index as number, end + 1])
+  }
+  for (const m of blank.matchAll(MESSAGE_CALL)) {
+    const paren = (m.index as number) + m[0].length - 1
+    const end = close.get(paren)
+    if (end === undefined) continue
+    if (/\blog\s*\($/.test(m[0]) && /\bto\s*:\s*['"`]debug['"`]/.test(text.slice(paren, end))) continue
+    messages.push([m.index as number, end + 1])
+  }
+  for (const m of blank.matchAll(MESSAGE_KEY)) {
+    const at = (m.index as number) + (m[1] as string).length
+    // Only an object's key: a parameter (`(text: string)`) or an argument is none.
+    let inner: number | undefined
+    for (const [o, c] of pairs) {
+      if (o >= at) break
+      if (c > at) inner = o
+    }
+    if (inner === undefined || blank[inner] !== '{') continue
+    const key = (m[2] as string).length
+    if (m[3]) messages.push([at, exprEnd(at + key + m[3].length)])
+    else messages.push([at, at + key])
+  }
+  const stringsIn = ([a, b]: Span): string[] => spans.strings.filter(([x, y]) => a <= x && y <= b).map(([x, y]) => text.slice(x, y))
+  return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode }
 }
 
 /**
@@ -1850,8 +1899,9 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
 // What drawnParts reads, as places in the file `name`: its parts (each drawing call, JSX element and
 // line builder, and each top level declaration drawn) and the values followed into them, apart, with
 // the file as read (no `r` for a file not among `files`). Null where any of the mod's files cannot be
-// read.
-const drawnOf = (files: readonly ModFile[], name: string): { r?: ModRead; parts: Span[]; followed: Span[] } | null => {
+// read. With `seeds` 'messages' the same reading starts from where a message a person reads is handed
+// its words (#1823) rather than from what is drawn.
+const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'messages' = 'units'): { r?: ModRead; parts: Span[]; followed: Span[] } | null => {
   const read = new Map<string, ModRead>()
   for (const f of files) {
     const r = readMod(f)
@@ -1996,7 +2046,7 @@ const drawnOf = (files: readonly ModFile[], name: string): { r?: ModRead; parts:
     }
   }
   for (const r of read.values())
-    for (const u of r.units) {
+    for (const u of r[seeds]) {
       for (const x of r.refs(u)) reach(r.name, x)
       const own = r.ownParen(u)
       // A line builder (a unit that is a function, whole) is drawn with its own words; what it is
@@ -2022,7 +2072,7 @@ const drawnOf = (files: readonly ModFile[], name: string): { r?: ModRead; parts:
   }
   const r = read.get(name)
   if (!r) return { parts: [], followed: [] }
-  const parts = new Map(r.units.map(u => [`${u[0]}:${u[1]}`, u]))
+  const parts = new Map(r[seeds].map(u => [`${u[0]}:${u[1]}`, u]))
   for (const s of r.statements) if (s.name !== undefined && drawn.has(`${name}\n${s.name}`)) parts.set(`${s.from}:${s.to}`, [s.from, s.to])
   const followed = new Map(extra.get(name) ?? [])
   for (const key of parts.keys()) followed.delete(key)
@@ -2071,9 +2121,13 @@ const importBindings = (text: string): Map<string, string> | null => {
  * drawn, a value followed into one, whole, the data it hands a call included) and outside every
  * function that draws (the innermost one around a drawing call or element, a render hook's handler
  * among them, where a new local naming the card is asked about as Dan chose for #1248); every name
- * what is drawn uses is imported from the same file under the same name as before; and drawsChange
- * finds the drawn parts unchanged. A JSX element or a colour in those lines, a text or mod file the
- * reader cannot follow, and no change at all are never so.
+ * what is drawn uses is imported from the same file under the same name as before; the wording of
+ * every message a person reads (a toast, a notification, a transcript line, a stop's or refusal's
+ * reason, a tool's result) is the same, followed into each message as values are followed into what
+ * is drawn (Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked
+ * about"), so #1245's notification helper stays held as #1248 recorded; and drawsChange finds the
+ * drawn parts unchanged. A JSX element or a colour in those lines, a text or mod file the reader
+ * cannot follow, and no change at all are never so.
  */
 export const modHookDrawingUntouched = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
   const reading = modHookReading(before, after)
@@ -2105,7 +2159,48 @@ export const modHookDrawingUntouched = (files: readonly ModFile[], name: string,
   const now = importBindings(after)
   if (!was || !now) return false
   for (const x of names) if (was.get(x) !== now.get(x)) return false
+  if (!messageWordingSame(others, name, before, after)) return false
   return !drawsChange(others, name, before, after)
+}
+
+/**
+ * Whether the wording of every message a person reads from the mod hook file `name` (MESSAGE_CALL,
+ * MESSAGE_KEY) is the same before and after a change, read beside the mod's other hook files `files`
+ * (#1823): each string, template text and JSX text reaching one, followed into each message as values
+ * are followed into what is drawn. When a message is shown may change; what it says may not. False
+ * where any of the texts cannot be read.
+ */
+export const messageWordingSame = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
+  const others = files.filter(f => f.name !== name)
+  const wording = (text: string): string[] | null => {
+    const d = drawnOf([...others, { name, text }], name, 'messages')
+    if (!d?.r) return null
+    const r = d.r
+    // Everything a call is handed of each top level function that sends a message, itself or through
+    // another such function (the goal tracker's waitingOnYou, through notifySoon's promise, to
+    // notify's terminal-notifier, which the values followed do not reach).
+    const fnsAt = r.statements.filter(s => s.name !== undefined && !s.isType)
+    const sends = new Set<string>()
+    for (let grew = true; grew; ) {
+      grew = false
+      for (const s of fnsAt) {
+        if (sends.has(s.name as string)) continue
+        const inS = (p: number) => s.from <= p && p < s.to
+        if (r.messages.some(([a]) => inS(a)) || [...sends].some(x => (r.calls.get(x) ?? []).some(inS))) {
+          sends.add(s.name as string)
+          grew = true
+        }
+      }
+    }
+    const spans: Span[] = [...d.parts, ...d.followed]
+    for (const x of sends) for (const p of r.calls.get(x) ?? []) spans.push(...(r.args(p) ?? []))
+    // Each wording once: the same words moved into a helper, or said from one more place, say
+    // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
+    return [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort()
+  }
+  const said = wording(before)
+  const says = wording(after)
+  return !!said && !!says && said.length === says.length && said.every((x, i) => x === says[i])
 }
 
 /**

@@ -1632,6 +1632,44 @@ test('#1823: the held Edit adding names to a mod hook file imports passes unaske
   expect(w.ran.length).toBe(1)
 })
 
+// #1823, Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked about".
+// A change judged a run of lines at a time must not carry a toast's new words through beside a run
+// only the #1823 reading let through (as manual steps' pressCopy rewording did, 2026-10-05).
+test("#1823: a placement change passes; the same Write also rewording a toast is asked, though the toast's run names no drawing word", withKit, async ($, on) => {
+  const text = `import type { EngineInterface, Register } from 'claude-code'
+
+const PANE_COLUMNS = 144
+export const placeFor = (columns: number) => (columns >= PANE_COLUMNS ? 'pane' : 'band')
+
+// Step numbers are counted from one where they are said.
+const shown = (n: number) => n + 1
+
+const copied = ($: EngineInterface, n: number) => {
+  $.ui.toast(\`Copied the value for step \${shown(n)}.\`)
+}
+
+export const register: Register = on => {
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text dimColor>steps</Text>
+  })
+}
+`
+  const w = world($, on, {
+    files: {
+      [STEPS_HOOK]: text,
+      '/w/slate/payload/mods/manual-steps/hooks/card.ts': 'export const cardLines = () => []\n',
+      '/w/slate/payload/mods/manual-steps/.claude-plugin/plugin.json': '{ "name": "manual-steps" }',
+    },
+  })
+  const write = (content: string) => ({ tool: 'Write', file_path: STEPS_HOOK, content })
+  const placed = text.replace('const PANE_COLUMNS = 144', 'const PANE_COLUMNS = 110')
+  expect(refusalOf(await call($, write(placed)))).toBe('')
+  expect(w.ran.length).toBe(1)
+  expect(refusalOf(await call($, write(placed.replace('Copied the value for step', 'Copied that value for step'))))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
 // #1275: the #1263 divider was added to manual steps' card.ts, which builds every line the steps card
 // draws, and the guard never saw it, since only a mod's .tsx and .jsx files counted. A mod's .ts hook
 // file is judged by what in it reaches what the mod draws (rules.ts drawsChange), read beside the
