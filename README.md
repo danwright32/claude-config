@@ -265,8 +265,8 @@ words, never treated as a hold and never treated as absent.
 
 A hold says it is in force only once it is (#1854). `hold` writes its record under a temporary name
 and renames it into place, reads it back the way the watcher will, and only then prints "Watcher held
-off for ...", with the exact length asked for (90 is "1 hour 30 minutes", never rounded to "2 hours")
-and the clock time it ends. A record that cannot be written, or does not read back, is refused with
+off for ...", with the exact length asked for in hours and minutes, never rounded up to the next
+hour, and the clock time it ends. A record that cannot be written, or does not read back, is refused with
 "no hold was taken" and a non-zero exit, so the line and the exit code always agree. The hold record
 is one file shared by every session on the Mac, so a hold never shortens one already in force (the
 longer one is kept and named), and `release` names the hold it lifted, so a session lifting a hold
