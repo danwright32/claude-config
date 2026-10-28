@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Disk clean</title>
+<!--
+  The template for disk-clean's review page (claude-config#1807), drawn to the design Dan settled on
+  2026-10-28: docs/design/disk-clean-review-page.html, whose decisions D1 to D10 are cited below.
+  review-page.sh puts the scan where the REVIEW marker line is and writes the result as one self
+  contained file: nothing here is fetched from anywhere, no font, no script, no image.
+-->
+<style>
+:root {
+  --bg: #fff;
+  --text: #1a1a1a;
+  --muted: #555;
+  --note: #6b6b6b;
+  --kept: #8a8a8a;
+  --rule: #eee;
+  --head-rule: #1a1a1a;
+  --bar-rule: #ccc;
+  /* D6: blue only on a ticked box and on Copy selection. */
+  --tick: #1d5fd0;
+  --copy: #1d5fd0;
+  --copy-text: #fff;
+  /* D7: the marks are amber, and red is used nowhere. */
+  --flag-text: #6e4500;
+  --flag-bg: #fff1d1;
+  --flag-border: #d9a441;
+}
+/* D10: dark keeps every role, tuned for a dark surface. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161616;
+    --text: #e8e8e8;
+    --muted: #a8a8a8;
+    --note: #9a9a9a;
+    --kept: #7c7c7c;
+    --rule: #2c2c2c;
+    --head-rule: #e8e8e8;
+    --bar-rule: #3a3a3a;
+    --tick: #5b9bff;
+    --copy: #3b7bea;
+    --copy-text: #fff;
+    --flag-text: #f3c66b;
+    --flag-bg: #3a2a08;
+    --flag-border: #8a6420;
+  }
+}
+html, body { margin: 0; background: var(--bg); }
+.page {
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  /* The bottom padding keeps the last row clear of the foot bar (L189). */
+  padding: 28px 32px 88px;
+}
+.top h1 { font-size: 22px; margin: 0 0 4px; }
+.scanline { margin: 0 0 24px; color: var(--muted); }
+.empty { margin: 0; color: var(--muted); }
+h2 { font-size: 15px; margin: 0; }
+
+/* D1: one list, a heading row per kind with its total on the right, nothing boxed. */
+.group-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-top: 22px; padding-bottom: 6px; border-bottom: 1px solid var(--head-rule); }
+.group-total { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* D5: a row is one line, path then note then marks, wrapping only when too long. */
+.item { display: grid; grid-template-columns: 28px 1fr 110px; align-items: start; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--rule); }
+.item.kept { color: var(--kept); }
+.tick { margin: 2px 0 0; accent-color: var(--tick); width: 16px; height: 16px; }
+.tick:not(:disabled) { cursor: pointer; }
+.tick:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.what { display: flex; flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
+.path { overflow-wrap: anywhere; }
+.sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.note { font-size: 12.5px; color: var(--note); overflow-wrap: anywhere; }
+.flags { display: flex; gap: 6px; flex-wrap: wrap; }
+.flag { font-size: 12px; border: 1px solid var(--flag-border); border-radius: 4px; padding: 0 6px; color: var(--flag-text); background: var(--flag-bg); }
+.size { text-align: right; font-variant-numeric: tabular-nums; }
+.size.unknown { color: var(--kept); }
+
+/* D9: the foot bar, fixed, holding what is selected and Copy selection. */
+.bar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px 16px; flex-wrap: wrap; padding: 14px 32px; background: var(--bg); border-top: 1px solid var(--bar-rule); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: var(--text); }
+.count { color: var(--muted); font-variant-numeric: tabular-nums; flex: 1 1 240px; }
+.copy { font: inherit; font-weight: 600; padding: 8px 16px; border: 1px solid var(--copy); border-radius: 6px; background: var(--copy); color: var(--copy-text); cursor: pointer; }
+.copy:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.fallback { order: 3; flex: 1 1 100%; height: 72px; font: 12px/1.4 ui-monospace, Menlo, monospace; color: var(--text); background: var(--bg); border: 1px solid var(--bar-rule); border-radius: 6px; padding: 6px; resize: vertical; }
+
+@media (max-width: 560px) {
+  .page { padding: 20px 16px 104px; }
+  .item { grid-template-columns: 24px 1fr 84px; }
+  .bar { padding: 12px 16px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+<!-- REVIEW -->
+</div>
+<footer class="bar" id="bar"><span class="count" id="count" aria-live="polite">Nothing selected</span><button type="button" class="copy" id="copy">Copy selection</button></footer>
+<output id="payload" hidden></output>
+<script>
+(function () {
+  "use strict";
+  var list = document.getElementById("review");
+  var ticks = list ? Array.prototype.slice.call(list.querySelectorAll("input.tick")) : [];
+  var count = document.getElementById("count");
+  var button = document.getElementById("copy");
+  var bar = document.getElementById("bar");
+  var payloadOut = document.getElementById("payload");
+
+  // A size in words by the rule of dcu_h in hooks/lib/disk-clean-units.sh, which wrote every other
+  // size on this page, so the selection's total reads the same way: decimal, as Finder writes it.
+  function human(bytes) {
+    if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + " GB";
+    if (bytes >= 1e6) return Math.round(bytes / 1e6) + " MB";
+    var k = Math.round(bytes / 1e3);
+    return (k < 1 && bytes > 0 ? 1 : k) + " KB";
+  }
+
+  function selection() {
+    var ids = [], bytes = 0, lower = false;
+    for (var i = 0; i < ticks.length; i++) {
+      var t = ticks[i];
+      if (!t.checked || t.disabled) continue;
+      ids.push(t.getAttribute("data-id"));
+      var b = t.getAttribute("data-bytes");
+      if (b === "") lower = true; else bytes += Number(b);
+      if (t.getAttribute("data-partial") === "1") lower = true;
+    }
+    return { ids: ids, words: ids.length ? ids.length + " selected, " + (lower ? "at least " : "") + human(bytes) : "Nothing selected" };
+  }
+
+  function payloadText(sel) {
+    return JSON.stringify({ scan_id: list.getAttribute("data-scan-id"), nonce: list.getAttribute("data-nonce"), count: sel.ids.length, ids: sel.ids });
+  }
+
+  function dropFallback() {
+    var old = bar.querySelector(".fallback");
+    if (old) old.remove();
+  }
+
+  function render() {
+    dropFallback();
+    count.textContent = selection().words;
+  }
+
+  if (list) list.addEventListener("change", render);
+
+  button.addEventListener("click", function () {
+    var sel = selection();
+    if (!list || sel.ids.length === 0) {
+      count.textContent = "Nothing selected, so nothing was copied.";
+      return;
+    }
+    var text = payloadText(sel);
+    payloadOut.textContent = text;
+    var done = function () {
+      dropFallback();
+      count.textContent = sel.words + ". Copied: paste it into the chat, where it is checked against this scan before anything is removed.";
+    };
+    var failed = function () {
+      count.textContent = sel.words + ". The clipboard could not be reached, so nothing was copied: select the text below and copy it.";
+      dropFallback();
+      var area = document.createElement("textarea");
+      area.className = "fallback";
+      area.readOnly = true;
+      area.setAttribute("aria-label", "The selection to paste into the chat");
+      area.value = text;
+      bar.appendChild(area);
+      area.focus();
+      area.select();
+    };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, failed);
+      else failed();
+    } catch (err) {
+      failed();
+    }
+  });
+
+  // A page restored by a reload or from the back and forward cache keeps its old ticks; this one
+  // always opens with nothing selected (L732).
+  function clearAll() {
+    for (var i = 0; i < ticks.length; i++) ticks[i].checked = false;
+    render();
+  }
+  window.addEventListener("pageshow", clearAll);
+  clearAll();
+})();
+</script>
+</body>
+</html>

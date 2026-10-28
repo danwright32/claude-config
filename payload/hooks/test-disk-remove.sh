@@ -51,7 +51,7 @@ check "disk-remove.sh is there to run" "$([ -f "$DR" ] && echo ok || echo "missi
 . "$DIR/lib/disk-clean-units.sh" || check "lib/disk-clean-units.sh is there to source" "could not source it"
 check "disk-remove.sh sources lib/disk-clean-units.sh rather than keeping its own copy" \
   "$(grep -qF '. "$LIB/disk-clean-units.sh"' "$DR" && grep -qF 'dcu_docker_kib "$(build_cache_kib)"' "$DR" && echo ok || echo "it does not source it, or does not read the build cache's size through dcu_docker_kib")"
-check "the units library writes sizes as disk-remove reports them" "$(eq "$(dcu_human 1572864)" "1.5 GB")"
+check "the units library writes sizes as disk-remove reports them" "$(eq "$(dcu_human 1572864)" "1.6 GB")"
 dc_setup || { check "the harness sets up" "dc_setup failed"; finish; }
 
 # Outside the harness's root: the stand in for the real Mac.
@@ -397,7 +397,7 @@ record s1 10; plan "$H/plan" s1 r1 r2
 run --plan "$H/plan"
 check "a truncated log is still there" "$(there "$H/w/run.log")"
 check "and empty" "$(eq "$(wc -c < "$H/w/run.log" | tr -d ' ')" 0)"
-check "and reported truncated with what it freed" "$(has "$OUT_TEXT" "truncated  $H/w/run.log  (49 KB freed")"
+check "and reported truncated with what it freed" "$(has "$OUT_TEXT" "truncated  $H/w/run.log  (50 KB freed")"
 check "truncate never runs the open check, since the point is a file held open" "$(hasnt "$(calls_of lsof)" run.log)"
 check "a folder is skipped by truncate" "$(has "$(grep -F "$H/w/logdir" <<< "$OUT_TEXT")" "truncate empties a single file")"
 check "the record marks it truncated" "$(has "$(grep '"id":"r1"' "$STATE/last-scan.json")" '"state":"truncated"')"

@@ -6,8 +6,10 @@
 # needed the same two readings, so the figure a scan offers and the figure a removal reports are
 # turned into words, and read from Docker, by one function each (L370).
 #
-#   dcu_human <KiB>        a KiB count as a person reads it: "12 KB", "340 MB", "1.5 GB"; "size
-#                          unknown" for anything that is not a number, never 0
+#   dcu_human <KiB>        a KiB count as a person reads it, in DECIMAL units as Finder and the
+#                          settled review page write them (#1807: 1 GB is a billion bytes): "12 KB",
+#                          "340 MB", "1.6 GB"; "size unknown" for anything that is not a number,
+#                          never 0 KB for a size that has bytes
 #   DCU_AWK_LIB            the same reading as an awk function, dcu_h(<KiB>), for a caller turning
 #                          thousands of sizes into words in one awk pass (the review page, #1807);
 #                          dcu_human is a call to it, so the two can never disagree
@@ -17,12 +19,13 @@
 # Commands: awk and the builtins. bash 3.2 safe. Sourcing defines functions and does nothing else.
 
 DCU_AWK_LIB='
-function dcu_h(k) {
+function dcu_h(k,    b, n) {
   if (k !~ /^[0-9]+$/) return "size unknown"
-  k = k + 0
-  if (k >= 1048576) return sprintf("%.1f GB", k / 1048576)
-  if (k >= 1024) return sprintf("%d MB", int(k / 1024))
-  return sprintf("%d KB", k)
+  b = k * 1024
+  if (b >= 1000000000) return sprintf("%.1f GB", b / 1000000000)
+  if (b >= 1000000) return sprintf("%d MB", int(b / 1000000 + 0.5))
+  n = int(b / 1000 + 0.5); if (n < 1 && b > 0) n = 1
+  return sprintf("%d KB", n)
 }
 '
 

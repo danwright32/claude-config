@@ -20,8 +20,12 @@ What is here so far, for whoever builds the next phase:
   unusable, 3 not the last scan, 4 nonce from another copy of the page, 5 count does not match the
   ids, 6 an id not offerable now, 7 nothing chosen) or writes disk-remove's plan and prints what
   it will remove, by category and by path (#1807).
+- `review-page.sh --out <folder> [--clear-clipboard]`: renders the last scan into the one review
+  page, `review-page.html` filled in, with its nonce beside it, drawn to the design Dan settled
+  (`docs/design/disk-clean-review-page.html`). Exit 0 written, 3 written but the clipboard could
+  not be cleared, 2 refused (#1807).
 - `review-lib.sh`: the nonce a review page carries (`dcrv_write_nonce`, `dcrv_read_nonce`),
   clearing the clipboard before the page opens (`dcrv_clear_clipboard`), and the words for an
-  item's size and flags. The page itself waits on a design round (#1807).
+  item's size and marks.
 
 Removal is `~/.claude/hooks/lib/disk-remove.sh`, never anything in this folder.

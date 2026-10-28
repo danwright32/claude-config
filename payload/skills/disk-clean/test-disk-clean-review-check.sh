@@ -133,9 +133,9 @@ check "it writes disk-remove's plan" "$(eq "$(cat "$PLAN")" "scan_id $SID
 count 2
 item caches-1
 item large-files-1")"
-check "it names what will go, by category, in words" "$(has "$OUT_TEXT" "App caches: 1 item, 3.0 GB")"
+check "it names what will go, by category, in words" "$(has "$OUT_TEXT" "App caches: 1 item, 3.2 GB")"
 check "and every item by path" "$(has "$OUT_TEXT" "$H/Documents/keys.p12")"
-check "and flags an item holding credentials" "$(has "$OUT_TEXT" "keys or passwords")"
+check "and flags an item holding credentials" "$(has "$OUT_TEXT" "Holds a credential")"
 check "the plan it writes is one disk-remove can read" "$(awk 'NR == 1 && $1 != "scan_id" { bad = 1 } NR == 2 && $1 != "count" { bad = 1 } NR > 2 && $1 != "item" { bad = 1 } END { print (bad ? "not the plan layout" : "ok") }' "$PLAN")"
 
 payload "$SID" "$N" 2 large-files-2 caches-2

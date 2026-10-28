@@ -8,15 +8,16 @@
 # LAST: a selection copied from an older copy of the page, or one still on the clipboard from an
 # earlier run, carries another nonce and is refused.
 #
-#   DCRV_NONCE                         the nonce file's name inside the folder the page is rendered
-#                                      into (a scratchpad folder the skill gives)
+#   DCRV_PAGE, DCRV_NONCE              the page's and the nonce file's names inside the folder the
+#                                      page is rendered into (a scratchpad folder the skill gives)
 #   DCRV_AWK_WORDS                     awk functions saying an item's facts in words, one copy for
 #                                      the page and the checker's confirmation (L370):
-#                                        dcrv_size(<bytes>, <size>, <category>)  "3.0 GB", "at least
-#                                          1 MB", "size not read", never 0 for a size nobody read;
-#                                          needs DCU_AWK_LIB (hooks/lib/disk-clean-units.sh) beside it
-#                                        dcrv_flags(<flags>)  the warnings a flags list carries, joined
-#                                          by "; ", or empty
+#                                        dcrv_size(<bytes>, <size>)  "18.4 GB", "At least 1.6 GB",
+#                                          "Size unknown", never 0 for a size nobody read; needs
+#                                          DCU_AWK_LIB (hooks/lib/disk-clean-units.sh) beside it
+#                                        dcrv_flags(<flags>)  the marks a flags list carries, in the
+#                                          settled design's words ("Holds a credential", "Removes it
+#                                          from iCloud on every device"), joined by "; ", or empty
 #   dcrv_write_nonce <folder> <scan_id>
 #                                      makes a fresh nonce (32 hex characters from /dev/urandom),
 #                                      writes <folder>/$DCRV_NONCE as two lines, "scan_id <id>" and
@@ -40,20 +41,18 @@ DCRV_DIR="${BASH_SOURCE[0]%/*}"; [ "$DCRV_DIR" != "${BASH_SOURCE[0]}" ] || DCRV_
 . "$DCRV_DIR/../../hooks/lib/disk-clean-predicates.sh" || { echo "disk-clean review: hooks/lib/disk-clean-predicates.sh is missing"; return 2; }
 
 DCRV_AWK_WORDS='
-function dcrv_size(bytes, size, category,    h) {
-  if (bytes !~ /^[0-9]+$/) return (size == "denied") ? "size not read: permission denied" : "size not read"
+function dcrv_size(bytes, size,    h) {
+  if (bytes !~ /^[0-9]+$/) return "Size unknown"
   h = dcu_h(int(bytes / 1024))
-  if (size == "partial") return "at least " h
-  if (size == "reported") return h ", as " (category == "docker" ? "Docker" : "its own tool") " reports it"
-  return h
+  return (size == "partial") ? "At least " h : h
 }
 function dcrv_flags(flags,    n, f, i, out, w) {
   n = split(flags, f, ",")
   out = ""
   for (i = 1; i <= n; i++) {
     w = ""
-    if (f[i] == "credential") w = "holds keys or passwords"
-    else if (f[i] == "icloud") w = "removing it removes it from iCloud on every device"
+    if (f[i] == "credential") w = "Holds a credential"
+    else if (f[i] == "icloud") w = "Removes it from iCloud on every device"
     else if (f[i] != "") w = f[i]
     if (w != "") out = out (out == "" ? "" : "; ") w
   }
@@ -61,6 +60,7 @@ function dcrv_flags(flags,    n, f, i, out, w) {
 }
 '
 
+DCRV_PAGE=disk-clean-review.html
 DCRV_NONCE=disk-clean-review.nonce
 
 # True outside test mode; in it, true only when <path> lies inside the throwaway directory, by the

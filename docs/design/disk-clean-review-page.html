@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Disk clean, the review page, the settled design</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --dr-bg: #F4F1ED; --dr-text: #1B1613; --dr-muted: #665A51; --dr-border: #DDD5CD;
+    --dr-frame: #FFFFFF; --dr-link: #1D5A96; --dr-target: #F7E3BE; --dr-warn: #A3260F;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --dr-bg: #171412; --dr-text: #EDE6DF; --dr-muted: #ADA197; --dr-border: #3F3731;
+      --dr-frame: #FFFFFF; --dr-link: #8FBDEB; --dr-target: #3D3122; --dr-warn: #F29A80;
+    }
+  }
+  body { margin: 0; background: var(--dr-bg); color: var(--dr-text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .dr-doc { max-width: 1400px; margin: 0 auto; padding: 32px 24px 64px; }
+  .dr-doc h1 { font-size: 28px; margin: 0 0 6px; }
+  .dr-doc h2 { font-size: 18px; margin: 36px 0 10px; }
+  .dr-doc h3 { font-size: 15px; margin: 24px 0 8px; }
+  .dr-meta { color: var(--dr-muted); font-size: 13px; margin: 0; }
+  .dr-decisions li { margin: 0 0 10px; }
+  .dr-how { color: var(--dr-muted); font-size: 13px; }
+  .dr-frame { border: 1px solid var(--dr-border); background: var(--dr-frame); display: block; }
+  .dr-trouble { color: var(--dr-warn); font-weight: 600; max-width: 72ch; margin: 0 0 8px; }
+  .dr-requirements { list-style: none; padding-left: 0; }
+  .dr-requirements li { margin: 0 -6px 10px; padding: 2px 6px; border-radius: 4px; scroll-margin-top: 16px; }
+  .dr-requirements li:target { background: var(--dr-target); outline: none; }
+  .dr-decisions a { color: var(--dr-link); text-decoration: underline; text-underline-offset: 2px; }
+  .dr-decisions a:focus-visible { outline: 2px solid var(--dr-link); outline-offset: 2px; border-radius: 2px; }
+</style></head>
+<body><div class="dr-doc">
+<h1>Disk clean, the review page</h1>
+<p>The page /disk-clean opens in Chrome so you can tick what it removes (#1807). Settled over five rounds, approved by Dan on 2026-10-28.</p>
+<p class="dr-meta">The settled design. A new product, whose page does not exist yet. Every frame is drawn at its own width, from the committed fixture the built page renders too. The build is done when it scores 100% against this file on both halves.</p>
+<h2>Requirements</h2>
+<ul class="dr-requirements"><li id="req-1" tabindex="-1"><strong>1</strong> Every scan item is listed by its kind, each with a tick box, and none is ticked when the page opens</li><li id="req-2" tabindex="-1"><strong>2</strong> Items it will not remove are greyed, with their reason</li><li id="req-3" tabindex="-1"><strong>3</strong> An item holding a credential, or kept in iCloud Drive, is marked</li><li id="req-4" tabindex="-1"><strong>4</strong> The page reads in light and in dark</li><li id="req-5" tabindex="-1"><strong>5</strong> Copy selection, pinned to the foot, copies what is ticked back to the session</li></ul>
+<h2>Decisions</h2>
+<ol class="dr-decisions"><li id="D1"><strong>D1</strong> One list: each kind is a heading row with its total on the right, its items beneath, nothing boxed. Round 1, chosen over a bordered block per kind and a flat table. <span class="dr-how"><a href="#req-1">Requirement 1</a>. Checked on f1, f2, f3: Each kind is an h2 heading row followed by its item rows, with that kind&#x27;s total in the same row, and no kind is drawn inside a bordered box.</span></li><li id="D2"><strong>D2</strong> Within a kind, the items it will not remove come after every item you can tick. Round 2, chosen over mixing them in and over one Kept back section at the foot. <span class="dr-how"><a href="#req-2">Requirement 2</a>. Checked on f1: Within every kind, no row whose tick box is enabled comes after a row whose tick box is disabled.</span></li><li id="D3"><strong>D3</strong> Kinds come largest first by what can be freed, with Tools not used in 180 days and Large personal files always last. Round 3: the biggest wins first, but your own files never lead, since they cannot come back. <span class="dr-how"><a href="#req-1">Requirement 1</a>. Checked on f1: The kinds other than Tools not used in 180 days and Large personal files appear in falling order of their totals, and those two are the last two kinds, in that order.</span></li><li id="D4"><strong>D4</strong> Within a kind, the items you can tick are largest first, and a size the scan could not measure comes last. Follows round 3&#x27;s largest first down to the rows. <span class="dr-how"><a href="#req-1">Requirement 1</a>. Checked on f1: Within every kind, the enabled rows&#x27; sizes do not rise from one row to the next, and a row reading Size unknown follows every measured one.</span></li><li id="D5"><strong>D5</strong> A row is one line: path, then its reason or detail, then its marks, wrapping only when too long. Round 4, chosen over stacking each on its own line and over two lines. <span class="dr-how"><a href="#req-2">Requirement 2</a>. Checked on f1: In a row with a note and no marks, the path and the note sit on one line at 1100 wide.</span></li><li id="D6"><strong>D6</strong> Blue is used only on ticked boxes and the Copy selection button. Round 5: colour only on what you do. <span class="dr-how"><a href="#req-5">Requirement 5</a>. Checked on f2, f3: The Copy selection button&#x27;s background and the ticked boxes&#x27; accent are blue, and no other element is blue.</span></li><li id="D7"><strong>D7</strong> The two marks, Holds a credential and Removes it from iCloud on every device, are amber, and red is not used anywhere. Round 5: a risky row is seen before it is ticked; red stays for something actually wrong. <span class="dr-how"><a href="#req-3">Requirement 3</a>. Checked on f1, f3: Every mark has an amber background and border, and no element on the page is red.</span></li><li id="D8"><strong>D8</strong> A mark is said once: an item&#x27;s note never repeats what its mark says. Every fact once per screen (L605); the iCloud note repeated its mark in the rounds. <span class="dr-how"><a href="#req-3">Requirement 3</a>. Checked on f1: The iCloud item&#x27;s note reads in iCloud Drive and does not say every device.</span></li><li id="D9"><strong>D9</strong> A bar fixed to the foot holds the count and size of what is ticked, or Nothing selected, and Copy selection. Held the same through every round. <span class="dr-how"><a href="#req-5">Requirement 5</a>. Checked on f1, f2: The foot bar reads Nothing selected in f1 and 4 selected, 35.3 GB in f2, beside a Copy selection button.</span></li><li id="D10"><strong>D10</strong> Dark keeps every role: a dark surface, light text, the same blue action and amber marks, tuned for the dark. The issue asks for light and dark; the colours carry the roles round 5 chose. <span class="dr-how"><a href="#req-4">Requirement 4</a>. Checked on f3: In f3 the page background is dark, the text is light, Copy selection is blue and the marks are amber.</span></li></ol>
+<h2>Exceptions Dan approved</h2>
+<p>None. A deliberate difference from this design is a new design round, or an exception Dan approves in his own words, recorded here.</p>
+<h2>Frames</h2>
+<h3>Light, as it opens <span class="dr-meta">f1, 1100 wide</span></h3><iframe class="dr-frame" data-frame="f1" title="Light, as it opens" style="width:1100px;height:400px"></iframe><h3>Light, four ticked <span class="dr-meta">f2, 1100 wide</span></h3><iframe class="dr-frame" data-frame="f2" title="Light, four ticked" style="width:1100px;height:400px"></iframe><h3>Dark, four ticked <span class="dr-meta">f3, 1100 wide</span></h3><iframe class="dr-frame" data-frame="f3" title="Dark, four ticked" style="width:1100px;height:400px"></iframe>
+
+</div>
+<script type="application/json" id="decision-map">
+{
+ "requirements": [
+  {
+   "number": "1",
+   "text": "Every scan item is listed by its kind, each with a tick box, and none is ticked when the page opens"
+  },
+  {
+   "number": "2",
+   "text": "Items it will not remove are greyed, with their reason"
+  },
+  {
+   "number": "3",
+   "text": "An item holding a credential, or kept in iCloud Drive, is marked"
+  },
+  {
+   "number": "4",
+   "text": "The page reads in light and in dark"
+  },
+  {
+   "number": "5",
+   "text": "Copy selection, pinned to the foot, copies what is ticked back to the session"
+  }
+ ],
+ "decisions": [
+  {
+   "id": "D1",
+   "decision": "One list: each kind is a heading row with its total on the right, its items beneath, nothing boxed",
+   "why": "Round 1, chosen over a bordered block per kind and a flat table",
+   "requirement": "1",
+   "frames": [
+    "f1",
+    "f2",
+    "f3"
+   ],
+   "check": "Each kind is an h2 heading row followed by its item rows, with that kind's total in the same row, and no kind is drawn inside a bordered box"
+  },
+  {
+   "id": "D2",
+   "decision": "Within a kind, the items it will not remove come after every item you can tick",
+   "why": "Round 2, chosen over mixing them in and over one Kept back section at the foot",
+   "requirement": "2",
+   "frames": [
+    "f1"
+   ],
+   "check": "Within every kind, no row whose tick box is enabled comes after a row whose tick box is disabled"
+  },
+  {
+   "id": "D3",
+   "decision": "Kinds come largest first by what can be freed, with Tools not used in 180 days and Large personal files always last",
+   "why": "Round 3: the biggest wins first, but your own files never lead, since they cannot come back",
+   "requirement": "1",
+   "frames": [
+    "f1"
+   ],
+   "check": "The kinds other than Tools not used in 180 days and Large personal files appear in falling order of their totals, and those two are the last two kinds, in that order"
+  },
+  {
+   "id": "D4",
+   "decision": "Within a kind, the items you can tick are largest first, and a size the scan could not measure comes last",
+   "why": "Follows round 3's largest first down to the rows",
+   "requirement": "1",
+   "frames": [
+    "f1"
+   ],
+   "check": "Within every kind, the enabled rows' sizes do not rise from one row to the next, and a row reading Size unknown follows every measured one"
+  },
+  {
+   "id": "D5",
+   "decision": "A row is one line: path, then its reason or detail, then its marks, wrapping only when too long",
+   "why": "Round 4, chosen over stacking each on its own line and over two lines",
+   "requirement": "2",
+   "frames": [
+    "f1"
+   ],
+   "check": "In a row with a note and no marks, the path and the note sit on one line at 1100 wide"
+  },
+  {
+   "id": "D6",
+   "decision": "Blue is used only on ticked boxes and the Copy selection button",
+   "why": "Round 5: colour only on what you do",
+   "requirement": "5",
+   "frames": [
+    "f2",
+    "f3"
+   ],
+   "check": "The Copy selection button's background and the ticked boxes' accent are blue, and no other element is blue"
+  },
+  {
+   "id": "D7",
+   "decision": "The two marks, Holds a credential and Removes it from iCloud on every device, are amber, and red is not used anywhere",
+   "why": "Round 5: a risky row is seen before it is ticked; red stays for something actually wrong",
+   "requirement": "3",
+   "frames": [
+    "f1",
+    "f3"
+   ],
+   "check": "Every mark has an amber background and border, and no element on the page is red"
+  },
+  {
+   "id": "D8",
+   "decision": "A mark is said once: an item's note never repeats what its mark says",
+   "why": "Every fact once per screen (L605); the iCloud note repeated its mark in the rounds",
+   "requirement": "3",
+   "frames": [
+    "f1"
+   ],
+   "check": "The iCloud item's note reads in iCloud Drive and does not say every device"
+  },
+  {
+   "id": "D9",
+   "decision": "A bar fixed to the foot holds the count and size of what is ticked, or Nothing selected, and Copy selection",
+   "why": "Held the same through every round",
+   "requirement": "5",
+   "frames": [
+    "f1",
+    "f2"
+   ],
+   "check": "The foot bar reads Nothing selected in f1 and 4 selected, 35.3 GB in f2, beside a Copy selection button"
+  },
+  {
+   "id": "D10",
+   "decision": "Dark keeps every role: a dark surface, light text, the same blue action and amber marks, tuned for the dark",
+   "why": "The issue asks for light and dark; the colours carry the roles round 5 chose",
+   "requirement": "4",
+   "frames": [
+    "f3"
+   ],
+   "check": "In f3 the page background is dark, the text is light, Copy selection is blue and the marks are amber"
+  }
+ ]
+}
+</script>
+<script type="application/json" id="design-frames">
+{
+ "frames": [
+  {
+   "id": "f1",
+   "title": "Light, as it opens",
+   "width": 1100
+  },
+  {
+   "id": "f2",
+   "title": "Light, four ticked",
+   "width": 1100
+  },
+  {
+   "id": "f3",
+   "title": "Dark, four ticked",
+   "width": 1100
+  }
+ ],
+ "kind": "new-product"
+}
+</script>
+<script type="application/json" id="design-exceptions">
+{
+ "exceptions": []
+}
+</script>
+<script>
+var DR_TEMPLATE = "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<style>\nhtml, body { margin: 0; }\n<\/style>\n<style>\n.page { font: 14px/1.45 -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif; color: #1a1a1a; background: #fff; padding: 28px 32px 88px; }\n.top h1 { font-size: 22px; margin: 0 0 4px; }\n.scanline { margin: 0 0 24px; color: #555; }\nh2 { font-size: 15px; margin: 0; }\n.group-total { color: #555; font-variant-numeric: tabular-nums; }\n.item { display: grid; grid-template-columns: 28px 1fr 110px; align-items: start; gap: 8px; padding: 9px 0; border-bottom: 1px solid #eee; }\n.item.kept { color: #8a8a8a; }\n.tick { margin: 3px 0 0; }\n.what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }\n.path { overflow-wrap: anywhere; }\n.note { font-size: 12.5px; color: #6b6b6b; }\n.flags { display: flex; gap: 6px; flex-wrap: wrap; }\n.flag { font-size: 12px; border: 1px solid #1a1a1a; border-radius: 4px; padding: 0 6px; }\n.size { text-align: right; font-variant-numeric: tabular-nums; }\n.size.unknown { color: #8a8a8a; }\n.bar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; align-items: center; padding: 14px 32px; background: #fff; border-top: 1px solid #ccc; }\n.copy { font: inherit; font-weight: 600; padding: 8px 16px; border: 1px solid #1a1a1a; border-radius: 6px; background: #1a1a1a; color: #fff; }\n.count { color: #555; }\n\n/* 1: one list, a heading row per kind */\n.grouped .group-head { display: flex; justify-content: space-between; align-items: baseline; margin-top: 22px; padding-bottom: 6px; border-bottom: 1px solid #1a1a1a; }\n.grouped .kept-head { margin-top: 36px; }\n\n/* Row density, the round's one variable */\n.sub { display: flex; gap: 2px 8px; flex-wrap: wrap; }\n.d-stacked .sub { flex-direction: column; align-items: flex-start; }\n.d-two .sub { align-items: center; }\n.d-two .item { padding: 7px 0; }\n.d-inline .what { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }\n.d-inline .sub { align-items: baseline; }\n.d-inline .item { padding: 5px 0; }\n.d-inline .tick { margin-top: 2px; }\n\n/* Colour, the round's one variable */\n.c-amber .tick { accent-color: #1d5fd0; }\n.c-amber .copy { background: #1d5fd0; border-color: #1d5fd0; }\n.c-amber .flag { color: #6e4500; background: #fff1d1; border-color: #d9a441; }\n\n/* Dark: the same roles on a dark surface, the issue asks for both */\n.theme-dark { color: #e8e8e8; background: #161616; }\n.theme-dark .scanline, .theme-dark .group-total, .theme-dark .count { color: #a8a8a8; }\n.theme-dark .item { border-bottom-color: #2c2c2c; }\n.theme-dark .item.kept, .theme-dark .size.unknown { color: #7c7c7c; }\n.theme-dark .note { color: #9a9a9a; }\n.theme-dark .grouped .group-head { border-bottom-color: #e8e8e8; }\n.theme-dark .bar { background: #161616; border-top-color: #3a3a3a; }\n.theme-dark.c-amber .tick { accent-color: #5b9bff; }\n.theme-dark.c-amber .copy { background: #3b7bea; border-color: #3b7bea; color: #fff; }\n.theme-dark.c-amber .flag { color: #f3c66b; background: #3a2a08; border-color: #8a6420; }\n\n<\/style>\n<\/head><body><div id=\"dr-slot\"><\/div>\n<script>window.DESIGN_FIXTURE = {\"scan\": {\"scanned_at\": \"Today at 9:42 AM\", \"fda\": \"granted\", \"walk\": \"complete\", \"host\": \"Daniels-MacBook-Pro-2\"}, \"titles\": {\"trash\": \"Trash\", \"caches\": \"App caches\", \"xcode\": \"Xcode build caches\", \"build-folders\": \"Project build folders\", \"docker\": \"Docker\", \"playwright\": \"Playwright browsers\", \"claude-temp\": \"Claude Code temporary folders\", \"worktrees\": \"Finished worktrees\", \"transcripts\": \"Old transcripts\", \"runaway-logs\": \"Runaway logs\", \"forgotten-tools\": \"Tools not used in 180 days\", \"large-files\": \"Large personal files\"}, \"categories\": [\"trash\", \"caches\", \"xcode\", \"build-folders\", \"docker\", \"playwright\", \"claude-temp\", \"worktrees\", \"transcripts\", \"runaway-logs\", \"forgotten-tools\", \"large-files\"], \"items\": [{\"category\": \"trash\", \"target\": \"/Users/dan/.Trash/Lightroom export 2025.zip\", \"bytes\": 4200000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"trash-0\"}, {\"category\": \"trash\", \"target\": \"/Users/dan/.Trash/old-installer.dmg\", \"bytes\": 1100000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"trash-1\"}, {\"category\": \"trash\", \"target\": \"/Users/dan/.Trash/Screen Recording 2026-09-14.mov\", \"bytes\": 2600000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"trash-2\"}, {\"category\": \"caches\", \"target\": \"/Users/dan/Library/Caches/com.adobe.LightroomClassicCC7\", \"bytes\": 18400000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"caches-3\"}, {\"category\": \"caches\", \"target\": \"/Users/dan/Library/Caches/Google/Chrome\", \"bytes\": 3100000000, \"state\": \"not offerable: Chrome has files open in it\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"caches-4\"}, {\"category\": \"caches\", \"target\": \"/Users/dan/Library/Caches/com.spotify.client\", \"bytes\": 2200000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"caches-5\"}, {\"category\": \"caches\", \"target\": \"/Users/dan/Library/Caches/pip\", \"bytes\": 900000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"caches-6\"}, {\"category\": \"caches\", \"target\": \"/Users/dan/Library/Caches/Homebrew\", \"bytes\": 1700000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"caches-7\"}, {\"category\": \"caches\", \"target\": \"/Users/dan/Library/Caches/com.apple.bird\", \"bytes\": null, \"state\": \"not offerable: iCloud's own cache, never removed\", \"size\": \"unread\", \"flags\": \"\", \"detail\": \"\", \"id\": \"caches-8\"}, {\"category\": \"xcode\", \"target\": \"/Users/dan/Library/Developer/Xcode/DerivedData/Overture-agekzq\", \"bytes\": 6800000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"xcode-9\"}, {\"category\": \"xcode\", \"target\": \"/Users/dan/Library/Developer/Xcode/DerivedData/Overture-bkxqpe\", \"bytes\": 5900000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"xcode-10\"}, {\"category\": \"xcode\", \"target\": \"/Users/dan/Library/Developer/Xcode/DerivedData/Ovation-chrrta\", \"bytes\": 3400000000, \"state\": \"not offerable: its project is still on disk\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"xcode-11\"}, {\"category\": \"xcode\", \"target\": \"/Users/dan/Library/Developer/Xcode/DerivedData/Downbeat-dmqsfz\", \"bytes\": 2100000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"xcode-12\"}, {\"category\": \"build-folders\", \"target\": \"/Users/dan/Non-icloudDocuments/Apps/playeditapp/node_modules\", \"bytes\": 1400000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"build-folders-13\"}, {\"category\": \"build-folders\", \"target\": \"/Users/dan/Non-icloudDocuments/Apps/NurseDex/node_modules\", \"bytes\": 900000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"build-folders-14\"}, {\"category\": \"build-folders\", \"target\": \"/Users/dan/Non-icloudDocuments/Apps/NurseDex/.next\", \"bytes\": 600000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"build-folders-15\"}, {\"category\": \"build-folders\", \"target\": \"/Users/dan/Non-icloudDocuments/Apps/repo-digest/node_modules\", \"bytes\": 400000000, \"state\": \"not offerable: its project changed in the last 30 days\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"build-folders-16\"}, {\"category\": \"docker\", \"target\": \"image node:20-bullseye (dangling)\", \"bytes\": 1300000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"docker-17\"}, {\"category\": \"docker\", \"target\": \"builder cache\", \"bytes\": 4800000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"docker-18\"}, {\"category\": \"docker\", \"target\": \"volume pg-data\", \"bytes\": 2000000000, \"state\": \"not offerable: a volume is never removed, it may hold data\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"docker-19\"}, {\"category\": \"playwright\", \"target\": \"/Users/dan/Library/Caches/ms-playwright/chromium-1134\", \"bytes\": 600000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"playwright-20\"}, {\"category\": \"playwright\", \"target\": \"/Users/dan/Library/Caches/ms-playwright/chromium-1169\", \"bytes\": 600000000, \"state\": \"not offerable: a project still uses this version\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"playwright-21\"}, {\"category\": \"claude-temp\", \"target\": \"/private/tmp/claude-501/-Users-dan-Apps-Overture/0a1f9c\", \"bytes\": 300000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"claude-temp-22\"}, {\"category\": \"claude-temp\", \"target\": \"/private/tmp/claude-501/-Users-dan-Apps-Ovation/77b2e1\", \"bytes\": 200000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"claude-temp-23\"}, {\"category\": \"claude-temp\", \"target\": \"/private/tmp/claude-501/-Users-dan-Apps-claude-config/793f26\", \"bytes\": 100000000, \"state\": \"not offerable: a running session uses it\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"claude-temp-24\"}, {\"category\": \"worktrees\", \"target\": \"/Users/dan/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-a0162ffe\", \"bytes\": 200000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"worktrees-25\"}, {\"category\": \"worktrees\", \"target\": \"/Users/dan/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-a8a78c69\", \"bytes\": 200000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"worktrees-26\"}, {\"category\": \"worktrees\", \"target\": \"/Users/dan/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/sleep-1807\", \"bytes\": 200000000, \"state\": \"not offerable: it has uncommitted changes\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"worktrees-27\"}, {\"category\": \"worktrees\", \"target\": \"/Users/dan/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-ab1b3186\", \"bytes\": null, \"state\": \"unmeasured: GitHub did not answer whether its pull request merged\", \"size\": \"unread\", \"flags\": \"\", \"detail\": \"\", \"id\": \"worktrees-28\"}, {\"category\": \"transcripts\", \"target\": \"/Users/dan/.claude/projects/-Users-dan-Apps-Overture/8f2a11c0.jsonl\", \"bytes\": 120000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"transcripts-29\"}, {\"category\": \"transcripts\", \"target\": \"/Users/dan/.claude/projects/-Users-dan-Apps-Overture/1c77e0b9.jsonl\", \"bytes\": 90000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"transcripts-30\"}, {\"category\": \"runaway-logs\", \"target\": \"/Users/dan/Library/Logs/Backblaze/bzbmenu.log\", \"bytes\": 800000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"runaway-logs-31\"}, {\"category\": \"runaway-logs\", \"target\": \"/Users/dan/Library/Logs/Synology/daemon.log\", \"bytes\": 1600000000, \"state\": \"offerable\", \"size\": \"partial\", \"flags\": \"\", \"detail\": \"\", \"id\": \"runaway-logs-32\"}, {\"category\": \"forgotten-tools\", \"target\": \"/Users/dan/.android\", \"bytes\": 12000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"credential\", \"detail\": \"holds adbkey, an ADB private key; nothing changed since 2023-10-09\", \"id\": \"forgotten-tools-33\"}, {\"category\": \"forgotten-tools\", \"target\": \"/Users/dan/.expo\", \"bytes\": 152000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"credential\", \"detail\": \"holds a code signing settings file; last changed 2025-11-14\", \"id\": \"forgotten-tools-34\"}, {\"category\": \"large-files\", \"target\": \"/Users/dan/Downloads/Sonoma installer.dmg\", \"bytes\": 13200000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"large-files-35\"}, {\"category\": \"large-files\", \"target\": \"/Users/dan/Downloads/wedding-raw-backup.zip\", \"bytes\": 22500000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"large-files-36\"}, {\"category\": \"large-files\", \"target\": \"/Users/dan/Documents/Client footage/final cut.mov\", \"bytes\": 9400000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"icloud\", \"detail\": \"in iCloud Drive\", \"id\": \"large-files-37\"}, {\"category\": \"large-files\", \"target\": \"/Users/dan/Movies/drone 2024-07.mp4\", \"bytes\": 3800000000, \"state\": \"offerable\", \"size\": \"measured\", \"flags\": \"\", \"detail\": \"\", \"id\": \"large-files-38\"}, {\"category\": \"large-files\", \"target\": \"/Users/dan/Desktop/archive.tar\", \"bytes\": null, \"state\": \"unmeasured: permission denied (Full Disk Access)\", \"size\": \"denied\", \"flags\": \"\", \"detail\": \"\", \"id\": \"large-files-39\"}], \"ticked\": [\"caches-3\", \"xcode-9\", \"xcode-10\", \"trash-0\"]};<\/script>\n<script>\n// The settled disk-clean review page (#1807), from five design rounds on 2026-10-28: one list (1),\n// kept items at the end of their kind (2), largest first with your own files last (3), one line\n// rows (4), blue on the action and amber on the warnings (5).\nvar F = window.DESIGN_FIXTURE;\nvar TICKED = [];\n\nfunction el(tag, cls, text) {\n  var n = document.createElement(tag);\n  if (cls) n.className = cls;\n  if (text !== undefined) n.textContent = text;\n  return n;\n}\n\nfunction size(it) {\n  if (it.bytes === null) return \"Size unknown\";\n  var b = it.bytes, s;\n  if (b >= 1e9) s = (b / 1e9).toFixed(1) + \" GB\";\n  else if (b >= 1e6) s = Math.round(b / 1e6) + \" MB\";\n  else s = Math.max(1, Math.round(b / 1e3)) + \" KB\";\n  return it.size === \"partial\" ? \"At least \" + s : s;\n}\n\nfunction shortPath(t) { return t.replace(/^\\/Users\\/dan/, \"~\"); }\nfunction offerable(it) { return it.state === \"offerable\"; }\nfunction reason(it) { return offerable(it) ? \"\" : it.state.replace(/^(not offerable|unmeasured): /, \"\"); }\n\nfunction itemsOf(cat) { return F.items.filter(function (it) { return it.category === cat; }); }\nfunction total(items) {\n  var b = 0;\n  items.forEach(function (it) { if (offerable(it) && it.bytes) b += it.bytes; });\n  return size({ bytes: b, size: \"measured\" });\n}\n\nfunction flags(it) {\n  var box = el(\"span\", \"flags\");\n  if (it.flags.indexOf(\"credential\") >= 0) box.append(el(\"span\", \"flag\", \"Holds a credential\"));\n  if (it.flags.indexOf(\"icloud\") >= 0) box.append(el(\"span\", \"flag\", \"Removes it from iCloud on every device\"));\n  return box;\n}\n\nfunction tick(it) {\n  var c = el(\"input\", \"tick\");\n  c.type = \"checkbox\";\n  c.disabled = !offerable(it);\n  c.checked = TICKED.indexOf(it.id) >= 0;\n  c.setAttribute(\"aria-label\", shortPath(it.target));\n  return c;\n}\n\nfunction header() {\n  var h = el(\"header\", \"top\");\n  h.append(el(\"h1\", \"\", \"Disk clean\"));\n  h.append(el(\"p\", \"scanline\", \"Scanned \" + F.scan.scanned_at.toLowerCase() + \" on this Mac. Nothing is removed until you copy your selection back.\"));\n  return h;\n}\n\nfunction bar() {\n  var b = el(\"footer\", \"bar\");\n  var n = 0, bytes = 0;\n  F.items.forEach(function (it) { if (TICKED.indexOf(it.id) >= 0) { n++; bytes += it.bytes || 0; } });\n  b.append(el(\"span\", \"count\", n ? n + \" selected, \" + size({ bytes: bytes, size: \"measured\" }) : \"Nothing selected\"));\n  var btn = el(\"button\", \"copy\", \"Copy selection\");\n  btn.type = \"button\";\n  b.append(btn);\n  return b;\n}\n\nfunction itemRow(it, withCategory, kind) {\n  var r = el(\"div\", \"item\" + (offerable(it) ? \"\" : \" kept\"));\n  r.append(tick(it));\n  var main = el(\"div\", \"what\");\n  main.append(el(\"span\", \"path\", shortPath(it.target)));\n  var note = reason(it) || it.detail;\n  if (kind) note = kind + \": \" + note;\n  var sub = el(\"span\", \"sub\");\n  if (note) sub.append(el(\"span\", \"note\", note));\n  if (it.flags) sub.append(flags(it));\n  if (sub.childNodes.length) main.append(sub);\n  if (withCategory) r.append(el(\"span\", \"cat\", F.titles[it.category]));\n  r.append(main);\n  r.append(el(\"span\", \"size\" + (it.bytes === null ? \" unknown\" : \"\"), size(it)));\n  return r;\n}\n\n// Kinds whose items are your own files, not something regenerated, in the order they are shown.\nvar PERSONAL = [\"forgotten-tools\", \"large-files\"];\n\nfunction bytesOf(cat) {\n  var b = 0;\n  itemsOf(cat).forEach(function (it) { if (offerable(it) && it.bytes) b += it.bytes; });\n  return b;\n}\n\nfunction ordered(order) {\n  var cats = F.categories.slice();\n  var bySize = function (a, b) { return bytesOf(b) - bytesOf(a); };\n  if (order === \"size\") return cats.sort(bySize);\n  if (order === \"size-personal-last\") {\n    return cats.filter(function (c) { return PERSONAL.indexOf(c) < 0; }).sort(bySize).concat(PERSONAL);\n  }\n  return cats;\n}\n\nfunction grouped(kept, order) {\n  var list = el(\"div\", \"grouped\");\n  var held = [];\n  ordered(order).forEach(function (cat) {\n    var items = itemsOf(cat);\n    if (!items.length) return;\n    var h = el(\"div\", \"group-head\");\n    h.append(el(\"h2\", \"\", F.titles[cat]));\n    h.append(el(\"span\", \"group-total\", total(items)));\n    list.append(h);\n    var shown = items;\n    var big = function (a, b) { return (b.bytes || -1) - (a.bytes || -1); };\n    if (kept === \"end\") shown = items.filter(offerable).sort(big).concat(items.filter(function (it) { return !offerable(it); }));\n    if (kept === \"foot\") {\n      shown = items.filter(offerable);\n      items.forEach(function (it) { if (!offerable(it)) held.push(it); });\n    }\n    shown.forEach(function (it) { list.append(itemRow(it, false)); });\n  });\n  if (held.length) {\n    var h = el(\"div\", \"group-head kept-head\");\n    h.append(el(\"h2\", \"\", \"Kept back\"));\n    list.append(h);\n    held.forEach(function (it) { list.append(itemRow(it, false, F.titles[it.category])); });\n  }\n  return list;\n}\n\nfunction buildScreen(variant) {\n  TICKED = variant.ticked ? F.ticked : [];\n  var page = el(\"div\", \"page grouped-page d-inline c-amber\" + (variant.theme === \"dark\" ? \" theme-dark\" : \"\"));\n  page.append(header());\n  page.append(grouped(\"end\", \"size-personal-last\"));\n  page.append(bar());\n  return page;\n}\n\n<\/script>\n<script>\n(function () {\n  \"use strict\";\n  var V = \"__DR_VARIANT__\";\n  var slot = document.getElementById(\"dr-slot\");\n  var report = { built: false, why: \"\" };\n  /* A slot the captured page's text names but its document does not hold (an id inside a comment)\n     is said as that, never as the builder throwing (lessons review of #1364). */\n  if (!slot) {\n    window.DR_FRAME = { built: false, noSlot: true, why: \"the captured page holds no element \" + \"dr-slot\" };\n    return;\n  }\n  try {\n    var node = buildScreen(V);\n    if (!node || !node.nodeType) throw new Error(\"buildScreen returned no element\");\n    slot.replaceChildren(node);\n    report.built = true;\n  } catch (err) {\n    report.why = String(err && err.message ? err.message : err);\n  }\n  window.DR_FRAME = report;\n  if (report.built) report.tell = function () {\n    if (typeof screenShown === \"function\") screenShown(V, slot.firstElementChild);\n  };\n  if (report.tell) {\n    try { report.tell(); } catch (err) { report.shownWhy = String(err && err.message ? err.message : err); }\n  }\n  /* A key pressed while this frame has the focus goes to the page around it, unless the design took\n     it or it was typed into a field, as the switcher's own keys yield (claude-config#356). */\n  document.addEventListener(\"keydown\", function (event) {\n    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;\n    var t = event.target;\n    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|OPTION)$/.test(t.tagName || \"\"))) return;\n    if (window.parent && window.parent !== window) window.parent.postMessage({ drKey: event.key }, \"*\");\n  });\n})();\n<\/script>\n<\/body><\/html>\n";
+var DR_VARIANTS = {"f1": "{\"ticked\": false, \"theme\": \"light\"}", "f2": "{\"ticked\": true, \"theme\": \"light\"}", "f3": "{\"ticked\": true, \"theme\": \"dark\"}"};
+/* A frame's whole document: the captured chrome with the round drawn in it from the fixture. The web
+   adapter of the design match score draws it as a page of its own at the frame's width. The template
+   holds the variant as the quoted token make-settled.py wrote, replaced here by the frame's own. */
+function designFrameDocument(id) {
+  if (!Object.prototype.hasOwnProperty.call(DR_VARIANTS, id)) throw new Error("this design has no frame " + id);
+  return DR_TEMPLATE.split("\"__DR_VARIANT__\"").join(DR_VARIANTS[id]);
+}
+/* What kept a frame of this design from being drawn whole, from the report its document leaves as
+   window.DR_FRAME, or "" when nothing did (claude-config#1539). This page says it beside the frame, and the
+   design match score asks this file for it, so the two never word a frame differently. */
+function designFrameTrouble(report) {
+  if (!report) return "its builder never ran, so nothing of the round is drawn in it";
+  if (report.noSlot) return String(report.why) + ", so there is nowhere in it to draw the round";
+  if (!report.built) return "its builder threw (" + String(report.why) + "), so nothing of the round is drawn in it";
+  if (report.shownWhy) return "its builder's screenShown threw (" + String(report.shownWhy) + "), so whatever that draws once the frame is shown is missing from it";
+  return "";
+}
+/* A frame still loading its page has no root yet, and is left alone: its own load sizes it and tells
+   its builder. Reading the root anyway threw, and the page said the builder's screenShown had, whenever
+   an option was chosen before its frame loaded (claude-config#1467). */
+function drReady(frame) {
+  var doc = frame.contentDocument;
+  return !!(doc && doc.documentElement && !frame.hidden);
+}
+/* The frame is as tall as its page, and follows it (claude-config#1795): sized when the option is shown,
+   and again whenever the page changes height, a step revealing or a list opening after a click, read by
+   a ResizeObserver on the page's root. Before, it was sized only on show, so a page that grew after a
+   click stayed clipped inside its frame and scrolled.
+   The height read is the root's own, not its scroll height, which never reads less than the frame it
+   sits in, so a short screen would keep whatever height its frame started at. A root or body of h-full
+   height (Slate's) is as tall as the frame and never grows with its content, so both are given an
+   automatic height and a minimum of none, and report their content instead.
+   A page can still hold an area as tall as its frame (a min-height: 100vh under a header), which grows
+   each time the frame does, so sizing the frame to it again on every resize grew it for ever. So the
+   page is read again at once at the height just set, and a resize it then reports is that same
+   picture, already answered, and is left alone; only a page that changed since is sized again. Such a
+   page keeps the part its own frame height added scrolled inside the frame, as it would in a window. */
+function drSize(frame) {
+  if (DR_FIXED[frame.dataset.frame] || !drReady(frame)) return;
+  drWatch(frame);
+  var root = frame.contentDocument.documentElement;
+  var tall = Math.ceil(root.getBoundingClientRect().height);
+  var last = frame.drSettled;
+  if (last && last.frame === frame.style.height && last.page === tall) return;
+  frame.style.height = tall + "px";
+  frame.drSettled = { frame: frame.style.height, page: Math.ceil(root.getBoundingClientRect().height) };
+}
+/* Once per loaded page, shown or hidden, before its picture is read: every option's root and body are
+   changed alike, so two options drawing the same thing still read as the same picture (#1512). The
+   observer is the frame's own window's, which is told of its own document's layout, and is kept on the
+   frame so it lives as long as the frame does. */
+function drWatch(frame) {
+  var doc = frame.contentDocument;
+  if (DR_FIXED[frame.dataset.frame] || !doc || !doc.documentElement || frame.drWatching === doc) return;
+  frame.drWatching = doc;
+  [doc.documentElement, doc.body].forEach(function (node) {
+    if (!node) return;
+    node.style.setProperty("height", "auto", "important");
+    node.style.setProperty("min-height", "0", "important");
+  });
+  var Watch = frame.contentWindow && frame.contentWindow.ResizeObserver;
+  if (Watch) { frame.drWatcher = new Watch(function () { drSize(frame); }); frame.drWatcher.observe(doc.documentElement); }
+}
+var DR_FIXED = {"f1": false, "f2": false, "f3": false};
+Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), function (frame) {
+  frame.addEventListener("load", function () {
+    drSize(frame);
+    var trouble = designFrameTrouble(frame.contentWindow && frame.contentWindow.DR_FRAME);
+    var said = frame.previousElementSibling;
+    if (said && said.classList.contains("dr-trouble")) said.remove();
+    if (!trouble) return;
+    var note = document.createElement("p");
+    note.className = "dr-trouble";
+    note.textContent = "This frame is not the design: " + trouble + ".";
+    frame.before(note);
+  });
+  frame.srcdoc = designFrameDocument(frame.dataset.frame);
+});
+</script>
+</body></html>
+<!-- design-settled sha256:a226ebdba6766dd357d44a150eb454cf8c0c6967cae1d289cbacf9b5d75fd4f5 -->

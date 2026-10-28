@@ -195,7 +195,7 @@ awk -F "$S" -v cats="$cats" -v table="$DCR_TITLES" "$DCU_AWK_LIB$DCR_AWK_TITLES$
       for (k = 1; k <= count[c]; k++) {
         split(line[c, k], f, FS)
         w = dcrv_flags(f[9])
-        print "  " dcrv_size(f[6], f[8], f[2]) "  " f[4] (w == "" ? "" : "  (" w ")")
+        print "  " dcrv_size(f[6], f[8]) "  " f[4] (w == "" ? "" : "  (" w ")")
       }
     }
   }' "$WORK/ids" "$WORK/items"
