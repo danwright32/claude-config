@@ -137,6 +137,80 @@ export const neverMergeSaid = (n: NeverMerge, toDan = false): string =>
 /** What is recorded as the reason when Dan leaves it closed, and listed after (#1767). */
 export const neverMergeWhy = (n: NeverMerge): string => (n.from === 'comment' ? `its closing comment names PR ${refSaid(n.pr)}` : `Dan named PR ${refSaid(n.pr)} earlier`)
 
+// ---- The issues a merged PR worked, and what is left on each (#1812) ----
+// On 2026-10-27 winding down held for an issue whose fix had merged with its live check still owed,
+// and Claude offered Dan two ways out: turn winding down off, or close the issue unfinished. Dan: "you
+// should finish and merge all work you started ... Just don't start any new work". So an issue the
+// session worked is finished, its owed verification included, and the refusal names what is left.
+
+// The words that name an issue a PR worked without closing it: Refs, Ref, References. A closing
+// keyword is GitHub's own to read (closingIssuesReferences); a reference to another repository is
+// not this repository's issue. "Part of" is left out (lessons review): it names an epic or tracking
+// issue as often as the issue worked, and one would hold winding down until the whole epic closed.
+const ISSUE_REFS = /\b(?:refs?|references)\b:?\s+((?:(?:[\w.-]+\/[\w.-]+)?#\d+\b(?:\s*(?:,|\band\b)\s*)*)+)/gi
+const ONE_REF = /(?:([\w.-]+\/[\w.-]+))?#(\d+)\b/g
+
+/**
+ * The issues a PR's description refers to without closing (#1812), in order, each once: `#N`, and
+ * `owner/name#N` only when it is `repo` (in any case). With no repository known, only `#N`.
+ */
+export const issueRefs = (body: string, repo: string | undefined): number[] => {
+  const out: number[] = []
+  for (const m of body.matchAll(ISSUE_REFS))
+    for (const r of (m[1] ?? '').matchAll(ONE_REF)) {
+      const named = r[1]
+      if (named && (!repo || named.toLowerCase() !== repo.toLowerCase())) continue
+      const n = Number(r[2])
+      if (!out.includes(n)) out.push(n)
+    }
+  return out
+}
+
+// A line stating what is still to do once the PR merges.
+const NEXT_STEP = /\b(?:next steps?|still owed|left to do|remaining|follow[ -]?up|after (?:this )?merg(?:e|es|ed|ing)|once (?:this is |it is )?merged)\b/i
+// A Markdown list marker, quote or heading at a line's start.
+const LINE_MARK = /^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*|#{1,6}\s+)/
+
+/**
+ * What a PR's description states is still to do (#1812): the line saying so, or the first line under a
+ * heading that does, preferring one that names `#issue`; undefined when it states nothing.
+ */
+export const statedNextStep = (body: string, issue: number): string | undefined => {
+  const lines = body.split('\n')
+  const found: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i] as string
+    if (!NEXT_STEP.test(raw)) continue
+    if (/^\s*#{1,6}\s/.test(raw)) {
+      const under = lines.slice(i + 1).find(l => l.trim() !== '')
+      if (under !== undefined && !/^\s*#{1,6}\s/.test(under)) found.push(under.replace(LINE_MARK, '').trim())
+    } else found.push(raw.replace(LINE_MARK, '').trim())
+  }
+  // One naming this issue first; else one naming no issue at all, which is the PR's as a whole. A
+  // line naming only another issue is that issue's, so this one's last comment is read instead.
+  const naming = new RegExp(`#${issue}\\b`)
+  return found.find(l => naming.test(l)) ?? found.find(l => !/#\d+\b/.test(l))
+}
+
+/** What is left on an open issue the session worked, and where that was read (#1812). */
+export type IssueLeft = { from: 'pr' | 'comment'; quote: string }
+/** One issue a merged PR worked, as read: open with what is left on it, or closed (#1812). */
+export type IssueRead = { number: number; state: 'OPEN' | 'CLOSED'; left?: IssueLeft }
+/** What is left on an issue: the PR's stated next step, else the issue's last comment, quoted; else undefined. */
+export const whatIsLeft = (prBody: string, issue: number, lastComment: string | undefined): IssueLeft | undefined => {
+  const step = statedNextStep(prBody, issue)
+  if (step) return { from: 'pr', quote: quoteOf(step) }
+  const said = quoteOf(lastComment ?? '')
+  return said ? { from: 'comment', quote: said } : undefined
+}
+
+// An open issue, as the refusal says it: finish it, naming what is left where that was read.
+const issueOpen = (n: number, pr: number, left: IssueLeft | undefined): string => {
+  const head = `issue #${n} is still open: finish what is left on it now`
+  if (!left) return `${head} (read the issue for what that is)`
+  return left.from === 'pr' ? `${head}, which PR #${pr} names as its next step ("${left.quote}")` : `${head}, as its last comment says ("${left.quote}")`
+}
+
 /** What the finish check read, each part its own reading so a failed read is said apart from a no. */
 export type Reading = {
   branch: string
@@ -146,7 +220,17 @@ export type Reading = {
    * `head` is the commit the PR's branch is on now, as GitHub gave it; absent when it gave none.
    * `neverMerge`, for a PR closed without merging, is a recorded reason it will never merge (#1767).
    */
-  pr: { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; head?: string; issues: { number: number; state: 'OPEN' | 'CLOSED' }[]; neverMerge?: NeverMerge } | null | Unreadable
+  pr:
+    | {
+        number: number
+        state: 'OPEN' | 'MERGED' | 'CLOSED'
+        head?: string
+        /** The issues it closes and those it refers to (#1812), each with what is left on it when open. */
+        issues: IssueRead[]
+        neverMerge?: NeverMerge
+      }
+    | null
+    | Unreadable
   /** Dan's choice to leave this PR open (#917) or closed (#1033), when he made one; never inferred. */
   choice?: LeftAsIs
   /**
@@ -435,7 +519,7 @@ export const outstanding = (r: Reading): string[] => {
     if (isUnreadable(v)) unread(question, v)
     else if (v) out.push(still)
   }
-  for (const i of r.pr.issues) if (i.state !== 'CLOSED') out.push(`issue #${i.number} is still open`)
+  for (const i of r.pr.issues) if (i.state !== 'CLOSED') out.push(issueOpen(i.number, r.pr.number, i.left))
   return out
 }
 

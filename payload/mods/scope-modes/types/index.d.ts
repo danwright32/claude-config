@@ -6,7 +6,8 @@ export type ScopeModesPlace = 'home' | 'away'
 export type ScopeModesHeld = { id: string; label: string; prompt: string }
 /**
  * What winding down is finishing, read when it turned on: the branch the session is on, the issue
- * numbers its name carries, and once found, its PR and the issues that PR closes. `main` is the
+ * numbers its name carries, and once found, its PR and the issues that PR closes or refers to with
+ * Refs (#1812), each of which winding down holds for until it is finished. `main` is the
  * project's main working tree and `repo` the owner/name of its origin, as the session's repository
  * gave them when winding down turned on: where the check reads once the session's own folder (a
  * worktree winding down removes when it cleans up) is gone (#1059). Absent when they could not be read.
