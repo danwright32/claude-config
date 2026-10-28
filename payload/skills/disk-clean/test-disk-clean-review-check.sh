@@ -250,7 +250,7 @@ awk -v n="$BIG" -v h="$H" -v s="$S" 'BEGIN {
 }' > "$H/big.txt"
 write_record "$H/big.txt"
 new_nonce
-ids="$(awk -F "$S" '$6 == "offerable" { print $1 }' "$H/big.txt" | head -2000)"
+ids="$(awk -F "$S" '$6 == "offerable" && n++ < 2000 { print $1 }' "$H/big.txt")"
 # shellcheck disable=SC2086
 payload "$SID" "$N" 2000 $ids
 start="$(date +%s)"
