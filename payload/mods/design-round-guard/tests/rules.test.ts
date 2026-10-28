@@ -42,6 +42,7 @@ import {
   subjectsOf,
   textsOf,
   patternMayBeLook,
+  nameFromOutput,
   inScratchpad,
   namesScratchpad,
   joinedOnly,
@@ -235,6 +236,17 @@ test('a name holding a pattern may be a look changing file exactly where some na
   // 'src/*.tsx')`, measured on 2026-10-27 among the commands #1773 would otherwise have let through).
   for (const w of ['(#i)x.css', 'x(#a1).tsz', `${'f(a|b|c)'.repeat(6)}.md`, "$(git ls-files 'src/*.tsx')", "$(ls 'app/(shop)')"])
     expect([w, patternMayBeLook(w)]).toEqual([w, 'unread'])
+  // So is one holding no pattern at all (#1815: `$(git ls-files src)`), or a backtick's.
+  for (const w of ['$(git ls-files src)', '$(git ls-files src/app)', '`git ls-files src`', 'src/$(cat name)', 'x$(date).css', '$(git diff --name-only'])
+    expect([w, patternMayBeLook(w)]).toEqual([w, 'unread'])
+})
+
+test('#1815: a name a command substitution fills in is known by its last part, read past the slashes inside one', () => {
+  for (const w of ['$(git ls-files src)', '$(git ls-files src/app)', '`git ls-files src/app`', 'src/$(cat name)', 'app/x$(date).css', '$(find . -name "*.tsx"', "$(ls 'app/(shop)')"])
+    expect([w, nameFromOutput(w)]).toEqual([w, true])
+  // A substitution in the folder only, none at all, or a variable, which is no command's output.
+  for (const w of ['$(git rev-parse --show-toplevel)/notes.md', '/api/issues/$(cat id)/events/?full=true', '`pwd`/x.md', 'app/page.tsx', '$HOME/x', '${D}/spec.json', 'if (a || b) {', 'cost $5'])
+    expect([w, nameFromOutput(w)]).toEqual([w, false])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {

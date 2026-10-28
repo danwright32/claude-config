@@ -536,6 +536,68 @@ function designFrameTrouble(report) {
 """
 
 
+# How a frame showing one of these documents is sized on the page around it, one copy for the switcher's
+# options (claude-config#1795) and a settled design's frames (#1816): as tall as its page, and following it
+# as the page changes height, with an h-full root and body reporting their content rather than the frame's
+# own height. Before #1816 the settled page sized each frame once, as it loaded, from its root's scroll
+# height, which never reads less than the frame, so an h-full page kept whatever height its frame began at.
+# Each page names, as a JavaScript expression over the frame, whether that frame was given a height of its
+# own, which is kept as given; and each calls drSize(frame) as the frame loads and whenever it is shown.
+FRAME_FOLLOWS_PAGE = """/* A frame still loading its page has no root yet, and is left alone: its own load sizes it and tells
+   its builder. Reading the root anyway threw, and the page said the builder's screenShown had, whenever
+   an option was chosen before its frame loaded (claude-config#1467). */
+function drReady(frame) {
+  var doc = frame.contentDocument;
+  return !!(doc && doc.documentElement && !frame.hidden);
+}
+/* The frame is as tall as its page, and follows it (claude-config#1795): sized when the option is shown,
+   and again whenever the page changes height, a step revealing or a list opening after a click, read by
+   a ResizeObserver on the page's root. Before, it was sized only on show, so a page that grew after a
+   click stayed clipped inside its frame and scrolled.
+   The height read is the root's own, not its scroll height, which never reads less than the frame it
+   sits in, so a short screen would keep whatever height its frame started at. A root or body of h-full
+   height (Slate's) is as tall as the frame and never grows with its content, so both are given an
+   automatic height and a minimum of none, and report their content instead.
+   A page can still hold an area as tall as its frame (a min-height: 100vh under a header), which grows
+   each time the frame does, so sizing the frame to it again on every resize grew it for ever. So the
+   page is read again at once at the height just set, and a resize it then reports is that same
+   picture, already answered, and is left alone; only a page that changed since is sized again. Such a
+   page keeps the part its own frame height added scrolled inside the frame, as it would in a window. */
+function drSize(frame) {
+  if (__FIXED__ || !drReady(frame)) return;
+  drWatch(frame);
+  var root = frame.contentDocument.documentElement;
+  var tall = Math.ceil(root.getBoundingClientRect().height);
+  var last = frame.drSettled;
+  if (last && last.frame === frame.style.height && last.page === tall) return;
+  frame.style.height = tall + "px";
+  frame.drSettled = { frame: frame.style.height, page: Math.ceil(root.getBoundingClientRect().height) };
+}
+/* Once per loaded page, shown or hidden, before its picture is read: every option's root and body are
+   changed alike, so two options drawing the same thing still read as the same picture (#1512). The
+   observer is the frame's own window's, which is told of its own document's layout, and is kept on the
+   frame so it lives as long as the frame does. */
+function drWatch(frame) {
+  var doc = frame.contentDocument;
+  if (__FIXED__ || !doc || !doc.documentElement || frame.drWatching === doc) return;
+  frame.drWatching = doc;
+  [doc.documentElement, doc.body].forEach(function (node) {
+    if (!node) return;
+    node.style.setProperty("height", "auto", "important");
+    node.style.setProperty("min-height", "0", "important");
+  });
+  var Watch = frame.contentWindow && frame.contentWindow.ResizeObserver;
+  if (Watch) { frame.drWatcher = new Watch(function () { drSize(frame); }); frame.drWatcher.observe(doc.documentElement); }
+}
+"""
+
+
+def frame_follows_page(fixed):
+    """The sizing script above, with fixed, a JavaScript expression over frame that is truthy for a frame
+    whose height is its own, put in its place."""
+    return FRAME_FOLLOWS_PAGE.replace("__FIXED__", fixed)
+
+
 def frame_document(chrome, builder, styles, variant, fixture=None, told_by_page=False):
     """The whole document for one option or frame: the captured chrome with the round drawn in it.
     told_by_page: the page around it calls the builder's screenShown each time it shows this frame, as

@@ -780,7 +780,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     const tool = kind === 'python' ? readProgram(args, undefined).module : name === 'npx' ? npxTool(args) : undefined
     if (tool) {
       const handed = handedOf(args.slice(tool.args), TOOL_READS.get(tool.name))
-      if (handed.length) runs.push({ what: kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx', script: tool.name, args: handed })
+      if (handed.length) runs.push({ what: kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx', script: tool.name, tool: true, args: handed })
     }
     // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be
     // read is a write the words do not name, and so is one that cannot be read at all (a script
