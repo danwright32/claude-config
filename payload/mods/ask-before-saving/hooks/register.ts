@@ -1,7 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
-import { inputTexts } from './mod-kit/inputs.ts'
+import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingIndexCover, AskBeforeSavingQuestion } from '../types/index.d.ts'
 import {
   APPROVAL_MS,
@@ -292,11 +292,20 @@ const savedText = async ($: EngineInterface, tool: string, input: Record<string,
   if (tool === 'Edit') return String(input.new_string ?? '')
   if (tool !== 'Write') return String(input.command ?? '')
   // No file there yet: the whole content is what would be saved. One that exists and cannot be read
-  // fails the hook, and the hook fails closed.
+  // fails the hook, and the hook fails closed. One that is no ordinary file (/dev/stdin, a fifo) is
+  // never opened (#1814): what it holds now is unknown, never empty, so the whole content is said,
+  // with why its new lines could not be told.
   const abs = resolvePath(String(input.file_path ?? ''), at.cwd, at.home)
-  const old = (await $.fs.exists(abs)) ? await $.fs.read(abs) : undefined
-  return addedText(String(input.content ?? ''), old)
+  const old = await textNow($, abs)
+  if ('unreadable' in old)
+    return `${addedText(String(input.content ?? ''), undefined)} (the whole of what it writes: ${display(abs, at.home)} could not be read before it, as ${old.unreadable}, so which lines are new could not be told)`
+  return addedText(String(input.content ?? ''), 'text' in old ? old.text : undefined)
 }
+
+// What a file a call writes holds now, by mod-kit's one reader of it (#1814), which never opens a
+// device or a fifo: a read of one waited for ever, so the call never ran.
+const textNow = ($: EngineInterface, path: string): Promise<Current> =>
+  currentText({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, path)
 
 // A note Claude reads at its next step, never shown to Dan as typed. A note that cannot be added is
 // a toast carrying the whole note and why, so Dan sees what Claude was not told.
@@ -379,17 +388,21 @@ const takeApproval = async ($: EngineInterface, key: string) => {
 // read: a Bash call is never looked into here (second lessons review of #869, where a refused shell
 // call's target reads failed and replaced the refusal that stopped it). A file that exists and cannot
 // be read fails the hook, and the hook fails closed.
-// `now` reads the file as it is (undefined when there is none), handed in so the noun (#1483), which
-// may not pass its engine to a helper, reads through its own.
-const lessonAddedBy = async (tool: string, input: Record<string, unknown>, at: Where, now: (file: string) => Promise<string | undefined>): Promise<string | undefined> => {
+// `now` reads the file as it is, by mod-kit's currentText, handed in so the noun (#1483), which may
+// not pass its engine to a helper, reads through its own. A lessons file that is no ordinary file (a
+// fifo, a link to a device) is never opened (#1814), and what a call adds to it cannot be told, so
+// it is asked about.
+const lessonAddedBy = async (tool: string, input: Record<string, unknown>, at: Where, now: (file: string) => Promise<Current>): Promise<string | undefined> => {
   if (tool !== 'Edit' && tool !== 'Write') return undefined
   const file = lessonsFile(at.home)
   if (resolvePath(String(input.file_path ?? ''), at.cwd, at.home) !== file) return undefined
   // The file as it is now: an Edit's kept text is judged against it as well as a Write's content.
-  return lessonAddition(tool, input, await now(file))
+  const old = await now(file)
+  if ('unreadable' in old) return undefined
+  return lessonAddition(tool, input, 'text' in old ? old.text : undefined)
 }
 const lessonAdded = ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<string | undefined> =>
-  lessonAddedBy(tool, input, at, async file => ((await $.fs.exists(file)) ? await $.fs.read(file) : undefined))
+  lessonAddedBy(tool, input, at, file => textNow($, file))
 
 // The approval Dan gave in the durable lesson picker for the lesson this text adds, taken as the call
 // that uses it arrives, and refused on its age there (L567); one past its time is taken out and said.
@@ -417,9 +430,12 @@ const takeLesson = async ($: EngineInterface, added: string) => {
 // an Edit's result against the index as it is now, and a shell command that only appends text it
 // spells out (rules.ts shellAppended, by mod-kit's one reader of what it runs and writes) appended to
 // it. Undefined for anything else, which is asked about. An index that exists and cannot be read fails
-// the hook, and the hook fails closed.
+// the hook, and the hook fails closed; one that is no ordinary file (a fifo, a link to a device) is
+// never opened (#1814), and what a call adds to it cannot be told, so it is asked about.
 const indexLineOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, index: string): Promise<string | undefined> => {
-  const old = (await $.fs.exists(index)) ? await $.fs.read(index) : undefined
+  const now = await textNow($, index)
+  if ('unreadable' in now) return undefined
+  const old = 'text' in now ? now.text : undefined
   if (tool === 'Write') return indexLineAdded(old, String(input.content ?? ''))
   if (tool === 'Edit') {
     const edited = editedFile(old, input)
@@ -517,7 +533,9 @@ export const register: Register = on => {
         const home = (await built.env.get('HOME')) ?? ''
         const at: Where = { home, cwd: await built.session.cwd() }
         const key = saveKey(tool, input, at.cwd, at.home)
-        const added = await lessonAddedBy(tool, input, at, async file => ((await built.fs.exists(file)) ? await built.fs.read(file) : undefined))
+        const added = await lessonAddedBy(tool, input, at, file =>
+          currentText({ exists: p => built.fs.exists(p), stat: (p, o) => built.fs.stat(p, o), read: p => built.fs.read(p) }, file),
+        )
         const now = await built.clock.now()
         const approvals = (await built.state.get(approvalsRef)).value ?? []
         return { isApproved: approvals.some(x => stands(x.until, now) && (savesThis(x, key) || addsThis(x, added))) }

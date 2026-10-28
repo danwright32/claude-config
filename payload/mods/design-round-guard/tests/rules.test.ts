@@ -21,6 +21,7 @@ import {
   isModHookTs,
   drawsChange,
   modHookLogicOnly,
+  modHookDrawingUntouched,
   onScreenProblem,
   sourceSpans,
   settledNotYet,
@@ -43,6 +44,7 @@ import {
   textsOf,
   patternMayBeLook,
   nameFromOutput,
+  outputTrusted,
   inScratchpad,
   namesScratchpad,
   joinedOnly,
@@ -247,6 +249,36 @@ test('#1815: a name a command substitution fills in is known by its last part, r
   // A substitution in the folder only, none at all, or a variable, which is no command's output.
   for (const w of ['$(git rev-parse --show-toplevel)/notes.md', '/api/issues/$(cat id)/events/?full=true', '`pwd`/x.md', 'app/page.tsx', '$HOME/x', '${D}/spec.json', 'if (a || b) {', 'cost $5'])
     expect([w, nameFromOutput(w)]).toEqual([w, false])
+})
+
+// #1832, Dan, 2026-10-27 (picker answer "git rev-parse only"): of the substitutions a script is
+// handed, only `git rev-parse`'s output is trusted to name no file. Anything else it runs, a second
+// command beside it, a substitution inside it or one never closed, is not.
+test('#1832: only a substitution running git rev-parse alone is trusted to name no file', () => {
+  // git rev-parse in another checkout (-C) is still git rev-parse: 23 of the 147 script arguments the
+  // #1832 replay found were `$(git -C <folder> rev-parse HEAD)`.
+  for (const w of ['$(git rev-parse HEAD)', '"$(git rev-parse HEAD)"', '$(git rev-parse --short HEAD)', '`git rev-parse HEAD`', '$(git  rev-parse HEAD)', '$(git -C $W rev-parse HEAD)', '$(git -C /w/x rev-parse --short HEAD)', 'abc..$(git rev-parse HEAD)'])
+    expect([w, outputTrusted(w)]).toEqual([w, true])
+  for (const w of [
+    '$(git diff --name-only main)',
+    '$(cat /tmp/scope.txt)',
+    '`git ls-files src`',
+    '$(git rev-parse HEAD; cat x)',
+    '$(git rev-parse HEAD && ls src)',
+    '$(git rev-parse HEAD | xargs echo)',
+    '$(git rev-parse $(cat ref))',
+    '$(git rev-parse HEAD)$(cat x)',
+    '$(git rev-parse HEAD | cut -c9-)',
+    // A redirect inside it writes a file, so it is no longer only printing a commit.
+    '$(git rev-parse HEAD > app/page.tsx)',
+    '$(git rev-parse HEAD >> log)',
+    '$(git rev-parse < x)',
+    '$(git -C $(pwd) rev-parse HEAD)',
+    '$(git -C x ls-files)',
+    '$(git rev-parse HEAD',
+    'app/page.tsx',
+  ])
+    expect([w, outputTrusted(w)]).toEqual([w, false])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {
@@ -700,7 +732,13 @@ const STEPS_NEW = [
 test("#1248: the refused helper is still asked about, by Dan's choice, for the card it reads; one naming no drawing word passes", () => {
   if (STEPS_BEFORE.split(STEPS_OLD).length !== 2) throw new Error('the fixture holds the refused old_string other than once')
   // Dan, 2026-10-16: the line fix only, no word exempted, so the helper reading the card is asked.
+  // Still so since #1823 (Dan, 2026-10-27: "message wording should be asked about"): the helper
+  // draws nothing, but the notification it sends Dan is new wording, so it stays held.
   expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(false)
+  expect(modHookDrawingUntouched([], 'register.tsx', STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(false)
+  // And once it is there, rewording the notification is held too.
+  const withHelper = STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW)
+  expect(modHookDrawingUntouched([], 'register.tsx', withHelper, withHelper.replace('is pinned. Next, step', 'is on the card. Next, step'))).toBe(false)
   // Added directly above the line naming the card, a helper naming no drawing word passes: the
   // untouched line below it is no longer read.
   expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, `const nextOf = (n: number) => n + 1\n\n${STEPS_OLD}`))).toBe(true)
@@ -722,6 +760,169 @@ test('#1248: lines added above, or removed from above, an unchanged line that dr
   // A line taken from above one that draws, alike.
   expect(modHookLogicOnly(STEPS_BEFORE.replace(line, `  void nextStep\n${line}`), STEPS_BEFORE)).toBe(true)
   expect(modHookLogicOnly(STEPS_BEFORE.replace(line, `  void card\n${line}`), STEPS_BEFORE)).toBe(false)
+})
+
+// #1823: on 2026-10-27 the #1811 builder's Edit to manual steps' register.tsx (held call
+// toolu_01F5RzQjX5PsNPoecZroB4fp) only added names to its imports, and was held for the words "card"
+// and "StepsCard" in them. The six import lines are the call's old_string and new_string word for
+// word; the rest is cut down from the file as it stood: a band row drawn from cardLines, a reply
+// sentence Claude reads, and a render hook drawing JSX. card.ts beside it builds the card's lines.
+const MS_IMPORTS_OLD = [
+  "import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'",
+  "import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'",
+  "import type { DrawnAt, StepsVerdict } from './card.ts'",
+  "import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'",
+  "import { PROSE_MARK, turnAt } from './turn.ts'",
+  "import { waitingPhrase } from './waiting.ts'",
+].join('\n')
+const MS_IMPORTS_NEW = [
+  "import type { ManualSteps, StepsCard, StepsPages, StepsPaneId } from '../types/index.d.ts'",
+  "import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'",
+  "import type { DrawnAt, StepsVerdict } from './card.ts'",
+  "import { isStepsPage, pageRefusal, signsOf } from './page.ts'",
+  "import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'",
+  "import { PROSE_MARK, turnAt } from './turn.ts'",
+  "import { saysNoneNow, waitingPhrase } from './waiting.ts'",
+].join('\n')
+const MS_TSX = [
+  "import type { EngineInterface, Register } from 'claude-code'",
+  MS_IMPORTS_OLD,
+  '',
+  "const TOOL = 'steps'",
+  "const STEPS_DESCRIPTION = 'Pin manual steps for Dan as a card he works through.'",
+  'const PANE_COLUMNS = 144',
+  "const placeFor = (columns: number) => (columns >= PANE_COLUMNS ? 'pane' : 'band')",
+  '',
+  'const movedToBand = ($: EngineInterface, failed: string | undefined) => {',
+  '  if (failed) $.ui.toast(`The steps card could not be moved to the band: ${failed}.`)',
+  "  $.ui.log('manual-steps: the card went to the band', { to: 'debug' })",
+  "  $.ui.log('Manual steps moved the card to the band.')",
+  '}',
+  'const pinned = (heading: string) => ({ result: `Pinned the card "${heading}".` })',
+  '',
+  'const proseStep = (phrase: string) =>',
+  '  `${PROSE_MARK} ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Put it on the card with the ${TOOL} tool.`',
+  '',
+  'const publishBand = async ($: EngineInterface, card: StepsCard) => {',
+  "  const lines = cardLines(card, 'band')",
+  "  await $.modkit.bandRow({ mod: 'manual-steps', id: 'steps', lines })",
+  '}',
+  '',
+  'export const register: Register = on => {',
+  "  on('session.start', async ($, e, next) => {",
+  '    await $.tool.register({ name: TOOL, description: STEPS_DESCRIPTION })',
+  '    return next(e)',
+  '  })',
+  "  on('command.run', { command: 'steps' }, async () => ({ text: 'No steps card is pinned for this project.' }))",
+  "  on('classic.Stop', async ($, e, next) => {",
+  '    const phrase = waitingPhrase(String(e.last_assistant_message))',
+  "    return phrase ? { decision: 'block', reason: proseStep(phrase) } : next(e)",
+  '  })',
+  "  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {",
+  '    const { Box, Text } = $.ui.resolve(e)',
+  '    const left = String(e.props.text).length',
+  '    return (',
+  '      <Box flexDirection="column">',
+  '        <Text dimColor>{left} left</Text>',
+  '        {await next(e)}',
+  '      </Box>',
+  '    )',
+  '  })',
+  '}',
+  '',
+].join('\n')
+const MS_FILES = [
+  {
+    name: 'card.ts',
+    text: [
+      'export const DROPPED_AFTER_MS = 2 * 60_000',
+      'export const cardLines = (card: { heading: string }, at: string) => [[{ text: `${card.heading} (${at})`, bold: true }]]',
+      'export const nextStep = (card: { steps: unknown[] }) => (card.steps.length ? 0 : undefined)',
+      '',
+    ].join('\n'),
+  },
+]
+const msEdit = (from: string, to: string, text = MS_TSX) => {
+  if (text.split(from).length !== 2) throw new Error(`the fixture holds ${from} other than once`)
+  return text.replace(from, to)
+}
+
+test('#1823: the held Edit adding names to the imports draws nothing new, though it names the card', () => {
+  const after = msEdit(MS_IMPORTS_OLD, MS_IMPORTS_NEW)
+  // Held today for its words, which is the hold #1823 reports.
+  expect(modHookLogicOnly(MS_TSX, after)).toBe(false)
+  expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, after)).toBe(true)
+  // A new helper that reads the card's heading for no surface and no message draws nothing either.
+  const helper = 'const heading = (card: StepsCard): string => card.heading.trim()\n\n'
+  expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, msEdit('const publishBand', `${helper}const publishBand`))).toBe(true)
+})
+
+// #1823, Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked
+// about". Where or when the card shows, and words only Claude reads, pass; the wording of a message
+// a person sees (a toast, a transcript line, a stop reason, a notification, a tool result) is held.
+test('#1823: a placement change and a tool description pass; the wording of a message Dan sees is held', () => {
+  const judged = (from: string, to: string) => modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, msEdit(from, to))
+  // Where the card goes, and a description of the tool, which only Claude reads.
+  expect(judged('const PANE_COLUMNS = 144', 'const PANE_COLUMNS = 110')).toBe(true)
+  expect(judged('as a card he works through.', 'as a card Dan works through, one step at a time.')).toBe(true)
+  // A debug log line, which nobody sees in the session, and when the toast is shown, its words alike.
+  expect(judged('the card went to the band', 'the steps card went to the band')).toBe(true)
+  expect(judged('  if (failed) $.ui.toast(', '  if (failed && failed.length) $.ui.toast(')).toBe(true)
+  // A toast's words, a transcript line's, and a stop reason's, each held for its wording.
+  expect(judged('could not be moved to the band', 'could not go back to the band')).toBe(false)
+  expect(judged('Manual steps moved the card to the band.', 'Manual steps put the card in the band.')).toBe(false)
+  expect(judged('Put it on the card with', 'Pin it on the steps card with')).toBe(false)
+  // A tool result Claude hands back, which shows in Dan's transcript.
+  expect(judged('Pinned the card "', 'Put the card up: "')).toBe(false)
+  // What a slash command answers Dan with.
+  expect(judged('No steps card is pinned for this project.', 'No steps card is up in this project.')).toBe(false)
+})
+
+// #1823: the goal tracker pages Dan by running terminal-notifier, its title reaching it through a
+// promise (`title().then(t => notify($, t, ...))`), which the values followed do not cross. Cut down
+// from mods/goal-tracker/hooks/register.tsx as it stood on 2026-10-05.
+const NOTIFY_TSX = [
+  "import type { EngineInterface, Register } from 'claude-code'",
+  'const notify = async ($: EngineInterface, title: string, message: string) => {',
+  "  await $.process.run(['terminal-notifier', '-title', title, '-message', message], { timeoutMs: 10_000 })",
+  '}',
+  'const notifySoon = ($: EngineInterface, title: () => Promise<string>, message: string) => {',
+  '  void title().then(t => notify($, t, message))',
+  '}',
+  'const waitingOnYou = ($: EngineInterface, text: string) => notifySoon($, async () => `the steps card is waiting on you`, text)',
+  'export const register: Register = on => {',
+  "  on('ui.render', { component: 'Pane' }, async ($, e) => {",
+  '    const { Text } = $.ui.resolve(e)',
+  '    return <Text>goals</Text>',
+  '  })',
+  '}',
+  '',
+].join('\n')
+test("#1823: a notification's title reaching terminal-notifier through a promise is wording, held when it changes", () => {
+  expect(modHookDrawingUntouched([], 'register.tsx', NOTIFY_TSX, NOTIFY_TSX.replace('the steps card is waiting on you', 'the steps card needs you'))).toBe(false)
+  // When it is sent is no wording.
+  expect(modHookDrawingUntouched([], 'register.tsx', NOTIFY_TSX, NOTIFY_TSX.replace('{ timeoutMs: 10_000 }', '{ timeoutMs: 20_000 }'))).toBe(true)
+})
+
+test('#1823: an edit naming the card that changes what is drawn is still held', () => {
+  const held = (after: string) => expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, after)).toBe(false)
+  // The words drawn: JSX text, and what a band row is handed.
+  held(msEdit('{left} left</Text>', '{left} steps left on the card</Text>'))
+  held(msEdit("cardLines(card, 'band')", "cardLines(card, 'pane')"))
+  // What a drawn value's call is handed, which the parts compared take out as data.
+  held(msEdit("cardLines(card, 'band')", "cardLines({ ...card, heading: 'Card' }, 'band')"))
+  // A drawing word inside a function that draws, though nothing reads the new line.
+  held(msEdit('    const left = String', '    const card = e.props.text\n    const left = String'))
+  // An import now naming another file for a name what is drawn uses.
+  held(msEdit("keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'", "keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card2.ts'"))
+  held(msEdit('import { cardFrom, cardLines,', 'import { cardFrom, stepLines as cardLines,'))
+  // A colour spelled outright, JSX touched, no change, and a text the reader cannot follow.
+  held(msEdit("const TOOL = 'steps'", "const TOOL = 'steps'\nconst EDGE = '#ff0000'"))
+  held(msEdit('<Text dimColor>', '<Text dimColor bold>'))
+  expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, MS_TSX)).toBe(false)
+  held(msEdit("const TOOL = 'steps'", "const TOOL = 'steps'\nconst card = <Box>"))
+  // A mod file beside it that cannot be read holds every edit.
+  expect(modHookDrawingUntouched([...MS_FILES, { name: 'place.ts', text: "const x = 'open" }], 'register.tsx', MS_TSX, msEdit(MS_IMPORTS_OLD, MS_IMPORTS_NEW))).toBe(false)
 })
 
 // #1158: a git checkout or restore puts back every edit since its source at once, each of which was

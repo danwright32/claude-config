@@ -580,6 +580,40 @@ export const nameFromOutput = (word: string): boolean => {
 }
 
 /**
+ * Whether every command substitution in a word is one Dan trusts to print no file name (#1832, Dan,
+ * 2026-10-27, picker answer "git rev-parse only"): `git rev-parse` run alone, as in
+ * `--sha "$(git rev-parse HEAD)"`, or in another checkout (`git -C <folder> rev-parse HEAD`, 23 of the
+ * 147 script arguments the replay found). A second command beside it (`;`, `&`, `|`, a newline), a
+ * substitution inside it, one never closed, or any other command is not trusted, so a script handed
+ * such a name is held as one no rule reads. A word holding no substitution at all is not trusted
+ * either: this answers only for a name a command's output fills in.
+ */
+export const outputTrusted = (word: string): boolean => {
+  const inner: string[] = []
+  for (let i = 0; i < word.length; i++) {
+    if (word[i] === '`') {
+      const end = word.indexOf('`', i + 1)
+      if (end < 0) return false
+      inner.push(word.slice(i + 1, end))
+      i = end
+    } else if (word[i] === '$' && word[i + 1] === '(') {
+      let depth = 1
+      let j = i + 2
+      for (; j < word.length && depth; j++) {
+        if (word[j] === '(') depth++
+        else if (word[j] === ')') depth--
+      }
+      if (depth) return false
+      inner.push(word.slice(i + 2, j - 1))
+      i = j - 1
+    }
+  }
+  // `git rev-parse` alone, or in another checkout named by -C (a folder, a variable allowed, never a
+  // substitution), with only plain arguments after it: no redirect, which would write a file.
+  return inner.length > 0 && inner.every((cmd) => /^\s*git\s+(-C\s+[^\s;&|`()<>]+\s+)?rev-parse(\s+[^;&|\n`$()<>]*)?\s*$/.test(cmd))
+}
+
+/**
  * Whether a file name the shell expands as a pattern may name a look changing file (#1015): `look`
  * when some name it can expand to is one (`[t]ailwind.config.ts`, `app/[t]okens.json`, `page.ts[x]`,
  * `out.*`, `build/*`), `not` when its literal parts rule every one out (`run-*.log`, `x.{md,txt}`,
@@ -994,29 +1028,42 @@ export const changedSpan = (before: string, after: string): { at: number; before
  * judged so. A size held in a constant whose name says nothing of it (`const MAX = 40`) is a gap this
  * reading leaves, as a mod's `.ts` files, never held, leave every one.
  */
-export const modHookLogicOnly = (before: string, after: string): boolean => {
-  if (before === after) return false
+export const modHookLogicOnly = (before: string, after: string): boolean => modHookReading(before, after)?.verdict === 'logic'
+
+/**
+ * How the lines a change to a mod's hook file touches read (#1138, #1823): 'drawn' where they hold a
+ * JSX element or spell a colour, 'words' where they only name a word a mod's drawing is spelled in,
+ * 'logic' where neither; and in each text, before and after, where those lines lie (`from` to `to`,
+ * equal where the change only adds to the other text). Undefined for no change, or a text the reader
+ * cannot follow.
+ */
+const modHookReading = (before: string, after: string): { verdict: 'logic' | 'words' | 'drawn'; lines: [Span, Span] } | undefined => {
+  if (before === after) return undefined
   const span = changedSpan(before, after)
+  let verdict: 'logic' | 'words' | 'drawn' = 'logic'
+  const lines: Span[] = []
   for (const [text, end] of [
     [before, span.before],
     [after, span.after],
   ] as const) {
     const spans = sourceSpans(text)
-    if (!spans) return false
+    if (!spans) return undefined
     // The lines the change touches in this text, ending where it ends, never on the unchanged line
     // after them (#1248). Where it only adds to the other text, none, so all this text is asked is
     // whether an element spans the place the lines go.
     const from = text.lastIndexOf('\n', span.at - 1) + 1
     const nl = end === span.at ? from : text[end - 1] === '\n' ? end - 1 : text.indexOf('\n', end)
     const to = nl < 0 ? text.length : nl
-    if (spans.jsx.some(([a, b]) => a < to && from < b)) return false
+    lines.push([from, to])
+    if (spans.jsx.some(([a, b]) => a < to && from < b)) verdict = 'drawn'
     let shown = ''
     for (let i = from; i < to; i++) if (!spans.comments.some(([a, b]) => a <= i && i < b)) shown += text[i]
-    if (MOD_LOOK_LITERAL.test(shown)) return false
-    for (const w of shown.match(/[A-Za-z]+/g) ?? [])
-      for (const part of w.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')) if (MOD_LOOK_WORDS.has(part)) return false
+    if (MOD_LOOK_LITERAL.test(shown)) verdict = 'drawn'
+    if (verdict === 'logic')
+      for (const w of shown.match(/[A-Za-z]+/g) ?? [])
+        for (const part of w.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')) if (MOD_LOOK_WORDS.has(part)) verdict = 'words'
   }
-  return true
+  return { verdict, lines: lines as [Span, Span] }
 }
 
 // The spacing the language and JSX read alike: spaces, tabs and line breaks, never a no break space,
@@ -1120,6 +1167,14 @@ export const shellUnread = (file: string, why: string): string =>
   `The design round guard could not read ${file} before the command ran (${why}), so it could not judge what the command changes there by what it leaves, and judged the whole file as a look change.`
 
 /**
+ * What a refusal says of a file a Write or Edit names that is no ordinary file (#1814): /dev/stdin, a
+ * fifo, a link to a device. It is never opened, since a read of one waits for ever, so what it holds
+ * now is unknown (never read as empty), and the call is judged whole rather than by the lines it changes.
+ */
+export const targetUnread = (file: string, why: string): string =>
+  `The design round guard could not read what ${file} holds before this call (${why}), so it judged the whole file as a look change rather than the lines it changes.`
+
+/**
  * What a refusal says of a file a script run is handed as its argument (#1586): what the script does
  * with it cannot be read before it runs, so it was judged as a write of that file, as an Edit of it
  * would be. Dan's Not a look change lets one such call through where the script only reads it.
@@ -1171,6 +1226,15 @@ const RUN_LOOKS = new Set(['color', 'bold', 'dim', 'italic', 'underline', 'strik
 // is mod-kit's own (card.ts blockedCard), judged there, and a caller hands it only the words of a
 // refusal, shown as a tool result row, which are copy, held nowhere else (#1296 had followed them).
 const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card)|ui\s*\.\s*open)\s*\(/g
+// #1823 (Dan, 2026-10-27: "message wording should be asked about"): where a message a person reads is
+// handed its words. A toast, a notification, a transcript line (a debug one aside, read where it is
+// found), a pane's status, a question, a blocked action's card, and the goal tracker's notifier, which
+// pages Dan (#1245); and the keys a hook's or tool's answer is read out by: a stop's or refusal's
+// reason, a block, a deny, a tool's result, a system message and a slash command's text (a drawn
+// run's text is held as drawn already). A tool's description is read only by Claude, and is no
+// message.
+const MESSAGE_CALL = /\$\s*\.\s*(?:ui\s*\.\s*(?:toast|notify|notice|status|ask|log)|modkit\s*\.\s*blocked)\s*\(|\.\s*waitingOnYou\s*\(/g
+const MESSAGE_KEY = /([{,]\s*)(reason|block|deny|result|systemMessage|text)(\s*:|(?=\s*[,}]))/g
 const DECL = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(const|let|var|function\s*\*?|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/
 const IMPORT = /^import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]\.\/([^'"/]+)['"]/
 
@@ -1189,6 +1253,10 @@ type ModRead = {
   imports: Map<string, { file: string; name: string }>
   // What the file draws by itself: each drawing call, JSX element, and function building a text run.
   units: Span[]
+  // #1823: where a message a person reads is handed its words (MESSAGE_CALL, MESSAGE_KEY), and the
+  // text of each string, template text and JSX text inside a span.
+  messages: Span[]
+  stringsIn: (s: Span) => string[]
   code: (s: Span) => string
   refs: (s: Span) => string[]
   isTop: (name: string) => boolean
@@ -1614,10 +1682,15 @@ const readMod = (f: ModFile): ModRead | null => {
     return out
   }
   const drawParen = new RegExp(DRAW_CALL.source, 'y')
+  const messageParen = new RegExp(MESSAGE_CALL.source, 'y')
+  const notifierParen = /\$\s*\.\s*process\s*\.\s*run\s*\(/y
   const ownParen = (u: Span): number | undefined => {
-    drawParen.lastIndex = u[0]
-    const m = drawParen.exec(blank)
-    return m ? u[0] + m[0].length - 1 : undefined
+    for (const p of [drawParen, messageParen, notifierParen]) {
+      p.lastIndex = u[0]
+      const m = p.exec(blank)
+      if (m) return u[0] + m[0].length - 1
+    }
+    return undefined
   }
   // Where in [a, b) a value is only tested, never itself the value: a ternary's condition, each
   // operand of `&&` but the last, an operand holding a comparison or led by `!` or `typeof` (#1296).
@@ -1800,7 +1873,38 @@ const readMod = (f: ModFile): ModRead | null => {
     }
     return g.returns
   }
-  return { name: f.name, statements, imports, units, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode }
+  // #1823: where a message a person reads is handed its words (MESSAGE_CALL, a transcript line but
+  // not a debug one), and the value of each key a hook's or tool's answer is read out by
+  // (MESSAGE_KEY), or the key alone where it is shorthand for a local.
+  const messages: Span[] = []
+  // A desktop notification sent by running a notifier (the goal tracker's terminal-notifier, #706).
+  for (const m of blank.matchAll(/\$\s*\.\s*process\s*\.\s*run\s*\(/g)) {
+    const paren = (m.index as number) + m[0].length - 1
+    const end = close.get(paren)
+    if (end !== undefined && /terminal-notifier|display notification/.test(text.slice(paren, end))) messages.push([m.index as number, end + 1])
+  }
+  for (const m of blank.matchAll(MESSAGE_CALL)) {
+    const paren = (m.index as number) + m[0].length - 1
+    const end = close.get(paren)
+    if (end === undefined) continue
+    if (/\blog\s*\($/.test(m[0]) && /\bto\s*:\s*['"`]debug['"`]/.test(text.slice(paren, end))) continue
+    messages.push([m.index as number, end + 1])
+  }
+  for (const m of blank.matchAll(MESSAGE_KEY)) {
+    const at = (m.index as number) + (m[1] as string).length
+    // Only an object's key: a parameter (`(text: string)`) or an argument is none.
+    let inner: number | undefined
+    for (const [o, c] of pairs) {
+      if (o >= at) break
+      if (c > at) inner = o
+    }
+    if (inner === undefined || blank[inner] !== '{') continue
+    const key = (m[2] as string).length
+    if (m[3]) messages.push([at, exprEnd(at + key + m[3].length)])
+    else messages.push([at, at + key])
+  }
+  const stringsIn = ([a, b]: Span): string[] => spans.strings.filter(([x, y]) => a <= x && y <= b).map(([x, y]) => text.slice(x, y))
+  return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode }
 }
 
 /**
@@ -1819,6 +1923,19 @@ const readMod = (f: ModFile): ModRead | null => {
  * function's or line builder's own parameters, and which surface a drawing call names (toolUseId).
  */
 export const drawnParts = (files: readonly ModFile[], name: string): string[] | null => {
+  const d = drawnOf(files, name)
+  if (!d) return null
+  if (!d.r) return []
+  const { r, parts, followed } = d
+  return [...parts.map(u => r.code(u)), ...new Set(followed.map(s => r.cutCode(s)))].sort()
+}
+
+// What drawnParts reads, as places in the file `name`: its parts (each drawing call, JSX element and
+// line builder, and each top level declaration drawn) and the values followed into them, apart, with
+// the file as read (no `r` for a file not among `files`). Null where any of the mod's files cannot be
+// read. With `seeds` 'messages' the same reading starts from where a message a person reads is handed
+// its words (#1823) rather than from what is drawn.
+const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'messages' = 'units'): { r?: ModRead; parts: Span[]; followed: Span[] } | null => {
   const read = new Map<string, ModRead>()
   for (const f of files) {
     const r = readMod(f)
@@ -1963,7 +2080,7 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
     }
   }
   for (const r of read.values())
-    for (const u of r.units) {
+    for (const u of r[seeds]) {
       for (const x of r.refs(u)) reach(r.name, x)
       const own = r.ownParen(u)
       // A line builder (a unit that is a function, whole) is drawn with its own words; what it is
@@ -1988,13 +2105,136 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
     for (const s of r.statements) if (s.name === x && !s.isType) for (const y of r.refs([s.from, s.to])) reach(file, y)
   }
   const r = read.get(name)
-  if (!r) return []
-  const parts = new Map(r.units.map(u => [`${u[0]}:${u[1]}`, u]))
+  if (!r) return { parts: [], followed: [] }
+  const parts = new Map(r[seeds].map(u => [`${u[0]}:${u[1]}`, u]))
   for (const s of r.statements) if (s.name !== undefined && drawn.has(`${name}\n${s.name}`)) parts.set(`${s.from}:${s.to}`, [s.from, s.to])
   const followed = new Map(extra.get(name) ?? [])
   for (const key of parts.keys()) followed.delete(key)
-  // A followed value given the same way twice (two returns of `undefined`) is one value (#1576).
-  return [...[...parts.values()].map(u => r.code(u)), ...new Set([...followed.values()].map(s => r.cutCode(s)))].sort()
+  // A followed value given the same way twice (two returns of `undefined`) is one value (#1576),
+  // which drawnParts reads as one.
+  return { r, parts: [...parts.values()], followed: [...followed.values()] }
+}
+
+// The names each import in `text` binds, as the file and the name it takes them from; type only
+// imports aside, since a type draws nothing. Null where one name is bound twice, which this reading
+// cannot tell apart (an import in a comment, say), so the change is held.
+const importBindings = (text: string): Map<string, string> | null => {
+  const out = new Map<string, string>()
+  for (const m of text.matchAll(/(?:^|\n)[ \t]*import\s+(type\s+)?([\s\S]*?)\s+from\s+(['"])([^'"\n]+)\3/g)) {
+    if (m[1]) continue
+    const from = m[4] as string
+    const clause = (m[2] as string).trim()
+    const bind = (local: string, what: string) => {
+      if (out.has(local)) throw importBindings
+      out.set(local, `${from}#${what}`)
+    }
+    try {
+      const ns = /\*\s*as\s+([A-Za-z_$][\w$]*)/.exec(clause)
+      if (ns) bind(ns[1] as string, '*')
+      const lead = /^([A-Za-z_$][\w$]*)\s*(?:,|$)/.exec(clause)
+      if (lead) bind(lead[1] as string, 'default')
+      const named = /\{([^}]*)\}/.exec(clause)
+      for (const part of named ? (named[1] as string).split(',') : []) {
+        const p = /^\s*(type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/.exec(part)
+        if (p && !p[1]) bind((p[3] ?? p[2]) as string, p[2] as string)
+      }
+    } catch (err) {
+      if (err === importBindings) return null
+      throw err
+    }
+  }
+  return out
+}
+
+/**
+ * Whether a change to a mod's hook file in TSX or JSX that modHookLogicOnly holds only for a drawing
+ * word draws nothing new, read as drawsChange reads the mod's `.ts` hook files (#1823): the manual
+ * steps builder's #1811 Edit adding names to its imports was held for "card" and "StepsCard" there.
+ * True when, in the text before and the text after, the lines the change touches lie outside every
+ * place drawnOf reads as drawn (a drawing call, JSX element or line builder, a top level declaration
+ * drawn, a value followed into one, whole, the data it hands a call included) and outside every
+ * function that draws (the innermost one around a drawing call or element, a render hook's handler
+ * among them, where a new local naming the card is asked about as Dan chose for #1248); every name
+ * what is drawn uses is imported from the same file under the same name as before; the wording of
+ * every message a person reads (a toast, a notification, a transcript line, a stop's or refusal's
+ * reason, a tool's result) is the same, followed into each message as values are followed into what
+ * is drawn (Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked
+ * about"), so #1245's notification helper stays held as #1248 recorded; and drawsChange finds the
+ * drawn parts unchanged. A JSX element or a colour in those lines, a text or mod file the reader
+ * cannot follow, and no change at all are never so.
+ */
+export const modHookDrawingUntouched = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
+  const reading = modHookReading(before, after)
+  if (!reading || reading.verdict === 'drawn') return false
+  const others = files.filter(f => f.name !== name)
+  const names = new Set<string>()
+  for (const [text, [from, to]] of [
+    [before, reading.lines[0]],
+    [after, reading.lines[1]],
+  ] as const) {
+    const d = drawnOf([...others, { name, text }], name)
+    if (!d?.r) return false
+    const r = d.r
+    const drawn = [...d.parts, ...d.followed]
+    // The function that draws around each drawing call or element: the innermost one around it that
+    // is not itself inside an element (a `.map` callback in JSX is part of the element).
+    const units = r.units
+    for (const u of units) {
+      let best: Fn | undefined
+      for (const f of r.fns)
+        if (f.from <= u[0] && u[1] <= f.to && !units.some(v => v[0] <= f.from && f.to <= v[1]) && (!best || f.from > best.from)) best = f
+      if (best) drawn.push([best.from, best.to])
+    }
+    const touches = ([a, b]: Span) => (from < to ? a < to && from < b : a < from && from < b)
+    if (drawn.some(touches)) return false
+    for (const s of drawn) for (const x of r.refs(s)) names.add(x)
+  }
+  const was = importBindings(before)
+  const now = importBindings(after)
+  if (!was || !now) return false
+  for (const x of names) if (was.get(x) !== now.get(x)) return false
+  if (!messageWordingSame(others, name, before, after)) return false
+  return !drawsChange(others, name, before, after)
+}
+
+/**
+ * Whether the wording of every message a person reads from the mod hook file `name` (MESSAGE_CALL,
+ * MESSAGE_KEY) is the same before and after a change, read beside the mod's other hook files `files`
+ * (#1823): each string, template text and JSX text reaching one, followed into each message as values
+ * are followed into what is drawn. When a message is shown may change; what it says may not. False
+ * where any of the texts cannot be read.
+ */
+export const messageWordingSame = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
+  const others = files.filter(f => f.name !== name)
+  const wording = (text: string): string[] | null => {
+    const d = drawnOf([...others, { name, text }], name, 'messages')
+    if (!d?.r) return null
+    const r = d.r
+    // Everything a call is handed of each top level function that sends a message, itself or through
+    // another such function (the goal tracker's waitingOnYou, through notifySoon's promise, to
+    // notify's terminal-notifier, which the values followed do not reach).
+    const fnsAt = r.statements.filter(s => s.name !== undefined && !s.isType)
+    const sends = new Set<string>()
+    for (let grew = true; grew; ) {
+      grew = false
+      for (const s of fnsAt) {
+        if (sends.has(s.name as string)) continue
+        const inS = (p: number) => s.from <= p && p < s.to
+        if (r.messages.some(([a]) => inS(a)) || [...sends].some(x => (r.calls.get(x) ?? []).some(inS))) {
+          sends.add(s.name as string)
+          grew = true
+        }
+      }
+    }
+    const spans: Span[] = [...d.parts, ...d.followed]
+    for (const x of sends) for (const p of r.calls.get(x) ?? []) spans.push(...(r.args(p) ?? []))
+    // Each wording once: the same words moved into a helper, or said from one more place, say
+    // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
+    return [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort()
+  }
+  const said = wording(before)
+  const says = wording(after)
+  return !!said && !!says && said.length === says.length && said.every((x, i) => x === says[i])
 }
 
 /**
