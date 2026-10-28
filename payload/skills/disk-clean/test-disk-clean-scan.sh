@@ -285,7 +285,7 @@ check "none is unreadable" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$5 == "unrea
 check "du was run in batches, never once per item" "$([ "$(dc_calls du | wc -l | tr -d ' ')" -lt 50 ] && echo ok || echo "$(dc_calls du | wc -l | tr -d ' ') du calls")"
 
 # ================================================================================================
-# 8. The static command check over every disk-clean script, and the placeholder skill
+# 8. The static command check over every disk-clean script
 # ================================================================================================
 cc="$(dc_check_commands 2>&1)"; cc_rc=$?
 check "every command the disk-clean scripts call is stubbed, core or a builtin" "$([ "$cc_rc" -eq 0 ] && echo ok || echo "$(awk '/^fail/ && n++ < 10' <<< "$cc")")"
@@ -298,10 +298,6 @@ for m in caches trash xcode build-folders docker playwright claude-temp worktree
   check "categories/$m.sh is executable" "$([ -x "$DIR/categories/$m.sh" ] && echo ok || echo "not executable or missing")"
 done
 check "no category is named named, which disk-remove reserves" "$([ -e "$DIR/categories/named.sh" ] && echo "categories/named.sh exists" || echo ok)"
-SK="$DIR/SKILL.md"
-fm() { awk -v key="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit } NR > 1 && index($0, key ":") == 1 { v = substr($0, length(key) + 2); sub(/^[ \t]+/, "", v); print v; exit }' "$SK"; }
-check "SKILL.md names the skill" "$(eq "$(fm name)" disk-clean)"
-check "SKILL.md is never invoked on its own while it is being built" "$(eq "$(fm disable-model-invocation)" true)"
-check "SKILL.md's description says not to use it yet" "$(has "$(fm description)" "not ready")"
+# The skill itself, which replaced the placeholder in #1808, is tested by test-disk-clean-skill.sh.
 
 finish

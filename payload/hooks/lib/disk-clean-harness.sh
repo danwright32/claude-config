@@ -11,8 +11,8 @@
 # fixed path: a suite beside disk-remove.sh as "$DIR/lib/disk-clean-harness.sh", and a suite in the
 # skill's own folder as "$DIR/../../hooks/lib/disk-clean-harness.sh", the way the disk-full suite
 # reaches lib/suite-deadline.sh. Not in payload/skills/disk-clean/tests/: claude-sync refuses to
-# carry, and reports on every send, a skills folder with no SKILL.md, and the skill's SKILL.md is
-# phase #1808. Its own suite is hooks/test-disk-clean-harness.sh.
+# carry, and reports on every send, a skills folder with no SKILL.md, and the folder is the skill's
+# own (#1808). Its own suite is hooks/test-disk-clean-harness.sh.
 #
 # USE, in a suite:
 #

@@ -2646,9 +2646,18 @@ a detail), for disk-clean's scan below; it is read only and takes no lock.
 
 ## Measuring what could go: disk-clean's scan
 
-`skills/disk-clean/scan.sh` is the read only half of the disk-clean skill being built in the Disk
-cleanup skill milestone (claude-config#1806); its SKILL.md is a placeholder that says not to use it
-until #1808. It removes nothing. It runs a Full Disk Access probe first (listing `~/Library/Mail`),
+`/disk-clean`, which Dan types and Claude never starts on its own (`disable-model-invocation`), is the
+flow in `skills/disk-clean/SKILL.md` (claude-config#1808): the scan, a report with the Full Disk
+Access result first and every unmeasured kind named with its reason, one review page opened in
+Chrome (`review-page.sh`), the pasted selection checked against the scan (`review-check.sh`), one
+confirm picker naming what goes, `disk-remove.sh` on the checker's plan, and the result reported as
+the verified per item total beside `df -m` before and after. Anything needing Dan's password is handed
+to him as one command; the skill never runs `sudo`. `test-disk-clean-skill.sh` derives every exit
+code each of those four scripts can return from its source and fails when the skill does not say what
+to tell Dan for one, and runs the review page and checker commands as written through the harness.
+
+`skills/disk-clean/scan.sh` is the read only half of that flow (claude-config#1806). It removes
+nothing. It runs a Full Disk Access probe first (listing `~/Library/Mail`),
 one pruned walk of the home folder (never into `~/Library`, the Trash, key folders, sync clients,
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
@@ -2666,8 +2675,7 @@ disk-clean harness.
 
 ## Removing anything: disk-remove.sh
 
-`hooks/lib/disk-remove.sh` is the one place the disk-full skill, and the disk-clean skill being
-built in the Disk cleanup skill milestone, remove anything (claude-config#1805). It never takes a
+`hooks/lib/disk-remove.sh` is the one place the disk-full and disk-clean skills remove anything (claude-config#1805). It never takes a
 path to remove on its command line. `--plan <file>` reads a plan naming a scan and the ids of the
 items Dan chose in it, and takes every path, method and category from that scan's own record, so
 nothing is removed that a scan did not measure and offer. The record is `last-scan.json` (written
