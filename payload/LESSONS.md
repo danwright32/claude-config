@@ -3297,6 +3297,9 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L821. A deadline raced against work must report a timeout only when the deadline actually won, because a timer that resolves when cancelled runs every .then attached to it, so a timeout message or side effect hung there fires on the path where the work answered in time and reads as a failure that never happened.** (bidspoke#2968, 2026-10-28)
+  SHORT: Report a raced deadline's timeout only if it won; a timer resolving on cancel runs its .then on the path that answered in time.
+
 - **L800. A monitor warning that an operation is nearing its limit must not read only what is recorded when an operation finishes, because one killed at the limit never finishes and so never appears, and the failure the warning exists for reads as absent; count the kills from a source that sees them.** (bidspoke#2651, 2026-10-22)
   SHORT: A near-limit monitor reading only what finished cannot see an operation killed at the limit, so count the kills from a source that sees them.
 - **L795. An alert opened from state held inside one short-lived process (a Worker isolate, a serverless instance, a pod) must be clearable from a healthy reading any process can take, because the process that opened it can be evicted before it ever sees the recovery, and the alert then stays open and repeats a false outage.** (slate#4008, 2026-10-21)
@@ -8005,6 +8008,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   which asks the server for the page again first)
 
 ## Building with AI
+- **L820. Any AI call that writes, reads or reasons about a date must be given today's date, and the time zone it means, as a fact in its context, because a model with no date resolves 'last Friday' or 'next month' to a guess from its training and a well formed guess passes every format check.**
+  (pivot#155, 2026-10-28)
+  SHORT: An AI call handling dates must be given today's date and time zone in its context; without it a guessed date passes every format check.
 - **L816. A streamed model reply is complete only when its stream reports a finish: an error part or a missing finish must fail the call, because the AI SDK still resolves the text written so far and a half sentence reads as a whole reply.**
   (pivot#113, 2026-10-27)
   SHORT: A streamed model reply ending in an error or with no finish must fail the call; the SDK still returns the partial text as if whole.
