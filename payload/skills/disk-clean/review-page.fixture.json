@@ -36,7 +36,7 @@
  "items": [
   {
    "category": "trash",
-   "target": "/Users/dan/.Trash/Lightroom export 2025.zip",
+   "target": "~/.Trash/Lightroom export 2025.zip",
    "bytes": 4200000000,
    "state": "offerable",
    "size": "measured",
@@ -46,7 +46,7 @@
   },
   {
    "category": "trash",
-   "target": "/Users/dan/.Trash/old-installer.dmg",
+   "target": "~/.Trash/old-installer.dmg",
    "bytes": 1100000000,
    "state": "offerable",
    "size": "measured",
@@ -56,7 +56,7 @@
   },
   {
    "category": "trash",
-   "target": "/Users/dan/.Trash/Screen Recording 2026-09-14.mov",
+   "target": "~/.Trash/Screen Recording 2026-09-14.mov",
    "bytes": 2600000000,
    "state": "offerable",
    "size": "measured",
@@ -66,7 +66,7 @@
   },
   {
    "category": "caches",
-   "target": "/Users/dan/Library/Caches/com.adobe.LightroomClassicCC7",
+   "target": "~/Library/Caches/com.adobe.LightroomClassicCC7",
    "bytes": 18400000000,
    "state": "offerable",
    "size": "measured",
@@ -76,7 +76,7 @@
   },
   {
    "category": "caches",
-   "target": "/Users/dan/Library/Caches/Google/Chrome",
+   "target": "~/Library/Caches/Google/Chrome",
    "bytes": 3100000000,
    "state": "not offerable: Chrome has files open in it",
    "size": "measured",
@@ -86,7 +86,7 @@
   },
   {
    "category": "caches",
-   "target": "/Users/dan/Library/Caches/com.spotify.client",
+   "target": "~/Library/Caches/com.spotify.client",
    "bytes": 2200000000,
    "state": "offerable",
    "size": "measured",
@@ -96,7 +96,7 @@
   },
   {
    "category": "caches",
-   "target": "/Users/dan/Library/Caches/pip",
+   "target": "~/Library/Caches/pip",
    "bytes": 900000000,
    "state": "offerable",
    "size": "measured",
@@ -106,7 +106,7 @@
   },
   {
    "category": "caches",
-   "target": "/Users/dan/Library/Caches/Homebrew",
+   "target": "~/Library/Caches/Homebrew",
    "bytes": 1700000000,
    "state": "offerable",
    "size": "measured",
@@ -116,7 +116,7 @@
   },
   {
    "category": "caches",
-   "target": "/Users/dan/Library/Caches/com.apple.bird",
+   "target": "~/Library/Caches/com.apple.bird",
    "bytes": null,
    "state": "not offerable: iCloud's own cache, never removed",
    "size": "unread",
@@ -126,7 +126,7 @@
   },
   {
    "category": "xcode",
-   "target": "/Users/dan/Library/Developer/Xcode/DerivedData/Overture-agekzq",
+   "target": "~/Library/Developer/Xcode/DerivedData/Overture-agekzq",
    "bytes": 6800000000,
    "state": "offerable",
    "size": "measured",
@@ -136,7 +136,7 @@
   },
   {
    "category": "xcode",
-   "target": "/Users/dan/Library/Developer/Xcode/DerivedData/Overture-bkxqpe",
+   "target": "~/Library/Developer/Xcode/DerivedData/Overture-bkxqpe",
    "bytes": 5900000000,
    "state": "offerable",
    "size": "measured",
@@ -146,7 +146,7 @@
   },
   {
    "category": "xcode",
-   "target": "/Users/dan/Library/Developer/Xcode/DerivedData/Ovation-chrrta",
+   "target": "~/Library/Developer/Xcode/DerivedData/Ovation-chrrta",
    "bytes": 3400000000,
    "state": "not offerable: its project is still on disk",
    "size": "measured",
@@ -156,7 +156,7 @@
   },
   {
    "category": "xcode",
-   "target": "/Users/dan/Library/Developer/Xcode/DerivedData/Downbeat-dmqsfz",
+   "target": "~/Library/Developer/Xcode/DerivedData/Downbeat-dmqsfz",
    "bytes": 2100000000,
    "state": "offerable",
    "size": "measured",
@@ -166,7 +166,7 @@
   },
   {
    "category": "build-folders",
-   "target": "/Users/dan/Non-icloudDocuments/Apps/playeditapp/node_modules",
+   "target": "~/Non-icloudDocuments/Apps/playeditapp/node_modules",
    "bytes": 1400000000,
    "state": "offerable",
    "size": "measured",
@@ -176,7 +176,7 @@
   },
   {
    "category": "build-folders",
-   "target": "/Users/dan/Non-icloudDocuments/Apps/NurseDex/node_modules",
+   "target": "~/Non-icloudDocuments/Apps/NurseDex/node_modules",
    "bytes": 900000000,
    "state": "offerable",
    "size": "measured",
@@ -186,7 +186,7 @@
   },
   {
    "category": "build-folders",
-   "target": "/Users/dan/Non-icloudDocuments/Apps/NurseDex/.next",
+   "target": "~/Non-icloudDocuments/Apps/NurseDex/.next",
    "bytes": 600000000,
    "state": "offerable",
    "size": "measured",
@@ -196,7 +196,7 @@
   },
   {
    "category": "build-folders",
-   "target": "/Users/dan/Non-icloudDocuments/Apps/repo-digest/node_modules",
+   "target": "~/Non-icloudDocuments/Apps/repo-digest/node_modules",
    "bytes": 400000000,
    "state": "not offerable: its project changed in the last 30 days",
    "size": "measured",
@@ -236,7 +236,7 @@
   },
   {
    "category": "playwright",
-   "target": "/Users/dan/Library/Caches/ms-playwright/chromium-1134",
+   "target": "~/Library/Caches/ms-playwright/chromium-1134",
    "bytes": 600000000,
    "state": "offerable",
    "size": "measured",
@@ -246,7 +246,7 @@
   },
   {
    "category": "playwright",
-   "target": "/Users/dan/Library/Caches/ms-playwright/chromium-1169",
+   "target": "~/Library/Caches/ms-playwright/chromium-1169",
    "bytes": 600000000,
    "state": "not offerable: a project still uses this version",
    "size": "measured",
@@ -286,7 +286,7 @@
   },
   {
    "category": "worktrees",
-   "target": "/Users/dan/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-a0162ffe",
+   "target": "~/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-a0162ffe",
    "bytes": 200000000,
    "state": "offerable",
    "size": "measured",
@@ -296,7 +296,7 @@
   },
   {
    "category": "worktrees",
-   "target": "/Users/dan/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-a8a78c69",
+   "target": "~/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-a8a78c69",
    "bytes": 200000000,
    "state": "offerable",
    "size": "measured",
@@ -306,7 +306,7 @@
   },
   {
    "category": "worktrees",
-   "target": "/Users/dan/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/sleep-1807",
+   "target": "~/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/sleep-1807",
    "bytes": 200000000,
    "state": "not offerable: it has uncommitted changes",
    "size": "measured",
@@ -316,7 +316,7 @@
   },
   {
    "category": "worktrees",
-   "target": "/Users/dan/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-ab1b3186",
+   "target": "~/Non-icloudDocuments/Apps/claude-config/.claude/worktrees/agent-ab1b3186",
    "bytes": null,
    "state": "unmeasured: GitHub did not answer whether its pull request merged",
    "size": "unread",
@@ -326,7 +326,7 @@
   },
   {
    "category": "transcripts",
-   "target": "/Users/dan/.claude/projects/-Users-dan-Apps-Overture/8f2a11c0.jsonl",
+   "target": "~/.claude/projects/-Users-dan-Apps-Overture/8f2a11c0.jsonl",
    "bytes": 120000000,
    "state": "offerable",
    "size": "measured",
@@ -336,7 +336,7 @@
   },
   {
    "category": "transcripts",
-   "target": "/Users/dan/.claude/projects/-Users-dan-Apps-Overture/1c77e0b9.jsonl",
+   "target": "~/.claude/projects/-Users-dan-Apps-Overture/1c77e0b9.jsonl",
    "bytes": 90000000,
    "state": "offerable",
    "size": "measured",
@@ -346,7 +346,7 @@
   },
   {
    "category": "runaway-logs",
-   "target": "/Users/dan/Library/Logs/Backblaze/bzbmenu.log",
+   "target": "~/Library/Logs/Backblaze/bzbmenu.log",
    "bytes": 800000000,
    "state": "offerable",
    "size": "measured",
@@ -356,7 +356,7 @@
   },
   {
    "category": "runaway-logs",
-   "target": "/Users/dan/Library/Logs/Synology/daemon.log",
+   "target": "~/Library/Logs/Synology/daemon.log",
    "bytes": 1600000000,
    "state": "offerable",
    "size": "partial",
@@ -366,7 +366,7 @@
   },
   {
    "category": "forgotten-tools",
-   "target": "/Users/dan/.android",
+   "target": "~/.android",
    "bytes": 12000,
    "state": "offerable",
    "size": "measured",
@@ -376,7 +376,7 @@
   },
   {
    "category": "forgotten-tools",
-   "target": "/Users/dan/.expo",
+   "target": "~/.expo",
    "bytes": 152000,
    "state": "offerable",
    "size": "measured",
@@ -386,7 +386,7 @@
   },
   {
    "category": "large-files",
-   "target": "/Users/dan/Downloads/Sonoma installer.dmg",
+   "target": "~/Downloads/Sonoma installer.dmg",
    "bytes": 13200000000,
    "state": "offerable",
    "size": "measured",
@@ -396,7 +396,7 @@
   },
   {
    "category": "large-files",
-   "target": "/Users/dan/Downloads/wedding-raw-backup.zip",
+   "target": "~/Downloads/wedding-raw-backup.zip",
    "bytes": 22500000000,
    "state": "offerable",
    "size": "measured",
@@ -406,7 +406,7 @@
   },
   {
    "category": "large-files",
-   "target": "/Users/dan/Documents/Client footage/final cut.mov",
+   "target": "~/Documents/Client footage/final cut.mov",
    "bytes": 9400000000,
    "state": "offerable",
    "size": "measured",
@@ -416,7 +416,7 @@
   },
   {
    "category": "large-files",
-   "target": "/Users/dan/Movies/drone 2024-07.mp4",
+   "target": "~/Movies/drone 2024-07.mp4",
    "bytes": 3800000000,
    "state": "offerable",
    "size": "measured",
@@ -426,7 +426,7 @@
   },
   {
    "category": "large-files",
-   "target": "/Users/dan/Desktop/archive.tar",
+   "target": "~/Desktop/archive.tar",
    "bytes": null,
    "state": "unmeasured: permission denied (Full Disk Access)",
    "size": "denied",

@@ -2,7 +2,7 @@
 # Tests for disk-clean's review page renderer (claude-config#1807): review-page.sh, which renders the
 # last scan into one self contained local page, with the nonce beside it, drawn to the design Dan
 # settled on 2026-10-28 (docs/design/disk-clean-review-page.html, its fixture
-# review-page.fixture.json beside this file).
+# review-page.fixture.json beside this file, the home folder written as ~).
 #
 # Everything runs ONLY through the disk-clean harness's dc_run (hooks/lib/disk-clean-harness.sh),
 # with HOME a throwaway directory and pbcopy a stub, so no test ever touches the real clipboard.
@@ -53,14 +53,16 @@ NONCE="$OUT/disk-clean-review.nonce"
 S=$'\037'
 SID="scan-1761600000-4242"
 
-# The settled fixture as a scan record: its items in record order, /Users/dan as this HOME.
+# The settled fixture as a scan record: its items in record order, its ~ as this HOME. The fixture
+# is the design's own (docs/design/disk-clean-review-page.fixture.json) with the home folder of the
+# machine it was drawn on written as ~, since a synced file may name no machine's home (check-home-paths).
 fixture_items() {
   python3 - "$FIXTURE" "$H" <<'PY'
 import json, sys
 f = json.load(open(sys.argv[1]))
 for it in f["items"]:
     b = "" if it["bytes"] is None else str(it["bytes"])
-    t = it["target"].replace("/Users/dan", sys.argv[2], 1)
+    t = sys.argv[2] + it["target"][1:] if it["target"].startswith("~") else it["target"]
     print("\037".join([it["id"], it["category"], "delete", t, b, it["state"], "1:1", it["size"], it["flags"], it["detail"]]))
 PY
 }
