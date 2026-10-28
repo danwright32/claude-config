@@ -145,6 +145,98 @@ fi
 # turn end never rewrites it.
 held_dir() { printf '%s/held' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
 
+# WHAT THE GATE DECIDED, kept so a gate that never fires is visible (claude-config#354).
+#
+# The label gate below fails open on every route, which is right, but it makes a gate that
+# has never once silenced a quiz indistinguishable from one that is working and simply
+# meeting a visible change every time. Dan would go on declining quizzes exactly as before
+# with nothing reporting that the fix was inert (L557).
+#
+# One line per VERDICT KIND, never one per merge, so the file is a handful of lines however
+# many merges pass through it and nothing has to drain it (L526). Each fail open route gets
+# its own name, because "the gate never skips" and "gh has answered nothing for a fortnight"
+# are different readings needing different remedies (L11).
+#
+# A named seam with its default OUTSIDE ~/.claude, the same shape as the issue spool's:
+# anything under ~/.claude auto pushes to the other Mac within seconds, and a counter that
+# ticks on every merge is not config.
+#
+# Every write here is best effort. A counter that cannot be written must never stop a quiz.
+#
+# It ASSUMES IT RUNS TWICE and accepts what that costs, rather than not having been asked:
+# Dan runs concurrent sessions on one machine, so two merges can read and write this file
+# at once. The write is a rewrite to a temporary file followed by a mv, which is atomic, so
+# the file cannot be left half written and no reader ever sees a torn one. What a race can
+# lose is one increment, which delays the notice by a merge. A lock for that would be a
+# lock taken on every merge to protect a diagnostic count, so the trade is stated here
+# rather than defended by a mechanism nothing else needs.
+#
+# Defined HERE, above the held quiz release, because the release (--release-held, below) returns
+# before the rest of the script runs, and it counts too: a GitHub answer it cuts short at its
+# deadline or its budget is recorded as `cut` (claude-config#1817). Defined further down, the
+# release could never reach them, and a cut answer read as fewer quizzes rather than quizzes cut.
+# Nothing here reads the PostToolUse payload, which is still read after the release, so only the
+# place these are defined moved.
+QUIZ_VERDICT_THRESHOLD="${CLAUDE_QUIZ_VERDICT_THRESHOLD:-10}"
+
+qv_file() { printf '%s/counts' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
+
+qv_get() {  # $1 = key ; prints its number, 0 when absent
+  awk -v k="$1" '$1 == k { print $2 + 0; found = 1 } END { if (!found) print 0 }' \
+    "$(qv_file)" 2>/dev/null || printf '0'
+}
+
+qv_set() {  # $1 = key, $2 = value (absolute), or $1 = key with $2 = + to increment
+  local file tmp
+  file="$(qv_file)"
+  mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
+  [ -f "$file" ] || : > "$file" 2>/dev/null || return 0
+  tmp="$file.$$"
+  awk -v k="$1" -v v="$2" '
+    BEGIN { seen = 0 }
+    $1 == k { print k, (v == "+" ? $2 + 1 : v); seen = 1; next }
+    { print }
+    END { if (!seen) print k, (v == "+" ? 1 : v) }
+  ' "$file" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
+  mv "$tmp" "$file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+# The counts, most frequent first, as one readable phrase. This IS the diagnosis: no-label
+# says the repo does not use the convention, no-answer says gh is not answering at all.
+# Only what the LABEL GATE recorded: the snooze, a hold and the release's cut answers are other
+# decisions, kept under their own names, and listing them here would read as the gate failing (L11).
+qv_breakdown() {
+  awk '$1 !~ /^(fired_since_quiet|warned|started|snoozed|held|cut)$/ { print $2 + 0, $1 }' "$(qv_file)" 2>/dev/null \
+    | sort -rn \
+    | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }'
+}
+
+qv_record() {  # $1 = verdict
+  qv_set "$1" +
+  if [ "$1" = "quiet" ]; then
+    qv_set fired_since_quiet 0
+    qv_set warned 0
+  else
+    qv_set fired_since_quiet +
+  fi
+}
+
+# The notice, once, when the gate has run the threshold's worth of quizzes without silencing
+# one. Cleared by a quiet verdict, so if the gate starts working and later stops again it
+# says so again rather than staying silent for ever (L523). A notice repeated on every merge
+# is what teaches somebody to skim the whole instruction (L36).
+qv_notice() {
+  local fired warned
+  fired="$(qv_get fired_since_quiet)"
+  warned="$(qv_get warned)"
+  [ "$warned" = "0" ] || return 0
+  [ "$fired" -ge "$QUIZ_VERDICT_THRESHOLD" ] 2>/dev/null || return 0
+  qv_set warned 1
+  printf '\n\nSAY THIS TO DAN IN ONE LINE FIRST, then run the quiz as normal: the changelog label gate has now run %s times without once silencing a quiz. What it has recorded: %s. If those were all genuinely user facing changes then nothing is wrong. If they were not, the gate is not reading the label, and that breakdown names the step that is failing.' \
+    "$fired" "$(qv_breakdown)"
+}
+
 # EACH GITHUB QUESTION HAS ITS OWN DEADLINE, AND THE RELEASE A BUDGET (claude-config#1786). The release
 # is a Stop hook with a 60 second timeout (settings.hooks.json), and a hook the harness kills says
 # nothing: before this, one hung answer from GitHub cost every hold in the file a turn. So each
@@ -180,7 +272,12 @@ held_ask() {  # $1 = folder to ask in, $2 = pr, $3 = remote slug, $4 = --repo va
     exec 2>/dev/null </dev/null
     . "$1/lib/push-scope.sh" && . "$1/lib/merge-target.sh" && cd "$2" && mt_pr_view "$3" "number,state,mergedAt,url" "$4" "$5"
   ' held-ask "$HOOK_DIR" "$1" "$2" "$3" "$4"
-  [ "$BOUNDED_RC" = 124 ] && return 1
+  # Cut short at its deadline, or at what was left of the budget: counted, so a release that keeps
+  # cutting shows in the counts rather than as quizzes that never came (#1817, L357).
+  if [ "$BOUNDED_RC" = 124 ]; then
+    qv_set cut +
+    return 1
+  fi
   printf '%s' "$BOUNDED_OUT"
 }
 
@@ -374,89 +471,6 @@ fi
 session_id=""
 ps_reader_missing jq || session_id="$(printf '%s' "$payload" | jq -r '.session_id // ""' 2>/dev/null)"
 valid_session_id "$session_id" || session_id=""
-
-# WHAT THE GATE DECIDED, kept so a gate that never fires is visible (claude-config#354).
-#
-# The label gate below fails open on every route, which is right, but it makes a gate that
-# has never once silenced a quiz indistinguishable from one that is working and simply
-# meeting a visible change every time. Dan would go on declining quizzes exactly as before
-# with nothing reporting that the fix was inert (L557).
-#
-# One line per VERDICT KIND, never one per merge, so the file is a handful of lines however
-# many merges pass through it and nothing has to drain it (L526). Each fail open route gets
-# its own name, because "the gate never skips" and "gh has answered nothing for a fortnight"
-# are different readings needing different remedies (L11).
-#
-# A named seam with its default OUTSIDE ~/.claude, the same shape as the issue spool's:
-# anything under ~/.claude auto pushes to the other Mac within seconds, and a counter that
-# ticks on every merge is not config.
-#
-# Every write here is best effort. A counter that cannot be written must never stop a quiz.
-#
-# It ASSUMES IT RUNS TWICE and accepts what that costs, rather than not having been asked:
-# Dan runs concurrent sessions on one machine, so two merges can read and write this file
-# at once. The write is a rewrite to a temporary file followed by a mv, which is atomic, so
-# the file cannot be left half written and no reader ever sees a torn one. What a race can
-# lose is one increment, which delays the notice by a merge. A lock for that would be a
-# lock taken on every merge to protect a diagnostic count, so the trade is stated here
-# rather than defended by a mechanism nothing else needs.
-QUIZ_VERDICT_THRESHOLD="${CLAUDE_QUIZ_VERDICT_THRESHOLD:-10}"
-
-qv_file() { printf '%s/counts' "${CLAUDE_QUIZ_VERDICT_DIR:-$HOME/.claude-quiz-verdicts}"; }
-
-qv_get() {  # $1 = key ; prints its number, 0 when absent
-  awk -v k="$1" '$1 == k { print $2 + 0; found = 1 } END { if (!found) print 0 }' \
-    "$(qv_file)" 2>/dev/null || printf '0'
-}
-
-qv_set() {  # $1 = key, $2 = value (absolute), or $1 = key with $2 = + to increment
-  local file tmp
-  file="$(qv_file)"
-  mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
-  [ -f "$file" ] || : > "$file" 2>/dev/null || return 0
-  tmp="$file.$$"
-  awk -v k="$1" -v v="$2" '
-    BEGIN { seen = 0 }
-    $1 == k { print k, (v == "+" ? $2 + 1 : v); seen = 1; next }
-    { print }
-    END { if (!seen) print k, (v == "+" ? 1 : v) }
-  ' "$file" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
-  mv "$tmp" "$file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-  return 0
-}
-
-# The counts, most frequent first, as one readable phrase. This IS the diagnosis: no-label
-# says the repo does not use the convention, no-answer says gh is not answering at all.
-qv_breakdown() {
-  awk '$1 !~ /^(fired_since_quiet|warned|started|snoozed|held)$/ { print $2 + 0, $1 }' "$(qv_file)" 2>/dev/null \
-    | sort -rn \
-    | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }'
-}
-
-qv_record() {  # $1 = verdict
-  qv_set "$1" +
-  if [ "$1" = "quiet" ]; then
-    qv_set fired_since_quiet 0
-    qv_set warned 0
-  else
-    qv_set fired_since_quiet +
-  fi
-}
-
-# The notice, once, when the gate has run the threshold's worth of quizzes without silencing
-# one. Cleared by a quiet verdict, so if the gate starts working and later stops again it
-# says so again rather than staying silent for ever (L523). A notice repeated on every merge
-# is what teaches somebody to skim the whole instruction (L36).
-qv_notice() {
-  local fired warned
-  fired="$(qv_get fired_since_quiet)"
-  warned="$(qv_get warned)"
-  [ "$warned" = "0" ] || return 0
-  [ "$fired" -ge "$QUIZ_VERDICT_THRESHOLD" ] 2>/dev/null || return 0
-  qv_set warned 1
-  printf '\n\nSAY THIS TO DAN IN ONE LINE FIRST, then run the quiz as normal: the changelog label gate has now run %s times without once silencing a quiz. What it has recorded: %s. If those were all genuinely user facing changes then nothing is wrong. If they were not, the gate is not reading the label, and that breakdown names the step that is failing.' \
-    "$fired" "$(qv_breakdown)"
-}
 
 # Did anything a person could notice actually ship?
 #
