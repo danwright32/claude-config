@@ -1,6 +1,6 @@
 ---
 name: regal-journey-edits
-description: Write the page Dan or a teammate follows to hand edit Regal journeys (Pennie's Regal account), in the format Dan chose. Use whenever a change elsewhere (Slate, trypennie, Pipedream, Salesforce) needs nodes added, rewired or edited in live Regal journeys and a person, not Claude, will make the edits. Reads the journeys live and read only, then builds one page with one ticked row per node change.
+description: Write the page Dan or a teammate follows to hand edit Regal journeys (Pennie's Regal account), in the format Dan chose. Use whenever a change elsewhere (Slate, trypennie, Pipedream, Salesforce) needs nodes added, rewired or edited in live Regal journeys and a person, not Claude, will make the edits. Reads the journeys live and read only, then builds one page with one ticked row per node change. Also use when Dan has Claude make the edits in the Regal editor itself: a snapshot, a page script and jdiff.py check every line before Save as Live and every setting after.
 ---
 
 # Regal journey edits
@@ -96,8 +96,64 @@ page, `<<new:Name>>` a node this change adds, `<<copy:97>>` this change's copy o
 keeps its source's name in Regal, so it is named through its source), `[[value]]` copyable,
 `` `text` `` code.
 
+## Check every line landed
+
+Every line a card moves has to be on the canvas, from the exit it names, before Save as Live, and a
+crowded canvas makes a missed one easy to save. Why: in Slate's Marcia edits on 2026-10-28 a drag
+that missed its handle panned the canvas on journey 481 instead of drawing the line, and only a
+check of every line caught it before anything was saved.
+
+**When a person makes the edits, the check is by eye.** Put it in the page's `pattern`, as the step
+before Save as Live: check that every line the card names is drawn, from the exit it names. The
+card's `after` then catches what the eye missed, once real runs go through.
+
+**When Claude makes the edits in the Regal editor, the script check replaces the by-eye one**
+(decided for claude-config#1853 on 2026-10-28): an eye skims a crowded canvas, a script reads every
+line. Rule 1 still holds, since the editor is driven like a person and no Regal tool that writes is
+called. Keep every file in this session's scratchpad.
+
+1. **Snapshot the version being edited before touching it.** Read it with `fetch-journey` (or
+   `fetch-journey-version` when the editor is open on an older version), save the result to a file,
+   then:
+
+   ```bash
+   python3 ~/.claude/skills/regal-journey-edits/jdiff.py snap journey-481.json snap-481.json
+   ```
+
+   It never overwrites a snapshot, because the one taken before the edit is the only record of what
+   the journey was.
+2. **Prove the page script reads this canvas, before the first edit.** Fit the whole journey on
+   screen (the fit view control), so every node is drawn. Run all of `read_lines.js` in the editor
+   tab with the browser tools' JavaScript tool, save the text it returns, and diff it:
+
+   ```bash
+   python3 ~/.claude/skills/regal-journey-edits/jdiff.py diff snap-481.json canvas-481-before.json
+   ```
+
+   It must say No differences. Anything else means the script is not reading this canvas, or the
+   canvas has not drawn every node, and a check never seen to pass proves nothing: stop and tell Dan
+   rather than edit on it.
+3. **Before Save as Live, read the canvas again and diff it against the same snapshot.** The lines
+   removed and added must be exactly the card's line moves, each from the exit the card names. A
+   line listed as "exit not read from the canvas" leaves a node with more than one exit, and the
+   page did not expose which: check that one line's exit on the canvas before saving.
+4. **After Save as Live, read back the saved version and diff it** (`fetch-journey` again, saved to a
+   new file, then `jdiff.py diff` against the snapshot). It lists every line and every node setting
+   that changed; anything the card did not ask for is undone before real runs reach it. Moving a
+   node on the canvas and Regal's live counts are not settings, so they are never listed.
+
+`jdiff.py` exits 0 for no differences, 1 when it lists some, and 2 when a file could not be read or
+is not what it should be (a missing file, a different journey, a line the page script could not
+read). A 2 is never a clean result.
+
 ## Tests
 
 `bash test-regal-journey-edits.sh` runs `tests/build_tests.py`: the fixture builds, every copyable
 value gets a button, a node with no name or an unknown reference is refused, and no dash reaches the
 page.
+
+`tests/test_jdiff.py` runs with every skill's Python tests (`hooks/test-skill-python-tests.sh`). It
+checks `jdiff.py` against `tests/journey_v1.json`, shaped on a real fetch-journey result with every
+id and name invented, and runs `read_lines.js` under node against `tests/canvas.html`, React Flow's
+markup for the same journey: a line removed, a line added, a line moved between exits, a changed
+setting, identical inputs exiting 0, and every unreadable input exiting 2.
