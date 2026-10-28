@@ -111,6 +111,7 @@ import {
   filesSaid,
   filesWritten,
   isLeftClosed,
+  issueRefs,
   LEAVE_BRANCH_TOOL,
   NEW_WORK,
   neverMergeSaid,
@@ -127,8 +128,10 @@ import {
   settledByBranchChoice,
   settledByDan,
   stashTaken,
+  whatIsLeft,
   whoseFiles,
   type DeployState,
+  type IssueRead,
   type NeverMerge,
   type PrComment,
   type PrRef,
@@ -3412,6 +3415,7 @@ type PrJson = {
   closingIssuesReferences?: { number?: number }[]
   closedAt?: string
   comments?: PrComment[]
+  body?: string
 }
 
 type IsItLiveNoun = { verdict: (q: { repo: string; pr: number }) => Promise<{ state: DeployState } | null> }
@@ -3444,11 +3448,13 @@ const readDeploy = async ($: EngineInterface, pr: { number: number; url?: string
   }
 }
 
-// The PR a reading found, and the issues it closes, which the caller keeps for later checks; its
+// The PR a reading found, and the issues it closes or refers to with Refs (#1812), which the caller
+// keeps for later checks and the agent rule; its
 // link, when GitHub gave one, is what tells it apart from a PR this session opened (#856).
 type Found = { number: number; closes: number[]; url?: string }
 // closedAt and comments find a closed PR's recorded reason it will never merge (#1767).
-const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefOid,closedAt,comments'
+// body names the issues it refers to without closing them, and its stated next step (#1812).
+const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefOid,closedAt,comments,body'
 
 // What the finish check reads for one PR: the branch's own (found by its head) or one named by
 // number, in `repo` when given (a PR this session opened, read in the repository its link names).
@@ -3473,15 +3479,24 @@ const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefO
 // `wait` has passed, which starts at a minute and doubles, up to ten, each time the answer has not
 // moved (an unchanged PR is waiting on its checks or on Dan). An answer that moved starts it at a
 // minute again, and a read that failed keeps nothing, so the next minute asks again.
-type PrSeen = { pr: PrJson | null; issues: Map<number, 'OPEN' | 'CLOSED'>; askedAt: number; wait: number }
+//
+// The issues a merged PR worked are those it closes and those its description refers to with Refs,
+// Ref or References (#1812), each read the same way. A number a Refs line names that GitHub
+// says is a pull request (`PR`) is no issue to finish, and is not read again. An open issue's last
+// comment is kept beside it (`last`), for what is left on it when the PR states no next step.
+type IssueSeen = 'OPEN' | 'CLOSED' | 'PR'
+type PrSeen = { pr: PrJson | null; issues: Map<number, IssueSeen>; last: Map<number, string>; worked: number[]; askedAt: number; wait: number }
 const prSeen = new Map<string, PrSeen>()
 const IDLE_MAX_MS = 10 * MIN
 const closesOf = (pr: PrJson | null) => (pr?.closingIssuesReferences ?? []).map(x => x.number).filter((n): n is number => typeof n === 'number')
-// Nothing about it can change: merged, with every issue it closes closed. Only a PR read by its
+// The issues a PR worked (#1812): those it closes, then those its description refers to.
+const workedOf = (pr: PrJson | null, repo: string | undefined) => [...new Set([...closesOf(pr), ...issueRefs(typeof pr?.body === 'string' ? pr.body : '', repo)])]
+const settledIssue = (s: IssueSeen | undefined) => s === 'CLOSED' || s === 'PR'
+// Nothing about it can change: merged, with every issue it worked closed. Only a PR read by its
 // number: a lookup by branch asks which PR a branch has, which a new PR on that name changes.
-const allSettled = (s: PrSeen, byNumber: boolean) => byNumber && s.pr?.state === 'MERGED' && closesOf(s.pr).every(n => s.issues.get(n) === 'CLOSED')
-const seenSaid = (s: Pick<PrSeen, 'pr' | 'issues'>) =>
-  JSON.stringify([s.pr?.number, s.pr?.state, s.pr?.headRefOid, closesOf(s.pr), [...s.issues], s.pr?.closedAt, Array.isArray(s.pr?.comments) ? s.pr.comments.length : 0])
+const allSettled = (s: PrSeen, byNumber: boolean) => byNumber && s.pr?.state === 'MERGED' && s.worked.every(n => settledIssue(s.issues.get(n)))
+const seenSaid = (s: Pick<PrSeen, 'pr' | 'issues' | 'worked'>) =>
+  JSON.stringify([s.pr?.number, s.pr?.state, s.pr?.headRefOid, s.worked, [...s.issues], s.pr?.closedAt, Array.isArray(s.pr?.comments) ? s.pr.comments.length : 0])
 
 // ---- A recorded reason a PR closed without merging will never merge (#1767) ----
 // Dan would rather merge a closed PR, so winding down reopens and finishes it unless its closing
@@ -3669,7 +3684,9 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     const key = `${(slug ?? '').toLowerCase()}|${t.pr ? `#${t.pr}` : `@${t.branch}`}`
     const seen = prSeen.get(key)
     let pr: PrJson | null
-    let issues: Map<number, 'OPEN' | 'CLOSED'>
+    let issues: Map<number, IssueSeen>
+    let last: Map<number, string>
+    let worked: number[]
     const poll = seen && (allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait)) ? undefined : await pollOf($)
     const held = poll ? await heldLook($, poll, now) : undefined
     // A held look keeps the minute's last reading; a turn end's, or one with none, says why it has none.
@@ -3677,6 +3694,8 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     if (seen && (held !== undefined || allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait))) {
       pr = seen.pr
       issues = seen.issues
+      last = seen.last
+      worked = seen.worked
     } else {
       if (t.pr && seen?.pr?.state === 'MERGED') pr = seen.pr
       else {
@@ -3696,19 +3715,33 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
         }
       }
       issues = new Map(seen?.issues)
+      last = new Map(seen?.last)
+      worked = workedOf(pr, slug)
+      const closing = closesOf(pr)
       // Its issues decide nothing until it has merged (outstanding reads them only then).
       if (pr?.state === 'MERGED')
-        for (const n of closesOf(pr)) {
-          if (issues.get(n) === 'CLOSED') continue
-          const v = await gh(['issue', 'view', String(n), ...where, '--json', 'state'])
+        for (const n of worked) {
+          if (settledIssue(issues.get(n))) continue
+          const v = await gh(['issue', 'view', String(n), ...where, '--json', 'state,url,comments'])
           if (v.exitCode !== 0) {
             if (poll) await failedLook(poll, now, v.stderr).catch(err => pollFailed($, err))
             return { reading: { ...r, pr: { unreadable: `issue #${n}: ${v.stderr.trim()}` } } }
           }
-          const s = (JSON.parse(v.stdout) as { state?: string }).state
-          issues.set(n, s === 'CLOSED' ? 'CLOSED' : 'OPEN')
+          // An answer that is not JSON throws, and the finish check refuses the turn end on it.
+          const j = JSON.parse(v.stdout) as { state?: string; url?: string; comments?: { body?: string }[] }
+          // gh issue view answers for a pull request too, with a pull link: a Refs line naming one
+          // names no issue to finish (a closing reference is always an issue).
+          if (!closing.includes(n) && typeof j.url === 'string' && /\/pull\/\d+$/.test(j.url)) {
+            issues.set(n, 'PR')
+            continue
+          }
+          issues.set(n, j.state === 'CLOSED' ? 'CLOSED' : 'OPEN')
+          const comments = Array.isArray(j.comments) ? j.comments : []
+          const said = comments.length ? String(comments[comments.length - 1]?.body ?? '') : ''
+          if (said.trim()) last.set(n, said)
+          else last.delete(n)
         }
-      const moved = !seen || seenSaid(seen) !== seenSaid({ pr, issues })
+      const moved = !seen || seenSaid(seen) !== seenSaid({ pr, issues, worked })
       let wait = MIN
       if (poll) {
         try {
@@ -3719,20 +3752,32 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
           pollFailed($, err)
         }
       }
-      prSeen.set(key, { pr, issues, askedAt: now, wait })
+      prSeen.set(key, { pr, issues, last, worked, askedAt: now, wait })
     }
     if (pr) {
       if (!r.branch && typeof pr.headRefName === 'string') r.branch = pr.headRefName
       const state = pr.state === 'MERGED' || pr.state === 'CLOSED' ? pr.state : 'OPEN'
       const closes = closesOf(pr)
+      const body = typeof pr.body === 'string' ? pr.body : ''
+      // Each issue it worked (#1812), a pull request a Refs line named left out; an open one carries
+      // what is left on it, from the PR's stated next step or the issue's last comment.
+      const issuesSaid = worked.flatMap((n): IssueRead[] => {
+        const s = issues.get(n)
+        if (s === 'PR') return []
+        if (s === 'CLOSED') return [{ number: n, state: 'CLOSED' }]
+        const left = whatIsLeft(body, n, last.get(n))
+        return [{ number: n, state: 'OPEN', ...(left ? { left } : {}) }]
+      })
       r.pr = {
         number: pr.number as number,
         state,
         ...(typeof pr.headRefOid === 'string' && pr.headRefOid ? { head: pr.headRefOid } : {}),
-        issues: state === 'MERGED' ? closes.map(n => ({ number: n, state: issues.get(n) === 'CLOSED' ? ('CLOSED' as const) : ('OPEN' as const) })) : [],
+        issues: state === 'MERGED' ? issuesSaid : [],
       }
       prUrl = typeof pr.url === 'string' ? pr.url : undefined
-      found = { number: pr.number as number, closes, url: prUrl }
+      // An agent may be sent about every issue it worked, one it refers to as much as one it closes
+      // (#1812), since winding down holds for both until they are finished.
+      found = { number: pr.number as number, closes: [...new Set([...closes, ...worked])], url: prUrl }
       // A closed PR is reopened and finished unless its closing comment names the PR that
       // superseded it (#1767); a number GitHub cannot place is said, never read as no reason.
       if (state === 'CLOSED') {
@@ -4350,7 +4395,8 @@ const stashedFiles = async ($: EngineInterface, raw: string): Promise<string[]> 
 }
 
 // The issue numbers an agent may be sent about while winding down: the branch's, its PR and the
-// issues it closes, and every PR this session opened with the issues each closes (#702).
+// issues it closes or refers to (#1812), and every PR this session opened with the issues each
+// closes or refers to (#702).
 const ownNumbers = (t: TargetRead, opened: readonly ScopeModesOpened[]): number[] => [
   ...(t && 'issues' in t ? [...t.issues, ...(t.pr ? [t.pr] : []), ...(t.closes ?? [])] : []),
   ...opened.flatMap(o => [o.number, ...(o.closes ?? [])]),
@@ -4535,7 +4581,12 @@ const useCleanups = async ($: EngineInterface, cleanups: readonly ScopeModesClea
 // What winding down means, said the same way in its note, its command's context and the Stop
 // reason (#856): a session read "start nothing new" as permission to park a PR needing Dan.
 // #917: the one way a PR stays open, and only on Dan's own answer, never Claude's reading of one.
-const FINALIZE_ALL = `Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again. A PR closed without merging is reopened and finished, as Dan would rather merge it, and left closed only on his answer to the same tool, asked only when its closing comment or his own earlier answer names the PR that superseded it. A branch, a worktree on it or uncommitted work stays as it is only on his answer to ${LEAVE_BRANCH_TOOL}, and a new branch to commit uncommitted work starts only on his answer to ${CLEANUP_TOOL}.`
+// #1812: on 2026-10-27 a session held by an open issue offered Dan two ways out, turning winding down
+// off or closing the issue unfinished. Dan: "you should finish and merge all work you started ...
+// Just don't start any new work". So no way out is ever offered; the issue is finished.
+const FINISH_ISSUES =
+  'Every issue this session worked is finished, the verification its fix still owes included (a live check, a measurement, a follow up PR the fix needs), and closed only once that is done. Never ask Dan whether to turn winding down off or to close an issue unfinished, and never close one before what is left on it is done: do it. Only new work is refused.'
+const FINALIZE_ALL = `Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again. A PR closed without merging is reopened and finished, as Dan would rather merge it, and left closed only on his answer to the same tool, asked only when its closing comment or his own earlier answer names the PR that superseded it. A branch, a worktree on it or uncommitted work stays as it is only on his answer to ${LEAVE_BRANCH_TOOL}, and a new branch to commit uncommitted work starts only on his answer to ${CLEANUP_TOOL}. ${FINISH_ISSUES}`
 const ASK_THEN_MERGE = 'When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers; never end the turn waiting on him.'
 
 // Each mode's note opens with its one definition (hooks/modes.ts), the same words the

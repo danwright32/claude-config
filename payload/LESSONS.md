@@ -3324,6 +3324,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   (slate#3700, 2026-10-13)
   SHORT: Checking several candidates to choose one, judge each one's failure on its own, so one broken candidate is skipped, not the whole choice failed.
 
+- **L1034. A safety check that guards an action must be the last step before that action, because any
+  work placed between them (measuring, logging, a lookup) widens the window in which what was checked
+  can change.**
+  (claude-config#1872, 2026-10-28)
+  SHORT: A safety check guarding an action must be the last step before it: any work between them widens the window for what it checked to change.
+
+- **L1033. A check that runs a script and reads one exit code as nothing to refuse must not use 1 for
+  it, because 1 is also what the interpreter exits on a crash: give the clean answer its own code and
+  treat every other code as could not read.**
+  (claude-config#1869, 2026-10-28)
+  SHORT: A check reading a script's exit 1 as nothing to refuse passes every crash: give the clean answer its own code, and any other is unread.
+
 - **L490. A guard that parses its input through an external interpreter (jq, python, awk) must
   assert that interpreter is present before parsing, and refuse by name when it is not.** An absent
   parser hands back EMPTY input, and every predicate over empty input reads as nothing to refuse, so
