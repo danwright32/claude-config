@@ -1055,6 +1055,23 @@ test('#1841: a compared name a message is computed from passes in a .ts hook fil
   expect(modHookTsShows([], 'register.ts', text, text.replace('Copied the', 'Copied your'))).toBe(true)
 })
 
+// #1841 (lessons review at 74900c0): a message's words given to a variable with = or added with +=
+// are no value compared, so they are still held.
+test('#1841: words assigned or appended before they are said are still held', () => {
+  const text = [
+    "import type { EngineInterface } from 'claude-code'",
+    'export const warn = async ($: EngineInterface, n: number) => {',
+    "  let msg = 'Blocked a command'",
+    "  if (n > 1) msg += ' that would print a secret'",
+    '  await $.ui.toast(`${msg}.`)',
+    '}',
+    '',
+  ].join('\n')
+  expect(modHookTsShows([], 'register.ts', text, text.replace("'Blocked a command'", "'Stopped a command'"))).toBe(true)
+  expect(modHookTsShows([], 'register.ts', text, text.replace("' that would print a secret'", "' that would show a secret'"))).toBe(true)
+  expect(modHookTsShows([], 'register.ts', text, text.replace('n > 1', 'n > 3'))).toBe(false)
+})
+
 // #1158: a git checkout or restore puts back every edit since its source at once, each of which was
 // an edit of its own, so it is judged one run of changed lines at a time.
 test('changedRuns: each run of changed lines as its own step, the last step ending at the new text', () => {
