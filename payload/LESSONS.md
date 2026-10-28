@@ -8005,6 +8005,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   which asks the server for the page again first)
 
 ## Building with AI
+- **L820. Any AI call that writes, reads or reasons about a date must be given today's date, and the time zone it means, as a fact in its context, because a model with no date resolves 'last Friday' or 'next month' to a guess from its training and a well formed guess passes every format check.**
+  (pivot#155, 2026-10-28)
+  SHORT: An AI call handling dates must be given today's date and time zone in its context; without it a guessed date passes every format check.
 - **L816. A streamed model reply is complete only when its stream reports a finish: an error part or a missing finish must fail the call, because the AI SDK still resolves the text written so far and a half sentence reads as a whole reply.**
   (pivot#113, 2026-10-27)
   SHORT: A streamed model reply ending in an error or with no finish must fail the call; the SDK still returns the partial text as if whole.

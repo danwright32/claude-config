@@ -57,6 +57,7 @@ import {
   isTestPath,
   patternMayBeLook,
   nameFromOutput,
+  outputTrusted,
   relTo,
   shapeKind,
   shellVarPath,
@@ -64,6 +65,8 @@ import {
   mentionsStore,
   namesScratchpad,
   modHookLogicOnly,
+  modHookDrawingUntouched,
+  messageWordingSame,
   modManifestOf,
   onScreenProblem,
   pathsOf,
@@ -193,6 +196,17 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   name no rule reads (rules.ts nameFromOutput), where it named nothing judged and passed. A script
 //   file handed one is judged as before: on this Mac every one measured was a commit, a test scope
 //   or quoted text.
+// - Since #1823: an Edit to a mod's .tsx or .jsx hook file held only for a drawing word (an import
+//   naming StepsCard, a sentence naming the card) is read beside the mod's other hook files, as a .ts
+//   one is, and passes where the lines it touches lie outside everything the mod draws and every
+//   function that draws, no name what is drawn uses is imported anew, and the wording of every message
+//   a person reads (a toast, a notification, a transcript line, a stop or refusal reason, a tool
+//   result, a command's reply) is unchanged (rules.ts modHookDrawingUntouched and
+//   messageWordingSame, in nothingShown; Dan, 2026-10-27: "Timing wording can go through, but
+//   message wording should be asked about"). A JSX element or a colour in those lines is held as before.
+// - Since #1832: a script file handed a name a command substitution fills in is held the same way,
+//   unless every substitution in it is `git rev-parse`, alone or with -C (rules.ts outputTrusted; Dan,
+//   2026-10-27: "git rev-parse only"), so a commit handed as `--sha` passes and a scope list is held.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -530,14 +544,49 @@ const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: 
 // rule an edit and a git checkout or restore are judged by (#1158): a component's data prop (rules.ts
 // dataOnlyChange), or, in a mod's own hook file, logic outside what it draws (rules.ts
 // modHookLogicOnly, #1138); judged whole, else one run of changed lines at a time (rules.ts
-// changedRuns), as the separate edits a restore puts back were each judged.
+// changedRuns), as the separate edits a restore puts back were each judged. Since #1823 a change to a
+// mod's hook file held only for a drawing word is read beside the mod's other hook files, as a .ts
+// one is, and passes where it touches nothing the mod draws and changes no message's words (rules.ts
+// modHookDrawingUntouched); hook files that cannot be listed or read leave it held.
 const nothingShown = async ($: EngineInterface, path: string, tree: string, before: string, after: string): Promise<boolean> => {
   // Only a real Claude Code mod's folder, whose plugin.json says so; one that cannot be read is asked.
   const modHook = isModHook(relTo(path, tree)) && (await $.fs.exists(modManifestOf(path)).catch(() => false))
-  const shows = (b: string, a: string) => !dataOnlyChange(b, a) && !(modHook && (modHookLogicOnly(b, a) || commentOnlyChange(b, a, true)))
-  if (before === after || !shows(before, after)) return true
+  const dir = path.slice(0, path.lastIndexOf('/'))
+  const name = path.slice(dir.length + 1)
+  let files: ModFile[] | null | undefined
+  const modFiles = async (): Promise<ModFile[] | null> => {
+    if (files !== undefined) return files
+    try {
+      const read: ModFile[] = []
+      for (const e of await $.fs.list(dir))
+        if (e.kind === 'file' && e.name !== name && /\.(ts|tsx|mts|cts|jsx)$/i.test(e.name) && !/\.d\.[mc]?ts$/i.test(e.name)) read.push({ name: e.name, text: String(await $.fs.read(`${dir}/${e.name}`)) })
+      files = read
+    } catch {
+      files = null
+    }
+    return files
+  }
+  // Whether a run passed only by the #1823 reading, so the whole change's message wording is asked.
+  let readByDrawing = false
+  const shows = async (b: string, a: string) => {
+    if (dataOnlyChange(b, a)) return false
+    if (!modHook) return true
+    if (modHookLogicOnly(b, a) || commentOnlyChange(b, a, true)) return false
+    const others = await modFiles()
+    if (!others || !modHookDrawingUntouched(others, name, b, a)) return true
+    readByDrawing = true
+    return false
+  }
+  if (before === after || !(await shows(before, after))) return true
   const runs = changedRuns(before, after)
-  return runs.length > 1 && runs.every(([b, a]) => !shows(b, a))
+  if (runs.length < 2) return false
+  readByDrawing = false
+  for (const [b, a] of runs) if (await shows(b, a)) return false
+  // Judged a run at a time, a message's new words in a run the word reading passes would slip
+  // beside a run only #1823's reading let through, so the change as a whole keeps its wording.
+  if (!readByDrawing) return true
+  const others = await modFiles()
+  return !!others && messageWordingSame(others, name, before, after)
 }
 
 // Whether a call's change to a mod's plain TypeScript hook file (rules.ts isModHookTs) changes what the
@@ -772,9 +821,11 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // gives it a path.
     // A name a command's output fills in, handed to a tool through npx or a module through python -m
     // (#1815: `npx prettier --write $(git ls-files src)`), is judged the same way, as a name no rule
-    // reads. Not one a script file is handed: its arguments are its own, and on this Mac every one
-    // measured was a commit, a test scope or quoted text (182 of 104,832 commands, 2026-10-27).
-    const output = t.tool === true && !t.path && nameFromOutput(t.word)
+    // reads. So is one a script file is handed (#1832), unless every substitution in it is
+    // `git rev-parse` run alone, the one output Dan trusts to name no file (2026-10-27, picker
+    // answer "git rev-parse only"): `--sha "$(git rev-parse HEAD)"` passes, a test scope list
+    // (`$(cat scope.txt)`) is held.
+    const output = !t.path && nameFromOutput(t.word) && (t.tool === true || !outputTrusted(t.word))
     if (tool === 'Bash' && (output || (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
       let tree: string | null | undefined

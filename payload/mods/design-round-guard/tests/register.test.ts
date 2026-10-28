@@ -1579,6 +1579,97 @@ test('#1248: a logic line added above one that draws passes unasked; changing th
   expect(w.ran.length).toBe(1)
 })
 
+// #1823: the #1811 builder's Edit to manual steps' register.tsx (held call
+// toolu_01F5RzQjX5PsNPoecZroB4fp) only added names to its imports, word for word below, and was held
+// for "card" and "StepsCard" in them. Through the whole guard, beside the mod's card.ts.
+const STEPS_HOOK = '/w/slate/payload/mods/manual-steps/hooks/register.tsx'
+const STEPS_IMPORTS_OLD = `import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
+import type { DrawnAt, StepsVerdict } from './card.ts'
+import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
+import { PROSE_MARK, turnAt } from './turn.ts'
+import { waitingPhrase } from './waiting.ts'`
+const STEPS_IMPORTS_NEW = `import type { ManualSteps, StepsCard, StepsPages, StepsPaneId } from '../types/index.d.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
+import type { DrawnAt, StepsVerdict } from './card.ts'
+import { isStepsPage, pageRefusal, signsOf } from './page.ts'
+import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
+import { PROSE_MARK, turnAt } from './turn.ts'
+import { saysNoneNow, waitingPhrase } from './waiting.ts'`
+const STEPS_TEXT = `import type { EngineInterface, Register } from 'claude-code'
+${STEPS_IMPORTS_OLD}
+
+const publishBand = async ($: EngineInterface, card: StepsCard) => {
+  await $.modkit.bandRow({ mod: 'manual-steps', id: 'steps', lines: cardLines(card) })
+}
+
+export const register: Register = on => {
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>steps left</Text>
+        {await next(e)}
+      </Box>
+    )
+  })
+}
+`
+
+test('#1823: the held Edit adding names to a mod hook file imports passes unasked; one changing what its card draws is still asked', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: {
+      [STEPS_HOOK]: STEPS_TEXT,
+      '/w/slate/payload/mods/manual-steps/hooks/card.ts': 'export const cardLines = (card: { heading: string }) => [[{ text: card.heading, bold: true }]]\n',
+      '/w/slate/payload/mods/manual-steps/.claude-plugin/plugin.json': '{ "name": "manual-steps" }',
+    },
+  })
+  const edit = (old_string: string, new_string: string) => ({ tool: 'Edit', file_path: STEPS_HOOK, old_string, new_string })
+  expect(refusalOf(await call($, edit(STEPS_IMPORTS_OLD, STEPS_IMPORTS_NEW)))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // What the card's band row is handed, which names the card too, is still asked.
+  expect(refusalOf(await call($, edit('lines: cardLines(card) })', 'lines: cardLines(card).slice(1) })')))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
+// #1823, Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked about".
+// A change judged a run of lines at a time must not carry a toast's new words through beside a run
+// only the #1823 reading let through (as manual steps' pressCopy rewording did, 2026-10-05).
+test("#1823: a placement change passes; the same Write also rewording a toast is asked, though the toast's run names no drawing word", withKit, async ($, on) => {
+  const text = `import type { EngineInterface, Register } from 'claude-code'
+
+const PANE_COLUMNS = 144
+export const placeFor = (columns: number) => (columns >= PANE_COLUMNS ? 'pane' : 'band')
+
+// Step numbers are counted from one where they are said.
+const shown = (n: number) => n + 1
+
+const copied = ($: EngineInterface, n: number) => {
+  $.ui.toast(\`Copied the value for step \${shown(n)}.\`)
+}
+
+export const register: Register = on => {
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text dimColor>steps</Text>
+  })
+}
+`
+  const w = world($, on, {
+    files: {
+      [STEPS_HOOK]: text,
+      '/w/slate/payload/mods/manual-steps/hooks/card.ts': 'export const cardLines = () => []\n',
+      '/w/slate/payload/mods/manual-steps/.claude-plugin/plugin.json': '{ "name": "manual-steps" }',
+    },
+  })
+  const write = (content: string) => ({ tool: 'Write', file_path: STEPS_HOOK, content })
+  const placed = text.replace('const PANE_COLUMNS = 144', 'const PANE_COLUMNS = 110')
+  expect(refusalOf(await call($, write(placed)))).toBe('')
+  expect(w.ran.length).toBe(1)
+  expect(refusalOf(await call($, write(placed.replace('Copied the value for step', 'Copied that value for step'))))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
 // #1275: the #1263 divider was added to manual steps' card.ts, which builds every line the steps card
 // draws, and the guard never saw it, since only a mod's .tsx and .jsx files counted. A mod's .ts hook
 // file is judged by what in it reaches what the mod draws (rules.ts drawsChange), read beside the
@@ -2673,21 +2764,40 @@ test('#1815: a tool or module handed a name a command substitution fills in is h
   expect(w.ran).toEqual([])
 })
 
-test('#1815 control: a script file handed a substitution, or a tool handed one only in a folder, is judged as before', withKit, async ($, on) => {
+test('#1815 control: a script file handed a git rev-parse substitution, or a tool handed one only in a folder, passes', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate/apps/worker' })
   for (const command of [
     // #1802's releases: code, a query string after a closed substitution.
     MUTATE('if (a || b) {', 'if (a && b) {'),
     'python3 sentry.py "/api/0/issues/$(cat id)/events/?full=true"',
-    // A script file's own arguments, as measured: a commit, a test scope.
+    // A script file handed a commit git rev-parse prints (#1832 keeps trusting that one).
     'bash ~/.claude/hooks/lib/pr-review.sh start --dir "$PWD" --sha "$(git rev-parse HEAD)"',
-    'mac/scripts/run-tests-locked.sh $(cat /tmp/scope.txt)',
     // A name the command spells itself, in a folder a substitution gives.
     'npx prettier --write "$(git rev-parse --show-toplevel)/notes.md"',
     'npx prettier --write src/lib/engine.ts',
   ])
     expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
-  expect(w.ran.length).toBe(6)
+  expect(w.ran.length).toBe(5)
+})
+
+// #1832: after #1815 a script file handed a name a substitution fills in still passed, so
+// `python3 scripts/gen.py $(git diff --name-only main)` could write screen files unasked. Dan decided
+// on 2026-10-27 (picker answer "git rev-parse only") that only `git rev-parse`'s output is trusted
+// to name no file; every other substitution handed to a script is held, test scope lists included.
+test('#1832: a script handed a name a substitution fills in is held unless git rev-parse alone fills it', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    'python3 scripts/gen.py $(git diff --name-only main)',
+    'mac/scripts/run-tests-locked.sh $(cat /tmp/scope.txt)',
+    'bash scripts/fmt.sh `git ls-files src`',
+    'node build.js "$(git rev-parse HEAD; cat names)"',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes('could not be followed') && why.includes('cannot read') }).toEqual({ command, held: true })
+  }
+  for (const command of ['python3 scripts/stamp.py $(git rev-parse HEAD)', 'bash scripts/tag.sh `git rev-parse --short HEAD`'])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(2)
 })
 
 test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {
