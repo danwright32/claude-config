@@ -472,8 +472,11 @@ export type ModKitWrites = {
    * reads it by choice: the design round guard, ask before saving, the collision guard and scope
    * modes' overnight LESSONS.md check judge each argument as a write of that file (#1592); no build,
    * which allows running scripts, and winding down's note of the files a call wrote do not read it.
+   * `tool` marks a module run with `python -m` or a tool run through `npx` (#1815): a program whose
+   * operands are, by its own convention, the files it works on, where a script file's arguments are
+   * its own (a commit, a test's name), so a guard can judge the two apart.
    */
-  runs?: { what: string; script: string; path?: string; args: { word: string; path?: string; folder?: string }[] }[]
+  runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string }[] }[]
 }
 
 /**
