@@ -211,6 +211,20 @@ check "the stand-in list of cloud only folders alone, outside test mode, is refu
 run_scan --only nonsense
 check "an unknown category is refused with exit 2" "$(eq "$RC" 2)"
 
+# A working folder that cannot be made is a failed scan, never a finished one (#1851): mktemp
+# failing inside scan-lib.sh's dcs_init once exited 0 from the sourced library, so scan.sh exited 0
+# having written no record. TMPDIR is made unwritable, so mktemp really fails.
+rm -f "$REC"
+chmod 500 "$DC_TMPDIR"
+run_scan --only trash
+check "a working folder that cannot be made fails the scan with exit 2" "$(eq "$RC" 2)"
+check "and names what could not be made, and where" "$(has "$OUT_TEXT" "could not make a working folder under $DC_TMPDIR")"
+check "and says it scanned nothing" "$(has "$OUT_TEXT" "so it scanned nothing")"
+check "and wrote no record" "$([ -e "$REC" ] && echo "a record was written" || echo ok)"
+OUT_TEXT="$(dc_run bash "$DIR/categories/trash.sh" judge "$H/.Trash/x" 2>&1)"; RC=$?
+check "a judge run alone that cannot make one fails too, so disk-remove reads it as unmeasured" "$(eq "$RC" 2)"
+chmod 700 "$DC_TMPDIR"
+
 # ================================================================================================
 # 6. A path holding a control character is left out, said so, and never breaks the record
 # ================================================================================================

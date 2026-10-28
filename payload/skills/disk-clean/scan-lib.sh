@@ -99,11 +99,17 @@ dcs_init() {
   DCS_UID="$(id -u 2>/dev/null)" || DCS_UID=""
   # Claude Code keeps a temp folder per project and session under /tmp/claude-<uid>.
   if [ -n "$DCS_TEST_ROOT" ]; then DCS_CLAUDE_TMP="${TMPDIR%/}/claude-$DCS_UID"; else DCS_CLAUDE_TMP="/private/tmp/claude-$DCS_UID"; fi
-  # The private working folder: scan.sh hands its own down; a judge run alone makes one.
+  # The private working folder: scan.sh hands its own down; a judge run alone makes one. Failing to
+  # make one is a failure (exit 2), never exit 0: this runs inside whatever sourced the library, so
+  # an exit 0 here once ended scan.sh with success and no record (#1851). A judge's caller,
+  # disk-remove.sh, reads a judge that exits non zero as unmeasured, so a judge refuses too.
   if [ -n "${DISK_CLEAN_WORK:-}" ] && [ -d "$DISK_CLEAN_WORK" ]; then
     DCS_WORK="$DISK_CLEAN_WORK"; DCS_OWN_WORK=""
   else
-    DCS_WORK="$(mktemp -d "${TMPDIR:-/tmp}/disk-clean.XXXXXXXX")" || { echo "unmeasured: could not make a working folder under ${TMPDIR:-/tmp}"; exit 0; }
+    DCS_WORK="$(mktemp -d "${TMPDIR:-/tmp}/disk-clean.XXXXXXXX" 2>&1)" || {
+      echo "disk-clean: could not make a working folder under ${TMPDIR:-/tmp} (mktemp said: ${DCS_WORK:-nothing}), so it scanned nothing."
+      exit 2
+    }
     DCS_OWN_WORK=1
     trap 'dcs_cleanup' EXIT
   fi
