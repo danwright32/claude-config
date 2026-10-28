@@ -805,9 +805,25 @@ date_from_epoch(){   # unix timestamp, strftime format -> formatted date, or not
 # outage message, raw whole days in the conflict copy list, and this. The same gap then read three
 # different ways depending which part of the output you were in, and one of them told somebody
 # their sync had been failing for "0 minutes", which is not a duration anybody can act on.
-duration_in_words(){   # seconds -> "less than a minute", "5 minutes", "2 days", "3 weeks"
-  local s="${1:-}" n unit
+#
+# With `exact` as the second argument it says hours and minutes in full, a part minute counted as a
+# whole one (claude-config#1854). That is for a length somebody CHOSE and is relying on, a watcher
+# hold: rounded, `hold 90` was promised as "2 hours", and a hold read as half an hour longer than it
+# is gets trusted past its end.
+duration_in_words(){   # seconds [exact] -> "less than a minute", "5 minutes", "2 days", "3 weeks"
+  local s="${1:-}" n unit h m
   case "$s" in ''|*[!0-9]*) printf 'an unknown length of time'; return 0 ;; esac
+  if [ "${2:-}" = exact ]; then
+    if [ "$s" -eq 0 ]; then printf 'less than a minute'; return 0; fi
+    m=$(( (s + 59) / 60 )); h=$(( m / 60 )); m=$(( m % 60 ))
+    if [ "$h" -eq 0 ]; then
+      if [ "$m" -eq 1 ]; then printf '1 minute'; else printf '%s minutes' "$m"; fi
+      return 0
+    fi
+    if [ "$h" -eq 1 ]; then printf '1 hour'; else printf '%s hours' "$h"; fi
+    if [ "$m" -eq 1 ]; then printf ' 1 minute'; elif [ "$m" -gt 1 ]; then printf ' %s minutes' "$m"; fi
+    return 0
+  fi
   if [ "$s" -lt 60 ]; then printf 'less than a minute'; return 0; fi
   if   [ "$s" -lt 5400 ];    then n=$(( (s + 30) / 60 ));         unit=minute
   elif [ "$s" -lt 129600 ];  then n=$(( (s + 1800) / 3600 ));     unit=hour
@@ -10524,7 +10540,8 @@ FAILED
 # marker nothing can read is neither "no hold" nor "held for ever": obeying it stops the sync until
 # somebody finds the file, and ignoring it silently discards a decision somebody made (L11, L50).
 hold_remaining(){
-  local until taken now
+  local until taken now left
+  if left="$(hold_live_left)"; then printf '%s' "$left"; return 0; fi
   [ -f "$SYNC_HOLD_FILE" ] || return 1
   until="$(awk 'NR==1{print $1}' "$SYNC_HOLD_FILE" 2>/dev/null)"
   taken="$(awk 'NR==1{print $2}' "$SYNC_HOLD_FILE" 2>/dev/null)"
@@ -10535,34 +10552,91 @@ hold_remaining(){
       return 1 ;;
   esac
   now="$(date +%s)"
-  if [ "$now" -ge "$until" ]; then
-    case "$taken" in ''|*[!0-9]*) taken="$until" ;; esac
-    echo "claude-sync: the watcher hold taken $(age_in_words "$(( now - taken ))") has expired, so it has been cleared and the watcher is sending again." >&2
-    rm -f "$SYNC_HOLD_FILE" 2>/dev/null || true
-    return 1
-  fi
-  printf '%s' "$(( until - now ))"
-  return 0
+  case "$taken" in ''|*[!0-9]*) taken="$until" ;; esac
+  echo "claude-sync: the watcher hold taken $(age_in_words "$(( now - 10#$taken ))") has expired, so it has been cleared and the watcher is sending again." >&2
+  rm -f "$SYNC_HOLD_FILE" 2>/dev/null || true
+  return 1
 }
 
+# The ONE reading of whether a hold is in force, shared by the watcher (through hold_remaining),
+# status, and hold's own check of what it wrote (claude-config#1854). Read only: seconds left on
+# stdout for a live hold, a non-zero return for anything else, and nothing cleared or said, because
+# hold reads the record it is about to replace and must not report that record's expiry as news.
+hold_live_left(){
+  local until now
+  [ -n "$SYNC_HOLD_FILE" ] && [ -f "$SYNC_HOLD_FILE" ] || return 1
+  until="$(awk 'NR==1{print $1}' "$SYNC_HOLD_FILE" 2>/dev/null)"
+  case "$until" in ''|*[!0-9]*) return 1 ;; esac
+  until=$(( 10#$until ))
+  now="$(date +%s)"
+  [ "$now" -lt "$until" ] || return 1
+  printf '%s' "$(( until - now ))"
+}
+# The reason a hold was taken for: everything after its expiry, start and host.
+hold_record_why(){ awk 'NR==1{$1="";$2="";$3="";sub(/^ +/,"");print}' "$SYNC_HOLD_FILE" 2>/dev/null || true; }
+
+# Says a hold is in force only once it has READ BACK the record the watcher reads and found it live
+# (claude-config#1854). On 2026-10-28 `hold 90` printed "Watcher held off for 2 hours", a release
+# ten minutes later found no hold, and the watcher had published a half built skill in between: the
+# line was printed after a write nothing checked, so it could promise a pause that was not there.
+#
+# Written to a temporary name and RENAMED into place, never truncated and refilled. A truncate
+# leaves the record empty for an instant, and the watcher reading it then finds it unreadable and
+# deletes it (hold_remaining), while the write goes on into a file nobody can see: a hold that
+# printed success and is gone.
+#
+# It never SHORTENS a hold already in force. Holds are one record shared by every session on the
+# Mac, so a five minute hold taken over another session's ninety would end that session's pause
+# early with nothing said to it; the longer one is kept and named instead.
 do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
-  local mins="${1:-$SYNC_HOLD_MINUTES}" why now
+  local mins="${1:-$SYNC_HOLD_MINUTES}" why now until line tmp left at
   [ -n "$SYNC_HOLD_FILE" ] || die "no hold was taken: $(not_users_own_home), so this Mac's watcher is not its to hold. Name a hold file in SYNC_HOLD_FILE."
-  case "$mins" in ''|*[!0-9]*|0) mins="$SYNC_HOLD_MINUTES" ;; esac
+  # Base ten whatever was typed: 090 is ninety minutes, never an octal error after the fact.
+  case "$mins" in ''|*[!0-9]*) mins="$SYNC_HOLD_MINUTES" ;; esac
+  case "$mins" in ''|*[!0-9]*) mins=30 ;; esac
+  mins=$(( 10#$mins ))
+  [ "$mins" -gt 0 ] || mins=30
   shift 2>/dev/null || true
   why="$*"
+  why="${why//$'\n'/ }"
   [ -n "$why" ] || why="a session is committing by hand"
   now="$(date +%s)"
-  printf '%s %s %s %s\n' "$(( now + mins * 60 ))" "$now" "$(sync_hostname)" "$why" > "$SYNC_HOLD_FILE"
-  echo "Watcher held off for $(duration_in_words "$(( mins * 60 ))") ($why). It resumes on its own when that runs out, or now with: claude-sync release"
+  until=$(( now + mins * 60 ))
+  if left="$(hold_live_left)" && [ $(( now + left )) -ge "$until" ]; then
+    echo "A watcher hold was already in force for another $(duration_in_words "$left" exact) ($(hold_record_why)), at least the $(duration_in_words $(( mins * 60 )) exact) asked for, so it was kept rather than shortened. It resumes on its own when that runs out, or now with: claude-sync release"
+    return 0
+  fi
+  line="$until $now $(sync_hostname) $why"
+  tmp="$SYNC_HOLD_FILE.writing.$$"
+  if ! { printf '%s\n' "$line" > "$tmp"; } 2>/dev/null || ! mv -f -- "$tmp" "$SYNC_HOLD_FILE" 2>/dev/null; then
+    rm -f -- "$tmp" 2>/dev/null || true
+    die "no hold was taken: the record could not be written at $SYNC_HOLD_FILE, so the watcher is NOT held and goes on sending."
+  fi
+  if [ ! -f "$SYNC_HOLD_FILE" ] || [ "$(head -n 1 "$SYNC_HOLD_FILE" 2>/dev/null || true)" != "$line" ] || ! hold_live_left >/dev/null; then
+    # A directory where the record belongs takes the rename INTO it, so ours is removed from there.
+    rm -f -- "$SYNC_HOLD_FILE/${tmp##*/}" 2>/dev/null || true
+    die "no hold was taken: the record written to $SYNC_HOLD_FILE did not read back as the hold just asked for, so the watcher is NOT held and goes on sending."
+  fi
+  at="$(date_from_epoch "$until" '%H:%M')"
+  echo "Watcher held off for $(duration_in_words $(( mins * 60 )) exact)${at:+, until $at} ($why). It resumes on its own when that runs out, or now with: claude-sync release"
   return 0
 }
 
 do_release(){
+  local why taken now
   [ -n "$SYNC_HOLD_FILE" ] || die "nothing was released: $(not_users_own_home), so this Mac's watcher hold is not its to lift. Name a hold file in SYNC_HOLD_FILE."
   if [ -f "$SYNC_HOLD_FILE" ]; then
+    # Named, because the record is shared by every session on the Mac: a release lifting a hold
+    # somebody else took has to say whose it was, or that session's pause ends with nothing said.
+    why="$(hold_record_why)"
+    taken="$(awk 'NR==1{print $2}' "$SYNC_HOLD_FILE" 2>/dev/null)"
+    now="$(date +%s)"
     rm -f "$SYNC_HOLD_FILE" 2>/dev/null || true
-    echo "Watcher hold released; the next edit sends normally."
+    [ ! -e "$SYNC_HOLD_FILE" ] || die "nothing was released: the hold record at $SYNC_HOLD_FILE could not be removed, so the watcher is still held."
+    case "$taken" in
+      ''|*[!0-9]*) echo "Watcher hold released${why:+ ($why)}; the next edit sends normally." ;;
+      *) echo "Watcher hold released, the one taken $(age_in_words "$(( now - 10#$taken ))")${why:+ ($why)}; the next edit sends normally." ;;
+    esac
   else
     # Said rather than passed over in silence: "nothing to release" and "released" are different
     # answers, and a release that reports success over a hold somebody else still holds is the
@@ -10760,7 +10834,7 @@ do_send(){
   # #262: the automatic send is what takes a deliberate commit's message and cancels its CI run,
   # so it is the one a hold stops. An explicit `claude-sync send` is unaffected.
   if [ "${SYNC_IN_WATCH:-0}" = "1" ] && hold_left="$(hold_remaining)"; then
-    echo "claude-sync: the watcher is on hold for another $(duration_in_words "$hold_left"), so this edit was not sent. It goes out when the hold runs out, or immediately after: claude-sync release" >&2
+    echo "claude-sync: the watcher is on hold for another $(duration_in_words "$hold_left" exact), so this edit was not sent. It goes out when the hold runs out, or immediately after: claude-sync release" >&2
     send_outcome held
     return 0
   fi
@@ -11560,7 +11634,7 @@ report_my_push(){
 report_watcher_hold(){
   local left
   if left="$(hold_remaining)"; then
-    echo "watcher hold: the automatic send is held for another $(duration_in_words "$left") ($(awk 'NR==1{$1="";$2="";$3="";sub(/^ +/,"");print}' "$SYNC_HOLD_FILE" 2>/dev/null)). Lift it now with: claude-sync release"
+    echo "watcher hold: the automatic send is held for another $(duration_in_words "$left" exact) ($(hold_record_why)). Lift it now with: claude-sync release"
   fi
   return 0
 }
@@ -11697,7 +11771,7 @@ $(sync_stuck_records)
 CAUSEEOF
   [ -f "$CI_UNREADABLE_SINCE_FILE" ] && echo "the CI gate is holding config back, because no test verdict for the shared repo could be read (said above)"
   if left="$(hold_remaining 2>/dev/null)"; then
-    echo "the watcher is held for another $(duration_in_words "$left"), and its send is also what catches this Mac up between timer runs (claude-sync release ends it)"
+    echo "the watcher is held for another $(duration_in_words "$left" exact), and its send is also what catches this Mac up between timer runs (claude-sync release ends it)"
   fi
   agentdir="$(launchagents_for_this_home)"
   if [ -n "$agentdir" ]; then
@@ -13333,7 +13407,7 @@ watch_stale_tick(){
   if left="$(hold_remaining)"; then
     to="$(script_digest || true)"
     SYNC_IN_WATCH=1 send_outcome stale-daemon-held
-    echo "a hold is in force, and this daemon runs claude-sync $from while the file on disk is now ${to:0:12}. It restarts onto it once the hold lifts, in $(duration_in_words "$left"), and sends nothing meanwhile, as the hold asks." >&2
+    echo "a hold is in force, and this daemon runs claude-sync $from while the file on disk is now ${to:0:12}. It restarts onto it once the hold lifts, in $(duration_in_words "$left" exact), and sends nothing meanwhile, as the hold asks." >&2
     return 0
   fi
   if ! acquire_lock; then
