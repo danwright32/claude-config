@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L819. Wire two managed services by the guide for that exact pair; the host's default string can work lightly and hang under concurrency.
 - L810. Check a saved credential by doing its real action on its real destination, never a login check alone: a wrong identity passes login.
 - L1031. A React app must survive browser translation: Translate swaps text nodes React owns and its next update crashes, so guard the DOM or opt out.
 - L794. Model an RPC binding double so every property read is a remote method, or .call on a method passes tests and throws live.

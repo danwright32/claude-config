@@ -6,6 +6,9 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L818. A feature that runs across several deployed services gets its live end-to-end check as its first deliverable, run after every deploy, before any screen is built on top, because unit tests with stand-ins, a build check and a sign-in smoke check each prove one layer and the first person to run the whole thing otherwise finds every fault one at a time.**
+  (pivot#126, 2026-10-28)
+  SHORT: A multi-service feature's live end-to-end check is its first deliverable, run every deploy; layer checks leave a user to find each fault.
 - **L817. A deploy smoke check against an app behind a sign-in proxy (Cloudflare Access, an SSO gateway) measures only the proxy, because the proxy answers a signed-out request before the app runs, so a build that crashes on every request passes it; load a page from the built app itself before deploying.**
   (pivot#122, 2026-10-28)
   SHORT: A smoke check behind a sign-in proxy tests only the proxy, so a crashing build passes; load a page from the built app itself before deploying.
@@ -4690,6 +4693,12 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## State and identity
 
+- **L1032. A check that a file is still the one it was before must not rest on its device and inode
+  alone, because a filesystem reuses a deleted file's inode for the next file created, so a
+  replacement passes as the original; pair the inode with something a replacement changes, such as
+  birth time or ctime and size.** (claude-config#1840, 2026-10-28)
+  SHORT: A file identity check must not rest on device and inode alone, which a replacement can reuse; pair it with birth time or ctime and size.
+
 - **L812. When events about separate records each write onto one shared profile (a CRM contact, a user
   record), an event about an older or replaced record must not overwrite what a newer record set, so
   write those profile fields only from the person's current record and test the replaced record
@@ -7512,6 +7521,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
 
 ## External systems
+- **L819. Connecting two managed services (a database pool like Hyperdrive and a host like Supabase) follows the integration guide written for that exact pair before any setting is chosen, because the host's default connection string is often the one the guide says not to use, and the wrong choice works under light load and hangs under real concurrency.**
+  (pivot#126, 2026-10-28)
+  SHORT: Wire two managed services by the guide for that exact pair; the host's default string can work lightly and hang under concurrency.
 - **L810. Check a saved credential by performing the action it exists for against its real
   destination (posting to the alert channel, sending from the mailbox, writing to the bucket),
   never only by a login check, because a valid credential for the wrong identity passes every
