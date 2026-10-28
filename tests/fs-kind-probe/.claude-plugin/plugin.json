@@ -1,0 +1,6 @@
+{
+  "name": "fs-kind-probe",
+  "version": "0.1.0",
+  "description": "A test fixture for tests/fs-kind-engine-check.sh, never installed: records the kind $.fs gives a fifo, /dev/null, /dev/stdin, a link to it and an ordinary file, by stat and by a folder listing.",
+  "author": { "name": "Dan Wright" }
+}
