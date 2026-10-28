@@ -2770,15 +2770,34 @@ test('#1815 control: a script file handed a substitution, or a tool handed one o
     // #1802's releases: code, a query string after a closed substitution.
     MUTATE('if (a || b) {', 'if (a && b) {'),
     'python3 sentry.py "/api/0/issues/$(cat id)/events/?full=true"',
-    // A script file's own arguments, as measured: a commit, a test scope.
+    // A script file handed a commit git rev-parse prints (#1832 keeps trusting that one).
     'bash ~/.claude/hooks/lib/pr-review.sh start --dir "$PWD" --sha "$(git rev-parse HEAD)"',
-    'mac/scripts/run-tests-locked.sh $(cat /tmp/scope.txt)',
     // A name the command spells itself, in a folder a substitution gives.
     'npx prettier --write "$(git rev-parse --show-toplevel)/notes.md"',
     'npx prettier --write src/lib/engine.ts',
   ])
     expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
-  expect(w.ran.length).toBe(6)
+  expect(w.ran.length).toBe(5)
+})
+
+// #1832: after #1815 a script file handed a name a substitution fills in still passed, so
+// `python3 scripts/gen.py $(git diff --name-only main)` could write screen files unasked. Dan decided
+// on 2026-10-27 (picker answer "git rev-parse only") that only `git rev-parse`'s output is trusted
+// to name no file; every other substitution handed to a script is held, test scope lists included.
+test('#1832: a script handed a name a substitution fills in is held unless git rev-parse alone fills it', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    'python3 scripts/gen.py $(git diff --name-only main)',
+    'mac/scripts/run-tests-locked.sh $(cat /tmp/scope.txt)',
+    'bash scripts/fmt.sh `git ls-files src`',
+    'node build.js "$(git rev-parse HEAD; cat names)"',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes('could not be followed') && why.includes('cannot read') }).toEqual({ command, held: true })
+  }
+  for (const command of ['python3 scripts/stamp.py $(git rev-parse HEAD)', 'bash scripts/tag.sh `git rev-parse --short HEAD`'])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(2)
 })
 
 test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {

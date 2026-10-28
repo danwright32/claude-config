@@ -580,6 +580,40 @@ export const nameFromOutput = (word: string): boolean => {
 }
 
 /**
+ * Whether every command substitution in a word is one Dan trusts to print no file name (#1832, Dan,
+ * 2026-10-27, picker answer "git rev-parse only"): `git rev-parse` run alone, as in
+ * `--sha "$(git rev-parse HEAD)"`, or in another checkout (`git -C <folder> rev-parse HEAD`, 23 of the
+ * 147 script arguments the replay found). A second command beside it (`;`, `&`, `|`, a newline), a
+ * substitution inside it, one never closed, or any other command is not trusted, so a script handed
+ * such a name is held as one no rule reads. A word holding no substitution at all is not trusted
+ * either: this answers only for a name a command's output fills in.
+ */
+export const outputTrusted = (word: string): boolean => {
+  const inner: string[] = []
+  for (let i = 0; i < word.length; i++) {
+    if (word[i] === '`') {
+      const end = word.indexOf('`', i + 1)
+      if (end < 0) return false
+      inner.push(word.slice(i + 1, end))
+      i = end
+    } else if (word[i] === '$' && word[i + 1] === '(') {
+      let depth = 1
+      let j = i + 2
+      for (; j < word.length && depth; j++) {
+        if (word[j] === '(') depth++
+        else if (word[j] === ')') depth--
+      }
+      if (depth) return false
+      inner.push(word.slice(i + 2, j - 1))
+      i = j - 1
+    }
+  }
+  // `git rev-parse` alone, or in another checkout named by -C (a folder, a variable allowed, never a
+  // substitution), with only plain arguments after it.
+  return inner.length > 0 && inner.every((cmd) => /^\s*git\s+(-C\s+[^\s;&|`()]+\s+)?rev-parse(\s+[^;&|\n`$()]*)?\s*$/.test(cmd))
+}
+
+/**
  * Whether a file name the shell expands as a pattern may name a look changing file (#1015): `look`
  * when some name it can expand to is one (`[t]ailwind.config.ts`, `app/[t]okens.json`, `page.ts[x]`,
  * `out.*`, `build/*`), `not` when its literal parts rule every one out (`run-*.log`, `x.{md,txt}`,
