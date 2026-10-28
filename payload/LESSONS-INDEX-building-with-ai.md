@@ -5,6 +5,8 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L820. An AI call handling dates must be given today's date and time zone in its context; without it a guessed date passes every format check.
+- L816. A streamed model reply ending in an error or with no finish must fail the call; the SDK still returns the partial text as if whole.
 - L814. Record fixed consent text as shown only on the page's confirmed render, and fill its blanks from sources no model or chat input can write.
 - L1029. Put a prompt's fixed text first and the per call parts after: the cache reuses only an unchanged opening, so one early varying line re-bills it all.
 - L768. An AI check reading a large artifact once is a sample, so recheck loops never converge: verify references by script and split the rest.

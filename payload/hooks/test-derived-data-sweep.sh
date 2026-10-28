@@ -429,6 +429,69 @@ run_state "$ROOT" "$TMP_ROOT/state-direct" --auto
 check "--auto run by hand, without the lock --start takes, is refused with exit 2" "$(eq "$RC" 2)"
 check "and deletes nothing" "$(isdir "$ROOT/App-orphan")"
 
+# ================== --remove-one: one folder, for disk-remove.sh (claude-config#1805) ==================
+# disk-remove.sh removes the folders Dan ticked one at a time, so it cannot use --delete, which takes
+# every orphan. --remove-one takes the same lock as the automatic sweep, so the two never delete at
+# once, and judges the one folder again with the same rule before removing it. Every answer that is
+# not "removed" leaves the folder where it was.
+ROOT13="$TMP_ROOT/dd-one"; S13="$TMP_ROOT/state-one"
+mkdir -p "$ROOT13"; build_fixture "$ROOT13"; write_fake_ps "$ROOT13"
+run_state "$ROOT13" "$S13" --remove-one "$ROOT13/App-orphan"
+check "--remove-one exits 0 for an idle orphan" "$(eq "$RC" 0)"
+check "and removes it" "$(gone "$ROOT13/App-orphan")"
+check "and says so, naming it" "$(has "$OUT" "removed $ROOT13/App-orphan")"
+check "and leaves the other orphan, which it was not asked about" "$(isdir "$ROOT13/App-orphan-two")"
+for name in App-live App-fresh App-building App-noplist App-unmounted ModuleCache.noindex; do
+  run_state "$ROOT13" "$S13" --remove-one "$ROOT13/$name"
+  check "--remove-one on $name exits 4, kept" "$(eq "$RC" 4)"
+  check "and $name is still there" "$(isdir "$ROOT13/$name")"
+  check "and it says why $name was kept" "$(has "$OUT" "kept $ROOT13/$name: ")"
+done
+run_state "$ROOT13" "$S13" --remove-one "$ROOT13/App-fresh"
+check "the reason for a fresh orphan is the recent write" "$(has "$OUT" "modified in the last 60 minutes")"
+run_state "$ROOT13" "$S13" --remove-one "$ROOT13/App-live"
+check "the reason for a live folder is that its project is still there" "$(has "$OUT" "its project is still on disk")"
+mkdir -p "$TMP_ROOT/elsewhere/App-orphan-copy"
+run_state "$ROOT13" "$S13" --remove-one "$TMP_ROOT/elsewhere/App-orphan-copy"
+check "--remove-one on a folder outside the DerivedData folder is refused with exit 2" "$(eq "$RC" 2)"
+check "and it is left alone" "$(isdir "$TMP_ROOT/elsewhere/App-orphan-copy")"
+run_state "$ROOT13" "$S13" --remove-one "$ROOT13/App-orphan-two/Build"
+check "--remove-one on a folder deeper inside one is refused with exit 2" "$(eq "$RC" 2)"
+check "and it is left alone" "$(isdir "$ROOT13/App-orphan-two/Build")"
+run_state "$ROOT13" "$S13" --remove-one "$ROOT13"
+check "--remove-one on the DerivedData folder itself is refused with exit 2" "$(eq "$RC" 2)"
+run_state "$ROOT13" "$S13" --remove-one
+check "--remove-one with no folder is refused with exit 2" "$(eq "$RC" 2)"
+run_state "$TMP_ROOT/no-derived-data-here" "$S13" --remove-one "$TMP_ROOT/no-derived-data-here/App-x"
+check "--remove-one on a Mac with no DerivedData is refused with exit 2, never read as removed" "$(eq "$RC" 2)"
+run_state "$ROOT13" "$S13" --remove-one "$ROOT13/App-orphan-two" --delete
+check "--remove-one with another mode is refused with exit 2" "$(eq "$RC" 2)"
+check "and removes nothing" "$(isdir "$ROOT13/App-orphan-two")"
+
+# While an automatic sweep holds the lock, --remove-one does nothing and says so with exit 75.
+ROOT14="$TMP_ROOT/dd-one-locked"; S14="$TMP_ROOT/state-one-locked"; RELEASE14="$TMP_ROOT/release-14"
+mkdir -p "$ROOT14"
+make_folder "$ROOT14" "One-orphan" "$TMP_ROOT/removed-one/App.xcodeproj" >/dev/null
+cat > "$TMP_ROOT/blocking-ps-14" <<PS
+#!/bin/sh
+n=0
+while [ ! -e "$RELEASE14" ] && [ "\$n" -lt $((HANG_S * 10)) ]; do sleep 0.1; n=\$((n + 1)); done
+echo "  77 /usr/bin/login -f someone"
+PS
+chmod +x "$TMP_ROOT/blocking-ps-14"
+SAVED_PS="$FAKE_PS"; FAKE_PS="$TMP_ROOT/blocking-ps-14"
+run_state "$ROOT14" "$S14" --start
+start14_rc="$RC"
+run_state "$ROOT14" "$S14" --remove-one "$ROOT14/One-orphan"
+one14_rc="$RC"; one14_out="$OUT"; one14_there="$([ -d "$ROOT14/One-orphan" ] && echo yes || echo no)"
+: > "$RELEASE14"
+FAKE_PS="$SAVED_PS"
+check "an automatic sweep started and holds the lock" "$(eq "$start14_rc" 0)"
+check "--remove-one while it runs exits 75" "$(eq "$one14_rc" 75)"
+check "and says a sweep is already running" "$(has "$one14_out" "already running")"
+check "and had removed nothing when it returned" "$(eq "$one14_there" yes)"
+check "the automatic sweep finishes" "$(wait_finished "$S14" && echo ok || echo "no finished record in $S14")"
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
