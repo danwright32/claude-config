@@ -84,6 +84,8 @@ ids="$(dcr_items "$REC" | awk -F "$S" '{ print $1 }')"
 check "every item id is unique" "$(eq "$(sort <<< "$ids" | uniq -d)" "")"
 check "the Trash's items come first in the record" "$(eq "$(dcr_items "$REC" | awk -F "$S" 'NR == 1 { print $2 }')" trash)"
 check "the report names the record it wrote" "$(has "$OUT_TEXT" "$REC")"
+check "the report counts each category's offerable items and their size" "$(has "$OUT_TEXT" "App caches: 1 offerable (12 KB), 0 not offerable, 0 unmeasured.")"
+check "and the Trash's" "$(has "$OUT_TEXT" "Trash: 1 offerable (12 KB)")"
 
 # The record's additions keep it readable by disk-remove's reader: seven fields, extra ones ignored.
 check "dcr_items still prints seven fields per item" "$(eq "$(dcr_items "$REC" | awk -F "$S" '{ print NF }' | sort -u)" 7)"

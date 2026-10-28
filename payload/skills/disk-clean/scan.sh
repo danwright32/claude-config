@@ -214,7 +214,8 @@ echo ""
 for c in $RUN; do
   status="$(dcr_header "$DCS_RECORD" "status.$c" 2>/dev/null)"
   line="$(awk -F "$S" -v c="$c" '
-    $2 == c { n++; if ($5 == "offerable") { o++; if ($6 != "") b += $6 } else if (index($5, "unmeasured: ") == 1) u++; else x++ }
+    # The items file: id, category, method, target, bytes, state (then identity, size, flags, detail).
+    $2 == c { n++; if ($6 == "offerable") { o++; if ($5 != "") b += $5 } else if (index($6, "unmeasured: ") == 1) u++; else x++ }
     END { printf "%d %d %d %d %.0f", n, o, x, u, b / 1024 }' "$W/items")"
   set -- $line
   words="$2 offerable ($(dcu_human "$5")), $3 not offerable, $4 unmeasured"

@@ -333,7 +333,10 @@ if [ ! -e "$ROOT" ]; then
   # nothing, because a Mac without Xcode output has nothing to add to a disk warning.
   [ "$MODE" = summary ] && exit 0
   # Asked to remove one named folder, "nothing to look at" is not "removed" (L98).
-  case "$MODE" in remove-one*|classify) refuse "there is no Xcode build output on this Mac (nothing at $ROOT), so $ONE is not a build cache it may remove, and it removed nothing." ;; esac
+  case "$MODE" in
+    remove-one*) refuse "there is no Xcode build output on this Mac (nothing at $ROOT), so $ONE is not a build cache it may remove, and it removed nothing." ;;
+    classify) refuse "there is no Xcode build output on this Mac (nothing at $ROOT), so $* is not a build cache it can classify, and it classified nothing." ;;
+  esac
   NO_ROOT=1
   echo "There is no Xcode build output on this Mac to look at (nothing at $ROOT)."
   exit 0

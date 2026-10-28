@@ -517,6 +517,9 @@ for name in App-orphan App-live App-building App-fresh App-noplist App-unmounted
 done
 run_sweep "$ROOT15" --classify
 check "--classify with no folder is refused with exit 2" "$(eq "$RC" 2)"
+run_sweep "$TMP_ROOT/no-such-derived-data" --classify "$ROOT15/App-orphan"
+check "--classify on a Mac with no DerivedData is refused with exit 2" "$(eq "$RC" 2)"
+check "and says it classified nothing, naming the folder, never a removal" "$(has "$OUT" "so $ROOT15/App-orphan is not a build cache it can classify, and it classified nothing")"
 
 echo ""
 echo "passed: $pass, failed: $fail"
