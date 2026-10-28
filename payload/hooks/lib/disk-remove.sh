@@ -97,6 +97,7 @@ LIB="$(CDPATH= cd -P "$LIB" 2>/dev/null && pwd -P)" || { echo "disk-remove: cann
 HOOKS="${LIB%/*}"
 . "$LIB/disk-clean-predicates.sh" || { echo "disk-remove: lib/disk-clean-predicates.sh is missing beside it, so it removed nothing."; exit 2; }
 . "$LIB/disk-clean-record.sh" || { echo "disk-remove: lib/disk-clean-record.sh is missing beside it, so it removed nothing."; exit 2; }
+. "$LIB/disk-clean-units.sh" || { echo "disk-remove: lib/disk-clean-units.sh is missing beside it, so it removed nothing."; exit 2; }
 
 refuse() { # <exit code> <reason>
   local code="$1"; shift
@@ -206,13 +207,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-human() { # <KiB>
-  local k="${1:-}"
-  case "$k" in ''|*[!0-9]*) printf 'size unknown'; return 0 ;; esac
-  if [ "$k" -ge 1048576 ]; then awk -v k="$k" 'BEGIN { printf "%.1f GB", k / 1048576 }'
-  elif [ "$k" -ge 1024 ]; then printf '%s MB' "$((k / 1024))"
-  else printf '%s KB' "$k"; fi
-}
+human() { dcu_human "$@"; } # lib/disk-clean-units.sh
 
 # Sets SIZE_KIB (empty when unread), SIZE_PARTIAL (1 when du said anything on stderr or failed, so
 # the figure is a lower bound) and SIZE_WORDS, the same in words. Allocated blocks, as du -k reports
@@ -467,16 +462,6 @@ gone_now() { [ ! -e "$1" ] && [ ! -L "$1" ]; }
 
 # ---------- docker ----------
 DOCKER_UP=""
-docker_kib() { # <docker size, such as 1.2GB or 512kB> -> KiB; fails, printing nothing, on anything else
-  local k
-  k="$(awk -v s="$1" 'BEGIN {
-    if (!match(s, /^[0-9.]+/)) exit 1
-    v = substr(s, 1, RLENGTH); u = substr(s, RLENGTH + 1)
-    m = 1
-    if (u == "kB" || u == "KB") m = 1000; else if (u == "MB") m = 1000000; else if (u == "GB") m = 1000000000; else if (u == "TB") m = 1000000000000; else if (u != "B") exit 1
-    printf "%d", v * m / 1024 }')" || return 1
-  [ -n "$k" ] && printf '%s' "$k"
-}
 # The build cache's size as docker system df reports it. Read whole, with no early exit, so the
 # reader never leaves before docker has finished writing (L183).
 build_cache_kib() { docker system df --format '{{.Type}}|{{.Size}}' </dev/null 2>/dev/null | awk -F '|' '$1 == "Build Cache" && !found { print $2; found = 1 }'; }
@@ -511,12 +496,12 @@ do_docker() { # <id> <category> <target> <identity>
       if docker container inspect "$ref" </dev/null >/dev/null 2>&1; then finish_item "$id" failed "" "docker $t" "it is still there after docker container rm (exit $rc: ${out%%$'\n'*})"; return; fi
       finish_item "$id" removed "${SIZE_KIB:-0}" "docker $t" "$(human "$SIZE_KIB"), as Docker reports its size" ;;
     builder)
-      before="$(docker_kib "$(build_cache_kib)")" || before=""
+      before="$(dcu_docker_kib "$(build_cache_kib)")" || before=""
       [ -n "$before" ] || { finish_item "$id" skipped "" "docker $t" "the size of Docker's build cache could not be read, so nothing could confirm it shrank"; return; }
       [ "$before" -gt 0 ] || { finish_item "$id" gone "" "docker $t" "Docker's build cache is already empty"; return; }
       intent "$id" docker "$t" "$before" || { finish_item "$id" skipped "" "docker $t" "its INTENT line could not be written to $LOG, so it was not touched"; return; }
       out="$(docker builder prune -f </dev/null 2>&1)"; rc=$?
-      after="$(docker_kib "$(build_cache_kib)")" || after=""
+      after="$(dcu_docker_kib "$(build_cache_kib)")" || after=""
       if [ -z "$after" ]; then finish_item "$id" failed "" "docker $t" "after docker builder prune (exit $rc) the build cache's size could not be read, so nothing confirms it shrank"; return; fi
       if [ "$after" -ge "$before" ]; then finish_item "$id" failed "" "docker $t" "the build cache did not shrink ($(human "$before") before, $(human "$after") after; docker builder prune exit $rc: ${out%%$'\n'*})"; return; fi
       finish_item "$id" removed "$((before - after))" "docker $t" "$(human "$((before - after))") of build cache, as Docker reports it" ;;
