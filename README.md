@@ -2588,7 +2588,8 @@ warning says how much that scan offered that has not been removed yet, how long 
 and to run /disk-clean. A size that was unread or only partly read makes the total "at least" that
 much, never a 0 added in. A record that is missing, unreadable, cut off, holding an item it cannot
 read, dated in the future or 7 days old adds nothing and never changes the verdict. Reading a record
-costs about 0.14 ms an item (0.9 s for 5,264 items, measured 2026-10-28), so the tally is kept in
+costs about 0.14 ms an item (0.76 s to read 5,264 items, about 0.9 s for the whole warning that
+reads them, measured 2026-10-28), so the tally is kept in
 `disk-clean-tally` beside the readings, keyed on the record's inode, change time, size and path, and
 a warning with an unchanged record adds about 5 ms; a disk with room adds nothing.
 
