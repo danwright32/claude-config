@@ -20,6 +20,11 @@
 #     its brace is closed, draws nothing. And a real colour, frame and border are look changes: goal
 #     box's card border, scope modes' held band row frame, handoff's heading colour, beside the manual
 #     steps divider (a row) above.
+#   - #1833: the #1747 loop is found by its structure (a for loop whose braced block opens with its
+#     spoolNote guard), never by the spelling of the line it pushes, which had to be kept as it was
+#     for this suite to pass. Controls: a copy of the real file with the pushed object's fields
+#     reversed is still found and judged the same, and the loop with its brace and guard taken out
+#     is not found.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
@@ -44,10 +49,138 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-mod-line-builder-reader.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 RULES="$ROOT/payload/mods/design-round-guard/hooks/rules.ts"
 
+# #1833: the #1747 loop in the real register.ts is found by its structure, read with the repository's
+# one TypeScript reader (tools/lib/ts_source.py), never by one line's spelling: a for loop whose
+# braced block opens with `if (spoolNote(...)) continue`. From it come the three texts the #1756
+# checks judge (whole, before its brace and guard, half with its brace not yet closed), the same
+# three built from a copy whose pushed object has its fields in reverse order (a reordered but
+# equivalent line, which must still be found), and whether the loop is found in the text before
+# (the guarded thing removed, which must not be).
+cat >"$TMP/loop.py" <<'PY'
+import json
+import re
+import sys
+
+lib, reg_path, out_path = sys.argv[1:4]
+sys.path.insert(0, lib)
+from ts_source import closing, code_only
+
+
+def skip(code, i):
+    while i < len(code) and code[i].isspace():
+        i += 1
+    return i
+
+
+def loops(text):
+    """Each for loop whose braced block opens with `if (spoolNote(...)) continue`, as the indices
+    of its header's close, its block's { and }, and that first statement's start and end."""
+    code = code_only(text)
+    found = []
+    for m in re.finditer(r"\bfor\s*\(", code):
+        head = closing(code, m.end() - 1)
+        if head is None:
+            continue
+        brace = skip(code, head)
+        if code[brace : brace + 1] != "{":
+            continue
+        end = closing(code, brace)
+        if end is None:
+            continue
+        first = skip(code, brace + 1)
+        cond = re.compile(r"if\s*\(").match(code, first)
+        if not cond:
+            continue
+        shut = closing(code, cond.end() - 1)
+        if shut is None or not re.search(r"\bspoolNote\s*\(", code[cond.end() : shut]):
+            continue
+        cont = re.compile(r"\s*continue\b;?").match(code, shut)
+        if not cont:
+            continue
+        found.append({"head": head, "open": brace, "close": end - 1, "first": first, "stmt": cont.end()})
+    return found
+
+
+def cut(text, a, b):
+    """text without [a, b), and without the line holding it when nothing else stands on that line."""
+    start = text.rfind("\n", 0, a) + 1
+    stop = text.find("\n", b)
+    stop = len(text) if stop < 0 else stop
+    if not text[start:a].strip() and not text[b:stop].strip():
+        return text[:start] + text[stop + 1 :]
+    return text[:a] + text[b:]
+
+
+def texts(text):
+    """The #1747 change's three texts from text, or None unless exactly one such loop is there."""
+    found = loops(text)
+    if len(found) != 1:
+        return None
+    lp = found[0]
+    half = cut(text, lp["close"], lp["close"] + 1)
+    # From the end back, so each cut leaves the earlier indices where they were.
+    before = cut(text, lp["close"], lp["close"] + 1)
+    before = cut(before, lp["first"], lp["stmt"])
+    before = before[: lp["head"]] + before[lp["open"] + 1 :]
+    return {"whole": text, "before": before, "half": half}
+
+
+def reordered(text):
+    """text with the object the loop's first push( is handed written with its fields reversed, or
+    None when that object cannot be found or has fewer than two fields."""
+    found = loops(text)
+    if len(found) != 1:
+        return None
+    lp = found[0]
+    code = code_only(text)
+    m = re.compile(r"\bpush\s*\(\s*\{").search(code, lp["stmt"], lp["close"])
+    if not m:
+        return None
+    o = m.end() - 1
+    e = closing(code, o)
+    if e is None:
+        return None
+    fields, depth, start = [], 0, o + 1
+    for j in range(o + 1, e - 1):
+        c = code[j]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            fields.append(text[start:j].strip())
+            start = j + 1
+    fields.append(text[start : e - 1].strip())
+    fields = [f for f in fields if f]
+    if len(fields) < 2:
+        return None
+    return text[: o + 1] + " " + ", ".join(reversed(fields)) + " " + text[e - 1 :]
+
+
+reg = open(reg_path, encoding="utf-8").read()
+real = texts(reg)
+moved = reordered(reg)
+out = {
+    "real": real,
+    "reordered": None if moved is None else texts(moved),
+    "reorderedText": moved,
+    "builtReordered": moved is not None and moved != reg,
+    "removedFound": None if real is None else bool(loops(real["before"])),
+}
+json.dump(out, open(out_path, "w", encoding="utf-8"))
+PY
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "FAIL: python3 is not installed, so the #1747 loop could not be read from register.ts"
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+fi
+loop_out="$(python3 -I "$TMP/loop.py" "$ROOT/tools/lib" "$ROOT/payload/mods/design-round-guard/hooks/register.ts" "$TMP/loop.json" 2>&1)"; loop_rc=$?
+
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
-const [rules, mods] = process.argv.slice(2)
+const [rules, mods, loopJson] = process.argv.slice(2)
+const loopRead = JSON.parse(readFileSync(loopJson, 'utf8'))
 const { drawnParts, drawsChange, sourceSpans, bracketsOpen } = await import(pathToFileURL(rules).href)
 for (const mod of readdirSync(mods)) {
   const hooks = `${mods}/${mod}/hooks`
@@ -77,13 +210,10 @@ const reg = guard.find(f => f.name === 'register.ts')?.text ?? ''
 const swap = (a, b) => (reg.split(a).length === 2 ? drawsChange(guard, 'register.ts', reg, reg.replace(a, b)) : 'missing')
 // #1747's two halves, as they landed with #1761: the real loop as it is (whole), without the brace it
 // was given and its continue (before), and with the closing brace not yet added (half, what the
-// #1747 builder's first Edit left).
-const loop = '  for (const r of w.runs ?? [])\n    for (const a of r.args)'
-const opened = "  for (const r of w.runs ?? []) {\n    if (spoolNote(r, at.home)) continue\n    for (const a of r.args)"
-const pushed = 'run: r.path ?? r.script })\n'
-const whole = reg.split(opened).length === 2 && reg.split(`${pushed}  }\n`).length === 2 ? reg : undefined
-const before = whole?.replace(opened, loop).replace(`${pushed}  }\n`, pushed)
-const half = whole?.replace(`${pushed}  }\n`, pushed)
+// #1747 builder's first Edit left). Found by structure in loop.py (#1833), so a field added to or
+// reordered in the line the loop pushes moves nothing here; null when the loop is not there.
+const { whole, before, half } = loopRead.real ?? {}
+const moved = loopRead.reordered
 // A real file's text with one span swapped, judged beside its mod's other hook files.
 const real = (mod, name, a, b) => {
   const dir = `${mods}/${mod}/hooks`
@@ -97,6 +227,10 @@ console.log(JSON.stringify({
   keysReason: real('keystroke-guard', 'keys.ts', "safeWay: 'Open it first, then type.'", "safeWay: 'Start it first, then type.'"),
   halfOpen: half === undefined ? 'missing' : bracketsOpen(half),
   wholeDraws: whole === undefined ? 'missing' : drawsChange(guard, 'register.ts', before, whole),
+  movedHalfOpen: moved ? bracketsOpen(moved.half) : 'missing',
+  movedWholeDraws: moved ? drawsChange(guard, 'register.ts', moved.before, moved.whole) : 'missing',
+  builtReordered: loopRead.builtReordered,
+  removedFound: loopRead.removedFound,
   border: real('goal-box', 'box.ts', "border: 'success'", "border: 'warning'"),
   frame: real('scope-modes', 'away.ts', "slot: 'held', frame: { kind: 'box' }", "slot: 'held', frame: { kind: 'left-rule' }"),
   colour: real('handoff', 'handoff.ts', "color: 'warning', bold: true }, { text: input.title }", "color: 'error', bold: true }, { text: input.title }"),
@@ -106,8 +240,10 @@ console.log(JSON.stringify({
   waits: once(wait) ? drawsChange(files, 'card.ts', card, card.replace(wait, 'export const DROPPED_AFTER_MS = 3 * 60_000')) : 'missing',
 }))
 JS
-out="$(node --experimental-strip-types --no-warnings "$TMP/read.mjs" "$RULES" "$ROOT/payload/mods" 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ]; then
+out="$(node --experimental-strip-types --no-warnings "$TMP/read.mjs" "$RULES" "$ROOT/payload/mods" "$TMP/loop.json" 2>&1)"; rc=$?
+if [ "$loop_rc" -ne 0 ]; then
+  check "the #1747 loop was read from register.ts" "exit=$loop_rc out=$loop_out"
+elif [ "$rc" -ne 0 ]; then
   check "the reader ran under node" "exit=$rc out=$out"
 else
   files="$(printf '%s\n' "$out" | grep -c '"rel"')"
@@ -130,6 +266,10 @@ else
   case "$out" in *'"keysReason":false'*) check "#1756: a refusal's words in the real keystroke guard keys.ts are no look change" ok ;; *) check "#1756: a refusal's words in the real keystroke guard keys.ts are no look change" "$out" ;; esac
   case "$out" in *'"halfOpen":true'*) check "#1756: the real #1747 Edit leaves the guard's register.ts with a bracket open" ok ;; *) check "#1756: the real #1747 Edit leaves the guard's register.ts with a bracket open" "$out" ;; esac
   case "$out" in *'"wholeDraws":false'*) check "#1756: the real #1747 change, its brace closed, is no look change" ok ;; *) check "#1756: the real #1747 change, its brace closed, is no look change" "$out" ;; esac
+  case "$out" in *'"builtReordered":true'*) check "#1833 control: a copy of the real register.ts with the pushed object's fields reversed was built" ok ;; *) check "#1833 control: a copy of the real register.ts with the pushed object's fields reversed was built" "$out" ;; esac
+  case "$out" in *'"movedHalfOpen":true'*) check "#1833 control: the #1747 loop is still found, its brace left open, once its pushed fields are reordered" ok ;; *) check "#1833 control: the #1747 loop is still found, its brace left open, once its pushed fields are reordered" "$out" ;; esac
+  case "$out" in *'"movedWholeDraws":false'*) check "#1833 control: the #1747 change on the reordered copy is still found and is no look change" ok ;; *) check "#1833 control: the #1747 change on the reordered copy is still found and is no look change" "$out" ;; esac
+  case "$out" in *'"removedFound":false'*) check "#1833 control: with its brace and spoolNote guard taken out, the #1747 loop is not found" ok ;; *) check "#1833 control: with its brace and spoolNote guard taken out, the #1747 loop is not found" "$out" ;; esac
   case "$out" in *'"border":true'*) check "#1756 control: goal box's real card border is a look change" ok ;; *) check "#1756 control: goal box's real card border is a look change" "$out" ;; esac
   case "$out" in *'"frame":true'*) check "#1756 control: scope modes' real held band row frame is a look change" ok ;; *) check "#1756 control: scope modes' real held band row frame is a look change" "$out" ;; esac
   case "$out" in *'"colour":true'*) check "#1756 control: handoff's real heading colour is a look change" ok ;; *) check "#1756 control: handoff's real heading colour is a look change" "$out" ;; esac
