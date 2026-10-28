@@ -73,6 +73,10 @@ TOP_SILENT="$TMPROOT/top-silent"
 printf '#!/bin/sh\n: >> "%s"\n' "$TOP_CALLED" > "$TOP_SILENT"; chmod +x "$TOP_SILENT"
 export FREE_SPACE_TOP_CMD="$TOP_SILENT"
 export FREE_SPACE_DISK_BYTES=$((926 * 1024 * 1024 * 1024))
+# The disk-clean scan record a low or falling warning reads (claude-config#1809) is per Mac, under
+# ~/.claude/state, so every run points the check at one of the suite's own that does not exist,
+# unless a case writes one and names it (L2).
+export FREE_SPACE_SCAN_RECORD="$TMPROOT/no-scan-here/last-scan.json"
 
 GB=$((1024 * 1024 * 1024))
 T0=1757500000            # a fixed instant, so every span below is arithmetic rather than a race
@@ -659,6 +663,224 @@ awk 'BEGIN { for (i = 0; i < 200; i++) printf "2020-01-%03d 0 1\n", i }' > "$S_S
 swap_probe "$((200 * GB))" "$S_SWD2" "$SWAP_SMALL"
 check "and the record keeps a bounded number of days" \
   "$([ "$(grep -c . "$S_SWD2/_fixture.swap-days")" -le 120 ] && grep -q "^$swd_day " <<< "$(tail -n 1 "$S_SWD2/_fixture.swap-days")" && echo ok || echo "$(grep -c . "$S_SWD2/_fixture.swap-days") line(s), last: $(tail -n 1 "$S_SWD2/_fixture.swap-days")")"
+
+# ---- the disk-clean scan's remaining total, added to a low or falling warning (#1809) ----
+# A warning that says the disk is nearly full, while a scan from two days ago already found 14 GB
+# that could go, leaves Dan to rediscover it. So on verdict 3 or 4 the warning adds one line: what
+# that scan offered and disk-clean has not removed yet, and how old the scan is. The record belongs
+# to disk-clean, so the fixtures are written by its own writer, lib/disk-clean-record.sh, rather
+# than typed here (L370), and every way the record can be absent or wrong must leave the warning
+# exactly as it was, exit code included (L5: the line is an extra, never a condition).
+. "$DIR/lib/disk-clean-record.sh" || { echo "FAIL: lib/disk-clean-record.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
+SCANS="$TMPROOT/scans"; mkdir -p "$SCANS"
+US=$'\037'
+DAY=86400
+EMDASH="$(printf '\xe2\x80\x94')"; ENDASH="$(printf '\xe2\x80\x93')"
+# scan_record <file> <scanned_at> <item line>...   each item line: id|category|method|target|bytes|state|size
+scan_record(){
+  local f="$1" at="$2" items="$SCANS/items-$RANDOM"; shift 2
+  : > "$items"
+  local line
+  for line in "$@"; do
+    IFS='|' read -r _id _cat _m _t _b _st _sz <<< "$line"
+    printf '%s\n' "$_id$US$_cat$US$_m$US$_t$US$_b$US$_st$US$US$_sz" >> "$items"
+  done
+  dcr_write "$f" "scan-$RANDOM" "$at" "$items" || echo "FAIL: the fixture writer refused $f"
+}
+# scan_probe <record> <free bytes> [state dir] -> PROBE_RC and PROBE_MSG, from a reading of its own
+scan_probe(){
+  local state="${3:-$TMPROOT/state-scan-$RANDOM}"
+  FREE_SPACE_SCAN_RECORD="$1" probe "$2" "$T0" "$state"
+}
+
+# The warning as it reads with no scan at all, which every refusal below must reproduce exactly.
+# Each of those probes reuses this state folder, so the reading history (and so the rate clause)
+# is the same first reading every time: the probe at T0 is dropped as a reading not before now.
+scan_probe "$TMPROOT/no-scan-here/last-scan.json" "$((7 * GB))" "$TMPROOT/state-scan-base"
+base_rc="$PROBE_RC"; base_msg="$PROBE_MSG"
+check "with no scan record a low warning still exits 3" "$([ "$base_rc" -eq 3 ] && echo ok || echo "exit $base_rc")"
+check "and says nothing about disk-clean" "$(! grep -q 'disk-clean' <<< "$base_msg" && echo ok || echo "said: $base_msg")"
+
+# Two offerable items (10 GB and 4.5 GB), one already removed, one refused, one unmeasured. Only the
+# first two are what is left to offer.
+SC_FRESH="$SCANS/fresh.json"
+scan_record "$SC_FRESH" "$((T0 - 2 * DAY - 3600))" \
+  "a1|caches|trash|/x/caches|$((10 * GB))|offerable|measured" \
+  "a2|xcode|trash|/x/derived|$((9 * GB / 2))|offerable|measured" \
+  "a3|trash|empty|/x/.Trash|$((50 * GB))|removed|measured" \
+  "a4|worktrees|trash|/x/wt|$((20 * GB))|not offerable: it has uncommitted work|measured" \
+  "a5|docker|prune|images|$((30 * GB))|unmeasured: docker did not answer|unread"
+scan_probe "$SC_FRESH" "$((7 * GB))" "$TMPROOT/state-scan-base"; fresh_msg="$PROBE_MSG"
+check "a fresh scan leaves the low verdict's exit code at 3" "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC")"
+check "and the warning's first line exactly as it was" \
+  "$([ "$(head -n 1 <<< "$fresh_msg")" = "$(head -n 1 <<< "$base_msg")" ] && echo ok || echo "first line: $(head -n 1 <<< "$fresh_msg")")"
+check "and adds exactly one line, the rest of the warning untouched" \
+  "$([ "$(grep -vF 'disk-clean' <<< "$fresh_msg")" = "$base_msg" ] && [ "$(grep -cF 'disk-clean' <<< "$fresh_msg")" = 1 ] && echo ok || echo "said: $fresh_msg")"
+fresh_line="$(grep -F 'disk-clean' <<< "$fresh_msg")"
+check "the line totals only what is offerable and not yet removed (10 + 4.5 GB)" \
+  "$(grep -qF ' 14.5 GB ' <<< "$fresh_line" && ! grep -qF 'at least' <<< "$fresh_line" && echo ok || echo "said: $fresh_line")"
+check "and says how old the scan is" "$(grep -qF 'taken 2 day(s) ago' <<< "$fresh_line" && echo ok || echo "said: $fresh_line")"
+check "and suggests /disk-clean" "$(grep -qF 'run /disk-clean' <<< "$fresh_line" && echo ok || echo "said: $fresh_line")"
+check "and holds no dash as punctuation" \
+  "$(! grep -qE "[[:space:]]-[[:space:]]|$EMDASH|$ENDASH" <<< "$fresh_line" && echo ok || echo "said: $fresh_line")"
+printf '%s\n' "$fresh_line" > "$SCANS/line-exact"
+
+# Falling fast (exit 4) carries the same line.
+S_SCF="$TMPROOT/state-scan-falling"; mkdir -p "$S_SCF"
+FREE_SPACE_SCAN_RECORD="$SC_FRESH" probe "$((300 * GB))" "$((T0 - 10800))" "$S_SCF"
+FREE_SPACE_SCAN_RECORD="$SC_FRESH" probe "$((60 * GB))" "$T0" "$S_SCF"
+check "a falling verdict keeps exit 4 and adds the same line" \
+  "$([ "$PROBE_RC" -eq 4 ] && grep -qxF "$fresh_line" <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# A disk with room says nothing, report or not: the line belongs to a warning.
+scan_probe "$SC_FRESH" "$((200 * GB))"
+check "a disk with room adds no line, even with a fresh scan" "$([ "$PROBE_RC" -eq 0 ] && [ -z "$PROBE_MSG" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+FREE_SPACE_SCAN_RECORD="$SC_FRESH" rprobe "$((200 * GB))" "$T0" "$TMPROOT/state-scan-report"
+check "nor does --report on a disk with room" "$([ "$PROBE_RC" -eq 0 ] && ! grep -q 'disk-clean' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# Every record that cannot be trusted adds nothing and changes nothing: the output is byte for
+# byte the no scan warning, and the exit code is still 3.
+same_as_base(){ [ "$PROBE_RC" -eq "$base_rc" ] && [ "$PROBE_MSG" = "$base_msg" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG"; }
+SC_STALE="$SCANS/stale.json"
+scan_record "$SC_STALE" "$((T0 - 8 * DAY))" "s1|caches|trash|/x/c|$((10 * GB))|offerable|measured"
+scan_probe "$SC_STALE" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "a scan 8 days old adds nothing" "$(same_as_base)"
+SC_EDGE="$SCANS/seven.json"
+scan_record "$SC_EDGE" "$((T0 - 7 * DAY))" "s1|caches|trash|/x/c|$((10 * GB))|offerable|measured"
+scan_probe "$SC_EDGE" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "a scan exactly 7 days old adds nothing (under 7 days, not up to)" "$(same_as_base)"
+SC_INSIDE="$SCANS/inside.json"
+scan_record "$SC_INSIDE" "$((T0 - 7 * DAY + 60))" "s1|caches|trash|/x/c|$((10 * GB))|offerable|measured"
+scan_probe "$SC_INSIDE" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "a scan a minute under 7 days old is still used, and said to be 6 days old" \
+  "$(grep -qF 'taken 6 day(s) ago' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+SC_FUTURE="$SCANS/future.json"
+scan_record "$SC_FUTURE" "$((T0 + 3600))" "s1|caches|trash|/x/c|$((10 * GB))|offerable|measured"
+scan_probe "$SC_FUTURE" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "a scan dated in the future adds nothing, since its age cannot be stated" "$(same_as_base)"
+scan_probe "$SCANS/absent.json" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "a missing scan file adds nothing" "$(same_as_base)"
+SC_CUT="$SCANS/cut.json"
+sed '$d' "$SC_FRESH" > "$SC_CUT"
+scan_probe "$SC_CUT" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "a scan file cut off before its closing line adds nothing" "$(same_as_base)"
+SC_JUNK="$SCANS/junk.json"
+printf 'not a record at all\n]}\n' > "$SC_JUNK"
+scan_probe "$SC_JUNK" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "a file that is not a scan record adds nothing" "$(same_as_base)"
+SC_NOAT="$SCANS/noat.json"
+{ printf '{"version":1,"scan_id":"x","items":[\n'; sed -n '2,$p' "$SC_FRESH"; } > "$SC_NOAT"
+scan_probe "$SC_NOAT" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "a record with no scanned_at adds nothing" "$(same_as_base)"
+SC_BADITEM="$SCANS/baditem.json"
+awk 'NR == 3 { print "{\"id\":\"broken\",\"category\":\"caches\",\"bytes\":5}," ; next } { print }' "$SC_FRESH" > "$SC_BADITEM"
+scan_probe "$SC_BADITEM" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "a record holding an item line it cannot read adds nothing, rather than a total missing that item" "$(same_as_base)"
+: > "$SCANS/empty.json"
+scan_probe "$SCANS/empty.json" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "an empty scan file adds nothing" "$(same_as_base)"
+mkdir -p "$SCANS/dir.json"
+scan_probe "$SCANS/dir.json" "$((7 * GB))" "$TMPROOT/state-scan-base"
+check "a folder where the scan file should be adds nothing" "$(same_as_base)"
+SC_LOCKED="$SCANS/locked.json"
+cp "$SC_FRESH" "$SC_LOCKED"; chmod 000 "$SC_LOCKED"
+if cat "$SC_LOCKED" >/dev/null 2>&1; then
+  check "an unreadable scan file adds nothing" "UNMEASURED: this user can read a mode 000 file (root?), so unreadability cannot be set up here"
+else
+  scan_probe "$SC_LOCKED" "$((7 * GB))" "$TMPROOT/state-scan-base"
+  check "an unreadable scan file adds nothing" "$(same_as_base)"
+fi
+chmod 600 "$SC_LOCKED"
+
+# Sizes that were not read in full are never counted as 0, and the total is said to be a floor.
+SC_PART="$SCANS/partial.json"
+scan_record "$SC_PART" "$((T0 - DAY))" \
+  "p1|caches|trash|/x/c|$((10 * GB))|offerable|measured" \
+  "p2|large-files|trash|/x/big|$((3 * GB))|offerable|partial"
+scan_probe "$SC_PART" "$((7 * GB))"
+check "a partly read size makes the total 'at least' that much" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'at least 13.0 GB' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+printf '%s\n' "$(grep -F 'disk-clean' <<< "$PROBE_MSG")" > "$SCANS/line-at-least"
+SC_UNREAD="$SCANS/unread.json"
+scan_record "$SC_UNREAD" "$((T0 - DAY))" \
+  "u1|caches|trash|/x/c|$((10 * GB))|offerable|measured" \
+  "u2|playwright|trash|/x/pw||offerable|unread"
+scan_probe "$SC_UNREAD" "$((7 * GB))"
+check "an offerable item with no size read makes the total 'at least', never a 0 added in" \
+  "$(grep -qF 'at least 10.0 GB' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+SC_ALLUNREAD="$SCANS/allunread.json"
+scan_record "$SC_ALLUNREAD" "$((T0 - DAY))" "v1|playwright|trash|/x/pw||offerable|unread" "v2|caches|trash|/x/c|$((5 * GB))|removed|measured"
+scan_probe "$SC_ALLUNREAD" "$((7 * GB))"
+check "offerable items whose sizes were all unread are said to be unsized, never '0 GB'" \
+  "$(grep -qF '1 item(s)' <<< "$PROBE_MSG" && grep -qF 'could not read' <<< "$PROBE_MSG" && ! grep -qE ' 0(\.0)? ?[KMG]B' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+printf '%s\n' "$(grep -F 'disk-clean' <<< "$PROBE_MSG")" > "$SCANS/line-unsized"
+
+# Everything already removed: the scan has nothing left, which is said rather than a total of 0.
+SC_DONE="$SCANS/done.json"
+scan_record "$SC_DONE" "$((T0 - 3 * 3600))" "d1|caches|trash|/x/c|$((10 * GB))|removed|measured" "d2|trash|empty|/x/t|$((2 * GB))|trashed|measured"
+scan_probe "$SC_DONE" "$((7 * GB))"
+check "a scan with everything removed says nothing is left, in hours when under a day old" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'taken 3 hour(s) ago' <<< "$PROBE_MSG" && grep -qF 'nothing left' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+printf '%s\n' "$(grep -F 'disk-clean' <<< "$PROBE_MSG")" > "$SCANS/line-nothing-left"
+# A scan that offered nothing at all is not one whose offers were taken, and one that could not
+# judge some of what it found says so (L540: no answer without its measured reason). Measured on
+# 2026-10-28: a real claude-temp scan found 376 folders and judged none, because the session map
+# was empty while Claude Code ran.
+SC_NONE="$SCANS/none.json"
+scan_record "$SC_NONE" "$((T0 - 3600))" "n1|claude-temp|trash|/x/t1|4096|unmeasured: the session map is empty|measured" \
+  "n2|claude-temp|trash|/x/t2|4096|unmeasured: the session map is empty|measured" "n3|caches|trash|/x/c|$GB|not offerable: in use|measured"
+scan_probe "$SC_NONE" "$((7 * GB))"
+check "a scan that offered nothing says it found nothing it could remove, and how many it could not judge" \
+  "$(grep -qF 'found nothing it could remove' <<< "$PROBE_MSG" && grep -qF 'could not judge 2 item(s)' <<< "$PROBE_MSG" && ! grep -qF 'nothing left' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+printf '%s\n' "$(grep -F 'disk-clean' <<< "$PROBE_MSG")" > "$SCANS/line-found-nothing"
+
+# THE TALLY IS KEPT BETWEEN PROMPTS. Reading a record costs about 0.14 ms an item (0.76 s for 5,264
+# items, measured 2026-10-28), and this runs on every prompt while the disk is low, so the tally is
+# kept beside the readings, keyed on the record's inode, change time, size and path, and read again
+# only when one of them moves. Every writer of the record (the scan, disk-remove's marks) renames a
+# new file into place, so each write is a new inode even inside one second at one size.
+S_TALLY="$TMPROOT/state-scan-tally"; mkdir -p "$S_TALLY"
+SC_MARK="$SCANS/mark.json"; cp "$SC_FRESH" "$SC_MARK"
+scan_probe "$SC_MARK" "$((7 * GB))" "$S_TALLY"
+check "the first warning reads the record and keeps its tally" \
+  "$(grep -qF ' 14.5 GB ' <<< "$PROBE_MSG" && [ -s "$S_TALLY/disk-clean-tally" ] && echo ok || echo "tally file: $(ls "$S_TALLY"), said: $PROBE_MSG")"
+mark_sid="$(dcr_header "$SC_MARK" scan_id)"
+printf 'a2%sremoved\n' "$US" > "$SCANS/marks-1"; dcr_mark "$SC_MARK" "$mark_sid" "$SCANS/marks-1"
+scan_probe "$SC_MARK" "$((7 * GB))" "$S_TALLY"
+check "a removal marked in the record after that is in the next warning's total" \
+  "$(grep -qF ' 10.0 GB ' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+# "truncated" is as long as "offerable", so this mark leaves the record the same size, and it lands
+# inside the same second: only the new file's inode tells the two apart.
+printf 'a1%struncated\n' "$US" > "$SCANS/marks-2"; dcr_mark "$SC_MARK" "$mark_sid" "$SCANS/marks-2"
+scan_probe "$SC_MARK" "$((7 * GB))" "$S_TALLY"
+check "and a mark that leaves the record the same size is seen too" \
+  "$(grep -qF 'has nothing left to offer' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+# The kept tally is what a matching warning reads: one planted with the record's own key is believed,
+# which is the proof the read is skipped, and one that is not a tally is read past, never shown.
+SC_KEEP="$SCANS/keep.json"; cp "$SC_FRESH" "$SC_KEEP"
+S_KEEP="$TMPROOT/state-scan-keep"; mkdir -p "$S_KEEP"
+scan_probe "$SC_KEEP" "$((7 * GB))" "$S_KEEP"
+keep_key="$(sed -n 1p "$S_KEEP/disk-clean-tally")"
+printf '%s\n%s 2 0 %s 0 0 0 0\n' "$keep_key" "$((T0 - DAY))" "$((99 * 1024 * 1024))" > "$S_KEEP/disk-clean-tally"
+scan_probe "$SC_KEEP" "$((7 * GB))" "$S_KEEP"
+check "a kept tally whose key matches the record is used without reading the record again" \
+  "$(grep -qF ' 99.0 GB ' <<< "$PROBE_MSG" && grep -qF 'taken 1 day(s) ago' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+printf '%s\nnot a tally at all\n' "$keep_key" > "$S_KEEP/disk-clean-tally"
+scan_probe "$SC_KEEP" "$((7 * GB))" "$S_KEEP"
+check "a kept tally that is not one is read past, and the record read again" \
+  "$(grep -qxF "$fresh_line" <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+
+# Unset, the record is read where disk-clean's scan writes it, under HOME (scan-lib.sh's DCS_RECORD).
+FAKE_HOME="$TMPROOT/fake-home"; mkdir -p "$FAKE_HOME/.claude/state/disk-clean"
+cp "$SC_FRESH" "$FAKE_HOME/.claude/state/disk-clean/last-scan.json"
+FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$TMPROOT/state-scan-home" FREE_SPACE_PATH=/fixture \
+  HOME="$FAKE_HOME" FREE_SPACE_SCAN_RECORD= bash "$CHECK" > "$TMPROOT/scan-home-out" 2>&1
+check "with no seam set, the record is read from ~/.claude/state/disk-clean/last-scan.json" \
+  "$(grep -qxF "$fresh_line" "$TMPROOT/scan-home-out" && echo ok || echo "said: $(cat "$TMPROOT/scan-home-out")")"
+check "and the /disk-clean skill the line suggests is there to run (L111)" \
+  "$([ -f "$DIR/../skills/disk-clean/SKILL.md" ] && grep -q '^name: disk-clean$' "$DIR/../skills/disk-clean/SKILL.md" && echo ok || echo "no disk-clean skill beside $DIR")"
+check "which is where disk-clean's scan writes it" \
+  "$(grep -qF 'DCS_RECORD="$DCS_STATE/last-scan.json"' "$DIR/../skills/disk-clean/scan-lib.sh" && grep -qF 'DCS_STATE="$HOME/.claude/state/disk-clean"' "$DIR/../skills/disk-clean/scan-lib.sh" && echo ok || echo "scan-lib.sh no longer names that path")"
 
 # ================== the nudge: WHEN the answer is spoken ==================
 # The check answers the question; the nudge decides when to say it. Same split as
