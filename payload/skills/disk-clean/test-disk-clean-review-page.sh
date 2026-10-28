@@ -158,7 +158,13 @@ check "beside Copy selection (D9)" "$(has "$HTML" ">Copy selection</button>")"
 # ================================================================================================
 # 3. The settled decisions the markup makes, on the design's own fixture
 # ================================================================================================
-check "every kind is a heading row with its total (D1)" "$(eq "$(grep -cE '<div class="group-head" data-category="[a-z-]+"><h2>[^<]+</h2><span class="group-total">' <<< "$HTML")" 12)"
+check "every kind is a heading row with its total (D1)" "$(eq "$(grep -cE '<div class="group-head" data-category="[a-z-]+"><label class="head-left"><input class="tick head-tick" [^>]*><h2>[^<]+</h2></label><span class="group-total">' <<< "$HTML")" 12)"
+head() { awk -v c="data-category=\"$1\"" 'index($0, c) && /class="group-head"/ { print; exit }' <<< "$HTML"; }
+check "every kind's heading has a tick box before its name (D11)" "$(eq "$(count_of "$HTML" 'class="tick head-tick"')" 12)"
+check "the heading box is named for the kind (D11)" "$(has "$(head caches)" 'aria-label="Tick every App caches item"')"
+check "the heading box ticks only its own kind's items (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* data-category="caches"' <<< "$(head caches)" && echo ok || echo "the box names no kind: $(head caches)")"
+check "a kind with items to tick has its heading box enabled (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(head caches)" && echo "it is disabled" || echo ok)"
+check "every row's box says which kind it is in, for its heading box" "$(grep -qE '<input class="tick"[^>]* data-category="caches"' <<< "$(row caches-3)" && echo ok || echo "it does not")"
 check "no kind is drawn inside a box (D1)" "$(grep -qE 'class="(category|items)"' <<< "$HTML" && echo "a kind is boxed" || echo ok)"
 order="$(grep -oE '<div class="group-head" data-category="[a-z-]+"' <<< "$HTML" | awk -F '"' '{ printf "%s%s", (n++ ? " " : ""), $4 }')"
 check "kinds come largest first, your own files last (D3)" "$(eq "$order" "$(fixture_order)")"
@@ -193,8 +199,8 @@ check "a path under the home folder starts with ~" "$(has "$(row caches-3)" '<sp
 check "a size is in decimal units, as the design writes it" "$(has "$(row caches-3)" '<span class="size">18.4 GB</span>')"
 check "a partial size says it is a lower bound" "$(has "$(row runaway-logs-32)" "At least 1.6 GB")"
 check "a size nobody read says so, never 0" "$(has "$(row caches-8)" '<span class="size unknown">Size unknown</span>')"
-check "a kind's total counts only what can go" "$(has "$HTML" 'data-category="caches"><h2>App caches</h2><span class="group-total">23.2 GB</span>')"
-check "a kind's total holding a partial size says so" "$(has "$HTML" 'data-category="runaway-logs"><h2>Runaway logs</h2><span class="group-total">At least ')"
+check "a kind's total counts only what can go" "$(has "$(head caches)" '<h2>App caches</h2></label><span class="group-total">23.2 GB</span>')"
+check "a kind's total holding a partial size says so" "$(has "$(head runaway-logs)" '<span class="group-total">At least ')"
 check "the tick box is named by its path" "$(has "$(row caches-3)" 'aria-label="~/Library/Caches/com.adobe.LightroomClassicCC7"')"
 # The colours themselves are read from the drawn page in the PR; here, no style names red as a value.
 check "no style uses red (D7)" "$(grep -qiE '(:|,) *red *[;,)!]|#(f00|ff0000|e00|d00|c00)[^0-9a-f]' <<< "$HTML" && echo "a red is used" || echo ok)"
@@ -213,6 +219,43 @@ check "its markup is escaped" "$(has "$(row large-files-1)" "~/Downloads/&lt;scr
 check "and never live" "$(hasnt "$HTML" "<script>alert(1)")"
 check "a detail holding markup is escaped too" "$(has "$(row large-files-1)" "&lt;b&gt;bold&lt;/b&gt;")"
 check "the page still has exactly one script" "$(eq "$(count_of "$HTML" "<script")" 1)"
+
+# A kind with nothing that can be ticked has its heading box disabled (D11).
+fresh
+printf '%s\n' "caches-1${S}caches${S}delete${S}$H/Library/Caches/a${S}4096${S}not offerable: Safari has files open in it${S}1:1${S}measured${S}${S}" \
+  "trash-1${S}trash${S}delete${S}$H/.Trash/b${S}4096${S}offerable${S}1:2${S}measured${S}${S}" > "$H/items.txt"
+write_record "$H/items.txt" "trash caches"
+render --out "$OUT"
+check "a kind with nothing to tick has its heading box disabled (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(head caches)" && echo ok || echo "it can be ticked: $(head caches)")"
+check "while a kind with something to tick does not" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(head trash)" && echo "it is disabled" || echo ok)"
+
+# The heading box's rules (D11), run in node from the page's own script: what CI's runner and
+# both Macs have. Without node this part is reported as unmeasured, never as a pass (L411).
+if command -v node >/dev/null 2>&1; then
+  rules="$(awk '/D11 rules begin/ { p = 1; next } /D11 rules end/ { p = 0 } p' <<< "$HTML")"
+  check "the page carries the heading box's rules" "$([ -n "$rules" ] && echo ok || echo "no D11 rules block in the page")"
+  verdict="$(node -e "$rules"'
+    var out = [];
+    function eq(name, got, want) { if (JSON.stringify(got) !== JSON.stringify(want)) out.push(name + ": got " + JSON.stringify(got)); }
+    function boxes() { return [{ checked: false, disabled: false }, { checked: false, disabled: false }, { checked: false, disabled: true }]; }
+    var b = boxes();
+    eq("opens empty", headState(b), { disabled: false, checked: false, indeterminate: false });
+    b[0].checked = true;
+    eq("one of two ticked is half filled", headState(b), { disabled: false, checked: false, indeterminate: true });
+    b[1].checked = true;
+    eq("both ticked is full", headState(b), { disabled: false, checked: true, indeterminate: false });
+    b = boxes(); applyHead(b, true);
+    eq("ticking the heading ticks what can be ticked", [b[0].checked, b[1].checked], [true, true]);
+    eq("and never a kept item", b[2].checked, false);
+    eq("after which the heading is full", headState(b), { disabled: false, checked: true, indeterminate: false });
+    applyHead(b, false);
+    eq("unticking it unticks them", [b[0].checked, b[1].checked, b[2].checked], [false, false, false]);
+    eq("a kind with nothing to tick is disabled", headState([{ checked: false, disabled: true }]), { disabled: true, checked: false, indeterminate: false });
+    console.log(out.length ? out.join("; ") : "ok");' 2>&1)"
+  check "the heading box: half filled, full, and never ticking a kept item (D11)" "$verdict"
+else
+  echo "SUITE-PART-UNMEASURED the heading box's rules (D11): node is not on PATH, so the page's script could not be run"
+fi
 
 # An empty scan says so, rather than drawing an empty page.
 fresh

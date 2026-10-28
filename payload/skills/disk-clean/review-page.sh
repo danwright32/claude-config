@@ -2,7 +2,7 @@
 #
 # review-page.sh: renders the last disk-clean scan into the one review page Dan ticks what goes on
 # (claude-config#1807), drawn to the design he settled on 2026-10-28
-# (docs/design/disk-clean-review-page.html, decisions D1 to D10).
+# (docs/design/disk-clean-review-page.html, decisions D1 to D11).
 #
 #   bash ~/.claude/skills/disk-clean/review-page.sh --out <folder> [--clear-clipboard]
 #
@@ -15,7 +15,9 @@
 # The page is ONE self contained file: review-page.html beside this script with the scan put where
 # its REVIEW marker is. Nothing on it is fetched from anywhere. What it shows, from the record
 # (~/.claude/state/disk-clean/last-scan.json, read through hooks/lib/disk-clean-record.sh):
-#   - each kind of thing as a heading row with what can go from it on the right (D1). A kind's total
+#   - each kind of thing as a heading row with what can go from it on the right (D1), and a tick box
+#     before its name that ticks every item of the kind that can be ticked, never a kept one, half
+#     filled when only some are, disabled when none can be (D11). A kind's total
 #     says "At least" when anything in it that can go was only partly measured or not at all, since
 #     then the figure is a lower bound (L11);
 #   - kinds largest first by what can go, with Tools not used in 180 days and Large personal files
@@ -109,6 +111,7 @@ awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v ta
     if (!(c in known)) { known[c] = 1; firsts[++nfirst] = c }
     n[c]++
     if ($5 == "offerable") {
+      can[c]++
       if ($6 ~ /^[0-9]+$/) kib[c] += int($6 / 1024); else lower[c] = 1
       if ($8 == "partial") lower[c] = 1
     }
@@ -129,7 +132,7 @@ awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v ta
     if ("large-files" in n) order[++nr] = "large-files"
     for (r = 1; r <= nr; r++) {
       c = order[r]; rank[c] = r
-      printf "%d%s%s%s%s%s%s\n", r, tab, c, tab, dcr_t(c, table), tab, (lower[c] ? "At least " : "") dcu_h(kib[c] + 0) > catfile
+      printf "%d%s%s%s%s%s%s%s%d\n", r, tab, c, tab, dcr_t(c, table), tab, (lower[c] ? "At least " : "") dcu_h(kib[c] + 0), tab, can[c] + 0 > catfile
     }
     for (i = 1; i <= NR; i++) {
       split(seq[i], f, FS)
@@ -160,7 +163,7 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     return st
   }
   BEGIN {
-    while ((getline line < catfile) > 0) { split(line, c, tab); title[c[1]] = c[3]; total[c[1]] = c[4]; name[c[1]] = c[2] }
+    while ((getline line < catfile) > 0) { split(line, c, tab); title[c[1]] = c[3]; total[c[1]] = c[4]; name[c[1]] = c[2]; can[c[1]] = c[5] + 0 }
     printf "<header class=\"top\"><h1>Disk clean</h1><p class=\"scanline\">Scanned %s on this Mac. Nothing is removed until you copy your selection back.</p></header>\n", h(scanned)
     printf "<div class=\"grouped\" id=\"review\" data-scan-id=\"%s\" data-nonce=\"%s\">\n", h(sid), h(nonce)
     FS = tab
@@ -169,7 +172,9 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     r = $1; rest = $0
     for (k = 1; k <= 4; k++) rest = substr(rest, index(rest, tab) + 1)
     split(rest, f, sep)
-    if (r != last) { last = r; printf "<div class=\"group-head\" data-category=\"%s\"><h2>%s</h2><span class=\"group-total\">%s</span></div>\n", h(name[r]), h(title[r]), h(total[r]) }
+    # D11: the heading box, in the tick column of the rows, ticking every item of the kind that can be
+    # ticked; disabled when none can.
+    if (r != last) { last = r; printf "<div class=\"group-head\" data-category=\"%s\"><label class=\"head-left\"><input class=\"tick head-tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"Tick every %s item\" data-category=\"%s\"%s><h2>%s</h2></label><span class=\"group-total\">%s</span></div>\n", h(name[r]), h(title[r]), h(name[r]), (can[r] ? "" : " disabled"), h(title[r]), h(total[r]) }
     id = f[1]; st = f[5]; b = f[6]; ok = (st == "offerable")
     p = h(short(f[4]))
     note = ok ? f[10] : reason(st)
@@ -182,8 +187,8 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     }
     if (sub_ != "") sub_ = "<span class=\"sub\">" sub_ "</span>"
     known = (b ~ /^[0-9]+$/)
-    printf "<div class=\"item%s\" data-id=\"%s\"><input class=\"tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"%s\" data-id=\"%s\" data-bytes=\"%s\" data-partial=\"%d\"%s><div class=\"what\"><span class=\"path\">%s</span>%s</div><span class=\"size%s\">%s</span></div>\n", \
-      (ok ? "" : " kept"), h(id), p, h(id), (known ? b : ""), (f[8] == "partial"), (ok ? "" : " disabled"), p, sub_, (known ? "" : " unknown"), h(dcrv_size(b, f[8]))
+    printf "<div class=\"item%s\" data-id=\"%s\"><input class=\"tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"%s\" data-id=\"%s\" data-category=\"%s\" data-bytes=\"%s\" data-partial=\"%d\"%s><div class=\"what\"><span class=\"path\">%s</span>%s</div><span class=\"size%s\">%s</span></div>\n", \
+      (ok ? "" : " kept"), h(id), p, h(id), h(name[r]), (known ? b : ""), (f[8] == "partial"), (ok ? "" : " disabled"), p, sub_, (known ? "" : " unknown"), h(dcrv_size(b, f[8]))
     rows++
   }
   END {

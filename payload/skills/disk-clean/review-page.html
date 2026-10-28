@@ -7,7 +7,7 @@
 <title>Disk clean</title>
 <!--
   The template for disk-clean's review page (claude-config#1807), drawn to the design Dan settled on
-  2026-10-28: docs/design/disk-clean-review-page.html, whose decisions D1 to D10 are cited below.
+  2026-10-28: docs/design/disk-clean-review-page.html, whose decisions D1 to D11 are cited below.
   review-page.sh puts the scan where the REVIEW marker line is and writes the result as one self
   contained file: nothing here is fetched from anywhere, no font, no script, no image.
 -->
@@ -65,11 +65,16 @@ h2 { font-size: 15px; margin: 0; }
 /* D1: one list, a heading row per kind with its total on the right, nothing boxed. */
 .group-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-top: 22px; padding-bottom: 6px; border-bottom: 1px solid var(--head-rule); }
 .group-total { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* D11: a tick box on each kind's heading, in the rows' tick column, before the kind's name. */
+.head-left { display: flex; align-items: baseline; }
+/* Two classes, so the rows' .tick margin further down cannot take the design's 15px back. */
+.tick.head-tick { width: 13px; margin: 0 15px 0 0; }
+.head-left:has(.head-tick:not(:disabled)) { cursor: pointer; }
 
 /* D5: a row is one line, path then note then marks, wrapping only when too long. */
 .item { display: grid; grid-template-columns: 28px 1fr 110px; align-items: start; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--rule); }
 .item.kept { color: var(--kept); }
-.tick { margin: 2px 0 0; accent-color: var(--tick); width: 16px; height: 16px; }
+.tick { margin: 2px 0 0; accent-color: var(--tick); }
 .tick:not(:disabled) { cursor: pointer; }
 .tick:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .what { display: flex; flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
@@ -105,7 +110,34 @@ h2 { font-size: 15px; margin: 0; }
 (function () {
   "use strict";
   var list = document.getElementById("review");
-  var ticks = list ? Array.prototype.slice.call(list.querySelectorAll("input.tick")) : [];
+  var ticks = list ? Array.prototype.slice.call(list.querySelectorAll("input.tick:not(.head-tick)")) : [];
+  var heads = list ? Array.prototype.slice.call(list.querySelectorAll("input.head-tick")) : [];
+  // Each kind's row boxes, by the kind its heading box names.
+  var kinds = {};
+  for (var k = 0; k < ticks.length; k++) {
+    var c = ticks[k].getAttribute("data-category");
+    (kinds[c] = kinds[c] || []).push(ticks[k]);
+  }
+
+  // D11 rules begin: the heading box's rules, over a kind's row boxes ({checked, disabled}). Pure,
+  // so the suite runs them in node without a browser.
+  function headState(boxes) {
+    var can = 0, on = 0;
+    for (var i = 0; i < boxes.length; i++) if (!boxes[i].disabled) { can++; if (boxes[i].checked) on++; }
+    return { disabled: can === 0, checked: can > 0 && on === can, indeterminate: on > 0 && on < can };
+  }
+  function applyHead(boxes, checked) {
+    for (var i = 0; i < boxes.length; i++) if (!boxes[i].disabled) boxes[i].checked = checked;
+  }
+  // D11 rules end
+
+  function syncHeads() {
+    for (var i = 0; i < heads.length; i++) {
+      var st = headState(kinds[heads[i].getAttribute("data-category")] || []);
+      heads[i].checked = st.checked;
+      heads[i].indeterminate = st.indeterminate;
+    }
+  }
   var count = document.getElementById("count");
   var button = document.getElementById("copy");
   var bar = document.getElementById("bar");
@@ -144,10 +176,15 @@ h2 { font-size: 15px; margin: 0; }
 
   function render() {
     dropFallback();
+    syncHeads();
     count.textContent = selection().words;
   }
 
-  if (list) list.addEventListener("change", render);
+  if (list) list.addEventListener("change", function (e) {
+    var t = e.target;
+    if (t.classList && t.classList.contains("head-tick")) applyHead(kinds[t.getAttribute("data-category")] || [], t.checked);
+    render();
+  });
 
   button.addEventListener("click", function () {
     var sel = selection();
