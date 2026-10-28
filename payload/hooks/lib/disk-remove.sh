@@ -107,7 +107,7 @@ refuse() { # <exit code> <reason>
 
 S=$'\037'
 T0="$(date +%s)" || refuse 2 "could not read the clock, so it removed nothing."
-MAX_SCAN_AGE=3600
+MAX_SCAN_AGE="$DCR_MAX_SCAN_AGE" # lib/disk-clean-record.sh, which the review page reads too
 
 # ---------- arguments ----------
 MODE="" PLAN="" PROPOSE_METHOD=""

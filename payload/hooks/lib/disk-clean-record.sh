@@ -51,6 +51,10 @@
 #   dcr_review_items <record>          what dcr_items prints, then size, flags and detail (empty when
 #                                      absent): ten fields, for the review page (#1807). dcr_items
 #                                      keeps its seven, which disk-remove.sh reads
+#   dcr_title <category>               the category as a person reads it ("App caches"), or the name
+#                                      itself for one this table does not know. DCR_TITLES is the
+#                                      table (name|title rows), read by dcr_title and by the review
+#                                      page's awk (#1807) through DCR_AWK_TITLES, one lookup for both
 #   dcr_mark <record> <scan_id> <marks file>
 #                                      sets the state of every item named in <marks file> (lines of
 #                                      id \037 state), refusing when the record's scan_id is no longer
@@ -58,6 +62,26 @@
 #                                      read (L105)
 
 DCR_SEP=$'\037'
+
+# How old a scan may be, in seconds, before disk-remove.sh refuses a plan made from it: what it
+# measured may have changed since. The review page states the deadline from the same number (#1807).
+DCR_MAX_SCAN_AGE=3600
+
+# Every category's name as a person reads it, in one table: the scan's summary, the review page and
+# the checker's confirmation all say the same words (#1806, #1807). Rows are name|title separated by
+# semicolons, on one line, because BSD awk refuses a -v value holding a newline.
+DCR_TITLES='trash|Trash;caches|App caches;xcode|Xcode build caches;build-folders|Build folders;docker|Docker;playwright|Playwright browsers;claude-temp|Claude Code temp folders;worktrees|Worktrees;transcripts|Claude Code transcripts;runaway-logs|Runaway logs;forgotten-tools|Forgotten tools;large-files|Large personal files;named|Named by disk-full'
+# dcr_t(<name>, <the table>): the lookup, for any awk program handed DCR_TITLES with -v.
+DCR_AWK_TITLES='
+function dcr_t(name, table,    n, i, rows, k) {
+  n = split(table, rows, ";")
+  for (i = 1; i <= n; i++) { k = index(rows[i], "|"); if (substr(rows[i], 1, k - 1) == name) return substr(rows[i], k + 1) }
+  return name
+}
+'
+dcr_title() { # <category>
+  awk -v name="${1:-}" -v table="$DCR_TITLES" "$DCR_AWK_TITLES"'BEGIN { printf "%s\n", dcr_t(name, table) }'
+}
 
 # Shared awk: reads one string or number field from an item or header line.
 DCR_AWK_LIB='

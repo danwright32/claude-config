@@ -52,14 +52,6 @@ W="$DCS_WORK"
 ALL="trash caches xcode build-folders docker playwright claude-temp worktrees transcripts runaway-logs forgotten-tools large-files"
 WALKERS=" build-folders worktrees runaway-logs forgotten-tools large-files "
 
-title() {
-  case "$1" in
-    trash) echo "Trash" ;; caches) echo "App caches" ;; xcode) echo "Xcode build caches" ;; build-folders) echo "Build folders" ;;
-    docker) echo "Docker" ;; playwright) echo "Playwright browsers" ;; claude-temp) echo "Claude Code temp folders" ;;
-    worktrees) echo "Worktrees" ;; transcripts) echo "Claude Code transcripts" ;; runaway-logs) echo "Runaway logs" ;;
-    forgotten-tools) echo "Forgotten tools" ;; large-files) echo "Large personal files" ;; *) echo "$1" ;;
-  esac
-}
 
 LIMIT="${DISK_CLEAN_CATEGORY_SECONDS:-600}"
 WALK_LIMIT="${DISK_CLEAN_WALK_SECONDS:-900}"
@@ -219,8 +211,8 @@ for c in $RUN; do
     END { printf "%d %d %d %d %.0f", n, o, x, u, b / 1024 }' "$W/items")"
   set -- $line
   words="$2 offerable ($(dcu_human "$5")), $3 not offerable, $4 unmeasured"
-  if [ "$status" = measured ]; then echo "$(title "$c"): $words."
-  else echo "$(title "$c"): $status. Found before that: $words."; fi
+  if [ "$status" = measured ]; then echo "$(dcr_title "$c"): $words."
+  else echo "$(dcr_title "$c"): $status. Found before that: $words."; fi
   n="$(dcr_header "$DCS_RECORD" "note.$c" 2>/dev/null)" && echo "  $n"
 done
 echo ""

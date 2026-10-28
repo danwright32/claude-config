@@ -8,17 +8,26 @@
 #
 #   dcu_human <KiB>        a KiB count as a person reads it: "12 KB", "340 MB", "1.5 GB"; "size
 #                          unknown" for anything that is not a number, never 0
+#   DCU_AWK_LIB            the same reading as an awk function, dcu_h(<KiB>), for a caller turning
+#                          thousands of sizes into words in one awk pass (the review page, #1807);
+#                          dcu_human is a call to it, so the two can never disagree
 #   dcu_docker_kib <size>  a size as Docker prints it (decimal units: 1.2GB, 512kB, 0B) in KiB;
 #                          fails, printing nothing, on anything else
 #
 # Commands: awk and the builtins. bash 3.2 safe. Sourcing defines functions and does nothing else.
 
+DCU_AWK_LIB='
+function dcu_h(k) {
+  if (k !~ /^[0-9]+$/) return "size unknown"
+  k = k + 0
+  if (k >= 1048576) return sprintf("%.1f GB", k / 1048576)
+  if (k >= 1024) return sprintf("%d MB", int(k / 1024))
+  return sprintf("%d KB", k)
+}
+'
+
 dcu_human() { # <KiB>
-  local k="${1:-}"
-  case "$k" in ''|*[!0-9]*) printf 'size unknown'; return 0 ;; esac
-  if [ "$k" -ge 1048576 ]; then awk -v k="$k" 'BEGIN { printf "%.1f GB", k / 1048576 }'
-  elif [ "$k" -ge 1024 ]; then printf '%s MB' "$((k / 1024))"
-  else printf '%s KB' "$k"; fi
+  awk -v k="${1:-}" "$DCU_AWK_LIB"'BEGIN { printf "%s", dcu_h(k) }'
 }
 
 dcu_docker_kib() { # <docker size, such as 1.2GB or 512kB> -> KiB; fails, printing nothing, on anything else
