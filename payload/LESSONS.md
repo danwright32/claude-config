@@ -7990,6 +7990,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   which asks the server for the page again first)
 
 ## Building with AI
+- **L816. A streamed model reply is complete only when its stream reports a finish: an error part or a missing finish must fail the call, because the AI SDK still resolves the text written so far and a half sentence reads as a whole reply.**
+  (pivot#113, 2026-10-27)
+  SHORT: A streamed model reply ending in an error or with no finish must fail the call; the SDK still returns the partial text as if whole.
 - **L814. A record that a person was shown fixed regulated text (a consent, a disclosure) must be written from the page's own confirmation that it displayed that text at that version, and every blank in that text must be filled from a source no model or chat input can write, because a screen the server built is not a screen anyone saw, and a blank the model can fill puts model output into fixed wording.**
   (pivot#75, pivot#76, 2026-10-27)
   SHORT: Record fixed consent text as shown only on the page's confirmed render, and fill its blanks from sources no model or chat input can write.
