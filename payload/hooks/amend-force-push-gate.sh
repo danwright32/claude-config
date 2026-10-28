@@ -34,14 +34,14 @@ payload="$(cat 2>/dev/null || true)"
 # call leaves before python starts.
 case "$payload" in *'"agent_id"'*) ;; *) exit 0 ;; esac
 case "$payload" in *git*) ;; *) exit 0 ;; esac
-case "$payload" in *amend*|*push*) ;; *) exit 0 ;; esac
+case "$payload" in *--am*|*push*) ;; *) exit 0 ;; esac
 
 refuse() { printf '%s\n' "$1" >&2; exit 2; }
 
 # The one degraded judgement, for every path that cannot read the command (L370).
 refuse_unread() {   # $1 = the text to look in, $2 = why it could not be read
   case "$1" in
-    *--amend*|*--force*|*push*' -f'*|*push*' +'*|*push*':+'*)
+    *--am*|*--force*|*push*' -f'*|*push*' +'*|*push*':+'*)
       refuse "REFUSED (amend-force-push-gate.sh): this agent's command names an amend or a force push, and $2, so the gate cannot tell what it does. Never amend a commit or force push: add a new commit and push normally (claude-config#1856)." ;;
   esac
   exit 0
@@ -69,7 +69,7 @@ agent="${parsed%%$'\x1f'*}"
 cmd="${parsed#*$'\x1f'}"
 [ -n "$agent" ] || agent="(no id given)"
 
-case "$cmd" in *amend*|*push*) ;; *) exit 0 ;; esac
+case "$cmd" in *--am*|*push*) ;; *) exit 0 ;; esac
 
 said="$(printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/agent-overrides.py" rewrite-refusal "$agent" 2>&1)"; rc=$?
 # 10 is the reader's "nothing to refuse"; 1 is what Python exits on a crash, so it is unread.

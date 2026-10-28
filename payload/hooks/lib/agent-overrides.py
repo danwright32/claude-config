@@ -284,15 +284,16 @@ PUSH_SHORT_VALUED = set("o")
 
 
 def _commit_amends(after):
-    """Whether a git commit's words (after the subcommand) amend: --amend, unless a later --no-amend
-    turns it off. The value of a valued option (-m "--amend") is not an option."""
+    """Whether a git commit's words (after the subcommand) amend: --amend, or a prefix git reads as it
+    (--am is the shortest, since no other commit option starts so), unless a later --no-amend turns
+    it off. The value of a valued option (-m "--amend") is not an option."""
     on = False
     i = 0
     while i < len(after):
         w = after[i]
         if w == "--":
             break
-        if w == "--amend":
+        if len(w) >= 4 and "--amend".startswith(w):
             on = True
         elif w == "--no-amend":
             on = False

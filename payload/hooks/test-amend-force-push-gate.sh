@@ -94,6 +94,8 @@ agent_refused "commit --amend behind rtk" 'rtk git commit --amend --no-edit'
 agent_refused "commit --amend after a cd" 'cd /tmp/repo && git commit --amend --no-edit'
 agent_refused "commit --amend inside bash -c" "bash -c 'git commit --amend --no-edit'"
 agent_refused "commit --amend with git -C" 'git -C /tmp/repo commit --amend --no-edit'
+agent_refused "commit --amen, a prefix git reads as --amend" 'git commit --amen --no-edit'
+agent_refused "commit --am, the shortest prefix git reads as --amend" 'git commit --am --no-edit'
 agent_refused "a rebase whose --exec amends" 'git rebase origin/main --exec "git commit --amend --no-edit"'
 agent_refused "push --force" 'git push --force origin feature'
 says "a force push's refusal is the same sentence" "$RULE"
