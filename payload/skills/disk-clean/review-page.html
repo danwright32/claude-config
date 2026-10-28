@@ -70,6 +70,11 @@ h2 { font-size: 15px; margin: 0; }
 /* Two classes, so the rows' .tick margin further down cannot take the design's 15px back. */
 .tick.head-tick { width: 13px; margin: 0 15px 0 0; }
 .head-left:has(.head-tick:not(:disabled)) { cursor: pointer; }
+/* A kind the scan could not measure: greyed, no tick box (a space of its width keeps the name in
+   the names' column), and the reason where the total goes. */
+.group-head.unmeasured { color: var(--kept); border-bottom-color: var(--rule); }
+.head-space { flex: 0 0 13px; margin-right: 15px; }
+.group-reason { color: var(--kept); text-align: right; }
 
 /* D5: a row is one line, path then note then marks, wrapping only when too long. */
 .item { display: grid; grid-template-columns: 28px 1fr 110px; align-items: start; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--rule); }

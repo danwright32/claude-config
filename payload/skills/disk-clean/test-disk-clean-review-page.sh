@@ -79,6 +79,7 @@ PY
 }
 notes() { # [<categories>]
   printf 'categories%s%s\n' "$S" "${1:-trash caches xcode build-folders docker playwright claude-temp worktrees transcripts runaway-logs forgotten-tools large-files}"
+  [ -z "${EXTRA_NOTES:-}" ] || printf '%s\n' "$EXTRA_NOTES"
 }
 fresh() {
   chmod -R u+rwx "$H" 2>/dev/null
@@ -159,7 +160,7 @@ check "beside Copy selection (D9)" "$(has "$HTML" ">Copy selection</button>")"
 # 3. The settled decisions the markup makes, on the design's own fixture
 # ================================================================================================
 check "every kind is a heading row with its total (D1)" "$(eq "$(grep -cE '<div class="group-head" data-category="[a-z-]+"><label class="head-left"><input class="tick head-tick" [^>]*><h2>[^<]+</h2></label><span class="group-total">' <<< "$HTML")" 12)"
-heading() { awk -v c="data-category=\"$1\"" 'index($0, c) && /class="group-head"/ { print; exit }' <<< "$HTML"; }
+heading() { awk -v c="data-category=\"$1\"" 'index($0, c) && /class="group-head/ { print; exit }' <<< "$HTML"; }
 check "every kind's heading has a tick box before its name (D11)" "$(eq "$(count_of "$HTML" 'class="tick head-tick"')" 12)"
 check "the heading box is named for the kind (D11)" "$(has "$(heading caches)" 'aria-label="Tick every App caches item"')"
 check "the heading box ticks only its own kind's items (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* data-category="caches"' <<< "$(heading caches)" && echo ok || echo "the box names no kind: $(heading caches)")"
@@ -256,6 +257,46 @@ if command -v node >/dev/null 2>&1; then
 else
   echo "SUITE-PART-UNMEASURED the heading box's rules (D11): node is not on PATH, so the page's script could not be run"
 fi
+
+# ================================================================================================
+# A kind the scan could not measure at all is shown (Dan, 2026-10-28): its heading greyed, with no
+# tick box, its reason where the total goes, no rows, after the measured kinds that regenerate and
+# before Dan's own files.
+# ================================================================================================
+fresh
+printf '%s\n' "trash-1${S}trash${S}delete${S}$H/.Trash/a${S}2000000000${S}offerable${S}1:1${S}measured${S}${S}" \
+  "caches-1${S}caches${S}delete${S}$H/Library/Caches/b${S}5000000000${S}offerable${S}1:2${S}measured${S}${S}" \
+  "large-files-1${S}large-files${S}trash${S}$H/Downloads/c${S}900000000${S}offerable${S}1:3${S}measured${S}${S}" > "$H/items.txt"
+EXTRA_NOTES="status.trash${S}measured
+status.caches${S}measured
+status.docker${S}unmeasured: Docker was not running
+status.xcode${S}unmeasured: 
+note.xcode${S}Xcode is not installed on this Mac
+status.large-files${S}measured" write_record "$H/items.txt" "trash caches xcode docker large-files"
+render --out "$OUT"
+check "a scan with an unmeasured kind renders with exit 0" "$(eq "$RC" 0)"
+check "the unmeasured kind is shown" "$([ -n "$(heading docker)" ] && echo ok || echo "no Docker heading")"
+check "its heading is greyed" "$(has "$(heading docker)" 'class="group-head unmeasured"')"
+check "its reason stands where the total goes, without the record's prefix" "$(has "$(heading docker)" '<span class="group-reason">Docker was not running</span>')"
+check "it has no tick box" "$(grep -q '<input' <<< "$(heading docker)" && echo "it has one" || echo ok)"
+check "and no rows beneath it" "$(grep -qE 'class="item[^"]*" data-id="[^"]*"[^>]*>.*data-category="docker"' <<< "$HTML" && echo "a row names it" || echo ok)"
+check "so it adds nothing to the bar: only measured kinds carry tick boxes" "$(eq "$(count_of "$HTML" 'class="tick head-tick"')" 3)"
+check "a status with no reason of its own takes the kind's note" "$(has "$(heading xcode)" '<span class="group-reason">Xcode is not installed on this Mac</span>')"
+order="$(grep -oE '<div class="group-head[^"]*" data-category="[a-z-]+"' <<< "$HTML" | awk -F '"' '{ printf "%s%s", (n++ ? " " : ""), $4 }')"
+check "unmeasured kinds come after the measured ones that regenerate, before your own files" "$(eq "$order" "caches trash xcode docker large-files")"
+EXTRA_NOTES="status.large-files${S}unmeasured: the walk of the home folder timed out" write_record "$H/items.txt" "trash caches large-files"
+awk -F "$S" '$2 != "large-files"' "$H/items.txt" > "$H/items2.txt"
+EXTRA_NOTES="status.large-files${S}unmeasured: the walk of the home folder timed out" write_record "$H/items2.txt" "trash caches large-files"
+render --out "$OUT"
+order="$(grep -oE '<div class="group-head[^"]*" data-category="[a-z-]+"' <<< "$HTML" | awk -F '"' '{ printf "%s%s", (n++ ? " " : ""), $4 }')"
+check "an unmeasured kind of your own files still comes last" "$(eq "$order" "caches trash large-files")"
+check "and says why" "$(has "$(heading large-files)" "the walk of the home folder timed out")"
+: > "$H/items.txt"
+EXTRA_NOTES="status.docker${S}unmeasured: Docker was not running" write_record "$H/items.txt" "trash docker"
+render --out "$OUT"
+check "with nothing found but a kind unmeasured, it never claims the scan found nothing" "$(hasnt "$HTML" "This scan found nothing to remove.")"
+check "it says nothing was found in what could be measured" "$(has "$HTML" "Nothing was found to remove in what the scan could measure.")"
+check "and still shows the unmeasured kind" "$(has "$(heading docker)" "Docker was not running")"
 
 # An empty scan says so, rather than drawing an empty page.
 fresh

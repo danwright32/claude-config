@@ -22,7 +22,10 @@
 #     then the figure is a lower bound (L11);
 #   - kinds largest first by what can go, with Tools not used in 180 days and Large personal files
 #     always last, in that order, because those are Dan's own and cannot come back (D3). A kind the
-#     scan found nothing in is not drawn, as the design draws it;
+#     scan found nothing in is not drawn, as the design draws it; a kind it could not measure at all
+#     is (Dan, 2026-10-28): its heading greyed, with no tick box and no rows, and the reason the scan
+#     recorded (its status, else its note) where the total goes, after the measured kinds that
+#     regenerate and before Dan's own files;
 #   - within a kind, what can be ticked largest first and unknown sizes last (D4), then what will not
 #     be removed, greyed, each with its reason (D2), in the order the scan found them;
 #   - each row on one line: path (the home folder as ~), then its reason or detail, then its marks
@@ -102,12 +105,32 @@ NONCE="$(dcrv_write_nonce "$OUT" "$SID")" || refuse "could not write the nonce b
 
 # ---------- the rows, in the order the design settled ----------
 dcr_review_items "$REC" > "$WORK/items"
+# How the scan went for each kind, as it recorded it: kind, status, note (header values never hold a
+# tab or any other control character; disk-clean-record.sh refuses to write one).
+: > "$WORK/status"
+for c in $CATS; do
+  st="$(dcr_header "$REC" "status.$c" 2>/dev/null)" || st=""
+  nt="$(dcr_header "$REC" "note.$c" 2>/dev/null)" || nt=""
+  printf '%s\t%s\t%s\n' "$c" "$st" "$nt" >> "$WORK/status"
+done
 # Pass 1: each kind's total and rank, and one sort key line per item:
 #   rank, 0 for an item that can go or 1 for one that cannot, minus its KiB (unknown sizes after every
 #   known one, kept items in scan order), the item's place in the scan, then the item itself.
 awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v tab="$TAB" "$DCU_AWK_LIB$DCR_AWK_TITLES"'
+  # A kind the scan could not measure, with the reason it recorded: its status without the
+  # "unmeasured: " prefix, else its note, else a plain statement that it was not measured.
+  FILENAME == ARGV[1] {
+    split($0, sf, tab)
+    if (index(sf[2], "unmeasured:") == 1) {
+      why = sf[2]; sub(/^unmeasured:[ ]*/, "", why)
+      if (why == "") why = sf[3]
+      if (why == "") why = "the scan could not measure it"
+      unm[sf[1]] = why
+    }
+    next
+  }
   {
-    seq[NR] = $0; c = $2; cat_of[NR] = c
+    ni++; seq[ni] = $0; c = $2; cat_of[ni] = c
     if (!(c in known)) { known[c] = 1; firsts[++nfirst] = c }
     n[c]++
     if ($5 == "offerable") {
@@ -117,30 +140,35 @@ awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v ta
     }
   }
   END {
-    # The kinds, in the scan header order, then any the header does not name.
+    # The kinds, in the scan header order, then any the header does not name. A kind with items is
+    # drawn; so is one the scan could not measure at all, which has none (Dan, 2026-10-28).
     m = split(cats, co, " "); nk = 0
-    for (j = 1; j <= m; j++) if ((co[j] in n) && !(co[j] in placed)) { kinds[++nk] = co[j]; placed[co[j]] = 1 }
+    for (j = 1; j <= m; j++) if (((co[j] in n) || (co[j] in unm)) && !(co[j] in placed)) { kinds[++nk] = co[j]; placed[co[j]] = 1 }
     for (j = 1; j <= nfirst; j++) if (!(firsts[j] in placed)) { kinds[++nk] = firsts[j]; placed[firsts[j]] = 1 }
-    # D3: largest first by what can go (a stable insertion sort over a dozen kinds), your own last.
+    # A kind cut short partway still shows what it found, and its total is then a lower bound.
+    for (c in unm) if (c in n) lower[c] = 1
+    # D3: largest first by what can go (a stable insertion sort over a dozen kinds); then the kinds
+    # the scan could not measure at all, which have no size, in the scan order; your own files last.
     nr = 0
     for (j = 1; j <= nk; j++) {
-      c = kinds[j]; if (c == "forgotten-tools" || c == "large-files") continue
+      c = kinds[j]; if (c == "forgotten-tools" || c == "large-files" || !(c in n)) continue
       r = ++nr; order[r] = c
       while (r > 1 && kib[order[r - 1]] + 0 < kib[c] + 0) { order[r] = order[r - 1]; r--; order[r] = c }
     }
-    if ("forgotten-tools" in n) order[++nr] = "forgotten-tools"
-    if ("large-files" in n) order[++nr] = "large-files"
+    for (j = 1; j <= nk; j++) { c = kinds[j]; if (c != "forgotten-tools" && c != "large-files" && !(c in n)) order[++nr] = c }
+    if (("forgotten-tools" in n) || ("forgotten-tools" in unm)) order[++nr] = "forgotten-tools"
+    if (("large-files" in n) || ("large-files" in unm)) order[++nr] = "large-files"
     for (r = 1; r <= nr; r++) {
       c = order[r]; rank[c] = r
-      printf "%d%s%s%s%s%s%s%s%d\n", r, tab, c, tab, dcr_t(c, table), tab, (lower[c] ? "At least " : "") dcu_h(kib[c] + 0), tab, can[c] + 0 > catfile
+      printf "%d%s%s%s%s%s%s%s%d%s%s\n", r, tab, c, tab, dcr_t(c, table), tab, (lower[c] ? "At least " : "") dcu_h(kib[c] + 0), tab, can[c] + 0, tab, ((c in n) ? "" : unm[c]) > catfile
     }
-    for (i = 1; i <= NR; i++) {
+    for (i = 1; i <= ni; i++) {
       split(seq[i], f, FS)
       kept = (f[5] == "offerable") ? 0 : 1
       key = kept ? 0 : ((f[6] ~ /^[0-9]+$/) ? -int(f[6] / 1024) : 1)
       printf "%d%s%d%s%d%s%d%s%s\n", rank[cat_of[i]], tab, kept, tab, key, tab, i, tab, seq[i]
     }
-  }' "$WORK/items" > "$WORK/keyed" || refuse "could not read the scan's items, so no page was written."
+  }' "$WORK/status" "$WORK/items" > "$WORK/keyed" || refuse "could not read the scan's items, so no page was written."
 [ -f "$WORK/cats" ] || : > "$WORK/cats"
 sort -t "$TAB" -k1,1n -k2,2n -k3,3n -k4,4n "$WORK/keyed" > "$WORK/sorted" || refuse "could not order the scan's items, so no page was written."
 
@@ -162,8 +190,23 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     sub(/^(not offerable|unmeasured): /, "", st)
     return st
   }
+  # Every heading up to and including rank <upto> not yet drawn: a kind with items as its rows
+  # begin, and a kind the scan could not measure, which has no rows, in its place between them.
+  function heads(upto) {
+    while (drawn < upto) {
+      drawn++
+      if (why[drawn] != "") {
+        printf "<div class=\"group-head unmeasured\" data-category=\"%s\"><div class=\"head-left\"><span class=\"head-space\"></span><h2>%s</h2></div><span class=\"group-reason\">%s</span></div>\n", h(name[drawn]), h(title[drawn]), h(why[drawn])
+        unmeasured++
+        continue
+      }
+      # D11: the heading box, in the tick column of the rows, ticking every item of the kind that
+      # can be ticked; disabled when none can.
+      printf "<div class=\"group-head\" data-category=\"%s\"><label class=\"head-left\"><input class=\"tick head-tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"Tick every %s item\" data-category=\"%s\"%s><h2>%s</h2></label><span class=\"group-total\">%s</span></div>\n", h(name[drawn]), h(title[drawn]), h(name[drawn]), (can[drawn] ? "" : " disabled"), h(title[drawn]), h(total[drawn])
+    }
+  }
   BEGIN {
-    while ((getline line < catfile) > 0) { split(line, c, tab); title[c[1]] = c[3]; total[c[1]] = c[4]; name[c[1]] = c[2]; can[c[1]] = c[5] + 0 }
+    while ((getline line < catfile) > 0) { split(line, c, tab); title[c[1]] = c[3]; total[c[1]] = c[4]; name[c[1]] = c[2]; can[c[1]] = c[5] + 0; why[c[1]] = c[6]; nkinds++ }
     printf "<header class=\"top\"><h1>Disk clean</h1><p class=\"scanline\">Scanned %s on this Mac. Nothing is removed until you copy your selection back.</p></header>\n", h(scanned)
     printf "<div class=\"grouped\" id=\"review\" data-scan-id=\"%s\" data-nonce=\"%s\">\n", h(sid), h(nonce)
     FS = tab
@@ -172,9 +215,7 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     r = $1; rest = $0
     for (k = 1; k <= 4; k++) rest = substr(rest, index(rest, tab) + 1)
     split(rest, f, sep)
-    # D11: the heading box, in the tick column of the rows, ticking every item of the kind that can be
-    # ticked; disabled when none can.
-    if (r != last) { last = r; printf "<div class=\"group-head\" data-category=\"%s\"><label class=\"head-left\"><input class=\"tick head-tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"Tick every %s item\" data-category=\"%s\"%s><h2>%s</h2></label><span class=\"group-total\">%s</span></div>\n", h(name[r]), h(title[r]), h(name[r]), (can[r] ? "" : " disabled"), h(title[r]), h(total[r]) }
+    heads(r + 0)
     id = f[1]; st = f[5]; b = f[6]; ok = (st == "offerable")
     p = h(short(f[4]))
     note = ok ? f[10] : reason(st)
@@ -192,7 +233,9 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     rows++
   }
   END {
-    if (!rows) print "<p class=\"empty\">This scan found nothing to remove.</p>"
+    heads(nkinds + 0)
+    if (!rows && unmeasured) print "<p class=\"empty\">Nothing was found to remove in what the scan could measure.</p>"
+    else if (!rows) print "<p class=\"empty\">This scan found nothing to remove.</p>"
     print "</div>"
   }' "$WORK/sorted" > "$WORK/body" || refuse "could not write the page's rows, so no page was written."
 
