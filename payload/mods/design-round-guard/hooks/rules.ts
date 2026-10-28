@@ -1120,6 +1120,14 @@ export const shellUnread = (file: string, why: string): string =>
   `The design round guard could not read ${file} before the command ran (${why}), so it could not judge what the command changes there by what it leaves, and judged the whole file as a look change.`
 
 /**
+ * What a refusal says of a file a Write or Edit names that is no ordinary file (#1814): /dev/stdin, a
+ * fifo, a link to a device. It is never opened, since a read of one waits for ever, so what it holds
+ * now is unknown (never read as empty), and the call is judged whole rather than by the lines it changes.
+ */
+export const targetUnread = (file: string, why: string): string =>
+  `The design round guard could not read what ${file} holds before this call (${why}), so it judged the whole file as a look change rather than the lines it changes.`
+
+/**
  * What a refusal says of a file a script run is handed as its argument (#1586): what the script does
  * with it cannot be read before it runs, so it was judged as a write of that file, as an Edit of it
  * would be. Dan's Not a look change lets one such call through where the script only reads it.
