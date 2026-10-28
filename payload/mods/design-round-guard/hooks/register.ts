@@ -55,6 +55,7 @@ import {
   isPattern,
   isTestPath,
   patternMayBeLook,
+  nameFromOutput,
   relTo,
   shapeKind,
   shellVarPath,
@@ -186,6 +187,11 @@ import { inputTexts } from './mod-kit/inputs.ts'
 //   handed (`'if (a || b) {'`), which spells no look changing name however it is read, runs, while a
 //   group that may spell one (`'app/page.(tsx|md)'`) is held as before. A name ending inside a
 //   command substitution is still unreadable, and zsh's globbing flags are read by no rule.
+// - Since #1815: a tool run through npx or a module run with python -m (mod-kit's `tool`) handed a
+//   name a command substitution fills in (`npx prettier --write $(git ls-files src)`) is held as a
+//   name no rule reads (rules.ts nameFromOutput), where it named nothing judged and passed. A script
+//   file handed one is judged as before: on this Mac every one measured was a commit, a test scope
+//   or quoted text.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -276,7 +282,8 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // `folder`, for a shell write whose name is a pattern, is where mod-kit's write reader placed it (#1123).
 // `from`, for a git checkout or restore, is where git puts the file back from (#1158).
 // `run`, for a file a script run is handed as its argument, is that script's file (#1586).
-type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string }
+// `tool`, on such a file, is set when the run is a tool through npx or a module through python -m (#1815).
+type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true }
 
 // Every file a call writes or removes, and whether it may write the guard's own record where its
 // words do not say what it writes.
@@ -310,7 +317,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // The spool helper's note writes none of what it is handed (#1747, rules.ts spoolNote).
   for (const r of w.runs ?? []) {
     if (spoolNote(r, at.home)) continue
-    for (const a of r.args) targets.push({ word: a.word, ...(a.path ? { path: a.path } : {}), ...(a.folder ? { folder: a.folder } : {}), run: r.path ?? r.script })
+    for (const a of r.args) targets.push({ word: a.word, ...(a.path ? { path: a.path } : {}), ...(a.folder ? { folder: a.folder } : {}), ...(r.tool ? { tool: true as const } : {}), run: r.path ?? r.script })
   }
   for (const u of w.unnamed) {
     // A program whose text names every file it writes is judged by those files (#830).
@@ -746,7 +753,12 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // or spelled from the top of the disk or home, a cd before it followed. A folder in no checkout is
     // in no project, whatever the name. A group (`x.(css|md)`) is read as a name by mod-kit, which
     // gives it a path.
-    if (tool === 'Bash' && (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word))) {
+    // A name a command's output fills in, handed to a tool through npx or a module through python -m
+    // (#1815: `npx prettier --write $(git ls-files src)`), is judged the same way, as a name no rule
+    // reads. Not one a script file is handed: its arguments are its own, and on this Mac every one
+    // measured was a commit, a test scope or quoted text (182 of 104,832 commands, 2026-10-27).
+    const output = t.tool === true && !t.path && nameFromOutput(t.word)
+    if (tool === 'Bash' && (output || (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
       let tree: string | null | undefined
       if (folder !== undefined) {
@@ -773,7 +785,9 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       }
       unsureFiles.push(t.word)
       why ||=
-        may === 'unread'
+        output
+          ? `where the command writes ${t.word} could not be followed, and its name is a command's output, which the design round guard cannot read before it runs, so it may name a look changing file`
+          : may === 'unread'
           ? `where the command writes ${t.word} could not be followed, and its name is a pattern the design round guard cannot read, so it may name a look changing file`
           : `where the command writes ${t.word} could not be followed, and its name is a pattern that may name a look changing file`
       continue
