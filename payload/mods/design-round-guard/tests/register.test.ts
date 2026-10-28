@@ -2764,7 +2764,7 @@ test('#1815: a tool or module handed a name a command substitution fills in is h
   expect(w.ran).toEqual([])
 })
 
-test('#1815 control: a script file handed a substitution, or a tool handed one only in a folder, is judged as before', withKit, async ($, on) => {
+test('#1815 control: a script file handed a git rev-parse substitution, or a tool handed one only in a folder, passes', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate/apps/worker' })
   for (const command of [
     // #1802's releases: code, a query string after a closed substitution.

@@ -609,8 +609,8 @@ export const outputTrusted = (word: string): boolean => {
     }
   }
   // `git rev-parse` alone, or in another checkout named by -C (a folder, a variable allowed, never a
-  // substitution), with only plain arguments after it.
-  return inner.length > 0 && inner.every((cmd) => /^\s*git\s+(-C\s+[^\s;&|`()]+\s+)?rev-parse(\s+[^;&|\n`$()]*)?\s*$/.test(cmd))
+  // substitution), with only plain arguments after it: no redirect, which would write a file.
+  return inner.length > 0 && inner.every((cmd) => /^\s*git\s+(-C\s+[^\s;&|`()<>]+\s+)?rev-parse(\s+[^;&|\n`$()<>]*)?\s*$/.test(cmd))
 }
 
 /**

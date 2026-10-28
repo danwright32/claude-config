@@ -269,6 +269,10 @@ test('#1832: only a substitution running git rev-parse alone is trusted to name 
     '$(git rev-parse $(cat ref))',
     '$(git rev-parse HEAD)$(cat x)',
     '$(git rev-parse HEAD | cut -c9-)',
+    // A redirect inside it writes a file, so it is no longer only printing a commit.
+    '$(git rev-parse HEAD > app/page.tsx)',
+    '$(git rev-parse HEAD >> log)',
+    '$(git rev-parse < x)',
     '$(git -C $(pwd) rev-parse HEAD)',
     '$(git -C x ls-files)',
     '$(git rev-parse HEAD',
