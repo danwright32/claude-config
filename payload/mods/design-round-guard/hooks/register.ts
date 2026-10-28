@@ -137,7 +137,8 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   in it reaches what the mod draws (rules.ts drawsChange), read beside the mod's other hook files: a
 //   line builder making mod-kit's text runs, dividers or buttons (manual steps' cardLines, where the
 //   #1263 divider passed unasked), anything handed to a drawing call or used in JSX, and every name
-//   those use. Any other edit there passes, as does every edit to a .ts file that draws nothing.
+//   those use. Any other edit there passes, as does every edit to a .ts file that draws nothing,
+//   unless it changes the words of a message a person reads (since #1841, below).
 // - Since #1158: a git checkout or restore of such a file is judged by the lines it changes, against
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
 //   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
@@ -180,8 +181,9 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   kept first, and the call waits on him. Since #1682 mod-kit's `runs` also gives a module run with
 //   python -m and a tool run through npx, each judged here as a script run is.
 // - Since #1756: the words a mod hands mod-kit's blocked card (`$.modkit.blocked`: its guard name,
-//   reason and safe way) are copy in a tool result row, not drawing, so a changed refusal passes; the
-//   card's look is mod-kit's own, judged in its card.ts (rules.ts DRAW_CALL). And an Edit, MultiEdit
+//   reason and safe way) are copy in a tool result row, not drawing, so a changed refusal passed (since
+//   #1841 it is held again as a message's words); the card's look is mod-kit's own, judged in its
+//   card.ts (rules.ts DRAW_CALL). And an Edit, MultiEdit
 //   or Write leaving a mod's .ts hook file with a bracket open, half of a change made in two edits,
 //   passes, the edit closing it judged against the file before the first (drawingChange, midEdits).
 // - Since #1773: a pattern's groups (bash's extglob, zsh's alternation and qualifiers, a bar) are

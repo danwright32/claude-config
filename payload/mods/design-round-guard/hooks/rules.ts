@@ -1190,7 +1190,8 @@ const RUN_LOOKS = new Set(['color', 'bold', 'dim', 'italic', 'underline', 'strik
 // What draws a mod's lines, with what it is handed: mod-kit's band row, pane and boxed card, and a
 // pane's size and title as Claude Code opens it. Not a blocked action's grey card (#1756): its look
 // is mod-kit's own (card.ts blockedCard), judged there, and a caller hands it only the words of a
-// refusal, shown as a tool result row, which are copy, held nowhere else (#1296 had followed them).
+// refusal, shown as a tool result row, which are copy, not drawing (#1296 had followed them); since
+// #1823 and #1841 they are a message's words (MESSAGE_CALL), held as such.
 const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card)|ui\s*\.\s*open)\s*\(/g
 // #1823 (Dan, 2026-10-27: "message wording should be asked about"): where a message a person reads is
 // handed its words. A toast, a notification, a transcript line (a debug one aside, read where it is
