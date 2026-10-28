@@ -23,8 +23,11 @@
 # --propose is how disk-full removes the folders and files Dan decided on by name. It measures each
 # path, refuses the ones this tool never removes, writes a record of its own (category "named") and a
 # plan, prints what it offered and refused, and names the --plan command to run once Dan has seen it.
-# Its judge, run again before each removal, is that the path is still the same file system object
-# (device and inode) it measured.
+# Its judge, run again before each removal, is that the path is still the same file system object it
+# measured: the same device and inode, the same birth time (ctime where the file system keeps none)
+# and, for every method but truncate, the same size. Device and inode alone are not enough, because
+# a file system gives a deleted file's inode to the next file made (#1840, L1032). A path whose
+# identity cannot be read is refused at --propose.
 #
 # EACH ITEM, IN ORDER (the plan's design, #1804 comment; L514): the identity deny list on the path
 # as recorded, whatever the category; refuse a symbolic link and resolve the rest of the path
@@ -226,8 +229,63 @@ measure() { # <path>
   [ -z "$SIZE_PARTIAL" ] || SIZE_WORDS="at least $SIZE_WORDS"
 }
 
-file_identity() { # <path> -> device:inode
-  stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null
+# The one identity of a file system object, "v2:<device>:<inode>:<birth>:<ctime>:<size>" (#1840).
+# Device and inode alone let a replacement pass as the original: a file system hands a deleted file's
+# inode to the next file made, so a file written just after the original went routinely carries its
+# device and inode (Linux CI did, run 40621284222; L1032). Birth time is what a replacement changes;
+# where the file system keeps none, GNU stat prints 0 (or "-") for it, birth is left empty, and the
+# judge compares ctime instead. Times keep their fractional seconds where stat gives them (GNU %.9W,
+# BSD %FB), since a replacement can be made inside the second its original went; the whole second
+# forms are asked for only when the fractional answer is unusable. Every stat asks GNU's -c first:
+# GNU stat takes -f as file system status and answers it with exit 0. Prints nothing and fails when
+# no answer is usable.
+file_identity() { # <path>
+  local raw
+  raw="$(stat -c '%d:%i:%.9W:%.9Z:%s' "$1" 2>/dev/null || stat -f '%d:%i:%FB:%Fc:%z' "$1" 2>/dev/null)"
+  identity_from_stat "$raw" && return 0
+  raw="$(stat -c '%d:%i:%W:%Z:%s' "$1" 2>/dev/null || stat -f '%d:%i:%B:%c:%z' "$1" 2>/dev/null)"
+  identity_from_stat "$raw"
+}
+identity_from_stat() { # <device:inode:birth:ctime:size, as stat printed it>
+  local IFS=: dev ino birth ctime size extra
+  read -r dev ino birth ctime size extra <<< "$1"
+  case "$birth" in -|'?') birth="" ;; *[!0.]*) ;; *) birth="" ;; esac # 0, 0.000000000, "-" and "?" all mean not kept
+  case "$dev$ino$size" in *[!0-9]*) return 1 ;; esac
+  [ -n "$dev" ] && [ -n "$ino" ] && [ -n "$size" ] && [ -z "$extra" ] || return 1
+  is_stat_time "$ctime" || return 1
+  [ -z "$birth" ] || is_stat_time "$birth" || return 1
+  printf 'v2:%s:%s:%s:%s:%s\n' "$dev" "$ino" "$birth" "$ctime" "$size"
+}
+is_stat_time() { case "$1" in ''|*[!0-9.]*|.*|*.|*.*.*) return 1 ;; esac; return 0; }
+
+# Sets JUDGE_VERDICT for a named item from its recorded identity and the one read now, both v2.
+identity_verdict() { # <recorded> <now> <method>
+  local IFS=: rtag rdev rino rbirth rctime rsize rextra ntag ndev nino nbirth nctime nsize nextra
+  read -r rtag rdev rino rbirth rctime rsize rextra <<< "$1"
+  read -r ntag ndev nino nbirth nctime nsize nextra <<< "$2"
+  if [ "$rtag" != v2 ] || [ -n "$rextra" ] || [ -z "$rdev" ] || [ -z "$rino" ] || [ -z "$rctime" ] || [ -z "$rsize" ]; then
+    JUDGE_VERDICT="unmeasured: its record's identity ($1) is not in a shape this tool reads"; return
+  fi
+  if [ "$rdev:$rino" != "$ndev:$nino" ]; then
+    JUDGE_VERDICT="not offerable: it is not the item that was proposed (device and inode were $rdev:$rino, now $ndev:$nino), so it was replaced since"
+    return
+  fi
+  if [ -n "$rbirth" ] && [ -n "$nbirth" ]; then
+    if [ "$rbirth" != "$nbirth" ]; then
+      JUDGE_VERDICT="not offerable: it is not the item that was proposed (the same device and inode, but born at $rbirth and this one at $nbirth), so it was replaced since by a file given the old one's inode"
+      return
+    fi
+  elif [ "$rctime" != "$nctime" ]; then
+    JUDGE_VERDICT="not offerable: it is not the item that was proposed, or it was changed since (its ctime was $rctime, now $nctime, and this file system records no birth time to tell the two apart)"
+    return
+  fi
+  # truncate is for a log a process is still writing to, so it growing is expected. On a file system
+  # with no birth time its ctime moves with every write too, so there a log being written is skipped
+  # above, which is the safe side; macOS keeps birth times.
+  if [ "$3" != truncate ] && [ "$rsize" != "$nsize" ]; then
+    JUDGE_VERDICT="not offerable: it changed size since it was proposed ($rsize bytes, now $nsize)"; return
+  fi
+  JUDGE_VERDICT=offerable
 }
 file_bytes() { # <path>
   stat -c '%s' "$1" 2>/dev/null || stat -f '%z' "$1" 2>/dev/null
@@ -249,15 +307,22 @@ open_check() { # <path>
 }
 
 # Sets JUDGE_VERDICT to the judge's one line, or to an unmeasured line saying why there is none.
-run_judge() { # <category> <target> <identity>
+run_judge() { # <category> <target> <identity> [method]
   local cat="$1" t="$2" ident="$3" module out rc now_ident
   if [ "$cat" = named ]; then
     # --propose's own judge: still the same file system object it measured.
     if [ -L "$t" ] || [ ! -e "$t" ]; then JUDGE_VERDICT="not offerable: it is no longer there as it was proposed"; return; fi
     [ -n "$ident" ] || { JUDGE_VERDICT="unmeasured: its record holds no identity to compare"; return; }
-    now_ident="$(file_identity "$t")"
-    if [ "$now_ident" = "$ident" ]; then JUDGE_VERDICT=offerable
-    else JUDGE_VERDICT="not offerable: it is not the item that was proposed (device and inode were $ident, now ${now_ident:-unreadable}), so it was replaced since"; fi
+    # A record written before #1840 holds device:inode only. That is exactly the check a replacement
+    # passed, so comparing what it has would repeat the fault: it is UNMEASURED, never a match, and the
+    # item is skipped until it is proposed again. Named records are valid for an hour, so few exist.
+    case "$ident" in
+      v2:*) ;;
+      *) JUDGE_VERDICT="unmeasured: its record holds an identity in the older device and inode shape ($ident), which a file made in its place can share, so it cannot tell this is the item proposed; propose it again"; return ;;
+    esac
+    now_ident="$(file_identity "$t")" || {
+      JUDGE_VERDICT="unmeasured: its identity could not be read now (stat gave no usable answer), so nothing confirms it is the item proposed"; return; }
+    identity_verdict "$ident" "$now_ident" "${4:-}"
     return
   fi
   case "$cat" in [a-z0-9]*) ;; *) JUDGE_VERDICT="unmeasured: '$cat' is not a category name"; return ;; esac
@@ -333,8 +398,9 @@ if [ "$MODE" = propose ]; then
     if [ "$PROPOSE_METHOD" = truncate ] && { [ ! -f "$PHYS" ] || [ -d "$PHYS" ]; }; then
       refused_n=$((refused_n + 1)); echo "refused  $t: truncate empties a single file, and this is not one"; continue
     fi
+    ident="$(file_identity "$PHYS")" || {
+      refused_n=$((refused_n + 1)); echo "refused  $t: its identity could not be read (stat gave no usable answer), so nothing could check it is the same item before removing it"; continue; }
     measure "$PHYS"
-    ident="$(file_identity "$PHYS")"
     bytes=""; [ -n "$SIZE_KIB" ] && bytes=$((SIZE_KIB * 1024))
     printf '%s\n' "n$n${S}named${S}$PROPOSE_METHOD${S}$PHYS${S}$bytes${S}offerable${S}$ident" >> "$WORK/items"
     offered=$((offered + 1))
@@ -520,7 +586,7 @@ do_path() { # <id> <category> <method> <target> <identity>
       [ -x "${DISK_CLEAN_TRASH:-/usr/bin/trash}" ] || {
         finish_item "$id" skipped "" "$t" "/usr/bin/trash is not on this Mac (it ships with macOS 15), and this tool never deletes in place of moving to the Trash"; return; } ;;
   esac
-  run_judge "$cat" "$t" "$ident"
+  run_judge "$cat" "$t" "$ident" "$method"
   [ "$JUDGE_VERDICT" = offerable ] || { finish_item "$id" skipped "" "$t" "judged again just now: $JUDGE_VERDICT"; return; }
   if [ "$method" != truncate ]; then
     open_check "$PHYS"
