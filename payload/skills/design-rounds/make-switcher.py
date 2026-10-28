@@ -572,7 +572,7 @@ KIND_STYLE = ".dr-kind { margin: 0 0 6px; max-width: 62ch; color: #3D342E; font-
 # option's key>__ where it is read. A round of one page has it read from DR_<WHAT>, exactly the text this
 # builder always had, so its page is byte for byte as before; a round of several pages (claude-config#1536)
 # has DR_<WHAT> hold each page's, by name, read through DR_PAGE_OF[key]. One builder for both (L370).
-CHROME_BUILDER = r"""/* Written by make-switcher.py for a round drawn in captured chrome (claude-config#1364): each option is
+CHROME_BUILDER = (r"""/* Written by make-switcher.py for a round drawn in captured chrome (claude-config#1364): each option is
    the captured page with the round's builder drawing into its slot, in an iframe of its own. */
 var DR_TEMPLATE = __TEMPLATE__;
 var DR_OPTION_VARIANTS = __OPTIONS__;
@@ -603,53 +603,11 @@ function screenShown(_variant, frame, said) {  /* the page hands the option firs
   DR_SAID = said;
   try { drTell(frame); } finally { drSize(frame); }
 }
-/* A frame still loading its page has no root yet, and is left alone: its own load sizes it and tells
-   its builder. Reading the root anyway threw, and the page said the builder's screenShown had, whenever
-   an option was chosen before its frame loaded (claude-config#1467). */
-function drReady(frame) {
-  var doc = frame.contentDocument;
-  return !!(doc && doc.documentElement && !frame.hidden);
-}
-/* The frame is as tall as its page, and follows it (claude-config#1795): sized when the option is shown,
-   and again whenever the page changes height, a step revealing or a list opening after a click, read by
-   a ResizeObserver on the page's root. Before, it was sized only on show, so a page that grew after a
-   click stayed clipped inside its frame and scrolled.
-   The height read is the root's own, not its scroll height, which never reads less than the frame it
-   sits in, so a short screen would keep whatever height its frame started at. A root or body of h-full
-   height (Slate's) is as tall as the frame and never grows with its content, so both are given an
-   automatic height and a minimum of none, and report their content instead.
-   A page can still hold an area as tall as its frame (a min-height: 100vh under a header), which grows
-   each time the frame does, so sizing the frame to it again on every resize grew it for ever. So the
-   page is read again at once at the height just set, and a resize it then reports is that same
-   picture, already answered, and is left alone; only a page that changed since is sized again. Such a
-   page keeps the part its own frame height added scrolled inside the frame, as it would in a window. */
-function drSize(frame) {
-  if (__PAGE:HEIGHT:frame.getAttribute("data-dr-option")__ || !drReady(frame)) return;
-  drWatch(frame);
-  var root = frame.contentDocument.documentElement;
-  var tall = Math.ceil(root.getBoundingClientRect().height);
-  var last = frame.drSettled;
-  if (last && last.frame === frame.style.height && last.page === tall) return;
-  frame.style.height = tall + "px";
-  frame.drSettled = { frame: frame.style.height, page: Math.ceil(root.getBoundingClientRect().height) };
-}
-/* Once per loaded page, shown or hidden, before its picture is read: every option's root and body are
-   changed alike, so two options drawing the same thing still read as the same picture (#1512). The
-   observer is the frame's own window's, which is told of its own document's layout, and is kept on the
-   frame so it lives as long as the frame does. */
-function drWatch(frame) {
-  var doc = frame.contentDocument;
-  if (__PAGE:HEIGHT:frame.getAttribute("data-dr-option")__ || !doc || !doc.documentElement || frame.drWatching === doc) return;
-  frame.drWatching = doc;
-  [doc.documentElement, doc.body].forEach(function (node) {
-    if (!node) return;
-    node.style.setProperty("height", "auto", "important");
-    node.style.setProperty("min-height", "0", "important");
-  });
-  var Watch = frame.contentWindow && frame.contentWindow.ResizeObserver;
-  if (Watch) { frame.drWatcher = new Watch(function () { drSize(frame); }); frame.drWatcher.observe(doc.documentElement); }
-}
-/* Told only once its builder has run, through the frame's DR_FRAME.tell. Until then a frame shown is
+"""
+    # How a frame is sized lives in chrome_frame.py, shared with a settled design's frames (claude-config#1816);
+    # a frame is fixed when its page was given a height of its own.
+    + chrome_frame.frame_follows_page('__PAGE:HEIGHT:frame.getAttribute("data-dr-option")__')
+    + r"""/* Told only once its builder has run, through the frame's DR_FRAME.tell. Until then a frame shown is
    owed the call and its load makes it, so an option is told once each time it is shown, never while
    it is hidden. */
 function drTell(frame) {
@@ -732,7 +690,7 @@ window.addEventListener("message", function (event) {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: event.data.drKey, bubbles: true }));
   }
 });
-"""
+""")
 
 
 def main(argv):

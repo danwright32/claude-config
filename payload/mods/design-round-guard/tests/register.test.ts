@@ -2573,6 +2573,48 @@ test('#1773 control: a screen file written by the shell, handed to a script, or 
   expect(w.ran).toEqual([])
 })
 
+// #1815: a tool handed a command substitution whose own text holds no pattern was let through:
+// `npx prettier --write $(git ls-files src)` rewrites every screen file under src, but the argument
+// named no path and no look changing name, so nothing was judged (measured 2026-10-27 on main). A
+// name the shell fills in from a command's output cannot be read before it runs, so it is held as
+// the unreadable name it is, as `$(git ls-files 'app/*.tsx')` already was. Only for a tool run through
+// npx or a module run with python -m, whose operands are by convention the files it works on: over
+// this Mac's 104,832 distinct Bash commands (2026-09-26 to 2026-10-27) a script file was handed one
+// 182 times, every one a commit (`pr-review.sh --sha $(git rev-parse HEAD)`), a test scope
+// (`run-tests-locked.sh $(cat scope.txt)`) or quoted text, and a tool 3 times, each prettier handed
+// `$(git diff --name-only ...)`.
+test('#1815: a tool or module handed a name a command substitution fills in is held as unreadable', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    'npx prettier --write $(git ls-files src)',
+    'npx prettier --write "$(git ls-files src)"',
+    'npx eslint --fix `git ls-files src`',
+    'npx prettier --write src/$(cat name)',
+    'python3 -m black $(git diff --name-only main)',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes('could not be followed') && why.includes('cannot read') }).toEqual({ command, held: true })
+  }
+  expect(w.ran).toEqual([])
+})
+
+test('#1815 control: a script file handed a substitution, or a tool handed one only in a folder, is judged as before', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate/apps/worker' })
+  for (const command of [
+    // #1802's releases: code, a query string after a closed substitution.
+    MUTATE('if (a || b) {', 'if (a && b) {'),
+    'python3 sentry.py "/api/0/issues/$(cat id)/events/?full=true"',
+    // A script file's own arguments, as measured: a commit, a test scope.
+    'bash ~/.claude/hooks/lib/pr-review.sh start --dir "$PWD" --sha "$(git rev-parse HEAD)"',
+    'mac/scripts/run-tests-locked.sh $(cat /tmp/scope.txt)',
+    // A name the command spells itself, in a folder a substitution gives.
+    'npx prettier --write "$(git rev-parse --show-toplevel)/notes.md"',
+    'npx prettier --write src/lib/engine.ts',
+  ])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(6)
+})
+
 test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {
   const w = world($, on)
   expect(refusalOf(await call($, GEN(STORE)))).toContain('own record')
