@@ -46,6 +46,7 @@ import {
   textsOf,
   patternMayBeLook,
   nameFromOutput,
+  outputTrusted,
   inScratchpad,
   namesScratchpad,
   joinedOnly,
@@ -250,6 +251,36 @@ test('#1815: a name a command substitution fills in is known by its last part, r
   // A substitution in the folder only, none at all, or a variable, which is no command's output.
   for (const w of ['$(git rev-parse --show-toplevel)/notes.md', '/api/issues/$(cat id)/events/?full=true', '`pwd`/x.md', 'app/page.tsx', '$HOME/x', '${D}/spec.json', 'if (a || b) {', 'cost $5'])
     expect([w, nameFromOutput(w)]).toEqual([w, false])
+})
+
+// #1832, Dan, 2026-10-27 (picker answer "git rev-parse only"): of the substitutions a script is
+// handed, only `git rev-parse`'s output is trusted to name no file. Anything else it runs, a second
+// command beside it, a substitution inside it or one never closed, is not.
+test('#1832: only a substitution running git rev-parse alone is trusted to name no file', () => {
+  // git rev-parse in another checkout (-C) is still git rev-parse: 23 of the 147 script arguments the
+  // #1832 replay found were `$(git -C <folder> rev-parse HEAD)`.
+  for (const w of ['$(git rev-parse HEAD)', '"$(git rev-parse HEAD)"', '$(git rev-parse --short HEAD)', '`git rev-parse HEAD`', '$(git  rev-parse HEAD)', '$(git -C $W rev-parse HEAD)', '$(git -C /w/x rev-parse --short HEAD)', 'abc..$(git rev-parse HEAD)'])
+    expect([w, outputTrusted(w)]).toEqual([w, true])
+  for (const w of [
+    '$(git diff --name-only main)',
+    '$(cat /tmp/scope.txt)',
+    '`git ls-files src`',
+    '$(git rev-parse HEAD; cat x)',
+    '$(git rev-parse HEAD && ls src)',
+    '$(git rev-parse HEAD | xargs echo)',
+    '$(git rev-parse $(cat ref))',
+    '$(git rev-parse HEAD)$(cat x)',
+    '$(git rev-parse HEAD | cut -c9-)',
+    // A redirect inside it writes a file, so it is no longer only printing a commit.
+    '$(git rev-parse HEAD > app/page.tsx)',
+    '$(git rev-parse HEAD >> log)',
+    '$(git rev-parse < x)',
+    '$(git -C $(pwd) rev-parse HEAD)',
+    '$(git -C x ls-files)',
+    '$(git rev-parse HEAD',
+    'app/page.tsx',
+  ])
+    expect([w, outputTrusted(w)]).toEqual([w, false])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {

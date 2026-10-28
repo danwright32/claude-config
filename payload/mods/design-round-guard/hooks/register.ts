@@ -57,6 +57,7 @@ import {
   isTestPath,
   patternMayBeLook,
   nameFromOutput,
+  outputTrusted,
   relTo,
   shapeKind,
   shellVarPath,
@@ -214,6 +215,9 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   a type's union, a command's words and flags, what a string is split, searched or keyed by, and a
 //   string with no letter in it, which a message is only computed from, pass. A .tsx or .jsx file's
 //   messages are read whole as before, since narrowing them would let one edit #1823 holds through.
+// - Since #1832: a script file handed a name a command substitution fills in is held the same way,
+//   unless every substitution in it is `git rev-parse`, alone or with -C (rules.ts outputTrusted; Dan,
+//   2026-10-27: "git rev-parse only"), so a commit handed as `--sha` passes and a scope list is held.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -829,9 +833,11 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // gives it a path.
     // A name a command's output fills in, handed to a tool through npx or a module through python -m
     // (#1815: `npx prettier --write $(git ls-files src)`), is judged the same way, as a name no rule
-    // reads. Not one a script file is handed: its arguments are its own, and on this Mac every one
-    // measured was a commit, a test scope or quoted text (182 of 104,832 commands, 2026-10-27).
-    const output = t.tool === true && !t.path && nameFromOutput(t.word)
+    // reads. So is one a script file is handed (#1832), unless every substitution in it is
+    // `git rev-parse` run alone, the one output Dan trusts to name no file (2026-10-27, picker
+    // answer "git rev-parse only"): `--sha "$(git rev-parse HEAD)"` passes, a test scope list
+    // (`$(cat scope.txt)`) is held.
+    const output = !t.path && nameFromOutput(t.word) && (t.tool === true || !outputTrusted(t.word))
     if (tool === 'Bash' && (output || (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
       let tree: string | null | undefined
