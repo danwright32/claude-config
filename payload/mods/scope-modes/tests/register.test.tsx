@@ -221,6 +221,8 @@ type GhPr = {
   closingIssuesReferences: { number: number }[]
   closedAt?: string
   comments?: { body: string; createdAt: string }[]
+  /** The PR's description (#1812: the issues it refers to, and its stated next step). */
+  body?: string
 }
 // `others` are PRs GitHub also holds, found only by `gh pr view` by number (#856). `notPrs` are
 // numbers that are issues, which `gh pr view` refuses as GitHub does (#1767).
@@ -365,6 +367,8 @@ type Opts = {
   editFails?: string
   /** gh issue view failing, with its stderr (#836). */
   issueViewFails?: string
+  /** Each issue's comments as gh issue view gives them, oldest first, by number (#1812). */
+  issueComments?: Record<number, string[]>
   /** gh issue comment failing on an issue, with its stderr (#836). */
   commentFails?: Record<number, string>
   /** ls of a folder failing for a reason other than the folder being absent (#836). */
@@ -852,7 +856,7 @@ const world = (on: On, o: Opts = {}) => {
       }
       if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
       if (a[0] === 'issue' && a[1] === 'view' && o.issueViewFails) return fail(1, o.issueViewFails)
-      if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN', labels: (o.issueLabels?.[Number(a[2])] ?? []).map(name => ({ name })), body: o.issueBodies?.[Number(a[2])] ?? 'The issue.\n\n## Open questions\n\nNone', url: `https://github.com/o/r/${o.pullNumbers?.includes(Number(a[2])) ? 'pull' : 'issues'}/${a[2]}` }))
+      if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN', labels: (o.issueLabels?.[Number(a[2])] ?? []).map(name => ({ name })), body: o.issueBodies?.[Number(a[2])] ?? 'The issue.\n\n## Open questions\n\nNone', comments: (o.issueComments?.[Number(a[2])] ?? []).map(body => ({ body })), url: `https://github.com/o/r/${o.pullNumbers?.includes(Number(a[2])) ? 'pull' : 'issues'}/${a[2]}` }))
       // An issue's body written whole (#1279), from standard input.
       if (a[0] === 'issue' && a[1] === 'edit') {
         if (o.editFails) return fail(1, o.editFails)
@@ -1433,6 +1437,55 @@ test('winding down refuses the turn end until merged, live and cleaned, then end
 
 const cleaned = { gh: merged(), branchHere: false, branchOnGitHub: false }
 
+// #1812: on 2026-10-27 winding down held for #1765, whose fix had merged with its live check still
+// owed, and Claude offered Dan two ways out: turn winding down off, or close the issue unfinished.
+// Dan: "you should finish and merge all work you started ... Just don't start any new work".
+const refsPr = (body: string) => ({ number: 12, state: 'MERGED', url: 'https://github.com/o/r/pull/12', closingIssuesReferences: [], body })
+const refsWorld = (body: string, state = 'OPEN') => ({ gh: { pr: refsPr(body), issues: { 1765: state } }, branchHere: false, branchOnGitHub: false, verdict: { state: 'live', at: T0 } })
+
+test('an open issue its merged PR refers to holds winding down, and the refusal says to finish it, naming what is left and offering no way out (#1812)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, refsWorld('Fixes the hang in the commit gate.\n\nRefs #1765: the live check in a fresh headless session is still owed after merge.'))
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(
+    /^Winding down is not finished: issue #1765 is still open: finish what is left on it now, which PR #12 names as its next step \("Refs #1765: the live check in a fresh headless session is still owed after merge\."\)\./,
+  )
+  expect(block).toMatch(/Every issue this session worked is finished, the verification its fix still owes included/)
+  expect(block).toMatch(/Never ask Dan whether to turn winding down off or to close an issue unfinished/)
+  // No way out is offered: neither the command that turns it off nor closing the issue.
+  expect(block).not.toMatch(/\/build|gh issue close|ends it sooner/)
+  await clock.advance(MIN)
+  expect(w.toasts).toEqual([])
+  expect(lastModes(w)).toEqual(['WINDING DOWN'])
+
+  // Once what was left is done and the issue closed, winding down ends by itself.
+  w.o.gh = { pr: refsPr('Refs #1765'), issues: { 1765: 'CLOSED' } }
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+})
+
+test("with no next step in the PR, the issue's last comment says what is left; a PR a Refs line names is never read as an issue (#1812)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...refsWorld('Refs #1765 and #1813'), pullNumbers: [1813], issueComments: { 1765: ['An early note.', 'Fix merged in PR #12. Still owed: a live check from a fresh session.'] } })
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(
+    /^Winding down is not finished: issue #1765 is still open: finish what is left on it now, as its last comment says \("Fix merged in PR #12\. Still owed: a live check from a fresh session\."\)\./,
+  )
+  expect(block).not.toMatch(/#1813/)
+})
+
+test('an issue a merged PR refers to that cannot be read is said, never read as closed (#1812)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...refsWorld('Refs #1765'), issueViewFails: 'HTTP 502' })
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the PR could not be read \(issue #1765: HTTP 502\)/)
+})
+
 test("deploying, or could not confirm live, keeps the turn end refused with that reason; no deploy step recorded finishes it", withDeps, async ($, on) => {
   const { w, clock } = world(on, { ...cleaned, verdict: { state: 'deploying', at: T0 } })
   await start($ as never, clock)
@@ -1729,7 +1782,7 @@ test('turned on from the default branch, winding down finishes the PRs this sess
   expect((await stop($ as never)).block).toBeUndefined()
   expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
   // GitHub was asked about PR #31 in the repository its link names.
-  expect(w.runs.some(r => r.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,closingIssuesReferences,headRefName,headRefOid,closedAt,comments')).toBe(true)
+  expect(w.runs.some(r => r.join(' ') === 'gh pr view 31 --repo o/r --json number,state,url,closingIssuesReferences,headRefName,headRefOid,closedAt,comments,body')).toBe(true)
 })
 
 // #856: winding down finalizes everything the session has open. A session whose own branch PR was
@@ -1743,6 +1796,10 @@ const FINALIZE = [
   // #1033 and #1767: a PR closed without merging is finished, left closed only on his answer to the
   // same tool, asked only on a recorded reason it will never merge.
   /A PR closed without merging is reopened and finished, as Dan would rather merge it, and left closed only on his answer to the same tool, asked only when its closing comment or his own earlier answer names the PR that superseded it/,
+  // #1812: every issue the session worked is finished, its owed verification included, and no way
+  // out is offered; only new work is refused.
+  /Every issue this session worked is finished, the verification its fix still owes included \(a live check, a measurement, a follow up PR the fix needs\)/,
+  /Never ask Dan whether to turn winding down off or to close an issue unfinished, and never close one before what is left on it is done: do it\. Only new work is refused\./,
 ]
 
 test('a session whose own PR is finished is not finished while a PR it opened is still open (#856)', withDeps, async ($, on) => {
