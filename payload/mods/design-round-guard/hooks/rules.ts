@@ -1865,6 +1865,9 @@ const readMod = (f: ModFile): ModRead | null => {
       if (c > at) inner = o
     }
     if (inner === undefined || blank[inner] !== '{') continue
+    // #1841: nor a property a tool's input schema names (job watcher's `reason`, which Claude fills in):
+    // its value is a schema, whose description only Claude reads.
+    if (/\bproperties\s*:\s*$/.test(blank.slice(Math.max(0, inner - 40), inner))) continue
     const key = (m[2] as string).length
     if (m[3]) messages.push([at, exprEnd(at + key + m[3].length)])
     else messages.push([at, at + key])
@@ -2216,6 +2219,19 @@ export const drawsChange = (files: readonly ModFile[], name: string, before: str
   if (!was || !now) return true
   return was.length !== now.length || was.some((p, i) => p !== now[i])
 }
+
+/**
+ * Whether changing the mod's plain TypeScript hook file `name` (isModHookTs) from `before` to `after`
+ * (undefined for a file not there) is asked about, read beside the mod's other hook files in `files`:
+ * where it changes what the mod draws (drawsChange, #1275), or the wording of a message a person reads
+ * from it (messageWordingSame, the one reading #1823 gave a mod's .tsx and .jsx files; #1841, Dan,
+ * 2026-10-27: "Timing wording can go through, but message wording should be asked about"). A file
+ * made or taken away is read as one with no text, so its messages' words are new or gone. When a
+ * message is sent, the logic around it, and a tool's or schema's description, which only Claude reads,
+ * pass. A file any of them cannot be read in is held.
+ */
+export const modHookTsShows = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): boolean =>
+  drawsChange(files, name, before, after) || !messageWordingSame(files, name, before ?? '', after ?? '')
 
 /** A call written out whole, in a fixed order: its tool, every key of its input, its folder and session. */
 export const callText = (tool: string, input: Record<string, unknown>, at: { cwd: string; session: string }): string => {
