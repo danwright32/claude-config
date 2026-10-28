@@ -836,7 +836,7 @@ printf '%s\n' "$(grep -F 'disk-clean' <<< "$PROBE_MSG")" > "$SCANS/line-found-no
 
 # THE TALLY IS KEPT BETWEEN PROMPTS. Reading a record costs about 0.14 ms an item (0.76 s for 5,264
 # items, measured 2026-10-28), and this runs on every prompt while the disk is low, so the tally is
-# kept beside the readings, keyed on the record's inode, change time, size and path, and read again
+# kept beside the readings, keyed on the record's inode, modification time, size and path, and read again
 # only when one of them moves. Every writer of the record (the scan, disk-remove's marks) renames a
 # new file into place, so each write is a new inode even inside one second at one size.
 S_TALLY="$TMPROOT/state-scan-tally"; mkdir -p "$S_TALLY"

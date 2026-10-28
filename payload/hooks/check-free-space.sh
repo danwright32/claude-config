@@ -521,8 +521,8 @@ symbol_cache_note(){
 # on a disk with room. Reading the record goes through lib/disk-clean-record.sh, which owns the
 # layout (L370), and costs about 0.14 ms an item: 0.76 s for a 5,264 item record, measured
 # 2026-10-28, on every prompt for as long as the disk stays low. So the tally (scanned_at and the
-# counts below) is kept in <state dir>/disk-clean-tally, keyed on the record's inode, change time,
-# size and path, and the record is read again only when one of those moves (L431: one stat is far
+# counts below) is kept in <state dir>/disk-clean-tally, keyed on the record's inode, modification
+# time, size and path, and the record is read again only when one of those moves (L431: one stat is far
 # cheaper than the read). Every writer of the record renames a new file into place (dcr_write,
 # dcr_mark), so even a mark that keeps the size inside the same second is a new inode. A kept tally
 # that is not eight numbers is read past, never shown. Sizes are worded by lib/disk-clean-units.sh,
@@ -539,7 +539,7 @@ scan_note(){
   . "$here/lib/disk-clean-units.sh" 2>/dev/null || return 0
   scan_tally_ok(){ is_number "${at:-}" && is_number "${n:-}" && is_number "${unsized:-}" && is_number "${kib:-}" \
     && is_number "${bad:-}" && is_number "${partial:-}" && is_number "${taken:-}" && is_number "${unjudged:-}"; }
-  # GNU first, then BSD, as for the symbol cache's change time above.
+  # GNU first, then BSD, the order the symbol cache's age is read in above.
   stamp="$(stat -c '%i %Y %s' "$record" 2>/dev/null || stat -f '%i %m %z' "$record" 2>/dev/null || true)"
   [ -n "$stamp" ] && key="$stamp $record"
   if [ -n "$key" ] && [ -f "$cache" ]; then

@@ -2590,7 +2590,7 @@ much, never a 0 added in. A record that is missing, unreadable, cut off, holding
 read, dated in the future or 7 days old adds nothing and never changes the verdict. Reading a record
 costs about 0.14 ms an item (0.76 s to read 5,264 items, about 0.9 s for the whole warning that
 reads them, measured 2026-10-28), so the tally is kept in
-`disk-clean-tally` beside the readings, keyed on the record's inode, change time, size and path, and
+`disk-clean-tally` beside the readings, keyed on the record's inode, modification time, size and path, and
 a warning with an unchanged record adds about 5 ms; a disk with room adds nothing.
 
 ## Xcode build caches left behind by removed worktrees
