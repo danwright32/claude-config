@@ -9030,6 +9030,32 @@ hook_suite_coverage(){   # $1 = the file holding the runner's output -> "<ran>\t
 # scratch. A suite still there after SYNC_SUITE_STOP_GRACE is stopped, has its tree killed again
 # (its trap may have started something) and is killed outright.
 #
+# The clock every suite deadline and the stop grace below are judged by (claude-config#1842): the
+# send gate's SYNC_SEND_TESTS_TIMEOUT, the pull runner's SYNC_HOOK_TESTS_TIMEOUT and
+# SYNC_SUITE_STOP_GRACE. Normally the real clock in whole seconds. SYNC_TEST_SUITE_CLOCK names a
+# command that prints the time instead, for the suite only: its #464 fixtures set a one second
+# deadline and a one second grace, inside which a suite had to reach a blocked state and then have
+# its EXIT trap start a child. A whole second clock makes each of those anywhere from a few
+# milliseconds to one second, so at a load average of 33 (measured 2026-10-27, in a full run) the
+# trap had not started its child when it
+# was killed, and the check failed and passed on rerun (L290, L293). With this the fixture moves the
+# clock on when the state it needs is reached, and the deadline is a ceiling, not a race. Each
+# stage's start is read before the suite can act, so that move always comes after it.
+#
+# A clock printing anything but a whole number is said and the real clock is used, never taken as
+# zero, which would make every deadline wait for ever (L50).
+suite_clock_now(){
+  local t
+  if [ -n "${SYNC_TEST_SUITE_CLOCK:-}" ]; then
+    t="$("$SYNC_TEST_SUITE_CLOCK" 2>/dev/null)"
+    case "$t" in
+      ''|*[!0-9]*) echo "claude-sync: SYNC_TEST_SUITE_CLOCK ($SYNC_TEST_SUITE_CLOCK) printed '$t', not a whole number of seconds, so the real clock was used." >&2 ;;
+      *) printf '%s\n' "$t"; return 0 ;;
+    esac
+  fi
+  date +%s
+}
+
 # Returns 0 once the suite has gone. Returns 1, having said so, when it could not be seen to go
 # even after KILL, rather than waiting on it without end.
 stop_suite_tree(){   # $1 = pid of the suite
@@ -9039,12 +9065,15 @@ stop_suite_tree(){   # $1 = pid of the suite
     kill -STOP "$pid" 2>/dev/null
     bash "$KILL_TREE_LIB" "$pid" 2>/dev/null
     kill -TERM "$pid" 2>/dev/null
+    # The grace starts at the ask and is read while the suite is still stopped, so nothing its EXIT
+    # trap does can come before it: read after the CONT, a trap quicker than this read could start
+    # its child first, and a clock moved on by that child would then never seem to move (#1842).
+    t0="$(suite_clock_now)"
     kill -CONT "$pid" 2>/dev/null
-    t0="$(date +%s)"
     while kill -0 "$pid" 2>/dev/null; do
       stat="$(ps -o stat= -p "$pid" 2>/dev/null)"
       case "$stat" in Z*|'') break ;; esac
-      [ "$(( $(date +%s) - t0 ))" -ge "$SYNC_SUITE_STOP_GRACE" ] && break
+      [ "$(( $(suite_clock_now) - t0 ))" -ge "$SYNC_SUITE_STOP_GRACE" ] && break
       sleep "$SYNC_POLL_INTERVAL"
     done
     stat="$(ps -o stat= -p "$pid" 2>/dev/null)"
@@ -9073,7 +9102,7 @@ stop_suite_tree(){   # $1 = pid of the suite
 }
 
 hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
-  local runner out pid started now limit rc=0 killed=0 ran='?' notrun='?' took='?' nrnames='?' suite_notes=''
+  local runner out pid started dl_started now limit rc=0 killed=0 ran='?' notrun='?' took='?' nrnames='?' suite_notes=''
   [ "${SYNC_NO_HOOK_TESTS:-0}" = "1" ] && return 0
   # Normally this runs only when an apply actually wrote a hook, which is the right trigger for a
   # receive. It is also the ONLY writer of the record, so a Mac that FIXED a failure without a hook
@@ -9118,6 +9147,11 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   # SYNC_ variable goes, through suite_env_strip, rather than a list of the ones found so far: the
   # send gate leaked another, SYNC_IN_WATCH, from 2026-10-09 to 2026-10-16 (claude-config#1240).
   suite_env_strip
+  # The deadline reads suite_clock_now, which is this same real clock unless the suite sets its own
+  # (claude-config#1842), and starts BEFORE the runner does, so nothing the runner does can come
+  # before it. `started` stays real, because the duration recorded below is a fact about this Mac,
+  # never about a test's clock.
+  dl_started="$(suite_clock_now)"
   env ${SUITE_ENV_STRIP[@]+"${SUITE_ENV_STRIP[@]}"} \
     SYNC_NO_HOOK_TESTS=1 RUN_ALL_TESTS_CHECKOUT="$SYNC_REPO" bash "$runner" > "$out" 2>&1 &
   pid=$!
@@ -9125,8 +9159,8 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   while kill -0 "$pid" 2>/dev/null; do
     # Against the clock, never by adding up the sleeps below: a timer built from its own sleeps
     # measures iterations rather than elapsed time (L226).
-    now="$(date +%s)"
-    if [ "$limit" -gt 0 ] && [ "$(( now - started ))" -ge "$limit" ]; then
+    now="$(suite_clock_now)"
+    if [ "$limit" -gt 0 ] && [ "$(( now - dl_started ))" -ge "$limit" ]; then
       killed=1
       break
     fi
@@ -9142,8 +9176,9 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   else
     wait "$pid" 2>/dev/null || rc=$?
   fi
-  # How long it actually took (claude-config#218). Measured from THIS process's clock, which
-  # already holds `started` for the deadline, rather than read out of the runner's printed report.
+  # How long it actually took (claude-config#218). Measured from THIS process's real clock, from
+  # `started`, which is kept for this alone (the deadline runs on `dl_started`, claude-config#1842),
+  # rather than read out of the runner's printed report.
   # The runner prints a per suite profile and no total, and a measurement that reaches its reader
   # only by being printed is lost the moment the work moves behind a worker, a background job or a
   # parallel lane, while the work itself goes on succeeding (L325).
@@ -10333,7 +10368,10 @@ SCANS
       out="$(scratch_file)" || out="/dev/null"
       # Same shape as the pull's runner: a background child against the clock, because a wait with
       # no deadline cannot fail, it can only hang, and this one holds the sync lock while it does
-      # (L110).
+      # (L110). The deadline reads suite_clock_now, the real clock unless the suite sets its own,
+      # and starts BEFORE the suite does, so nothing the suite does can come before it
+      # (claude-config#1842).
+      started="$(suite_clock_now)"; killed=0
       if [ -n "$title" ]; then
         # One section alone: its timing record OFF, or a single section rewrites the timings the
         # full suite deals its shards by, and the machine wide suite lock SKIPPED, or any other run
@@ -10348,9 +10386,8 @@ SCANS
           SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$path" > "$out" 2>&1 &
       fi
       pid=$!
-      started="$(date +%s)"; killed=0
       while kill -0 "$pid" 2>/dev/null; do
-        now="$(date +%s)"
+        now="$(suite_clock_now)"
         if [ "$(( now - started ))" -ge "$limit" ]; then
           killed=1
           break
