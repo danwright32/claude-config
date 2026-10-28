@@ -86,7 +86,16 @@ T0="$(date +%s)" || { echo "disk-clean scan: could not read the clock, so it sca
 SID="scan-$T0-$$"
 : > "$W/notes"
 
-note() { printf '%s%s%s\n' "$1" "$S" "$2" >> "$W/notes"; }
+# A header value often carries a tool's own words (the first line of its stderr, a path find could
+# not read), and dcr_write refuses the WHOLE record over one control character in a header value,
+# which is its guard and stays. So each value is cleaned here, the one place every header line is
+# noted, before it reaches dcr_write: a tab or newline becomes a space, anything else is dropped
+# (#1851). Without it one tab in a tool's error line lost the entire scan.
+note() {
+  local v="$2"
+  v="${v//$'\t'/ }"; v="${v//$'\n'/ }"; v="${v//[[:cntrl:]]/}"
+  printf '%s%s%s\n' "$1" "$S" "$v" >> "$W/notes"
+}
 note host "$(hostname -s 2>/dev/null || hostname 2>/dev/null)"
 
 # ---------- 2. the Full Disk Access probe, first ----------
@@ -205,12 +214,27 @@ fi
 echo ""
 for c in $RUN; do
   status="$(dcr_header "$DCS_RECORD" "status.$c" 2>/dev/null)"
+  # UNREAD IS NEVER 0 (L90, L11), worded as the low space warning words the same record (#1809): an
+  # offerable item with no bytes, or whose size is partial, denied or unread rather than measured
+  # or reported, makes the total "at least"; when no offerable item's size was read at all, the
+  # total is unknown, never 0 KB (#1851).
   line="$(awk -F "$S" -v c="$c" '
     # The items file: id, category, method, target, bytes, state (then identity, size, flags, detail).
-    $2 == c { n++; if ($6 == "offerable") { o++; if ($5 != "") b += $5 } else if (index($6, "unmeasured: ") == 1) u++; else x++ }
-    END { printf "%d %d %d %d %.0f", n, o, x, u, b / 1024 }' "$W/items")"
+    $2 == c {
+      n++
+      if ($6 == "offerable") {
+        o++
+        if ($5 == "") unsized++
+        else { b += $5; if ($8 != "measured" && $8 != "reported" && $8 != "") part = 1 }
+      }
+      else if (index($6, "unmeasured: ") == 1) u++; else x++
+    }
+    END { printf "%d %d %d %d %.0f %d %d", n, o, x, u, b / 1024, unsized, part }' "$W/items")"
   set -- $line
-  words="$2 offerable ($(dcu_human "$5")), $3 not offerable, $4 unmeasured"
+  if [ "$2" -gt 0 ] && [ "$6" -eq "$2" ]; then total="$(dcu_human "")"
+  elif [ "$6" -gt 0 ] || [ "$7" -eq 1 ]; then total="at least $(dcu_human "$5")"
+  else total="$(dcu_human "$5")"; fi
+  words="$2 offerable ($total), $3 not offerable, $4 unmeasured"
   if [ "$status" = measured ]; then echo "$(dcr_title "$c"): $words."
   else echo "$(dcr_title "$c"): $status. Found before that: $words."; fi
   n="$(dcr_header "$DCS_RECORD" "note.$c" 2>/dev/null)" && echo "  $n"

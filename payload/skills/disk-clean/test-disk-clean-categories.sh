@@ -405,15 +405,54 @@ check "worktrees judge: once it has changes it is not" "$(has "$JUDGED" "not off
 # ================================================================================================
 fresh
 TP="$H/.claude/projects/-Users-x-proj"
-mkdir -p "$TP"; printf '{}\n' > "$TP/old.jsonl"; printf '{}\n' > "$TP/new.jsonl"; old "$TP/old.jsonl"
+U_OLD=0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d
+U_NEW=1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+mkdir -p "$TP"; printf '{}\n' > "$TP/$U_OLD.jsonl"; printf '{}\n' > "$TP/$U_NEW.jsonl"; old "$TP/$U_OLD.jsonl"
 run_scan --only transcripts
-check "transcripts: one over 90 days is offerable" "$(eq "$(state_of "$TP/old.jsonl")" offerable)"
-check "transcripts: moved to the Trash" "$(eq "$(method_of "$TP/old.jsonl")" trash)"
-check "transcripts: a recent one is not listed" "$(eq "$(item_of "$TP/new.jsonl")" "")"
+check "transcripts: one over 90 days is offerable" "$(eq "$(state_of "$TP/$U_OLD.jsonl")" offerable)"
+check "transcripts: moved to the Trash" "$(eq "$(method_of "$TP/$U_OLD.jsonl")" trash)"
+check "transcripts: a recent one is not listed" "$(eq "$(item_of "$TP/$U_NEW.jsonl")" "")"
 check "transcripts: a hit says Claude Code's 30 day cleanup appears to have stopped" "$(has "$(note_of transcripts)" "Claude Code's 30 day cleanup appears to have stopped")"
-rm -f "$TP/old.jsonl"
+rm -f "$TP/$U_OLD.jsonl"
 run_scan --only transcripts
 check "transcripts: with none over 90 days there is no such note" "$(eq "$(note_of transcripts)" "")"
+
+# Only Claude Code's own transcripts belong (#1851). On the work MacBook on 2026-10-28 every one of
+# the 52 files this category offered was a plugin's vercel-plugin/skill-injections.jsonl, kept
+# beside the transcripts, and the note blamed Claude Code's cleanup for them. A session transcript
+# is <project>/<session id>.jsonl; a subagent's is agent-<id>.jsonl under <session id>/subagents/,
+# which Claude Code's 30 day cleanup removes with its session. Anything else there is not offered.
+fresh
+mkdir -p "$TP/vercel-plugin" "$TP/$U_OLD/subagents/workflows/wf_1" "$TP/$U_OLD/tool-results"
+printf '{}\n' > "$TP/vercel-plugin/skill-injections.jsonl"
+printf '{}\n' > "$TP/notes.jsonl"
+printf '{}\n' > "$TP/$U_OLD/subagents/agent-a1b2c3.jsonl"
+printf '{}\n' > "$TP/$U_OLD/subagents/workflows/wf_1/agent-d4e5f6.jsonl"
+printf '{}\n' > "$TP/$U_OLD/subagents/workflows/wf_1/journal.jsonl"
+printf '{}\n' > "$TP/$U_OLD/tool-results/out.jsonl"
+old "$TP"
+run_scan --only transcripts
+check "transcripts: a plugin's sidecar file is not listed" "$(eq "$(item_of "$TP/vercel-plugin/skill-injections.jsonl")" "")"
+check "transcripts: a .jsonl not named for a session is not listed" "$(eq "$(item_of "$TP/notes.jsonl")" "")"
+check "transcripts: a workflow journal is not listed" "$(eq "$(item_of "$TP/$U_OLD/subagents/workflows/wf_1/journal.jsonl")" "")"
+check "transcripts: a .jsonl in a session's tool results is not listed" "$(eq "$(item_of "$TP/$U_OLD/tool-results/out.jsonl")" "")"
+check "transcripts: an old subagent transcript is offerable" "$(eq "$(state_of "$TP/$U_OLD/subagents/agent-a1b2c3.jsonl")" offerable)"
+check "transcripts: and so is one a workflow's agent wrote" "$(eq "$(state_of "$TP/$U_OLD/subagents/workflows/wf_1/agent-d4e5f6.jsonl")" offerable)"
+check "transcripts: the note counts only the transcripts" "$(has "$(note_of transcripts)" ": 2 transcript(s) are older than")"
+judge transcripts "$TP/vercel-plugin/skill-injections.jsonl"
+check "transcripts judge: a plugin's sidecar file is not offerable" "$(eq "$JUDGED" "not offerable: it is not a Claude Code transcript")"
+judge transcripts "$TP/$U_OLD/subagents/agent-a1b2c3.jsonl"
+check "transcripts judge: an old subagent transcript is offerable" "$(eq "$JUDGED" offerable)"
+rm -f "$TP/$U_OLD/subagents/agent-a1b2c3.jsonl" "$TP/$U_OLD/subagents/workflows/wf_1/agent-d4e5f6.jsonl"
+run_scan --only transcripts
+check "transcripts: with only sidecar files old, nothing is listed and there is no note" "$(eq "$(items_in transcripts) $(note_of transcripts)" "0 ")"
+# A folder it cannot read is unmeasured, never read as holding no old transcripts.
+printf '{}\n' > "$TP/$U_OLD.jsonl"; old "$TP/$U_OLD.jsonl"
+mkdir -p "$H/.claude/projects/-Users-x-locked"; chmod 000 "$H/.claude/projects/-Users-x-locked"
+run_scan --only transcripts
+check "transcripts: a projects folder it cannot read makes the category unmeasured" "$(has "$(status_of transcripts)" "unmeasured: part of ~/.claude/projects could not be read")"
+check "transcripts: and the transcripts it could read are still listed" "$(eq "$(state_of "$TP/$U_OLD.jsonl")" offerable)"
+chmod 700 "$H/.claude/projects/-Users-x-locked"
 
 # ================================================================================================
 # Runaway logs: *.log over 500 MB, emptied in place when a process holds it
