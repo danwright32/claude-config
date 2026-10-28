@@ -17936,15 +17936,41 @@ printf '# rules\n' > "$DLH/CLAUDE.md"
 printf '#!/usr/bin/env bash\necho stuck\n' > "$DLH/hooks/stuck.sh"
 dl_ms(){ perl -MTime::HiRes -e 'printf "%.0f", Time::HiRes::time()*1000'; }
 # A body blocked in a command substitution, written with the EXIT trap given. The pids go to
-# $DLP/<label>.child and .grandchild.
-dl_blocked_body(){   # $1 = label  $2 = the EXIT trap's command
+# $DLP/<label>.child and .grandchild. A third argument makes the suite that many seconds slow to set
+# its trap and reach the blocked state, which is how a loaded Mac runs it (claude-config#1842).
+dl_blocked_body(){   # $1 = label  $2 = the EXIT trap's command  [$3 = seconds slow to start]
+  [ -n "${3:-}" ] && printf 'sleep %s\n' "$3"
   printf 'trap %q EXIT\n' "$2"
   printf 'v="$(bash -c %q)"\n' "echo \$\$ > '$DLP/$1.child'; sleep 40 & echo \$! > '$DLP/$1.grandchild'; wait"
   printf 'echo "SUITE-RESULT passed=1 failed=0"\n'
 }
-dl_write_suite(){   # $1 = label  $2 = the EXIT trap's command
-  { printf '#!/usr/bin/env bash\n# covers stuck.sh\n'; dl_blocked_body "$1" "$2"; } > "$DLH/hooks/test-stuck.sh"
+dl_write_suite(){   # $1 = label  $2 = the EXIT trap's command  [$3 = seconds slow to start]
+  { printf '#!/usr/bin/env bash\n# covers stuck.sh\n'; dl_blocked_body "$1" "$2" "${3:-}"; } > "$DLH/hooks/test-stuck.sh"
 }
+# The clock claude-sync judges the deadline and the stop grace by, for one fixture
+# (claude-config#1842). Each of those was ONE second against claude-sync's whole second clock, so
+# the suite had anywhere from a few milliseconds to a second to reach its blocked state, and its EXIT
+# trap the same to start its child: at a load average of 33 the trap lost that race, the check said
+# the fixture proved nothing, and a rerun passed (L290, L293). This clock is the real one, moved a
+# long way on at the moment the fixture reaches what the next stage needs: its child and grandchild
+# written down, which ends the deadline, then its trap's child, which ends the grace. So each stage
+# waits on its condition. claude-sync reads the start of each stage before the suite can act (the
+# deadline before the suite starts, the grace while it is still stopped), so the move always comes
+# after it. The deadline values the checks set are only the ceiling for a fixture that never gets
+# there: a run that reaches one is slower than DL_CEIL seconds, which the checks below refuse, and
+# two of them reach the 20 second bound, short of the 40 second sleep it guards against.
+dl_clock(){   # $1 = label -> prints the clock's path
+  cat > "$DLP/$1.clock" <<DLCLOCK
+#!/usr/bin/env bash
+s=0
+[ -s '$DLP/$1.child' ] && [ -s '$DLP/$1.grandchild' ] && s=100000
+[ -s '$DLP/$1.trapchild' ] && s=200000
+echo \$(( \$(date +%s) + s ))
+DLCLOCK
+  chmod +x "$DLP/$1.clock"
+  printf '%s' "$DLP/$1.clock"
+}
+DL_CEIL=10
 # Running means alive under that pid AND still the command it was, so a pid the system has handed
 # to something else since cannot answer for it (L157).
 dl_running(){   # $1 = pid file  $2 = text its command line carries
@@ -17966,9 +17992,9 @@ dl_reap(){   # the fixture's own leftovers, whatever the checks said, so a red r
 dl_write_suite send "touch '$DLP/send.trap-ran'"
 dl_t0="$(dl_ms)"
 out_464a="$(CLAUDE_HOME="$DLH" SYNC_REPO="$DLR" SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
-  SYNC_SEND_TESTS_TIMEOUT=1 bash "$SCRIPT" send 2>&1)"
+  SYNC_TEST_SUITE_CLOCK="$(dl_clock send)" SYNC_SEND_TESTS_TIMEOUT="$DL_CEIL" bash "$SCRIPT" send 2>&1)"
 dl_held=$(( $(dl_ms) - dl_t0 ))
-dbg "#464 send against a suite blocked in a command substitution, 1s deadline, took ${dl_held}ms: $out_464a"
+dbg "#464 send against a suite blocked in a command substitution, deadline at the block, took ${dl_held}ms: $out_464a"
 # Recorded before anything is judged: a check that runs after its own subject has had time to exit
 # by itself cannot tell stopped from finished (L239).
 dl_child_up=0; dl_running "$DLP/send.child" 'bash -c' && dl_child_up=1
@@ -17978,6 +18004,9 @@ check "#464 the fixture really started its child and grandchild (else the checks
   "[ -s '$DLP/send.child' ] && [ -s '$DLP/send.grandchild' ]"
 check "#464 a send returns within the bound when a suite is blocked past its deadline (${dl_held}ms, bound 20000ms)" \
   "[ '$dl_held' -le 20000 ]"
+# Ended by the fixture's clock, not its ceiling, or every deadline above is a real time race again.
+check "#1842 and its deadline ended when the suite blocked, not at the ${DL_CEIL}s ceiling (${dl_held}ms)" \
+  "[ '$dl_held' -lt $(( DL_CEIL * 1000 )) ]"
 check "#464 and the suite's child is not left running" "[ '$dl_child_up' -eq 0 ]"
 check "#464 and nor is the child's own child" "[ '$dl_gc_up' -eq 0 ]"
 # Its tree killed first and THEN asked to stop, so its EXIT trap runs, which is where a real suite
@@ -17986,7 +18015,7 @@ check "#464 and the suite's EXIT trap ran, so its own cleanup happened" "[ -f '$
 # Timed out is its own cause with its own words, never folded into "fails here": the remedy for a
 # suite that hung is not the remedy for one that is red (L11). Suite, hook and deadline on ONE line.
 check "#464 the send says the suite was stopped at its deadline, naming it, its hook and the deadline" \
-  "line_has \"\$out_464a\" 'test-stuck\\.sh' '[ ]stuck\\.sh' 'SYNC_SEND_TESTS_TIMEOUT' '1s'"
+  "line_has \"\$out_464a\" 'test-stuck\\.sh' '[ ]stuck\\.sh' 'SYNC_SEND_TESTS_TIMEOUT' '${DL_CEIL}s'"
 check "#464 and does not call a stopped suite a failing one" \
   "! line_has \"\$out_464a\" 'test-stuck\\.sh' 'fails here'"
 check "#464 and the hook it covers is held back" "[ ! -e '$DLR/payload/hooks/stuck.sh' ]"
@@ -17996,9 +18025,10 @@ check "#464 and the hook it covers is held back" "[ ! -e '$DLR/payload/hooks/stu
 dl_write_suite trap "sleep 40 & echo \$! > '$DLP/trap.trapchild'; wait"
 dl_t0="$(dl_ms)"
 out_464b="$(CLAUDE_HOME="$DLH" SYNC_REPO="$DLR" SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
-  SYNC_SEND_TESTS_TIMEOUT=1 SYNC_SUITE_STOP_GRACE=1 bash "$SCRIPT" send 2>&1)"
+  SYNC_TEST_SUITE_CLOCK="$(dl_clock trap)" SYNC_SEND_TESTS_TIMEOUT="$DL_CEIL" SYNC_SUITE_STOP_GRACE="$DL_CEIL" \
+  bash "$SCRIPT" send 2>&1)"
 dl_held=$(( $(dl_ms) - dl_t0 ))
-dbg "#464 send against a suite whose EXIT trap blocks, 1s grace, took ${dl_held}ms: $out_464b"
+dbg "#464 send against a suite whose EXIT trap blocks, grace ended by the trap's child, took ${dl_held}ms: $out_464b"
 dl_tc_up=0; dl_running "$DLP/trap.trapchild" 'sleep 40' && dl_tc_up=1
 dl_child_up=0; dl_running "$DLP/trap.child" 'bash -c' && dl_child_up=1
 dl_reap
@@ -18006,10 +18036,44 @@ check "#464 the blocking trap really started its child (else the check below pro
   "[ -s '$DLP/trap.trapchild' ]"
 check "#464 a suite whose EXIT trap blocks is still stopped within the bound (${dl_held}ms, bound 20000ms)" \
   "[ '$dl_held' -le 20000 ]"
+check "#1842 and its grace ended when the trap had started its child, not at the ${DL_CEIL}s ceiling (${dl_held}ms)" \
+  "[ '$dl_held' -lt $(( DL_CEIL * 1000 )) ]"
 check "#464 and neither the blocked child nor the trap's child is left running" \
   "[ '$dl_tc_up' -eq 0 ] && [ '$dl_child_up' -eq 0 ]"
 check "#464 and that suite too is reported as stopped at its deadline" \
   "line_has \"\$out_464b\" 'test-stuck\\.sh' 'SYNC_SEND_TESTS_TIMEOUT'"
+
+# The same suite as a loaded Mac runs it (claude-config#1842): a second and a half slow to set its
+# trap and reach the blocked state, and its trap as slow to start its child. Against the one second
+# deadline and grace on a whole second clock that the checks above used to set, each of those loses
+# its race every time (seen failing before the fix: neither the child, the grandchild nor the trap's
+# child was started). Judged against the bound, not the ceiling: the stages ending on the clock is
+# what the checks above judge, and this one carries three seconds of deliberate sleep.
+dl_write_suite slow "sleep 1.5; sleep 40 & echo \$! > '$DLP/slow.trapchild'; wait" 1.5
+dl_t0="$(dl_ms)"
+out_1842="$(CLAUDE_HOME="$DLH" SYNC_REPO="$DLR" SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
+  SYNC_TEST_SUITE_CLOCK="$(dl_clock slow)" SYNC_SEND_TESTS_TIMEOUT="$DL_CEIL" SYNC_SUITE_STOP_GRACE="$DL_CEIL" \
+  bash "$SCRIPT" send 2>&1)"
+dl_held=$(( $(dl_ms) - dl_t0 ))
+dbg "#1842 send against a slow suite whose slow EXIT trap blocks, took ${dl_held}ms: $out_1842"
+dl_tc_up=0; dl_running "$DLP/slow.trapchild" 'sleep 40' && dl_tc_up=1
+dl_child_up=0; dl_running "$DLP/slow.child" 'bash -c' && dl_child_up=1
+dl_gc_up=0; dl_running "$DLP/slow.grandchild" 'sleep 40' && dl_gc_up=1
+dl_reap
+check "#1842 a suite slow to reach its blocked state is still waited for until it does" \
+  "[ -s '$DLP/slow.child' ] && [ -s '$DLP/slow.grandchild' ]"
+check "#1842 and a trap slow to start its child is still waited for until it has" \
+  "[ -s '$DLP/slow.trapchild' ]"
+check "#1842 and that slow suite is still stopped within the bound, with nothing left running (${dl_held}ms, bound 20000ms)" \
+  "[ '$dl_held' -le 20000 ] && [ '$dl_tc_up' -eq 0 ] && [ '$dl_child_up' -eq 0 ] && [ '$dl_gc_up' -eq 0 ]"
+# The seam refuses what is not a time rather than reading it as zero, which would end no deadline.
+# Judged on the message alone, so the real one second clock racing this fixture costs nothing here.
+dl_write_suite noclock "true"
+out_1842b="$(CLAUDE_HOME="$DLH" SYNC_REPO="$DLR" SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
+  SYNC_TEST_SUITE_CLOCK=/usr/bin/false SYNC_SEND_TESTS_TIMEOUT=1 SYNC_SUITE_STOP_GRACE=1 bash "$SCRIPT" send 2>&1)"
+dl_reap
+check "#1842 a clock that prints no number is said, and the real clock is used" \
+  "line_has \"\$out_1842b\" 'SYNC_TEST_SUITE_CLOCK' 'real clock'"
 # A grace nobody can read is refused as a number, never taken as zero or as for ever (L50).
 check "#464 an unreadable grace falls back to the default and says so" \
   "line_has \"\$(CLAUDE_HOME='$DLH' SYNC_REPO='$DLR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_SUITE_STOP_GRACE=soon bash '$SCRIPT' status 2>&1)\" 'SYNC_SUITE_STOP_GRACE' 'soon'"
@@ -18022,9 +18086,9 @@ printf '# marker\n' > "$DLPR/payload/hooks/dl-marker.sh"
 { printf '#!/usr/bin/env bash\n'; dl_blocked_body pull "touch '$DLP/pull.trap-ran'"; } > "$DLPR/payload/hooks/run-all-tests.sh"
 dl_t0="$(dl_ms)"
 out_464c="$(CLAUDE_HOME="$DLPH" SYNC_REPO="$DLPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
-  SYNC_HOOK_TESTS_TIMEOUT=1 bash "$SCRIPT" pull 2>&1)"
+  SYNC_TEST_SUITE_CLOCK="$(dl_clock pull)" SYNC_HOOK_TESTS_TIMEOUT="$DL_CEIL" bash "$SCRIPT" pull 2>&1)"
 dl_held=$(( $(dl_ms) - dl_t0 ))
-dbg "#464 pull against a runner blocked in a command substitution, 1s deadline, took ${dl_held}ms: $out_464c"
+dbg "#464 pull against a runner blocked in a command substitution, deadline at the block, took ${dl_held}ms: $out_464c"
 dl_child_up=0; dl_running "$DLP/pull.child" 'bash -c' && dl_child_up=1
 dl_gc_up=0; dl_running "$DLP/pull.grandchild" 'sleep 40' && dl_gc_up=1
 dl_reap
@@ -18032,10 +18096,12 @@ check "#464 the pull's runner really started its child (else the checks below pr
   "[ -s '$DLP/pull.child' ] && [ -s '$DLP/pull.grandchild' ]"
 check "#464 a pull returns within the bound when its runner is blocked past the deadline (${dl_held}ms, bound 20000ms)" \
   "[ '$dl_held' -le 20000 ]"
+check "#1842 and its deadline ended when the runner blocked, not at the ${DL_CEIL}s ceiling (${dl_held}ms)" \
+  "[ '$dl_held' -lt $(( DL_CEIL * 1000 )) ]"
 check "#464 and nothing the runner started is left running" \
   "[ '$dl_child_up' -eq 0 ] && [ '$dl_gc_up' -eq 0 ]"
 check "#464 and the pull still reports the runner as stopped at its deadline" \
-  "line_has \"\$out_464c\" 'could NOT be completed here' 'still running after 1s'"
+  "line_has \"\$out_464c\" 'could NOT be completed here' \"still running after ${DL_CEIL}s\""
 SYNC_NO_SEND_TESTS=1
 
 
