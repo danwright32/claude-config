@@ -17950,7 +17950,8 @@ dl_write_suite(){   # $1 = label  $2 = the EXIT trap's command  [$3 = seconds sl
 # The clock claude-sync judges the deadline and the stop grace by, for one fixture
 # (claude-config#1842). Each of those was ONE second against claude-sync's whole second clock, so
 # the suite had anywhere from a few milliseconds to a second to reach its blocked state, and its EXIT
-# trap the same to start its child: at a load average of 33 the trap lost that race, the check said
+# trap the same to start its child: at a load average of 33, measured 2026-10-27 in a full run, the
+# trap lost that race, the check said
 # the fixture proved nothing, and a rerun passed (L290, L293). This clock is the real one, moved a
 # long way on at the moment the fixture reaches what the next stage needs: its child and grandchild
 # written down, which ends the deadline, then its trap's child, which ends the grace. So each stage
