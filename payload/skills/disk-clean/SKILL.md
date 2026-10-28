@@ -177,7 +177,7 @@ command for all of them, in its own code block, each path absolute and in single
 glob, shaped like this:
 
 ```bash
-sudo rm -rf '/Users/dan/Library/Caches/com.example.helper'
+sudo rm -rf '/private/tmp/com.example.helper'
 ```
 
 A failure that says Operation not permitted is macOS protecting the folder, which `sudo` does not
