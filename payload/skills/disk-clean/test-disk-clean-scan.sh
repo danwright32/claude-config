@@ -213,6 +213,47 @@ check "the record is still written whole" "$(dcr_complete "$REC" && echo ok || e
 check "the ordinary folder is listed" "$(has "$(dcr_items "$REC")" "$H/Library/Caches/com.ok")"
 check "the scan says it left one out" "$(has "$(dcr_header "$REC" note.caches)" "left out 1 path")"
 
+# A status or note carries a tool's own words, such as the first line of its stderr, and dcr_write
+# refuses the whole record over one control character in a header value (#1851). So the scan cleans
+# them where it notes them: a tab or newline becomes a space, anything else is dropped.
+fresh
+mkdir -p "$H/Library/Developer/Xcode/DerivedData/App-x" "$H/.Trash"; printf 'x\n' > "$H/.Trash/t"
+dc_stub derived-data-sweep 'printf "boom\tthere\001 now\n" >&2; exit 9'
+run_scan --only xcode,trash
+check "a tool error holding a tab and a control character still leaves a whole record" "$(eq "$RC $(dcr_complete "$REC" && echo whole)" "0 whole")"
+check "the tab reads as a space and the other control character is dropped" "$(has "$(dcr_header "$REC" status.xcode)" "(exit 9: boom there now)")"
+check "the other category's items are still in the record" "$(eq "$(dcr_header "$REC" status.trash)" measured)"
+printf 'status.x%sa\tb\n' "$S" > "$DC_ROOT/notes3"
+check "dcr_write itself still refuses a header value holding a control character" "$(dcr_write "$DC_ROOT/r4.json" sw 100 "$DC_ROOT/items1" "$DC_ROOT/notes3" && echo "wrote it" || echo ok)"
+
+# ================================================================================================
+# 6b. The closing summary never reads a size it could not read as 0 (L90, L11, #1851)
+# ================================================================================================
+# Worded as the low space warning words the same record (#1809): an offerable item whose size is
+# partial, denied or unread makes the category's total "at least", and one with no size read at
+# all is never totalled as 0 KB.
+du_mixed='for a in "$@"; do case "$a" in -*) ;; *unread) ;; *com.part) printf "12\t%s\n" "$a"; printf "du: %s/sub: Permission denied\n" "$a" >&2 ;; *) printf "12\t%s\n" "$a" ;; esac; done'
+fresh
+mkdir -p "$H/Library/Caches/com.a" "$H/Library/Caches/com.unread"
+dc_stub du "$du_mixed"
+run_scan --only caches
+check "an unread size makes the total at least" "$(has "$OUT_TEXT" "App caches: 2 offerable (at least 12 KB), 0 not offerable, 0 unmeasured.")"
+fresh
+mkdir -p "$H/Library/Caches/com.a" "$H/Library/Caches/com.part"
+dc_stub du "$du_mixed"
+run_scan --only caches
+check "a partial size makes the total at least" "$(has "$OUT_TEXT" "App caches: 2 offerable (at least 24 KB), 0 not offerable, 0 unmeasured.")"
+fresh
+mkdir -p "$H/Library/Caches/com.unread"
+dc_stub du "$du_mixed"
+run_scan --only caches
+check "with no size read at all the total is unknown, never 0 KB" "$(has "$OUT_TEXT" "App caches: 1 offerable (size unknown), 0 not offerable, 0 unmeasured.")"
+fresh
+mkdir -p "$H/Library/Caches/com.a"
+dc_stub du "$du_mixed"
+run_scan --only caches
+check "every size measured in full keeps the plain total" "$(has "$OUT_TEXT" "App caches: 1 offerable (12 KB), 0 not offerable, 0 unmeasured.")"
+
 # ================================================================================================
 # 7. Thousands of items (L101): every one recorded, sized in one batch, in bounded time
 # ================================================================================================
