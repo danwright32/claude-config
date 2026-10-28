@@ -17951,15 +17951,18 @@ dl_write_suite(){   # $1 = label  $2 = the EXIT trap's command  [$3 = seconds sl
 # (claude-config#1842). Each of those was ONE second against claude-sync's whole second clock, so
 # the suite had anywhere from a few milliseconds to a second to reach its blocked state, and its EXIT
 # trap the same to start its child: at a load average of 33, measured 2026-10-27 in a full run, the
-# trap lost that race, the check said
-# the fixture proved nothing, and a rerun passed (L290, L293). This clock is the real one, moved a
+# trap lost that race, the check said the fixture proved nothing, and a rerun passed (L290, L293).
+# This clock is the real one, moved a
 # long way on at the moment the fixture reaches what the next stage needs: its child and grandchild
 # written down, which ends the deadline, then its trap's child, which ends the grace. So each stage
 # waits on its condition. claude-sync reads the start of each stage before the suite can act (the
 # deadline before the suite starts, the grace while it is still stopped), so the move always comes
 # after it. The deadline values the checks set are only the ceiling for a fixture that never gets
-# there: a run that reaches one is slower than DL_CEIL seconds, which the checks below refuse, and
-# two of them reach the 20 second bound, short of the 40 second sleep it guards against.
+# there, and one ceiling alone is longer than the 20 second bound every fixture is judged against, so
+# a stage that ends at its ceiling rather than on its condition fails that bound outright. No check
+# times a run against anything tighter, since a whole send or pull carries its own repository work,
+# which a loaded Mac stretches. The ceiling stays short of the 40 second sleep the bound guards
+# against.
 dl_clock(){   # $1 = label -> prints the clock's path
   cat > "$DLP/$1.clock" <<DLCLOCK
 #!/usr/bin/env bash
@@ -17971,7 +17974,7 @@ DLCLOCK
   chmod +x "$DLP/$1.clock"
   printf '%s' "$DLP/$1.clock"
 }
-DL_CEIL=10
+DL_CEIL=30
 # Running means alive under that pid AND still the command it was, so a pid the system has handed
 # to something else since cannot answer for it (L157).
 dl_running(){   # $1 = pid file  $2 = text its command line carries
@@ -18005,9 +18008,6 @@ check "#464 the fixture really started its child and grandchild (else the checks
   "[ -s '$DLP/send.child' ] && [ -s '$DLP/send.grandchild' ]"
 check "#464 a send returns within the bound when a suite is blocked past its deadline (${dl_held}ms, bound 20000ms)" \
   "[ '$dl_held' -le 20000 ]"
-# Ended by the fixture's clock, not its ceiling, or every deadline above is a real time race again.
-check "#1842 and its deadline ended when the suite blocked, not at the ${DL_CEIL}s ceiling (${dl_held}ms)" \
-  "[ '$dl_held' -lt $(( DL_CEIL * 1000 )) ]"
 check "#464 and the suite's child is not left running" "[ '$dl_child_up' -eq 0 ]"
 check "#464 and nor is the child's own child" "[ '$dl_gc_up' -eq 0 ]"
 # Its tree killed first and THEN asked to stop, so its EXIT trap runs, which is where a real suite
@@ -18037,8 +18037,6 @@ check "#464 the blocking trap really started its child (else the check below pro
   "[ -s '$DLP/trap.trapchild' ]"
 check "#464 a suite whose EXIT trap blocks is still stopped within the bound (${dl_held}ms, bound 20000ms)" \
   "[ '$dl_held' -le 20000 ]"
-check "#1842 and its grace ended when the trap had started its child, not at the ${DL_CEIL}s ceiling (${dl_held}ms)" \
-  "[ '$dl_held' -lt $(( DL_CEIL * 1000 )) ]"
 check "#464 and neither the blocked child nor the trap's child is left running" \
   "[ '$dl_tc_up' -eq 0 ] && [ '$dl_child_up' -eq 0 ]"
 check "#464 and that suite too is reported as stopped at its deadline" \
@@ -18048,8 +18046,7 @@ check "#464 and that suite too is reported as stopped at its deadline" \
 # trap and reach the blocked state, and its trap as slow to start its child. Against the one second
 # deadline and grace on a whole second clock that the checks above used to set, each of those loses
 # its race every time (seen failing before the fix: neither the child, the grandchild nor the trap's
-# child was started). Judged against the bound, not the ceiling: the stages ending on the clock is
-# what the checks above judge, and this one carries three seconds of deliberate sleep.
+# child was started).
 dl_write_suite slow "sleep 1.5; sleep 40 & echo \$! > '$DLP/slow.trapchild'; wait" 1.5
 dl_t0="$(dl_ms)"
 out_1842="$(CLAUDE_HOME="$DLH" SYNC_REPO="$DLR" SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
@@ -18097,8 +18094,6 @@ check "#464 the pull's runner really started its child (else the checks below pr
   "[ -s '$DLP/pull.child' ] && [ -s '$DLP/pull.grandchild' ]"
 check "#464 a pull returns within the bound when its runner is blocked past the deadline (${dl_held}ms, bound 20000ms)" \
   "[ '$dl_held' -le 20000 ]"
-check "#1842 and its deadline ended when the runner blocked, not at the ${DL_CEIL}s ceiling (${dl_held}ms)" \
-  "[ '$dl_held' -lt $(( DL_CEIL * 1000 )) ]"
 check "#464 and nothing the runner started is left running" \
   "[ '$dl_child_up' -eq 0 ] && [ '$dl_gc_up' -eq 0 ]"
 check "#464 and the pull still reports the runner as stopped at its deadline" \

@@ -9176,8 +9176,9 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   else
     wait "$pid" 2>/dev/null || rc=$?
   fi
-  # How long it actually took (claude-config#218). Measured from THIS process's clock, which
-  # already holds `started` for the deadline, rather than read out of the runner's printed report.
+  # How long it actually took (claude-config#218). Measured from THIS process's real clock, from
+  # `started`, which is kept for this alone (the deadline runs on `dl_started`, claude-config#1842),
+  # rather than read out of the runner's printed report.
   # The runner prints a per suite profile and no total, and a measurement that reaches its reader
   # only by being printed is lost the moment the work moves behind a worker, a background job or a
   # parallel lane, while the work itself goes on succeeding (L325).
