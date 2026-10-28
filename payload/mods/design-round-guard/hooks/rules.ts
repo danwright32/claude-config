@@ -1201,6 +1201,10 @@ const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card)|ui\s*\.\s*op
 // message.
 const MESSAGE_CALL = /\$\s*\.\s*(?:ui\s*\.\s*(?:toast|notify|notice|status|ask|log)|modkit\s*\.\s*blocked)\s*\(|\.\s*waitingOnYou\s*\(/g
 const MESSAGE_KEY = /([{,]\s*)(reason|block|deny|result|systemMessage|text)(\s*:|(?=\s*[,}]))/g
+// #1841: a call whose strings are no words a person reads, though a message may be computed from what
+// it gives back: a search, a split or a key (only what replace looks for), a process run (a notifier
+// excepted, as a message of its own), and the disk and environment.
+const NOT_TEXT_CALL = /\.\s*(?:split|test|match|matchAll|exec|search|startsWith|endsWith|includes|indexOf|lastIndexOf|has|get|delete|replace|replaceAll)\s*\(|\bRegExp\s*\(|(?:\$\s*\.\s*process\s*\.\s*)?\brun\s*\(|\$\s*\.\s*(?:fs|env)\s*\.\s*\w+\s*\(/g
 const DECL = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(const|let|var|function\s*\*?|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/
 const IMPORT = /^import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]\.\/([^'"/]+)['"]/
 
@@ -1222,7 +1226,7 @@ type ModRead = {
   // #1823: where a message a person reads is handed its words (MESSAGE_CALL, MESSAGE_KEY), and the
   // text of each string, template text and JSX text inside a span.
   messages: Span[]
-  stringsIn: (s: Span) => string[]
+  stringsIn: (s: Span, words?: boolean) => string[]
   code: (s: Span) => string
   refs: (s: Span) => string[]
   isTop: (name: string) => boolean
@@ -1872,7 +1876,60 @@ const readMod = (f: ModFile): ModRead | null => {
     if (m[3]) messages.push([at, exprEnd(at + key + m[3].length)])
     else messages.push([at, at + key])
   }
-  const stringsIn = ([a, b]: Span): string[] => spans.strings.filter(([x, y]) => a <= x && y <= b).map(([x, y]) => text.slice(x, y))
+  // #1841 (Dan, 2026-10-28: "Narrow it first"): only words a person reads are a message's wording,
+  // never a string a message is only computed from. Replayed, those were a regular expression
+  // (keystroke guard's `open -a` pattern), a value compared or a `typeof` tag, a type's union, a
+  // command's words and flags (`run($, ['gh', 'api', 'user', '--jq', '.login'])`), what a string is
+  // split, searched or keyed by, and a separator holding no letter at all (one with words, as
+  // `join(' and ')`, is read).
+  const notHeard = new Set<number>()
+  const within = (from: number, to: number) => {
+    for (const [x, y] of spans.strings) if (from <= x && y <= to) notHeard.add(x)
+  }
+  for (const m of blank.matchAll(NOT_TEXT_CALL)) {
+    const paren = (m.index as number) + m[0].length - 1
+    const end = close.get(paren)
+    // A notifier run is a message: its words are heard.
+    if (end === undefined || messages.some(([s]) => s === m.index)) continue
+    let to = end
+    // What replace puts in is text; only what it looks for is not.
+    if (/replace(?:All)?\s*\($/.test(m[0])) {
+      let depth = 0
+      for (let i = paren + 1; i < end; i++) {
+        const c = blank[i]
+        if (c === '(' || c === '[' || c === '{') depth++
+        else if (c === ')' || c === ']' || c === '}') depth--
+        else if (c === ',' && depth === 0) {
+          to = i
+          break
+        }
+      }
+    }
+    within(paren, to)
+  }
+  // A quoted string compared (`=== 'object'`, `case 'note':`, `'x' in o`) is a value tested for.
+  const quoted = ([x]: Span) => text[x - 1] === "'" || text[x - 1] === '"'
+  const compared = ([x, y]: Span) =>
+    /(?:[=!]==?|\bcase)\s*$/.test(blank.slice(Math.max(0, x - 1 - 12), x - 1)) || /^\s*(?:[=!]==?|in\b)/.test(blank.slice(y + 1, y + 1 + 12))
+  const heard = ([x, y]: Span): boolean => {
+    if (notHeard.has(x)) return false
+    const s = text.slice(x, y)
+    if (text[x - 1] === '/') return false
+    if (!/\p{L}/u.test(s.replace(/\\(?:u\{[^}]*\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)/g, ''))) return false
+    if (/^[-+]{1,2}[A-Za-z][\w-]*=?$/.test(s)) return false
+    if (quoted([x, y])) {
+      if (compared([x, y])) return false
+      // A type's union (`kind: 'input' | 'focus'`).
+      if (/(?:^|[^|])\|\s*$/.test(blank.slice(Math.max(0, x - 1 - 12), x - 1)) || /^\s*\|(?!\|)/.test(blank.slice(y + 1, y + 1 + 12))) return false
+    }
+    return true
+  }
+  // Every string, template text and JSX text inside a span; with `words`, only those a person reads
+  // (#1841), as a mod's .ts hook file is judged. A .tsx or .jsx file's messages are still read whole,
+  // as #1823 read them: read so, one edit #1823 holds would pass (manual steps' press handler
+  // rewritten on 2026-10-16, whose only changed strings are the button names it compares).
+  const stringsIn = ([a, b]: Span, words = false): string[] =>
+    spans.strings.filter(([x, y]) => a <= x && y <= b && (!words || heard([x, y]))).map(([x, y]) => text.slice(x, y))
   return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode }
 }
 
@@ -2170,10 +2227,11 @@ export const modHookDrawingUntouched = (files: readonly ModFile[], name: string,
  * Whether the wording of every message a person reads from the mod hook file `name` (MESSAGE_CALL,
  * MESSAGE_KEY) is the same before and after a change, read beside the mod's other hook files `files`
  * (#1823): each string, template text and JSX text reaching one, followed into each message as values
- * are followed into what is drawn. When a message is shown may change; what it says may not. False
- * where any of the texts cannot be read.
+ * are followed into what is drawn. When a message is shown may change; what it says may not. With
+ * `words` (#1841, a mod's .ts hook file) only the strings a person reads count, never one a message is
+ * only computed from (readMod's heard). False where any of the texts cannot be read.
  */
-export const messageWordingSame = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
+export const messageWordingSame = (files: readonly ModFile[], name: string, before: string, after: string, words = false): boolean => {
   const others = files.filter(f => f.name !== name)
   const wording = (text: string): string[] | null => {
     const d = drawnOf([...others, { name, text }], name, 'messages')
@@ -2199,7 +2257,7 @@ export const messageWordingSame = (files: readonly ModFile[], name: string, befo
     for (const x of sends) for (const p of r.calls.get(x) ?? []) spans.push(...(r.args(p) ?? []))
     // Each wording once: the same words moved into a helper, or said from one more place, say
     // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
-    return [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort()
+    return [...new Set(spans.flatMap(s => r.stringsIn(s, words)))].sort()
   }
   const said = wording(before)
   const says = wording(after)
@@ -2228,10 +2286,12 @@ export const drawsChange = (files: readonly ModFile[], name: string, before: str
  * 2026-10-27: "Timing wording can go through, but message wording should be asked about"). A file
  * made or taken away is read as one with no text, so its messages' words are new or gone. When a
  * message is sent, the logic around it, and a tool's or schema's description, which only Claude reads,
- * pass. A file any of them cannot be read in is held.
+ * pass; and only the words a person reads count (Dan, 2026-10-28: "Narrow it first"), so a regular
+ * expression, a value compared, a command's words or a separator a message is computed from passes.
+ * A file any of them cannot be read in is held.
  */
 export const modHookTsShows = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): boolean =>
-  drawsChange(files, name, before, after) || !messageWordingSame(files, name, before ?? '', after ?? '')
+  drawsChange(files, name, before, after) || !messageWordingSame(files, name, before ?? '', after ?? '', true)
 
 /** A call written out whole, in a fixed order: its tool, every key of its input, its folder and session. */
 export const callText = (tool: string, input: Record<string, unknown>, at: { cwd: string; session: string }): string => {

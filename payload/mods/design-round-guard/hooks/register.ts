@@ -207,7 +207,11 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   (rules.ts modHookTsShows: drawsChange, or messageWordingSame false), by an Edit, a git put back or
 //   a shell write alike, so a toast, a refusal's reason or a tool's result reworded there is asked
 //   about. When a message is sent, the logic around it, and a tool's or schema's description pass; a
-//   property a tool's input schema names `reason` or `text` is no message.
+//   property a tool's input schema names `reason` or `text` is no message. Only the words a person
+//   reads count there (Dan, 2026-10-28: "Narrow it first"): a regular expression, a value compared,
+//   a type's union, a command's words and flags, what a string is split, searched or keyed by, and a
+//   string with no letter in it, which a message is only computed from, pass. A .tsx or .jsx file's
+//   messages are read whole as before, since narrowing them would let one edit #1823 holds through.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
