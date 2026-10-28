@@ -59,6 +59,7 @@ STATE="$H/.claude/state/disk-clean"
 S=$'\037'
 NOW="$(date +%s)"
 VERDICTS="$DC_ROOT/verdicts"
+FAKE_STAT="$DC_ROOT/fake-stat" # what section 17's stand in stat reports
 
 # ---- the stubs every case starts from ----
 default_stubs() {
@@ -78,6 +79,7 @@ default_stubs() {
 # A fresh case: no state, no calls recorded, no verdicts, a work folder in HOME.
 fresh() {
   rm -rf "$H/.claude" "$H/w" "$VERDICTS" "$DC_ROOT/tmp/"* 2>/dev/null
+  rm -f "$DC_STUBS/stat" "$FAKE_STAT" # section 17's stand in stat never outlives its case
   mkdir -p "$H/w" "$VERDICTS" "$STATE"
   : > "$DC_CALLS"
   : > "$DC_ROOT/refused.log"
@@ -537,15 +539,26 @@ check "an interrupted Docker removal is reported as not checked, never as still 
   "$(has "$OUT_TEXT" "stopped partway while removing docker image sha256:abc; whether it went is not checked here")"
 
 # ================================================================================================
-# 15. Thousands of items (L101): every one handled, the record and log whole, in bounded time
+# 15. A large plan (L101): every item judged, checked, measured, trashed and logged, nothing skipped
 # ================================================================================================
+# Why 200 and not thousands (claude-config#1843). Nothing in disk-remove.sh branches on how many
+# items a plan holds: the plan, the record, the log and the marks all go through files read a line
+# at a time, never an argument list or an in memory limit. Its cost is per item, about 22 to 30 ms
+# here, almost all of it the four tools each item runs (judge, lsof, du, trash) plus its own
+# substitutions, and measured flat from 200 to 2000 items (2026-10-27: 24 to 30 ms an item at 200,
+# 22 to 23 ms at 2000, load average 14 to 15 on 12 cores), so 2000 items spent 36 to 104 seconds
+# proving what 200 do. The one count dependent branch is the total's unit: the du stub reports
+# 12 KB an item, so the "MB" words need at least 86 items, and the total is asserted below so a
+# smaller BIG fails here rather than quietly testing the KB branch. Every item running each tool
+# exactly once is asserted from the stubs' own call log, so a per item step that starts being
+# skipped, or repeated, at size is caught structurally rather than by a timing.
 if [ -n "${DR_UNDER_TEST:-}" ] && [ -n "${DR_SKIP_BIG:-}" ]; then
-  # Only for a run against a deliberately broken copy, where the thousands case would add a minute
-  # to every mutant and prove nothing the cases above do not.
-  echo "SUITE-PART-UNMEASURED the thousands of items case: skipped for a copy under test (DR_SKIP_BIG)"
+  # Only for a run against a deliberately broken copy, where the large case adds seconds to every
+  # mutant and proves nothing the cases above do not.
+  echo "SUITE-PART-UNMEASURED the large plan case: skipped for a copy under test (DR_SKIP_BIG)"
 else
 fresh
-BIG=2000
+BIG=200
 mkdir -p "$H/w/big"
 i=1; while [ "$i" -le "$BIG" ]; do : > "$H/w/big/f$i"; printf '%s\n' "b$i${S}fixture${S}trash${S}$H/w/big/f$i${S}${S}offerable${S}" >> "$DC_ROOT/items"; i=$((i + 1)); done
 record big 10
@@ -557,6 +570,13 @@ echo "  ($BIG items took ${big_took}s)"
 check "a plan of $BIG items exits 0" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $(tail -5 <<< "$OUT_TEXT")")"
 check "every one of them is gone" "$(eq "$(find "$H/w/big" -type f | wc -l | tr -d ' ')" 0)"
 check "the report counts all of them" "$(has "$OUT_TEXT" "moved $BIG item(s) to the Trash")"
+check "the total is every item's own size summed, in MB (the unit the count must reach)" \
+  "$(has "$OUT_TEXT" "moved $BIG item(s) to the Trash, $((BIG * 12 / 1024)) MB, which")"
+# Each per item tool ran once for every item and for no item twice: <calls> <distinct targets>.
+for big_tool in judge lsof du trash; do
+  check "every item ran $big_tool exactly once" \
+    "$(eq "$(dc_calls "$big_tool" | awk '{ n++; if (!seen[$NF]++) d++ } END { print n + 0, d + 0 }')" "$BIG $BIG")"
+done
 check "the log holds $BIG INTENT and $BIG OUTCOME lines" "$(eq "$(grep -c '^INTENT' "$(LOGF big)") $(grep -c '^OUTCOME' "$(LOGF big)")" "$BIG $BIG")"
 check "the record marks all $BIG trashed and is still complete" \
   "$([ "$(grep -c '"state":"trashed"' "$STATE/last-scan.json")" -eq "$BIG" ] && dcr_complete "$STATE/last-scan.json" && echo ok || echo "marked $(grep -c '"state":"trashed"' "$STATE/last-scan.json")")"
@@ -578,8 +598,11 @@ check "it writes a plan and names it" "$([ -n "$named_plan" ] && [ -f "$named_pl
 check "and names the command that removes them" "$(has "$OUT_TEXT" "bash ~/.claude/hooks/lib/disk-remove.sh --plan $named_plan")"
 check "the plan holds the two offered items only" "$(eq "$(grep -c '^item ' "$named_plan" 2>/dev/null)" 2)"
 check "and it removed nothing" "$([ -e "$H/Downloads/old-installer" ] && [ -e "$H/w/swap" ] && echo ok || echo "something went")"
-# The file is replaced by another of the same name: the named judge sees a different inode.
-rm -f "$H/w/swap"; printf 'new\n' > "$H/w/swap"
+# The file is replaced by another of the same name. The replacement is written BEFORE the original
+# goes and renamed over it, so both exist at once and cannot share an inode: deleting first let Linux
+# hand the new file the old one's inode, and this check failed on CI only some of the time
+# (claude-config#1840). Inode reuse itself is tested with a stubbed stat in section 17.
+printf 'new\n' > "$H/w/swap.new"; rm -f "$H/w/swap"; mv "$H/w/swap.new" "$H/w/swap"
 run --plan "$named_plan"
 check "running the plan trashes the folder that was proposed" "$(gone "$H/Downloads/old-installer")"
 check "and skips a file replaced since it was proposed" "$(has "$OUT_TEXT" "it is not the item that was proposed")"
@@ -592,5 +615,138 @@ run --propose shred "$H/w/swap"
 check "--propose with a method it does not offer is refused with exit 2" "$(eq "$RC" 2)"
 run --propose truncate "$H/Downloads"
 check "--propose truncate of a folder refuses it" "$(has "$OUT_TEXT" "refused")"
+
+# ================================================================================================
+# 17. Inode reuse (claude-config#1840, L1032): a file created where a removed one was can be given
+#     the same device and inode, so the named judge must also compare what a replacement changes
+# ================================================================================================
+# A stand in stat for ONE path, put ahead of the core tools on dc_run's PATH; every other path goes
+# to the real stat. It reports what $FAKE_STAT says, so a case can change the answer between
+# --propose and --plan, which no real file system lets a test do on demand:
+#   line 1  gnu    answers -c, and takes -f as file system status, printing junk with exit 0 as GNU
+#                  stat does (the Ubuntu CI runner)
+#           bsd    refuses -c, as macOS stat does, and answers -f
+#           none   fails both, as for a file it cannot read
+#   line 2  the path it stands in for
+#   line 3  dev ino birth birth_with_fraction ctime ctime_with_fraction size, where size "real"
+#           reads the real file's size, so emptying it in place can be seen
+fake_stat_on() {
+  {
+    printf '#!/bin/bash\nreal=%q\nctl=%q\n' "$DC_CORE/stat" "$FAKE_STAT"
+    cat <<'STUB'
+for last in "$@"; do :; done
+[ "$last" = "$(sed -n 2p "$ctl")" ] || exec "$real" "$@"
+shape="$(sed -n 1p "$ctl")"
+read -r dev ino bw bf cw cf size <<< "$(sed -n 3p "$ctl")"
+[ "$size" = real ] && size="$("$real" -c %s "$last" 2>/dev/null || "$real" -f %z "$last")"
+flag="$1" out="$2"
+case "$shape:$flag" in
+  gnu:-c)
+    out="${out//%.9W/$bf}"; out="${out//%W/$bw}"; out="${out//%.9Z/$cf}"; out="${out//%Z/$cw}"
+    out="${out//%d/$dev}"; out="${out//%i/$ino}"; out="${out//%s/$size}"; printf '%s\n' "$out" ;;
+  gnu:-f) printf '%s\n' "ext2/ext3 255 4096 0"; exit 0 ;;
+  bsd:-c) echo "stat: illegal option -- c" >&2; exit 1 ;;
+  bsd:-f)
+    out="${out//%FB/$bf}"; out="${out//%B/$bw}"; out="${out//%Fc/$cf}"; out="${out//%c/$cw}"
+    out="${out//%d/$dev}"; out="${out//%i/$ino}"; out="${out//%z/$size}"; printf '%s\n' "$out" ;;
+  *) echo "stat: cannot stat '$last'" >&2; exit 1 ;;
+esac
+STUB
+  } > "$DC_STUBS/stat"
+  chmod +x "$DC_STUBS/stat"
+}
+fake_says() { printf '%s\n%s\n%s\n' "$1" "$H/w/reused" "$2" > "$FAKE_STAT"; } # <shape> <line 3>
+# Proposes $H/w/reused with stat reporting <at propose>, then runs the plan with it reporting
+# <at plan>, in [shape at plan] when given. Leaves OUT_TEXT and RC from the plan run.
+reuse_case() { # <shape> <at propose> <at plan> [method] [shape at plan]
+  fresh
+  printf 'xy\n' > "$H/w/reused"
+  fake_says "$1" "$2"
+  fake_stat_on
+  run --propose "${4:-trash}" "$H/w/reused"
+  PROPOSE_TEXT="$OUT_TEXT"
+  REUSE_PLAN="$(sed -n 's/^Plan: \([^ ]*\) .*/\1/p' <<< "$OUT_TEXT")"
+  [ -n "$REUSE_PLAN" ] || { OUT_TEXT="no plan was written: $PROPOSE_TEXT"; RC=99; return; }
+  fake_says "${5:-$1}" "$3"
+  run --plan "$REUSE_PLAN"
+}
+T1="1793000000 1793000000.100000000"
+T2="1793000500 1793000500.200000000"
+
+# The case that failed on CI: same device and inode, a different birth time. Both stat shapes.
+reuse_case gnu "64768 777 $T1 $T1 3" "64768 777 $T2 $T1 3"
+check "with GNU stat, a file with the same device and inode but a new birth time is skipped as not the item proposed" \
+  "$(has "$OUT_TEXT" "it is not the item that was proposed")"
+check "and it is still there" "$(there "$H/w/reused")"
+check "and trash never ran on it" "$(eq "$(calls_of trash)" "")"
+reuse_case bsd "16777231 777 $T1 $T1 3" "16777231 777 $T2 $T1 3"
+check "with macOS stat, a file with the same device and inode but a new birth time is skipped as not the item proposed" \
+  "$(has "$OUT_TEXT" "it is not the item that was proposed")"
+check "and it is still there" "$(there "$H/w/reused")"
+
+# Where the file system keeps no birth time, GNU stat prints 0 for it (or "-"), and ctime decides.
+reuse_case gnu "64768 777 0 0 $T1 3" "64768 777 0 0 $T2 3"
+check "with no birth time recorded (0), the same device and inode with a new ctime is skipped" \
+  "$(has "$OUT_TEXT" "it is not the item that was proposed, or it was changed since")"
+check "and it is still there" "$(there "$H/w/reused")"
+reuse_case gnu "64768 777 - - $T1 3" "64768 777 - - $T2 3"
+check "with no birth time recorded (-), the same device and inode with a new ctime is skipped" \
+  "$(has "$OUT_TEXT" "it is not the item that was proposed, or it was changed since")"
+check "and it is still there" "$(there "$H/w/reused")"
+
+# Size: the same device, inode and birth time but a different size is not what Dan was shown.
+reuse_case gnu "64768 777 $T1 $T1 3" "64768 777 $T1 $T1 9"
+check "a file whose size changed since it was proposed is skipped, saying so" "$(has "$OUT_TEXT" "it changed size since it was proposed (3 bytes, now 9)")"
+check "and it is still there" "$(there "$H/w/reused")"
+
+# The controls: an unchanged file still goes, so the cases above are not a judge refusing everything.
+reuse_case gnu "64768 777 $T1 $T1 3" "64768 777 $T1 $T1 3"
+check "with GNU stat, an unchanged file is trashed (exit $RC)" "$(gone "$H/w/reused")"
+reuse_case bsd "16777231 777 $T1 $T1 3" "16777231 777 $T1 $T1 3"
+check "with macOS stat, an unchanged file is trashed (exit $RC)" "$(gone "$H/w/reused")"
+reuse_case gnu "64768 777 0 0 $T1 3" "64768 777 0 0 $T1 3"
+check "with no birth time, an unchanged file is trashed (exit $RC)" "$(gone "$H/w/reused")"
+reuse_case gnu "64768 777 $T1 $T1 3" "64768 777 $T1 $T2 3"
+check "where a birth time is recorded, a ctime that alone moved (a permissions change) does not stop it (exit $RC)" "$(gone "$H/w/reused")"
+
+# truncate is for a log a process is writing to, so its size growing is expected, not a replacement.
+fresh
+printf 'xy\n' > "$H/w/reused"
+fake_says gnu "64768 777 $T1 $T1 real"
+fake_stat_on
+run --propose truncate "$H/w/reused"
+REUSE_PLAN="$(sed -n 's/^Plan: \([^ ]*\) .*/\1/p' <<< "$OUT_TEXT")"
+printf 'more lines written since\n' >> "$H/w/reused"
+run --plan "$REUSE_PLAN"
+check "a log proposed for truncating that grew since is still emptied (exit $RC)" "$(has "$OUT_TEXT" "truncated")"
+check "and it is empty" "$(eq "$(wc -c < "$H/w/reused" | tr -d ' ')" 0)"
+
+# A stat that cannot read the file: unmeasured at removal, refused at proposal.
+reuse_case gnu "64768 777 $T1 $T1 3" "64768 777 $T1 $T1 3" trash none
+check "an identity that cannot be read now is skipped as unmeasured, never as a match" "$(has "$OUT_TEXT" "unmeasured: its identity could not be read now")"
+check "and it is still there" "$(there "$H/w/reused")"
+fresh
+printf 'xy\n' > "$H/w/reused"
+fake_says none "0 0 0 0 0 0 0"
+fake_stat_on
+run --propose trash "$H/w/reused"
+check "--propose refuses a path whose identity cannot be read, since nothing could check it again before removal" \
+  "$(has "$OUT_TEXT" "refused  $H/w/reused: its identity could not be read")"
+
+# A record written before #1840 holds device:inode only, which a replacement can share, so it is
+# never taken as a match: the item is skipped as unmeasured. Its identity here is the file's REAL
+# device and inode, which the old judge accepted.
+fresh
+printf 'xy\n' > "$H/w/old"
+old_ident="$(stat -c '%d:%i' "$H/w/old" 2>/dev/null || stat -f '%d:%i' "$H/w/old")"
+item n1 named trash "$H/w/old" 3 offerable "$old_ident"
+mkdir -p "$STATE/named"
+record named-old 10 "$STATE/named/named-old.json"
+plan "$H/plan" named-old n1
+run --plan "$H/plan"
+check "a record holding only device and inode (the shape before #1840) is skipped as unmeasured" \
+  "$(has "$OUT_TEXT" "unmeasured: its record holds an identity in the older device and inode shape")"
+check "and the file is still there" "$(there "$H/w/old")"
+rm -f "$DC_STUBS/stat" "$FAKE_STAT"
 
 finish
