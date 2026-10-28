@@ -4690,6 +4690,12 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## State and identity
 
+- **L1032. A check that a file is still the one it was before must not rest on its device and inode
+  alone, because a filesystem reuses a deleted file's inode for the next file created, so a
+  replacement passes as the original; pair the inode with something a replacement changes, such as
+  birth time or ctime and size.** (claude-config#1840, 2026-10-28)
+  SHORT: A file identity check must not rest on device and inode alone, which a replacement can reuse; pair it with birth time or ctime and size.
+
 - **L812. When events about separate records each write onto one shared profile (a CRM contact, a user
   record), an event about an older or replaced record must not overwrite what a newer record set, so
   write those profile fields only from the person's current record and test the replaced record
