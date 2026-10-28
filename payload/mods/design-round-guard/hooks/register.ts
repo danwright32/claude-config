@@ -27,6 +27,7 @@ import {
   commentOnlyChange,
   dataOnlyChange,
   shellUnread,
+  targetUnread,
   addedOntoFolder,
   shellBraces,
   afterVariable,
@@ -93,7 +94,7 @@ import {
   unsure,
 } from './rules.ts'
 import { errorText } from './mod-kit/skew.ts'
-import { inputTexts } from './mod-kit/inputs.ts'
+import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something
 // without my input. If we can make this something that can't be ignored rather than just a memory,
@@ -362,8 +363,10 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
 }
 
 // Whether a Swift file is a SwiftUI view: the text the call carries, beside the file as it is now.
-// Text that cannot be had (a file the shell writes, a file that cannot be read) counts as one.
-const swiftView = async ($: EngineInterface, t: Target, tool: string, input: Record<string, unknown>): Promise<boolean> => {
+// Text that cannot be had (a file the shell writes, a file that cannot be read) counts as one. A file
+// that is no ordinary file (a fifo, a link to a device) is never opened (#1814), counts as one, and
+// says why, for the refusal to carry.
+const swiftView = async ($: EngineInterface, t: Target, tool: string, input: Record<string, unknown>): Promise<boolean | { unreadable: string }> => {
   const texts: string[] = []
   if (t.text !== undefined) texts.push(t.text)
   // The text an edit carries (Edit's, each of MultiEdit's), judged beside the file as it is now.
@@ -371,11 +374,14 @@ const swiftView = async ($: EngineInterface, t: Target, tool: string, input: Rec
   texts.push(...carried)
   if (t.path && t.text === undefined) {
     if (!(await $.fs.exists(t.path).catch(() => false))) return !carried.length || isSwiftUI(texts.join('\n'))
+    let now: Current
     try {
-      texts.push(await $.fs.read(t.path))
+      now = await targetNow($, t.path)
     } catch {
       return true
     }
+    if ('unreadable' in now) return { unreadable: now.unreadable }
+    if ('text' in now) texts.push(now.text)
   }
   return isSwiftUI(texts.join('\n'))
 }
@@ -496,14 +502,18 @@ const restoreAlone = async ($: EngineInterface, command: string): Promise<string
 // an Edit, MultiEdit or Write naming one existing file, from the text the call leaves; a git checkout
 // or restore, from what git puts back (#1158), or why that could not be read (`notAlone`, restoreAlone's
 // answer for the call). Undefined for anything else (a shell write, a new file, a file that cannot be
-// read, a call naming more than one file), which is never judged by its lines and is asked about.
-type Change = { before: string; after: string } | { unread: string } | undefined
+// read, a call naming more than one file), which is never judged by its lines and is asked about. A
+// file that is no ordinary file (/dev/stdin, a fifo, a link to a device) is never opened (#1814) and
+// is `unreadable`, with why, for the refusal to say.
+type Change = { before: string; after: string } | { unread: string } | { unreadable: string } | undefined
 const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: string, tool: string, input: Record<string, unknown>, notAlone: string | undefined): Promise<Change> => {
   if (!judgedByText(t.path) || (tool === 'Bash' ? t.from === undefined : pathsOf(input).length !== 1)) return undefined
   let before: string
   try {
-    if (!(await $.fs.exists(t.path))) return undefined
-    before = await $.fs.read(t.path)
+    const now = await targetNow($, t.path)
+    if ('unreadable' in now) return { unreadable: now.unreadable }
+    if ('absent' in now) return undefined
+    before = now.text
   } catch {
     return undefined
   }
@@ -639,8 +649,11 @@ const recordText = async (
     let before = ''
     if (tool !== 'Write') {
       try {
-        if (!(await $.fs.exists(t.path))) return { why: 'the file is not there to change' }
-        before = String(await $.fs.read(t.path))
+        const now = await targetNow($, t.path)
+        if ('absent' in now) return { why: 'the file is not there to change' }
+        // Never opened (#1814): a read of /dev/stdin or a fifo waits for ever.
+        if ('unreadable' in now) return { why: `the file could not be read: ${now.unreadable}` }
+        before = String(now.text)
       } catch (err) {
         return { why: `the file could not be read: ${message(err)}` }
       }
@@ -655,8 +668,12 @@ const recordText = async (
   }
   const src = await copiedFrom($, String(input.command ?? ''), t.path, at)
   if (typeof src !== 'string') return src
+  // What it copies, never opened when it is /dev/stdin or a fifo (#1814): a read of one waits for ever.
   try {
-    return { text: String(await $.fs.read(src)) }
+    const from = await targetNow($, src)
+    if ('unreadable' in from) return { why: `${src}, which it copies, could not be read: ${from.unreadable}` }
+    if ('absent' in from) return { why: `${src}, which it copies, could not be read: it is not there` }
+    return { text: String(from.text) }
   } catch (err) {
     return { why: `${src}, which it copies, could not be read: ${message(err)}` }
   }
@@ -860,7 +877,17 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     }
     // Only now is a Swift file read for SwiftUI, so a test is never read, nor held when it cannot be
     // (lessons review of #991).
-    if (kind === 'swift' && !(await swiftView($, t, tool, input))) continue
+    if (kind === 'swift') {
+      const view = await swiftView($, t, tool, input)
+      if (view === false) continue
+      // One that is no ordinary file (#1814) is held, saying why.
+      if (view !== true) {
+        const notes = unreadIn.get(tree) ?? []
+        const said = targetUnread(relTo(t.path, tree), view.unreadable)
+        if (!notes.includes(said)) notes.push(said)
+        unreadIn.set(tree, notes)
+      }
+    }
     if (t.from !== undefined && (judgedByText(t.path) || modTs) && notAlone === null) notAlone = await restoreAlone($, String(input.command ?? ''))
     if (modTs) {
       const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined, watch)
@@ -884,6 +911,12 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     const change = await changeOf($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined)
     if (change && 'unread' in change) {
       const said = unreadPutBack(relTo(t.path, tree), change.unread)
+      const notes = unreadIn.get(tree) ?? []
+      if (!notes.includes(said)) notes.push(said)
+      unreadIn.set(tree, notes)
+    } else if (change && 'unreadable' in change) {
+      // A file that is no ordinary file (#1814): never opened, judged whole, saying why.
+      const said = targetUnread(relTo(t.path, tree), change.unreadable)
       const notes = unreadIn.get(tree) ?? []
       if (!notes.includes(said)) notes.push(said)
       unreadIn.set(tree, notes)
@@ -1002,8 +1035,19 @@ const scratchpadOf = async ($: EngineInterface, at: Where): Promise<string | und
   return undefined
 }
 
-// A file's text as it stands, undefined for one not there.
-const textNow = async ($: EngineInterface, path: string): Promise<string | undefined> => ((await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined)
+// What a file holds now, by mod-kit's one reader of a file a call writes (#1814): one that is no
+// ordinary file (/dev/stdin, a fifo, a link to a device) is never opened, since a read of one waits
+// for ever and the call never runs, and is unreadable with why, never empty.
+const targetNow = ($: EngineInterface, path: string): Promise<Current> =>
+  currentText({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, path)
+
+// A file's text as it stands, undefined for one not there. One that is no ordinary file throws why
+// (#1814), which each caller says as a file it could not read.
+const textNow = async ($: EngineInterface, path: string): Promise<string | undefined> => {
+  const now = await targetNow($, path)
+  if ('unreadable' in now) throw new Error(now.unreadable)
+  return 'text' in now ? String(now.text) : undefined
+}
 
 // Puts back one mod hook file a shell write made draw (#1296, Dan, 2026-10-17: judge after, and undo),
 // keeping what the command wrote first: written to the session's scratchpad and read back before
