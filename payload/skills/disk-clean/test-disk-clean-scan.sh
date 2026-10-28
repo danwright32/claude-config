@@ -170,7 +170,13 @@ check "the walk finds a project's node_modules" "$(has "$(dcr_items "$REC")" "$H
 for p in "Library/Caches/x" ".Trash/p" ".ssh" "Some.app/Contents" "Dropbox/proj"; do
   check "the walk never goes into $p" "$(hasnt "$(dcr_items "$REC")" "$H/$p/node_modules")"
 done
-check "find is run once over the home folder for the walk, never once per category" "$(eq "$(dcr_header "$REC" walk)" complete)"
+check "the walk of a readable home folder is complete" "$(eq "$(dcr_header "$REC" walk)" complete)"
+# Counted from the harness's call log, where every find the scan runs is recorded: three categories
+# that each read the walk, and exactly one find whose starting folder is the home folder (L63).
+: > "$DC_CALLS"
+run_scan --only build-folders,worktrees,large-files
+check "find is run once over the home folder for the walk, never once per category" \
+  "$(eq "$(dc_calls find | awk -v h="$(printf '%q' "$H")" '$2 == h' | wc -l | tr -d ' ')" 1)"
 mkdir -p "$H/Apps/locked/x"; chmod 000 "$H/Apps/locked"
 run_scan --only build-folders
 check "a folder the walk cannot read makes the walk partial, saying how many" "$(has "$(dcr_header "$REC" walk)" "partial: 1 folder")"
@@ -204,6 +210,8 @@ rm -f "$STATE/remove.lock"
 # Test seams are honoured only in test mode, as disk-remove.sh does.
 run_scan_env -u DISK_CLEAN_TEST_ROOT bash "$SCAN" --only trash
 check "with a test seam set outside test mode it refuses with exit 2" "$(eq "$RC" 2)"
+run_scan_env -u DISK_CLEAN_TEST_ROOT -u DISK_CLEAN_TRASH -u DISK_CLEAN_JUDGE -u DISK_CLEAN_DERIVED_DATA_SWEEP DISK_CLEAN_DATALESS="$DC_ROOT/dataless" bash "$SCAN" --only trash
+check "the stand-in list of cloud only folders alone, outside test mode, is refused too" "$(eq "$RC $(has "$OUT_TEXT" DISK_CLEAN_DATALESS)" "2 ok")"
 run_scan --only nonsense
 check "an unknown category is refused with exit 2" "$(eq "$RC" 2)"
 

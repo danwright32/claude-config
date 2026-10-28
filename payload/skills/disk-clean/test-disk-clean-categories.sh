@@ -231,6 +231,44 @@ printf 'today\n' > "$P/stale/src/b.ts"
 judge build-folders "$P/stale/node_modules"
 check "build folders judge: once the project is edited again it is not" "$(has "$JUDGED" "not offerable: the project's own files changed within 30 days")"
 
+# A folder iCloud keeps only in the cloud (dataless) is never read, because listing one makes iCloud
+# fetch it, and du does not skip it (#1860: four Slate worktree build folders held 1,673). chflags
+# cannot set the flag, so DISK_CLEAN_DATALESS names a file of paths that stand in for dataless ones,
+# honoured only in test mode. A folder with one beneath it is sized by a find that stops there,
+# never by du, and its size is exact for this Mac (nothing under a dataless folder is stored here),
+# so it is measured, never partial, and flagged icloud-only-part.
+fresh
+P="$H/Apps"
+mkdir -p "$P/cloudy/node_modules/local" "$P/cloudy/node_modules/evicted/deep" "$P/cloudy/src" "$P/gone/node_modules/x" "$P/plain/node_modules/x"
+printf '{}\n' > "$P/cloudy/package.json"; printf 'x\n' > "$P/cloudy/src/a.ts"; printf '{}\n' > "$P/gone/package.json"; printf '{}\n' > "$P/plain/package.json"
+dd if=/dev/zero of="$P/cloudy/node_modules/local/a.bin" bs=1024 count=64 2>/dev/null
+dd if=/dev/zero of="$P/cloudy/node_modules/evicted/deep/b.bin" bs=1024 count=1024 2>/dev/null
+old "$P/cloudy"; old "$P/gone"; old "$P/plain"
+printf '%s\n' "$P/cloudy/node_modules/evicted" "$P/gone" > "$DC_ROOT/dataless"
+dl_run_scan() { OUT_TEXT="$(dc_run env DISK_CLEAN_DATALESS="$DC_ROOT/dataless" bash "$SCAN" "$@" 2>&1)"; RC=$?; }
+dl_run_scan --only build-folders
+it="$(item_of "$P/cloudy/node_modules")"
+# What is stored outside the stand-in, read by this suite's own du on its own scratch folder.
+want_kib=$(( $(du -sk "$P/cloudy/node_modules" | awk '{ print $1 }') - $(du -sk "$P/cloudy/node_modules/evicted" | awk '{ print $1 }') ))
+check "build folders: a folder holding a cloud only folder is still listed" "$(eq "$(state_of "$P/cloudy/node_modules")" offerable)"
+check "build folders: it is never passed to du" "$(hasnt "$(dc_calls du)" "$P/cloudy/node_modules")"
+check "build folders: its size is what is stored here, the cloud only folder left out" "$(eq "$(field "$it" 6)" "$((want_kib * 1024))")"
+check "build folders: and that size is exact, so measured, never partial" "$(eq "$(field "$it" 8)" measured)"
+check "build folders: it is flagged as partly kept only in iCloud" "$(has "$(flags_of "$P/cloudy/node_modules")" icloud-only-part)"
+check "build folders: a folder with no cloud only folder beneath it is still sized by du" "$(has "$(dc_calls du)" "$P/plain/node_modules")"
+check "build folders: and is not flagged as partly kept only in iCloud" "$(hasnt "$(flags_of "$P/plain/node_modules")" icloud-only-part)"
+# The search for cloud only folders takes the listed paths 200 to a find, so a list longer than that
+# crosses a batch (L101): the first and the last of 201 cache folders hold a stand-in.
+fresh
+C="$H/Library/Caches"
+for n in $(seq -w 1 201); do mkdir -p "$C/app$n"; done
+mkdir -p "$C/app001/evicted" "$C/app201/evicted"; printf '%s\n' "$C/app001/evicted" "$C/app201/evicted" > "$DC_ROOT/dataless"
+dl_run_scan --only caches
+check "sizes: a cloud only folder in a full first batch of 200 is found and flagged" "$(has "$(flags_of "$C/app001")" icloud-only-part)"
+check "sizes: and one in the batch after it too" "$(has "$(flags_of "$C/app201")" icloud-only-part)"
+check "sizes: the folders between them are still sized by du" "$(eq "$(field "$(item_of "$C/app100")" 8) $(hasnt "$(flags_of "$C/app100")" icloud-only-part) $(has "$(dc_calls du)" "$C/app100")" "measured ok ok")"
+check "build folders: the walk never goes into a cloud only project folder" "$(eq "$(item_of "$P/gone/node_modules")" "")"
+
 # ================================================================================================
 # Docker: only when docker info answers; volumes listed and never offerable
 # ================================================================================================
@@ -399,6 +437,19 @@ check "worktrees judge: the merged one is offerable" "$(eq "$JUDGED" offerable)"
 printf ' M late.txt' > "$W/merged/.fx-status"
 judge worktrees "$W/merged"
 check "worktrees judge: once it has changes it is not" "$(has "$JUDGED" "not offerable: it has uncommitted or untracked files")"
+# A folder whose own .git file iCloud keeps only in the cloud cannot be read without fetching it, so
+# whether it is a worktree is not known: it is unmeasured and says why, never silently left out (L10,
+# L11), and git is never run in it. The stand-in is DISK_CLEAN_DATALESS, as for build folders.
+wt evicted "" feat-j jjj1 "$GH_URL"
+printf '%s\n' "$W/evicted/.git" > "$DC_ROOT/dataless"
+: > "$DC_CALLS"
+dl_run_scan --only worktrees
+check "worktrees: one whose .git file is kept only in iCloud is listed" "$(eq "$(field "$(item_of "$W/evicted")" 4)" "$W/evicted")"
+check "worktrees: as unmeasured, saying its .git file is kept only in iCloud" "$(has "$(state_of "$W/evicted")" "unmeasured: its .git file is kept only in iCloud")"
+check "worktrees: and git is never run in it" "$(hasnt "$(dc_calls git)" "$W/evicted")"
+check "worktrees: the others are judged as before" "$(eq "$(state_of "$W/merged")" "not offerable: it has uncommitted or untracked files")"
+JUDGED="$(dc_run env DISK_CLEAN_DATALESS="$DC_ROOT/dataless" DISK_CLEAN_CATEGORY=worktrees bash "$CATS/worktrees.sh" judge "$W/evicted" 2>&1)"
+check "worktrees judge: one whose .git file is kept only in iCloud is unmeasured" "$(has "$JUDGED" "unmeasured: its .git file is kept only in iCloud")"
 
 # ================================================================================================
 # Transcripts: .jsonl over 90 days, and any hit says Claude Code's own cleanup stopped

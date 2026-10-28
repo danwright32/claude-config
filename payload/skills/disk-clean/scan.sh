@@ -36,7 +36,8 @@
 # "unmeasured: ..."), walk (complete, "partial: ..." or "unmeasured: ..."), categories (the ones this
 # scan ran, in order), status.<category> (measured or "unmeasured: <why>") and, where a category has
 # one, note.<category>. Each item carries id, category, method, target, bytes, state, identity, size
-# (measured, partial, reported, denied, unread), flags (credential, icloud) and detail.
+# (measured, partial, reported, denied, unread), flags (credential, icloud, icloud-only-part) and
+# detail.
 #
 # Exit: 0 the record was written (unmeasured categories included); 2 refused or the record could not
 # be written; 75 a disk-remove run is removing things now.

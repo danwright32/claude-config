@@ -23,7 +23,8 @@
 # how bytes was measured: measured, partial (a lower bound: du could not read everything beneath it),
 # reported (the owning tool's own figure, Docker's), denied or unread (and then there is no bytes,
 # never a 0). flags is a comma list: credential (it holds keys or secrets), icloud (removing it
-# removes it from iCloud on every device). The header may carry more string keys after scanned_at. Strings escape
+# removes it from iCloud on every device), icloud-only-part (part of it is kept only in iCloud, so
+# its bytes are what is stored on this Mac, exactly, and the rest is in the cloud). The header may carry more string keys after scanned_at. Strings escape
 # only \ and " (as \\ and \"); a string holding anything else escaped, or a control character, is
 # not one this layout carries, and its item reads as unreadable. A trailing comma after the last
 # item is allowed. States: offerable, "not offerable: <reason>", "unmeasured: <reason>", and the ones
