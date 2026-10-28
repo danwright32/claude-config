@@ -10,10 +10,13 @@ import { currentText, inputTexts, isDevice, type InputFs } from '../hooks/inputs
 // path that is not a regular file never answers, as the real one does, so a test that opened one
 // would hang; every read is counted.
 type Disk = Record<string, string | 'FIFO' | 'DIR' | 'DEVICE'>
-const disk = (entries: Disk, fail?: { stat?: string; statError?: string; read?: string }) => {
+const disk = (entries: Disk, fail?: { exists?: string; stat?: string; statError?: string; read?: string }) => {
   const reads: string[] = []
   const fs: InputFs = {
-    exists: async path => entries[path] !== undefined,
+    exists: async path => {
+      if (fail?.exists === path) throw new Error(`EPERM: ${path}, exists`)
+      return entries[path] !== undefined
+    },
     stat: async path => {
       if (fail?.stat === path) throw new Error(fail.statError ?? `EACCES: ${path}`)
       const e = entries[path]
@@ -62,6 +65,8 @@ describe('inputs: reading what a command reads', () => {
   test('a file there that cannot be judged or read throws, so a guard fails closed', async () => {
     const statFails = disk({ '/repo/a.patch': 'A' }, { stat: '/repo/a.patch' })
     await expect(inputTexts(statFails.fs, ['/repo/a.patch'])).rejects.toThrow('EACCES: /repo/a.patch')
+    const existsFails = disk({ '/repo/a.patch': 'A' }, { exists: '/repo/a.patch' })
+    await expect(inputTexts(existsFails.fs, ['/repo/a.patch'])).rejects.toThrow('EPERM: /repo/a.patch, exists')
     const readFails = disk({ '/repo/a.patch': 'A' }, { read: '/repo/a.patch' })
     await expect(inputTexts(readFails.fs, ['/repo/a.patch'])).rejects.toThrow('EIO: /repo/a.patch')
   })
@@ -99,6 +104,14 @@ describe('inputs: what a file a call writes holds now', () => {
     const denied = disk({ '/repo/a.md': 'A' }, { stat: '/repo/a.md' })
     expect(await currentText(denied.fs, '/repo/a.md')).toEqual({ unreadable: 'it could not be looked at (EACCES: /repo/a.md)' })
     expect([...reads, ...denied.reads]).toEqual([])
+  })
+  // The first half of the look is asking whether anything is there at all, and it can throw as the
+  // stat can (#1839): that throw escaped this reader while only the stat's was caught, against the
+  // promise above that a failed look never escapes. Either half failing is the same unreadable answer.
+  test('a file whose existence check throws is unreadable, the error named, and never read', async () => {
+    const { fs, reads } = disk({ '/repo/CLAUDE.md': 'x' }, { exists: '/repo/CLAUDE.md' })
+    expect(await currentText(fs, '/repo/CLAUDE.md')).toEqual({ unreadable: 'it could not be looked at (EPERM: /repo/CLAUDE.md, exists)' })
+    expect(reads).toEqual([])
   })
   test('a file there that cannot be read throws, so a guard fails closed', async () => {
     const readFails = disk({ '/repo/a.md': 'A' }, { read: '/repo/a.md' })
