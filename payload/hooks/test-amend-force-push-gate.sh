@@ -165,10 +165,13 @@ if [ "$RC" -eq 0 ]; then check "with no python3 a plain commit goes through" ok;
 
 # ---------------------------------------------------------------------------------------------
 echo "the rule is said where every dispatched builder reads it, in the same words"
-if grep -F -q "$RULE" "$RULES"; then check "payload/CLAUDE.md carries the refusal's sentence" ok
+# The rule file cites its issue before the full stop, as its neighbours do, so the refusal's
+# sentence is matched without its own full stop.
+RULE_WORDS="${RULE%.}"
+if grep -F -q "$RULE_WORDS (#1856)." "$RULES"; then check "payload/CLAUDE.md carries the refusal's sentence" ok
 else check "payload/CLAUDE.md carries the refusal's sentence" "not found in $RULES"; fi
 line="$(grep -F "A commit message goes in a file" "$RULES")"
-case "$line" in *"$RULE"*"#1856"*) check "it sits in the worktree agent rule, citing #1856" ok ;; *) check "it sits in the worktree agent rule, citing #1856" "${line:0:200}" ;; esac
+case "$line" in *"$RULE_WORDS (#1856)."*) check "it sits in the worktree agent rule, citing #1856" ok ;; *) check "it sits in the worktree agent rule, citing #1856" "${line:0:200}" ;; esac
 
 # ---------------------------------------------------------------------------------------------
 echo "settings.hooks.json: the gate runs before every Bash call"
