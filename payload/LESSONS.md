@@ -7521,6 +7521,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
 
 ## External systems
+- **L819. Connecting two managed services (a database pool like Hyperdrive and a host like Supabase) follows the integration guide written for that exact pair before any setting is chosen, because the host's default connection string is often the one the guide says not to use, and the wrong choice works under light load and hangs under real concurrency.**
+  (pivot#126, 2026-10-28)
+  SHORT: Wire two managed services by the guide for that exact pair; the host's default string can work lightly and hang under concurrency.
 - **L810. Check a saved credential by performing the action it exists for against its real
   destination (posting to the alert channel, sending from the mailbox, writing to the bucket),
   never only by a login check, because a valid credential for the wrong identity passes every
