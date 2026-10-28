@@ -12,6 +12,7 @@ which is NOT loaded into the session.
 - L771. A timeout raced against the work throws the timer's error and drops what the work attached, so attach context where the timer fires.
 - L1027. Local dev and test servers must not report to production's error tracker, and alerts act only on production.
 - L767. Checking several candidates to choose one, judge each one's failure on its own, so one broken candidate is skipped, not the whole choice failed.
+- L1034. A safety check guarding an action must be the last step before it: any work between them widens the window for what it checked to change.
 - L1033. A check reading a script's exit 1 as nothing to refuse passes every crash: give the clean answer its own code, and any other is unread.
 - L490. A gate parsing input through an external interpreter must refuse by name when it is missing: an empty parse reads as nothing to refuse.
 - L710. A gap the NEXT occurrence repairs is invisible on every occurrence but the last and reads as working, so check the LAST occurrence directly.
