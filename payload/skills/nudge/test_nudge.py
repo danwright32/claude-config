@@ -7,10 +7,10 @@ import unittest
 import nudge
 
 
-LINK = "https://example.slack.com/archives/C084ATS9AR4/p1793208433546939"
+LINK = "https://example.slack.com/archives/C0123ABCDEF/p1793208433546939"
 REPLY_LINK = (
-    "https://example.slack.com/archives/C084ATS9AR4/p1793208999000111"
-    "?thread_ts=1793208433.546939&cid=C084ATS9AR4"
+    "https://example.slack.com/archives/C0123ABCDEF/p1793208999000111"
+    "?thread_ts=1793208433.546939&cid=C0123ABCDEF"
 )
 
 
@@ -19,7 +19,7 @@ class FakeSlack:
 
     def __init__(self, answer=None):
         self.calls = []
-        self.answer = answer or {"ok": True, "channel": "C084ATS9AR4", "ts": "1793300000.000100"}
+        self.answer = answer or {"ok": True, "channel": "C0123ABCDEF", "ts": "1793300000.000100"}
 
     def __call__(self, method, params):
         self.calls.append((method, params))
@@ -28,25 +28,25 @@ class FakeSlack:
 
 class ParseLinkTest(unittest.TestCase):
     def test_top_level_message_link(self):
-        self.assertEqual(nudge.parse_link(LINK), ("example", "C084ATS9AR4", "1793208433.546939"))
+        self.assertEqual(nudge.parse_link(LINK), ("example", "C0123ABCDEF", "1793208433.546939"))
 
     def test_link_to_a_reply_targets_the_parent_thread(self):
-        self.assertEqual(nudge.parse_link(REPLY_LINK), ("example", "C084ATS9AR4", "1793208433.546939"))
+        self.assertEqual(nudge.parse_link(REPLY_LINK), ("example", "C0123ABCDEF", "1793208433.546939"))
 
     def test_surrounding_whitespace_and_angle_brackets_are_ignored(self):
-        self.assertEqual(nudge.parse_link("  <" + LINK + ">\n")[1:], ("C084ATS9AR4", "1793208433.546939"))
+        self.assertEqual(nudge.parse_link("  <" + LINK + ">\n")[1:], ("C0123ABCDEF", "1793208433.546939"))
 
     def test_private_channel_ids_are_accepted(self):
-        self.assertEqual(nudge.parse_link(LINK.replace("C084ATS9AR4", "G01ABCDEF"))[1], "G01ABCDEF")
+        self.assertEqual(nudge.parse_link(LINK.replace("C0123ABCDEF", "G01ABCDEF"))[1], "G01ABCDEF")
 
     def test_links_that_are_not_slack_messages_are_refused_by_name(self):
         for bad in [
             "",
             "hello",
-            "https://example.com/archives/C084ATS9AR4/p1793208433546939",
-            "https://example.slack.com/archives/C084ATS9AR4",
-            "https://example.slack.com/archives/C084ATS9AR4/p17932084",
-            "https://example.slack.com/archives/C084ATS9AR4/p1793208433546939?thread_ts=garbage",
+            "https://example.com/archives/C0123ABCDEF/p1793208433546939",
+            "https://example.slack.com/archives/C0123ABCDEF",
+            "https://example.slack.com/archives/C0123ABCDEF/p17932084",
+            "https://example.slack.com/archives/C0123ABCDEF/p1793208433546939?thread_ts=garbage",
         ]:
             with self.subTest(bad=bad):
                 with self.assertRaises(nudge.NudgeError) as caught:
@@ -81,17 +81,17 @@ class LinesTest(unittest.TestCase):
 class PostTest(unittest.TestCase):
     def test_posts_the_line_in_the_thread_and_returns_a_link_to_it(self):
         slack = FakeSlack()
-        link = nudge.post(LINK, "Psst. @systems-team can't read minds (yet).", slack)
+        link = nudge.post(LINK, "Psst. @some-team can't read minds (yet).", slack)
         self.assertEqual(
             link,
-            "https://example.slack.com/archives/C084ATS9AR4/p1793300000000100"
-            "?thread_ts=1793208433.546939&cid=C084ATS9AR4",
+            "https://example.slack.com/archives/C0123ABCDEF/p1793300000000100"
+            "?thread_ts=1793208433.546939&cid=C0123ABCDEF",
         )
         method, params = slack.calls[0]
         self.assertEqual(method, "chat.postMessage")
-        self.assertEqual(params["channel"], "C084ATS9AR4")
+        self.assertEqual(params["channel"], "C0123ABCDEF")
         self.assertEqual(params["thread_ts"], "1793208433.546939")
-        self.assertEqual(params["text"], "Psst. @systems-team can't read minds (yet).")
+        self.assertEqual(params["text"], "Psst. @some-team can't read minds (yet).")
         self.assertFalse(params["link_names"])
         self.assertFalse(params["unfurl_links"])
         self.assertEqual(len(slack.calls), 1)
