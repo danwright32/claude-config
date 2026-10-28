@@ -173,6 +173,14 @@ class DiffSavedVersion(Base):
         self.assertEqual(rc, 0, text)
         self.assertIn("No differences", text)
 
+    def test_a_clean_read_back_says_settings_were_compared_whatever_the_journey_is_called(self):
+        named = copy.deepcopy(V1)
+        named["name"] = "Leads from the canvas form"
+        snap = self.snapshot(named)
+        rc, text = run("diff", snap, self.write("same.json", named))
+        self.assertEqual(rc, 0, text)
+        self.assertIn("every line and every node setting matches", text)
+
     def test_counts_and_layout_moving_are_not_differences(self):
         snap = self.snapshot()
         later = copy.deepcopy(V1)

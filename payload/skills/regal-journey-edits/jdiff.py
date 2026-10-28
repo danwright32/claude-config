@@ -329,14 +329,15 @@ def cmd_diff(snap_path, other_path):
     other = load_json(other_path, "file to compare")
     if isinstance(other, dict) and other.get("source") == CANVAS_SOURCE:
         head, out, count = diff_canvas(snap, other, other_path)
+        compared = "every line and every node on the canvas"  # the canvas carries no settings
     elif isinstance(other, dict) and "flow" in other:
         head, out, count = diff_saved(snap, other, other_path)
+        compared = "every line and every node setting"
     else:
         raise InputError(f"{other_path} is neither the page script's output nor a fetch-journey result")
     print(head)
     if count == 0:
-        print("No differences: every line" + ("" if "canvas" in head else " and every node setting")
-              + " matches the snapshot.")
+        print(f"No differences: {compared} matches the snapshot.")
         return 0
     print("\n".join(out))
     print(f"DIFFERENCES: {count}")
