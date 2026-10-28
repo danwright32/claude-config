@@ -18390,6 +18390,15 @@ out_54z=""; rc_54z=0
 out_54z="$(h54_env bash "$SCRIPT" hold 090 "leading zero" 2>&1)" || rc_54z=$?
 check "#1854 hold 090 is 90 minutes" "[ '$rc_54z' = 0 ] && line_has \"\$out_54z\" 'held off for 1 hour 30 minutes' 'leading zero'"
 h54_env bash "$SCRIPT" release >/dev/null 2>&1 || true
+# A length of 0, or none, is the configured default rather than a constant written into hold.
+out_54o=""; rc_54o=0
+out_54o="$(h54_env SYNC_HOLD_MINUTES=45 bash "$SCRIPT" hold 0 "zero asked" 2>&1)" || rc_54o=$?
+check "#1854 hold 0 takes SYNC_HOLD_MINUTES" "[ '$rc_54o' = 0 ] && line_has \"\$out_54o\" 'held off for 45 minutes' 'zero asked'"
+h54_env bash "$SCRIPT" release >/dev/null 2>&1 || true
+out_54e=""; rc_54e=0
+out_54e="$(h54_env SYNC_HOLD_MINUTES=45 bash "$SCRIPT" hold 2>&1)" || rc_54e=$?
+check "#1854 and so does a hold with no length at all" "[ '$rc_54e' = 0 ] && line_has \"\$out_54e\" 'held off for 45 minutes' 'committing by hand'"
+h54_env bash "$SCRIPT" release >/dev/null 2>&1 || true
 
 
 section "== a watch daemon older than the claude-sync on disk refuses to send (#420) =="

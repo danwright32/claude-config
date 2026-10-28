@@ -10589,13 +10589,16 @@ hold_record_why(){ awk 'NR==1{$1="";$2="";$3="";sub(/^ +/,"");print}' "$SYNC_HOL
 # Mac, so a five minute hold taken over another session's ninety would end that session's pause
 # early with nothing said to it; the longer one is kept and named instead.
 do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
-  local mins="${1:-$SYNC_HOLD_MINUTES}" why now until line tmp left at
+  local mins="${1:-}" dflt="$SYNC_HOLD_MINUTES" why now until line tmp left at
   [ -n "$SYNC_HOLD_FILE" ] || die "no hold was taken: $(not_users_own_home), so this Mac's watcher is not its to hold. Name a hold file in SYNC_HOLD_FILE."
-  # Base ten whatever was typed: 090 is ninety minutes, never an octal error after the fact.
-  case "$mins" in ''|*[!0-9]*) mins="$SYNC_HOLD_MINUTES" ;; esac
-  case "$mins" in ''|*[!0-9]*) mins=30 ;; esac
+  # Base ten whatever was typed: 090 is ninety minutes, never an octal error after the fact. No
+  # length, or none worth having, is the configured default; an unusable default is 30.
+  case "$dflt" in ''|*[!0-9]*) dflt=30 ;; esac
+  dflt=$(( 10#$dflt ))
+  [ "$dflt" -gt 0 ] || dflt=30
+  case "$mins" in ''|*[!0-9]*) mins="$dflt" ;; esac
   mins=$(( 10#$mins ))
-  [ "$mins" -gt 0 ] || mins=30
+  [ "$mins" -gt 0 ] || mins="$dflt"
   shift 2>/dev/null || true
   why="$*"
   why="${why//$'\n'/ }"
