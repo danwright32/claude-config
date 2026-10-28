@@ -30,7 +30,9 @@
 # disk-remove.sh writes: removed, trashed, truncated, gone.
 #
 # Functions (bash 3.2; commands: awk, mv, rm, and the builtins):
-#   dcr_header <record> <key>          the header's value for scan_id or scanned_at; fails when absent
+#   dcr_header <record> <key>          the header's value for scan_id, scanned_at or any note
+#                                      dcr_write put there (fda, walk, categories,
+#                                      status.<category>, note.<category>); fails when absent
 #   dcr_complete <record>              succeeds when the record ends in its closing line
 #   dcr_items <record>                 one line per item: id, category, method, target, state, the
 #                                      bytes field (empty when absent), identity (empty when absent),
