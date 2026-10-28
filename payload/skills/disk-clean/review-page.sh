@@ -223,7 +223,7 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     if (note != "") sub_ = "<span class=\"note\">" h(note) "</span>"
     if (f[9] != "") {
       nf = split(f[9], fl, ","); marks = ""
-      for (k = 1; k <= nf; k++) if (fl[k] != "") marks = marks "<span class=\"flag\">" h(dcrv_flags(fl[k])) "</span>"
+      for (k = 1; k <= nf; k++) if (fl[k] != "") marks = marks "<span class=\"flag" (dcrv_flag_quiet(fl[k]) ? " quiet" : "") "\">" h(dcrv_flags(fl[k])) "</span>"
       sub_ = sub_ "<span class=\"flags\">" marks "</span>"
     }
     if (sub_ != "") sub_ = "<span class=\"sub\">" sub_ "</span>"

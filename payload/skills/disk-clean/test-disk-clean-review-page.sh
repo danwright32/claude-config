@@ -298,6 +298,19 @@ check "with nothing found but a kind unmeasured, it never claims the scan found 
 check "it says nothing was found in what could be measured" "$(has "$HTML" "Nothing was found to remove in what the scan could measure.")"
 check "and still shows the unmeasured kind" "$(has "$(heading docker)" "Docker was not running")"
 
+# A folder partly kept only in iCloud (#1806's icloud-only-part): said in words beside the item, in
+# the row's quiet grey, never as an amber mark, which warns about removing.
+fresh
+printf '%s\n' "build-folders-1${S}build-folders${S}delete${S}$H/Apps/p/node_modules${S}400000000${S}offerable${S}1:1${S}measured${S}icloud-only-part${S}" \
+  "build-folders-2${S}build-folders${S}delete${S}$H/Apps/q/node_modules${S}300000000${S}offerable${S}1:2${S}measured${S}credential,icloud-only-part${S}" > "$H/items.txt"
+write_record "$H/items.txt" "build-folders"
+render --out "$OUT"
+check "a folder partly kept only in iCloud says so beside it" "$(has "$(row build-folders-1)" "Partly kept only in iCloud")"
+check "in the quiet mark, never the amber one" "$(has "$(row build-folders-1)" '<span class="flag quiet">Partly kept only in iCloud</span>')"
+check "and the flag's own name never reaches the page" "$(hasnt "$HTML" "icloud-only-part")"
+check "beside a warning, the warning keeps its amber mark" "$(has "$(row build-folders-2)" '<span class="flag">Holds a credential</span>')"
+check "and the iCloud note stays quiet" "$(has "$(row build-folders-2)" '<span class="flag quiet">Partly kept only in iCloud</span>')"
+
 # An empty scan says so, rather than drawing an empty page.
 fresh
 : > "$H/items.txt"

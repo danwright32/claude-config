@@ -17,7 +17,12 @@
 #                                          DCU_AWK_LIB (hooks/lib/disk-clean-units.sh) beside it
 #                                        dcrv_flags(<flags>)  the marks a flags list carries, in the
 #                                          settled design's words ("Holds a credential", "Removes it
-#                                          from iCloud on every device"), joined by "; ", or empty
+#                                          from iCloud on every device", "Partly kept only in
+#                                          iCloud"), joined by "; ", or empty
+#                                        dcrv_flag_quiet(<flag>)  true for a flag that informs
+#                                          rather than warns (icloud-only-part: part of the folder
+#                                          is kept only in iCloud, and its size is what this Mac
+#                                          stores), which the page draws grey, never amber
 #   dcrv_write_nonce <folder> <scan_id>
 #                                      makes a fresh nonce (32 hex characters from /dev/urandom),
 #                                      writes <folder>/$DCRV_NONCE as two lines, "scan_id <id>" and
@@ -46,6 +51,8 @@ function dcrv_size(bytes, size,    h) {
   h = dcu_h(int(bytes / 1024))
   return (size == "partial") ? "At least " h : h
 }
+# A flag that informs rather than warns about removing: drawn in the row grey, never amber.
+function dcrv_flag_quiet(flag) { return flag == "icloud-only-part" }
 function dcrv_flags(flags,    n, f, i, out, w) {
   n = split(flags, f, ",")
   out = ""
@@ -53,6 +60,7 @@ function dcrv_flags(flags,    n, f, i, out, w) {
     w = ""
     if (f[i] == "credential") w = "Holds a credential"
     else if (f[i] == "icloud") w = "Removes it from iCloud on every device"
+    else if (f[i] == "icloud-only-part") w = "Partly kept only in iCloud"
     else if (f[i] != "") w = f[i]
     if (w != "") out = out (out == "" ? "" : "; ") w
   }
