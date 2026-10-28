@@ -28,12 +28,13 @@ export type InputFs = {
 // otherwise whether anything is there, and what it is once its links are followed. A look that
 // throws is answered as `{ lookFailed }`, the error itself, never as a kind: Claude Code 2.1.312's
 // stat with links followed THROWS EBADF for /dev/stdin and for a link to it (measured headless,
-// #1814), where a fifo answers 'other'. Each reader below decides what a failed look means.
+// #1814), where a fifo answers 'other'. The existence check is inside the same catch (#1839), since
+// it is half of the look and can throw as the stat can. Each reader below decides what a failed look means.
 type Kind = 'device' | 'absent' | 'file' | 'dir' | 'other' | { lookFailed: unknown }
 const kindAt = async (fs: InputFs, path: string): Promise<Kind> => {
   if (isDevice(path)) return 'device'
-  if (!(await fs.exists(path))) return 'absent'
   try {
+    if (!(await fs.exists(path))) return 'absent'
     return (await fs.stat(path, { resolve: true })).kind
   } catch (err) {
     return { lookFailed: err }
