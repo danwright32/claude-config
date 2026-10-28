@@ -206,6 +206,8 @@ rm -f "$STATE/remove.lock"
 # Test seams are honoured only in test mode, as disk-remove.sh does.
 run_scan_env -u DISK_CLEAN_TEST_ROOT bash "$SCAN" --only trash
 check "with a test seam set outside test mode it refuses with exit 2" "$(eq "$RC" 2)"
+run_scan_env -u DISK_CLEAN_TEST_ROOT -u DISK_CLEAN_TRASH -u DISK_CLEAN_JUDGE -u DISK_CLEAN_DERIVED_DATA_SWEEP DISK_CLEAN_DATALESS="$DC_ROOT/dataless" bash "$SCAN" --only trash
+check "the stand-in list of cloud only folders alone, outside test mode, is refused too" "$(eq "$RC $(has "$OUT_TEXT" DISK_CLEAN_DATALESS)" "2 ok")"
 run_scan --only nonsense
 check "an unknown category is refused with exit 2" "$(eq "$RC" 2)"
 

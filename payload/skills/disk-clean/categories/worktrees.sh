@@ -4,7 +4,8 @@
 # module calls.
 #
 # From the walk: every .git FILE naming a folder under some repository's .git/worktrees (a
-# submodule's .git file names .git/modules and is not one). Offered, through `git worktree remove`
+# submodule's .git file names .git/modules and is not one). A .git file iCloud keeps only in the
+# cloud is never read, since reading it makes iCloud fetch it: its folder is listed as unmeasured. Offered, through `git worktree remove`
 # without --force (disk-remove.sh's worktree method), only when ALL of these hold, checked in order:
 #   no Claude Code session's working folder is in it (the live session map)
 #   `git status --porcelain --untracked-files=all` is empty, untracked files included
@@ -45,6 +46,10 @@ github_repo() { # <url>
 wt_rules() { # <worktree>
   local t="${1%/}" cwd st br head url repo out err="$DCS_WORK/wt.err.$$" n oid
   D=""
+  # Reading a .git file iCloud keeps only in the cloud makes iCloud fetch it, and so would git.
+  if [ -f "$t/.git" ] && dcs_dataless "$t/.git"; then
+    V="unmeasured: its .git file is kept only in iCloud, so whether it is a git worktree is not known without downloading it"; return
+  fi
   is_worktree "$t" || { V="not offerable: it is not a git worktree"; return; }
   [ -z "$MAP_WHY" ] || { V="unmeasured: $MAP_WHY"; return; }
   while IFS= read -r cwd; do
@@ -76,7 +81,9 @@ do_scan() {
   while IFS= read -r g; do
     case "$g" in */.git) ;; *) continue ;; esac
     [ -f "$g" ] || continue
-    is_worktree "${g%/.git}" && printf '%s\n' "${g%/.git}" >> "$DCS_WORK/wt.paths"
+    # A .git file kept only in iCloud cannot be read to tell, so the folder is listed for wt_rules
+    # to call unmeasured rather than left out without a word (L10, L11).
+    if dcs_dataless "$g" || is_worktree "${g%/.git}"; then printf '%s\n' "${g%/.git}" >> "$DCS_WORK/wt.paths"; fi
   done < "$DCS_WALK"
   dcs_measure "$DCS_WORK/wt.paths" > "$DCS_WORK/wt.sized"
   local p kib size ident flags cred
