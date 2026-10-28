@@ -579,12 +579,73 @@ describe('writes: the value of a known option a tool reads is no file it writes 
     // tsc --outDir and eslint -o name what they write; prettier --write is a flag, so its next word
     // is the file it writes.
     expect(words('npx tsc -p tsconfig.json --outDir dist')).toEqual([['dist']])
-    expect(words('npx eslint -o report.txt app')).toEqual([['report.txt', 'app']])
+    expect(words('npx eslint -o report.txt --fix app')).toEqual([['report.txt', 'app']])
     expect(words('npx prettier --write app/page.tsx')).toEqual([['app/page.tsx']])
   })
   test("a script file's own options are not known, so their values are still handed on", () => {
     expect(words('python3 gen.py --bind 127.0.0.1 --out report.html')).toEqual([['127.0.0.1', 'report.html']])
     expect(words('node build.mjs -p tsconfig.json')).toEqual([['tsconfig.json']])
+  })
+})
+
+// #1827: a known tool that changes the files it is handed only when a flag tells it to handed them
+// all on as files it may write, so `npx prettier --check src` was held like `--write`. In the #1815
+// replay of this Mac's 104,832 distinct Bash commands, every new design round guard hold was a
+// prettier --check. By each tool's own documentation, prettier rewrites files in place only with
+// --write (-w), and otherwise prints them or, with --check, -c, --list-different or -l, names the ones
+// that differ; eslint changes them only with --fix (--fix-dry-run fixes in memory). Without that flag
+// the run hands on only the file an option of its own writes (eslint -o, --cache-location).
+describe("writes: a known tool's mode that changes no file it is handed hands none on (#1827)", () => {
+  const words = (command: string) => (read(command).runs ?? []).map(r => r.args.map(a => a.word))
+  test('prettier hands on its files only with --write or -w', () => {
+    for (const command of [
+      'npx prettier --check src',
+      'npx prettier -c src app/page.tsx',
+      'npx prettier --list-different src',
+      'npx prettier -l src',
+      'npx prettier src/a.ts',
+      'npx prettier --check $(git ls-files src)',
+      'npx --yes prettier@3 --check src',
+      'rtk npx prettier --check src',
+    ])
+      expect({ command, words: words(command) }).toEqual({ command, words: [] })
+    expect(words('npx prettier --write src')).toEqual([['src']])
+    expect(words('npx prettier -w src')).toEqual([['src']])
+    expect(words('npx prettier --check --write src')).toEqual([['src']])
+    expect(words('npx prettier -l --write src')).toEqual([['src']])
+    // A cluster of short flags carrying -w writes, one without it does not.
+    expect(words('npx prettier -uw src')).toEqual([['src']])
+    expect(words('npx prettier -cu src')).toEqual([])
+    expect(words('npx --yes prettier@3 --write src')).toEqual([['src']])
+  })
+  test('eslint hands on its files only with --fix; --fix-dry-run writes none, and -o still names its report', () => {
+    expect(words('npx eslint src')).toEqual([])
+    expect(words('npx eslint --fix-dry-run src')).toEqual([])
+    expect(words('npx eslint -c eslint.config.js app/page.tsx')).toEqual([])
+    expect(words('npx eslint --fix src')).toEqual([['src']])
+    expect(words('npx eslint --fix-dry-run --fix src')).toEqual([['src']])
+    expect(words('npx eslint -o report.txt app')).toEqual([['report.txt']])
+    expect(words('npx eslint --output-file=report.txt app')).toEqual([['report.txt']])
+    expect(words('npx eslint --cache --cache-location .cache/eslint app')).toEqual([['.cache/eslint']])
+    expect(words('npx prettier --check --cache --cache-location .cache/prettier src')).toEqual([['.cache/prettier']])
+  })
+  test('a word that may hold a flag the reader cannot see keeps every file handed on', () => {
+    // A variable it cannot read, or one whose value the shell splits into words, may be --write.
+    expect(words('npx prettier $MODE src')).toEqual([['$MODE', 'src']])
+    expect(words('npx prettier --check ${FLAGS} src')).toEqual([['${FLAGS}', 'src']])
+    expect(words('for f in src/a.ts; do npx prettier $f; done')).toEqual([['$f']])
+    expect(words('F="src --write"; npx prettier --check $F')).toEqual([['$F']])
+    expect(words('F=--write; npx prettier --check $F src')).toEqual([['src']])
+    expect(words('npx eslint "$@"')).toEqual([['$@']])
+    expect(words('npx eslint `echo --fix` src')).toEqual([['`echo --fix`', 'src']])
+    // A command substitution in its operands gives the files it works on (#1815), so it is read as them.
+    expect(words('npx prettier --check $(git ls-files src)')).toEqual([])
+    expect(words('npx prettier --check "$(git diff --name-only HEAD)" src/$(cat name)')).toEqual([])
+  })
+  test('a tool with no such mode known, a module, or a script file, still hands on every file', () => {
+    expect(words('npx biome check src')).toEqual([['check', 'src']])
+    expect(words('python3 -m black --check src')).toEqual([['src']])
+    expect(words('python3 prettier.py --check src')).toEqual([['src']])
   })
 })
 
