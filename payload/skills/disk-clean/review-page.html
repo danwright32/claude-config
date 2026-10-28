@@ -144,12 +144,14 @@ h2 { font-size: 15px; margin: 0; }
   var payloadOut = document.getElementById("payload");
 
   // A size in words by the rule of dcu_h in hooks/lib/disk-clean-units.sh, which wrote every other
-  // size on this page, so the selection's total reads the same way: decimal, as Finder writes it.
+  // size on this page, so the selection's total reads the same way: decimal, as Finder writes it,
+  // in the same integer arithmetic (the suite runs both over the same values).
   function human(bytes) {
-    if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + " GB";
-    if (bytes >= 1e6) return Math.round(bytes / 1e6) + " MB";
-    var k = Math.round(bytes / 1e3);
-    return (k < 1 && bytes > 0 ? 1 : k) + " KB";
+    var n;
+    if (bytes >= 1e9) { n = Math.floor((bytes * 10 + 5e8) / 1e9); return Math.floor(n / 10) + "." + (n % 10) + " GB"; }
+    if (bytes >= 1e6) return Math.floor((bytes + 5e5) / 1e6) + " MB";
+    n = Math.floor((bytes + 500) / 1e3);
+    return (n < 1 && bytes > 0 ? 1 : n) + " KB";
   }
 
   function selection() {

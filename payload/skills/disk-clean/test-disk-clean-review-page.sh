@@ -159,11 +159,11 @@ check "beside Copy selection (D9)" "$(has "$HTML" ">Copy selection</button>")"
 # 3. The settled decisions the markup makes, on the design's own fixture
 # ================================================================================================
 check "every kind is a heading row with its total (D1)" "$(eq "$(grep -cE '<div class="group-head" data-category="[a-z-]+"><label class="head-left"><input class="tick head-tick" [^>]*><h2>[^<]+</h2></label><span class="group-total">' <<< "$HTML")" 12)"
-head() { awk -v c="data-category=\"$1\"" 'index($0, c) && /class="group-head"/ { print; exit }' <<< "$HTML"; }
+heading() { awk -v c="data-category=\"$1\"" 'index($0, c) && /class="group-head"/ { print; exit }' <<< "$HTML"; }
 check "every kind's heading has a tick box before its name (D11)" "$(eq "$(count_of "$HTML" 'class="tick head-tick"')" 12)"
-check "the heading box is named for the kind (D11)" "$(has "$(head caches)" 'aria-label="Tick every App caches item"')"
-check "the heading box ticks only its own kind's items (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* data-category="caches"' <<< "$(head caches)" && echo ok || echo "the box names no kind: $(head caches)")"
-check "a kind with items to tick has its heading box enabled (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(head caches)" && echo "it is disabled" || echo ok)"
+check "the heading box is named for the kind (D11)" "$(has "$(heading caches)" 'aria-label="Tick every App caches item"')"
+check "the heading box ticks only its own kind's items (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* data-category="caches"' <<< "$(heading caches)" && echo ok || echo "the box names no kind: $(heading caches)")"
+check "a kind with items to tick has its heading box enabled (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(heading caches)" && echo "it is disabled" || echo ok)"
 check "every row's box says which kind it is in, for its heading box" "$(grep -qE '<input class="tick"[^>]* data-category="caches"' <<< "$(row caches-3)" && echo ok || echo "it does not")"
 check "no kind is drawn inside a box (D1)" "$(grep -qE 'class="(category|items)"' <<< "$HTML" && echo "a kind is boxed" || echo ok)"
 order="$(grep -oE '<div class="group-head" data-category="[a-z-]+"' <<< "$HTML" | awk -F '"' '{ printf "%s%s", (n++ ? " " : ""), $4 }')"
@@ -199,8 +199,8 @@ check "a path under the home folder starts with ~" "$(has "$(row caches-3)" '<sp
 check "a size is in decimal units, as the design writes it" "$(has "$(row caches-3)" '<span class="size">18.4 GB</span>')"
 check "a partial size says it is a lower bound" "$(has "$(row runaway-logs-32)" "At least 1.6 GB")"
 check "a size nobody read says so, never 0" "$(has "$(row caches-8)" '<span class="size unknown">Size unknown</span>')"
-check "a kind's total counts only what can go" "$(has "$(head caches)" '<h2>App caches</h2></label><span class="group-total">23.2 GB</span>')"
-check "a kind's total holding a partial size says so" "$(has "$(head runaway-logs)" '<span class="group-total">At least ')"
+check "a kind's total counts only what can go" "$(has "$(heading caches)" '<h2>App caches</h2></label><span class="group-total">23.2 GB</span>')"
+check "a kind's total holding a partial size says so" "$(has "$(heading runaway-logs)" '<span class="group-total">At least ')"
 check "the tick box is named by its path" "$(has "$(row caches-3)" 'aria-label="~/Library/Caches/com.adobe.LightroomClassicCC7"')"
 # The colours themselves are read from the drawn page in the PR; here, no style names red as a value.
 check "no style uses red (D7)" "$(grep -qiE '(:|,) *red *[;,)!]|#(f00|ff0000|e00|d00|c00)[^0-9a-f]' <<< "$HTML" && echo "a red is used" || echo ok)"
@@ -226,8 +226,8 @@ printf '%s\n' "caches-1${S}caches${S}delete${S}$H/Library/Caches/a${S}4096${S}no
   "trash-1${S}trash${S}delete${S}$H/.Trash/b${S}4096${S}offerable${S}1:2${S}measured${S}${S}" > "$H/items.txt"
 write_record "$H/items.txt" "trash caches"
 render --out "$OUT"
-check "a kind with nothing to tick has its heading box disabled (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(head caches)" && echo ok || echo "it can be ticked: $(head caches)")"
-check "while a kind with something to tick does not" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(head trash)" && echo "it is disabled" || echo ok)"
+check "a kind with nothing to tick has its heading box disabled (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(heading caches)" && echo ok || echo "it can be ticked: $(heading caches)")"
+check "while a kind with something to tick does not" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(heading trash)" && echo "it is disabled" || echo ok)"
 
 # The heading box's rules (D11), run in node from the page's own script: what CI's runner and
 # both Macs have. Without node this part is reported as unmeasured, never as a pass (L411).
@@ -264,6 +264,30 @@ write_record "$H/items.txt" trash
 render --out "$OUT"
 check "a scan with nothing in it renders with exit 0" "$(eq "$RC" 0)"
 check "and says it found nothing" "$(has "$HTML" "This scan found nothing to remove.")"
+
+# ================================================================================================
+# 4b. One size rule, written three times because three languages draw sizes: dcu_human (bash, the
+#     scan's summary and disk-remove), dcu_h (awk, this page's rows and the checker) and the page's
+#     own human() (its selection total). They must agree on every value, boundaries included.
+# ================================================================================================
+. "$DIR/../../hooks/lib/disk-clean-units.sh" || check "the units library is there to source" "could not source it"
+kibs="$(awk 'BEGIN { for (k = 0; k <= 3000; k += 7) print k; for (k = 976540; k <= 976600; k++) print k;
+  print 488; print 489; print 976; print 977; print 1220703; print 1220704; print 2441406; print 2441407; print 48828125; print 9765625000 }')"
+bash_words="$(while IFS= read -r k; do printf '%s|%s\n' "$k" "$(dcu_human "$k")"; done <<< "$kibs")"
+awk_words="$(awk "$DCU_AWK_LIB"'{ printf "%s|%s\n", $1, dcu_h($1) }' <<< "$kibs")"
+check "the bash and awk size rules agree on every value" "$(diff <(printf '%s\n' "$bash_words") <(printf '%s\n' "$awk_words") > /dev/null && echo ok || echo "they differ: $(diff <(printf '%s\n' "$bash_words") <(printf '%s\n' "$awk_words") | awk 'NR <= 4' | tr '\n' ' ')")"
+fresh
+fixture_record
+render --out "$OUT"
+if command -v node >/dev/null 2>&1; then
+  js_human="$(awk '/function human\(bytes\)/ { p = 1 } p { print } p && /^  }/ { exit }' <<< "$HTML")"
+  check "the page carries its size rule" "$([ -n "$js_human" ] && echo ok || echo "no human() in the page")"
+  js_words="$(node -e "$js_human"'
+    require("fs").readFileSync(0, "utf8").trim().split("\n").forEach(function (k) { console.log(k + "|" + human(Number(k) * 1024)); });' <<< "$kibs" 2>&1)"
+  check "the page's size rule agrees with the bash one on every value" "$(diff <(printf '%s\n' "$bash_words") <(printf '%s\n' "$js_words") > /dev/null && echo ok || echo "they differ: $(diff <(printf '%s\n' "$bash_words") <(printf '%s\n' "$js_words") | awk 'NR <= 4' | tr '\n' ' ')")"
+else
+  echo "SUITE-PART-UNMEASURED the page's size rule against the bash one: node is not on PATH"
+fi
 
 # ================================================================================================
 # 5. The clipboard is cleared before the page exists, only when asked, and a failure says so

@@ -600,6 +600,7 @@ check "--propose with one refusal among its paths exits 5" "$(eq "$RC" 5)"
 check "it offers the folder Dan named" "$(has "$OUT_TEXT" "offered  $H/Downloads/old-installer")"
 check "it refuses a deny listed path at once, before any plan" "$(has "$OUT_TEXT" "refused  $H/Library/Mobile Documents/x/doc: never removed:")"
 check "it refuses a path that is not there" "$(has "$OUT_TEXT" "refused  $H/w/not-there: it is not there")"
+check "an offered size is in words by the one size rule, dcu_human (12 KiB)" "$(has "$OUT_TEXT" "offered  $H/Downloads/old-installer  ($(dcu_human 12), to trash)")"
 named_plan="$(sed -n 's/^Plan: \([^ ]*\) .*/\1/p' <<< "$OUT_TEXT")"
 check "it writes a plan and names it" "$([ -n "$named_plan" ] && [ -f "$named_plan" ] && echo ok || echo "said: $OUT_TEXT")"
 check "and names the command that removes them" "$(has "$OUT_TEXT" "bash ~/.claude/hooks/lib/disk-remove.sh --plan $named_plan")"
@@ -622,6 +623,16 @@ run --propose shred "$H/w/swap"
 check "--propose with a method it does not offer is refused with exit 2" "$(eq "$RC" 2)"
 run --propose truncate "$H/Downloads"
 check "--propose truncate of a folder refuses it" "$(has "$OUT_TEXT" "refused")"
+
+# Each size branch of measure, against dcu_human: under a MB, under a GB in decimal MB (1000 KiB is
+# 1 MB, never 1000 KB), and past a GB.
+mkdir -p "$H/Downloads/sized"; printf 'x\n' > "$H/Downloads/sized/f"
+for sz in 999 1000 976562 1048576; do
+  dc_stub du "for a in \"\$@\"; do case \"\$a\" in -*) ;; *) printf \"$sz\\t%s\\n\" \"\$a\" ;; esac; done"
+  run --propose trash "$H/Downloads/sized"
+  check "an offered size of $sz KiB reads as dcu_human writes it" "$(has "$OUT_TEXT" "offered  $H/Downloads/sized  ($(dcu_human "$sz"), to trash)")"
+done
+dc_stub du 'for a in "$@"; do case "$a" in -*) ;; *) printf "12\t%s\n" "$a" ;; esac; done'
 
 # ================================================================================================
 # 17. Inode reuse (claude-config#1840, L1032): a file created where a removed one was can be given
