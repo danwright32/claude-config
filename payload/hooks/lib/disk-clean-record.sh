@@ -19,24 +19,38 @@
 # Line 1 is the header and the last line is exactly `]}`; a record without that last line is a write
 # that stopped partway and is read as unreadable, never as a shorter scan (L211). Every item is one
 # line beginning {"id":, carries at least id, category, method, target and state as strings, and may
-# carry more fields (bytes, identity, reason, flags), which marking leaves untouched. Strings escape
+# carry more fields (bytes, identity, size, flags, detail), which marking leaves untouched. size says
+# how bytes was measured: measured, partial (a lower bound: du could not read everything beneath it),
+# reported (the owning tool's own figure, Docker's), denied or unread (and then there is no bytes,
+# never a 0). flags is a comma list: credential (it holds keys or secrets), icloud (removing it
+# removes it from iCloud on every device). The header may carry more string keys after scanned_at. Strings escape
 # only \ and " (as \\ and \"); a string holding anything else escaped, or a control character, is
 # not one this layout carries, and its item reads as unreadable. A trailing comma after the last
 # item is allowed. States: offerable, "not offerable: <reason>", "unmeasured: <reason>", and the ones
 # disk-remove.sh writes: removed, trashed, truncated, gone.
 #
 # Functions (bash 3.2; commands: awk, mv, rm, and the builtins):
-#   dcr_header <record> <key>          the header's value for scan_id or scanned_at; fails when absent
+#   dcr_header <record> <key>          the header's value for scan_id, scanned_at or any note
+#                                      dcr_write put there (fda, walk, categories,
+#                                      status.<category>, note.<category>); fails when absent
 #   dcr_complete <record>              succeeds when the record ends in its closing line
 #   dcr_items <record>                 one line per item: id, category, method, target, state, the
 #                                      bytes field (empty when absent), identity (empty when absent),
 #                                      separated by \037; a line that cannot be read prints its id
 #                                      (or ?) with state "unreadable"
-#   dcr_write <record> <scan_id> <scanned_at> <items file>
+#   dcr_write <record> <scan_id> <scanned_at> <items file> [<notes file>]
 #                                      writes a record from lines of id, category, method, target,
-#                                      bytes, state, identity separated by \037, through a temp file
-#                                      renamed into place; fails, writing nothing, on a field holding
-#                                      a control character
+#                                      bytes, state, identity, and optionally size, flags and detail,
+#                                      separated by \037, through a temp file renamed into place;
+#                                      fails, writing nothing, on a field holding a control character.
+#                                      <notes file> holds lines of key \037 value, written into the
+#                                      header as strings after scanned_at (disk-clean's scan, #1806:
+#                                      fda, walk, categories, status.<category>, note.<category>); a
+#                                      key must be letters, digits, dots, hyphens and underscores, and
+#                                      none of version, scan_id, scanned_at or items
+#   dcr_review_items <record>          what dcr_items prints, then size, flags and detail (empty when
+#                                      absent): ten fields, for the review page (#1807). dcr_items
+#                                      keeps its seven, which disk-remove.sh reads
 #   dcr_mark <record> <scan_id> <marks file>
 #                                      sets the state of every item named in <marks file> (lines of
 #                                      id \037 state), refusing when the record's scan_id is no longer
@@ -110,10 +124,11 @@ dcr_items() { # <record>
 
 _dcr_has_control() { case "$1" in *[[:cntrl:]]*) return 0 ;; esac; return 1; }
 
-dcr_write() { # <record> <scan_id> <scanned_at> <items file>
-  local record="$1" sid="$2" at="$3" items="$4" tmp
+dcr_write() { # <record> <scan_id> <scanned_at> <items file> [<notes file>]
+  local record="$1" sid="$2" at="$3" items="$4" notes="${5:-/dev/null}" tmp
   _dcr_has_control "$sid" && return 1
   case "$at" in ''|*[!0-9]*) return 1 ;; esac
+  [ -r "$notes" ] || return 1
   tmp="$record.tmp.$$"
   awk -v sep="$DCR_SEP" -v sid="$sid" -v at="$at" '
     function esc(s,    i, c, out) {
@@ -121,7 +136,16 @@ dcr_write() { # <record> <scan_id> <scanned_at> <items file>
       for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); if (c == "\\" || c == "\"") out = out "\\"; out = out c }
       return out
     }
-    BEGIN { printf "{\"version\":1,\"scan_id\":\"%s\",\"scanned_at\":%s,\"items\":[\n", esc(sid), at }
+    FILENAME == ARGV[1] {
+      if ($0 == "") next
+      k = index($0, sep); if (k == 0) { bad = 1; exit }
+      key = substr($0, 1, k - 1); val = substr($0, k + 1)
+      if (key !~ /^[A-Za-z0-9._-]+$/ || key == "version" || key == "scan_id" || key == "scanned_at" || key == "items") { bad = 1; exit }
+      if (val ~ /[\001-\037]/) { bad = 1; exit }
+      header = header ",\"" key "\":\"" esc(val) "\""
+      next
+    }
+    FNR == 1 && !started { started = 1; printf "{\"version\":1,\"scan_id\":\"%s\",\"scanned_at\":%s%s,\"items\":[\n", esc(sid), at, header; printed = 1 }
     {
       n = split($0, f, sep)
       if (n < 6) { bad = 1; exit }
@@ -130,14 +154,36 @@ dcr_write() { # <record> <scan_id> <scanned_at> <items file>
       if (f[5] ~ /^[0-9]+$/) line = line ",\"bytes\":" f[5]
       line = line ",\"state\":\"" esc(f[6]) "\""
       if (n >= 7 && f[7] != "") line = line ",\"identity\":\"" esc(f[7]) "\""
+      if (n >= 8 && f[8] != "") line = line ",\"size\":\"" esc(f[8]) "\""
+      if (n >= 9 && f[9] != "") line = line ",\"flags\":\"" esc(f[9]) "\""
+      if (n >= 10 && f[10] != "") line = line ",\"detail\":\"" esc(f[10]) "\""
       lines[++count] = line "}"
     }
     END {
       if (bad) exit 1
+      if (!printed) printf "{\"version\":1,\"scan_id\":\"%s\",\"scanned_at\":%s%s,\"items\":[\n", esc(sid), at, header
       for (k = 1; k <= count; k++) print lines[k] (k < count ? "," : "")
       print "]}"
-    }' "$items" > "$tmp" || { rm -f "$tmp"; return 1; }
+    }' "$notes" "$items" > "$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$record" || { rm -f "$tmp"; return 1; }
+}
+
+dcr_review_items() { # <record>
+  awk -v sep="$DCR_SEP" "$DCR_AWK_LIB"'
+    NR == 1 { next }
+    /^\{"id":/ {
+      DCR_BAD = 0
+      id = dcr_str($0, "id"); cat = dcr_str($0, "category"); m = dcr_str($0, "method")
+      t = dcr_str($0, "target"); st = dcr_str($0, "state"); idn = dcr_str($0, "identity")
+      sz = dcr_str($0, "size"); fl = dcr_str($0, "flags"); dt = dcr_str($0, "detail")
+      b = dcr_num($0, "bytes")
+      if (DCR_BAD || id == "" || cat == "" || m == "" || t == "" || st == "") {
+        if (id == "") id = "?"
+        print id sep "" sep "" sep "" sep "unreadable" sep "" sep "" sep "" sep "" sep ""
+      } else {
+        print id sep cat sep m sep t sep st sep b sep idn sep sz sep fl sep dt
+      }
+    }' "$1"
 }
 
 dcr_mark() { # <record> <scan_id> <marks file>
