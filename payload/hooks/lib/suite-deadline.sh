@@ -40,7 +40,9 @@
 # TERM for as long as the child lived. So the watchdog remembers what the suite had started,
 # refreshed every poll, and kills whatever of it is still running once the suite has gone, however
 # it went (TERM between two commands, KILL, a crash). A process is killed only when it is alive
-# under the same pid with the same command line it had in the suite's tree. What can still slip
+# under the same pid with the same command line it had in the suite's tree, or under the same pid
+# with a changed one when the look that saw it was under a minute ago, which catches a child seen
+# while still starting (lib/recorded-pid.sh, claude-config#1909). What can still slip
 # through is anything started within the last poll before the suite died, which is the price of not
 # rereading the process table continuously. A TERM that arrives while the suite is blocked is held
 # by bash until the deadline breaks the block, so the deadline is also what bounds that case.
