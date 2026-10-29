@@ -500,12 +500,122 @@ symbol_cache_note(){
   echo '```'
 }
 
+# ---------- what the last disk-clean scan found that is still there to remove (claude-config#1809) ----------
+# A warning that the disk is nearly full, while a scan from two days ago already found 14 GB that
+# could go, leaves Dan to find that out again. So a low or falling verdict adds ONE line: the total
+# disk-clean's last scan offered that disk-remove has not marked removed, how old that scan is, and
+# /disk-clean. It is said only on a warning, never on a disk with room.
+#
+# THE LINE IS AN EXTRA, NEVER A CONDITION. A record that is missing, unreadable, cut off before its
+# closing line, holding an item line it cannot read, missing scanned_at, dated in the future, or 7
+# days old or more adds nothing, and nothing here can change the verdict or the exit code: this
+# function only prints, and every way out of it is a return. A record with an item it cannot read
+# is refused whole rather than totalled without that item, because the layout's own rule is that an
+# unreadable part is never read as a smaller scan (lib/disk-clean-record.sh, L211).
+#
+# UNREAD IS NEVER 0 (L90). An offerable item with no bytes, or whose size is partial, denied or
+# unread rather than measured or reported, makes the total "at least" that much; offerable items
+# with no size read at all are counted as items, never as 0 GB.
+#
+# PART IN iCLOUD IS SAID, NEVER SIZED. The scan never reads a folder iCloud keeps only in the cloud
+# (reading it makes iCloud download it), so an item with one beneath it is sized from what is stored
+# on this Mac alone and flagged icloud-only-part (lib/disk-clean-record.sh). The total is right about
+# this Mac; the line adds how many offered items have such a part, in the review page's words ("kept
+# only in iCloud", L118), and that the part was not measured, with no figure for it (L11). Only
+# sized items are counted, because the note qualifies the total: an item with no size is not in it
+# at all, and the total already says "at least" for it.
+#
+# ONLY ON THE WARNING, AND READ ONCE PER RECORD. Every prompt runs this hook, so nothing here runs
+# on a disk with room. Reading the record goes through lib/disk-clean-record.sh, which owns the
+# layout (L370), and costs about 0.14 ms an item: 0.76 s for a 5,264 item record, measured
+# 2026-10-28, on every prompt for as long as the disk stays low. So the tally (scanned_at and the
+# counts below) is kept in <state dir>/disk-clean-tally, keyed on the record's inode, modification
+# time, size and path, and the record is read again only when one of those moves (L431: one stat is far
+# cheaper than the read). Every writer of the record renames a new file into place (dcr_write,
+# dcr_mark), so even a mark that keeps the size inside the same second is a new inode. A kept tally
+# that is not nine numbers (one kept in the eight number form from before the iCloud count, too) is
+# read past, never shown. Sizes are worded by lib/disk-clean-units.sh,
+# the one copy disk-clean's scan and disk-remove use.
+#
+# Environment: FREE_SPACE_SCAN_RECORD, the record to read (default ~/.claude/state/disk-clean/
+# last-scan.json, where disk-clean's scan writes it), so the suite never reads this Mac's (L2).
+scan_note(){
+  local record="${FREE_SPACE_SCAN_RECORD:-${HOME:-}/.claude/state/disk-clean/last-scan.json}"
+  [ -f "$record" ] && [ -r "$record" ] || return 0
+  local here="." at age age_words tally n unsized kib bad partial taken unjudged icloud total cloud_note=""
+  local stamp="" key="" kept_key="" kept="" _extra="" cache="$STATE_DIR/disk-clean-tally"
+  case "${BASH_SOURCE[0]}" in */*) here="${BASH_SOURCE[0]%/*}" ;; esac
+  . "$here/lib/disk-clean-units.sh" 2>/dev/null || return 0
+  scan_tally_ok(){ is_number "${at:-}" && is_number "${n:-}" && is_number "${unsized:-}" && is_number "${kib:-}" \
+    && is_number "${bad:-}" && is_number "${partial:-}" && is_number "${taken:-}" && is_number "${unjudged:-}" \
+    && is_number "${icloud:-}"; }
+  # GNU first, then BSD, the order the symbol cache's age is read in above.
+  stamp="$(stat -c '%i %Y %s' "$record" 2>/dev/null || stat -f '%i %m %z' "$record" 2>/dev/null || true)"
+  [ -n "$stamp" ] && key="$stamp $record"
+  if [ -n "$key" ] && [ -f "$cache" ]; then
+    { IFS= read -r kept_key; IFS= read -r kept; } < "$cache" 2>/dev/null || true
+  fi
+  read -r at n unsized kib bad partial taken unjudged icloud _extra <<< "$kept"
+  if [ -z "$key" ] || [ "$kept_key" != "$key" ] || [ -n "${_extra:-}" ] || ! scan_tally_ok; then
+    . "$here/lib/disk-clean-record.sh" 2>/dev/null || return 0
+    dcr_complete "$record" 2>/dev/null || return 0
+    at="$(dcr_header "$record" scanned_at 2>/dev/null)" || return 0
+    # Fields of dcr_review_items: id, category, method, target, state, bytes, identity, size, flags,
+    # detail. flags is a comma list, so icloud-only-part is matched as a whole entry, never inside icloud.
+    tally="$(dcr_review_items "$record" 2>/dev/null | awk -F "$DCR_SEP" '
+      $5 == "unreadable" { bad = 1 }
+      $5 == "removed" || $5 == "trashed" || $5 == "truncated" || $5 == "gone" { taken++ }
+      index($5, "unmeasured: ") == 1 { unjudged++ }
+      $5 == "offerable" {
+        n++
+        if ($6 == "") unsized++
+        else {
+          b += $6; if ($8 != "measured" && $8 != "reported" && $8 != "") partial = 1
+          nf = split($9, f, ","); for (i = 1; i <= nf; i++) if (f[i] == "icloud-only-part") { cloud++; break }
+        }
+      }
+      END { printf "%d %d %.0f %d %d %d %d %d\n", n, unsized, b / 1024, bad, partial, taken, unjudged, cloud }')" || return 0
+    read -r n unsized kib bad partial taken unjudged icloud <<< "$tally"
+    scan_tally_ok || return 0
+    if [ -n "$key" ]; then
+      { printf '%s\n' "$key"; printf '%s %s %s %s %s %s %s %s %s\n' "$at" "$n" "$unsized" "$kib" "$bad" "$partial" "$taken" "$unjudged" "$icloud"; } > "$cache.$$" 2>/dev/null \
+        && mv -f "$cache.$$" "$cache" 2>/dev/null || rm -f "$cache.$$" 2>/dev/null || true
+    fi
+  fi
+  [ "$bad" = 0 ] || return 0
+  [ "$at" -le "$now" ] || return 0
+  age=$((now - at))
+  [ "$age" -lt $((7 * 86400)) ] || return 0
+  if [ "$age" -ge 86400 ]; then age_words="$((age / 86400)) day(s) ago"
+  elif [ "$age" -ge 3600 ]; then age_words="$((age / 3600)) hour(s) ago"
+  else age_words="$((age / 60)) minute(s) ago"; fi
+  # Nothing left to offer has two causes, said apart (L11): its offers were taken, or it made none.
+  if [ "$n" -eq 0 ] && [ "$taken" -gt 0 ]; then
+    echo "A disk-clean scan taken $age_words has nothing left to offer: everything it found to remove has been removed. To scan again, run /disk-clean."
+  elif [ "$n" -eq 0 ] && [ "$unjudged" -gt 0 ]; then
+    echo "A disk-clean scan taken $age_words found nothing it could remove, and could not judge $unjudged item(s). To scan again, run /disk-clean."
+  elif [ "$n" -eq 0 ]; then
+    echo "A disk-clean scan taken $age_words found nothing it could remove. To scan again, run /disk-clean."
+  elif [ "$n" -eq "$unsized" ]; then
+    echo "A disk-clean scan taken $age_words found $n item(s) that it could remove and has not removed yet, but could not read their size. To review them, run /disk-clean."
+  else
+    total="$(dcu_human "$kib")"
+    [ "$icloud" -gt 0 ] && cloud_note=" Part of $icloud item(s) it found is kept only in iCloud: that part was not measured and is not in the total."
+    if [ "$unsized" -gt 0 ] || [ "${partial:-0}" = 1 ]; then
+      echo "A disk-clean scan taken $age_words found at least $total that it could remove and has not removed yet (it could not read every size in full).$cloud_note To review it and choose what goes, run /disk-clean."
+    else
+      echo "A disk-clean scan taken $age_words found $total that it could remove and has not removed yet.$cloud_note To review it and choose what goes, run /disk-clean."
+    fi
+  fi
+}
+
 # The reason there is no rate is said only under --report. The prompt warning keeps the sentence it
 # always had, so a notice on every prompt does not grow a clause nobody asked for.
 [ "$REPORT" -eq 1 ] || no_rate_clause=""
 
 if [ "$free_gb" -lt "$FLOOR_GB" ]; then
   echo "claude-sync: only $free_gb GB free on $VOLUME, under the $FLOOR_GB GB floor.$rate_clause$no_rate_clause$cause_clause"
+  scan_note
   swap_note
   symbol_cache_note
   exit 3
@@ -513,6 +623,7 @@ fi
 
 if [ "$falling_fast" -eq 1 ]; then
   echo "claude-sync: $free_gb GB free on $VOLUME, which is above the $FLOOR_GB GB floor but not for long.$rate_clause$cause_clause"
+  scan_note
   swap_note
   symbol_cache_note
   exit 4
