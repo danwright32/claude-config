@@ -105,7 +105,9 @@ check "trash judge: an entry listed at scan time is offerable" "$(eq "$JUDGED" o
 printf 'c\n' > "$H/.Trash/later.txt"
 judge trash "$H/.Trash/later.txt"
 check "trash judge: an entry added after the scan is not offerable" "$(has "$JUDGED" "not offerable: it was not in the Trash when the scan ran")"
-rm -f "$H/.Trash/photo.NEF"; printf 'replaced\n' > "$H/.Trash/photo.NEF"
+# The replacement is written while the original still exists, then moved over it, so the two
+# can never share an inode: deleting first let Linux hand the freed inode straight back (#1851 CI).
+printf 'replaced\n' > "$H/.Trash/photo.new"; mv -f "$H/.Trash/photo.new" "$H/.Trash/photo.NEF"
 judge trash "$H/.Trash/photo.NEF"
 check "trash judge: an entry replaced since the scan (same name, new inode) is not offerable" "$(has "$JUDGED" "not offerable: it is not the entry the scan listed")"
 # What disk-clean trashed this run: an item of another category marked trashed, whose file now sits
