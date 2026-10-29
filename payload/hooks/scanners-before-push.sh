@@ -113,13 +113,12 @@ cd "$repo_dir" 2>/dev/null || exit 0
 REPO_FILES="$HOOK_DIR/lib/repo-files.sh"
 SCANS='ls-files|repo-files[.]sh'
 suites="$(bash "$REPO_FILES" . '*test-*.sh' 2>/dev/null)"
-# The uncommitted files, listed once and kept for the key below. A listing that fails leaves their
-# number UNKNOWN, said in those words, never a zero that reads as a clean tree of drafts (#1146, L90).
-_sc_uncommitted_unread=""
+# The uncommitted files, counted for the line saying what the scanners read; the key is built from
+# the wider listing just below (#1910). A listing that fails leaves their number UNKNOWN, said in
+# those words, never a zero that reads as a clean tree of drafts (#1146, L90).
 if _sc_uncommitted_list="$(bash "$REPO_FILES" --uncommitted . 2>/dev/null)"; then
   uncommitted_n="$(printf '%s' "$_sc_uncommitted_list" | grep -c . || true)"
 else
-  _sc_uncommitted_list=""; _sc_uncommitted_unread=1
   uncommitted_n="an unknown number of"
 fi
 # Every path whose contents may differ from the commit, a tracked file edited and not committed
@@ -392,8 +391,8 @@ start_one(){         # $1 = the suite path   $2 = a section, or empty
 # never starts a second copy. The gate is no weaker for it: a push goes through only once every
 # scanner has passed on exactly the input being pushed.
 #
-# THE INPUT is the key above, the commit tree plus the digest of the uncommitted files, the same key
-# the record of passes uses, so a run's verdict counts exactly where a remembered pass would (L370).
+# THE INPUT is the key above, the commit tree plus the digest of every file that differs from it on
+# disk (#1910), the same key the record of passes uses, so a run's verdict counts exactly where a remembered pass would (L370).
 # A run is kept at <state>/runs/<repo>/<scanner>.<key>, where <scanner> is a digest of the suite and
 # its section. The checkout that started it is recorded beside it, because two checkouts of one
 # repository, worktrees, push different trees at once: a run is SUPERSEDED, stopped and removed,
