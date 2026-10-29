@@ -88,6 +88,8 @@ import {
   settledQuestion,
   skipOptions,
   skipQuestion,
+  skipIssueProblem,
+  namedByIssue,
   subjectsOf,
   settledNotYet,
   settledTypedSaid,
@@ -123,7 +125,7 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   is for the project of the refused call, or of a path the question names, never the session's
 //   folder (#1010).
 // - Since #1010: an edit whose one change is a component's data prop passes unasked (rules.ts
-//   dataOnlyChange), and the skip question's third answer, Not a look change, lets one refused call
+//   dataOnlyChange), and the skip question's third answer, Not a look or wording change, lets one refused call
 //   through when it is sent again unchanged (`pass:<rules.ts callKey>` in the store).
 // - A subagent is refused like the main session and told to stop and report; only the main session
 //   asks Dan. Which loop a call runs in is known only at tool.call, so a subagent's call is judged
@@ -175,6 +177,12 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   when the issue has no answer of its own (rules.ts worktreeKey, answerOf below), so renaming the
 //   branch to name its issue does not ask him again. Never kept under the issue: another worktree,
 //   the main checkout and any later builder are still asked (#1306). A settled round is not carried.
+// - Since #1904: the skip question may carry metadata "issue", the issue a refused builder works on,
+//   and a subject on its worktree-agent branch is then named "issue #N in <repo> (this builder
+//   only)" in the question, its answers and the record's label (rules.ts namedByIssue). Where the
+//   answer is kept does not change. Contract 3, raised with the design rounds skill.
+// - Since #1911: the skip question's third answer reads "Not a look or wording change", and its
+//   other answers name wording beside the look, since a hold can be for a message's words alone.
 // - Since #1586: a script file a command runs (`python3 gen.py`, `bash x.sh`, `./tool`, make-settled.py)
 //   writes what cannot be read before it runs, so each file it is handed as an argument (mod-kit's
 //   `runs`) is judged as a write of it, as an Edit would be, and the refusal says why (rules.ts
@@ -210,7 +218,7 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   messageWordingSame, in nothingShown; Dan, 2026-10-27: "Timing wording can go through, but
 //   message wording should be asked about"). A JSX element or a colour in those lines is held as before.
 // - Since #1841: a mod's .ts hook file is held for the same wording too, not only for what it draws
-//   (rules.ts modHookTsShows: drawsChange, or messageWordingSame false), by an Edit, a git put back or
+//   (rules.ts modHookTsHold: drawsChange, or messageWordingSame false), by an Edit, a git put back or
 //   a shell write alike, so a toast, a refusal's reason or a tool's result reworded there is asked
 //   about. When a message is sent, the logic around it, and a tool's or schema's description pass; a
 //   property a tool's input schema names `reason` or `text` is no message. Only the words a person
@@ -468,7 +476,7 @@ const answerOf = async ($: EngineInterface, s: DesignRoundSubject): Promise<Desi
   return carried?.kind === 'skipped' ? carried : undefined
 }
 
-// Dan's Not a look change for this very call (#1010). A store that cannot be read here is read again
+// Dan's Not a look or wording change for this very call (#1010). A store that cannot be read here is read again
 // by the judgement that follows, which refuses saying so.
 const passKey = (key: string) => `pass:${key}`
 // A call as it is known: its key and its whole text, from its tool and input, in the folder it runs
@@ -832,7 +840,7 @@ type Verdict =
   | { unreadable: { files: string[]; subjects: DesignRoundSubject[]; why: string; worded?: Worded[] } }
   | { missing: { files: string[]; subjects: DesignRoundSubject[]; trees: string[]; unread: string[]; worded?: Worded[] } }
 
-// The judgement every call gets, the main session's and a subagent's alike. Dan's Not a look change
+// The judgement every call gets, the main session's and a subagent's alike. Dan's Not a look or wording change
 // for this very call (#1010) is looked up only for a call that would otherwise wait on him, so no
 // other call pays a store read for it (lessons review of #1010).
 const judge = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Verdict> => {
@@ -1592,11 +1600,18 @@ export const register: Register = on => {
         const problem = onScreenProblem(ask.metadata?.onScreen, waiting.files)
         if (problem !== undefined) return { deny: problem }
         const onScreen = String(ask.metadata?.onScreen).trim()
+        // The issue a refused builder works on (#1904), read in place of its worktree-agent branch;
+        // one that is no whole number is refused by name before anything is asked.
+        const badIssue = skipIssueProblem(ask.metadata?.issue)
+        if (badIssue !== undefined) return { deny: badIssue }
+        const issue = typeof ask.metadata?.issue === 'number' ? ask.metadata.issue : undefined
         // Only what still has no answer of his is asked about and recorded: a subject he has since
         // settled keeps its settlement, never overwritten by a skip (lessons review of #991).
-        // What the refused call waits on, as the settled question naming it reads it (#1046).
+        // What the refused call waits on, as the settled question naming it reads it (#1046). Only
+        // the label is changed by a named issue: the key, and the worktree a skip is also kept under,
+        // stay the branch's, so no other checkout reads his answer (#1306, #1740).
         const open: DesignRoundSubject[] = []
-        for (const x of waitsOn(waiting)) if (!(await answerOf($, x))) open.push(x)
+        for (const x of waitsOn(waiting)) if (!(await answerOf($, x))) open.push(namedByIssue(x, issue))
         if (!open.length) {
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
           return { deny: `Nothing to ask: ${listed(waiting.subjects.map(x => x.label))} already has his answer, so the edit goes through. Make it again.` }

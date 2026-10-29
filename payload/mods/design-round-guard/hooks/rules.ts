@@ -17,8 +17,11 @@ export const SKIP_YES = 'Skip them'
 export const SKIP_NO = 'Run /design-rounds'
 export const SETTLED_YES = 'Settled'
 export const SETTLED_NO = 'Not yet'
-/** The skip question's third answer (#1010): this one refused edit changes nothing on screen. */
-export const NOT_LOOK = 'Not a look change'
+/**
+ * The skip question's third answer (#1010): this one refused edit changes nothing on screen. Since
+ * #1859 a hold can be for a message's words alone, so it names wording too (#1911).
+ */
+export const NOT_LOOK = 'Not a look or wording change'
 
 /**
  * The version of what this guard and the design rounds skill agree a question carries (#1057): its
@@ -30,8 +33,10 @@ export const NOT_LOOK = 'Not a look change'
  * fails while they differ).
  * 1: #1046, Settled answering for what the refused call it names (`call`) waits on.
  * 2: #1138, the skip question carrying `onScreen`, the plain sentence Dan reads first.
+ * 3: #1904, the skip question carrying `issue`, the issue a builder on its worktree-agent branch
+ *    works on, which Dan reads in place of that branch; where his answer is kept is unchanged.
  */
-export const CONTRACT = 2
+export const CONTRACT = 3
 /** The skill this guard enforces, as installed under ~/.claude/skills. */
 export const SKILL = 'design-rounds'
 
@@ -1177,7 +1182,7 @@ export const targetUnread = (file: string, why: string): string =>
 /**
  * What a refusal says of a file a script run is handed as its argument (#1586): what the script does
  * with it cannot be read before it runs, so it was judged as a write of that file, as an Edit of it
- * would be. Dan's Not a look change lets one such call through where the script only reads it.
+ * would be. Dan's Not a look or wording change lets one such call through where the script only reads it.
  */
 export const scriptUnread = (script: string, file: string): string =>
   `The design round guard cannot read what ${script} does with ${file}, which it is handed as an argument, before it runs, so it judged it as a write of that file.`
@@ -2454,29 +2459,27 @@ export const drawsChange = (files: readonly ModFile[], name: string, before: str
 }
 
 /**
- * Whether changing the mod's plain TypeScript hook file `name` (isModHookTs) from `before` to `after`
- * (undefined for a file not there) is asked about, read beside the mod's other hook files in `files`:
- * where it changes what the mod draws (drawsChange, #1275), or the wording of a message a person reads
- * from it (messageWordingSame, the one reading #1823 gave a mod's .tsx and .jsx files; #1841, Dan,
- * 2026-10-27: "Timing wording can go through, but message wording should be asked about"). A file
- * made or taken away is read as one with no text, so its messages' words are new or gone. When a
- * message is sent, the logic around it, and a tool's or schema's description, which only Claude reads,
- * pass; and only the words a person reads count (Dan, 2026-10-28: "Narrow it first"), so a regular
- * expression, a value compared, a command's words or a separator a message is computed from passes.
- * A file any of them cannot be read in is held.
- */
-export const modHookTsShows = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): boolean =>
-  modHookTsHold(files, name, before, after) !== undefined
-
-/**
- * Why modHookTsShows holds a change (#1859), so the refusal claims only what was measured (L11):
- * `look` where it changes what the mod draws, or where its messages' words cannot be read;
- * `worded`, the words heldWords names, where only the wording of a message a person reads changes;
- * undefined where it passes.
+ * Why a change to a mod's .ts hook file is held (#1859), so the refusal claims only what was
+ * measured (L11): `look` where it changes what the mod draws, or where its messages' words
+ * cannot be read; `worded`, the words heldWords names, where only the wording of a message a person
+ * reads changes; undefined where it passes.
  */
 export type HookHold = { look: true } | { worded: string }
 /** A file, as a refusal names it, held only for a message's wording (#1859), with the words heldWords names. */
 export type Worded = { file: string; words: string }
+/**
+ * Whether, and why, changing the mod's plain TypeScript hook file `name` (isModHookTs) from `before`
+ * to `after` (undefined for a file not there) is asked about, read beside the mod's other hook files
+ * in `files`: where it changes what the mod draws (drawsChange, #1275), or the wording of a message a
+ * person reads from it (messageWordingSame, the one reading #1823 gave a mod's .tsx and .jsx files;
+ * #1841, Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked about").
+ * A file made or taken away is read as one with no text, so its messages' words are new or gone. When
+ * a message is sent, the logic around it, and a tool's or schema's description, which only Claude
+ * reads, pass; and only the words a person reads count (Dan, 2026-10-28: "Narrow it first"), so a
+ * regular expression, a value compared, a command's words or a separator a message is computed from
+ * passes. A file any of them cannot be read in is held. The one reading of such a change: the yes or
+ * no wrapper that stood beside it, which only tests called, is gone (#1911).
+ */
 export const modHookTsHold = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): HookHold | undefined => {
   if (drawsChange(files, name, before, after)) return { look: true }
   const w = messageWordings(files, name, before ?? '', after ?? '')
@@ -2494,7 +2497,7 @@ export const callText = (tool: string, input: Record<string, unknown>, at: { cwd
 
 /**
  * What a refused call is known by, so the same call sent again is recognised when Dan has answered
- * Not a look change for it: the tool and every key of its input, in a fixed order, with the folder it
+ * Not a look or wording change for it: the tool and every key of its input, in a fixed order, with the folder it
  * runs in and the session, hashed (cyrb53). The folder because a shell command's relative path names
  * another file elsewhere; the session so his word about one edit does not stand for ever (lessons
  * review of #1010). The hash only finds the record: the record keeps callText, and a call is let
@@ -2538,7 +2541,9 @@ export const subjectsOf = (at: { main: string; repo: string; session: string } &
   const own = at.root !== undefined && at.root !== at.main ? worktreeKey(at.main, at.root) : undefined
   if (at.issues.length) return at.issues.map(n => (own === undefined ? issue(n) : { ...issue(n), carriedFrom: own }))
   const branch: DesignRoundSubject = { key: `record:${at.main}|branch:${at.branch}`, label: `branch ${at.branch} in ${at.repo}` }
-  return [own !== undefined && isAgentBranch(at.branch) ? { ...branch, carryTo: own } : branch]
+  // The project's name rides along, so the skip question can name the issue the builder works on in
+  // place of this branch (#1904, namedByIssue).
+  return [own !== undefined && isAgentBranch(at.branch) ? { ...branch, carryTo: own, repo: at.repo } : branch]
 }
 
 // A BUILDER'S SKIP CARRIED TO ITS RENAMED BRANCH (#1740). Claude Code starts an agent's worktree on a
@@ -2797,9 +2802,25 @@ export const skipQuestion = (onScreen: string, files: readonly string[], subject
   return `${lead} ${SKIP_QUESTION} This is for ${named(subjects)}; the file is ${listed(files)}.`
 }
 
+/**
+ * A subject as the skip question names it when it also names `issue` (#1904): a builder's
+ * worktree-agent branch, which names no issue (#1306), is read as the issue it works on, said to
+ * hold for this builder only, since Dan's answer is still kept under that branch and its worktree
+ * (#1740) and reaches no other checkout. Only the label changes; any other subject, or none named,
+ * is as it was.
+ */
+export const namedByIssue = (s: DesignRoundSubject, issue: number | undefined): DesignRoundSubject =>
+  issue === undefined || s.carryTo === undefined || s.repo === undefined ? s : { ...s, label: `issue #${issue} in ${s.repo} (this builder only)` }
+
+/** Why the skip question's `issue` cannot name a builder's issue (#1904), or undefined when it can or is not given. */
+export const skipIssueProblem = (issue: unknown): string | undefined =>
+  issue === undefined || (typeof issue === 'number' && Number.isInteger(issue) && issue > 0)
+    ? undefined
+    : `${JSON.stringify(issue)} is not an issue number: give metadata "issue" as the number of the issue the refused builder works on, or leave it out to name its branch. Nothing was asked.`
+
 export const skipOptions = (subjects: readonly DesignRoundSubject[]) => [
-  { label: SKIP_YES, description: `Edits that change the look go ahead on ${named(subjects)} without a design round; the next issue asks again` },
-  { label: SKIP_NO, description: 'Nothing that changes the look is edited until you settle a design round' },
+  { label: SKIP_YES, description: `Edits that change the look or wording go ahead on ${named(subjects)} without a design round; the next issue asks again` },
+  { label: SKIP_NO, description: 'Nothing that changes the look or wording is edited until you settle a design round' },
   { label: NOT_LOOK, description: 'Nothing on screen changes, so only this edit goes ahead, recorded as your word; the next one is asked about again' },
 ]
 
@@ -2826,7 +2847,7 @@ export const settledTypedSaid = (typed: string): string =>
   'Take what he typed as the feedback for the next design round and act on it, answering anything it asks; ' +
   'ask him whether the design is settled only once he has seen that round.'
 
-/** Dan's Not a look change, kept with the refused call (#1010): what it let through, and why. */
+/** Dan's Not a look or wording change, kept with the refused call (#1010): what it let through, and why. */
 export const notLookWhy = (files: readonly string[]): string =>
   `Dan answered "${NOT_LOOK}" to "${SKIP_QUESTION}": this edit to ${listed(files)} changes nothing on screen, so it went ahead with no design round.`
 

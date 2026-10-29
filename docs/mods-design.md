@@ -3435,6 +3435,29 @@ deleted).
   in a script's own text, a folder handed to a codemod, npx's `-c` and the other runners stay known
   limits.
 
+### What #1904 and #1911 changed, 2026-10-29
+
+A builder refused on its worktree's starting branch had Dan asked about "branch
+worktree-agent-a09a06788b6ba53ab in claude-config" (2026-10-29, for #1859), a name he cannot place.
+
+- **The issue is named, nothing else moves (#1904).** The skip question takes metadata `issue`, the
+  issue the refused builder works on, as the settled question already did, and a subject on a
+  worktree-agent branch is then shown as "issue #N in <repo> (this builder only)" in the question,
+  its answers and the record's label (rules.ts `namedByIssue`; the subject carries its project's
+  name for it). The key and the worktree a skip is also kept under (#1740) stay the branch's, so
+  #1306's guarantee holds: no answer reaches another worktree or the main checkout. Keeping it under
+  the issue was the rejected alternative, since a later builder for the same issue would inherit it.
+  "(this builder only)" is in the label because the plain issue name reads as covering the issue
+  everywhere, which it does not. Any other subject, or no issue named, reads as before; an issue
+  that is not a whole positive number is refused by name with nothing asked. Contract 3, raised with
+  the design rounds skill, since the question's metadata gained a key.
+- **The answers name wording (#1911).** Since #1859 a hold can be for a message's words alone, so the
+  third answer reads "Not a look or wording change" and the other two say "change the look or
+  wording". The answer is matched by the constant, never stored, so nothing kept is stranded.
+- **One reading of a .ts hook change (#1911).** `modHookTsShows`, a yes or no wrapper over
+  `modHookTsHold` that only tests called, is gone; its tests now assert which hold each change gets
+  (the look, a message's words, or none), which the wrapper could not tell apart.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
