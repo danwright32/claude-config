@@ -31,9 +31,10 @@
 #   HOOK_TESTS_LIST_ONLY=1    print the directories it would read, run nothing
 #   HOOK_TESTS_FAIL_DETAIL_MAX  lines of a failing suite's output to print
 #   HOOK_TESTS_FLAKE_RECHECK  0 turns off the second run of a suite that failed (default 1). With it
-#                             on, the failed suite's FAIL line says FLAKY, recheck timed out, or
+#                             on, the failed suite's FAIL line says FLAKY, recheck timed out,
 #                             recheck could not run because another run holds the suite lock,
-#                             naming who (#1312)
+#                             naming who (#1312), not rechecked because the run's deadline leaves
+#                             no time, or recheck stopped after Ns to report before it (#1901)
 #   HOOK_TESTS_FLAKE_RECHECK_MAX   seconds on the clock a recheck may take before it is called hung
 #                             (default 60, raised to three times the suite's first run)
 #   HOOK_TESTS_FLAKE_RECHECK_POLL  how often the recheck is looked at, in seconds (default 1)
