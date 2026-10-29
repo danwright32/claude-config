@@ -2781,7 +2781,8 @@ out_dlb="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_DEADLINE=s
 
 # The recheck's allowance is SECONDS on the clock, the unit its FAIL line prints (#1901). It was a
 # count of polls, so HOOK_TESTS_FLAKE_RECHECK_MAX=4 with a poll of 0.05 gave up after a fifth of a
-# second and said "recheck timed out after 4s", and on a loaded machine every poll ran longer than
+# second and said "recheck timed out after 4s" (seen on this case's red run, 2026-10-29), and on a
+# loaded machine every poll ran longer than
 # its sleep, so the real allowance drifted the other way. The hanging recheck records the clock
 # every 0.2 seconds, so how long it was really let run is read from what it saw, not from the runner.
 DLU="$TMPROOT/dir-recheck-seconds"; mkdir -p "$DLU"
@@ -2818,7 +2819,7 @@ out_dlx="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECH
   || check "#1901 a recheck allowance that is not whole seconds is refused" "exit=$code_dlx out=$out_dlx"
 
 # A recheck that HANGS is stopped at the deadline, well before its own measured allowance, and says
-# which of the two stopped it (L11). The allowance here is 200 seconds and the deadline is two
+# which of the two stopped it (L11). The allowance here is set far past the deadline, which is two
 # seconds away with no reserve, so a run that went on past a few seconds was not held to the
 # deadline, and one that says it timed out ran out the wrong limit.
 DLH="$TMPROOT/dir-deadline-hang"; mkdir -p "$DLH"
