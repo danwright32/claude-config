@@ -10619,7 +10619,8 @@ hold_write_rows(){
 
 # The record is read, changed and rewritten by every session on the Mac, so two holds taken in the
 # same instant would each write a record without the other's hold in it. Every change happens
-# under this lock; reading never takes it. SYNC_HOLD_LOCK_WAIT shortens the wait for the suite.
+# under this lock, clearing an expired line included; a reading that finds only live holds never
+# takes it. SYNC_HOLD_LOCK_WAIT shortens the wait for the suite.
 hold_lock(){
   local max="${SYNC_HOLD_LOCK_WAIT:-10}"
   case "$max" in ''|*[!0-9]*|0) max=10 ;; esac
