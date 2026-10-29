@@ -110,65 +110,90 @@ export PUSH_GATE_LEDGER_DIR="${PUSH_GATE_LEDGER_DIR:-$work/push-gates}"
 # summed the times, so the table described a push nobody makes: what a push waits through is the
 # SLOWEST gate, and each gate is slower than it is alone because the others share the machine with
 # it (claude-config#1122).
-now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
-names=(); decls=(); bounds=(); pids=(); starts=(); ends=(); killed=()
+#
+# Each gate is started, timed and waited on by a small python runner of its own (claude-config#1870).
+# This took every start and end with a python3 start of its own and noticed a gate had finished by
+# polling every 0.2 seconds, so it printed tenths of a second while measuring to about 0.2: a gate
+# that costs 7 ms read 0.1 and one that costs 125 ms read 0.4. The runner reads its clock in the
+# process that starts the gate, so its own start costs nothing that is measured, and it waits on the
+# gate with a blocking wait, so the end is read the moment the gate exits. A timer, not a poll, kills
+# a gate at its declared bound. Bash's EPOCHREALTIME would be a cheaper clock, but the bash on this
+# Mac is 3.2, which has none, so it is not used.
+KILL_TREE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../payload/hooks/lib" 2>/dev/null && pwd)/kill-tree.sh"
+RUN_GATE='
+import os, subprocess, sys, threading, time
+hook, bound, outdir, kill_tree = sys.argv[1], float(sys.argv[2]), sys.argv[3], sys.argv[4]
+data = sys.stdin.buffer.read()
+killed = []
+def kill(p):
+    killed.append(1)
+    try:
+        subprocess.run(["bash", kill_tree, str(p.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        pass
+    try:
+        p.kill()
+    except Exception:
+        pass
+with open(os.path.join(outdir, "out"), "wb") as out:
+    began_at = time.time(); began = time.monotonic()
+    p = subprocess.Popen(["bash", hook], stdin=subprocess.PIPE, stdout=out, stderr=subprocess.STDOUT)
+    timer = threading.Timer(bound, kill, (p,)); timer.daemon = True; timer.start()
+    try:
+        p.communicate(data)
+    except Exception:
+        p.wait()
+    took = time.monotonic() - began
+    timer.cancel()
+with open(os.path.join(outdir, "result"), "w") as f:
+    f.write("%d %.6f %.6f %.6f %s\n" % (p.returncode, took, began_at, began_at + took, "killed" if killed else "-"))
+'
+names=(); decls=(); bounds=(); pids=()
 n=0
-t0="$(now_ms)"
 while IFS="$(printf '\t')" read -r declared hook; do
   [ -n "$hook" ] || continue
   bound="$declared"
   case "$bound" in ''|*[!0-9]*) bound="$DEFAULT_TIMEOUT" ;; esac
-  names[n]="${hook##*/}"; decls[n]="$declared"; bounds[n]="$bound"; ends[n]=""; killed[n]=""
+  names[n]="${hook##*/}"; decls[n]="$declared"; bounds[n]="$bound"
   mkdir -p "$work/$n"
-  starts[n]="$(now_ms)"
-  # In the background, waited on as a CONDITION below, so a gate that hangs is killed at its own
-  # declared bound rather than taking this tool with it (L110, L473).
-  ( cd "$repo" 2>/dev/null || exit 0; printf '%s' "$payload" | bash "$hook" >"$work/$n/out" 2>&1; printf '%s' "$?" > "$work/$n/rc" ) &
+  ( cd "$repo" 2>/dev/null || exit 0; printf '%s' "$payload" | python3 -c "$RUN_GATE" "$hook" "$bound" "$work/$n" "$KILL_TREE" ) &
   pids[n]=$!
   n=$((n + 1))
 done <<EOF
 $gates
 EOF
-
-left=$n
-while [ "$left" -gt 0 ]; do
-  now="$(now_ms)"
-  j=0
-  while [ "$j" -lt "$n" ]; do
-    if [ -z "${ends[j]}" ]; then
-      if ! kill -0 "${pids[j]}" 2>/dev/null; then
-        ends[j]="$now"; left=$((left - 1))
-      elif [ $(( now - ${starts[j]} )) -gt $(( ${bounds[j]} * 1000 )) ]; then
-        bash "$(dirname "${BASH_SOURCE[0]}")/../payload/hooks/lib/kill-tree.sh" "${pids[j]}" 2>/dev/null || kill -9 "${pids[j]}" 2>/dev/null
-        killed[j]=1; ends[j]="$now"; left=$((left - 1))
-      fi
-    fi
-    j=$((j + 1))
-  done
-  [ "$left" -gt 0 ] && sleep 0.2
-done
 j=0
 while [ "$j" -lt "$n" ]; do wait "${pids[j]}" 2>/dev/null; j=$((j + 1)); done
 
+# Milliseconds, because that is what the runner measures to; a gate costing a few of them is common.
 printf 'seconds  exit  declared  gate\n'
-last=0; sum=0
+first=""; last=""; sum=0; unread=0
 j=0
 while [ "$j" -lt "$n" ]; do
-  ms=$(( ${ends[j]} - ${starts[j]} ))
-  sum=$(( sum + ms ))
-  [ $(( ${ends[j]} - t0 )) -gt "$last" ] && last=$(( ${ends[j]} - t0 ))
-  secs="$(awk -v m="$ms" 'BEGIN { printf "%.1f", m / 1000 }')"
-  if [ -n "${killed[j]}" ]; then
+  result="$(cat "$work/$j/result" 2>/dev/null)"
+  if [ -z "$result" ]; then
+    # A runner that left no result is said to have done so, never shown as a duration (L11, L98).
+    printf '%7s  %4s  %8s  %s (NOT MEASURED: its runner left no result, so there is no reading)\n' "-" "-" "${decls[j]}" "${names[j]}"
+    unread=$((unread + 1)); j=$((j + 1)); continue
+  fi
+  read -r rc took began ended how <<EOF
+$result
+EOF
+  secs="$(awk -v t="$took" 'BEGIN { printf "%.3f", t }')"
+  sum="$(awk -v s="$sum" -v t="$took" 'BEGIN { printf "%.6f", s + t }')"
+  first="$(awk -v a="$first" -v b="$began" 'BEGIN { printf "%.6f", (a == "" || b + 0 < a + 0) ? b : a }')"
+  last="$(awk -v a="$last" -v b="$ended" 'BEGIN { printf "%.6f", (a == "" || b + 0 > a + 0) ? b : a }')"
+  if [ "$how" = "killed" ]; then
     printf '%7s  %4s  %8s  %s (KILLED: timed out at its declared bound, so this is not a measurement of what it costs)\n' "$secs" "-" "${bounds[j]}" "${names[j]}"
   else
-    rc="$(cat "$work/$j/rc" 2>/dev/null || printf '?')"
     printf '%7s  %4s  %8s  %s\n' "$secs" "$rc" "${decls[j]}" "${names[j]}"
   fi
   j=$((j + 1))
 done
 
 printf '%7s  %4s  %8s  WALL CLOCK, which is what a push waits through before git runs: the gates run together, so it is the slowest of them\n' \
-  "$(awk -v m="$last" 'BEGIN { printf "%.1f", m / 1000 }')" "" ""
+  "$(awk -v a="${first:-0}" -v b="${last:-0}" 'BEGIN { printf "%.3f", b - a }')" "" ""
 printf '%7s  %4s  %8s  the gates'"'"' own times added up, which no push waits through; it is here to show how much they overlap\n' \
-  "$(awk -v m="$sum" 'BEGIN { printf "%.1f", m / 1000 }')" "" ""
+  "$(awk -v s="$sum" 'BEGIN { printf "%.3f", s }')" "" ""
+[ "$unread" -eq 0 ] || exit 1
 exit 0

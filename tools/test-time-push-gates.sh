@@ -118,6 +118,33 @@ awk -v a="${_slow_s:-0}" -v b="${_quick_s:-0}" 'BEGIN { exit !(a > b) }' \
   && check "the durations are measured, not printed from the config" ok \
   || check "the durations are measured, not printed from the config" "slow=$_slow_s quick=$_quick_s"
 
+# A known duration is reported as that duration (#1870). Each start and end was taken with a python3
+# start and a gate's end was noticed by a 0.2 second poll, so the tool printed tenths of a second
+# while measuring to about 0.2 seconds: a 7 ms gate read 0.1 and a 125 ms gate read 0.4. A stub that
+# sleeps 50 ms must read within 20 ms of that. The least of three readings is judged, because a
+# reading can only be made LONGER by a busy machine, never shorter (L290, L656).
+ACC_HOME="$TMPROOT/acc-home"; mkdir -p "$ACC_HOME/hooks"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nsleep 0.05\nexit 0\n' > "$ACC_HOME/hooks/fifty-ms.sh"; chmod +x "$ACC_HOME/hooks/fifty-ms.sh"
+cat > "$ACC_HOME/settings.json" <<'JSON'
+{ "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
+  { "type": "command", "command": "__CLAUDE_HOME__/hooks/fifty-ms.sh", "timeout": 10 }
+] } ] } }
+JSON
+acc=""
+for _i in 1 2 3; do
+  acc="$acc $(GATE_TIMING_HOME="$ACC_HOME" bash "$T" --repo "$TMPROOT" 2>&1 | awk '/fifty-ms[.]sh/ { print $1 }')"
+done
+awk -v r="$acc" 'BEGIN { n = split(r, a, " "); if (n < 3) exit 1; m = a[1] + 0; for (i = 2; i <= n; i++) if (a[i] + 0 < m) m = a[i] + 0; d = m - 0.050; if (d < 0) d = -d; exit !(d <= 0.020) }' \
+  && check "#1870 a gate that sleeps 50 ms is measured to within 20 ms" ok \
+  || check "#1870 a gate that sleeps 50 ms is measured to within 20 ms" "three readings, in seconds:$acc"
+
+# A gate whose runner left no reading (here, a --repo that does not exist, so no gate starts) is
+# named as unmeasured and the tool exits non zero, never a row of zeros that reads as free (L98).
+nores="$(GATE_TIMING_HOME="$ACC_HOME" bash "$T" --repo "$TMPROOT/no-such-checkout" 2>&1)"; rcn=$?
+[ "$rcn" -ne 0 ] && case "$nores" in *"fifty-ms.sh (NOT MEASURED"*) true ;; *) false ;; esac \
+  && check "#1870 a gate with no reading is named as unmeasured, and the tool fails" ok \
+  || check "#1870 a gate with no reading is named as unmeasured, and the tool fails" "rc=$rcn out=$nores"
+
 # --list names the gates a push waits on, with what each declares, and runs none of them: the one
 # reading of the settings both the timing and the README's count come from (claude-config#1066).
 mk marks.sh 'touch "$(dirname "$0")/../ran"'
