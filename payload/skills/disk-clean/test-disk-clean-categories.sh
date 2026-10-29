@@ -521,6 +521,28 @@ run_scan --only transcripts
 check "transcripts: a projects folder it cannot read makes the category unmeasured" "$(has "$(status_of transcripts)" "unmeasured: part of ~/.claude/projects could not be read")"
 check "transcripts: and the transcripts it could read are still listed" "$(eq "$(state_of "$TP/$U_OLD.jsonl")" offerable)"
 chmod 700 "$H/.claude/projects/-Users-x-locked"
+# A find that fails reading the transcript, as when it vanishes between the judge's check that it
+# is there and the find, measured nothing, so it says so rather than "it changed within 90 days"
+# (#1907, L11). The race cannot be timed, so a stand in find fails, once quietly and once saying why.
+judge transcripts "$TP/$U_OLD.jsonl"
+check "transcripts judge: an old transcript the core find reads is offerable (the control)" "$(eq "$JUDGED" offerable)"
+dc_stub find 'exit 1'
+judge transcripts "$TP/$U_OLD.jsonl"
+check "transcripts judge: a find that fails saying nothing is unmeasured, naming its exit" \
+  "$(eq "$JUDGED" "unmeasured: find exited 1 reading it, so whether it changed within 90 days is not known")"
+dc_stub find "echo \"find: \$1: No such file or directory\" >&2; exit 1"
+judge transcripts "$TP/$U_OLD.jsonl"
+check "transcripts judge: and so is one that fails saying the file has gone" \
+  "$(eq "$JUDGED" "unmeasured: find exited 1 reading it, so whether it changed within 90 days is not known")"
+dc_stub find 'printf "%s\n" "$1"; exit 2'
+judge transcripts "$TP/$U_OLD.jsonl"
+check "transcripts judge: a find that printed the file and then failed is unmeasured too, never offerable" \
+  "$(eq "$JUDGED" "unmeasured: find exited 2 reading it, so whether it changed within 90 days is not known")"
+dc_unstub find
+printf '{}\n' > "$TP/$U_NEW.jsonl"
+judge transcripts "$TP/$U_NEW.jsonl"
+check "transcripts judge: with the core find back, a recent transcript still changed within 90 days" \
+  "$(eq "$JUDGED" "not offerable: it changed within 90 days")"
 
 # ================================================================================================
 # Runaway logs: *.log over 500 MB, emptied in place when a process holds it
