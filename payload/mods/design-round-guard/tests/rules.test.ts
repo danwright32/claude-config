@@ -1035,24 +1035,137 @@ test('#1841: a string a message is only computed from passes; the words of the m
   expect(judged('would be brought to the front${', 'would come forward${')).toBe(true)
 })
 
-// #1841: a .tsx or .jsx hook file's messages are still read whole, as #1823 read them, since read
-// only for its words one edit #1823 holds would pass: manual steps' press handler rewritten on
-// 2026-10-16, whose only changed strings were the button names it compares.
-test('#1841: a compared name a message is computed from passes in a .ts hook file and is still held in a .tsx one', () => {
+// #1841 read a .tsx or .jsx hook file's messages whole, since read only for its words one edit #1823
+// held would pass: manual steps' press handler rewritten on 2026-10-16 (call
+// toolu_01BEGS4ToEC4pmthioGTcDwD), whose only changed strings were the button names it compares.
+// #1864: Dan approved releasing that edit (2026-10-28), and replayed it is the only .tsx hold the
+// words only reading releases, so a .tsx or .jsx file is read for its words too.
+test('#1864: a compared button name a message is computed from passes in a .ts and a .tsx hook file alike', () => {
   const text = [
     "import type { EngineInterface } from 'claude-code'",
     'export const press = async ($: EngineInterface, element: string) => {',
-    "  const field = element === 'steps:copy' ? 'value' : 'url'",
-    '  await $.ui.toast(`Copied the ${field}.`)',
+    "  const field = element === 'manual-steps:copy' ? 'value' : element === 'manual-steps:copy-link' ? 'url' : undefined",
+    '  if (field) await $.ui.toast(`Copied the ${field}.`)',
     '}',
     '',
   ].join('\n')
-  const after = text.replace("'steps:copy'", "'manual-steps:copy'")
-  expect(messageWordingSame([], 'register.tsx', text, after)).toBe(false)
-  expect(messageWordingSame([], 'register.ts', text, after, true)).toBe(true)
+  const after = text.replace(
+    "  const field = element === 'manual-steps:copy' ? 'value' : element === 'manual-steps:copy-link' ? 'url' : undefined",
+    "  const p = element.split(':')[1]\n  const field = p === 'copy' ? 'value' : p === 'copy-link' ? 'url' : undefined",
+  )
+  expect(after).not.toBe(text)
+  expect(messageWordingSame([], 'register.tsx', text, after)).toBe(true)
+  expect(messageWordingSame([], 'register.ts', text, after)).toBe(true)
   expect(modHookTsShows([], 'register.ts', text, after)).toBe(false)
   // Its words are held either way.
+  expect(messageWordingSame([], 'register.tsx', text, text.replace('Copied the', 'Copied your'))).toBe(false)
   expect(modHookTsShows([], 'register.ts', text, text.replace('Copied the', 'Copied your'))).toBe(true)
+  expect(messageWordingSame([], 'register.tsx', text, text.replace("? 'value'", "? 'text'"))).toBe(false)
+})
+
+// #1864: six edits #1852's reading still held changed only a one word tag nobody reads. Each is cut
+// down from the call that made it: keystroke guard's `kind: 'focus'` (toolu_01PSsWni5JtAvmeRzQzwo59F)
+// and its `'away'` answer (toolu_014hZsXxkSZUsS545eiHAC2x), ask before saving's `told: 'prompt'`
+// (toolu_01WwdETVTX7s3B57BfHSPt3j), scope modes' `'gh'` argv entry (toolu_01BuZTDUuBx6LfuAhxEqyiJj),
+// job watcher's `?? 'x'` fallback handed to a command (toolu_019ieRrjrfJ3Dj5aae7RuZPz), and mod-kit's
+// printf escape keys `'a'` and `'b'` (toolu_01M5GecamcwHEqhhHhDkH1bu, whose call also added the words
+// "fed by what printf pipes into it" and so stays held for those).
+const TAGS_TS = [
+  "import type { EngineInterface } from 'claude-code'",
+  "type Approval = { id: string; told: 'note' | 'prompt'; text: string }",
+  'const run = async ($: EngineInterface, argv: string[]) => $.process.run(argv, { timeoutMs: 5_000 })',
+  'const refusalFor = async ($: EngineInterface, agent: string, command: string) => {',
+  "  const r = await $.process.run(['python3', 'reader.py', 'stdin-device-refusal', agent], { stdin: command, timeoutMs: 10_000 })",
+  "  return r.exitCode === 0 ? { kind: 'refusal', text: r.stdout.trim() } : { kind: 'none' }",
+  '}',
+  "const holdWhileAway = async ($: EngineInterface, label: string, action: { kind: 'input' | 'focus' }): Promise<{ held: string } | 'home' | 'away'> => {",
+  '  const r = await ($ as unknown as { hold: (x: unknown) => Promise<{ isHeld: boolean; isAway?: boolean; deny: string }> }).hold({ label, action })',
+  '  if (r.isHeld) return { held: r.deny }',
+  "  return 'home'",
+  '}',
+  'export const guard = async ($: EngineInterface, command: string, agent: string | undefined, typing: boolean, running: boolean) => {',
+  "  const step = { argv: ['git', 'log', command], why: `Reading the log of ${command}` }",
+  '  const first = await run($, step.argv)',
+  '  if (first.exitCode !== 0) return { deny: `Could not read the log: ${first.stderr}` }',
+  "  const read = await refusalFor($, agent ?? 'agent', command)",
+  "  if (read.kind === 'refusal') return { deny: read.text }",
+  "  const away = await holdWhileAway($, `Type into ${command}`, typing ? { kind: 'input' } : { kind: 'input' })",
+  "  if (typeof away === 'object') return { deny: `Held while away: ${away.held}` }",
+  "  const approval: Approval = { id: command, told: running ? 'note' : 'note', text: `Saving ${command}` }",
+  '  $.ui.toast(`${approval.text} (${step.why})`)',
+  "  if (running) return { deny: 'mutant' }",
+  '  return undefined',
+  '}',
+  '',
+].join('\n')
+const PRINTF_TS = [
+  "import type { EngineInterface } from 'claude-code'",
+  String.raw`const ESCAPES = new Map([['n', '\n'], ['t', '\t']])`,
+  'const printf = (format: string): string => {',
+  "  let out = ''",
+  '  for (let i = 0; i < format.length; i++) {',
+  '    const c = format[i] as string',
+  '    const d = format[i + 1]',
+  String.raw`    if (c === '\\' && d !== undefined) {`,
+  '      i++',
+  "      out += ESCAPES.get(d) ?? `\\\\${d}`",
+  '    } else out += c',
+  '  }',
+  '  return out',
+  '}',
+  'export const say = async ($: EngineInterface, format: string) => {',
+  '  await $.ui.toast(`It would print ${printf(format)}`)',
+  '}',
+  '',
+].join('\n')
+const tagEdit = (text: string, from: string, to: string) => {
+  if (text.split(from).length !== 2) throw new Error(`the fixture holds ${from} other than once`)
+  return modHookTsShows([], 'register.ts', text, text.replace(from, to))
+}
+test('#1864: an edit changing only a one word tag in a .ts hook file passes', () => {
+  // A record's tag, as a property's value or one of a choice's answers.
+  expect(tagEdit(TAGS_TS, "typing ? { kind: 'input' } : { kind: 'input' }", "typing ? { kind: 'input' } : { kind: 'focus' }")).toBe(false)
+  expect(tagEdit(TAGS_TS, "told: running ? 'note' : 'note'", "told: running ? 'note' : 'prompt'")).toBe(false)
+  // An argv entry, beside the variable it is run with.
+  expect(tagEdit(TAGS_TS, "['git', 'log', command]", "['gh', 'log', command]")).toBe(false)
+  // A fallback handed to a function that only runs it as a command's word.
+  expect(tagEdit(TAGS_TS, "agent ?? 'agent'", "agent ?? 'x'")).toBe(false)
+  // An answer the function's own signature names.
+  expect(tagEdit(TAGS_TS, "  return 'home'", "  return r.isAway === true ? 'away' : 'home'")).toBe(false)
+  // A table's keys, each beside what it stands for.
+  expect(tagEdit(PRINTF_TS, String.raw`['t', '\t']])`, String.raw`['t', '\t'], ['a', '\x07'], ['b', '\b']])`)).toBe(false)
+})
+
+test('#1864: a one word message, and words beside a tag, are still held', () => {
+  // A toast or a refusal saying one word.
+  expect(tagEdit(TAGS_TS, '  return undefined', "  $.ui.toast('Saved')\n  return undefined")).toBe(true)
+  expect(tagEdit(TAGS_TS, '  return undefined', "  $.ui.toast('saved')\n  return undefined")).toBe(true)
+  expect(tagEdit(TAGS_TS, "{ deny: 'mutant' }", "{ deny: 'refused' }")).toBe(true)
+  expect(tagEdit(TAGS_TS, "{ deny: 'mutant' }", "{ decision: 'block', reason: 'refused' }")).toBe(true)
+  // The words of the record holding the argv, and an argv entry joined into a sentence.
+  expect(tagEdit(TAGS_TS, 'Reading the log of', 'Reading the history of')).toBe(true)
+  expect(tagEdit(TAGS_TS, '(${step.why})', "(${step.why}, ${['ran', 'git'].join(' ')})")).toBe(true)
+  // A table of words picked by a key, a one word answer of a function typed only as a string, and a
+  // word handed to a function that says it.
+  const words = (from: string, to: string) =>
+    tagEdit(
+      [
+        "import type { EngineInterface } from 'claude-code'",
+        "const VERB = { add: 'added', drop: 'dropped' }",
+        "const noun = (n: number): string => (n === 1 ? 'step' : 'steps')",
+        'const said = ($: EngineInterface, what: string) => $.ui.toast(`The card ${what}.`)',
+        "export const tell = async ($: EngineInterface, k: 'add' | 'drop', n: number) => {",
+        '  await $.ui.toast(`${VERB[k]} ${n} ${noun(n)}`)',
+        "  said($, 'moved')",
+        '}',
+        '',
+      ].join('\n'),
+      from,
+      to,
+    )
+  expect(words("drop: 'dropped'", "drop: 'removed'")).toBe(true)
+  expect(words("? 'step' :", "? 'item' :")).toBe(true)
+  expect(words("said($, 'moved')", "said($, 'closed')")).toBe(true)
 })
 
 // #1841 (lessons review at 74900c0): a message's words given to a variable with = or added with +=
