@@ -227,10 +227,13 @@ grep -qE "^[[:space:]]*(.*\\|)?$runner(\\|.*)?\\)[[:space:]]+IMAGE=" "$DIR/run-o
 # records the start, before checkout or anything else that takes time.
 start_recorded_first(){ # start_recorded_first <workflow>
   local first
-  first="$(code_of "$1" | awk '/^[[:space:]]*steps:[[:space:]]*$/ { s = 1; next } s && /^[[:space:]]*- / { n++ } s && n == 1 { print } s && n > 1 { exit }')"
+  first="$(code_of "$1" | awk '/^[[:space:]]*steps:[[:space:]]*$/ && !s { s = 1; next } s && /^[[:space:]]*- / { n++ } s && n == 1 { print }')"
   if [ -z "$first" ]; then echo "no first step was found"; return; fi
-  printf '%s\n' "$first" | grep -qE 'HOOK_TESTS_JOB_STARTED=\$\(date \+%s\).*GITHUB_ENV' \
-    && echo ok || echo "the first step does not write HOOK_TESTS_JOB_STARTED=\$(date +%s) to GITHUB_ENV"
+  if [[ "$first" =~ HOOK_TESTS_JOB_STARTED=\$\(date\ \+%s\).*GITHUB_ENV ]]; then
+    echo ok
+  else
+    echo "the first step does not write HOOK_TESTS_JOB_STARTED=\$(date +%s) to GITHUB_ENV"
+  fi
 }
 printf 'jobs:\n  suite:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 40\n    steps:\n      - uses: actions/checkout@abc\n      - run: echo "HOOK_TESTS_JOB_STARTED=$(date +%%s)" >> "$GITHUB_ENV"\n' > "$TMPROOT/start-late.yml"
 r="$(start_recorded_first "$TMPROOT/start-late.yml")"

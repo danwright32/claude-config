@@ -184,6 +184,14 @@ case "$RUN_DEADLINE" in
       exit 1
     fi ;;
 esac
+# The reserve covers what the deadline does not count and what must still be printed after the
+# last recheck. The first is the gap between the job starting and its first step recording
+# HOOK_TESTS_JOB_STARTED, which follows only "Set up job": 2 seconds on each of runs 40925941243,
+# 40925874396 and 40921855057, read from their job and step times on 2026-10-29. The second is the
+# rest of the report, and every step after it took 2 seconds in all on 40925941243. So 120 is about
+# thirty times what it covers, on purpose: too large only shortens a recheck, while too small loses
+# the FAIL line with the job, so it is biased hard toward large (L648). That run's suite step took
+# 28 of the job's 40 minutes, which is why three times a 1200 second stop could never fit.
 DEADLINE_RESERVE="${HOOK_TESTS_DEADLINE_RESERVE:-120}"
 case "$DEADLINE_RESERVE" in
   ''|*[!0-9]*)

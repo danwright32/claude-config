@@ -39,8 +39,10 @@ workflow_job_timeouts(){   # workflow_job_timeouts <file>... -> "<file>\t<job>\t
 }
 
 workflow_job_timeout_minutes(){   # workflow_job_timeout_minutes <file> <job> -> its minutes; 1 when it has none
-  local _wjt_m
-  _wjt_m="$(workflow_job_timeouts "$1" 2>/dev/null | awk -F'\t' -v j="$2" '$2 == j { print $3; exit }')"
+  local _wjt_all _wjt_m
+  # Read whole, then searched, never a reader that leaves early on a pipe (test-pipefail-shortcircuit.sh).
+  _wjt_all="$(workflow_job_timeouts "$1" 2>/dev/null)"
+  _wjt_m="$(printf '%s\n' "$_wjt_all" | awk -F'\t' -v j="$2" '$2 == j && !seen { print $3; seen = 1 }')"
   case "$_wjt_m" in
     ''|NONE|*[!0-9]*) return 1 ;;
   esac

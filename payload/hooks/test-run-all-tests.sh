@@ -68,6 +68,12 @@ export HOOK_TESTS_FLAKY_OUTPUT="$TMPROOT/flaky-output"
 # and it is a suite reading live data on every case (L2). The four cases that are ABOUT the spool
 # bracket still name their own, which overrides this.
 export CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool-default"
+
+# No launch below inherits the deadline of the run this suite is part of (#1901). Under CI the
+# outer run exports the job's own, so a fixture run near the end of the job would skip the very
+# recheck a case is asserting on, and with GITHUB_ACTIONS left set a fixture run would read the real
+# workflow. The cases that are ABOUT the deadline set their own.
+unset HOOK_TESTS_DEADLINE HOOK_TESTS_DEADLINE_RESERVE HOOK_TESTS_JOB_STARTED GITHUB_ACTIONS GITHUB_WORKFLOW_REF GITHUB_JOB
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 
 # NOTHING below runs the runner without either naming a directory or pointing HOOK_TESTS_ROOT at a
