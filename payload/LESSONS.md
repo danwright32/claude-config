@@ -6222,6 +6222,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   stores and fail when any goes unreported.**
   (bidspoke#2777, 2026-10-25)
   SHORT: A scanner's canary proves it ran, not that its rules see your credential shapes; a pinned version ages, so plant one canary per shape you store.
+- **L824. A redaction keyed on a field's NAME misses the same secret stored under any other name,
+  so redact by where the value came from (a secret variable, a credential reference), and test it
+  with a secret under a name the list does not hold.**
+  (bidspoke#3063, 2026-10-29)
+  SHORT: Redaction keyed on a field's NAME misses a secret under any other name; redact by the value's source, and test with an unlisted name.
 
 ## UX completeness
 - **L803. A search box over people's or places' names must fold accents on both the query and the
