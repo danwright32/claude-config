@@ -98,6 +98,9 @@ cwd="${parsed#*$'\x1f'}"
 # action. Nothing is refused for carrying no key: the helper waits for the review and asks it itself.
 # A key typed here that cannot be recorded refuses the command, saying so, since the helper would
 # otherwise refuse it for a reason this gate alone knows (L11, L667).
+# Only exit 0 counts as running the helper, so a reader that crashes (exit 1, or any code) records no
+# key, and the helper then waits for the review and asks it itself: a crash here costs a wait, never
+# a merge unreviewed (claude-config#1869 checked it; runs-script answers "does not run" with 10).
 pr_review_runs_helper() { printf '%s' "$1" | python3 "$HOOK_DIR/lib/agent-overrides.py" runs-script merge-when-ready.sh >/dev/null 2>&1; }
 case "$command" in
   *merge-when-ready*)
