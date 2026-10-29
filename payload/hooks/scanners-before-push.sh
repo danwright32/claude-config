@@ -36,7 +36,9 @@
 # scanner that could not run because another suite run held its lock past the wait (#642), and on
 # a scanner that ran and said, in a SUITE-UNMEASURED line, that it could not read what it judges,
 # or, in a SUITE-DEADLINE-UNMEASURED line, that it was stopped at its deadline on a machine busier
-# than its cores (#1333), which it calls a fault in its own run rather than a finding (#1146). Finding NO
+# than its cores (#1333), which it calls a fault in its own run rather than a finding (#1146), and on
+# scanners that did not finish inside the gate's own time budget, which it stops and names rather
+# than being killed by Claude Code and letting the push through unscanned (#1881). Finding NO
 # scanners is reported rather than passed silently, because reading nothing and reading everything
 # green look identical otherwise (L98).
 #
@@ -51,6 +53,11 @@
 # is 20 to 26 seconds (claude-config#523, and the table in README.md).
 #
 # Override: SKIP_SCANNERS_CHECK=1 git push ...   Explain why to the user first, never silently.
+
+# The clock starts here, before anything else, because Claude Code's timeout for this hook starts
+# when it spawns the hook, and every second of setup below is spent out of that same allowance
+# (claude-config#1881, the budget is explained where it is enforced).
+_sc_t0="$(date +%s)"
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
@@ -342,6 +349,82 @@ _sc_launch(){        # $1 = run index   $2 = the runs in flight at once
   else
     ( HOOK_TESTS_SLOTS="$2" bash "$s" > "$out.out" 2>&1; printf '%s' "$?" > "$out.rc" ) &
   fi
+  # Kept so the runs of this round, and only they, can be waited on and stopped (#1881).
+  _sc_inflight="$_sc_inflight $!"
+}
+
+# THE GATE'S OWN BUDGET (claude-config#1881). On 2026-10-28 this gate was killed at its declared 180
+# second timeout on three of three cold readings at a load average of about 145 on 12 cores, against
+# 25 seconds at normal load on 2026-10-13. Claude Code's hooks documentation says a PreToolUse hook
+# killed at its timeout "doesn't block the tool call", and a headless probe the same day measured
+# it on Claude Code 2.1.312: a hook that slept past a 3 second timeout, and would then have refused,
+# let the guarded command run. So a push under load went out with nothing scanned, and nothing said
+# so. This is a security gate, so it must never pass a push it did not scan.
+#
+# So the gate stops ITSELF first, at a budget below the declared timeout, kills every scanner still
+# running, and refuses the push saying it ran out of time. 150 seconds by default, leaving 30 of
+# the declared 180 for stopping the scanners and writing the refusal on a machine that busy; the
+# suite fails if this default ever reaches the declared timeout. The registration also carries
+# onFailure "block", so a gate that overruns even its own budget is a blocked push, never a passed
+# one; that is the backstop, and this is the reason, which Claude Code discards from a killed hook.
+#
+# A scanner that FINISHED and passed inside the budget is remembered as usual, so a retry runs only
+# the ones that did not finish rather than starting again from nothing.
+#
+# The wait is a signal from a watchdog rather than a poll, so a push whose scanners finish in two
+# seconds waits two seconds, not until the next tick (L290). The watchdog is one perl process with
+# its output closed, so nothing it leaves can hold this hook's output open after it exits (L235).
+_sc_budget_default=150
+_sc_budget="${SCANNERS_BUDGET_SECONDS:-$_sc_budget_default}"
+case "$_sc_budget" in
+  ''|*[!0-9]*|0)
+    # Unreadable is the default, never zero (which would refuse every push) and never no budget
+    # (which is the defect), and it is said rather than swallowed (L50, L90).
+    echo "scanners-before-push: SCANNERS_BUDGET_SECONDS is '$_sc_budget', not a whole number of seconds, so the default of $_sc_budget_default is used." >&2
+    _sc_budget="$_sc_budget_default" ;;
+esac
+_sc_inflight=""
+_sc_out_of_time=""
+_sc_stop_inflight(){   # stops every run of this round and everything it started
+  local p
+  for p in $_sc_inflight; do
+    # Stopped before its tree is walked, so it cannot start a replacement for what is killed under
+    # it, then killed itself, so its subshell never writes an exit code for a run it did not finish.
+    kill -STOP "$p" 2>/dev/null || continue
+    bash "$HOOK_DIR/lib/kill-tree.sh" "$p" 2>/dev/null
+    kill -9 "$p" 2>/dev/null
+  done
+}
+_sc_wait_bounded(){    # waits for this round's runs, or stops them when the budget runs out
+  local left watchdog
+  # Nothing launched this round (every scanner skipped): a bare `wait` with no process ids would
+  # wait for every child, the watchdog included, so there is nothing to wait for and it returns.
+  case "$_sc_inflight" in *[![:space:]]*) ;; *) return 0 ;; esac
+  left=$(( _sc_t0 + _sc_budget - $(date +%s) ))
+  if [ "$left" -le 0 ]; then
+    _sc_out_of_time=1
+    _sc_stop_inflight
+  else
+    trap '_sc_out_of_time=1; _sc_stop_inflight' USR1
+    perl -e 'sleep shift; kill "USR1", shift' "$left" "$$" </dev/null >/dev/null 2>&1 &
+    watchdog=$!
+    # A wait interrupted by the watchdog's signal returns at once, after the trap has stopped the
+    # runs, so it is waited again to reap them.
+    wait $_sc_inflight 2>/dev/null
+    [ -n "$_sc_out_of_time" ] && wait $_sc_inflight 2>/dev/null
+    # KILL, never a plain kill (claude-config#1889). When the scanners finish quickly this runs a
+    # moment after the watchdog was started, and a plain kill arriving before the watchdog has
+    # finished becoming perl is caught by the handler this script's EXIT trap installs and is lost
+    # at the exec (L240). Measured 2026-10-29 with a bare loop of this shape: 1 in 40 starts under
+    # bash 3.2 and 2 in 80 under bash 5.3 outlived it, and on Linux CI it left a gate waiting here
+    # for the watchdog to sleep out the whole budget, a push that took 150 seconds and passed. A
+    # KILL cannot be caught or ignored, so the wait below always returns.
+    kill -9 "$watchdog" 2>/dev/null
+    wait "$watchdog" 2>/dev/null
+    trap - USR1
+  fi
+  wait $_sc_inflight 2>/dev/null
+  _sc_inflight=""
 }
 
 while IFS= read -r s; do
@@ -367,7 +450,10 @@ while [ "$_sc_i" -le "$_sc_n" ]; do
   _sc_launch "$_sc_i" "$_sc_n"
   _sc_i=$(( _sc_i + 1 ))
 done
-wait
+# Its standard error is closed because bash reports every run it reaps after a kill ("Killed: 9",
+# with the subshell's source line) on the shell's own standard error, which is this hook's refusal
+# text. What was stopped is said in the refusal instead, in words (#1881).
+_sc_wait_bounded 2>/dev/null
 
 # A SCANNER THAT NEVER RAN BECAUSE ANOTHER SUITE RUN HELD ITS LOCK (claude-config#642). The sync
 # suite takes a machine wide lock and refuses, exit 5, with "test suite: another run is already
@@ -378,9 +464,11 @@ wait
 # then it blocks saying THAT, with the remedy, rather than accusing the scanner (L11).
 #
 # The deadline is counted in ATTEMPTS, so an injected sleep (SCANNERS_SLEEP, for the tests) cannot
-# turn it into a spin (L524, L704). 90 seconds by default: the hook's own timeout is 180, and a run
-# of every scanner was measured at 15 to 18 seconds, so a wait of 90 plus a full rerun still lands
-# inside it.
+# turn it into a spin (L524, L704). 90 seconds by default, a setting: the bound that matters is the
+# gate's own budget of 150 seconds (#1881), which the wait is spent out of and stops at, and a run
+# of every scanner was measured at 15 to 18 seconds on 2026-09-21, so a wait of 90 plus a rerun fits
+# inside it on a quiet machine. On a busy one the budget, not this wait, decides, and a rerun it
+# cuts short is refused as out of time.
 _sc_lock_wait="${SCANNERS_LOCK_WAIT_SECONDS:-90}"
 case "$_sc_lock_wait" in ''|*[!0-9]*) _sc_lock_wait=90 ;; esac
 _sc_lock_poll="${SCANNERS_LOCK_POLL_SECONDS:-5}"
@@ -399,7 +487,10 @@ _sc_locked_list(){   # prints the indexes of runs that refused on the lock
 }
 _sc_tries_left=$(( _sc_lock_wait / _sc_lock_poll ))
 _sc_locked="$(_sc_locked_list)"
-while [ -n "$_sc_locked" ] && [ "$_sc_tries_left" -gt 0 ]; do
+# The lock wait is spent out of the gate's budget too (#1881): it stops trying once the budget is
+# gone, and a run still refused then is reported as held on the lock, below.
+while [ -n "$_sc_locked" ] && [ "$_sc_tries_left" -gt 0 ] && [ -z "$_sc_out_of_time" ] \
+      && [ "$(date +%s)" -lt $(( _sc_t0 + _sc_budget )) ]; do
   "$_sc_sleep" "$_sc_lock_poll"
   _sc_tries_left=$(( _sc_tries_left - 1 ))
   # Only the refused runs go again, so they are the runs in flight at once this time.
@@ -410,7 +501,7 @@ while [ -n "$_sc_locked" ] && [ "$_sc_tries_left" -gt 0 ]; do
   done <<LOCKED
 $_sc_locked
 LOCKED
-  wait
+  _sc_wait_bounded 2>/dev/null
   _sc_locked="$(_sc_locked_list)"
 done
 if [ -n "$_sc_locked" ]; then
@@ -418,7 +509,8 @@ if [ -n "$_sc_locked" ]; then
     echo "PUSH BLOCKED: a whole tree scanner could not run, because another test run is going."
     echo ""
     echo "These never ran, so they neither passed nor failed: each refused to start while another"
-    echo "suite run held its lock, and the lock was still held after waiting ${_sc_lock_wait}s for it:"
+    echo "suite run held its lock, and the lock was still held after waiting for it (up to ${_sc_lock_wait}s,"
+    echo "inside this gate's own budget of ${_sc_budget}s):"
     while IFS= read -r _sc_i; do
       [ -n "$_sc_i" ] || continue
       printf '    %s\n' "$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
@@ -459,6 +551,10 @@ fi
 failed=""
 unmeasured=""
 unmeasured_load=""
+# Runs stopped at the gate's own budget (#1881): no verdict, so neither a pass nor a failure. Each
+# is kept with the command that runs it directly, which is the remedy the refusal names.
+unfinished=""
+unfinished_cmds=""
 ran=0
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
@@ -470,7 +566,23 @@ while [ "$_sc_i" -le "$_sc_n" ]; do
     _sc_passed_now="$_sc_passed_now$_sc_key $(head -1 "$_sc_work/$_sc_i.what" 2>/dev/null) $(sed -n 2p "$_sc_work/$_sc_i.what" 2>/dev/null)
 "
   fi
-  if [ ! -f "$_sc_work/$_sc_i.rc" ]; then
+  if [ ! -f "$_sc_work/$_sc_i.rc" ] && [ -n "$_sc_out_of_time" ]; then
+    _sc_s="$(sed -n 1p "$_sc_work/$_sc_i.what" 2>/dev/null)"; _sc_sec="$(sed -n 2p "$_sc_work/$_sc_i.what" 2>/dev/null)"
+    if [ -n "$_sc_sec" ]; then
+      unfinished="$unfinished    $_sc_s, section \"$_sc_sec\"
+"
+    else
+      unfinished="$unfinished    $_sc_s
+"
+    fi
+    if [ -n "$_sc_sec" ]; then
+      unfinished_cmds="${unfinished_cmds}    SECTION_ONLY=\"$_sc_sec\" bash $_sc_s
+"
+    else
+      unfinished_cmds="${unfinished_cmds}    bash $_sc_s
+"
+    fi
+  elif [ ! -f "$_sc_work/$_sc_i.rc" ]; then
     failed="$failed=== $_sc_what ===
 this scanner never reported an exit code, so its verdict is missing rather than clean
 "
@@ -497,6 +609,11 @@ done
 
 # What passed on this key, written only when nothing failed or went unmeasured, so a run with
 # either in it never lets a sibling be skipped on the strength of a push that was blocked.
+#
+# A run that only RAN OUT OF TIME is the exception, on purpose (#1881): it found nothing and nothing
+# in it failed to read, so each scanner that finished passed on exactly this key, and remembering
+# those is what lets a retry on a busy machine run only the scanners that did not finish. The ones
+# stopped wrote no exit code, so they are never remembered and always run again.
 if [ -z "$failed" ] && [ -z "$unmeasured" ] && [ -n "$_sc_key" ] && [ -n "$_sc_passed_now" ]; then
   if mkdir -p "$_sc_state_dir" 2>/dev/null; then
     printf '%s' "$_sc_passed_now" > "$_sc_passed_file" 2>/dev/null || true
@@ -517,14 +634,62 @@ _sc_unmeasured_note(){
   fi
 }
 
+# What the scanners stopped at the budget were, written once, for whichever block is printed (#1881).
+# It names the load, because a budget that is ample on a quiet machine is what a busy one runs out
+# of, and it claims only what was measured: that these did not finish in the time, not why (L11).
+_sc_unfinished_note(){
+  local load="load average unknown"
+  if . "$HOOK_DIR/lib/load-average.sh" 2>/dev/null && command -v load_average_note >/dev/null 2>&1; then
+    load="$(load_average_note)"
+  fi
+  echo "These scanners did not finish in ${_sc_budget} seconds and were stopped, so they neither passed nor"
+  echo "failed ($load):"
+  printf '%s' "$unfinished"
+  echo ""
+  echo "This gate stops itself at ${_sc_budget} seconds, inside the timeout its registration declares, because"
+  echo "Claude Code lets a push through when it kills a hook at that timeout, with nothing scanned."
+  # Said only as far as the write below the read back did it: passes are kept when there is a key
+  # and nothing failed or went unmeasured.
+  if [ -n "$_sc_key" ] && [ -z "$failed" ] && [ -z "$unmeasured" ]; then
+    echo "Every scanner that did finish and pass is remembered, so a retry runs only the ones above."
+  elif [ -z "$_sc_key" ]; then
+    echo "The uncommitted files could not be listed, so nothing that finished could be remembered, and a"
+    echo "retry runs every scanner again."
+  else
+    echo "Nothing from this run is remembered, because another scanner failed or measured nothing, so a"
+    echo "retry runs every scanner again."
+  fi
+  echo ""
+  echo "Retry the push when the machine is quieter, or run each one directly to see it through:"
+  printf '%s' "$unfinished_cmds"
+}
+
 if [ -z "$failed" ] && [ -n "$unmeasured" ]; then
   {
     echo "PUSH BLOCKED: a whole tree scanner measured nothing, so this push was not scanned."
     echo ""
     _sc_unmeasured_note
     echo ""
+    if [ -n "$unfinished" ]; then
+      _sc_unfinished_note
+      echo ""
+    fi
     echo "Retry the push. If it says this again, run the scanner directly to see the whole of it:"
     echo "    bash <the suite named above>"
+    echo ""
+    echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    echo "Explain to the user first why skipping is legitimate. Never override silently."
+  } >&2
+  exit 2
+fi
+
+# Out of time with nothing failed and nothing unmeasured: refused, never passed (#1881). Before the
+# success branch below, which would otherwise count the stopped runs among those that "passed".
+if [ -z "$failed" ] && [ -n "$unfinished" ]; then
+  {
+    echo "PUSH BLOCKED: the whole tree scanners did not finish in ${_sc_budget} seconds, so this push was not scanned."
+    echo ""
+    _sc_unfinished_note
     echo ""
     echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
     echo "Explain to the user first why skipping is legitimate. Never override silently."
@@ -563,6 +728,10 @@ fi
   echo ""
   if [ -n "$unmeasured" ]; then
     _sc_unmeasured_note
+    echo ""
+  fi
+  if [ -n "$unfinished" ]; then
+    _sc_unfinished_note
     echo ""
   fi
   echo "Reproduce any of them directly:"
