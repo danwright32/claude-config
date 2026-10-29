@@ -936,10 +936,6 @@ test('#1823: an edit naming the card that changes what is drawn is still held', 
   expect(modHookDrawingUntouched([...MS_FILES, { name: 'place.ts', text: "const x = 'open" }], 'register.tsx', MS_TSX, msEdit(MS_IMPORTS_OLD, MS_IMPORTS_NEW))).toBe(false)
 })
 
-// #1841: a mod's .ts hook file was judged only by what it draws (drawsChange), so the wording of a
-// toast, a refusal's reason or a tool's result there passed unasked. Dan, 2026-10-27, for #1823:
-// "Timing wording can go through, but message wording should be asked about". Cut down from
-// mods/secret-guard and mods/job-watcher's register.ts as they stood on 2026-10-28.
 // What modHookTsHold says of a change to a mod's .ts hook file (#1859): held for what it draws,
 // held only for a message's words, or passed. #1911 moved every test of the old yes or no wrapper
 // (modHookTsShows) here, so each now says which hold it expects, not only that there is one.
@@ -947,6 +943,11 @@ const holdOf = (...a: Parameters<typeof modHookTsHold>): 'look' | 'worded' | 'pa
   const h = modHookTsHold(...a)
   return h === undefined ? 'passes' : 'look' in h ? 'look' : 'worded'
 }
+
+// #1841: a mod's .ts hook file was judged only by what it draws (drawsChange), so the wording of a
+// toast, a refusal's reason or a tool's result there passed unasked. Dan, 2026-10-27, for #1823:
+// "Timing wording can go through, but message wording should be asked about". Cut down from
+// mods/secret-guard and mods/job-watcher's register.ts as they stood on 2026-10-28.
 const SECRET_TS = [
   "import type { EngineInterface, Register } from 'claude-code'",
   "const GUARD = 'Secret guard'",

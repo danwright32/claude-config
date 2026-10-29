@@ -18,8 +18,8 @@ export const SKIP_NO = 'Run /design-rounds'
 export const SETTLED_YES = 'Settled'
 export const SETTLED_NO = 'Not yet'
 /**
- * The skip question's third answer (#1010): this one refused edit changes nothing on screen. Since
- * #1859 a hold can be for a message's words alone, so it names wording too (#1911).
+ * The skip question's third answer (#1010): this one refused edit changes neither the look nor any
+ * wording. Since #1859 a hold can be for a message's words alone, so it names wording too (#1911).
  */
 export const NOT_LOOK = 'Not a look or wording change'
 
