@@ -1789,11 +1789,23 @@ The gate stops itself at a budget of 150 seconds, inside the 180 its registratio
 Claude Code lets a tool call through when it kills a PreToolUse hook at its timeout (its hooks
 documentation says so, and a headless probe on Claude Code 2.1.312 confirmed it on 2026-10-28), and
 on that day the gate was killed at 180 seconds on three of three readings at a load average of about
-145, so those pushes would have gone out unscanned. Now the scanners still running at the budget
-are stopped and the push is refused, naming each one and the command that runs it directly. The
-scanners that finished and passed are remembered, so a retry runs only the rest. The registration
-also carries `onFailure: "block"`, so a gate killed despite its budget blocks the push rather than
-passing it.
+145, so those pushes would have gone out unscanned. Now the push is refused at the budget, naming
+each scanner still running. The scanners that finished and passed are remembered, so a retry does
+not run them again. The registration also carries `onFailure: "block"`, so a gate killed despite
+its budget blocks the push rather than passing it.
+
+A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
+#1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444
+on a busy Mac on 2026-10-29, so stopping it meant it could never finish and every push needing it was refused for
+ever. Every scanner runs in a process group of its own, with its output in a file under
+`~/.claude/state/scanners-passed/runs/`, never the hook's pipe. The refusal names each one still
+running, how long it has run, how long its last run took, and its output file. The next push of the
+same tree and uncommitted files counts its verdict without running it again, waiting up to the
+budget if it is still going, and never starts a second copy. A push of anything else from the same
+checkout stops it and starts again; another checkout's runs are left alone. Push again once they
+finish: a push still goes through only once every scanner has passed on exactly what it carries. As
+with any pass, one read by a push in which another scanner failed or measured nothing is not
+remembered, so the push after it runs that scanner again.
 
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
@@ -2757,6 +2769,29 @@ step 7 runs the listing and `--last`.
 It takes the automatic sweep's own lock first (exit 75 and nothing touched while a sweep holds it),
 refuses anything not directly inside the DerivedData folder (exit 2), judges the folder again with
 the same rule, and exits 0 removed, 4 kept (the line says why) or 1 when it could not be removed.
+`derived-data-sweep.sh --classify <folder>...` prints that rule's answer for each folder, one tab
+separated line each (orphan, in-use, live, shared-cache, unattributed or refused, then the folder and
+a detail), for disk-clean's scan below; it is read only and takes no lock.
+
+## Measuring what could go: disk-clean's scan
+
+`skills/disk-clean/scan.sh` is the read only half of the disk-clean skill being built in the Disk
+cleanup skill milestone (claude-config#1806); its SKILL.md is a placeholder that says not to use it
+until #1808. It removes nothing. It runs a Full Disk Access probe first (listing `~/Library/Mail`),
+one pruned walk of the home folder (never into `~/Library`, the Trash, key folders, sync clients,
+app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
+fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
+Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
+transcripts, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
+`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything. Each
+category and the walk are time bounded by killing their process group (`DISK_CLEAN_CATEGORY_SECONDS`,
+default 600; `DISK_CLEAN_WALK_SECONDS`, default 900), and one that runs out is recorded as unmeasured.
+Sizes are du's allocated blocks, classified by du's exit code and stderr as measured, partial or
+permission denied, never 0 for unread. The result is `~/.claude/state/disk-clean/last-scan.json`,
+written through `hooks/lib/disk-clean-record.sh`, whose header also carries the probe, the walk and
+each category's status. It refuses (exit 75) while a `disk-remove.sh` run holds its lock. Its suites
+are `skills/disk-clean/test-disk-clean-scan.sh` and `test-disk-clean-categories.sh`, both through the
+disk-clean harness.
 
 ## Removing anything: disk-remove.sh
 

@@ -6,6 +6,9 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L823. Code that ships under a different loader than its tests use, such as a script Node runs by stripping types while Vitest compiles it fully, is proven only by loading it the way it ships, so turn on the compiler setting that refuses what that loader cannot run (erasableSyntaxOnly for Node type stripping).**
+  (pivot#229, 2026-10-29)
+  SHORT: Tests compiled differently from how code ships prove nothing about loading; refuse what the shipping loader can't run (erasableSyntaxOnly).
 - **L818. A feature that runs across several deployed services gets its live end-to-end check as its first deliverable, run after every deploy, before any screen is built on top, because unit tests with stand-ins, a build check and a sign-in smoke check each prove one layer and the first person to run the whole thing otherwise finds every fault one at a time.**
   (pivot#126, 2026-10-28)
   SHORT: A multi-service feature's live end-to-end check is its first deliverable, run every deploy; layer checks leave a user to find each fault.
