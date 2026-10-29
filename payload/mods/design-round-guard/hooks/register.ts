@@ -240,7 +240,7 @@ const fromAgent = new Set<string>()
 // #1296: a mod's .ts hook file a shell write may change, as it stood before the command ran: its path,
 // checkout, name in its hooks folder, text (undefined for one not there) and the mod's hook files.
 // `tsx` for a TSX or JSX hook file (#1576), judged after by the rule its Edit is (nothingShown), where a
-// .ts file is judged by modHookTsShows over `files` (#1841). `record` for a settled design under docs/design a
+// .ts file is judged by rules.ts modHookTsHold over `files` (#1841, #1859). `record` for a settled design under docs/design a
 // script run is handed (#1593), judged after by the design rounds skill's seal check (sealedAfter).
 type Watched = { path: string; tree: string; name: string; before: string | undefined; files: ModFile[]; tsx?: true; record?: true }
 // The main session's passing shell calls with files to read again once they ran, by tool_use_id: set
@@ -629,7 +629,7 @@ const wordsOnly = async ($: EngineInterface, path: string, tree: string, before:
 }
 
 // Whether a call's change to a mod's plain TypeScript hook file (rules.ts isModHookTs) changes what the
-// mod draws (#1275) or a message's words (#1841, rules.ts modHookTsShows): 'held' when it does, or
+// mod draws (#1275) or a message's words (#1841, rules.ts modHookTsHold): 'held' when it does, or
 // when the mod's hook files cannot be listed or read, and `worded` with the words heldWords names where
 // only a message's wording changes (#1859, rules.ts modHookTsHold); the
 // reason, for a git checkout or restore whose lines could not be read, judged whole; 'pass' otherwise,
