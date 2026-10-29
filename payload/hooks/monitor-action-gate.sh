@@ -58,9 +58,11 @@ elif ps_is_git_push "$cmd"; then what="pushes"
 elif ps_is_git_commit "$cmd"; then what="commits"
 else
   printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/agent-overrides.py" runs-script merge-when-ready.sh >/dev/null 2>&1; rc=$?
+  # 10 is the reader's "does not run it"; 1 is what Python exits on a crash, so it is unread like
+  # every other code (claude-config#1869, L1033).
   case "$rc" in
     0) what="runs the merge helper, which merges inside itself" ;;
-    1) ;;
+    10) ;;
     *) case "$cmd" in *merge-when-ready*) what="may run the merge helper (lib/agent-overrides.py could not read it, exit $rc)" ;; esac ;;
   esac
 fi

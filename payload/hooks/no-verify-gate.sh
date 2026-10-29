@@ -100,8 +100,10 @@ cmd="${parsed#*$'\x1f'}"
 case "$cmd" in
   */dev/stdin*|*/dev/fd/0*)
     dev="$(printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/agent-overrides.py" stdin-device-refusal "$agent" 2>&1)"; drc=$?
+    # 10 is the reader's "no read of the device path"; 1 is what Python exits on a crash, so it is
+    # unread like every other code (claude-config#1869, L1033).
     case "$drc" in
-      1) ;;
+      10) ;;
       0) refuse "REFUSED (no-verify-gate.sh): $dev" ;;
       *) refuse_unread "$cmd" "lib/agent-overrides.py could not read it (exit $drc: ${dev##*$'\n'})" ;;
     esac ;;
@@ -113,8 +115,9 @@ case "$cmd" in
 esac
 
 found="$(printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/agent-overrides.py" skips 2>&1)"; rc=$?
+# 10 is the reader's "no skip"; 1 is what Python exits on a crash, so it is unread (#1869, L1033).
 case "$rc" in
-  1) exit 0 ;;
+  10) exit 0 ;;
   0) ;;
   *) refuse_unread "$cmd" "lib/agent-overrides.py could not read it (exit $rc: ${found##*$'\n'})" ;;
 esac
