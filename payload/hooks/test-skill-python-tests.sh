@@ -92,6 +92,86 @@ run "$TMP/red"
 [ "$rc" -eq 1 ] && [ "$(result_of)" = "1 1" ] && grep -q 'test_this_one_is_wrong' <<< "$out" && ok \
   || bad "a failing test fails the run, is counted, and is named (rc=$rc, result=$(result_of))" "$out"
 
+# --- counts are test methods, so subTests can never drive the pass count below zero (#1855) -------
+# Each failing subTest adds its own failure or error while testsRun counts its method once, and the
+# runner once subtracted the first from the second: a file whose subTests all errored printed
+# passed=-12 failed=37. Two methods whose every case fails or errors are two failed methods.
+mkdir -p "$TMP/subfail"
+cat > "$TMP/subfail/test_subfail.py" <<'PY'
+import unittest
+class T(unittest.TestCase):
+    def test_every_case_errors(self):
+        for n in range(5):
+            with self.subTest(n=n):
+                raise AttributeError("the module under test is empty")
+    def test_every_case_fails(self):
+        for n in range(4):
+            with self.subTest(n=n):
+                self.assertEqual(n, -1)
+PY
+run "$TMP/subfail"
+[ "$rc" -eq 1 ] && [ "$(result_of)" = "0 2" ] && grep -q 'test_subfail.py passed=0 failed=2$' <<< "$out" && ok \
+  || bad "a file whose subTests all fail or error counts two failed methods and passed=0, never negative (rc=$rc, result=$(result_of))" "$out"
+
+# A method passes only if none of its subTests failed or errored; one skipped as a whole is neither
+# passed nor failed, while one whose cases skip but which itself ran to the end counts as passed.
+mkdir -p "$TMP/submixed"
+cat > "$TMP/submixed/test_submixed.py" <<'PY'
+import unittest
+class T(unittest.TestCase):
+    def test_some_cases_fail(self):
+        for n in range(4):
+            with self.subTest(n=n):
+                self.assertLess(n, 2)
+    def test_all_cases_pass(self):
+        for n in range(3):
+            with self.subTest(n=n):
+                self.assertGreaterEqual(n, 0)
+    def test_plain_no_subtest(self):
+        self.assertTrue(True)
+    def test_whole_method_skipped(self):
+        self.skipTest("not on this machine")
+    def test_cases_skipped(self):
+        for n in range(3):
+            with self.subTest(n=n):
+                self.skipTest("each case skipped")
+PY
+run "$TMP/submixed"
+[ "$rc" -eq 1 ] && [ "$(result_of)" = "3 1" ] && ok \
+  || bad "a method with some failing subTests is one failure, and its passing neighbours still count (rc=$rc, result=$(result_of))" "$out"
+
+# A class whose setUpClass fails runs none of its methods and is reported as one failure, beside a
+# plain test in the same file that still passes, never as a file that holds no tests.
+mkdir -p "$TMP/classfail"
+cat > "$TMP/classfail/test_classfail.py" <<'PY'
+import unittest
+class T(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        raise RuntimeError("class setup broke")
+    def test_never_runs(self):
+        pass
+def test_plain_passes():
+    assert True
+PY
+run "$TMP/classfail"
+[ "$rc" -eq 1 ] && [ "$(result_of)" = "1 1" ] && grep -q 'class setup broke' <<< "$out" && ok \
+  || bad "a failing setUpClass is one failure and the passing plain test still counts (rc=$rc, result=$(result_of))" "$out"
+
+mkdir -p "$TMP/classonly"
+cat > "$TMP/classonly/test_classonly.py" <<'PY'
+import unittest
+class T(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        raise RuntimeError("class setup broke")
+    def test_never_runs(self):
+        pass
+PY
+run "$TMP/classonly"
+[ "$rc" -eq 1 ] && [ "$(result_of)" = "0 1" ] && ! grep -q 'holds no tests' <<< "$out" && ok \
+  || bad "a file whose only class fails setUpClass is one failure, not also a file with no tests (rc=$rc, result=$(result_of))" "$out"
+
 # --- a module that cannot import is a failure, never a smaller run --------------------------------
 mkdir -p "$TMP/noimport"
 printf 'import a_module_that_does_not_exist_anywhere\ndef test_x():\n    pass\n' > "$TMP/noimport/test_broken.py"

@@ -42,6 +42,7 @@ import {
   madePermanent,
   mentioned,
   mentionsAny,
+  patchNames,
   resolvePath,
   ruleOf,
   saveIdOf,
@@ -211,6 +212,30 @@ const mentionText = async ($: EngineInterface, command: string): Promise<string>
   return text
 }
 
+// What mod-kit's write reader calls a patch it reads (git apply, git am, patch): its `what` for one.
+const PATCH = 'a patch'
+
+// A command's text as a patch it feeds is read (#1883): the body of each heredoc on standard input of
+// the command mod-kit's write reader gave as that patch (`words`, matched to its own reading of the
+// call), cut to the lines naming the files it changes (patchNames). Only a quoted heredoc, whose body
+// the shell leaves exactly as written, so its lines are the patch; an unquoted one may gain a header
+// once the shell expands it, and is read whole, as is a body naming no file, one replaced by a later
+// redirect, and one that cannot be found as written in the text.
+const patchHeredocsCut = async ($: EngineInterface, command: string, text: string, words: readonly string[]): Promise<string> => {
+  if (!mentionsAny(text)) return text
+  const same = (a: readonly string[]) => a.length === words.length && a.every((w, i) => w === words[i])
+  let out = text
+  for (const c of await $.modkit.pipeline({ command })) {
+    if (!same(c.words)) continue
+    for (const h of c.heredocs ?? []) {
+      if (!h.quoted || h.fd !== undefined || h.replaced || !h.body || !out.includes(h.body)) continue
+      const names = patchNames(h.body)
+      if (names !== undefined) out = out.split(h.body).join(names)
+    }
+  }
+  return out
+}
+
 // A python program with the lasting memory its sentences name taken out (#940), where it holds text
 // read by mod-kit's one scanner (#1171). A mod-kit that cannot say (one loaded before it had the
 // member, which a reload can leave, standing rule 5) leaves the program whole, so every memory file
@@ -275,13 +300,16 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
     // What the command mentions is a guess at the file; what a patch it reads names is what it writes.
     // A patch it reads from a device or a fifo is never opened (#1765), as a missing one never was:
     // the read waits for ever, and one fed on standard input is the heredoc, read in the command.
-    for (const m of await mentioned(text, home, inCheckout, isSet))
+    // A patch is judged by the lines naming the files it changes (#1883, patchNames), in a patch
+    // file and in a heredoc feeding the patch alike; one naming none is read whole, as before.
+    const patch = u.what === PATCH
+    for (const m of await mentioned(patch ? await patchHeredocsCut($, command, text, u.words) : text, home, inCheckout, isSet))
       if (!out.includes(m)) {
         out.push(m)
         guessed.push(m)
       }
     const read = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
-    for (const t of read) for (const m of await mentioned(t, home, inCheckout, isSet)) if (!out.includes(m)) out.push(m)
+    for (const t of read) for (const m of await mentioned(patch ? (patchNames(t) ?? t) : t, home, inCheckout, isSet)) if (!out.includes(m)) out.push(m)
   }
   return { files: out, guessed, handed }
 }

@@ -1666,7 +1666,12 @@ export const register: Register = on => {
   const placed = text.replace('const PANE_COLUMNS = 144', 'const PANE_COLUMNS = 110')
   expect(refusalOf(await call($, write(placed)))).toBe('')
   expect(w.ran.length).toBe(1)
-  expect(refusalOf(await call($, write(placed.replace('Copied the value for step', 'Copied that value for step'))))).toContain(SKIP_QUESTION)
+  const reworded = refusalOf(await call($, write(placed.replace('Copied the value for step', 'Copied that value for step'))))
+  expect(reworded).toContain(SKIP_QUESTION)
+  // #1859: held for the toast's words alone, so it says so, naming them, and never the screen's look.
+  expect(reworded).toContain('payload/mods/manual-steps/hooks/register.tsx changes the words of a message Dan reads')
+  expect(reworded).toContain('Copied that value for step')
+  expect(reworded.includes('changes how the screen looks')).toBe(false)
   expect(w.ran.length).toBe(1)
 })
 
@@ -1735,6 +1740,84 @@ test("#1275: a shell write making a line builder file draw differently is undone
   expect(refusalOf(await call($, { ...DIVIDER, file_path: '/w/slate/src/mods/shop/hooks/card.ts' }))).toBe('')
   expect(refusalOf(await call($, { ...DIVIDER, file_path: '/w/slate/payload/mods/demo/tests/card.test.ts' }))).toBe('')
   expect(w.ran.length).toBe(4)
+})
+
+// #1841: a mod's .ts hook file was judged only by what it draws, so a toast reworded there passed
+// unasked. Dan, 2026-10-27, for #1823: "Timing wording can go through, but message wording should be
+// asked about". Shaped after mods/secret-guard's register.ts, which draws nothing.
+const GUARD_HOOK = `${DEMO}/guard.ts`
+const GUARD_TEXT = `import type { EngineInterface } from 'claude-code'
+export const KEEP_SPEC = { name: 'keep_job', description: 'Keep a background job running on purpose.' }
+export const refuse = async ($: EngineInterface, what: string) => {
+  if (what.length > 3) await $.ui.toast('Blocked a command that would print a secret.')
+}
+`
+test("#1841: a toast reworded in a mod's .ts hook file is asked about, by an Edit or a shell write; a logic change there and a tool description pass", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: GUARD_HOOK, old_string: from, new_string: to })
+  expect(refusalOf(await call($, edit('Blocked a command that', 'Stopped a command that')))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('what.length > 3', 'what.length > 5')))).toBe('')
+  expect(refusalOf(await call($, edit('running on purpose.', 'up on purpose.')))).toBe('')
+  expect(w.ran.length).toBe(2)
+  // What sed leaves is read once it ran, by the same rule: the new words are undone and asked about.
+  const now = w.files[GUARD_HOOK] as string
+  w.ctl.shell = { [GUARD_HOOK]: now.replace('Blocked a command that', 'Stopped a command that') }
+  const why = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Blocked a command/Stopped a command/' payload/mods/demo/hooks/guard.ts" }))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('was undone')
+  expect(w.files[GUARD_HOOK]).toBe(now)
+})
+
+// #1859: an edit held only because a message's words changed was refused as one that "changes how the
+// screen looks", and a shell write's as one that "changed what the mod draws", more than the check
+// measured (L11). The refusal, the card and the shell outcome say the words changed, naming them; a
+// look change still says the look.
+test("#1859: a toast reworded in a mod's .ts hook file is refused as a message's words, never the screen's look, by an Edit or a shell write; a look change still says the look", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const LOOK = 'changes how the screen looks'
+  const why = refusalOf(await call($, { tool: 'Edit', file_path: GUARD_HOOK, old_string: 'Blocked a command that', new_string: 'Stopped a command that' }))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('payload/mods/demo/hooks/guard.ts changes the words of a message Dan reads')
+  expect(why).toContain('Stopped a command that')
+  expect(why.includes(LOOK)).toBe(false)
+  const reason = String((w.cards[w.cards.length - 1] as { reason?: string }).reason)
+  expect(reason).toContain('Stopped a command that')
+  expect(reason.includes('looks on screen')).toBe(false)
+  // What sed leaves is undone, saying it changed a message's words, never what the mod draws.
+  const now = w.files[GUARD_HOOK] as string
+  w.ctl.shell = { [GUARD_HOOK]: now.replace('Blocked a command that', 'Stopped a command that') }
+  const said = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Blocked a command/Stopped a command/' payload/mods/demo/hooks/guard.ts" }))
+  expect(said).toContain('was undone: it changed the words of a message Dan reads')
+  expect(said).toContain('Stopped a command that')
+  expect(said.includes('what the mod draws')).toBe(false)
+  expect(said.includes(LOOK)).toBe(false)
+  expect(w.files[GUARD_HOOK]).toBe(now)
+  // A look change, by an Edit or a shell write, still says the look.
+  const look = refusalOf(await call($, DIVIDER))
+  expect(look).toContain(`payload/mods/demo/hooks/card.ts ${LOOK}`)
+  expect(look.includes('the words of a message')).toBe(false)
+  const divided = LINES_TEXT.replace('  card.steps.forEach((s, i) => {\n', '  card.steps.forEach((s, i) => {\n    if (i > 0) lines.push({ divider: true })\n')
+  w.ctl.shell = { [LINES]: divided }
+  const drawn = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/x/y/' payload/mods/demo/hooks/card.ts" }))
+  expect(drawn).toContain('was undone: it changed what the mod draws on screen')
+  expect(drawn).toContain(`payload/mods/demo/hooks/card.ts ${LOOK}`)
+  expect(drawn.includes('the words of a message')).toBe(false)
+})
+
+// #1859: an edit that would not apply cannot be read before it runs, so it is held where the file
+// draws or sends a message now. One to a file that sends a message and draws nothing said "changes how
+// the screen looks"; it says a message's words, naming none, since which would change is unknown. One
+// to a file that draws still says the look.
+test("#1859: an edit that would not apply, to a mod's .ts hook file that only sends a message, is refused as a message's words; to one that draws, as the look", withKit, async ($, on) => {
+  world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT } })
+  const LOOK = 'changes how the screen looks'
+  const worded = refusalOf(await call($, { tool: 'Edit', file_path: GUARD_HOOK, old_string: 'no such text', new_string: 'anything' }))
+  expect(worded).toContain(SKIP_QUESTION)
+  expect(worded).toContain('payload/mods/demo/hooks/guard.ts changes the words of a message Dan reads,')
+  expect(worded.includes(LOOK)).toBe(false)
+  const look = refusalOf(await call($, { tool: 'Edit', file_path: LINES, old_string: 'no such text', new_string: 'anything' }))
+  expect(look).toContain(`payload/mods/demo/hooks/card.ts ${LOOK}`)
+  expect(look.includes('the words of a message')).toBe(false)
 })
 
 // #1341: a python heredoc that only reflowed a comment in this guard's own register.ts was refused as a

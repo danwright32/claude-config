@@ -152,6 +152,7 @@ is_agent = "agent_id" in d
 aid = d.get("agent_id")
 aid = aid if isinstance(aid, str) else ""
 agent_tr = agent_wt = looked = ""
+agent_removed = "0"
 if is_agent and tr.endswith(".jsonl"):
     sub = os.path.join(tr[:-len(".jsonl")], "subagents")
     looked = os.path.join(sub, "agent-%s.jsonl" % aid)
@@ -164,14 +165,22 @@ if is_agent and tr.endswith(".jsonl"):
         try:
             with open(meta) as fh:
                 m = json.load(fh)
-            if isinstance(m, dict) and m.get("spawnedWithWorktree") is True \
+            # A CLEANLY REMOVED worktree is its own case (claude-config#1876): the agent WAS
+            # isolated, finished without changes, and Claude Code deleted the worktree and rewrote
+            # this meta to worktreeCleanlyRemoved true (measured shape: no spawnedWithWorktree, no
+            # worktreePath). The agent can still call tools afterwards, from the main checkout, so
+            # the record credits no worktree, even one that kept both fields, since the worktree it
+            # named is gone. It is never read as a missing field: its transcript is still read.
+            if isinstance(m, dict) and m.get("worktreeCleanlyRemoved") is True:
+                agent_removed = "1"
+            elif isinstance(m, dict) and m.get("spawnedWithWorktree") is True \
                     and isinstance(m.get("worktreePath"), str):
                 agent_wt = m["worktreePath"]
         except Exception:
             pass
-print("\x1f".join([tr, "1" if is_agent else "0", agent_tr, agent_wt, looked, sid]))
+print("\x1f".join([tr, "1" if is_agent else "0", agent_tr, agent_wt, looked, sid, agent_removed]))
 ' 2>/dev/null || true)"
-IFS=$'\x1f' read -r transcript is_agent agent_transcript agent_worktree agent_looked session_id <<IDS || true
+IFS=$'\x1f' read -r transcript is_agent agent_transcript agent_worktree agent_looked session_id agent_removed <<IDS || true
 $ids
 IDS
 
@@ -476,12 +485,20 @@ if [ "$is_agent" = 1 ] && [ -z "$agent_transcript" ]; then
 This call comes from a subagent, and its own transcript was not found (looked for ${agent_looked:-it beside the session transcript}), so only the dispatching session's record was read: files this agent changed itself are among those listed.
 "
 fi
+# An agent whose worktree was cleanly removed (claude-config#1876) was isolated once, and the
+# refusal says so rather than reading as an agent that never had a worktree (L11).
+removed_note=""
+if [ "$is_agent" = 1 ] && [ "${agent_removed:-0}" = 1 ]; then
+  removed_note="
+This agent was spawned in a worktree of its own, which Claude Code deleted when the agent finished without changes (its record now says worktreeCleanlyRemoved), so no worktree is credited to it any more and it was judged on its transcript alone.
+"
+fi
 
 cat >&2 <<MSG
 claude-sync: REFUSED an unscoped 'git add' in $repo.
 
 These changes are in the tree and this session never touched them, so they belong to another session working in the same checkout:
-$foreign$unread_note
+$foreign$unread_note$removed_note
 An unscoped add stages them too, and they then travel in a commit whose message does not describe them, judged by a test gate that was not asked about them. That happened on 2026-09-10, in this repo, and the work only survived because it happened to be correct.
 
 Stage what this session actually changed, by name:

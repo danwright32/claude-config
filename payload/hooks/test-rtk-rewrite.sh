@@ -583,6 +583,53 @@ out1428nl="$(PATH="$BIN:$PATH" bash "$NOLIB/rtk-rewrite.sh" < "$TMPROOT/payload.
   && check "#1428 and a rewrite with no gh in it still goes through" ok \
   || check "#1428 and a rewrite with no gh in it still goes through" "got [$out1428nl]"
 
+# Only a rewrite running gh as a word starts the shared reader (claude-config#1880). The test used
+# to be a bare gh anywhere in the rewrite, and every path under a home folder like Dan's holds one
+# in "wright", so an rtk ls or rtk git naming such a path started python3 to learn it was not gh.
+# A python3 first on PATH records each start and then runs the real one.
+PY1880="$TMPROOT/py1880"; mkdir -p "$PY1880"
+printf '#!/bin/sh\necho started >>"%s"\nexec "%s" "$@"\n' "$TMPROOT/py1880-starts" "$(command -v python3)" > "$PY1880/python3"
+chmod +x "$PY1880/python3"
+FAKE_HOME1880="/Users""/dana-wright"   # assembled, so this file names no real home (check-home-paths.sh)
+starts1880() { # starts1880 <rewrite> <command>  -> "<python3 starts> <rewritten command>"
+  printf '%s\n' "$1" > "$TMPROOT/rewrite"; payload "$2"
+  rm -f "$TMPROOT/py1880-starts"
+  local got; got="$(PATH="$BIN:$PY1880:$PATH" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+  local n=0; [ -f "$TMPROOT/py1880-starts" ] && n="$(wc -l < "$TMPROOT/py1880-starts" | tr -d ' ')"
+  printf '%s %s' "$n" "$got"
+}
+r1880="$(starts1880 "rtk ls $FAKE_HOME1880/Apps" "ls $FAKE_HOME1880/Apps")"
+[ "$r1880" = "0 rtk ls $FAKE_HOME1880/Apps" ] \
+  && check "#1880 an rtk ls of a path holding gh inside a word starts no python3 and keeps its rewrite" ok \
+  || check "#1880 an rtk ls of a path holding gh inside a word starts no python3 and keeps its rewrite" "got [$r1880]"
+r1880="$(starts1880 "rtk git -C $FAKE_HOME1880/Apps/high-night status" "git -C $FAKE_HOME1880/Apps/high-night status")"
+[ "${r1880%% *}" = 0 ] \
+  && check "#1880 and so does an rtk git naming one, with gh inside other words too" ok \
+  || check "#1880 and so does an rtk git naming one, with gh inside other words too" "got [$r1880]"
+# Control: a real rtk gh still reaches the reader, and is still refused.
+r1880="$(starts1880 "rtk gh pr view 3 --repo o/r" "gh pr view 3 --repo o/r")"
+[ "${r1880%% *}" -ge 1 ] 2>/dev/null && [ "$r1880" = "${r1880%% *} " ] \
+  && check "#1880 control: an rtk gh pr view still starts the reader and is not rewritten" ok \
+  || check "#1880 control: an rtk gh pr view still starts the reader and is not rewritten" "got [$r1880]"
+# gh after a newline, in a subshell, or by its full path is still a gh the reader must see.
+r1880="$(starts1880 "cd $FAKE_HOME1880/Apps
+rtk gh issue list" "cd $FAKE_HOME1880/Apps
+gh issue list")"
+[ "${r1880%% *}" -ge 1 ] 2>/dev/null && [ "$r1880" = "${r1880%% *} " ] \
+  && check "#1880 an rtk gh on the line after a cd into such a path is still refused" ok \
+  || check "#1880 an rtk gh on the line after a cd into such a path is still refused" "got [$r1880]"
+r1880="$(starts1880 "(rtk gh run list)" "(gh run list)")"
+[ "${r1880%% *}" -ge 1 ] 2>/dev/null && [ "$r1880" = "${r1880%% *} " ] \
+  && check "#1880 and so is one in a subshell" ok \
+  || check "#1880 and so is one in a subshell" "got [$r1880]"
+# A byte that is not UTF-8 in front of gh must not make the match fail under a UTF-8 locale.
+UTF8_1880="$(locale -a 2>/dev/null | grep -i -m1 -E '^(en_US|C)\.utf-?8$')"
+printf 'echo \377; rtk gh pr status\n' > "$TMPROOT/rewrite"; payload 'echo x; gh pr status'
+out1880="$(LC_ALL="${UTF8_1880:-C}" PATH="$BIN:$PATH" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null)"
+[ -z "$out1880" ] \
+  && check "#1880 a byte that is not UTF-8 before an rtk gh does not let it through" ok \
+  || check "#1880 a byte that is not UTF-8 before an rtk gh does not let it through" "it rewrote: $out1880"
+
 # ---------------------------------------------------------------------------
 # The three destinations nobody had measured (claude-config#1443), each now measured plain against
 # rtk 0.31.0 with HOME emptied, offline, against stub binaries first on PATH that record the

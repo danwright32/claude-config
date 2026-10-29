@@ -105,13 +105,17 @@ check "trash judge: an entry listed at scan time is offerable" "$(eq "$JUDGED" o
 printf 'c\n' > "$H/.Trash/later.txt"
 judge trash "$H/.Trash/later.txt"
 check "trash judge: an entry added after the scan is not offerable" "$(has "$JUDGED" "not offerable: it was not in the Trash when the scan ran")"
-rm -f "$H/.Trash/photo.NEF"; printf 'replaced\n' > "$H/.Trash/photo.NEF"
+# The replacement is written while the original still exists, then moved over it, so the two
+# can never share an inode: deleting first let Linux hand the freed inode straight back (#1851 CI).
+printf 'replaced\n' > "$H/.Trash/photo.new"; mv -f "$H/.Trash/photo.new" "$H/.Trash/photo.NEF"
 judge trash "$H/.Trash/photo.NEF"
 check "trash judge: an entry replaced since the scan (same name, new inode) is not offerable" "$(has "$JUDGED" "not offerable: it is not the entry the scan listed")"
 # What disk-clean trashed this run: an item of another category marked trashed, whose file now sits
 # in the Trash with the same inode, as a move within one volume keeps it.
 printf 'big\n' > "$H/Downloads/movie.mov"
-ident="$(stat -f '%d:%i' "$H/Downloads/movie.mov" 2>/dev/null || stat -c '%d:%i' "$H/Downloads/movie.mov")"
+# GNU stat first, as disk-remove.sh and scan-lib.sh's dcs_identity ask: on Linux, GNU stat -f is a
+# file system query that succeeds and prints junk, so asking it first never reaches -c (#1851).
+ident="$(stat -c '%d:%i' "$H/Downloads/movie.mov" 2>/dev/null || stat -f '%d:%i' "$H/Downloads/movie.mov")"
 sid="$(dcr_header "$REC" scan_id)"
 awk -v t="$H/Downloads/movie.mov" -v i="$ident" '/^\{"id":/ && !done { print "{\"id\":\"lf-1\",\"category\":\"large-files\",\"method\":\"trash\",\"target\":\"" t "\",\"bytes\":4096,\"state\":\"offerable\",\"identity\":\"" i "\"},"; done = 1 } { print }' "$REC" > "$REC.new" && mv "$REC.new" "$REC"
 printf 'lf-1%strashed\n' "$S" > "$DC_ROOT/marks"; dcr_mark "$REC" "$sid" "$DC_ROOT/marks"
@@ -381,6 +385,19 @@ printf '{"pid":1,"sessionId":"%s","cwd":"/x"}\n' "$U1" > "$H/.claude/sessions/1.
 run_scan --only claude-temp
 check "claude temp: an unreadable session map makes the category unmeasured" "$(has "$(status_of claude-temp)" "unmeasured: the session map")"
 chmod 600 "$H/.claude/sessions/1.json"
+# A folder find could not read all of is never offered (#1851): its errors once went to /dev/null,
+# so a folder with an unreadable subfolder, in which nothing readable was recent, read as abandoned
+# although the unread part could have been used a minute ago.
+U4=44444444-4444-4444-8444-444444444444
+mkdir -p "$CT/$U4/locked/inner"; printf 'x\n' > "$CT/$U4/locked/inner/f"
+old "$CT/$U4"; chmod 000 "$CT/$U4/locked"
+run_scan --only claude-temp
+check "claude temp: a folder find could not wholly read is unmeasured, never offerable" "$(has "$(state_of "$CT/$U4")" "unmeasured: part of it could not be read")"
+check "claude temp: and says what find said" "$(has "$(state_of "$CT/$U4")" "Permission denied")"
+check "claude temp: an abandoned folder beside it is still offerable" "$(eq "$(state_of "$CT/$U2")" offerable)"
+judge claude-temp "$CT/$U4"
+check "claude temp judge: a folder find could not wholly read is unmeasured" "$(has "$JUDGED" "unmeasured: part of it could not be read")"
+chmod 700 "$CT/$U4/locked"
 
 # ================================================================================================
 # Worktrees: clean, pushed and merged only, by gh; a gh failure is unmeasured, never merged

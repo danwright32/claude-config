@@ -331,6 +331,48 @@ run_agent "git add -A" "$AGENT_ID"
 refused "#1513 control: a meta naming the shared main checkout credits nothing in it"
 says "and the foreign file is named" "sharedfile.txt"
 rm -f "$REPO/sharedfile.txt" "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
+
+# A CLEANLY REMOVED worktree is its own case (claude-config#1876). When an agent finishes without
+# changing anything, Claude Code deletes its worktree and rewrites the meta to worktreeCleanlyRemoved
+# true, dropping spawnedWithWorktree and worktreePath (12 of 906 metas on the personal MacBook,
+# measured 2026-10-28, in the shape below). The agent can go on calling tools after that: one agent
+# whose meta was rewritten on 2026-10-07 then wrote 768 lines more to its transcript that day, every
+# one with the MAIN checkout as its cwd, and several git adds among them. So the gate does run for
+# such an agent, and the worktree its meta once named is gone.
+CLEANED_META='{"agentType": "general-purpose", "description": "d", "toolUseId": "toolu_9", "spawnDepth": 1, "requestShape": "background", "requestNonInteractive": true, "worktreeCleanlyRemoved": true}'
+printf '%s\n' "$CLEANED_META" > "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
+printf 'after removal\n' > "$REPO/afterremoval.txt"
+set_mtime "$REPO/afterremoval.txt" "$((now - 50000))"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID"
+refused "#1876 an agent whose worktree was cleanly removed gets no credit in the main checkout"
+says "and the refusal says its own worktree was removed, not that it never had one" "worktreeCleanlyRemoved"
+says "and names the file" "afterremoval.txt"
+# Its own transcript is still read: the record is not a missing field, so its own edits stay its own.
+TR_SAVED="$TR"; TR="$AGENT_TR"; mention_edit "$REPO/afterremoval.txt"; TR="$TR_SAVED"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID"
+allowed "#1876 a file a cleanly removed agent edited after the removal is still its own, from its transcript"
+git -C "$REPO" add -A >/dev/null 2>&1; git -C "$REPO" -c commit.gpgsign=false commit -q -m "after removal" >/dev/null 2>&1
+# A record saying the worktree was cleanly removed never credits a worktree wholesale, even one that
+# also kept spawnedWithWorktree and a worktreePath that exists again: Claude Code says that worktree
+# was deleted, so whatever stands at the path now is not the one it made for this agent.
+python3 -c '
+import json, sys
+print(json.dumps({"agentType": "general-purpose", "spawnedWithWorktree": True, "worktreePath": sys.argv[1],
+                  "worktreeCleanlyRemoved": True, "spawnDepth": 1}))
+' "$WT" > "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID" "$WT"
+refused "#1876 a cleanly removed record that kept its worktree fields still credits nothing in that path"
+says "and the refusal says the worktree was removed" "worktreeCleanlyRemoved"
+# The control: the same meta without the removal flag still credits the worktree, so the refusal
+# above is the flag's doing and not a broken fixture.
+write_meta "$AGENT_ID" "$WT" true
+fresh_cache
+run_agent "git add -A" "$AGENT_ID" "$WT"
+allowed "#1876 control: the same meta without worktreeCleanlyRemoved still credits its worktree"
+rm -f "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
 git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1
 REPO="$REPO_BEFORE_1513"
 
@@ -830,9 +872,25 @@ else:
     if not mentions:
         problems.append("no tool input carries command or file_path")
     out("transcript", "DRIFT" if problems else "OK", "; ".join(problems))
-# Isolation: the newest agent whose recorded cwd is its own .claude/worktrees/agent-<id> worktree.
+# Isolation: the newest agent whose recorded cwd is its own .claude/worktrees/agent-<id> worktree,
+# chosen by where it ran rather than by its meta, so a renamed meta field still reads as drift. Passed
+# over: an agent whose worktree Claude Code removed at the end because it made no changes, since the
+# meta is rewritten at removal to worktreeCleanlyRemoved true without spawnedWithWorktree or
+# worktreePath (measured on 2.1.285 to 2.1.311, claude-config#1873). Such a record says nothing
+# about the fields this part checks for drift. The gate does meet it, since an agent can keep calling
+# tools after the removal, and reads the flag as its own case: no worktree credit (claude-config#1876,
+# pinned by the fixture cases in the section on worktrees a subagent was spawned with).
+def cleanly_removed(p):
+    try:
+        with open(p[:-len(".jsonl")] + ".meta.json") as fh:
+            m = json.load(fh)
+    except Exception:
+        return False
+    return isinstance(m, dict) and m.get("worktreeCleanlyRemoved") is True
 found = None
 for p in expected[:SCAN]:
+    if cleanly_removed(p):
+        continue
     seg = "/.claude/worktrees/agent-%s" % aid_of(p)
     for r in records(p):
         cwd = r.get("cwd")
@@ -842,7 +900,7 @@ for p in expected[:SCAN]:
     if found:
         break
 if found is None:
-    out("isolation", "UNMEASURED", "none of the newest %d agents ran in a worktree it was spawned with" % SCAN)
+    out("isolation", "UNMEASURED", "none of the newest %d agents ran in a worktree it was spawned with, other than ones removed unchanged" % SCAN)
 else:
     p, wt = found
     problems = []
@@ -951,6 +1009,66 @@ o="$(record_drift "$DR/noagents")"
 drift_says "#1523 drift control: transcripts but no agent ever run is unmeasured" layout UNMEASURED "$o"
 case "$o" in *"sess.jsonl"*|*'"type"'*) check "#1523 drift control: no transcript text is printed" "it printed a path or record" ;;
   *) check "#1523 drift control: no transcript text is printed" ok ;; esac
+drift_says "#1873 drift control: no transcripts at all leaves the isolation unmeasured" isolation UNMEASURED "$(record_drift "$DR/empty")"
+
+# Which record the isolation part judges (claude-config#1873). The live projects folder holds every
+# agent this Mac ran, so the newest one is whatever happened last, and the part must judge only a
+# record that can say anything about isolation. Two real shapes are not one, both measured on this Mac
+# on 2026-10-28 (12 and 5 of 709 records): an agent whose worktree Claude Code removed because it
+# made no changes, whose meta is rewritten at removal to worktreeCleanlyRemoved true with no
+# spawnedWithWorktree and no worktreePath (this is what failed three unrelated full runs that day), and
+# a nested agent that inherited its parent's worktree (inheritedWorktreePath) and ran in the parent's
+# folder. Nor is an agent sent into an existing worktree, which runs in a folder not named after itself.
+# drift_agent <root> <id> <cwd> <meta json> <age in seconds>: one more agent in the fixture session,
+# in the real layout, that ran Bash in <cwd>, last written <age> seconds ago.
+drift_agent(){
+  local sub="$1/-proj/sess/subagents"
+  mkdir -p "$sub" "$3"
+  [ -f "$1/-proj/sess.jsonl" ] || : > "$1/-proj/sess.jsonl"
+  python3 -c '
+import json, sys
+wt = sys.argv[1]
+print(json.dumps({"type": "assistant", "cwd": wt, "version": "9.9.9", "timestamp": "2026-10-28T20:00:00.000Z",
+    "message": {"content": [{"type": "tool_use", "id": "toolu_2", "name": "Bash", "input": {"command": "ls"}}]}}))
+print(json.dumps({"type": "user", "cwd": wt, "timestamp": "2026-10-28T20:00:01.000Z",
+    "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_2", "content": "x"}]}}))
+' "$3" > "$sub/agent-$2.jsonl"
+  printf '%s\n' "$4" > "$sub/agent-$2.meta.json"
+  set_mtime "$sub/agent-$2.jsonl" "$(( $(date +%s) - $5 ))"
+}
+# An older agent in the measured shape, behind whatever each case puts in front of it.
+drift_older(){ drift_fixture "$1"; set_mtime "$1/-proj/sess/subagents/agent-adrift000000000001.jsonl" "$(( $(date +%s) - 600 ))"; }
+CLEANED='{"agentType": "general-purpose", "description": "d", "toolUseId": "toolu_9", "spawnDepth": 1, "requestShape": "background", "requestNonInteractive": true, "worktreeCleanlyRemoved": true}'
+PLAIN='{"agentType": "general-purpose", "description": "d", "toolUseId": "toolu_9", "spawnDepth": 1, "requestShape": "background", "requestNonInteractive": true, "isBuiltIn": true, "finished": true}'
+
+drift_older "$DR/cleaned"
+drift_agent "$DR/cleaned" acleaned00000000001 "$DR/cleaned/wt/.claude/worktrees/agent-acleaned00000000001" "$CLEANED" 60
+o="$(record_drift "$DR/cleaned")"
+drift_says "#1873 a newest agent whose unchanged worktree was cleanly removed does not fail the isolation" isolation OK "$o"
+drift_older "$DR/sentinto"
+drift_agent "$DR/sentinto" asentinto0000000001 "$DR/sentinto/wt/.claude/worktrees/sleep-1807" "$PLAIN" 60
+o="$(record_drift "$DR/sentinto")"
+drift_says "#1873 a newest agent sent into an existing worktree does not fail the isolation" isolation OK "$o"
+drift_older "$DR/inherited"
+drift_agent "$DR/inherited" ainherited000000001 "$DR/inherited/wt/.claude/worktrees/agent-adrift000000000001" \
+  '{"agentType": "general-purpose", "isBuiltIn": true, "inheritedWorktreePath": "/x", "spawnedWithWorktree": true, "description": "d", "toolUseId": "toolu_9", "parentAgentId": "adrift000000000001", "spawnDepth": 2, "requestShape": "background", "requestNonInteractive": true, "finished": true}' 60
+o="$(record_drift "$DR/inherited")"
+drift_says "#1873 a newest nested agent that inherited its parent's worktree does not fail the isolation" isolation OK "$o"
+mkdir -p "$DR/onlycleaned"
+drift_agent "$DR/onlycleaned" acleaned00000000002 "$DR/onlycleaned/wt/.claude/worktrees/agent-acleaned00000000002" "$CLEANED" 60
+o="$(record_drift "$DR/onlycleaned")"
+drift_says "#1873 with only cleanly removed worktrees on the machine, the isolation is unmeasured" isolation UNMEASURED "$o"
+# The control: the part can still go red. The newest isolated agent lacks its worktreePath, with a good
+# one behind it that must not be judged in its place.
+drift_older "$DR/nopath"
+drift_agent "$DR/nopath" anopath000000000001 "$DR/nopath/wt/.claude/worktrees/agent-anopath000000000001" \
+  '{"agentType": "general-purpose", "isBuiltIn": true, "description": "d", "toolUseId": "toolu_9", "spawnDepth": 1, "requestShape": "background", "requestNonInteractive": true, "spawnedWithWorktree": true, "worktreeBranch": "worktree-agent-anopath000000000001"}' 60
+o="$(record_drift "$DR/nopath")"
+drift_says "#1873 control: a newest isolated agent missing its worktreePath is drift" isolation DRIFT "$o"
+drift_older "$DR/noclaim"
+drift_agent "$DR/noclaim" anoclaim00000000001 "$DR/noclaim/wt/.claude/worktrees/agent-anoclaim00000000001" "$PLAIN" 60
+o="$(record_drift "$DR/noclaim")"
+drift_says "#1873 control: a newest agent in its own worktree whose meta claims nothing, not cleanly removed, is drift" isolation DRIFT "$o"
 
 # Now the real records on this machine, read only.
 judge_drift "$(record_drift "${CLAUDE_ADD_SCOPE_LIVE_PROJECTS:-$HOME/.claude/projects}")" "on this machine"

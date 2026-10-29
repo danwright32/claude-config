@@ -959,6 +959,41 @@ test('a write anywhere else, a patch that touches no lasting memory, a backup in
   expect(w.ran.map(r => r.tool)).toEqual(['Write', 'Bash', 'Bash', 'Bash'])
 })
 
+// #1883: a worktree agent's git apply of a patch changing five code files was refused as a save to
+// LESSONS.md, which the patch named only in a changed line of another file. A patch is judged by the
+// lines naming the files it changes, read from a file, from standard input or from a quoted heredoc;
+// one that really changes lasting memory is asked about exactly as before, by every route.
+const CODE_PATCH =
+  'From 1234 Mon Sep 17 00:00:00 2001\nSubject: [PATCH] Note the rule beside LESSONS.md\n\nKeeps payload/LESSONS.md as it is.\n---\n' +
+  'diff --git a/payload/mods/x/hooks/a.ts b/payload/mods/x/hooks/a.ts\n--- a/payload/mods/x/hooks/a.ts\n+++ b/payload/mods/x/hooks/a.ts\n' +
+  '@@ -1,3 +1,3 @@\n // the rule lives in payload/LESSONS.md\n-const a = 1 // CLAUDE.md\n+const a = 2 // AGENTS.md\n x\n'
+const LESSONS_PATCH = 'diff --git a/payload/LESSONS.md b/payload/LESSONS.md\n--- a/payload/LESSONS.md\n+++ b/payload/LESSONS.md\n@@ -1 +1,2 @@\n x\n+L9. Never merge on Fridays.\n'
+test('a patch naming lasting memory only in its message or a changed line of another file runs unasked; one changing it is asked about (#1883)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${CWD}/code.patch`]: CODE_PATCH, [`${CWD}/lessons.patch`]: LESSONS_PATCH } })
+  const quiet = [
+    'git apply code.patch',
+    'git apply --3way --include=payload/mods/x/hooks/a.ts code.patch',
+    'git am code.patch',
+    'git apply < code.patch',
+    'patch -p1 < code.patch',
+    `git apply <<'EOF'\n${CODE_PATCH}EOF`,
+  ]
+  for (const command of quiet) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
+  expect(w.ran.length).toBe(quiet.length)
+  const held = ['git apply lessons.patch', 'git am lessons.patch', 'git apply < lessons.patch', 'patch -p1 < lessons.patch', `git apply <<'EOF'\n${LESSONS_PATCH}EOF`]
+  for (const command of held) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toContain(ASKS)
+  expect(w.ran.length).toBe(quiet.length)
+})
+
+// A heredoc the shell expands (unquoted) may hold a header only once it runs, so its whole text is
+// still read; and a patch naming no file in any line is read whole, as before #1883.
+test('an unquoted heredoc patch, and a patch with no line naming a file, are read whole as before (#1883)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${CWD}/plain.diff`]: '1a2\n> see LESSONS.md\n' } })
+  for (const command of [`git apply <<EOF\n${CODE_PATCH}EOF`, 'patch notes.md plain.diff', 'git apply < plain.diff'])
+    expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
 // #726: everything under a temporary folder was exempt, but a session started in a repository
 // cloned there loads its CLAUDE.md and AGENTS.md, so a save to one went through unasked.
 test('a save into a checkout in a temporary folder is refused, by Write and by Bash', withKit, async ($, on) => {

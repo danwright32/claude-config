@@ -1224,7 +1224,8 @@ const RUN_LOOKS = new Set(['color', 'bold', 'dim', 'italic', 'underline', 'strik
 // What draws a mod's lines, with what it is handed: mod-kit's band row, pane and boxed card, and a
 // pane's size and title as Claude Code opens it. Not a blocked action's grey card (#1756): its look
 // is mod-kit's own (card.ts blockedCard), judged there, and a caller hands it only the words of a
-// refusal, shown as a tool result row, which are copy, held nowhere else (#1296 had followed them).
+// refusal, shown as a tool result row, which are copy, not drawing (#1296 had followed them); since
+// #1823 and #1841 they are a message's words (MESSAGE_CALL), held as such.
 const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card)|ui\s*\.\s*open)\s*\(/g
 // #1823 (Dan, 2026-10-27: "message wording should be asked about"): where a message a person reads is
 // handed its words. A toast, a notification, a transcript line (a debug one aside, read where it is
@@ -1235,6 +1236,16 @@ const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card)|ui\s*\.\s*op
 // message.
 const MESSAGE_CALL = /\$\s*\.\s*(?:ui\s*\.\s*(?:toast|notify|notice|status|ask|log)|modkit\s*\.\s*blocked)\s*\(|\.\s*waitingOnYou\s*\(/g
 const MESSAGE_KEY = /([{,]\s*)(reason|block|deny|result|systemMessage|text)(\s*:|(?=\s*[,}]))/g
+// #1864: a one word name, shaped as code names a thing (`'focus'`, `'gh'`, `'manual-steps:copy'`),
+// which its place may show to be a tag; one with a capital, a space or a stop is always words.
+const TAG_WORD = /^[a-z][a-z0-9_:-]*$/
+// The keys whose value a person reads wherever the record goes (a picker option's label, a card's
+// title), so a one word value there is never read as a tag; a message's own keys are MESSAGE_KEY.
+const WORD_KEY = /^(?:label|title|subtitle|description|question|header|heading|body|message|hint|placeholder|summary|detail|caption|prompt|reason|block|deny|result|systemMessage|text)$/
+// #1841: a call whose strings are no words a person reads, though a message may be computed from what
+// it gives back: a search, a split or a key (only what replace looks for), a process run (a notifier
+// excepted, as a message of its own), and the disk and environment.
+const NOT_TEXT_CALL = /\.\s*(?:split|test|match|matchAll|exec|search|startsWith|endsWith|includes|indexOf|lastIndexOf|has|get|delete|replace|replaceAll)\s*\(|\bRegExp\s*\(|(?:\$\s*\.\s*process\s*\.\s*)?\brun\s*\(|\$\s*\.\s*(?:fs|env)\s*\.\s*\w+\s*\(/g
 const DECL = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(const|let|var|function\s*\*?|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/
 const IMPORT = /^import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]\.\/([^'"/]+)['"]/
 
@@ -1899,11 +1910,168 @@ const readMod = (f: ModFile): ModRead | null => {
       if (c > at) inner = o
     }
     if (inner === undefined || blank[inner] !== '{') continue
+    // #1841: nor a property a tool's input schema names (job watcher's `reason`, which Claude fills in):
+    // its value is a schema, whose description only Claude reads.
+    if (/\bproperties\s*:\s*$/.test(blank.slice(Math.max(0, inner - 40), inner))) continue
     const key = (m[2] as string).length
     if (m[3]) messages.push([at, exprEnd(at + key + m[3].length)])
     else messages.push([at, at + key])
   }
-  const stringsIn = ([a, b]: Span): string[] => spans.strings.filter(([x, y]) => a <= x && y <= b).map(([x, y]) => text.slice(x, y))
+  // #1841 (Dan, 2026-10-28: "Narrow it first"): only words a person reads are a message's wording,
+  // never a string a message is only computed from. Replayed, those were a regular expression
+  // (keystroke guard's `open -a` pattern), a value compared or a `typeof` tag, a type's union, a
+  // command's words and flags (`run($, ['gh', 'api', 'user', '--jq', '.login'])`), what a string is
+  // split, searched or keyed by, and a separator holding no letter at all (one with words, as
+  // `join(' and ')`, is read).
+  const notHeard = new Set<number>()
+  // Each call's arguments a string in is no word read (#1864 reads a parameter's uses against them).
+  const notText: Span[] = []
+  const within = (from: number, to: number) => {
+    notText.push([from, to])
+    for (const [x, y] of spans.strings) if (from <= x && y <= to) notHeard.add(x)
+  }
+  for (const m of blank.matchAll(NOT_TEXT_CALL)) {
+    const paren = (m.index as number) + m[0].length - 1
+    const end = close.get(paren)
+    // A notifier run is a message: its words are heard.
+    if (end === undefined || messages.some(([s]) => s === m.index)) continue
+    let to = end
+    // What replace puts in is text; only what it looks for is not.
+    if (/replace(?:All)?\s*\($/.test(m[0])) {
+      let depth = 0
+      for (let i = paren + 1; i < end; i++) {
+        const c = blank[i]
+        if (c === '(' || c === '[' || c === '{') depth++
+        else if (c === ')' || c === ']' || c === '}') depth--
+        else if (c === ',' && depth === 0) {
+          to = i
+          break
+        }
+      }
+    }
+    within(paren, to)
+  }
+  // A quoted string compared (`=== 'object'`, `case 'note':`, `'x' in o`) is a value tested for.
+  const quoted = ([x]: Span) => text[x - 1] === "'" || text[x - 1] === '"'
+  const compared = ([x, y]: Span) =>
+    /(?:[=!]==?|\bcase)\s*$/.test(blank.slice(Math.max(0, x - 1 - 12), x - 1)) || /^\s*(?:[=!]==?|in\b)/.test(blank.slice(y + 1, y + 1 + 12))
+  // What a string literal holds read as a word: one with a letter, and no flag (`--json`).
+  const lettered = (s: string) => /\p{L}/u.test(s.replace(/\\(?:u\{[^}]*\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)/g, ''))
+  const isFlag = (s: string) => /^[-+]{1,2}[A-Za-z][\w-]*=?$/.test(s)
+  // #1864: a one word name (TAG_WORD) is a tag rather than a word said where its own place says so,
+  // never from how the same word is used elsewhere in the file, which flipped a value both shown and
+  // compared between held and not held (#1852). Each place, the string being the value or one of
+  // its alternatives (`c ? 'note' : 'prompt'`, `agent ?? 'x'`):
+  // - a field of a record: an object or array literal also holding something besides words (a
+  //   variable, a call, a nested literal, a flag, a string with no letter), so `{ kind: 'focus' }`,
+  //   `told: running ? 'note' : 'prompt'` beside an id and a text, an argv's `'gh'` beside the repo,
+  //   and printf's escape keys each beside what they stand for; never a table of words (`{ add:
+  //   'added', drop: 'dropped' }`), one read by an index or joined into a sentence, one a person reads
+  //   by its key (WORD_KEY), or anything inside a message;
+  // - an argument handed to one of the file's functions whose parameter is only run as a command's
+  //   word, searched with or compared (job watcher's `stdinDeviceRefusal($, agent ?? 'x', command)`);
+  // - an answer of a function whose own signature names it (`Promise<... | 'home' | 'away'>`).
+  const valueOf = (e: Span, keyed: boolean): Span | undefined => {
+    if (!keyed) return e
+    const k = /^\s*(?:[A-Za-z_$][\w$]*|'[^']*'|"[^"]*")\s*:/.exec(blank.slice(e[0], e[1]))
+    return k ? [e[0] + k[0].length, e[1]] : undefined
+  }
+  const elements = (o: number): Span[] => {
+    const c = close.get(o) as number
+    const out: Span[] = []
+    let from = o + 1
+    for (let j = o + 1; j < c; j++) {
+      if (mask[j]) continue
+      const ch = blank[j]
+      if (ch === '(' || ch === '[' || ch === '{') j = close.get(j) ?? c
+      else if (ch === ',') {
+        out.push([from, j])
+        from = j + 1
+      }
+    }
+    if (/\S/.test(blank.slice(from, c))) out.push([from, c])
+    return out
+  }
+  const isAlternative = (v: Span[], [x, y]: Span) =>
+    v.some(([p, q]) => skipBack(q - 1) === y && (skipOn(p) === x - 1 || /(?:\?\?|\|\|)\s*$/.test(blank.slice(p, x - 1))))
+  const alternativesOf = ([a, b]: Span): Span[] => (skipOn(a) < b ? branches([skipOn(a), skipBack(b - 1) + 1]) : [])
+  const literalWord = ([a, b]: Span): boolean => {
+    const s = skipOn(a)
+    const e = skipBack(b - 1)
+    const q = blank[s]
+    if (s >= e || (q !== "'" && q !== '"') || blank[e] !== q || spans.strings.every(([x, y]) => x !== s + 1 || y !== e)) return false
+    const w = text.slice(s + 1, e)
+    return lettered(w) && !isFlag(w)
+  }
+  const tagAt = ([x, y]: Span): boolean => {
+    if (!TAG_WORD.test(text.slice(x, y)) || messages.some(([a, b]) => a <= x && y <= b)) return false
+    let o: number | undefined
+    for (const [p, q] of pairs) {
+      if (p >= x) break
+      if (q > y) o = p
+    }
+    if (o === undefined) return false
+    const c = close.get(o) as number
+    const els = elements(o)
+    const at = els.findIndex(([a, b]) => a <= x && y < b)
+    const el = els[at]
+    if (!el) return false
+    if (blank[o] === '{' || blank[o] === '[') {
+      const keyed = blank[o] === '{'
+      const v = valueOf(el, keyed)
+      if (!v || !isAlternative(alternativesOf(v), [x, y])) return false
+      if (keyed && WORD_KEY.test(text.slice(skipOn(el[0]), v[0]).replace(/['":\s]/g, ''))) return false
+      if (/^\s*(?:\?\.\s*)?(?:\[|\.\s*join\s*\()/.test(blank.slice(c + 1, c + 40))) return false
+      // A list of one word is that word said (lessons review at 324ee11); a record of one field
+      // (`{ kind: 'focus' }`) is still a record, its field named by its key.
+      if (!keyed && els.length < 2) return false
+      const values = els.map(e => valueOf(e, keyed))
+      return !(values.length >= 2 && values.every(e => e !== undefined && !blank.slice(e[0], e[1]).includes('...') && literalWord(e)))
+    }
+    if (blank[o] === '(' && isAlternative(alternativesOf(el), [x, y])) {
+      // An argument to one of the file's own functions, called by its name.
+      const end = skipBack(o - 1)
+      const callee = /[A-Za-z_$][\w$]*$/.exec(blank.slice(Math.max(0, end - 80), end + 1))?.[0]
+      if (!callee || blank[skipBack(end - callee.length)] === '.') return false
+      const g = fns.find(f => f.name === callee)
+      const param = g?.params[at]
+      if (!g || !param || param.length !== 1) return false
+      const p = param[0] as string
+      for (const m of blank.slice(g.body, g.to).matchAll(new RegExp(`(?<![\\w$.])${p.replace(/\$/g, '\\$')}(?![\\w$])`, 'g'))) {
+        const i = g.body + (m.index as number)
+        const tested = /^\s*(?:[=!]==?)/.test(blank.slice(i + p.length, i + p.length + 12)) || /(?:[=!]==?)\s*$/.test(blank.slice(Math.max(0, i - 12), i))
+        if (!tested && !notText.some(([a, b]) => a < i && i < b)) return false
+      }
+      return true
+    }
+    return false
+  }
+  // An answer of a function whose own signature names it.
+  const answerTag = ([x, y]: Span): boolean => {
+    if (!TAG_WORD.test(text.slice(x, y)) || messages.some(([a, b]) => a <= x && y <= b)) return false
+    const k = fnAt(x)
+    const g = fns[k]
+    if (!g || !isAlternative(returns(k), [x, y])) return false
+    const q = text[x - 1] as string
+    return text.slice(g.from, g.body).includes(`${q}${text.slice(x, y)}${q}`)
+  }
+  const heard = ([x, y]: Span): boolean => {
+    if (notHeard.has(x)) return false
+    const s = text.slice(x, y)
+    if (text[x - 1] === '/') return false
+    if (!lettered(s)) return false
+    if (isFlag(s)) return false
+    if (quoted([x, y])) {
+      if (compared([x, y])) return false
+      // A type's union (`kind: 'input' | 'focus'`).
+      if (/(?:^|[^|])\|\s*$/.test(blank.slice(Math.max(0, x - 1 - 12), x - 1)) || /^\s*\|(?!\|)/.test(blank.slice(y + 1, y + 1 + 12))) return false
+      if (tagAt([x, y]) || answerTag([x, y])) return false
+    }
+    return true
+  }
+  // Every string, template text and JSX text inside a span that a person reads (#1841): every mod
+  // hook file's messages are read so since #1864, a .tsx or .jsx one's too.
+  const stringsIn = ([a, b]: Span): string[] => spans.strings.filter(([x, y]) => a <= x && y <= b && heard([x, y])).map(([x, y]) => text.slice(x, y))
   return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode }
 }
 
@@ -2163,7 +2331,9 @@ const importBindings = (text: string): Map<string, string> | null => {
  * drawn parts unchanged. A JSX element or a colour in those lines, a text or mod file the reader
  * cannot follow, and no change at all are never so.
  */
-export const modHookDrawingUntouched = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
+// `words` false leaves the messages' wording out (#1859), to tell a hold for wording alone from one
+// for what is drawn; every judgement reads it with the wording.
+export const modHookDrawingUntouched = (files: readonly ModFile[], name: string, before: string, after: string, words = true): boolean => {
   const reading = modHookReading(before, after)
   if (!reading || reading.verdict === 'drawn') return false
   const others = files.filter(f => f.name !== name)
@@ -2193,7 +2363,7 @@ export const modHookDrawingUntouched = (files: readonly ModFile[], name: string,
   const now = importBindings(after)
   if (!was || !now) return false
   for (const x of names) if (was.get(x) !== now.get(x)) return false
-  if (!messageWordingSame(others, name, before, after)) return false
+  if (words && !messageWordingSame(others, name, before, after)) return false
   return !drawsChange(others, name, before, after)
 }
 
@@ -2201,10 +2371,23 @@ export const modHookDrawingUntouched = (files: readonly ModFile[], name: string,
  * Whether the wording of every message a person reads from the mod hook file `name` (MESSAGE_CALL,
  * MESSAGE_KEY) is the same before and after a change, read beside the mod's other hook files `files`
  * (#1823): each string, template text and JSX text reaching one, followed into each message as values
- * are followed into what is drawn. When a message is shown may change; what it says may not. False
- * where any of the texts cannot be read.
+ * are followed into what is drawn. When a message is shown may change; what it says may not. Only the
+ * strings a person reads count (readMod's heard), never one a message is only computed from (#1841)
+ * nor a one word tag its place shows to be one (#1864); a .tsx or .jsx file is read so too since
+ * #1864 (Dan approved the one hold that releases, 2026-10-28). False where any of the texts cannot be
+ * read.
  */
 export const messageWordingSame = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
+  const w = messageWordings(files, name, before, after)
+  return !!w && w.said.length === w.says.length && w.said.every((x, i) => x === w.says[i])
+}
+
+/**
+ * The words of every message a person reads from the mod hook file `name` before and after a change,
+ * each once and sorted, as messageWordingSame compares them; null where any of the texts cannot be
+ * read. #1859 names the words that changed from these (heldWords).
+ */
+export const messageWordings = (files: readonly ModFile[], name: string, before: string, after: string): { said: string[]; says: string[] } | null => {
   const others = files.filter(f => f.name !== name)
   const wording = (text: string): string[] | null => {
     const d = drawnOf([...others, { name, text }], name, 'messages')
@@ -2234,7 +2417,26 @@ export const messageWordingSame = (files: readonly ModFile[], name: string, befo
   }
   const said = wording(before)
   const says = wording(after)
-  return !!said && !!says && said.length === says.length && said.every((x, i) => x === says[i])
+  return said && says ? { said, says } : null
+}
+
+// The longest the words a hold names may run (#1859): one short phrase the refusal can carry.
+const WORDS_SHOWN = 60
+
+/**
+ * The words a hold for a message's wording names (#1859): the longest of the words a person reads
+ * that the change brings in, or, where it brings in none with a letter, of those it takes away, else
+ * the longest it changes at all; on one line, spaces run together, and cut to WORDS_SHOWN characters.
+ * Empty where what changed is only spaces.
+ */
+export const heldWords = (said: readonly string[], says: readonly string[]): string => {
+  const added = says.filter(x => !said.includes(x))
+  const gone = said.filter(x => !says.includes(x))
+  const lettered = (xs: string[]) => xs.filter(x => /\p{L}/u.test(x))
+  const pool = [lettered(added), lettered(gone), added, gone].find(p => p.length) ?? []
+  const longest = [...pool].sort((a, b) => b.length - a.length)[0] ?? ''
+  const one = longest.replace(/\s+/g, ' ').trim()
+  return one.length > WORDS_SHOWN ? `${one.slice(0, WORDS_SHOWN - 3).trimEnd()}...` : one
 }
 
 /**
@@ -2249,6 +2451,38 @@ export const drawsChange = (files: readonly ModFile[], name: string, before: str
   const now = at(after)
   if (!was || !now) return true
   return was.length !== now.length || was.some((p, i) => p !== now[i])
+}
+
+/**
+ * Whether changing the mod's plain TypeScript hook file `name` (isModHookTs) from `before` to `after`
+ * (undefined for a file not there) is asked about, read beside the mod's other hook files in `files`:
+ * where it changes what the mod draws (drawsChange, #1275), or the wording of a message a person reads
+ * from it (messageWordingSame, the one reading #1823 gave a mod's .tsx and .jsx files; #1841, Dan,
+ * 2026-10-27: "Timing wording can go through, but message wording should be asked about"). A file
+ * made or taken away is read as one with no text, so its messages' words are new or gone. When a
+ * message is sent, the logic around it, and a tool's or schema's description, which only Claude reads,
+ * pass; and only the words a person reads count (Dan, 2026-10-28: "Narrow it first"), so a regular
+ * expression, a value compared, a command's words or a separator a message is computed from passes.
+ * A file any of them cannot be read in is held.
+ */
+export const modHookTsShows = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): boolean =>
+  modHookTsHold(files, name, before, after) !== undefined
+
+/**
+ * Why modHookTsShows holds a change (#1859), so the refusal claims only what was measured (L11):
+ * `look` where it changes what the mod draws, or where its messages' words cannot be read;
+ * `worded`, the words heldWords names, where only the wording of a message a person reads changes;
+ * undefined where it passes.
+ */
+export type HookHold = { look: true } | { worded: string }
+/** A file, as a refusal names it, held only for a message's wording (#1859), with the words heldWords names. */
+export type Worded = { file: string; words: string }
+export const modHookTsHold = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): HookHold | undefined => {
+  if (drawsChange(files, name, before, after)) return { look: true }
+  const w = messageWordings(files, name, before ?? '', after ?? '')
+  if (!w) return { look: true }
+  if (w.said.length === w.says.length && w.said.every((x, i) => x === w.says[i])) return undefined
+  return { worded: heldWords(w.said, w.says) }
 }
 
 /** A call written out whole, in a fixed order: its tool, every key of its input, its folder and session. */
@@ -2387,12 +2621,35 @@ export const settledUnchecked = (file: string, why: string): string =>
  */
 export const ROUND_FILES = `A design round's own working files (its builder, stylesheet, spec and switcher) go in this session's scratchpad, which the guard never holds: if this is one, write it there, naming it by its full path or after a cd there.`
 
+// The files held only for a message's words (#1859), in the order `files` names them, each once.
+const wordedIn = (files: readonly string[], worded: readonly Worded[]): Worded[] =>
+  [...new Set(files)].flatMap(f => {
+    const w = worded.find(x => x.file === f)
+    return w ? [w] : []
+  })
+// Those words, quoted in brackets, or nothing where none could be named.
+const quoted = (words: readonly Worded[]): string => {
+  const said = words.filter(w => w.words).map(w => `"${w.words}"`)
+  return said.length ? ` (${said.join(', ')})` : ''
+}
+// Whether every file held is held for a message's words alone (#1859).
+const wordsAlone = (files: readonly string[], worded: readonly Worded[]): boolean => files.length > 0 && files.every(f => worded.some(w => w.file === f))
+// What a hold says each file changes (#1859, L11): how the screen looks, or, for a file held only
+// because a message's words changed, those words, never the look.
+const changesWhat = (files: readonly string[], worded: readonly Worded[]): string => {
+  const words = wordedIn(files, worded)
+  const look = files.filter(f => !words.some(w => w.file === f))
+  return [
+    ...(look.length ? [`${listed(look)} changes how the screen looks`] : []),
+    ...(words.length ? [`${listed(words.map(w => w.file))} changes the words of a message Dan reads${quoted(words)}`] : []),
+  ].join('; ')
+}
+
 /** What the main session reads when a look changing edit is refused: the files, and the two ways on (plan point 3). */
-export const refusal = (id: string, files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string => {
-  const f = listed(files)
+export const refusal = (id: string, files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = [], worded: readonly Worded[] = []): string => {
   const s = named(subjects)
   return (
-    `Blocked: ${f} changes how the screen looks, and ${s} has no design round Dan has settled, nor his word to skip one. Dan decides the look, so take one of these two ways on and no other. ` +
+    `Blocked: ${changesWhat(files, worded)}, and ${s} has no design round Dan has settled, nor his word to skip one. ${wordsAlone(files, worded) ? 'Dan decides first' : 'Dan decides the look'}, so take one of these two ways on and no other. ` +
     `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}", "contract": ${CONTRACT}}, look changing edits on ${s} go through. ` +
     `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when nothing on screen changes, lets this one edit through. ` +
     unreadSaid(unread) +
@@ -2402,18 +2659,20 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
 }
 
 /** What a check with no call id reads ($.tool.check): the call would be refused, and making it says how to go on. */
-export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string =>
-  `Blocked: ${listed(files)} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. ` +
+export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = [], worded: readonly Worded[] = []): string =>
+  `Blocked: ${changesWhat(files, worded)}, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. ` +
   unreadSaid(unread) +
   `Making the call itself is refused with the two ways on: /design-rounds, or asking Dan "${SKIP_QUESTION}". ${ROUND_FILES}`
 
 /** What a subagent reads: refused like the main session, never asking Dan itself (plan point 2). */
-export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string, unread: readonly string[] = []): string => {
-  const f = listed(files)
+export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string, unread: readonly string[] = [], worded: readonly Worded[] = []): string => {
+  const sentence = wordsAlone(files, worded)
+    ? 'one plain sentence saying which message Dan reads changes, and from what words to what'
+    : 'one plain sentence saying what on screen the change alters (which control or area, on which screen), or that nothing visible changes'
   return (
-    `Blocked: ${f} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. A subagent never asks Dan. ` +
+    `Blocked: ${changesWhat(files, worded)}, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. A subagent never asks Dan. ` +
     unreadSaid(unread) +
-    `Stop this change and report it to the main session as waiting on Dan, with this line word for word: "${SKIP_SOURCE}:${id}", and one plain sentence saying what on screen the change alters (which control or area, on which screen), or that nothing visible changes, which the main session's question to Dan leads with. ` +
+    `Stop this change and report it to the main session as waiting on Dan, with this line word for word: "${SKIP_SOURCE}:${id}", and ${sentence}, which the main session's question to Dan leads with. ` +
     `The main session starts /design-rounds or asks Dan "${SKIP_QUESTION}", and once he answers, the change can be made again. ` +
     `${ROUND_FILES} ` +
     leaveIt(files)
@@ -2425,33 +2684,36 @@ export const agentRefusal = (files: readonly string[], subjects: readonly Design
 // what changes on screen, and a result row already drawn is not drawn again, so the plain sentence
 // itself comes in the question that follows (#1138), and the card says that it will.
 const CARD_LEAD = 'Claude wants to make an edit that may change how something looks on screen'
+// For an edit held only for a message's words (#1859), the card says that instead, naming them.
+const cardLead = (files: readonly string[], worded: readonly Worded[]): string =>
+  wordsAlone(files, worded) ? `Claude wants to make an edit that changes the words of a message you read${quoted(wordedIn(files, worded))}` : CARD_LEAD
 
 /** The card Dan sees for a refused look changing edit, drawn by mod-kit as every guard's is. */
-export const card = (files: readonly string[], subjects: readonly DesignRoundSubject[]) => ({
-  reason: `${CARD_LEAD}, for ${named(subjects)}, which has no settled design round. The file is ${listed(files)}.`,
+export const card = (files: readonly string[], subjects: readonly DesignRoundSubject[], worded: readonly Worded[] = []) => ({
+  reason: `${cardLead(files, worded)}, for ${named(subjects)}, which has no settled design round. The file is ${listed(files)}.`,
   safeWay: `Claude tells you in plain words what would change, then starts /design-rounds or asks whether to skip them for this issue, or whether this edit changes the look at all.`,
 })
 
 /** The card when the issue or branch cannot be told. */
-export const unsureCard = (files: readonly string[]) => ({
-  reason: `${CARD_LEAD}, and the design round guard could not tell which issue or branch it belongs to. The file is ${listed(files)}.`,
+export const unsureCard = (files: readonly string[], worded: readonly Worded[] = []) => ({
+  reason: `${cardLead(files, worded)}, and the design round guard could not tell which issue or branch it belongs to. The file is ${listed(files)}.`,
   safeWay: 'Claude checks out the issue branch, or asks you.',
 })
 
 /** The card when the record of Dan's answers cannot be read. */
-export const unreadableCard = (files: readonly string[]) => ({
-  reason: `${CARD_LEAD}, and the design round guard could not read its record of your answers. The file is ${listed(files)}.`,
+export const unreadableCard = (files: readonly string[], worded: readonly Worded[] = []) => ({
+  reason: `${cardLead(files, worded)}, and the design round guard could not read its record of your answers. The file is ${listed(files)}.`,
   safeWay: 'Claude tries again, or tells you.',
 })
 
 /** Failing closed when the issue or branch cannot be told (#978: "saying so"). */
-export const unsure = (files: readonly string[], why: string): string =>
-  `Blocked: ${listed(files)} changes how the screen looks, and the design round guard could not tell which issue or branch it belongs to (${why}), so it cannot tell whether Dan settled its design or skipped design rounds for it. ` +
+export const unsure = (files: readonly string[], why: string, worded: readonly Worded[] = []): string =>
+  `Blocked: ${changesWhat(files, worded)}, and the design round guard could not tell which issue or branch it belongs to (${why}), so it cannot tell whether Dan settled its design or skipped design rounds for it. ` +
   `Check out the issue's branch (a detached head names none) and try again, or ask Dan. ${ROUND_FILES}`
 
 /** Failing closed when the record of Dan's answers cannot be read: never read as no answer, nor as one. */
-export const unreadable = (files: readonly string[], subjects: readonly DesignRoundSubject[], why: string): string =>
-  `Blocked: ${listed(files)} changes how the screen looks, and the design round guard's record of Dan's answers could not be read (${why}), so it cannot tell whether he settled a design round for ${named(subjects)}. Try again; if it keeps failing, tell Dan. ${ROUND_FILES}`
+export const unreadable = (files: readonly string[], subjects: readonly DesignRoundSubject[], why: string, worded: readonly Worded[] = []): string =>
+  `Blocked: ${changesWhat(files, worded)}, and the design round guard's record of Dan's answers could not be read (${why}), so it cannot tell whether he settled a design round for ${named(subjects)}. Try again; if it keeps failing, tell Dan. ${ROUND_FILES}`
 
 /** A write to the guard's own record: only Dan's answers may write it. */
 export const forged = (path: string): string =>
@@ -2462,10 +2724,11 @@ export const cannotCheck = (why: string): string => `Blocked: the design round g
 
 /**
  * What became of a shell write the guard judged once it ran (#1296): a change to a mod's .ts hook file
- * that made it draw, put back with what the command wrote kept first (`undone`, where it is kept), or
- * not put back, and why: no copy could be kept (`unkept`), the file changed again after the command
- * wrote it (`changed`, where the copy is), putting it back failed (`failed`), or the file could not be
- * read after the command (`unread`). Only `undone` ever says the change was undone.
+ * that made it draw, or since #1859 that changed only a message's words, put back with what the
+ * command wrote kept first (`undone`, where it is kept), or not put back, and why: no copy could be
+ * kept (`unkept`), the file changed again after the command wrote it (`changed`, where the copy is),
+ * putting it back failed (`failed`), or the file could not be read after the command (`unread`).
+ * Only `undone` ever says the change was undone.
  */
 export type ShellOutcome =
   | { file: string; undone: string }
@@ -2474,21 +2737,32 @@ export type ShellOutcome =
   | { file: string; failed: string; kept: string }
   | { file: string; unread: string }
 // `record`, for a settled design under docs/design a script run was handed (#1593): what the change
-// did is said as the page no longer being sealed, never as a mod's drawing (L11).
-export const shellOutcome = (o: ShellOutcome, record = false): string => {
-  const did = record ? `left ${o.file} no settled design exactly as make-settled.py wrote it` : `changed what the mod draws in ${o.file}`
+// did is said as the page no longer being sealed, never as a mod's drawing (L11). `words`, for a change
+// held only for a message's wording (#1859), the words heldWords names: said as those words changing,
+// never as what the mod draws. A file that could not be read after says it cannot tell which.
+export const shellOutcome = (o: ShellOutcome, record = false, words?: string): string => {
+  const quote = words ? ` ("${words}")` : ''
+  const did = record
+    ? `left ${o.file} no settled design exactly as make-settled.py wrote it`
+    : words !== undefined
+      ? `changed the words of a message Dan reads in ${o.file}${quote}`
+      : `changed what the mod draws in ${o.file}`
   const notUndone = `The command ran and ${did}, and that change was NOT undone:`
-  const why = record ? 'it left no settled design exactly as make-settled.py wrote it' : 'it changed what the mod draws on screen'
+  const why = record
+    ? 'it left no settled design exactly as make-settled.py wrote it'
+    : words !== undefined
+      ? `it changed the words of a message Dan reads${quote}`
+      : 'it changed what the mod draws on screen'
   if ('undone' in o) return `The command ran, and its change to ${o.file} was undone: ${why}. What the command wrote there is kept at ${o.undone}.`
   if ('unkept' in o) return `${notUndone} the design round guard could not keep a copy of what the command wrote (${o.unkept}), so it left the file as the command left it.`
   if ('changed' in o) return `${notUndone} the file changed again after the command wrote it, so putting the earlier text back would lose that later change. What the command wrote is kept at ${o.changed}.`
   if ('failed' in o) return `${notUndone} putting the earlier text back failed (${o.failed}). The file still holds what the command wrote, also kept at ${o.kept}.`
-  const unknown = record ? 'it is still a settled design exactly as make-settled.py wrote it' : 'it changed what the mod draws'
+  const unknown = record ? 'it is still a settled design exactly as make-settled.py wrote it' : 'it changed what the mod draws or the words of a message Dan reads'
   return `The command ran, and the design round guard could not read ${o.file} after it (${o.unread}), so whether ${unknown} is unknown; the file was left as the command left it.`
 }
 /** A check after a shell write that itself failed (#1296): the command ran, and nothing was undone. */
 export const shellUnchecked = (why: string): string =>
-  `The command ran, but the design round guard could not check afterwards whether it changed what a mod draws or a settled design under docs/design (${why}), so nothing was undone. Check the files the command wrote, and tell Dan.`
+  `The command ran, but the design round guard could not check afterwards whether it changed what a mod draws, the words of a message Dan reads, or a settled design under docs/design (${why}), so nothing was undone. Check the files the command wrote, and tell Dan.`
 
 /** What a refusal says of a settled design under docs/design a script run took away (#1593). */
 export const RECORD_REMOVED = 'the command took it away'
