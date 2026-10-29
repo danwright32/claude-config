@@ -36,6 +36,12 @@
 #                             naming who (#1312)
 #   HOOK_TESTS_FLAKE_RECHECK_MAX   seconds a recheck may take before it is called hung (default 60)
 #   HOOK_TESTS_FLAKE_RECHECK_POLL  how long each wait for it lasts (default 1)
+#   HOOK_TESTS_DEADLINE       the epoch second by which this run must have printed its report, which
+#                             no recheck may run past (#1901). Unset under GitHub Actions, it is the
+#                             running job's timeout-minutes, read from its workflow file, counted
+#                             from HOOK_TESTS_JOB_STARTED, and exported so a nested run keeps it
+#   HOOK_TESTS_DEADLINE_RESERVE    seconds before that deadline every recheck must end (default 120)
+#   HOOK_TESTS_JOB_STARTED    the epoch second the CI job started, recorded by the workflow's first step
 #   HOOK_TESTS_JOBS           how many suites run at once
 #   HOOK_TESTS_BUDGET         processes this whole run may have in flight (default: cores, max 8)
 #   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
@@ -88,6 +94,11 @@ if [ -f "$SELF_DIR/lib/kept-output.sh" ]; then
   . "$SELF_DIR/lib/kept-output.sh"
 else
   kept_output_save(){ cat > /dev/null; KEPT_OUTPUT_PATH=""; KEPT_OUTPUT_WHY="$SELF_DIR/lib/kept-output.sh is missing"; return 1; }
+fi
+# The one reader of a workflow job's timeout-minutes, which tests/test-claude-sync.sh uses too
+# (claude-config#1901). Missing, the CI job's limit is said to be unreadable rather than guessed.
+if [ -f "$SELF_DIR/lib/workflow-job-timeout.sh" ]; then
+  . "$SELF_DIR/lib/workflow-job-timeout.sh"
 fi
 
 # This script's own directory holds `test-*.sh` files, and one of them tests this
@@ -157,6 +168,28 @@ FLAKE_RECHECK_MAX="${HOOK_TESTS_FLAKE_RECHECK_MAX:-60}"
 # (L524). Both numbers are read in the same unit, so setting this alone shortens the wait without
 # changing what the deadline MEANS.
 FLAKE_RECHECK_POLL="${HOOK_TESTS_FLAKE_RECHECK_POLL:-1}"
+# The moment this run must have printed its report by (claude-config#1901). The recheck's allowance
+# above is three times what the suite took, and a suite stopped at its own 1200s wall clock was
+# given about 3600s more, far past the forty minute CI job. On 2026-10-29 both cancelled runs of
+# #1889 (40810536330, 40820063314) ended inside that recheck, so the log stopped with no FAIL line
+# and the hanging suite was never named. So no recheck runs past this, less a reserve for printing
+# the rest of the report. Empty means no deadline; under GitHub Actions one is derived below, in the
+# run itself, from the job's own limit. Refused rather than guessed at when it is not a number (L50).
+RUN_DEADLINE="${HOOK_TESTS_DEADLINE:-}"
+DEADLINE_WHAT="the deadline in HOOK_TESTS_DEADLINE"
+case "$RUN_DEADLINE" in
+  ''|*[!0-9]*)
+    if [ -n "$RUN_DEADLINE" ]; then
+      echo "run-all-tests: HOOK_TESTS_DEADLINE='$RUN_DEADLINE' is not an epoch second. Refusing rather than guessing, because it decides whether a failed suite is run again at all." >&2
+      exit 1
+    fi ;;
+esac
+DEADLINE_RESERVE="${HOOK_TESTS_DEADLINE_RESERVE:-120}"
+case "$DEADLINE_RESERVE" in
+  ''|*[!0-9]*)
+    echo "run-all-tests: HOOK_TESTS_DEADLINE_RESERVE='$DEADLINE_RESERVE' is not a whole number of seconds. Refusing rather than guessing how close to the deadline a recheck may run." >&2
+    exit 1 ;;
+esac
 
 # How many suites run at once (claude-config#125). Since #120 this reads every directory in the
 # repo, which was 37 suites and about five minutes run one after another when #125 was written,
@@ -709,6 +742,52 @@ if [ "$ran" -gt 0 ]; then
     _how="slots of ${_shares#, }"
   fi
   echo "run-all-tests: up to $at_once suite(s) at once, $_how, so at most $_in_flight process(es) at once, against a budget of $BUDGET"
+  # Under GitHub Actions the deadline is the job's OWN limit (claude-config#1901), read from the
+  # workflow file and job the platform says this is, never a number copied here, which would go
+  # stale the day the workflow's timeout moved (L210). Counted from the start the job's first step
+  # recorded, because counted from this run's start the steps before it would be missing, and that
+  # is the direction that lets the job be cancelled first. Exported, so a run started from inside
+  # this one keeps the same deadline rather than deriving its own. Said out loud either way: a cap
+  # nobody can see is indistinguishable from none, and none is what this exists to end (L98).
+  if [ -z "$RUN_DEADLINE" ] && [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    _dl_ref="${GITHUB_WORKFLOW_REF:-}"
+    _dl_rel="${_dl_ref#*/*/}"; _dl_rel="${_dl_rel%%@*}"
+    _dl_job="${GITHUB_JOB:-}"
+    _dl_file="${GITHUB_WORKSPACE:-}/$_dl_rel"
+    _dl_min=""; _dl_why=""
+    if [ -z "$_dl_ref" ] || [ "$_dl_rel" = "$_dl_ref" ] || [ -z "$_dl_rel" ]; then
+      _dl_why="GITHUB_WORKFLOW_REF ('$_dl_ref') names no workflow file"
+    elif [ -z "${GITHUB_WORKSPACE:-}" ]; then
+      _dl_why="GITHUB_WORKSPACE is not set, so $_dl_rel cannot be found"
+    elif [ -z "$_dl_job" ]; then
+      _dl_why="GITHUB_JOB is not set, so which job's limit applies is unknown"
+    elif [ ! -f "$_dl_file" ]; then
+      _dl_why="$_dl_file does not exist"
+    elif ! type workflow_job_timeout_minutes > /dev/null 2>&1; then
+      _dl_why="$SELF_DIR/lib/workflow-job-timeout.sh is missing"
+    else
+      _dl_min="$(workflow_job_timeout_minutes "$_dl_file" "$_dl_job")"
+      case "$_dl_min" in
+        ''|*[!0-9]*|0) _dl_min=""; _dl_why="job '$_dl_job' in $_dl_rel carries no timeout-minutes this runner can read" ;;
+      esac
+    fi
+    if [ -n "$_dl_min" ]; then
+      _dl_now="$(date +%s)"
+      _dl_started="${HOOK_TESTS_JOB_STARTED:-}"
+      _dl_from="the job's start, as its first step recorded it"
+      case "$_dl_started" in
+        ''|*[!0-9]*)
+          _dl_started="$_dl_now"
+          _dl_from="this run's own start, because the workflow recorded no HOOK_TESTS_JOB_STARTED, so the steps before this one are not counted" ;;
+      esac
+      RUN_DEADLINE=$(( _dl_started + _dl_min * 60 ))
+      DEADLINE_WHAT="the CI job's ${_dl_min} minute limit"
+      export HOOK_TESTS_DEADLINE="$RUN_DEADLINE"
+      echo "run-all-tests: the CI job is cancelled $(( RUN_DEADLINE - _dl_now ))s from now, at the ${_dl_min} minute timeout-minutes of job '$_dl_job' in $_dl_rel, counted from $_dl_from. Every flake recheck ends ${DEADLINE_RESERVE}s before that, so this report is printed first."
+    else
+      echo "run-all-tests: the CI job's time limit could not be read: $_dl_why. So a flake recheck is NOT held to end before the job is cancelled, and a suite that hangs again on its recheck can lose its FAIL line with the job (claude-config#1901)."
+    fi
+  fi
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.runner.XXXXXXXX")"
   case "${WORK%/}" in
     ''|/|"${HOME%/}") echo "run-all-tests: refusing to run: throwaway directory came back as '$WORK'." >&2; exit 1 ;;
@@ -1039,6 +1118,15 @@ LIVECOPY
         *) if [ "$_waited" -ge "$_spent" ]; then _spent=0; else _spent=$(( _spent - _waited )); fi ;;
       esac
       printf '%s' "$_spent" > "$WORK/$idx.sec"
+      # A suite STOPPED AT ITS OWN WALL CLOCK is named now, not only in the report (claude-config#1901).
+      # The report waits for every suite to finish and may then run this one again, and on
+      # 2026-10-29 the CI job was cancelled in between both times, so the one suite that hung was
+      # never named at all. Read from lib/suite-deadline.sh's own line, anchored on this suite's
+      # name, so a suite whose output merely quotes the wording is not named for it.
+      _stopped="$(grep -E "^(FAIL|STOPPED, UNMEASURED): $(basename "$suite" | sed 's/[.[\*^$]/\\&/g') ran past its own wall clock of [0-9]+s and was stopped" "$WORK/$idx.out" 2>/dev/null | sed -n '1s/.*ran past its own wall clock of \([0-9][0-9]*\)s.*/\1/p')"
+      if [ -n "$_stopped" ]; then
+        printf 'run-all-tests: STOPPED %s ran past its own wall clock of %ss and was stopped, %ss after it started. Named now, while other suites may still be running; its verdict is printed with the rest.\n' "$(basename "$suite")" "$_stopped" "$SECONDS"
+      fi
       # The load the moment it finished, read for every suite because a failure is only known once
       # its output is judged below, by which time the moment has passed (claude-config#1083).
       load_average_one_minute > "$WORK/$idx.load" 2>/dev/null
@@ -1433,7 +1521,23 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       # a suite that hangs on the second run costs a bounded wait rather than the whole run (L110).
       _flake=""
       _fl_kept=""
-      if [ "$FLAKE_RECHECK" = "1" ]; then
+      # Held to the run's deadline as well (claude-config#1901): the time left before it, less the
+      # reserve for printing the rest of the report, in real seconds on the clock, because the
+      # allowance below counts polls and a loaded machine stretches every poll. None left, it is
+      # not started at all, and the FAIL line says so rather than reading as a plain failure (L11).
+      _fl_stop_at=""
+      _fl_skip=""
+      if [ "$FLAKE_RECHECK" = "1" ] && [ -n "$RUN_DEADLINE" ]; then
+        _fl_left=$(( RUN_DEADLINE - DEADLINE_RESERVE - $(date +%s) ))
+        if [ "$_fl_left" -le 0 ]; then
+          _fl_skip=" (not rechecked: $DEADLINE_WHAT leaves no time to run it again)"
+        else
+          _fl_stop_at=$(( SECONDS + _fl_left ))
+        fi
+      fi
+      if [ -n "$_fl_skip" ]; then
+        _flake="$_fl_skip"
+      elif [ "$FLAKE_RECHECK" = "1" ]; then
         _fl_max="$FLAKE_RECHECK_MAX"
         case "$secs" in
           ''|*[!0-9]*) ;;
@@ -1449,18 +1553,26 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         # recheck queued behind another run would be called hung for waiting (#1297, L11).
         ( HOOK_TESTS_FLAKE_RECHECK=0 SUITE_LOCK_WAIT=0 bash "$suite" > "$WORK/$((idx - 1)).recheck" 2>&1; _fl_rc=$?; exit "$_fl_rc" ) < /dev/null &
         _fl_pid=$!
+        _fl_began="$SECONDS"
         _fl_waited=0
-        while kill -0 "$_fl_pid" 2>/dev/null && [ "$_fl_waited" -lt "$_fl_max" ]; do
+        while kill -0 "$_fl_pid" 2>/dev/null && [ "$_fl_waited" -lt "$_fl_max" ] \
+              && { [ -z "$_fl_stop_at" ] || [ "$SECONDS" -lt "$_fl_stop_at" ]; }; do
           sleep "$FLAKE_RECHECK_POLL"
           _fl_waited=$(( _fl_waited + 1 ))
         done
         if kill -0 "$_fl_pid" 2>/dev/null; then
           # It outlasted its deadline, so it is not a flake and it is not a clean failure either.
           # Said out loud rather than folded into the FAIL line, because a suite that hangs on the
-          # second run is a different problem from one that fails on it (L11).
+          # second run is a different problem from one that fails on it (L11). And which deadline,
+          # because a recheck cut short to print the report before the run's own deadline did
+          # not run out its allowance and is not known to hang (#1901).
           runner_kill_tree "$_fl_pid" 2>/dev/null || true
           kill -9 "$_fl_pid" 2>/dev/null || true
-          _flake=" (recheck timed out after ${_fl_max}s)"
+          if [ -n "$_fl_stop_at" ] && [ "$SECONDS" -ge "$_fl_stop_at" ]; then
+            _flake=" (recheck stopped after $(( SECONDS - _fl_began ))s, so this report is printed before $DEADLINE_WHAT)"
+          else
+            _flake=" (recheck timed out after ${_fl_max}s)"
+          fi
         else
           wait "$_fl_pid"; _fl_rc=$?
           _fl_out="$(cat "$WORK/$((idx - 1)).recheck" 2>/dev/null)"

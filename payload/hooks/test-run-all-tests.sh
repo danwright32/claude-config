@@ -2683,6 +2683,169 @@ case "$out_fl2" in
 esac
 
 # ---------------------------------------------------------------------------
+# A SUITE THAT HANGS IN CI IS NAMED BEFORE THE JOB'S TIME LIMIT CANCELS IT (claude-config#1901).
+#
+# A suite stopped at its own wall clock (1200s) was named only in the report, which waits for every
+# suite to finish and then runs the failed one again with a deadline of three times what it took,
+# about 3600s. The CI job is cancelled at its timeout-minutes, so on 2026-10-29 both cancelled runs
+# of #1889 (40810536330, 40820063314) ended inside that recheck with no FAIL line at all, and the
+# hanging suite was found by reading the report's alphabetical order.
+#
+# Two halves. The suite is named the moment it is stopped, while the others are still running. And
+# a recheck is held to end before the run's deadline, which under GitHub Actions the runner reads
+# from the workflow file and job it is running in, never from a number copied here. Every wait
+# below is on a condition or a deadline the case sets, never real minutes (L290, L524).
+# ---------------------------------------------------------------------------
+NM="$TMPROOT/dir-named-at-stop"; mkdir -p "$NM"
+NM_LOG="$TMPROOT/named-at-stop.log"
+NM_LOW="$TMPROOT/loadavg-named-low"; printf '#!/bin/sh\necho 2.5\n' > "$NM_LOW"; chmod +x "$NM_LOW"
+# A real suite armed with the real helper and put past its deadline through the helper's clock
+# seam, so the line the runner recognises is the helper's own wording, not a copy of it (L3).
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '. "%s"\n' "$DIR/lib/suite-deadline.sh"
+  printf 'suite_deadline_arm 60 || exit $?\n'
+  printf 'out="$(sleep 30)"\n'
+  printf 'printf %s\\\\n "%s passed=1 failed=0"\n' "'%s'" "$MARK"
+} > "$NM/test-stopped.sh"
+# Running beside it, and it passes only if the runner named the stopped suite while it was still
+# running: it watches the runner's own log for the line, for at most about thirty seconds.
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'i=0\n'
+  printf 'while [ "$i" -lt 600 ]; do\n'
+  printf '  if grep -E "^run-all-tests: .*test-stopped\\.sh ran past its own wall clock of 60s" "%s" > /dev/null 2>&1; then\n' "$NM_LOG"
+  printf '    printf %s\\\\n "%s passed=1 failed=0"; exit 0\n' "'%s'" "$MARK"
+  printf '  fi\n'
+  printf '  sleep 0.05; i=$((i + 1))\n'
+  printf 'done\n'
+  printf 'echo "FAIL: the stopped suite was not named while this one was still running"\n'
+  printf 'printf %s\\\\n "%s passed=0 failed=1"\n' "'%s'" "$MARK"
+  printf 'exit 1\n'
+} > "$NM/test-watcher.sh"
+chmod +x "$NM/test-stopped.sh" "$NM/test-watcher.sh"
+env -u CI -u HOOK_TESTS_DEADLINE -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_JOBS=2 HOOK_TESTS_FLAKE_RECHECK=0 \
+  LOAD_AVERAGE_CMD="$NM_LOW" LOAD_AVERAGE_CORES=12 SUITE_WALL_STARTED=$(( $(date +%s) - 1000 )) SUITE_WALL_POLL=0.05 \
+  bash "$RUNNER" "$NM" > "$NM_LOG" 2>&1; code_nm=$?
+out_nm="$(cat "$NM_LOG" 2>/dev/null)"
+printf '%s\n' "$out_nm" | grep -E '^ +ok +test-watcher\.sh' > /dev/null \
+  && check "#1901 a suite stopped at its wall clock is named while the others are still running" ok \
+  || check "#1901 a suite stopped at its wall clock is named while the others are still running" "exit=$code_nm out=$out_nm"
+nm_named="$(printf '%s\n' "$out_nm" | grep -n -E '^run-all-tests: .*test-stopped\.sh ran past its own wall clock' | sed -n '1s/:.*//p')"
+nm_fail="$(printf '%s\n' "$out_nm" | grep -n -E '^ +FAIL +test-stopped\.sh' | sed -n '1s/:.*//p')"
+{ [ -n "$nm_named" ] && [ -n "$nm_fail" ] && [ "$nm_named" -lt "$nm_fail" ]; } \
+  && check "#1901 and that line comes before the report, which still fails the suite" ok \
+  || check "#1901 and that line comes before the report, which still fails the suite" "named at line '${nm_named}', FAIL at line '${nm_fail}': $out_nm"
+printf '%s\n' "$out_nm" | grep -E '^run-all-tests: .*test-watcher\.sh ran past' > /dev/null \
+  && check "#1901 and a suite that was not stopped is not named so" "out=$out_nm" \
+  || check "#1901 and a suite that was not stopped is not named so" ok
+
+# A recheck the deadline leaves no room for is not started at all, and the FAIL line says why.
+mk_counted_failing_suite() { # mk_counted_failing_suite <dir> <name>: fails every time, counting its runs
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo ran >> "%s"\n' "$1/$2.runs"
+    printf 'echo "FAIL: it failed"\n'
+    printf 'printf %s\\\\n "%s passed=0 failed=1"\n' "'%s'" "$MARK"
+    printf 'exit 1\n'
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+DLP="$TMPROOT/dir-deadline-past"
+mk_counted_failing_suite "$DLP" late
+out_dlp="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 \
+  HOOK_TESTS_DEADLINE=$(( $(date +%s) - 5 )) bash "$RUNNER" "$DLP" 2>&1)"; code_dlp=$?
+[ "$(grep -c . "$DLP/late.runs" 2>/dev/null)" = 1 ] \
+  && check "#1901 a failed suite is not rechecked once the run's deadline leaves no time for it" ok \
+  || check "#1901 a failed suite is not rechecked once the run's deadline leaves no time for it" "runs=$(grep -c . "$DLP/late.runs" 2>/dev/null) out=$out_dlp"
+{ [ "$code_dlp" -ne 0 ] && printf '%s\n' "$out_dlp" | grep -E '^ +FAIL +test-late\.sh.*not rechecked.*HOOK_TESTS_DEADLINE' > /dev/null; } \
+  && check "#1901 and its FAIL line says it was not rechecked, naming the deadline" ok \
+  || check "#1901 and its FAIL line says it was not rechecked, naming the deadline" "exit=$code_dlp out=$out_dlp"
+case "$(printf '%s\n' "$out_dlp" | grep -E '^ +FAIL +test-late\.sh')" in
+  *FLAKY*|*"recheck timed out"*) check "#1901 and it is neither a flake nor a recheck that hung" "out=$out_dlp" ;;
+  *) check "#1901 and it is neither a flake nor a recheck that hung" ok ;;
+esac
+# A non-numeric deadline is refused rather than guessed at (L50).
+out_dlb="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_DEADLINE=soon bash "$RUNNER" "$DLP" 2>&1)"; code_dlb=$?
+{ [ "$code_dlb" -ne 0 ] && printf '%s\n' "$out_dlb" | grep -F "HOOK_TESTS_DEADLINE='soon'" > /dev/null; } \
+  && check "#1901 a deadline that is not an epoch second is refused" ok \
+  || check "#1901 a deadline that is not an epoch second is refused" "exit=$code_dlb out=$out_dlb"
+
+# A recheck that HANGS is stopped at the deadline, well before its own measured allowance, and says
+# which of the two stopped it (L11). The allowance here is 200 polls of 0.05s, ten seconds; the
+# deadline is two seconds away with no reserve, so a run that waited the allowance out was not held
+# to the deadline.
+DLH="$TMPROOT/dir-deadline-hang"; mkdir -p "$DLH"
+DLH_MARKER="$TMPROOT/deadline-hang-marker"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'if [ -e "%s" ]; then\n' "$DLH_MARKER"
+  hang_while_owner "$$"
+  printf 'fi\n'
+  printf 'touch "%s"\n' "$DLH_MARKER"
+  printf 'echo "FAIL: it failed, and it will hang if run again"\n'
+  printf 'printf %s\\\\n "%s passed=0 failed=1"\n' "'%s'" "$MARK"
+  printf 'exit 1\n'
+} > "$DLH/test-hangsagain.sh"
+chmod +x "$DLH/test-hangsagain.sh"
+rm -f "$DLH_MARKER"
+out_dlh="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 HOOK_TESTS_FLAKE_RECHECK_MAX=200 \
+  HOOK_TESTS_FLAKE_RECHECK_POLL=0.05 HOOK_TESTS_DEADLINE_RESERVE=0 HOOK_TESTS_DEADLINE=$(( $(date +%s) + 2 )) \
+  bash "$RUNNER" "$DLH" 2>&1)"; code_dlh=$?
+{ [ "$code_dlh" -ne 0 ] && printf '%s\n' "$out_dlh" | grep -E '^ +FAIL +test-hangsagain\.sh.*recheck stopped after [0-9]+s.*HOOK_TESTS_DEADLINE' > /dev/null; } \
+  && check "#1901 a recheck that hangs is stopped at the run's deadline, and says so" ok \
+  || check "#1901 a recheck that hangs is stopped at the run's deadline, and says so" "exit=$code_dlh out=$out_dlh"
+case "$(printf '%s\n' "$out_dlh" | grep -E '^ +FAIL +test-hangsagain\.sh')" in
+  *"recheck timed out"*|*FLAKY*) check "#1901 and not as a recheck that ran out its own allowance" "out=$out_dlh" ;;
+  *) check "#1901 and not as a recheck that ran out its own allowance" ok ;;
+esac
+rm -f "$DLH_MARKER"
+
+# Under GitHub Actions the deadline is READ from the workflow file and job the run is in, counted
+# from the start the job's first step recorded. Two jobs with different limits, so a number copied
+# into the runner would answer the same for both and fail one of these (L1).
+WS="$TMPROOT/ci-workspace"; mkdir -p "$WS/.github/workflows"
+printf 'name: fixture\non: [push]\njobs:\n  quick:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 90\n    steps:\n      - run: true\n  suite:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 40\n    steps:\n      - run: true\n' \
+  > "$WS/.github/workflows/fixture.yml"
+GHA="$TMPROOT/dir-gha"
+gha_run(){ # gha_run <job> <seconds since the job started, or empty for none recorded>
+  rm -f "$GHA/gha.runs"
+  env -u CI -u HOOK_TESTS_DEADLINE -u HOOK_TESTS_DEADLINE_RESERVE -u HOOK_TESTS_JOB_STARTED \
+    ${2:+HOOK_TESTS_JOB_STARTED=$(( $(date +%s) - $2 ))} \
+    GITHUB_ACTIONS=true GITHUB_WORKSPACE="$WS" GITHUB_JOB="$1" \
+    GITHUB_WORKFLOW_REF="owner/repo/.github/workflows/fixture.yml@refs/heads/branch" \
+    HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 bash "$RUNNER" "$GHA" 2>&1
+}
+mk_counted_failing_suite "$GHA" gha
+# Thirty nine and a half minutes into a forty minute job: inside the reserve, so not rechecked.
+out_gha="$(gha_run suite 2370)"
+{ [ "$(grep -c . "$GHA/gha.runs" 2>/dev/null)" = 1 ] \
+    && printf '%s\n' "$out_gha" | grep -E '^ +FAIL +test-gha\.sh.*not rechecked.*40 minute' > /dev/null; } \
+  && check "#1901 under GitHub Actions the job's own timeout-minutes decides there is no time to recheck" ok \
+  || check "#1901 under GitHub Actions the job's own timeout-minutes decides there is no time to recheck" "runs=$(grep -c . "$GHA/gha.runs" 2>/dev/null) out=$out_gha"
+printf '%s\n' "$out_gha" | grep -E "^run-all-tests: .*40 minute.*job 'suite'.*\.github/workflows/fixture\.yml" > /dev/null \
+  && check "#1901 and the run says the limit it read, which job and which file" ok \
+  || check "#1901 and the run says the limit it read, which job and which file" "out=$out_gha"
+# The same moment in the job whose limit is ninety minutes leaves fifty, so it is rechecked.
+out_ghq="$(gha_run quick 2370)"
+[ "$(grep -c . "$GHA/gha.runs" 2>/dev/null)" = 2 ] \
+  && check "#1901 and a job with a longer limit at the same moment is rechecked" ok \
+  || check "#1901 and a job with a longer limit at the same moment is rechecked" "runs=$(grep -c . "$GHA/gha.runs" 2>/dev/null) out=$out_ghq"
+# A job with no timeout to read is said out loud, and the recheck is not cut short on a guess.
+out_ghn="$(gha_run nosuchjob 2370)"
+{ [ "$(grep -c . "$GHA/gha.runs" 2>/dev/null)" = 2 ] \
+    && printf '%s\n' "$out_ghn" | grep -E "^run-all-tests: the CI job's time limit could not be read.*nosuchjob" > /dev/null; } \
+  && check "#1901 a job whose limit cannot be read says so and is still rechecked" ok \
+  || check "#1901 a job whose limit cannot be read says so and is still rechecked" "runs=$(grep -c . "$GHA/gha.runs" 2>/dev/null) out=$out_ghn"
+# With no start recorded, the limit is counted from the run's own start, and the run says so.
+out_ghs="$(gha_run suite '')"
+{ [ "$(grep -c . "$GHA/gha.runs" 2>/dev/null)" = 2 ] \
+    && printf '%s\n' "$out_ghs" | grep -E "^run-all-tests: .*40 minute.*this run's own start" > /dev/null; } \
+  && check "#1901 with no job start recorded the limit is counted from the run's own start, said out loud" ok \
+  || check "#1901 with no job start recorded the limit is counted from the run's own start, said out loud" "runs=$(grep -c . "$GHA/gha.runs" 2>/dev/null) out=$out_ghs"
+
+# ---------------------------------------------------------------------------
 # A LINE A PASSING SUITE WANTS THE READER TO SEE (claude-config#505).
 #
 # This runner prints its own one line summary per suite plus, for a failure, the FAIL lines and
