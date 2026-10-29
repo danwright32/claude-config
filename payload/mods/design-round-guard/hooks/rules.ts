@@ -1236,6 +1236,12 @@ const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card)|ui\s*\.\s*op
 // message.
 const MESSAGE_CALL = /\$\s*\.\s*(?:ui\s*\.\s*(?:toast|notify|notice|status|ask|log)|modkit\s*\.\s*blocked)\s*\(|\.\s*waitingOnYou\s*\(/g
 const MESSAGE_KEY = /([{,]\s*)(reason|block|deny|result|systemMessage|text)(\s*:|(?=\s*[,}]))/g
+// #1864: a one word name, shaped as code names a thing (`'focus'`, `'gh'`, `'manual-steps:copy'`),
+// which its place may show to be a tag; one with a capital, a space or a stop is always words.
+const TAG_WORD = /^[a-z][a-z0-9_:-]*$/
+// The keys whose value a person reads wherever the record goes (a picker option's label, a card's
+// title), so a one word value there is never read as a tag; a message's own keys are MESSAGE_KEY.
+const WORD_KEY = /^(?:label|title|subtitle|description|question|header|heading|body|message|hint|placeholder|summary|detail|caption|prompt|reason|block|deny|result|systemMessage|text)$/
 // #1841: a call whose strings are no words a person reads, though a message may be computed from what
 // it gives back: a search, a split or a key (only what replace looks for), a process run (a notifier
 // excepted, as a message of its own), and the disk and environment.
@@ -1261,7 +1267,7 @@ type ModRead = {
   // #1823: where a message a person reads is handed its words (MESSAGE_CALL, MESSAGE_KEY), and the
   // text of each string, template text and JSX text inside a span.
   messages: Span[]
-  stringsIn: (s: Span, words?: boolean) => string[]
+  stringsIn: (s: Span) => string[]
   code: (s: Span) => string
   refs: (s: Span) => string[]
   isTop: (name: string) => boolean
@@ -1918,7 +1924,10 @@ const readMod = (f: ModFile): ModRead | null => {
   // split, searched or keyed by, and a separator holding no letter at all (one with words, as
   // `join(' and ')`, is read).
   const notHeard = new Set<number>()
+  // Each call's arguments a string in is no word read (#1864 reads a parameter's uses against them).
+  const notText: Span[] = []
   const within = (from: number, to: number) => {
+    notText.push([from, to])
     for (const [x, y] of spans.strings) if (from <= x && y <= to) notHeard.add(x)
   }
   for (const m of blank.matchAll(NOT_TEXT_CALL)) {
@@ -1946,25 +1955,123 @@ const readMod = (f: ModFile): ModRead | null => {
   const quoted = ([x]: Span) => text[x - 1] === "'" || text[x - 1] === '"'
   const compared = ([x, y]: Span) =>
     /(?:[=!]==?|\bcase)\s*$/.test(blank.slice(Math.max(0, x - 1 - 12), x - 1)) || /^\s*(?:[=!]==?|in\b)/.test(blank.slice(y + 1, y + 1 + 12))
+  // What a string literal holds read as a word: one with a letter, and no flag (`--json`).
+  const lettered = (s: string) => /\p{L}/u.test(s.replace(/\\(?:u\{[^}]*\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)/g, ''))
+  const isFlag = (s: string) => /^[-+]{1,2}[A-Za-z][\w-]*=?$/.test(s)
+  // #1864: a one word name (TAG_WORD) is a tag rather than a word said where its own place says so,
+  // never from how the same word is used elsewhere in the file, which flipped a value both shown and
+  // compared between held and not held (#1852). Each place, the string being the value or one of
+  // its alternatives (`c ? 'note' : 'prompt'`, `agent ?? 'x'`):
+  // - a field of a record: an object or array literal also holding something besides words (a
+  //   variable, a call, a nested literal, a flag, a string with no letter), so `{ kind: 'focus' }`,
+  //   `told: running ? 'note' : 'prompt'` beside an id and a text, an argv's `'gh'` beside the repo,
+  //   and printf's escape keys each beside what they stand for; never a table of words (`{ add:
+  //   'added', drop: 'dropped' }`), one read by an index or joined into a sentence, one a person reads
+  //   by its key (WORD_KEY), or anything inside a message;
+  // - an argument handed to one of the file's functions whose parameter is only run as a command's
+  //   word, searched with or compared (job watcher's `stdinDeviceRefusal($, agent ?? 'x', command)`);
+  // - an answer of a function whose own signature names it (`Promise<... | 'home' | 'away'>`).
+  const valueOf = (e: Span, keyed: boolean): Span | undefined => {
+    if (!keyed) return e
+    const k = /^\s*(?:[A-Za-z_$][\w$]*|'[^']*'|"[^"]*")\s*:/.exec(blank.slice(e[0], e[1]))
+    return k ? [e[0] + k[0].length, e[1]] : undefined
+  }
+  const elements = (o: number): Span[] => {
+    const c = close.get(o) as number
+    const out: Span[] = []
+    let from = o + 1
+    for (let j = o + 1; j < c; j++) {
+      if (mask[j]) continue
+      const ch = blank[j]
+      if (ch === '(' || ch === '[' || ch === '{') j = close.get(j) ?? c
+      else if (ch === ',') {
+        out.push([from, j])
+        from = j + 1
+      }
+    }
+    if (/\S/.test(blank.slice(from, c))) out.push([from, c])
+    return out
+  }
+  const isAlternative = (v: Span[], [x, y]: Span) =>
+    v.some(([p, q]) => skipBack(q - 1) === y && (skipOn(p) === x - 1 || /(?:\?\?|\|\|)\s*$/.test(blank.slice(p, x - 1))))
+  const alternativesOf = ([a, b]: Span): Span[] => (skipOn(a) < b ? branches([skipOn(a), skipBack(b - 1) + 1]) : [])
+  const literalWord = ([a, b]: Span): boolean => {
+    const s = skipOn(a)
+    const e = skipBack(b - 1)
+    const q = blank[s]
+    if (s >= e || (q !== "'" && q !== '"') || blank[e] !== q || spans.strings.every(([x, y]) => x !== s + 1 || y !== e)) return false
+    const w = text.slice(s + 1, e)
+    return lettered(w) && !isFlag(w)
+  }
+  const tagAt = ([x, y]: Span): boolean => {
+    if (!TAG_WORD.test(text.slice(x, y)) || messages.some(([a, b]) => a <= x && y <= b)) return false
+    let o: number | undefined
+    for (const [p, q] of pairs) {
+      if (p >= x) break
+      if (q > y) o = p
+    }
+    if (o === undefined) return false
+    const c = close.get(o) as number
+    const els = elements(o)
+    const at = els.findIndex(([a, b]) => a <= x && y < b)
+    const el = els[at]
+    if (!el) return false
+    if (blank[o] === '{' || blank[o] === '[') {
+      const keyed = blank[o] === '{'
+      const v = valueOf(el, keyed)
+      if (!v || !isAlternative(alternativesOf(v), [x, y])) return false
+      if (keyed && WORD_KEY.test(text.slice(skipOn(el[0]), v[0]).replace(/['":\s]/g, ''))) return false
+      if (/^\s*(?:\?\.\s*)?(?:\[|\.\s*join\s*\()/.test(blank.slice(c + 1, c + 40))) return false
+      // A list of one word is that word said (lessons review at 324ee11); a record of one field
+      // (`{ kind: 'focus' }`) is still a record, its field named by its key.
+      if (!keyed && els.length < 2) return false
+      const values = els.map(e => valueOf(e, keyed))
+      return !(values.length >= 2 && values.every(e => e !== undefined && !blank.slice(e[0], e[1]).includes('...') && literalWord(e)))
+    }
+    if (blank[o] === '(' && isAlternative(alternativesOf(el), [x, y])) {
+      // An argument to one of the file's own functions, called by its name.
+      const end = skipBack(o - 1)
+      const callee = /[A-Za-z_$][\w$]*$/.exec(blank.slice(Math.max(0, end - 80), end + 1))?.[0]
+      if (!callee || blank[skipBack(end - callee.length)] === '.') return false
+      const g = fns.find(f => f.name === callee)
+      const param = g?.params[at]
+      if (!g || !param || param.length !== 1) return false
+      const p = param[0] as string
+      for (const m of blank.slice(g.body, g.to).matchAll(new RegExp(`(?<![\\w$.])${p.replace(/\$/g, '\\$')}(?![\\w$])`, 'g'))) {
+        const i = g.body + (m.index as number)
+        const tested = /^\s*(?:[=!]==?)/.test(blank.slice(i + p.length, i + p.length + 12)) || /(?:[=!]==?)\s*$/.test(blank.slice(Math.max(0, i - 12), i))
+        if (!tested && !notText.some(([a, b]) => a < i && i < b)) return false
+      }
+      return true
+    }
+    return false
+  }
+  // An answer of a function whose own signature names it.
+  const answerTag = ([x, y]: Span): boolean => {
+    if (!TAG_WORD.test(text.slice(x, y)) || messages.some(([a, b]) => a <= x && y <= b)) return false
+    const k = fnAt(x)
+    const g = fns[k]
+    if (!g || !isAlternative(returns(k), [x, y])) return false
+    const q = text[x - 1] as string
+    return text.slice(g.from, g.body).includes(`${q}${text.slice(x, y)}${q}`)
+  }
   const heard = ([x, y]: Span): boolean => {
     if (notHeard.has(x)) return false
     const s = text.slice(x, y)
     if (text[x - 1] === '/') return false
-    if (!/\p{L}/u.test(s.replace(/\\(?:u\{[^}]*\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)/g, ''))) return false
-    if (/^[-+]{1,2}[A-Za-z][\w-]*=?$/.test(s)) return false
+    if (!lettered(s)) return false
+    if (isFlag(s)) return false
     if (quoted([x, y])) {
       if (compared([x, y])) return false
       // A type's union (`kind: 'input' | 'focus'`).
       if (/(?:^|[^|])\|\s*$/.test(blank.slice(Math.max(0, x - 1 - 12), x - 1)) || /^\s*\|(?!\|)/.test(blank.slice(y + 1, y + 1 + 12))) return false
+      if (tagAt([x, y]) || answerTag([x, y])) return false
     }
     return true
   }
-  // Every string, template text and JSX text inside a span; with `words`, only those a person reads
-  // (#1841), as a mod's .ts hook file is judged. A .tsx or .jsx file's messages are still read whole,
-  // as #1823 read them: read so, one edit #1823 holds would pass (manual steps' press handler
-  // rewritten on 2026-10-16, whose only changed strings are the button names it compares).
-  const stringsIn = ([a, b]: Span, words = false): string[] =>
-    spans.strings.filter(([x, y]) => a <= x && y <= b && (!words || heard([x, y]))).map(([x, y]) => text.slice(x, y))
+  // Every string, template text and JSX text inside a span that a person reads (#1841): every mod
+  // hook file's messages are read so since #1864, a .tsx or .jsx one's too.
+  const stringsIn = ([a, b]: Span): string[] => spans.strings.filter(([x, y]) => a <= x && y <= b && heard([x, y])).map(([x, y]) => text.slice(x, y))
   return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode }
 }
 
@@ -2262,11 +2369,13 @@ export const modHookDrawingUntouched = (files: readonly ModFile[], name: string,
  * Whether the wording of every message a person reads from the mod hook file `name` (MESSAGE_CALL,
  * MESSAGE_KEY) is the same before and after a change, read beside the mod's other hook files `files`
  * (#1823): each string, template text and JSX text reaching one, followed into each message as values
- * are followed into what is drawn. When a message is shown may change; what it says may not. With
- * `words` (#1841, a mod's .ts hook file) only the strings a person reads count, never one a message is
- * only computed from (readMod's heard). False where any of the texts cannot be read.
+ * are followed into what is drawn. When a message is shown may change; what it says may not. Only the
+ * strings a person reads count (readMod's heard), never one a message is only computed from (#1841)
+ * nor a one word tag its place shows to be one (#1864); a .tsx or .jsx file is read so too since
+ * #1864 (Dan approved the one hold that releases, 2026-10-28). False where any of the texts cannot be
+ * read.
  */
-export const messageWordingSame = (files: readonly ModFile[], name: string, before: string, after: string, words = false): boolean => {
+export const messageWordingSame = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
   const others = files.filter(f => f.name !== name)
   const wording = (text: string): string[] | null => {
     const d = drawnOf([...others, { name, text }], name, 'messages')
@@ -2292,7 +2401,7 @@ export const messageWordingSame = (files: readonly ModFile[], name: string, befo
     for (const x of sends) for (const p of r.calls.get(x) ?? []) spans.push(...(r.args(p) ?? []))
     // Each wording once: the same words moved into a helper, or said from one more place, say
     // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
-    return [...new Set(spans.flatMap(s => r.stringsIn(s, words)))].sort()
+    return [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort()
   }
   const said = wording(before)
   const says = wording(after)
@@ -2326,7 +2435,7 @@ export const drawsChange = (files: readonly ModFile[], name: string, before: str
  * A file any of them cannot be read in is held.
  */
 export const modHookTsShows = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): boolean =>
-  drawsChange(files, name, before, after) || !messageWordingSame(files, name, before ?? '', after ?? '', true)
+  drawsChange(files, name, before, after) || !messageWordingSame(files, name, before ?? '', after ?? '')
 
 /** A call written out whole, in a fixed order: its tool, every key of its input, its folder and session. */
 export const callText = (tool: string, input: Record<string, unknown>, at: { cwd: string; session: string }): string => {
