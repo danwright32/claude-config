@@ -37,7 +37,10 @@ import {
   isModHook,
   isModHookTs,
   drawnParts,
-  drawsChange,
+  modHookTsHold,
+  messageWordings,
+  heldWords,
+  type Worded,
   isOwnRecord,
   isDesignRecord,
   sealCheck,
@@ -138,7 +141,8 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   in it reaches what the mod draws (rules.ts drawsChange), read beside the mod's other hook files: a
 //   line builder making mod-kit's text runs, dividers or buttons (manual steps' cardLines, where the
 //   #1263 divider passed unasked), anything handed to a drawing call or used in JSX, and every name
-//   those use. Any other edit there passes, as does every edit to a .ts file that draws nothing.
+//   those use. Any other edit there passes, as does every edit to a .ts file that draws nothing,
+//   unless it changes the words of a message a person reads (since #1841, below).
 // - Since #1158: a git checkout or restore of such a file is judged by the lines it changes, against
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
 //   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
@@ -181,8 +185,9 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   kept first, and the call waits on him. Since #1682 mod-kit's `runs` also gives a module run with
 //   python -m and a tool run through npx, each judged here as a script run is.
 // - Since #1756: the words a mod hands mod-kit's blocked card (`$.modkit.blocked`: its guard name,
-//   reason and safe way) are copy in a tool result row, not drawing, so a changed refusal passes; the
-//   card's look is mod-kit's own, judged in its card.ts (rules.ts DRAW_CALL). And an Edit, MultiEdit
+//   reason and safe way) are copy in a tool result row, not drawing, so a changed refusal passed (since
+//   #1841 it is held again as a message's words); the card's look is mod-kit's own, judged in its
+//   card.ts (rules.ts DRAW_CALL). And an Edit, MultiEdit
 //   or Write leaving a mod's .ts hook file with a bracket open, half of a change made in two edits,
 //   passes, the edit closing it judged against the file before the first (drawingChange, midEdits).
 // - Since #1773: a pattern's groups (bash's extglob, zsh's alternation and qualifiers, a bar) are
@@ -204,6 +209,23 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   result, a command's reply) is unchanged (rules.ts modHookDrawingUntouched and
 //   messageWordingSame, in nothingShown; Dan, 2026-10-27: "Timing wording can go through, but
 //   message wording should be asked about"). A JSX element or a colour in those lines is held as before.
+// - Since #1841: a mod's .ts hook file is held for the same wording too, not only for what it draws
+//   (rules.ts modHookTsShows: drawsChange, or messageWordingSame false), by an Edit, a git put back or
+//   a shell write alike, so a toast, a refusal's reason or a tool's result reworded there is asked
+//   about. When a message is sent, the logic around it, and a tool's or schema's description pass; a
+//   property a tool's input schema names `reason` or `text` is no message. Only the words a person
+//   reads count there (Dan, 2026-10-28: "Narrow it first"): a regular expression, a value compared,
+//   a type's union, a command's words and flags, what a string is split, searched or keyed by, and a
+//   string with no letter in it, which a message is only computed from, pass.
+// - Since #1864: a one word tag passes too where its own place shows it is one (rules.ts readMod's
+//   tagAt and answerTag): a field of a record that holds more than words (`kind: 'focus'`, an argv's
+//   `'gh'`), an argument a function of the file only runs, searches or compares, and an answer the
+//   function's own signature names. A .tsx or .jsx file's messages are read for their words the same
+//   way, which releases the one edit #1823 held for a compared button name (Dan approved, 2026-10-28).
+// - Since #1859: an edit held only because a message's words changed (rules.ts modHookTsHold for a
+//   .ts file, wordsOnly for a .tsx or .jsx one) is refused saying so, naming the words, by its
+//   refusal, its card and, for a shell write, what became of it, never that it changes how the
+//   screen looks or what the mod draws (L11). What is held is unchanged; only what it says is.
 // - Since #1832: a script file handed a name a command substitution fills in is held the same way,
 //   unless every substitution in it is `git rev-parse`, alone or with -C (rules.ts outputTrusted; Dan,
 //   2026-10-27: "git rev-parse only"), so a commit handed as `--sha` passes and a scope list is held.
@@ -218,7 +240,7 @@ const fromAgent = new Set<string>()
 // #1296: a mod's .ts hook file a shell write may change, as it stood before the command ran: its path,
 // checkout, name in its hooks folder, text (undefined for one not there) and the mod's hook files.
 // `tsx` for a TSX or JSX hook file (#1576), judged after by the rule its Edit is (nothingShown), where a
-// .ts file is judged by drawsChange over `files`. `record` for a settled design under docs/design a
+// .ts file is judged by rules.ts modHookTsHold over `files` (#1841, #1859). `record` for a settled design under docs/design a
 // script run is handed (#1593), judged after by the design rounds skill's seal check (sealedAfter).
 type Watched = { path: string; tree: string; name: string; before: string | undefined; files: ModFile[]; tsx?: true; record?: true }
 // The main session's passing shell calls with files to read again once they ran, by tool_use_id: set
@@ -547,23 +569,15 @@ const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: 
 // changedRuns), as the separate edits a restore puts back were each judged. Since #1823 a change to a
 // mod's hook file held only for a drawing word is read beside the mod's other hook files, as a .ts
 // one is, and passes where it touches nothing the mod draws and changes no message's words (rules.ts
-// modHookDrawingUntouched); hook files that cannot be listed or read leave it held.
-const nothingShown = async ($: EngineInterface, path: string, tree: string, before: string, after: string): Promise<boolean> => {
+// modHookDrawingUntouched); hook files that cannot be listed or read leave it held. `words` false
+// leaves the messages' wording out (#1859), only to tell a hold for wording alone (wordsOnly).
+const nothingShown = async ($: EngineInterface, path: string, tree: string, before: string, after: string, words = true): Promise<boolean> => {
   // Only a real Claude Code mod's folder, whose plugin.json says so; one that cannot be read is asked.
   const modHook = isModHook(relTo(path, tree)) && (await $.fs.exists(modManifestOf(path)).catch(() => false))
-  const dir = path.slice(0, path.lastIndexOf('/'))
-  const name = path.slice(dir.length + 1)
+  const name = path.slice(path.lastIndexOf('/') + 1)
   let files: ModFile[] | null | undefined
   const modFiles = async (): Promise<ModFile[] | null> => {
-    if (files !== undefined) return files
-    try {
-      const read: ModFile[] = []
-      for (const e of await $.fs.list(dir))
-        if (e.kind === 'file' && e.name !== name && /\.(ts|tsx|mts|cts|jsx)$/i.test(e.name) && !/\.d\.[mc]?ts$/i.test(e.name)) read.push({ name: e.name, text: String(await $.fs.read(`${dir}/${e.name}`)) })
-      files = read
-    } catch {
-      files = null
-    }
+    if (files === undefined) files = await hookFilesBeside($, path)
     return files
   }
   // Whether a run passed only by the #1823 reading, so the whole change's message wording is asked.
@@ -573,7 +587,7 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
     if (!modHook) return true
     if (modHookLogicOnly(b, a) || commentOnlyChange(b, a, true)) return false
     const others = await modFiles()
-    if (!others || !modHookDrawingUntouched(others, name, b, a)) return true
+    if (!others || !modHookDrawingUntouched(others, name, b, a, words)) return true
     readByDrawing = true
     return false
   }
@@ -584,13 +598,40 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
   for (const [b, a] of runs) if (await shows(b, a)) return false
   // Judged a run at a time, a message's new words in a run the word reading passes would slip
   // beside a run only #1823's reading let through, so the change as a whole keeps its wording.
-  if (!readByDrawing) return true
+  if (!readByDrawing || !words) return true
   const others = await modFiles()
   return !!others && messageWordingSame(others, name, before, after)
 }
 
+// The mod's other hook files beside the hook file `path`, each by name and text, or null where the
+// folder cannot be listed or one of them read.
+const hookFilesBeside = async ($: EngineInterface, path: string): Promise<ModFile[] | null> => {
+  const dir = path.slice(0, path.lastIndexOf('/'))
+  const name = path.slice(dir.length + 1)
+  try {
+    const read: ModFile[] = []
+    for (const e of await $.fs.list(dir))
+      if (e.kind === 'file' && e.name !== name && /\.(ts|tsx|mts|cts|jsx)$/i.test(e.name) && !/\.d\.[mc]?ts$/i.test(e.name)) read.push({ name: e.name, text: String(await $.fs.read(`${dir}/${e.name}`)) })
+    return read
+  } catch {
+    return null
+  }
+}
+
+// Whether a change nothingShown holds is held for a message's wording alone (#1859): it would pass
+// with the wording left out. The words heldWords names when it is, so the refusal says that and never
+// the screen's look (L11); undefined for any other hold, a look change or one that cannot be read.
+const wordsOnly = async ($: EngineInterface, path: string, tree: string, before: string, after: string): Promise<string | undefined> => {
+  if (!(await nothingShown($, path, tree, before, after, false))) return undefined
+  const others = await hookFilesBeside($, path)
+  const w = others && messageWordings(others, path.slice(path.lastIndexOf('/') + 1), before, after)
+  return w ? heldWords(w.said, w.says) : undefined
+}
+
 // Whether a call's change to a mod's plain TypeScript hook file (rules.ts isModHookTs) changes what the
-// mod draws (#1275): 'held' when it does, or when the mod's hook files cannot be listed or read; the
+// mod draws (#1275) or a message's words (#1841, rules.ts modHookTsHold): 'held' when it does, or
+// when the mod's hook files cannot be listed or read, and `worded` with the words heldWords names where
+// only a message's wording changes (#1859, rules.ts modHookTsHold); the
 // reason, for a git checkout or restore whose lines could not be read, judged whole; 'pass' otherwise,
 // and for a folder no plugin.json makes a mod. What a call leaves: a Write's content, an Edit's or
 // MultiEdit's text applied to the file, what git puts back (#1158). A shell write, which cannot be read
@@ -598,7 +639,7 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
 // to a file that drew nothing since #1296, and since #1576 one to a file that draws too, so a shell
 // write and an Edit making the same change are judged alike. Any other call that cannot be read before
 // it runs (an edit that would not apply, a call naming several files) is held where the file draws
-// now and passes where it does not. A change to its comments alone passes (rules.ts commentOnlyChange,
+// or sends a message now and passes where it does neither. A change to its comments alone passes (rules.ts commentOnlyChange,
 // #1341).
 const drawingChange = async (
   $: EngineInterface,
@@ -608,7 +649,7 @@ const drawingChange = async (
   input: Record<string, unknown>,
   notAlone: string | undefined,
   watch: Watched[],
-): Promise<'held' | 'pass' | { unread: string }> => {
+): Promise<'held' | 'pass' | { unread: string } | { worded: string }> => {
   if (!(await $.fs.exists(modManifestOf(t.path)).catch(() => false))) return 'pass'
   const dir = t.path.slice(0, t.path.lastIndexOf('/'))
   const name = t.path.slice(dir.length + 1)
@@ -628,7 +669,12 @@ const drawingChange = async (
     after = back.text
   } else if (tool !== 'Bash' && pathsOf(input).length === 1) after = tool === 'Write' ? editedText('', tool, input) : now === undefined ? undefined : editedText(now, tool, input)
   if (after === undefined) {
-    if (tool !== 'Bash') return drawsChange(files, name, undefined, now) ? 'held' : 'pass'
+    // Held where the file draws or sends a message now. One that only sends a message is held for a
+    // message's words (#1859), naming none: which would change cannot be read.
+    if (tool !== 'Bash') {
+      const hold = modHookTsHold(files, name, undefined, now)
+      return !hold ? 'pass' : 'worded' in hold ? { worded: '' } : 'held'
+    }
     // A file whose drawing cannot be read now could not be judged after either: held.
     if (drawnParts(files, name) === null) return 'held'
     // Once per file, however many of the command's words write it (lessons review).
@@ -653,12 +699,14 @@ const drawingChange = async (
       }
       if (nowOpen && was !== undefined) return 'pass'
     } else if (nowOpen && was !== undefined) {
-      if (drawsChange(files, name, was, after)) return 'held'
+      const hold = modHookTsHold(files, name, was, after)
+      if (hold) return 'worded' in hold ? hold : 'held'
       midEdits.delete(t.path)
       return 'pass'
     }
   }
-  return drawsChange(files, name, now, after) ? 'held' : 'pass'
+  const hold = modHookTsHold(files, name, now, after)
+  return !hold ? 'pass' : 'worded' in hold ? hold : 'held'
 }
 
 // The file a command copies whole into `path`, when the command is one cp alone with no option, naming
@@ -775,12 +823,14 @@ const sealedAfter = async ($: EngineInterface, w: Watched, after: string | undef
   return s === true ? undefined : s
 }
 
+// `worded`, the files held only for a message's wording, with its words (#1859), which a refusal says
+// in place of the screen's look.
 type Verdict =
   | { pass: true; watch?: Watched[] }
   | { forged: string }
-  | { unsure: string[]; why: string }
-  | { unreadable: { files: string[]; subjects: DesignRoundSubject[]; why: string } }
-  | { missing: { files: string[]; subjects: DesignRoundSubject[]; trees: string[]; unread: string[] } }
+  | { unsure: string[]; why: string; worded?: Worded[] }
+  | { unreadable: { files: string[]; subjects: DesignRoundSubject[]; why: string; worded?: Worded[] } }
+  | { missing: { files: string[]; subjects: DesignRoundSubject[]; trees: string[]; unread: string[]; worded?: Worded[] } }
 
 // The judgement every call gets, the main session's and a subagent's alike. Dan's Not a look change
 // for this very call (#1010) is looked up only for a call that would otherwise wait on him, so no
@@ -811,6 +861,8 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   const unsureFiles: string[] = []
   // The mod .ts hook files a shell write passing now may change, read again once it ran (#1296).
   const watch: Watched[] = []
+  // The files held only for a message's wording (#1859), as a refusal names them.
+  const worded: Worded[] = []
   const passing = (): Verdict => (watch.length ? { pass: true, watch } : { pass: true })
   let why = ''
   for (const t of targets) {
@@ -943,7 +995,8 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     if (modTs) {
       const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined, watch)
       if (drawn === 'pass') continue
-      if (drawn !== 'held') {
+      if (drawn !== 'held' && 'worded' in drawn) worded.push({ file: relTo(t.path, tree), words: drawn.worded })
+      else if (drawn !== 'held') {
         const notes = unreadIn.get(tree) ?? []
         const said = unreadPutBack(relTo(t.path, tree), drawn.unread)
         if (!notes.includes(said)) notes.push(said)
@@ -999,6 +1052,11 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       if (!notes.includes(said)) notes.push(said)
       unreadIn.set(tree, notes)
     }
+    // A mod hook file held for a message's wording alone says so (#1859).
+    if (change && 'after' in change) {
+      const words = await wordsOnly($, t.path, tree, change.before, change.after)
+      if (words !== undefined) worded.push({ file: relTo(t.path, tree), words })
+    }
     const files = byTree.get(tree) ?? []
     if (!files.includes(t.path)) files.push(t.path)
     byTree.set(tree, files)
@@ -1022,7 +1080,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     try {
       for (const s of subjects) if (!(await answerOf($, s))) lacking.push(s)
     } catch (err) {
-      return { unreadable: { files: shown, subjects, why: message(err) } }
+      return { unreadable: { files: shown, subjects, why: message(err), worded } }
     }
     if (!lacking.length) continue
     missingFiles.push(...shown)
@@ -1030,8 +1088,8 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     unread.push(...(unreadIn.get(tree) ?? []))
     for (const s of lacking) if (!missing.some(m => m.key === s.key)) missing.push(s)
   }
-  if (unsureFiles.length) return { unsure: unsureFiles, why }
-  if (missing.length) return { missing: { files: missingFiles, subjects: missing, trees: missingTrees, unread } }
+  if (unsureFiles.length) return { unsure: unsureFiles, why, worded }
+  if (missing.length) return { missing: { files: missingFiles, subjects: missing, trees: missingTrees, unread, worded } }
   return passing()
 }
 
@@ -1052,22 +1110,22 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, c
     return forged(v.forged)
   }
   if ('unsure' in v) {
-    const c = unsureCard(v.unsure)
+    const c = unsureCard(v.unsure, v.worded)
     await drawCard($, call.id, c.reason, c.safeWay)
-    return unsure(v.unsure, v.why)
+    return unsure(v.unsure, v.why, v.worded)
   }
   if ('unreadable' in v) {
     const u = v.unreadable
-    const c = unreadableCard(u.files)
+    const c = unreadableCard(u.files, u.worded)
     await drawCard($, call.id, c.reason, c.safeWay)
-    return unreadable(u.files, u.subjects, u.why)
+    return unreadable(u.files, u.subjects, u.why, u.worded)
   }
-  const { files, subjects, trees, unread } = v.missing
+  const { files, subjects, trees, unread, worded } = v.missing
   const waiting: DesignRoundPending = { id: call.id, tool: call.tool, files, subjects, trees, key: call.called.key, call: call.called.call, ...(call.agent ? { agent: true as const } : {}) }
   await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== call.id), waiting])
-  const c = card(files, subjects)
+  const c = card(files, subjects, worded)
   await drawCard($, call.id, c.reason, c.safeWay)
-  return call.agent ? agentRefusal(files, subjects, call.id, unread) : refusal(call.id, files, subjects, unread)
+  return call.agent ? agentRefusal(files, subjects, call.id, unread, worded) : refusal(call.id, files, subjects, unread, worded)
 }
 
 // The session's scratchpad on the disk (#1296): `<temp>/claude-<uid>/<project>/<session id>/scratchpad`,
@@ -1151,7 +1209,8 @@ const afterShell = async (
 ): Promise<typeof r> => {
   if (r.deny !== undefined) return r
   // `why`, for a settled design (#1593), what the refusal says of it: the seal check's own reason.
-  const changed: { w: Watched; after?: string; unread?: string; why?: string }[] = []
+  // `words`, for a hook file whose change was held for a message's wording alone (#1859), its words.
+  const changed: { w: Watched; after?: string; unread?: string; why?: string; words?: string }[] = []
   for (const w of watch) {
     let after: string | undefined
     try {
@@ -1168,8 +1227,14 @@ const afterShell = async (
       continue
     }
     // A TSX or JSX hook file by the rule its Edit is judged by (#1576); one made or taken away is a change.
-    const shows = w.tsx ? w.before === undefined || after === undefined || !(await nothingShown($, w.path, w.tree, w.before, after)) : drawsChange(w.files, w.name, w.before, after)
-    if (shows) changed.push({ w, after })
+    if (!w.tsx) {
+      const hold = modHookTsHold(w.files, w.name, w.before, after)
+      if (hold) changed.push({ w, after, ...('worded' in hold ? { words: hold.worded } : {}) })
+      continue
+    }
+    if (w.before !== undefined && after !== undefined && (await nothingShown($, w.path, w.tree, w.before, after))) continue
+    const words = w.before === undefined || after === undefined ? undefined : await wordsOnly($, w.path, w.tree, w.before, after)
+    changed.push({ w, after, ...(words === undefined ? {} : { words }) })
   }
   if (!changed.length) return r
   // What each waits on: its checkout's issue, unless Dan has answered for it.
@@ -1211,15 +1276,16 @@ const afterShell = async (
   for (const c of held) {
     const file = relTo(c.w.path, c.w.tree)
     if (c.unread !== undefined) said.push(shellOutcome({ file, unread: c.unread }, c.w.record))
-    else said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`), c.w.record))
+    else said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`), c.w.record, c.words))
   }
   const files = held.map(c => relTo(c.w.path, c.w.tree))
   const whys = held.flatMap(c => (c.why === undefined ? [] : [c.why]))
+  const worded = held.flatMap(c => (c.words === undefined ? [] : [{ file: relTo(c.w.path, c.w.tree), words: c.words }]))
   const v: Exclude<Verdict, { pass: true }> = unknown.files.length
-    ? { unsure: unknown.files, why: unknown.why.join('; ') }
+    ? { unsure: unknown.files, why: unknown.why.join('; '), worded }
     : unread.files.length
-      ? { unreadable: { files: unread.files, subjects: unread.subjects, why: unread.why.join('; ') } }
-      : { missing: { files, subjects: lacking, trees, unread: whys } }
+      ? { unreadable: { files: unread.files, subjects: unread.subjects, why: unread.why.join('; '), worded } }
+      : { missing: { files, subjects: lacking, trees, unread: whys, worded } }
   const refused = await refuse($, v, { id: call.id, tool: call.tool, agent: call.agent, called })
   // What the command printed is never repeated here: only the tool's own result passes the secret
   // guard's scrub, so a secret it printed would reach Claude through this text (lessons review).
@@ -1229,9 +1295,9 @@ const afterShell = async (
 // What a check with no call id is told: the refusal the call would meet, with no id to ask Dan under.
 const previewed = (v: Exclude<Verdict, { pass: true }>): string => {
   if ('forged' in v) return forged(v.forged)
-  if ('unsure' in v) return unsure(v.unsure, v.why)
-  if ('unreadable' in v) return unreadable(v.unreadable.files, v.unreadable.subjects, v.unreadable.why)
-  return checked(v.missing.files, v.missing.subjects, v.missing.unread)
+  if ('unsure' in v) return unsure(v.unsure, v.why, v.worded)
+  if ('unreadable' in v) return unreadable(v.unreadable.files, v.unreadable.subjects, v.unreadable.why, v.unreadable.worded)
+  return checked(v.missing.files, v.missing.subjects, v.missing.unread, v.missing.worded)
 }
 
 // A refused call waiting on Dan, by its id: the one lookup the skip question and the settled question

@@ -136,6 +136,7 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/scanners-before-push.sh",
             "timeout": 180,
+            "onFailure": "block",
             "statusMessage": "Running the scanners that read the whole repository"
           },
           {
@@ -149,6 +150,11 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/no-verify-gate.sh",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/amend-force-push-gate.sh",
             "timeout": 15
           },
           {

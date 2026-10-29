@@ -11,7 +11,7 @@ import { sendTwice } from './send.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './repo.ts'
 import { branchAt } from './branch.ts'
 import { workingTree } from './tree.ts'
-import { commandWrites } from './writes.ts'
+import { callShell, commandWrites } from './writes.ts'
 import { pythonText } from './code.ts'
 import { isDans } from './origin.ts'
 import { followAccount, loginStarted, readAccount, registerLogin } from './login.ts'
@@ -290,7 +290,9 @@ export const register: Register = (on, options) => {
         keep(input)
       },
       commands: async ({ command }) => commands(command),
-      writes: async ({ command, cwd, home }) => commandWrites(command, cwd, home),
+      // Read as the shell the call runs in reads it (#1834), found from the session's environment.
+      writes: async ({ command, cwd, home }) =>
+        commandWrites(command, cwd, home, callShell({ CLAUDE_CODE_SHELL: await built.env.get('CLAUDE_CODE_SHELL'), SHELL: await built.env.get('SHELL') })),
       git: async ({ words }) => git(words),
       gh: async ({ words }) => ghArgs(words),
       mergeHelper: async command => mergeHelperArgs(command),

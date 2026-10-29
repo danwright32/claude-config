@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import { commandWrites } from '../hooks/writes.ts'
+import { callShell, commandWrites } from '../hooks/writes.ts'
 
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and
 // missed inline scripts, rsync, install, ln, dd, a patch, every file but the last of a sed -i, and a
@@ -579,12 +579,138 @@ describe('writes: the value of a known option a tool reads is no file it writes 
     // tsc --outDir and eslint -o name what they write; prettier --write is a flag, so its next word
     // is the file it writes.
     expect(words('npx tsc -p tsconfig.json --outDir dist')).toEqual([['dist']])
-    expect(words('npx eslint -o report.txt app')).toEqual([['report.txt', 'app']])
+    expect(words('npx eslint -o report.txt --fix app')).toEqual([['report.txt', 'app']])
     expect(words('npx prettier --write app/page.tsx')).toEqual([['app/page.tsx']])
   })
   test("a script file's own options are not known, so their values are still handed on", () => {
     expect(words('python3 gen.py --bind 127.0.0.1 --out report.html')).toEqual([['127.0.0.1', 'report.html']])
     expect(words('node build.mjs -p tsconfig.json')).toEqual([['tsconfig.json']])
+  })
+})
+
+// #1827: a known tool that changes the files it is handed only when a flag tells it to handed them
+// all on as files it may write, so `npx prettier --check src` was held like `--write`. In the #1815
+// replay of this Mac's 104,832 distinct Bash commands, every new design round guard hold was a
+// prettier --check. By each tool's own documentation, prettier rewrites files in place only with
+// --write (-w), and otherwise prints them or, with --check, -c, --list-different or -l, names the ones
+// that differ; eslint changes them only with --fix (--fix-dry-run fixes in memory). Without that flag
+// the run hands on only the file an option of its own writes (eslint -o, --cache-location).
+describe("writes: a known tool's mode that changes no file it is handed hands none on (#1827)", () => {
+  const words = (command: string) => (read(command).runs ?? []).map(r => r.args.map(a => a.word))
+  test('prettier hands on its files only with --write or -w', () => {
+    for (const command of [
+      'npx prettier --check src',
+      'npx prettier -c src app/page.tsx',
+      'npx prettier --list-different src',
+      'npx prettier -l src',
+      'npx prettier src/a.ts',
+      'npx prettier --check $(git ls-files src)',
+      'npx --yes prettier@3 --check src',
+      'rtk npx prettier --check src',
+    ])
+      expect({ command, words: words(command) }).toEqual({ command, words: [] })
+    expect(words('npx prettier --write src')).toEqual([['src']])
+    expect(words('npx prettier -w src')).toEqual([['src']])
+    expect(words('npx prettier --check --write src')).toEqual([['src']])
+    expect(words('npx prettier -l --write src')).toEqual([['src']])
+    // A cluster of short flags carrying -w writes, one without it does not.
+    expect(words('npx prettier -uw src')).toEqual([['src']])
+    expect(words('npx prettier -cu src')).toEqual([])
+    expect(words('npx --yes prettier@3 --write src')).toEqual([['src']])
+  })
+  test('eslint hands on its files only with --fix; --fix-dry-run writes none, and -o still names its report', () => {
+    expect(words('npx eslint src')).toEqual([])
+    expect(words('npx eslint --fix-dry-run src')).toEqual([])
+    expect(words('npx eslint -c eslint.config.js app/page.tsx')).toEqual([])
+    expect(words('npx eslint --fix src')).toEqual([['src']])
+    expect(words('npx eslint --fix-dry-run --fix src')).toEqual([['src']])
+    expect(words('npx eslint -o report.txt app')).toEqual([['report.txt']])
+    expect(words('npx eslint --output-file=report.txt app')).toEqual([['report.txt']])
+    expect(words('npx eslint --cache --cache-location .cache/eslint app')).toEqual([['.cache/eslint']])
+    expect(words('npx prettier --check --cache --cache-location .cache/prettier src')).toEqual([['.cache/prettier']])
+  })
+  test('a word that may hold a flag the reader cannot see keeps every file handed on', () => {
+    // A variable it cannot read, or one whose value the shell splits into words, may be --write.
+    expect(words('npx prettier $MODE src')).toEqual([['$MODE', 'src']])
+    expect(words('npx prettier --check ${FLAGS} src')).toEqual([['${FLAGS}', 'src']])
+    expect(words('for f in src/a.ts; do npx prettier $f; done')).toEqual([['$f']])
+    expect(words('F="src --write"; npx prettier --check $F')).toEqual([['$F']])
+    expect(words('F=--write; npx prettier --check $F src')).toEqual([['src']])
+    expect(words('npx eslint "$@"')).toEqual([['$@']])
+    expect(words('npx eslint `echo --fix` src')).toEqual([['`echo --fix`', 'src']])
+    // A command substitution in its operands gives the files it works on (#1815), so it is read as them.
+    expect(words('npx prettier --check $(git ls-files src)')).toEqual([])
+    expect(words('npx prettier --check "$(git diff --name-only HEAD)" src/$(cat name)')).toEqual([])
+  })
+  test('a tool with no such mode known, a module, or a script file, still hands on every file', () => {
+    expect(words('npx biome check src')).toEqual([['check', 'src']])
+    expect(words('python3 -m black --check src')).toEqual([['src']])
+    expect(words('python3 prettier.py --check src')).toEqual([['src']])
+  })
+})
+
+// #1834: a variable the command set was read as its value but handed on as one word even unquoted,
+// so under bash `F="--write src"; npx prettier --check $F` handed on nothing and `F="a.ts b.ts";
+// python3 gen.py $F` one path no file has. bash, sh, dash and ksh split an unquoted expansion's value
+// on whitespace; zsh does not (measured in this Mac's Bash tool on 2026-10-28: /bin/zsh 5.9 printed
+// `[a b]` for `F="a b"; printf '[%s]\n' $F`). So the reader follows the shell the line runs in: the
+// one Claude Code runs a Bash call in, and for a script a shell is given, that shell.
+describe("writes: an unquoted variable's value is split into words as the shell running it does (#1834)", () => {
+  const handed = (command: string, shell?: string) => (commandWrites(command, CWD, HOME, shell).runs ?? []).map(r => r.args.map(a => a.path ?? `(as written) ${a.word}`))
+  test('under bash an unquoted value is split into words, and a split --write makes prettier a writing run', () => {
+    expect(commandWrites('F="--write src"; npx prettier --check $F', CWD, HOME, '/bin/bash').runs).toEqual([
+      { what: 'a tool run through npx', script: 'prettier', tool: true, args: [{ word: '$F', path: `${CWD}/src` }] },
+    ])
+    expect(commandWrites('F="a.ts b.ts"; python3 gen.py $F', CWD, HOME, '/bin/bash').runs?.[0]?.args).toEqual([
+      { word: '$F', path: `${CWD}/a.ts` },
+      { word: '$F', path: `${CWD}/b.ts` },
+    ])
+    expect(handed('F="src --write"; npx prettier --check $F', '/bin/bash')).toEqual([[`${CWD}/src`]])
+    expect(handed('F="a.ts b.ts"; python3 gen.py $F', '/opt/homebrew/bin/bash')).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
+  })
+  test('a quoted value is kept whole', () => {
+    expect(commandWrites('F="a.ts b.ts"; python3 gen.py "$F"', CWD, HOME, '/bin/bash').runs?.[0]?.args).toEqual([{ word: '$F', path: `${CWD}/a.ts b.ts` }])
+    expect(handed(`F="a.ts b.ts"; python3 gen.py "\${F}" x.ts`, '/bin/bash')).toEqual([[`${CWD}/a.ts b.ts`, `${CWD}/x.ts`]])
+    // A quoted part of a word stays whole while the unquoted part beside it splits.
+    expect(handed(`F="a b"; G="c d"; python3 gen.py "$F"$G`, '/bin/bash')).toEqual([[`${CWD}/a bc`, `${CWD}/d`]])
+  })
+  test('the split joins the text around it, leading and trailing spaces end a word, and an empty value hands on nothing', () => {
+    expect(handed('F="a b"; python3 gen.py x$F.ts', '/bin/bash')).toEqual([[`${CWD}/xa`, `${CWD}/b.ts`]])
+    expect(handed('F=" a"; python3 gen.py x$F', '/bin/bash')).toEqual([[`${CWD}/x`, `${CWD}/a`]])
+    expect(handed(`F="a  "; python3 gen.py \${F}y`, '/bin/bash')).toEqual([[`${CWD}/a`, `${CWD}/y`]])
+    expect(handed('F=""; python3 gen.py $F out.ts', '/bin/bash')).toEqual([[`${CWD}/out.ts`]])
+  })
+  test("a redirect's target is kept whole, since bash refuses a split one as ambiguous and writes nothing", () => {
+    expect(commandWrites('F="a b"; echo x > $F', CWD, HOME, '/bin/bash').files).toEqual([{ word: '$F', path: `${CWD}/a b` }])
+  })
+  test('under zsh, or a shell not known, an unquoted value is kept whole, as before', () => {
+    for (const shell of ['/bin/zsh', undefined]) {
+      expect(handed('F="a.ts b.ts"; python3 gen.py $F', shell)).toEqual([[`${CWD}/a.ts b.ts`]])
+      expect(handed('F="--write src"; npx prettier --check $F', shell)).toEqual([])
+    }
+  })
+  test('a script given to a shell is split as that shell splits, whatever runs the line', () => {
+    expect(handed(`bash -c 'F="a.ts b.ts"; python3 gen.py $F'`, '/bin/zsh')).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
+    expect(handed(`sh -c 'F="a.ts b.ts"; python3 gen.py $F'`)).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
+    expect(handed(`bash <<'EOF'\nF="--write src"; npx prettier --check $F\nEOF`, '/bin/zsh')).toEqual([[`${CWD}/src`]])
+    expect(handed(`zsh -c 'F="a.ts b.ts"; python3 gen.py $F'`, '/bin/bash')).toEqual([[`${CWD}/a.ts b.ts`]])
+    // A command substitution runs in the shell of the line it sits in.
+    expect(handed(`bash -c 'echo $(F="a.ts b.ts"; python3 gen.py $F)'`, '/bin/zsh')).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
+  })
+})
+
+// The shell Claude Code runs a Bash call in: CLAUDE_CODE_SHELL where it names a bash or zsh, which
+// Claude Code takes over everything (its own message: `CLAUDE_CODE_SHELL="..." is not a valid
+// bash/zsh path, falling back to detection`), otherwise $SHELL where it names one. Otherwise Claude
+// Code finds one itself, which cannot be known here.
+describe('callShell: the shell a Bash call runs in (#1834)', () => {
+  test('CLAUDE_CODE_SHELL naming bash or zsh, otherwise SHELL naming one, otherwise not known', () => {
+    expect(callShell({ SHELL: '/bin/zsh' })).toBe('/bin/zsh')
+    expect(callShell({ SHELL: '/opt/homebrew/bin/bash' })).toBe('/opt/homebrew/bin/bash')
+    expect(callShell({ CLAUDE_CODE_SHELL: '/bin/bash', SHELL: '/bin/zsh' })).toBe('/bin/bash')
+    expect(callShell({ CLAUDE_CODE_SHELL: '/usr/local/bin/fish', SHELL: '/bin/zsh' })).toBe('/bin/zsh')
+    expect(callShell({ SHELL: '/usr/local/bin/fish' })).toBeUndefined()
+    expect(callShell({})).toBeUndefined()
   })
 })
 

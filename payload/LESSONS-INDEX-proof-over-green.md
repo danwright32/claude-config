@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L823. Tests compiled differently from how code ships prove nothing about loading; refuse what the shipping loader can't run (erasableSyntaxOnly).
 - L818. A multi-service feature's live end-to-end check is its first deliverable, run every deploy; layer checks leave a user to find each fault.
 - L817. A smoke check behind a sign-in proxy tests only the proxy, so a crashing build passes; load a page from the built app itself before deploying.
 - L801. Count commits by message using the title line only; git log --grep also matches bodies and inflates counts.

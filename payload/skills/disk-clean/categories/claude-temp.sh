@@ -9,7 +9,8 @@
 # the last day (DCS_TEMP_MINUTES, a threshold the code sets, not measured). Neither half alone is enough: a live session's folder can sit untouched for
 # days, and a session can end a minute ago. The whole category is unmeasured when the session map
 # cannot be read, and when it is EMPTY while a Claude Code process runs, because an empty map then
-# means the map is wrong, not that every session ended (the plan's rule).
+# means the map is wrong, not that every session ended (the plan's rule). One folder is unmeasured
+# when find could not read all of it, since the part it could not read may be in use (#1851).
 set -uo pipefail
 HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
 . "$HERE/../scan-lib.sh" || { echo "unmeasured: scan-lib.sh is missing beside the categories folder"; exit 0; }
@@ -36,7 +37,7 @@ is_uuid() {
 }
 # Sets V for <target>; read_map has run.
 temp_rules() { # <target>
-  local t="${1%/}" root_phys grand u recent
+  local t="${1%/}" root_phys grand u recent rc err="$DCS_WORK/ct.find.err.$$"
   u="${t##*/}"
   root_phys="$(CDPATH= cd -P "$ROOT" 2>/dev/null && pwd -P)" || root_phys=""
   grand="$(CDPATH= cd -P "${t%/*}/.." 2>/dev/null && pwd -P)" || grand=""
@@ -44,8 +45,14 @@ temp_rules() { # <target>
   [ -d "$t" ] && [ ! -L "$t" ] || { V="not offerable: it is no longer there"; return; }
   if [ -n "$MAP_WHY" ]; then V="unmeasured: $MAP_WHY"; return; fi
   if grep -qxF -- "$u" "$IDS"; then V="not offerable: a live session ($u) owns it"; return; fi
-  recent="$(find "$t" -mmin -"$DCS_TEMP_MINUTES" -print -quit 2>/dev/null)"
-  if [ -n "$recent" ]; then V="not offerable: used within the last 24 hours"; return; fi
+  # find's complaints are read, as build-folders.sh and forgotten-tools.sh read dcs_recent_file's:
+  # a folder find could not wholly read may hold something used a minute ago, so it is unmeasured,
+  # never offerable (#1851, L10, L11). A find that failed saying nothing is unmeasured too.
+  recent="$(find "$t" -mmin -"$DCS_TEMP_MINUTES" -print -quit 2> "$err")"; rc=$?
+  if [ -n "$recent" ]; then V="not offerable: used within the last 24 hours"; rm -f "$err"; return; fi
+  if [ -s "$err" ]; then V="unmeasured: part of it could not be read ($(awk 'NR == 1' "$err")), so whether it was used in the last 24 hours is not known"; rm -f "$err"; return; fi
+  rm -f "$err"
+  if [ "$rc" -ne 0 ]; then V="unmeasured: find exited $rc reading it, so whether it was used in the last 24 hours is not known"; return; fi
   V=offerable
 }
 

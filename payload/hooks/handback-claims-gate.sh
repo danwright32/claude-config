@@ -79,8 +79,10 @@ if [ -z "$transcript" ] || [ ! -r "$transcript" ]; then
 fi
 
 found="$(printf '%s' "$report" | python3 "$HOOK_DIR/lib/agent-overrides.py" check-report "$transcript" 2>&1)"; rc=$?
+# 10 is the reader's "nothing contradicts"; 1 is what Python exits on a crash, so a crash says the
+# check did not run rather than passing as a clean report (claude-config#1869, L1033).
 case "$rc" in
-  1) exit 0 ;;
+  10) exit 0 ;;
   0) ;;
   *)
     echo "HANDBACK CLAIMS CHECK DID NOT RUN: handback-claims-gate.sh could not compare agent $agent's report with its commands (lib/agent-overrides.py exit $rc: ${found##*$'\n'}), so its claims about skipping checks were NOT checked." >&2

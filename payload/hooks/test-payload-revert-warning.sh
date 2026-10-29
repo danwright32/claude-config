@@ -49,6 +49,9 @@ mkdir -p "$FIX/dev/payload/hooks" "$FIX/src/payload/hooks" "$FIX/state" "$FIX/el
 : > "$FIX/src/claude-sync"
 
 HOLD="$FIX/hold"
+# Whose hold counts depends on the session asking (claude-config#1886), and this suite runs inside a
+# session whose id Claude Code exports; each case names its own session in the payload instead.
+unset CLAUDE_CODE_SESSION_ID
 PIDF="$FIX/watch.pid"
 
 # A REAL process whose command line is the one the daemon has. `exec -a` puts the script path and
@@ -133,6 +136,25 @@ out5="$(run s1 "$FIX/dev")"
 [ -n "$out5" ] \
   && check "#279 and it speaks again once that hold has expired" ok \
   || check "#279 and it speaks again once that hold has expired" "it stayed quiet"
+
+# Only this session's own hold, or one with no session recorded, is a remedy for this session
+# (claude-config#1886): its edits are sent the moment another session releases.
+fresh
+printf '%s %s host session=s2 their work\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" > "$HOLD"
+out5b="$(run s1 "$FIX/dev")"
+[ -n "$out5b" ] \
+  && check "#1886 another session's hold does not silence it" ok \
+  || check "#1886 another session's hold does not silence it" "it stayed quiet"
+case "$out5b" in
+  *"session s2 holds"*) check "#1886 and it names the session whose hold that is" ok ;;
+  *)                    check "#1886 and it names the session whose hold that is" "out=$out5b" ;;
+esac
+fresh
+printf '%s %s host session=s1 my work\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" > "$HOLD"
+out5c="$(run s1 "$FIX/dev")"
+[ -z "$out5c" ] \
+  && check "#1886 this session's own hold silences it" ok \
+  || check "#1886 this session's own hold silences it" "out=$out5c"
 
 # Reading the marker must not CLEAR it. claude-sync's own hold_remaining deletes an expired or
 # unreadable marker, which is right for the tool and wrong for a hook: a hook that removes a
