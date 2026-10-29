@@ -119,7 +119,7 @@ S_LOW="$TMPROOT/state-low"; mkdir -p "$S_LOW"
 probe "$((7 * GB))" "$T0" "$S_LOW"; low_msg="$PROBE_MSG"
 check "under the floor exits 3" "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC")"
 check "under the floor says how much is left, in a unit a person reads" \
-  "$(grep -q '7 GB free on' <<< "$low_msg" && echo ok || echo "said: $low_msg")"
+  "$(grep -q '7.5 GB free on' <<< "$low_msg" && echo ok || echo "said: $low_msg")"
 check "under the floor names the volume it measured" \
   "$(grep -q '/fixture' <<< "$low_msg" && echo ok || echo "said: $low_msg")"
 # The whole point of the issue: the warning must not guess at what is eating the disk.
@@ -280,7 +280,7 @@ probe "$((30 * GB))" "$T0" "$S_SUSTAIN"; sustain_msg="$PROBE_MSG"
 check "a sustained fall from the same level still fires" \
   "$([ "$PROBE_RC" -eq 4 ] && echo ok || echo "exit $PROBE_RC, said: $sustain_msg")"
 check "and states the rate it measured" \
-  "$(grep -q 'about 6 GB per hour' <<< "$sustain_msg" && echo ok || echo "said: $sustain_msg")"
+  "$(grep -q 'about 6.4 GB per hour' <<< "$sustain_msg" && echo ok || echo "said: $sustain_msg")"
 # A persistence window of 0 is the old behaviour, a rate from the newest reading, so the burst that
 # the default refuses is projected again: proof the window is what refuses it (L1001).
 S_BURST0="$TMPROOT/state-burst-off"; mkdir -p "$S_BURST0"
@@ -390,7 +390,7 @@ check "and the same reading is reported against a floor nothing can clear" \
 # The positive control on the two above: a floor test passes whatever df said, including nothing,
 # so this is what actually proves a NUMBER came out of the parse (L171, L98).
 check "and that reading really is a number of GB, which is what proves df was parsed" \
-  "$(grep -qE '^claude-sync: only [0-9]+ GB free on /,' <<< "$df_low" && echo ok || echo "said: $df_low")"
+  "$(grep -qE '^claude-sync: only [0-9]+(\.[0-9])? (GB|MB|KB) free on /,' <<< "$df_low" && echo ok || echo "said: $df_low")"
 
 # ---- --report: the disk-full skill's rate step reads this, rather than measuring again (#683) ----
 # The skill's step 2 used to compute a rate itself, with awk strftime (macOS awk has no such
@@ -413,7 +413,7 @@ rprobe "$((200 * GB))" "$T0" "$TMPROOT/state-r-first"
 check "--report on a disk with room exits 0, the same answer as the quiet mode" \
   "$([ "$PROBE_RC" -eq 0 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 check "--report says how much is left even when there is room" \
-  "$(grep -q '^claude-sync: 200 GB free on /fixture' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -q '^claude-sync: 214.7 GB free on /fixture' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 check "--report on a first reading states no rate, and says it is the first reading" \
   "$(! grep -qi 'per hour' <<< "$PROBE_MSG" && grep -qi 'first reading' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 
@@ -423,7 +423,7 @@ S_RSLOW="$TMPROOT/state-r-slow"
 rprobe "$((300 * GB))" "$((T0 - 10800))" "$S_RSLOW"
 rprobe "$((240 * GB))" "$T0" "$S_RSLOW"
 check "--report states the rate of a fall the quiet mode keeps to itself" \
-  "$([ "$PROBE_RC" -eq 0 ] && grep -q 'about 20 GB per hour' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+  "$([ "$PROBE_RC" -eq 0 ] && grep -q 'about 21.5 GB per hour' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
 # Two readings minutes apart: no rate, and the reason is the span, with the minimum named.
 S_RSHORT="$TMPROOT/state-r-short"
@@ -451,7 +451,7 @@ check "--report after a recovery states no rate and names the recovery as the re
 # Under the floor with no rate: still exit 3, and the reason travels with it.
 rprobe "$((7 * GB))" "$T0" "$TMPROOT/state-r-low"
 check "--report under the floor still exits 3 and still says why there is no rate" \
-  "$([ "$PROBE_RC" -eq 3 ] && grep -q '7 GB free on /fixture' <<< "$PROBE_MSG" && grep -qi 'first reading' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+  "$([ "$PROBE_RC" -eq 3 ] && grep -q '7.5 GB free on /fixture' <<< "$PROBE_MSG" && grep -qi 'first reading' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
 # A mistyped flag must not fall back to the quiet mode, which on a healthy disk prints nothing and
 # would read as a report with nothing in it (L320).
@@ -466,7 +466,7 @@ S_RDF="$TMPROOT/state-r-df"; mkdir -p "$S_RDF"
 rdf_msg="$(FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$S_RDF" FREE_SPACE_PATH=/ FREE_SPACE_FLOOR_GB=0 \
   bash "$CHECK" --report 2>&1)"; rdf_rc=$?
 check "--report against a real df parses a number of GB" \
-  "$([ "$rdf_rc" -eq 0 ] && grep -qE '^claude-sync: [0-9]+ GB free on /,' <<< "$rdf_msg" && echo ok || echo "exit $rdf_rc, said: $rdf_msg")"
+  "$([ "$rdf_rc" -eq 0 ] && grep -qE '^claude-sync: [0-9]+(\.[0-9])? (GB|MB|KB) free on /,' <<< "$rdf_msg" && echo ok || echo "exit $rdf_rc, said: $rdf_msg")"
 
 # ---- the macOS symbol cache, named as a known cause on a low or falling verdict ----
 # Measured 2026-10-04: the disk fell from 25 GB to 8 GB free, more than once, while Overture agents
@@ -514,7 +514,7 @@ check "each command sits alone in its own code block" \
 check "and the change time it read is stated, as an age" \
   "$(grep -q '30 minute(s) ago' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
 check "and the folder is named only after the free space sentence, so the nudge still reads its figure" \
-  "$(grep -q '^claude-sync: only 7 GB free on /fixture' <<< "${sym_low%%$'\n'*}" && echo ok || echo "first line: ${sym_low%%$'\n'*}")"
+  "$(grep -q '^claude-sync: only 7.5 GB free on /fixture' <<< "${sym_low%%$'\n'*}" && echo ok || echo "first line: ${sym_low%%$'\n'*}")"
 
 # Falling fast, above the floor, is the other verdict that names it.
 S_SYMF="$TMPROOT/state-sym-fast"; mkdir -p "$S_SYMF"
@@ -580,7 +580,7 @@ swap_probe "$((1 * GB))" "$TMPROOT/state-swap-big" "$SWAP_BIG"; swap_big="$PROBE
 check "a low disk with swap above its share still exits 3" \
   "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC, said: $swap_big")"
 check "and says how much swap there is, read from sysctl" \
-  "$(grep -q 'Swap holds 92 GB' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
+  "$(grep -q 'Swap holds 99.3 GB' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
 check "and names the processes holding the most memory, with what top measured" \
   "$(grep -q 'bzserv (pid 612): 117G' <<< "$swap_big" && grep -q 'fseventsd (pid 377): 105G' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
 check "and keeps a command name that has a space in it whole" \
@@ -588,7 +588,7 @@ check "and keeps a command name that has a space in it whole" \
 check "and says a restart gives the space back, and deleting files does not" \
   "$(grep -qi 'restart' <<< "$swap_big" && grep -qi 'deleting files does not' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
 check "and the swap is said only after the free space sentence, so the nudge still reads its figure" \
-  "$(grep -q '^claude-sync: only 1 GB free on /fixture' <<< "${swap_big%%$'\n'*}" && echo ok || echo "first line: ${swap_big%%$'\n'*}")"
+  "$(grep -q '^claude-sync: only 1.1 GB free on /fixture' <<< "${swap_big%%$'\n'*}" && echo ok || echo "first line: ${swap_big%%$'\n'*}")"
 check "and the first line no longer says nothing measured a cause, since swap was measured" \
   "$(grep -q 'Swap is measured below' <<< "${swap_big%%$'\n'*}" && ! grep -q 'Nothing here says what is using it' <<< "$swap_big" && echo ok || echo "first line: ${swap_big%%$'\n'*}")"
 check "and hands over the top command that lists them, alone in its block" \
@@ -610,7 +610,7 @@ check "swap just under 2% of the disk is not named" \
   "$(! grep -qi 'Swap holds' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 swap_probe "$((1 * GB))" "$TMPROOT/state-swap-21" "$SWAP_21" "" FREE_SPACE_DISK_BYTES=$((100 * GB))
 check "and just over 2% of it is" \
-  "$(grep -qi 'Swap holds 2 GB' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -qi 'Swap holds 2.3 GB' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 
 # A disk with room says nothing, however much swap there is: the holders ride on a warning that is
 # already firing, never on one of their own.
@@ -629,12 +629,12 @@ check "swap that cannot be read is said to be unread on a low disk, and the verd
 # that swap went unread.
 swap_probe "$((1 * GB))" "$TMPROOT/state-swap-nosize" "$SWAP_BIG" "" FREE_SPACE_DISK_BYTES=
 check "swap read with no disk size says how much swap and that its share is not known" \
-  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'Swap holds 92 GB' <<< "$PROBE_MSG" && grep -qi 'size could not be read' <<< "$PROBE_MSG" && ! grep -qi 'could not read swap' <<< "$PROBE_MSG" && [ ! -e "$TOP_CALLED" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'Swap holds 99.3 GB' <<< "$PROBE_MSG" && grep -qi 'size could not be read' <<< "$PROBE_MSG" && ! grep -qi 'could not read swap' <<< "$PROBE_MSG" && [ ! -e "$TOP_CALLED" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
 # A top that prints nothing, or that hangs, still leaves the swap said and the command handed over.
 swap_probe "$((1 * GB))" "$TMPROOT/state-swap-top-empty" "$SWAP_BIG" "$TOP_SILENT"
 check "a top that names nobody is said, never read as nobody holding memory" \
-  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'Swap holds 92 GB' <<< "$PROBE_MSG" && grep -qi 'top named no process' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'Swap holds 99.3 GB' <<< "$PROBE_MSG" && grep -qi 'top named no process' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 TOP_HANG="$TMPROOT/top-hang"
 cat > "$TOP_HANG" <<TOP
 #!/bin/sh
@@ -676,6 +676,8 @@ SCANS="$TMPROOT/scans"; mkdir -p "$SCANS"
 US=$'\037'
 DAY=86400
 EMDASH="$(printf '\xe2\x80\x94')"; ENDASH="$(printf '\xe2\x80\x93')"
+# The fixture sizes below are in GB as this suite defines it (1024^3 bytes), while the total is
+# worded by dcu_human, which writes decimal GB as Finder does (#1807): 10 of these GB reads 10.7 GB.
 # scan_record <file> <scanned_at> <item line>...   each item line: id|category|method|target|bytes|state|size[|flags]
 scan_record(){
   local f="$1" at="$2" items="$SCANS/items-$RANDOM"; shift 2
@@ -701,7 +703,7 @@ base_rc="$PROBE_RC"; base_msg="$PROBE_MSG"
 check "with no scan record a low warning still exits 3" "$([ "$base_rc" -eq 3 ] && echo ok || echo "exit $base_rc")"
 check "and says nothing about disk-clean" "$(! grep -q 'disk-clean' <<< "$base_msg" && echo ok || echo "said: $base_msg")"
 
-# Two offerable items (10 GB and 4.5 GB), one already removed, one refused, one unmeasured. Only the
+# Two offerable items (10 GiB and 4.5 GiB), one already removed, one refused, one unmeasured. Only the
 # first two are what is left to offer.
 SC_FRESH="$SCANS/fresh.json"
 scan_record "$SC_FRESH" "$((T0 - 2 * DAY - 3600))" \
@@ -717,8 +719,8 @@ check "and the warning's first line exactly as it was" \
 check "and adds exactly one line, the rest of the warning untouched" \
   "$([ "$(grep -vF 'disk-clean' <<< "$fresh_msg")" = "$base_msg" ] && [ "$(grep -cF 'disk-clean' <<< "$fresh_msg")" = 1 ] && echo ok || echo "said: $fresh_msg")"
 fresh_line="$(grep -F 'disk-clean' <<< "$fresh_msg")"
-check "the line totals only what is offerable and not yet removed (10 + 4.5 GB)" \
-  "$(grep -qF ' 14.5 GB ' <<< "$fresh_line" && ! grep -qF 'at least' <<< "$fresh_line" && echo ok || echo "said: $fresh_line")"
+check "the line totals only what is offerable and not yet removed (10 + 4.5 GiB, which is 15.6 decimal GB)" \
+  "$(grep -qF ' 15.6 GB ' <<< "$fresh_line" && ! grep -qF 'at least' <<< "$fresh_line" && echo ok || echo "said: $fresh_line")"
 check "and says how old the scan is" "$(grep -qF 'taken 2 day(s) ago' <<< "$fresh_line" && echo ok || echo "said: $fresh_line")"
 check "and suggests /disk-clean" "$(grep -qF 'run /disk-clean' <<< "$fresh_line" && echo ok || echo "said: $fresh_line")"
 check "and holds no dash as punctuation" \
@@ -799,7 +801,7 @@ scan_record "$SC_PART" "$((T0 - DAY))" \
   "p2|large-files|trash|/x/big|$((3 * GB))|offerable|partial"
 scan_probe "$SC_PART" "$((7 * GB))"
 check "a partly read size makes the total 'at least' that much" \
-  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'at least 13.0 GB' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'at least 14.0 GB' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 printf '%s\n' "$(grep -F 'disk-clean' <<< "$PROBE_MSG")" > "$SCANS/line-at-least"
 SC_UNREAD="$SCANS/unread.json"
 scan_record "$SC_UNREAD" "$((T0 - DAY))" \
@@ -807,7 +809,7 @@ scan_record "$SC_UNREAD" "$((T0 - DAY))" \
   "u2|playwright|trash|/x/pw||offerable|unread"
 scan_probe "$SC_UNREAD" "$((7 * GB))"
 check "an offerable item with no size read makes the total 'at least', never a 0 added in" \
-  "$(grep -qF 'at least 10.0 GB' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -qF 'at least 10.7 GB' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 SC_ALLUNREAD="$SCANS/allunread.json"
 scan_record "$SC_ALLUNREAD" "$((T0 - DAY))" "v1|playwright|trash|/x/pw||offerable|unread" "v2|caches|trash|/x/c|$((5 * GB))|removed|measured"
 scan_probe "$SC_ALLUNREAD" "$((7 * GB))"
@@ -833,8 +835,8 @@ cloud_line="$(grep -F 'disk-clean' <<< "$PROBE_MSG")"
 check "an offered item partly kept only in iCloud leaves the low verdict's exit code at 3" "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC")"
 check "and still adds exactly one line, the rest of the warning untouched" \
   "$([ "$(grep -vF 'disk-clean' <<< "$PROBE_MSG")" = "$base_msg" ] && [ "$(grep -cF 'disk-clean' <<< "$PROBE_MSG")" = 1 ] && echo ok || echo "said: $PROBE_MSG")"
-check "the total is what is stored on this Mac (10 + 3 + 1 GB), not made 'at least' by the flag" \
-  "$(grep -qF ' 14.0 GB ' <<< "$cloud_line" && ! grep -qF 'at least' <<< "$cloud_line" && echo ok || echo "said: $cloud_line")"
+check "the total is what is stored on this Mac (10 + 3 + 1 GiB, which is 15.0 decimal GB), not made 'at least' by the flag" \
+  "$(grep -qF ' 15.0 GB ' <<< "$cloud_line" && ! grep -qF 'at least' <<< "$cloud_line" && echo ok || echo "said: $cloud_line")"
 check "and the line says part of the offered items is kept only in iCloud, counting only those still offered" \
   "$(grep -qF 'Part of 2 item(s) it found is kept only in iCloud' <<< "$cloud_line" && echo ok || echo "said: $cloud_line")"
 check "and that the part in iCloud was not measured and is not in the total, with no figure for it" \
@@ -852,7 +854,7 @@ scan_record "$SC_ICLOUDONLY" "$((T0 - DAY))" \
   "i3|build-folders|trash|/x/nm2|$GB|not offerable: in use|measured|icloud-only-part"
 scan_probe "$SC_ICLOUDONLY" "$((7 * GB))"
 check "an item flagged icloud alone, or a flagged one no longer offered, adds no iCloud note" \
-  "$(grep -qF ' 10.0 GB ' <<< "$PROBE_MSG" && ! grep -qF 'kept only in iCloud' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -qF ' 10.7 GB ' <<< "$PROBE_MSG" && ! grep -qF 'kept only in iCloud' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 # With a size read only in part as well, the total stays "at least" and the note is still said.
 SC_CLOUDPART="$SCANS/cloud-partial.json"
 scan_record "$SC_CLOUDPART" "$((T0 - DAY))" \
@@ -860,7 +862,7 @@ scan_record "$SC_CLOUDPART" "$((T0 - DAY))" \
   "q2|build-folders|trash|/x/nm|$((3 * GB))|offerable|measured|icloud-only-part"
 scan_probe "$SC_CLOUDPART" "$((7 * GB))"
 check "with a partly read size as well, the total stays 'at least' and the iCloud note is still said" \
-  "$(grep -qF 'at least 13.0 GB' <<< "$PROBE_MSG" && grep -qF 'Part of 1 item(s) it found is kept only in iCloud' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -qF 'at least 14.0 GB' <<< "$PROBE_MSG" && grep -qF 'Part of 1 item(s) it found is kept only in iCloud' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 # The note qualifies the total, so a flagged item with no size, which is not in the total at all,
 # is not counted in it: the total's own "at least" already covers that item.
 SC_CLOUDUNSIZED="$SCANS/cloud-unsized.json"
@@ -870,7 +872,7 @@ scan_record "$SC_CLOUDUNSIZED" "$((T0 - DAY))" \
   "w3|build-folders|trash|/x/nm2|$GB|offerable|measured|icloud-only-part"
 scan_probe "$SC_CLOUDUNSIZED" "$((7 * GB))"
 check "a flagged item with no size is left out of the iCloud count, which covers only what the total holds" \
-  "$(grep -qF 'at least 11.0 GB' <<< "$PROBE_MSG" && grep -qF 'Part of 1 item(s) it found is kept only in iCloud' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -qF 'at least 11.8 GB' <<< "$PROBE_MSG" && grep -qF 'Part of 1 item(s) it found is kept only in iCloud' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 
 # Everything already removed: the scan has nothing left, which is said rather than a total of 0.
 SC_DONE="$SCANS/done.json"
@@ -900,12 +902,12 @@ S_TALLY="$TMPROOT/state-scan-tally"; mkdir -p "$S_TALLY"
 SC_MARK="$SCANS/mark.json"; cp "$SC_FRESH" "$SC_MARK"
 scan_probe "$SC_MARK" "$((7 * GB))" "$S_TALLY"
 check "the first warning reads the record and keeps its tally" \
-  "$(grep -qF ' 14.5 GB ' <<< "$PROBE_MSG" && [ -s "$S_TALLY/disk-clean-tally" ] && echo ok || echo "tally file: $(ls "$S_TALLY"), said: $PROBE_MSG")"
+  "$(grep -qF ' 15.6 GB ' <<< "$PROBE_MSG" && [ -s "$S_TALLY/disk-clean-tally" ] && echo ok || echo "tally file: $(ls "$S_TALLY"), said: $PROBE_MSG")"
 mark_sid="$(dcr_header "$SC_MARK" scan_id)"
 printf 'a2%sremoved\n' "$US" > "$SCANS/marks-1"; dcr_mark "$SC_MARK" "$mark_sid" "$SCANS/marks-1"
 scan_probe "$SC_MARK" "$((7 * GB))" "$S_TALLY"
 check "a removal marked in the record after that is in the next warning's total" \
-  "$(grep -qF ' 10.0 GB ' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -qF ' 10.7 GB ' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 # "truncated" is as long as "offerable", so this mark leaves the record the same size, and it lands
 # inside the same second: only the new file's inode tells the two apart.
 printf 'a1%struncated\n' "$US" > "$SCANS/marks-2"; dcr_mark "$SC_MARK" "$mark_sid" "$SCANS/marks-2"
@@ -921,7 +923,7 @@ keep_key="$(sed -n 1p "$S_KEEP/disk-clean-tally")"
 printf '%s\n%s 2 0 %s 0 0 0 0 1\n' "$keep_key" "$((T0 - DAY))" "$((99 * 1024 * 1024))" > "$S_KEEP/disk-clean-tally"
 scan_probe "$SC_KEEP" "$((7 * GB))" "$S_KEEP"
 check "a kept tally whose key matches the record is used without reading the record again" \
-  "$(grep -qF ' 99.0 GB ' <<< "$PROBE_MSG" && grep -qF 'taken 1 day(s) ago' <<< "$PROBE_MSG" && grep -qF 'Part of 1 item(s)' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -qF ' 106.3 GB ' <<< "$PROBE_MSG" && grep -qF 'taken 1 day(s) ago' <<< "$PROBE_MSG" && grep -qF 'Part of 1 item(s)' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 # A tally kept before the iCloud count was added holds eight numbers. Believed, it would hide the
 # note until the record next changed, so it is read past like any other tally that is not one.
 SC_OLDTALLY="$SCANS/old-tally.json"; cp "$SC_CLOUD" "$SC_OLDTALLY"
@@ -948,6 +950,28 @@ check "and the /disk-clean skill the line suggests is there to run (L111)" \
   "$([ -f "$DIR/../skills/disk-clean/SKILL.md" ] && grep -q '^name: disk-clean$' "$DIR/../skills/disk-clean/SKILL.md" && echo ok || echo "no disk-clean skill beside $DIR")"
 check "which is where disk-clean's scan writes it" \
   "$(grep -qF 'DCS_RECORD="$DCS_STATE/last-scan.json"' "$DIR/../skills/disk-clean/scan-lib.sh" && grep -qF 'DCS_STATE="$HOME/.claude/state/disk-clean"' "$DIR/../skills/disk-clean/scan-lib.sh" && echo ok || echo "scan-lib.sh no longer names that path")"
+
+# One unit in one warning (#1807): the free space figure, the floor and the scan's total are all
+# worded by dcu_human, so 10 GiB free and a 10 GiB scan total read alike, never as "10 GB free"
+# beside "10.7 GB" found. Only the words change: the floor is still FREE_SPACE_FLOOR_GB GiB.
+. "$DIR/lib/disk-clean-units.sh" || { echo "FAIL: lib/disk-clean-units.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
+SC_UNIT="$SCANS/unit.json"
+scan_record "$SC_UNIT" "$((T0 - DAY))" "u1|caches|trash|/x/c|$((10 * GB))|offerable|measured"
+scan_probe "$SC_UNIT" "$((10 * GB))"
+unit_words="$(dcu_human $((10 * GB / 1024)))"
+check "10 GiB free and a 10 GiB scan total are worded alike, by the one size rule ($unit_words)" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF "only $unit_words free on /fixture" <<< "$PROBE_MSG" && grep -qF "found $unit_words that it could remove" <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+check "which is the figure Finder shows for 10 GiB, 10.7 GB" \
+  "$(grep -qF 'only 10.7 GB free on /fixture' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+check "and the floor it is under is worded by the same rule ($(dcu_human $((20 * GB / 1024))))" \
+  "$(grep -qF "under the $(dcu_human $((20 * GB / 1024))) floor" <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+scan_probe "$TMPROOT/no-scan-here/last-scan.json" "$((20 * GB))"
+check "the floor itself is unchanged: 20 GiB free is not under it (exit 0)" "$([ "$PROBE_RC" -eq 0 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+scan_probe "$TMPROOT/no-scan-here/last-scan.json" "$((20 * GB - 1))"
+check "and one byte less is (exit 3)" "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+scan_probe "$TMPROOT/no-scan-here/last-scan.json" "$((500 * 1024 * 1024))"
+check "under a GB the free space is worded in MB by the same rule, never as 0 GB" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF "only $(dcu_human $((500 * 1024))) free on /fixture" <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
 # ================== the nudge: WHEN the answer is spoken ==================
 # The check answers the question; the nudge decides when to say it. Same split as
@@ -984,6 +1008,14 @@ check "the same answer is not repeated on the next prompt" \
 n_worse="$(nudge "$((1 * GB))" "$((T0 + 120))" "$NS2" sess-low)"
 check "but a materially worse answer is said again" \
   "$(grep -q 'GB free on' <<< "$n_worse" && echo ok || echo "said: $n_worse")"
+# The figure is worded by the one size rule (#1807), "1.1 GB" or "524 MB", and the bands are whole
+# GB: the nudge must read both forms, or an answer it cannot read keys on the verdict alone and is
+# said again on a change no band records.
+NS_MB="$TMPROOT/ns-mb"; mkdir -p "$NS_MB"
+n_mb1="$(nudge "$((1 * GB))" "$T0" "$NS_MB" sess-mb)"
+n_mb2="$(nudge "$((500 * 1024 * 1024))" "$((T0 + 60))" "$NS_MB" sess-mb)"
+check "1.1 GB and then 524 MB free are both read as band 0, so the second is not repeated" \
+  "$(grep -qF '1.1 GB free on' <<< "$n_mb1" && [ -z "$n_mb2" ] && echo ok || echo "first said: $n_mb1; second said: $n_mb2")"
 # A new session loaded nothing and has been told nothing, so it hears it too.
 n_other="$(nudge "$((7 * GB))" "$((T0 + 180))" "$NS2" sess-other)"
 check "a different session is told as well, having heard nothing itself" \
