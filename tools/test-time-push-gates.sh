@@ -235,8 +235,10 @@ twice = sorted({r for r in rows if rows.count(r) > 1})
 if missing: out.append("no row for: " + ", ".join(missing))
 if extra: out.append("a row for what no push waits on: " + ", ".join(extra))
 if twice: out.append("more than one row for: " + ", ".join(twice))
-print("; ".join(out))' "$REPO_ROOT/README.md")"
-[ -z "$table_diff" ] && [ -n "$real" ] \
+print("; ".join(out) if out else "TABLE-OK")' "$REPO_ROOT/README.md" 2>&1)"
+# Passes only on the reader's own word that it compared and found nothing: a reader that crashed, or
+# a python3 that could not start, prints no difference either, and must not read as agreement (L98).
+[ "$table_diff" = "TABLE-OK" ] && [ -n "$real" ] \
   && check "#1870 the README's cost table has one row for each gate a push waits on, and no other" ok \
   || check "#1870 the README's cost table has one row for each gate a push waits on, and no other" "$table_diff"
 
