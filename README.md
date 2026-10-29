@@ -1293,7 +1293,22 @@ minutes. It accepts only the merge
 method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
 the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run
-out. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
+out. One conflict it resolves itself (claude-config#1867): each mod's description in this README's
+mods table is one long line, so two pull requests touching one mod conflict on it, and on 2026-10-28
+that stopped #1819, #1835 (twice), #1850 and #1852 for about an hour each. When GitHub refuses an
+update, the helper merges the base into the head it judged in a throwaway clone of its own (the
+session's checkout is never touched; its objects are only borrowed, read only), and pushes that
+merge, never forced, only when README.md is the one file in conflict and
+`hooks/lib/readme-rows-merge.py` resolves every hunk of it as rows of the mods table: a row changed
+on one side takes that side, and a row changed on both is merged cell by cell and word by word,
+an issue number run that both sides added to is unioned, and anything else refuses. The resolver
+checks the result before writing it (no conflict marker, the table holding every mod either side
+has once, each row's cell count unchanged), and exits 0 resolved, 10 not a case it handles, or 2
+could not read, so a crash (1) is never read as handled. The pushed head then waits for its checks
+and lessons review and is judged by every gate as any update's is. Any other conflict, or a fork's
+branch, stops as before, naming the conflicted files. Reshaping the README instead would not have
+helped: two pull requests adding an issue number to one mod meet on one line however the
+description is laid out. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
 merge landed: on 2026-10-19 that closed bidspoke#2482, which was based on the merged
 branch, and a closed pull request's base cannot be changed, so it had to be opened again as a new
 one, losing its review thread and a CI round (claude-config#1337). Instead, once the merge reads
