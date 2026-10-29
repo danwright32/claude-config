@@ -21,6 +21,12 @@ import {
   isModHookTs,
   drawsChange,
   modHookTsShows,
+  modHookTsHold,
+  shellOutcome,
+  shellUnchecked,
+  card,
+  unsureCard,
+  unreadableCard,
   messageWordingSame,
   modHookLogicOnly,
   modHookDrawingUntouched,
@@ -986,6 +992,73 @@ test("#1841: the wording of a toast, a refusal or a tool's result in a mod's .ts
   expect(modHookTsShows([], 'new.ts', undefined, 'export const twice = (n: number) => n * 2\n')).toBe(false)
   // A mod file beside it that cannot be read holds every edit.
   expect(modHookTsShows([{ name: 'place.ts', text: "const x = 'open" }], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe(true)
+})
+
+// #1859: a hold made only because a message's words changed said the edit "changes how the screen
+// looks", and a shell write's that it "changed what the mod draws", claiming more than the check
+// measured (L11). The check says why it held (modHookTsHold), naming the words, and every refusal,
+// card and shell outcome says that reason; a real look change still says the look.
+test("#1859: a hold for a message's words alone says so, naming the words, and never the screen's look; a look change still says the look", () => {
+  const reworded = SECRET_TS.replace('Blocked a command that', 'Stopped a command that')
+  const hold = modHookTsHold([], 'register.ts', SECRET_TS, reworded)
+  const words = hold && 'worded' in hold ? hold.worded : ''
+  expect(words).toContain('Stopped a command that')
+  // A look change, logic alone, and words taken away.
+  expect(modHookTsHold([], 'row.ts', undefined, "export const row = (t: string) => [{ text: t, color: 'warning' }]\n")).toEqual({ look: true })
+  expect(modHookTsHold([], 'register.ts', SECRET_TS, SECRET_TS.replace('what.length > 3', 'what.length > 5'))).toBe(undefined)
+  const gone = modHookTsHold([], 'register.ts', SECRET_TS, SECRET_TS.replace("result: 'Kept the job running.'", "result: ''"))
+  expect(gone && 'worded' in gone ? gone.worded : '').toContain('Kept the job running.')
+  // Long words are shortened, their spaces run together.
+  const long = SECRET_TS.replace('Blocked a command that would print a secret.', `Stopped ${'a very long sentence   '.repeat(8)}that ends here.`)
+  const shortened = modHookTsHold([], 'register.ts', SECRET_TS, long)
+  const said = shortened && 'worded' in shortened ? shortened.worded : ''
+  expect(said.length).toBeLessThan(80)
+  expect(said.includes('  ')).toBe(false)
+  expect(said.startsWith('Stopped a very long')).toBe(true)
+
+  const subjects = [{ key: 'k', label: 'issue #1859 in claude-config' }]
+  const file = 'payload/mods/demo/hooks/guard.ts'
+  const worded = [{ file, words }]
+  const LOOK = 'changes how the screen looks'
+  const WORDS = 'changes the words of a message Dan reads'
+  for (const r of [
+    refusal('t1', [file], subjects, [], worded),
+    agentRefusal([file], subjects, 't2', [], worded),
+    checked([file], subjects, [], worded),
+    unsure([file], 'a detached head names no branch', worded),
+    unreadable([file], subjects, 'EIO', worded),
+  ]) {
+    expect({ r, words: r.includes(WORDS) && r.includes('Stopped a command that') }).toEqual({ r, words: true })
+    expect({ r, look: r.includes(LOOK) }).toEqual({ r, look: false })
+    expect(DASHES.test(r)).toBe(false)
+  }
+  for (const c of [card([file], subjects, worded), unsureCard([file], worded), unreadableCard([file], worded)]) {
+    expect({ c: c.reason, words: c.reason.includes('Stopped a command that') }).toEqual({ c: c.reason, words: true })
+    expect({ c: c.reason, look: c.reason.includes('looks on screen') }).toEqual({ c: c.reason, look: false })
+  }
+  // A real look change says the look, and never a message's words.
+  for (const r of [refusal('t3', ['app/page.tsx'], subjects), agentRefusal(['app/page.tsx'], subjects, 't4'), checked(['app/page.tsx'], subjects)]) {
+    expect(r).toContain(`app/page.tsx ${LOOK}`)
+    expect(r.includes(WORDS)).toBe(false)
+  }
+  expect(card(['app/page.tsx'], subjects).reason.startsWith('Claude wants to make an edit that may change how something looks on screen')).toBe(true)
+  // Both at once: each file is said with its own reason.
+  const both = refusal('t5', ['app/page.tsx', file], subjects, [], worded)
+  expect(both).toContain(`app/page.tsx ${LOOK}`)
+  expect(both).toContain(`${file} ${WORDS}`)
+  expect(both.includes(`${file} ${LOOK}`)).toBe(false)
+
+  // A shell write held for a message's words says so, never what the mod draws.
+  for (const o of [{ file, undone: '/s/kept' }, { file, unkept: 'no scratchpad' }, { file, changed: '/s/kept' }, { file, failed: 'EIO', kept: '/s/kept' }]) {
+    const s = shellOutcome(o, false, words)
+    expect({ s, words: s.includes('the words of a message Dan reads') && s.includes('Stopped a command that') }).toEqual({ s, words: true })
+    expect({ s, draws: s.includes('what the mod draws') }).toEqual({ s, draws: false })
+    expect(shellOutcome(o)).toContain('what the mod draws')
+  }
+  // One that could not be read after says it cannot tell which of the two it was, and so does a check
+  // after a shell write that itself failed.
+  expect(shellOutcome({ file, unread: 'EIO' })).toContain('what the mod draws or the words of a message Dan reads')
+  expect(shellUnchecked('EIO')).toContain('the words of a message Dan reads')
 })
 
 // #1841, Dan, 2026-10-28 ("Narrow it first"): only the words a person reads count. Replayed, about 50
