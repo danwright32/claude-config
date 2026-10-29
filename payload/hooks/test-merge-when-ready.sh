@@ -2547,6 +2547,16 @@ check_eq "#1867 a fork's pull request stops as before" "1" "$rc"
 check "#1867 saying its branch is in a fork" "fork" "$out"
 check_eq "#1867 with its branch untouched" "$RR_HEAD" "$(rr_tip)"
 
+# An origin whose address carries a credential is not the repository's plain address, so it is
+# refused before any fetch, and git's errors, which repeat the address, are never printed.
+rr_fixture token "$MAIN_ROWS" "$BRANCH_ROWS"
+git -C "$RS" remote set-url origin https://x-access-token:s3cr3t-stand-in@github.com/acme/widget.git
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 an origin carrying a credential stops as before" "1" "$rc"
+check "#1867 saying the origin is not the repository" "origin is not acme/widget" "$out"
+check_not "#1867 and never printing the credential" "s3cr3t-stand-in" "$out"
+check_eq "#1867 nothing was pushed through it" "$RR_HEAD" "$(rr_tip)"
+
 # The resolver's own exit codes (L1033): 0 resolved, 10 not a case it handles, 2 could not read.
 RR_LIB="$DIR/lib/readme-rows-merge.py"
 rr_merge_in(){ # rr_merge_in <fixture>: the fixture's branch as first pushed, with main merged into it, conflicted

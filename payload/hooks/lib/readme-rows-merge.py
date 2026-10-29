@@ -188,8 +188,8 @@ def check_hunks_in_table(segments):
 
 def issue_union(so, sb, st):
     """A word conflict inside the Issue cell where each side is a run of issue numbers: every
-    number any version names, first seen first, then in number order, as the scratch resolver did
-    on 2026-10-28. Keeps our side's surrounding spaces and its trailing comma, which both sides
+    number any of the three versions names, once each, in number order, as the scratch resolver
+    did on 2026-10-28. Keeps our side's surrounding spaces and its trailing comma, which both sides
     must agree on."""
     if not (ISSUE_RUN.match(so.strip()) and ISSUE_RUN.match(st.strip()) and (sb.strip() == "" or ISSUE_RUN.match(sb.strip()))):
         return None
