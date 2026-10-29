@@ -89,6 +89,17 @@ if [ -f "$SUITE_PILE_LIB" ]; then
   # shellcheck source=payload/hooks/lib/suite-pile.sh
   . "$SUITE_PILE_LIB"
 fi
+# The ONE reading of the watcher hold record, shared with the hooks that refuse a payload write
+# without the writing session's own hold (claude-config#1886, L370). Resolved the same way as the
+# three above. It defines functions only and sets no variable, so it cannot move SYNC_HOLD_FILE,
+# which is decided below for this run's home. Missing, hold_rows says so and reads a record that
+# exists as held rather than guessing at it.
+HOLD_RECORD_LIB="$SYNC_SELF_PAYLOAD/hooks/lib/hold-record.sh"
+[ -f "$HOLD_RECORD_LIB" ] || HOLD_RECORD_LIB="$CLAUDE_HOME/hooks/lib/hold-record.sh"
+if [ -f "$HOLD_RECORD_LIB" ]; then
+  # shellcheck source=payload/hooks/lib/hold-record.sh
+  . "$HOLD_RECORD_LIB"
+fi
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
 MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
@@ -10565,45 +10576,66 @@ FAILED
 # The session is CLAUDE_CODE_SESSION_ID, which Claude Code gives every tool call a session makes,
 # its subagents' included, so a subagent's hold is its session's. Anything else (a plain terminal,
 # a value that is not the shape of an id) is "unknown".
+#
+# The record is PARSED in hooks/lib/hold-record.sh, which the hooks that refuse a payload write
+# without the writing session's own hold read through as well (claude-config#1886), so the tool
+# and those hooks cannot come to two answers about whose hold a line is (L370).
 hold_self(){
-  local id="${CLAUDE_CODE_SESSION_ID:-}"
-  case "$id" in ''|*[!A-Za-z0-9._-]*) id=unknown ;; esac
-  printf '%s' "$id"
+  if declare -F hold_record_session >/dev/null 2>&1; then hold_record_session "${CLAUDE_CODE_SESSION_ID:-}"
+  else printf 'unknown'; fi
 }
 # Who a hold belongs to, in words, and the command that lifts it from where this run stands.
 hold_owner_words(){   # $1 = owner
   if [ "$1" = unknown ]; then printf 'no session recorded'
   elif [ "$1" = "$(hold_self)" ]; then printf 'this session'
-  else printf 'session %s' "${1:0:8}"; fi
+  else printf 'session %s' "$(hold_record_short "$1")"; fi
 }
 hold_lift_hint(){   # $1 = owner
   if [ "$1" = unknown ] || [ "$1" = "$(hold_self)" ]; then printf 'claude-sync release'
-  else printf 'claude-sync release --other %s' "${1:0:8}"; fi
+  else printf 'claude-sync release --other %s' "$(hold_record_short "$1")"; fi
 }
 
 # Every line of the record as a row: state, ends, taken, host, owner, why, separated by the unit
-# separator (octal 037) rather than a tab, because `read` folds a run of tabs into one and a row
-# with empty fields would shift. State is live, expired, or unreadable. Read only.
+# separator (octal 037). Read only; the shape is hold_record_rows's.
+#
+# With the shared reader missing (a checkout whose payload lost hooks/lib/hold-record.sh, and no
+# installed copy either), the record cannot be read, and neither "no hold" nor clearing it is safe:
+# the first sends somebody's half finished work, the second destroys their decision (L5, L42). So
+# a record that exists reads as held for another minute, by nobody known, with the reason said, and
+# every reading after says it again until the file is restored.
+#
+# That made up row answers ONE question, "is the watcher held", and nothing else. Every path that
+# rewrites the record (hold, release, clearing an expired line, and hold_write_rows beneath them
+# all) refuses while the reader is missing: working from the made up row would write it back over
+# the real holds, destroying every session's decision in the file (L5; the lessons review of #1894).
+hold_reader_loaded(){ declare -F hold_record_rows >/dev/null 2>&1; }
+hold_reader_missing_why(){
+  printf 'hooks/lib/hold-record.sh, which reads the hold record, is in neither %s/hooks/lib nor %s/hooks/lib. Restore it with: git checkout -- payload/hooks/lib/hold-record.sh' "$SYNC_SELF_PAYLOAD" "$CLAUDE_HOME"
+}
 hold_rows(){   # $1 = now
   [ -n "$SYNC_HOLD_FILE" ] && [ -f "$SYNC_HOLD_FILE" ] || return 0
-  awk -v now="$1" 'BEGIN { OFS = "\037" }
-    {
-      if ($1 !~ /^[0-9]+$/) { print "unreadable", "", "", "", "", ""; next }
-      ends = $1 + 0; taken = $2; host = $3
-      if ($4 ~ /^session=/) { owner = substr($4, 9); first = 5 } else { owner = "unknown"; first = 4 }
-      if (owner == "") owner = "unknown"
-      if (taken !~ /^[0-9]+$/) taken = ends
-      why = ""
-      for (i = first; i <= NF; i++) why = why (why == "" ? "" : " ") $i
-      gsub(/\037/, " ", why)
-      print ((ends > now + 0) ? "live" : "expired"), ends, taken, host, owner, why
-    }' "$SYNC_HOLD_FILE" 2>/dev/null || true
+  if ! hold_reader_loaded; then
+    echo "claude-sync: the watcher hold record at $SYNC_HOLD_FILE cannot be read, so the watcher is treated as held: $(hold_reader_missing_why)" >&2
+    printf 'live\037%s\037%s\037%s\037unknown\037%s\n' "$(( $1 + 60 ))" "$1" "$(hostname -s 2>/dev/null || echo unknown)" "the hold record cannot be read: hooks/lib/hold-record.sh is missing"
+    return 0
+  fi
+  hold_record_rows "$SYNC_HOLD_FILE" "$1"
 }
 
 # Writes the rows on stdin back as the record, longest first, or removes the record when none are
 # left. Written under a temporary name and RENAMED into place, never truncated and refilled (#1854).
+#
+# Refuses, writing nothing, while the shared reader is missing: the rows it was handed were then
+# read through the made up row in hold_rows, never from the record (#1886). The lowest layer every
+# rewrite passes through, so a new caller cannot forget it (L593). Each caller still refuses first,
+# in its own words.
 hold_write_rows(){
   local tmp="$SYNC_HOLD_FILE.writing.$$" body
+  if ! hold_reader_loaded; then
+    cat > /dev/null
+    echo "claude-sync: the watcher hold record at $SYNC_HOLD_FILE was not rewritten, and is exactly as it was: $(hold_reader_missing_why)" >&2
+    return 1
+  fi
   body="$(awk -F '\037' 'NF >= 6 { print $2 " " $3 " " $4 " session=" $5 " " $6 }' | sort -k1,1nr)"
   if [ -z "$body" ]; then
     rm -f -- "$SYNC_HOLD_FILE" 2>/dev/null || true
@@ -10646,6 +10678,8 @@ hold_lock_refusal(){   # $1 = hold_lock's return code
 hold_remaining(){
   local now rows stale st ends taken host owner why live_n rc=0 tail
   [ -n "$SYNC_HOLD_FILE" ] && [ -f "$SYNC_HOLD_FILE" ] || return 1
+  # With no reader nothing can be told expired, so nothing is cleared: only whether it is held.
+  hold_reader_loaded || { hold_live_left; return; }
   now="$(date +%s)"
   rows="$(hold_rows "$now")"
   stale="$(printf '%s\n' "$rows" | awk -F '\037' '$1 != "live"' | grep -c . || true)"
@@ -10707,6 +10741,8 @@ hold_live_left(){
 do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
   local mins="${1:-}" dflt="$SYNC_HOLD_MINUTES" why now until tmp at owner rows rc=0 own_left own_why st ends taken host o w
   [ -n "$SYNC_HOLD_FILE" ] || die "no hold was taken: $(not_users_own_home), so this Mac's watcher is not its to hold. Name a hold file in SYNC_HOLD_FILE."
+  # Taking a hold rewrites every session's line in the record, which needs the reader (#1886).
+  hold_reader_loaded || die "no hold was taken, and the hold record at $SYNC_HOLD_FILE was left exactly as it was: $(hold_reader_missing_why)"
   # Base ten whatever was typed: 090 is ninety minutes, never an octal error after the fact. No
   # length, or none worth having, is the configured default; an unusable default is 30.
   case "$dflt" in ''|*[!0-9]*) dflt=30 ;; esac
@@ -10794,6 +10830,8 @@ do_release(){   # [--other <session>]
     echo "No watcher hold was in force, so nothing was released."
     return 0
   fi
+  # Lifting a hold rewrites every session's line in the record, which needs the reader (#1886).
+  hold_reader_loaded || die "nothing was released, and the hold record at $SYNC_HOLD_FILE was left exactly as it was, so the watcher is held as before: $(hold_reader_missing_why)"
   hold_lock || rc=$?
   [ "$rc" = 0 ] || die "nothing was released: $(hold_lock_refusal "$rc"), so the watcher is held exactly as before."
   now="$(date +%s)"

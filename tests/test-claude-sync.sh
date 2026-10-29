@@ -18609,6 +18609,68 @@ check "#1863 and still lists the live hold" "line_has \"\$out_63l\" 'watcher hol
 check "#1863 and leaves the expired line for a later reading to clear" "grep -q 'A ran out again' '$H63_HOLD'"
 h63_b bash "$SCRIPT" release >/dev/null 2>&1 || true
 
+# THE SHARED READER MISSING (claude-config#1886). The record is parsed in hooks/lib/hold-record.sh,
+# which the payload write gate reads through too, so the two cannot disagree about whose hold a line
+# is. A claude-sync that cannot load it must neither read an existing record as no hold (the watcher
+# would send somebody's half finished work) nor clear it (somebody's decision): it reads it as held
+# and says why. hold_rows is cut out of the script by name and run with no reader defined.
+H63_ROWS_FN="$(sed -n -e '/^hold_reader_loaded(){.*}$/p' -e '/^hold_reader_missing_why(){/,/^}/p' -e '/^hold_rows(){/,/^}/p' "$SCRIPT")"
+case "$H63_ROWS_FN" in *hold_record_rows*) h63_cut=whole ;; *) h63_cut=missing ;; esac
+check "#1886 hold_rows was cut from claude-sync whole" "[ '$h63_cut' = whole ]"
+h63_rows_no_reader(){
+  local SYNC_HOLD_FILE="$H63_HOLD" SYNC_SELF_PAYLOAD="$H63/no-payload" CLAUDE_HOME="$H63/no-home"
+  ( unset -f hold_record_rows hold_record_session hold_record_short 2>/dev/null
+    eval "$H63_ROWS_FN"
+    hold_rows "$(date +%s)" ) 2>&1
+}
+printf '%s %s %s session=%s B holds on\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" somehost "$H63_B" > "$H63_HOLD"
+out_63r="$(h63_rows_no_reader)"
+dbg "#1886 hold_rows with no reader: $out_63r"
+case "$out_63r" in live*|*"
+live"*) h63_held=yes ;; *) h63_held=no ;; esac
+check "#1886 with the shared reader missing, an existing record reads as held, not as no hold" "[ '$h63_held' = yes ]"
+check "#1886 and says the reader is missing, and how to restore it" "line_has \"\$out_63r\" 'cannot be read' 'git checkout -- payload/hooks/lib/hold-record.sh'"
+check "#1886 and leaves the record as it was" "grep -q 'B holds on' '$H63_HOLD'"
+rm -f "$H63_HOLD"
+out_63n="$(h63_rows_no_reader)"
+check "#1886 and with no record there is nothing to read and nothing said" "[ -z \"\$out_63n\" ]"
+
+# THE SAME, END TO END, FOR EVERY COMMAND THAT REWRITES THE RECORD (claude-config#1886, the lessons
+# review of #1894). The held row hold_rows makes up without the reader answers only "is the watcher
+# held". Taking, lifting or clearing a hold reads the rows and writes them back, so working from the
+# made up row would write it over the real holds, destroying two sessions' decisions (L5). Each must
+# refuse, change nothing, exit non-zero and name the file and how to restore it. A copy of the
+# script with no payload beside it, under a home whose hooks hold no lib, is a claude-sync whose
+# reader cannot be found.
+H63_NOLIB="$H63/no-reader"; mkdir -p "$H63_NOLIB"
+cp "$SCRIPT" "$H63_NOLIB/claude-sync"
+{
+  printf '%s %s %s session=%s A keeps building\n' "$(( $(date +%s) + 7200 ))" "$(date +%s)" somehost "$H63_A"
+  printf '%s %s %s session=%s B keeps committing\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" somehost "$H63_B"
+  printf '%s %s %s session=%s A ran out long ago\n' "$(( $(date +%s) - 600 ))" "$(( $(date +%s) - 4200 ))" somehost "$H63_A"
+} > "$H63_HOLD"
+cp "$H63_HOLD" "$H63/hold-before-no-reader"
+h63_nolib_try(){   # $1 = label  $2.. = command words, run as session A -> one check per promise
+  local label="$1" rc=0
+  shift
+  H63_NL_OUT="$(h63_a bash "$H63_NOLIB/claude-sync" "$@" 2>&1)" || rc=$?
+  dbg "#1886 $label with no reader: rc=$rc $H63_NL_OUT"
+  check "#1886 $label with the reader missing refuses and exits non-zero" "[ '$rc' != 0 ]"
+  check "#1886 and names the missing file and how to restore it" \
+    "line_has \"\$H63_NL_OUT\" 'hold-record.sh' 'git checkout -- payload/hooks/lib/hold-record.sh'"
+  check "#1886 and leaves the record byte for byte as it was" "cmp -s '$H63_HOLD' '$H63/hold-before-no-reader'"
+}
+h63_nolib_try "hold" hold 30 "with no reader"
+h63_nolib_try "release" release
+h63_nolib_try "release --other" release --other bbbbbbbb
+# Status reads through the same made up row and would clear the expired line. It still answers that
+# the watcher is held, and clears nothing.
+out_63s="$(h63_a bash "$H63_NOLIB/claude-sync" status 2>&1 || true)"
+dbg "#1886 status with no reader: $out_63s"
+check "#1886 status with the reader missing still says the watcher is held" "line_has \"\$out_63s\" 'watcher hold' 'hold-record.sh'"
+check "#1886 and clears nothing, the expired line included" "cmp -s '$H63_HOLD' '$H63/hold-before-no-reader'"
+rm -f "$H63_HOLD" "$H63/hold-before-no-reader"
+
 
 section "== a watch daemon older than the claude-sync on disk refuses to send (#420) =="
 # `do_watch` runs `watch_tick` as a FUNCTION inside one long lived bash process, so every send the
