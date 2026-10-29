@@ -150,6 +150,16 @@ prompt_hook "a payload with no session" "neither a session id" "$NOSESSION" rule
 prompt_hook "a payload with no session" "neither a session id" "$NOSESSION" suite-pile-notice.sh
 prompt_hook "a payload with no session" "neither a session id" "$NOSESSION" sync-stuck-notice.sh
 prompt_hook "settings that are not whole numbers" "must all be whole numbers" "$WITHSESSION" suite-pile-notice.sh SYNC_SUITE_MAX_AGE=soon
+# Run by its bare name from its own folder, as a person trying a hook by hand does, a hook that cuts
+# its folder from its path in bash must still find the library rather than fall back.
+for bare in sync-stuck-notice.sh suite-pile-notice.sh rtk-rewrite.sh; do
+  out="$(cd "$DIR" && printf '%s' "$NOSESSION" | env PATH="$WORK/empty" TMPDIR="$WORK" HOME="$WORK/home" "$BASH" "$bare" 2>/dev/null)"
+  case "$out" in
+    *"lib/hook-notice.sh is missing"*) bad "#1906 $bare run by its bare name did not find lib/hook-notice.sh beside it: $out" ;;
+    *systemMessage*) ok ;;
+    *) bad "#1906 $bare run by its bare name with nothing on PATH said nothing: [$out]" ;;
+  esac
+done
 mkdir -p "$WORK/catonly"; ln -s "$(command -v cat)" "$WORK/catonly/cat"; ln -s "$(command -v dirname)" "$WORK/catonly/dirname"
 prompt_hook "no python3" "python3 is not on PATH" "$WITHSESSION" stale-worktree-nudge.sh PATH="$WORK/catonly"
 

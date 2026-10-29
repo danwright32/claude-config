@@ -42,7 +42,8 @@
 #   CLAUDE_SUITE_PILE_NOW         the clock, as an epoch, so a test can cross the window (L290)
 set -uo pipefail
 
-SPN_DIR="${BASH_SOURCE[0]%/*}"   # cut in bash, since this runs on every prompt
+# Cut in bash, since this runs on every prompt; a bare name (run from its own folder) is ".".
+case "${BASH_SOURCE[0]}" in */*) SPN_DIR="${BASH_SOURCE[0]%/*}" ;; *) SPN_DIR=. ;; esac
 # shellcheck source=lib/hook-notice.sh
 . "$SPN_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2

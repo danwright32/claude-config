@@ -68,7 +68,8 @@ RULES_DIR="${CLAUDE_RULES_DIR:-$HOME/.claude}"
 # SessionStart plain stdout goes to Claude as context, so the systemMessage, which
 # neither event is documented to discard, is the channel shown to the person.
 # shellcheck source=lib/hook-notice.sh
-RFC_DIR="${BASH_SOURCE[0]%/*}"   # cut in bash, since this runs on every prompt
+# Cut in bash, since this runs on every prompt; a bare name (run from its own folder) is ".".
+case "${BASH_SOURCE[0]}" in */*) RFC_DIR="${BASH_SOURCE[0]%/*}" ;; *) RFC_DIR=. ;; esac
 . "$RFC_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }

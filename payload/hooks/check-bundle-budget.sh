@@ -180,19 +180,6 @@ READERS
   BB_NOTE="bundle-budget: this repository commits $own_record, but nothing in this repository reads it, so it judges nothing and this guard weighs the bundle as usual."
 fi
 
-# The record is keyed by the remote, never by the path: a worktree and its checkout are one
-# repository with one bundle, and a repository that moves keeps its budget.
-remote="$(git remote get-url origin 2>/dev/null)"
-if [ -z "$remote" ]; then
-  say_and_allow "bundle-budget: this repository has no origin remote to key a budget on, so the bundle weight was not judged.$(BUNDLE_BUDGET_STATE_DIR="${BUNDLE_BUDGET_STATE_DIR:-}" state_dir="${BUNDLE_BUDGET_STATE_DIR:-$HOME/.claude/state/bundle-budget}"; lifetime_note)"
-fi
-
-head_time="$(git log -1 --format=%ct 2>/dev/null)"
-case "$head_time" in
-  ''|*[!0-9]*)
-    say_and_allow "bundle-budget: could not read HEAD's commit time, so whether the build is fresh is unknown and the bundle was not judged." ;;
-esac
-
 state_dir="${BUNDLE_BUDGET_STATE_DIR:-$HOME/.claude/state/bundle-budget}"
 
 # HOW MANY REPOSITORIES THIS GUARD HAS EVER WEIGHED, said on every push it does NOT weigh
@@ -213,6 +200,21 @@ lifetime_note(){
     *) printf ' This guard has weighed %s repositories ever.' "$n" ;;
   esac
 }
+
+# Defined above here because the line below calls it: called before its definition, the count was
+# silently dropped from this notice, since bash runs a script line by line (#1906).
+# The record is keyed by the remote, never by the path: a worktree and its checkout are one
+# repository with one bundle, and a repository that moves keeps its budget.
+remote="$(git remote get-url origin 2>/dev/null)"
+if [ -z "$remote" ]; then
+  say_and_allow "bundle-budget: this repository has no origin remote to key a budget on, so the bundle weight was not judged.$(lifetime_note)"
+fi
+
+head_time="$(git log -1 --format=%ct 2>/dev/null)"
+case "$head_time" in
+  ''|*[!0-9]*)
+    say_and_allow "bundle-budget: could not read HEAD's commit time, so whether the build is fresh is unknown and the bundle was not judged." ;;
+esac
 
 out="$(python3 "$HOOK_DIR/lib/bundle-budget.py" --repo "$repo_dir" --head-time "$head_time" \
   --remote "$remote" --state-dir "$state_dir" $accept 2>&1)"; rc=$?

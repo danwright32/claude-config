@@ -66,7 +66,8 @@ set -uo pipefail
 # A check that could not run is said as a systemMessage (#1906). The hooks documentation says
 # Claude Code discards a hook's stderr on exit 0, and that a UserPromptSubmit hook's plain stdout
 # reaches only Claude, as context; its systemMessage is not among those it says are discarded.
-SSN_DIR="${BASH_SOURCE[0]%/*}"   # cut in bash, since this runs on every prompt
+# Cut in bash, since this runs on every prompt; a bare name (run from its own folder) is ".".
+case "${BASH_SOURCE[0]}" in */*) SSN_DIR="${BASH_SOURCE[0]%/*}" ;; *) SSN_DIR=. ;; esac
 # shellcheck source=lib/hook-notice.sh
 . "$SSN_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2

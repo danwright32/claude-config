@@ -165,11 +165,13 @@ fire_stdout "$R3" "git push"
 why="$(hook_notice_verdict "$FS_OUT" 'found no scanner')"
 [ "$FS_RC" -eq 0 ] && [ -z "$why" ] && check "#1906 and says so as a systemMessage" ok \
   || check "#1906 and says so as a systemMessage" "exit=$FS_RC $why"
-# A passing push says what it covered (L400), which only reaches the person as a systemMessage.
+# A passing push says what it covered (L400), which only reaches the person as a systemMessage. $R1
+# already passed above and the gate remembers it, so this push is the one that says every scan had
+# already passed on this tree: the coverage line of a remembered pass.
 fire_stdout "$R1" "git push"
-why="$(hook_notice_verdict "$FS_OUT" 'whole tree scan')"
-[ "$FS_RC" -eq 0 ] && [ -z "$why" ] && check "#1906 a passing push says what it scanned, as a systemMessage" ok \
-  || check "#1906 a passing push says what it scanned, as a systemMessage" "exit=$FS_RC $why"
+why="$(hook_notice_verdict "$FS_OUT" 'nothing was scanned for this push. All [0-9]+ whole tree scan\(s\) had already passed')"
+[ "$FS_RC" -eq 0 ] && [ -z "$why" ] && check "#1906 a push whose scans already passed says so, as a systemMessage" ok \
+  || check "#1906 a push whose scans already passed says so, as a systemMessage" "exit=$FS_RC $why"
 # A push started underneath the gate is not gated again, and says so the same way.
 fire_stdout "$R3" "git push" SCANNERS_GATE_RUNNING=1
 why="$(hook_notice_verdict "$FS_OUT" 'not gated again')"

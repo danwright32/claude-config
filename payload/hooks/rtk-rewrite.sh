@@ -11,8 +11,8 @@
 # PreToolUse hook's stderr on exit 0, so a warning there reached nobody (claude-config#1906). After
 # editing this file, re-record .rtk-hook.sha256 beside it, or rtk refuses to run at all.
 # The directory is cut from the path in bash itself, since this runs before every Bash call and a
-# dirname fork there is paid on all of them.
-RTK_HOOK_DIR="${BASH_SOURCE[0]%/*}"
+# dirname fork there is paid on all of them. A bare name (run from its own folder) is ".".
+case "${BASH_SOURCE[0]}" in */*) RTK_HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) RTK_HOOK_DIR=. ;; esac
 # shellcheck source=lib/hook-notice.sh
 . "$RTK_HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2

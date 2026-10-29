@@ -292,6 +292,9 @@ chunk "$W" ".next/static/chunks/main.js" 100000 60
 run_hook "$W" "git push"
 want_rc 0 "no origin remote lets the push through"
 want_says "no origin remote" "and says the budget has nothing to be keyed on"
+# The count of repositories ever weighed rides on every push it does not weigh (#526), this one too:
+# the function giving it was defined below the line calling it, so the count was silently dropped.
+want_says "This guard has" "and carries how many repositories this guard has ever weighed"
 
 # --- an unreadable record is named, not read as zero --------------------------------------------
 W="$(mk_repo "$WORKDIR/corrupt")"
