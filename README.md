@@ -1702,6 +1702,16 @@ push that follows a fresh commit changes the tree and pays in full. Only a pass 
 failure is never skipped past, and the gate says when it scanned nothing rather than reporting zero
 scans as a clean run.
 
+The gate stops itself at a budget of 150 seconds, inside the 180 its registration declares (#1881).
+Claude Code lets a tool call through when it kills a PreToolUse hook at its timeout (its hooks
+documentation says so, and a headless probe on Claude Code 2.1.312 confirmed it on 2026-10-28), and
+on that day the gate was killed at 180 seconds on three of three readings at a load average of about
+145, so those pushes would have gone out unscanned. Now the scanners still running at the budget
+are stopped and the push is refused, naming each one and the command that runs it directly. The
+scanners that finished and passed are remembered, so a retry runs only the rest. The registration
+also carries `onFailure: "block"`, so a gate killed despite its budget blocks the push rather than
+passing it.
+
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
 
