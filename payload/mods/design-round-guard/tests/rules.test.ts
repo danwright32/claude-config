@@ -69,6 +69,7 @@ import {
   bracketsOpen,
   namedByIssue,
   skipIssueProblem,
+  notLookWhy,
 } from '../hooks/rules.ts'
 import * as allRules from '../hooks/rules.ts'
 
@@ -1910,6 +1911,10 @@ test("#1911: the skip question's answers name wording beside the look", () => {
   expect(yes?.description).toContain('change the look or wording')
   expect(no?.description).toContain('changes the look or wording')
   expect(third?.label).toBe(NOT_LOOK)
+  // What it says it means, and the reason kept with it, name both too (lessons review of 83729c4):
+  // "nothing on screen changes" read false for a hold that was only ever about a message's words.
+  expect(third?.description).toContain('Neither the look nor any wording changes')
+  expect(notLookWhy(['hooks/rules.ts'])).toContain('changes neither the look nor any wording')
 })
 
 // #1911: modHookTsShows had become a yes or no wrapper over modHookTsHold that only tests called; its

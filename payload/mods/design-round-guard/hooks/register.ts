@@ -1633,7 +1633,7 @@ export const register: Register = on => {
             return say(r, `Dan answered ${NOT_LOOK}, but it could not be recorded (${message(err)}), so the edit to ${listed(waiting.files)} stays blocked. Tell him, and ask again.`)
           }
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
-          return say(r, `Dan answered ${NOT_LOOK}: this one edit to ${listed(waiting.files)} goes ahead, recorded as his word that it changes nothing on screen. ${again(waiting)} Any other edit that changes the look on ${s} is still held.`)
+          return say(r, `Dan answered ${NOT_LOOK}: this one edit to ${listed(waiting.files)} goes ahead, recorded as his word that it changes neither the look nor any wording. ${again(waiting)} Any other edit that changes the look on ${s} is still held.`)
         }
         if (chosen !== SKIP_YES) return typed(r, chosen, skipTyped(waiting.files, open))
         const kept = await record(open, 'skipped')

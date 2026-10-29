@@ -2656,7 +2656,7 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
   return (
     `Blocked: ${changesWhat(files, worded)}, and ${s} has no design round Dan has settled, nor his word to skip one. ${wordsAlone(files, worded) ? 'Dan decides first' : 'Dan decides the look'}, so take one of these two ways on and no other. ` +
     `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}", "contract": ${CONTRACT}}, look changing edits on ${s} go through. ` +
-    `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when nothing on screen changes, lets this one edit through. ` +
+    `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when neither the look nor any wording changes, lets this one edit through. ` +
     unreadSaid(unread) +
     `${ROUND_FILES} ` +
     leaveIt(files)
@@ -2821,7 +2821,7 @@ export const skipIssueProblem = (issue: unknown): string | undefined =>
 export const skipOptions = (subjects: readonly DesignRoundSubject[]) => [
   { label: SKIP_YES, description: `Edits that change the look or wording go ahead on ${named(subjects)} without a design round; the next issue asks again` },
   { label: SKIP_NO, description: 'Nothing that changes the look or wording is edited until you settle a design round' },
-  { label: NOT_LOOK, description: 'Nothing on screen changes, so only this edit goes ahead, recorded as your word; the next one is asked about again' },
+  { label: NOT_LOOK, description: 'Neither the look nor any wording changes, so only this edit goes ahead, recorded as your word; the next one is asked about again' },
 ]
 
 // Dan typed an answer to the skip question instead of choosing one (#1138): said to him and to
@@ -2849,7 +2849,7 @@ export const settledTypedSaid = (typed: string): string =>
 
 /** Dan's Not a look or wording change, kept with the refused call (#1010): what it let through, and why. */
 export const notLookWhy = (files: readonly string[]): string =>
-  `Dan answered "${NOT_LOOK}" to "${SKIP_QUESTION}": this edit to ${listed(files)} changes nothing on screen, so it went ahead with no design round.`
+  `Dan answered "${NOT_LOOK}" to "${SKIP_QUESTION}": this edit to ${listed(files)} changes neither the look nor any wording, so it went ahead with no design round.`
 
 /** The design rounds skill's closing question as Dan reads it. */
 export const settledQuestion = (subjects: readonly DesignRoundSubject[]): string =>
