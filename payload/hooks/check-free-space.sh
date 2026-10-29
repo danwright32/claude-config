@@ -56,7 +56,7 @@
 #   FREE_SPACE_PATH           the volume to measure (default the data volume, else /)
 #   FREE_SPACE_BYTES          a reading supplied directly, instead of running df
 #   FREE_SPACE_NOW            epoch seconds, instead of the clock
-#   FREE_SPACE_FLOOR_GB       the floor (default 20)
+#   FREE_SPACE_FLOOR_GB       the floor in GiB (default 20); the warning words it, like every size, by dcu_human
 #   FREE_SPACE_HORIZON_HOURS  reaching zero within this many hours is "falling fast" (default 6)
 #   FREE_SPACE_MIN_SPAN_MIN   no rate is reported from a span shorter than this (default 10)
 #   FREE_SPACE_WINDOW_HOURS   readings older than this are pruned and never used (default 6)
@@ -93,6 +93,17 @@ for _arg in "$@"; do
 done
 
 GIB=$((1024 * 1024 * 1024))
+
+# Every size this warning states is worded by lib/disk-clean-units.sh, the one rule disk-clean's
+# scan, review page and disk-remove use (decimal units as Finder writes them, #1807), so the free
+# space, the floor, the rate, swap and the scan's total read in one unit on one warning (L118).
+# Only the words: every threshold is still compared in GiB, as before. Should the library not
+# load, the warning still speaks, in GiB and saying so, rather than not at all (L71).
+_fs_here="."; case "${BASH_SOURCE[0]}" in */*) _fs_here="${BASH_SOURCE[0]%/*}" ;; esac
+. "$_fs_here/lib/disk-clean-units.sh" 2>/dev/null || true
+fs_words_to(){ # <variable> <bytes>: the size in words, with no process started
+  if declare -F dcu_human_to >/dev/null; then dcu_human_to "$1" $(( $2 / 1024 )); else printf -v "$1" '%s GiB' $(( $2 / GIB )); fi
+}
 
 VOLUME="${FREE_SPACE_PATH:-}"
 if [ -z "$VOLUME" ]; then
@@ -155,6 +166,7 @@ fi
 is_number "$free_bytes" || cannot "the reading was '$free_bytes'"
 
 free_gb=$((free_bytes / GIB))
+fs_words_to free_words "$free_bytes"; fs_words_to floor_words $((FLOOR_GB * GIB))
 
 # ---------- the readings, which are what makes a rate possible at all ----------
 # Keyed on the volume, so measuring two of them never mixes their histories (L15).
@@ -307,7 +319,7 @@ EOF
     elif [ "$span" -lt $((MIN_SPAN_MIN * 60)) ]; then
       no_rate_clause=" No rate yet: the fall that has lasted $PERSIST_MIN minutes spans only $((span / 60)) minute(s) of readings, and a rate is stated only over at least $MIN_SPAN_MIN minutes."
     else
-      rate_gb=$(( (fall * 3600 / span) / GIB ))
+      fs_words_to rate_words $(( fall * 3600 / span ))
       # Seconds rather than hours, so a fall that empties the disk inside an hour is not rounded down
       # to zero hours and read as no time at all.
       to_zero=$(( held_b * span / fall - (now - held_t) ))
@@ -315,9 +327,9 @@ EOF
       if [ "$span" -ge 3600 ]; then span_words="$((span / 3600)) hour(s)"; else span_words="$((span / 60)) minute(s)"; fi
       if [ "$to_zero" -ge 3600 ]; then zero_words="about $((to_zero / 3600)) hour(s)"; else zero_words="under an hour"; fi
       if [ "$PERSIST_MIN" -gt 0 ]; then
-        rate_clause=" It is falling at about $rate_gb GB per hour, measured over $span_words and counting only space that has stayed gone for $PERSIST_MIN minutes, which reaches zero in $zero_words."
+        rate_clause=" It is falling at about $rate_words per hour, measured over $span_words and counting only space that has stayed gone for $PERSIST_MIN minutes, which reaches zero in $zero_words."
       else
-        rate_clause=" It is falling at about $rate_gb GB per hour, measured over the last $span_words, which reaches zero in $zero_words."
+        rate_clause=" It is falling at about $rate_words per hour, measured over the last $span_words, which reaches zero in $zero_words."
       fi
       [ "$to_zero" -le $((HORIZON_HOURS * 3600)) ] && falling_fast=1
     fi
@@ -406,11 +418,13 @@ if [ -n "$swap_bytes" ] && [ -n "$swap_day" ]; then
 fi
 
 swap_note(){
+  local swap_words=""
+  is_number "${swap_bytes:-}" && fs_words_to swap_words "$swap_bytes"
   if [ -n "$swap_why" ] && [ -n "$swap_bytes" ]; then
     # Swap WAS read; only the disk's size was not, so its share cannot be judged. Said as exactly
     # that, never as swap being unread (L11).
     echo ""
-    echo "Swap holds $((swap_bytes / GIB)) GB by sysctl vm.swapusage, but the disk's size could not be read, so whether that is a large share of this disk is not known and the processes holding it are not named here. Swap is kept on /System/Volumes/VM, which shares this disk and which no folder size reaches. To name them:"
+    echo "Swap holds $swap_words by sysctl vm.swapusage, but the disk's size could not be read, so whether that is a large share of this disk is not known and the processes holding it are not named here. Swap is kept on /System/Volumes/VM, which shares this disk and which no folder size reaches. To name them:"
     echo '```'
     echo "top -l 1 -o mem -n 10 -stats pid,command,mem,time"
     echo '```'
@@ -427,7 +441,7 @@ swap_note(){
   [ "$swap_over" -eq 1 ] || return 0
   local pct=$(( (swap_bytes * 1000 / disk_bytes + 5) / 10 )) holders=""
   echo ""
-  echo "Swap holds $((swap_bytes / GIB)) GB, about $pct% of this disk, by sysctl vm.swapusage. More than $SWAP_SHARE_PCT% is memory that processes are holding rather than ordinary paging, and it is kept on /System/Volumes/VM, which shares this disk and which no folder size reaches."
+  echo "Swap holds $swap_words, about $pct% of this disk, by sysctl vm.swapusage. More than $SWAP_SHARE_PCT% is memory that processes are holding rather than ordinary paging, and it is kept on /System/Volumes/VM, which shares this disk and which no folder size reaches."
   if [ "$TOP_SECONDS" -eq 0 ]; then
     echo "Naming the processes holding it is turned off here (FREE_SPACE_TOP_SECONDS=0)."
   else
@@ -614,7 +628,7 @@ scan_note(){
 [ "$REPORT" -eq 1 ] || no_rate_clause=""
 
 if [ "$free_gb" -lt "$FLOOR_GB" ]; then
-  echo "claude-sync: only $free_gb GB free on $VOLUME, under the $FLOOR_GB GB floor.$rate_clause$no_rate_clause$cause_clause"
+  echo "claude-sync: only $free_words free on $VOLUME, under the $floor_words floor.$rate_clause$no_rate_clause$cause_clause"
   scan_note
   swap_note
   symbol_cache_note
@@ -622,7 +636,7 @@ if [ "$free_gb" -lt "$FLOOR_GB" ]; then
 fi
 
 if [ "$falling_fast" -eq 1 ]; then
-  echo "claude-sync: $free_gb GB free on $VOLUME, which is above the $FLOOR_GB GB floor but not for long.$rate_clause$cause_clause"
+  echo "claude-sync: $free_words free on $VOLUME, which is above the $floor_words floor but not for long.$rate_clause$cause_clause"
   scan_note
   swap_note
   symbol_cache_note
@@ -630,6 +644,6 @@ if [ "$falling_fast" -eq 1 ]; then
 fi
 
 if [ "$REPORT" -eq 1 ]; then
-  echo "claude-sync: $free_gb GB free on $VOLUME, above the $FLOOR_GB GB floor.$rate_clause$no_rate_clause"
+  echo "claude-sync: $free_words free on $VOLUME, above the $floor_words floor.$rate_clause$no_rate_clause"
 fi
 exit 0
