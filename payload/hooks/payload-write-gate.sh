@@ -71,7 +71,10 @@ others_note(){   # $1 = where the command is in this message
   OTHERS_NOTE=""
   s="$(sc_hold_others_sentence "$sid")"
   [ -n "$s" ] || return 0
-  OTHERS_NOTE="$s Take it with $1.
+  # Pointed at the command only when another session holds; the same call also says when no hold
+  # can count at all because the hold reader is missing, and then no hold would help.
+  [ -z "$(sc_hold_others "$sid")" ] || s="$s Take it with $1."
+  OTHERS_NOTE="$s
 
 "
 }

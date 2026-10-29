@@ -25,13 +25,20 @@ SYNC_WATCH_PID_FILE="${SYNC_WATCH_PID_FILE:-$HOME/.claude-sync-watch.pid}"
 SYNC_HOLD_FILE="${SYNC_HOLD_FILE:-$HOME/.claude-sync-hold}"
 
 # The record is parsed in ONE place, shared with claude-sync itself, so the hooks and the tool
-# cannot come to two answers about whose hold a line is (claude-config#1886, L370). Missing, this
-# file fails to load, and every caller already treats that as it treats a missing sync-clone.sh.
-# shellcheck source=hold-record.sh
+# cannot come to two answers about whose hold a line is (claude-config#1886, L370).
+#
+# Missing, this file STILL loads, and no hold counts for anyone. Failing to load would be the
+# opposite: every hook that sources this treats a library it cannot load as nothing to say, and
+# allows the write, so a missing reader would let every payload write through in silence (the
+# lessons review of #1894, L42). Counting no hold refuses instead, and the refusal says why.
 # Found beside this file by parameter expansion, never dirname, which a PATH holding nothing cannot
 # start (claude-config#1104).
 SC_LIB_DIR="${BASH_SOURCE[0]%/*}"; [ "$SC_LIB_DIR" != "${BASH_SOURCE[0]}" ] || SC_LIB_DIR=.
-. "$SC_LIB_DIR/hold-record.sh" || return 1
+SC_HOLD_READER=""
+# shellcheck source=hold-record.sh
+if . "$SC_LIB_DIR/hold-record.sh" 2>/dev/null && declare -F hold_record_rows >/dev/null 2>&1; then
+  SC_HOLD_READER=1
+fi
 
 # Is this a clone of the tool at all, and where is its root? Found by walking up for a directory
 # holding BOTH a claude-sync and a payload/, which is what makes a directory a clone of it. Not
@@ -135,6 +142,7 @@ sc_is_own_worktree(){ # sc_is_own_worktree <clone root>
 # covered only by a terminal's hold, the same "unknown" a hold it took itself would record.
 sc_hold_covers(){   # $1 = the session asking, from the hook payload (may be empty)
   local a b
+  [ -n "$SC_HOLD_READER" ] || return 1     # no reader: no hold can be read, so none counts
   a="$(hold_record_session "${1:-}")"
   b="$(hold_record_session "${CLAUDE_CODE_SESSION_ID:-}")"
   hold_record_rows "$SYNC_HOLD_FILE" "$(date +%s)" | awk -F '\037' -v a="$a" -v b="$b" \
@@ -146,6 +154,7 @@ sc_hold_covers(){   # $1 = the session asking, from the hook payload (may be emp
 # session's. Nothing when there is none.
 sc_hold_others(){   # $1 = the session asking, as for sc_hold_covers
   local a b o
+  [ -n "$SC_HOLD_READER" ] || return 0
   a="$(hold_record_session "${1:-}")"
   b="$(hold_record_session "${CLAUDE_CODE_SESSION_ID:-}")"
   while IFS= read -r o; do
@@ -160,6 +169,10 @@ sc_hold_others(){   # $1 = the session asking, as for sc_hold_covers
 # when no other session holds the watcher, so a caller can always append it.
 sc_hold_others_sentence(){   # $1 = the session asking, as for sc_hold_covers
   local o list="" n=0
+  if [ -z "$SC_HOLD_READER" ]; then
+    printf 'No hold can count here: lib/hold-record.sh, which reads the hold record, is missing beside lib/sync-clone.sh at %s, so this stands even under a hold. Restore it with: git checkout -- payload/hooks/lib/hold-record.sh' "$SC_LIB_DIR"
+    return 0
+  fi
   while IFS= read -r o; do
     [ -n "$o" ] || continue
     n=$((n + 1)); list="${list:+$list, }$o"
@@ -174,6 +187,7 @@ sc_hold_others_sentence(){   # $1 = the session asking, as for sc_hold_covers
 # inside any string value is escaped in JSON, so only the payload's own key can match.
 sc_payload_session(){   # $1 = the hook payload
   local re='"session_id"[[:space:]]*:[[:space:]]*"([^"]*)"' id
+  [ -n "$SC_HOLD_READER" ] || return 0
   [[ "${1:-}" =~ $re ]] || return 0
   id="${BASH_REMATCH[1]}"
   [ "$(hold_record_session "$id")" = "$id" ] || return 0

@@ -179,6 +179,21 @@ want "and nothing from a payload that carries none" "" "$(sc_payload_session '{"
 want "and nothing from one whose id is not the shape of an id" "" \
   "$(sc_payload_session '{"session_id":"a b; rm"}')"
 
+echo "sync clone: with the hold reader missing"
+
+# A copy of the library with no hold-record.sh beside it still LOADS, because every hook treats a
+# library that fails to load as nothing to say and allows the write. It counts no hold instead, the
+# side that refuses, and says why (the lessons review of #1894, L42).
+mkdir -p "$FIX/noreader"
+cp "$LIB" "$FIX/noreader/sync-clone.sh"
+printf '%s %s host session=unknown from a terminal\n' "$(( now + 3600 ))" "$now" > "$SYNC_HOLD_FILE"
+nr_out="$(bash -c '. "$1" || { echo NOT-LOADED; exit 0; }
+  if sc_hold_covers "$2"; then echo COVERED; else echo NOT-COVERED; fi
+  sc_hold_others_sentence "$2"' _ "$FIX/noreader/sync-clone.sh" "$ME" 2>&1)"
+case "$nr_out" in *NOT-LOADED*) check "it still loads without hold-record.sh" "it failed to load" ;; *) check "it still loads without hold-record.sh" ok ;; esac
+case "$nr_out" in *NOT-COVERED*) check "and no hold covers anyone, a terminal's included" ok ;; *) check "and no hold covers anyone, a terminal's included" "got: $nr_out" ;; esac
+case "$nr_out" in *"git checkout -- payload/hooks/lib/hold-record.sh"*) check "and the sentence a refusal carries says the reader is missing and how to restore it" ok ;; *) check "and the sentence a refusal carries says the reader is missing and how to restore it" "got: $nr_out" ;; esac
+
 echo "sync clone: one reading of the hold record"
 
 # claude-sync and these hooks must read the record one way, or "is this my hold" has two answers

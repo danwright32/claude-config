@@ -163,6 +163,23 @@ CLAUDE_CODE_SESSION_ID="$ME" edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
 allowed "my own hold counts when my session comes only from CLAUDE_CODE_SESSION_ID"
 edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
 refused "and a caller whose session is unknown cannot write on a named session's hold"
+# The hold record is read through lib/hold-record.sh. With it gone, sync-clone.sh must still load
+# and count no hold, so the gate refuses as it would with none and says why. Failing to load would
+# let every payload write through in silence, since the hook allows when its library is missing
+# (the lessons review of #1894).
+mkdir -p "$FIX/noholdreader"
+cp "$HOOK" "$FIX/noholdreader/payload-write-gate.sh"
+cp -R "$DIR/lib" "$FIX/noholdreader/lib"
+rm -f "$FIX/noholdreader/lib/hold-record.sh"
+HOOK_SAVED="$HOOK"; HOOK="$FIX/noholdreader/payload-write-gate.sh"
+printf '%s %s host session=unknown from a terminal\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" > "$HOLD"
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "with lib/hold-record.sh missing, a payload write is refused even under a hold, not let through in silence"
+says "and the refusal names the missing reader" "hold-record.sh"
+says "and how to restore it" "git checkout -- payload/hooks/lib/hold-record.sh"
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev" "$NOPIDF"
+allowed "and with no watcher running it still refuses nothing"
+HOOK="$HOOK_SAVED"
 SID="$ME"
 rm -f "$HOLD"
 edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
