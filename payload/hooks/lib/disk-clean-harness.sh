@@ -35,7 +35,8 @@
 #   writes   rm rmdir mkdir touch mv cp ln chmod tee, sed -i and find -delete are wrappers that
 #            refuse (exit 97, logged) any path whose physical location is outside DC_ROOT, and
 #            refuse everything when DISK_CLEAN_TEST_ROOT does not name a valid root
-#            (disk-clean-guard.sh). xargs and find -exec reach the same wrappers by PATH.
+#            (disk-clean-guard.sh). xargs and find -exec reach the same wrappers by PATH. Every call
+#            to one is recorded in the call log as a stub's is, so dc_calls find counts the finds.
 #   seams    each VAR=stub on DC_SEAMS is exported as VAR="$DC_STUBS/stub". Code that must call a
 #            tool by its full path (disk-remove.sh calls "${DISK_CLEAN_TRASH:-/usr/bin/trash}",
 #            because a Homebrew `trash` can shadow Apple's) does it through a seam.

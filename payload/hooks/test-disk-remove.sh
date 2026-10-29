@@ -9,7 +9,7 @@
 # ~/.Trash. Every refusal is aimed at a sentinel in a second throwaway directory OUTSIDE the
 # harness's, standing in for the real Mac, so a refusal that fails destroys only that (L5).
 #
-# DR_UNDER_TEST names another copy of disk-remove.sh to run, with its two libraries beside it, so a
+# DR_UNDER_TEST names another copy of disk-remove.sh to run, with its three libraries beside it (predicates, record, units), so a
 # deliberately broken copy can be shown to fail these tests (L1).
 set -uo pipefail
 
@@ -45,6 +45,13 @@ gone() { { [ -e "$1" ] || [ -L "$1" ]; } && echo "$1 is still there" || echo ok;
 . "$DIR/lib/disk-clean-harness.sh" || { check "the harness is there to source" "could not source it"; finish; }
 . "$DIR/lib/disk-clean-record.sh" || { check "the record library is there to source" "could not source it"; finish; }
 check "disk-remove.sh is there to run" "$([ -f "$DR" ] && echo ok || echo "missing: $DR")"
+# Size words and Docker sizes have one copy, lib/disk-clean-units.sh, which disk-clean's scan reads
+# too (#1806), so a removal reports a size the way the scan offered it. Its functions are tested in
+# skills/disk-clean/test-disk-clean-scan.sh; the Docker and report cases below run them through here.
+. "$DIR/lib/disk-clean-units.sh" || check "lib/disk-clean-units.sh is there to source" "could not source it"
+check "disk-remove.sh sources lib/disk-clean-units.sh rather than keeping its own copy" \
+  "$(grep -qF '. "$LIB/disk-clean-units.sh"' "$DR" && grep -qF 'dcu_docker_kib "$(build_cache_kib)"' "$DR" && echo ok || echo "it does not source it, or does not read the build cache's size through dcu_docker_kib")"
+check "the units library writes sizes as disk-remove reports them" "$(eq "$(dcu_human 1572864)" "1.5 GB")"
 dc_setup || { check "the harness sets up" "dc_setup failed"; finish; }
 
 # Outside the harness's root: the stand in for the real Mac.

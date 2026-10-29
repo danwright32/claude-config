@@ -2769,6 +2769,29 @@ step 7 runs the listing and `--last`.
 It takes the automatic sweep's own lock first (exit 75 and nothing touched while a sweep holds it),
 refuses anything not directly inside the DerivedData folder (exit 2), judges the folder again with
 the same rule, and exits 0 removed, 4 kept (the line says why) or 1 when it could not be removed.
+`derived-data-sweep.sh --classify <folder>...` prints that rule's answer for each folder, one tab
+separated line each (orphan, in-use, live, shared-cache, unattributed or refused, then the folder and
+a detail), for disk-clean's scan below; it is read only and takes no lock.
+
+## Measuring what could go: disk-clean's scan
+
+`skills/disk-clean/scan.sh` is the read only half of the disk-clean skill being built in the Disk
+cleanup skill milestone (claude-config#1806); its SKILL.md is a placeholder that says not to use it
+until #1808. It removes nothing. It runs a Full Disk Access probe first (listing `~/Library/Mail`),
+one pruned walk of the home folder (never into `~/Library`, the Trash, key folders, sync clients,
+app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
+fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
+Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
+transcripts, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
+`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything. Each
+category and the walk are time bounded by killing their process group (`DISK_CLEAN_CATEGORY_SECONDS`,
+default 600; `DISK_CLEAN_WALK_SECONDS`, default 900), and one that runs out is recorded as unmeasured.
+Sizes are du's allocated blocks, classified by du's exit code and stderr as measured, partial or
+permission denied, never 0 for unread. The result is `~/.claude/state/disk-clean/last-scan.json`,
+written through `hooks/lib/disk-clean-record.sh`, whose header also carries the probe, the walk and
+each category's status. It refuses (exit 75) while a `disk-remove.sh` run holds its lock. Its suites
+are `skills/disk-clean/test-disk-clean-scan.sh` and `test-disk-clean-categories.sh`, both through the
+disk-clean harness.
 
 ## Removing anything: disk-remove.sh
 

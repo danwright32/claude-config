@@ -492,6 +492,35 @@ check "and says a sweep is already running" "$(has "$one14_out" "already running
 check "and had removed nothing when it returned" "$(eq "$one14_there" yes)"
 check "the automatic sweep finishes" "$(wait_finished "$S14" && echo ok || echo "no finished record in $S14")"
 
+# ================== --classify: the rule's answer per folder, for disk-clean's scan (#1806) ==================
+# disk-clean's Xcode category offers orphans through this sweep and live folders separately, so it
+# needs the SAME rule's answer for each folder in a form a script reads, never the list's wording.
+# Read only: it takes no lock and every folder is still there afterwards.
+ROOT15="$TMP_ROOT/dd-classify"
+mkdir -p "$ROOT15"; build_fixture "$ROOT15"; write_fake_ps "$ROOT15"
+mkdir -p "$TMP_ROOT/elsewhere15/App-x"
+run_sweep "$ROOT15" --classify "$ROOT15/App-orphan" "$ROOT15/App-live" "$ROOT15/App-building" "$ROOT15/App-fresh" \
+  "$ROOT15/App-noplist" "$ROOT15/App-unmounted" "$ROOT15/ModuleCache.noindex" "$TMP_ROOT/elsewhere15/App-x"
+T=$'\t'
+check "--classify exits 0" "$(eq "$RC" 0)"
+check "--classify prints one line per folder asked about" "$(eq "$(printf '%s\n' "$OUT" | awk 'NF' | wc -l | tr -d ' ')" 8)"
+check "an idle orphan is orphan" "$(has "$OUT" "orphan$T$ROOT15/App-orphan$T")"
+check "a live folder is live, naming its project" "$(has "$OUT" "live$T$ROOT15/App-live$T$TMP_ROOT/live-checkout/App.xcodeproj")"
+check "an orphan a running xcodebuild names is in-use" "$(has "$OUT" "in-use$T$ROOT15/App-building$T")"
+check "a freshly written orphan is in-use" "$(has "$OUT" "in-use$T$ROOT15/App-fresh$T")"
+check "a folder with no info.plist is unattributed" "$(has "$OUT" "unattributed$T$ROOT15/App-noplist${T}no-info-plist")"
+check "a folder on an unmounted volume is unattributed" "$(has "$OUT" "unattributed$T$ROOT15/App-unmounted${T}volume-not-mounted")"
+check "a shared cache is shared-cache" "$(has "$OUT" "shared-cache$T$ROOT15/ModuleCache.noindex$T")"
+check "a folder outside DerivedData is refused, never classified" "$(has "$OUT" "refused$T$TMP_ROOT/elsewhere15/App-x$T")"
+for name in App-orphan App-live App-building App-fresh App-noplist App-unmounted ModuleCache.noindex; do
+  check "--classify leaves $name in place" "$(isdir "$ROOT15/$name")"
+done
+run_sweep "$ROOT15" --classify
+check "--classify with no folder is refused with exit 2" "$(eq "$RC" 2)"
+run_sweep "$TMP_ROOT/no-such-derived-data" --classify "$ROOT15/App-orphan"
+check "--classify on a Mac with no DerivedData is refused with exit 2" "$(eq "$RC" 2)"
+check "and says it classified nothing, naming the folder, never a removal" "$(has "$OUT" "so $ROOT15/App-orphan is not a build cache it can classify, and it classified nothing")"
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
