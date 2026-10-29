@@ -329,7 +329,9 @@ check "control forget-clone: says so" has "$out" "Removed $PLANTED_CLONE"
 
 out="$(run_as "$OWN" watch SYNC_WATCH_SEND=true)"
 check "control watch: replaces the real pid file whose watcher has gone" lacks "$(cat "$PIDFILE" 2>/dev/null)" "999999"
-out="$(run_as "$OWN" hold -- 5 a control hold)"
+# Longer than the planted day long hold: a hold never shortens one already in force
+# (claude-config#1854), so a five minute control would keep the planted record and prove nothing.
+out="$(run_as "$OWN" hold -- 2000 a control hold)"
 check "control hold: writes the real hold marker" grep -q 'a control hold' "$HOLD"
 out="$(run_as "$OWN" release)"
 check "control release: removes the real hold marker" test ! -e "$HOLD"
