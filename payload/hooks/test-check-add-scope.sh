@@ -876,8 +876,10 @@ else:
 # chosen by where it ran rather than by its meta, so a renamed meta field still reads as drift. Passed
 # over: an agent whose worktree Claude Code removed at the end because it made no changes, since the
 # meta is rewritten at removal to worktreeCleanlyRemoved true without spawnedWithWorktree or
-# worktreePath (measured on 2.1.285 to 2.1.311, claude-config#1873). The gate never reads that meta:
-# it reads an agent's meta while the agent runs, before any removal.
+# worktreePath (measured on 2.1.285 to 2.1.311, claude-config#1873). Such a record says nothing
+# about the fields this part checks for drift. The gate does meet it, since an agent can keep calling
+# tools after the removal, and reads the flag as its own case: no worktree credit (claude-config#1876,
+# pinned by the fixture cases in the section on worktrees a subagent was spawned with).
 def cleanly_removed(p):
     try:
         with open(p[:-len(".jsonl")] + ".meta.json") as fh:
