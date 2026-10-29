@@ -1,0 +1,52 @@
+<!-- The journey editor canvas for tests/journey_v1.json, in React Flow's markup: each line is a
+     g.react-flow__edge whose aria-label is "Edge from <source node id> to <target node id>", each
+     node a div.react-flow__node carrying its id in data-id. The decoys are things on a real canvas
+     whose class names start the same way and must not be read as lines or nodes: the edges
+     container, a line still being dragged, the edge label layer and the minimap.
+     data-fake-fiber-handle is not React Flow's: tests/page_harness.js turns it into the React
+     internals a real page holds on the element, so the exit (sourceHandle) path is tested too. -->
+<div class="react-flow" data-testid="rf__wrapper">
+  <div class="react-flow__renderer">
+    <div class="react-flow__viewport react-flow__container">
+      <svg class="react-flow__edges react-flow__container">
+        <g class="react-flow__edge react-flow__edge-buttonedge" data-testid="rf__edge-e0000001-0000-4000-8000-000000000001"
+           aria-label="Edge from a0000001-0000-4000-8000-000000000001 to a0000003-0000-4000-8000-000000000003"
+           role="group" tabindex="0" data-fake-fiber-handle="null"><path class="react-flow__edge-path" d="M0,0 L1,1"></path></g>
+        <g class="react-flow__edge react-flow__edge-buttonedge" data-testid="rf__edge-a0000003-0000-4000-8000-000000000003-yes-to-a0000016-0000-4000-8000-000000000016"
+           aria-label="Edge from a0000003-0000-4000-8000-000000000003 to a0000016-0000-4000-8000-000000000016"
+           role="group" tabindex="0"><path class="react-flow__edge-path" d="M0,0 L1,1"></path></g>
+        <g class="react-flow__edge react-flow__edge-buttonedge" data-testid="rf__edge-a0000003-0000-4000-8000-000000000003-no-to-a0000014-0000-4000-8000-000000000014"
+           aria-label="Edge from a0000003-0000-4000-8000-000000000003 to a0000014-0000-4000-8000-000000000014"
+           role="group" tabindex="0" data-fake-fiber-handle="no"><path class="react-flow__edge-path" d="M0,0 L1,1"></path></g>
+        <g class="react-flow__edge react-flow__edge-buttonedge selected" data-testid="rf__edge-a0000016-0000-4000-8000-000000000016-to-a0000014-0000-4000-8000-000000000014"
+           aria-label="Edge from a0000016-0000-4000-8000-000000000016 to a0000014-0000-4000-8000-000000000014"
+           role="group" tabindex="0"><path class="react-flow__edge-path" d="M0,0 L1,1"></path></g>
+        <g class="react-flow__edge react-flow__edge-buttonedge" data-testid="rf__edge-e0000005-0000-4000-8000-000000000005"
+           aria-label="Edge from a0000014-0000-4000-8000-000000000014 to a0000015-0000-4000-8000-000000000015"
+           role="group" tabindex="0"><path class="react-flow__edge-path" d="M0,0 L1,1"></path></g>
+        <g class="react-flow__connection"><path class="react-flow__connection-path" d="M0,0 L2,2"></path></g>
+      </svg>
+      <div class="react-flow__edgelabel-renderer"><button class="edgebutton">x</button></div>
+      <div class="react-flow__nodes">
+        <div class="react-flow__node react-flow__node-trigger" data-id="a0000001-0000-4000-8000-000000000001" data-testid="rf__node-a0000001-0000-4000-8000-000000000001">
+          <div>Trigger</div><div>Example Booking Created</div><span>1</span>
+          <div class="react-flow__handle react-flow__handle-bottom source" data-handleid="" data-nodeid="a0000001-0000-4000-8000-000000000001"></div>
+        </div>
+        <div class="react-flow__node react-flow__node-conditional" data-id="a0000003-0000-4000-8000-000000000003" data-testid="rf__node-a0000003-0000-4000-8000-000000000003">
+          <div>Conditional</div><div>Agent Assigned?</div><span>3</span>
+          <div class="react-flow__handle source" data-handleid="yes"></div><div class="react-flow__handle source" data-handleid="no"></div>
+        </div>
+        <div class="react-flow__node react-flow__node-webhook" data-id="a0000014-0000-4000-8000-000000000014" data-testid="rf__node-a0000014-0000-4000-8000-000000000014">
+          <div>Webhook</div><div>Update Tasks in Queue</div><span>14</span>
+        </div>
+        <div class="react-flow__node react-flow__node-delay" data-id="a0000015-0000-4000-8000-000000000015" data-testid="rf__node-a0000015-0000-4000-8000-000000000015">
+          <div>Delay</div><div>7 days</div><span>15</span>
+        </div>
+        <div class="react-flow__node react-flow__node-updateContact" data-id="a0000016-0000-4000-8000-000000000016" data-testid="rf__node-a0000016-0000-4000-8000-000000000016">
+          <div>Update Contact</div><div>Set Booking Details</div><span>16</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="react-flow__minimap"><svg><rect class="react-flow__minimap-node"></rect></svg></div>
+</div>
