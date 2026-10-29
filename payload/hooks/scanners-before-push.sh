@@ -457,9 +457,11 @@ _sc_wait_bounded 2>/dev/null
 # then it blocks saying THAT, with the remedy, rather than accusing the scanner (L11).
 #
 # The deadline is counted in ATTEMPTS, so an injected sleep (SCANNERS_SLEEP, for the tests) cannot
-# turn it into a spin (L524, L704). 90 seconds by default: the hook's own timeout is 180, and a run
-# of every scanner was measured at 15 to 18 seconds, so a wait of 90 plus a full rerun still lands
-# inside it.
+# turn it into a spin (L524, L704). 90 seconds by default, a setting: the bound that matters is the
+# gate's own budget of 150 seconds (#1881), which the wait is spent out of and stops at, and a run
+# of every scanner was measured at 15 to 18 seconds on 2026-09-21, so a wait of 90 plus a rerun fits
+# inside it on a quiet machine. On a busy one the budget, not this wait, decides, and a rerun it
+# cuts short is refused as out of time.
 _sc_lock_wait="${SCANNERS_LOCK_WAIT_SECONDS:-90}"
 case "$_sc_lock_wait" in ''|*[!0-9]*) _sc_lock_wait=90 ;; esac
 _sc_lock_poll="${SCANNERS_LOCK_POLL_SECONDS:-5}"
