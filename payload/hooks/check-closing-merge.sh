@@ -49,7 +49,13 @@ payload=$(cat)
 case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
 
 # shellcheck source=lib/merge-target.sh
-. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
+{ . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null && declare -F mt_runs_merge >/dev/null; } || {
+  # A library this gate cannot load is not a merge with nothing to check (claude-config#1900,
+  # L10). Past the words above this may be a merge, so it is refused, naming the file.
+  case "$payload" in *SKIP_CLOSING_CHECK=1*) exit 0 ;; esac
+  echo "Cannot tell whether this merge closes an issue its body says stays open: check-closing-merge.sh could not load $HOOK_DIR/lib/merge-target.sh, or lib/push-scope.sh beneath it, which reads whether this command merges a pull request and which one, so whether its body closes an issue it says stays open could not be checked. A library this gate cannot load is not a merge with nothing to check. Reinstall the hooks with claude-sync pull. Deliberate override: SKIP_CLOSING_CHECK=1 <the same command>." >&2
+  exit 2
+}
 
 DETECTOR="${CLOSING_KEYWORD_LIB:-$HOOK_DIR/lib/closing-keyword.py}"
 OVERRIDE="Deliberate override, for a body that has to quote the phrasing: SKIP_CLOSING_CHECK=1 <the same command>."

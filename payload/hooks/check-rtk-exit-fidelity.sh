@@ -216,7 +216,7 @@ substitution_for() {
   [ -n "$out" ] || return 1
   printf '%s' "$out" | python3 -c 'import json,sys
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     sys.exit(1)
 c = ((d.get("hookSpecificOutput") or {}).get("updatedInput") or {}).get("command", "")

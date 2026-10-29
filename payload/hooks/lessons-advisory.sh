@@ -108,6 +108,14 @@ else
   mb="$(ps_merge_base "$base")"
 fi
 
+# Everything below reads the pushed text, which no JSON reader has parsed, so it all runs in the C
+# locale, where every byte is a character (claude-config#1900). Under a UTF-8 locale macOS awk stops
+# with an error at the first pattern that scans a byte that is not UTF-8, grep never matches a line
+# holding one, and cut and sed refuse the input outright, so a push carrying one such byte read as
+# matching no trigger at all. Every trigger pattern is ASCII, and python3 started from here runs in
+# its UTF-8 mode, which the C locale turns on.
+export LC_ALL=C
+
 diff_opts=(--unified=0 --src-prefix=a/ --dst-prefix=b/ --diff-filter=ACMR)
 
 raw=""
@@ -606,8 +614,8 @@ if ps_reader_missing python3; then
 fi
 
 printf '%s' "$context" | python3 -c '
-import sys, json
-ctx = sys.stdin.read()
+import io, sys, json
+ctx = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ctx}}))
 ' 2>/dev/null || exit 0
 

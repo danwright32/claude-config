@@ -36,7 +36,7 @@ fi
 id=$(printf '%s' "$input" | python3 -c '
 import sys, json
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     print(""); sys.exit(0)
 for k in ("agent_id","agentId","teammate","teammate_name","teammateName","name","session_id","sessionId"):

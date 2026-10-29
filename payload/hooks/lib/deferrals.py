@@ -45,6 +45,7 @@ comment to this detector, so a deferral written inside one is not seen.
 import json
 import os
 import re
+import io
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -435,7 +436,7 @@ def main(argv):
     except (OSError, ValueError) as e:
         sys.stderr.write(f"deferrals.py: could not read the phrase list at {phrases_path}: {e}\n")
         return 3
-    text = sys.stdin.read()
+    text = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
     fragment = False
     if mode == "diff":
         findings = scan_diff(text, phrase_re)

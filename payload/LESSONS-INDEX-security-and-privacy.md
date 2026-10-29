@@ -49,3 +49,4 @@ which is NOT loaded into the session.
 - L805. A fork PR runs its own workflow file, so no runs-on clause keeps it off a self-hosted runner: refuse public repos in its group, approve outsiders.
 - L806. Write workflow logs and artifacts as if public: a repo made public exposes every past log, artifact and issue, which no history scan reads.
 - L807. A scanner's canary proves it ran, not that its rules see your credential shapes; a pinned version ages, so plant one canary per shape you store.
+- L824. Redaction keyed on a field's NAME misses a secret under any other name; redact by the value's source, and test with an unlisted name.

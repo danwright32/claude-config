@@ -193,7 +193,7 @@ _sq_gh_source() {
   case "$1" in
     accounts) _sq_gh_as "" auth status --json hosts 2>/dev/null | python3 -c '
 import json, sys
-for a in json.load(sys.stdin).get("hosts", {}).get("github.com", []):
+for a in json.loads(sys.stdin.buffer.read().decode("utf-8", "replace")).get("hosts", {}).get("github.com", []):
     if a.get("state") == "success" and a.get("login"):
         print(a["login"])' ;;
     issue) _sq_gh issue view "$3" -R "$2" --json number,title,labels,author,state ;;

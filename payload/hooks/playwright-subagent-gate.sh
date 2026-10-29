@@ -38,7 +38,7 @@ payload="$(cat 2>/dev/null || true)"
 verdict="$(printf '%s' "$payload" | python3 -c '
 import json, re, sys
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception as e:
     print("unreadable\t" + type(e).__name__); sys.exit()
 if not isinstance(d, dict):

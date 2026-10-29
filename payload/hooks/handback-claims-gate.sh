@@ -47,7 +47,7 @@ case "$payload" in *'"agent_id"'*) ;; *) exit 0 ;; esac
 parsed="$(printf '%s' "$payload" | python3 -c '
 import json, os, sys
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     sys.exit(3)
 if not isinstance(d, dict) or "agent_id" not in d:
