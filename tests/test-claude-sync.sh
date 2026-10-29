@@ -20683,9 +20683,11 @@ check "#1902 a registration this Mac added and has not sent still goes up" \
 NR_BROKEN="$WORK/norestore-broken.json"; printf 'this is not json\n' > "$NR_BROKEN"
 nr_fetch "$NRA_R"
 cp "$NR_BROKEN" "$NRA_R/payload/settings.hooks.json"
-git -C "$NRA_R" commit -qm "a broken hooks fragment" -- payload/settings.hooks.json
+NR_GIT_SAID="$(git -C "$NRA_R" commit -qm "a broken hooks fragment" -- payload/settings.hooks.json 2>&1)"
 NR_BROKEN_SHA="$(git -C "$NRA_R" rev-parse HEAD)"
-git -C "$NRA_R" push -q origin HEAD 2>/dev/null
+NR_GIT_SAID="$NR_GIT_SAID $(git -C "$NRA_R" push -q origin HEAD 2>&1)"
+check "#1902 (the fixture's broken commit reached the shared repo; git said: $(printf '%s' "$NR_GIT_SAID" | tr '\n' ' ' | cut -c1-300))" \
+  "nr_shared '$NRA_R' | cmp -s - '$NR_BROKEN'"
 nr_fetch "$NRB_R"
 NRB_BEFORE="$(jq -c '.hooks' "$NRB_H/settings.json")"
 nr_sync "$NRB_H" "$NRB_R" "$NR_OUT/b5"
