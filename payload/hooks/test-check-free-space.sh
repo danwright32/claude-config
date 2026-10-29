@@ -676,14 +676,14 @@ SCANS="$TMPROOT/scans"; mkdir -p "$SCANS"
 US=$'\037'
 DAY=86400
 EMDASH="$(printf '\xe2\x80\x94')"; ENDASH="$(printf '\xe2\x80\x93')"
-# scan_record <file> <scanned_at> <item line>...   each item line: id|category|method|target|bytes|state|size
+# scan_record <file> <scanned_at> <item line>...   each item line: id|category|method|target|bytes|state|size[|flags]
 scan_record(){
   local f="$1" at="$2" items="$SCANS/items-$RANDOM"; shift 2
   : > "$items"
   local line
   for line in "$@"; do
-    IFS='|' read -r _id _cat _m _t _b _st _sz <<< "$line"
-    printf '%s\n' "$_id$US$_cat$US$_m$US$_t$US$_b$US$_st$US$US$_sz" >> "$items"
+    IFS='|' read -r _id _cat _m _t _b _st _sz _fl <<< "$line"
+    printf '%s\n' "$_id$US$_cat$US$_m$US$_t$US$_b$US$_st$US$US$_sz$US$_fl" >> "$items"
   done
   dcr_write "$f" "scan-$RANDOM" "$at" "$items" || echo "FAIL: the fixture writer refused $f"
 }
@@ -815,6 +815,53 @@ check "offerable items whose sizes were all unread are said to be unsized, never
   "$(grep -qF '1 item(s)' <<< "$PROBE_MSG" && grep -qF 'could not read' <<< "$PROBE_MSG" && ! grep -qE ' 0(\.0)? ?[KMG]B' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 printf '%s\n' "$(grep -F 'disk-clean' <<< "$PROBE_MSG")" > "$SCANS/line-unsized"
 
+# PART OF A FOLDER KEPT ONLY IN iCLOUD (the PR #1857 review, 2026-10-28). The scan never reads a
+# folder iCloud keeps only in the cloud, since reading it makes iCloud download it, so an item with
+# one beneath it is sized from what is stored on this Mac alone and flagged icloud-only-part
+# (lib/disk-clean-record.sh). The total is then right about this Mac and silent about the rest, so
+# the line says so, in the review page's words ("kept only in iCloud", L118), without a figure for
+# the part nobody measured. The flag is one entry of a comma list, never the icloud flag beside it.
+SC_CLOUD="$SCANS/cloud.json"
+scan_record "$SC_CLOUD" "$((T0 - DAY))" \
+  "c1|caches|trash|/x/c|$((10 * GB))|offerable|measured" \
+  "c2|build-folders|trash|/x/nm|$((3 * GB))|offerable|measured|icloud-only-part" \
+  "c3|build-folders|trash|/x/nm2|$GB|offerable|measured|icloud,icloud-only-part" \
+  "c4|build-folders|trash|/x/nm3|$GB|removed|measured|icloud-only-part" \
+  "c5|build-folders|trash|/x/nm4|$GB|not offerable: in use|measured|icloud-only-part"
+scan_probe "$SC_CLOUD" "$((7 * GB))" "$TMPROOT/state-scan-base"
+cloud_line="$(grep -F 'disk-clean' <<< "$PROBE_MSG")"
+check "an offered item partly kept only in iCloud leaves the low verdict's exit code at 3" "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC")"
+check "and still adds exactly one line, the rest of the warning untouched" \
+  "$([ "$(grep -vF 'disk-clean' <<< "$PROBE_MSG")" = "$base_msg" ] && [ "$(grep -cF 'disk-clean' <<< "$PROBE_MSG")" = 1 ] && echo ok || echo "said: $PROBE_MSG")"
+check "the total is what is stored on this Mac (10 + 3 + 1 GB), not made 'at least' by the flag" \
+  "$(grep -qF ' 14.0 GB ' <<< "$cloud_line" && ! grep -qF 'at least' <<< "$cloud_line" && echo ok || echo "said: $cloud_line")"
+check "and the line says part of the offered items is kept only in iCloud, counting only those still offered" \
+  "$(grep -qF 'Part of 2 item(s) it found is kept only in iCloud' <<< "$cloud_line" && echo ok || echo "said: $cloud_line")"
+check "and that the part in iCloud was not measured and is not in the total, with no figure for it" \
+  "$(grep -qF 'that part was not measured and is not in the total.' <<< "$cloud_line" && echo ok || echo "said: $cloud_line")"
+check "and still ends by suggesting /disk-clean" "$(grep -qE 'run /disk-clean\.$' <<< "$cloud_line" && echo ok || echo "said: $cloud_line")"
+check "and holds no dash as punctuation" \
+  "$(! grep -qE "[[:space:]]-[[:space:]]|$EMDASH|$ENDASH" <<< "$cloud_line" && echo ok || echo "said: $cloud_line")"
+printf '%s\n' "$cloud_line" > "$SCANS/line-icloud"
+# Only the item flag icloud-only-part says so: the icloud flag (removing it removes it from iCloud
+# on every device) is a different fact, and a flagged item no longer offered is not in the total.
+SC_ICLOUDONLY="$SCANS/icloud-flag.json"
+scan_record "$SC_ICLOUDONLY" "$((T0 - DAY))" \
+  "i1|caches|trash|/x/c|$((10 * GB))|offerable|measured|icloud" \
+  "i2|build-folders|trash|/x/nm|$GB|removed|measured|icloud-only-part" \
+  "i3|build-folders|trash|/x/nm2|$GB|not offerable: in use|measured|icloud-only-part"
+scan_probe "$SC_ICLOUDONLY" "$((7 * GB))"
+check "an item flagged icloud alone, or a flagged one no longer offered, adds no iCloud note" \
+  "$(grep -qF ' 10.0 GB ' <<< "$PROBE_MSG" && ! grep -qF 'kept only in iCloud' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+# With a size read only in part as well, the total stays "at least" and the note is still said.
+SC_CLOUDPART="$SCANS/cloud-partial.json"
+scan_record "$SC_CLOUDPART" "$((T0 - DAY))" \
+  "q1|caches|trash|/x/c|$((10 * GB))|offerable|partial" \
+  "q2|build-folders|trash|/x/nm|$((3 * GB))|offerable|measured|icloud-only-part"
+scan_probe "$SC_CLOUDPART" "$((7 * GB))"
+check "with a partly read size as well, the total stays 'at least' and the iCloud note is still said" \
+  "$(grep -qF 'at least 13.0 GB' <<< "$PROBE_MSG" && grep -qF 'Part of 1 item(s) it found is kept only in iCloud' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+
 # Everything already removed: the scan has nothing left, which is said rather than a total of 0.
 SC_DONE="$SCANS/done.json"
 scan_record "$SC_DONE" "$((T0 - 3 * 3600))" "d1|caches|trash|/x/c|$((10 * GB))|removed|measured" "d2|trash|empty|/x/t|$((2 * GB))|trashed|measured"
@@ -861,10 +908,20 @@ SC_KEEP="$SCANS/keep.json"; cp "$SC_FRESH" "$SC_KEEP"
 S_KEEP="$TMPROOT/state-scan-keep"; mkdir -p "$S_KEEP"
 scan_probe "$SC_KEEP" "$((7 * GB))" "$S_KEEP"
 keep_key="$(sed -n 1p "$S_KEEP/disk-clean-tally")"
-printf '%s\n%s 2 0 %s 0 0 0 0\n' "$keep_key" "$((T0 - DAY))" "$((99 * 1024 * 1024))" > "$S_KEEP/disk-clean-tally"
+printf '%s\n%s 2 0 %s 0 0 0 0 1\n' "$keep_key" "$((T0 - DAY))" "$((99 * 1024 * 1024))" > "$S_KEEP/disk-clean-tally"
 scan_probe "$SC_KEEP" "$((7 * GB))" "$S_KEEP"
 check "a kept tally whose key matches the record is used without reading the record again" \
-  "$(grep -qF ' 99.0 GB ' <<< "$PROBE_MSG" && grep -qF 'taken 1 day(s) ago' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -qF ' 99.0 GB ' <<< "$PROBE_MSG" && grep -qF 'taken 1 day(s) ago' <<< "$PROBE_MSG" && grep -qF 'Part of 1 item(s)' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+# A tally kept before the iCloud count was added holds eight numbers. Believed, it would hide the
+# note until the record next changed, so it is read past like any other tally that is not one.
+SC_OLDTALLY="$SCANS/old-tally.json"; cp "$SC_CLOUD" "$SC_OLDTALLY"
+S_OLDTALLY="$TMPROOT/state-scan-oldtally"; mkdir -p "$S_OLDTALLY"
+scan_probe "$SC_OLDTALLY" "$((7 * GB))" "$S_OLDTALLY"
+old_key="$(sed -n 1p "$S_OLDTALLY/disk-clean-tally")"
+printf '%s\n%s 3 0 %s 0 0 1 0\n' "$old_key" "$((T0 - DAY))" "$((14 * 1024 * 1024))" > "$S_OLDTALLY/disk-clean-tally"
+scan_probe "$SC_OLDTALLY" "$((7 * GB))" "$S_OLDTALLY"
+check "a tally kept in the eight number form from before the iCloud count is read past, so the note is said" \
+  "$(grep -qxF "$cloud_line" <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 printf '%s\nnot a tally at all\n' "$keep_key" > "$S_KEEP/disk-clean-tally"
 scan_probe "$SC_KEEP" "$((7 * GB))" "$S_KEEP"
 check "a kept tally that is not one is read past, and the record read again" \

@@ -2715,7 +2715,10 @@ Before those, one line from disk-clean's last scan (claude-config#1809): when
 `~/.claude/state/disk-clean/last-scan.json` (`FREE_SPACE_SCAN_RECORD`) is under 7 days old, the
 warning says how much that scan offered that has not been removed yet, how long ago it was taken,
 and to run /disk-clean. A size that was unread or only partly read makes the total "at least" that
-much, never a 0 added in. A record that is missing, unreadable, cut off, holding an item it cannot
+much, never a 0 added in. An offered item flagged `icloud-only-part` (part of it is kept only in
+iCloud, which the scan never reads, so its size is only what is stored on this Mac) makes the line
+say how many such items there are and that the part in iCloud was not measured and is not in the
+total. A record that is missing, unreadable, cut off, holding an item it cannot
 read, dated in the future or 7 days old adds nothing and never changes the verdict. Reading a record
 costs about 0.14 ms an item (0.76 s to read 5,264 items, about 0.9 s for the whole warning that
 reads them, measured 2026-10-28), so the tally is kept in

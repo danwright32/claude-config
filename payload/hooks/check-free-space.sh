@@ -517,6 +517,12 @@ symbol_cache_note(){
 # unread rather than measured or reported, makes the total "at least" that much; offerable items
 # with no size read at all are counted as items, never as 0 GB.
 #
+# PART IN iCLOUD IS SAID, NEVER SIZED. The scan never reads a folder iCloud keeps only in the cloud
+# (reading it makes iCloud download it), so an item with one beneath it is sized from what is stored
+# on this Mac alone and flagged icloud-only-part (lib/disk-clean-record.sh). The total is right about
+# this Mac; the line adds how many offered items have such a part, in the review page's words ("kept
+# only in iCloud", L118), and that the part was not measured, with no figure for it (L11).
+#
 # ONLY ON THE WARNING, AND READ ONCE PER RECORD. Every prompt runs this hook, so nothing here runs
 # on a disk with room. Reading the record goes through lib/disk-clean-record.sh, which owns the
 # layout (L370), and costs about 0.14 ms an item: 0.76 s for a 5,264 item record, measured
@@ -525,7 +531,8 @@ symbol_cache_note(){
 # time, size and path, and the record is read again only when one of those moves (L431: one stat is far
 # cheaper than the read). Every writer of the record renames a new file into place (dcr_write,
 # dcr_mark), so even a mark that keeps the size inside the same second is a new inode. A kept tally
-# that is not eight numbers is read past, never shown. Sizes are worded by lib/disk-clean-units.sh,
+# that is not nine numbers (one kept in the eight number form from before the iCloud count, too) is
+# read past, never shown. Sizes are worded by lib/disk-clean-units.sh,
 # the one copy disk-clean's scan and disk-remove use.
 #
 # Environment: FREE_SPACE_SCAN_RECORD, the record to read (default ~/.claude/state/disk-clean/
@@ -533,24 +540,26 @@ symbol_cache_note(){
 scan_note(){
   local record="${FREE_SPACE_SCAN_RECORD:-${HOME:-}/.claude/state/disk-clean/last-scan.json}"
   [ -f "$record" ] && [ -r "$record" ] || return 0
-  local here="." at age age_words tally n unsized kib bad partial taken unjudged total
+  local here="." at age age_words tally n unsized kib bad partial taken unjudged icloud total cloud_note=""
   local stamp="" key="" kept_key="" kept="" _extra="" cache="$STATE_DIR/disk-clean-tally"
   case "${BASH_SOURCE[0]}" in */*) here="${BASH_SOURCE[0]%/*}" ;; esac
   . "$here/lib/disk-clean-units.sh" 2>/dev/null || return 0
   scan_tally_ok(){ is_number "${at:-}" && is_number "${n:-}" && is_number "${unsized:-}" && is_number "${kib:-}" \
-    && is_number "${bad:-}" && is_number "${partial:-}" && is_number "${taken:-}" && is_number "${unjudged:-}"; }
+    && is_number "${bad:-}" && is_number "${partial:-}" && is_number "${taken:-}" && is_number "${unjudged:-}" \
+    && is_number "${icloud:-}"; }
   # GNU first, then BSD, the order the symbol cache's age is read in above.
   stamp="$(stat -c '%i %Y %s' "$record" 2>/dev/null || stat -f '%i %m %z' "$record" 2>/dev/null || true)"
   [ -n "$stamp" ] && key="$stamp $record"
   if [ -n "$key" ] && [ -f "$cache" ]; then
     { IFS= read -r kept_key; IFS= read -r kept; } < "$cache" 2>/dev/null || true
   fi
-  read -r at n unsized kib bad partial taken unjudged _extra <<< "$kept"
+  read -r at n unsized kib bad partial taken unjudged icloud _extra <<< "$kept"
   if [ -z "$key" ] || [ "$kept_key" != "$key" ] || [ -n "${_extra:-}" ] || ! scan_tally_ok; then
     . "$here/lib/disk-clean-record.sh" 2>/dev/null || return 0
     dcr_complete "$record" 2>/dev/null || return 0
     at="$(dcr_header "$record" scanned_at 2>/dev/null)" || return 0
-    # Fields of dcr_review_items: id, category, method, target, state, bytes, identity, size, ...
+    # Fields of dcr_review_items: id, category, method, target, state, bytes, identity, size, flags,
+    # detail. flags is a comma list, so icloud-only-part is matched as a whole entry, never inside icloud.
     tally="$(dcr_review_items "$record" 2>/dev/null | awk -F "$DCR_SEP" '
       $5 == "unreadable" { bad = 1 }
       $5 == "removed" || $5 == "trashed" || $5 == "truncated" || $5 == "gone" { taken++ }
@@ -558,13 +567,16 @@ scan_note(){
       $5 == "offerable" {
         n++
         if ($6 == "") unsized++
-        else { b += $6; if ($8 != "measured" && $8 != "reported" && $8 != "") partial = 1 }
+        else {
+          b += $6; if ($8 != "measured" && $8 != "reported" && $8 != "") partial = 1
+          nf = split($9, f, ","); for (i = 1; i <= nf; i++) if (f[i] == "icloud-only-part") { cloud++; break }
+        }
       }
-      END { printf "%d %d %.0f %d %d %d %d\n", n, unsized, b / 1024, bad, partial, taken, unjudged }')" || return 0
-    read -r n unsized kib bad partial taken unjudged <<< "$tally"
+      END { printf "%d %d %.0f %d %d %d %d %d\n", n, unsized, b / 1024, bad, partial, taken, unjudged, cloud }')" || return 0
+    read -r n unsized kib bad partial taken unjudged icloud <<< "$tally"
     scan_tally_ok || return 0
     if [ -n "$key" ]; then
-      { printf '%s\n' "$key"; printf '%s %s %s %s %s %s %s %s\n' "$at" "$n" "$unsized" "$kib" "$bad" "$partial" "$taken" "$unjudged"; } > "$cache.$$" 2>/dev/null \
+      { printf '%s\n' "$key"; printf '%s %s %s %s %s %s %s %s %s\n' "$at" "$n" "$unsized" "$kib" "$bad" "$partial" "$taken" "$unjudged" "$icloud"; } > "$cache.$$" 2>/dev/null \
         && mv -f "$cache.$$" "$cache" 2>/dev/null || rm -f "$cache.$$" 2>/dev/null || true
     fi
   fi
@@ -586,10 +598,11 @@ scan_note(){
     echo "A disk-clean scan taken $age_words found $n item(s) that it could remove and has not removed yet, but could not read their size. To review them, run /disk-clean."
   else
     total="$(dcu_human "$kib")"
+    [ "$icloud" -gt 0 ] && cloud_note=" Part of $icloud item(s) it found is kept only in iCloud: that part was not measured and is not in the total."
     if [ "$unsized" -gt 0 ] || [ "${partial:-0}" = 1 ]; then
-      echo "A disk-clean scan taken $age_words found at least $total that it could remove and has not removed yet (it could not read every size in full). To review it and choose what goes, run /disk-clean."
+      echo "A disk-clean scan taken $age_words found at least $total that it could remove and has not removed yet (it could not read every size in full).$cloud_note To review it and choose what goes, run /disk-clean."
     else
-      echo "A disk-clean scan taken $age_words found $total that it could remove and has not removed yet. To review it and choose what goes, run /disk-clean."
+      echo "A disk-clean scan taken $age_words found $total that it could remove and has not removed yet.$cloud_note To review it and choose what goes, run /disk-clean."
     fi
   fi
 }
