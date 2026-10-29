@@ -1153,9 +1153,10 @@ test('#1864: a one word message, and words beside a tag, are still held', () => 
         "import type { EngineInterface } from 'claude-code'",
         "const VERB = { add: 'added', drop: 'dropped' }",
         "const noun = (n: number): string => (n === 1 ? 'step' : 'steps')",
+        "const LAST = ['done']",
         'const said = ($: EngineInterface, what: string) => $.ui.toast(`The card ${what}.`)',
         "export const tell = async ($: EngineInterface, k: 'add' | 'drop', n: number) => {",
-        '  await $.ui.toast(`${VERB[k]} ${n} ${noun(n)}`)',
+        '  await $.ui.toast(`${VERB[k]} ${n} ${noun(n)}, ${LAST}`)',
         "  said($, 'moved')",
         '}',
         '',
@@ -1166,6 +1167,8 @@ test('#1864: a one word message, and words beside a tag, are still held', () => 
   expect(words("drop: 'dropped'", "drop: 'removed'")).toBe(true)
   expect(words("? 'step' :", "? 'item' :")).toBe(true)
   expect(words("said($, 'moved')", "said($, 'closed')")).toBe(true)
+  // A list of one word (lessons review at 324ee11).
+  expect(words("['done']", "['finished']")).toBe(true)
 })
 
 // #1841 (lessons review at 74900c0): a message's words given to a variable with = or added with +=

@@ -2022,6 +2022,9 @@ const readMod = (f: ModFile): ModRead | null => {
       if (!v || !isAlternative(alternativesOf(v), [x, y])) return false
       if (keyed && WORD_KEY.test(text.slice(skipOn(el[0]), v[0]).replace(/['":\s]/g, ''))) return false
       if (/^\s*(?:\?\.\s*)?(?:\[|\.\s*join\s*\()/.test(blank.slice(c + 1, c + 40))) return false
+      // A list of one word is that word said (lessons review at 324ee11); a record of one field
+      // (`{ kind: 'focus' }`) is still a record, its field named by its key.
+      if (!keyed && els.length < 2) return false
       const values = els.map(e => valueOf(e, keyed))
       return !(values.length >= 2 && values.every(e => e !== undefined && !blank.slice(e[0], e[1]).includes('...') && literalWord(e)))
     }
