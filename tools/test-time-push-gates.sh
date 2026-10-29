@@ -161,6 +161,45 @@ want="$word PreToolUse hooks fire on a \`git push\` here, declaring timeouts of 
 if grep -qF "$want" "$REPO_ROOT/README.md"; then check "the README counts the hooks a push waits on" ok
 else check "the README counts the hooks a push waits on" "wanted the README to say: $want. It says: $(grep -o '[A-Z][a-z-]* PreToolUse hooks fire on a .git push. here, declaring timeouts of [0-9]* to [0-9]* seconds' "$REPO_ROOT/README.md")"; fi
 
+# And the README's table of what each gate costs, checked against the same list both ways
+# (claude-config#1870). The count above was right while the table under it had no row for
+# no-verify-gate.sh or no-session-link-in-comments.sh, because nothing compared the table's rows
+# with the settings, so a gate added beside the table went unnoticed (L96). Every gate a push
+# waits on must have a row, and every row must name a gate a push waits on, so a row left behind
+# by a removed gate fails too.
+table_diff="$(printf '%s\n' "$real" | python3 -c '
+import re, sys
+readme = open(sys.argv[1]).read()
+gates = [l.split("\t", 1)[1] for l in sys.stdin.read().splitlines() if "\t" in l]
+m = re.search(r"^### What a push actually waits on\n(.*?)(?=^### )", readme, re.S | re.M)
+if not m:
+    print("the README has no \"What a push actually waits on\" section"); sys.exit(0)
+rows, in_table = [], False
+for line in m.group(1).splitlines():
+    if line.startswith("| Gate |"):
+        in_table = True; continue
+    if in_table:
+        if not line.startswith("|"):
+            break
+        if line.startswith("| ---"):
+            continue
+        cell = line.split("|")[1]
+        name = re.search(r"`([^`]+[.]sh)`", cell)
+        rows.append(name.group(1) if name else "(a row naming no gate: %s)" % cell.strip())
+if not rows:
+    print("the section has no table headed \"| Gate |\""); sys.exit(0)
+out = []
+missing = [g for g in gates if g not in rows]
+extra = [r for r in rows if r not in gates]
+twice = sorted({r for r in rows if rows.count(r) > 1})
+if missing: out.append("no row for: " + ", ".join(missing))
+if extra: out.append("a row for what no push waits on: " + ", ".join(extra))
+if twice: out.append("more than one row for: " + ", ".join(twice))
+print("; ".join(out))' "$REPO_ROOT/README.md")"
+[ -z "$table_diff" ] && [ -n "$real" ] \
+  && check "#1870 the README's cost table has one row for each gate a push waits on, and no other" ok \
+  || check "#1870 the README's cost table has one row for each gate a push waits on, and no other" "$table_diff"
+
 # --json was parsed and documented while nothing read it, so asking for JSON printed the table and
 # exited 0, an answer in the wrong shape that reads as the right one (claude-config#1122). Nothing
 # consumes JSON from this tool, so the flag is gone: asking for it is refused by name.
