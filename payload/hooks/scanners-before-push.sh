@@ -385,11 +385,15 @@ start_one(){         # $1 = the suite path   $2 = a section, or empty
 _sc_checkout="$(pwd -P)"
 _sc_detach=""
 _sc_runs="$_sc_work/runs"
-# The lock that lets one push at a time decide about a scanner's runs, shared with claude-sync (L370).
-# Without it nothing could stop two pushes each starting a copy, so runs are stopped at the budget.
+# The lock that lets one push at a time decide about a scanner's runs, shared with claude-sync (L370),
+# and the shared rule for a run recorded moments ago (lib/recorded-pid.sh, claude-config#1909).
+# Without either, nothing could stop two pushes each starting a copy, so runs are stopped at the
+# budget.
 _sc_have_lock=""
 # shellcheck source=lib/pid-lock.sh
-. "$HOOK_DIR/lib/pid-lock.sh" 2>/dev/null && command -v take_pid_lock >/dev/null 2>&1 && _sc_have_lock=1
+. "$HOOK_DIR/lib/pid-lock.sh" 2>/dev/null && command -v take_pid_lock >/dev/null 2>&1 \
+  && . "$HOOK_DIR/lib/recorded-pid.sh" 2>/dev/null && command -v recorded_pid_young >/dev/null 2>&1 \
+  && _sc_have_lock=1
 # `mkdir -p` is asked, then the folder is looked at, so a push that loses the race to make it with
 # another push at the same moment still finds it there and is not left without one.
 [ -n "$_sc_key" ] && mkdir -p "$_sc_state_dir/runs/$_sc_repo_key" 2>/dev/null
@@ -432,20 +436,16 @@ _sc_slot(){   # $1 = run index -> the digest naming its suite and section
 # process is forked, and for an instant after that, while the process is inside execve becoming the
 # run, Linux shows its command line as EMPTY. A push looking in that instant judged a live run gone
 # and started a second copy of it: two pushes of one tree at once did so on Linux CI on 2026-10-29,
-# never on this Mac. An id that a process recorded moments ago cannot have been recycled, so a run
-# started within the last minute counts as itself whenever its process is running. A setting, not a
-# measurement: the instant is microseconds, and a minute is far past it and far short of the time
-# any system takes to reuse an id.
-_SC_RUN_YOUNG=60
+# never on this Mac. So a run started within the last minute counts as itself whenever its process
+# is running, by the one rule every such check shares, recorded_pid_young in lib/recorded-pid.sh
+# (claude-config#1909), read against the start time the run recorded.
 _sc_run_alive(){   # $1 = a run's folder -> 0 when the process it recorded is running and is that run
-  local p age
+  local p
   p="$(cat "$1/pid" 2>/dev/null)"
   case "$p" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$p" 2>/dev/null || return 1
   case "$(ps -ww -o command= -p "$p" 2>/dev/null)" in *" $1 "*|*" $1") return 0 ;; esac
-  age="$(_sc_run_age "$1")"
-  case "$age" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$age" -lt "$_SC_RUN_YOUNG" ]
+  recorded_pid_young "$p" "$(cat "$1/started" 2>/dev/null)"
 }
 # How long ago a run started, from the time it RECORDED in its `started` file, never the file's
 # modification time, which anything touching the folder moves. Nothing when it cannot be read.
