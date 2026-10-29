@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import { commandWrites } from '../hooks/writes.ts'
+import { callShell, commandWrites } from '../hooks/writes.ts'
 
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and
 // missed inline scripts, rsync, install, ln, dd, a patch, every file but the last of a sed -i, and a
@@ -646,6 +646,71 @@ describe("writes: a known tool's mode that changes no file it is handed hands no
     expect(words('npx biome check src')).toEqual([['check', 'src']])
     expect(words('python3 -m black --check src')).toEqual([['src']])
     expect(words('python3 prettier.py --check src')).toEqual([['src']])
+  })
+})
+
+// #1834: a variable the command set was read as its value but handed on as one word even unquoted,
+// so under bash `F="--write src"; npx prettier --check $F` handed on nothing and `F="a.ts b.ts";
+// python3 gen.py $F` one path no file has. bash, sh, dash and ksh split an unquoted expansion's value
+// on whitespace; zsh does not (measured in this Mac's Bash tool on 2026-10-28: /bin/zsh 5.9 printed
+// `[a b]` for `F="a b"; printf '[%s]\n' $F`). So the reader follows the shell the line runs in: the
+// one Claude Code runs a Bash call in, and for a script a shell is given, that shell.
+describe("writes: an unquoted variable's value is split into words as the shell running it does (#1834)", () => {
+  const handed = (command: string, shell?: string) => (commandWrites(command, CWD, HOME, shell).runs ?? []).map(r => r.args.map(a => a.path ?? `(as written) ${a.word}`))
+  test('under bash an unquoted value is split into words, and a split --write makes prettier a writing run', () => {
+    expect(commandWrites('F="--write src"; npx prettier --check $F', CWD, HOME, '/bin/bash').runs).toEqual([
+      { what: 'a tool run through npx', script: 'prettier', tool: true, args: [{ word: '$F', path: `${CWD}/src` }] },
+    ])
+    expect(commandWrites('F="a.ts b.ts"; python3 gen.py $F', CWD, HOME, '/bin/bash').runs?.[0]?.args).toEqual([
+      { word: '$F', path: `${CWD}/a.ts` },
+      { word: '$F', path: `${CWD}/b.ts` },
+    ])
+    expect(handed('F="src --write"; npx prettier --check $F', '/bin/bash')).toEqual([[`${CWD}/src`]])
+    expect(handed('F="a.ts b.ts"; python3 gen.py $F', '/opt/homebrew/bin/bash')).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
+  })
+  test('a quoted value is kept whole', () => {
+    expect(commandWrites('F="a.ts b.ts"; python3 gen.py "$F"', CWD, HOME, '/bin/bash').runs?.[0]?.args).toEqual([{ word: '$F', path: `${CWD}/a.ts b.ts` }])
+    expect(handed(`F="a.ts b.ts"; python3 gen.py "\${F}" x.ts`, '/bin/bash')).toEqual([[`${CWD}/a.ts b.ts`, `${CWD}/x.ts`]])
+    // A quoted part of a word stays whole while the unquoted part beside it splits.
+    expect(handed(`F="a b"; G="c d"; python3 gen.py "$F"$G`, '/bin/bash')).toEqual([[`${CWD}/a bc`, `${CWD}/d`]])
+  })
+  test('the split joins the text around it, leading and trailing spaces end a word, and an empty value hands on nothing', () => {
+    expect(handed('F="a b"; python3 gen.py x$F.ts', '/bin/bash')).toEqual([[`${CWD}/xa`, `${CWD}/b.ts`]])
+    expect(handed('F=" a"; python3 gen.py x$F', '/bin/bash')).toEqual([[`${CWD}/x`, `${CWD}/a`]])
+    expect(handed(`F="a  "; python3 gen.py \${F}y`, '/bin/bash')).toEqual([[`${CWD}/a`, `${CWD}/y`]])
+    expect(handed('F=""; python3 gen.py $F out.ts', '/bin/bash')).toEqual([[`${CWD}/out.ts`]])
+  })
+  test("a redirect's target is kept whole, since bash refuses a split one as ambiguous and writes nothing", () => {
+    expect(commandWrites('F="a b"; echo x > $F', CWD, HOME, '/bin/bash').files).toEqual([{ word: '$F', path: `${CWD}/a b` }])
+  })
+  test('under zsh, or a shell not known, an unquoted value is kept whole, as before', () => {
+    for (const shell of ['/bin/zsh', undefined]) {
+      expect(handed('F="a.ts b.ts"; python3 gen.py $F', shell)).toEqual([[`${CWD}/a.ts b.ts`]])
+      expect(handed('F="--write src"; npx prettier --check $F', shell)).toEqual([])
+    }
+  })
+  test('a script given to a shell is split as that shell splits, whatever runs the line', () => {
+    expect(handed(`bash -c 'F="a.ts b.ts"; python3 gen.py $F'`, '/bin/zsh')).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
+    expect(handed(`sh -c 'F="a.ts b.ts"; python3 gen.py $F'`)).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
+    expect(handed(`bash <<'EOF'\nF="--write src"; npx prettier --check $F\nEOF`, '/bin/zsh')).toEqual([[`${CWD}/src`]])
+    expect(handed(`zsh -c 'F="a.ts b.ts"; python3 gen.py $F'`, '/bin/bash')).toEqual([[`${CWD}/a.ts b.ts`]])
+    // A command substitution runs in the shell of the line it sits in.
+    expect(handed(`bash -c 'echo $(F="a.ts b.ts"; python3 gen.py $F)'`, '/bin/zsh')).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
+  })
+})
+
+// The shell Claude Code runs a Bash call in: CLAUDE_CODE_SHELL where it names a bash or zsh, which
+// Claude Code takes over everything (its own message: `CLAUDE_CODE_SHELL="..." is not a valid
+// bash/zsh path, falling back to detection`), otherwise $SHELL where it names one. Otherwise Claude
+// Code finds one itself, which cannot be known here.
+describe('callShell: the shell a Bash call runs in (#1834)', () => {
+  test('CLAUDE_CODE_SHELL naming bash or zsh, otherwise SHELL naming one, otherwise not known', () => {
+    expect(callShell({ SHELL: '/bin/zsh' })).toBe('/bin/zsh')
+    expect(callShell({ SHELL: '/opt/homebrew/bin/bash' })).toBe('/opt/homebrew/bin/bash')
+    expect(callShell({ CLAUDE_CODE_SHELL: '/bin/bash', SHELL: '/bin/zsh' })).toBe('/bin/bash')
+    expect(callShell({ CLAUDE_CODE_SHELL: '/usr/local/bin/fish', SHELL: '/bin/zsh' })).toBe('/bin/zsh')
+    expect(callShell({ SHELL: '/usr/local/bin/fish' })).toBeUndefined()
+    expect(callShell({})).toBeUndefined()
   })
 })
 
