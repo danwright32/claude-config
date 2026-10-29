@@ -44,8 +44,11 @@ input="$(cat 2>/dev/null || true)"
 session=""
 re_sid='"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"'
 re_tp='"transcript_path"[[:space:]]*:[[:space:]]*"([^"]+)"'
-if [[ $input =~ $re_sid ]]; then session="${BASH_REMATCH[1]}"
-elif [[ $input =~ $re_tp ]]; then session="${BASH_REMATCH[1]}"
+# Under a UTF-8 locale bash's =~ stops at a byte that is not UTF-8, so each is also looked for in the
+# C locale, which reads every byte as a character (claude-config#1885).
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+if payload_match "$input" "$re_sid"; then session="${BASH_REMATCH[1]}"
+elif payload_match "$input" "$re_tp"; then session="${BASH_REMATCH[1]}"
 fi
 if [ -z "$session" ]; then
   echo "suite-pile-notice: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and nothing was checked." >&2

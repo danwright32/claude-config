@@ -317,6 +317,21 @@ out="$(prompt_home unsethome "")"
 says "control: an unset CLAUDE_HOME is this user's own config" "$out" "sending is stuck"
 clear_state
 
+# A byte that is not UTF-8 in front of the session id stops bash's =~ under a UTF-8 locale
+# (claude-config#1885), so the payload read as carrying no session and the sync went unchecked.
+bad_prompt() { # bad_prompt <payload printf format>  -> stderr too, under en_US.UTF-8
+  printf "$1" | HOME="$FHOME" CLAUDE_HOME="$FHOME/.claude" SYNC_LAUNCHAGENTS="$WORK/agents" \
+    CLAUDE_SYNC_STUCK_STATE_DIR="$WORK/state" CLAUDE_SYNC_STUCK_NOW="$NOW" \
+    SYNC_NO_NOTIFY=1 LC_ALL=en_US.UTF-8 bash "$HOOK" 2>&1
+}
+out="$(bad_prompt '{"cwd":"/x/\377","prompt":"carry on"}')"
+says "#1885 control: a byte that is not UTF-8 and no session is said to carry none" "$out" "neither a session id"
+out="$(bad_prompt '{"cwd":"/x/\377","session_id":"bad1885","prompt":"carry on"}')"
+never_says "#1885 a byte that is not UTF-8 in front of the session id does not hide it" "$out" "neither a session id"
+out="$(bad_prompt '{"cwd":"/x/\377","transcript_path":"/x/bad1885.jsonl","prompt":"carry on"}')"
+never_says "#1885 nor in front of the transcript path" "$out" "neither a session id"
+clear_state
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

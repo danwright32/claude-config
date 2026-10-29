@@ -138,15 +138,25 @@ RUNS_FILE_PAST="([[:space:]]|(then|do|else|elif|if|while|until|time)[[:space:]]|
 SQ="'"
 RUNS_FILE_WORD='(\\\\)?(\\"|'$SQ')?((source|\.)[[:space:]]|\.*/|[^[:space:];&|"'$SQ'=:/~$\\()`<>{}][^[:space:];&|"'$SQ'=:]*/|[~/]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(\\"|'$SQ')?/)'
 
+WRAPPER_WORD='(^|[^A-Za-z0-9_.-]|\\[nt])(bash|sh|zsh|dash|ksh|eval|env|find|watch|script|parallel)([^A-Za-z0-9_.-]|$)'
+GUARDED_WORD='(^|[^A-Za-z0-9_.-]|\\[nt])(git|gh|rtk)([^A-Za-z0-9_.-]|$)'
+
+# Does payload text $1 match regex $2? Under a UTF-8 locale bash's =~ stops at a byte that is not
+# UTF-8, so a word after one reads as absent and the call passes unread (claude-config#1885). The C
+# locale reads every byte as a character, so it is tried as well; the session's locale is tried first,
+# since only it counts a Unicode space as [[:space:]], so a match is only ever added, never lost.
+# BASH_REMATCH is the matching try's.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+
 payload="$(cat)"
 # Every Bash call passes through here, and nearly none name a wrapper or run a script by its path
 # beside git, gh or rtk: answer those at once, before the shared reader is even loaded. The payload is
 # JSON, so a line break or a tab before a word is written \n or \t there.
-if [[ $payload =~ (^|[^A-Za-z0-9_.-]|\\[nt])(bash|sh|zsh|dash|ksh|eval|env|find|watch|script|parallel)([^A-Za-z0-9_.-]|$) ]]; then
+if payload_match "$payload" "$WRAPPER_WORD"; then
   # The wrapper the text names, which is all a refusal made with no reader to judge it can record.
   NAMED_WRAPPER="${BASH_REMATCH[2]}"
   NAMED_WHAT="names a shell, eval, env, find, watch, script or parallel"
-elif [[ $payload =~ $RUNS_FILE_AT$RUNS_FILE_PAST$RUNS_FILE_WORD ]]; then
+elif payload_match "$payload" "$RUNS_FILE_AT$RUNS_FILE_PAST$RUNS_FILE_WORD"; then
   # The longest match ends in a blank only for source or `.`.
   case "${BASH_REMATCH[0]}" in
     *[[:space:]]) NAMED_WRAPPER=source; NAMED_WHAT="sources a file" ;;
@@ -155,7 +165,7 @@ elif [[ $payload =~ $RUNS_FILE_AT$RUNS_FILE_PAST$RUNS_FILE_WORD ]]; then
 else
   exit 0
 fi
-[[ $payload =~ (^|[^A-Za-z0-9_.-]|\\[nt])(git|gh|rtk)([^A-Za-z0-9_.-]|$) ]] || exit 0
+payload_match "$payload" "$GUARDED_WORD" || exit 0
 
 LEDGER_DIR="${WRAPPED_REFUSAL_LEDGER_DIR:-$HOME/.claude/state/wrapped-commands}"
 LEDGER="$LEDGER_DIR/refusals.tsv"
