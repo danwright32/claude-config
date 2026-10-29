@@ -3,7 +3,7 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, shellAppended } from '../hooks/rules.ts'
-import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
+import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
@@ -295,6 +295,37 @@ test('lasting memory a script or a patch mentions, read from its text', async ()
   expect(await mentioned(`F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`, HOME, inCheckout)).toEqual(['~/.claude/projects/p/memory/MEMORY.md'])
   expect(await mentioned(`printf x >> "$(ls ~/.claude/projects/p/memory/MEMORY.md)"`, HOME, inCheckout)).toEqual(['~/.claude/projects/p/memory/MEMORY.md'])
   expect(await mentioned('ls ~/.claude/projects/p/memory|wc -l&&cat ~/.claude/projects/q/memory>x', HOME, inCheckout)).toEqual(['~/.claude/projects/p/memory', '~/.claude/projects/q/memory'])
+})
+
+// #1883: a git apply of a patch changing five code files was refused as a save to LESSONS.md, which
+// the patch named only in a changed line of another file. A patch is judged by the lines that name
+// the files it changes; one with no such line, or one whose text is encoded, is read whole as before.
+const CODE_PATCH =
+  'From 1234 Mon Sep 17 00:00:00 2001\nSubject: [PATCH] Note the rule beside LESSONS.md\n\nKeeps payload/LESSONS.md as it is.\n---\n' +
+  ' payload/mods/x/hooks/a.ts | 2 +-\n\n' +
+  'diff --git a/payload/mods/x/hooks/a.ts b/payload/mods/x/hooks/a.ts\nindex 1..2 100644\n--- a/payload/mods/x/hooks/a.ts\n+++ b/payload/mods/x/hooks/a.ts\n' +
+  '@@ -1,3 +1,3 @@\n // the rule lives in ~/.claude/LESSONS.md\n-const a = 1 // CLAUDE.md\n+const a = 2 // AGENTS.md\n x\n'
+test('a patch is judged by the files it changes, never by words elsewhere in it (#1883)', async () => {
+  const { inCheckout } = checkouts()
+  const judged = async (t: string) => mentioned(patchNames(t) ?? t, HOME, inCheckout)
+  // Named only in its message, its summary, a context line and a changed line: no lasting memory.
+  expect(await judged(CODE_PATCH)).toEqual([])
+  // One that really changes a lasting memory file is still found, by every line that can name it.
+  expect(await judged('diff --git a/payload/LESSONS.md b/payload/LESSONS.md\n--- a/payload/LESSONS.md\n+++ b/payload/LESSONS.md\n@@ -1 +1,2 @@\n x\n+y\n')).toEqual(['payload/LESSONS.md'])
+  expect(await judged('--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n x\n+- rule\n')).toEqual(['AGENTS.md'])
+  expect(await judged('diff --git a/notes.md b/CLAUDE.md\nsimilarity index 100%\nrename from notes.md\nrename to CLAUDE.md\n')).toEqual(['CLAUDE.md'])
+  expect(await judged('diff --git a/notes.md b/CLAUDE.md\ncopy from notes.md\ncopy to x/CLAUDE.md\n')).toEqual(['CLAUDE.md', 'x/CLAUDE.md'])
+  expect(await judged('Index: MEMORY.md\n===\n--- MEMORY.md.orig\n+++ MEMORY.md\n')).toEqual(['MEMORY.md'])
+  expect(await judged('*** a/CLAUDE.md\tdate\n--- b/CLAUDE.md\tdate\n***************\n*** 1 ****\n')).toEqual(['CLAUDE.md'])
+  // GNU patch takes an indented diff, so an indented header still names its file.
+  expect(await judged('  --- a/x.ts\n  +++ b/payload/LESSONS.md\n')).toEqual(['payload/LESSONS.md'])
+  // No line naming a file (a normal diff, an ed script): read whole, as before.
+  expect(patchNames('1a2\n> see LESSONS.md\n')).toBeUndefined()
+  expect(await judged('1a2\n> see LESSONS.md\n')).toEqual(['LESSONS.md'])
+  // An encoded mail can hide a header (quoted-printable wraps a long path), so it is read whole.
+  const encoded = `Content-Transfer-Encoding: quoted-printable\n\n${CODE_PATCH}`
+  expect(patchNames(encoded)).toBeUndefined()
+  expect(patchNames(`Content-Transfer-Encoding: 8bit\n\n${CODE_PATCH}`)).toBeDefined()
 })
 
 // #940: a python heredoc that wrote only a test script was asked about as a save to the global
