@@ -6446,6 +6446,11 @@ $f
       echo "claude-sync: the shared config's settings.hooks.json could not be read as JSON, so the hooks section of settings.json was left exactly as it was and your hooks may now be out of date. Check it with 'jq . $PAYLOAD/settings.hooks.json'; the next pull that can read it applies it." >&2
       sync_log_line "the hooks block was NOT applied, because the shared config's settings.hooks.json could not be read as JSON"
       [ -t 2 ] || notify "hooks block could not be read from the shared config"
+    elif [ -z "$tmp" ] && [ -n "$hk_wrote" ]; then
+      # The first half already took lines out, so "left as it was" would be false, and the person
+      # needs the copy from before this pull (L11, from the lessons review of #1913).
+      echo "claude-sync: could not finish merging the hooks block into settings.json. The lines the shared config no longer has were already taken out, but what is new was NOT put in, so your hooks may now be out of date. That usually means settings.json is no longer valid JSON: check with 'jq . $settings', fix it, then re-run the pull. Its copy from before this pull is $settings.syncbak." >&2
+      [ -t 2 ] || notify "hooks block only half merged into settings.json"
     elif [ -z "$tmp" ]; then
       # Fail loud and change nothing more: a half-written hooks block is worse than an
       # unchanged one, and a silent skip would leave hooks quietly out of date.

@@ -20814,6 +20814,35 @@ check "#1902 the other Mac keeps its registrations" \
 check "#1902 and publishes them back" \
   "[ \"\$(nr_group_of <(nr_shared '$NRB_R') renamed.sh)\" = Bash ]"
 
+# A SECOND HALF THAT FAILS SAYS WHAT THE FIRST HALF ALREADY DID (#1913, from the lessons review).
+# The first half can take lines out before the mirror runs; if the second half then cannot write the
+# block, "left exactly as it was" is no longer true, and the person needs the copy from before the
+# pull. Driven by an rsync stand in that breaks settings.json right after the real hooks mirror, the
+# one moment between the two halves.
+nr_pull "$NRA_H" "$NRA_R" "$NR_OUT/a15"
+rm -f "$NRA_H/hooks/moved.sh"
+nr_settings "$NRA_H" "Bash=renamed.sh,nofile.sh"
+nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a16"
+cat > "$NR_SHIM/rsync" <<NR_RSYNC_BREAK
+#!/usr/bin/env bash
+"$NR_REAL_RSYNC" "\$@"; rc=\$?
+dry=""; for a in "\$@"; do case "\$a" in --dry-run|-[!-]*n*) dry=1 ;; esac; done
+last="\${@: -1}"
+if [ -z "\$dry" ] && [ "\$last" = "\$NR_WATCH_HOME/hooks/" ]; then printf 'broken by the test\n' > "\$NR_WATCH_HOME/settings.json"; printf 'broke\n' >> "$NR_OUT/shim-broke"; fi
+exit \$rc
+NR_RSYNC_BREAK
+chmod +x "$NR_SHIM/rsync"
+: > "$NR_OUT/shim-broke"
+PATH="$NR_SHIM:$PATH" NR_WATCH_HOME="$NRB_H" CLAUDE_HOME="$NRB_H" SYNC_REPO="$NRB_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >"$NR_OUT/b15" 2>&1
+check "#1913 (the stand in broke settings.json between the two halves)" \
+  "[ -s '$NR_OUT/shim-broke' ]"
+check "#1913 a second half that fails says the first half already took lines out" \
+  "grep -q 'already taken out' '$NR_OUT/b15'"
+check "#1913 and does not claim settings.json was left as it was" \
+  "! grep -q 'left exactly as it was' '$NR_OUT/b15'"
+check "#1913 and the copy from before the pull it names is there" \
+  "jq -e '.hooks' '$NRB_H/settings.json.syncbak' >/dev/null"
+
 section "== a fixed failure can be cleared, by the command the message names (claude-config#305) =="
 # record_hook_suite_result is written by hook_suite_verdict and by nothing else, and that runs only
 # when an apply actually wrote a file under hooks/. So the record is refreshed by an INCOMING
