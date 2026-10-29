@@ -260,10 +260,12 @@ pc_ledger_path() {
 }
 
 # The tool call id from a hook payload, or nothing. Read by pattern, since the payload was already
-# parsed for what decides the gate and this field decides nothing.
+# parsed for what decides the gate and this field decides nothing. Claude Code writes it after the
+# command, and under a UTF-8 locale =~ stops at a byte that is not UTF-8, so it is also looked for in
+# the C locale, which reads every byte as a character (claude-config#1885).
 pc_call_id() {   # $1 = payload JSON
   local re='"tool_use_id"[[:space:]]*:[[:space:]]*"([^"]*)"'
-  [[ "$1" =~ $re ]] && printf '%s' "${BASH_REMATCH[1]}"
+  if [[ "$1" =~ $re ]] || { local LC_ALL=C; [[ "$1" =~ $re ]]; }; then printf '%s' "${BASH_REMATCH[1]}"; fi
   return 0
 }
 

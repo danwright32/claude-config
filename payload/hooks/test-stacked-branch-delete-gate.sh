@@ -646,6 +646,39 @@ echo "$NODE_FEAT" > "$ST/node"
 judge "gh api graphql -f query='mutation { updateRefs(input: {repositoryId: \"REF_kwDOfeat\", refUpdates: [{name: \"refs/heads/feat/x\", afterOid: \"$ZERO\"}]}) { clientMutationId } }'"
 check_eq "#1758 an updateRefs whose repository id names no repository is refused" "2" "$rc"
 
+# 21. A byte that is not UTF-8 stops bash's =~ and the system grep matching under a UTF-8 locale
+# (claude-config#1885), so the fast path, and the crude reading used with no reader, read a delete
+# after one as absent and passed it. Each case writes such a byte into the JSON raw, in front of a
+# delete that names no "delete" (which the case pattern catches whatever the bytes), under
+# en_US.UTF-8, and expects the verdict the same command gets without it.
+BAD=$'\xff'
+if LC_ALL=en_US.UTF-8 bash -c '[[ "$1" =~ git ]]' _ "${BAD}git"; then
+  echo "SUITE-PART-UNMEASURED #1885 the fault itself: =~ under en_US.UTF-8 here matches past a byte that is not UTF-8, so the byte cases pass with or without the fix"
+fi
+raw_payload(){ printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$1" "$REPO"; }
+utf8_run(){ # utf8_run <hook> <command>: sets out, rc and calls
+  out="$(raw_payload "$2" | LC_ALL=en_US.UTF-8 PATH="$STUB:$PATH" bash "$1" 2>&1)"; rc=$?
+  calls="$(cat "$ST/gh-calls" 2>/dev/null)"
+}
+for c in "git push origin :feat/x" "git push origin -d feat/x"; do
+  fresh
+  echo '[{"number":9}]' > "$ST/stacked"
+  utf8_run "$HOOK" "echo ok; $c"
+  check_eq "#1885 control: refused with no such byte: $c" "2" "$rc"
+  fresh
+  echo '[{"number":9}]' > "$ST/stacked"
+  utf8_run "$HOOK" "echo $BAD; $c"
+  check_eq "#1885 a byte that is not UTF-8 in front does not hide the delete: $c" "2" "$rc"
+  check "#1885 and the stacked pull request is named: $c" "#9" "$out"
+  fresh
+  utf8_run "$LONE/stacked-branch-delete-gate.sh" "echo $BAD; $c "
+  check_eq "#1885 nor from the crude reading used with no reader: $c" "2" "$rc"
+  check "#1885 which says it could not read the command: $c" "shell-words.py" "$out"
+done
+fresh
+utf8_run "$HOOK" "echo $BAD; ls -la"
+check_eq "#1885 control: a byte in front of a command deleting nothing still passes in silence" "0||" "$rc|$out|$calls"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
