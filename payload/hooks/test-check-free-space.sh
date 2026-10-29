@@ -119,7 +119,7 @@ S_LOW="$TMPROOT/state-low"; mkdir -p "$S_LOW"
 probe "$((7 * GB))" "$T0" "$S_LOW"; low_msg="$PROBE_MSG"
 check "under the floor exits 3" "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC")"
 check "under the floor says how much is left, in a unit a person reads" \
-  "$(grep -q '7 GB free on' <<< "$low_msg" && echo ok || echo "said: $low_msg")"
+  "$(grep -q '7.5 GB free on' <<< "$low_msg" && echo ok || echo "said: $low_msg")"
 check "under the floor names the volume it measured" \
   "$(grep -q '/fixture' <<< "$low_msg" && echo ok || echo "said: $low_msg")"
 # The whole point of the issue: the warning must not guess at what is eating the disk.
@@ -280,7 +280,7 @@ probe "$((30 * GB))" "$T0" "$S_SUSTAIN"; sustain_msg="$PROBE_MSG"
 check "a sustained fall from the same level still fires" \
   "$([ "$PROBE_RC" -eq 4 ] && echo ok || echo "exit $PROBE_RC, said: $sustain_msg")"
 check "and states the rate it measured" \
-  "$(grep -q 'about 6 GB per hour' <<< "$sustain_msg" && echo ok || echo "said: $sustain_msg")"
+  "$(grep -q 'about 6.4 GB per hour' <<< "$sustain_msg" && echo ok || echo "said: $sustain_msg")"
 # A persistence window of 0 is the old behaviour, a rate from the newest reading, so the burst that
 # the default refuses is projected again: proof the window is what refuses it (L1001).
 S_BURST0="$TMPROOT/state-burst-off"; mkdir -p "$S_BURST0"
@@ -390,7 +390,7 @@ check "and the same reading is reported against a floor nothing can clear" \
 # The positive control on the two above: a floor test passes whatever df said, including nothing,
 # so this is what actually proves a NUMBER came out of the parse (L171, L98).
 check "and that reading really is a number of GB, which is what proves df was parsed" \
-  "$(grep -qE '^claude-sync: only [0-9]+ GB free on /,' <<< "$df_low" && echo ok || echo "said: $df_low")"
+  "$(grep -qE '^claude-sync: only [0-9]+(\.[0-9])? (GB|MB|KB) free on /,' <<< "$df_low" && echo ok || echo "said: $df_low")"
 
 # ---- --report: the disk-full skill's rate step reads this, rather than measuring again (#683) ----
 # The skill's step 2 used to compute a rate itself, with awk strftime (macOS awk has no such
@@ -413,7 +413,7 @@ rprobe "$((200 * GB))" "$T0" "$TMPROOT/state-r-first"
 check "--report on a disk with room exits 0, the same answer as the quiet mode" \
   "$([ "$PROBE_RC" -eq 0 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 check "--report says how much is left even when there is room" \
-  "$(grep -q '^claude-sync: 200 GB free on /fixture' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -q '^claude-sync: 214.7 GB free on /fixture' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 check "--report on a first reading states no rate, and says it is the first reading" \
   "$(! grep -qi 'per hour' <<< "$PROBE_MSG" && grep -qi 'first reading' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 
@@ -423,7 +423,7 @@ S_RSLOW="$TMPROOT/state-r-slow"
 rprobe "$((300 * GB))" "$((T0 - 10800))" "$S_RSLOW"
 rprobe "$((240 * GB))" "$T0" "$S_RSLOW"
 check "--report states the rate of a fall the quiet mode keeps to itself" \
-  "$([ "$PROBE_RC" -eq 0 ] && grep -q 'about 20 GB per hour' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+  "$([ "$PROBE_RC" -eq 0 ] && grep -q 'about 21.5 GB per hour' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
 # Two readings minutes apart: no rate, and the reason is the span, with the minimum named.
 S_RSHORT="$TMPROOT/state-r-short"
@@ -451,7 +451,7 @@ check "--report after a recovery states no rate and names the recovery as the re
 # Under the floor with no rate: still exit 3, and the reason travels with it.
 rprobe "$((7 * GB))" "$T0" "$TMPROOT/state-r-low"
 check "--report under the floor still exits 3 and still says why there is no rate" \
-  "$([ "$PROBE_RC" -eq 3 ] && grep -q '7 GB free on /fixture' <<< "$PROBE_MSG" && grep -qi 'first reading' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+  "$([ "$PROBE_RC" -eq 3 ] && grep -q '7.5 GB free on /fixture' <<< "$PROBE_MSG" && grep -qi 'first reading' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
 # A mistyped flag must not fall back to the quiet mode, which on a healthy disk prints nothing and
 # would read as a report with nothing in it (L320).
@@ -466,7 +466,7 @@ S_RDF="$TMPROOT/state-r-df"; mkdir -p "$S_RDF"
 rdf_msg="$(FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$S_RDF" FREE_SPACE_PATH=/ FREE_SPACE_FLOOR_GB=0 \
   bash "$CHECK" --report 2>&1)"; rdf_rc=$?
 check "--report against a real df parses a number of GB" \
-  "$([ "$rdf_rc" -eq 0 ] && grep -qE '^claude-sync: [0-9]+ GB free on /,' <<< "$rdf_msg" && echo ok || echo "exit $rdf_rc, said: $rdf_msg")"
+  "$([ "$rdf_rc" -eq 0 ] && grep -qE '^claude-sync: [0-9]+(\.[0-9])? (GB|MB|KB) free on /,' <<< "$rdf_msg" && echo ok || echo "exit $rdf_rc, said: $rdf_msg")"
 
 # ---- the macOS symbol cache, named as a known cause on a low or falling verdict ----
 # Measured 2026-10-04: the disk fell from 25 GB to 8 GB free, more than once, while Overture agents
@@ -514,7 +514,7 @@ check "each command sits alone in its own code block" \
 check "and the change time it read is stated, as an age" \
   "$(grep -q '30 minute(s) ago' <<< "$sym_low" && echo ok || echo "said: $sym_low")"
 check "and the folder is named only after the free space sentence, so the nudge still reads its figure" \
-  "$(grep -q '^claude-sync: only 7 GB free on /fixture' <<< "${sym_low%%$'\n'*}" && echo ok || echo "first line: ${sym_low%%$'\n'*}")"
+  "$(grep -q '^claude-sync: only 7.5 GB free on /fixture' <<< "${sym_low%%$'\n'*}" && echo ok || echo "first line: ${sym_low%%$'\n'*}")"
 
 # Falling fast, above the floor, is the other verdict that names it.
 S_SYMF="$TMPROOT/state-sym-fast"; mkdir -p "$S_SYMF"
@@ -580,7 +580,7 @@ swap_probe "$((1 * GB))" "$TMPROOT/state-swap-big" "$SWAP_BIG"; swap_big="$PROBE
 check "a low disk with swap above its share still exits 3" \
   "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC, said: $swap_big")"
 check "and says how much swap there is, read from sysctl" \
-  "$(grep -q 'Swap holds 92 GB' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
+  "$(grep -q 'Swap holds 99.3 GB' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
 check "and names the processes holding the most memory, with what top measured" \
   "$(grep -q 'bzserv (pid 612): 117G' <<< "$swap_big" && grep -q 'fseventsd (pid 377): 105G' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
 check "and keeps a command name that has a space in it whole" \
@@ -588,7 +588,7 @@ check "and keeps a command name that has a space in it whole" \
 check "and says a restart gives the space back, and deleting files does not" \
   "$(grep -qi 'restart' <<< "$swap_big" && grep -qi 'deleting files does not' <<< "$swap_big" && echo ok || echo "said: $swap_big")"
 check "and the swap is said only after the free space sentence, so the nudge still reads its figure" \
-  "$(grep -q '^claude-sync: only 1 GB free on /fixture' <<< "${swap_big%%$'\n'*}" && echo ok || echo "first line: ${swap_big%%$'\n'*}")"
+  "$(grep -q '^claude-sync: only 1.1 GB free on /fixture' <<< "${swap_big%%$'\n'*}" && echo ok || echo "first line: ${swap_big%%$'\n'*}")"
 check "and the first line no longer says nothing measured a cause, since swap was measured" \
   "$(grep -q 'Swap is measured below' <<< "${swap_big%%$'\n'*}" && ! grep -q 'Nothing here says what is using it' <<< "$swap_big" && echo ok || echo "first line: ${swap_big%%$'\n'*}")"
 check "and hands over the top command that lists them, alone in its block" \
@@ -610,7 +610,7 @@ check "swap just under 2% of the disk is not named" \
   "$(! grep -qi 'Swap holds' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 swap_probe "$((1 * GB))" "$TMPROOT/state-swap-21" "$SWAP_21" "" FREE_SPACE_DISK_BYTES=$((100 * GB))
 check "and just over 2% of it is" \
-  "$(grep -qi 'Swap holds 2 GB' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+  "$(grep -qi 'Swap holds 2.3 GB' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 
 # A disk with room says nothing, however much swap there is: the holders ride on a warning that is
 # already firing, never on one of their own.
@@ -629,12 +629,12 @@ check "swap that cannot be read is said to be unread on a low disk, and the verd
 # that swap went unread.
 swap_probe "$((1 * GB))" "$TMPROOT/state-swap-nosize" "$SWAP_BIG" "" FREE_SPACE_DISK_BYTES=
 check "swap read with no disk size says how much swap and that its share is not known" \
-  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'Swap holds 92 GB' <<< "$PROBE_MSG" && grep -qi 'size could not be read' <<< "$PROBE_MSG" && ! grep -qi 'could not read swap' <<< "$PROBE_MSG" && [ ! -e "$TOP_CALLED" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'Swap holds 99.3 GB' <<< "$PROBE_MSG" && grep -qi 'size could not be read' <<< "$PROBE_MSG" && ! grep -qi 'could not read swap' <<< "$PROBE_MSG" && [ ! -e "$TOP_CALLED" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
 # A top that prints nothing, or that hangs, still leaves the swap said and the command handed over.
 swap_probe "$((1 * GB))" "$TMPROOT/state-swap-top-empty" "$SWAP_BIG" "$TOP_SILENT"
 check "a top that names nobody is said, never read as nobody holding memory" \
-  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'Swap holds 92 GB' <<< "$PROBE_MSG" && grep -qi 'top named no process' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'Swap holds 99.3 GB' <<< "$PROBE_MSG" && grep -qi 'top named no process' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 TOP_HANG="$TMPROOT/top-hang"
 cat > "$TOP_HANG" <<TOP
 #!/bin/sh
@@ -951,6 +951,28 @@ check "and the /disk-clean skill the line suggests is there to run (L111)" \
 check "which is where disk-clean's scan writes it" \
   "$(grep -qF 'DCS_RECORD="$DCS_STATE/last-scan.json"' "$DIR/../skills/disk-clean/scan-lib.sh" && grep -qF 'DCS_STATE="$HOME/.claude/state/disk-clean"' "$DIR/../skills/disk-clean/scan-lib.sh" && echo ok || echo "scan-lib.sh no longer names that path")"
 
+# One unit in one warning (#1807): the free space figure, the floor and the scan's total are all
+# worded by dcu_human, so 10 GiB free and a 10 GiB scan total read alike, never as "10 GB free"
+# beside "10.7 GB" found. Only the words change: the floor is still FREE_SPACE_FLOOR_GB GiB.
+. "$DIR/lib/disk-clean-units.sh" || { echo "FAIL: lib/disk-clean-units.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
+SC_UNIT="$SCANS/unit.json"
+scan_record "$SC_UNIT" "$((T0 - DAY))" "u1|caches|trash|/x/c|$((10 * GB))|offerable|measured"
+scan_probe "$SC_UNIT" "$((10 * GB))"
+unit_words="$(dcu_human $((10 * GB / 1024)))"
+check "10 GiB free and a 10 GiB scan total are worded alike, by the one size rule ($unit_words)" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF "only $unit_words free on /fixture" <<< "$PROBE_MSG" && grep -qF "found $unit_words that it could remove" <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+check "which is the figure Finder shows for 10 GiB, 10.7 GB" \
+  "$(grep -qF 'only 10.7 GB free on /fixture' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+check "and the floor it is under is worded by the same rule ($(dcu_human $((20 * GB / 1024))))" \
+  "$(grep -qF "under the $(dcu_human $((20 * GB / 1024))) floor" <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+scan_probe "$TMPROOT/no-scan-here/last-scan.json" "$((20 * GB))"
+check "the floor itself is unchanged: 20 GiB free is not under it (exit 0)" "$([ "$PROBE_RC" -eq 0 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+scan_probe "$TMPROOT/no-scan-here/last-scan.json" "$((20 * GB - 1))"
+check "and one byte less is (exit 3)" "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+scan_probe "$TMPROOT/no-scan-here/last-scan.json" "$((500 * 1024 * 1024))"
+check "under a GB the free space is worded in MB by the same rule, never as 0 GB" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF "only $(dcu_human $((500 * 1024))) free on /fixture" <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
 # ================== the nudge: WHEN the answer is spoken ==================
 # The check answers the question; the nudge decides when to say it. Same split as
 # project-list-nudge.sh, so there is one implementation of the question (L107).
@@ -986,6 +1008,14 @@ check "the same answer is not repeated on the next prompt" \
 n_worse="$(nudge "$((1 * GB))" "$((T0 + 120))" "$NS2" sess-low)"
 check "but a materially worse answer is said again" \
   "$(grep -q 'GB free on' <<< "$n_worse" && echo ok || echo "said: $n_worse")"
+# The figure is worded by the one size rule (#1807), "1.1 GB" or "524 MB", and the bands are whole
+# GB: the nudge must read both forms, or an answer it cannot read keys on the verdict alone and is
+# said again on a change no band records.
+NS_MB="$TMPROOT/ns-mb"; mkdir -p "$NS_MB"
+n_mb1="$(nudge "$((1 * GB))" "$T0" "$NS_MB" sess-mb)"
+n_mb2="$(nudge "$((500 * 1024 * 1024))" "$((T0 + 60))" "$NS_MB" sess-mb)"
+check "1.1 GB and then 524 MB free are both read as band 0, so the second is not repeated" \
+  "$(grep -qF '1.1 GB free on' <<< "$n_mb1" && [ -z "$n_mb2" ] && echo ok || echo "first said: $n_mb1; second said: $n_mb2")"
 # A new session loaded nothing and has been told nothing, so it hears it too.
 n_other="$(nudge "$((7 * GB))" "$((T0 + 180))" "$NS2" sess-other)"
 check "a different session is told as well, having heard nothing itself" \
