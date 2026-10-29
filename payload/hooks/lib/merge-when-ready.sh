@@ -107,7 +107,8 @@
 # STOPS, each in its own words and none of them a merge:
 #   0  merged (or found already merged), confirmed by reading the pull request back
 #   1  needs a person: a gate refused, the review has findings to read (they are printed, with how to
-#      come back carrying their key), GitHub refused the update (a conflict), the pull request is
+#      come back carrying their key), GitHub refused the update (a conflict, except one confined to
+#      rows of README.md's mods table, which is merged here, see readme_rows_merge), the pull request is
 #      closed, its head is still not its branch's tip after the base was set again (or the branch
 #      is gone), an update GitHub has still not shown four minutes after it, a read GitHub
 #      refused or still did not answer after being asked again, or that gh still could not connect
@@ -296,7 +297,11 @@ fi
 # script. Only a kill that cannot be caught leaves it, and the next run passes it over (see
 # merge-turn.sh). The signals exit, so the EXIT trap runs for them too. The phase record goes the
 # same way; one a kill leaves names a pid no longer running, which no reader believes.
-trap 'turn_leave; mp_clear' EXIT
+# The throwaway clone a conflicted update is merged in (claude-config#1867, see readme_rows_merge)
+# goes the same way, however this run ends.
+rr_dir=""
+rr_cleanup(){ [ -z "$rr_dir" ] || rm -rf "$rr_dir"; rr_dir=""; return 0; }
+trap 'turn_leave; mp_clear; rr_cleanup' EXIT
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 for t in gh jq git; do
   command -v "$t" >/dev/null 2>&1 || { echo "merge-when-ready: $t is not on PATH. Nothing was merged." >&2; exit 1; }
@@ -1136,6 +1141,97 @@ turn_moved(){
   line_note "$t"
 }
 
+# A CONFLICT CONFINED TO README.md's MODS TABLE ROWS IS MERGED HERE (claude-config#1867). Each mod's
+# description is one long line of that table, so two pull requests touching one mod conflict on it,
+# and its issue number list conflicts every time: on 2026-10-28 #1819, #1835 (twice), #1850 and #1852
+# each stopped here on GitHub's refusal to update, and each cost about an hour by hand. Reshaping the
+# README would not have helped, since two pull requests adding an issue number to one mod still meet
+# on one line. So when GitHub refuses an update, base is merged into the head this run judged, in a
+# throwaway clone this run owns (never the session's checkout, whose objects it only borrows, read
+# only), and the merge is pushed only when README.md is the ONE file in conflict and
+# lib/readme-rows-merge.py resolves every hunk of it as rows of the mods table (exit 0), having
+# checked the result's structure before writing it (L631). The push is never forced, so a branch
+# that moved since the fetch refuses it. The pushed head then waits for its checks and lessons
+# review like any update's, and every gate judges its merge. In every other case nothing is pushed,
+# and rr_why holds the sentence the stop adds, naming the conflicted files when there are any.
+RR_RESOLVER="$MWR_LIB/readme-rows-merge.py"
+rr_why=""; rr_new=""; rr_report=""
+# A fetch or push from the clone, as the account this run reads GitHub with when it has one, which
+# gh's credential helper honours.
+rr_net(){
+  if [ -n "$account" ]; then
+    local tok; tok="$(gh auth token -u "$account" 2>/dev/null)" || tok=""
+    [ -n "$tok" ] && { GH_TOKEN="$tok" git -C "$rr_dir/wt" "$@"; return; }
+  fi
+  git -C "$rr_dir/wt" "$@"
+}
+rr_refuse(){ rr_why="$1"; rr_cleanup; return 1; }
+readme_rows_merge(){
+  rr_why=""; rr_new=""; rr_report=""
+  local url wt common tip files rc out rows line name email ident=()
+  if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" = "true" ]; then
+    rr_refuse "Its branch is in a fork, which this never pushes to, so no conflict was resolved here."; return 1
+  fi
+  url="$(git config --get remote.origin.url 2>/dev/null)"
+  if [ -z "$url" ] || [ "$(mt_remote_slug | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]')" ]; then
+    rr_refuse "This checkout's origin is not $slug, so no conflict was resolved here."; return 1
+  fi
+  rr_dir="$(mktemp -d "${TMPDIR:-/tmp}/mwr-readme.XXXXXX" 2>/dev/null)" || { rr_dir=""; rr_refuse "No folder could be made to merge it in, so no conflict was resolved here."; return 1; }
+  wt="$rr_dir/wt"
+  git init -q "$wt" >/dev/null 2>&1 || { rr_refuse "No clone could be made to merge it in, so no conflict was resolved here."; return 1; }
+  common="$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  [ -n "$common" ] && [ -d "$common/objects" ] && printf '%s\n' "$common/objects" > "$wt/.git/objects/info/alternates"
+  if ! out="$(rr_net fetch -q --no-tags "$url" "+refs/heads/$base:refs/mwr/base" "+refs/heads/$branch:refs/mwr/head" 2>&1)"; then
+    rr_refuse "Fetching $base and $branch to merge them here failed (${out:0:300}), so no conflict was resolved here."; return 1
+  fi
+  tip="$(git -C "$wt" rev-parse refs/mwr/head 2>/dev/null)"
+  if [ "$tip" != "$head" ]; then
+    rr_refuse "Branch $branch is at ${tip:0:7}, not the head ${head:0:7} this run judged, so no conflict was resolved here."; return 1
+  fi
+  name="$(git -C "$top" config user.name 2>/dev/null)"; email="$(git -C "$top" config user.email 2>/dev/null)"
+  [ -n "$name" ] && ident+=(-c "user.name=$name")
+  [ -n "$email" ] && ident+=(-c "user.email=$email")
+  git -C "$wt" checkout -q --detach refs/mwr/head >/dev/null 2>&1 || { rr_refuse "Head ${head:0:7} could not be checked out to merge it here, so no conflict was resolved here."; return 1; }
+  git -C "$wt" ${ident[@]+"${ident[@]}"} merge --no-ff --no-commit refs/mwr/base >/dev/null 2>&1; rc=$?
+  files="$(git -C "$wt" diff --name-only --diff-filter=U 2>/dev/null)"
+  if [ -z "$files" ]; then
+    if [ "$rc" -eq 0 ]; then
+      rr_refuse "Merging $base into ${head:0:7} here has no conflict, so GitHub refused for another reason."; return 1
+    fi
+    rr_refuse "Merging $base into ${head:0:7} here failed without naming a conflicted file."; return 1
+  fi
+  if [ "$files" != "README.md" ]; then
+    rr_refuse "Merging $base into ${head:0:7} here conflicts in $(printf '%s\n' "$files" | paste -sd, - | sed 's/,/, /g'); only a conflict confined to rows of README.md's mods table is resolved here."; return 1
+  fi
+  rows="$(python3 "$RR_RESOLVER" "$wt" 2>&1)"; rc=$?
+  line="$(printf '%s\n' "$rows" | sed '/^$/d' | tail -1)"
+  case "$rc" in
+    0) ;;
+    10) rr_refuse "Its conflict is in README.md alone, and was not resolved here: ${line#not handled: }."; return 1 ;;
+    *) rr_refuse "Its conflict is in README.md alone, and lib/readme-rows-merge.py could not read the conflict (exit $rc: ${line:0:300}), so nothing was resolved."; return 1 ;;
+  esac
+  git -C "$wt" add README.md >/dev/null 2>&1 || { rr_refuse "The resolved README.md could not be staged, so nothing was pushed."; return 1; }
+  if [ -n "$(git -C "$wt" diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+    rr_refuse "A conflict was still recorded after README.md was resolved, so nothing was pushed."; return 1
+  fi
+  {
+    printf "Merge %s into %s, resolving rows of README.md's mods table\n\n" "$base" "$branch"
+    printf "GitHub would not update #%s with %s, and the only conflict was in rows of README.md's\n" "$pr" "$base"
+    printf 'mods table, so merge-when-ready.sh merged it with lib/readme-rows-merge.py (claude-config#1867):\n\n'
+    printf '%s\n' "$rows" | sed '/^$/d; s/^/  /'
+    line="$(bash "$MWR_LIB/claude-session-line.sh" 2>/dev/null)" && printf '\n%s\n' "$line"
+  } > "$rr_dir/msg"
+  git -C "$wt" ${ident[@]+"${ident[@]}"} commit -q -F "$rr_dir/msg" >/dev/null 2>&1 || { rr_refuse "The resolved merge could not be committed, so nothing was pushed."; return 1; }
+  rr_new="$(git -C "$wt" rev-parse HEAD 2>/dev/null)"
+  # Never forced: a branch that moved since the fetch refuses this, and that is a stop.
+  if ! out="$(rr_net push -q "$url" "$rr_new:refs/heads/$branch" 2>&1)"; then
+    rr_refuse "The resolved merge could not be pushed to $branch (${out:0:300}), so nothing was resolved."; return 1
+  fi
+  rr_report="$(printf '%s\n' "$rows" | sed '/^$/d' | paste -sd ';' - | sed 's/;/; /g')"
+  rr_cleanup
+  return 0
+}
+
 while :; do
   polls=$((polls + 1))
   [ "$polls" -le "$MAX_POLLS" ] || stop 3 "Out of time: $((polls - 1)) look(s) at #$pr without reaching a merge (MWR_MAX_POLLS). Nothing was merged; run the same command again to resume."
@@ -1241,9 +1337,19 @@ while :; do
     fi
     if ! upd="$(gh_as pr update-branch "$pr" --repo "$slug" 2>&1)"; then
       # Refused for the rate limit, which updates nothing: paused, and made at a later look
-      # (claude-config#1482). Any other refusal is a conflict or a rule, for a person.
+      # (claude-config#1482). Any other refusal is a conflict or a rule, for a person, unless the
+      # conflict is confined to rows of README.md's mods table, which is merged here and pushed as
+      # the update (claude-config#1867, see readme_rows_merge).
       if ghp_rate_limited "$upd"; then rate_pause "the update of #$pr with $base" "$upd"; continue; fi
-      stop 1 "Stopped: GitHub refused to update #$pr with $base: ${upd:0:500}. Nothing was merged; resolve it by hand."
+      phase_local "merging $base into ${head:0:7} here, after GitHub refused the update"
+      if readme_rows_merge; then
+        updates=$((updates + 1))
+        updated_from="$head"; updated_at="$(now)"; catching_up=1; tip_ok_for=""
+        say "GitHub would not update #$pr with $base (${upd:0:200}), and the only conflict was in rows of README.md's mods table, so this merged $base into it here and pushed ${rr_new:0:7} to $branch (update $updates): $rr_report. Waiting for the new head's checks and lessons review."
+        review_busy=""
+        rest "$POLL"; continue
+      fi
+      stop 1 "Stopped: GitHub refused to update #$pr with $base: ${upd:0:500}. $rr_why Nothing was merged; resolve it by hand."
     fi
     updates=$((updates + 1))
     # The next look confirms the head against the branch again even if GitHub shows the same one,

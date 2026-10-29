@@ -80,12 +80,42 @@ commit_all(){ git -C "$1" add -A >/dev/null 2>&1; git -C "$1" commit -q -m "fixt
 # below is inside a command substitution, which is a subshell, so a variable set in here never
 # reaches the caller and every exit code read that way was the previous one (measured: three
 # checks passed against a stale 0).
+#
+# EVERY CALL HAS A DEADLINE OF ITS OWN (claude-config#1889). The gate starts and stops processes
+# of its own, and on 2026-10-29 one of them outlived its kill on Linux CI, so a gate call waited out
+# the gate's whole 150 second budget instead of about one second. Nothing failed: each call was
+# merely slow, the suite ran into its 1200 second wall clock, and the flake recheck then ate the
+# rest of the 40 minute CI job, so the only thing anybody saw was a cancelled job naming no test
+# (L240, L313). So the gate runs in a process group of its own (lib/bounded-run.sh) and is killed,
+# with everything it started, at FIRE_DEADLINE seconds. That call then exits 124, which every
+# check on its exit code names, and it is written to FIRE_DEADLINE_LOG, which a check at the end
+# names by fixture and command, so a hang fails by name rather than eating the job.
+#
+# 60 seconds, a setting rather than a measurement: well clear of a call that takes about a second
+# on a quiet machine, and well inside the gate's own budget of 150, so a call that waits out that
+# budget is caught here first.
+. "$DIR/lib/bounded-run.sh" || {
+  echo "FAIL: $(basename "$0"): lib/bounded-run.sh is missing, so the gate calls cannot be bounded. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+FIRE_DEADLINE="${SCANNERS_TEST_FIRE_DEADLINE:-60}"
+case "$FIRE_DEADLINE" in
+  ''|*[!0-9]*|0)
+    echo "test-scanners-before-push: SCANNERS_TEST_FIRE_DEADLINE='$FIRE_DEADLINE' is not a whole number of seconds above zero. Refusing to run the gate calls unbounded." >&2
+    exit 2 ;;
+esac
+FIRE_DEADLINE_LOG="$TMPROOT/fire-deadlines"
 fire(){              # $1 = repo  $2 = the command  -> prints the hook's output, exits with its code
-  local out rc
-  out="$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$2" "$1" | bash "$H" 2>&1)"
-  rc=$?
-  printf '%s' "$out"
-  return "$rc"
+  local payload
+  payload="$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$2" "$1")"
+  bounded_run "$FIRE_DEADLINE" bash "$H" <<< "$payload"
+  printf '%s' "$BOUNDED_OUT"
+  if [ "$BOUNDED_RC" -eq 124 ]; then
+    printf '%s: %s\n' "$(basename "$1")" "$2" >> "$FIRE_DEADLINE_LOG"
+    printf '\nFIRE-DEADLINE: the gate did not return within %s seconds, so it and everything it started were killed\n' "$FIRE_DEADLINE"
+  fi
+  return "$BOUNDED_RC"
 }
 
 # --- a repository with a passing scanner: the push goes through, and the gate says what it ran,
@@ -626,8 +656,7 @@ esac
 #     line that did not appear rather than a message that says one did not (L1).
 SKIPSTATE="$TMPROOT/skip-state"
 fire_skip(){ # $1 = repo  $2 = command
-  printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$2" "$1" \
-    | SCANNERS_STATE_DIR="$SKIPSTATE" bash "$H" 2>&1
+  SCANNERS_STATE_DIR="$SKIPSTATE" fire "$1" "$2"
 }
 R17="$(mkrepo unchanged)"
 RAN="$TMPROOT/unchanged-ran"
@@ -772,6 +801,190 @@ else
   echo "  (no repository at $REAL, so the selection against a real tree was not checked here; it is checked where this repo is)"
 fi
 
+# --- scanners that do not finish inside the gate's own budget REFUSE the push (claude-config#1881).
+#     On 2026-10-28 this gate was killed at its declared 180 second timeout on three of three cold
+#     readings at a load average of about 145. Claude Code's hooks documentation says a PreToolUse
+#     hook killed at its timeout "doesn't block the tool call", and a headless probe the same day
+#     confirmed it: a hook that slept past a 3 second timeout and would then have refused let a
+#     `touch` through. So a push under load went out with nothing scanned. The gate now enforces a
+#     budget of its own below the declared timeout, kills the scanners still running when it runs
+#     out, and refuses, saying so.
+#
+#     The budget is injected (SCANNERS_BUDGET_SECONDS), so these cases wait 2 seconds rather than
+#     150. A slow scanner records its process id, so "killed" is checked on the process rather than
+#     believed from a message (L1).
+add_slow_scanner(){   # $1 = repo  $2 = name  $3 = a file that, while present, makes it slow
+  cat > "$1/payload/hooks/test-$2.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+echo ran >> "$TMPROOT/$2.runs"
+if [ -e "$3" ]; then
+  echo \$\$ > "$TMPROOT/$2.pid"
+  sleep 30
+  echo "scanner $2 finished slowly"
+fi
+exit 0
+EOF
+  chmod +x "$1/payload/hooks/test-$2.sh"
+}
+BUDGETSTATE="$TMPROOT/budget-state"
+budgetfire(){ SCANNERS_STATE_DIR="$BUDGETSTATE" SCANNERS_BUDGET_SECONDS=2 fire "$@"; }
+
+R1881="$(mkrepo outoftime)"; SLOW1881="$TMPROOT/slow-1881"; : > "$SLOW1881"
+add_scanner "$R1881" alpha 0; add_slow_scanner "$R1881" omega "$SLOW1881"; commit_all "$R1881"
+_t0="$(date +%s)"
+o1881="$(budgetfire "$R1881" "git push")"; c1881=$?
+_took=$(( $(date +%s) - _t0 ))
+[ "$c1881" -eq 2 ] && check "#1881 a scanner still running when the gate's budget runs out blocks the push" ok \
+  || check "#1881 a scanner still running when the gate's budget runs out blocks the push" "exit=$c1881 out=$o1881"
+grep -q 'did not finish in 2 seconds' <<< "$o1881" \
+  && check "#1881 and says the scanners ran out of time, with the budget" ok \
+  || check "#1881 and says the scanners ran out of time, with the budget" "out=$o1881"
+grep -q 'test-omega.sh' <<< "$o1881" && ! grep -q 'payload/hooks/test-alpha.sh' <<< "$o1881" \
+  && check "#1881 and names the scanner that did not finish, not the one that passed" ok \
+  || check "#1881 and names the scanner that did not finish, not the one that passed" "out=$o1881"
+grep -q 'bash payload/hooks/test-omega.sh' <<< "$o1881" \
+  && check "#1881 and names the command that runs it directly" ok \
+  || check "#1881 and names the command that runs it directly" "out=$o1881"
+grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o1881" \
+  && check "#1881 and does not call a scanner that never finished a failing one" "out=$o1881" \
+  || check "#1881 and does not call a scanner that never finished a failing one" ok
+# Well under the fixture's own sleep, a number set here and not measured: the gate stopped at its
+# budget rather than waiting for the scanner.
+[ "$_took" -lt 20 ] && check "#1881 and returns at its budget rather than waiting for the scanner" ok \
+  || check "#1881 and returns at its budget rather than waiting for the scanner" "took ${_took}s"
+_slowpid="$(cat "$TMPROOT/omega.pid" 2>/dev/null)"
+if [ -n "$_slowpid" ] && kill -0 "$_slowpid" 2>/dev/null; then
+  check "#1881 and the scanner it gave up on is no longer running" "process $_slowpid is still alive"
+  kill -9 "$_slowpid" 2>/dev/null
+elif [ -n "$_slowpid" ]; then
+  check "#1881 and the scanner it gave up on is no longer running" ok
+else
+  check "#1881 and the scanner it gave up on is no longer running" "the slow scanner never recorded its process id"
+fi
+
+# A retry reuses what finished: alpha passed inside the budget on this exact tree, so the next push
+# runs only omega, now fast, and goes through. Counted by the runs each scanner records, not by the
+# gate's own words (L1).
+rm -f "$SLOW1881"
+o1881b="$(budgetfire "$R1881" "git push")"; c1881b=$?
+[ "$c1881b" -eq 0 ] && check "#1881 the retry goes through once the slow scanner finishes in time" ok \
+  || check "#1881 the retry goes through once the slow scanner finishes in time" "exit=$c1881b out=$o1881b"
+[ "$(grep -c . "$TMPROOT/omega.runs" 2>/dev/null || true)" = "2" ] && grep -q '1 more were skipped' <<< "$o1881b" \
+  && check "#1881 and the retry skips the scanner that already passed inside the budget" ok \
+  || check "#1881 and the retry skips the scanner that already passed inside the budget" "omega runs=$(grep -c . "$TMPROOT/omega.runs" 2>/dev/null) out=$o1881b"
+
+# A scanner that finished and FAILED inside the budget is still reported as failing, with the one
+# that ran out of time named beside it, since a finding outranks a missing verdict.
+R1881c="$(mkrepo outoftimefail)"; SLOW1881c="$TMPROOT/slow-1881c"; : > "$SLOW1881c"
+add_scanner "$R1881c" gamma 1; add_slow_scanner "$R1881c" psi "$SLOW1881c"; commit_all "$R1881c"
+o1881c="$(budgetfire "$R1881c" "git push")"; c1881c=$?
+[ "$c1881c" -eq 2 ] && grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o1881c" \
+  && grep -q 'test-gamma.sh' <<< "$o1881c" && grep -q 'test-psi.sh' <<< "$o1881c" \
+  && grep -q 'did not finish in 2 seconds' <<< "$o1881c" \
+  && check "#1881 a failure inside the budget is reported as one, with the scanner that ran out of time named too" ok \
+  || check "#1881 a failure inside the budget is reported as one, with the scanner that ran out of time named too" "exit=$c1881c out=$o1881c"
+_psipid="$(cat "$TMPROOT/psi.pid" 2>/dev/null)"; [ -n "$_psipid" ] && kill -9 "$_psipid" 2>/dev/null
+
+# The same budget with scanners that are fast lets the push through: the budget is not a refusal
+# of every push (the control for the cases above).
+R1881d="$(mkrepo intime)"; add_scanner "$R1881d" alpha 0; add_scanner "$R1881d" beta 0; commit_all "$R1881d"
+o1881d="$(budgetfire "$R1881d" "git push")"; c1881d=$?
+[ "$c1881d" -eq 0 ] && check "#1881 fast scanners inside the same budget let the push through" ok \
+  || check "#1881 fast scanners inside the same budget let the push through" "exit=$c1881d out=$o1881d"
+
+# A budget that is not a whole number of seconds is refused as unreadable and the default used,
+# never read as zero, which would refuse every push, or as no budget, which would be the defect.
+R1881e="$(mkrepo badbudget)"; add_scanner "$R1881e" alpha 0; commit_all "$R1881e"
+o1881e="$(SCANNERS_STATE_DIR="$BUDGETSTATE" SCANNERS_BUDGET_SECONDS=soon fire "$R1881e" "git push")"; c1881e=$?
+[ "$c1881e" -eq 0 ] && check "#1881 an unreadable budget falls back to the default rather than refusing every push" ok \
+  || check "#1881 an unreadable budget falls back to the default rather than refusing every push" "exit=$c1881e out=$o1881e"
+
+# The default budget must sit below the timeout the registration declares, or Claude Code kills the
+# gate first and the push goes through unscanned, which is the defect. Both numbers are read from
+# their files, so moving either one without the other fails here. The registration also asks Claude
+# Code to BLOCK the call if the gate is killed anyway (onFailure, measured working on 2.1.312 the
+# same day), so a gate that overruns its own budget still cannot let a push through.
+_reg=""
+. "$DIR/lib/settings-file.sh" 2>/dev/null && _reg="$(hook_settings_file "$DIR/..")"
+if [ -n "$_reg" ] && command -v jq >/dev/null 2>&1; then
+  _declared="$(jq -r '[.hooks.PreToolUse[].hooks[] | select(.command | endswith("/scanners-before-push.sh"))][0].timeout // empty' "$_reg")"
+  _onfail="$(jq -r '[.hooks.PreToolUse[].hooks[] | select(.command | endswith("/scanners-before-push.sh"))][0].onFailure // empty' "$_reg")"
+  _default="$(sed -n 's/^_sc_budget_default=\([0-9][0-9]*\)$/\1/p' "$H")"
+  if [ -n "$_declared" ] && [ -n "$_default" ] && [ "$_default" -lt "$_declared" ]; then
+    check "#1881 the default budget sits below the declared hook timeout" ok
+  else
+    check "#1881 the default budget sits below the declared hook timeout" "budget=${_default:-unread} timeout=${_declared:-unread}"
+  fi
+  [ "$_onfail" = "block" ] && check "#1881 the registration blocks the push if the gate is killed anyway" ok \
+    || check "#1881 the registration blocks the push if the gate is killed anyway" "onFailure=${_onfail:-absent}"
+else
+  # No hooks block beside this copy of the hooks, or no jq to read it, so this is said out loud rather
+  # than skipped in silence (L98).
+  echo "  (no readable hooks block beside this suite, or no jq, so the budget against the declared timeout was not checked here)"
+fi
+
+# --- the gate's watchdog is gone when its scanners finish, even when it could not act on a plain
+#     kill (claude-config#1889). The watchdog is started in the background and, on a push whose
+#     scanners finish in time, stopped straight after. A plain kill sent before the background job
+#     has finished starting is caught by the handler the gate's EXIT trap installs, and is lost when
+#     the job becomes perl (L240). Measured 2026-10-29 with a bare loop of that shape: 1 in 40
+#     starts under the Mac's bash 3.2 and 2 in 80 under bash 5.3 outlived the kill. On Linux CI two
+#     runs of this suite were cancelled with a gate and its watchdog both still alive and all of
+#     that gate's scanners gone, which is the state this race leaves: the gate waits for the
+#     watchdog to sleep out the whole budget, so the push takes its full budget and still passes.
+#
+#     A race cannot be hit on demand, so the case below makes the plain kill fail EVERY time: the
+#     gate runs with the termination signal ignored, which its watchdog inherits. Only a kill that
+#     cannot be caught or ignored ends it, so the gate must return in about a second rather than at
+#     its budget, and a gate that relies on the plain kill is stopped by the call deadline instead.
+R1889="$(mkrepo watchdogkill)"; add_scanner "$R1889" alpha 0; commit_all "$R1889"
+_t0="$(date +%s)"
+o1889="$( trap '' TERM
+          SCANNERS_STATE_DIR="$TMPROOT/watchdog-state" SCANNERS_BUDGET_SECONDS=100 FIRE_DEADLINE=20 \
+            fire "$R1889" "git push")"; c1889=$?
+_took=$(( $(date +%s) - _t0 ))
+# Well under the call deadline of 20, which is itself well under the budget of 100: a gate that
+# waited for its watchdog is cut off at 20 and exits 124.
+[ "$c1889" -eq 0 ] && [ "$_took" -lt 15 ] \
+  && check "#1889 the gate stops its watchdog with a kill that cannot be lost, and returns at once" ok \
+  || check "#1889 the gate stops its watchdog with a kill that cannot be lost, and returns at once" "exit=$c1889 took ${_took}s out=$o1889"
+
+# --- the call deadline itself, seen to fire (L1). A stand in for the gate ignores the termination
+#     signal and waits on a child of its own, which is the shape of a hang the deadline exists for.
+#     It must come back at the deadline with exit 124 and the line that names it, and leave
+#     neither the stand in nor its child running. Its record goes to a log of its own, so the
+#     check at the end, which reads the real log, is not tripped by this deliberate hang.
+HANGHOOKS="$TMPROOT/hanghooks"; mkdir -p "$HANGHOOKS"
+cat > "$HANGHOOKS/scanners-before-push.sh" <<EOF
+#!/usr/bin/env bash
+trap '' TERM
+echo \$\$ > "$TMPROOT/hang.pid"
+sleep 30 &
+echo \$! > "$TMPROOT/hang-child.pid"
+wait
+EOF
+chmod +x "$HANGHOOKS/scanners-before-push.sh"
+_t0="$(date +%s)"
+oHang="$(H="$HANGHOOKS/scanners-before-push.sh" FIRE_DEADLINE=2 FIRE_DEADLINE_LOG="$TMPROOT/selftest-deadlines" \
+         fire "$R1889" "git push")"; cHang=$?
+_took=$(( $(date +%s) - _t0 ))
+[ "$cHang" -eq 124 ] && grep -q 'FIRE-DEADLINE: the gate did not return within 2 seconds' <<< "$oHang" && [ "$_took" -lt 15 ] \
+  && check "#1889 a gate call that hangs is stopped at its own deadline and says so" ok \
+  || check "#1889 a gate call that hangs is stopped at its own deadline and says so" "exit=$cHang took ${_took}s out=$oHang"
+grep -q '^watchdogkill: git push$' "$TMPROOT/selftest-deadlines" 2>/dev/null \
+  && check "#1889 and the call is recorded by fixture and command, for the check at the end" ok \
+  || check "#1889 and the call is recorded by fixture and command, for the check at the end" "log=$(cat "$TMPROOT/selftest-deadlines" 2>/dev/null)"
+_hangpid="$(cat "$TMPROOT/hang.pid" 2>/dev/null)"; _hangchild="$(cat "$TMPROOT/hang-child.pid" 2>/dev/null)"
+if [ -z "$_hangpid" ] || [ -z "$_hangchild" ]; then
+  check "#1889 and nothing the hung call started is still running" "the stand in never recorded its process ids"
+elif kill -0 "$_hangpid" 2>/dev/null || kill -0 "$_hangchild" 2>/dev/null; then
+  check "#1889 and nothing the hung call started is still running" "still alive: stand in $_hangpid or its child $_hangchild"
+  kill -9 "$_hangpid" "$_hangchild" 2>/dev/null
+else
+  check "#1889 and nothing the hung call started is still running" ok
+fi
+
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a
 #     fixture's record in the real folder would be a test result a later real push trusts (L2).
@@ -805,6 +1018,12 @@ for _fx in "$TMPROOT"/*/; do
 done
 [ -z "$_leaked" ] && check "no fixture wrote a pass record into the real state folder" ok \
   || check "no fixture wrote a pass record into the real state folder" "these did, and were removed:$_leaked"
+
+# --- no gate call ran into its call deadline (claude-config#1889). Each one that did has already
+#     failed its own exit code check; this names them together, by fixture and command, so a gate
+#     that has started to hang is one line to read rather than a scatter of exit=124.
+[ ! -s "$FIRE_DEADLINE_LOG" ] && check "no gate call ran past its ${FIRE_DEADLINE} second call deadline" ok \
+  || check "no gate call ran past its ${FIRE_DEADLINE} second call deadline" "these were stopped there: $(tr '\n' ';' < "$FIRE_DEADLINE_LOG")"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

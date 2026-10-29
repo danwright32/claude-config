@@ -226,6 +226,18 @@ out="$(printf '{"session_id":"l1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_P
   CLAUDE_SUITE_PILE_NOW="$NOW" bash "$WORK/bare/suite-pile-notice.sh" 2>/dev/null)"; rc=$?
 silent "a hook whose library is missing says nothing" "$out"
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
+# A byte that is not UTF-8 in front of the session id stops bash's =~ under a UTF-8 locale
+# (claude-config#1885), so the payload read as carrying no session and nothing was checked.
+bad_prompt() { # bad_prompt <payload printf format>  -> stderr too, under en_US.UTF-8
+  printf "$1" | SYNC_PS_FIXTURE="$WORK/empty" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
+    CLAUDE_SUITE_PILE_NOW="$NOW" LC_ALL=en_US.UTF-8 bash "$HOOK" 2>&1
+}
+out="$(bad_prompt '{"cwd":"/x/\377","prompt":"carry on"}')"
+says "#1885 control: a byte that is not UTF-8 and no session is said to carry none" "$out" "neither a session id"
+out="$(bad_prompt '{"cwd":"/x/\377","session_id":"bad1885","prompt":"carry on"}')"
+never_says "#1885 a byte that is not UTF-8 in front of the session id does not hide it" "$out" "neither a session id"
+out="$(bad_prompt '{"cwd":"/x/\377","transcript_path":"/x/bad1885.jsonl","prompt":"carry on"}')"
+never_says "#1885 nor in front of the transcript path" "$out" "neither a session id"
 
 echo "suite pile notice: status and the notice agree on every fixture"
 # The real claude-sync, against the same tables. Status speaks exactly when the notice does, and

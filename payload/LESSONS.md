@@ -6,6 +6,9 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L823. Code that ships under a different loader than its tests use, such as a script Node runs by stripping types while Vitest compiles it fully, is proven only by loading it the way it ships, so turn on the compiler setting that refuses what that loader cannot run (erasableSyntaxOnly for Node type stripping).**
+  (pivot#229, 2026-10-29)
+  SHORT: Tests compiled differently from how code ships prove nothing about loading; refuse what the shipping loader can't run (erasableSyntaxOnly).
 - **L818. A feature that runs across several deployed services gets its live end-to-end check as its first deliverable, run after every deploy, before any screen is built on top, because unit tests with stand-ins, a build check and a sign-in smoke check each prove one layer and the first person to run the whole thing otherwise finds every fault one at a time.**
   (pivot#126, 2026-10-28)
   SHORT: A multi-service feature's live end-to-end check is its first deliverable, run every deploy; layer checks leave a user to find each fault.
@@ -10125,6 +10128,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A recovery that re-submits into the queue it waits on must first ask whether the work is already pending, or it false-alarms and lengthens the delay.
 - **L798. Deleting a deployed thing's source from the repository does not remove it from the platform it runs on, so a removal is finished only when the platform's own list no longer shows it, and a teardown left as a sentence in a pull request body is never carried out.** (project-enrollment-tracker#1855, 2026-10-21)
   SHORT: Deleting a deployed thing's source does not undeploy it; a removal is done only when the platform's own list no longer shows it.
+- **L822. Before narrowing who may use a shared resource (a runner group, an allowlist, a token's scope), list every current user from the resource's own usage record and admit each one that should keep it, because a user left out often does not fail loudly: its work waits for a turn that never comes.** (project-enrollment-tracker#1961, 2026-10-29)
+  SHORT: Before narrowing who may use a shared resource, list its current users from its own usage record: one left out often just waits, silently.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

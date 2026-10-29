@@ -31,8 +31,9 @@
 #
 # EACH ITEM, IN ORDER (the plan's design, #1804 comment; L514): the identity deny list on the path
 # as recorded, whatever the category; refuse a symbolic link and resolve the rest of the path
-# physically; the deny list again on the physical path; the allowed root; already gone; the category's own judge, run
-# again now; for every method but truncate, an lsof open check; measure its size; write INTENT to the
+# physically; the deny list again on the physical path; the allowed root; already gone; measure its
+# size; the category's own judge, run again now; for every method but truncate, an lsof open check,
+# last of all, so nothing slow sits between it and the removal (#1872, L1034); write INTENT to the
 # log; act; verify it is gone (or truncated); write OUTCOME. Nothing is acted on whose INTENT line
 # could not be written.
 #
@@ -586,13 +587,18 @@ do_path() { # <id> <category> <method> <target> <identity>
       [ -x "${DISK_CLEAN_TRASH:-/usr/bin/trash}" ] || {
         finish_item "$id" skipped "" "$t" "/usr/bin/trash is not on this Mac (it ships with macOS 15), and this tool never deletes in place of moving to the Trash"; return; } ;;
   esac
+  # A check guards the removal only for as long as nothing slow sits between them (#1872, L1034).
+  # So du runs first (0.4 s for a 97,000 entry node_modules, longer for a big cache); then the judge,
+  # so no measuring sits between it confirming this is the item proposed and the removal; then lsof,
+  # last, so a file opened while du or the judge ran is still seen. Only the INTENT line, one append
+  # to the log, sits between lsof and the removal, since it must go in before anything is touched.
+  measure "$PHYS"
   run_judge "$cat" "$t" "$ident" "$method"
   [ "$JUDGE_VERDICT" = offerable ] || { finish_item "$id" skipped "" "$t" "judged again just now: $JUDGE_VERDICT"; return; }
   if [ "$method" != truncate ]; then
     open_check "$PHYS"
     [ "$OPEN_VERDICT" = free ] || { finish_item "$id" skipped "" "$t" "$OPEN_VERDICT"; return; }
   fi
-  measure "$PHYS"
   [ "$method" = truncate ] && before_bytes="$(file_bytes "$PHYS")"
   intent "$id" "$method" "$PHYS" "$SIZE_KIB" || { finish_item "$id" skipped "" "$t" "its INTENT line could not be written to $LOG, so it was not touched"; return; }
   case "$method" in

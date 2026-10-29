@@ -57,6 +57,12 @@
 # (for example, GitHub will not show this account the pull requests, and the branch is known to have
 # none based on it).
 
+# Does payload text $1 match regex $2? Under a UTF-8 locale bash's =~ stops at a byte that is not
+# UTF-8, so a delete after one reads as absent and the call passes unread (claude-config#1885). The C
+# locale reads every byte as a character, so it is tried as well; the session's locale is tried first,
+# since only it counts a Unicode space as [[:space:]], so a match is only ever added, never lost.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+
 payload="$(cat)"
 # Every Bash call passes through here, and nearly none can delete a branch: answer those at once,
 # before anything is loaded. What can: a DELETE method, a --delete or --delete-branch, a short flag
@@ -67,13 +73,16 @@ fast_re='(^|[[:space:]"'"'"'])(-[A-Za-z]*d|\+?:[A-Za-z0-9_./-]+)([[:space:]"'"'"
 shopt -s nocasematch
 case "$payload" in
   *delete*|*graphql*) ;;
-  *) [[ "$payload" =~ $fast_re ]] || exit 0 ;;
+  *) payload_match "$payload" "$fast_re" || exit 0 ;;
 esac
 shopt -u nocasematch
 
 # The crude reading used only when the real one cannot run: does the payload LOOK like a delete?
+# The system grep stops matching at a byte that is not UTF-8 under a UTF-8 locale, as =~ does, so it
+# is asked in the C locale as well, after the session's (claude-config#1885).
 looks_like_delete() {
-  grep -Eiq 'DELETE.*refs/heads|deleteRef[[:space:]]*\(|updateRefs[[:space:]]*\(|push.*(--delete|[[:space:]]-[A-Za-z]*d[[:space:]]|[[:space:]]\+?:[A-Za-z0-9_./-])|merge.*(--delete-branch|[[:space:]]-[A-Za-z]*d([[:space:]]|$))' <<< "$payload"
+  local re='DELETE.*refs/heads|deleteRef[[:space:]]*\(|updateRefs[[:space:]]*\(|push.*(--delete|[[:space:]]-[A-Za-z]*d[[:space:]]|[[:space:]]\+?:[A-Za-z0-9_./-])|merge.*(--delete-branch|[[:space:]]-[A-Za-z]*d([[:space:]]|$))'
+  grep -Eiq "$re" <<< "$payload" || LC_ALL=C grep -Eiq "$re" <<< "$payload"
 }
 cannot_read() {   # $1 = what is missing or failed, as a clause
   looks_like_delete || exit 0

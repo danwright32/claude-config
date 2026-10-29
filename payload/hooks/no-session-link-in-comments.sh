@@ -11,12 +11,27 @@ set -uo pipefail
 
 payload="$(cat)"
 
-# Every Bash call reaches this hook; only one naming gh or a Slack tool can post a comment, so the
-# rest skip the Python start.
-case "$payload" in
-  *gh*|*slack*) ;;
-  *) exit 0 ;;
-esac
+# Every Bash call reaches this hook; only one running gh, or a Slack send, can post a comment, so the
+# rest skip the Python start (56 to 72 ms a call from a home folder, measured 2026-10-28).
+#
+# The test is the one the gate itself starts with, gh as a word in the command (\bgh\b), read here
+# over the payload's JSON text from the "command" key on, so the cwd, transcript path and session id
+# in front of it are never read: a bare *gh* matched "wright" in every home folder on Dan's Macs and
+# never skipped anything (claude-config#1880). In the JSON text a character in front of gh may be
+# written as an escape, a newline as \n and a control character as \u001f, so the letter or digit
+# in front of gh there is part of an escape and counts as a boundary. Every imprecision here runs
+# the gate rather than skipping it: the description after the command is read too, and a payload
+# with no "command" key at all is read whole. The C locale makes every byte a character, so a byte
+# that is not UTF-8 cannot make the match fail and skip the gate.
+GH_WORD='(^|[^A-Za-z0-9_]|\\[A-Za-z]|\\u[0-9A-Fa-f]{4})gh([^A-Za-z0-9_]|$)'
+may_post() {
+  local LC_ALL=C
+  case "$1" in *slack*) return 0 ;; esac
+  local text="$1"
+  case "$1" in *'"command"'*) text="${1#*\"command\"}" ;; esac
+  [[ "$text" =~ $GH_WORD ]]
+}
+may_post "$payload" || exit 0
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
