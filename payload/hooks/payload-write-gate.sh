@@ -20,9 +20,14 @@
 # prompt time warning stays for the case this cannot see: a hold that lapses mid session.
 #
 # It refuses ONLY in the state that loses work: a live watcher, running from a DIFFERENT clone, and
-# no hold in force, in a checkout the daemon can overwrite. A session editing the clone the watcher
-# itself runs from is editing the source of the mirror and is not at risk, and neither is one
-# holding the watcher off.
+# no hold in force that covers the writing session, in a checkout the daemon can overwrite. A
+# session editing the clone the watcher itself runs from is editing the source of the mirror and is
+# not at risk, and neither is one holding the watcher off.
+#
+# The hold has to be the WRITING session's own, or one taken from a terminal, which records no
+# session and covers anyone (claude-config#1886). Any session's hold used to do: session B wrote on
+# session A's hold, and B's half written files were sent the moment A released. The refusal then
+# names whose hold it is and that this session needs its own.
 #
 # Nor is an agent's linked worktree on a branch other than the default (claude-config#800): the
 # daemon never writes into it, and its work reaches main only by a reviewed merge. Both halves
@@ -52,6 +57,25 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 payload="$(cat 2>/dev/null || true)"
 
+# WHICH SESSION is writing, because only its own hold protects its writes (claude-config#1886).
+# Another session's hold lets this one write today and is released whenever that session is done,
+# which sends this session's half written files with it. Read from the payload without python3, so
+# the branch below that has none still knows; lib/sync-clone.sh adds CLAUDE_CODE_SESSION_ID.
+sid="$(sc_payload_session "$payload")"
+# The paragraph that names who does hold the watcher, when it is somebody else, and where this
+# message gives the command that takes this session's own hold, in OTHERS_NOTE with the blank line
+# that follows it. Empty otherwise, so a message reads exactly as before when nobody else holds.
+OTHERS_NOTE=""
+others_note(){   # $1 = where the command is in this message
+  local s
+  OTHERS_NOTE=""
+  s="$(sc_hold_others_sentence "$sid")"
+  [ -n "$s" ] || return 0
+  OTHERS_NOTE="$s Take it with $1.
+
+"
+}
+
 # THE READER THIS GATE SEES THE TOOL CALL THROUGH, asked before its answer is believed
 # (claude-config#480, L490).
 #
@@ -80,13 +104,14 @@ if ps_reader_missing python3; then
     sc_is_this_clone "$unreadable_root" "$unreadable_watcher" && exit 0
     sc_is_own_worktree "$unreadable_root" && exit 0
   fi
-  sc_hold_live && exit 0
+  sc_hold_covers "$sid" && exit 0
+  others_note "the second way below"
   cat >&2 <<MSG
 claude-sync: REFUSED a write that may be under a development checkout's payload/.
 
 $(ps_reader_absent_why "python3 is not on PATH" "payload-write-gate.sh reads which tool is being called and which files it would write with it, so with python3 absent it cannot tell a write under payload/ from any other write, and a watch daemon is live on this Mac running from another clone." "python3")
 
-A watch daemon mirrors ~/.claude up over payload/ and pushes, so an edit made to payload/ in a development checkout is not merged with the config, it is overwritten by it, silently and with no conflict to notice. On 2026-09-03 it reverted 84 files of a day's work in one commit.
+${OTHERS_NOTE}A watch daemon mirrors ~/.claude up over payload/ and pushes, so an edit made to payload/ in a development checkout is not merged with the config, it is overwritten by it, silently and with no conflict to notice. On 2026-09-03 it reverted 84 files of a day's work in one commit.
 
 Two ways on, and the first needs nothing:
 
@@ -152,10 +177,11 @@ if [ "$event" = "PostToolUse" ]; then
   rm -f "$roots_f" "$list_f"
   changed="$(printf '%s\n' "$changed" | sed '/^$/d' | LC_ALL=C sort -u)"
   [ -n "$changed" ] || exit 0
-  # Protected since it ran: a hold taken meanwhile, or the watcher gone, is what makes it safe now.
+  # Protected since it ran: a hold of this session's own taken meanwhile, or the watcher gone, is
+  # what makes it safe now. Another session's hold is not (claude-config#1886).
   wcmd="$(sc_watcher_cmd || true)"
   [ -n "$wcmd" ] || exit 0
-  sc_hold_live && exit 0
+  sc_hold_covers "$sid" && exit 0
   # Left out: a file that already matches the installed config, which the daemon mirrors FROM, so
   # it has nothing to revert there (claude-config#1211). On 2026-10-15 a fast forward pull of the
   # checkout right after the same commit was installed listed 27 files, every one identical to its
@@ -188,12 +214,13 @@ if [ "$event" = "PostToolUse" ]; then
   [ "$matched" -gt 0 ] && shown="$shown
 
   $matched more already matched the installed config at $installed, so the daemon has nothing to revert there, and are left out."
+  others_note "the command below"
   cat >&2 <<MSG
-claude-sync: $n file(s) changed under a development checkout's payload/ while that command ran, with a watch daemon live from another clone and no hold in force. What was measured is what changed while it ran, so another session or a parallel command writing there at the same moment would show here too:
+claude-sync: $n file(s) changed under a development checkout's payload/ while that command ran, with a watch daemon live from another clone and no hold of this session's in force. What was measured is what changed while it ran, so another session or a parallel command writing there at the same moment would show here too:
 
 $shown
 
-Nothing in the command's words showed those writes, so they could not be refused before it ran. The daemon mirrors ~/.claude up over payload/ and pushes, so these edits can be reverted silently, as 84 files were on 2026-09-03. Protect them now, before anything else:
+${OTHERS_NOTE}Nothing in the command's words showed those writes, so they could not be refused before it ran. The daemon mirrors ~/.claude up over payload/ and pushes, so these edits can be reverted silently, as 84 files were on 2026-09-03. Protect them now, before anything else:
 
      claude-sync hold 120 "why you are editing the checkout"
 
@@ -449,7 +476,7 @@ while IFS= read -r t; do
   [ -n "$wcmd" ] || continue                       # no watcher: nothing can revert anything
   sc_is_this_clone "$root" "$wcmd" && continue     # the watcher runs from HERE: this is its source
   sc_is_own_worktree "$root" && continue          # a linked worktree on its own branch (#800)
-  sc_hold_live && continue                         # held off: this is exactly what a hold is for
+  sc_hold_covers "$sid" && continue                # held off by THIS session, or a terminal (#1886)
   refuse_root="$root"; refuse_path="$t"; break
 done <<TARGETS
 $targets
@@ -457,14 +484,16 @@ TARGETS
 
 # BEFORE a Bash call it let through: a note of what each at risk payload/ holds, for the check after
 # it to compare against (claude-config#647). Taken only in the state that loses work, a live watcher
-# from another clone and no hold, and only for the checkouts this command could reach: the one it
-# runs in, and any its words name. Two finds over a few hundred files, never one process per file.
+# from another clone and no hold covering this session (the same question the refusal asks, so a
+# call let through on another session's hold still has its note, claude-config#1886), and only for
+# the checkouts this command could reach: the one it runs in, and any its words name. Two finds
+# over a few hundred files, never one process per file.
 note_payload_before(){
   local wcmd roots="" dir root
   [ "$tool" = "Bash" ] && [ "$use_id" != "-" ] || return 0
   wcmd="$(sc_watcher_cmd || true)"
   [ -n "$wcmd" ] || return 0
-  sc_hold_live && return 0
+  sc_hold_covers "$sid" && return 0
   while IFS= read -r dir; do
     [ -n "$dir" ] || continue
     root="$(sc_clone_root_of "$dir" 2>/dev/null)" || continue
@@ -501,12 +530,13 @@ if [ -z "$refuse_root" ]; then
   exit 0
 fi
 
+others_note "the second way below"
 cat >&2 <<MSG
 claude-sync: REFUSED a write to $refuse_path.
 
 This is a development checkout at $refuse_root, and a watch daemon is live on this Mac running from another clone. That daemon mirrors ~/.claude up over payload/ and pushes, so an edit made to payload/ here is not merged with the config, it is overwritten by it, silently and with no conflict to notice. On 2026-09-03 it reverted 84 files of a day's work in one commit and deleted a file that existed only in the repo.
 
-Two ways on, and the first needs nothing:
+${OTHERS_NOTE}Two ways on, and the first needs nothing:
 
   1. Edit ~/.claude directly. That is the copy the daemon mirrors FROM, so nothing can revert it.
   2. Take a hold first, then edit here:

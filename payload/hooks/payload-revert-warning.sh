@@ -108,11 +108,17 @@ watcher_clone_name(){
 }
 
 # ---------------------------------------------------------------------------
-# Is a hold in force? Read only, and expiry is the only thing that makes a marker stop counting.
-# An UNREADABLE marker is not a hold: obeying one would silence this for as long as the bad file
-# sits there, and that is the direction that loses a day of work. It is left on disk for claude-sync
-# itself to report and clear, which it does in its own words.
-hold_live(){ sc_hold_live; }
+# Is a hold in force that covers THIS session? Read only, and expiry is the only thing that makes a
+# marker stop counting. An UNREADABLE marker is not a hold: obeying one would silence this for as
+# long as the bad file sits there, and that is the direction that loses a day of work. It is left on
+# disk for claude-sync itself to report and clear, which it does in its own words.
+#
+# Only this session's own hold, or a terminal's, which records no session (claude-config#1886), the
+# same question the payload write gate asks. Another session's hold is no remedy for this one: its
+# edits are sent the moment that session releases, so the notice still speaks, and names whose
+# hold it is.
+sid="$(sc_payload_session "$input")"
+hold_live(){ sc_hold_covers "$sid"; }
 
 # ---------------------------------------------------------------------------
 # The state this prompt is in, in one line. Everything that would change what the person needs to
@@ -128,7 +134,10 @@ elif sc_is_own_worktree "$root"; then
   state="own-worktree $root"
 else
   clone="$(watcher_clone_name)"
-  if hold_live; then state="held $root $clone"; else state="warn $root $clone"; fi
+  # Whose hold is in force is part of the state, so a hold another session takes or lifts while this
+  # one is unprotected speaks again, naming who now holds it.
+  others="$(sc_hold_others "$sid" | tr '\n' ' ')"
+  if hold_live; then state="held $root $clone"; else state="warn $root $clone${others:+ $others}"; fi
 fi
 
 key="$(printf '%s' "$session" | shasum | cut -c1-12)"
@@ -143,6 +152,7 @@ printf '%s\n' "$state" > "$STATE" 2>/dev/null || true
 
 [ "$state" = "$previous" ] && exit 0
 case "$state" in warn' '*) ;; *) exit 0 ;; esac
+others_sentence="$(sc_hold_others_sentence "$sid")"
 
-echo "claude-sync: this is a development checkout at $root, and a watch daemon is live on this Mac running from $clone. That daemon mirrors ~/.claude up over payload/ and pushes, so edits made to payload/ here are not merged with the config, they are overwritten by it, silently and with no conflict to notice. On 2026-09-03 it reverted 84 files of a day's work in one commit and deleted a file that existed only in the repo. Either edit ~/.claude directly, which needs no hold, or take a hold before editing here: claude-sync hold 120 \"why\". A hold expires, so afterwards make ~/.claude match what is in the checkout, or the next send reverts it again."
+echo "claude-sync: this is a development checkout at $root, and a watch daemon is live on this Mac running from $clone. That daemon mirrors ~/.claude up over payload/ and pushes, so edits made to payload/ here are not merged with the config, they are overwritten by it, silently and with no conflict to notice. On 2026-09-03 it reverted 84 files of a day's work in one commit and deleted a file that existed only in the repo. Either edit ~/.claude directly, which needs no hold, or take a hold before editing here: claude-sync hold 120 \"why\". A hold expires, so afterwards make ~/.claude match what is in the checkout, or the next send reverts it again.${others_sentence:+ $others_sentence}"
 exit 0

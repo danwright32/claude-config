@@ -70,17 +70,24 @@ printf '%s\n' "$WPID" > "$PIDF"
 # rc and stderr together, because the verdict is the exit code and the reason is the text, and a
 # gate that refuses without saying why is half a gate (L184, L11).
 RC=0; OUT=""
+# Which session is calling decides whose hold counts (claude-config#1886). Every payload carries
+# SID as its session_id, as Claude Code's do, and the id this suite's own session exports is taken
+# out, or every answer would be about that session instead of the one a case names.
+unset CLAUDE_CODE_SESSION_ID
+SID=""
+ME="11111111-aaaa-4bbb-8ccc-000000000001"
+THEM="22222222-dddd-4eee-8fff-000000000002"
 edit(){ # edit <file path> <cwd> [pid file]
   local pidf="${3:-$PIDF}"
-  OUT="$(printf '{"tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"%s"}}' "$2" "$1" \
+  OUT="$(printf '{"tool_name":"Edit","session_id":"%s","cwd":"%s","tool_input":{"file_path":"%s"}}' "$SID" "$2" "$1" \
     | env SYNC_WATCH_PID_FILE="$pidf" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
 }
 runbash(){ # runbash <command> <cwd> [pid file]
   local pidf="${3:-$PIDF}"
   OUT="$(python3 -c '
 import json, sys
-print(json.dumps({"tool_name": "Bash", "cwd": sys.argv[2], "tool_input": {"command": sys.argv[1]}}))
-' "$1" "$2" | env SYNC_WATCH_PID_FILE="$pidf" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
+print(json.dumps({"tool_name": "Bash", "session_id": sys.argv[3], "cwd": sys.argv[2], "tool_input": {"command": sys.argv[1]}}))
+' "$1" "$2" "$SID" | env SYNC_WATCH_PID_FILE="$pidf" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
 }
 refused(){ # refused <description>
   if [ "$RC" -eq 2 ]; then check "$1" ok; else check "$1" "exit $RC, said: ${OUT:0:160}"; fi
@@ -117,6 +124,54 @@ printf '%s\n' "$(( $(date +%s) - 60 ))" > "$HOLD"
 edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
 refused "an expired hold is not a hold"
 rm -f "$HOLD"
+
+echo "payload write gate: only this session's own hold, or one from a terminal, lets it through (claude-config#1886)"
+
+# Another session's hold is no protection: this session's half written files are sent the moment
+# that session releases. So the hold that counts is the writer's own, or one with no session
+# recorded, which is a terminal's and anyone's.
+SID="$ME"
+printf '%s %s host session=%s my work\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "$ME" > "$HOLD"
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+allowed "this session's own hold lets its write through"
+printf '%s %s host session=%s their work\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "$THEM" > "$HOLD"
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "only another session's hold does not let this session write"
+says "and it says another session holds the watcher, by the short name status shows" "session 22222222 holds"
+says "and that this session needs its own hold" "this session needs its own hold"
+says "naming the exact command to take one" 'claude-sync hold 120 "'
+runbash "echo hi > $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "and a shell write is refused on another session's hold the same way"
+says "naming that session too" "session 22222222 holds"
+printf '%s %s host session=unknown from a terminal\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" > "$HOLD"
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+allowed "a live hold with no session recorded, taken from a terminal, lets it through"
+# A record from before claude-config#1863 has no session field at all, and is read as unknown.
+printf '%s %s host an old reason\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" > "$HOLD"
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+allowed "an old format hold with no session field still lets it through, as unknown"
+{
+  printf '%s %s host session=%s their work\n' "$(( $(date +%s) + 7200 ))" "$(date +%s)" "$THEM"
+  printf '%s %s host session=%s my work\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "$ME"
+} > "$HOLD"
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+allowed "my own hold on a later line, beside another session's, lets it through"
+# Claude Code gives the session to the hook's environment as well as its payload.
+SID=""
+printf '%s %s host session=%s my work\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "$ME" > "$HOLD"
+CLAUDE_CODE_SESSION_ID="$ME" edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+allowed "my own hold counts when my session comes only from CLAUDE_CODE_SESSION_ID"
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "and a caller whose session is unknown cannot write on a named session's hold"
+SID="$ME"
+rm -f "$HOLD"
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "no hold at all still refuses, as before"
+case "$OUT" in
+  *"needs its own hold"*) check "and with no hold the refusal does not claim another session holds it" "it did" ;;
+  *) check "and with no hold the refusal does not claim another session holds it" ok ;;
+esac
+SID=""
 
 # No watcher means nothing can revert anything.
 edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev" "$NOPIDF"
@@ -329,8 +384,8 @@ prepost(){ # prepost <event> <command> <cwd> <tool use id> [pid file]
   OUT="$(python3 -c '
 import json, sys
 print(json.dumps({"hook_event_name": sys.argv[1], "tool_name": "Bash", "cwd": sys.argv[3],
-                  "tool_use_id": sys.argv[4], "tool_input": {"command": sys.argv[2]}}))
-' "$1" "$2" "$3" "$4" | env SYNC_WATCH_PID_FILE="$pidf" SYNC_HOLD_FILE="$HOLD" PAYLOAD_WRITE_STATE_DIR="$STATE" bash "$HOOK" 2>&1)"; RC=$?
+                  "tool_use_id": sys.argv[4], "session_id": sys.argv[5], "tool_input": {"command": sys.argv[2]}}))
+' "$1" "$2" "$3" "$4" "$SID" | env SYNC_WATCH_PID_FILE="$pidf" SYNC_HOLD_FILE="$HOLD" PAYLOAD_WRITE_STATE_DIR="$STATE" bash "$HOOK" 2>&1)"; RC=$?
 }
 # The installed config the report compares against, empty until a case fills it, so every case
 # above the next section is judged as it was before a file could match (claude-config#1211).
@@ -376,6 +431,23 @@ prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t6
 printf 'held\n' > "$FIX/dev/payload/LESSONS.md"
 prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t6
 allowed "a change made under a hold is not reported"
+# Under another session's hold the change is as exposed as under none (claude-config#1886): the
+# note is taken before the call and the change reported after it.
+SID="$ME"
+printf '%s %s host session=%s their work\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "$THEM" > "$HOLD"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t6b
+printf 'theirs\n' > "$FIX/dev/payload/LESSONS.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t6b
+if [ "$RC" -eq 2 ]; then check "a change made under only another session's hold is still reported" ok
+else check "a change made under only another session's hold is still reported" "exit $RC, said: ${OUT:0:160}"; fi
+says "and the report names the session whose hold it is" "session 22222222 holds"
+says "and says this session needs its own hold" "this session needs its own hold"
+printf '%s %s host session=%s my work\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "$ME" > "$HOLD"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t6c
+printf 'mine\n' > "$FIX/dev/payload/LESSONS.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t6c
+allowed "a change made under this session's own hold is not reported"
+SID=""
 rm -f "$HOLD"
 prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t7 "$NOPIDF"
 printf 'nowatch\n' > "$FIX/dev/payload/LESSONS.md"
@@ -555,7 +627,7 @@ else check "the bare directory really reaches no python3" ok; fi
 # read the payload's cwd, and the session's own working directory is what Claude Code starts a hook
 # in, so that is what it has left to ask about.
 edit_nopy(){ # edit_nopy <file path> <cwd>
-  OUT="$(printf '{"tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"%s"}}' "$2" "$1" \
+  OUT="$(printf '{"tool_name":"Edit","session_id":"%s","cwd":"%s","tool_input":{"file_path":"%s"}}' "$SID" "$2" "$1" \
     | ( cd "$2" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1 ))"; RC=$?
 }
 
@@ -578,6 +650,17 @@ allowed "a write outside payload is not refused over a reader it never needed"
 printf '%s\n' "$(( $(date +%s) + 3600 ))" > "$HOLD"
 edit_nopy "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
 allowed "a hold in force still lets the write through with no python3"
+# Whose hold it is is read with no python3 too (claude-config#1886), so the reader's absence never
+# lets a write through on another session's hold.
+SID="$ME"
+printf '%s %s host session=%s their work\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "$THEM" > "$HOLD"
+edit_nopy "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "with no python3, only another session's hold still refuses"
+says "and names that session" "session 22222222 holds"
+printf '%s %s host session=%s my work\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "$ME" > "$HOLD"
+edit_nopy "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+allowed "with no python3, this session's own hold lets the write through"
+SID=""
 rm -f "$HOLD"
 
 # And the clone the watcher itself runs from is not at risk, so it is not refused either.

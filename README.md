@@ -297,8 +297,17 @@ it, `.claude-sync-hold.lock`, so two sessions holding in the same instant cannot
 record without the other's hold in it. A reading that finds only live holds never takes the lock;
 one that finds an expired or unreadable line (the watcher's send, `status`) takes it to clear that
 line, waits at most a second for it, so `status` is never held up behind a change, and when it
-cannot get it clears nothing that time and still answers whether the watcher is held. The hooks that refuse a
-payload write without a hold (`hooks/lib/sync-clone.sh`) count any live hold, whoever took it.
+cannot get it clears nothing that time and still answers whether the watcher is held.
+
+The hooks that refuse a payload write without a hold (`payload-write-gate.sh`, and the per prompt
+`payload-revert-warning.sh`, through `hooks/lib/sync-clone.sh`) count only a hold that covers the
+WRITING session (#1886): its own, matched on the `session_id` the hook payload carries or on
+`CLAUDE_CODE_SESSION_ID`, or an `unknown` one from a terminal, old format records included. Another
+session's hold does not count, because the writer's half written files would be sent the moment
+that session released. The refusal then names whose hold is in force, by the short name `status`
+shows, and says this session needs its own: `claude-sync hold 120 "why"`. The record is parsed in
+one place, `hooks/lib/hold-record.sh`, which `claude-sync` and those hooks both read through. A
+`claude-sync` that cannot load it reads an existing record as held, says why, and clears nothing.
 
 ### A watcher older than the claude-sync on disk restarts itself (#420, #1569)
 

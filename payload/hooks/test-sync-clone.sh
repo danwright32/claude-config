@@ -33,6 +33,10 @@ trap 'rm -rf "$FIX"; [ -n "${WPID:-}" ] && kill "$WPID" 2>/dev/null; true' EXIT
 
 export SYNC_HOLD_FILE="$FIX/hold"
 export SYNC_WATCH_PID_FILE="$FIX/watch.pid"
+# Whose hold counts depends on which session is asking (claude-config#1886), and this suite runs
+# inside a session whose id Claude Code exports. Left in place, every answer below would be about
+# that session rather than the one each case names.
+unset CLAUDE_CODE_SESSION_ID
 # shellcheck source=lib/sync-clone.sh
 . "$LIB"
 
@@ -91,45 +95,108 @@ printf 'not a number\n' > "$SYNC_WATCH_PID_FILE"
 DESC="a pid file holding no number is not a watcher"
 no sc_watcher_cmd
 
-echo "sync clone: whether a hold is in force"
+echo "sync clone: whether a hold covers the session asking"
+
+# Every case below asks as one session, ME, about a record that may also hold THEM's hold. The ids
+# are the shape Claude Code gives, so the short name is the first eight characters, as status shows.
+ME="11111111-aaaa-4bbb-8ccc-000000000001"
+THEM="22222222-dddd-4eee-8fff-000000000002"
+now="$(date +%s)"
 
 rm -f "$SYNC_HOLD_FILE"
 DESC="no marker is no hold"
-no sc_hold_live
-printf '%s\n' "$(( $(date +%s) + 3600 ))" > "$SYNC_HOLD_FILE"
-DESC="a marker in the future is a hold"
-yes sc_hold_live
-printf '%s\n' "$(( $(date +%s) - 1 ))" > "$SYNC_HOLD_FILE"
+no sc_hold_covers "$ME"
+printf '%s\n' "$(( now + 3600 ))" > "$SYNC_HOLD_FILE"
+# A record from before claude-config#1863 names no session, and is read as one by "unknown", which
+# is a hold from a terminal and covers whoever asks (L1010).
+DESC="an old format marker in the future is a hold, read as unknown, so it covers any session"
+yes sc_hold_covers "$ME"
+DESC="and it covers a caller whose session is not known either"
+yes sc_hold_covers ""
+printf '%s\n' "$(( now - 1 ))" > "$SYNC_HOLD_FILE"
 DESC="a marker in the past is not"
-no sc_hold_live
+no sc_hold_covers "$ME"
 # An unreadable marker is NOT a hold. Reading one as a hold would silence every guard built on this
 # for as long as the bad file sits there, and that is the direction that loses a day of work (L42).
 printf 'soon\n' > "$SYNC_HOLD_FILE"
 DESC="a marker nothing can read is not a hold"
-no sc_hold_live
+no sc_hold_covers "$ME"
 : > "$SYNC_HOLD_FILE"
 DESC="an empty marker is not a hold"
-no sc_hold_live
-# Several sessions can each hold at once, one line each (claude-config#1863), so a hold is in force
-# while ANY line is live, wherever it sits, and in the session tagged format as in the old one.
+no sc_hold_covers "$ME"
+
+# The point of claude-config#1886: another session's hold is no protection for this one, because
+# this session's half written files are sent the moment that hold is released.
+printf '%s %s host session=%s their work\n' "$(( now + 3600 ))" "$now" "$THEM" > "$SYNC_HOLD_FILE"
+DESC="only another session's live hold does not cover me"
+no sc_hold_covers "$ME"
+DESC="and it does not cover a caller whose session is not known"
+no sc_hold_covers ""
+want "and that other session is named by the short name status shows" "22222222" "$(sc_hold_others "$ME")"
+printf '%s %s host session=%s my work\n' "$(( now + 3600 ))" "$now" "$ME" > "$SYNC_HOLD_FILE"
+DESC="my own live hold covers me"
+yes sc_hold_covers "$ME"
+want "and names no other session" "" "$(sc_hold_others "$ME")"
+# The session can come from the environment instead of the hook payload: Claude Code gives
+# CLAUDE_CODE_SESSION_ID to every hook and command a session runs.
+DESC="my own hold covers me when my session comes only from CLAUDE_CODE_SESSION_ID"
+CLAUDE_CODE_SESSION_ID="$ME" yes sc_hold_covers ""
+printf '%s %s host session=%s ran out\n' "$(( now - 60 ))" "$(( now - 3600 ))" "$ME" > "$SYNC_HOLD_FILE"
+DESC="my own hold, expired, does not"
+no sc_hold_covers "$ME"
+printf '%s %s host session=unknown from a terminal\n' "$(( now + 3600 ))" "$now" > "$SYNC_HOLD_FILE"
+DESC="a live unknown hold, taken from a terminal, covers any session"
+yes sc_hold_covers "$ME"
+want "and is never named as another session's" "" "$(sc_hold_others "$ME")"
+# Several sessions can each hold at once, one line each (claude-config#1863), so a hold of mine
+# counts wherever its line sits, however the first line reads.
 {
-  printf '%s %s host session=aaaaaaaa ran out\n' "$(( $(date +%s) - 60 ))" "$(( $(date +%s) - 3600 ))"
-  printf '%s %s host session=bbbbbbbb still working\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)"
+  printf '%s %s host session=%s their work\n' "$(( now + 7200 ))" "$now" "$THEM"
+  printf '%s %s host session=%s my work\n' "$(( now + 3600 ))" "$now" "$ME"
 } > "$SYNC_HOLD_FILE"
-DESC="a live hold on a later line is a hold, however the first line reads"
-yes sc_hold_live
+DESC="my live hold on a later line covers me, beside another session's"
+yes sc_hold_covers "$ME"
 {
-  printf '%s %s host session=aaaaaaaa ran out\n' "$(( $(date +%s) - 60 ))" "$(( $(date +%s) - 3600 ))"
-  printf '%s %s host session=bbbbbbbb ran out too\n' "$(( $(date +%s) - 5 ))" "$(( $(date +%s) - 3600 ))"
+  printf '%s %s host session=%s their work\n' "$(( now + 7200 ))" "$now" "$THEM"
+  printf '%s %s host session=%s ran out\n' "$(( now - 5 ))" "$(( now - 3600 ))" "$ME"
 } > "$SYNC_HOLD_FILE"
-DESC="a marker whose every line has expired is not a hold"
-no sc_hold_live
+DESC="my expired hold beside another session's live one does not cover me"
+no sc_hold_covers "$ME"
+want "and the other session is still named" "22222222" "$(sc_hold_others "$ME")"
 # And it never clears the marker: that is a decision somebody made, and claude-sync owns reporting
 # and removing it (L5).
 printf 'soon\n' > "$SYNC_HOLD_FILE"
-sc_hold_live || true
+sc_hold_covers "$ME" || true
 check "and reading it leaves it exactly where it was" \
   "$([ -f "$SYNC_HOLD_FILE" ] && [ "$(cat "$SYNC_HOLD_FILE")" = "soon" ] && echo ok || echo 'the marker was changed or removed')"
+
+echo "sync clone: which session a hook payload names"
+
+want "the session_id a hook payload carries" "$ME" \
+  "$(sc_payload_session "{\"session_id\": \"$ME\", \"cwd\": \"/x\"}")"
+want "and nothing from a payload that carries none" "" "$(sc_payload_session '{"cwd":"/x"}')"
+# An id is written into the record as one word, so anything not the shape of one is not an id.
+want "and nothing from one whose id is not the shape of an id" "" \
+  "$(sc_payload_session '{"session_id":"a b; rm"}')"
+
+echo "sync clone: one reading of the hold record"
+
+# claude-sync and these hooks must read the record one way, or "is this my hold" has two answers
+# (L370). The parser lives in lib/hold-record.sh, and claude-sync keeps no copy of it.
+SYNC_SCRIPT="$DIR/../../claude-sync"
+if [ -f "$SYNC_SCRIPT" ]; then
+  if grep -q 'hold_record_rows' "$SYNC_SCRIPT" && ! grep -q 'substr($4, 9)' "$SYNC_SCRIPT"; then
+    check "claude-sync reads the hold record through lib/hold-record.sh, not a copy of its own" ok
+  else
+    check "claude-sync reads the hold record through lib/hold-record.sh, not a copy of its own" \
+      "claude-sync does not call hold_record_rows, or still parses session= itself"
+  fi
+  if grep -q 'substr($4, 9)' "$DIR/lib/hold-record.sh" 2>/dev/null; then
+    check "and lib/hold-record.sh holds that one parser" ok
+  else
+    check "and lib/hold-record.sh holds that one parser" "it is missing, or no longer parses session="
+  fi
+fi
 
 echo
 echo "passed: $pass, failed: $fail"

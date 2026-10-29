@@ -18609,6 +18609,32 @@ check "#1863 and still lists the live hold" "line_has \"\$out_63l\" 'watcher hol
 check "#1863 and leaves the expired line for a later reading to clear" "grep -q 'A ran out again' '$H63_HOLD'"
 h63_b bash "$SCRIPT" release >/dev/null 2>&1 || true
 
+# THE SHARED READER MISSING (claude-config#1886). The record is parsed in hooks/lib/hold-record.sh,
+# which the payload write gate reads through too, so the two cannot disagree about whose hold a line
+# is. A claude-sync that cannot load it must neither read an existing record as no hold (the watcher
+# would send somebody's half finished work) nor clear it (somebody's decision): it reads it as held
+# and says why. hold_rows is cut out of the script by name and run with no reader defined.
+H63_ROWS_FN="$(sed -n '/^hold_rows(){/,/^}/p' "$SCRIPT")"
+case "$H63_ROWS_FN" in *hold_record_rows*) h63_cut=whole ;; *) h63_cut=missing ;; esac
+check "#1886 hold_rows was cut from claude-sync whole" "[ '$h63_cut' = whole ]"
+h63_rows_no_reader(){
+  local SYNC_HOLD_FILE="$H63_HOLD" SYNC_SELF_PAYLOAD="$H63/no-payload" CLAUDE_HOME="$H63/no-home"
+  ( unset -f hold_record_rows hold_record_session hold_record_short 2>/dev/null
+    eval "$H63_ROWS_FN"
+    hold_rows "$(date +%s)" ) 2>&1
+}
+printf '%s %s %s session=%s B holds on\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" somehost "$H63_B" > "$H63_HOLD"
+out_63r="$(h63_rows_no_reader)"
+dbg "#1886 hold_rows with no reader: $out_63r"
+case "$out_63r" in live*|*"
+live"*) h63_held=yes ;; *) h63_held=no ;; esac
+check "#1886 with the shared reader missing, an existing record reads as held, not as no hold" "[ '$h63_held' = yes ]"
+check "#1886 and says the reader is missing, and how to restore it" "line_has \"\$out_63r\" 'cannot be read' 'git checkout -- payload/hooks/lib/hold-record.sh'"
+check "#1886 and leaves the record as it was" "grep -q 'B holds on' '$H63_HOLD'"
+rm -f "$H63_HOLD"
+out_63n="$(h63_rows_no_reader)"
+check "#1886 and with no record there is nothing to read and nothing said" "[ -z \"\$out_63n\" ]"
+
 
 section "== a watch daemon older than the claude-sync on disk refuses to send (#420) =="
 # `do_watch` runs `watch_tick` as a FUNCTION inside one long lived bash process, so every send the
