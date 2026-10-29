@@ -217,6 +217,40 @@ grep -qE "^[[:space:]]*(.*\\|)?$runner(\\|.*)?\\)[[:space:]]+IMAGE=" "$DIR/run-o
   && check "#597 run-on-linux.sh has an image for '$runner'" ok \
   || check "#597 run-on-linux.sh has an image for '$runner'" "no case arm names it"
 
+# ---------------------------------------------------------------------------
+# #1901: the job's start is recorded first, and its limit is one the runner can read.
+# ---------------------------------------------------------------------------
+# run-all-tests.sh holds every flake recheck to end before the job is cancelled, reading the job's
+# timeout-minutes through lib/workflow-job-timeout.sh and counting it from HOOK_TESTS_JOB_STARTED.
+# Counted from the runner's own start instead, the minutes the steps before it took would be
+# missing, which is the direction that lets the job be cancelled first. So the very first step
+# records the start, before checkout or anything else that takes time.
+start_recorded_first(){ # start_recorded_first <workflow>
+  local first
+  first="$(code_of "$1" | awk '/^[[:space:]]*steps:[[:space:]]*$/ && !s { s = 1; next } s && /^[[:space:]]*- / { n++ } s && n == 1 { print }')"
+  if [ -z "$first" ]; then echo "no first step was found"; return; fi
+  if [[ "$first" =~ HOOK_TESTS_JOB_STARTED=\$\(date\ \+%s\).*GITHUB_ENV ]]; then
+    echo ok
+  else
+    echo "the first step does not write HOOK_TESTS_JOB_STARTED=\$(date +%s) to GITHUB_ENV"
+  fi
+}
+printf 'jobs:\n  suite:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 40\n    steps:\n      - uses: actions/checkout@abc\n      - run: echo "HOOK_TESTS_JOB_STARTED=$(date +%%s)" >> "$GITHUB_ENV"\n' > "$TMPROOT/start-late.yml"
+r="$(start_recorded_first "$TMPROOT/start-late.yml")"
+[ "$r" != ok ] \
+  && check "#1901 a workflow that records the job start after another step is refused" ok \
+  || check "#1901 a workflow that records the job start after another step is refused" "it passed"
+r="$(start_recorded_first "$REAL")"
+[ "$r" = ok ] \
+  && check "#1901 the real workflow records the job start in its first step" ok \
+  || check "#1901 the real workflow records the job start in its first step" "$r"
+. "$DIR/../payload/hooks/lib/workflow-job-timeout.sh"
+m="$(workflow_job_timeout_minutes "$REAL" suite)"
+case "$m" in
+  ''|*[!0-9]*|0) check "#1901 the runner can read the suite job's timeout-minutes from the real workflow" "read '$m'" ;;
+  *) check "#1901 the runner can read the suite job's timeout-minutes from the real workflow ($m)" ok ;;
+esac
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
