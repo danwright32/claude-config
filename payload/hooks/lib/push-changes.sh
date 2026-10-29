@@ -191,7 +191,7 @@ pc_judge() {   # $1 = model  $2 = timeout seconds  $3 = system prompt (the rubri
   parsed="$(printf '%s' "$envelope" | python3 -c '
 import sys, json, re
 try:
-    env = json.load(sys.stdin)
+    env = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     if not isinstance(env, dict):
         print("ERR_VERDICT"); sys.exit(0)
     def num(v):

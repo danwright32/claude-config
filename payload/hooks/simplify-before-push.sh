@@ -224,7 +224,7 @@ def said(f):
     return (("[" + str(k) + "] ") if k else "") + str(s)
 
 try:
-    obj = json.load(sys.stdin)
+    obj = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     findings = obj.get("findings") or []
     if obj.get("verdict") != "block" or not findings:
         print("PASS")

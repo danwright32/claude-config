@@ -53,8 +53,10 @@ if not transcript or not os.path.isfile(transcript):
 # Did the latest turn (since the last genuine user message) use any tool other
 # than AskUserQuestion? If not, it was a trivial chat / question turn -> skip.
 SKIP_TOOLS = {"AskUserQuestion"}
+# Decoded as jq would, so one byte that is not UTF-8 on any line cannot make the whole read raise
+# and the turn read as one with nothing in it (claude-config#1900).
 try:
-    with open(transcript, "r", encoding="utf-8") as f:
+    with open(transcript, "r", encoding="utf-8", errors="replace") as f:
         lines = [ln for ln in f if ln.strip()]
 except Exception:
     sys.exit(0)

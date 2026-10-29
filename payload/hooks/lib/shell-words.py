@@ -54,6 +54,7 @@ Inside a substitution quotes open afresh, so X="$(a "b c")" is one word.
 import os
 import re
 import shlex
+import io
 import sys
 
 
@@ -1410,7 +1411,7 @@ def data_blanked(s, declared, home):
 
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ""
-    data = sys.stdin.read()
+    data = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
     if mode == "words":
         sys.stdout.write("\x1f".join(command_words(data)))
     elif mode == "gitdir":
