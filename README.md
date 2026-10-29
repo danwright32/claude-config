@@ -1814,6 +1814,16 @@ for and fails if one exits anything but 0, since such a gate would now block eve
 transcript in 2.4 seconds at a load average of 7 on 2026-10-29, which leaves too little room at the
 load averages of 145 measured the day before, now that running out of time refuses the hand back.
 
+`linux-sections-before-push.sh` had no bound of its own on its Linux run, so with the field one
+slow section would have refused every push of that change. It now stops the run at a budget of 240
+seconds, inside the 300 its registration declares (`LINUX_SECTIONS_BUDGET_SECONDS` sets another),
+stops the container by the name it gave `tests/run-on-linux.sh` (killing the docker client leaves
+the container running), and lets the push through saying UNMEASURED, which is what its design says
+a run it could not finish is. That notice, and the one for a run docker could not start, also go
+out as a `systemMessage`, since Claude Code discards a PreToolUse hook's stderr on exit 0. How
+long a Linux run takes is not measured on this Mac, whose docker daemon was not running on
+2026-10-29, so 240 is a setting.
+
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
 

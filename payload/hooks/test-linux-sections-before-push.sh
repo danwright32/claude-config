@@ -419,6 +419,120 @@ run "$R13" "cd \"\$X\" && git push '$BARE' main"; o19e="$OUT"
 [ "$RC" -eq 0 ] && check "an unresolvable directory pushing to a local path is not the shared repo" ok \
                 || check "an unresolvable directory pushing to a local path is not the shared repo" "rc=$RC out=$o19e"
 
+# --- the Linux run stops ITSELF inside the registration's timeout (claude-config#1899). The gate is
+#     registered with onFailure block, so a run Claude Code kills at its timeout now REFUSES the
+#     push. Its Linux run had no bound of its own, so one slow section would have refused every push
+#     of that change. It now stops the run at its own budget, stops the container by name, and lets
+#     the push through saying UNMEASURED, which is what its fail open design says a run it could not
+#     finish is.
+DOCKLOG="$TMPROOT/docker.log"
+cat > "$TMPROOT/docker-stub" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$DOCKLOG"
+exit 0
+STUB
+chmod +x "$TMPROOT/docker-stub"
+R20="$(mkrepo slow 0)"
+cat > "$R20/tests/audit-changed-sections.sh" <<AUDIT
+#!/usr/bin/env bash
+printf '%s' "\${LINUX_RUN_CONTAINER_NAME:-}" > "$TMPROOT/slow-name"
+echo \$\$ > "$TMPROOT/slow-audit.pid"
+sleep 60 &
+echo \$! > "$TMPROOT/slow-child.pid"
+wait
+AUDIT
+chmod +x "$R20/tests/audit-changed-sections.sh"
+git -C "$R20" add -A 2>/dev/null; git -C "$R20" -c user.email=p@l -c user.name=p commit -qm slow 2>/dev/null
+export LINUX_SECTIONS_BUDGET_SECONDS=2 SYNC_DOCKER="$TMPROOT/docker-stub"
+_old_state="$LINUX_SECTIONS_STATE_DIR"; export LINUX_SECTIONS_STATE_DIR="$TMPROOT/linux-state-budget"
+_t0=$SECONDS
+run "$R20" 'git push'; o20="$OUT"; rc20=$RC
+_took=$(( SECONDS - _t0 ))
+unset LINUX_SECTIONS_BUDGET_SECONDS SYNC_DOCKER; export LINUX_SECTIONS_STATE_DIR="$_old_state"
+[ "$rc20" -eq 0 ] && check "#1899 a Linux run past the budget lets the push through rather than being killed into a refusal" ok \
+                  || check "#1899 a Linux run past the budget lets the push through rather than being killed into a refusal" "rc=$rc20 out=$o20"
+[ "$_took" -lt 20 ] && check "#1899 and it stops at the budget, not when the run would have ended" ok \
+                    || check "#1899 and it stops at the budget, not when the run would have ended" "took ${_took}s"
+case "$o20" in *UNMEASURED*'did not finish in 2 seconds'*|*'did not finish in 2 seconds'*UNMEASURED*) check "#1899 and it says the push was not judged, and why" ok ;;
+               *) check "#1899 and it says the push was not judged, and why" "out=$o20" ;; esac
+_sm="$(printf '%s\n' "$o20" | awk '/^\{/' | python3 -c 'import json, sys
+for l in sys.stdin:
+    print(json.loads(l).get("systemMessage", ""))' 2>/dev/null)"
+case "$_sm" in *UNMEASURED*) check "#1899 and says it where a person sees it, a systemMessage, since stderr on exit 0 is discarded" ok ;;
+               *) check "#1899 and says it where a person sees it, a systemMessage, since stderr on exit 0 is discarded" "systemMessage=${_sm:-none} out=$o20" ;; esac
+_ap="$(cat "$TMPROOT/slow-audit.pid" 2>/dev/null)"; _cp="$(cat "$TMPROOT/slow-child.pid" 2>/dev/null)"
+if [ -n "$_ap" ] && [ -n "$_cp" ] && ! kill -0 "$_ap" 2>/dev/null && ! kill -0 "$_cp" 2>/dev/null; then
+  check "#1899 and nothing the run started is left running" ok
+else
+  check "#1899 and nothing the run started is left running" "audit=${_ap:-unread} child=${_cp:-unread}"
+  [ -n "$_cp" ] && kill -9 "$_cp" 2>/dev/null; [ -n "$_ap" ] && kill -9 "$_ap" 2>/dev/null
+fi
+_name="$(cat "$TMPROOT/slow-name" 2>/dev/null)"
+if [ -n "$_name" ] && grep -q -x -F "kill $_name" "$DOCKLOG" 2>/dev/null; then
+  check "#1899 and the container the run started is stopped by the name the run was given" ok
+else
+  check "#1899 and the container the run started is stopped by the name the run was given" "name=${_name:-none given} docker calls: $(tr '\n' ';' < "$DOCKLOG" 2>/dev/null)"
+fi
+grep -q 'stood-down' "$TMPROOT"/linux-state-budget/* 2>/dev/null \
+  && check "#1899 and the record counts it as a push Linux did not judge" ok \
+  || check "#1899 and the record counts it as a push Linux did not judge" "$(cat "$TMPROOT"/linux-state-budget/* 2>/dev/null)"
+
+# The same for a run docker could not start: until #1899 that notice went to stderr on exit 0, which
+# Claude Code discards, so the stand down it exists to report was said to nobody.
+run "$R7" 'git push'; o7b="$OUT"
+_sm7="$(printf '%s\n' "$o7b" | awk '/^\{/' | python3 -c 'import json, sys
+for l in sys.stdin:
+    print(json.loads(l).get("systemMessage", ""))' 2>/dev/null)"
+case "$_sm7" in *UNMEASURED*) check "#1899 a run docker could not start is also said as a systemMessage" ok ;;
+                *) check "#1899 a run docker could not start is also said as a systemMessage" "systemMessage=${_sm7:-none} rc=$RC out=$o7b" ;; esac
+
+# A budget that is not a whole number of seconds falls back to the default, never to zero, which
+# would stand down every push, and never to no bound.
+export LINUX_SECTIONS_BUDGET_SECONDS=soon
+run "$R1" 'git push'
+unset LINUX_SECTIONS_BUDGET_SECONDS
+[ "$RC" -eq 2 ] && check "#1899 an unreadable budget still runs and judges the sections" ok \
+                || check "#1899 an unreadable budget still runs and judges the sections" "rc=$RC out=$OUT"
+
+# The default budget sits below the timeout the registration declares, read from both files, so
+# moving either without the other fails here.
+_reg=""
+. "$DIR/lib/settings-file.sh" 2>/dev/null && _reg="$(hook_settings_file "$DIR/..")"
+if [ -n "$_reg" ]; then
+  _declared="$(python3 -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+print([h for g in d["hooks"]["PreToolUse"] for h in g["hooks"] if h["command"].endswith("/linux-sections-before-push.sh")][0].get("timeout", 600))' "$_reg" 2>/dev/null)"
+  _default="$(sed -n 's/^_ls_budget_default=\([0-9][0-9]*\)$/\1/p' "$HOOK")"
+  if [ -n "$_declared" ] && [ -n "$_default" ] && [ "$_default" -lt "$_declared" ]; then
+    check "#1899 the default budget sits below the declared hook timeout" ok
+  else
+    check "#1899 the default budget sits below the declared hook timeout" "budget=${_default:-unread} timeout=${_declared:-unread}"
+  fi
+else
+  echo "SUITE-PART-UNMEASURED the linux gate's budget against its declared timeout: no hooks block beside this copy of the hooks"
+fi
+
+# The runner names its container when asked to, so the gate has something to stop (#1899).
+_LIN="$DIR/../../tests/run-on-linux.sh"
+if [ -f "$_LIN" ]; then
+  : > "$DOCKLOG"
+  LINUX_RUN_CONTAINER_NAME=probe-1899 SYNC_DOCKER="$TMPROOT/docker-stub" bash "$_LIN" >/dev/null 2>&1
+  _runline="$(grep -E '^run ' "$DOCKLOG" 2>/dev/null)"
+  grep -q -e '--name probe-1899' <<< "$_runline" \
+    && check "#1899 run-on-linux.sh names the container it was told to" ok \
+    || check "#1899 run-on-linux.sh names the container it was told to" "docker calls: $(tr '\n' ';' < "$DOCKLOG")"
+  : > "$DOCKLOG"
+  SYNC_DOCKER="$TMPROOT/docker-stub" bash "$_LIN" >/dev/null 2>&1
+  _runline="$(grep -E '^run ' "$DOCKLOG" 2>/dev/null)"
+  if [ -n "$_runline" ] && ! grep -q -e '--name' <<< "$_runline"; then
+    check "#1899 and names none when it was told none" ok
+  else
+    check "#1899 and names none when it was told none" "run line: ${_runline:-none}"
+  fi
+else
+  echo "SUITE-PART-UNMEASURED run-on-linux.sh naming its container: tests/run-on-linux.sh is not beside this copy of the hooks"
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
