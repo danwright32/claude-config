@@ -873,6 +873,61 @@ test('#1740: only a skip on a worktree-agent branch carries; a skip on any other
   expect(Object.keys(w.store).some(k => k.includes('|worktree:'))).toBe(false)
 })
 
+// #1904: a refused builder's skip question named its throwaway branch, "branch
+// worktree-agent-a09a06788b6ba53ab in claude-config" (2026-10-29, for #1859), rather than the issue Dan
+// knows. The main session now names the issue the builder works on, as metadata "issue", and Dan reads
+// that issue, said to hold for this builder only. Only the label changes: his answer is kept where it
+// was, under the branch and its worktree (#1740), never the issue, so no other checkout reads it (#1306).
+test("#1904: a builder's skip question names the issue the main session gives, while the answer stays with that worktree", withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = 'main'
+  w.branches['/w/slate-wt'] = 'worktree-agent-a09a06788b6ba53ab'
+  const why = refusalOf(await call($, { ...WT_PAGE, agentId: 'agent-a1' }))
+  expect(why).toContain('branch worktree-agent-a09a06788b6ba53ab in slate')
+  const answered = await askSkip($, w, why, SKIP_YES, {}, { issue: 1859 })
+  const q = w.asked[0]?.questions[0]
+  if (!q) throw new Error('Dan was asked no question')
+  expect(q.question).toContain('This is for issue #1859 in slate (this builder only);')
+  expect(q.question).not.toContain('worktree-agent')
+  expect(q.options[0]?.description).toContain('issue #1859 in slate (this builder only)')
+  expect(contextOf(answered)).toContain(`Dan answered ${SKIP_YES}`)
+  // Kept where it always was: the branch and its worktree, never the issue.
+  expect(Object.keys(w.store).filter(k => k.startsWith('record:')).sort()).toEqual([
+    'record:/w/slate|branch:worktree-agent-a09a06788b6ba53ab',
+    'record:/w/slate|worktree:/w/slate-wt',
+  ])
+  expect(w.store['record:/w/slate|branch:worktree-agent-a09a06788b6ba53ab']).toMatchObject({ kind: 'skipped', label: 'issue #1859 in slate (this builder only)' })
+  // The builder goes on unasked, and after renaming its branch to name the issue; another worktree on
+  // the issue's own branch, and the main checkout, are still asked.
+  expect(refusalOf(await call($, { ...WT_PAGE, agentId: 'agent-a1' }))).toBe('')
+  w.branches['/w/slate-wt'] = 'design-guard-1859'
+  expect(refusalOf(await call($, { ...WT_PAGE, agentId: 'agent-a1' }))).toBe('')
+  w.branches['/w/slate-wt2'] = 'goal-box-1859'
+  expect(refusalOf(await call($, WT2_PAGE))).toContain(SKIP_QUESTION)
+  w.branches['/w/slate'] = '1859-design-guard'
+  expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+})
+
+test('#1904: an issue on the skip question renames only a builder branch, and one that is no number is refused with nothing asked', withKit, async ($, on) => {
+  const w = world($, on)
+  // An issue's own branch: the question names that issue, whatever the metadata gives.
+  await askSkip($, w, refusalOf(await call($, PAGE)), SKIP_YES, {}, { issue: 1859 })
+  expect(w.asked[0]?.questions[0]?.question).toContain('This is for issue #978 in slate;')
+  expect(Object.keys(w.store).filter(k => k.startsWith('record:'))).toEqual(['record:/w/slate|issue:978'])
+  // On a builder's branch, an issue that is no number is refused by name; nothing asked or recorded.
+  w.branches['/w/slate-wt'] = 'worktree-agent-a09a06788b6ba53ab'
+  const held = refusalOf(await call($, { ...WT_PAGE }))
+  for (const issue of ['1859', 0, 2.5]) {
+    const r = refusalOf(await askSkip($, w, held, SKIP_YES, {}, { issue }))
+    expect([issue, r.includes('is not an issue number')]).toEqual([issue, true])
+  }
+  expect(w.asked.length).toBe(1)
+  expect(Object.keys(w.store).filter(k => k.startsWith('record:'))).toEqual(['record:/w/slate|issue:978'])
+  // Without one, the branch, as before.
+  await askSkip($, w, held, SKIP_YES)
+  expect(w.asked[1]?.questions[0]?.question).toContain('This is for branch worktree-agent-a09a06788b6ba53ab in slate;')
+})
+
 // #1322: before #1306, an agent worktree's branch read as the issues its random id spelled, and Dan's
 // Skip them there was kept under #7831, #26 and #84 on 2026-10-17, where a real branch for #26 or #84
 // would inherit it. Which branch an old answer came from was never kept, so an answer under an issue

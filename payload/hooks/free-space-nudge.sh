@@ -68,12 +68,17 @@ STATE="$STATE_DIR/$session"
 # Pure shell rather than a pipeline into `head`. A short circuiting consumer kills its producer,
 # and under pipefail that is a failure that never happened, which this repo tracks as a hazard of
 # its own (L183). There is nothing to pipe here anyway: the figure is the word before the phrase.
+# The check words the figure by the one size rule (lib/disk-clean-units.sh, #1807): "7.5 GB" with
+# one decimal place, and MB or KB under a GB. The whole GB are what the bands are made of, so the
+# decimal part is dropped and anything under a GB is band 0, never a figure this cannot read.
 gb=""
 case "$answer" in
   *" GB free on "*)
     gb="${answer%% GB free on *}"
     gb="${gb##* }"
+    gb="${gb%%.*}"
     ;;
+  *" MB free on "*|*" KB free on "*) gb=0 ;;
 esac
 case "$gb" in ''|*[!0-9]*) key="$verdict" ;; *) key="$verdict-$((gb / 5))" ;; esac
 # Swap crossing its share of the disk is a different answer even when the free space figure has not
