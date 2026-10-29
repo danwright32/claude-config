@@ -4313,10 +4313,37 @@ next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whol
 # had folded the Edit and Write groups into Bash (#400). So each kept entry carries its group's
 # SHAPE, meaning every field of the group except its hooks, and lands in the first primary group
 # of that same shape, or in a new group of that shape when primary has none (L483).
+#
+# A CHANGED FIELD OF A REGISTRATION BOTH SIDES HOLD IS MERGED THREE WAYS TOO (2026-10-29). The rule
+# above names a registration by its command alone, so for a command primary held it kept primary's
+# copy whole, and a change to any OTHER field made on the secondary side was reverted. PR #1889 added
+# "onFailure": "block" to the scanners gate; this Mac had pulled it but held it unapplied while its
+# tests ran, and the watcher's send (primary: this Mac's config, without the field) pushed 62f2b1c4,
+# deleting exactly that line from main. So a registration is now matched by its event, its group's
+# shape and its command, and where primary's copy is still the base's and secondary's is not, the
+# change came from the secondary side and secondary's copy is taken, every field of it, known or
+# not, so the next field Claude Code adds travels too (L620). Where primary changed it, primary
+# wins, as before; with no base there is nothing to tell the two apart, and primary wins.
 merge_hook_blocks(){   # $1 primary  $2 secondary  $3 base  -> the merged hooks object, or nothing
   jq -cn --argjson pri "$1" --argjson sec "$2" --argjson bas "$3" '
     def cmds($h): [ $h | to_entries[] | .value[]? | .hooks[]? | .command ];
-    cmds($pri) as $priC
+    def regs($h): [ $h | to_entries[] | .key as $k | .value[]? | del(.hooks) as $s
+                    | .hooks[]? | {k: $k, s: $s, c: .command, e: .} ];
+    def entry($rs; $k; $s; $c): first($rs[] | select(.k == $k and .s == $s and .c == $c) | .e) // null;
+    regs($sec) as $secR
+    | regs($bas) as $basR
+    | ($pri | with_entries(
+          .key as $k
+          | .value |= (if type == "array" then map(
+              if (type == "object") and (.hooks | type) == "array" then
+                del(.hooks) as $s
+                | .hooks |= map(
+                    . as $p
+                    | entry($basR; $k; $s; $p.command) as $b
+                    | entry($secR; $k; $s; $p.command) as $q
+                    | if $b != null and $q != null and $p == $b and $q != $b then $q else $p end)
+              else . end) else . end))) as $pri
+    | cmds($pri) as $priC
     | cmds($bas) as $basC
     | [ ($sec | to_entries[])
         | .key as $k
