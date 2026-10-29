@@ -40,7 +40,11 @@ OVERRIDE = "ALLOW_SESSION_LINK_IN_COMMENT=1"
 COMMENT_KINDS = frozenset({("issue", "comment"), ("pr", "comment"), ("pr", "review")})
 # A close posts its --comment as an ordinary comment.
 CLOSE_KINDS = frozenset({("issue", "close"), ("pr", "close")})
-SLACK_SENDS = re.compile(r"mcp__.*slack.*__slack_(send_message|send_message_draft|schedule_message)")
+# Any server: the claude.ai connector names its server Slack with a capital S, and a pattern wanting
+# a lowercase "slack" there let every claude.ai send through (claude-config#1905). The tool names
+# themselves are lowercase on every connector. The matcher in settings.hooks.json is the same
+# pattern, and test-no-session-link-in-comments.sh holds both to one list of send tools.
+SLACK_SENDS = re.compile(r"mcp__.*__slack_(send_message|send_message_draft|schedule_message)")
 API_COMMENT_ENDPOINT = re.compile(r"(?:^|/)(?:comments|replies|reviews)(?:/|\?|$)")
 API_WRITE_FLAGS = {"-f", "-F", "--field", "--raw-field", "--input"}
 API_WRITE_METHODS = {"POST", "PATCH", "PUT"}

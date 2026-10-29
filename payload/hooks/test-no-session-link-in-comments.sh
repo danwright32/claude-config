@@ -217,11 +217,32 @@ if [[ "$out" == *'"deny"'* || "$out" == *"SESSION LINK GATE DID NOT RUN"* ]]; th
   fail=$((fail + 1)); echo "FAIL: a payload with a byte that is not UTF-8 must reach the gate (got: ${out:-<no output>})"; fi
 
 # --- Slack ---
-check deny "slack message with the link" "$(tool_payload mcp__plugin_slack_slack__slack_send_message "Shipped. $LINK")"
-check deny "slack draft with the link" "$(tool_payload mcp__plugin_slack_slack__slack_send_message_draft "Shipped. $LINK")"
-check deny "scheduled slack message with the link" "$(tool_payload mcp__plugin_slack_slack__slack_schedule_message "Shipped. $LINK")"
-check allow "slack message without the link" "$(tool_payload mcp__plugin_slack_slack__slack_send_message "Shipped.")"
-check allow "slack read tool mentioning the link" "$(tool_payload mcp__plugin_slack_slack__slack_search_public "$LINK")"
+# Every Slack tool that sends a message, as each connector names it. The claude.ai connector spells
+# its server Slack with a capital S, and Claude Code matches a hook matcher case sensitively
+# (measured 2026-10-29, claude-config#1905), so a pattern wanting a lowercase "slack" in the server
+# name never saw a claude.ai send. Both the gate below and the settings check at the end read this
+# one list, so a send tool added here is held to both.
+SLACK_SEND_TOOLS=(
+  mcp__plugin_slack_slack__slack_send_message
+  mcp__plugin_slack_slack__slack_send_message_draft
+  mcp__plugin_slack_slack__slack_schedule_message
+  mcp__claude_ai_Slack__slack_send_message
+  mcp__claude_ai_Slack__slack_send_message_draft
+  mcp__claude_ai_Slack__slack_schedule_message
+)
+# Slack tools that only read, which the gate and the settings leave alone.
+SLACK_READ_TOOLS=(
+  mcp__plugin_slack_slack__slack_search_public
+  mcp__claude_ai_Slack__slack_search_public
+  mcp__claude_ai_Slack__slack_read_channel
+)
+for tool in "${SLACK_SEND_TOOLS[@]}"; do
+  check deny "$tool with the link" "$(tool_payload "$tool" "Shipped. $LINK")"
+  check allow "$tool without the link" "$(tool_payload "$tool" "Shipped.")"
+done
+for tool in "${SLACK_READ_TOOLS[@]}"; do
+  check allow "$tool mentioning the link" "$(tool_payload "$tool" "$LINK")"
+done
 
 # --- The refusal says what to do ---
 out="$(bash_payload "gh pr comment 5 --body \"Agreed. $LINK\"" | bash "$HOOK" 2>/dev/null)"
@@ -243,23 +264,39 @@ err="$(printf 'gh not json' | bash "$HOOK" 2>&1 >/dev/null)"
 if [[ "$err" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a payload that is not JSON must say the gate did not run (got: ${err:-<nothing>})"; fi
 
-# --- Wired: the installed settings route Bash and the Slack send tools to the hook ---
+# --- Wired: the installed settings route Bash and every Slack send tool to the hook ---
+# The matcher is read the way Claude Code reads it, measured 2026-10-29 with a headless session
+# logging which matchers fired (claude-config#1905): a matcher holding any character beyond letters,
+# digits, _, -, spaces, commas and | is a regular expression tested ANYWHERE in the tool name
+# ("ea[d]" fired on Read), and case sensitively ("rea[d]" did not fire on Read, "Rea[d]" did; a
+# lowercase "slack" server pattern did not fire on mcp__claude_ai_Slack__slack_search_channels). A
+# plain matcher is an exact name, or a list of names split on | or commas.
 . "$DIR/lib/settings-file.sh"
 SETTINGS="$(hook_settings_file "$DIR/..")" || SETTINGS="$DIR/../no-settings-file-found"
-if python3 - "$SETTINGS" <<'PY'
+wired="$(python3 - "$SETTINGS" Bash "${SLACK_SEND_TOOLS[@]}" -- "${SLACK_READ_TOOLS[@]}" <<'PY'
 import json, re, sys
+args = sys.argv[2:]
+sep = args.index("--")
+routed, unrouted = args[:sep], args[sep + 1:]
 pre = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
-want = {"Bash": False, "mcp__plugin_slack_slack__slack_send_message": False,
-        "mcp__plugin_slack_slack__slack_send_message_draft": False,
-        "mcp__plugin_slack_slack__slack_schedule_message": False}
-for entry in pre:
-    if any(h.get("command", "").endswith("/no-session-link-in-comments.sh") for h in entry.get("hooks", [])):
-        for tool in want:
-            if re.fullmatch(entry.get("matcher", ""), tool):
-                want[tool] = True
-sys.exit(0 if all(want.values()) else 1)
+def fires(matcher, tool):
+    if matcher in ("", "*"):
+        return True
+    if re.fullmatch(r"[A-Za-z0-9_\- ,|]+", matcher):
+        return tool in [m.strip() for m in re.split(r"[|,]", matcher)]
+    return re.search(matcher, tool) is not None
+matchers = [entry.get("matcher", "") for entry in pre
+            if any(h.get("command", "").endswith("/no-session-link-in-comments.sh") for h in entry.get("hooks", []))]
+for tool in routed:
+    if not any(fires(m, tool) for m in matchers):
+        print("not routed to the hook: %s (matchers: %s)" % (tool, matchers))
+for tool in unrouted:
+    if any(fires(m, tool) for m in matchers):
+        print("a read tool routed to the hook: %s (matchers: %s)" % (tool, matchers))
 PY
-then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $SETTINGS must route Bash and the three Slack send tools to the hook"; fi
+)"
+if [ $? -eq 0 ] && [ -z "$wired" ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: $SETTINGS must route Bash and every Slack send tool to the hook, and no read tool: ${wired:-the check did not run}"; fi
 
 echo
 echo "passed: $pass, failed: $fail"
