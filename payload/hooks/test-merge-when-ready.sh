@@ -335,6 +335,15 @@ export MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh"
 export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh"
 export MWR_VERIFY_GATE="$STUBS/verify-gate.sh" MWR_CLOSING_GATE="$STUBS/closing-gate.sh"
 
+# --- git with no network and no Mac's own settings ------------------------------------------------
+# A conflicted update is now merged locally when only README.md's mods table rows conflict
+# (claude-config#1867), and that fetches from the checkout's origin. Every GitHub address is pointed
+# at a folder that does not exist, so a section that reaches it fails at once rather than going to
+# the network, and section 27 points acme/widget at a local bare repository of its own.
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL="$WORKDIR/gitconfig"
+printf '[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n[url "%s/offline/"]\n\tinsteadOf = https://github.com/\n' "$WORKDIR" > "$GIT_CONFIG_GLOBAL"
+
 # --- a checkout of acme/widget to run from ---------------------------------------------------------
 REPO="$(cd "$WORKDIR" && pwd -P)/widget"
 git init -q "$REPO"
@@ -2364,6 +2373,205 @@ hp="$(cat "$ST/helper-pid" 2>/dev/null)"
 check_eq "#1676 control: while the run is alive and waiting, its record is believed" "believed" "$(cat "$ST/verdict-alive" 2>/dev/null)"
 check_eq "#1676 a run killed outright leaves its record behind" "yes" "$( [ -n "$hp" ] && [ -e "$MWR_PHASE_DIR/$hp" ] && echo yes || echo no)"
 check_eq "#1676 which is not believed once its run has gone" "busy" "$( ( eval "$MP_LIBS" && mp_waiting "$hp" "$(cat "$ST/clock")" ) && echo waiting || echo busy)"
+
+# =================================================================================================
+# 27. A conflict confined to README.md's mods table rows is merged here (claude-config#1867). On
+#     2026-10-28 #1819, #1835 (twice), #1850 and #1852 each stopped on GitHub's refusal to update,
+#     because two pull requests had touched one mod's row, and each cost about an hour by hand. Now,
+#     when GitHub refuses, the helper merges the base into the branch in a throwaway clone of its
+#     own, and pushes that merge (never forced) only when README.md is the one file in conflict and
+#     every conflicted line is a row of its mods table that lib/readme-rows-merge.py resolves. Any
+#     other case stops exactly as before, naming the conflicted files, with the branch untouched,
+#     the session's checkout untouched and nothing left behind.
+#
+#     Each fixture is a real bare repository standing in for acme/widget (the checkout's origin is
+#     pointed at it through insteadOf), with main and feat/x each holding one edit of README.md.
+# =================================================================================================
+RR="$(cd "$WORKDIR" && pwd -P)/rr"; mkdir -p "$RR"
+RR_TMP="$RR/tmp"
+RR_PY="$RR/crash-bin"; mkdir -p "$RR_PY"
+printf '#!/usr/bin/env bash\necho "Traceback (most recent call last): simulated crash" >&2\nexit 1\n' > "$RR_PY/python3"; chmod +x "$RR_PY/python3"
+rr_readme(){ cat <<'EOF'
+# widget
+
+Shared prose that both sides may edit.
+
+## Mods
+
+| Mod | What it does | Issue |
+| --- | --- | --- |
+| `alpha` | Does the first thing. | #10 |
+| `beta` | Does the second thing. | #20 |
+| `gamma` | Does the third thing. | #30 |
+
+## After
+
+More prose.
+EOF
+}
+# rr_sub <file> <old line> <new line>: replace the line equal to <old line>.
+rr_sub(){ awk -v o="$2" -v n="$3" '{ if ($0 == o) print n; else print }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"; }
+A0='| `alpha` | Does the first thing. | #10 |'
+B0='| `beta` | Does the second thing. | #20 |'
+C0='| `gamma` | Does the third thing. | #30 |'
+# rr_fixture <name> <main's edit> <the branch's edit> [<an edit to the base>]: each edit is run in
+# the work tree.
+rr_fixture(){
+  RB="$RR/$1.git"; RW="$RR/$1-work"; RS="$RR/$1-session"; RR_CONF="$RR/$1.gitconfig"
+  git init -q --bare "$RB"
+  git init -q "$RW"
+  rr_readme > "$RW/README.md"; printf 'one\ntwo\n' > "$RW/other.txt"
+  [ -z "${4:-}" ] || (cd "$RW" && eval "$4")
+  git -C "$RW" add README.md other.txt; git -C "$RW" commit -qm base
+  git -C "$RW" branch -q feat/x
+  (cd "$RW" && eval "$2"); git -C "$RW" commit -qam "main's edit"
+  git -C "$RW" checkout -q feat/x
+  (cd "$RW" && eval "$3"); git -C "$RW" commit -qam "the branch's edit"
+  git -C "$RW" push -q "$RB" main feat/x
+  git clone -q "$RB" "$RS"
+  git -C "$RS" remote set-url origin https://github.com/acme/widget.git
+  printf '[include]\n\tpath = %s\n[url "%s"]\n\tinsteadOf = https://github.com/acme/widget.git\n' "$GIT_CONFIG_GLOBAL" "$RB" > "$RR_CONF"
+  RR_HEAD="$(git -C "$RB" rev-parse feat/x)"; RR_MAIN="$(git -C "$RB" rev-parse main)"
+  RR_SESSION="$(git -C "$RS" rev-parse HEAD)"
+  fresh "$RR_HEAD" 1 "$GREEN"
+  : > "$ST/update-fails"
+  # Once a merge is pushed, GitHub shows the pushed head, green and up to date.
+  local step="h=\$(git -C '$RB' rev-parse feat/x); [ \"\$h\" = \"\$(cat \"\$ST/head\")\" ] || { printf '%s' \"\$h\" > \"\$ST/head\"; printf 0 > \"\$ST/behind\"; printf '%s' '$GREEN' > \"\$ST/rollup\"; }"
+  printf '%s\n' "$step" "$step" "$step" "$step" > "$ST/on-sleep"
+  rm -rf "$RR_TMP"; mkdir -p "$RR_TMP"
+}
+rr_run(){ (cd "$RS" && TMPDIR="$RR_TMP" GIT_CONFIG_GLOBAL="$RR_CONF" CLAUDE_CODE_BRIDGE_SESSION_ID=session_rr1867 bash "$HELPER" "$@" 2>&1); }
+rr_tip(){ git -C "$RB" rev-parse feat/x; }
+rr_left(){ find "$RR_TMP" -mindepth 1 -maxdepth 1 -name 'mwr-readme*' | wc -l | tr -d ' '; }
+rr_session_same(){ [ "$(git -C "$RS" rev-parse HEAD)" = "$RR_SESSION" ] && [ -z "$(git -C "$RS" status --porcelain)" ] && echo same || echo changed; }
+rr_row(){ git -C "$RB" show "feat/x:README.md" | grep -F -- "| \`$1\` |"; }
+# The edits each case is built from.
+MAIN_ROWS="rr_sub README.md '$A0' '| \`alpha\` | Does the first thing. Main sentence. | #10 |'; rr_sub README.md '$C0' '| \`gamma\` | Does the third thing, from main. | #30 |'"
+BRANCH_ROWS="rr_sub README.md '$A0' '| \`alpha\` | Branch sentence. Does the first thing. | #10 |'; rr_sub README.md '$B0' '| \`beta\` | Does the second thing, from the branch. | #20 |'"
+
+# Both sides edited one mod's prose, and each edited a row the other left alone: resolved, pushed,
+# and then waited on and merged as after any update.
+rr_fixture prose "$MAIN_ROWS" "$BRANCH_ROWS"
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 a conflict confined to mods table rows is resolved and the pull request merges" "0" "$rc"
+check "#1867 saying it merged the base into the branch here" "merged main into it here" "$out"
+check_eq "#1867 the branch holds a new head" "moved" "$([ "$(rr_tip)" != "$RR_HEAD" ] && echo moved || echo same)"
+check_eq "#1867 a merge of the head it judged and the base, so nothing was rewritten" "$RR_HEAD $RR_MAIN" "$(git -C "$RB" log -1 --format=%P feat/x)"
+check_eq "#1867 both sentences are in the row both sides edited" '| `alpha` | Branch sentence. Does the first thing. Main sentence. | #10 |' "$(rr_row alpha)"
+check_eq "#1867 a row only the branch changed takes the branch's change" '| `beta` | Does the second thing, from the branch. | #20 |' "$(rr_row beta)"
+check_eq "#1867 a row only main changed takes main's change" '| `gamma` | Does the third thing, from main. | #30 |' "$(rr_row gamma)"
+check_eq "#1867 no conflict marker reaches the branch" "0" "$(git -C "$RB" show feat/x:README.md | grep -c -E '^(<{7}|>{7}|={7})')"
+rr_msg="$(git -C "$RB" log -1 --format=%B feat/x)"
+check "#1867 the merge commit says what it resolved" "README.md" "$rr_msg"
+check_eq "#1867 and ends with the session line" "Claude-Session: https://claude.ai/code/session_rr1867" "$(printf '%s\n' "$rr_msg" | sed '/^$/d' | tail -1)"
+check_eq "#1867 the merge is pinned to the pushed head" "1" "$(count gh-calls "pr merge 7 --repo acme/widget --squash --match-head-commit $(rr_tip)")"
+check_eq "#1867 the throwaway clone is removed" "0" "$(rr_left)"
+check_eq "#1867 the session's checkout is untouched" "same" "$(rr_session_same)"
+
+# Each side added a different issue number to one row: the union.
+rr_fixture union "rr_sub README.md '$A0' '| \`alpha\` | Does the first thing. | #10, #11 |'" "rr_sub README.md '$A0' '| \`alpha\` | Does the first thing. | #10, #12 |'"
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 two issue numbers added to one row resolve" "0" "$rc"
+check_eq "#1867 into the union of the issue list" '| `alpha` | Does the first thing. | #10, #11, #12 |' "$(rr_row alpha)"
+
+# The shape real rows have (L48): a pipe inside a code span in the description, and an Issue cell
+# that is not a tidy list. On 2026-10-29 the mod-kit row split into 7 pieces on every pipe and its
+# Issue cell began "#607 to #609, #605". Both sides add prose and an issue number: both are kept.
+RA0='| `alpha` | Reads `a | b` first. | #5 to #7, #3, #10 |'
+rr_fixture real "rr_sub README.md '$RA0' '| \`alpha\` | Reads \`a | b\` first. Main adds. | #5 to #7, #3, #10, #11 |'" "rr_sub README.md '$RA0' '| \`alpha\` | Branch adds. Reads \`a | b\` first. | #5 to #7, #3, #10, #12 |'" "rr_sub README.md '$A0' '$RA0'"
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 a row of the real shape resolves" "0" "$rc"
+check_eq "#1867 keeping the code span's pipe, both sentences and both issue numbers" '| `alpha` | Branch adds. Reads `a | b` first. Main adds. | #5 to #7, #3, #10, #11, #12 |' "$(rr_row alpha)"
+
+# A conflict in another file as well: stops as before, naming both, with nothing pushed.
+rr_fixture otherfile "$MAIN_ROWS; printf 'main\ntwo\n' > other.txt" "$BRANCH_ROWS; printf 'branch\ntwo\n' > other.txt"
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 a conflict in another file as well stops" "1" "$rc"
+check "#1867 for a person, as before" "resolve it by hand" "$out"
+check "#1867 naming the other file" "other.txt" "$out"
+check "#1867 and README.md" "README.md" "$out"
+check_eq "#1867 nothing was pushed" "$RR_HEAD" "$(rr_tip)"
+check_eq "#1867 nothing was merged" "0" "$(count gh-calls 'pr merge')"
+check_eq "#1867 the throwaway clone is removed after a stop" "0" "$(rr_left)"
+check_eq "#1867 the session's checkout is untouched after a stop" "same" "$(rr_session_same)"
+
+# A hunk in README.md outside the table: stops.
+rr_fixture prosehunk "$MAIN_ROWS; rr_sub README.md 'Shared prose that both sides may edit.' 'Prose main rewrote.'" "$BRANCH_ROWS; rr_sub README.md 'Shared prose that both sides may edit.' 'Prose the branch rewrote.'"
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 a README.md conflict outside the mods table stops" "1" "$rc"
+check "#1867 saying it is not only mods table rows" "not only rows of its mods table" "$out"
+check_eq "#1867 nothing was pushed for it" "$RR_HEAD" "$(rr_tip)"
+
+# Both sides changed the same words differently: the word merge still conflicts, so it stops.
+rr_fixture words "rr_sub README.md '$A0' '| \`alpha\` | Does the main thing. | #10 |'" "rr_sub README.md '$A0' '| \`alpha\` | Does the branch thing. | #10 |'"
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 a word merge that still conflicts stops" "1" "$rc"
+check "#1867 naming the row" "alpha" "$out"
+check_eq "#1867 nothing was pushed for a word conflict" "$RR_HEAD" "$(rr_tip)"
+
+# A row whose cell count one side changed: the structure check refuses it (L631).
+rr_fixture cells "rr_sub README.md '$A0' '| \`alpha\` | Does the first thing. | extra | #10 |'" "rr_sub README.md '$A0' '| \`alpha\` | Does the very first thing. | #10 |'"
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 a row whose cells changed in number stops" "1" "$rc"
+check_eq "#1867 nothing was pushed for it either" "$RR_HEAD" "$(rr_tip)"
+
+# The resolver crashing (exit 1, as any uncaught error does) is read as unread, never as handled.
+rr_fixture crash "$MAIN_ROWS" "$BRANCH_ROWS"
+out="$(PATH="$RR_PY:$PATH" rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 a resolver that crashes stops it" "1" "$rc"
+check "#1867 saying the resolver could not read it" "could not read the conflict" "$out"
+check_eq "#1867 nothing was pushed after a crash" "$RR_HEAD" "$(rr_tip)"
+check_eq "#1867 and the throwaway clone is removed after a crash" "0" "$(rr_left)"
+
+# GitHub refused, but the merge has no conflict here: GitHub's reason is something else, for a person.
+rr_fixture clean "rr_sub README.md '$C0' '| \`gamma\` | Does the third thing, from main. | #30 |'" "rr_sub README.md '$A0' '| \`alpha\` | Branch sentence. Does the first thing. | #10 |'"
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 a refusal with no conflict here stops" "1" "$rc"
+check "#1867 saying the merge had no conflict here" "no conflict" "$out"
+check_eq "#1867 and pushes nothing" "$RR_HEAD" "$(rr_tip)"
+
+# The branch moved past the head the helper judged: it resolves nothing it has not judged.
+rr_fixture moved "$MAIN_ROWS" "$BRANCH_ROWS"
+git -C "$RW" commit -q --allow-empty -m "a later push"; git -C "$RW" push -q "$RB" feat/x
+rr_moved="$(rr_tip)"
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 a branch that moved past the judged head stops" "1" "$rc"
+check "#1867 saying the branch moved" "not the head" "$out"
+check_eq "#1867 and leaves the branch where it was" "$rr_moved" "$(rr_tip)"
+
+# A fork's branch is not pushed to.
+rr_fixture fork "$MAIN_ROWS" "$BRANCH_ROWS"
+printf 'true' > "$ST/cross"; printf 'someone' > "$ST/fork-owner"
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 a fork's pull request stops as before" "1" "$rc"
+check "#1867 saying its branch is in a fork" "fork" "$out"
+check_eq "#1867 with its branch untouched" "$RR_HEAD" "$(rr_tip)"
+
+# An origin whose address carries a credential is not the repository's plain address, so it is
+# refused before any fetch, and git's errors, which repeat the address, are never printed.
+rr_fixture token "$MAIN_ROWS" "$BRANCH_ROWS"
+git -C "$RS" remote set-url origin https://x-access-token:s3cr3t-stand-in@github.com/acme/widget.git
+out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1867 an origin carrying a credential stops as before" "1" "$rc"
+check "#1867 saying the origin is not the repository" "origin is not acme/widget" "$out"
+check_not "#1867 and never printing the credential" "s3cr3t-stand-in" "$out"
+check_eq "#1867 nothing was pushed through it" "$RR_HEAD" "$(rr_tip)"
+
+# The resolver's own exit codes (L1033): 0 resolved, 10 not a case it handles, 2 could not read.
+RR_LIB="$DIR/lib/readme-rows-merge.py"
+rr_merge_in(){ # rr_merge_in <fixture>: the fixture's branch as first pushed, with main merged into it, conflicted
+  # Cloned from the work tree, whose feat/x is the branch before any merge the helper pushed.
+  local d="$RR/$1-direct"; git clone -q "$RR/$1-work" "$d"; git -C "$d" checkout -q feat/x
+  git -C "$d" merge -q origin/main >/dev/null 2>&1; printf '%s' "$d"
+}
+d="$(rr_merge_in union)"; python3 "$RR_LIB" "$d" >/dev/null 2>&1; rc=$?
+check_eq "#1867 the resolver exits 0 when it resolved" "0" "$rc"
+check_eq "#1867 and writes the resolved row" '| `alpha` | Does the first thing. | #10, #11, #12 |' "$(grep -F '| `alpha` |' "$d/README.md")"
+d="$(rr_merge_in words)"; before="$(cat "$d/README.md")"; python3 "$RR_LIB" "$d" >/dev/null 2>&1; rc=$?
+check_eq "#1867 the resolver exits 10 for a case it does not handle" "10" "$rc"
+check_eq "#1867 and writes nothing then" "$before" "$(cat "$d/README.md")"
+python3 "$RR_LIB" "$RR/union-session" >/dev/null 2>&1; rc=$?
+check_eq "#1867 the resolver exits 2 when README.md is not in conflict there" "2" "$rc"
 
 echo
 echo "passed: $pass, failed: $fail"
