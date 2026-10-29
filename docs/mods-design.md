@@ -2785,7 +2785,7 @@ direction is what follows.
   a className, style, literal, JSX, copy, an import, a prop on a plain HTML element (CSS can read
   it), two changes in one edit, a shell edit, a new file. Leaning that way on purpose: a hold costs
   Dan one answer, a pass is a look he never saw.
-- **A third answer.** The skip question offers Not a look change beside Skip them and Run
+- **A third answer.** The skip question offers Not a look change (named Not a look or wording change since #1911) beside Skip them and Run
   /design-rounds. It lets that one refused call through, recognised when it is sent again unchanged
   by a hash of its tool, its input, the folder it runs in and the session (so a shell command's
   relative path elsewhere, or the same edit in a later session, is asked about again), within an
@@ -2813,7 +2813,7 @@ direction is what follows.
   file. A file an inline script only mentions keeps its route segments and groups (`(shop)`) too;
   it was read as `/page.tsx`, at the top of the disk, and passed.
 - **The design rounds skill has an exit with nothing to render**: say so, build no switcher, and
-  ask the guard's own question about the refused edit, where Not a look change lets it through.
+  ask the guard's own question about the refused edit, where Not a look or wording change lets it through.
 
 ### What #1015 and #1057 changed, 2026-10-12
 
@@ -2995,7 +2995,7 @@ way", so the edit it never wanted stayed.
   other way", and, for a `.tsx` or `.jsx` file only, that undoing an earlier edit of one's own is
   judged by the lines it changes; a stylesheet's refusal does not claim it (lessons review).
 - Left as is: a stylesheet or other look file has no lines that draw nothing, so putting one back
-  still waits on a round. Dan's Not a look change lets one refused call through, so undoing an edit
+  still waits on a round. Dan's Not a look or wording change lets one refused call through, so undoing an edit
   he passed that way to a stylesheet is asked about again.
 
 ### What #1171 changed, 2026-10-13
@@ -3211,7 +3211,7 @@ guard now works out from the code which parts of a mod's `.ts` hook files feed w
 - **A shell write judged by what it leaves** (Dan, 2026-10-17: judge after, and undo). A shell write
   to a mod's `.ts` hook file that draws nothing yet runs, and the guard reads the file again once it
   ran (a `tool.call` hook around the `tool.check` judgement, and the subagent's own). One the command
-  made draw, on an issue Dan has not answered for and not his Not a look change for that call, is put
+  made draw, on an issue Dan has not answered for and not his Not a look or wording change for that call, is put
   back: what the command wrote is written to the session's scratchpad
   (`design-round-guard/<call id>-<file>`) and read back first; the file is put back only while it
   still holds exactly what the command wrote; a file the command made is taken away with `rm`. The
@@ -3312,7 +3312,7 @@ read no write from a script file's arguments.
   file that draws nothing runs and is read again after (#1296; since #1576 any mod hook file, `.ts`,
   `.tsx` or `.jsx`, one that already draws included, below), and the guard's own record is
   refused. The refusal says the guard cannot read what the script does with the file (rules.ts
-  `scriptUnread`); where the script only reads it, Dan's Not a look change lets that one call through.
+  `scriptUnread`); where the script only reads it, Dan's Not a look or wording change lets that one call through.
 - **The settled page went through by a cp, until #1593.** As #1586 shipped, a page under
   `docs/design` handed to a script was never seal checked, since there is no text to check before it
   runs, so make-settled.py run straight into `docs/design` was held on an issue with no answer. The
@@ -3402,8 +3402,8 @@ before saving, the overnight LESSONS.md check, the collision guard, the design r
 - **What it costs.** A test runner handed a test file (`npx vitest run x.test.ts`, the commonest
   form) is now, to the collision guard, a possible edit of that file, as a script handed one has been
   since #1592; to the design round guard a test passes. A read only tool handed a screen file (`npx
-  eslint app/page.tsx` without `--fix`) is held on an issue with no answer, and Dan's Not a look
-  change lets it through. No list of tools that only read was added: such a list exempts whatever it
+  eslint app/page.tsx` without `--fix`) is held on an issue with no answer, and Dan's Not a look or
+  wording change lets it through. No list of tools that only read was added: such a list exempts whatever it
   misses (L96), and an exemption is Dan's to sign off.
 - **Still unread.** A file a run writes that no argument names (a path in a script's own text), what
   is under a folder a run is handed (`npx codemod app/`, judged as the folder alone, which is no look
@@ -3421,7 +3421,7 @@ deleted).
   being asked; changed, it stands while the design rounds skill's own check says it is still a
   settled design exactly as make-settled.py sealed it (register.ts `sealed`, the one call of
   `sealCheck` the before and after readings share). Otherwise, on an issue Dan has not answered for
-  and not his Not a look change for that call, it is put back as it was, what the script wrote kept
+  and not his Not a look or wording change for that call, it is put back as it was, what the script wrote kept
   in the session's scratchpad first, a page the script made taken away, one it took away written
   back, and the call waits on him with the check's reason; the outcome is said as the page no longer
   being sealed, never as a mod's drawing (rules.ts `shellOutcome`'s `record`). A seal check that

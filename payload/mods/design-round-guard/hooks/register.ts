@@ -1624,7 +1624,7 @@ export const register: Register = on => {
         // (lessons review of #991).
         if (chosen === SKIP_NO) return say(r, `Dan answered ${SKIP_NO}: start /design-rounds now, and ask its closing question with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}"}. Nothing that changes the look is edited on ${s} until he answers ${SETTLED_YES} to it. ${ROUND_FILES}`)
         if (chosen === NOT_LOOK) {
-          // His word that this one call changes nothing on screen, kept with why (#1010): the same
+          // His word that this one call changes neither the look nor any wording, kept with why (#1010, #1911): the same
           // call sent again goes through, and nothing is recorded for the issue.
           try {
             const pass: DesignRoundPass = { kind: 'not-look', at: await $.clock.now(), tool: waiting.tool, files: waiting.files, subjects: open.map(x => x.label), why: notLookWhy(waiting.files), onScreen, call: waiting.call }
