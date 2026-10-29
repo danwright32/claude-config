@@ -118,6 +118,46 @@ awk -v a="${_slow_s:-0}" -v b="${_quick_s:-0}" 'BEGIN { exit !(a > b) }' \
   && check "the durations are measured, not printed from the config" ok \
   || check "the durations are measured, not printed from the config" "slow=$_slow_s quick=$_quick_s"
 
+# A known duration is reported as that duration (#1870). Each start and end was taken with a python3
+# start and a gate's end was noticed by a 0.2 second poll, so the tool printed tenths of a second
+# while measuring to about 0.2 seconds: a 7 ms gate read 0.1 and a 125 ms gate read 0.4, measured
+# 2026-10-28, as was everything below. A stub that
+# sleeps 50 ms must read within 20 ms of what it really costs, which is its 50 ms plus starting bash
+# and sleep. That start is not a constant: at load average 100 the stub cost 75 ms, so a test against
+# a bare 50 ms failed a correct tool on a busy machine (L290). So the stub is also timed directly,
+# in the same process that starts it, between the tool's readings, and the tool must agree with that
+# reference to within 20 ms, and read no less than the 50 ms the stub sleeps. The least of three of
+# each is judged, because a busy machine can only make a reading LONGER (L656). The old tool read
+# 0.3 0.3 0.3 here.
+ACC_HOME="$TMPROOT/acc-home"; mkdir -p "$ACC_HOME/hooks"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nsleep 0.05\nexit 0\n' > "$ACC_HOME/hooks/fifty-ms.sh"; chmod +x "$ACC_HOME/hooks/fifty-ms.sh"
+cat > "$ACC_HOME/settings.json" <<'JSON'
+{ "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
+  { "type": "command", "command": "__CLAUDE_HOME__/hooks/fifty-ms.sh", "timeout": 10 }
+] } ] } }
+JSON
+acc=""; ref=""
+for _i in 1 2 3; do
+  acc="$acc $(GATE_TIMING_HOME="$ACC_HOME" bash "$T" --repo "$TMPROOT" 2>&1 | awk '/fifty-ms[.]sh/ { print $1 }')"
+  ref="$ref $(python3 -c '
+import subprocess, sys, time
+t = time.monotonic()
+subprocess.run(["bash", sys.argv[1]], input=b"{}", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+print("%.3f" % (time.monotonic() - t))' "$ACC_HOME/hooks/fifty-ms.sh")"
+done
+awk -v r="$acc" -v f="$ref" '
+  function least(s,   a, n, i, m) { n = split(s, a, " "); if (n < 3) return -1; m = a[1] + 0; for (i = 2; i <= n; i++) if (a[i] + 0 < m) m = a[i] + 0; return m }
+  BEGIN { t = least(r); g = least(f); if (t < 0 || g < 0) exit 1; d = t - g; if (d < 0) d = -d; exit !(d <= 0.020 && t >= 0.050) }' \
+  && check "#1870 a gate that sleeps 50 ms is measured to within 20 ms of a direct timing of it" ok \
+  || check "#1870 a gate that sleeps 50 ms is measured to within 20 ms of a direct timing of it" "the tool read, in seconds:$acc; timed directly:$ref"
+
+# A gate whose runner left no reading (here, a --repo that does not exist, so no gate starts) is
+# named as unmeasured and the tool exits non zero, never a row of zeros that reads as free (L98).
+nores="$(GATE_TIMING_HOME="$ACC_HOME" bash "$T" --repo "$TMPROOT/no-such-checkout" 2>&1)"; rcn=$?
+[ "$rcn" -ne 0 ] && case "$nores" in *"fifty-ms.sh (NOT MEASURED"*) true ;; *) false ;; esac \
+  && check "#1870 a gate with no reading is named as unmeasured, and the tool fails" ok \
+  || check "#1870 a gate with no reading is named as unmeasured, and the tool fails" "rc=$rcn out=$nores"
+
 # --list names the gates a push waits on, with what each declares, and runs none of them: the one
 # reading of the settings both the timing and the README's count come from (claude-config#1066).
 mk marks.sh 'touch "$(dirname "$0")/../ran"'
@@ -160,6 +200,47 @@ print(w[0].upper() + w[1:])' "$n")"
 want="$word PreToolUse hooks fire on a \`git push\` here, declaring timeouts of $lo to $hi seconds"
 if grep -qF "$want" "$REPO_ROOT/README.md"; then check "the README counts the hooks a push waits on" ok
 else check "the README counts the hooks a push waits on" "wanted the README to say: $want. It says: $(grep -o '[A-Z][a-z-]* PreToolUse hooks fire on a .git push. here, declaring timeouts of [0-9]* to [0-9]* seconds' "$REPO_ROOT/README.md")"; fi
+
+# And the README's table of what each gate costs, checked against the same list both ways
+# (claude-config#1870). The count above was right while the table under it had no row for
+# no-verify-gate.sh or no-session-link-in-comments.sh, because nothing compared the table's rows
+# with the settings, so a gate added beside the table went unnoticed (L96). Every gate a push
+# waits on must have a row, and every row must name a gate a push waits on, so a row left behind
+# by a removed gate fails too.
+table_diff="$(printf '%s\n' "$real" | python3 -c '
+import re, sys
+readme = open(sys.argv[1]).read()
+gates = [l.split("\t", 1)[1] for l in sys.stdin.read().splitlines() if "\t" in l]
+m = re.search(r"^### What a push actually waits on\n(.*?)(?=^### )", readme, re.S | re.M)
+if not m:
+    print("the README has no \"What a push actually waits on\" section"); sys.exit(0)
+rows, in_table = [], False
+for line in m.group(1).splitlines():
+    if line.startswith("| Gate |"):
+        in_table = True; continue
+    if in_table:
+        if not line.startswith("|"):
+            break
+        if line.startswith("| ---"):
+            continue
+        cell = line.split("|")[1]
+        name = re.search(r"`([^`]+[.]sh)`", cell)
+        rows.append(name.group(1) if name else "(a row naming no gate: %s)" % cell.strip())
+if not rows:
+    print("the section has no table headed \"| Gate |\""); sys.exit(0)
+out = []
+missing = [g for g in gates if g not in rows]
+extra = [r for r in rows if r not in gates]
+twice = sorted({r for r in rows if rows.count(r) > 1})
+if missing: out.append("no row for: " + ", ".join(missing))
+if extra: out.append("a row for what no push waits on: " + ", ".join(extra))
+if twice: out.append("more than one row for: " + ", ".join(twice))
+print("; ".join(out) if out else "TABLE-OK")' "$REPO_ROOT/README.md" 2>&1)"
+# Passes only on the reader's own word that it compared and found nothing: a reader that crashed, or
+# a python3 that could not start, prints no difference either, and must not read as agreement (L98).
+[ "$table_diff" = "TABLE-OK" ] && [ -n "$real" ] \
+  && check "#1870 the README's cost table has one row for each gate a push waits on, and no other" ok \
+  || check "#1870 the README's cost table has one row for each gate a push waits on, and no other" "$table_diff"
 
 # --json was parsed and documented while nothing read it, so asking for JSON printed the table and
 # exited 0, an answer in the wrong shape that reads as the right one (claude-config#1122). Nothing

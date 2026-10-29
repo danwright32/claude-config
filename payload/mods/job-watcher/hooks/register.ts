@@ -1345,7 +1345,9 @@ const stdinDeviceRefusal = async ($: EngineInterface, agent: string, command: st
   try {
     const r = await $.process.run(['python3', `${home}/.claude/hooks/lib/agent-overrides.py`, 'stdin-device-refusal', agent], { stdin: command, timeoutMs: 10_000 })
     if (r.exitCode === 0 && r.stdout.trim()) return { kind: 'refusal', text: r.stdout.trim() }
-    if (r.exitCode === 1 && !r.stdout.trim()) return { kind: 'none' }
+    // 10 is the reader's "no read of the device path"; 1 is what Python exits on a crash, so it is
+    // unread like every other code (claude-config#1869, L1033).
+    if (r.exitCode === 10 && !r.stdout.trim()) return { kind: 'none' }
     return { kind: 'unread', why: `it exited ${r.exitCode}: ${(r.stderr.trim().split('\n').pop() ?? '').slice(0, 160)}` }
   } catch (err) {
     return { kind: 'unread', why: `it could not run: ${errorText(err, MOD).slice(0, 160)}` }
