@@ -13,6 +13,11 @@ the commands cannot come to disagree about what a skip is (L263, L370).
         exit 0 printing what agent <agent> is told for such a command, 1 printing nothing when there
         is none. The one wording, said by no-verify-gate.sh before the call and by the job watcher
         mod at Claude Code's permission prompt, which comes first (claude-config#1765).
+    agent-overrides.py rewrite-refusal <agent>    stdin: one command line
+        exit 0 printing what agent <agent> is told for a git command that rewrites a commit already
+        made (commit --amend, push --force, -f, --force-with-lease, a +refspec), 10 printing nothing
+        when there is none, never 1, which is what Python exits on a crash. Said by
+        amend-force-push-gate.sh (claude-config#1856).
     agent-overrides.py runs-script <name>    stdin: one command line
         exit 0 when a command in it runs the script <name> (by name or path, directly or through a
         shell), 1 when none does.
@@ -270,6 +275,127 @@ def stdin_device_refusal(agent, found):
             % (agent, "\n  ".join(found)))
 
 
+# The one sentence a dispatched builder is told about rewriting a commit it already made: in the global
+# CLAUDE.md's worktree agent rule, and in amend-force-push-gate.sh's refusal (claude-config#1856).
+REWRITE_RULE = "Never amend a commit or force push: add a new commit and push normally."
+# git push's options that take the next word as their value, so that word is not a refspec or a flag.
+PUSH_LONG_VALUED = {"--repo", "--receive-pack", "--exec", "--push-option"}
+PUSH_SHORT_VALUED = set("o")
+
+
+def _commit_amends(after):
+    """Whether a git commit's words (after the subcommand) amend: --amend, or a prefix git reads as it
+    (--am is the shortest, since no other commit option starts so), unless a later --no-amend turns
+    it off. The value of a valued option (-m "--amend") is not an option."""
+    on = False
+    i = 0
+    while i < len(after):
+        w = after[i]
+        if w == "--":
+            break
+        if len(w) >= 4 and "--amend".startswith(w):
+            on = True
+        elif w == "--no-amend":
+            on = False
+        elif w.startswith("--"):
+            if "=" not in w and w in COMMIT_LONG_VALUED:
+                i += 1
+        elif w.startswith("-") and len(w) > 1:
+            letters = w[1:]
+            for k, ch in enumerate(letters):
+                if ch in COMMIT_SHORT_VALUED:
+                    if k == len(letters) - 1:
+                        i += 1
+                    break
+        i += 1
+    return on
+
+
+# The long options that force a push. The same list, and the same reading of a prefix, as the
+# scope-modes mod's overnight refusal (mods/scope-modes/hooks/overnight.ts FORCES and spells), so the
+# two cannot come to disagree about what a force push is (L263).
+PUSH_FORCES = ("--force", "--force-with-lease", "--force-if-includes", "--mirror")
+
+
+def _spells_force(name):
+    """Whether a long option's name could be read by git as one of PUSH_FORCES: git takes any
+    unambiguous prefix of a long option (`--forc`), so the whole name or a prefix of four characters
+    or more counts, failing closed where git would call it ambiguous."""
+    return any(o == name or (len(name) >= 4 and o.startswith(name)) for o in PUSH_FORCES)
+
+
+def _push_forces(after):
+    """What forces a git push's words (after the subcommand): --force, -f (alone or clustered),
+    --force-with-lease (with or without a value), --force-if-includes, --mirror, a prefix git would
+    read as one of them, or a refspec with a + leading either side. The last of a force and its
+    --no- form wins, as in git."""
+    why = []
+    forced = {}
+    i = 0
+    opts_done = False
+    while i < len(after):
+        w = after[i]
+        if not opts_done and w == "--":
+            opts_done = True
+        elif not opts_done and w.startswith("--"):
+            name = w.split("=", 1)[0]
+            if name.startswith("--no-") and _spells_force("--" + name[5:]):
+                forced.pop("--" + name[5:], None)
+                if name == "--no-force":
+                    forced.pop("-f", None)
+            elif _spells_force(name):
+                forced[name] = w
+            elif "=" not in w and name in PUSH_LONG_VALUED:
+                i += 1
+        elif not opts_done and w.startswith("-") and len(w) > 1:
+            letters = w[1:]
+            for k, ch in enumerate(letters):
+                if ch == "f":
+                    forced["-f"] = "-f"
+                if ch in PUSH_SHORT_VALUED:
+                    if k == len(letters) - 1:
+                        i += 1
+                    break
+        elif any(side.startswith("+") for side in w.split(":")):
+            why.append("refspec " + w)
+        i += 1
+    return list(forced.values()) + why
+
+
+def rewrites(s, depth=0):
+    """Every git command s runs that rewrites a commit already made: `git commit --amend`, and a
+    `git push` forced by --force, -f, --force-with-lease or a +refspec, as short descriptions, behind
+    rtk, env, a cd, an if or a `bash -c` string alike, and inside a rebase's --exec. Words that only
+    mention one (a commit message, an echo, a grep) are not one (claude-config#1856)."""
+    found = []
+    for text, _pairs, words in _commands(s):
+        reading = sw.git_read(words)
+        if reading is None:
+            continue
+        sub, _front, after = reading
+        first = text.strip().split("\n")[0]
+        if sub == "commit" and _commit_amends(after):
+            found.append("git commit with --amend: %s" % first)
+        elif sub == "push":
+            why = _push_forces(after)
+            if why:
+                found.append("git push with %s: %s" % (", ".join(dict.fromkeys(why)), first))
+        if depth < 3:
+            for inner in _exec_values(sub, after):
+                found.extend(rewrites(inner, depth + 1))
+    return found
+
+
+def rewrite_refusal(agent, found):
+    """What an agent whose git command amends or force pushes is told, after the gate's own
+    `REFUSED (<who>): `. It ends on REWRITE_RULE, the sentence the global CLAUDE.md says."""
+    return ("agent %s ran a git command that rewrites a commit already made:\n  %s\n"
+            "A dispatched builder that amended after a push review finding pushed its commit without the "
+            "fix, and force pushes were refused by the auto mode classifier the same night "
+            "(claude-config#1856). %s"
+            % (agent, "\n  ".join(found), REWRITE_RULE))
+
+
 def runs_script(s, name):
     for _text, _pairs, words in _commands(s):
         if not words:
@@ -509,6 +635,13 @@ def main(argv):
             return 1
         print(stdin_device_refusal(argv[2], found))
         return 0
+    if mode == "rewrite-refusal" and len(argv) > 2 and argv[2]:
+        found = rewrites(data)
+        if not found:
+            # Not 1: Python exits 1 on an uncaught exception, and a crash must never read as clean.
+            return 10
+        print(rewrite_refusal(argv[2], found))
+        return 0
     if mode == "runs-script" and len(argv) > 2:
         return 0 if runs_script(data, argv[2]) else 1
     if mode == "check-report" and len(argv) > 2:
@@ -520,7 +653,7 @@ def main(argv):
         for line in lines:
             print(line)
         return 0 if lines else 1
-    sys.stderr.write("usage: agent-overrides.py skips | stdin-device | stdin-device-refusal <agent> | runs-script <name> | check-report <transcript>  (input on stdin)\n")
+    sys.stderr.write("usage: agent-overrides.py skips | stdin-device | stdin-device-refusal <agent> | rewrite-refusal <agent> | runs-script <name> | check-report <transcript>  (input on stdin)\n")
     return 64
 
 

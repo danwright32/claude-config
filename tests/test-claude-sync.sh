@@ -17055,8 +17055,37 @@ esac
 _cpu_burn(){   # a fixed amount of work, done in a CHILD, costing about a second of processor time
   bash -c 'i=0; while [ "$i" -lt 500000 ]; do i=$((i + 1)); done'
 }
-_cpu_burn
-suite_cpu_read; _cpu_after="$SUITE_CPU_SECONDS"
+# ONE burn is not enough to compare against, and load is not why (claude-config#1858). The reader
+# cuts each of the four `times` fields to whole seconds, so a burn moves the total only when it
+# carries a field past a second boundary. A burn cost 1.9s of processor time on this Mac and less
+# on a faster runner, and a burn of 0.75s left the total unchanged on 4 of 10 tries here at no load
+# (both measured 2026-10-28). CI run 40629263718 read 274 before and after at a load average of
+# 2.72 on 4 cores. So the child keeps doing work until the figure rises, and the ceiling is a count
+# of burns, not a clock: no machine is slow enough to need more, and a reader that never rises
+# fails after them instead of hanging (L290, L524). It takes the reader as an argument so the
+# control below can hand it one that never moves.
+_cpu_rise_tries=8
+_cpu_wait_rise(){   # $1 the work, $2 the reader; true once the figure passes _cpu_before
+  local _cw_n=0
+  while [ "$_cw_n" -lt "$_cpu_rise_tries" ]; do
+    "$1"; "$2"; _cpu_after="$SUITE_CPU_SECONDS"
+    case "$_cpu_after" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$_cpu_after" -gt "$_cpu_before" ] && return 0
+    _cw_n=$((_cw_n + 1))
+  done
+  return 1
+}
+# The control: with a reader stuck at the starting figure the wait has to GIVE UP and report it,
+# or a counter that never rises would pass the check below by the wait never ending (L1, L98).
+_cpu_read_stuck(){ SUITE_CPU_SECONDS="$_cpu_before"; }
+case "$_cpu_before" in
+  ''|*[!0-9]*) check "#149 the wait gives up on a counter that never rises" "false" ;;
+  *) check "#149 the wait gives up on a counter that never rises" \
+       "! _cpu_wait_rise : _cpu_read_stuck" ;;
+esac
+_cpu_after=""
+case "$_cpu_before" in ''|*[!0-9]*) ;; *) _cpu_wait_rise _cpu_burn suite_cpu_read ;; esac
+dbg "#149 processor time read $_cpu_before before the work and $_cpu_after after it"
 case "$_cpu_before$_cpu_after" in
   ''|*[!0-9]*) check "#149 and it rises when a child does real work" "false" ;;
   *) check "#149 and it rises when a child does real work" \
