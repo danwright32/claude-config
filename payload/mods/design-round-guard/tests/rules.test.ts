@@ -20,6 +20,8 @@ import {
   isModHook,
   isModHookTs,
   drawsChange,
+  modHookTsShows,
+  messageWordingSame,
   modHookLogicOnly,
   modHookDrawingUntouched,
   onScreenProblem,
@@ -923,6 +925,151 @@ test('#1823: an edit naming the card that changes what is drawn is still held', 
   held(msEdit("const TOOL = 'steps'", "const TOOL = 'steps'\nconst card = <Box>"))
   // A mod file beside it that cannot be read holds every edit.
   expect(modHookDrawingUntouched([...MS_FILES, { name: 'place.ts', text: "const x = 'open" }], 'register.tsx', MS_TSX, msEdit(MS_IMPORTS_OLD, MS_IMPORTS_NEW))).toBe(false)
+})
+
+// #1841: a mod's .ts hook file was judged only by what it draws (drawsChange), so the wording of a
+// toast, a refusal's reason or a tool's result there passed unasked. Dan, 2026-10-27, for #1823:
+// "Timing wording can go through, but message wording should be asked about". Cut down from
+// mods/secret-guard and mods/job-watcher's register.ts as they stood on 2026-10-28.
+const SECRET_TS = [
+  "import type { EngineInterface, Register } from 'claude-code'",
+  "const GUARD = 'Secret guard'",
+  'const KEEP_SPEC = {',
+  "  name: 'keep_job',",
+  "  description: 'Keep a background job running on purpose, with the reason it must stay up.',",
+  '  inputSchema: {',
+  "    type: 'object',",
+  '    properties: {',
+  "      task_id: { type: 'string', description: 'The background job id the Bash call reported.' },",
+  "      reason: { type: 'string', description: 'Why it must keep running.' },",
+  '    },',
+  '  },',
+  '}',
+  'const refuse = async ($: EngineInterface, what: string, toolUseId: string) => {',
+  '  if (what.length > 3) {',
+  "    await $.ui.toast('Blocked a command that would print a secret.')",
+  '    return { deny: `Blocked: this would print ${what}.` }',
+  '  }',
+  '  return undefined',
+  '}',
+  'export const register: Register = on => {',
+  "  on('tool.call', { tool: 'keep_job' }, async () => ({ result: 'Kept the job running.' }))",
+  '}',
+  '',
+].join('\n')
+test("#1841: the wording of a toast, a refusal or a tool's result in a mod's .ts hook file is asked about, though it draws nothing", () => {
+  const edit = (from: string, to: string) => {
+    const after = SECRET_TS.replace(from, to)
+    if (after === SECRET_TS) throw new Error(`no ${from}`)
+    return after
+  }
+  const judged = (from: string, to: string) => modHookTsShows([], 'register.ts', SECRET_TS, edit(from, to))
+  // drawsChange, all a .ts hook file was judged by, lets the toast's new words through.
+  expect(drawsChange([], 'register.ts', SECRET_TS, edit('Blocked a command that', 'Stopped a command that'))).toBe(false)
+  // A toast's words, a refusal's reason, and a tool's result, each held for its wording.
+  expect(judged('Blocked a command that', 'Stopped a command that')).toBe(true)
+  expect(judged('Blocked: this would print', 'Stopped: this would show')).toBe(true)
+  expect(judged('Kept the job running.', 'The job stays up.')).toBe(true)
+  // When the toast is shown, and what decides it, pass.
+  expect(judged('what.length > 3', 'what.length > 5')).toBe(false)
+  // A tool's description and its schema's, read only by Claude, pass: a schema property named
+  // reason among them, which is no refusal's reason.
+  expect(judged('Keep a background job running on purpose', 'Keep a background job up on purpose')).toBe(false)
+  expect(judged('Why it must keep running.', 'Why it has to keep running.')).toBe(false)
+  expect(judged('The background job id', 'The id of the background job')).toBe(false)
+  // What it draws is still held, and a change to nothing at all is none.
+  expect(modHookTsShows([], 'row.ts', undefined, "export const row = (t: string) => [{ text: t, color: 'warning' }]\n")).toBe(true)
+  expect(modHookTsShows([], 'register.ts', SECRET_TS, SECRET_TS)).toBe(false)
+  // A file made with a message says new words, and one taken away takes them; one with none passes.
+  expect(modHookTsShows([], 'register.ts', undefined, SECRET_TS)).toBe(true)
+  expect(modHookTsShows([], 'register.ts', SECRET_TS, undefined)).toBe(true)
+  expect(modHookTsShows([], 'new.ts', undefined, 'export const twice = (n: number) => n * 2\n')).toBe(false)
+  // A mod file beside it that cannot be read holds every edit.
+  expect(modHookTsShows([{ name: 'place.ts', text: "const x = 'open" }], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe(true)
+})
+
+// #1841, Dan, 2026-10-28 ("Narrow it first"): only the words a person reads count. Replayed, about 50
+// of the edits the wider reading held changed only a string a message's value is computed from: a
+// regular expression (keystroke guard's `open -a` pattern, 2026-10-26), a `typeof` tag, a command's
+// words and flags, a separator. Shaped after mods/keystroke-guard's keys.ts and register.ts.
+const FRONT_TS = [
+  "import type { EngineInterface } from 'claude-code'",
+  'const run = async ($: EngineInterface, argv: string[]) => $.process.run(argv, { timeoutMs: 5_000 })',
+  'const appOf = (cmd: string): string | undefined => {',
+  String.raw`  const open = /\bopen\s+(?:-\w+\s+)*-a\s+(\S+)/.exec(cmd)`,
+  '  return open ? open[1] : undefined',
+  '}',
+  'export const refuse = async ($: EngineInterface, cmd: string, kind: string, extra: unknown) => {',
+  '  const app = appOf(cmd)',
+  '  if (!app) return undefined',
+  "  const front = (await run($, ['osascript', '-e', 'name of first process'])).stdout.split(' then ')[0]",
+  "  const mode: 'input' | 'focus' = kind === 'focus' ? 'focus' : 'input'",
+  "  const what = `${typeof extra === 'object' ? 'its window' : 'it'}${mode === 'input' ? ' to type into' : ''}`",
+  "  const names = [app, front].join(' and ')",
+  "  await $.ui.toast(`Blocked bringing ${names}${what ? ', ' : ''}${what} to the front, for ${mode}.`)",
+  "  const flag = cmd.split(' ').find(w => ['-g', '--background'].some(f => w.startsWith(f)))",
+  '  return { deny: `Blocked: ${app} would be brought to the front${flag ? ` (${flag})` : ""}.` }',
+  '}',
+  '',
+].join('\n')
+test('#1841: a string a message is only computed from passes; the words of the message are still held', () => {
+  const judged = (from: string, to: string) => {
+    const after = FRONT_TS.replace(from, to)
+    if (after === FRONT_TS) throw new Error(`no ${from}`)
+    return modHookTsShows([], 'register.ts', FRONT_TS, after)
+  }
+  // A regular expression, a typeof tag, a value compared, a type's union, a command's words and
+  // flags, what a string is split by, and a separator with no letter in it.
+  expect(judged(String.raw`(\S+)/.exec`, String.raw`([^\s;&|]+)/.exec`)).toBe(false)
+  expect(judged("typeof extra === 'object'", "typeof extra === 'string'")).toBe(false)
+  expect(judged("mode === 'input'", "mode === 'focus'")).toBe(false)
+  expect(judged("mode: 'input' | 'focus'", "mode: 'input' | 'focus' | 'keys'")).toBe(false)
+  expect(judged("'-e', 'name of first process'", "'-ss', 'name of front process'")).toBe(false)
+  expect(judged(".split(' then ')", ".split(' and then ')")).toBe(false)
+  expect(judged("['-g', '--background']", "['-g', '-j', '--background']")).toBe(false)
+  expect(judged("what ? ', ' : ''", "what ? '; ' : ''")).toBe(false)
+  // The words: the toast's, a word it is joined with, what it says of the window, and the refusal's.
+  expect(judged('Blocked bringing', 'Stopped bringing')).toBe(true)
+  expect(judged(".join(' and ')", ".join(' or ')")).toBe(true)
+  expect(judged("'its window'", "'the window'")).toBe(true)
+  expect(judged('would be brought to the front${', 'would come forward${')).toBe(true)
+})
+
+// #1841: a .tsx or .jsx hook file's messages are still read whole, as #1823 read them, since read
+// only for its words one edit #1823 holds would pass: manual steps' press handler rewritten on
+// 2026-10-16, whose only changed strings were the button names it compares.
+test('#1841: a compared name a message is computed from passes in a .ts hook file and is still held in a .tsx one', () => {
+  const text = [
+    "import type { EngineInterface } from 'claude-code'",
+    'export const press = async ($: EngineInterface, element: string) => {',
+    "  const field = element === 'steps:copy' ? 'value' : 'url'",
+    '  await $.ui.toast(`Copied the ${field}.`)',
+    '}',
+    '',
+  ].join('\n')
+  const after = text.replace("'steps:copy'", "'manual-steps:copy'")
+  expect(messageWordingSame([], 'register.tsx', text, after)).toBe(false)
+  expect(messageWordingSame([], 'register.ts', text, after, true)).toBe(true)
+  expect(modHookTsShows([], 'register.ts', text, after)).toBe(false)
+  // Its words are held either way.
+  expect(modHookTsShows([], 'register.ts', text, text.replace('Copied the', 'Copied your'))).toBe(true)
+})
+
+// #1841 (lessons review at 74900c0): a message's words given to a variable with = or added with +=
+// are no value compared, so they are still held.
+test('#1841: words assigned or appended before they are said are still held', () => {
+  const text = [
+    "import type { EngineInterface } from 'claude-code'",
+    'export const warn = async ($: EngineInterface, n: number) => {',
+    "  let msg = 'Blocked a command'",
+    "  if (n > 1) msg += ' that would print a secret'",
+    '  await $.ui.toast(`${msg}.`)',
+    '}',
+    '',
+  ].join('\n')
+  expect(modHookTsShows([], 'register.ts', text, text.replace("'Blocked a command'", "'Stopped a command'"))).toBe(true)
+  expect(modHookTsShows([], 'register.ts', text, text.replace("' that would print a secret'", "' that would show a secret'"))).toBe(true)
+  expect(modHookTsShows([], 'register.ts', text, text.replace('n > 1', 'n > 3'))).toBe(false)
 })
 
 // #1158: a git checkout or restore puts back every edit since its source at once, each of which was

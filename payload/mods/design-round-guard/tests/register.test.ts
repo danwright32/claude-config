@@ -1737,6 +1737,32 @@ test("#1275: a shell write making a line builder file draw differently is undone
   expect(w.ran.length).toBe(4)
 })
 
+// #1841: a mod's .ts hook file was judged only by what it draws, so a toast reworded there passed
+// unasked. Dan, 2026-10-27, for #1823: "Timing wording can go through, but message wording should be
+// asked about". Shaped after mods/secret-guard's register.ts, which draws nothing.
+const GUARD_HOOK = `${DEMO}/guard.ts`
+const GUARD_TEXT = `import type { EngineInterface } from 'claude-code'
+export const KEEP_SPEC = { name: 'keep_job', description: 'Keep a background job running on purpose.' }
+export const refuse = async ($: EngineInterface, what: string) => {
+  if (what.length > 3) await $.ui.toast('Blocked a command that would print a secret.')
+}
+`
+test("#1841: a toast reworded in a mod's .ts hook file is asked about, by an Edit or a shell write; a logic change there and a tool description pass", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: GUARD_HOOK, old_string: from, new_string: to })
+  expect(refusalOf(await call($, edit('Blocked a command that', 'Stopped a command that')))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('what.length > 3', 'what.length > 5')))).toBe('')
+  expect(refusalOf(await call($, edit('running on purpose.', 'up on purpose.')))).toBe('')
+  expect(w.ran.length).toBe(2)
+  // What sed leaves is read once it ran, by the same rule: the new words are undone and asked about.
+  const now = w.files[GUARD_HOOK] as string
+  w.ctl.shell = { [GUARD_HOOK]: now.replace('Blocked a command that', 'Stopped a command that') }
+  const why = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Blocked a command/Stopped a command/' payload/mods/demo/hooks/guard.ts" }))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('was undone')
+  expect(w.files[GUARD_HOOK]).toBe(now)
+})
+
 // #1341: a python heredoc that only reflowed a comment in this guard's own register.ts was refused as a
 // look change. A change to comments alone draws nothing, by any tool the guard can read before it runs.
 test('#1341: an edit to comments alone in a mod hook file passes unasked by Edit, MultiEdit or Write; beside a look change, or in what only looks like a comment, it is asked', withKit, async ($, on) => {
