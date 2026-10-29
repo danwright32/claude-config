@@ -826,10 +826,16 @@ if [ -z "$failed" ] && [ -z "$unmeasured" ] && [ -n "$_sc_key" ] && [ -n "$_sc_p
   fi
 fi
 
-# Every run with a verdict has now been read, so its folder goes: a pass lives on in the record
-# above, the one place a pass is remembered (L83), and a failure is never remembered, so the next
-# push runs it afresh. Only runs still going are left, for the push after this one. Taken under the
-# slot's lock, so a push deciding about the same scanner at this moment never sees half a folder.
+# Every run with a verdict has now been read, so its folder goes, and the record above is the one
+# place a pass is remembered (L83). A failure is never remembered, so the next push runs it afresh.
+# A pass from a push in which another scanner failed or measured nothing is NOT remembered either,
+# by the rule above that a blocked push lets no sibling be skipped (#1146), and that holds for a pass
+# made in the background too: its folder goes with the rest and the next push runs it again, even
+# when that is the slow one. Keeping the folder would be a second record of passes that the rule
+# above does not govern. A failure usually means the tree changes before the next push anyway, which
+# would stop the run being counted whatever was kept. Only runs still going are left, for the push
+# after this one. Taken under the slot's lock, so a push deciding about the same scanner at this
+# moment never sees half a folder.
 if [ -n "$_sc_detach" ]; then
   _sc_i=1
   while [ "$_sc_i" -le "$_sc_n" ]; do

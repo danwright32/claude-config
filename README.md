@@ -1788,7 +1788,9 @@ running, how long it has run, how long its last run took, and its output file. T
 same tree and uncommitted files counts its verdict without running it again, waiting up to the
 budget if it is still going, and never starts a second copy. A push of anything else from the same
 checkout stops it and starts again; another checkout's runs are left alone. Push again once they
-finish: a push still goes through only once every scanner has passed on exactly what it carries.
+finish: a push still goes through only once every scanner has passed on exactly what it carries. As
+with any pass, one read by a push in which another scanner failed or measured nothing is not
+remembered, so the push after it runs that scanner again.
 
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).

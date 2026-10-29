@@ -966,6 +966,22 @@ o1881f3="$(budgetfire "$R1881f" "git push")"; c1881f3=$?
   && check "#1881 and the push after that runs it afresh, since a failure is never remembered" ok \
   || check "#1881 and the push after that runs it afresh, since a failure is never remembered" "exit=$c1881f3 sigma runs=$(held_runs sigma) out=$o1881f3"
 
+# A pass made in the background and read by a push in which ANOTHER scanner failed is not
+# remembered, by the gate's standing rule that a blocked push lets no sibling be skipped (#1146),
+# so the push after that runs it again. Pinned here so that rule is a decision, not a side effect.
+R1881s="$(mkrepo bgsibling)"; HOLD1881s="$TMPROOT/hold-1881s"; : > "$HOLD1881s"
+add_scanner "$R1881s" gamma 1; add_held_scanner "$R1881s" rho "$HOLD1881s" 0; commit_all "$R1881s"
+budgetfire "$R1881s" "git push" >/dev/null
+note_held rho
+rm -f "$HOLD1881s"
+held_gone rho || check "#1881 the sibling case's held scanner finished once released" "it is still running"
+o1881s2="$(budgetfire "$R1881s" "git push")"; c1881s2=$?
+_rho_after_read="$(held_runs rho)"
+o1881s3="$(budgetfire "$R1881s" "git push")"; c1881s3=$?
+[ "$c1881s2" -eq 2 ] && [ "$c1881s3" -eq 2 ] && [ "$_rho_after_read" = "1" ] && [ "$(held_runs rho)" = "2" ] \
+  && check "#1881 a background pass read beside a failing scanner is not remembered, so the next push runs it again" ok \
+  || check "#1881 a background pass read beside a failing scanner is not remembered, so the next push runs it again" "exits=$c1881s2,$c1881s3 rho runs=$_rho_after_read then $(held_runs rho)"
+
 # A run left in the background for a tree the checkout has since moved past is stopped, and a new
 # one started for the tree now being pushed: its verdict would be about files this push does not
 # carry.
