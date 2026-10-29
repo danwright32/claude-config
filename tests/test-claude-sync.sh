@@ -18468,7 +18468,8 @@ check "#1863 the record holds both, each naming its session" \
   "grep -q 'session=$H63_A .*session A builds a skill' '$H63_HOLD' && grep -q 'session=$H63_B .*session B commits a fix' '$H63_HOLD'"
 # The longest hold is written FIRST, so a claude-sync or hook from before this change, which reads
 # only the first line, still sees the Mac held for as long as any hold lasts.
-check "#1863 and its first line is the hold that lasts longest" "awk 'NR==1' '$H63_HOLD' | grep -q 'session A builds a skill'"
+check "#1863 and its first line is the hold that lasts longest" \
+  "case \"\$(awk 'NR==1' '$H63_HOLD')\" in *'session A builds a skill'*) true ;; *) false ;; esac"
 out_63s="$(h63_b bash "$SCRIPT" status 2>&1 || true)"
 check "#1863 status lists A's hold" "line_has \"\$out_63s\" 'watcher hold' 'session A builds a skill' 'release --other aaaaaaaa'"
 check "#1863 and B's, which B lifts with a plain release" "line_has \"\$out_63s\" 'watcher hold' 'session B commits a fix' 'this session'"
