@@ -40,9 +40,10 @@ mkdir -p "$R/sub" "$R/nested"
 git -C "$R" init -q
 git -C "$R" config user.email t@t; git -C "$R" config user.name t
 printf 'ignored.sh\n' > "$R/.gitignore"
-for f in committed.sh sub/committed-deep.sh gone.sh committed.md; do printf 'x\n' > "$R/$f"; done
+for f in committed.sh sub/committed-deep.sh gone.sh committed.md edited.sh; do printf 'x\n' > "$R/$f"; done
 git -C "$R" add -A >/dev/null 2>&1; git -C "$R" -c commit.gpgsign=false commit -q -m seed >/dev/null 2>&1
 rm -f "$R/gone.sh"                                   # tracked, deleted from the tree
+printf 'y\n' > "$R/edited.sh"                        # tracked, edited and not committed
 printf 'x\n' > "$R/staged.sh"; git -C "$R" add staged.sh
 printf 'x\n' > "$R/untracked.sh"
 printf 'x\n' > "$R/sub/untracked-deep.sh"
@@ -57,7 +58,7 @@ $2
 $1
 "*) return 0 ;; esac; return 1; }
 [ "$rc" -eq 0 ] && check "it lists a repository's files" ok || check "it lists a repository's files" "rc=$rc out=$all"
-for want in committed.sh sub/committed-deep.sh committed.md staged.sh untracked.sh sub/untracked-deep.sh; do
+for want in committed.sh sub/committed-deep.sh committed.md edited.sh staged.sh untracked.sh sub/untracked-deep.sh; do
   has "$want" "$all" && check "it lists $want" ok || check "it lists $want" "got: $all"
 done
 for not in gone.sh ignored.sh nested/inner.sh nested/ nested; do
@@ -76,6 +77,27 @@ unc="$(bash "$RF" --uncommitted "$R" 2>&1)"
 [ "$(printf '%s\n' "$unc" | sort | tr '\n' ' ')" = "staged.sh sub/untracked-deep.sh untracked.sh " ] \
   && check "--uncommitted lists exactly the staged and untracked files" ok \
   || check "--uncommitted lists exactly the staged and untracked files" "got: $unc"
+
+# Every path whose contents on disk may differ from the commit, which is what a key over what the
+# scanners read is built from (claude-config#1910). The scanners read a tracked file from disk, so
+# one edited and not committed changes what they read as much as a new file does, and so does one
+# deleted, which they no longer read. Ignored files and a nested checkout are not read, so not listed.
+chg="$(bash "$RF" --changed "$R" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$chg" | sort | tr '\n' ' ')" = "edited.sh gone.sh staged.sh sub/untracked-deep.sh untracked.sh " ] \
+  && check "#1910 --changed lists exactly the edited, deleted, staged and untracked files" ok \
+  || check "#1910 --changed lists exactly the edited, deleted, staged and untracked files" "rc=$rc got: $chg"
+# A clean checkout has nothing that differs, which is an empty list and a success, never a refusal.
+C="$TMPROOT/clean"; mkdir -p "$C"; git -C "$C" init -q
+git -C "$C" config user.email t@t; git -C "$C" config user.name t
+printf 'x\n' > "$C/a.sh"; git -C "$C" add -A >/dev/null 2>&1; git -C "$C" -c commit.gpgsign=false commit -q -m seed >/dev/null 2>&1
+chg="$(bash "$RF" --changed "$C" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && [ -z "$chg" ] && check "#1910 --changed on a clean checkout is an empty list and a success" ok \
+  || check "#1910 --changed on a clean checkout is an empty list and a success" "rc=$rc got: $chg"
+# A checkout with no commit has nothing to differ FROM, so it is refused, never listed as clean (L98).
+N="$TMPROOT/nocommit"; mkdir -p "$N"; git -C "$N" init -q; printf 'x\n' > "$N/a.sh"
+out="$(bash "$RF" --changed "$N" 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && check "#1910 --changed with no commit to compare against is refused" ok \
+  || check "#1910 --changed with no commit to compare against is refused" "rc=$rc out=$out"
 
 # Not a repository is a refusal that says so, never an empty list that reads as a clean tree (L98).
 mkdir -p "$TMPROOT/plain"

@@ -386,12 +386,13 @@ o38="$(fire "$R38" "git push")"; c38=$?
 # The gate's OWN listing of the uncommitted files is the same kind of read: when it fails, the count
 # is unknown, never zero, and with the uncommitted files unread there is no key a pass can be
 # remembered on, or a later push would skip a scan over files nobody had read (#1146, L90). Run from
-# a copy of the gate whose repo-files.sh refuses the uncommitted listing and nothing else.
+# a copy of the gate whose repo-files.sh refuses the listings of what is not committed, the count's
+# and, since #1910, the key's, and nothing else.
 FAKEHOOKS="$TMPROOT/fakehooks"; mkdir -p "$FAKEHOOKS/lib"
 cp "$H" "$FAKEHOOKS/scanners-before-push.sh"; cp "$DIR/lib/push-scope.sh" "$FAKEHOOKS/lib/push-scope.sh"
 cat > "$FAKEHOOKS/lib/repo-files.sh" <<EOF
 #!/usr/bin/env bash
-[ "\$1" = --uncommitted ] && { echo "repo-files: git could not list the uncommitted files under \$2." >&2; exit 1; }
+case "\$1" in --uncommitted|--changed) echo "repo-files: git could not list the files under \$2 that are not committed." >&2; exit 1 ;; esac
 exec bash "$DIR/lib/repo-files.sh" "\$@"
 EOF
 R36="$(mkrepo uncommittedunread)"; add_scanner "$R36" alpha 0; commit_all "$R36"
@@ -1279,6 +1280,34 @@ treefire "$W1910" "git push" >/dev/null
   && check "#1910 a record left a day ago, and the old single record, are removed; a recent one is kept" ok \
   || check "#1910 a record left a day ago, and the old single record, are removed; a recent one is kept" "left: $(ls "$TREESTATE" "$TREESTATE/$(fx_key "$R1910")" 2>/dev/null | tr '\n' ' ')"
 
+# --- the key covers every file the scanners read, a TRACKED file edited and not committed included
+#     (claude-config#1910). It was the commit tree plus the staged and untracked files only, while
+#     the scanners read tracked files from disk, so a pass reached before such an edit let the next
+#     push skip scanning the edited file. Each step is judged by the runs the scanner records.
+R1910e="$(mkrepo trackededit)"; RAN1910e="$TMPROOT/trackededit-ran"
+add_counting_scanner "$R1910e" xi "$RAN1910e"; printf 'one\n' > "$R1910e/tracked.sh"; commit_all "$R1910e"
+treefire "$R1910e" "git push" >/dev/null
+treefire "$R1910e" "git push" >/dev/null
+_xi_control="$(counted "$RAN1910e")"
+printf 'two\n' > "$R1910e/tracked.sh"
+o1910e="$(treefire "$R1910e" "git push")"; c1910e=$?
+_xi_edited="$(counted "$RAN1910e")"
+treefire "$R1910e" "git push" >/dev/null
+_xi_again="$(counted "$RAN1910e")"
+[ "$_xi_control" = "1" ] && [ "$c1910e" -eq 0 ] && [ "$_xi_edited" = "2" ] && [ "$_xi_again" = "2" ] \
+  && check "#1910 a tracked file edited after a pass makes the next push scan again, and that pass is then kept" ok \
+  || check "#1910 a tracked file edited after a pass makes the next push scan again, and that pass is then kept" "xi runs: unchanged=$_xi_control edited=$_xi_edited again=$_xi_again exit=$c1910e out=$o1910e"
+# Put back as it was committed, it is exactly what passed first, so nothing runs; deleted, it is not,
+# since the scanners no longer read it.
+printf 'one\n' > "$R1910e/tracked.sh"
+treefire "$R1910e" "git push" >/dev/null
+_xi_back="$(counted "$RAN1910e")"
+rm -f "$R1910e/tracked.sh"
+treefire "$R1910e" "git push" >/dev/null
+[ "$_xi_back" = "2" ] && [ "$(counted "$RAN1910e")" = "3" ] \
+  && check "#1910 the key follows what is on disk: put back it skips, deleted it scans" ok \
+  || check "#1910 the key follows what is on disk: put back it skips, deleted it scans" "xi runs: put back=$_xi_back deleted=$(counted "$RAN1910e")"
+
 # --- when a run cannot be left running, a scanner still running at the budget is STOPPED, and the
 #     refusal says why, in words naming the cause (claude-config#1910, L11). With no key, left
 #     running, its verdict could never be matched to what a later push carries, so it would be load with no
@@ -1292,7 +1321,7 @@ nokey_hooks(){   # $1 = folder  $2 = listing (the uncommitted listing fails), lo
   if [ "$2" = listing ]; then
     cat > "$1/lib/repo-files.sh" <<EOF
 #!/usr/bin/env bash
-[ "\$1" = --uncommitted ] && { echo "repo-files: git could not list the uncommitted files under \$2." >&2; exit 1; }
+case "\$1" in --uncommitted|--changed) echo "repo-files: git could not list the files under \$2 that are not committed." >&2; exit 1 ;; esac
 exec bash "$DIR/lib/repo-files.sh" "\$@"
 EOF
   else
@@ -1317,7 +1346,7 @@ nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 =
   fi
   rm -f "$hold"
 }
-nokey_case listing listing 'repo-files.sh --uncommitted'
+nokey_case listing listing 'repo-files.sh --changed'
 nokey_case lock lock 'lib/pid-lock.sh'
 : > "$TMPROOT/nokey-notafolder"
 nokey_case state state "$TMPROOT/nokey-notafolder/state" "$TMPROOT/nokey-notafolder/state"

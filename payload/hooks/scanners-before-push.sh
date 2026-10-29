@@ -122,6 +122,12 @@ else
   _sc_uncommitted_list=""; _sc_uncommitted_unread=1
   uncommitted_n="an unknown number of"
 fi
+# Every path whose contents may differ from the commit, a tracked file edited and not committed
+# included, listed once for the key below (#1910). The count above is of new files only, which is
+# what the coverage line reports; the key needs every file the scanners read that the tree does not
+# already account for.
+_sc_changed_unread=""
+_sc_changed_list="$(bash "$REPO_FILES" --changed . 2>/dev/null)" || { _sc_changed_list=""; _sc_changed_unread=1; }
 scanners=""
 while IFS= read -r s; do
   [ -n "$s" ] || continue
@@ -277,10 +283,14 @@ _sc_n=0
 # the whole repository on every push even when nothing they read has changed, which is most pushes.
 #
 # THE KEY is what the scanners actually read: the commit tree (which holds every tracked file, the
-# scanners' own source included, so an edited scanner keys differently) plus a digest of the files
-# that are staged or untracked, which #522 taught them to read and which change without a commit.
-# Computing it is two git calls and a hash of a handful of files, far cheaper than the scan it
-# saves, which is the test that decides whether a cache like this is worth having at all (L431).
+# scanners' own source included, so an edited scanner keys differently) plus a digest of every path
+# whose contents on disk may differ from it: a tracked file edited, staged or deleted, a staged
+# addition, and an untracked file, which #522 taught the scanners to read. Until #1910 the digest
+# covered only the staged additions and untracked files, while the scanners read tracked files from
+# disk, so a pass reached before an edit to a tracked file let the next push skip scanning the
+# edited file. Computing it is a few git calls and a hash of a handful of files, far cheaper than
+# the scan it saves, which is the test that decides whether a cache like this is worth having at
+# all (L431).
 #
 # MEASURED on this Mac 2026-09-21: 14.0 seconds cold against 0.6 with every scanner skipped. The
 # saving lands on a REPEAT attempt, a push blocked by another gate and tried again, because a push
@@ -296,18 +306,20 @@ _sc_n=0
 _sc_state_dir="${SCANNERS_STATE_DIR:-$HOME/.claude/state/scanners-passed}"
 _sc_key=""
 _sc_tree="$(git rev-parse HEAD^{tree} 2>/dev/null || true)"
-# Read from the one listing made above. When that listing failed the uncommitted files are unknown,
+# Read from the one listing made above. When that listing failed the files that differ are unknown,
 # and a key without them would remember a pass that a later push with different drafts could skip
-# on, so there is no key at all: nothing is skipped and nothing remembered (#1146).
-if [ -n "$_sc_tree" ] && [ -z "$_sc_uncommitted_unread" ]; then
-  _sc_uncommitted_digest="$( { while IFS= read -r _u; do
+# on, so there is no key at all: nothing is skipped and nothing remembered (#1146). A deleted path
+# is hashed as absent, so a deletion changes the key as an edit does.
+if [ -n "$_sc_tree" ] && [ -z "$_sc_changed_unread" ]; then
+  _sc_changed_digest="$( { while IFS= read -r _u; do
         [ -n "$_u" ] || continue
-        printf '%s ' "$_u"; shasum -a 256 "$_u" 2>/dev/null | awk '{print $1}'
-      done <<UNCOMMITTED
-$_sc_uncommitted_list
-UNCOMMITTED
+        printf '%s ' "$_u"
+        if [ -f "$_u" ]; then shasum -a 256 "$_u" 2>/dev/null | awk '{print $1}'; else echo absent; fi
+      done <<CHANGED
+$_sc_changed_list
+CHANGED
       } | shasum -a 256 2>/dev/null | awk '{print $1}')"
-  _sc_key="$_sc_tree-${_sc_uncommitted_digest:-none}"
+  _sc_key="$_sc_tree-${_sc_changed_digest:-none}"
 fi
 _sc_repo_key="$(printf '%s' "$(git remote get-url origin 2>/dev/null || pwd -P)" | shasum -a 256 2>/dev/null | awk '{print $1}')"
 # THE RECORD IS ONE FILE PER TREE, MERGED INTO, NEVER WRITTEN OVER (claude-config#1910). It was one
@@ -394,13 +406,13 @@ start_one(){         # $1 = the suite path   $2 = a section, or empty
 # next push leaves the key equal and the verdict about a tree that existed only in between. A run
 # inside the budget has always had that window; a run in the background widens it.
 #
-# Without a key (the uncommitted files could not be listed) nothing can be matched later, so runs go
-# in this hook's own work folder and are stopped at the budget, as #1889 did.
+# Without a key (the files that differ from the commit could not be listed) nothing can be matched
+# later, so runs go in this hook's own work folder and are stopped at the budget, as #1889 did.
 #
 # WHY THAT CASE IS STOPPED RATHER THAN LEFT TO FINISH (claude-config#1910). A run left going is
 # worth something only because a later push can count its verdict, and it can count it only where
-# it knows the run read exactly what that push carries. Without the uncommitted files nothing says
-# what the run read, so its verdict could never be counted by any push: left running it would be
+# it knows the run read exactly what that push carries. Without that listing nothing says what the
+# run read, so its verdict could never be counted by any push: left running it would be
 # minutes of load with no reader (L46). It is stopped, and the refusal says why, and that a retry
 # cannot help a scanner slower than the budget until the cause is fixed, naming the command that
 # shows it, so the slow scanner is not refused on every retry with nobody told why (L11, L111). The
@@ -424,9 +436,9 @@ if [ -n "$_sc_key" ] && [ -n "$_sc_have_lock" ] && [ -d "$_sc_state_dir/runs/$_s
 elif [ -z "$_sc_tree" ]; then
   _sc_detach_why="this checkout has no commit, so there is no tree a result could be counted against"
 elif [ -z "$_sc_key" ]; then
-  _sc_detach_why="the uncommitted files could not be listed, so nothing says what a run read and no later push could count its result"
+  _sc_detach_why="the files that differ from the commit could not be listed, so nothing says what a run read and no later push could count its result"
   _sc_detach_fix="To see why the listing fails, run:
-    bash $REPO_FILES --uncommitted $_sc_checkout"
+    bash $REPO_FILES --changed $_sc_checkout"
 elif [ -z "$_sc_have_lock" ]; then
   _sc_detach_why="$HOOK_DIR/lib/pid-lock.sh could not be loaded, and without its lock two pushes could each start a copy"
   _sc_detach_fix="Reinstall the hooks with claude-sync pull."

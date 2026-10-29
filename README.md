@@ -1784,7 +1784,10 @@ Two things the timing showed that no timeout could:
   declared ceiling is for the case where it asks.
 
 A scanner that already passed on exactly this tree and these uncommitted files is not run again
-(#531). Measured on 2026-09-21: 14.0 seconds cold, 0.6 seconds when nothing it reads has changed.
+(#531). The key is the commit's tree plus a digest of every file that differs from it on disk: a
+tracked file edited, staged or deleted, a staged addition, and an untracked file (`repo-files.sh
+--changed`). Until #1910 it left out tracked files edited and not committed, which the scanners read
+from disk, so a pass reached before such an edit let the next push skip scanning the edited file. Measured on 2026-09-21: 14.0 seconds cold, 0.6 seconds when nothing it reads has changed.
 That saving lands on a REPEAT attempt, a push blocked by another gate and tried again, because a
 push that follows a fresh commit changes the tree and pays in full. Only a pass is remembered, so a
 failure is never skipped past, and the gate says when it scanned nothing rather than reporting zero
@@ -1820,9 +1823,9 @@ finish: a push still goes through only once every scanner has passed on exactly 
 with any pass, one read by a push in which another scanner failed or measured nothing is not
 remembered, so the push after it runs that scanner again.
 
-When the uncommitted files cannot be listed, a scanner still running at the budget is STOPPED, not
-left running (#1910). A run left going is worth something only because a later push can count its
-verdict, and without the uncommitted files nothing says what it read, so no push could ever count
+When the files that differ from the commit cannot be listed, a scanner still running at the budget
+is STOPPED, not left running (#1910). A run left going is worth something only because a later push
+can count its verdict, and without that listing nothing says what it read, so no push could ever count
 it. The refusal says so, says that a retry cannot help a scanner slower than the budget until the
 listing works, and gives the command that shows why it fails. The same is said, in its own words,
 when the lock library or the folder for runs is missing.
