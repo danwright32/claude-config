@@ -121,8 +121,13 @@ awk -v a="${_slow_s:-0}" -v b="${_quick_s:-0}" 'BEGIN { exit !(a > b) }' \
 # A known duration is reported as that duration (#1870). Each start and end was taken with a python3
 # start and a gate's end was noticed by a 0.2 second poll, so the tool printed tenths of a second
 # while measuring to about 0.2 seconds: a 7 ms gate read 0.1 and a 125 ms gate read 0.4. A stub that
-# sleeps 50 ms must read within 20 ms of that. The least of three readings is judged, because a
-# reading can only be made LONGER by a busy machine, never shorter (L290, L656).
+# sleeps 50 ms must read within 20 ms of what it really costs, which is its 50 ms plus starting bash
+# and sleep. That start is not a constant: at load average 100 the stub cost 75 ms, so a test against
+# a bare 50 ms failed a correct tool on a busy machine (L290). So the stub is also timed directly,
+# in the same process that starts it, between the tool's readings, and the tool must agree with that
+# reference to within 20 ms, and read no less than the 50 ms the stub sleeps. The least of three of
+# each is judged, because a busy machine can only make a reading LONGER (L656). The old tool read
+# 0.3 0.3 0.3 here.
 ACC_HOME="$TMPROOT/acc-home"; mkdir -p "$ACC_HOME/hooks"
 printf '#!/usr/bin/env bash\ncat >/dev/null\nsleep 0.05\nexit 0\n' > "$ACC_HOME/hooks/fifty-ms.sh"; chmod +x "$ACC_HOME/hooks/fifty-ms.sh"
 cat > "$ACC_HOME/settings.json" <<'JSON'
@@ -130,13 +135,20 @@ cat > "$ACC_HOME/settings.json" <<'JSON'
   { "type": "command", "command": "__CLAUDE_HOME__/hooks/fifty-ms.sh", "timeout": 10 }
 ] } ] } }
 JSON
-acc=""
+acc=""; ref=""
 for _i in 1 2 3; do
   acc="$acc $(GATE_TIMING_HOME="$ACC_HOME" bash "$T" --repo "$TMPROOT" 2>&1 | awk '/fifty-ms[.]sh/ { print $1 }')"
+  ref="$ref $(python3 -c '
+import subprocess, sys, time
+t = time.monotonic()
+subprocess.run(["bash", sys.argv[1]], input=b"{}", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+print("%.3f" % (time.monotonic() - t))' "$ACC_HOME/hooks/fifty-ms.sh")"
 done
-awk -v r="$acc" 'BEGIN { n = split(r, a, " "); if (n < 3) exit 1; m = a[1] + 0; for (i = 2; i <= n; i++) if (a[i] + 0 < m) m = a[i] + 0; d = m - 0.050; if (d < 0) d = -d; exit !(d <= 0.020) }' \
-  && check "#1870 a gate that sleeps 50 ms is measured to within 20 ms" ok \
-  || check "#1870 a gate that sleeps 50 ms is measured to within 20 ms" "three readings, in seconds:$acc"
+awk -v r="$acc" -v f="$ref" '
+  function least(s,   a, n, i, m) { n = split(s, a, " "); if (n < 3) return -1; m = a[1] + 0; for (i = 2; i <= n; i++) if (a[i] + 0 < m) m = a[i] + 0; return m }
+  BEGIN { t = least(r); g = least(f); if (t < 0 || g < 0) exit 1; d = t - g; if (d < 0) d = -d; exit !(d <= 0.020 && t >= 0.050) }' \
+  && check "#1870 a gate that sleeps 50 ms is measured to within 20 ms of a direct timing of it" ok \
+  || check "#1870 a gate that sleeps 50 ms is measured to within 20 ms of a direct timing of it" "the tool read, in seconds:$acc; timed directly:$ref"
 
 # A gate whose runner left no reading (here, a --repo that does not exist, so no gate starts) is
 # named as unmeasured and the tool exits non zero, never a row of zeros that reads as free (L98).
