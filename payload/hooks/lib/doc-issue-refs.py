@@ -48,6 +48,7 @@ phrase needs a space. The brief's named false positive, "#1041 added the links",
 claim and produces no row.
 """
 import re
+import io
 import sys
 
 # The marker that stands in for a reference once it has been recognised, so the patterns below
@@ -252,7 +253,7 @@ def main(argv):
     out = []
     if args and args[0] == "--stdin":
         name = args[1] if len(args) > 1 else "(stdin)"
-        out.extend(scan(name, sys.stdin.read(), explain))
+        out.extend(scan(name, io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read(), explain))
     else:
         for path in args:
             try:

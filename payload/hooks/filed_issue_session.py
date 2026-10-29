@@ -217,7 +217,7 @@ def evaluate(data, line, now, clock):
 
 def main():
     try:
-        data = json.loads(sys.stdin.read())
+        data = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     except Exception:
         return 0
     if not isinstance(data, dict):

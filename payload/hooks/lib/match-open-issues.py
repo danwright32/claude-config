@@ -29,6 +29,7 @@ import json
 import os
 import re
 import subprocess
+import io
 import sys
 
 TIMEOUT = float(os.environ.get("CLAUDE_ISSUE_MATCH_TIMEOUT") or 20)
@@ -58,7 +59,7 @@ def paths_main():
     """`--paths`: a JSON list of issues (number, title, body) on stdin, each issue's paths out as
     {"<number>": [paths]}. A list that cannot be read exits 2, never read as issues naming nothing."""
     try:
-        rows = json.loads(sys.stdin.read())
+        rows = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     except Exception as exc:
         sys.stderr.write("match-open-issues --paths: stdin is not JSON (%s)\n" % type(exc).__name__)
         return 2
@@ -197,7 +198,7 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--paths":
         return paths_main()
     project = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
-    text = sys.stdin.read()
+    text = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
     if "FINDING" not in text:
         sys.stdout.write(text)
         return 0

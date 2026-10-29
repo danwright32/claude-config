@@ -51,6 +51,7 @@ body GitHub holds, at merge, claude-config#1550).
 """
 import json
 import re
+import io
 import sys
 
 KEYWORD = r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
@@ -165,13 +166,13 @@ def findings(text, closing, slug):
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ""
     if mode == "text":
-        for key, reason in findings(sys.stdin.read(), None, None):
+        for key, reason in findings(io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read(), None, None):
             print("%s: %s" % (show(key, None), reason))
         return 0
     if mode == "pr" and len(argv) > 2:
         slug = argv[2]
         try:
-            view = json.loads(sys.stdin.read())
+            view = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
             refs = view["closingIssuesReferences"]
             closing = {(("%s/%s" % (r["repository"]["owner"]["login"], r["repository"]["name"])).lower(),
                         int(r["number"])) for r in refs}

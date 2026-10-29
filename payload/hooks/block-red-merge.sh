@@ -50,7 +50,13 @@ payload=$(cat)
 case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
 
 # shellcheck source=lib/merge-target.sh
-. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
+{ . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null && declare -F mt_runs_merge >/dev/null; } || {
+  # A library this gate cannot load is not a merge with nothing to check (claude-config#1900,
+  # L10). Past the words above this may be a merge, so it is refused, naming the file.
+  case "$payload" in *ALLOW_RED_MERGE=1*) exit 0 ;; esac
+  echo "Refusing to merge: block-red-merge.sh could not load $HOOK_DIR/lib/merge-target.sh, or lib/push-scope.sh beneath it, which reads whether this command merges a pull request and which one, so whether this pull request's checks are green could not be checked. A library this gate cannot load is not a merge with nothing to check. Reinstall the hooks with claude-sync pull. Deliberate override: ALLOW_RED_MERGE=1 <the same command>." >&2
+  exit 2
+}
 
 # What this gate REFUSES with when a tool it reads through is not installed. On stderr with exit 2
 # rather than through deny() below, because deny() builds its JSON with jq and jq is one of the

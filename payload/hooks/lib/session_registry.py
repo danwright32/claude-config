@@ -24,6 +24,7 @@ As a command:
 import json
 import os
 import re
+import io
 import sys
 
 DEAD_MS = 5 * 60_000  # the session registry's own rule for a session that has gone quiet
@@ -118,7 +119,7 @@ def main(argv):
         except ValueError:
             print("session_registry.py: NOW_MS must be a whole number of milliseconds, got %r" % argv[2], file=sys.stderr)
             return 2
-        sids = [l.strip() for l in sys.stdin if l.strip()]
+        sids = [l.strip() for l in io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read().splitlines() if l.strip()]
         out, why = ended(Registry(default_path(), now), argv[3], sids)
         if why:
             print("session_registry.py: %s" % why, file=sys.stderr)

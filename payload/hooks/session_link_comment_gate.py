@@ -174,7 +174,7 @@ def judge_bash(command, cwd):
 
 def main():
     try:
-        data = json.loads(sys.stdin.read())
+        data = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     except ValueError as e:
         # Exit non zero so the wrapper says the gate did not run, rather than passing unjudged.
         print("the hook payload is not JSON: %s" % e, file=sys.stderr)

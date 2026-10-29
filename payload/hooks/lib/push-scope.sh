@@ -69,7 +69,7 @@ ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
 import os, sys, json
 sep = os.environ.get("PS_SEP", "; ")
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     sys.exit(1)
 ti = d.get("tool_input") or {}
@@ -785,8 +785,8 @@ ps__read_adds() {   # $1 = command  $2 = scope | takes
   # as they are to ps_is_git_add. With that file missing, any segment naming git and add is one.
   # -B: loading shell-words.py as a module would otherwise leave a bytecode cache in the hooks' lib/.
   printf '%s' "$1" | PS_MODE="${2:-scope}" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
-import importlib.util, os, re, shlex, sys
-cmd = sys.stdin.read()
+import importlib.util, io, os, re, shlex, sys
+cmd = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
 mode = os.environ.get("PS_MODE", "scope")
 try:
     spec = importlib.util.spec_from_file_location("shell_words", os.environ["PS_SHELL_WORDS"])

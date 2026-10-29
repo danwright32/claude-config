@@ -372,6 +372,26 @@ case "$out" in
   *) check "control: and does not call itself a fixture" ok ;;
 esac
 
+echo "lesson entry check: a byte that is not UTF-8 does not make it go quiet (claude-config#1900)"
+
+# jq reads such a byte as U+FFFD, and python3 reading its stdin in text mode raised on it: the
+# written file came back empty and the hook exited 0, the same quiet as a lesson with nothing wrong.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- L2. an entry with the bold left off.\n' > "$HOME_FIX/LESSONS.md"
+out="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s","old_string":"a\xffb","new_string":"c"}}' "$HOME_FIX/LESSONS.md" \
+  | LC_ALL=en_US.UTF-8 CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
+says "an Edit whose payload holds a byte that is not UTF-8 still has its lesson checked" "$out" '"decision":"block"'
+says "and the refusal names the entry" "$out" "L2"
+# The same byte in the lesson itself reaches the refusal's text, which is encoded by python3 too.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- L2. an entry \xff with the bold left off.\n' > "$HOME_FIX/LESSONS.md"
+out="$(LC_ALL=en_US.UTF-8 run_hook Edit "$HOME_FIX/LESSONS.md")"
+says "a malformed entry holding a byte that is not UTF-8 is still refused" "$out" '"decision":"block"'
+sound
+# A payload no reader can parse is not one naming no file.
+out="$(printf 'not json, but it names %s/LESSONS.md' "$HOME_FIX" | CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
+says "a payload nothing can parse that names the lessons file says the check did not run" "$out" "LESSON CHECK DID NOT RUN"
+out="$(printf 'not json at all' | CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
+silent "and one naming nothing of the kind says nothing" "$out"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
