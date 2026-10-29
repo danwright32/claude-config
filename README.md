@@ -1774,11 +1774,21 @@ The gate stops itself at a budget of 150 seconds, inside the 180 its registratio
 Claude Code lets a tool call through when it kills a PreToolUse hook at its timeout (its hooks
 documentation says so, and a headless probe on Claude Code 2.1.312 confirmed it on 2026-10-28), and
 on that day the gate was killed at 180 seconds on three of three readings at a load average of about
-145, so those pushes would have gone out unscanned. Now the scanners still running at the budget
-are stopped and the push is refused, naming each one and the command that runs it directly. The
-scanners that finished and passed are remembered, so a retry runs only the rest. The registration
-also carries `onFailure: "block"`, so a gate killed despite its budget blocks the push rather than
-passing it.
+145, so those pushes would have gone out unscanned. Now the push is refused at the budget, naming
+each scanner still running. The scanners that finished and passed are remembered, so a retry does
+not run them again. The registration also carries `onFailure: "block"`, so a gate killed despite
+its budget blocks the push rather than passing it.
+
+A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
+#1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444
+on a busy Mac on 2026-10-29, so stopping it meant it could never finish and every push needing it was refused for
+ever. Every scanner runs in a process group of its own, with its output in a file under
+`~/.claude/state/scanners-passed/runs/`, never the hook's pipe. The refusal names each one still
+running, how long it has run, how long its last run took, and its output file. The next push of the
+same tree and uncommitted files counts its verdict without running it again, waiting up to the
+budget if it is still going, and never starts a second copy. A push of anything else from the same
+checkout stops it and starts again; another checkout's runs are left alone. Push again once they
+finish: a push still goes through only once every scanner has passed on exactly what it carries.
 
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).

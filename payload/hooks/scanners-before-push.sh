@@ -37,8 +37,9 @@
 # a scanner that ran and said, in a SUITE-UNMEASURED line, that it could not read what it judges,
 # or, in a SUITE-DEADLINE-UNMEASURED line, that it was stopped at its deadline on a machine busier
 # than its cores (#1333), which it calls a fault in its own run rather than a finding (#1146), and on
-# scanners that did not finish inside the gate's own time budget, which it stops and names rather
-# than being killed by Claude Code and letting the push through unscanned (#1881). Finding NO
+# scanners that did not finish inside the gate's own time budget, which it names rather than being
+# killed by Claude Code and letting the push through unscanned (#1881), and leaves running in the
+# background so the next push of the same tree counts their verdict (#1881 follow up). Finding NO
 # scanners is reported rather than passed silently, because reading nothing and reading everything
 # green look identical otherwise (L98).
 #
@@ -340,17 +341,201 @@ start_one(){         # $1 = the suite path   $2 = a section, or empty
 # run's share. The push is held whether the stop is judged UNMEASURED or FAIL; this decides only
 # which it is called. The sync suite also takes the share as its shard count, which a single
 # section run does not use: it runs filtered, in one process.
+#
+# A SCANNER STILL RUNNING AT THE BUDGET IS LEFT RUNNING, NEVER KILLED (follows claude-config#1881
+# and #1889). #1889 stopped it, and the whole repository suite, test-run-all-tests.sh, took about
+# 410 seconds in CI and 444 on this Mac under load on 2026-10-29, so it could never finish inside
+# the budget: every push that needed it was refused, and each retry started it again from nothing.
+# The same day one builder's push was refused three times that way. Before #1889 the same scanner was
+# killed at Claude Code's 180 seconds and the push went out unscanned, so it had never really run.
+#
+# So every scanner runs DETACHED from the start: in a session, and so a process group, of its own,
+# its input from /dev/null and its output to a file in the state folder, never this hook's pipe,
+# which a run still holding would keep the push waiting on (L235). The hook waits for it up to the
+# budget. If it is still going then, the hook refuses and leaves it running; the next push of the
+# SAME input counts its verdict, waiting for it up to the budget again if it is still going, and
+# never starts a second copy. The gate is no weaker for it: a push goes through only once every
+# scanner has passed on exactly the input being pushed.
+#
+# THE INPUT is the key above, the commit tree plus the digest of the uncommitted files, the same key
+# the record of passes uses, so a run's verdict counts exactly where a remembered pass would (L370).
+# A run is kept at <state>/runs/<repo>/<scanner>.<key>, where <scanner> is a digest of the suite and
+# its section. The checkout that started it is recorded beside it, because two checkouts of one
+# repository, worktrees, push different trees at once: a run is SUPERSEDED, stopped and removed,
+# only by a push from its OWN checkout with a different input, never by another checkout's, or two
+# sessions would stop each other's runs for ever. Runs do not pile up: one per scanner per checkout,
+# a finished one removed once its verdict is read, and anything older than the stale age below
+# stopped and removed whoever finds it.
+#
+# WHAT IT CANNOT SEE, said plainly: a file changed while a run reads it and changed BACK before the
+# next push leaves the key equal and the verdict about a tree that existed only in between. A run
+# inside the budget has always had that window; a run in the background widens it.
+#
+# Without a key (the uncommitted files could not be listed) nothing can be matched later, so runs go
+# in this hook's own work folder and are stopped at the budget, as #1889 did.
+_sc_checkout="$(pwd -P)"
+_sc_detach=""
+_sc_runs="$_sc_work/runs"
+if [ -n "$_sc_key" ] && mkdir -p "$_sc_state_dir/runs/$_sc_repo_key" 2>/dev/null; then
+  _sc_detach=1
+  _sc_runs="$_sc_state_dir/runs/$_sc_repo_key"
+fi
+mkdir -p "$_sc_runs" 2>/dev/null
+# Six hours: far past any scanner here (the slowest, test-run-all-tests.sh, about 7 minutes under
+# load), so a run older than this is one nobody is coming back for. A setting, not a measurement.
+_sc_run_stale="${SCANNERS_RUN_STALE_SECONDS:-21600}"
+case "$_sc_run_stale" in ''|*[!0-9]*|0) _sc_run_stale=21600 ;; esac
+# A poll delay that can be injected (L524), defined here because the slot lock below waits on it.
+_sc_sleep="${SCANNERS_SLEEP:-sleep}"
+
+# The run's own script: it runs the suite with its output in the run's folder, then records how long
+# it took and, last, its exit code, written whole by a rename so a reader never sees half of one.
+# The run's folder is its first argument, so the folder shows in the process listing, which is how a
+# recorded process id is told from a recycled one before anything is sent to it (L1011).
+_SC_RUN='rd=$1; s=$2; sec=$3; slots=$4; last=$5; t0=$(date +%s); if [ -n "$sec" ]; then HOOK_TESTS_SLOTS="$slots" SECTION_ONLY="$sec" bash "$s" > "$rd/out" 2>&1 < /dev/null; else HOOK_TESTS_SLOTS="$slots" bash "$s" > "$rd/out" 2>&1 < /dev/null; fi; rc=$?; printf "%s" $(( $(date +%s) - t0 )) > "$last.$$" && mv -f "$last.$$" "$last"; printf "%s" "$rc" > "$rd/rc.$$" && mv -f "$rd/rc.$$" "$rd/rc"'
+# Starts it in a session of its own and records its process id BEFORE returning, so a push that
+# looks at this run a moment later always finds the id. The fork's child is never a process group
+# leader, so setsid cannot refuse it. perl's setsid rather than the setsid command, which macOS does
+# not have: one route, run by the suite on both systems, rather than two each tested on only one.
+_SC_LAUNCHER='use POSIX (); my ($run, $rd, @rest) = @ARGV; my $pid = fork(); exit 127 unless defined $pid;
+if ($pid == 0) { POSIX::setsid(); open(STDIN, "<", "/dev/null"); open(STDOUT, ">", "/dev/null"); open(STDERR, ">", "/dev/null");
+  exec("bash", "-c", $run, "scanners-before-push-run", $rd, @rest); exit 127; }
+open(my $fh, ">", "$rd/pid.tmp") or exit 1; print $fh $pid; close $fh; rename("$rd/pid.tmp", "$rd/pid") or exit 1; exit 0;'
+
+_sc_rd(){   # $1 = run index -> the folder its run writes to
+  cat "$_sc_work/$1.dir" 2>/dev/null
+}
+_sc_slot(){   # $1 = run index -> the digest naming its suite and section
+  shasum -a 256 < "$_sc_work/$1.what" 2>/dev/null | awk '{print substr($1, 1, 20)}'
+}
+_sc_run_alive(){   # $1 = a run's folder -> 0 when the process it recorded is running and is that run
+  local p
+  p="$(cat "$1/pid" 2>/dev/null)"
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null || return 1
+  case "$(ps -ww -o command= -p "$p" 2>/dev/null)" in *" $1 "*|*" $1") return 0 ;; esac
+  return 1
+}
+_sc_run_stop(){   # $1 = a run's folder: stops its whole process group, once it is proved to be that run
+  local p
+  _sc_run_alive "$1" || return 0
+  p="$(cat "$1/pid" 2>/dev/null)"
+  kill -KILL -- "-$p" 2>/dev/null || kill -KILL "$p" 2>/dev/null
+  return 0
+}
+_sc_age(){   # $1 = a file -> its age in whole seconds, or nothing when it cannot be read
+  perl -e 'my @s = stat(shift) or exit 1; print time - $s[9]' "$1" 2>/dev/null
+}
+
+# ONE PUSH AT A TIME DECIDES ABOUT A SCANNER'S RUNS (assume it runs twice). Two pushes of one input
+# at once would each find no run and each start one. A folder is the lock, because making one is a
+# single step that only one caller can win; its holder's process id is written in it, so a lock
+# left by a push that died is taken over rather than waited on for ever. It is held only while the
+# runs are looked at and one is started, which is milliseconds, so the wait is short and bounded.
+_sc_lock(){   # $1 = the lock folder -> 0 once this push holds it
+  local n=0 holder age
+  while ! mkdir "$1" 2>/dev/null; do
+    n=$(( n + 1 ))
+    [ "$n" -le 50 ] || return 1
+    holder="$(cat "$1/pid" 2>/dev/null)"
+    age="$(_sc_age "$1")"
+    if { [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; } || { [ -z "$holder" ] && [ "${age:-0}" -gt 10 ]; }; then
+      rm -rf "$1" 2>/dev/null
+      continue
+    fi
+    "$_sc_sleep" 0.1
+  done
+  printf '%s' "$$" > "$1/pid" 2>/dev/null
+  return 0
+}
+
+# Starts the run for an index, in its folder, and waits on it. Called with the slot's lock held.
 _sc_launch(){        # $1 = run index   $2 = the runs in flight at once
-  local out="$_sc_work/$1" s sec
-  s="$(sed -n 1p "$out.what")"; sec="$(sed -n 2p "$out.what")"
-  rm -f "$out.rc"
-  if [ -n "$sec" ]; then
-    ( HOOK_TESTS_SLOTS="$2" SECTION_ONLY="$sec" bash "$s" > "$out.out" 2>&1; printf '%s' "$?" > "$out.rc" ) &
-  else
-    ( HOOK_TESTS_SLOTS="$2" bash "$s" > "$out.out" 2>&1; printf '%s' "$?" > "$out.rc" ) &
-  fi
+  local s sec rd
+  s="$(sed -n 1p "$_sc_work/$1.what")"; sec="$(sed -n 2p "$_sc_work/$1.what")"
+  rd="$(cat "$_sc_work/$1.dir")"
+  rm -rf "$rd"; mkdir -p "$rd" 2>/dev/null
+  cp "$_sc_work/$1.what" "$rd/what" 2>/dev/null
+  printf '%s' "$_sc_key" > "$rd/input"
+  printf '%s' "$_sc_checkout" > "$rd/checkout"
+  date +%s > "$rd/started"
+  perl -e "$_SC_LAUNCHER" "$_SC_RUN" "$rd" "$s" "$sec" "$2" "$(cat "$_sc_work/$1.last")" </dev/null >/dev/null 2>&1
+  _sc_watch "$1"
+}
+# Waits on a run, whether this push started it or an earlier one did: a small watcher, a child of
+# this hook, that ends when the run has written its exit code or is gone. The run itself is never a
+# child of this hook, so the watcher is what is waited on and, at the budget, what is stopped. Its
+# output is closed, so it holds nothing open either (L235). It looks five times a second.
+_sc_watch(){   # $1 = run index
+  local rd
+  rd="$(cat "$_sc_work/$1.dir")"
+  perl -e 'my ($p, $f) = @ARGV; while (! -e $f && $p =~ /^\d+$/ && kill(0, $p)) { select(undef, undef, undef, 0.2) } exit 0' \
+    "$(cat "$rd/pid" 2>/dev/null)" "$rd/rc" </dev/null >/dev/null 2>&1 &
   # Kept so the runs of this round, and only they, can be waited on and stopped (#1881).
   _sc_inflight="$_sc_inflight $!"
+  _sc_inflight_idx="$_sc_inflight_idx $1"
+}
+
+# A run that refused because another suite run held the machine wide lock never ran (#642), so its
+# exit code is no verdict and it is started again rather than counted.
+_sc_lock_refused(){   # $1 = run index -> 0 when that run refused because another run held the lock
+  local rd
+  rd="$(cat "$_sc_work/$1.dir" 2>/dev/null)"
+  [ "$(cat "$rd/rc" 2>/dev/null)" = "5" ] || return 1
+  grep -q '^test suite: another run is already going' "$rd/out" 2>/dev/null
+}
+
+# Decides, for one index, whether its scanner is started, waited on where an earlier push left it,
+# or already has a verdict for this input, and clears away its runs nobody will come back for.
+_sc_claim(){   # $1 = run index   $2 = the runs in flight at once
+  local slot rd other lock
+  slot="$(_sc_slot "$1")"
+  printf '%s' "$_sc_runs/$slot-last" > "$_sc_work/$1.last"
+  if [ -z "$_sc_detach" ]; then
+    printf '%s' "$_sc_runs/$1" > "$_sc_work/$1.dir"
+    _sc_launch "$1" "$2"
+    return 0
+  fi
+  rd="$_sc_runs/$slot.$_sc_key"
+  printf '%s' "$rd" > "$_sc_work/$1.dir"
+  lock="$_sc_runs/$slot-lock"
+  if ! _sc_lock "$lock"; then
+    # Another push is deciding about this very scanner right now. Nothing is started, so there is
+    # never a second copy, and the scanner is reported as not finished, which refuses this push.
+    : > "$_sc_work/$1.busy"
+    return 0
+  fi
+  for other in "$_sc_runs/$slot".*; do
+    [ -d "$other" ] || continue
+    [ "$other" = "$rd" ] && continue
+    if [ "$(cat "$other/checkout" 2>/dev/null)" = "$_sc_checkout" ] \
+       || [ "$(_sc_age "$other/started")" -gt "$_sc_run_stale" ] 2>/dev/null \
+       || { [ -f "$other/rc" ] && [ "$(_sc_age "$other/rc")" -gt "$_sc_run_stale" ] 2>/dev/null; }; then
+      _sc_run_stop "$other"
+      rm -rf "$other"
+    fi
+  done
+  if [ -f "$rd/rc" ] && ! _sc_lock_refused "$1"; then
+    # Finished, after the push that started it had gone: its verdict is read back below like any
+    # other run's, and it is not run again to find that out.
+    : > "$_sc_work/$1.bg"
+  elif [ ! -f "$rd/rc" ] && _sc_run_alive "$rd"; then
+    : > "$_sc_work/$1.bg"
+    _sc_watch "$1"
+  else
+    _sc_launch "$1" "$2"
+  fi
+  rm -rf "$lock"
+  return 0
+}
+# Starts an index again after it refused on the suite lock, under its slot's lock like any start.
+_sc_relaunch(){   # $1 = run index   $2 = the runs in flight at once
+  local lock
+  if [ -z "$_sc_detach" ]; then _sc_launch "$1" "$2"; return 0; fi
+  lock="$_sc_runs/$(_sc_slot "$1")-lock"
+  _sc_lock "$lock" || { : > "$_sc_work/$1.busy"; return 0; }
+  _sc_launch "$1" "$2"
+  rm -rf "$lock"
 }
 
 # THE GATE'S OWN BUDGET (claude-config#1881). On 2026-10-28 this gate was killed at its declared 180
@@ -361,19 +546,21 @@ _sc_launch(){        # $1 = run index   $2 = the runs in flight at once
 # let the guarded command run. So a push under load went out with nothing scanned, and nothing said
 # so. This is a security gate, so it must never pass a push it did not scan.
 #
-# So the gate stops ITSELF first, at a budget below the declared timeout, kills every scanner still
-# running, and refuses the push saying it ran out of time. 150 seconds by default, leaving 30 of
-# the declared 180 for stopping the scanners and writing the refusal on a machine that busy; the
-# suite fails if this default ever reaches the declared timeout. The registration also carries
+# So the gate stops ITSELF first, at a budget below the declared timeout, stops waiting, and refuses
+# the push saying its scanners have not finished. Those still running are left running in the
+# background (above, where runs are started) and counted by the next push of the same input. 150
+# seconds by default, leaving 30 of the declared 180 for writing the refusal on a machine that busy;
+# the suite fails if this default ever reaches the declared timeout. The registration also carries
 # onFailure "block", so a gate that overruns even its own budget is a blocked push, never a passed
 # one; that is the backstop, and this is the reason, which Claude Code discards from a killed hook.
 #
 # A scanner that FINISHED and passed inside the budget is remembered as usual, so a retry runs only
 # the ones that did not finish rather than starting again from nothing.
 #
-# The wait is a signal from a watchdog rather than a poll, so a push whose scanners finish in two
-# seconds waits two seconds, not until the next tick (L290). The watchdog is one perl process with
-# its output closed, so nothing it leaves can hold this hook's output open after it exits (L235).
+# The wait on the budget is a signal from a watchdog rather than a poll, so a push whose scanners
+# finish in two seconds waits about two seconds, not until the budget (L290); each run's own watcher
+# looks five times a second. The watchdog is one perl process with its output closed, so nothing it
+# leaves can hold this hook's output open after it exits (L235).
 _sc_budget_default=150
 _sc_budget="${SCANNERS_BUDGET_SECONDS:-$_sc_budget_default}"
 case "$_sc_budget" in
@@ -384,16 +571,18 @@ case "$_sc_budget" in
     _sc_budget="$_sc_budget_default" ;;
 esac
 _sc_inflight=""
+_sc_inflight_idx=""
 _sc_out_of_time=""
-_sc_stop_inflight(){   # stops every run of this round and everything it started
-  local p
-  for p in $_sc_inflight; do
-    # Stopped before its tree is walked, so it cannot start a replacement for what is killed under
-    # it, then killed itself, so its subshell never writes an exit code for a run it did not finish.
-    kill -STOP "$p" 2>/dev/null || continue
-    bash "$HOOK_DIR/lib/kill-tree.sh" "$p" 2>/dev/null
-    kill -9 "$p" 2>/dev/null
-  done
+_sc_stop_inflight(){   # at the budget: stops waiting on this round's runs
+  local p i
+  # Only the WATCHERS are stopped, with a kill that cannot be caught (#1889), and never with a walk
+  # of their children: the runs are not their children, and a run left going is the point.
+  for p in $_sc_inflight; do kill -9 "$p" 2>/dev/null; done
+  # Without a key a run's verdict could never be matched later, so it is stopped, its whole process
+  # group, as #1889 did.
+  if [ -z "$_sc_detach" ]; then
+    for i in $_sc_inflight_idx; do _sc_run_stop "$(cat "$_sc_work/$i.dir" 2>/dev/null)"; done
+  fi
 }
 _sc_wait_bounded(){    # waits for this round's runs, or stops them when the budget runs out
   local left watchdog
@@ -425,6 +614,7 @@ _sc_wait_bounded(){    # waits for this round's runs, or stops them when the bud
   fi
   wait $_sc_inflight 2>/dev/null
   _sc_inflight=""
+  _sc_inflight_idx=""
 }
 
 while IFS= read -r s; do
@@ -447,7 +637,7 @@ EOF
 
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
-  _sc_launch "$_sc_i" "$_sc_n"
+  _sc_claim "$_sc_i" "$_sc_n"
   _sc_i=$(( _sc_i + 1 ))
 done
 # Its standard error is closed because bash reports every run it reaps after a kill ("Killed: 9",
@@ -473,11 +663,6 @@ _sc_lock_wait="${SCANNERS_LOCK_WAIT_SECONDS:-90}"
 case "$_sc_lock_wait" in ''|*[!0-9]*) _sc_lock_wait=90 ;; esac
 _sc_lock_poll="${SCANNERS_LOCK_POLL_SECONDS:-5}"
 case "$_sc_lock_poll" in ''|*[!0-9]*|0) _sc_lock_poll=5 ;; esac
-_sc_sleep="${SCANNERS_SLEEP:-sleep}"
-_sc_lock_refused(){   # $1 = run index -> 0 when that run refused because another run held the lock
-  [ "$(cat "$_sc_work/$1.rc" 2>/dev/null)" = "5" ] || return 1
-  grep -q '^test suite: another run is already going' "$_sc_work/$1.out" 2>/dev/null
-}
 _sc_locked_list(){   # prints the indexes of runs that refused on the lock
   local i=1
   while [ "$i" -le "$_sc_n" ]; do
@@ -497,7 +682,7 @@ while [ -n "$_sc_locked" ] && [ "$_sc_tries_left" -gt 0 ] && [ -z "$_sc_out_of_t
   _sc_relaunch_n="$(printf '%s\n' "$_sc_locked" | grep -c . || true)"
   while IFS= read -r _sc_i; do
     [ -n "$_sc_i" ] || continue
-    _sc_launch "$_sc_i" "$_sc_relaunch_n"
+    _sc_relaunch "$_sc_i" "$_sc_relaunch_n"
   done <<LOCKED
 $_sc_locked
 LOCKED
@@ -514,7 +699,7 @@ if [ -n "$_sc_locked" ]; then
     while IFS= read -r _sc_i; do
       [ -n "$_sc_i" ] || continue
       printf '    %s\n' "$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
-      grep -m1 '^test suite: another run is already going' "$_sc_work/$_sc_i.out" 2>/dev/null | sed 's/^/      /'
+      grep -m1 '^test suite: another run is already going' "$(_sc_rd "$_sc_i")/out" 2>/dev/null | sed 's/^/      /'
     done <<LOCKED
 $_sc_locked
 LOCKED
@@ -551,54 +736,75 @@ fi
 failed=""
 unmeasured=""
 unmeasured_load=""
-# Runs stopped at the gate's own budget (#1881): no verdict, so neither a pass nor a failure. Each
-# is kept with the command that runs it directly, which is the remedy the refusal names.
+# Runs stopped at, or left running past, the gate's own budget (#1881): no verdict, so neither a
+# pass nor a failure. A run left running is named with where its output goes; one that was stopped
+# (no key, so nothing could be left running) with the command that runs it directly.
 unfinished=""
 unfinished_cmds=""
 ran=0
+# Of those that ran, how many finished in the background after an earlier push had gone, said in
+# the summary so a verdict this push did not watch being made is never passed off as one it did.
+_sc_bg_done=0
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
   _sc_what="$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
+  _sc_rdir="$(_sc_rd "$_sc_i")"
   ran=$(( ran + 1 ))
-  _sc_rc_now="$(cat "$_sc_work/$_sc_i.rc" 2>/dev/null || printf 'missing')"
+  _sc_rc_now="$(cat "$_sc_rdir/rc" 2>/dev/null || printf 'missing')"
   if [ "$_sc_rc_now" = "0" ] && [ -n "$_sc_key" ]; then
     # Only a PASS is remembered, and it is remembered against the key it passed on.
     _sc_passed_now="$_sc_passed_now$_sc_key $(head -1 "$_sc_work/$_sc_i.what" 2>/dev/null) $(sed -n 2p "$_sc_work/$_sc_i.what" 2>/dev/null)
 "
   fi
-  if [ ! -f "$_sc_work/$_sc_i.rc" ] && [ -n "$_sc_out_of_time" ]; then
+  [ -f "$_sc_rdir/rc" ] && [ -f "$_sc_work/$_sc_i.bg" ] && _sc_bg_done=$(( _sc_bg_done + 1 ))
+  # Not finished: another push held its slot, or the budget ran out while it was still going. A run
+  # that is gone without an exit code is not that, it is a missing verdict, below.
+  if [ ! -f "$_sc_rdir/rc" ] && { [ -f "$_sc_work/$_sc_i.busy" ] \
+       || { [ -n "$_sc_out_of_time" ] && { [ -z "$_sc_detach" ] || _sc_run_alive "$_sc_rdir"; }; }; }; then
     _sc_s="$(sed -n 1p "$_sc_work/$_sc_i.what" 2>/dev/null)"; _sc_sec="$(sed -n 2p "$_sc_work/$_sc_i.what" 2>/dev/null)"
-    if [ -n "$_sc_sec" ]; then
-      unfinished="$unfinished    $_sc_s, section \"$_sc_sec\"
+    _sc_label="$_sc_s"
+    [ -n "$_sc_sec" ] && _sc_label="$_sc_s, section \"$_sc_sec\""
+    if [ -f "$_sc_work/$_sc_i.busy" ]; then
+      unfinished="$unfinished    $_sc_label: another push was starting or reading it at this moment
+"
+    elif [ -n "$_sc_detach" ]; then
+      _sc_for="$(_sc_age "$_sc_rdir/started")"
+      _sc_last="$(cat "$(cat "$_sc_work/$_sc_i.last" 2>/dev/null)" 2>/dev/null)"
+      case "$_sc_last" in
+        ''|*[!0-9]*) _sc_last="no earlier run of it is recorded" ;;
+        *) _sc_last="its last run took ${_sc_last}s" ;;
+      esac
+      case "$_sc_for" in ''|*[!0-9]*) _sc_for="for an unknown time" ;; *) _sc_for="for ${_sc_for}s" ;; esac
+      unfinished="$unfinished    $_sc_label: running $_sc_for, $_sc_last; output: $_sc_rdir/out
 "
     else
-      unfinished="$unfinished    $_sc_s
+      unfinished="$unfinished    $_sc_label
 "
+      if [ -n "$_sc_sec" ]; then
+        unfinished_cmds="${unfinished_cmds}    SECTION_ONLY=\"$_sc_sec\" bash $_sc_s
+"
+      else
+        unfinished_cmds="${unfinished_cmds}    bash $_sc_s
+"
+      fi
     fi
-    if [ -n "$_sc_sec" ]; then
-      unfinished_cmds="${unfinished_cmds}    SECTION_ONLY=\"$_sc_sec\" bash $_sc_s
-"
-    else
-      unfinished_cmds="${unfinished_cmds}    bash $_sc_s
-"
-    fi
-  elif [ ! -f "$_sc_work/$_sc_i.rc" ]; then
+  elif [ ! -f "$_sc_rdir/rc" ]; then
     failed="$failed=== $_sc_what ===
 this scanner never reported an exit code, so its verdict is missing rather than clean
 "
   elif [ "$_sc_rc_now" != "0" ]; then
-    _sc_fails="$(awk '/^FAIL|^not ok/ { if (n++ < 10) print }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
-    _sc_unm="$(awk '/^SUITE-(DEADLINE-)?UNMEASURED / { if (n++ < 5) { sub(/^SUITE-(DEADLINE-)?UNMEASURED /, ""); print } }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
+    _sc_fails="$(awk '/^FAIL|^not ok/ { if (n++ < 10) print }' "$_sc_rdir/out" 2>/dev/null)"
+    _sc_unm="$(awk '/^SUITE-(DEADLINE-)?UNMEASURED / { if (n++ < 5) { sub(/^SUITE-(DEADLINE-)?UNMEASURED /, ""); print } }' "$_sc_rdir/out" 2>/dev/null)"
     if [ -z "$_sc_fails" ] && [ -n "$_sc_unm" ]; then
       unmeasured="$unmeasured=== $_sc_what ===
 $_sc_unm
 "
-      grep -q '^SUITE-DEADLINE-UNMEASURED ' "$_sc_work/$_sc_i.out" 2>/dev/null && unmeasured_load=1
+      grep -q '^SUITE-DEADLINE-UNMEASURED ' "$_sc_rdir/out" 2>/dev/null && unmeasured_load=1
     else
       # No FAIL line at all is a failure whose reason is somewhere else in what it printed, so the
       # end of that is shown rather than an empty detail (#642 was found behind one).
       [ -n "$_sc_fails" ] || _sc_fails="it exited $_sc_rc_now with no FAIL line; the end of what it printed:
-$(tail -5 "$_sc_work/$_sc_i.out" 2>/dev/null | sed 's/^/  /')"
+$(tail -5 "$_sc_rdir/out" 2>/dev/null | sed 's/^/  /')"
       failed="$failed=== $_sc_what ===
 $_sc_fails
 "
@@ -618,6 +824,25 @@ if [ -z "$failed" ] && [ -z "$unmeasured" ] && [ -n "$_sc_key" ] && [ -n "$_sc_p
   if mkdir -p "$_sc_state_dir" 2>/dev/null; then
     printf '%s' "$_sc_passed_now" > "$_sc_passed_file" 2>/dev/null || true
   fi
+fi
+
+# Every run with a verdict has now been read, so its folder goes: a pass lives on in the record
+# above, the one place a pass is remembered (L83), and a failure is never remembered, so the next
+# push runs it afresh. Only runs still going are left, for the push after this one. Taken under the
+# slot's lock, so a push deciding about the same scanner at this moment never sees half a folder.
+if [ -n "$_sc_detach" ]; then
+  _sc_i=1
+  while [ "$_sc_i" -le "$_sc_n" ]; do
+    _sc_rdir="$(_sc_rd "$_sc_i")"
+    if [ -f "$_sc_rdir/rc" ]; then
+      _sc_lockdir="$_sc_runs/$(_sc_slot "$_sc_i")-lock"
+      if _sc_lock "$_sc_lockdir"; then
+        rm -rf "$_sc_rdir"
+        rm -rf "$_sc_lockdir"
+      fi
+    fi
+    _sc_i=$(( _sc_i + 1 ))
+  done
 fi
 
 # What the unmeasured scanners said, written once, for the block below whichever form it takes.
@@ -642,16 +867,27 @@ _sc_unfinished_note(){
   if . "$HOOK_DIR/lib/load-average.sh" 2>/dev/null && command -v load_average_note >/dev/null 2>&1; then
     load="$(load_average_note)"
   fi
-  echo "These scanners did not finish in ${_sc_budget} seconds and were stopped, so they neither passed nor"
-  echo "failed ($load):"
+  if [ -n "$_sc_detach" ]; then
+    echo "These scanners did not finish in ${_sc_budget} seconds, so they have neither passed nor failed yet."
+    echo "They are still running in the background, on their own, reading exactly this tree and these"
+    echo "uncommitted files ($load):"
+  else
+    echo "These scanners did not finish in ${_sc_budget} seconds and were stopped, so they neither passed nor"
+    echo "failed ($load):"
+  fi
   printf '%s' "$unfinished"
   echo ""
   echo "This gate stops itself at ${_sc_budget} seconds, inside the timeout its registration declares, because"
   echo "Claude Code lets a push through when it kills a hook at that timeout, with nothing scanned."
   # Said only as far as the write below the read back did it: passes are kept when there is a key
   # and nothing failed or went unmeasured.
-  if [ -n "$_sc_key" ] && [ -z "$failed" ] && [ -z "$unmeasured" ]; then
+  if [ -n "$_sc_detach" ] && [ -z "$failed" ] && [ -z "$unmeasured" ]; then
+    echo "Every scanner that did finish and pass is remembered, so a retry does not run those again."
+  elif [ -n "$_sc_key" ] && [ -z "$failed" ] && [ -z "$unmeasured" ]; then
     echo "Every scanner that did finish and pass is remembered, so a retry runs only the ones above."
+  elif [ -n "$_sc_detach" ]; then
+    echo "Nothing that finished in this run is remembered, because another scanner failed or measured"
+    echo "nothing, so a retry runs those again."
   elif [ -z "$_sc_key" ]; then
     echo "The uncommitted files could not be listed, so nothing that finished could be remembered, and a"
     echo "retry runs every scanner again."
@@ -660,6 +896,13 @@ _sc_unfinished_note(){
     echo "retry runs every scanner again."
   fi
   echo ""
+  if [ -n "$_sc_detach" ]; then
+    echo "So push again once they finish. A push of this same tree and these uncommitted files counts"
+    echo "their result without running them again, and waits up to ${_sc_budget} seconds for any still going;"
+    echo "a push of anything else from this checkout stops them and starts again. A push goes through only"
+    echo "once every scanner has passed on exactly what it carries."
+    return 0
+  fi
   echo "Retry the push when the machine is quieter, or run each one directly to see it through:"
   printf '%s' "$unfinished_cmds"
 }
@@ -699,6 +942,9 @@ fi
 
 if [ -z "$failed" ]; then
   # What it covered, once, so the coverage of this gate is visible rather than assumed (L400).
+  if [ "$_sc_bg_done" -gt 0 ]; then
+    printf 'scanners-before-push: %s of the scans below finished in the background, on exactly this tree and these uncommitted files, after an earlier push was refused while they ran.\n' "$_sc_bg_done" >&2
+  fi
   if [ "$ran" -eq 0 ] && [ "$_sc_skipped" -gt 0 ]; then
     # Every scanner was skipped, so nothing was scanned at this moment. Said in those words: a line
     # reading "0 scans passed" is what a run that scanned nothing and a clean tree have in common
