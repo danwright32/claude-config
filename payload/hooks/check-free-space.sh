@@ -521,7 +521,9 @@ symbol_cache_note(){
 # (reading it makes iCloud download it), so an item with one beneath it is sized from what is stored
 # on this Mac alone and flagged icloud-only-part (lib/disk-clean-record.sh). The total is right about
 # this Mac; the line adds how many offered items have such a part, in the review page's words ("kept
-# only in iCloud", L118), and that the part was not measured, with no figure for it (L11).
+# only in iCloud", L118), and that the part was not measured, with no figure for it (L11). Only
+# sized items are counted, because the note qualifies the total: an item with no size is not in it
+# at all, and the total already says "at least" for it.
 #
 # ONLY ON THE WARNING, AND READ ONCE PER RECORD. Every prompt runs this hook, so nothing here runs
 # on a disk with room. Reading the record goes through lib/disk-clean-record.sh, which owns the

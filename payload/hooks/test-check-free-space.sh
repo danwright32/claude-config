@@ -861,6 +861,16 @@ scan_record "$SC_CLOUDPART" "$((T0 - DAY))" \
 scan_probe "$SC_CLOUDPART" "$((7 * GB))"
 check "with a partly read size as well, the total stays 'at least' and the iCloud note is still said" \
   "$(grep -qF 'at least 13.0 GB' <<< "$PROBE_MSG" && grep -qF 'Part of 1 item(s) it found is kept only in iCloud' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+# The note qualifies the total, so a flagged item with no size, which is not in the total at all,
+# is not counted in it: the total's own "at least" already covers that item.
+SC_CLOUDUNSIZED="$SCANS/cloud-unsized.json"
+scan_record "$SC_CLOUDUNSIZED" "$((T0 - DAY))" \
+  "w1|caches|trash|/x/c|$((10 * GB))|offerable|measured" \
+  "w2|build-folders|trash|/x/nm||offerable|unread|icloud-only-part" \
+  "w3|build-folders|trash|/x/nm2|$GB|offerable|measured|icloud-only-part"
+scan_probe "$SC_CLOUDUNSIZED" "$((7 * GB))"
+check "a flagged item with no size is left out of the iCloud count, which covers only what the total holds" \
+  "$(grep -qF 'at least 11.0 GB' <<< "$PROBE_MSG" && grep -qF 'Part of 1 item(s) it found is kept only in iCloud' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 
 # Everything already removed: the scan has nothing left, which is said rather than a total of 0.
 SC_DONE="$SCANS/done.json"
