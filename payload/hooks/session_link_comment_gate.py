@@ -42,7 +42,7 @@ COMMENT_KINDS = frozenset({("issue", "comment"), ("pr", "comment"), ("pr", "revi
 # A close posts its --comment as an ordinary comment.
 CLOSE_KINDS = frozenset({("issue", "close"), ("pr", "close")})
 # The Slack tools that write text a teammate reads, named without their server in
-# lib/slack-write-tools.txt, which the style-check mod reads too. Any server: the claude.ai connector
+# lib/slack-write-tools.txt. Any server: the claude.ai connector
 # names its server Slack with a capital S, and a pattern wanting a lowercase "slack" there let every
 # claude.ai send through (claude-config#1905). It is read only for an MCP tool, so a Bash call never
 # depends on it; a list that cannot be read raises, so the wrapper says the gate did not run rather
