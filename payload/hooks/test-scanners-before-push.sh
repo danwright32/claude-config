@@ -820,7 +820,8 @@ grep -q 'bash payload/hooks/test-omega.sh' <<< "$o1881" \
 grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o1881" \
   && check "#1881 and does not call a scanner that never finished a failing one" "out=$o1881" \
   || check "#1881 and does not call a scanner that never finished a failing one" ok
-# Well under the slow scanner's 30 seconds: the gate stopped at its budget rather than waiting.
+# Well under the fixture's own sleep, a number set here and not measured: the gate stopped at its
+# budget rather than waiting for the scanner.
 [ "$_took" -lt 20 ] && check "#1881 and returns at its budget rather than waiting for the scanner" ok \
   || check "#1881 and returns at its budget rather than waiting for the scanner" "took ${_took}s"
 _slowpid="$(cat "$TMPROOT/omega.pid" 2>/dev/null)"
