@@ -228,7 +228,7 @@ waiting_on=""
 [ -n "${CLAUDE_ISSUE_HARVEST_FORCE:-}" ] || waiting_on=$(printf '%s' "$input" | python3 -c '
 import json, re, sys
 try:
-    payload = json.load(sys.stdin)
+    payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     sys.exit(0)
 tasks = payload.get("background_tasks")
@@ -285,7 +285,7 @@ if [ -n "$waiting_on" ]; then
 import json, os, sys
 path, now, max_n, max_s = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 try:
-    payload = json.load(sys.stdin)
+    payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     print("harvest unreadable payload"); sys.exit(0)
 payload.pop("background_tasks", None)
@@ -477,12 +477,12 @@ if [ "$status" -ne 0 ] || [ "$out_blank" -eq 1 ]; then
 fi
 
 record=$(printf '%s' "$out" | python3 -c '
-import json, sys
+import io, json, sys
 
 MAX_FINDINGS = 50
 MAX_FINDING_CHARS = 500
 
-raw = sys.stdin.read()
+raw = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
 findings = [ln.split("FINDING:", 1)[1].strip()[:MAX_FINDING_CHARS]
             for ln in raw.splitlines()
             if ln.strip().startswith("FINDING:") and ln.split("FINDING:", 1)[1].strip()]

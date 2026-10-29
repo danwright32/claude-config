@@ -101,9 +101,13 @@ check "dcr_write refuses a note key that is not a plain name" "$(dcr_write "$DC_
 # hooks/lib/disk-clean-units.sh: the one copy of size words and Docker sizes, shared with
 # disk-remove.sh, so the figure a scan offers and the figure a removal reports read alike.
 . "$DIR/../../hooks/lib/disk-clean-units.sh" || check "disk-clean-units.sh is there to source" "could not source it"
-check "dcu_human writes KB under a MB" "$(eq "$(dcu_human 512)" "512 KB")"
-check "dcu_human writes whole MB under a GB" "$(eq "$(dcu_human 2048)" "2 MB")"
-check "dcu_human writes GB to one place" "$(eq "$(dcu_human 1572864)" "1.5 GB")"
+# Decimal units, as Finder and the settled review page (#1807) write them: a KiB count is bytes / 1024.
+check "dcu_human writes decimal KB under a MB" "$(eq "$(dcu_human 512)" "524 KB")"
+check "dcu_human writes whole decimal MB under a GB" "$(eq "$(dcu_human 2048)" "2 MB")"
+check "dcu_human writes decimal GB to one place" "$(eq "$(dcu_human 1572864)" "1.6 GB")"
+check "dcu_human turns a GB at a billion bytes" "$(eq "$(dcu_human 976563)" "1.0 GB")"
+check "dcu_human writes an empty size as 0 KB" "$(eq "$(dcu_human 0)" "0 KB")"
+check "dcu_human never writes 0 KB for a few bytes" "$(eq "$(dcu_human 1)" "1 KB")"
 check "dcu_human never writes 0 for an unread size" "$(eq "$(dcu_human "")" "size unknown")"
 check "dcu_docker_kib reads Docker's decimal GB" "$(eq "$(dcu_docker_kib 1.5GB)" 1464843)"
 check "dcu_docker_kib reads kB" "$(eq "$(dcu_docker_kib 2048kB)" 2000)"
@@ -264,7 +268,7 @@ fresh
 mkdir -p "$H/Library/Caches/com.a" "$H/Library/Caches/com.part"
 dc_stub du "$du_mixed"
 run_scan --only caches
-check "a partial size makes the total at least" "$(has "$OUT_TEXT" "App caches: 2 offerable (at least 24 KB), 0 not offerable, 0 unmeasured.")"
+check "a partial size makes the total at least" "$(has "$OUT_TEXT" "App caches: 2 offerable (at least 25 KB), 0 not offerable, 0 unmeasured.")"
 fresh
 mkdir -p "$H/Library/Caches/com.unread"
 dc_stub du "$du_mixed"

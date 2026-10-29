@@ -56,6 +56,7 @@ import importlib.util
 import json
 import os
 import re
+import io
 import sys
 
 # Loading shell-words.py would otherwise leave a __pycache__ in lib/, which is the synced payload
@@ -624,7 +625,7 @@ def check_report(report, transcript):
 
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ""
-    data = sys.stdin.read()
+    data = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
     if mode == "skips":
         found = skips(data)
         for f in found:

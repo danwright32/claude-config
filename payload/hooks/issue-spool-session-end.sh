@@ -20,7 +20,7 @@ payload="$(cat 2>/dev/null)"
 sid="$(printf '%s' "$payload" | python3 -c '
 import json, sys
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     sys.exit(0)
 s = d.get("session_id") if isinstance(d, dict) else None

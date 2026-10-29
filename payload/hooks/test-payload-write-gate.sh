@@ -691,6 +691,61 @@ allowed "the control allows the same write when nothing could revert it"
 
 rm -rf "$NOPY_ROOT"
 
+echo "payload write gate: a library or a payload it cannot read is refused, not allowed (claude-config#1900)"
+
+# Both libraries were sourced with `|| exit 0`, so a hook dir missing either let every payload write
+# through with nothing said: a library that cannot be loaded read as nothing to check (L10, L1033).
+# Each is taken away on its own, from a copy of the hook beside the rest of the real library.
+SAVED_HOOK="$HOOK"
+for gone in sync-clone.sh push-scope.sh; do
+  rm -rf "$FIX/nolib"; mkdir -p "$FIX/nolib"
+  cp "$SAVED_HOOK" "$FIX/nolib/payload-write-gate.sh"
+  cp -R "$DIR/lib" "$FIX/nolib/lib"
+  rm -f "$FIX/nolib/lib/$gone"
+  HOOK="$FIX/nolib/payload-write-gate.sh"
+  rm -f "$HOLD"
+  edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+  refused "with lib/$gone missing, an Edit under payload/ is refused rather than allowed in silence"
+  says "and the refusal names the library it could not load" "lib/$gone"
+  says "and says how to restore it" "claude-sync pull"
+  runbash "echo hi > $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+  refused "with lib/$gone missing, a shell write under payload/ is refused too"
+  runbash "SKIP_PAYLOAD_WRITE_CHECK=1 echo hi > $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+  allowed "with lib/$gone missing, the documented override still lets one command through"
+  edit "$FIX/dev/tests/a.sh" "$FIX/dev"
+  allowed "with lib/$gone missing, a write that names nothing under payload/ is not refused"
+  OUT="$(printf '{"hook_event_name":"PostToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"cat %s"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
+    | env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
+  allowed "with lib/$gone missing, the check after a call refuses nothing, since the call already ran"
+done
+HOOK="$SAVED_HOOK"
+
+# A byte that is not UTF-8 anywhere in the payload: jq reads it as U+FFFD, and python3's text mode
+# stdin raised on it, so the tool name came back as a dash and the write was allowed (claude-config
+# #1900). The byte sits in a field the gate does not judge, so the refusal is about the write.
+rm -f "$HOLD"
+OUT="$(printf '{"tool_name":"Edit","session_id":"","cwd":"%s","tool_input":{"file_path":"%s","old_string":"a\xffb","new_string":"c"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
+  | env LC_ALL=en_US.UTF-8 SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
+refused "an Edit under payload/ whose payload holds a byte that is not UTF-8 is still refused"
+says "and it names the file, so the payload was read rather than guessed at" "$FIX/dev/payload/LESSONS.md"
+OUT="$(printf '{"tool_name":"Bash","session_id":"","cwd":"%s","tool_input":{"command":"echo \xff > %s"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
+  | env LC_ALL=en_US.UTF-8 SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
+refused "a shell write under payload/ whose command holds a byte that is not UTF-8 is still refused"
+says "and it names the file" "$FIX/dev/payload/LESSONS.md"
+OUT="$(printf '{"tool_name":"Edit","session_id":"","cwd":"%s","tool_input":{"file_path":"%s","old_string":"a\xffb","new_string":"c"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
+  | env LC_ALL=en_US.UTF-8 SYNC_WATCH_PID_FILE="$NOPIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
+allowed "the control: the same payload with no watcher is allowed, so the refusal above is the write"
+
+# A payload no reader can make sense of at all is not an empty one: one naming payload/ is refused,
+# saying it could not be read, and one that names nothing there passes as before.
+OUT="$(printf 'not json at all, but it names %s' "$FIX/dev/payload/LESSONS.md" \
+  | ( cd "$FIX/dev" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1 ))"; RC=$?
+refused "a payload nothing can parse that names payload/ is refused rather than allowed"
+says "and the refusal says the payload could not be read" "could not be read"
+OUT="$(printf 'not json at all' \
+  | ( cd "$FIX/dev" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1 ))"; RC=$?
+allowed "and one that names nothing under payload/ is not refused"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
