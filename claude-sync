@@ -16,7 +16,8 @@
 #   claude-sync recheck           # run the hook suite and record what it said, so a fixed failure stops being reported
 #   claude-sync forget-clone DIR  # drop one checkout from the register, when it has gone for good
 #   claude-sync hold 30 "why"     # stop the watcher committing for a while, so you can commit
-#   claude-sync release           # lift that hold now rather than waiting for it to run out
+#   claude-sync release           # lift your own hold now rather than waiting for it to run out
+#   claude-sync release --other S # lift the hold session S took (status names each hold's session)
 #   claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
 #   claude-sync next-lesson       # the next free lesson number, reserved for ten minutes
 #   claude-sync check-lessons     # fail if anything would stop the lessons file publishing
@@ -4105,25 +4106,38 @@ highest_taken_in_band(){   # $1 = tree  $2 = band start
 # cannot happen (its break lock left behind by a killed run) used to `continue` straight back to the
 # top, which is a loop with no deadline and no sleep, spinning for ever.
 take_reservations_lock(){
-  local lock="$LESSON_RESERVATIONS_FILE.lock" t0 holder max="${SYNC_LESSON_LOCK_WAIT:-10}" mine
+  local lock="$LESSON_RESERVATIONS_FILE.lock" max="${SYNC_LESSON_LOCK_WAIT:-10}" rc=0
   case "$max" in ''|*[!0-9]*|0) max=10 ;; esac
   mkdir -p "$(dirname "$LESSON_RESERVATIONS_FILE")" || die "could not create $(dirname "$LESSON_RESERVATIONS_FILE"), so no lesson number could be reserved. NOTHING was minted."
-  mine="$lock.$$"
-  printf '%s\n' "$$" > "$mine" || die "could not write $mine, so no lesson number could be reserved. NOTHING was minted."
+  take_pid_lock "$lock" "$max" || rc=$?
+  case "$rc" in
+    0) ;;
+    2) die "could not write $lock.$$, so no lesson number could be reserved. NOTHING was minted." ;;
+    *) die "another ask for a lesson number has held $lock for $(duration_in_words "$max"), so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that file (and $lock.break if it is there)." ;;
+  esac
+}
+# The lock itself, shared by the reservations above and the watcher hold record (claude-config#1863),
+# which several sessions read, change and rewrite at once in just the same way. Returns 0 once held,
+# 1 at the deadline, and 2 when the pid file it links from cannot be written at all, so each caller
+# gives its refusal in its own words.
+take_pid_lock(){   # $1 = lock file  $2 = seconds to wait
+  local lock="$1" max="$2" t0 holder mine="$1.$$"
+  { printf '%s\n' "$$" > "$mine"; } 2>/dev/null || { rm -f "$mine" 2>/dev/null || true; return 2; }
   t0="$(date +%s)"
   while ! ln "$mine" "$lock" 2>/dev/null; do
     holder="$(cat "$lock" 2>/dev/null || true)"
     case "$holder" in
       ''|*[!0-9]*) : ;;   # gone between the ln and the read, or unreadable: try again, never break on a guess
-      *) kill -0 "$holder" 2>/dev/null || break_stale_reservations_lock "$lock" "$holder" ;;
+      *) kill -0 "$holder" 2>/dev/null || break_stale_pid_lock "$lock" "$holder" ;;
     esac
     if [ "$(( $(date +%s) - t0 ))" -ge "$max" ]; then
       rm -f "$mine"
-      die "another ask for a lesson number has held $lock for $(duration_in_words "$max"), so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that file (and $lock.break if it is there)."
+      return 1
     fi
     sleep 0.1
   done
   rm -f "$mine"
+  return 0
 }
 release_reservations_lock(){ rm -f "$LESSON_RESERVATIONS_FILE.lock"; }
 
@@ -4137,7 +4151,7 @@ release_reservations_lock(){ rm -f "$LESSON_RESERVATIONS_FILE.lock"; }
 # lock is a takeover, which holds the break lock. A run killed in the instant between taking the
 # break lock and releasing it leaves it behind, and then no takeover can happen: every ask stops at
 # its ten second deadline naming both folders, which fails closed rather than minting twice.
-break_stale_reservations_lock(){   # $1 = lock file  $2 = the dead holder's pid
+break_stale_pid_lock(){   # $1 = lock file  $2 = the dead holder's pid
   mkdir "$1.break" 2>/dev/null || return 0
   if [ "$(cat "$1" 2>/dev/null || true)" = "$2" ] && ! kill -0 "$2" 2>/dev/null; then
     rm -f "$1"
@@ -10535,45 +10549,142 @@ FAILED
   return "$rc"
 }
 
-# Seconds left on a LIVE hold, printed on stdout; nothing, and a non-zero return, for every other
-# state. The three states are told apart in their own words rather than folded together, because a
-# marker nothing can read is neither "no hold" nor "held for ever": obeying it stops the sync until
-# somebody finds the file, and ignoring it silently discards a decision somebody made (L11, L50).
+# ---------- the watcher hold record (#262, #1854, #1863) ----------
+#
+# One line per hold, each taken by one session, so several sessions can hold the watcher at once
+# and each hold ends on its own (claude-config#1863):
+#
+#   <ends, epoch> <taken, epoch> <host> session=<id> <why ...>
+#
+# Before #1863 the record was ONE line with no session field (<ends> <taken> <host> <why ...>).
+# That shape is still read, as a hold by "unknown", which is anyone's to lift (L1010). Lines are
+# written longest hold FIRST, because a claude-sync or hook from before #1863 reads only the first
+# line: that way it still sees the Mac held for as long as any hold lasts, and clears the record
+# only once every hold in it has run out.
+#
+# The session is CLAUDE_CODE_SESSION_ID, which Claude Code gives every tool call a session makes,
+# its subagents' included, so a subagent's hold is its session's. Anything else (a plain terminal,
+# a value that is not the shape of an id) is "unknown".
+hold_self(){
+  local id="${CLAUDE_CODE_SESSION_ID:-}"
+  case "$id" in ''|*[!A-Za-z0-9._-]*) id=unknown ;; esac
+  printf '%s' "$id"
+}
+# Who a hold belongs to, in words, and the command that lifts it from where this run stands.
+hold_owner_words(){   # $1 = owner
+  if [ "$1" = unknown ]; then printf 'no session recorded'
+  elif [ "$1" = "$(hold_self)" ]; then printf 'this session'
+  else printf 'session %s' "${1:0:8}"; fi
+}
+hold_lift_hint(){   # $1 = owner
+  if [ "$1" = unknown ] || [ "$1" = "$(hold_self)" ]; then printf 'claude-sync release'
+  else printf 'claude-sync release --other %s' "${1:0:8}"; fi
+}
+
+# Every line of the record as a row: state, ends, taken, host, owner, why, separated by the unit
+# separator (octal 037) rather than a tab, because `read` folds a run of tabs into one and a row
+# with empty fields would shift. State is live, expired, or unreadable. Read only.
+hold_rows(){   # $1 = now
+  [ -n "$SYNC_HOLD_FILE" ] && [ -f "$SYNC_HOLD_FILE" ] || return 0
+  awk -v now="$1" 'BEGIN { OFS = "\037" }
+    {
+      if ($1 !~ /^[0-9]+$/) { print "unreadable", "", "", "", "", ""; next }
+      ends = $1 + 0; taken = $2; host = $3
+      if ($4 ~ /^session=/) { owner = substr($4, 9); first = 5 } else { owner = "unknown"; first = 4 }
+      if (owner == "") owner = "unknown"
+      if (taken !~ /^[0-9]+$/) taken = ends
+      why = ""
+      for (i = first; i <= NF; i++) why = why (why == "" ? "" : " ") $i
+      gsub(/\037/, " ", why)
+      print ((ends > now + 0) ? "live" : "expired"), ends, taken, host, owner, why
+    }' "$SYNC_HOLD_FILE" 2>/dev/null || true
+}
+
+# Writes the rows on stdin back as the record, longest first, or removes the record when none are
+# left. Written under a temporary name and RENAMED into place, never truncated and refilled (#1854).
+hold_write_rows(){
+  local tmp="$SYNC_HOLD_FILE.writing.$$" body
+  body="$(awk -F '\037' 'NF >= 6 { print $2 " " $3 " " $4 " session=" $5 " " $6 }' | sort -k1,1nr)"
+  if [ -z "$body" ]; then
+    rm -f -- "$SYNC_HOLD_FILE" 2>/dev/null || true
+    [ ! -e "$SYNC_HOLD_FILE" ]
+    return
+  fi
+  if ! { printf '%s\n' "$body" > "$tmp"; } 2>/dev/null || ! mv -f -- "$tmp" "$SYNC_HOLD_FILE" 2>/dev/null; then
+    rm -f -- "$tmp" 2>/dev/null || true
+    return 1
+  fi
+  return 0
+}
+
+# The record is read, changed and rewritten by every session on the Mac, so two holds taken in the
+# same instant would each write a record without the other's hold in it. Every change happens
+# under this lock; reading never takes it. SYNC_HOLD_LOCK_WAIT shortens the wait for the suite.
+hold_lock(){
+  local max="${SYNC_HOLD_LOCK_WAIT:-10}"
+  case "$max" in ''|*[!0-9]*|0) max=10 ;; esac
+  take_pid_lock "$SYNC_HOLD_FILE.lock" "$max"
+}
+hold_unlock(){ rm -f "$SYNC_HOLD_FILE.lock" 2>/dev/null || true; }
+# The refusal for each way hold_lock can fail, in its own words (L11).
+hold_lock_refusal(){   # $1 = hold_lock's return code
+  if [ "$1" = 2 ]; then
+    printf 'the lock beside the hold record could not be written at %s.lock' "$SYNC_HOLD_FILE"
+  else
+    printf 'another claude-sync has been changing the hold record at %s for too long (its lock is %s.lock; delete that file if no claude-sync is running)' "$SYNC_HOLD_FILE" "$SYNC_HOLD_FILE"
+  fi
+}
+
+# Seconds left on the LONGEST live hold, printed on stdout; nothing, and a non-zero return, when no
+# hold is live. Expired holds are cleared one by one, each said, and the rest kept. A line nothing
+# can read is cleared too, in its own words, because it is neither "no hold" nor "held for ever":
+# obeying it stops the sync until somebody finds the file, and ignoring it silently discards a
+# decision somebody made (L11, L50). Clearing needs the lock; when another run holds it, nothing is
+# cleared this time and the answer is still given, since the next reading clears it.
 hold_remaining(){
-  local until taken now left
-  if left="$(hold_live_left)"; then printf '%s' "$left"; return 0; fi
-  [ -f "$SYNC_HOLD_FILE" ] || return 1
-  until="$(awk 'NR==1{print $1}' "$SYNC_HOLD_FILE" 2>/dev/null)"
-  taken="$(awk 'NR==1{print $2}' "$SYNC_HOLD_FILE" 2>/dev/null)"
-  case "$until" in
-    ''|*[!0-9]*)
-      echo "claude-sync: the watcher hold marker at $SYNC_HOLD_FILE could not be read, so it has been cleared and the watcher is sending again. Take another with 'claude-sync hold' if you still need one." >&2
-      rm -f "$SYNC_HOLD_FILE" 2>/dev/null || true
-      return 1 ;;
-  esac
+  local now rows stale st ends taken host owner why live_n rc=0 tail
+  [ -n "$SYNC_HOLD_FILE" ] && [ -f "$SYNC_HOLD_FILE" ] || return 1
   now="$(date +%s)"
-  case "$taken" in ''|*[!0-9]*) taken="$until" ;; esac
-  echo "claude-sync: the watcher hold taken $(age_in_words "$(( now - 10#$taken ))") has expired, so it has been cleared and the watcher is sending again." >&2
-  rm -f "$SYNC_HOLD_FILE" 2>/dev/null || true
-  return 1
+  rows="$(hold_rows "$now")"
+  stale="$(printf '%s\n' "$rows" | awk -F '\037' '$1 != "live"' | grep -c . || true)"
+  if [ -n "$rows" ] && [ "${stale:-0}" -eq 0 ]; then hold_live_left; return; fi
+  hold_lock || rc=$?
+  [ "$rc" = 0 ] || { hold_live_left; return; }
+  now="$(date +%s)"
+  rows="$(hold_rows "$now")"
+  live_n="$(printf '%s\n' "$rows" | awk -F '\037' '$1 == "live"' | grep -c . || true)"
+  if ! printf '%s\n' "$rows" | awk -F '\037' '$1 == "live"' | hold_write_rows; then
+    hold_unlock
+    echo "claude-sync: the watcher hold record at $SYNC_HOLD_FILE holds a hold that has expired or cannot be read, and it could not be rewritten without it." >&2
+    hold_live_left
+    return
+  fi
+  hold_unlock
+  if [ "${live_n:-0}" -gt 0 ]; then tail="and the watcher stays held by the hold still in force"
+  else tail="and the watcher is sending again"; fi
+  if [ -z "$rows" ]; then
+    echo "claude-sync: the watcher hold marker at $SYNC_HOLD_FILE could not be read, so it has been cleared $tail. Take another with 'claude-sync hold' if you still need one." >&2
+  fi
+  while IFS=$'\037' read -r st ends taken host owner why; do
+    case "$st" in
+      unreadable) echo "claude-sync: a hold in the watcher hold record at $SYNC_HOLD_FILE could not be read, so it has been cleared, $tail. Take another with 'claude-sync hold' if you still need one." >&2 ;;
+      expired) echo "claude-sync: the watcher hold taken $(age_in_words "$(( now - 10#$taken ))") by $(hold_owner_words "$owner")${why:+ ($why)} has expired, so it has been cleared, $tail." >&2 ;;
+    esac
+  done <<HOLDROWS
+$rows
+HOLDROWS
+  hold_live_left
 }
 
 # The ONE reading of whether a hold is in force, shared by the watcher (through hold_remaining),
-# status, and hold's own check of what it wrote (claude-config#1854). Read only: seconds left on
-# stdout for a live hold, a non-zero return for anything else, and nothing cleared or said, because
-# hold reads the record it is about to replace and must not report that record's expiry as news.
+# status, and hold's own check of what it wrote (claude-config#1854): seconds left on the longest
+# live hold on stdout, a non-zero return when none is live, and nothing cleared or said, because
+# hold reads the record it is about to rewrite and must not report an expiry in it as news.
 hold_live_left(){
-  local until now
-  [ -n "$SYNC_HOLD_FILE" ] && [ -f "$SYNC_HOLD_FILE" ] || return 1
-  until="$(awk 'NR==1{print $1}' "$SYNC_HOLD_FILE" 2>/dev/null)"
-  case "$until" in ''|*[!0-9]*) return 1 ;; esac
-  until=$(( 10#$until ))
+  local now
   now="$(date +%s)"
-  [ "$now" -lt "$until" ] || return 1
-  printf '%s' "$(( until - now ))"
+  hold_rows "$now" | awk -F '\037' -v now="$now" '$1 == "live" { l = $2 - now; if (l > m) m = l } END { if (m > 0) { printf "%d", m; exit 0 } exit 1 }'
 }
-# The reason a hold was taken for: everything after its expiry, start and host.
-hold_record_why(){ awk 'NR==1{$1="";$2="";$3="";sub(/^ +/,"");print}' "$SYNC_HOLD_FILE" 2>/dev/null || true; }
 
 # Says a hold is in force only once it has READ BACK the record the watcher reads and found it live
 # (claude-config#1854). On 2026-10-28 `hold 90` printed "Watcher held off for 2 hours", a release
@@ -10585,11 +10696,12 @@ hold_record_why(){ awk 'NR==1{$1="";$2="";$3="";sub(/^ +/,"");print}' "$SYNC_HOL
 # deletes it (hold_remaining), while the write goes on into a file nobody can see: a hold that
 # printed success and is gone.
 #
-# It never SHORTENS a hold already in force. Holds are one record shared by every session on the
-# Mac, so a five minute hold taken over another session's ninety would end that session's pause
-# early with nothing said to it; the longer one is kept and named instead.
+# Each session's hold is its own line (claude-config#1863), so a hold touches only the caller's own:
+# another session's hold is kept as it is, whatever its length, and both are in force. The caller's
+# own hold is never SHORTENED either; asking for less than it already has keeps the longer one and
+# says so.
 do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
-  local mins="${1:-}" dflt="$SYNC_HOLD_MINUTES" why now until line tmp left at
+  local mins="${1:-}" dflt="$SYNC_HOLD_MINUTES" why now until tmp at owner rows rc=0 own_left own_why st ends taken host o w
   [ -n "$SYNC_HOLD_FILE" ] || die "no hold was taken: $(not_users_own_home), so this Mac's watcher is not its to hold. Name a hold file in SYNC_HOLD_FILE."
   # Base ten whatever was typed: 090 is ninety minutes, never an octal error after the fact. No
   # length, or none worth having, is the configured default; an unusable default is 30.
@@ -10602,50 +10714,136 @@ do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
   shift 2>/dev/null || true
   why="$*"
   why="${why//$'\n'/ }"
+  why="${why//$'\t'/ }"
   [ -n "$why" ] || why="a session is committing by hand"
+  owner="$(hold_self)"
+  hold_lock || rc=$?
+  [ "$rc" = 0 ] || die "no hold was taken: $(hold_lock_refusal "$rc"), so the watcher is NOT held and goes on sending."
   now="$(date +%s)"
   until=$(( now + mins * 60 ))
-  if left="$(hold_live_left)" && [ $(( now + left )) -ge "$until" ]; then
-    echo "A watcher hold was already in force for another $(duration_in_words "$left" exact) ($(hold_record_why)), at least the $(duration_in_words $(( mins * 60 )) exact) asked for, so it was kept rather than shortened. It resumes on its own when that runs out, or now with: claude-sync release"
+  rows="$(hold_rows "$now")"
+  own_left=0; own_why=""
+  while IFS=$'\037' read -r st ends taken host o w; do
+    if [ "$st" = live ] && [ "$o" = "$owner" ] && [ $(( 10#$ends - now )) -gt "$own_left" ]; then
+      own_left=$(( 10#$ends - now )); own_why="$w"
+    fi
+  done <<HOLDROWS
+$rows
+HOLDROWS
+  if [ "$own_left" -gt 0 ] && [ $(( now + own_left )) -ge "$until" ]; then
+    hold_unlock
+    echo "Your watcher hold was already in force for another $(duration_in_words "$own_left" exact) ($own_why), at least the $(duration_in_words $(( mins * 60 )) exact) asked for, so it was kept rather than shortened. It resumes on its own when that runs out, or now with: claude-sync release"
     return 0
   fi
-  line="$until $now $(sync_hostname) $why"
+  # Every other session's live hold, as it was, and this session's new one in place of its old.
   tmp="$SYNC_HOLD_FILE.writing.$$"
-  if ! { printf '%s\n' "$line" > "$tmp"; } 2>/dev/null || ! mv -f -- "$tmp" "$SYNC_HOLD_FILE" 2>/dev/null; then
-    rm -f -- "$tmp" 2>/dev/null || true
+  if ! { printf '%s\n' "$rows" | awk -F '\037' -v me="$owner" '$1 == "live" && $5 != me'
+         printf 'live\037%s\037%s\037%s\037%s\037%s\n' "$until" "$now" "$(sync_hostname)" "$owner" "$why"
+       } | hold_write_rows; then
+    hold_unlock
     die "no hold was taken: the record could not be written at $SYNC_HOLD_FILE, so the watcher is NOT held and goes on sending."
   fi
-  if [ ! -f "$SYNC_HOLD_FILE" ] || [ "$(head -n 1 "$SYNC_HOLD_FILE" 2>/dev/null || true)" != "$line" ] || ! hold_live_left >/dev/null; then
+  # Read back the way the watcher reads it: this session's hold, with the end just asked for, live.
+  if [ ! -f "$SYNC_HOLD_FILE" ] || ! hold_rows "$(date +%s)" | awk -F '\037' -v me="$owner" -v e="$until" '$1 == "live" && $5 == me && $2 == e { found = 1 } END { exit found ? 0 : 1 }'; then
+    hold_unlock
     # A directory where the record belongs takes the rename INTO it, so ours is removed from there.
     rm -f -- "$SYNC_HOLD_FILE/${tmp##*/}" 2>/dev/null || true
     die "no hold was taken: the record written to $SYNC_HOLD_FILE did not read back as the hold just asked for, so the watcher is NOT held and goes on sending."
   fi
-  at="$(date_from_epoch "$until" '%H:%M')"
+  hold_unlock
+  # With the leading +, which date needs to read the argument as a format at all: written without
+  # it, as #1854 shipped, date refused it, so the "until" clause was never once printed. In Eastern
+  # time and labelled, as every time of day said to Dan is.
+  at="$(TZ=America/New_York date_from_epoch "$until" '+%-I:%M %p ET')"
   echo "Watcher held off for $(duration_in_words $(( mins * 60 )) exact)${at:+, until $at} ($why). It resumes on its own when that runs out, or now with: claude-sync release"
+  while IFS=$'\037' read -r st ends taken host o w; do
+    [ "$st" = live ] && [ "$o" != "$owner" ] || continue
+    echo "The watcher is also held by $(hold_owner_words "$o") ($w) for another $(duration_in_words $(( 10#$ends - now )) exact), and stays held until every hold has ended."
+  done <<HOLDROWS
+$rows
+HOLDROWS
   return 0
 }
 
-do_release(){
-  local why taken now
+# Lifts the caller's OWN hold, and a hold nobody owns (one taken outside any session, or written
+# before holds had owners), never another session's (claude-config#1863). Before, one release
+# lifted the one shared record, so any session's release ended a pause another session had taken and
+# the watcher then sent that session's half finished work. Another session's hold is lifted only by
+# naming it, as status shows it: release --other <session>. Every lift names the hold it lifted, and
+# every hold still in force afterwards is named with the command that lifts it.
+do_release(){   # [--other <session>]
+  local target="" now rows rc=0 st ends taken host o w matched lifted=0 kept="" keep_n=0
+  case "${1:-}" in
+    '') ;;
+    --other)
+      [ -n "${2:-}" ] || die "nothing was released: --other needs the session whose hold to lift, as claude-sync status names it: claude-sync release --other <session>"
+      case "$2" in *[!A-Za-z0-9._-]*) die "nothing was released: '$2' is not a session name. claude-sync status names each hold's session." ;; esac
+      target="$2" ;;
+    *) die "nothing was released: release takes no argument except --other <session>, and '$1' is not that. A plain release lifts your own hold; claude-sync status names the others." ;;
+  esac
   [ -n "$SYNC_HOLD_FILE" ] || die "nothing was released: $(not_users_own_home), so this Mac's watcher hold is not its to lift. Name a hold file in SYNC_HOLD_FILE."
-  if [ -f "$SYNC_HOLD_FILE" ]; then
-    # Named, because the record is shared by every session on the Mac: a release lifting a hold
-    # somebody else took has to say whose it was, or that session's pause ends with nothing said.
-    why="$(hold_record_why)"
-    taken="$(awk 'NR==1{print $2}' "$SYNC_HOLD_FILE" 2>/dev/null)"
-    now="$(date +%s)"
-    rm -f "$SYNC_HOLD_FILE" 2>/dev/null || true
-    [ ! -e "$SYNC_HOLD_FILE" ] || die "nothing was released: the hold record at $SYNC_HOLD_FILE could not be removed, so the watcher is still held."
-    case "$taken" in
-      ''|*[!0-9]*) echo "Watcher hold released${why:+ ($why)}; the next edit sends normally." ;;
-      *) echo "Watcher hold released, the one taken $(age_in_words "$(( now - 10#$taken ))")${why:+ ($why)}; the next edit sends normally." ;;
-    esac
-  else
+  if [ ! -e "$SYNC_HOLD_FILE" ]; then
+    [ -z "$target" ] || die "nothing was released: no watcher hold is in force, so there is no hold by session $target to lift."
     # Said rather than passed over in silence: "nothing to release" and "released" are different
     # answers, and a release that reports success over a hold somebody else still holds is the
     # one that costs something (L98).
     echo "No watcher hold was in force, so nothing was released."
+    return 0
   fi
+  hold_lock || rc=$?
+  [ "$rc" = 0 ] || die "nothing was released: $(hold_lock_refusal "$rc"), so the watcher is held exactly as before."
+  now="$(date +%s)"
+  rows="$(hold_rows "$now")"
+  if [ -n "$target" ]; then
+    matched="$(printf '%s\n' "$rows" | awk -F '\037' -v t="$target" '$1 == "live" && index($5, t) == 1 { print $5 }' | sort -u)"
+    if [ -z "$matched" ]; then
+      hold_unlock
+      die "nothing was released: no watcher hold by session $target is in force. claude-sync status names each hold in force and its session."
+    fi
+    if [ "$(printf '%s\n' "$matched" | grep -c .)" -gt 1 ]; then
+      hold_unlock
+      die "nothing was released: '$target' names more than one session holding ($(printf '%s\n' "$matched" | tr '\n' ' ' | sed 's/ $//')), so which hold to lift is not decided. Give more of the session id."
+    fi
+  fi
+  # Which live holds this release lifts: its own and unowned ones, or the one named.
+  hold_release_lifts(){   # $1 = owner -> 0 when this release lifts that owner's hold
+    if [ -n "$target" ]; then [ "$1" = "$matched" ]
+    else [ "$1" = "$(hold_self)" ] || [ "$1" = unknown ]; fi
+  }
+  while IFS=$'\037' read -r st ends taken host o w; do
+    [ "$st" = live ] || continue
+    if hold_release_lifts "$o"; then lifted=$(( lifted + 1 )); else kept="$kept$st"$'\037'"$ends"$'\037'"$taken"$'\037'"$host"$'\037'"$o"$'\037'"$w"$'\n'; keep_n=$(( keep_n + 1 )); fi
+  done <<HOLDROWS
+$rows
+HOLDROWS
+  # Expired and unreadable lines go in the same rewrite: none of them holds anything.
+  if ! printf '%s' "$kept" | hold_write_rows; then
+    hold_unlock
+    die "nothing was released: the hold record at $SYNC_HOLD_FILE could not be rewritten, so the watcher is held exactly as before."
+  fi
+  hold_unlock
+  while IFS=$'\037' read -r st ends taken host o w; do
+    [ "$st" = live ] && hold_release_lifts "$o" || continue
+    if [ "$keep_n" -eq 0 ] && [ "$lifted" -eq 1 ]; then
+      echo "Watcher hold released, the one taken $(age_in_words "$(( now - 10#$taken ))") by $(hold_owner_words "$o")${w:+ ($w)}; the next edit sends normally."
+    else
+      echo "Watcher hold released, the one taken $(age_in_words "$(( now - 10#$taken ))") by $(hold_owner_words "$o")${w:+ ($w)}."
+    fi
+  done <<HOLDROWS
+$rows
+HOLDROWS
+  if [ "$lifted" -gt 1 ] && [ "$keep_n" -eq 0 ]; then echo "No hold is left, so the next edit sends normally."; fi
+  while IFS=$'\037' read -r st ends taken host o w; do
+    [ -n "$st" ] || continue
+    if [ "$lifted" -gt 0 ]; then
+      echo "The watcher is still held: the hold by $(hold_owner_words "$o") ($w) stays in force for another $(duration_in_words $(( 10#$ends - now )) exact). Lift it with: $(hold_lift_hint "$o")"
+    else
+      echo "No watcher hold of yours was in force, so nothing was released: the hold by $(hold_owner_words "$o") ($w) stays in force for another $(duration_in_words $(( 10#$ends - now )) exact). Lift it with: $(hold_lift_hint "$o")"
+    fi
+  done <<KEPTROWS
+$kept
+KEPTROWS
+  if [ "$lifted" -eq 0 ] && [ "$keep_n" -eq 0 ]; then echo "No watcher hold was in force, so nothing was released."; fi
   return 0
 }
 
@@ -10837,7 +11035,7 @@ do_send(){
   # #262: the automatic send is what takes a deliberate commit's message and cancels its CI run,
   # so it is the one a hold stops. An explicit `claude-sync send` is unaffected.
   if [ "${SYNC_IN_WATCH:-0}" = "1" ] && hold_left="$(hold_remaining)"; then
-    echo "claude-sync: the watcher is on hold for another $(duration_in_words "$hold_left" exact), so this edit was not sent. It goes out when the hold runs out, or immediately after: claude-sync release" >&2
+    echo "claude-sync: the watcher is on hold for another $(duration_in_words "$hold_left" exact), so this edit was not sent. It goes out once every hold has run out or been lifted with claude-sync release (claude-sync status names each hold and how to lift it)." >&2
     send_outcome held
     return 0
   fi
@@ -11634,11 +11832,19 @@ report_my_push(){
   return 0
 }
 
+# Every hold in force, one line each, with whose it is and the command that lifts it from here
+# (claude-config#1863): a plain release for this session's own or an unowned one, --other for
+# another session's.
 report_watcher_hold(){
-  local left
-  if left="$(hold_remaining)"; then
-    echo "watcher hold: the automatic send is held for another $(duration_in_words "$left" exact) ($(hold_record_why)). Lift it now with: claude-sync release"
-  fi
+  local now st ends taken host owner why
+  hold_remaining >/dev/null || return 0
+  now="$(date +%s)"
+  while IFS=$'\037' read -r st ends taken host owner why; do
+    [ "$st" = live ] || continue
+    echo "watcher hold: the automatic send is held for another $(duration_in_words $(( 10#$ends - now )) exact) by $(hold_owner_words "$owner") ($why). Lift it with: $(hold_lift_hint "$owner")"
+  done <<HOLDROWS
+$(hold_rows "$now")
+HOLDROWS
   return 0
 }
 
@@ -11774,7 +11980,7 @@ $(sync_stuck_records)
 CAUSEEOF
   [ -f "$CI_UNREADABLE_SINCE_FILE" ] && echo "the CI gate is holding config back, because no test verdict for the shared repo could be read (said above)"
   if left="$(hold_remaining 2>/dev/null)"; then
-    echo "the watcher is held for another $(duration_in_words "$left" exact), and its send is also what catches this Mac up between timer runs (claude-sync release ends it)"
+    echo "the watcher is held for another $(duration_in_words "$left" exact), and its send is also what catches this Mac up between timer runs (claude-sync status names each hold and the release that lifts it)"
   fi
   agentdir="$(launchagents_for_this_home)"
   if [ -n "$agentdir" ]; then
@@ -13792,7 +13998,7 @@ case "$cmd" in
   # a mutating run touches, and a hold that had to queue behind the very send it exists to hold off
   # would be useless exactly when it is reached for (#262).
   hold) do_hold "${2:-}" "${@:3}" ;;
-  release) do_release ;;
+  release) do_release "${@:2}" ;;
   status) do_status ;;           # read-only, deliberately never blocked
   verify) do_verify ;;           # read-only too: it answers a question, it changes nothing
   # Not wrapped in with_lock: it touches only the tool's own scratch under the temp directory,
