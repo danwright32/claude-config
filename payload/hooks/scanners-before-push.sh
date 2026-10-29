@@ -412,7 +412,14 @@ _sc_wait_bounded(){    # waits for this round's runs, or stops them when the bud
     # runs, so it is waited again to reap them.
     wait $_sc_inflight 2>/dev/null
     [ -n "$_sc_out_of_time" ] && wait $_sc_inflight 2>/dev/null
-    kill "$watchdog" 2>/dev/null
+    # KILL, never a plain kill (claude-config#1889). When the scanners finish quickly this runs a
+    # moment after the watchdog was started, and a plain kill arriving before the watchdog has
+    # finished becoming perl is caught by the handler this script's EXIT trap installs and is lost
+    # at the exec (L240). Measured 2026-10-29 with a bare loop of this shape: 1 in 40 starts under
+    # bash 3.2 and 2 in 80 under bash 5.3 outlived it, and on Linux CI it left a gate waiting here
+    # for the watchdog to sleep out the whole budget, a push that took 150 seconds and passed. A
+    # KILL cannot be caught or ignored, so the wait below always returns.
+    kill -9 "$watchdog" 2>/dev/null
     wait "$watchdog" 2>/dev/null
     trap - USR1
   fi
