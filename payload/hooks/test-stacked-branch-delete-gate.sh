@@ -646,7 +646,7 @@ echo "$NODE_FEAT" > "$ST/node"
 judge "gh api graphql -f query='mutation { updateRefs(input: {repositoryId: \"REF_kwDOfeat\", refUpdates: [{name: \"refs/heads/feat/x\", afterOid: \"$ZERO\"}]}) { clientMutationId } }'"
 check_eq "#1758 an updateRefs whose repository id names no repository is refused" "2" "$rc"
 
-# 19. A byte that is not UTF-8 stops bash's =~ and the system grep matching under a UTF-8 locale
+# 21. A byte that is not UTF-8 stops bash's =~ and the system grep matching under a UTF-8 locale
 # (claude-config#1885), so the fast path, and the crude reading used with no reader, read a delete
 # after one as absent and passed it. Each case writes such a byte into the JSON raw, in front of a
 # delete that names no "delete" (which the case pattern catches whatever the bytes), under
