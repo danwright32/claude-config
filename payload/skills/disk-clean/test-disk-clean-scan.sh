@@ -166,7 +166,13 @@ check "the walk finds a project's node_modules" "$(has "$(dcr_items "$REC")" "$H
 for p in "Library/Caches/x" ".Trash/p" ".ssh" "Some.app/Contents" "Dropbox/proj"; do
   check "the walk never goes into $p" "$(hasnt "$(dcr_items "$REC")" "$H/$p/node_modules")"
 done
-check "find is run once over the home folder for the walk, never once per category" "$(eq "$(dcr_header "$REC" walk)" complete)"
+check "the walk of a readable home folder is complete" "$(eq "$(dcr_header "$REC" walk)" complete)"
+# Counted from the harness's call log, where every find the scan runs is recorded: three categories
+# that each read the walk, and exactly one find whose starting folder is the home folder (L63).
+: > "$DC_CALLS"
+run_scan --only build-folders,worktrees,large-files
+check "find is run once over the home folder for the walk, never once per category" \
+  "$(eq "$(dc_calls find | awk -v h="$(printf '%q' "$H")" '$2 == h' | wc -l | tr -d ' ')" 1)"
 mkdir -p "$H/Apps/locked/x"; chmod 000 "$H/Apps/locked"
 run_scan --only build-folders
 check "a folder the walk cannot read makes the walk partial, saying how many" "$(has "$(dcr_header "$REC" walk)" "partial: 1 folder")"
@@ -200,8 +206,24 @@ rm -f "$STATE/remove.lock"
 # Test seams are honoured only in test mode, as disk-remove.sh does.
 run_scan_env -u DISK_CLEAN_TEST_ROOT bash "$SCAN" --only trash
 check "with a test seam set outside test mode it refuses with exit 2" "$(eq "$RC" 2)"
+run_scan_env -u DISK_CLEAN_TEST_ROOT -u DISK_CLEAN_TRASH -u DISK_CLEAN_JUDGE -u DISK_CLEAN_DERIVED_DATA_SWEEP DISK_CLEAN_DATALESS="$DC_ROOT/dataless" bash "$SCAN" --only trash
+check "the stand-in list of cloud only folders alone, outside test mode, is refused too" "$(eq "$RC $(has "$OUT_TEXT" DISK_CLEAN_DATALESS)" "2 ok")"
 run_scan --only nonsense
 check "an unknown category is refused with exit 2" "$(eq "$RC" 2)"
+
+# A working folder that cannot be made is a failed scan, never a finished one (#1851): mktemp
+# failing inside scan-lib.sh's dcs_init once exited 0 from the sourced library, so scan.sh exited 0
+# having written no record. TMPDIR is made unwritable, so mktemp really fails.
+rm -f "$REC"
+chmod 500 "$DC_TMPDIR"
+run_scan --only trash
+check "a working folder that cannot be made fails the scan with exit 2" "$(eq "$RC" 2)"
+check "and names what could not be made, and where" "$(has "$OUT_TEXT" "could not make a working folder under $DC_TMPDIR")"
+check "and says it scanned nothing" "$(has "$OUT_TEXT" "so it scanned nothing")"
+check "and wrote no record" "$([ -e "$REC" ] && echo "a record was written" || echo ok)"
+OUT_TEXT="$(dc_run bash "$DIR/categories/trash.sh" judge "$H/.Trash/x" 2>&1)"; RC=$?
+check "a judge run alone that cannot make one fails too, so disk-remove reads it as unmeasured" "$(eq "$RC" 2)"
+chmod 700 "$DC_TMPDIR"
 
 # ================================================================================================
 # 6. A path holding a control character is left out, said so, and never breaks the record
@@ -212,6 +234,47 @@ run_scan --only caches
 check "the record is still written whole" "$(dcr_complete "$REC" && echo ok || echo incomplete)"
 check "the ordinary folder is listed" "$(has "$(dcr_items "$REC")" "$H/Library/Caches/com.ok")"
 check "the scan says it left one out" "$(has "$(dcr_header "$REC" note.caches)" "left out 1 path")"
+
+# A status or note carries a tool's own words, such as the first line of its stderr, and dcr_write
+# refuses the whole record over one control character in a header value (#1851). So the scan cleans
+# them where it notes them: a tab or newline becomes a space, anything else is dropped.
+fresh
+mkdir -p "$H/Library/Developer/Xcode/DerivedData/App-x" "$H/.Trash"; printf 'x\n' > "$H/.Trash/t"
+dc_stub derived-data-sweep 'printf "boom\tthere\001 now\n" >&2; exit 9'
+run_scan --only xcode,trash
+check "a tool error holding a tab and a control character still leaves a whole record" "$(eq "$RC $(dcr_complete "$REC" && echo whole)" "0 whole")"
+check "the tab reads as a space and the other control character is dropped" "$(has "$(dcr_header "$REC" status.xcode)" "(exit 9: boom there now)")"
+check "the other category's items are still in the record" "$(eq "$(dcr_header "$REC" status.trash)" measured)"
+printf 'status.x%sa\tb\n' "$S" > "$DC_ROOT/notes3"
+check "dcr_write itself still refuses a header value holding a control character" "$(dcr_write "$DC_ROOT/r4.json" sw 100 "$DC_ROOT/items1" "$DC_ROOT/notes3" && echo "wrote it" || echo ok)"
+
+# ================================================================================================
+# 6b. The closing summary never reads a size it could not read as 0 (L90, L11, #1851)
+# ================================================================================================
+# Worded as the low space warning words the same record (#1809): an offerable item whose size is
+# partial, denied or unread makes the category's total "at least", and one with no size read at
+# all is never totalled as 0 KB.
+du_mixed='for a in "$@"; do case "$a" in -*) ;; *unread) ;; *com.part) printf "12\t%s\n" "$a"; printf "du: %s/sub: Permission denied\n" "$a" >&2 ;; *) printf "12\t%s\n" "$a" ;; esac; done'
+fresh
+mkdir -p "$H/Library/Caches/com.a" "$H/Library/Caches/com.unread"
+dc_stub du "$du_mixed"
+run_scan --only caches
+check "an unread size makes the total at least" "$(has "$OUT_TEXT" "App caches: 2 offerable (at least 12 KB), 0 not offerable, 0 unmeasured.")"
+fresh
+mkdir -p "$H/Library/Caches/com.a" "$H/Library/Caches/com.part"
+dc_stub du "$du_mixed"
+run_scan --only caches
+check "a partial size makes the total at least" "$(has "$OUT_TEXT" "App caches: 2 offerable (at least 24 KB), 0 not offerable, 0 unmeasured.")"
+fresh
+mkdir -p "$H/Library/Caches/com.unread"
+dc_stub du "$du_mixed"
+run_scan --only caches
+check "with no size read at all the total is unknown, never 0 KB" "$(has "$OUT_TEXT" "App caches: 1 offerable (size unknown), 0 not offerable, 0 unmeasured.")"
+fresh
+mkdir -p "$H/Library/Caches/com.a"
+dc_stub du "$du_mixed"
+run_scan --only caches
+check "every size measured in full keeps the plain total" "$(has "$OUT_TEXT" "App caches: 1 offerable (12 KB), 0 not offerable, 0 unmeasured.")"
 
 # ================================================================================================
 # 7. Thousands of items (L101): every one recorded, sized in one batch, in bounded time

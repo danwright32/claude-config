@@ -6,6 +6,9 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L823. Code that ships under a different loader than its tests use, such as a script Node runs by stripping types while Vitest compiles it fully, is proven only by loading it the way it ships, so turn on the compiler setting that refuses what that loader cannot run (erasableSyntaxOnly for Node type stripping).**
+  (pivot#229, 2026-10-29)
+  SHORT: Tests compiled differently from how code ships prove nothing about loading; refuse what the shipping loader can't run (erasableSyntaxOnly).
 - **L818. A feature that runs across several deployed services gets its live end-to-end check as its first deliverable, run after every deploy, before any screen is built on top, because unit tests with stand-ins, a build check and a sign-in smoke check each prove one layer and the first person to run the whole thing otherwise finds every fault one at a time.**
   (pivot#126, 2026-10-28)
   SHORT: A multi-service feature's live end-to-end check is its first deliverable, run every deploy; layer checks leave a user to find each fault.
@@ -3297,6 +3300,9 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L821. A deadline raced against work must report a timeout only when the deadline actually won, because a timer that resolves when cancelled runs every .then attached to it, so a timeout message or side effect hung there fires on the path where the work answered in time and reads as a failure that never happened.** (bidspoke#2968, 2026-10-28)
+  SHORT: Report a raced deadline's timeout only if it won; a timer resolving on cancel runs its .then on the path that answered in time.
+
 - **L800. A monitor warning that an operation is nearing its limit must not read only what is recorded when an operation finishes, because one killed at the limit never finishes and so never appears, and the failure the warning exists for reads as absent; count the kills from a source that sees them.** (bidspoke#2651, 2026-10-22)
   SHORT: A near-limit monitor reading only what finished cannot see an operation killed at the limit, so count the kills from a source that sees them.
 - **L795. An alert opened from state held inside one short-lived process (a Worker isolate, a serverless instance, a pod) must be clearable from a healthy reading any process can take, because the process that opened it can be evicted before it ever sees the recovery, and the alert then stays open and repeats a false outage.** (slate#4008, 2026-10-21)
@@ -3320,6 +3326,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   choice; a shared batch call or a concurrent map lets one rejection take down every member.**
   (slate#3700, 2026-10-13)
   SHORT: Checking several candidates to choose one, judge each one's failure on its own, so one broken candidate is skipped, not the whole choice failed.
+
+- **L1034. A safety check that guards an action must be the last step before that action, because any
+  work placed between them (measuring, logging, a lookup) widens the window in which what was checked
+  can change.**
+  (claude-config#1872, 2026-10-28)
+  SHORT: A safety check guarding an action must be the last step before it: any work between them widens the window for what it checked to change.
+
+- **L1033. A check that runs a script and reads one exit code as nothing to refuse must not use 1 for
+  it, because 1 is also what the interpreter exits on a crash: give the clean answer its own code and
+  treat every other code as could not read.**
+  (claude-config#1869, 2026-10-28)
+  SHORT: A check reading a script's exit 1 as nothing to refuse passes every crash: give the clean answer its own code, and any other is unread.
 
 - **L490. A guard that parses its input through an external interpreter (jq, python, awk) must
   assert that interpreter is present before parsing, and refuse by name when it is not.** An absent
@@ -10110,6 +10128,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A recovery that re-submits into the queue it waits on must first ask whether the work is already pending, or it false-alarms and lengthens the delay.
 - **L798. Deleting a deployed thing's source from the repository does not remove it from the platform it runs on, so a removal is finished only when the platform's own list no longer shows it, and a teardown left as a sentence in a pull request body is never carried out.** (project-enrollment-tracker#1855, 2026-10-21)
   SHORT: Deleting a deployed thing's source does not undeploy it; a removal is done only when the platform's own list no longer shows it.
+- **L822. Before narrowing who may use a shared resource (a runner group, an allowlist, a token's scope), list every current user from the resource's own usage record and admit each one that should keep it, because a user left out often does not fail loudly: its work waits for a turn that never comes.** (project-enrollment-tracker#1961, 2026-10-29)
+  SHORT: Before narrowing who may use a shared resource, list its current users from its own usage record: one left out often just waits, silently.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

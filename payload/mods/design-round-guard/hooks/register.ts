@@ -37,7 +37,7 @@ import {
   isModHook,
   isModHookTs,
   drawnParts,
-  drawsChange,
+  modHookTsShows,
   isOwnRecord,
   isDesignRecord,
   sealCheck,
@@ -57,6 +57,7 @@ import {
   isTestPath,
   patternMayBeLook,
   nameFromOutput,
+  outputTrusted,
   relTo,
   shapeKind,
   shellVarPath,
@@ -137,7 +138,8 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   in it reaches what the mod draws (rules.ts drawsChange), read beside the mod's other hook files: a
 //   line builder making mod-kit's text runs, dividers or buttons (manual steps' cardLines, where the
 //   #1263 divider passed unasked), anything handed to a drawing call or used in JSX, and every name
-//   those use. Any other edit there passes, as does every edit to a .ts file that draws nothing.
+//   those use. Any other edit there passes, as does every edit to a .ts file that draws nothing,
+//   unless it changes the words of a message a person reads (since #1841, below).
 // - Since #1158: a git checkout or restore of such a file is judged by the lines it changes, against
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
 //   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
@@ -180,8 +182,9 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   kept first, and the call waits on him. Since #1682 mod-kit's `runs` also gives a module run with
 //   python -m and a tool run through npx, each judged here as a script run is.
 // - Since #1756: the words a mod hands mod-kit's blocked card (`$.modkit.blocked`: its guard name,
-//   reason and safe way) are copy in a tool result row, not drawing, so a changed refusal passes; the
-//   card's look is mod-kit's own, judged in its card.ts (rules.ts DRAW_CALL). And an Edit, MultiEdit
+//   reason and safe way) are copy in a tool result row, not drawing, so a changed refusal passed (since
+//   #1841 it is held again as a message's words); the card's look is mod-kit's own, judged in its
+//   card.ts (rules.ts DRAW_CALL). And an Edit, MultiEdit
 //   or Write leaving a mod's .ts hook file with a bracket open, half of a change made in two edits,
 //   passes, the edit closing it judged against the file before the first (drawingChange, midEdits).
 // - Since #1773: a pattern's groups (bash's extglob, zsh's alternation and qualifiers, a bar) are
@@ -203,6 +206,22 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   result, a command's reply) is unchanged (rules.ts modHookDrawingUntouched and
 //   messageWordingSame, in nothingShown; Dan, 2026-10-27: "Timing wording can go through, but
 //   message wording should be asked about"). A JSX element or a colour in those lines is held as before.
+// - Since #1841: a mod's .ts hook file is held for the same wording too, not only for what it draws
+//   (rules.ts modHookTsShows: drawsChange, or messageWordingSame false), by an Edit, a git put back or
+//   a shell write alike, so a toast, a refusal's reason or a tool's result reworded there is asked
+//   about. When a message is sent, the logic around it, and a tool's or schema's description pass; a
+//   property a tool's input schema names `reason` or `text` is no message. Only the words a person
+//   reads count there (Dan, 2026-10-28: "Narrow it first"): a regular expression, a value compared,
+//   a type's union, a command's words and flags, what a string is split, searched or keyed by, and a
+//   string with no letter in it, which a message is only computed from, pass.
+// - Since #1864: a one word tag passes too where its own place shows it is one (rules.ts readMod's
+//   tagAt and answerTag): a field of a record that holds more than words (`kind: 'focus'`, an argv's
+//   `'gh'`), an argument a function of the file only runs, searches or compares, and an answer the
+//   function's own signature names. A .tsx or .jsx file's messages are read for their words the same
+//   way, which releases the one edit #1823 held for a compared button name (Dan approved, 2026-10-28).
+// - Since #1832: a script file handed a name a command substitution fills in is held the same way,
+//   unless every substitution in it is `git rev-parse`, alone or with -C (rules.ts outputTrusted; Dan,
+//   2026-10-27: "git rev-parse only"), so a commit handed as `--sha` passes and a scope list is held.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -214,7 +233,7 @@ const fromAgent = new Set<string>()
 // #1296: a mod's .ts hook file a shell write may change, as it stood before the command ran: its path,
 // checkout, name in its hooks folder, text (undefined for one not there) and the mod's hook files.
 // `tsx` for a TSX or JSX hook file (#1576), judged after by the rule its Edit is (nothingShown), where a
-// .ts file is judged by drawsChange over `files`. `record` for a settled design under docs/design a
+// .ts file is judged by modHookTsShows over `files` (#1841). `record` for a settled design under docs/design a
 // script run is handed (#1593), judged after by the design rounds skill's seal check (sealedAfter).
 type Watched = { path: string; tree: string; name: string; before: string | undefined; files: ModFile[]; tsx?: true; record?: true }
 // The main session's passing shell calls with files to read again once they ran, by tool_use_id: set
@@ -586,7 +605,8 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
 }
 
 // Whether a call's change to a mod's plain TypeScript hook file (rules.ts isModHookTs) changes what the
-// mod draws (#1275): 'held' when it does, or when the mod's hook files cannot be listed or read; the
+// mod draws (#1275) or a message's words (#1841, rules.ts modHookTsShows): 'held' when it does, or
+// when the mod's hook files cannot be listed or read; the
 // reason, for a git checkout or restore whose lines could not be read, judged whole; 'pass' otherwise,
 // and for a folder no plugin.json makes a mod. What a call leaves: a Write's content, an Edit's or
 // MultiEdit's text applied to the file, what git puts back (#1158). A shell write, which cannot be read
@@ -594,7 +614,7 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
 // to a file that drew nothing since #1296, and since #1576 one to a file that draws too, so a shell
 // write and an Edit making the same change are judged alike. Any other call that cannot be read before
 // it runs (an edit that would not apply, a call naming several files) is held where the file draws
-// now and passes where it does not. A change to its comments alone passes (rules.ts commentOnlyChange,
+// or sends a message now and passes where it does neither. A change to its comments alone passes (rules.ts commentOnlyChange,
 // #1341).
 const drawingChange = async (
   $: EngineInterface,
@@ -624,7 +644,7 @@ const drawingChange = async (
     after = back.text
   } else if (tool !== 'Bash' && pathsOf(input).length === 1) after = tool === 'Write' ? editedText('', tool, input) : now === undefined ? undefined : editedText(now, tool, input)
   if (after === undefined) {
-    if (tool !== 'Bash') return drawsChange(files, name, undefined, now) ? 'held' : 'pass'
+    if (tool !== 'Bash') return modHookTsShows(files, name, undefined, now) ? 'held' : 'pass'
     // A file whose drawing cannot be read now could not be judged after either: held.
     if (drawnParts(files, name) === null) return 'held'
     // Once per file, however many of the command's words write it (lessons review).
@@ -649,12 +669,12 @@ const drawingChange = async (
       }
       if (nowOpen && was !== undefined) return 'pass'
     } else if (nowOpen && was !== undefined) {
-      if (drawsChange(files, name, was, after)) return 'held'
+      if (modHookTsShows(files, name, was, after)) return 'held'
       midEdits.delete(t.path)
       return 'pass'
     }
   }
-  return drawsChange(files, name, now, after) ? 'held' : 'pass'
+  return modHookTsShows(files, name, now, after) ? 'held' : 'pass'
 }
 
 // The file a command copies whole into `path`, when the command is one cp alone with no option, naming
@@ -817,9 +837,11 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // gives it a path.
     // A name a command's output fills in, handed to a tool through npx or a module through python -m
     // (#1815: `npx prettier --write $(git ls-files src)`), is judged the same way, as a name no rule
-    // reads. Not one a script file is handed: its arguments are its own, and on this Mac every one
-    // measured was a commit, a test scope or quoted text (182 of 104,832 commands, 2026-10-27).
-    const output = t.tool === true && !t.path && nameFromOutput(t.word)
+    // reads. So is one a script file is handed (#1832), unless every substitution in it is
+    // `git rev-parse` run alone, the one output Dan trusts to name no file (2026-10-27, picker
+    // answer "git rev-parse only"): `--sha "$(git rev-parse HEAD)"` passes, a test scope list
+    // (`$(cat scope.txt)`) is held.
+    const output = !t.path && nameFromOutput(t.word) && (t.tool === true || !outputTrusted(t.word))
     if (tool === 'Bash' && (output || (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
       let tree: string | null | undefined
@@ -1162,7 +1184,7 @@ const afterShell = async (
       continue
     }
     // A TSX or JSX hook file by the rule its Edit is judged by (#1576); one made or taken away is a change.
-    const shows = w.tsx ? w.before === undefined || after === undefined || !(await nothingShown($, w.path, w.tree, w.before, after)) : drawsChange(w.files, w.name, w.before, after)
+    const shows = w.tsx ? w.before === undefined || after === undefined || !(await nothingShown($, w.path, w.tree, w.before, after)) : modHookTsShows(w.files, w.name, w.before, after)
     if (shows) changed.push({ w, after })
   }
   if (!changed.length) return r

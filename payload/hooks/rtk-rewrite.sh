@@ -280,24 +280,28 @@ done <<< "$rtk_invocations"
 # subcommand, so `rtk gh -R o/x api ...` is gh api and the third word is not. Only the commands rtk
 # runs are judged, so a gh that rtk left as written costs the rest of the rewrite nothing. With no
 # reader to ask (no python3, no lib), nothing can tell gh api from the rest and the rewrite is
-# refused: that costs a token saving and cannot cost a field (L42). The substring test only spares
-# commands that cannot run gh at all the cost of starting the reader.
-case "$REWRITTEN" in
-  *gh*)
-    rtk_hook_dir="${BASH_SOURCE[0]%/*}"; [ "$rtk_hook_dir" != "${BASH_SOURCE[0]}" ] || rtk_hook_dir=.
-    # shellcheck source=lib/push-scope.sh
-    . "$rtk_hook_dir/lib/push-scope.sh" 2>/dev/null || exit 0
-    ps__read "$REWRITTEN"; [ "$?" -ne 1 ] || exit 0
-    rtk_rec="${PS__M_FIRST[$PS__HIT]}"; rtk_rec_end=$((rtk_rec + PS__M_COUNT[PS__HIT]))
-    while [ "$rtk_rec" -lt "$rtk_rec_end" ]; do
-      case $'\x1f'"${PS__R_WORDS[$rtk_rec]}"$'\x1f' in
-        *$'\x1f'rtk$'\x1f'*)
-          if ! ps_runs_at gh "$rtk_rec" api && [ -n "$PS_RUN_SUB" ]; then exit 0; fi ;;
-      esac
-      rtk_rec=$((rtk_rec + 1))
-    done
-    ;;
-esac
+# refused: that costs a token saving and cannot cost a field (L42). The word test only spares
+# commands that cannot run gh at all the cost of starting the reader. It was a bare gh anywhere,
+# which "wright" in every path under a home folder on Dan's Macs matched, so each rtk rewrite naming
+# one started python3 for nothing (claude-config#1880). Every character but a letter, digit or
+# underscore counts as a boundary, so it errs toward reading, and the C locale keeps a byte that is
+# not UTF-8 from failing the match and skipping the reader.
+RTK_GH_WORD='(^|[^A-Za-z0-9_])gh([^A-Za-z0-9_]|$)'
+rtk_names_gh() { local LC_ALL=C; [[ "$1" =~ $RTK_GH_WORD ]]; }
+if rtk_names_gh "$REWRITTEN"; then
+  rtk_hook_dir="${BASH_SOURCE[0]%/*}"; [ "$rtk_hook_dir" != "${BASH_SOURCE[0]}" ] || rtk_hook_dir=.
+  # shellcheck source=lib/push-scope.sh
+  . "$rtk_hook_dir/lib/push-scope.sh" 2>/dev/null || exit 0
+  ps__read "$REWRITTEN"; [ "$?" -ne 1 ] || exit 0
+  rtk_rec="${PS__M_FIRST[$PS__HIT]}"; rtk_rec_end=$((rtk_rec + PS__M_COUNT[PS__HIT]))
+  while [ "$rtk_rec" -lt "$rtk_rec_end" ]; do
+    case $'\x1f'"${PS__R_WORDS[$rtk_rec]}"$'\x1f' in
+      *$'\x1f'rtk$'\x1f'*)
+        if ! ps_runs_at gh "$rtk_rec" api && [ -n "$PS_RUN_SUB" ]; then exit 0; fi ;;
+    esac
+    rtk_rec=$((rtk_rec + 1))
+  done
+fi
 
 # NEVER rewrite a command so that a package RUNNER it named disappears (claude-config#1408).
 #

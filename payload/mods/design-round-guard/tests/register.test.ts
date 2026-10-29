@@ -1737,6 +1737,32 @@ test("#1275: a shell write making a line builder file draw differently is undone
   expect(w.ran.length).toBe(4)
 })
 
+// #1841: a mod's .ts hook file was judged only by what it draws, so a toast reworded there passed
+// unasked. Dan, 2026-10-27, for #1823: "Timing wording can go through, but message wording should be
+// asked about". Shaped after mods/secret-guard's register.ts, which draws nothing.
+const GUARD_HOOK = `${DEMO}/guard.ts`
+const GUARD_TEXT = `import type { EngineInterface } from 'claude-code'
+export const KEEP_SPEC = { name: 'keep_job', description: 'Keep a background job running on purpose.' }
+export const refuse = async ($: EngineInterface, what: string) => {
+  if (what.length > 3) await $.ui.toast('Blocked a command that would print a secret.')
+}
+`
+test("#1841: a toast reworded in a mod's .ts hook file is asked about, by an Edit or a shell write; a logic change there and a tool description pass", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: GUARD_HOOK, old_string: from, new_string: to })
+  expect(refusalOf(await call($, edit('Blocked a command that', 'Stopped a command that')))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('what.length > 3', 'what.length > 5')))).toBe('')
+  expect(refusalOf(await call($, edit('running on purpose.', 'up on purpose.')))).toBe('')
+  expect(w.ran.length).toBe(2)
+  // What sed leaves is read once it ran, by the same rule: the new words are undone and asked about.
+  const now = w.files[GUARD_HOOK] as string
+  w.ctl.shell = { [GUARD_HOOK]: now.replace('Blocked a command that', 'Stopped a command that') }
+  const why = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Blocked a command/Stopped a command/' payload/mods/demo/hooks/guard.ts" }))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('was undone')
+  expect(w.files[GUARD_HOOK]).toBe(now)
+})
+
 // #1341: a python heredoc that only reflowed a comment in this guard's own register.ts was refused as a
 // look change. A change to comments alone draws nothing, by any tool the guard can read before it runs.
 test('#1341: an edit to comments alone in a mod hook file passes unasked by Edit, MultiEdit or Write; beside a look change, or in what only looks like a comment, it is asked', withKit, async ($, on) => {
@@ -2764,21 +2790,40 @@ test('#1815: a tool or module handed a name a command substitution fills in is h
   expect(w.ran).toEqual([])
 })
 
-test('#1815 control: a script file handed a substitution, or a tool handed one only in a folder, is judged as before', withKit, async ($, on) => {
+test('#1815 control: a script file handed a git rev-parse substitution, or a tool handed one only in a folder, passes', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate/apps/worker' })
   for (const command of [
     // #1802's releases: code, a query string after a closed substitution.
     MUTATE('if (a || b) {', 'if (a && b) {'),
     'python3 sentry.py "/api/0/issues/$(cat id)/events/?full=true"',
-    // A script file's own arguments, as measured: a commit, a test scope.
+    // A script file handed a commit git rev-parse prints (#1832 keeps trusting that one).
     'bash ~/.claude/hooks/lib/pr-review.sh start --dir "$PWD" --sha "$(git rev-parse HEAD)"',
-    'mac/scripts/run-tests-locked.sh $(cat /tmp/scope.txt)',
     // A name the command spells itself, in a folder a substitution gives.
     'npx prettier --write "$(git rev-parse --show-toplevel)/notes.md"',
     'npx prettier --write src/lib/engine.ts',
   ])
     expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
-  expect(w.ran.length).toBe(6)
+  expect(w.ran.length).toBe(5)
+})
+
+// #1832: after #1815 a script file handed a name a substitution fills in still passed, so
+// `python3 scripts/gen.py $(git diff --name-only main)` could write screen files unasked. Dan decided
+// on 2026-10-27 (picker answer "git rev-parse only") that only `git rev-parse`'s output is trusted
+// to name no file; every other substitution handed to a script is held, test scope lists included.
+test('#1832: a script handed a name a substitution fills in is held unless git rev-parse alone fills it', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    'python3 scripts/gen.py $(git diff --name-only main)',
+    'mac/scripts/run-tests-locked.sh $(cat /tmp/scope.txt)',
+    'bash scripts/fmt.sh `git ls-files src`',
+    'node build.js "$(git rev-parse HEAD; cat names)"',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes('could not be followed') && why.includes('cannot read') }).toEqual({ command, held: true })
+  }
+  for (const command of ['python3 scripts/stamp.py $(git rev-parse HEAD)', 'bash scripts/tag.sh `git rev-parse --short HEAD`'])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(2)
 })
 
 test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {

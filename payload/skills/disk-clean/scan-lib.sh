@@ -20,8 +20,10 @@
 #
 # TEST MODE is the harness's (hooks/lib/disk-clean-harness.sh): DISK_CLEAN_TEST_ROOT set and HOME
 # physically inside it, judged by hooks/lib/disk-clean-predicates.sh, the predicate disk-remove.sh
-# uses. Only then are the seams honoured: DISK_CLEAN_DERIVED_DATA_SWEEP (a command) and the Claude
-# Code temp folder moving under TMPDIR. Outside test mode a seam being set refuses everything.
+# uses. Only then are the seams honoured: DISK_CLEAN_DERIVED_DATA_SWEEP (a command),
+# DISK_CLEAN_DATALESS (a file of paths that stand in for entries iCloud keeps only in the cloud,
+# since chflags cannot set that flag) and the Claude Code temp folder moving under TMPDIR. Outside
+# test mode a seam being set refuses everything.
 #
 # Commands: awk cat date dirname du find grep id ls lsof mkdir mktemp ps sed sort stat tr wc xargs,
 # and the builtins. bash 3.2 safe. Sourcing defines constants and functions and runs dcs_init.
@@ -84,11 +86,12 @@ dcs_init() {
       exit 2
     }
   else
-    [ -z "${DISK_CLEAN_DERIVED_DATA_SWEEP+x}${DISK_CLEAN_TRASH+x}${DISK_CLEAN_JUDGE+x}${DISK_CLEAN_CATEGORIES+x}" ] || {
-      echo "disk-clean: a test seam (DISK_CLEAN_DERIVED_DATA_SWEEP, DISK_CLEAN_TRASH, DISK_CLEAN_JUDGE or DISK_CLEAN_CATEGORIES) is set, but DISK_CLEAN_TEST_ROOT is not, and the seams are honoured only in test mode, so it scanned nothing."
+    [ -z "${DISK_CLEAN_DERIVED_DATA_SWEEP+x}${DISK_CLEAN_TRASH+x}${DISK_CLEAN_JUDGE+x}${DISK_CLEAN_CATEGORIES+x}${DISK_CLEAN_DATALESS+x}" ] || {
+      echo "disk-clean: a test seam (DISK_CLEAN_DERIVED_DATA_SWEEP, DISK_CLEAN_TRASH, DISK_CLEAN_JUDGE, DISK_CLEAN_CATEGORIES or DISK_CLEAN_DATALESS) is set, but DISK_CLEAN_TEST_ROOT is not, and the seams are honoured only in test mode, so it scanned nothing."
       exit 2
     }
   fi
+  dcs_dl_setup
   [ -n "${HOME:-}" ] || { echo "disk-clean: HOME is not set, so it scanned nothing."; exit 2; }
   DCS_HOME="$(CDPATH= cd -P "$HOME" 2>/dev/null && pwd -P)" || { echo "disk-clean: could not read the home folder $HOME, so it scanned nothing."; exit 2; }
   DCS_STATE="$HOME/.claude/state/disk-clean"
@@ -96,11 +99,17 @@ dcs_init() {
   DCS_UID="$(id -u 2>/dev/null)" || DCS_UID=""
   # Claude Code keeps a temp folder per project and session under /tmp/claude-<uid>.
   if [ -n "$DCS_TEST_ROOT" ]; then DCS_CLAUDE_TMP="${TMPDIR%/}/claude-$DCS_UID"; else DCS_CLAUDE_TMP="/private/tmp/claude-$DCS_UID"; fi
-  # The private working folder: scan.sh hands its own down; a judge run alone makes one.
+  # The private working folder: scan.sh hands its own down; a judge run alone makes one. Failing to
+  # make one is a failure (exit 2), never exit 0: this runs inside whatever sourced the library, so
+  # an exit 0 here once ended scan.sh with success and no record (#1851). A judge's caller,
+  # disk-remove.sh, reads a judge that exits non zero as unmeasured, so a judge refuses too.
   if [ -n "${DISK_CLEAN_WORK:-}" ] && [ -d "$DISK_CLEAN_WORK" ]; then
     DCS_WORK="$DISK_CLEAN_WORK"; DCS_OWN_WORK=""
   else
-    DCS_WORK="$(mktemp -d "${TMPDIR:-/tmp}/disk-clean.XXXXXXXX")" || { echo "unmeasured: could not make a working folder under ${TMPDIR:-/tmp}"; exit 0; }
+    DCS_WORK="$(mktemp -d "${TMPDIR:-/tmp}/disk-clean.XXXXXXXX" 2>&1)" || {
+      echo "disk-clean: could not make a working folder under ${TMPDIR:-/tmp} (mktemp said: ${DCS_WORK:-nothing}), so it scanned nothing."
+      exit 2
+    }
     DCS_OWN_WORK=1
     trap 'dcs_cleanup' EXIT
   fi
@@ -110,8 +119,12 @@ dcs_cleanup() { [ -n "${DCS_OWN_WORK:-}" ] && [ -n "${DCS_WORK:-}" ] && rm -rf "
 # ---------------------------------------------------------------------------------------------
 # Output lines
 # ---------------------------------------------------------------------------------------------
+# Every item carries icloud-only-part when dcs_measure sized it around a folder iCloud keeps only in
+# the cloud: added here, where every module writes its items, so no module can leave it off (L621).
 dcs_item() { # <target> <method> <KiB> <size> <state> <flags> <detail> <identity>
-  printf 'item%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%send\n' "$S" "$1" "$S" "$2" "$S" "$3" "$S" "$4" "$S" "$5" "$S" "$6" "$S" "$7" "$S" "$8" "$S"
+  local fl="$6"
+  if [ -s "$DCS_WORK/dataless-part" ] && grep -qxF -- "$1" "$DCS_WORK/dataless-part"; then fl="$(dcs_join "$fl" icloud-only-part)"; fi
+  printf 'item%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%send\n' "$S" "$1" "$S" "$2" "$S" "$3" "$S" "$4" "$S" "$5" "$S" "$fl" "$S" "$7" "$S" "$8" "$S"
 }
 dcs_status() { printf 'status%s%s\n' "$S" "$1"; }
 dcs_note() { printf 'note%s%s\n' "$S" "$1"; }
@@ -123,11 +136,34 @@ dcs_note() { printf 'note%s%s\n' "$S" "$1"; }
 #   partial   du gave a figure but said it could not read something beneath the path: a lower bound
 #   denied    du could not read the path itself (Full Disk Access, or a root only folder): no figure
 #   unread    du gave no figure for it and said nothing about it: no figure, never 0
+# du does not skip a folder iCloud keeps only in the cloud, and reading one makes iCloud fetch it
+# (#1860: 1,673 of them in four Slate worktree build folders). So a path with one at or beneath it
+# (the walk's own test, DCS_DL) is never given to du: a find that stops at each one lists the rest
+# and their blocks are summed, each file once however many links it has. That is exactly what is
+# stored on this Mac, since nothing under a dataless folder is, so it is measured, never partial, and
+# the path is written to dataless-part, which makes dcs_item flag it icloud-only-part. Its errors are
+# read as du's are; a find or stat that failed saying nothing leaves it unread. The search costs
+# about one more du over the same paths (measured 2026-10-28 on the personal MacBook at load 16, a
+# 97,000 entry node_modules: 0.6 s, against 0.4 s for du warm and 1.4 s cold); it is run on every
+# path rather than only on iCloud synced ones, because missing one makes iCloud fetch it.
 dcs_measure() { # <file of paths>
   local list="$1" out="$DCS_WORK/du.out.$$" err="$DCS_WORK/du.err.$$" ids="$DCS_WORK/stat.out.$$" rc
-  : > "$out"; : > "$err"; : > "$ids"
+  local dl="$DCS_WORK/dl.found.$$" plain="$DCS_WORK/du.list.$$" part="$DCS_WORK/dl.list.$$" p
+  : > "$out"; : > "$err"; : > "$ids"; : > "$dl"; : > "$part"
   [ -s "$list" ] || return 0
-  tr '\n' '\000' < "$list" | xargs -0 du -sk -- > "$out" 2> "$err"; rc=$?
+  if [ -n "$DCS_DL_ANY" ]; then
+    dcs_dl_beneath "$list" > "$dl"
+    awk -v plain="$plain" -v part="$part" 'FILENAME == ARGV[1] { d[$0] = 1; next }
+      { for (x in d) if (x == $0 || index(x, $0 "/") == 1) { print > part; next } print > plain }' "$dl" "$list"
+  else
+    cat "$list" > "$plain"
+  fi
+  rc=0
+  if [ -s "$plain" ]; then tr '\n' '\000' < "$plain" | xargs -0 du -sk -- > "$out" 2> "$err"; rc=$?; fi
+  while IFS= read -r p; do
+    dcs_size_around "$p" >> "$out" 2>> "$err"
+    printf '%s\n' "$p" >> "$DCS_WORK/dataless-part"
+  done < "$part"
   if stat -c '%d:%i' / >/dev/null 2>&1; then
     tr '\n' '\000' < "$list" | xargs -0 stat -c "%d:%i$S%n" > "$ids" 2>/dev/null
   else
@@ -136,8 +172,9 @@ dcs_measure() { # <file of paths>
   awk -v sep="$S" -v rc="$rc" '
     FILENAME == ARGV[1] { t = index($0, "\t"); if (t) kib[substr($0, t + 1)] = substr($0, 1, t - 1); next }
     FILENAME == ARGV[2] {
-      # "du: <path>: <reason>": the path is everything between the first ": " and the last.
-      line = $0; sub(/^du: /, "", line)
+      # "du: <path>: <reason>" (or find: or stat:): the path is everything between the first ": "
+      # and the last.
+      line = $0; sub(/^(du|find|stat): /, "", line)
       n = 0; for (i = length(line) - 1; i > 0; i--) if (substr(line, i, 2) == ": ") { n = i; break }
       if (n) { p = substr(line, 1, n - 1); bad[p] = 1; nbad++ } else { loose++ }
       next
@@ -153,7 +190,37 @@ dcs_measure() { # <file of paths>
       }
       print p sep k sep size sep ident[p]
     }' "$out" "$err" "$ids" "$list"
-  rm -f "$out" "$err" "$ids"
+  rm -f "$out" "$err" "$ids" "$dl" "$plain" "$part"
+}
+# Prints every folder at or beneath the paths listed in <file> that the walk's test (DCS_DL) says
+# iCloud keeps only in the cloud, never going into one. One find per 200 paths, never one per path.
+dcs_dl_beneath() { # <file of paths>
+  local p batch=()
+  while IFS= read -r p; do
+    batch=( "${batch[@]+"${batch[@]}"}" "$p" )
+    if [ "${#batch[@]}" -ge 200 ]; then
+      find "${batch[@]}" -type d \( "${DCS_DL[@]}" \) -print -prune 2>/dev/null; batch=()
+    fi
+  done < "$1"
+  [ "${#batch[@]}" -eq 0 ] || find "${batch[@]}" -type d \( "${DCS_DL[@]}" \) -print -prune 2>/dev/null
+  return 0
+}
+# Prints "KiB<TAB><path>" for what is stored on this Mac at or beneath <path>, never going into a
+# folder iCloud keeps only in the cloud. find's and stat's own complaints go to stderr, where
+# dcs_measure reads them as it reads du's; when either failed saying nothing, there is no figure.
+dcs_size_around() { # <path>
+  local p="$1" files="$DCS_WORK/dl.files.$$" sizes="$DCS_WORK/dl.sizes.$$" e="$DCS_WORK/dl.err.$$" frc src=0
+  : > "$sizes"; : > "$e"
+  find "$p" -type d \( "${DCS_DL[@]}" \) -prune -o -print0 > "$files" 2>> "$e"; frc=$?
+  if [ -s "$files" ]; then
+    if stat -c '%d:%i' / >/dev/null 2>&1; then xargs -0 stat -c '%d:%i %b' < "$files" > "$sizes" 2>> "$e"; src=$?
+    else xargs -0 stat -f '%d:%i %b' < "$files" > "$sizes" 2>> "$e"; src=$?; fi
+  fi
+  if { [ "$frc" -eq 0 ] && [ "$src" -eq 0 ]; } || [ -s "$e" ]; then
+    awk -v p="$p" '!seen[$1]++ { b += $2 } END { printf "%d\t%s\n", int((b + 1) / 2), p }' "$sizes"
+  fi
+  cat "$e" >&2
+  rm -f "$files" "$sizes" "$e"
 }
 
 dcs_identity() { # <path> -> device:inode
@@ -168,18 +235,37 @@ dcs_bytes() { # <path> -> apparent size in bytes
 dcs_date() { # <epoch seconds> -> YYYY-MM-DD
   date -r "$1" '+%Y-%m-%d' 2>/dev/null || date -d "@$1" '+%Y-%m-%d' 2>/dev/null
 }
-# Succeeds when <path> is a file macOS keeps in iCloud only (dataless), which removing frees nothing
-# on this Mac. Off macOS there is no such flag, and nothing is.
+# Succeeds when <path> is an entry macOS keeps in iCloud only (dataless): a file whose removal frees
+# nothing on this Mac, or one that reading would make iCloud fetch. stat does not fetch it. Off
+# macOS there is no such flag, and nothing is, apart from the test mode stand-ins.
 dcs_dataless() { # <path>
   local f
+  case "$DCS_DL_LIST" in *"$TAB$1$TAB"*) return 0 ;; esac
   f="$(stat -f '%Xf' "$1" 2>/dev/null)" || return 1
   case "$f" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
   [ $(( 16#$f & 16#40000000 )) -ne 0 ]
 }
-# Whether this find knows macOS's dataless flag (GNU find does not). Every find below the walk
-# prunes dataless folders with it, because listing one makes iCloud fetch its contents.
+# Whether this find knows macOS's dataless flag (GNU find does not).
 DCS_FIND_DL=""
 find / -maxdepth 0 -flags +dataless >/dev/null 2>&1 && DCS_FIND_DL=1
+# DCS_DL: the find primaries matching an entry iCloud keeps only in the cloud, the ONE test every
+# find here prunes with (the walk, dcs_recent_file, dcs_credential, dcs_measure; L370), because
+# listing a dataless folder makes iCloud fetch its contents. It starts with -false, so with nothing
+# to add it matches nothing. In test mode DISK_CLEAN_DATALESS names a file of paths, one per line,
+# each added as an exact -path, and kept TAB delimited in DCS_DL_LIST for dcs_dataless. DCS_DL_ANY
+# says whether anything can match at all, so a Mac or runner with no dataless test skips the search.
+dcs_dl_setup() {
+  local p q
+  DCS_DL=( -false ); DCS_DL_LIST="$TAB"; DCS_DL_ANY=""
+  [ -n "$DCS_FIND_DL" ] && { DCS_DL=( "${DCS_DL[@]}" -o -flags +dataless ); DCS_DL_ANY=1; }
+  [ -n "$DCS_TEST_ROOT" ] && [ -n "${DISK_CLEAN_DATALESS:-}" ] || return 0
+  [ -r "$DISK_CLEAN_DATALESS" ] || { echo "disk-clean: DISK_CLEAN_DATALESS ($DISK_CLEAN_DATALESS) could not be read, so it scanned nothing."; exit 2; }
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    q="$(printf '%s' "$p" | sed 's/[][*?\\]/\\&/g')"
+    DCS_DL=( "${DCS_DL[@]}" -o -path "$q" ); DCS_DL_LIST="$DCS_DL_LIST$p$TAB"; DCS_DL_ANY=1
+  done < "$DISK_CLEAN_DATALESS"
+}
 
 # Prints the first file under <dir> that changed within <days> days, never going into a folder named
 # one of <prune names>; nothing when there is none. It never lists a dataless folder either: it
@@ -192,11 +278,7 @@ dcs_recent_file() { # <dir> <days> <stderr file> [<prune name>...]
   shift 3
   local pr=( -name .disk-clean-prunes-nothing )
   for n in "$@"; do pr=( "${pr[@]}" -o -name "$n" ); done
-  if [ -n "$DCS_FIND_DL" ]; then
-    find "$d" \( "${pr[@]}" \) -prune -o -type d -flags +dataless -print -quit -o -type f -mtime -"$days" -print -quit 2> "$err"
-  else
-    find "$d" \( "${pr[@]}" \) -prune -o -type f -mtime -"$days" -print -quit 2> "$err"
-  fi
+  find "$d" \( "${pr[@]}" \) -prune -o -type d \( "${DCS_DL[@]}" \) -print -quit -o -type f -mtime -"$days" -print -quit 2> "$err"
 }
 
 # Physical path of a folder, or of a file's folder plus its name.
@@ -294,7 +376,7 @@ dcs_claude_running() {
 #   every file over the large size in Downloads, Desktop, Documents and Movies
 # Its stderr is where it could not read a folder; the caller decides what a partial walk means.
 dcs_walk() {
-  local H="$HOME" markers="" m line dl=""
+  local H="$HOME" markers="" m line
   # No globbing from here on: the markers hold patterns (*.csproj) find must receive as written.
   set -f
   while IFS= read -r line; do
@@ -302,33 +384,20 @@ dcs_walk() {
   done <<EOF
 $DCS_TOOLS
 EOF
-  dl="$DCS_FIND_DL"
-  if [ -n "$dl" ]; then
-    find "$H" \( -path "$H/Library" -o -path "$H/.Trash" -o -path "$H/.ssh" -o -path "$H/.gnupg" -o -path "$H/.claude/projects" \
-        -o -path "$H/Dropbox" -o -path "$H/.dropbox" -o -path "$H/Google Drive" -o -path "$H/OneDrive" -o -path "$H/OneDrive - *" \
-        -o -path "$H/Box" -o -path "$H/pCloud Drive" -o -path "$H/.pcloud" -o -path "$H/SynologyDrive" \
-        -o -name '*.app' -o -name '*.photoslibrary' -o -name '*.musiclibrary' -o -name '*.tvlibrary' -o -name '*.imovielibrary' \
-        -o -name '*.aplibrary' -o -name '*.fcpbundle' -o -name '*.lrdata' -o -name '*.lrlibrary' -o -name '*.lrcat-data' \
-        -o -name '*.cocatalog' -o -name '*.cosessiondb' \) -prune \
-      -o -flags +dataless -prune \
-      -o -type d \( -name node_modules -o -name .next \) -print -prune \
-      -o -type d -path '*/.wrangler/tmp' -print -prune \
-      -o -name .git -print -prune \
-      -o -type f \( -name '*.log' -size +"$DCS_LARGE_MB"M -o -name .nvmrc -o -name .python-version -o -name pyvenv.cfg $markers \
-        -o \( \( -path "$H/Downloads/*" -o -path "$H/Desktop/*" -o -path "$H/Documents/*" -o -path "$H/Movies/*" \) -size +"$DCS_LARGE_MB"M \) \) -print
-  else
-    find "$H" \( -path "$H/Library" -o -path "$H/.Trash" -o -path "$H/.ssh" -o -path "$H/.gnupg" -o -path "$H/.claude/projects" \
-        -o -path "$H/Dropbox" -o -path "$H/.dropbox" -o -path "$H/Google Drive" -o -path "$H/OneDrive" -o -path "$H/OneDrive - *" \
-        -o -path "$H/Box" -o -path "$H/pCloud Drive" -o -path "$H/.pcloud" -o -path "$H/SynologyDrive" \
-        -o -name '*.app' -o -name '*.photoslibrary' -o -name '*.musiclibrary' -o -name '*.tvlibrary' -o -name '*.imovielibrary' \
-        -o -name '*.aplibrary' -o -name '*.fcpbundle' -o -name '*.lrdata' -o -name '*.lrlibrary' -o -name '*.lrcat-data' \
-        -o -name '*.cocatalog' -o -name '*.cosessiondb' \) -prune \
-      -o -type d \( -name node_modules -o -name .next \) -print -prune \
-      -o -type d -path '*/.wrangler/tmp' -print -prune \
-      -o -name .git -print -prune \
-      -o -type f \( -name '*.log' -size +"$DCS_LARGE_MB"M -o -name .nvmrc -o -name .python-version -o -name pyvenv.cfg $markers \
-        -o \( \( -path "$H/Downloads/*" -o -path "$H/Desktop/*" -o -path "$H/Documents/*" -o -path "$H/Movies/*" \) -size +"$DCS_LARGE_MB"M \) \) -print
-  fi
+  # A .git is printed before the dataless prune and never entered, so a worktree whose own .git
+  # file iCloud keeps only in the cloud is still found, and worktrees.sh says so (#1860).
+  find "$H" \( -path "$H/Library" -o -path "$H/.Trash" -o -path "$H/.ssh" -o -path "$H/.gnupg" -o -path "$H/.claude/projects" \
+      -o -path "$H/Dropbox" -o -path "$H/.dropbox" -o -path "$H/Google Drive" -o -path "$H/OneDrive" -o -path "$H/OneDrive - *" \
+      -o -path "$H/Box" -o -path "$H/pCloud Drive" -o -path "$H/.pcloud" -o -path "$H/SynologyDrive" \
+      -o -name '*.app' -o -name '*.photoslibrary' -o -name '*.musiclibrary' -o -name '*.tvlibrary' -o -name '*.imovielibrary' \
+      -o -name '*.aplibrary' -o -name '*.fcpbundle' -o -name '*.lrdata' -o -name '*.lrlibrary' -o -name '*.lrcat-data' \
+      -o -name '*.cocatalog' -o -name '*.cosessiondb' \) -prune \
+    -o -name .git -print -prune \
+    -o \( "${DCS_DL[@]}" \) -prune \
+    -o -type d \( -name node_modules -o -name .next \) -print -prune \
+    -o -type d -path '*/.wrangler/tmp' -print -prune \
+    -o -type f \( -name '*.log' -size +"$DCS_LARGE_MB"M -o -name .nvmrc -o -name .python-version -o -name pyvenv.cfg $markers \
+      -o \( \( -path "$H/Downloads/*" -o -path "$H/Desktop/*" -o -path "$H/Documents/*" -o -path "$H/Movies/*" \) -size +"$DCS_LARGE_MB"M \) \) -print
   local rc=$?
   set +f
   return "$rc"
@@ -368,11 +437,7 @@ dcs_credential() { # <path>
   if [ -d "$1" ]; then
     for n in $DCS_CRED_NAMES; do expr="$expr${expr:+ -o} -name $n"; done
     # shellcheck disable=SC2086
-    if [ -n "$DCS_FIND_DL" ]; then
-      find "$1" \( -name node_modules -o -name .git -o -type d -flags +dataless \) -prune -o -type f \( $expr \) -print -quit 2>/dev/null
-    else
-      find "$1" \( -name node_modules -o -name .git \) -prune -o -type f \( $expr \) -print -quit 2>/dev/null
-    fi
+    find "$1" \( -name node_modules -o -name .git -o -type d \( "${DCS_DL[@]}" \) \) -prune -o -type f \( $expr \) -print -quit 2>/dev/null
   else
     for n in $DCS_CRED_NAMES; do
       case "${1##*/}" in $n) printf '%s\n' "$1"; break ;; esac

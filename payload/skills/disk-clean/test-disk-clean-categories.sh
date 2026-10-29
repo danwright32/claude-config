@@ -105,13 +105,17 @@ check "trash judge: an entry listed at scan time is offerable" "$(eq "$JUDGED" o
 printf 'c\n' > "$H/.Trash/later.txt"
 judge trash "$H/.Trash/later.txt"
 check "trash judge: an entry added after the scan is not offerable" "$(has "$JUDGED" "not offerable: it was not in the Trash when the scan ran")"
-rm -f "$H/.Trash/photo.NEF"; printf 'replaced\n' > "$H/.Trash/photo.NEF"
+# The replacement is written while the original still exists, then moved over it, so the two
+# can never share an inode: deleting first let Linux hand the freed inode straight back (#1851 CI).
+printf 'replaced\n' > "$H/.Trash/photo.new"; mv -f "$H/.Trash/photo.new" "$H/.Trash/photo.NEF"
 judge trash "$H/.Trash/photo.NEF"
 check "trash judge: an entry replaced since the scan (same name, new inode) is not offerable" "$(has "$JUDGED" "not offerable: it is not the entry the scan listed")"
 # What disk-clean trashed this run: an item of another category marked trashed, whose file now sits
 # in the Trash with the same inode, as a move within one volume keeps it.
 printf 'big\n' > "$H/Downloads/movie.mov"
-ident="$(stat -f '%d:%i' "$H/Downloads/movie.mov" 2>/dev/null || stat -c '%d:%i' "$H/Downloads/movie.mov")"
+# GNU stat first, as disk-remove.sh and scan-lib.sh's dcs_identity ask: on Linux, GNU stat -f is a
+# file system query that succeeds and prints junk, so asking it first never reaches -c (#1851).
+ident="$(stat -c '%d:%i' "$H/Downloads/movie.mov" 2>/dev/null || stat -f '%d:%i' "$H/Downloads/movie.mov")"
 sid="$(dcr_header "$REC" scan_id)"
 awk -v t="$H/Downloads/movie.mov" -v i="$ident" '/^\{"id":/ && !done { print "{\"id\":\"lf-1\",\"category\":\"large-files\",\"method\":\"trash\",\"target\":\"" t "\",\"bytes\":4096,\"state\":\"offerable\",\"identity\":\"" i "\"},"; done = 1 } { print }' "$REC" > "$REC.new" && mv "$REC.new" "$REC"
 printf 'lf-1%strashed\n' "$S" > "$DC_ROOT/marks"; dcr_mark "$REC" "$sid" "$DC_ROOT/marks"
@@ -231,6 +235,44 @@ printf 'today\n' > "$P/stale/src/b.ts"
 judge build-folders "$P/stale/node_modules"
 check "build folders judge: once the project is edited again it is not" "$(has "$JUDGED" "not offerable: the project's own files changed within 30 days")"
 
+# A folder iCloud keeps only in the cloud (dataless) is never read, because listing one makes iCloud
+# fetch it, and du does not skip it (#1860: four Slate worktree build folders held 1,673). chflags
+# cannot set the flag, so DISK_CLEAN_DATALESS names a file of paths that stand in for dataless ones,
+# honoured only in test mode. A folder with one beneath it is sized by a find that stops there,
+# never by du, and its size is exact for this Mac (nothing under a dataless folder is stored here),
+# so it is measured, never partial, and flagged icloud-only-part.
+fresh
+P="$H/Apps"
+mkdir -p "$P/cloudy/node_modules/local" "$P/cloudy/node_modules/evicted/deep" "$P/cloudy/src" "$P/gone/node_modules/x" "$P/plain/node_modules/x"
+printf '{}\n' > "$P/cloudy/package.json"; printf 'x\n' > "$P/cloudy/src/a.ts"; printf '{}\n' > "$P/gone/package.json"; printf '{}\n' > "$P/plain/package.json"
+dd if=/dev/zero of="$P/cloudy/node_modules/local/a.bin" bs=1024 count=64 2>/dev/null
+dd if=/dev/zero of="$P/cloudy/node_modules/evicted/deep/b.bin" bs=1024 count=1024 2>/dev/null
+old "$P/cloudy"; old "$P/gone"; old "$P/plain"
+printf '%s\n' "$P/cloudy/node_modules/evicted" "$P/gone" > "$DC_ROOT/dataless"
+dl_run_scan() { OUT_TEXT="$(dc_run env DISK_CLEAN_DATALESS="$DC_ROOT/dataless" bash "$SCAN" "$@" 2>&1)"; RC=$?; }
+dl_run_scan --only build-folders
+it="$(item_of "$P/cloudy/node_modules")"
+# What is stored outside the stand-in, read by this suite's own du on its own scratch folder.
+want_kib=$(( $(du -sk "$P/cloudy/node_modules" | awk '{ print $1 }') - $(du -sk "$P/cloudy/node_modules/evicted" | awk '{ print $1 }') ))
+check "build folders: a folder holding a cloud only folder is still listed" "$(eq "$(state_of "$P/cloudy/node_modules")" offerable)"
+check "build folders: it is never passed to du" "$(hasnt "$(dc_calls du)" "$P/cloudy/node_modules")"
+check "build folders: its size is what is stored here, the cloud only folder left out" "$(eq "$(field "$it" 6)" "$((want_kib * 1024))")"
+check "build folders: and that size is exact, so measured, never partial" "$(eq "$(field "$it" 8)" measured)"
+check "build folders: it is flagged as partly kept only in iCloud" "$(has "$(flags_of "$P/cloudy/node_modules")" icloud-only-part)"
+check "build folders: a folder with no cloud only folder beneath it is still sized by du" "$(has "$(dc_calls du)" "$P/plain/node_modules")"
+check "build folders: and is not flagged as partly kept only in iCloud" "$(hasnt "$(flags_of "$P/plain/node_modules")" icloud-only-part)"
+# The search for cloud only folders takes the listed paths 200 to a find, so a list longer than that
+# crosses a batch (L101): the first and the last of 201 cache folders hold a stand-in.
+fresh
+C="$H/Library/Caches"
+for n in $(seq -w 1 201); do mkdir -p "$C/app$n"; done
+mkdir -p "$C/app001/evicted" "$C/app201/evicted"; printf '%s\n' "$C/app001/evicted" "$C/app201/evicted" > "$DC_ROOT/dataless"
+dl_run_scan --only caches
+check "sizes: a cloud only folder in a full first batch of 200 is found and flagged" "$(has "$(flags_of "$C/app001")" icloud-only-part)"
+check "sizes: and one in the batch after it too" "$(has "$(flags_of "$C/app201")" icloud-only-part)"
+check "sizes: the folders between them are still sized by du" "$(eq "$(field "$(item_of "$C/app100")" 8) $(hasnt "$(flags_of "$C/app100")" icloud-only-part) $(has "$(dc_calls du)" "$C/app100")" "measured ok ok")"
+check "build folders: the walk never goes into a cloud only project folder" "$(eq "$(item_of "$P/gone/node_modules")" "")"
+
 # ================================================================================================
 # Docker: only when docker info answers; volumes listed and never offerable
 # ================================================================================================
@@ -343,6 +385,19 @@ printf '{"pid":1,"sessionId":"%s","cwd":"/x"}\n' "$U1" > "$H/.claude/sessions/1.
 run_scan --only claude-temp
 check "claude temp: an unreadable session map makes the category unmeasured" "$(has "$(status_of claude-temp)" "unmeasured: the session map")"
 chmod 600 "$H/.claude/sessions/1.json"
+# A folder find could not read all of is never offered (#1851): its errors once went to /dev/null,
+# so a folder with an unreadable subfolder, in which nothing readable was recent, read as abandoned
+# although the unread part could have been used a minute ago.
+U4=44444444-4444-4444-8444-444444444444
+mkdir -p "$CT/$U4/locked/inner"; printf 'x\n' > "$CT/$U4/locked/inner/f"
+old "$CT/$U4"; chmod 000 "$CT/$U4/locked"
+run_scan --only claude-temp
+check "claude temp: a folder find could not wholly read is unmeasured, never offerable" "$(has "$(state_of "$CT/$U4")" "unmeasured: part of it could not be read")"
+check "claude temp: and says what find said" "$(has "$(state_of "$CT/$U4")" "Permission denied")"
+check "claude temp: an abandoned folder beside it is still offerable" "$(eq "$(state_of "$CT/$U2")" offerable)"
+judge claude-temp "$CT/$U4"
+check "claude temp judge: a folder find could not wholly read is unmeasured" "$(has "$JUDGED" "unmeasured: part of it could not be read")"
+chmod 700 "$CT/$U4/locked"
 
 # ================================================================================================
 # Worktrees: clean, pushed and merged only, by gh; a gh failure is unmeasured, never merged
@@ -399,21 +454,73 @@ check "worktrees judge: the merged one is offerable" "$(eq "$JUDGED" offerable)"
 printf ' M late.txt' > "$W/merged/.fx-status"
 judge worktrees "$W/merged"
 check "worktrees judge: once it has changes it is not" "$(has "$JUDGED" "not offerable: it has uncommitted or untracked files")"
+# A folder whose own .git file iCloud keeps only in the cloud cannot be read without fetching it, so
+# whether it is a worktree is not known: it is unmeasured and says why, never silently left out (L10,
+# L11), and git is never run in it. The stand-in is DISK_CLEAN_DATALESS, as for build folders.
+wt evicted "" feat-j jjj1 "$GH_URL"
+printf '%s\n' "$W/evicted/.git" > "$DC_ROOT/dataless"
+: > "$DC_CALLS"
+dl_run_scan --only worktrees
+check "worktrees: one whose .git file is kept only in iCloud is listed" "$(eq "$(field "$(item_of "$W/evicted")" 4)" "$W/evicted")"
+check "worktrees: as unmeasured, saying its .git file is kept only in iCloud" "$(has "$(state_of "$W/evicted")" "unmeasured: its .git file is kept only in iCloud")"
+check "worktrees: and git is never run in it" "$(hasnt "$(dc_calls git)" "$W/evicted")"
+check "worktrees: the others are judged as before" "$(eq "$(state_of "$W/merged")" "not offerable: it has uncommitted or untracked files")"
+JUDGED="$(dc_run env DISK_CLEAN_DATALESS="$DC_ROOT/dataless" DISK_CLEAN_CATEGORY=worktrees bash "$CATS/worktrees.sh" judge "$W/evicted" 2>&1)"
+check "worktrees judge: one whose .git file is kept only in iCloud is unmeasured" "$(has "$JUDGED" "unmeasured: its .git file is kept only in iCloud")"
 
 # ================================================================================================
 # Transcripts: .jsonl over 90 days, and any hit says Claude Code's own cleanup stopped
 # ================================================================================================
 fresh
 TP="$H/.claude/projects/-Users-x-proj"
-mkdir -p "$TP"; printf '{}\n' > "$TP/old.jsonl"; printf '{}\n' > "$TP/new.jsonl"; old "$TP/old.jsonl"
+U_OLD=0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d
+U_NEW=1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+mkdir -p "$TP"; printf '{}\n' > "$TP/$U_OLD.jsonl"; printf '{}\n' > "$TP/$U_NEW.jsonl"; old "$TP/$U_OLD.jsonl"
 run_scan --only transcripts
-check "transcripts: one over 90 days is offerable" "$(eq "$(state_of "$TP/old.jsonl")" offerable)"
-check "transcripts: moved to the Trash" "$(eq "$(method_of "$TP/old.jsonl")" trash)"
-check "transcripts: a recent one is not listed" "$(eq "$(item_of "$TP/new.jsonl")" "")"
+check "transcripts: one over 90 days is offerable" "$(eq "$(state_of "$TP/$U_OLD.jsonl")" offerable)"
+check "transcripts: moved to the Trash" "$(eq "$(method_of "$TP/$U_OLD.jsonl")" trash)"
+check "transcripts: a recent one is not listed" "$(eq "$(item_of "$TP/$U_NEW.jsonl")" "")"
 check "transcripts: a hit says Claude Code's 30 day cleanup appears to have stopped" "$(has "$(note_of transcripts)" "Claude Code's 30 day cleanup appears to have stopped")"
-rm -f "$TP/old.jsonl"
+rm -f "$TP/$U_OLD.jsonl"
 run_scan --only transcripts
 check "transcripts: with none over 90 days there is no such note" "$(eq "$(note_of transcripts)" "")"
+
+# Only Claude Code's own transcripts belong (#1851). On the work MacBook on 2026-10-28 every one of
+# the 52 files this category offered was a plugin's vercel-plugin/skill-injections.jsonl, kept
+# beside the transcripts, and the note blamed Claude Code's cleanup for them. A session transcript
+# is <project>/<session id>.jsonl; a subagent's is agent-<id>.jsonl under <session id>/subagents/,
+# which Claude Code's 30 day cleanup removes with its session. Anything else there is not offered.
+fresh
+mkdir -p "$TP/vercel-plugin" "$TP/$U_OLD/subagents/workflows/wf_1" "$TP/$U_OLD/tool-results"
+printf '{}\n' > "$TP/vercel-plugin/skill-injections.jsonl"
+printf '{}\n' > "$TP/notes.jsonl"
+printf '{}\n' > "$TP/$U_OLD/subagents/agent-a1b2c3.jsonl"
+printf '{}\n' > "$TP/$U_OLD/subagents/workflows/wf_1/agent-d4e5f6.jsonl"
+printf '{}\n' > "$TP/$U_OLD/subagents/workflows/wf_1/journal.jsonl"
+printf '{}\n' > "$TP/$U_OLD/tool-results/out.jsonl"
+old "$TP"
+run_scan --only transcripts
+check "transcripts: a plugin's sidecar file is not listed" "$(eq "$(item_of "$TP/vercel-plugin/skill-injections.jsonl")" "")"
+check "transcripts: a .jsonl not named for a session is not listed" "$(eq "$(item_of "$TP/notes.jsonl")" "")"
+check "transcripts: a workflow journal is not listed" "$(eq "$(item_of "$TP/$U_OLD/subagents/workflows/wf_1/journal.jsonl")" "")"
+check "transcripts: a .jsonl in a session's tool results is not listed" "$(eq "$(item_of "$TP/$U_OLD/tool-results/out.jsonl")" "")"
+check "transcripts: an old subagent transcript is offerable" "$(eq "$(state_of "$TP/$U_OLD/subagents/agent-a1b2c3.jsonl")" offerable)"
+check "transcripts: and so is one a workflow's agent wrote" "$(eq "$(state_of "$TP/$U_OLD/subagents/workflows/wf_1/agent-d4e5f6.jsonl")" offerable)"
+check "transcripts: the note counts only the transcripts" "$(has "$(note_of transcripts)" ": 2 transcript(s) are older than")"
+judge transcripts "$TP/vercel-plugin/skill-injections.jsonl"
+check "transcripts judge: a plugin's sidecar file is not offerable" "$(eq "$JUDGED" "not offerable: it is not a Claude Code transcript")"
+judge transcripts "$TP/$U_OLD/subagents/agent-a1b2c3.jsonl"
+check "transcripts judge: an old subagent transcript is offerable" "$(eq "$JUDGED" offerable)"
+rm -f "$TP/$U_OLD/subagents/agent-a1b2c3.jsonl" "$TP/$U_OLD/subagents/workflows/wf_1/agent-d4e5f6.jsonl"
+run_scan --only transcripts
+check "transcripts: with only sidecar files old, nothing is listed and there is no note" "$(eq "$(items_in transcripts) $(note_of transcripts)" "0 ")"
+# A folder it cannot read is unmeasured, never read as holding no old transcripts.
+printf '{}\n' > "$TP/$U_OLD.jsonl"; old "$TP/$U_OLD.jsonl"
+mkdir -p "$H/.claude/projects/-Users-x-locked"; chmod 000 "$H/.claude/projects/-Users-x-locked"
+run_scan --only transcripts
+check "transcripts: a projects folder it cannot read makes the category unmeasured" "$(has "$(status_of transcripts)" "unmeasured: part of ~/.claude/projects could not be read")"
+check "transcripts: and the transcripts it could read are still listed" "$(eq "$(state_of "$TP/$U_OLD.jsonl")" offerable)"
+chmod 700 "$H/.claude/projects/-Users-x-locked"
 
 # ================================================================================================
 # Runaway logs: *.log over 500 MB, emptied in place when a process holds it

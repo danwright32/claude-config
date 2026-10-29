@@ -19,6 +19,11 @@ type Kind = Lang | 'shell' | 'deno'
 export const SHELLS: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
 
 const base = (p: string) => p.split('/').pop() ?? p
+/**
+ * Whether a shell, named by its program, splits an unquoted expansion's value into words on
+ * whitespace (#1834): bash, sh, dash and ksh do; zsh does not, unless told to (SH_WORD_SPLIT).
+ */
+export const splitsWords = (shell: string | undefined): boolean => ['sh', 'bash', 'dash', 'ksh'].includes(base(shell ?? ''))
 // A versioned name is the interpreter too (#712 from #726: python3.12, /usr/local/bin/python3.11,
 // node20 and perl5.34 ran inline code unread, an exact name list knowing none of them).
 const VERSION = '(?:\\d+(?:\\.\\d+)*)?'

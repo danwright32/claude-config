@@ -951,10 +951,14 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   `tools/check-mod-shared-parts.sh` holds to mod-kit's own, naming the `cp` that brings a stale one
   back.
 - Winding down finds what to finish from the branch the session is on when it turns on: its PR, the
-  issues the PR closes, and the branch and worktree. The deploy is the is it live mod's verdict for
-  that PR (#687), read through `$.isItLive.verdict` in the repository GitHub's own link for the PR
-  names, never Claude's word: only Live or "no deploy step recorded" finishes it; deploying, could
-  not confirm live, no card yet, and a verdict that cannot be read each keep the turn end refused
+  issues the PR closes or refers to (Refs, Ref or References, never Part of, which names an epic as
+  often, #1812), and the branch and worktree. An open one is finished, the verification its fix
+  still owes included, and the refusal names what is left on it (the merged PR's stated next step,
+  else the issue's last comment) and tells Claude to do it, never to ask Dan whether to turn
+  winding down off or close it unfinished. The deploy is the is it live mod's verdict for that PR
+  (#687), read through `$.isItLive.verdict` in the repository GitHub's own link for the PR names,
+  never Claude's word: only Live or "no deploy step recorded" finishes it; deploying, could not
+  confirm live, no card yet, and a verdict that cannot be read each keep the turn end refused
   and say which, and with is it live not loaded the deploy is unmeasured, never live. On the default branch with no PR and nothing uncommitted there is nothing to
   finish; outside a repository too. A check that cannot read GitHub never counts as finished. It is
   checked at each turn end and each minute, and the toast reads "Wind down finished: safe to close
@@ -2607,7 +2611,12 @@ and the band question is removed rather than kept beside it (L29). Three defects
 - **Every shell route** (#705): a Bash call is read by mod-kit's one reader of what a command writes
   (`$.modkit.writes`), which follows a `cd` before a relative path and resolves a copy into a folder.
   A write its words do not name (a patch, an inline script, a script on standard input) is judged by
-  the lasting memory its text, and any patch file it reads, mentions. A copy into the memory folder
+  the lasting memory its text, and any patch file it reads, mentions. A patch is read only for the
+  lines naming the files it changes (#1883: a git apply changing five code files was refused as a
+  save to `LESSONS.md`, which the patch named only in a changed line of another file): its `diff`,
+  `---`, `+++`, `***`, `Index:` and rename or copy lines, in a patch file and in a quoted heredoc
+  feeding the patch alike. One with no such line, an encoded mail, and an unquoted heredoc (which
+  the shell may expand into a header) are read whole, as before. A copy into the memory folder
   itself counts; a file in a temporary folder (`/tmp`, `/var/folders`, the session scratchpad) loads
   into no session, so it does not, unless it is in a git checkout there (#726: a session started in
   a repository or worktree cloned under `/tmp` loads its `CLAUDE.md`), found by mod-kit's walk for

@@ -5,12 +5,15 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L821. Report a raced deadline's timeout only if it won; a timer resolving on cancel runs its .then on the path that answered in time.
 - L800. A near-limit monitor reading only what finished cannot see an operation killed at the limit, so count the kills from a source that sees them.
 - L795. An alert opened from one short-lived process's state must clear from a reading any process can take, or eviction leaves it open forever.
 - L1028. An outbound call in a function killed at a hard deadline needs its own shorter timeout, or a hang skips the catch and its alert.
 - L771. A timeout raced against the work throws the timer's error and drops what the work attached, so attach context where the timer fires.
 - L1027. Local dev and test servers must not report to production's error tracker, and alerts act only on production.
 - L767. Checking several candidates to choose one, judge each one's failure on its own, so one broken candidate is skipped, not the whole choice failed.
+- L1034. A safety check guarding an action must be the last step before it: any work between them widens the window for what it checked to change.
+- L1033. A check reading a script's exit 1 as nothing to refuse passes every crash: give the clean answer its own code, and any other is unread.
 - L490. A gate parsing input through an external interpreter must refuse by name when it is missing: an empty parse reads as nothing to refuse.
 - L710. A gap the NEXT occurrence repairs is invisible on every occurrence but the last and reads as working, so check the LAST occurrence directly.
 - L706. A presence guard accepting any non-null value takes a zero as an answer, so an upstream exclusion arriving as zero silently suppresses the fallback.

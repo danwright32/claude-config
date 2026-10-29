@@ -246,6 +246,11 @@ check "touch with an option that takes a value works inside the root" \
 out="$(dc_run sed -n 1p "$OUT/sentinel" 2>&1)"; rc=$?
 check "sed that only reads a file outside the root is not refused" \
   "$([ "$rc" -eq 0 ] && [ "$out" = sentinel ] && echo ok || echo "exit $rc, said: $out")"
+# A guarded tool's calls are recorded as a stub's are, so a suite can count them: the scan's one walk
+# of the home folder is a find, and only the count of its calls can show it ran once (#1851).
+dc_run find "$DC_HOME/a" -maxdepth 0 > /dev/null 2>&1
+check "a guarded tool's call is recorded in the call log with its arguments, as a stub's is" \
+  "$(grep -qxF "find $(printf '%q' "$DC_HOME/a") -maxdepth 0" <<< "$(dc_calls find)" && echo ok || echo "calls: $(dc_calls find)")"
 
 refused "rm of a file outside the root is refused" rm "$OUT/sentinel"
 refused "rm -rf of the outside folder is refused" rm -rf "$OUT"

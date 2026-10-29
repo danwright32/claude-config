@@ -16,7 +16,9 @@ holding no test files, a file holding no tests, a file that cannot import, and a
 ends without reporting its count.
 
 Prints one `FILE <path> passed=<n> failed=<n>` line per file, then `passed: <n>, failed: <n>` for a
-person and `PY-TESTS-RESULT passed=<n> failed=<n>` for the suite that reads it.
+person and `PY-TESTS-RESULT passed=<n> failed=<n>` for the suite that reads it. Both count test
+methods (and plain test functions), never subTests: a method with three failing subTests is one
+failure (claude-config#1855).
 
 Exit: 0 every test passed, 1 a test failed or nothing could be run, 2 a folder named is missing.
 Env: SKILL_PY_TESTS_TIMEOUT  seconds one file may take before it is ended and failed (default 300).
@@ -43,6 +45,32 @@ def find_test_files(folder: str) -> list:
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
         found.extend(os.path.join(root, f) for f in sorted(files) if is_test_file(f))
     return found
+
+
+def count_methods(result: unittest.TestResult) -> tuple:
+    """Passed and failed, counted in test methods, the unit testsRun counts (claude-config#1855).
+
+    unittest adds one entry to failures or errors per failing subTest while testsRun counts the
+    method once, so subtracting the first from the second went negative (`passed=-12 failed=37`). A
+    method fails once however many of its subTests fail, error or unexpectedly succeed. A method
+    skipped as a whole is neither passed nor failed; one whose subTests skip but which itself ran
+    and failed nothing counts as passed. A failure outside any method (setUpClass, setUpModule and
+    their teardowns, which unittest records against a stand in rather than a test) is one failure
+    each, and runs no method, so it takes nothing from the pass count.
+    """
+    failed_methods = set()
+    outside = 0
+    for test, _ in result.failures + result.errors + [(t, None) for t in result.unexpectedSuccesses]:
+        owner = getattr(test, "test_case", test)  # a subTest's method
+        if isinstance(owner, unittest.TestCase):
+            failed_methods.add(owner)
+        else:
+            outside += 1
+    skipped_methods = {
+        test for test, _ in result.skipped
+        if isinstance(test, unittest.TestCase) and getattr(test, "test_case", None) is None
+    } - failed_methods
+    return result.testsRun - len(failed_methods) - len(skipped_methods), len(failed_methods) + outside
 
 
 def run_one(path: str) -> int:
@@ -85,9 +113,9 @@ def run_one(path: str) -> int:
         suite.addTest(unittest.FunctionTestCase(obj, description=f"{name} ({os.path.basename(path)})"))
 
     result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
-    failed = len(result.failures) + len(result.errors) + len(result.unexpectedSuccesses) + failed_to_load
-    passed = result.testsRun - len(result.failures) - len(result.errors) - len(result.unexpectedSuccesses) - len(result.skipped)
-    if result.testsRun == 0 and failed_to_load == 0:
+    passed, failed = count_methods(result)
+    failed += failed_to_load
+    if result.testsRun == 0 and failed == 0:
         print(f"FAIL: {path} holds no tests, so nothing in it ran. Refusing to report it as passing.")
         failed += 1
     sys.stdout.flush()
