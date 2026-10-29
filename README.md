@@ -296,8 +296,8 @@ Every change to the record (taking, lifting, clearing an expired hold) happens u
 it, `.claude-sync-hold.lock`, so two sessions holding in the same instant cannot each write a
 record without the other's hold in it. A reading that finds only live holds never takes the lock;
 one that finds an expired or unreadable line (the watcher's send, `status`) takes it to clear that
-line, waits for it as a change does, and when it cannot get it clears nothing that time and still
-answers whether the watcher is held. The hooks that refuse a
+line, waits at most a second for it, so `status` is never held up behind a change, and when it
+cannot get it clears nothing that time and still answers whether the watcher is held. The hooks that refuse a
 payload write without a hold (`hooks/lib/sync-clone.sh`) count any live hold, whoever took it.
 
 ### A watcher older than the claude-sync on disk restarts itself (#420, #1569)

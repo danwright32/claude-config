@@ -18591,6 +18591,24 @@ h63_a bash "$SCRIPT" release >/dev/null 2>&1 || true
 h63_b bash "$SCRIPT" release >/dev/null 2>&1 || true
 check "#1863 and each session's release lifts its own" "[ ! -e '$H63_HOLD' ]"
 
+# Status is never meant to block, and clearing an expired line takes the lock. With the lock held by
+# a live process (this suite) and a lock wait of a minute, status must still answer, leaving the
+# expired line for a later reading rather than waiting out the minute for it.
+{
+  printf '%s %s %s session=%s A ran out again\n' "$(( $(date +%s) - 60 ))" "$(( $(date +%s) - 3600 ))" "somehost" "$H63_A"
+  printf '%s %s %s session=%s B holds on\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "somehost" "$H63_B"
+} > "$H63_HOLD"
+printf '%s\n' "$$" > "$H63_HOLD.lock"
+t63_0="$(date +%s)"
+out_63l="$(h63_a SYNC_HOLD_LOCK_WAIT=60 bash "$SCRIPT" status 2>&1 || true)"
+t63_1="$(date +%s)"
+rm -f "$H63_HOLD.lock"
+dbg "#1863 status under a held lock took $(( t63_1 - t63_0 ))s"
+check "#1863 status under a held hold lock does not wait out the lock's minute" "[ $(( t63_1 - t63_0 )) -lt 60 ]"
+check "#1863 and still lists the live hold" "line_has \"\$out_63l\" 'watcher hold' 'B holds on'"
+check "#1863 and leaves the expired line for a later reading to clear" "grep -q 'A ran out again' '$H63_HOLD'"
+h63_b bash "$SCRIPT" release >/dev/null 2>&1 || true
+
 
 section "== a watch daemon older than the claude-sync on disk refuses to send (#420) =="
 # `do_watch` runs `watch_tick` as a FUNCTION inside one long lived bash process, so every send the
