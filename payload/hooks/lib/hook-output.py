@@ -44,6 +44,7 @@ import glob
 import json
 import os
 import re
+import io
 import sys
 
 # event -> the fields its hookSpecificOutput accepts. See the note above on where this came from.
@@ -250,7 +251,7 @@ def payload_faults(document):
 
 def main(argv):
     if len(argv) == 2 and argv[1] == "--payload":
-        document = sys.stdin.read()
+        document = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
         if not document.strip():
             print("read nothing on stdin, so no payload was judged", file=sys.stderr)
             return 2

@@ -42,7 +42,16 @@ set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+{ . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && declare -F ps_parse_payload >/dev/null; } || {
+  # A library this gate cannot load is not an add with nothing to check (claude-config#1900, L10):
+  # with it missing nothing here can tell a git add from any other command, so a command naming one
+  # is refused, naming the file, and any other passes as it would have.
+  payload="$(cat)"
+  case "$payload" in *SKIP_ADD_SCOPE_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *add*) ;; *) exit 0 ;; esac
+  echo "BLOCKED: check-add-scope.sh could not load $HOOK_DIR/lib/push-scope.sh, which reads whether this command runs a git add and what it takes, so this command could not be checked. A library this gate cannot load is not an add with nothing to check. Reinstall the hooks with claude-sync pull. For this one command: SKIP_ADD_SCOPE_CHECK=1 <the same command>" >&2
+  exit 2
+}
 
 payload="$(cat 2>/dev/null || true)"
 parsed="$(ps_parse_payload "$payload" segmented 2>/dev/null)" || parsed=""
@@ -139,7 +148,7 @@ fi
 ids="$(printf '%s' "$payload" | python3 -c '
 import glob, json, os, re, sys
 try:
-    d = json.loads(sys.stdin.read())
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     d = {}
 if not isinstance(d, dict):
@@ -258,7 +267,7 @@ if [ "$size" -lt "$from" ]; then from=0; : > "$MENTIONS"; : > "$WINDOWS"; : > "$
 
 if [ "$size" -gt "$from" ]; then
   tail -c "+$(( from + 1 ))" "$transcript" 2>/dev/null | ADD_SCOPE_WINDOWS="$WINDOWS" ADD_SCOPE_WORKTREE="$WORKTREE" python3 -c '
-import datetime, json, os, sys
+import datetime, io, json, os, sys
 out = []
 windows = []
 worktree = []
@@ -268,7 +277,7 @@ def epoch(ts):
             tzinfo=datetime.timezone.utc).timestamp()
     except Exception:
         return None
-for line in sys.stdin:
+for line in io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace"):
     line = line.strip()
     if not line:
         continue
@@ -416,7 +425,7 @@ for w in "${WINDOWS_FILES[@]}"; do
 done
 if [ -n "$windows_list" ]; then
   credited="$(printf '%s' "$foreign" | sed 's/^  //' | ADD_SCOPE_WINDOWS="$windows_list" ADD_SCOPE_REPO="$repo" python3 -c '
-import os, sys
+import io, os, sys
 starts, ends = {}, {}
 lines = []
 for wf in os.environ["ADD_SCOPE_WINDOWS"].splitlines():
@@ -435,7 +444,7 @@ for line in lines:
     (starts if kind == "S" else ends)[ident] = t
 spans = [(starts[i] - 1, ends[i] + 1) for i in starts if i in ends and ends[i] >= starts[i]]
 repo = os.environ["ADD_SCOPE_REPO"]
-for p in sys.stdin.read().splitlines():
+for p in io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read().splitlines():
     if not p:
         continue
     # A DELETED file has nothing left to stat, so it is judged by the directory it was removed

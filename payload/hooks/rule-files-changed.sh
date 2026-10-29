@@ -72,7 +72,7 @@ RULES_DIR="${CLAUDE_RULES_DIR:-$HOME/.claude}"
 fields="$(printf '%s' "$input" | python3 -c '
 import json, sys
 try:
-    d = json.loads(sys.stdin.read())
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     d = {}
 def one(v):

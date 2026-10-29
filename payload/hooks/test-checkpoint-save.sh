@@ -146,6 +146,20 @@ out_broken="$(run "$T_BROKEN")"; code_broken=$?
   && check "a transcript whose lines do not parse is quiet and clean" ok \
   || check "a transcript whose lines do not parse is quiet and clean" "out=$out_broken exit=$code_broken"
 
+# A byte that is not UTF-8 is read as jq reads it, never taken for a turn with nothing in it
+# (claude-config#1900). In the transcript, one such byte on any line made the whole read raise, so
+# a turn that did work was skipped in silence; in the payload, the reader holds it the same way.
+T_BYTE="$PROJDIR/sessions/byte.jsonl"
+transcript "$T_BYTE" "$(printf '{"type":"user","message":{"content":"earlier \xff turn"}}')" "$(user_line 'fix the retry')" "$(tool_line Edit)"
+out_byte="$(LC_ALL=en_US.UTF-8 run "$T_BYTE")"
+grep -q '"decision": *"block"' <<< "$out_byte" \
+  && check "a transcript holding a byte that is not UTF-8 still asks a turn that did work to save" ok \
+  || check "a transcript holding a byte that is not UTF-8 still asks a turn that did work to save" "out=${out_byte:0:200}"
+out_pbyte="$(printf '{"transcript_path":"%s","note":"a\xffb"}' "$T_WORKED" | LC_ALL=en_US.UTF-8 bash "$H" 2>/dev/null)"
+grep -q '"decision": *"block"' <<< "$out_pbyte" \
+  && check "a payload holding a byte that is not UTF-8 still asks a turn that did work to save" ok \
+  || check "a payload holding a byte that is not UTF-8 still asks a turn that did work to save" "out=${out_pbyte:0:200}"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
