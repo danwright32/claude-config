@@ -170,6 +170,12 @@ if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--watch" ]; then
   # the default poll of 2. Not tied to the poll, which tests shorten (claude-config#1454).
   grace=40
   [ -n "$pidfile" ] && printf '%s\n' "$$" > "$pidfile"
+  # The shared rule for a process seen moments ago whose command line cannot vouch for it
+  # (claude-config#1909). A copy of this file with no recorded-pid.sh beside it, as some fixtures
+  # make, matches by command line alone, which kills less and never more.
+  # shellcheck source=recorded-pid.sh
+  . "$_suite_deadline_dir/recorded-pid.sh" 2>/dev/null
+  command -v recorded_pid_young >/dev/null 2>&1 || recorded_pid_young(){ return 1; }
   table(){ ps -axo pid=,ppid=,command= 2>/dev/null; }
   # "pid<TAB>command" for every descendant of $1, read from the process table on stdin.
   descendants(){
@@ -186,7 +192,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--watch" ]; then
         for (p in want) if (p != root) printf "%s\t%s\n", p, cmd[p]
       }'
   }
-  known=""
+  known=""; known_at=""
   while kill -0 "$target" 2>/dev/null; do
     if [ $(( $(date +%s) - started )) -ge "$limit" ]; then
       # Stopped while its tree is walked, so it cannot start a replacement for what is killed
@@ -219,8 +225,10 @@ if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--watch" ]; then
     # died shows its children already handed to init, so it has no descendants at all, and taking
     # that as the snapshot left the sweep below nothing to kill: seen as an intermittent failure of
     # the suite's own check before this was added (L203).
+    # Its time taken BEFORE the read, so every process in it was running at least that long ago.
+    seen_at="$(date +%s)"
     seen="$(table | descendants "$target")"
-    kill -0 "$target" 2>/dev/null && known="$seen"
+    kill -0 "$target" 2>/dev/null && { known="$seen"; known_at="$seen_at"; }
     # What it has seen, beside the pidfile, so a test can wait until the watchdog knows a child
     # rather than guessing how long that takes (L290).
     [ -n "$pidfile" ] && printf '%s\n' "$known" > "$pidfile.seen"
@@ -228,13 +236,27 @@ if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--watch" ]; then
   done
   # The suite has gone. Whatever it had started that is still running under the same pid and the
   # same command line is an orphan of it, and so is anything that orphan has started since.
+  #
+  # So is one whose command line has CHANGED, when the look that saw it was moments ago
+  # (claude-config#1909). A child caught in its first instant shows no command line on Linux, inside
+  # execve, and its parent's on both systems, between fork and exec; read a moment later it shows
+  # what it runs, and was judged somebody else's process and left running for ever: the misreading
+  # PR #1897 found in the scanners gate. A pid seen running moments ago cannot have been handed to
+  # another process since, by the one rule lib/recorded-pid.sh holds. The look kept is the last one
+  # before the suite went, a poll ago, so only a poll longer than that rule's minute falls back to
+  # the command line alone.
   [ -n "$known" ] || exit 0
   now_table="$(table)"
   # Through the environment rather than -v, which would expand backslashes in a command line and
   # refuse the newlines between the rows.
-  doomed="$(printf '%s\n' "$now_table" | SUITE_DEADLINE_KNOWN="$known" awk '
+  matched="$(printf '%s\n' "$now_table" | SUITE_DEADLINE_KNOWN="$known" awk '
     BEGIN { n = split(ENVIRON["SUITE_DEADLINE_KNOWN"], rows, "\n"); for (i = 1; i <= n; i++) { t = index(rows[i], "\t"); if (t) was[substr(rows[i], 1, t - 1)] = substr(rows[i], t + 1) } }
-    { pid = $1; $1 = ""; $2 = ""; sub(/^ +/, ""); if ((pid in was) && was[pid] == $0) print pid }')"
+    { pid = $1; $1 = ""; $2 = ""; sub(/^ +/, ""); if (pid in was) print pid, (was[pid] == $0 ? "same" : "changed") }')"
+  doomed=""
+  while read -r p how; do
+    [ -n "$p" ] || continue
+    if [ "$how" = same ] || recorded_pid_young "$p" "$known_at"; then doomed="$doomed $p"; fi
+  done <<< "$matched"
   [ -n "$doomed" ] || exit 0
   for p in $doomed; do kill -STOP "$p" 2>/dev/null; done
   for p in $doomed; do

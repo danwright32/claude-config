@@ -2667,7 +2667,11 @@ limit are one notice. It reads the process table and nothing else, and says noth
 Measured 2026-09-19 on this Mac: about 58ms per prompt.
 
 Every suite in this repo arms `hooks/lib/suite-deadline.sh`, so it bounds its own wall clock however
-it was started, and whatever it started is killed if it is stopped from outside. The limit is
+it was started, and whatever it started is killed if it is stopped from outside. A child it saw
+moments before the suite went counts as the suite's own even when its command line has changed
+since, as it does for a child seen while still starting (on Linux, an empty command line inside
+execve), by the rule `hooks/lib/recorded-pid.sh` holds for every check of a recorded process id
+(claude-config#1909). The limit is
 `SUITE_WALL_DEFAULT`, one number for every suite, derived and dated in DESIGN.md's measured numbers
 table from the slowest suite that takes it, and overridden for one run by `SUITE_WALL_TIMEOUT`,
 which set to 0 turns the deadline off. `tests/test-claude-sync.sh` is the one suite with a limit of
