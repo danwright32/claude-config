@@ -2611,7 +2611,12 @@ and the band question is removed rather than kept beside it (L29). Three defects
 - **Every shell route** (#705): a Bash call is read by mod-kit's one reader of what a command writes
   (`$.modkit.writes`), which follows a `cd` before a relative path and resolves a copy into a folder.
   A write its words do not name (a patch, an inline script, a script on standard input) is judged by
-  the lasting memory its text, and any patch file it reads, mentions. A copy into the memory folder
+  the lasting memory its text, and any patch file it reads, mentions. A patch is read only for the
+  lines naming the files it changes (#1883: a git apply changing five code files was refused as a
+  save to `LESSONS.md`, which the patch named only in a changed line of another file): its `diff`,
+  `---`, `+++`, `***`, `Index:` and rename or copy lines, in a patch file and in a quoted heredoc
+  feeding the patch alike. One with no such line, an encoded mail, and an unquoted heredoc (which
+  the shell may expand into a header) are read whole, as before. A copy into the memory folder
   itself counts; a file in a temporary folder (`/tmp`, `/var/folders`, the session scratchpad) loads
   into no session, so it does not, unless it is in a git checkout there (#726: a session started in
   a repository or worktree cloned under `/tmp` loads its `CLAUDE.md`), found by mod-kit's walk for
