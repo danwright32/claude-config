@@ -2646,8 +2646,9 @@ HOOK_TESTS_FLAKY_OUTPUT="$FLP_KEPT" HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK
 # then hangs on the second run is not a flake and is not a clean failure, and without a deadline it
 # would hold the whole run open on a suite that had already misbehaved once (L110).
 #
-# Driven through the injected poll rather than by waiting the real deadline out, so this costs a
-# fraction of a second instead of a minute (L524).
+# Driven through an allowance of two seconds and a short poll rather than the default minute, so
+# this costs about two seconds (L524). The allowance is seconds on the clock since #1901, so it is
+# the number to shorten; the poll only sets how often the recheck is looked at.
 HG="$TMPROOT/hangs"
 mkdir -p "$HG"
 HG_MARKER="$TMPROOT/hang-marker"
@@ -2778,10 +2779,48 @@ out_dlb="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_DEADLINE=s
   && check "#1901 a deadline that is not an epoch second is refused" ok \
   || check "#1901 a deadline that is not an epoch second is refused" "exit=$code_dlb out=$out_dlb"
 
+# The recheck's allowance is SECONDS on the clock, the unit its FAIL line prints (#1901). It was a
+# count of polls, so HOOK_TESTS_FLAKE_RECHECK_MAX=4 with a poll of 0.05 gave up after a fifth of a
+# second and said "recheck timed out after 4s", and on a loaded machine every poll ran longer than
+# its sleep, so the real allowance drifted the other way. The hanging recheck records the clock
+# every 0.2 seconds, so how long it was really let run is read from what it saw, not from the runner.
+DLU="$TMPROOT/dir-recheck-seconds"; mkdir -p "$DLU"
+DLU_MARKER="$TMPROOT/recheck-seconds-marker"
+DLU_TICKS="$TMPROOT/recheck-seconds-ticks"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'if [ -e "%s" ]; then\n' "$DLU_MARKER"
+  printf '  while kill -0 %s 2>/dev/null; do date +%%s >> "%s"; sleep 0.2; done\n' "$$" "$DLU_TICKS"
+  printf 'fi\n'
+  printf 'touch "%s"\n' "$DLU_MARKER"
+  printf 'echo "FAIL: it failed, and it will hang if run again"\n'
+  printf 'printf %s\\\\n "%s passed=0 failed=1"\n' "'%s'" "$MARK"
+  printf 'exit 1\n'
+} > "$DLU/test-slowrecheck.sh"
+chmod +x "$DLU/test-slowrecheck.sh"
+rm -f "$DLU_MARKER" "$DLU_TICKS"
+out_dlu="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 HOOK_TESTS_FLAKE_RECHECK_MAX=4 \
+  HOOK_TESTS_FLAKE_RECHECK_POLL=0.05 bash "$RUNNER" "$DLU" 2>&1)"
+dlu_first="$(sed -n '1p' "$DLU_TICKS" 2>/dev/null)"; dlu_last="$(sed -n '$p' "$DLU_TICKS" 2>/dev/null)"
+dlu_span=$(( ${dlu_last:-0} - ${dlu_first:-0} ))
+[ "$dlu_span" -ge 2 ] \
+  && check "#1901 a recheck allowed 4 seconds really runs for seconds, not 4 polls" ok \
+  || check "#1901 a recheck allowed 4 seconds really runs for seconds, not 4 polls" "it ran for about ${dlu_span}s by its own clock; out=$out_dlu"
+dlu_said="$(printf '%s\n' "$out_dlu" | sed -n 's/.*recheck timed out after \([0-9][0-9]*\)s.*/\1/p' | sed -n 1p)"
+{ [ -n "$dlu_said" ] && [ "$dlu_said" -ge 3 ] && [ "$dlu_said" -le $(( dlu_span + 2 )) ]; } \
+  && check "#1901 and the seconds its FAIL line names are the seconds it was let run" ok \
+  || check "#1901 and the seconds its FAIL line names are the seconds it was let run" "said '${dlu_said}', ran about ${dlu_span}s; out=$out_dlu"
+rm -f "$DLU_MARKER"
+# Seconds are whole: a fraction that used to be read as a count of polls is refused, not guessed at (L50).
+out_dlx="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK_MAX=0.5 bash "$RUNNER" "$DLU" 2>&1)"; code_dlx=$?
+{ [ "$code_dlx" -ne 0 ] && printf '%s\n' "$out_dlx" | grep -F "HOOK_TESTS_FLAKE_RECHECK_MAX='0.5'" > /dev/null; } \
+  && check "#1901 a recheck allowance that is not whole seconds is refused" ok \
+  || check "#1901 a recheck allowance that is not whole seconds is refused" "exit=$code_dlx out=$out_dlx"
+
 # A recheck that HANGS is stopped at the deadline, well before its own measured allowance, and says
-# which of the two stopped it (L11). The allowance here is 200 polls of 0.05s, ten seconds; the
-# deadline is two seconds away with no reserve, so a run that waited the allowance out was not held
-# to the deadline.
+# which of the two stopped it (L11). The allowance here is 200 seconds and the deadline is two
+# seconds away with no reserve, so a run that went on past a few seconds was not held to the
+# deadline, and one that says it timed out ran out the wrong limit.
 DLH="$TMPROOT/dir-deadline-hang"; mkdir -p "$DLH"
 DLH_MARKER="$TMPROOT/deadline-hang-marker"
 {

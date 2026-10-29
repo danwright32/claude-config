@@ -34,8 +34,9 @@
 #                             on, the failed suite's FAIL line says FLAKY, recheck timed out, or
 #                             recheck could not run because another run holds the suite lock,
 #                             naming who (#1312)
-#   HOOK_TESTS_FLAKE_RECHECK_MAX   seconds a recheck may take before it is called hung (default 60)
-#   HOOK_TESTS_FLAKE_RECHECK_POLL  how long each wait for it lasts (default 1)
+#   HOOK_TESTS_FLAKE_RECHECK_MAX   seconds on the clock a recheck may take before it is called hung
+#                             (default 60, raised to three times the suite's first run)
+#   HOOK_TESTS_FLAKE_RECHECK_POLL  how often the recheck is looked at, in seconds (default 1)
 #   HOOK_TESTS_DEADLINE       the epoch second by which this run must have printed its report, which
 #                             no recheck may run past (#1901). Unset under GitHub Actions, it is the
 #                             running job's timeout-minutes, read from its workflow file, counted
@@ -159,14 +160,21 @@ FAIL_DETAIL_MAX="${HOOK_TESTS_FAIL_DETAIL_MAX:-40}"
 # On by default because the cost is paid only by a run that is already red, and off inside the
 # recheck itself so a suite that fails every time cannot recurse.
 FLAKE_RECHECK="${HOOK_TESTS_FLAKE_RECHECK:-1}"
-# The floor on how long a recheck may take. Raised to three times what the suite measured on its
-# first run, so a slow suite is not called hung for being slow, and a suite with no measurement at
-# all still has this bound.
+# The floor on how long a recheck may take, in SECONDS on the clock. Raised to three times what the
+# suite measured on its first run, so a slow suite is not called hung for being slow, and a suite
+# with no measurement at all still has this bound. It was a count of polls until #1901, printed as
+# seconds: an allowance of 200 with a poll of 0.05 gave up after ten seconds and said 200, and on a
+# loaded machine every poll outlasts its sleep, so the real allowance drifted past what it said. One
+# unit now, read off the same clock as the run's deadline below and as the FAIL line.
 FLAKE_RECHECK_MAX="${HOOK_TESTS_FLAKE_RECHECK_MAX:-60}"
-# The interval the recheck's deadline is counted in. Injectable from the day it is written, so the
-# test that drives the timeout branch is instant instead of waiting the deadline out for real
-# (L524). Both numbers are read in the same unit, so setting this alone shortens the wait without
-# changing what the deadline MEANS.
+case "$FLAKE_RECHECK_MAX" in
+  ''|*[!0-9]*)
+    echo "run-all-tests: HOOK_TESTS_FLAKE_RECHECK_MAX='$FLAKE_RECHECK_MAX' is not a whole number of seconds. Refusing rather than guessing how long a recheck may run." >&2
+    exit 1 ;;
+esac
+# How often the recheck is looked at, and nothing more: it no longer sets how long the wait is.
+# Injectable from the day it is written (L524), so a test that shortens the allowance is not then
+# held up to a second past it by the poll.
 FLAKE_RECHECK_POLL="${HOOK_TESTS_FLAKE_RECHECK_POLL:-1}"
 # The moment this run must have printed its report by (claude-config#1901). The recheck's allowance
 # above is three times what the suite took, and a suite stopped at its own 1200s wall clock was
@@ -1530,9 +1538,9 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       _flake=""
       _fl_kept=""
       # Held to the run's deadline as well (claude-config#1901): the time left before it, less the
-      # reserve for printing the rest of the report, in real seconds on the clock, because the
-      # allowance below counts polls and a loaded machine stretches every poll. None left, it is
-      # not started at all, and the FAIL line says so rather than reading as a plain failure (L11).
+      # reserve for printing the rest of the report, on the same clock as the allowance below. None
+      # left, it is not started at all, and the FAIL line says so rather than reading as a plain
+      # failure (L11).
       _fl_stop_at=""
       _fl_skip=""
       if [ "$FLAKE_RECHECK" = "1" ] && [ -n "$RUN_DEADLINE" ]; then
@@ -1561,12 +1569,16 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         # recheck queued behind another run would be called hung for waiting (#1297, L11).
         ( HOOK_TESTS_FLAKE_RECHECK=0 SUITE_LOCK_WAIT=0 bash "$suite" > "$WORK/$((idx - 1)).recheck" 2>&1; _fl_rc=$?; exit "$_fl_rc" ) < /dev/null &
         _fl_pid=$!
+        # Both limits on one clock, SECONDS, in seconds: whichever comes first ends the wait, and
+        # the poll only decides how often that is looked at (#1901).
         _fl_began="$SECONDS"
-        _fl_waited=0
-        while kill -0 "$_fl_pid" 2>/dev/null && [ "$_fl_waited" -lt "$_fl_max" ] \
-              && { [ -z "$_fl_stop_at" ] || [ "$SECONDS" -lt "$_fl_stop_at" ]; }; do
+        _fl_cut=$(( _fl_began + _fl_max ))
+        _fl_by_deadline=0
+        if [ -n "$_fl_stop_at" ] && [ "$_fl_stop_at" -lt "$_fl_cut" ]; then
+          _fl_cut="$_fl_stop_at"; _fl_by_deadline=1
+        fi
+        while kill -0 "$_fl_pid" 2>/dev/null && [ "$SECONDS" -lt "$_fl_cut" ]; do
           sleep "$FLAKE_RECHECK_POLL"
-          _fl_waited=$(( _fl_waited + 1 ))
         done
         if kill -0 "$_fl_pid" 2>/dev/null; then
           # It outlasted its deadline, so it is not a flake and it is not a clean failure either.
@@ -1576,10 +1588,10 @@ run-all-tests: this suite left no exit status, so it was killed or never started
           # not run out its allowance and is not known to hang (#1901).
           runner_kill_tree "$_fl_pid" 2>/dev/null || true
           kill -9 "$_fl_pid" 2>/dev/null || true
-          if [ -n "$_fl_stop_at" ] && [ "$SECONDS" -ge "$_fl_stop_at" ]; then
+          if [ "$_fl_by_deadline" -eq 1 ]; then
             _flake=" (recheck stopped after $(( SECONDS - _fl_began ))s, so this report is printed before $DEADLINE_WHAT)"
           else
-            _flake=" (recheck timed out after ${_fl_max}s)"
+            _flake=" (recheck timed out after $(( SECONDS - _fl_began ))s, its allowance of ${_fl_max}s)"
           fi
         else
           wait "$_fl_pid"; _fl_rc=$?
