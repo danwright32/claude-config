@@ -64,16 +64,18 @@ skips_says() { # skips_says <label> <command> <expected exit>
   out="$(printf '%s' "$2" | python3 "$LIB" skips 2>&1)"; rc=$?
   if [ "$rc" = "$3" ]; then check "$1" ok; else check "$1" "exit $rc, wanted $3: $out"; fi
 }
+# No skip is 10, never 1, which is what Python exits on an uncaught exception, so a crash can never
+# read as "no skip" (claude-config#1869, L1033).
 skips_says "commit --no-verify skips hooks" 'git commit --no-verify -m "wip"' 0
 skips_says "commit -n skips hooks" 'git commit -n -m "wip"' 0
 skips_says "commit -anm skips hooks (n before the value letter)" 'git commit -anm wip' 0
-skips_says "commit -am with n in the message value does not" 'git commit -amn' 1
-skips_says "a message mentioning --no-verify is not a skip" 'git commit -m "refuse --no-verify from agents"' 1
-skips_says "a heredoc message mentioning it is not a skip" "$(printf 'git commit -F - <<EOF\nno --no-verify here\nEOF')" 1
-skips_says "--verify after --no-verify turns hooks back on" 'git commit --no-verify --verify -m x' 1
+skips_says "commit -am with n in the message value does not" 'git commit -amn' 10
+skips_says "a message mentioning --no-verify is not a skip" 'git commit -m "refuse --no-verify from agents"' 10
+skips_says "a heredoc message mentioning it is not a skip" "$(printf 'git commit -F - <<EOF\nno --no-verify here\nEOF')" 10
+skips_says "--verify after --no-verify turns hooks back on" 'git commit --no-verify --verify -m x' 10
 skips_says "push --no-verify skips the pre-push hook" 'git push --no-verify origin x' 0
 skips_says "merge --no-verify" 'git merge --no-verify feature' 0
-skips_says "push -n is a dry run, not a skip" 'git push -n origin x' 1
+skips_says "push -n is a dry run, not a skip" 'git push -n origin x' 10
 skips_says "core.hooksPath on the git command" 'git -c core.hooksPath=/dev/null commit -m x' 0
 skips_says "core.hooksPath in any case" 'git -c Core.HooksPath=/tmp/none push' 0
 skips_says "HUSKY=0 in front of a commit" 'HUSKY=0 git commit -m x' 0
@@ -82,10 +84,10 @@ skips_says "behind rtk" 'rtk git commit --no-verify -m x' 0
 skips_says "inside an if" 'if true; then git commit --no-verify -m x; fi' 0
 skips_says "inside bash -c" "bash -c 'git commit --no-verify -m x'" 0
 skips_says "a rebase whose --exec commits with --no-verify" "git rebase origin/main --exec \"git commit --amend --no-edit --no-verify\"" 0
-skips_says "a rebase whose --exec commits plainly does not" "git rebase origin/main --exec \"git commit --amend --no-edit\"" 1
-skips_says "an echo of the words is not a skip" 'echo "git commit --no-verify"' 1
-skips_says "a plain commit is not a skip" 'git commit -m "x"' 1
-skips_says "a grep for the flag is not a skip" 'grep -rn -- "--no-verify" payload' 1
+skips_says "a rebase whose --exec commits plainly does not" "git rebase origin/main --exec \"git commit --amend --no-edit\"" 10
+skips_says "an echo of the words is not a skip" 'echo "git commit --no-verify"' 10
+skips_says "a plain commit is not a skip" 'git commit -m "x"' 10
+skips_says "a grep for the flag is not a skip" 'grep -rn -- "--no-verify" payload' 10
 
 # ---------------------------------------------------------------------------------------------
 echo "no-verify-gate.sh: an agent's skip of the git hooks is refused, with no approval that lets it through"
@@ -415,18 +417,20 @@ stdin_says "commit -qF /dev/stdin, the flag at the end of a cluster" 'git commit
 stdin_says "commit -F /dev/fd/0" 'git commit -F /dev/fd/0' 0
 stdin_says "tag -F /dev/stdin" 'git tag -a v1 -F /dev/stdin' 0
 stdin_says "behind rtk" 'rtk git commit -F /dev/stdin' 0
+# None found is 10, never 1, which is what Python exits on an uncaught exception, so a crash can
+# never read as "no read of the device path" (claude-config#1869, L1033).
 stdin_says "commit -F - is not one" 'git commit -F - <<EOF
 x
-EOF' 1
-stdin_says "commit -F <file> is not one" 'git commit -F /tmp/msg.txt' 1
-stdin_says "a message naming the path is not one" 'git commit -m "/dev/stdin"' 1
-stdin_says "a message mentioning the path is not one" 'git commit -m "never commit from /dev/stdin"' 1
+EOF' 10
+stdin_says "commit -F <file> is not one" 'git commit -F /tmp/msg.txt' 10
+stdin_says "a message naming the path is not one" 'git commit -m "/dev/stdin"' 10
+stdin_says "a message mentioning the path is not one" 'git commit -m "never commit from /dev/stdin"' 10
 stdin_says "a non git command naming the path is not one" 'python3 /dev/stdin <<EOF
 print(1)
-EOF' 1
+EOF' 10
 stdin_says "a heredoc body naming it is not one" 'git commit -F - <<EOF
 used to be -F /dev/stdin
-EOF' 1
+EOF' 10
 
 # ---------------------------------------------------------------------------------------------
 echo "no-verify-gate.sh: an agent's git command reading /dev/stdin is refused at once (claude-config#1765)"
@@ -481,9 +485,68 @@ else check "the gate's refusal is that wording, word for word" "gate said: ${ERR
 out="$(printf '%s' 'git commit -q -F - <<EOF
 x
 EOF' | python3 "$LIB" stdin-device-refusal a1b2c3d4 2>&1)"; rrc=$?
-if [ "$rrc" = 1 ] && [ -z "$out" ]; then check "-F - has no refusal, and says nothing" ok; else check "-F - has no refusal, and says nothing" "exit $rrc: $out"; fi
+if [ "$rrc" = 10 ] && [ -z "$out" ]; then check "-F - has no refusal, and says nothing (exit 10)" ok; else check "-F - has no refusal, and says nothing (exit 10)" "exit $rrc: $out"; fi
 out="$(printf '%s' 'git commit -F /dev/stdin' | python3 "$LIB" stdin-device-refusal 2>&1)"; rrc=$?
 if [ "$rrc" = 64 ]; then check "with no agent named it refuses to guess one" ok; else check "with no agent named it refuses to guess one" "exit $rrc: $out"; fi
+
+# ---------------------------------------------------------------------------------------------
+echo "a reader that crashes never reads as nothing found, in any gate that asks it (claude-config#1869)"
+# Python exits 1 on an uncaught exception (a failed import of shell-words.py, an odd command), so a
+# crash must never read as "nothing found" (L1033). Every mode answers nothing found with 10, and
+# every gate reads any other code as unread. The payload is read for real; only the command reader
+# is made to crash, exiting 1 as Python does.
+CRASHPY="$WORK/crashpy"; mkdir -p "$CRASHPY"
+REALPY="$(command -v python3)"
+printf '#!/bin/bash\ncase "$*" in *agent-overrides.py*) echo "Traceback: boom" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' "$REALPY" > "$CRASHPY/python3"
+chmod +x "$CRASHPY/python3"
+run_crashpy() { # run_crashpy <hook> <payload>
+  local errf; errf="$(mktemp "$WORK/err.XXXXXXXX")"
+  OUT="$(printf '%s' "$2" | PATH="$CRASHPY:$PATH" bash "$1" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+run_crashpy "$NV_GATE" "$(bash_payload "$HUNG_1" a1b2c3d4)"
+refused "a reader that crashes still refuses the 2026-10-05 hung commit"
+says "saying it could not read it" "could not read it"
+says "naming the file fix" "-F <file>"
+run_crashpy "$NV_GATE" "$(bash_payload 'git tag -a v1 -F /dev/fd/0' a1b2c3d4)"
+refused "a reader that crashes still refuses an agent's tag -F /dev/fd/0, which names no commit"
+# The skip reading, the same way.
+run_crashpy "$NV_GATE" "$(bash_payload 'git commit --no-verify -m wip' a1b2c3d4)"
+refused "a reader that crashes still refuses an agent's commit --no-verify"
+says "saying the skip could not be read" "could not read it"
+run_crashpy "$NV_GATE" "$(bash_payload 'HUSKY=0 git push origin x' a1b2c3d4)"
+refused "a reader that crashes still refuses an agent's HUSKY=0 push"
+# The control: the stub crashes only the reader, so an agent command it reads but that names nothing
+# it judges still passes, and so does one that never reaches it.
+run_crashpy "$NV_GATE" "$(bash_payload 'git commit -m wip' a1b2c3d4)"
+allowed "with the reader crashing, an agent's plain commit still goes through"
+run_crashpy "$NV_GATE" "$(bash_payload 'git status' a1b2c3d4)"
+allowed "with the reader crashing, an agent's git status still goes through"
+
+# runs-script: monitor-action-gate.sh asks it whether a Monitor runs the merge helper.
+rs_says() { # rs_says <label> <command> <expected exit>
+  local out rc
+  out="$(printf '%s' "$2" | python3 "$LIB" runs-script merge-when-ready.sh 2>&1)"; rc=$?
+  if [ "$rc" = "$3" ]; then check "$1" ok; else check "$1" "exit $rc, wanted $3: $out"; fi
+}
+rs_says "runs-script finds the helper run by path" 'bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash' 0
+rs_says "runs-script answers 10 when nothing runs it" 'tail -f /tmp/x/merge-when-ready.log' 10
+run_crashpy "$MON_GATE" "$(bash_payload 'until PR_REVIEW_READ=$k bash ~/.claude/hooks/lib/merge-when-ready.sh 2679 --squash; do sleep 60; done' '' Monitor)"
+refused "a reader that crashes still refuses the merge helper run from a Monitor"
+says "saying it could not read it" "could not read it"
+run_crashpy "$MON_GATE" "$(bash_payload 'gh pr checks 2679 --watch' '' Monitor)"
+allowed "with the reader crashing, watching checks from a Monitor still goes through"
+
+# check-report: handback-claims-gate.sh never refuses a report it could not compare (it says the
+# check did not run instead), so a crash must say that rather than pass silently as a clean report.
+CR_OUT="$(printf '%s' 'Done. No --no-verify, no overrides.' | python3 "$LIB" check-report "$T2" 2>&1)"; crc=$?
+if [ "$crc" = 10 ] && [ -z "$CR_OUT" ]; then check "check-report answers 10, saying nothing, when nothing contradicts" ok
+else check "check-report answers 10, saying nothing, when nothing contradicts" "exit $crc: $CR_OUT"; fi
+run_crashpy "$HB_GATE" "$(hb_payload b2 'Done. No --no-verify, no overrides.')"
+allowed "with the reader crashing, a hand-back is not refused"
+says "but it says the claims check did not run" "HANDBACK CLAIMS CHECK DID NOT RUN"
+hb b2 'Done. No --no-verify, no overrides.'
+case "$ERR$OUT" in *"DID NOT RUN"*) check "with the reader working, a clean report says nothing" "it said: ${ERR:0:300}" ;; *) check "with the reader working, a clean report says nothing" ok ;; esac
 
 # ---------------------------------------------------------------------------------------------
 echo "with no python3: each gate says so rather than passing what it cannot read"
