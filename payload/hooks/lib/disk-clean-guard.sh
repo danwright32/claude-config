@@ -37,6 +37,9 @@ if ! dc_root_valid "$root"; then
   REASON="DISK_CLEAN_TEST_ROOT ('$root') is not a throwaway directory the harness made, so nothing may be written"
   refuse "$@"
 fi
+# Every call is recorded in the root's call log in the stubs' own format, so dc_calls <tool> reads a
+# guarded tool's calls as it reads a stub's: a suite counts the scan's finds this way (#1851).
+{ printf '%s' "$name"; [ $# -gt 0 ] && printf ' %q' "$@"; printf '\n'; } >> "$root/calls.log"
 
 # The operands of the call, options and their values removed. $1 = the option letters that take a
 # value as the next argument.
