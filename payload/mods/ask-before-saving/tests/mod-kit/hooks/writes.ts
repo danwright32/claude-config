@@ -1,7 +1,7 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
 import { git, placed, readLine, type Command, type Line } from './commands.ts'
 import { codeOnly, codeTargets } from './code.ts'
-import { kindOf, readProgram } from './program.ts'
+import { kindOf, readProgram, splitsWords } from './program.ts'
 import { isDevice } from './inputs.ts'
 
 // The one reader of which files a Bash call changes (#705, L613), over the simple commands the
@@ -54,7 +54,8 @@ const isPipe = (word: string) => /^[<>]\(/.test(word)
 // one a loop, read, mapfile, getopts or printf -v sets, appended to or unset; one given a second,
 // different value (the reader cannot tell a ; from an && or ||, so which stands is unknown); and
 // every value once an eval or a sourced file may have changed it, is left as written. A value set
-// inside a subshell ends with it.
+// inside a subshell ends with it. An unquoted value is split into words where the shell running the
+// command splits it (#1834: bash, sh, dash and ksh do, zsh does not), and a quoted one is kept whole.
 const SETS = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/
 const APPENDS = /^([A-Za-z_][A-Za-z0-9_]*)\+=/
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -472,7 +473,9 @@ const TOOL_EDITS: ReadonlyMap<string, { edits: ReadonlySet<string>; outputs: Rea
 const toolName = (name: string) => name.replace(/(?<=.)@[^/@]*$/, '')
 // Whether a word may become a flag the reader cannot see: past its command substitutions, which give
 // the files a tool works on (#1815), it holds a variable the reader could not read ($MODE, "$@", a
-// loop's $f), a backquoted command, or a space, where a value the command set is split into words.
+// loop's $f), a backquoted command, or a space. A value the command set is already split into words
+// where the shell splits it (#1834); a space left is a quoted value, or one under a shell the reader
+// does not know, and is still read as one that may hold a flag.
 const withoutSubstitutions = (w: string) => {
   let out = ''
   for (let i = 0; i < w.length; i++) {
@@ -625,6 +628,43 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   const abs = (p: string) => absolutePath(p, dir, home)
   const absAll = (ps: string[]) => ps.map(abs).filter((p): p is string => !!p)
   const expand = (w: string) => w.replace(VARIABLE, (m, braced?: string, bare?: string) => vars.get((braced ?? bare) as string) ?? m)
+  // A word as the shell hands it on (#1834): each variable read as its value, the value of one whose
+  // $ stood outside quotes (`unquoted`, the places Command.splits gives) split on spaces, tabs and new
+  // lines as bash splits it. The text around a split joins its first and last parts; a space at
+  // either end of the value ends the word there; a word left with nothing in it is no word. A value
+  // the reader cannot read is left as written, unsplit.
+  const fields = (w: string, unquoted: readonly number[] | undefined): string[] => {
+    if (!unquoted?.length) return [expand(w)]
+    const out: string[] = []
+    let word = ''
+    let begun = false
+    let last = 0
+    const text = (t: string) => {
+      word += t
+      if (t) begun = true
+    }
+    for (const m of w.matchAll(VARIABLE)) {
+      const at = m.index ?? 0
+      text(w.slice(last, at))
+      last = at + m[0].length
+      const value = vars.get((m[1] ?? m[2]) as string)
+      if (value === undefined || value === null || !unquoted.includes(at)) {
+        text(value ?? m[0])
+        continue
+      }
+      value.split(/[ \t\n]+/).forEach((part, k) => {
+        if (k > 0) {
+          if (begun) out.push(word)
+          word = ''
+          begun = false
+        }
+        text(part)
+      })
+    }
+    text(w.slice(last))
+    if (begun) out.push(word)
+    return out
+  }
   const unknown = (name: string) => vars.set(name, null)
   const assign = (word: string) => {
     const m = SETS.exec(word)
@@ -658,9 +698,20 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     }
     asWritten.clear()
     foundRoots = c.found ?? []
-    const raw = written.map(expand)
-    raw.forEach((w, n) => {
-      if (w !== written[n]) asWritten.set(w, written[n] as string)
+    // Each word as the shell hands it on, variables read as their values, and the word of the
+    // command each came from: under a shell that splits an unquoted value (#1834), one word may
+    // become several or none. A redirect's target is kept whole, since bash refuses a split one
+    // ("ambiguous redirect") and writes nothing.
+    const raw: string[] = []
+    const from: number[] = []
+    written.forEach((w, n) => {
+      const prior = written[n - 1] ?? ''
+      const target = WRITE_REDIRECT.test(prior) || /^\d*>&$/.test(prior)
+      for (const part of target ? [expand(w)] : fields(w, c.splits?.[n])) {
+        raw.push(part)
+        from.push(n)
+        if (part !== w) asWritten.set(part, w)
+      }
     })
     // Output redirects first, and taken out of the words, with descriptor copies (2>&1). A `>&`
     // with nothing attached takes the next word: a number or - is a descriptor copied, anything
@@ -670,10 +721,10 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
       const w = raw[i] as string
       if (WRITE_REDIRECT.test(w)) {
         const target = raw[++i]
-        if (target !== undefined) named(target, undefined, written[i])
+        if (target !== undefined) named(target, undefined, written[from[i] as number])
       } else if (/^\d*>&$/.test(w)) {
         const target = raw[++i]
-        if (target !== undefined && !/^(?:\d+|-)$/.test(target)) named(target, undefined, written[i])
+        if (target !== undefined && !/^(?:\d+|-)$/.test(target)) named(target, undefined, written[from[i] as number])
       } else if (/^\d*>&[0-9-]*$/.test(w)) continue
       else words.push(w)
     }
@@ -989,5 +1040,19 @@ const lineWrites = (line: Line, cwd: string | undefined, home: string, inSubstit
   return out
 }
 
-/** What a Bash call changes, read from its text: `$.modkit.writes`, and what its tests read. */
-export const commandWrites = (command: string, cwd: string, home: string): ModKitWrites => lineWrites(readLine(command, { assignments: true }), cwd, home)
+/**
+ * The shell Claude Code runs a Bash call in (#1834), from its environment: CLAUDE_CODE_SHELL where it
+ * names a bash or zsh, which Claude Code takes over everything else (its own message on one that does
+ * not: "is not a valid bash/zsh path, falling back to detection"), otherwise SHELL where it names one.
+ * Otherwise Claude Code looks for one itself, which is not repeated here: undefined, read as a shell
+ * that does not split words, as this reader always read every line before.
+ */
+export const callShell = (env: { CLAUDE_CODE_SHELL?: string | null; SHELL?: string | null }): string | undefined =>
+  [env.CLAUDE_CODE_SHELL, env.SHELL].find((s): s is string => typeof s === 'string' && /^(?:bash|zsh)$/.test(s.split('/').pop() ?? ''))
+/**
+ * What a Bash call changes, read from its text: `$.modkit.writes`, and what its tests read. `shell`
+ * is the shell the call runs in (callShell), which decides whether an unquoted value is split into
+ * words (#1834: bash splits it, zsh does not).
+ */
+export const commandWrites = (command: string, cwd: string, home: string, shell?: string): ModKitWrites =>
+  lineWrites(readLine(command, { assignments: true }, splitsWords(shell) ? { splits: true } : {}), cwd, home)
