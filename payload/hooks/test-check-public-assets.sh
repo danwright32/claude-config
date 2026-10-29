@@ -361,8 +361,8 @@ if [ "$rc" = 1 ]; then ok; else bad "detector: no base names the existing dead a
 case "$(cat "$WORK/direct")" in *"public/old-dead.svg: nothing in the repo references it"*"no base commit, so every asset counts as added"*) ok ;; *) bad "detector: no base wording, got: $(cat "$WORK/direct")" ;; esac
 
 # ============================================================================================
-# The hook's own arms for a detector that could not measure or crashed: one NON-BLOCKING line
-# (exit 1, so the first stderr line surfaces), never a pass and never a refusal it did not measure.
+# The hook's own arms for a detector that could not measure or crashed: one line, exit 0 with a
+# systemMessage (#1912), never a pass and never a refusal it did not measure.
 # Reached through a stub detector, because a real repository the shared helpers accept as a work
 # tree gives the real detector nothing it cannot read (L151: every enumerated outcome gets a case
 # that produces it).

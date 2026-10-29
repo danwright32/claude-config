@@ -165,12 +165,12 @@ fire_stdout "$R3" "git push"
 why="$(hook_notice_verdict "$FS_OUT" 'found no scanner')"
 [ "$FS_RC" -eq 0 ] && [ -z "$why" ] && check "#1906 and says so as a systemMessage" ok \
   || check "#1906 and says so as a systemMessage" "exit=$FS_RC $why"
-# A push started underneath the gate is not gated again, and says so the same way.
 # A passing push says what it covered (L400), which only reaches the person as a systemMessage.
 fire_stdout "$R1" "git push"
 why="$(hook_notice_verdict "$FS_OUT" 'whole tree scan')"
 [ "$FS_RC" -eq 0 ] && [ -z "$why" ] && check "#1906 a passing push says what it scanned, as a systemMessage" ok \
   || check "#1906 a passing push says what it scanned, as a systemMessage" "exit=$FS_RC $why"
+# A push started underneath the gate is not gated again, and says so the same way.
 fire_stdout "$R3" "git push" SCANNERS_GATE_RUNNING=1
 why="$(hook_notice_verdict "$FS_OUT" 'not gated again')"
 [ "$FS_RC" -eq 0 ] && [ -z "$why" ] && check "#1906 a nested push says it was not gated, as a systemMessage" ok \

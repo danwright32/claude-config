@@ -233,7 +233,7 @@ NOTREPO="$(mktemp -d)"
 run_hook "$NOTREPO" "git push"
 want_code 0 "a push with no resolvable repo stays out of the way"
 
-# --- a judge that never answers in time is named as such (fail open, exit 1) ------------------------
+# --- a judge that never answers in time is named as such (fail open, exit 0, a systemMessage) ------
 # A stub timeout that reports what GNU timeout reports for a killed command, 124, with nothing
 # printed: no real wait, the condition is set rather than slept for (L290).
 TO_DIR="$TMPROOT/timeout-124"; mkdir -p "$TO_DIR"

@@ -272,8 +272,9 @@ out="$(prompt noagents)"
 silent "with no automatic sync installed there is nothing to report" "$out"
 agent_for "$CLONE"
 
-# No session to key on means a first prompt cannot be told from a later one, so it says on stderr
-# that it did not run rather than repeating itself on every prompt.
+# No session to key on means a first prompt cannot be told from a later one, so it says that it did
+# not run, to the person as a systemMessage (#1906) and on stderr for the debug log, and hands the
+# session nothing.
 out="$(printf '{"cwd":"."}' | HOME="$FHOME" CLAUDE_HOME="$FHOME/.claude" SYNC_LAUNCHAGENTS="$WORK/agents" \
        CLAUDE_SYNC_STUCK_STATE_DIR="$WORK/state" SYNC_NO_NOTIFY=1 bash "$HOOK" 2>"$WORK/err")"
 fault_said "a payload with no session says nothing to the session, and tells the person" "$out" "neither a session id"

@@ -207,7 +207,7 @@ case "$out" in
   *) check "and names no partial list of pids" ok ;;
 esac
 
-echo "suite pile notice: anything it cannot read is silent, never a guess and never a block"
+echo "suite pile notice: anything it cannot read is told to the person, never a guess and never a block"
 out="$(prompt u1 "$WORK/no-such-table")"; rc=$?
 fault_said "an unreadable process table says nothing to the session, and tells the person" "$out" "process table could not be read"
 [ "$rc" -eq 0 ] && check "and the hook exits 0, so the prompt goes ahead" ok || check "and the hook exits 0, so the prompt goes ahead" "exit $rc"

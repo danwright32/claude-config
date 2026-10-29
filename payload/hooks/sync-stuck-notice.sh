@@ -48,8 +48,9 @@
 # FAILS LOUD, NOT NOISY. A record that is there and cannot be read, a stretch whose start cannot be
 # read, and a clone that cannot be asked are each said once, in their own words, because each is a
 # sync nobody can vouch for and none of them is a healthy one (L98). A payload with no session is
-# the one case said only on stderr, which the person does not see: without a session a first prompt
-# cannot be told from a later one, and guessing would mean speaking on every prompt.
+# said as a systemMessage on every prompt it arrives on (#1906), since without a session a first
+# prompt cannot be told from a later one; it used to be said only on stderr, which the person never
+# saw, and a platform that stops sending the session is worth hearing about each time.
 #
 # Env:
 #   SYNC_STUCK_NOTICE_AFTER      seconds a stretch must have lasted before it is said (default 3600)
