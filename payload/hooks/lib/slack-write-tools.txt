@@ -1,0 +1,15 @@
+# The Slack tools that write text a teammate reads, one per line, named without their server:
+# Claude Code calls each mcp__<server>__<name>, and the server differs by connector (the claude.ai
+# connector's is claude_ai_Slack, the Slack plugin's plugin_slack_slack), so any server matches.
+#
+# Read by the session link gate (session_link_comment_gate.py) and the style-check mod, so the two
+# judge the same tools (claude-config#1905). The matcher that routes these to the session link gate
+# in settings.hooks.json is a pattern, not a reader of this file: test-no-session-link-in-comments.sh
+# fails when a name here is missing from it. Lines starting with # and blank lines are skipped.
+slack_send_message
+slack_send_message_draft
+slack_schedule_message
+slack_create_canvas
+slack_update_canvas
+slack_add_list_record
+slack_update_list_record
