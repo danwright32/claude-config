@@ -1250,7 +1250,7 @@ o1910m="$(treefire "$R1910m" "git push")"; c1910m=$?
 # The merge is made under the record's lock, so a writer at the same moment cannot lose a pass
 # (L5). Seen here by holding that lock with a live process, this suite's own: the gate must not
 # write the record past it, and must say the pass was not remembered rather than claim it was. It
-# waits out the lock's 5 second deadline, which is the only wait in this case.
+# waits out the deadline the gate sets on that lock, not a measurement, which is the only wait here.
 R1910l="$(mkrepo recordlock)"; RAN1910l="$TMPROOT/recordlock-ran"
 add_counting_scanner "$R1910l" nu "$RAN1910l"; commit_all "$R1910l"
 LOCK1910="$TMPROOT/recordlock-state"
