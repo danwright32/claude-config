@@ -20683,7 +20683,11 @@ check "#1902 a registration this Mac added and has not sent still goes up" \
 NR_BROKEN="$WORK/norestore-broken.json"; printf 'this is not json\n' > "$NR_BROKEN"
 nr_fetch "$NRA_R"
 cp "$NR_BROKEN" "$NRA_R/payload/settings.hooks.json"
-NR_GIT_SAID="$(git -C "$NRA_R" commit -qm "a broken hooks fragment" -- payload/settings.hooks.json 2>&1)"
+# With an identity of its own, as every other fixture commit in this file has: a Mac makes one up
+# from its host name, and the Linux runner refuses with "Author identity unknown" (CI run
+# 40946753111 printed exactly that in the check below).
+NR_GIT_ID=(-c user.name=t -c user.email=t@t)
+NR_GIT_SAID="$(git -C "$NRA_R" "${NR_GIT_ID[@]}" commit -qm "a broken hooks fragment" -- payload/settings.hooks.json 2>&1)"
 NR_BROKEN_SHA="$(git -C "$NRA_R" rev-parse HEAD)"
 NR_GIT_SAID="$NR_GIT_SAID $(git -C "$NRA_R" push -q origin HEAD 2>&1)"
 check "#1902 (the fixture's broken commit reached the shared repo; git said: $(printf '%s' "$NR_GIT_SAID" | tr '\n' ' ' | cut -c1-300))" \
@@ -20701,7 +20705,7 @@ check "#1902 and the apply says why" \
   "grep -q 'the hooks section of settings.json was left exactly as it was' '$NR_OUT/b5'"
 # Repaired in the shared repo, as a person would.
 nr_fetch "$NRA_R"
-git -C "$NRA_R" revert --no-edit "$NR_BROKEN_SHA" >/dev/null 2>&1
+git -C "$NRA_R" "${NR_GIT_ID[@]}" revert --no-edit "$NR_BROKEN_SHA" >/dev/null 2>&1
 git -C "$NRA_R" push -q origin HEAD 2>/dev/null
 check "#1902 (the fixture's repair reached the shared repo)" \
   "git -C '$NRA_R' show origin/\$(git -C '$NRA_R' symbolic-ref --short HEAD):payload/settings.hooks.json | jq -e . >/dev/null"
