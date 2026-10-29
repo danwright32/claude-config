@@ -119,8 +119,10 @@
 # caller's folder (claude-config#1104, test-lib-self-locate.sh).
 _MT_LIB="${BASH_SOURCE[0]%/*}"; [ "$_MT_LIB" != "${BASH_SOURCE[0]}" ] || _MT_LIB=.
 _MT_LIB="$(cd "${_MT_LIB:-/}" && pwd)"
+# Missing, this file does not load either (claude-config#1900). It carried on before, so every gate
+# sourcing it read it as loaded, then found no ps_ function to ask, read no merge, and allowed it.
 # shellcheck source=push-scope.sh
-. "$_MT_LIB/push-scope.sh"
+{ . "$_MT_LIB/push-scope.sh" && declare -F ps_parse_payload >/dev/null; } || return 1
 
 # THE ONE DECLARATION of a repo's own merge tool. Every question anybody asks about
 # these tools is answered from here.
@@ -390,8 +392,8 @@ mt_review_allowed() {   # $1 = the gate's name, $2 = the review's verdict
     jq -nc --arg m "$text" '{systemMessage: $m, hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}' && exit 0
   fi
   if command -v python3 >/dev/null 2>&1; then
-    printf '%s' "$text" | python3 -c 'import json, sys
-m = sys.stdin.read()
+    printf '%s' "$text" | python3 -c 'import io, json, sys
+m = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
 print(json.dumps({"systemMessage": m, "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": m}}))' && exit 0
   fi
   printf '%s\n' "$text" >&2

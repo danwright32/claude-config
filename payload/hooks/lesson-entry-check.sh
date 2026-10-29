@@ -129,16 +129,26 @@ fi
 # there is nothing to check and nothing to say. That is not the same as a check that ran and found
 # nothing, and the difference only matters once a file IS named, which is where the reporting below
 # is careful.
+#
+# Read as jq reads it, so a byte that is not UTF-8 anywhere in the payload is read rather than
+# raising (claude-config#1900). A payload python3 still cannot read is not one naming no file: one
+# whose raw text names this config's lessons file is said to be unchecked, the way an absent
+# python3 is above, and only one naming nothing of the kind passes in silence (L1033).
 if [ "$MODE" = bash ]; then target="$LESSONS"; else
 target="$(printf '%s' "$payload" | python3 -c '
 import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-except Exception:
-    d = {}
+sys.stdout.reconfigure(errors="replace")
+d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 ti = d.get("tool_input") or {}
 print(ti.get("file_path") or "")
-' 2>/dev/null || true)"
+' 2>/dev/null)" || {
+  case "$payload" in
+    *"$CLAUDE_HOME"*LESSONS.md*|*LESSONS.md*"$CLAUDE_HOME"*)
+      echo "LESSON CHECK DID NOT RUN: lesson-entry-check.sh could not read this tool call's payload as JSON, so which file it wrote is unknown, and it names $CLAUDE_HOME/LESSONS.md. Nothing has judged what was written there. Check it with: claude-sync lesson-faults" >&2
+      exit 2 ;;
+  esac
+  exit 0
+}
 fi
 [ -n "$target" ] || exit 0
 
@@ -153,13 +163,15 @@ real_of(){   # real_of <path> -> the path with its directory resolved, or the pa
 [ "$(real_of "$target")" = "$(real_of "$CLAUDE_HOME/LESSONS.md")" ] || exit 0
 
 # Emit a block, with the reason JSON encoded rather than pasted, so a fault quoting a lesson's own
-# text cannot break the payload.
+# text cannot break the payload. The reason can quote a lesson holding a byte that is not UTF-8, so
+# it is decoded as jq would, and an encoder that still fails says the reason on stderr with exit 2,
+# where PostToolUse puts it in front of the model too, rather than dropping it (claude-config#1900).
 block(){   # block <reason text>
   record_stamp
   printf '%s' "$1" | python3 -c '
 import json, sys
-print(json.dumps({"decision": "block", "reason": sys.stdin.read()}, separators=(",", ":")))
-' 2>/dev/null || true
+print(json.dumps({"decision": "block", "reason": sys.stdin.buffer.read().decode("utf-8", "replace")}, separators=(",", ":")))
+' 2>/dev/null || { printf '%s\n' "$1" >&2; exit 2; }
   exit 0
 }
 

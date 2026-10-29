@@ -44,6 +44,7 @@ the numbers in check-duplication.sh's header were produced against Slate main fc
 2026-09-18. No dependencies beyond the standard library, on purpose.
 """
 import hashlib
+import io
 import json
 import os
 import re
@@ -332,7 +333,7 @@ def _open_list(path):
     if path is None:
         return None
     if path == "-":
-        return sys.stdin
+        return io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
     return open(path, "r", encoding="utf-8")
 
 
@@ -365,7 +366,7 @@ def main(argv):
         # Top level names on stdin (one per line, as `git ls-tree --name-only` prints them); prints
         # the ones that are source roots, in SOURCE_ROOTS order. The hook asks this rather than
         # holding its own copy of the list, so the roots it archives are the roots this reads.
-        names = {line.strip() for line in sys.stdin.read().split("\n")}
+        names = {line.strip() for line in io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read().split("\n")}
         for r in SOURCE_ROOTS:
             if r in names:
                 print(r)

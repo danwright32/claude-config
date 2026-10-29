@@ -805,7 +805,7 @@ issue_spool_append() { # append <dir> <json-record>
   record="$(printf '%s' "$record" | CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-}" \
       CLAUDE_SPOOL_SESSION="$_sp_sid" CLAUDE_SPOOL_PROJECT="$_sp_proj" python3 -c '
 import json, os, sys
-rec = json.loads(sys.stdin.read())
+rec = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 if isinstance(rec, dict):
     if os.environ.get("CLAUDE_SUITE_RUN_ID"):
         rec["suite_run"] = os.environ["CLAUDE_SUITE_RUN_ID"]

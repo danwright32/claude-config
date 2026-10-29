@@ -71,8 +71,8 @@ printf '#!/bin/sh\necho "vm.swapusage: total = 0.00M  used = 0.00M  free = 0.00M
 out="$(FREE_SPACE_BYTES="$((240 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$STATE" \
   FREE_SPACE_PATH=/fixture FREE_SPACE_SYMBOL_CACHE="$TMP/no-symbol-cache" FREE_SPACE_SWAP_CMD="$TMP/swap" \
   FREE_SPACE_DISK_BYTES=$((926 * GB)) bash -c "$runnable" 2>&1)"
-check "the rate command, run as written, states the rate it measured" \
-  "$(grep -q 'about 20 GB per hour' <<< "$out" && echo ok || echo "said: $out")"
+check "the rate command, run as written, states the rate it measured (20 GiB an hour, which the one size rule words as 21.5 GB)" \
+  "$(grep -q 'about 21.5 GB per hour' <<< "$out" && echo ok || echo "said: $out")"
 check "and the exit code beside it" \
   "$(grep -qx 'exit 0' <<< "$out" && echo ok || echo "said: $out")"
 
