@@ -145,7 +145,8 @@ keep it, and the pull says a send will not carry it.
 ./claude-sync sync              # two-way: send local, then receive remote
 ./claude-sync status            # show differences, no changes
 ./claude-sync hold 30 "why"     # stop the watcher committing while you commit by hand
-./claude-sync release           # lift that hold now instead of waiting for it to run out
+./claude-sync release           # lift your own hold now instead of waiting for it to run out
+./claude-sync release --other S # lift the hold session S took (status names each hold's session)
 ./claude-sync cite-scan L2      # which synced files cite that lesson number
 ./claude-sync reap-scratch      # reclaim scratch a killed run left behind
 ./claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
@@ -266,11 +267,38 @@ words, never treated as a hold and never treated as absent.
 A hold says it is in force only once it is (#1854). `hold` writes its record under a temporary name
 and renames it into place, reads it back the way the watcher will, and only then prints "Watcher held
 off for ...", with the exact length asked for in hours and minutes, never rounded up to the next
-hour, and the clock time it ends. A record that cannot be written, or does not read back, is refused with
-"no hold was taken" and a non-zero exit, so the line and the exit code always agree. The hold record
-is one file shared by every session on the Mac, so a hold never shortens one already in force (the
-longer one is kept and named), and `release` names the hold it lifted, so a session lifting a hold
-another session took can see whose it was.
+hour, and the clock time it ends in Eastern time. A record that cannot be written, or does not read back, is refused with
+"no hold was taken" and a non-zero exit, so the line and the exit code always agree.
+
+Each hold belongs to the session that took it (#1863). Before, the record was one hold for the
+whole Mac with no owner, so any session's `release` lifted a pause another session had taken, and
+the watcher then sent that session's half finished work. Now:
+
+- A hold records the session that took it, read from `CLAUDE_CODE_SESSION_ID`, which Claude Code
+  gives every command a session runs, its subagents' included, so a subagent's hold is its
+  session's. A run with no session id (a plain terminal) records `unknown`, and an `unknown` hold
+  is anyone's to lift.
+- Several holds can be in force at once, one per session, each with its own end. The watcher is
+  held while ANY of them is live. Each expires on its own: the watcher clears that one, says so,
+  and stays held by the rest.
+- `hold` changes only the caller's own hold. Another session's is kept as it is, whatever its
+  length, and named on the line after the success line. The caller's own hold is never shortened:
+  asking for less than it already has keeps the longer one and says so.
+- `release` lifts only the caller's own hold, plus any `unknown` one. Another session's hold is
+  lifted only by naming it: `claude-sync release --other <session>`, where the session is the
+  short name `status` shows (the first eight characters of its id; any unique start of the id
+  works). Naming a session that holds nothing, or a start shared by two, refuses and lifts nothing.
+  Every release names the hold it lifted, and names every hold still in force with the command
+  that lifts it.
+- `status` lists every live hold on its own line, with whose it is and that command.
+
+Every change to the record (taking, lifting, clearing an expired hold) happens under a lock beside
+it, `.claude-sync-hold.lock`, so two sessions holding in the same instant cannot each write a
+record without the other's hold in it. A reading that finds only live holds never takes the lock;
+one that finds an expired or unreadable line (the watcher's send, `status`) takes it to clear that
+line, waits at most a second for it, so `status` is never held up behind a change, and when it
+cannot get it clears nothing that time and still answers whether the watcher is held. The hooks that refuse a
+payload write without a hold (`hooks/lib/sync-clone.sh`) count any live hold, whoever took it.
 
 ### A watcher older than the claude-sync on disk restarts itself (#420, #1569)
 
@@ -3527,7 +3555,8 @@ defined answer for being absent or untrustworthy.
 | `.claude-sync-clones` (in your home, not in a clone) | every clone on this Mac, the first time it takes the lock | `claude-sync status`, to find the records other clones hold | absent means no clone has done work since this was added, so status reports only what it can reach through the launch agents. An entry naming a clone that has gone is skipped rather than reported, and nothing prunes it: the file is only ever appended to, so a run that dies part way cannot lose the entries already there |
 | `.claude-sync-watch.pid` (in your home, not in a clone) | `claude-sync watch`, on the way up, claimed so two watchers starting together cannot both write it (#604) | the next `claude-sync watch`, to refuse starting a second one, and every running watcher's loop before each send, which stops when the file names another live watcher or the watcher that started the loop has gone | absent means no watcher has started here since this was added, and the next one starts normally. The pid in it is confirmed against what that process actually IS before it is believed, because a stale pid is reused by the system constantly and a guard that trusts the number refuses to start over something unrelated. It is removed on the way out, and only by the watcher whose own pid it holds, so one watcher exiting cannot clear another's record |
 | `.claude-sync.log` (in your home, not in a clone) | the scheduled and watch jobs, whose launch agents send their output here; the watcher one summary line per send, with whatever the send said indented beneath it, and a send that held files back logged as `NOT sent: <files> held back,` with its reason rather than as nothing to send (#849), and a send whose catch up sent logged as `sent` (#1402); and any send that holds the hooks block back, which appends its verdict with a time whichever entry point ran it (#592). A run whose `CLAUDE_HOME` is not your own `~/.claude` (every test fixture) appends nothing to it, unless `SYNC_LOG_FILE` names a file, and says once that its lines went nowhere (#1486) | a person diagnosing a notification or a quiet sync | absent means no automatic job has run here yet. It is never read by the tool itself, so nothing goes wrong when it is removed |
-| `.claude-sync-hold` (in your home, not in a clone) | `claude-sync hold` | the watcher's send, and `claude-sync status`, and `claude-sync release`, which removes it | absent means no hold, which is the normal state. It carries an expiry and fails OPEN: once that passes it is cleared and the watcher says the hold expired, because a hold that outlives the session that took it silently stops the sync. A marker that will not parse is cleared too, and reported in its own words rather than as an expiry, since obeying it would stop the sync until somebody found the file and ignoring it silently would discard a decision somebody made. One line, written whole by a rename and read back before `hold` says it is in force (#1854) |
+| `.claude-sync-hold` (in your home, not in a clone) | `claude-sync hold`, and `claude-sync release`, which removes the caller's own line (or a named session's, with `--other`) | the watcher's send, `claude-sync status`, `claude-sync release`, and the payload write hooks through `hooks/lib/sync-clone.sh` | absent means no hold, which is the normal state. One line per hold, one hold per session (#1863): `<ends> <taken> <host> session=<id> <why>`, longest hold first, so a claude-sync or hook from before #1863, which reads only the first line, still sees the Mac held for as long as any hold lasts. A line with no `session=` field, the single line every hold was before #1863, is read as a hold by `unknown`, which any release lifts. Each line carries its own expiry and fails OPEN: once that passes the line is cleared, the rest kept, and the watcher says which hold expired, because a hold that outlives the session that took it silently stops the sync. A line that will not parse is cleared too, and reported in its own words rather than as an expiry, since obeying it would stop the sync until somebody found the file and ignoring it silently would discard a decision somebody made. Rewritten whole by a rename, under the `.claude-sync-hold.lock` beside it, and read back before `hold` says it is in force (#1854) |
+| `.claude-sync-hold.lock` (in your home, beside the hold record) | any change to the hold record (#1863) | every other change to it, which waits up to ten seconds (`SYNC_HOLD_LOCK_WAIT`) | absent means nothing is changing the record, which is the normal state. It holds the pid of the run changing the record and is made by a hard link, so it never exists empty; one whose pid is no longer running is taken over rather than waited on |
 | `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
 | `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |
 | `.sync-lock.next` | a typed `claude-sync pull` that finds the lock held, while it waits for it (#850) | every mutating run, before it takes the lock, so a run arriving while a pull waits does not take the lock in front of it | absent means nobody is waiting, which is the normal state. It names the waiting pull's process and is created by a hard link, so two waiters cannot both hold it. The pull removes it on taking the lock or at its deadline; one left by a process that has gone, or older than any wait could last, is removed by the next run rather than honoured |

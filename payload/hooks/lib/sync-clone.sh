@@ -108,11 +108,11 @@ sc_is_own_worktree(){ # sc_is_own_worktree <clone root>
 # this for as long as the bad file sits there, and that is the direction that loses a day of work
 # (L42). It is left on disk for claude-sync itself to report and clear, in its own words, because a
 # hook that removes a decision somebody made destroys state it does not own (L5).
+#
+# The marker holds one line per session holding (claude-config#1863), so a hold is in force while
+# ANY line's expiry is still ahead, wherever that line sits. claude-sync writes the longest hold
+# first, but a reader that trusted that would be right only while every writer kept to it.
 sc_hold_live(){
-  local until now
   [ -f "$SYNC_HOLD_FILE" ] || return 1
-  until="$(awk 'NR==1{print $1}' "$SYNC_HOLD_FILE" 2>/dev/null)"
-  case "$until" in ''|*[!0-9]*) return 1 ;; esac
-  now="$(date +%s)"
-  [ "$now" -lt "$until" ]
+  awk -v now="$(date +%s)" '$1 ~ /^[0-9]+$/ && $1 + 0 > now + 0 { live = 1 } END { exit live ? 0 : 1 }' "$SYNC_HOLD_FILE" 2>/dev/null
 }
