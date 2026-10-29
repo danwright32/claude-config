@@ -110,6 +110,20 @@ no sc_hold_live
 : > "$SYNC_HOLD_FILE"
 DESC="an empty marker is not a hold"
 no sc_hold_live
+# Several sessions can each hold at once, one line each (claude-config#1863), so a hold is in force
+# while ANY line is live, wherever it sits, and in the session tagged format as in the old one.
+{
+  printf '%s %s host session=aaaaaaaa ran out\n' "$(( $(date +%s) - 60 ))" "$(( $(date +%s) - 3600 ))"
+  printf '%s %s host session=bbbbbbbb still working\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)"
+} > "$SYNC_HOLD_FILE"
+DESC="a live hold on a later line is a hold, however the first line reads"
+yes sc_hold_live
+{
+  printf '%s %s host session=aaaaaaaa ran out\n' "$(( $(date +%s) - 60 ))" "$(( $(date +%s) - 3600 ))"
+  printf '%s %s host session=bbbbbbbb ran out too\n' "$(( $(date +%s) - 5 ))" "$(( $(date +%s) - 3600 ))"
+} > "$SYNC_HOLD_FILE"
+DESC="a marker whose every line has expired is not a hold"
+no sc_hold_live
 # And it never clears the marker: that is a decision somebody made, and claude-sync owns reporting
 # and removing it (L5).
 printf 'soon\n' > "$SYNC_HOLD_FILE"

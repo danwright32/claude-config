@@ -749,4 +749,21 @@ check "a record holding only device and inode (the shape before #1840) is skippe
 check "and the file is still there" "$(there "$H/w/old")"
 rm -f "$DC_STUBS/stat" "$FAKE_STAT"
 
+# ================================================================================================
+# 18. The open check is the last step before the removal (claude-config#1872, L1034): measuring
+#     and judging come first, so du's whole run is no longer a window in which a file can be opened
+#     after lsof said nobody had it
+# ================================================================================================
+fresh
+printf 'x\n' > "$H/w/f1"; mkdir -p "$H/w/d2"; printf 'x\n' > "$H/w/d2/f"
+item i1 fixture trash "$H/w/f1"; item i2 fixture delete "$H/w/d2"
+record s1 10; plan "$H/plan" s1 i1 i2
+run --plan "$H/plan"
+# The order of the stubbed calls that make up each item: measure (du), judge, open check (lsof) and,
+# for trash, the removal itself. delete removes with the real rm, so lsof is its last stubbed step.
+order="$(awk '$1 == "du" || $1 == "judge" || $1 == "lsof" || $1 == "trash" { printf "%s%s", sep, $1; sep = " " }' "$DC_CALLS")"
+check "each item is measured, then judged, then checked for being open, and the open check comes right before the removal" \
+  "$(eq "$order" "du judge lsof trash du judge lsof")"
+check "and both items were removed (exit $RC)" "$([ "$RC" -eq 0 ] && [ ! -e "$H/w/f1" ] && [ ! -e "$H/w/d2" ] && echo ok || echo "$OUT_TEXT")"
+
 finish

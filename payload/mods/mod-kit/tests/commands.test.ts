@@ -496,3 +496,17 @@ describe('pipeline: asWritten (#1171)', () => {
     expect(pipeline('ls -la').map(c => 'asWritten' in c)).toEqual([false])
   })
 })
+
+// #1834: a shell that splits an unquoted expansion's value into words (bash, sh, dash, ksh) runs the
+// script it is given, so each command of that script carries where its unquoted $s are, quotes
+// removed, for the write reader to split. zsh splits none, and a top level line names no shell.
+describe("pipeline: where a word's expansions outside quotes are, under a shell that splits them (#1834)", () => {
+  test('bash and sh scripts carry each unquoted $ by its place in the word; quoted, escaped and zsh ones do not', () => {
+    expect(pipeline(`bash -c 'cp $A "$B" x\${C}"$D"$E \\$F'`).map(c => c.splits)).toEqual([[[], [0], [], [1, 7], []]])
+    expect(pipeline(`sh -c 'echo $A'`).map(c => c.splits)).toEqual([[[], [0]]])
+    expect(pipeline(`bash -c 'echo "$A" \\$B'`).map(c => c.splits)).toEqual([undefined])
+    expect(pipeline(`bash -c "echo \\$'x'"`).map(c => c.splits)).toEqual([undefined])
+    expect(pipeline(`zsh -c 'echo $A'`).map(c => c.splits)).toEqual([undefined])
+    expect(pipeline('echo $A').map(c => c.splits)).toEqual([undefined])
+  })
+})

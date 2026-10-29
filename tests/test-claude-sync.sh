@@ -12217,7 +12217,7 @@ rm -f "$RVF"
 # The call prints RAN only once the function has returned, so a sourcing that stopped early or a
 # renamed function cannot pass as "left the lock alone".
 _rv_takeover(){   # $1 = the pid the takeover believes is dead -> RAN, or nothing
-  bash -c "export CLAUDE_HOME='$RVH' SYNC_REPO='$RVR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1; . '$SCRIPT' help >/dev/null 2>&1; break_stale_reservations_lock '$RVF.lock' '$1' && echo RAN" 2>/dev/null || true
+  bash -c "export CLAUDE_HOME='$RVH' SYNC_REPO='$RVR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1; . '$SCRIPT' help >/dev/null 2>&1; break_stale_pid_lock '$RVF.lock' '$1' && echo RAN" 2>/dev/null || true
 }
 # The control first: a lock that still names the dead holder IS removed.
 printf '%s\n' "$rv_dead_pid" > "$RVF.lock"
@@ -18428,6 +18428,186 @@ out_54e=""; rc_54e=0
 out_54e="$(h54_env SYNC_HOLD_MINUTES=45 bash "$SCRIPT" hold 2>&1)" || rc_54e=$?
 check "#1854 and so does a hold with no length at all" "[ '$rc_54e' = 0 ] && line_has \"\$out_54e\" 'held off for 45 minutes' 'committing by hand'"
 h54_env bash "$SCRIPT" release >/dev/null 2>&1 || true
+
+
+section "== each hold belongs to the session that took it, and release lifts only its own (#1863) =="
+# Before this a hold was one record for the whole Mac with no owner, so any session's release lifted
+# a pause another session had taken, and the watcher then sent that session's half finished work.
+# Now every hold records the session that took it (CLAUDE_CODE_SESSION_ID, which every tool call a
+# session makes carries, its subagents' included), several can be in force at once, each with its
+# own end, the watcher is held while ANY is live, and a plain release lifts only the caller's own.
+# Another session's hold is lifted only by naming it: release --other <session>.
+H63="$WORK/h1863"; mkdir -p "$H63/home/hooks"
+echo '{"hooks":{}}' > "$H63/home/settings.json"
+printf '# rules before any hold\n' > "$H63/home/CLAUDE.md"
+git init -q --bare "$H63/bare.git"; git clone -q "$H63/bare.git" "$H63/repo" 2>/dev/null
+H63_HOLD="$H63/hold-marker"
+H63_A="aaaaaaaa-1111-4111-8111-111111111111"
+H63_B="bbbbbbbb-2222-4222-8222-222222222222"
+h63_env(){ CLAUDE_HOME="$H63/home" SYNC_REPO="$H63/repo" SYNC_HOLD_FILE="$H63_HOLD" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 env "$@"; }
+h63_a(){ h63_env CLAUDE_CODE_SESSION_ID="$H63_A" "$@"; }
+h63_b(){ h63_env CLAUDE_CODE_SESSION_ID="$H63_B" "$@"; }
+# Whether the watcher would send right now, judged by what it DID: a held watcher commits nothing.
+h63_commits(){ git -C "$H63/repo" rev-list --count HEAD 2>/dev/null || echo 0; }
+
+# TWO SESSIONS HOLDING AT ONCE. B's short hold is its own, so it is taken, not "kept" under A's.
+out_63a=""; rc_63a=0
+out_63a="$(h63_a bash "$SCRIPT" hold 90 "session A builds a skill" 2>&1)" || rc_63a=$?
+out_63b=""; rc_63b=0
+out_63b="$(h63_b bash "$SCRIPT" hold 5 "session B commits a fix" 2>&1)" || rc_63b=$?
+dbg "#1863 A holds: rc=$rc_63a $out_63a"
+dbg "#1863 B holds: rc=$rc_63b $out_63b"
+check "#1863 session A's hold is taken" "[ '$rc_63a' = 0 ] && line_has \"\$out_63a\" 'held off for 1 hour 30 minutes' 'session A builds a skill'"
+# And says when it ends. #1854 passed date a format with no leading +, which date refuses, so the
+# "until" clause it was written to print had never once appeared.
+check "#1863 and says the clock time it ends, in Eastern time" "line_has \"\$out_63a\" 'held off for 1 hour 30 minutes, until [0-9]{1,2}:[0-9]{2} [AP]M ET' 'session A builds a skill'"
+check "#1863 and session B's shorter hold is taken as its own, not folded into A's" \
+  "[ '$rc_63b' = 0 ] && line_has \"\$out_63b\" 'held off for 5 minutes' 'session B commits a fix'"
+check "#1863 and B is told A's hold is also in force" "line_has \"\$out_63b\" 'also' 'session A builds a skill'"
+check "#1863 the record holds both, each naming its session" \
+  "grep -q 'session=$H63_A .*session A builds a skill' '$H63_HOLD' && grep -q 'session=$H63_B .*session B commits a fix' '$H63_HOLD'"
+# The longest hold is written FIRST, so a claude-sync or hook from before this change, which reads
+# only the first line, still sees the Mac held for as long as any hold lasts.
+check "#1863 and its first line is the hold that lasts longest" \
+  "case \"\$(awk 'NR==1' '$H63_HOLD')\" in *'session A builds a skill'*) true ;; *) false ;; esac"
+out_63s="$(h63_b bash "$SCRIPT" status 2>&1 || true)"
+check "#1863 status lists A's hold" "line_has \"\$out_63s\" 'watcher hold' 'session A builds a skill' 'release --other aaaaaaaa'"
+check "#1863 and B's, which B lifts with a plain release" "line_has \"\$out_63s\" 'watcher hold' 'session B commits a fix' 'this session'"
+
+# RELEASE FROM ONE LEAVES THE OTHER'S HOLD IN FORCE.
+out_63r=""; rc_63r=0
+out_63r="$(h63_b bash "$SCRIPT" release 2>&1)" || rc_63r=$?
+dbg "#1863 B releases: rc=$rc_63r $out_63r"
+check "#1863 B's release lifts B's hold, naming it" "[ '$rc_63r' = 0 ] && line_has \"\$out_63r\" 'released' 'session B commits a fix'"
+check "#1863 and leaves A's hold in the record" "grep -q 'session A builds a skill' '$H63_HOLD' && ! grep -q 'session B commits a fix' '$H63_HOLD'"
+check "#1863 and says the watcher is still held by A, and how to lift that" \
+  "line_has \"\$out_63r\" 'still held' 'session A builds a skill' 'release --other aaaaaaaa'"
+check "#1863 and never says the next edit sends" "case \"\$out_63r\" in *'sends normally'*) false ;; *) true ;; esac"
+printf '# rules edited during A s hold\n' > "$H63/home/CLAUDE.md"
+c63_before="$(h63_commits)"
+out_63w="$(h63_b SYNC_IN_WATCH=1 bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1863 watcher while A still holds: $out_63w"
+check "#1863 and the watcher still sends nothing" "[ \"\$(h63_commits)\" = '$c63_before' ]"
+
+# A second plain release from B finds nothing of its own, and says so without touching A's.
+out_63n=""; rc_63n=0
+out_63n="$(h63_b bash "$SCRIPT" release 2>&1)" || rc_63n=$?
+check "#1863 a release with no hold of its own lifts nothing" \
+  "[ '$rc_63n' = 0 ] && line_has \"\$out_63n\" 'nothing was released' 'session A builds a skill' && grep -q 'session A builds a skill' '$H63_HOLD'"
+
+# Naming a session nobody holds for refuses, and lifts nothing.
+out_63m=""; rc_63m=0
+out_63m="$(h63_b bash "$SCRIPT" release --other cccccccc 2>&1)" || rc_63m=$?
+check "#1863 release --other naming no hold fails" "[ '$rc_63m' != 0 ] && grep -q 'session A builds a skill' '$H63_HOLD'"
+check "#1863 and says nothing was released, naming what is held" "line_has \"\$out_63m\" 'nothing was released' 'cccccccc'"
+out_63q=""; rc_63q=0
+out_63q="$(h63_b bash "$SCRIPT" release --other 2>&1)" || rc_63q=$?
+check "#1863 release --other with no session named fails and lifts nothing" \
+  "[ '$rc_63q' != 0 ] && grep -q 'session A builds a skill' '$H63_HOLD'"
+
+# RELEASE --OTHER LIFTS IT, by the short name status shows.
+out_63o=""; rc_63o=0
+out_63o="$(h63_b bash "$SCRIPT" release --other aaaaaaaa 2>&1)" || rc_63o=$?
+dbg "#1863 B lifts A's hold by name: rc=$rc_63o $out_63o"
+check "#1863 release --other lifts the named session's hold" "[ '$rc_63o' = 0 ] && [ ! -e '$H63_HOLD' ]"
+check "#1863 and names whose hold it lifted" "line_has \"\$out_63o\" 'released' 'session A builds a skill'"
+check "#1863 and says the next edit sends" "line_has \"\$out_63o\" 'next edit' 'sends normally'"
+
+# AN OLD FORMAT RECORD, one line with no session, written by the claude-sync before this, is still
+# honoured as one hold nobody owns, which any session may lift (L1010).
+printf '%s %s %s an old hold from before sessions\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "somehost" > "$H63_HOLD"
+printf '# rules edited during the old hold\n' > "$H63/home/CLAUDE.md"
+c63_before="$(h63_commits)"
+out_63ow="$(h63_a SYNC_IN_WATCH=1 bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1863 watcher under an old format hold: $out_63ow"
+check "#1863 an old format record still holds the watcher" "[ \"\$(h63_commits)\" = '$c63_before' ] && [ -f '$H63_HOLD' ]"
+out_63os="$(h63_a bash "$SCRIPT" status 2>&1 || true)"
+check "#1863 and status lists it as a hold with no session recorded" "line_has \"\$out_63os\" 'watcher hold' 'an old hold from before sessions' 'no session'"
+out_63oh=""; rc_63oh=0
+out_63oh="$(h63_a bash "$SCRIPT" hold 10 "A beside the old one" 2>&1)" || rc_63oh=$?
+check "#1863 and a session's hold beside it keeps the old record" \
+  "[ '$rc_63oh' = 0 ] && grep -q 'an old hold from before sessions' '$H63_HOLD' && grep -q 'session=$H63_A .*A beside the old one' '$H63_HOLD'"
+out_63or=""; rc_63or=0
+out_63or="$(h63_b bash "$SCRIPT" release 2>&1)" || rc_63or=$?
+check "#1863 and any session's plain release lifts the old record" \
+  "[ '$rc_63or' = 0 ] && line_has \"\$out_63or\" 'released' 'an old hold from before sessions' && ! grep -q 'an old hold from before sessions' '$H63_HOLD'"
+check "#1863 but not another session's hold beside it" "grep -q 'A beside the old one' '$H63_HOLD'"
+h63_a bash "$SCRIPT" release >/dev/null 2>&1 || true
+
+# A run with no session id records "unknown", and that hold is anyone's.
+out_63u=""; rc_63u=0
+out_63u="$(h63_env -u CLAUDE_CODE_SESSION_ID bash "$SCRIPT" hold 15 "taken from a plain terminal" 2>&1)" || rc_63u=$?
+check "#1863 a hold with no session id records unknown" "[ '$rc_63u' = 0 ] && grep -q 'session=unknown .*taken from a plain terminal' '$H63_HOLD'"
+out_63ur="$(h63_a bash "$SCRIPT" release 2>&1 || true)"
+check "#1863 and a session's plain release lifts it" "[ ! -e '$H63_HOLD' ] && line_has \"\$out_63ur\" 'released' 'taken from a plain terminal'"
+# And a terminal with no session id cannot lift a session's hold without naming it.
+h63_a bash "$SCRIPT" hold 20 "A works on" >/dev/null 2>&1 || true
+out_63ut="$(h63_env -u CLAUDE_CODE_SESSION_ID bash "$SCRIPT" release 2>&1 || true)"
+check "#1863 and a plain terminal's release leaves a session's hold alone" \
+  "grep -q 'A works on' '$H63_HOLD' && line_has \"\$out_63ut\" 'nothing was released' 'release --other aaaaaaaa'"
+h63_a bash "$SCRIPT" release >/dev/null 2>&1 || true
+
+# EXPIRY OF ONE HOLD WHILE THE OTHER STAYS: the expired one is cleared on its own and said, and the
+# watcher stays held by the live one.
+{
+  printf '%s %s %s session=%s A ran out\n' "$(( $(date +%s) - 60 ))" "$(( $(date +%s) - 3600 ))" "somehost" "$H63_A"
+  printf '%s %s %s session=%s B still working\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "somehost" "$H63_B"
+} > "$H63_HOLD"
+printf '# rules edited while one hold expired\n' > "$H63/home/CLAUDE.md"
+c63_before="$(h63_commits)"
+out_63x="$(h63_a SYNC_IN_WATCH=1 bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1863 one hold expired, one live: $out_63x"
+check "#1863 an expired hold beside a live one is cleared on its own" \
+  "! grep -q 'A ran out' '$H63_HOLD' && grep -q 'B still working' '$H63_HOLD'"
+check "#1863 and its expiry is said, naming it" "line_has \"\$out_63x\" 'expired' 'A ran out'"
+check "#1863 and the watcher stays held by the live one" "[ \"\$(h63_commits)\" = '$c63_before' ]"
+
+# An unreadable line beside a live hold is cleared in its own words, and the live hold kept.
+printf 'this is not a hold\n' >> "$H63_HOLD"
+out_63y="$(h63_a SYNC_IN_WATCH=1 bash "$SCRIPT" send 2>&1 || true)"
+check "#1863 an unreadable line beside a live hold is cleared, and the live hold kept" \
+  "! grep -q 'this is not a hold' '$H63_HOLD' && grep -q 'B still working' '$H63_HOLD'"
+check "#1863 and it is reported as unreadable" "line_has \"\$out_63y\" 'could not be read' 'cleared'"
+
+# Once the last live hold ends, the watcher sends again.
+printf '%s %s %s session=%s B ran out too\n' "$(( $(date +%s) - 5 ))" "$(( $(date +%s) - 3600 ))" "somehost" "$H63_B" > "$H63_HOLD"
+out_63z="$(h63_a SYNC_IN_WATCH=1 bash "$SCRIPT" send 2>&1 || true)"
+check "#1863 once every hold has expired the record is gone and the watcher sends" \
+  "[ ! -e '$H63_HOLD' ] && grep -q 'rules edited while one hold expired' '$H63/repo/payload/CLAUDE.md'"
+check "#1863 and no lock is left beside the record" "[ -z \"\$(find '$H63' -maxdepth 1 -name 'hold-marker?*' 2>/dev/null)\" ]"
+
+# Two sessions holding in the same instant each read, change and rewrite the one record, so without
+# the lock the second rename drops the first session's hold after it printed success. Both started
+# together, and both must be in the record afterwards. A race can pass by luck, so this proves the
+# lock is not broken outright rather than that it is needed; the lock itself is #1148's, tested there.
+h63_a bash "$SCRIPT" hold 30 "A at the same instant" >/dev/null 2>&1 &
+h63_pa=$!
+h63_b bash "$SCRIPT" hold 30 "B at the same instant" >/dev/null 2>&1 &
+h63_pb=$!
+wait "$h63_pa" || true; wait "$h63_pb" || true
+check "#1863 two holds taken at the same instant are both in the record" \
+  "grep -q 'A at the same instant' '$H63_HOLD' && grep -q 'B at the same instant' '$H63_HOLD'"
+h63_a bash "$SCRIPT" release >/dev/null 2>&1 || true
+h63_b bash "$SCRIPT" release >/dev/null 2>&1 || true
+check "#1863 and each session's release lifts its own" "[ ! -e '$H63_HOLD' ]"
+
+# Status is never meant to block, and clearing an expired line takes the lock. With the lock held by
+# a live process (this suite) and a lock wait of a minute, status must still answer, leaving the
+# expired line for a later reading rather than waiting out the minute for it.
+{
+  printf '%s %s %s session=%s A ran out again\n' "$(( $(date +%s) - 60 ))" "$(( $(date +%s) - 3600 ))" "somehost" "$H63_A"
+  printf '%s %s %s session=%s B holds on\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "somehost" "$H63_B"
+} > "$H63_HOLD"
+printf '%s\n' "$$" > "$H63_HOLD.lock"
+t63_0="$(date +%s)"
+out_63l="$(h63_a SYNC_HOLD_LOCK_WAIT=60 bash "$SCRIPT" status 2>&1 || true)"
+t63_1="$(date +%s)"
+rm -f "$H63_HOLD.lock"
+dbg "#1863 status under a held lock took $(( t63_1 - t63_0 ))s"
+check "#1863 status under a held hold lock does not wait out the lock's minute" "[ $(( t63_1 - t63_0 )) -lt 60 ]"
+check "#1863 and still lists the live hold" "line_has \"\$out_63l\" 'watcher hold' 'B holds on'"
+check "#1863 and leaves the expired line for a later reading to clear" "grep -q 'A ran out again' '$H63_HOLD'"
+h63_b bash "$SCRIPT" release >/dev/null 2>&1 || true
 
 
 section "== a watch daemon older than the claude-sync on disk refuses to send (#420) =="

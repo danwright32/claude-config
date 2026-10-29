@@ -213,8 +213,12 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   property a tool's input schema names `reason` or `text` is no message. Only the words a person
 //   reads count there (Dan, 2026-10-28: "Narrow it first"): a regular expression, a value compared,
 //   a type's union, a command's words and flags, what a string is split, searched or keyed by, and a
-//   string with no letter in it, which a message is only computed from, pass. A .tsx or .jsx file's
-//   messages are read whole as before, since narrowing them would let one edit #1823 holds through.
+//   string with no letter in it, which a message is only computed from, pass.
+// - Since #1864: a one word tag passes too where its own place shows it is one (rules.ts readMod's
+//   tagAt and answerTag): a field of a record that holds more than words (`kind: 'focus'`, an argv's
+//   `'gh'`), an argument a function of the file only runs, searches or compares, and an answer the
+//   function's own signature names. A .tsx or .jsx file's messages are read for their words the same
+//   way, which releases the one edit #1823 held for a compared button name (Dan approved, 2026-10-28).
 // - Since #1832: a script file handed a name a command substitution fills in is held the same way,
 //   unless every substitution in it is `git rev-parse`, alone or with -C (rules.ts outputTrusted; Dan,
 //   2026-10-27: "git rev-parse only"), so a commit handed as `--sha` passes and a scope list is held.

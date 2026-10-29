@@ -5,14 +5,20 @@ handback-claims-gate.sh, so the gate that refuses a skip and the check that comp
 the commands cannot come to disagree about what a skip is (L263, L370).
 
     agent-overrides.py skips                 stdin: one command line
-        one line per git hook skip it runs, exit 0 when there is one, 1 when there is none.
+        one line per git hook skip it runs, exit 0 when there is one, 10 when there is none.
+
+    EXIT CODES. No mode answers "nothing found" with 1, which is what Python exits on an uncaught
+    exception: a crash must never read as clean (claude-config#1856, #1869, L1033). Each answers it
+    with 10, and every caller reads any code it does not expect as could not read.
     agent-overrides.py stdin-device          stdin: one command line
         one line per git command reading a file from standard input's device path (/dev/stdin,
-        /dev/fd/0), exit 0 when there is one, 1 when there is none (claude-config#1765).
+        /dev/fd/0), exit 0 when there is one, 10 when there is none, never 1, which is what Python
+        exits on a crash (claude-config#1765, #1869).
     agent-overrides.py stdin-device-refusal <agent>    stdin: one command line
-        exit 0 printing what agent <agent> is told for such a command, 1 printing nothing when there
-        is none. The one wording, said by no-verify-gate.sh before the call and by the job watcher
-        mod at Claude Code's permission prompt, which comes first (claude-config#1765).
+        exit 0 printing what agent <agent> is told for such a command, 10 printing nothing when there
+        is none, never 1, which is what Python exits on a crash (#1869). The one wording, said by
+        no-verify-gate.sh before the call and by the job watcher mod at Claude Code's permission
+        prompt, which comes first (claude-config#1765).
     agent-overrides.py rewrite-refusal <agent>    stdin: one command line
         exit 0 printing what agent <agent> is told for a git command that rewrites a commit already
         made (commit --amend, push --force, -f, --force-with-lease, a +refspec), 10 printing nothing
@@ -20,11 +26,11 @@ the commands cannot come to disagree about what a skip is (L263, L370).
         amend-force-push-gate.sh (claude-config#1856).
     agent-overrides.py runs-script <name>    stdin: one command line
         exit 0 when a command in it runs the script <name> (by name or path, directly or through a
-        shell), 1 when none does.
+        shell), 10 when none does.
     agent-overrides.py check-report <transcript>    stdin: the report
         exit 0 printing what contradicts what when the report says no hook was skipped or no override
-        was used and the agent's own commands in <transcript> did; 1 when nothing contradicts; 2 when
-        the transcript cannot be read.
+        was used and the agent's own commands in <transcript> did; 10 when nothing contradicts; 2
+        when the transcript cannot be read.
 
 WHY. On 2026-10-23 a Bidspoke builder agent committed twice with `git commit --no-verify` because the
 repository's pre-commit typecheck and lint were slow under load, and handed back "no `--no-verify`, no
@@ -623,16 +629,19 @@ def main(argv):
         found = skips(data)
         for f in found:
             print(f)
-        return 0 if found else 1
+        # Not 1: Python exits 1 on an uncaught exception, and a crash must never read as clean (#1869).
+        return 0 if found else 10
     if mode == "stdin-device":
         found = stdin_device_reads(data)
         for f in found:
             print(f)
-        return 0 if found else 1
+        # Not 1: Python exits 1 on an uncaught exception, and a crash must never read as clean (#1869).
+        return 0 if found else 10
     if mode == "stdin-device-refusal" and len(argv) > 2 and argv[2]:
         found = stdin_device_reads(data)
         if not found:
-            return 1
+            # Not 1, for the same reason: both callers read any code but 0 and 10 as unread (#1869).
+            return 10
         print(stdin_device_refusal(argv[2], found))
         return 0
     if mode == "rewrite-refusal" and len(argv) > 2 and argv[2]:
@@ -643,7 +652,7 @@ def main(argv):
         print(rewrite_refusal(argv[2], found))
         return 0
     if mode == "runs-script" and len(argv) > 2:
-        return 0 if runs_script(data, argv[2]) else 1
+        return 0 if runs_script(data, argv[2]) else 10
     if mode == "check-report" and len(argv) > 2:
         try:
             lines = check_report(data, argv[2])
@@ -652,7 +661,7 @@ def main(argv):
             return 2
         for line in lines:
             print(line)
-        return 0 if lines else 1
+        return 0 if lines else 10
     sys.stderr.write("usage: agent-overrides.py skips | stdin-device | stdin-device-refusal <agent> | rewrite-refusal <agent> | runs-script <name> | check-report <transcript>  (input on stdin)\n")
     return 64
 

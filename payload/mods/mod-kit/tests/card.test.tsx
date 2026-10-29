@@ -1,6 +1,6 @@
-import { expect } from 'claude-code/testing'
+import { expect, mock } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import type { Register } from 'claude-code'
+import type { On, Register } from 'claude-code'
 
 // A stand-in guard that blocks every Bash call through the kit, as the real guards do.
 const guard: { name: string; register: Register } = {
@@ -122,6 +122,33 @@ test('the command reader is shared as $.modkit.commands', { plugins: [reader] },
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   const r = (await $.tool.call({ tool: 'Bash', command: 'sudo cat .env && git status' } as never)) as { deny?: string; text?: string }
   expect(JSON.parse(r.deny ?? r.text ?? '[]')).toEqual([['cat', '.env'], ['git', 'status']])
+})
+
+// #1834: the write reader reads a line as the shell Claude Code runs it in does, which mod-kit
+// finds from the session's environment, so an unquoted value is split into words under bash only.
+const writesReader: { name: string; register: Register } = {
+  name: 'writes-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      const w = await $.modkit.writes({ command: String((e as { command?: string }).command), cwd: '/w', home: '/h' })
+      return { deny: JSON.stringify((w.runs ?? []).map(r => r.args.map(a => a.path))) }
+    })
+  },
+}
+const handedUnder = async ($: unknown, on: On, env: Record<string, string>) => {
+  mock.env(on, env)
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const r = (await ($ as { tool: { call: (e: never) => Promise<{ deny?: string; text?: string }> } }).tool.call({ tool: 'Bash', command: 'F="a.ts b.ts"; python3 gen.py $F' } as never))
+  return JSON.parse(r.deny ?? r.text ?? '[]') as unknown
+}
+test("$.modkit.writes splits an unquoted value when the session's shell is bash", { plugins: [writesReader] }, async ($, on) => {
+  expect(await handedUnder($, on, { SHELL: '/bin/bash', HOME: '/h' })).toEqual([['/w/a.ts', '/w/b.ts']])
+})
+test("$.modkit.writes keeps an unquoted value whole when the session's shell is zsh", { plugins: [writesReader] }, async ($, on) => {
+  expect(await handedUnder($, on, { SHELL: '/bin/zsh', HOME: '/h' })).toEqual([['/w/a.ts b.ts']])
+})
+test('$.modkit.writes follows CLAUDE_CODE_SHELL over SHELL', { plugins: [writesReader] }, async ($, on) => {
+  expect(await handedUnder($, on, { CLAUDE_CODE_SHELL: '/bin/bash', SHELL: '/bin/zsh', HOME: '/h' })).toEqual([['/w/a.ts', '/w/b.ts']])
 })
 
 // #698: a reader that judges what a heredoc feeds asks for its body through the kit, as plain data.
