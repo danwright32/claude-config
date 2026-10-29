@@ -331,6 +331,48 @@ run_agent "git add -A" "$AGENT_ID"
 refused "#1513 control: a meta naming the shared main checkout credits nothing in it"
 says "and the foreign file is named" "sharedfile.txt"
 rm -f "$REPO/sharedfile.txt" "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
+
+# A CLEANLY REMOVED worktree is its own case (claude-config#1876). When an agent finishes without
+# changing anything, Claude Code deletes its worktree and rewrites the meta to worktreeCleanlyRemoved
+# true, dropping spawnedWithWorktree and worktreePath (12 of 906 metas on the personal MacBook,
+# measured 2026-10-28, in the shape below). The agent can go on calling tools after that: one agent
+# whose meta was rewritten on 2026-10-07 then wrote 768 lines more to its transcript that day, every
+# one with the MAIN checkout as its cwd, and several git adds among them. So the gate does run for
+# such an agent, and the worktree its meta once named is gone.
+CLEANED_META='{"agentType": "general-purpose", "description": "d", "toolUseId": "toolu_9", "spawnDepth": 1, "requestShape": "background", "requestNonInteractive": true, "worktreeCleanlyRemoved": true}'
+printf '%s\n' "$CLEANED_META" > "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
+printf 'after removal\n' > "$REPO/afterremoval.txt"
+set_mtime "$REPO/afterremoval.txt" "$((now - 50000))"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID"
+refused "#1876 an agent whose worktree was cleanly removed gets no credit in the main checkout"
+says "and the refusal says its own worktree was removed, not that it never had one" "worktreeCleanlyRemoved"
+says "and names the file" "afterremoval.txt"
+# Its own transcript is still read: the record is not a missing field, so its own edits stay its own.
+TR_SAVED="$TR"; TR="$AGENT_TR"; mention_edit "$REPO/afterremoval.txt"; TR="$TR_SAVED"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID"
+allowed "#1876 a file a cleanly removed agent edited after the removal is still its own, from its transcript"
+git -C "$REPO" add -A >/dev/null 2>&1; git -C "$REPO" -c commit.gpgsign=false commit -q -m "after removal" >/dev/null 2>&1
+# A record saying the worktree was cleanly removed never credits a worktree wholesale, even one that
+# also kept spawnedWithWorktree and a worktreePath that exists again: Claude Code says that worktree
+# was deleted, so whatever stands at the path now is not the one it made for this agent.
+python3 -c '
+import json, sys
+print(json.dumps({"agentType": "general-purpose", "spawnedWithWorktree": True, "worktreePath": sys.argv[1],
+                  "worktreeCleanlyRemoved": True, "spawnDepth": 1}))
+' "$WT" > "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID" "$WT"
+refused "#1876 a cleanly removed record that kept its worktree fields still credits nothing in that path"
+says "and the refusal says the worktree was removed" "worktreeCleanlyRemoved"
+# The control: the same meta without the removal flag still credits the worktree, so the refusal
+# above is the flag's doing and not a broken fixture.
+write_meta "$AGENT_ID" "$WT" true
+fresh_cache
+run_agent "git add -A" "$AGENT_ID" "$WT"
+allowed "#1876 control: the same meta without worktreeCleanlyRemoved still credits its worktree"
+rm -f "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
 git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1
 REPO="$REPO_BEFORE_1513"
 
