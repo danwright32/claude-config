@@ -65,7 +65,8 @@
 DCR_SEP=$'\037'
 
 # How old a scan may be, in seconds, before disk-remove.sh refuses a plan made from it: what it
-# measured may have changed since. The review page states the deadline from the same number (#1807).
+# measured may have changed since. Only disk-remove.sh reads it; the review page does not state the
+# deadline, so a selection pasted too late is refused by disk-remove, with the scan's age (#1807).
 DCR_MAX_SCAN_AGE=3600
 
 # Every category's name as a person reads it, in one table: the scan's summary, the review page and
