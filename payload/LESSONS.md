@@ -10125,6 +10125,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A recovery that re-submits into the queue it waits on must first ask whether the work is already pending, or it false-alarms and lengthens the delay.
 - **L798. Deleting a deployed thing's source from the repository does not remove it from the platform it runs on, so a removal is finished only when the platform's own list no longer shows it, and a teardown left as a sentence in a pull request body is never carried out.** (project-enrollment-tracker#1855, 2026-10-21)
   SHORT: Deleting a deployed thing's source does not undeploy it; a removal is done only when the platform's own list no longer shows it.
+- **L822. Before narrowing who may use a shared resource (a runner group, an allowlist, a token's scope), list every current user from the resource's own usage record and admit each one that should keep it, because a user left out often does not fail loudly: its work waits for a turn that never comes.** (project-enrollment-tracker#1961, 2026-10-29)
+  SHORT: Before narrowing who may use a shared resource, list its current users from its own usage record: one left out often just waits, silently.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
