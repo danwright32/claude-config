@@ -4287,32 +4287,61 @@ next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whol
 # change came from the secondary side and secondary's copy is taken, every field of it, known or
 # not, so the next field Claude Code adds travels too (L620). Where primary changed it, primary
 # wins, as before; with no base there is nothing to tell the two apart, and primary wins.
-merge_hook_blocks(){   # $1 primary  $2 secondary  $3 base  -> the merged hooks object, or nothing
-  jq -cn --argjson pri "$1" --argjson sec "$2" --argjson bas "$3" '
+#
+# ON THE SEND, A REGISTRATION THE REPO REMOVED OR MOVED STAYS REMOVED OR MOVED (claude-config#1902).
+# The rule above only ever ADDS from the secondary side, so the stale Mac of the onFailure incident
+# put back a registration the repo had removed, and undid a move to another matcher group by keeping
+# the old line and refusing the new one (its command was already in primary). So with $4 set to
+# drop-stale, which only the send passes, an entry primary holds UNCHANGED from the base and the
+# secondary side no longer holds at that event and group is dropped, and a secondary entry is kept
+# when that event, group and command are in neither primary nor base, so the moved line lands in its
+# new group. An entry primary changed is primary's work and is kept, removed or not (L5).
+#
+# Three things switch it off, each falling back to the rule above exactly. The apply never passes it:
+# there primary is what arrived and secondary is this Mac's settings.json, so the drop would read a
+# settings.json that has LOST its hooks (or a line the apply refused, #1913) as this Mac removing
+# every one of them, and a pull, which today heals such a Mac, would leave it with nothing (#300,
+# #409). An empty secondary side never drops anything: the send reads a payload it cannot parse as an
+# empty block, and dropping against that would remove every unchanged registration from the shared
+# repo in one commit. And with no base nothing can be told apart, so nothing is dropped.
+merge_hook_blocks(){   # $1 primary  $2 secondary  $3 base  $4 drop-stale or empty -> the merged hooks object, or nothing
+  jq -cn --argjson pri "$1" --argjson sec "$2" --argjson bas "$3" --arg mode "${4:-}" '
     def cmds($h): [ $h | to_entries[] | .value[]? | .hooks[]? | .command ];
     def regs($h): [ $h | to_entries[] | .key as $k | .value[]? | del(.hooks) as $s
                     | .hooks[]? | {k: $k, s: $s, c: .command, e: .} ];
     def entry($rs; $k; $s; $c): first($rs[] | select(.k == $k and .s == $s and .c == $c) | .e) // null;
+    def nonempty($h): ($h | type) == "object" and ([ $h[] | arrays | .[] ] | length) > 0;
     regs($sec) as $secR
     | regs($bas) as $basR
+    | ($mode == "drop-stale" and nonempty($sec) and nonempty($bas)) as $drop
     | ($pri | with_entries(
           .key as $k
+          | ((.value | type) == "array" and (.value | length) > 0) as $had
           | .value |= (if type == "array" then map(
               if (type == "object") and (.hooks | type) == "array" then
-                del(.hooks) as $s
+                (.hooks | length) as $n
+                | del(.hooks) as $s
                 | .hooks |= map(
                     . as $p
                     | entry($basR; $k; $s; $p.command) as $b
                     | entry($secR; $k; $s; $p.command) as $q
-                    | if $b != null and $q != null and $p == $b and $q != $b then $q else $p end)
-              else . end) else . end))) as $pri
+                    | if $drop and $b != null and $q == null and $p == $b then empty
+                      elif $b != null and $q != null and $p == $b and $q != $b then $q else $p end)
+                # A group the drop emptied goes, and an event it emptied with it.
+                | if $n > 0 and (.hooks | length) == 0 then empty else . end
+              else . end) else . end)
+          | select(($had and (.value | type) == "array" and (.value | length) == 0) | not))) as $pri
     | cmds($pri) as $priC
     | cmds($bas) as $basC
+    | regs($pri) as $priR
     | [ ($sec | to_entries[])
         | .key as $k
         | .value[]?
         | del(.hooks) as $shape
-        | [ .hooks[]? | select( ([.command] - $priC - $basC) | length > 0 ) ]
+        | [ .hooks[]? | . as $h
+            | select( if $drop
+                      then entry($priR; $k; $shape; $h.command) == null and entry($basR; $k; $shape; $h.command) == null
+                      else ([$h.command] - $priC - $basC) | length > 0 end ) ]
         | select(length > 0) | {key: $k, shape: $shape, keep: .} ] as $keeps
     | reduce $keeps[] as $e ($pri;
           (.[$e.key] // []) as $groups
@@ -4322,6 +4351,63 @@ merge_hook_blocks(){   # $1 primary  $2 secondary  $3 base  -> the merged hooks 
                            else $groups | (.[$at].hooks = ((.[$at].hooks // []) + $e.keep))
                          end))
   ' 2>/dev/null
+}
+
+# A registration is named by its event, its group's shape (every field but hooks) and its command,
+# the same three merge_hook_blocks matches on, so the lists below mean what the merge means.
+hook_block_regs(){   # $1 = a hooks object -> a JSON array of {k, s, c}, one per registration
+  jq -cn --argjson h "$1" '[ $h | to_entries[] | .key as $k | .value[]? | objects | del(.hooks) as $s
+                             | .hooks[]? | {k: $k, s: $s, c: .command} ]' 2>/dev/null
+}
+# The block with only the registrations IN the list kept ($3 = in), or only those NOT in it ($3 = out).
+# A group this empties goes, and an event it empties with it; anything it does not touch is left
+# exactly as it was, an empty group included.
+hook_block_select(){   # $1 = a hooks object  $2 = a JSON array of {k, s, c}  $3 = in|out -> the hooks object
+  jq -cn --argjson h "$1" --argjson r "$2" --arg how "$3" '
+    def listed($k; $s; $c): any($r[]; .k == $k and .s == $s and .c == $c);
+    $h | with_entries(
+      .key as $k
+      | ((.value | type) == "array" and (.value | length) > 0) as $had
+      | .value |= (if type == "array" then map(
+          if (type == "object") and (.hooks | type) == "array" then
+            (.hooks | length) as $n
+            | del(.hooks) as $s
+            | .hooks |= map(select(listed($k; $s; .command) == ($how == "in")))
+            | if $n > 0 and (.hooks | length) == 0 then empty else . end
+          else . end) else . end)
+      | select(($had and (.value | type) == "array" and (.value | length) == 0) | not))' 2>/dev/null
+}
+
+# EVERY REGISTRATION WHOSE SCRIPT IS NOT ON THIS MAC (claude-config#1913). Since #1899 a hook that
+# cannot start counts as failed, so a gate registered with "onFailure": "block" whose script is
+# missing refuses every call it matches: for the payload write gate that is every Bash call and every
+# edit. The script is the path under this Mac's config the command names, which is how every line
+# the payload carries names it (the home token, detokenized), followed by its arguments if any. A
+# command naming nothing under the config home is not something the sync installs or removes, so it
+# is not judged here.
+hook_regs_without_script(){   # $1 = a hooks object -> a JSON array of {k, s, c}, possibly []
+  local home="${CLAUDE_HOME%/}" cmd rest missing=""
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    case "$cmd" in *"$home/"*) ;; *) continue ;; esac
+    rest="${cmd#*"$home"/}"; rest="${rest%%[[:space:]]*}"; rest="${rest%[\"\']}"
+    [ -f "$home/$rest" ] || missing+="$cmd"$'\n'
+  done < <(jq -r '[ .[]? | .[]? | .hooks[]? | .command // empty ] | unique[]' <<<"$1" 2>/dev/null || true)
+  jq -cn --argjson h "$1" --arg m "$missing" '
+    ($m | split("\n") | map(select(length > 0))) as $gone
+    | [ $h | to_entries[] | .key as $k | .value[]? | objects | del(.hooks) as $s
+        | .hooks[]? | select(.command as $c | any($gone[]; . == $c)) | {k: $k, s: $s, c: .command} ]' 2>/dev/null
+}
+# HOOKS_REFUSED_FILE: the registrations the last apply left out because their script was missing, a
+# JSON array of {k, s, c}, per Mac and gitignored (claude-config#1913). Read by the send, which must
+# not take a line this Mac REFUSED for one it REMOVED: the base holds it and this Mac's config does
+# not, so without this record the next send would delete it from the shared repo, unregistering it
+# for the Mac whose script is fine. And read by the apply, so an unchanged refusal is said once.
+HOOKS_REFUSED_FILE="$SYNC_REPO/.hooks-refused"
+hooks_refused_here(){   # -> the recorded refusals as a JSON array, or [] when there are none
+  local r
+  r="$(jq -c 'if type == "array" then . else empty end' "$HOOKS_REFUSED_FILE" 2>/dev/null || true)"
+  printf '%s' "${r:-[]}"
 }
 
 # The hooks block of the commit this Mac LAST APPLIED, which is the base both directions compare
@@ -4856,6 +4942,14 @@ PROT
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
     local _sh_local _sh_pay _sh_base _sh_merged
     _sh_local="$(jq -c '.hooks // {}' "$CLAUDE_HOME/settings.json" 2>/dev/null || true)"
+    # The shared copy, read the same way. It used to fall back to an empty block when it could not
+    # be parsed, and the merge then published this Mac's block over it, losing whatever it held
+    # that this Mac had not applied, the #300 loss by another door (claude-config#1902). No file at
+    # all is an empty block (nothing has been published yet); a file that cannot be read is held.
+    _sh_pay='{}'
+    if [ -f "$PAYLOAD/settings.hooks.json" ]; then
+      _sh_pay="$(detok < "$PAYLOAD/settings.hooks.json" | jq -c '.hooks // {}' 2>/dev/null)" || _sh_pay=""
+    fi
     if [ -z "$_sh_local" ]; then
       # Not writing is the safe direction: a payload left as it is can still be published next
       # time, and one overwritten from an unreadable local file cannot be recovered (L5).
@@ -4863,13 +4957,19 @@ PROT
       echo "claude-sync: $CLAUDE_HOME/settings.json could not be read as JSON, so the hooks block was NOT published and the repo keeps the copy it had. Check it with 'jq . $CLAUDE_HOME/settings.json'." >&2
       # Logged like every other way the block is held back (claude-config#592, review of #785).
       sync_log_line "the hooks block was NOT published, because $CLAUDE_HOME/settings.json could not be read as JSON"
+    elif [ -z "$_sh_pay" ]; then
+      note_held_back settings.hooks.json
+      echo "claude-sync: the shared config's settings.hooks.json could not be read as JSON, so this Mac's hooks block was NOT published over it and the repo keeps the copy it has. Check it with 'jq . $PAYLOAD/settings.hooks.json'; the block publishes on the next send that can read it." >&2
+      sync_log_line "the hooks block was NOT published, because the shared config's settings.hooks.json could not be read as JSON"
     else
-      _sh_pay='{}'
-      if [ -f "$PAYLOAD/settings.hooks.json" ]; then
-        _sh_pay="$(detok < "$PAYLOAD/settings.hooks.json" | jq -c '.hooks // {}' 2>/dev/null || echo '{}')"
-      fi
       _sh_base="$(last_applied_hook_block)"
-      _sh_merged="$(merge_hook_blocks "$_sh_local" "$_sh_pay" "$_sh_base")"
+      # A line the last apply REFUSED, for want of its script, is not one this Mac removed, so it is
+      # taken out of the base: the payload's copy then reads as not yet seen here and is kept
+      # (claude-config#1913). Anything unreadable leaves the base as it was.
+      _sh_base="$(hook_block_select "$_sh_base" "$(hooks_refused_here)" out || true)"
+      [ -n "$_sh_base" ] || _sh_base="$(last_applied_hook_block)"
+      # drop-stale: a line the repo removed or moved is not put back by this Mac's stale copy (#1902).
+      _sh_merged="$(merge_hook_blocks "$_sh_local" "$_sh_pay" "$_sh_base" drop-stale)"
       local _sh_verdict=""
       [ -n "$_sh_merged" ] && _sh_verdict="$(hook_block_registration_faults "$_sh_merged")"
       if [ -n "$_sh_verdict" ]; then
@@ -6103,6 +6203,53 @@ MERGED
   done <<MOVED
 ${MOVED_LOCAL_RECORDS:-}
 MOVED
+  # THE HOOKS BLOCK GOES IN TWO HALVES, AROUND THE MIRROR (claude-config#1913). Since #1899 a gate
+  # registered with "onFailure": "block" whose script cannot start refuses every call it matches, so
+  # settings.json must never name a script that is not on disk, even for the seconds an apply takes.
+  # It did: the mirror below deleted a removed or renamed gate's script while settings.json still
+  # registered it, and the block was only rewritten afterwards. So the merged block is worked out
+  # HERE, before any file moves, and this half only takes OUT what it no longer holds (this Mac's own
+  # copy of every line that stays, untouched); the mirror then deletes and installs the scripts; and
+  # the half after it puts in what is new, leaving out any line whose script is still missing.
+  local hk_settings="$CLAUDE_HOME/settings.json" hk_inc="" hk_bas="" hk_loc="" hk_target="" hk_wrote=""
+  if [ -f "$PAYLOAD/settings.hooks.json" ]; then
+    [ -f "$hk_settings" ] || echo '{}' > "$hk_settings"
+    # The hooks block used to be REPLACED wholesale, which silently unregistered a
+    # hook added here since the last send: the hook script itself was held back as
+    # locally ahead, but the line that activates it was not, so the hook shipped
+    # inert. Seen on 2026-07-29 and once before during the send-wedge (#13).
+    # So merge three ways instead. The base is the fragment this Mac last applied:
+    # without it there is no way to tell "the other Mac deliberately removed this"
+    # from "this Mac added it and has not sent it yet", so with no base we keep
+    # local entries rather than drop work.
+    # A fragment that cannot be parsed is NOT an empty block (claude-config#1902): read as one, the
+    # merge kept nothing the base held and unregistered every hook on this Mac. It leaves hk_target
+    # empty, and the second half says which file could not be read.
+    hk_inc="$(detok < "$PAYLOAD/settings.hooks.json" | jq -c '.hooks // {}' 2>/dev/null)" || hk_inc=""
+    hk_bas="$(last_applied_hook_block)"
+    # The SAME rule the send applies, with the roles the other way round: what is arriving is
+    # primary, what is registered here is secondary (claude-config#300, see merge_hook_blocks). No
+    # drop-stale here: merge_hook_blocks says why.
+    hk_loc="$(jq -c '.hooks // {}' "$hk_settings" 2>/dev/null || true)"
+    [ -n "$hk_loc" ] && [ -n "$hk_inc" ] && hk_target="$(merge_hook_blocks "$hk_inc" "$hk_loc" "$hk_bas")"
+    if [ -n "$hk_target" ]; then
+      local hk_regs hk_narrow hk_tmp1
+      hk_regs="$(hook_block_regs "$hk_target")"
+      hk_narrow=""
+      [ -n "$hk_regs" ] && hk_narrow="$(hook_block_select "$hk_loc" "$hk_regs" in)"
+      if [ -n "$hk_narrow" ] && [ "$hk_narrow" != "$(jq -c . <<<"$hk_loc" 2>/dev/null)" ]; then
+        hk_tmp1="$(scratch_file)"
+        if jq --argjson m "$hk_narrow" '.hooks = $m' "$hk_settings" > "$hk_tmp1" 2>/dev/null; then
+          keep_prior_copy "$hk_settings"
+          mv "$hk_tmp1" "$hk_settings"
+          hk_wrote=1
+        else
+          # Left as it was: the half after the mirror says the block could not be merged.
+          rm -f "$hk_tmp1"; hk_target=""
+        fi
+      fi
+    fi
+  fi
   # -i itemizes so we can report the real writes; -c because -a quick-checks on
   # size plus mtime, and a same-size edit whose mtime git happens to preserve
   # would otherwise be neither copied nor reported. These trees are small.
@@ -6281,57 +6428,71 @@ $f
     fi
     cp "$PAYLOAD/$f" "$CLAUDE_HOME/$f"
   done
+  # The second half of the hooks block (claude-config#1913, the first is before the mirror). The
+  # scripts are now where this apply leaves them, so what goes in is the merged block less every
+  # line whose script is still missing, and those are said out loud rather than written.
   if [ -f "$PAYLOAD/settings.hooks.json" ]; then
-    local frag settings tmp inc_h bas_h added removed label
-    settings="$CLAUDE_HOME/settings.json"
-    [ -f "$settings" ] || echo '{}' > "$settings"
-    frag="$(detok < "$PAYLOAD/settings.hooks.json")"
-    inc_h="$(printf '%s' "$frag" | jq -c '.hooks // {}' 2>/dev/null || echo '{}')"
-    # The hooks block used to be REPLACED wholesale, which silently unregistered a
-    # hook added here since the last send: the hook script itself was held back as
-    # locally ahead, but the line that activates it was not, so the hook shipped
-    # inert. Seen on 2026-07-29 and once before during the send-wedge (#13).
-    # So merge three ways instead. The base is the fragment this Mac last applied:
-    # without it there is no way to tell "the other Mac deliberately removed this"
-    # from "this Mac added it and has not sent it yet", so with no base we keep
-    # local entries rather than drop work.
-    bas_h="$(last_applied_hook_block)"
-    tmp="$(scratch_file)"
-    # The SAME rule the send applies, with the roles the other way round: what is arriving is
-    # primary, what is registered here is secondary (claude-config#300, see merge_hook_blocks).
-    local loc_h merged_h
-    loc_h="$(jq -c '.hooks // {}' "$settings" 2>/dev/null || true)"
-    merged_h=""
-    [ -n "$loc_h" ] && merged_h="$(merge_hook_blocks "$inc_h" "$loc_h" "$bas_h")"
-    if [ -z "$merged_h" ] || ! jq --argjson m "$merged_h" '.hooks = $m' "$settings" > "$tmp" 2>/dev/null; then
-      # Fail loud and change nothing: a half-written hooks block is worse than an
+    local settings="$hk_settings" tmp="" added removed label hk_refused="[]" hk_final=""
+    if [ -n "$hk_target" ]; then
+      hk_refused="$(hook_regs_without_script "$hk_target")"
+      [ -n "$hk_refused" ] && hk_final="$(hook_block_select "$hk_target" "$hk_refused" out)"
+    fi
+    if [ -n "$hk_final" ]; then
+      tmp="$(scratch_file)"
+      jq --argjson m "$hk_final" '.hooks = $m' "$settings" > "$tmp" 2>/dev/null || { rm -f "$tmp"; tmp=""; }
+    fi
+    if [ -z "$hk_inc" ]; then
+      # Its own sentence, since the remedy is in a different file from the one below (L11).
+      echo "claude-sync: the shared config's settings.hooks.json could not be read as JSON, so the hooks section of settings.json was left exactly as it was and your hooks may now be out of date. Check it with 'jq . $PAYLOAD/settings.hooks.json'; the next pull that can read it applies it." >&2
+      sync_log_line "the hooks block was NOT applied, because the shared config's settings.hooks.json could not be read as JSON"
+      [ -t 2 ] || notify "hooks block could not be read from the shared config"
+    elif [ -z "$tmp" ]; then
+      # Fail loud and change nothing more: a half-written hooks block is worse than an
       # unchanged one, and a silent skip would leave hooks quietly out of date.
-      rm -f "$tmp"
       echo "claude-sync: could not merge the hooks block into settings.json, so it was left exactly as it was and your hooks may now be out of date. That usually means settings.json is not valid JSON: check with 'jq . $settings', fix it, then re-run the pull." >&2
       [ -t 2 ] || notify "hooks block could not be merged into settings.json"
-      tmp=""
-    fi
-    if [ -n "$tmp" ]; then
+    else
       # Only replace settings.json when the result actually differs. settings.json
       # is a WatchPath; rewriting it on every sync would re-trigger the auto-sync
       # job forever. A no-op sync must leave the file (and its mtime) untouched.
       if cmp -s "$tmp" "$settings"; then
         rm -f "$tmp"
       else
+        [ -n "$hk_wrote" ] || keep_prior_copy "$settings"
+        mv "$tmp" "$settings"
+        hk_wrote=1
+      fi
+      if [ -n "$hk_wrote" ]; then
         # Name the hooks that came and went. "updated settings.json" alone gave no
-        # way to notice that a registration had just disappeared.
-        added="$(jq -rn --argjson inc "$inc_h" --argjson bas "$bas_h" '
+        # way to notice that a registration had just disappeared. A refused line is not
+        # named as registered, because it was not (L11).
+        added="$(jq -rn --argjson inc "$hk_inc" --argjson bas "$hk_bas" --argjson ref "$hk_refused" '
           def cmds($h): [ $h | to_entries[] | .value[]? | .hooks[]? | .command ];
-          (cmds($inc) - cmds($bas)) | map(split("/") | last) | unique | join(", ")' 2>/dev/null || true)"
-        removed="$(jq -rn --argjson inc "$inc_h" --argjson bas "$bas_h" '
+          (cmds($inc) - cmds($bas) - [ $ref[].c ]) | map(split("/") | last) | unique | join(", ")' 2>/dev/null || true)"
+        removed="$(jq -rn --argjson inc "$hk_inc" --argjson bas "$hk_bas" '
           def cmds($h): [ $h | to_entries[] | .value[]? | .hooks[]? | .command ];
           (cmds($bas) - cmds($inc)) | map(split("/") | last) | unique | join(", ")' 2>/dev/null || true)"
         label="settings.json (hooks section)"
         [ -n "$added" ] && label="$label, registered: $added"
         [ -n "$removed" ] && label="$label, unregistered: $removed"
-        keep_prior_copy "$settings"
-        mv "$tmp" "$settings"
         record_applied updated "$label"
+      fi
+      # SAID ONCE PER REFUSAL, not on every pull: a line still refused for the same missing script
+      # is the same news, and repeating it is what teaches a reader to skip it (L36). Recorded even
+      # when empty, so a refusal that comes back later is news again.
+      local hk_new hk_names hk_paths
+      hk_new="$(jq -cn --argjson now "$hk_refused" --argjson was "$(hooks_refused_here)" '$now - $was' 2>/dev/null || printf '%s' "$hk_refused")"
+      if [ "$hk_new" != "[]" ] && [ -n "$hk_new" ]; then
+        hk_names="$(jq -r '[ .[].c | split(" ") | map(select(contains("/"))) | first | split("/") | last ] | unique | join(", ")' <<<"$hk_new" 2>/dev/null || true)"
+        hk_paths="$(jq -r '[ .[].c ] | unique | join("; ")' <<<"$hk_new" 2>/dev/null || true)"
+        echo "claude-sync: NOT registered ${hk_names}: the shared config registers it, but its script is not on this Mac, and a hook that cannot start refuses every call it matches when it is set to block. It stays out of settings.json for as long as the script is missing, and goes in on the first pull that finds it there. The shared config keeps the line, and nothing here sends its absence back. Registered as: ${hk_paths}." >&2
+        sync_log_line "did NOT register ${hk_names}: its script is not on this Mac"
+        notify "did not register ${hk_names}: its script is missing"
+      fi
+      if [ "$hk_refused" = "[]" ]; then
+        rm -f "$HOOKS_REFUSED_FILE" 2>/dev/null || true
+      else
+        printf '%s\n' "$hk_refused" > "$HOOKS_REFUSED_FILE" 2>/dev/null || true
       fi
     fi
   fi
