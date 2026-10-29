@@ -33,11 +33,36 @@ printf 'Agreed.\n' >"$TMP_DIR/clean.md"
 pass=0
 fail=0
 
-# bash_payload <command>: a Bash PreToolUse payload whose cwd is the temp directory.
+# A home folder shaped like the one on Dan's Macs, an account name holding "gh" inside a word
+# ("wright"). It is assembled from pieces so this file names no real machine's home
+# (check-home-paths.sh). HOME_CWD is a copy of it under the temp directory with the same body files
+# beside it, so relative paths resolve from it too (claude-config#1880).
+FAKE_HOME="/Users""/dana-wright"
+HOME_CWD="$TMP_DIR/home-like/dana-wright/Apps/claude-config"
+mkdir -p "$HOME_CWD"
+cp "$TMP_DIR/with-link.md" "$TMP_DIR/clean.md" "$HOME_CWD/"
+
+# Which payload bash_payload builds: PAYLOAD_CWD is its cwd, and PAYLOAD_SHAPE is "short" (three
+# fields) or "claude" (every field Claude Code sends, in its order, compact as JSON.stringify writes
+# it, with a transcript path and a description that hold "gh" inside words).
+PAYLOAD_CWD="$TMP_DIR"
+PAYLOAD_SHAPE=short
+
+# bash_payload <command>: a Bash PreToolUse payload carrying the command.
 bash_payload() {
-  printf '%s' "$1" | CWD="$TMP_DIR" python3 -c '
+  printf '%s' "$1" | CWD="$PAYLOAD_CWD" SHAPE="$PAYLOAD_SHAPE" FAKE_HOME="$FAKE_HOME" python3 -c '
 import os, sys, json
-json.dump({"tool_name": "Bash", "tool_input": {"command": sys.stdin.read()}, "cwd": os.environ["CWD"]}, sys.stdout)
+cmd = sys.stdin.read()
+if os.environ["SHAPE"] == "claude":
+    sid = "5e551011-0000-4000-8000-0000000000aa"
+    home = os.environ["FAKE_HOME"]
+    json.dump({"session_id": sid,
+               "transcript_path": home + "/.claude/projects/" + home.replace("/", "-") + "-Apps-claude-config/" + sid + ".jsonl",
+               "cwd": os.environ["CWD"], "permission_mode": "auto", "hook_event_name": "PreToolUse",
+               "tool_name": "Bash", "tool_input": {"command": cmd, "description": "Run it right through"},
+               "tool_use_id": "toolu_01ABC"}, sys.stdout, separators=(",", ":"), ensure_ascii=False)
+else:
+    json.dump({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": os.environ["CWD"]}, sys.stdout)
 '
 }
 # tool_payload <tool name> <text>: an MCP tool payload carrying the text as its message.
@@ -51,11 +76,13 @@ check() { # check <deny|allow> <description> <payload>
   local out; out="$(printf '%s' "$3" | bash "$HOOK" 2>/dev/null)"
   if [ "$1" = deny ] && [[ "$out" == *'"deny"'* ]]; then pass=$((pass + 1))
   elif [ "$1" = allow ] && [[ "$out" != *'"deny"'* ]]; then pass=$((pass + 1))
-  else fail=$((fail + 1)); echo "FAIL: $2 (expected $1, got: ${out:-<no output>})"; fi
+  else fail=$((fail + 1)); echo "FAIL: $2 [$PAYLOAD_SHAPE payload, cwd $PAYLOAD_CWD] (expected $1, got: ${out:-<no output>})"; fi
 }
 denies() { check deny "$1" "$(bash_payload "$2")"; }
 allows() { check allow "$1" "$(bash_payload "$2")"; }
 
+# Every Bash case, run once per payload shape and cwd at the bottom of this list.
+run_bash_cases() {
 # --- Comments, reviews and replies carrying the link are refused ---
 denies "pr comment, inline body" "gh pr comment 5 --body \"Agreed.
 
@@ -95,6 +122,25 @@ denies "gh api run through rtk" "rtk gh api repos/acme/widgets/issues/22/comment
 allows "gh api with the override, for that one command" "ALLOW_SESSION_LINK_IN_COMMENT=1 gh api repos/acme/widgets/issues/22/comments -f body=\"Done. $LINK\""
 denies "comment chained after a commit" "git add a.ts && gh pr comment 5 --body \"Pushed. $LINK\""
 
+# gh wherever a shell can start it. In the JSON payload a newline or tab before gh is written as
+# \n or \t, so the letter in front of gh there is n or t: a quick exit reading the payload text must
+# still see a command starting there (claude-config#1880).
+denies "gh after a newline" "true
+gh pr comment 5 --body \"x $LINK\""
+denies "gh after a tab" "true;	gh pr comment 5 --body \"x $LINK\""
+denies "gh after a backslash newline" "true \\
+&& gh pr comment 5 --body \"x $LINK\""
+denies "gh after a semicolon with no space" "true;gh pr comment 5 --body \"x $LINK\""
+denies "gh inside bash -c" "bash -c 'gh pr comment 5 --body \"x $LINK\"'"
+denies "gh inside sh -c in double quotes" "sh -c \"gh pr comment 5 --body 'x $LINK'\""
+denies "gh behind env" "env FOO=1 gh pr comment 5 --body \"x $LINK\""
+denies "gh in a subshell" "(gh pr comment 5 --body \"x $LINK\")"
+denies "gh api behind rtk after a cd" "cd /tmp && rtk gh api repos/a/b/issues/1/comments -f body=\"x $LINK\""
+denies "gh by its full path" "/opt/homebrew/bin/gh pr comment 5 --body \"x $LINK\""
+denies "gh behind command" "command gh pr comment 5 --body \"x $LINK\""
+denies "gh behind time" "time gh pr comment 5 --body \"x $LINK\""
+denies "gh reading a piped body" "echo \"x $LINK\" | gh pr comment 5 -F -"
+
 # --- Everything that is allowed to carry it, and comments without it ---
 allows "pr comment without the link" "gh pr comment 5 --body \"Agreed.\""
 allows "issue comment from a clean body file" "gh issue comment 22 --body-file clean.md"
@@ -113,6 +159,62 @@ allows "a review comment reply without the link" "gh api repos/a/b/pulls/1/comme
 allows "reading comments through gh api" "gh api repos/a/b/issues/22/comments --jq '.[] | select(.body | test(\"claude.ai/code/session\"))'"
 allows "the override, for that one command" "ALLOW_SESSION_LINK_IN_COMMENT=1 gh pr comment 5 --body \"$LINK\""
 allows "not a gh command" "echo \"$LINK\""
+}
+
+# The short payload from a temp directory, then Claude Code's whole payload from a home folder whose
+# name holds "gh" inside a word.
+PAYLOAD_CWD="$TMP_DIR"; PAYLOAD_SHAPE=short
+run_bash_cases
+PAYLOAD_CWD="$HOME_CWD"; PAYLOAD_SHAPE=claude
+run_bash_cases
+PAYLOAD_CWD="$TMP_DIR"; PAYLOAD_SHAPE=short
+
+# --- A command that cannot post skips the Python start, whatever the cwd (claude-config#1880) ---
+# A python3 on PATH that records each start and then runs the real one.
+REAL_PY="$(command -v python3)"
+mkdir -p "$TMP_DIR/stub"
+printf '#!/bin/sh\necho started >>"%s"\nexec "%s" "$@"\n' "$TMP_DIR/python-starts" "$REAL_PY" >"$TMP_DIR/stub/python3"
+chmod +x "$TMP_DIR/stub/python3"
+# python_starts <payload>: how many times the hook started python3 on this payload.
+python_starts() {
+  rm -f "$TMP_DIR/python-starts"
+  printf '%s' "$1" | PATH="$TMP_DIR/stub:$PATH" bash "$HOOK" >/dev/null 2>&1
+  if [ -f "$TMP_DIR/python-starts" ]; then wc -l <"$TMP_DIR/python-starts" | tr -d ' '; else echo 0; fi
+}
+skips() { # skips <description> <command> <cwd>
+  local p n; PAYLOAD_CWD="$3"; PAYLOAD_SHAPE=claude; p="$(bash_payload "$2")"; PAYLOAD_CWD="$TMP_DIR"; PAYLOAD_SHAPE=short
+  n="$(python_starts "$p")"
+  if [ "$n" = 0 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 should skip the Python start (started $n times)"; fi
+}
+skips "ls from a home folder holding gh inside a word" "ls" "$FAKE_HOME"
+skips "ls of a path holding gh inside a word" "ls $FAKE_HOME/Apps" "$FAKE_HOME"
+skips "words holding gh, in the command" "echo high through the night" "$FAKE_HOME"
+skips "git push from a home folder" "git push -u origin HEAD" "$FAKE_HOME/Apps/claude-config"
+# The stub is seen to count: a comment from the same home folder starts python3 once.
+PAYLOAD_CWD="$FAKE_HOME"; PAYLOAD_SHAPE=claude
+p="$(bash_payload "gh pr comment 5 --body \"Agreed. $LINK\"")"
+PAYLOAD_CWD="$TMP_DIR"; PAYLOAD_SHAPE=short
+n="$(python_starts "$p")"
+if [ "$n" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: a gh comment from a home folder should start python3 once (started $n times)"; fi
+# A control character in front of gh is written \u001f in the JSON, so a digit sits in front of gh
+# there; the gate's own word test sees a boundary, so the quick exit must hand it over.
+PAYLOAD_CWD="$FAKE_HOME"; PAYLOAD_SHAPE=claude
+p="$(bash_payload "true"$'\x1f'"gh pr comment 5")"
+PAYLOAD_CWD="$TMP_DIR"; PAYLOAD_SHAPE=short
+n="$(python_starts "$p")"
+if [[ "$p" == *'\u001fgh'* && "$n" = 1 ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: gh after a control character escaped as \\u001f should start python3 once (started $n times, payload $p)"; fi
+# A Slack send carries no command at all, and still reaches the gate.
+n="$(python_starts "$(tool_payload mcp__plugin_slack_slack__slack_send_message "Shipped. $LINK")")"
+if [ "$n" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: a Slack send should start python3 once (started $n times)"; fi
+# A payload byte that is not valid UTF-8 must not make the quick exit's match fail and skip the gate.
+# Under a UTF-8 locale bash's =~ stops matching at such a byte, so the hook runs under one here, with
+# the byte in front of gh.
+UTF8_LOCALE="$(locale -a 2>/dev/null | grep -i -m1 -E '^(en_US|C)\.utf-?8$')"
+p="$(bash_payload "true && gh pr comment 5 --body \"Agreed. $LINK\"")"
+p="${p/true/$'\xff'}"
+out="$(printf '%s' "$p" | LC_ALL="${UTF8_LOCALE:-C}" bash "$HOOK" 2>&1)"
+if [[ "$out" == *'"deny"'* || "$out" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: a payload with a byte that is not UTF-8 must reach the gate (got: ${out:-<no output>})"; fi
 
 # --- Slack ---
 check deny "slack message with the link" "$(tool_payload mcp__plugin_slack_slack__slack_send_message "Shipped. $LINK")"
