@@ -187,9 +187,10 @@ type World = {
   guard?: { refuses: boolean }
   /**
    * How hooks/lib/agent-overrides.py answers stdin-device-refusal (#1765): the refusal (exit 0), no
-   * read of the device path (exit 1), a python that fails (exit 2, a traceback), or a run that throws.
+   * read of the device path (exit 10, #1869), a python that fails (exit 2, a traceback), one that
+   * crashes on an uncaught exception (exit 1 and a traceback, as Python does, #1869), or a run that throws.
    */
-  reader?: 'refuses' | 'none' | 'crash' | 'throws'
+  reader?: 'refuses' | 'none' | 'crash' | 'crashExit1' | 'throws'
 }
 const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
@@ -260,7 +261,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       w.readerRuns.push({ argv: e.argv, stdin: e.init?.stdin ?? '' })
       if (o.reader === 'throws') throw new Error('python3: command not found')
       if (o.reader === 'crash') return res(2, '', 'Traceback (most recent call last):\nModuleNotFoundError: No module named shell_words')
-      if (o.reader === 'none') return res(1, '')
+      if (o.reader === 'crashExit1') return res(1, '', 'Traceback (most recent call last):\nModuleNotFoundError: No module named shell_words')
+      if (o.reader === 'none') return res(10, '')
       return ok(`${READER_REFUSAL}\n`)
     }
     if (cmd === '__asleep' && o.asleepAfter) await o.asleepAfter
@@ -3497,6 +3499,11 @@ const deniedUnread = async ($: unknown, w: ReturnType<typeof world>, beneath: { 
 
 test("a subagent's request naming the device path is still denied when the reader fails, saying why (#1765)", withDeps, async ($, on) => {
   const w = world(on, [], { reader: 'crash' })
+  await deniedUnread($, w, PROMPT_BENEATH(on))
+})
+
+test("a subagent's request naming the device path is still denied when the reader crashes with exit 1, which is never read as none found (#1869)", withDeps, async ($, on) => {
+  const w = world(on, [], { reader: 'crashExit1' })
   await deniedUnread($, w, PROMPT_BENEATH(on))
 })
 
