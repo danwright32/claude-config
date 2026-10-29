@@ -6,7 +6,7 @@
 // or interpreter runs as its program (program.ts) and judges inline code (code.ts), so a shell fed
 // its script on standard input is read as the commands it runs, as a shell's -c always was.
 import { codeVerdict, type CodeVerdict } from './code.ts'
-import { SHELLS, execsOf, findRoots, kindOf, languageOf, readProgram, type Lang, type Program, type Script, type Stdin } from './program.ts'
+import { SHELLS, execsOf, findRoots, kindOf, languageOf, readProgram, splitsWords, type Lang, type Program, type Script, type Stdin } from './program.ts'
 
 export { SHELLS }
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
@@ -142,14 +142,19 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
 // clause's pattern, up to its `)`, is no command (a `|` in it separates alternatives, never pipes),
 // the commands after it run until `;;`, `;&` or `;;&`, and `esac` closes the group. Read as a
 // subshell's close, a pattern's `)` took away the feed of the loop around it.
+//
+// `bare`, where given, is filled with each word's expansions written outside quotes (#1834): by the
+// word's place in the text, the place in the word, quotes removed, of each $ starting a variable
+// ($NAME or ${NAME}) that no quote or backslash covers, whose value bash splits into words.
 type Split = { words: string[]; starts: number[]; from?: number }
-const split = (cmd: string): Split[] => {
+const split = (cmd: string, bare?: Map<number, number[]>): Split[] => {
   const cmds: Split[] = []
   let words: string[] = []
   let starts: number[] = []
   let word = ''
   let start = 0
   let inWord = false
+  let wordBare: number[] = []
   let quote: '"' | "'" | undefined
   // Parentheses opened inside a word ($(, <(, $((), whose closing ones belong to the word too.
   let wordParens = 0
@@ -164,11 +169,13 @@ const split = (cmd: string): Split[] => {
     if (inWord) return
     inWord = true
     start = i
+    wordBare = []
   }
   const endWord = () => {
     if (inWord) {
       words.push(word)
       starts.push(start)
+      if (bare && wordBare.length) bare.set(start, wordBare)
     }
     word = ''
     inWord = false
@@ -340,6 +347,7 @@ const split = (cmd: string): Split[] => {
       word += c
     } else {
       begin(i)
+      if (c === '$' && /[A-Za-z_{]/.test(cmd[i + 1] ?? '')) wordBare.push(word.length)
       word += c
     }
   }
@@ -549,6 +557,9 @@ const printfText = (args: readonly string[]): string | undefined => {
  * command its -exec runs, whose {} this reader writes as one of them and stands for everything
  * under it. `substitution` marks a command the shell runs inside a command substitution (#974), and
  * `asWritten` one whose program text the shell left as written (#1171, shellLeftAsWritten).
+ * `splits`, on a command run by a shell that splits an unquoted expansion's value into words (#1834,
+ * splitsWords: bash, sh, dash, ksh, never zsh), gives for each word the places in it, quotes removed,
+ * of each $ outside quotes whose value that shell splits; absent where no word has one.
  */
 export type Command = {
   words: string[]
@@ -562,6 +573,7 @@ export type Command = {
   verdict?: CodeVerdict
   substitution?: true
   asWritten?: true
+  splits?: number[][]
 }
 
 /**
@@ -572,8 +584,10 @@ export type Command = {
 export type Line = (Command | { sub: Line })[]
 
 // What feeds the commands of one read: the command a | feeds them from, what is on their standard
-// input, and whether xargs runs them, each given to every command no | of its own feeds.
-type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[] }
+// input, and whether xargs runs them, each given to every command no | of its own feeds. `splits`
+// says the shell running them splits an unquoted expansion's value into words (#1834): the one a
+// Bash call runs in, at the top, and the shell itself for the script it is given.
+type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean }
 
 // A command's output redirects that name a file, each with its target: `> f`, `>> f`, `>| f`,
 // `&> f`, `2> f`, and a `>&` whose target is no descriptor. A descriptor copy (2>&1) names none.
@@ -596,14 +610,17 @@ const ownRedirects = (words: readonly string[]): string[] => {
 // (a -c always was; since #712 a heredoc, a here-string, or what echo, printf or cat pipes in too),
 // each reading what feeds the shell (#730: a heredoc or here-string feeding a -c), unless the shell
 // reads its script there, when what they read is the rest of that script. What a find -exec runs
-// is read after it, as a command of its own.
-const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions) => {
+// is read after it, as a command of its own. The script is read as that shell splits words (#1834),
+// and `splits` is where each word's expansions outside quotes are, when the shell running this one
+// splits their values.
+const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][]) => {
   const stdin = ownStdin(words, fed) ?? feed.stdin
   const kind = kindOf(words[0])
   const { program, script } = kind ? readProgram(words, stdin) : {}
   if (kind === 'shell' && program && 'text' in program) {
     const inner: Feed = program.stdin ? { stdin: { unreadable: 'fed the rest of the script the shell reads' } } : { pipedFrom: feed.pipedFrom, stdin }
-    out.push(...readLine(program.text, opts, { ...inner, ...(feed.xargs ? { xargs: true } : {}), ...(feed.found ? { found: feed.found } : {}) }))
+    const splitting = splitsWords(words[0]) ? { splits: true } : {}
+    out.push(...readLine(program.text, opts, { ...inner, ...(feed.xargs ? { xargs: true } : {}), ...(feed.found ? { found: feed.found } : {}), ...splitting }))
     // The shell's own output redirects send everything its script prints to a file, which the
     // script's commands never name (#760: `bash -c 'make' > build.log` wrote a build.log no reader
     // saw). They are given as a command of their own, the shell and those redirects, so every
@@ -625,6 +642,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
     ...(program ? { program } : {}),
     ...(script ? { script } : {}),
     ...(verdict ? { verdict } : {}),
+    ...(splits && splits.some(s => s.length) ? { splits } : {}),
   })
   // Its {} stands for each thing find finds, which this reader writes as the folder find starts
   // from, so the command carries those folders as `found`: what it changes at one of them is that
@@ -684,7 +702,9 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   const out: Line = []
   const { text, heredocs, unended } = dropHeredocs(cmd)
   const heredocAt = new Map(heredocs.map(h => [h.at, h]))
-  const read = split(text)
+  // Each word's expansions outside quotes, by its place in the text (#1834).
+  const bare = new Map<number, number[]>()
+  const read = split(text, bare)
   const begun = read.map(r => begins(r.words, r.starts))
   // Each substitution, by the command it sits in: the last one starting at or before it.
   const ran = new Map<number, string[]>()
@@ -697,7 +717,8 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   }
   for (const s of substitutions(text, false)) place(s.at, s.text)
   for (const h of [...heredocs, ...(unended ? [unended] : [])]) if (!h.quoted) for (const s of substitutions(h.body, true)) place(h.at, s.text)
-  const subFeed: Feed = { ...(outer.pipedFrom ? { pipedFrom: outer.pipedFrom } : {}), ...(outer.stdin ? { stdin: outer.stdin } : {}) }
+  // A substitution runs in the shell running the line, so it splits words as that shell does.
+  const subFeed: Feed = { ...(outer.pipedFrom ? { pipedFrom: outer.pipedFrom } : {}), ...(outer.stdin ? { stdin: outer.stdin } : {}), ...(outer.splits ? { splits: true } : {}) }
   const runSubs = (k: number) => {
     for (const s of ran.get(k) ?? []) out.push({ sub: readLine(s, opts, subFeed) })
   }
@@ -740,7 +761,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
     if (b.xargs || outer.xargs) feed = { ...feed, xargs: true }
     if (outer.found) feed = { ...feed, found: outer.found }
-    emit(b.words, fedOf(b), feed, out, opts)
+    emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined)
   })
   return out
 }

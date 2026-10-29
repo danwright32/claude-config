@@ -81,7 +81,9 @@ export type ModKit = {
    * and curl's cookie jar, dumped headers and trace, wget's log; `wget --spider` saves none), each
    * relative path resolved after any cd before it, a cd in a subshell ending with it, and a variable
    * the command set before it (`F=path; ... "$F"`, `export F=path`) read as its value where the
-   * reader can be sure of it (#743). `changes`, the other changes it makes to files (#712): removed
+   * reader can be sure of it (#743), an unquoted one split into words where the shell the call runs
+   * in splits it (#1834: bash does, zsh does not; the shell found from CLAUDE_CODE_SHELL or SHELL,
+   * and for a script a shell is given, that shell). `changes`, the other changes it makes to files (#712): removed
    * (rm, unlink, rmdir, a mv's source, find -delete, shred -u), stamped (touch), emptied (truncate,
    * shred), made (mkdir) or changed in mode (chmod, chown, chgrp), `tree` when the whole folder is
    * reached (rm -r, -R, a mv's source, find -delete). And `unnamed`, the writes its words do not
@@ -347,6 +349,11 @@ export type ModKitCommand = {
   verdict?: ModKitCodeVerdict
   substitution?: true
   asWritten?: true
+  /**
+   * On a command a shell that splits an unquoted value into words runs (bash, sh, dash, ksh; never
+   * zsh), for each word the places in it, quotes removed, of each $ outside quotes (#1834).
+   */
+  splits?: number[][]
 }
 
 /** The languages whose inline code the reader judges. */
