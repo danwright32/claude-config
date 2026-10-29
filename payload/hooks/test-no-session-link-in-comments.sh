@@ -218,7 +218,7 @@ if [[ "$out" == *'"deny"'* || "$out" == *"SESSION LINK GATE DID NOT RUN"* ]]; th
 
 # --- Slack ---
 # Every Slack tool that writes text a teammate reads is named once, in lib/slack-write-tools.txt,
-# which this gate reads. Each is tried here under both servers that
+# which this gate and the style-check mod both read. Each is tried here under both servers that
 # carry it: the Slack plugin's and the claude.ai connector's. The claude.ai connector spells its
 # server Slack with a capital S, and Claude Code matches a hook matcher case sensitively (measured
 # 2026-10-29, claude-config#1905), so a pattern wanting a lowercase "slack" in the server name never

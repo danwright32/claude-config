@@ -5,11 +5,29 @@ import { inputTexts } from './mod-kit/inputs.ts'
 // hook's own scanner, hooks/lib/style-scan.py, run on the text about to be written (L370, L613).
 // Nothing here knows which characters are forbidden.
 
-const SLACK = new Set([
-  'mcp__claude_ai_Slack__slack_send_message',
-  'mcp__claude_ai_Slack__slack_send_message_draft',
-  'mcp__claude_ai_Slack__slack_schedule_message',
-])
+// The Slack tools that write text a teammate reads are named once, without their server, in
+// hooks/lib/slack-write-tools.txt, which the session link gate reads too, so the two judge the same
+// tools on every server: the claude.ai connector's and the Slack plugin's (claude-config#1905). Read
+// for each MCP tool named slack_*, so an edit to the list counts at once. A list that cannot be read
+// judges every slack_* tool rather than none: a Slack search with a dash in it is held for a look,
+// which is the cheaper fault than a message to a teammate passing unchecked (L93).
+const slackName = (tool: string): string | undefined => {
+  const at = tool.lastIndexOf('__')
+  const name = tool.slice(at + 2)
+  return tool.startsWith('mcp__') && at > 'mcp_'.length && name.startsWith('slack_') ? name : undefined
+}
+const isSlackWrite = async ($: EngineInterface, tool: string): Promise<boolean> => {
+  const name = slackName(tool)
+  if (!name) return false
+  const list = `${(await $.env.get('HOME')) ?? ''}/.claude/hooks/lib/slack-write-tools.txt`
+  try {
+    const names = (await $.fs.read(list)).split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+    return names.includes(name)
+  } catch (err) {
+    $.ui.log(`style-check: could not read ${list}, so every Slack tool is judged: ${String(err).slice(0, 160)}`, { to: 'debug' })
+    return true
+  }
+}
 // Which commands carry a message is read from mod-kit's one shared reader ($.modkit.commands),
 // never a pattern over the raw text (L613, L673): a git command whose subcommand is commit, after
 // any global options (git -C <dir> commit), and gh issue or pr create, edit or comment.
@@ -91,7 +109,7 @@ const outgoing = async ($: EngineInterface, tool: string, e: Record<string, unkn
       return { text: parts.join('\n') }
     }
     default:
-      return SLACK.has(tool) ? { text: strings(e).join('\n') } : undefined
+      return (await isSlackWrite($, tool)) ? { text: strings(e).join('\n') } : undefined
   }
 }
 
