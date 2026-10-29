@@ -114,7 +114,7 @@ export PUSH_GATE_LEDGER_DIR="${PUSH_GATE_LEDGER_DIR:-$work/push-gates}"
 # Each gate is started, timed and waited on by a small python runner of its own (claude-config#1870).
 # This took every start and end with a python3 start of its own and noticed a gate had finished by
 # polling every 0.2 seconds, so it printed tenths of a second while measuring to about 0.2: a gate
-# that costs 7 ms read 0.1 and one that costs 125 ms read 0.4. The runner reads its clock in the
+# that costs 7 ms read 0.1 and one that costs 125 ms read 0.4 (measured 2026-10-28). The runner reads its clock in the
 # process that starts the gate, so its own start costs nothing that is measured, and it waits on the
 # gate with a blocking wait, so the end is read the moment the gate exits. A timer, not a poll, kills
 # a gate at its declared bound. Bash's EPOCHREALTIME would be a cheaper clock, but the bash on this

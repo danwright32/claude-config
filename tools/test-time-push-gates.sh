@@ -120,7 +120,8 @@ awk -v a="${_slow_s:-0}" -v b="${_quick_s:-0}" 'BEGIN { exit !(a > b) }' \
 
 # A known duration is reported as that duration (#1870). Each start and end was taken with a python3
 # start and a gate's end was noticed by a 0.2 second poll, so the tool printed tenths of a second
-# while measuring to about 0.2 seconds: a 7 ms gate read 0.1 and a 125 ms gate read 0.4. A stub that
+# while measuring to about 0.2 seconds: a 7 ms gate read 0.1 and a 125 ms gate read 0.4, measured
+# 2026-10-28, as was everything below. A stub that
 # sleeps 50 ms must read within 20 ms of what it really costs, which is its 50 ms plus starting bash
 # and sleep. That start is not a constant: at load average 100 the stub cost 75 ms, so a test against
 # a bare 50 ms failed a correct tool on a busy machine (L290). So the stub is also timed directly,
