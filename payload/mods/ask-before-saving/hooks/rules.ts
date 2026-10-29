@@ -251,6 +251,31 @@ export const certainPath = (word: string, command: string, home: string): string
 // `F=<memory folder>/MEMORY.md;` was shown as part of the file).
 const MENTION = /[~\w.\/$-]*\.claude\/projects\/[^\/\s'";&|()<>`]+\/memory(?:\/[^\s'";&|()<>`]*)?|(?:[~\w.\/$-]*\/)?(?:CLAUDE|AGENTS|MEMORY|LESSONS)\.md\b/g
 
+// The lines of a patch that name a file it changes (#1883): a diff command line (`diff --git a/x
+// b/x` among them), the --- and +++ of a unified diff, the *** of a context diff, an Index: line, and
+// git's rename and copy lines. Any indent is allowed, since GNU patch takes an indented diff. A line
+// of the patch's content that happens to start the same way is kept too, the side that asks.
+const NAMES_A_FILE = /^[ \t]*(?:diff |--- |\+\+\+ |\*\*\* |Index: |rename (?:from|to) |copy (?:from|to) )/
+// A mail git am reads whose body is encoded: quoted-printable can wrap a header's path across lines
+// and base64 hides it whole, so no header can be trusted to be all there is.
+const ENCODED = /^Content-Transfer-Encoding:[ \t]*(?!(?:7bit|8bit|binary)[ \t]*$)\S/im
+
+/**
+ * A patch's text cut to the lines that name the files it changes (#1883), for `mentioned` to judge:
+ * a git apply changing five code files was refused as a save to LESSONS.md, which the patch named
+ * only in a changed line of another file. Those lines are read as the whole text was, so a file a
+ * header names is found exactly as before. Undefined when the text has no such line (a normal diff,
+ * an ed script) or is an encoded mail: then nothing says which files it changes, and the whole text
+ * is read, as before. Scope modes' patchedPaths reads a git patch's paths for another question (what
+ * a call changed, honouring -p); this one answers what a patch might write, so it keeps every line
+ * that could name a file, for patch as well as git (L342).
+ */
+export const patchNames = (text: string): string | undefined => {
+  if (ENCODED.test(text)) return undefined
+  const names = text.split(/\r?\n/).filter(l => NAMES_A_FILE.test(l))
+  return names.length ? names.join('\n') : undefined
+}
+
 /** Whether a text mentions any lasting memory at all, read as `mentioned` reads it. */
 export const mentionsAny = (text: string): boolean => text.search(MENTION) !== -1
 

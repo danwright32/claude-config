@@ -186,6 +186,10 @@ if [ "$rc" = 1 ] && [ ! -s "$TMPROOT/err" ]; then ok; else no "an unwritable led
 # pc_call_id reads the id Claude Code gives every hook on one call, and nothing when there is none.
 if [ "$(pc_call_id '{"tool_name":"Bash","tool_use_id": "toolu_01AbC","tool_input":{}}')" = toolu_01AbC ]; then ok; else no "pc_call_id did not read the id"; fi
 if [ -z "$(pc_call_id '{"tool_input":{"command":"git push"}}')" ]; then ok; else no "pc_call_id invented an id"; fi
+# Claude Code writes the id after the command, and under a UTF-8 locale bash's =~ stops at a byte
+# that is not UTF-8, so one in the command hid the id (claude-config#1885).
+bad_payload="$(printf '{"tool_input":{"command":"echo \377"},"tool_use_id": "toolu_01AbC"}')"
+if [ "$(export LC_ALL=en_US.UTF-8; pc_call_id "$bad_payload")" = toolu_01AbC ]; then ok; else no "#1885 pc_call_id lost the id behind a byte that is not UTF-8"; fi
 
 # ---- one copy: neither gate keeps its own (L613) ------------------------------------------------
 # What each gate used to carry a copy of. A gate that grows one again fails here, named.

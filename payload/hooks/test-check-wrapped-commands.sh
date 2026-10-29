@@ -589,6 +589,35 @@ python3 -c 'import sys; [print("%d\tolder\tbash\tinput\trefused" % (1000 + i)) f
 out="$(payload "echo 'git push' | sh" | WRAPPED_REFUSAL_LEDGER_MAX=10 bash "$HOOK" 2>&1)"
 check_eq "#1492 control: under the cap nothing is dropped" "6" "$(grep -c . "$LEDGER")"
 
+# A byte that is not UTF-8 stops bash's =~ matching under a UTF-8 locale (claude-config#1885), so the
+# fast path read the words after one as absent and passed the command before the reader loaded. Each
+# case hands the hook such a byte in front of the words it looks for, written into the JSON raw, under
+# en_US.UTF-8, and expects the verdict the same command gets without it. The copies with no reader
+# (LONE, LONE1623) refuse whatever the fast path does not pass, so they judge the fast path alone.
+BAD=$'\xff'
+if LC_ALL=en_US.UTF-8 bash -c '[[ "$1" =~ git ]]' _ "${BAD}git"; then
+  echo "SUITE-PART-UNMEASURED #1885 the fault itself: =~ under en_US.UTF-8 here matches past a byte that is not UTF-8, so the byte cases pass with or without the fix"
+fi
+raw_payload(){ printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$1" "$WORKDIR"; }
+utf8_run(){ # utf8_run <hook> <command>: sets out and rc
+  out="$(raw_payload "$2" | LC_ALL=en_US.UTF-8 bash "$1" 2>&1)"; rc=$?
+}
+for c in "bash -c 'git push'" "eval x; echo ok; git status"; do
+  utf8_run "$LONE/check-wrapped-commands.sh" "echo ok; $c"
+  check_eq "#1885 control: with no reader the fast path passes on: $c" "2" "$rc"
+  utf8_run "$LONE/check-wrapped-commands.sh" "echo $BAD; $c"
+  check_eq "#1885 a byte that is not UTF-8 in front does not hide it from the fast path: $c" "2" "$rc"
+done
+utf8_run "$LONE/check-wrapped-commands.sh" "eval x; echo $BAD; git status"
+check_eq "#1885 nor does one between the wrapper and git" "2" "$rc"
+utf8_run "$LONE1623/check-wrapped-commands.sh" "echo $BAD; ./build.sh && git push"
+check_eq "#1885 nor a script run by its path" "2" "$rc"
+utf8_run "$HOOK" "echo $BAD; eval \$CMD && git status"
+check_eq "#1885 with the reader, the command after the byte is judged and refused" "2" "$rc"
+check "#1885 and the refusal names the wrapper" "\`eval\`" "$out"
+utf8_run "$HOOK" "echo $BAD; git status"
+check_eq "#1885 control: a byte in front of a command naming no wrapper still passes in silence" "0|" "$rc|$out"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
