@@ -136,6 +136,7 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/scanners-before-push.sh",
             "timeout": 180,
+            "onFailure": "block",
             "statusMessage": "Running the scanners that read the whole repository"
           },
           {
