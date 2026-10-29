@@ -1687,7 +1687,7 @@ the same way and reports the wall clock (#1122). Measured on this Mac on 2026-10
 readings of each, each against a fresh amend of a commit touching only this README in a throwaway
 checkout one commit ahead of `origin/main`, with other suites running (load average 12 to 18 on 12
 cores). The branch push is the one this repository accepts; it carried `SKIP_PR_REVIEW=1` so no
-timing run started a paid lessons review, whose wait is the last row of the table above. A push
+timing run started a paid lessons review, whose wait is the `pr-review-push-gate.sh` row above. A push
 straight to main is refused by `linux-sections-before-push.sh` within a second (a change reaches
 main through a pull request here), but the other gates still run to the end, so it waits as long:
 
