@@ -606,7 +606,7 @@ _sc_stop_inflight(){   # at the budget: stops waiting on this round's runs
     for i in $_sc_inflight_idx; do _sc_run_stop "$(cat "$_sc_work/$i.dir" 2>/dev/null)"; done
   fi
 }
-_sc_wait_bounded(){    # waits for this round's runs, or stops them when the budget runs out
+_sc_wait_bounded(){    # waits for this round's runs until the budget runs out, then stops waiting (the runs go on, unless there is no key)
   local left watchdog
   # Nothing launched this round (every scanner skipped): a bare `wait` with no process ids would
   # wait for every child, the watchdog included, so there is nothing to wait for and it returns.
