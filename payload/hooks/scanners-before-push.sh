@@ -376,7 +376,15 @@ start_one(){         # $1 = the suite path   $2 = a section, or empty
 _sc_checkout="$(pwd -P)"
 _sc_detach=""
 _sc_runs="$_sc_work/runs"
-if [ -n "$_sc_key" ] && mkdir -p "$_sc_state_dir/runs/$_sc_repo_key" 2>/dev/null; then
+# The lock that lets one push at a time decide about a scanner's runs, shared with claude-sync (L370).
+# Without it nothing could stop two pushes each starting a copy, so runs are stopped at the budget.
+_sc_have_lock=""
+# shellcheck source=lib/pid-lock.sh
+. "$HOOK_DIR/lib/pid-lock.sh" 2>/dev/null && command -v take_pid_lock >/dev/null 2>&1 && _sc_have_lock=1
+# `mkdir -p` is asked, then the folder is looked at, so a push that loses the race to make it with
+# another push at the same moment still finds it there and is not left without one.
+[ -n "$_sc_key" ] && mkdir -p "$_sc_state_dir/runs/$_sc_repo_key" 2>/dev/null
+if [ -n "$_sc_key" ] && [ -n "$_sc_have_lock" ] && [ -d "$_sc_state_dir/runs/$_sc_repo_key" ]; then
   _sc_detach=1
   _sc_runs="$_sc_state_dir/runs/$_sc_repo_key"
 fi
@@ -385,7 +393,7 @@ mkdir -p "$_sc_runs" 2>/dev/null
 # load), so a run older than this is one nobody is coming back for. A setting, not a measurement.
 _sc_run_stale="${SCANNERS_RUN_STALE_SECONDS:-21600}"
 case "$_sc_run_stale" in ''|*[!0-9]*|0) _sc_run_stale=21600 ;; esac
-# A poll delay that can be injected (L524), defined here because the slot lock below waits on it.
+# A poll delay that can be injected (L524), for the wait on the suite lock further down.
 _sc_sleep="${SCANNERS_SLEEP:-sleep}"
 
 # The run's own script: it runs the suite with its output in the run's folder, then records how long
@@ -408,19 +416,44 @@ _sc_rd(){   # $1 = run index -> the folder its run writes to
 _sc_slot(){   # $1 = run index -> the digest naming its suite and section
   shasum -a 256 < "$_sc_work/$1.what" 2>/dev/null | awk '{print substr($1, 1, 20)}'
 }
+# WHETHER A RECORDED PROCESS IS STILL THIS RUN. The process id alone is not enough, because an id
+# is reused once its process has gone, so the process's command line must name the run's folder.
+#
+# Except in the first moments of a run (PR #1897). The id is published the instant the run's
+# process is forked, and for an instant after that, while the process is inside execve becoming the
+# run, Linux shows its command line as EMPTY. A push looking in that instant judged a live run gone
+# and started a second copy of it: two pushes of one tree at once did so on Linux CI on 2026-10-29,
+# never on this Mac. An id that a process recorded moments ago cannot have been recycled, so a run
+# started within the last minute counts as itself whenever its process is running. A setting, not a
+# measurement: the instant is microseconds, and a minute is far past it and far short of the time
+# any system takes to reuse an id.
+_SC_RUN_YOUNG=60
 _sc_run_alive(){   # $1 = a run's folder -> 0 when the process it recorded is running and is that run
-  local p
+  local p age
   p="$(cat "$1/pid" 2>/dev/null)"
   case "$p" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$p" 2>/dev/null || return 1
   case "$(ps -ww -o command= -p "$p" 2>/dev/null)" in *" $1 "*|*" $1") return 0 ;; esac
-  return 1
+  age="$(_sc_run_age "$1")"
+  case "$age" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$age" -lt "$_SC_RUN_YOUNG" ]
 }
-_sc_run_stop(){   # $1 = a run's folder: stops its whole process group, once it is proved to be that run
+# How long ago a run started, from the time it RECORDED in its `started` file, never the file's
+# modification time, which anything touching the folder moves. Nothing when it cannot be read.
+_sc_run_age(){   # $1 = a run's folder
+  local s
+  s="$(cat "$1/started" 2>/dev/null)"
+  case "$s" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$(( $(date +%s) - s ))"
+}
+# Stops a run's whole process group, once it is shown to be that run. Only the GROUP is signalled,
+# never the bare id: the run leads a group of its own, and a process that merely inherited the id
+# without leading a group is then never touched (L1011).
+_sc_run_stop(){   # $1 = a run's folder
   local p
   _sc_run_alive "$1" || return 0
   p="$(cat "$1/pid" 2>/dev/null)"
-  kill -KILL -- "-$p" 2>/dev/null || kill -KILL "$p" 2>/dev/null
+  kill -KILL -- "-$p" 2>/dev/null
   return 0
 }
 _sc_age(){   # $1 = a file -> its age in whole seconds, or nothing when it cannot be read
@@ -428,25 +461,14 @@ _sc_age(){   # $1 = a file -> its age in whole seconds, or nothing when it canno
 }
 
 # ONE PUSH AT A TIME DECIDES ABOUT A SCANNER'S RUNS (assume it runs twice). Two pushes of one input
-# at once would each find no run and each start one. A folder is the lock, because making one is a
-# single step that only one caller can win; its holder's process id is written in it, so a lock
-# left by a push that died is taken over rather than waited on for ever. It is held only while the
-# runs are looked at and one is started, which is milliseconds, so the wait is short and bounded.
-_sc_lock(){   # $1 = the lock folder -> 0 once this push holds it
-  local n=0 holder age
-  while ! mkdir "$1" 2>/dev/null; do
-    n=$(( n + 1 ))
-    [ "$n" -le 50 ] || return 1
-    holder="$(cat "$1/pid" 2>/dev/null)"
-    age="$(_sc_age "$1")"
-    if { [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; } || { [ -z "$holder" ] && [ "${age:-0}" -gt 10 ]; }; then
-      rm -rf "$1" 2>/dev/null
-      continue
-    fi
-    "$_sc_sleep" 0.1
-  done
-  printf '%s' "$$" > "$1/pid" 2>/dev/null
-  return 0
+# at once would each find no run and each start one. The lock is take_pid_lock (lib/pid-lock.sh, the
+# one claude-sync takes): taken in one atomic step that never leaves it without its holder's id, and
+# a dead holder's lock is taken over under a lock of its own, so two waiters cannot both take it
+# over. It is held only while the runs are looked at and one is started, which is milliseconds, so
+# five seconds is a deadline nobody waits out unless something is wrong, and then this push refuses
+# rather than starting a second copy.
+_sc_lock(){   # $1 = the lock file -> 0 once this push holds it
+  take_pid_lock "$1" 5
 }
 
 # Starts the run for an index, in its folder, and waits on it. Called with the slot's lock held.
@@ -498,7 +520,7 @@ _sc_claim(){   # $1 = run index   $2 = the runs in flight at once
   fi
   rd="$_sc_runs/$slot.$_sc_key"
   printf '%s' "$rd" > "$_sc_work/$1.dir"
-  lock="$_sc_runs/$slot-lock"
+  lock="$_sc_runs/$slot-pidlock"
   if ! _sc_lock "$lock"; then
     # Another push is deciding about this very scanner right now. Nothing is started, so there is
     # never a second copy, and the scanner is reported as not finished, which refuses this push.
@@ -509,7 +531,7 @@ _sc_claim(){   # $1 = run index   $2 = the runs in flight at once
     [ -d "$other" ] || continue
     [ "$other" = "$rd" ] && continue
     if [ "$(cat "$other/checkout" 2>/dev/null)" = "$_sc_checkout" ] \
-       || [ "$(_sc_age "$other/started")" -gt "$_sc_run_stale" ] 2>/dev/null \
+       || [ "$(_sc_run_age "$other")" -gt "$_sc_run_stale" ] 2>/dev/null \
        || { [ -f "$other/rc" ] && [ "$(_sc_age "$other/rc")" -gt "$_sc_run_stale" ] 2>/dev/null; }; then
       _sc_run_stop "$other"
       rm -rf "$other"
@@ -525,17 +547,17 @@ _sc_claim(){   # $1 = run index   $2 = the runs in flight at once
   else
     _sc_launch "$1" "$2"
   fi
-  rm -rf "$lock"
+  rm -f "$lock"
   return 0
 }
 # Starts an index again after it refused on the suite lock, under its slot's lock like any start.
 _sc_relaunch(){   # $1 = run index   $2 = the runs in flight at once
   local lock
   if [ -z "$_sc_detach" ]; then _sc_launch "$1" "$2"; return 0; fi
-  lock="$_sc_runs/$(_sc_slot "$1")-lock"
+  lock="$_sc_runs/$(_sc_slot "$1")-pidlock"
   _sc_lock "$lock" || { : > "$_sc_work/$1.busy"; return 0; }
   _sc_launch "$1" "$2"
-  rm -rf "$lock"
+  rm -f "$lock"
 }
 
 # THE GATE'S OWN BUDGET (claude-config#1881). On 2026-10-28 this gate was killed at its declared 180
@@ -765,10 +787,11 @@ while [ "$_sc_i" -le "$_sc_n" ]; do
     _sc_label="$_sc_s"
     [ -n "$_sc_sec" ] && _sc_label="$_sc_s, section \"$_sc_sec\""
     if [ -f "$_sc_work/$_sc_i.busy" ]; then
-      unfinished="$unfinished    $_sc_label: another push was starting or reading it at this moment
+      _sc_lockname="$_sc_runs/$(_sc_slot "$_sc_i")-pidlock"
+      unfinished="$unfinished    $_sc_label: another push held its lock for 5 seconds while starting or reading it; if this repeats, delete $_sc_lockname (and $_sc_lockname.break if it is there)
 "
     elif [ -n "$_sc_detach" ]; then
-      _sc_for="$(_sc_age "$_sc_rdir/started")"
+      _sc_for="$(_sc_run_age "$_sc_rdir")"
       _sc_last="$(cat "$(cat "$_sc_work/$_sc_i.last" 2>/dev/null)" 2>/dev/null)"
       case "$_sc_last" in
         ''|*[!0-9]*) _sc_last="no earlier run of it is recorded" ;;
@@ -841,10 +864,10 @@ if [ -n "$_sc_detach" ]; then
   while [ "$_sc_i" -le "$_sc_n" ]; do
     _sc_rdir="$(_sc_rd "$_sc_i")"
     if [ -f "$_sc_rdir/rc" ]; then
-      _sc_lockdir="$_sc_runs/$(_sc_slot "$_sc_i")-lock"
+      _sc_lockdir="$_sc_runs/$(_sc_slot "$_sc_i")-pidlock"
       if _sc_lock "$_sc_lockdir"; then
         rm -rf "$_sc_rdir"
-        rm -rf "$_sc_lockdir"
+        rm -f "$_sc_lockdir"
       fi
     fi
     _sc_i=$(( _sc_i + 1 ))

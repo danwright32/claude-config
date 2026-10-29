@@ -942,10 +942,89 @@ _tw1=$!
 _tw2=$!
 wait "$_tw1" "$_tw2"
 note_held kappa
+# On a failure each push's own account of kappa is shown, so a second copy names the path that
+# started it (no key, stopped, or left running) rather than only a count (L177).
 [ "$(cat "$TMPROOT/twice-1.rc" 2>/dev/null)" = "2" ] && [ "$(cat "$TMPROOT/twice-2.rc" 2>/dev/null)" = "2" ] && [ "$(held_runs kappa)" = "1" ] \
   && check "#1881 two pushes of one tree at once start the scanner once" ok \
-  || check "#1881 two pushes of one tree at once start the scanner once" "exits=$(cat "$TMPROOT/twice-1.rc" "$TMPROOT/twice-2.rc" 2>/dev/null | tr '\n' ',') kappa runs=$(held_runs kappa)"
+  || check "#1881 two pushes of one tree at once start the scanner once" "exits=$(cat "$TMPROOT/twice-1.rc" "$TMPROOT/twice-2.rc" 2>/dev/null | tr '\n' ',') kappa runs=$(held_runs kappa); push 1: $(grep -m1 -e 'test-kappa' -e 'were stopped' -e 'still running' "$TMPROOT/twice-1.out" 2>/dev/null); push 2: $(grep -m1 -e 'test-kappa' -e 'were stopped' -e 'still running' "$TMPROOT/twice-2.out" 2>/dev/null)"
 rm -f "$HOLD1881k"
+
+# A run seen in the instant its process is still becoming the run: on Linux a process inside execve
+# shows an EMPTY command line for that instant, and the check that a recorded pid is really this
+# run reads the command line. The first push started a run and published its pid; a second push
+# looking in that instant judged it gone and started a second copy, which is how the case above
+# failed on Linux CI on 2026-10-29 (run 40877048627) while passing on this Mac. A stand in for ps
+# that shows no command line plays that instant on any system, so the second push is made to look
+# in it every time. A run started moments ago is never a recycled process id, so it must be adopted.
+FAKEPS="$TMPROOT/fakeps"; mkdir -p "$FAKEPS"
+_realps="$(command -v ps)"
+cat > "$FAKEPS/ps" <<EOF
+#!/usr/bin/env bash
+case " \$* " in *" command= "*) exit 0 ;; esac
+exec "$_realps" "\$@"
+EOF
+chmod +x "$FAKEPS/ps"
+R1881x="$(mkrepo bgexec)"; HOLD1881x="$TMPROOT/hold-1881x"; : > "$HOLD1881x"
+add_held_scanner "$R1881x" chi "$HOLD1881x" 0; commit_all "$R1881x"
+budgetfire "$R1881x" "git push" >/dev/null
+note_held chi
+o1881x="$(PATH="$FAKEPS:$PATH" budgetfire "$R1881x" "git push")"; c1881x=$?
+note_held chi
+[ "$c1881x" -eq 2 ] && [ "$(held_runs chi)" = "1" ] && grep -q 'still running in the background' <<< "$o1881x" \
+  && check "#1881 a run whose command line cannot be read yet, started moments ago, is adopted rather than started twice" ok \
+  || check "#1881 a run whose command line cannot be read yet, started moments ago, is adopted rather than started twice" "exit=$c1881x chi runs=$(held_runs chi) out=$o1881x"
+rm -f "$HOLD1881x"
+
+# The other direction: a run folder from long ago whose recorded process id now belongs to a
+# stranger is NOT that run. It is neither adopted nor stopped: a new run is started and the
+# stranger is left alone (L1011).
+R1881y="$(mkrepo bgstranger)"; HOLD1881y="$TMPROOT/hold-1881y"; : > "$HOLD1881y"
+add_held_scanner "$R1881y" upsilon "$HOLD1881y" 0; commit_all "$R1881y"
+o1881y="$(budgetfire "$R1881y" "git push")"
+note_held upsilon
+_ydir="$(awk '/output: / { sub(/^.*output: /, ""); sub(/\/out$/, ""); print; exit }' <<< "$o1881y")"
+# The run's whole process group, so the process that records its exit code dies with the scanner
+# and cannot write one after the folder is set up below.
+_yleader="$(cat "$_ydir/pid" 2>/dev/null)"
+[ -n "$_yleader" ] && kill -9 -- "-$_yleader" 2>/dev/null
+held_gone upsilon
+hang_wait "! kill -0 ${_yleader:-0} 2>/dev/null"
+# A stranger in a process group of its own, as a recycled id that is a group leader would be.
+perl -e 'setpgrp(0, 0); exec "sleep", "30"' </dev/null >/dev/null 2>&1 &
+_stranger=$!
+printf '%s' "$_stranger" > "$_ydir/pid"
+rm -f "$_ydir/rc"
+printf '%s\n' "$(( $(date +%s) - 3600 ))" > "$_ydir/started"
+o1881y2="$(budgetfire "$R1881y" "git push")"; c1881y2=$?
+note_held upsilon
+if [ -z "$_ydir" ]; then
+  check "#1881 an old run folder whose process id now belongs to a stranger is not adopted, and the stranger is left alone" "the first push named no output file: $o1881y"
+elif kill -0 "$_stranger" 2>/dev/null && [ "$(held_runs upsilon)" = "2" ] && [ "$c1881y2" -eq 2 ]; then
+  check "#1881 an old run folder whose process id now belongs to a stranger is not adopted, and the stranger is left alone" ok
+else
+  check "#1881 an old run folder whose process id now belongs to a stranger is not adopted, and the stranger is left alone" "stranger alive=$(kill -0 "$_stranger" 2>/dev/null && echo yes || echo no) upsilon runs=$(held_runs upsilon) exit=$c1881y2"
+fi
+kill -9 "$_stranger" 2>/dev/null
+rm -f "$HOLD1881y"
+
+# --- the lock itself, lib/pid-lock.sh, which this gate and claude-sync share (PR #1897). Each
+#     check runs it in a process of its own, so its pid file is that process's. A lock left by a
+#     holder that has died is taken over; one whose holder is alive is not, and the wait gives up at
+#     its deadline rather than going ahead.
+PLDIR="$TMPROOT/pidlock"; mkdir -p "$PLDIR"
+perl -e 'exit 0' & _deadpid=$!; wait "$_deadpid"
+printf '%s\n' "$_deadpid" > "$PLDIR/dead.lock"
+bash -c '. "$1/lib/pid-lock.sh" && take_pid_lock "$2" 3' _ "$DIR" "$PLDIR/dead.lock"; _plrc=$?
+[ "$_plrc" -eq 0 ] && [ "$(cat "$PLDIR/dead.lock" 2>/dev/null)" != "$_deadpid" ] && [ ! -e "$PLDIR/dead.lock.break" ] \
+  && check "#1897 pid-lock.sh takes over a lock whose holder has died" ok \
+  || check "#1897 pid-lock.sh takes over a lock whose holder has died" "rc=$_plrc lock holds $(cat "$PLDIR/dead.lock" 2>/dev/null)"
+printf '%s\n' "$$" > "$PLDIR/live.lock"
+_t0="$(date +%s)"
+bash -c '. "$1/lib/pid-lock.sh" && take_pid_lock "$2" 1' _ "$DIR" "$PLDIR/live.lock"; _plrc=$?
+_took=$(( $(date +%s) - _t0 ))
+[ "$_plrc" -eq 1 ] && [ "$(cat "$PLDIR/live.lock" 2>/dev/null)" = "$$" ] && [ "$_took" -lt 15 ] \
+  && check "#1897 pid-lock.sh leaves a live holder's lock alone and gives up at its deadline" ok \
+  || check "#1897 pid-lock.sh leaves a live holder's lock alone and gives up at its deadline" "rc=$_plrc took ${_took}s lock holds $(cat "$PLDIR/live.lock" 2>/dev/null)"
 
 # A run left in the background that FAILS is reported as a failure by the next push, from its own
 # result, and is not run again to find that out. The push after that runs it afresh, because only a
