@@ -91,15 +91,15 @@ BUILDER = re.compile(r"^hook_notice_json\(\)", re.M)
 
 def call_event(text, start):
     """The event a library call names: the one bare word of its arguments shaped like an event name.
-    Quoted text and $( ) are skipped, so an event named inside a notice's words is not taken for the
-    argument, and a backslash continuation carries the call on to the next line."""
-    words, word, i, depth = [], "", start, 0
+    Quoted text is skipped, so an event named inside a notice's words is not taken for the argument,
+    and a backslash continuation carries the call on to the next line."""
+    words, word, i = [], "", start
     while i < len(text):
         ch = text[i]
         if ch == "\\" and text[i + 1:i + 2] == "\n":
             i += 2
             continue
-        if ch == "\n" or (ch in ";&|" and depth == 0):
+        if ch == "\n" or ch in ";&|":
             break
         if ch in "\"'":
             close = ch
