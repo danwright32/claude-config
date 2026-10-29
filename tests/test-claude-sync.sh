@@ -17055,8 +17055,37 @@ esac
 _cpu_burn(){   # a fixed amount of work, done in a CHILD, costing about a second of processor time
   bash -c 'i=0; while [ "$i" -lt 500000 ]; do i=$((i + 1)); done'
 }
-_cpu_burn
-suite_cpu_read; _cpu_after="$SUITE_CPU_SECONDS"
+# ONE burn is not enough to compare against, and load is not why (claude-config#1858). The reader
+# cuts each of the four `times` fields to whole seconds, so a burn moves the total only when it
+# carries a field past a second boundary. A burn cost 1.9s of processor time on this Mac and less
+# on a faster runner, and a burn of 0.75s left the total unchanged on 4 of 10 tries here at no load
+# (both measured 2026-10-28). CI run 40629263718 read 274 before and after at a load average of
+# 2.72 on 4 cores. So the child keeps doing work until the figure rises, and the ceiling is a count
+# of burns, not a clock: no machine is slow enough to need more, and a reader that never rises
+# fails after them instead of hanging (L290, L524). It takes the reader as an argument so the
+# control below can hand it one that never moves.
+_cpu_rise_tries=8
+_cpu_wait_rise(){   # $1 the work, $2 the reader; true once the figure passes _cpu_before
+  local _cw_n=0
+  while [ "$_cw_n" -lt "$_cpu_rise_tries" ]; do
+    "$1"; "$2"; _cpu_after="$SUITE_CPU_SECONDS"
+    case "$_cpu_after" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$_cpu_after" -gt "$_cpu_before" ] && return 0
+    _cw_n=$((_cw_n + 1))
+  done
+  return 1
+}
+# The control: with a reader stuck at the starting figure the wait has to GIVE UP and report it,
+# or a counter that never rises would pass the check below by the wait never ending (L1, L98).
+_cpu_read_stuck(){ SUITE_CPU_SECONDS="$_cpu_before"; }
+case "$_cpu_before" in
+  ''|*[!0-9]*) check "#149 the wait gives up on a counter that never rises" "false" ;;
+  *) check "#149 the wait gives up on a counter that never rises" \
+       "! _cpu_wait_rise : _cpu_read_stuck" ;;
+esac
+_cpu_after=""
+case "$_cpu_before" in ''|*[!0-9]*) ;; *) _cpu_wait_rise _cpu_burn suite_cpu_read ;; esac
+dbg "#149 processor time read $_cpu_before before the work and $_cpu_after after it"
 case "$_cpu_before$_cpu_after" in
   ''|*[!0-9]*) check "#149 and it rises when a child does real work" "false" ;;
   *) check "#149 and it rises when a child does real work" \
@@ -18302,6 +18331,103 @@ dbg "#262 watcher send with an unreadable hold: $out_262u"
 check "#262 an unreadable hold marker is cleared rather than obeyed" "[ ! -f '$HOLD' ]"
 check "#262 and it is reported in its own words, not as an expiry" \
   "case \"\$out_262u\" in *'could not be read'*) true ;; *) false ;; esac"
+
+
+section "== a hold reports only a pause that is actually in force (#1854) =="
+# On 2026-10-28 `claude-sync hold 90` printed "Watcher held off for 2 hours", a release ten minutes
+# later found no hold at all, and in between the watcher published a half built skill to main. The
+# person read the success line and believed the watcher was paused. So the line is now earned: hold
+# writes its record, reads it back as the watcher will, and says it is in force only when it is,
+# with an exit code that agrees. And it says the length it was asked for, not a rounding of it.
+H54="$WORK/h1854"; mkdir -p "$H54/home/hooks"
+echo '{"hooks":{}}' > "$H54/home/settings.json"
+git init -q --bare "$H54/bare.git"; git clone -q "$H54/bare.git" "$H54/repo" 2>/dev/null
+H54_HOLD="$H54/hold-marker"
+h54_env(){ CLAUDE_HOME="$H54/home" SYNC_REPO="$H54/repo" SYNC_HOLD_FILE="$H54_HOLD" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 env "$@"; }
+
+# The length, said exactly. Rounded to the nearest hour, `hold 90` was the "2 hours" printed on 2026-10-28.
+DW54_FN="$WORK/h1854-duration.sh"
+sed -n '/^duration_in_words(){/,/^}/p' "$SCRIPT" > "$DW54_FN"
+dw54(){ bash -c '. "$1"; duration_in_words "$2" "$3"' _ "$DW54_FN" "$1" "${2:-}"; }
+check "#1854 an exact length of 90 minutes is 1 hour 30 minutes" "[ \"\$(dw54 5400 exact)\" = '1 hour 30 minutes' ]"
+check "#1854 and a part minute left counts as a whole one, never as none" "[ \"\$(dw54 5399 exact)\" = '1 hour 30 minutes' ]"
+check "#1854 and a whole number of hours says no minutes" "[ \"\$(dw54 7200 exact)\" = '2 hours' ]"
+check "#1854 and under an hour is minutes alone" "[ \"\$(dw54 300 exact)\" = '5 minutes' ]"
+check "#1854 and a few seconds is one minute" "[ \"\$(dw54 30 exact)\" = '1 minute' ]"
+check "#1854 and the rounded form other messages use is unchanged" "[ \"\$(dw54 5400)\" = '2 hours' ]"
+
+out_54h=""; rc_54h=0
+out_54h="$(h54_env bash "$SCRIPT" hold 90 "building the nudge skill" 2>&1)" || rc_54h=$?
+dbg "#1854 hold 90: rc=$rc_54h $out_54h"
+check "#1854 hold 90 succeeds" "[ '$rc_54h' = 0 ]"
+check "#1854 and says 1 hour 30 minutes" "line_has \"\$out_54h\" 'Watcher held off for 1 hour 30 minutes' 'building the nudge skill'"
+check "#1854 and never 2 hours" "case \"\$out_54h\" in *'2 hours'*) false ;; *) true ;; esac"
+check "#1854 and leaves no half written copy beside the record" \
+  "[ -z \"\$(find '$H54' -maxdepth 1 -name 'hold-marker?*' 2>/dev/null)\" ]"
+out_54s="$(h54_env bash "$SCRIPT" status 2>&1 || true)"
+check "#1854 status reads the same record and says the same length" \
+  "line_has \"\$out_54s\" 'watcher hold' '1 hour 30 minutes' 'building the nudge skill'"
+
+# A second, SHORTER hold must not cut the first one short: that is a hold somebody was promised
+# being lifted early by somebody else, with nothing said to either of them.
+until_54a="$(awk 'NR==1{print $1}' "$H54_HOLD" 2>/dev/null)"
+out_54k=""; rc_54k=0
+out_54k="$(h54_env bash "$SCRIPT" hold 5 "a quick commit" 2>&1)" || rc_54k=$?
+dbg "#1854 shorter hold over a longer one: rc=$rc_54k $out_54k"
+check "#1854 a shorter hold over a longer one succeeds" "[ '$rc_54k' = 0 ]"
+check "#1854 and keeps the longer hold's expiry" "[ \"\$(awk 'NR==1{print \$1}' '$H54_HOLD')\" = '$until_54a' ]"
+check "#1854 and says it kept the longer one, naming it" \
+  "line_has \"\$out_54k\" 'already' 'building the nudge skill'"
+
+# Release says WHICH hold it lifted, so a session lifting a hold another session took sees that.
+out_54r="$(h54_env bash "$SCRIPT" release 2>&1)"
+check "#1854 release clears the record" "[ ! -e '$H54_HOLD' ]"
+check "#1854 and names the hold it lifted" "line_has \"\$out_54r\" 'released' 'building the nudge skill'"
+out_54n="$(h54_env bash "$SCRIPT" release 2>&1)"
+check "#1854 a release with nothing held still says so" "line_has \"\$out_54n\" 'No watcher hold' 'nothing was released'"
+
+# THE FAILURE PATHS. A record that cannot be written, and one that does not read back, must each
+# end with no success line and a non-zero exit, because a person reads the line and not the code.
+out_54w=""; rc_54w=0
+out_54w="$(CLAUDE_HOME="$H54/home" SYNC_REPO="$H54/repo" SYNC_HOLD_FILE="$H54/no-such-dir/hold" SYNC_NO_NOTIFY=1 bash "$SCRIPT" hold 90 "unwritable" 2>&1)" || rc_54w=$?
+dbg "#1854 unwritable record: rc=$rc_54w $out_54w"
+check "#1854 a record that cannot be written fails" "[ '$rc_54w' != 0 ]"
+check "#1854 and prints no success line" "case \"\$out_54w\" in *'held off'*) false ;; *) true ;; esac"
+check "#1854 and says the watcher is not held" "line_has \"\$out_54w\" 'no hold was taken' 'NOT held'"
+
+# Written somewhere that swallows it: /dev/null takes the write and reads back as nothing. Today's
+# code printed success over exactly this.
+out_54d=""; rc_54d=0
+out_54d="$(CLAUDE_HOME="$H54/home" SYNC_REPO="$H54/repo" SYNC_HOLD_FILE=/dev/null SYNC_NO_NOTIFY=1 bash "$SCRIPT" hold 90 "swallowed" 2>&1)" || rc_54d=$?
+dbg "#1854 swallowed record: rc=$rc_54d $out_54d"
+check "#1854 a record that is not there afterwards fails" "[ '$rc_54d' != 0 ]"
+check "#1854 and prints no success line either" "case \"\$out_54d\" in *'held off'*) false ;; *) true ;; esac"
+
+# Written, but read back as something else: a directory where the record should be takes the
+# rename INTO it, so the write succeeds and the record the watcher reads is not there.
+mkdir -p "$H54/a-directory"
+out_54x=""; rc_54x=0
+out_54x="$(CLAUDE_HOME="$H54/home" SYNC_REPO="$H54/repo" SYNC_HOLD_FILE="$H54/a-directory" SYNC_NO_NOTIFY=1 bash "$SCRIPT" hold 90 "misdirected" 2>&1)" || rc_54x=$?
+dbg "#1854 record that does not read back: rc=$rc_54x $out_54x"
+check "#1854 a record that does not read back fails" "[ '$rc_54x' != 0 ]"
+check "#1854 and a record that does not read back prints no success line" "case \"\$out_54x\" in *'held off'*) false ;; *) true ;; esac"
+check "#1854 and says it did not read back" "line_has \"\$out_54x\" 'no hold was taken' 'read back'"
+check "#1854 and leaves nothing of its own behind" "[ -z \"\$(ls -A '$H54/a-directory')\" ]"
+
+# A length typed with a leading zero is still that many minutes, not an octal error after the fact.
+out_54z=""; rc_54z=0
+out_54z="$(h54_env bash "$SCRIPT" hold 090 "leading zero" 2>&1)" || rc_54z=$?
+check "#1854 hold 090 is 90 minutes" "[ '$rc_54z' = 0 ] && line_has \"\$out_54z\" 'held off for 1 hour 30 minutes' 'leading zero'"
+h54_env bash "$SCRIPT" release >/dev/null 2>&1 || true
+# A length of 0, or none, is the configured default rather than a constant written into hold.
+out_54o=""; rc_54o=0
+out_54o="$(h54_env SYNC_HOLD_MINUTES=45 bash "$SCRIPT" hold 0 "zero asked" 2>&1)" || rc_54o=$?
+check "#1854 hold 0 takes SYNC_HOLD_MINUTES" "[ '$rc_54o' = 0 ] && line_has \"\$out_54o\" 'held off for 45 minutes' 'zero asked'"
+h54_env bash "$SCRIPT" release >/dev/null 2>&1 || true
+out_54e=""; rc_54e=0
+out_54e="$(h54_env SYNC_HOLD_MINUTES=45 bash "$SCRIPT" hold 2>&1)" || rc_54e=$?
+check "#1854 and so does a hold with no length at all" "[ '$rc_54e' = 0 ] && line_has \"\$out_54e\" 'held off for 45 minutes' 'committing by hand'"
+h54_env bash "$SCRIPT" release >/dev/null 2>&1 || true
 
 
 section "== a watch daemon older than the claude-sync on disk refuses to send (#420) =="
