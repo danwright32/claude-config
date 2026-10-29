@@ -34,12 +34,16 @@ tr_is_transcript() { # <relative path>
 }
 
 tr_rules() { # <target>
-  local t="$1" phys old
+  local t="$1" phys old rc
   phys="$(dcs_phys "$t")" || phys=""
   case "$phys" in "$DCS_HOME/.claude/projects/"*.jsonl) ;; *) V="not offerable: it is not a Claude Code transcript"; return ;; esac
   tr_is_transcript "${phys#"$DCS_HOME/.claude/projects/"}" || { V="not offerable: it is not a Claude Code transcript"; return; }
   [ -f "$t" ] && [ ! -L "$t" ] || { V="not offerable: it is no longer there"; return; }
-  old="$(find "$t" -type f -mtime +"$DCS_TRANSCRIPT_DAYS" -print 2>/dev/null)"
+  # A find that failed measured nothing, as when the transcript went between the check above and
+  # here, so it is unmeasured, never "changed within N days", and never offerable even when it
+  # printed the file first (#1907, L11), as claude-temp.sh judges its find.
+  old="$(find "$t" -type f -mtime +"$DCS_TRANSCRIPT_DAYS" -print 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then V="unmeasured: find exited $rc reading it, so whether it changed within $DCS_TRANSCRIPT_DAYS days is not known"; return; fi
   [ -n "$old" ] || { V="not offerable: it changed within $DCS_TRANSCRIPT_DAYS days"; return; }
   V=offerable
 }
