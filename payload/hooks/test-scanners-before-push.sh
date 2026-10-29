@@ -1195,6 +1195,133 @@ else
   check "#1889 and nothing the hung call started is still running" ok
 fi
 
+# How the gate names a repository in its state folder: its origin, or its path when it has none. The
+# fixtures below that are given an origin are given their own path as one, so this names them too.
+fx_key(){ printf '%s' "$(cd "$1" && pwd -P)" | shasum -a 256 | awk '{print $1}'; }
+
+# --- the record of passes is kept PER TREE and MERGED, never rewritten whole (claude-config#1910).
+#     It was one file per repository origin, rewritten on every push, so two worktrees of one
+#     repository pushing in turn erased each other's passes and each ran again scans that had
+#     already passed on its own tree. Worktrees share their origin, so each fixture here is given
+#     one, and its second checkout is a real `git worktree` of it. Counted by the runs a scanner
+#     records, never by the gate's words (L1).
+TREESTATE="$TMPROOT/tree-state"
+treefire(){ SCANNERS_STATE_DIR="$TREESTATE" fire "$@"; }
+add_counting_scanner(){  # $1 = repo  $2 = name  $3 = the file each run appends a line to
+  cat > "$1/payload/hooks/test-$2.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+echo ran >> "$3"
+exit 0
+EOF
+  chmod +x "$1/payload/hooks/test-$2.sh"
+}
+counted(){ grep -c . "$1" 2>/dev/null || true; }
+# Two worktrees on DIFFERENT trees, pushing in turn: each keeps its own passes.
+R1910="$(mkrepo pertree)"; RAN1910="$TMPROOT/pertree-ran"
+add_counting_scanner "$R1910" lambda "$RAN1910"; commit_all "$R1910"
+git -C "$R1910" remote add origin "$(cd "$R1910" && pwd -P)"
+W1910="$TMPROOT/pertree-wt"
+git -C "$R1910" worktree add -q -b other "$W1910" >/dev/null 2>&1
+echo "other" > "$W1910/other.txt"; commit_all "$W1910"
+treefire "$R1910" "git push" >/dev/null
+treefire "$W1910" "git push" >/dev/null
+o1910="$(treefire "$R1910" "git push")"; c1910=$?
+o1910w="$(treefire "$W1910" "git push")"; c1910w=$?
+[ "$c1910" -eq 0 ] && [ "$c1910w" -eq 0 ] && [ "$(counted "$RAN1910")" = "2" ] \
+  && grep -q 'had already passed' <<< "$o1910" && grep -q 'had already passed' <<< "$o1910w" \
+  && check "#1910 two worktrees pushing different trees in turn keep each other's passes" ok \
+  || check "#1910 two worktrees pushing different trees in turn keep each other's passes" "exits=$c1910,$c1910w lambda runs=$(counted "$RAN1910") out=$o1910"
+# Two checkouts of the SAME tree with different uncommitted files share the tree's record, so the
+# second's pass must be merged into it, not written over the first's.
+R1910m="$(mkrepo pertreemerge)"; RAN1910m="$TMPROOT/pertreemerge-ran"
+add_counting_scanner "$R1910m" mu "$RAN1910m"; commit_all "$R1910m"
+git -C "$R1910m" remote add origin "$(cd "$R1910m" && pwd -P)"
+W1910m="$TMPROOT/pertreemerge-wt"
+git -C "$R1910m" worktree add -q --detach "$W1910m" HEAD >/dev/null 2>&1
+echo "a" > "$R1910m/draft-a.txt"; echo "b" > "$W1910m/draft-b.txt"
+treefire "$R1910m" "git push" >/dev/null
+treefire "$W1910m" "git push" >/dev/null
+o1910m="$(treefire "$R1910m" "git push")"; c1910m=$?
+[ "$c1910m" -eq 0 ] && [ "$(counted "$RAN1910m")" = "2" ] && grep -q 'had already passed' <<< "$o1910m" \
+  && check "#1910 a pass on one tree is merged into its record, beside another checkout's pass on it" ok \
+  || check "#1910 a pass on one tree is merged into its record, beside another checkout's pass on it" "exit=$c1910m mu runs=$(counted "$RAN1910m") record: $(cat "$TREESTATE/$(fx_key "$R1910m")"/*.txt 2>/dev/null | tr '\n' ';')"
+# The merge is made under the record's lock, so a writer at the same moment cannot lose a pass
+# (L5). Seen here by holding that lock with a live process, this suite's own: the gate must not
+# write the record past it, and must say the pass was not remembered rather than claim it was. It
+# waits out the lock's 5 second deadline, which is the only wait in this case.
+R1910l="$(mkrepo recordlock)"; RAN1910l="$TMPROOT/recordlock-ran"
+add_counting_scanner "$R1910l" nu "$RAN1910l"; commit_all "$R1910l"
+LOCK1910="$TMPROOT/recordlock-state"
+_rec1910="$LOCK1910/$(fx_key "$R1910l")"; mkdir -p "$_rec1910"
+printf '%s\n' "$$" > "$_rec1910/pidlock"
+o1910l="$(SCANNERS_STATE_DIR="$LOCK1910" fire "$R1910l" "git push")"; c1910l=$?
+[ "$c1910l" -eq 0 ] && [ -z "$(cat "$_rec1910"/*.txt 2>/dev/null)" ] && grep -q 'not remembered' <<< "$o1910l" \
+  && check "#1910 the record is written only under its lock, and a pass that could not be written is said" ok \
+  || check "#1910 the record is written only under its lock, and a pass that could not be written is said" "exit=$c1910l record: $(cat "$_rec1910"/*.txt 2>/dev/null | tr '\n' ';') out=$o1910l"
+rm -f "$_rec1910/pidlock"
+# Once the lock is free the pass is written, and the push after that skips it.
+SCANNERS_STATE_DIR="$LOCK1910" fire "$R1910l" "git push" >/dev/null
+o1910l3="$(SCANNERS_STATE_DIR="$LOCK1910" fire "$R1910l" "git push")"; c1910l3=$?
+[ "$c1910l3" -eq 0 ] && [ "$(counted "$RAN1910l")" = "2" ] && grep -q 'had already passed' <<< "$o1910l3" \
+  && check "#1910 and once the lock is free the pass is remembered" ok \
+  || check "#1910 and once the lock is free the pass is remembered" "exit=$c1910l3 nu runs=$(counted "$RAN1910l") out=$o1910l3"
+# Records do not pile up: one for a tree nobody has pushed in a day is removed by the next write,
+# and so is the one file per repository the gate kept before, which nothing reads any more. The age
+# is set on the file rather than waited for (L290).
+_old1910="$TREESTATE/$(fx_key "$R1910")/0000000000000000000000000000000000000000.txt"
+printf 'old line\n' > "$_old1910"; touch -t 202001010000 "$_old1910"
+printf 'old layout\n' > "$TREESTATE/$(fx_key "$R1910").txt"
+echo "again" > "$W1910/again.txt"; commit_all "$W1910"
+treefire "$W1910" "git push" >/dev/null
+[ ! -e "$_old1910" ] && [ ! -e "$TREESTATE/$(fx_key "$R1910").txt" ] \
+  && [ -s "$TREESTATE/$(fx_key "$R1910")/$(git -C "$R1910" rev-parse 'HEAD^{tree}').txt" ] \
+  && check "#1910 a record left a day ago, and the old single record, are removed; a recent one is kept" ok \
+  || check "#1910 a record left a day ago, and the old single record, are removed; a recent one is kept" "left: $(ls "$TREESTATE" "$TREESTATE/$(fx_key "$R1910")" 2>/dev/null | tr '\n' ' ')"
+
+# --- when a run cannot be left running, a scanner still running at the budget is STOPPED, and the
+#     refusal says why, in words naming the cause (claude-config#1910, L11). With no key, left
+#     running, its verdict could never be matched to what a later push carries, so it would be load with no
+#     reader; stopped without a word, the slow scanner is refused on every retry and nobody is told
+#     a retry cannot help. Each cause is played by a copy of the gate missing one thing it needs.
+nokey_hooks(){   # $1 = folder  $2 = listing (the uncommitted listing fails), lock (no lock library), or state (both there)
+  mkdir -p "$1/lib"
+  cp "$H" "$1/scanners-before-push.sh"
+  cp "$DIR/lib/push-scope.sh" "$DIR/lib/load-average.sh" "$1/lib/"
+  [ "$2" = lock ] || cp "$DIR/lib/pid-lock.sh" "$1/lib/"
+  if [ "$2" = listing ]; then
+    cat > "$1/lib/repo-files.sh" <<EOF
+#!/usr/bin/env bash
+[ "\$1" = --uncommitted ] && { echo "repo-files: git could not list the uncommitted files under \$2." >&2; exit 1; }
+exec bash "$DIR/lib/repo-files.sh" "\$@"
+EOF
+  else
+    cp "$DIR/lib/repo-files.sh" "$1/lib/"
+  fi
+}
+nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 = a state folder]
+  local hooks="$TMPROOT/nokey-$1-hooks" repo hold out rc pid
+  nokey_hooks "$hooks" "$2"
+  repo="$(mkrepo "nokey$1")"; hold="$TMPROOT/hold-nokey-$1"; : > "$hold"
+  add_held_scanner "$repo" "nk$1" "$hold" 0; commit_all "$repo"
+  out="$(H="$hooks/scanners-before-push.sh" SCANNERS_STATE_DIR="${4:-$TMPROOT/nokey-$1-state}" SCANNERS_BUDGET_SECONDS=2 \
+         fire "$repo" "git push")"; rc=$?
+  note_held "nk$1"
+  pid="$(cat "$TMPROOT/nk$1.pid" 2>/dev/null)"
+  if [ "$rc" -eq 2 ] && [ -n "$pid" ] && hang_wait "! kill -0 $pid 2>/dev/null" \
+     && grep -q 'stopped rather than left running' <<< "$out" && grep -q -F "$3" <<< "$out" \
+     && grep -q 'a retry stops them' <<< "$out"; then
+    check "#1910 when a run cannot be left running ($2), it is stopped at the budget and the refusal says why, naming $3" ok
+  else
+    check "#1910 when a run cannot be left running ($2), it is stopped at the budget and the refusal says why, naming $3" "exit=$rc pid=${pid:-none} out=$out"
+  fi
+  rm -f "$hold"
+}
+nokey_case listing listing 'repo-files.sh --uncommitted'
+nokey_case lock lock 'lib/pid-lock.sh'
+: > "$TMPROOT/nokey-notafolder"
+nokey_case state state "$TMPROOT/nokey-notafolder/state" "$TMPROOT/nokey-notafolder/state"
+
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a
 #     fixture's record in the real folder would be a test result a later real push trusts (L2).
@@ -1204,12 +1331,12 @@ fi
 #     The guard derives each fixture's record name itself, so it is first CALIBRATED against the
 #     gate: one passing run into a private folder must leave a record under exactly that name, or
 #     the guard below would look for names the gate never writes and pass whatever leaked (L1).
-fx_key(){ printf '%s' "$(cd "$1" && pwd -P)" | shasum -a 256 | awk '{print $1}'; }
+#     Since #1910 a repository's record is a folder, one file per tree.
 RK="$(mkrepo keyprobe)"; add_scanner "$RK" alpha 0; commit_all "$RK"
 PROBE_STATE="$TMPROOT/probe-state"
 SCANNERS_STATE_DIR="$PROBE_STATE" fire "$RK" "git push" >/dev/null
-[ -f "$PROBE_STATE/$(fx_key "$RK").txt" ] && check "the leak guard names records the way the gate writes them" ok \
-  || check "the leak guard names records the way the gate writes them" "gate wrote: $(ls "$PROBE_STATE" 2>/dev/null | tr '\n' ' ')"
+[ -f "$PROBE_STATE/$(fx_key "$RK")/$(git -C "$RK" rev-parse 'HEAD^{tree}').txt" ] && check "the leak guard names records the way the gate writes them" ok \
+  || check "the leak guard names records the way the gate writes them" "gate wrote: $(cd "$PROBE_STATE" 2>/dev/null && find . -type f | tr '\n' ' ')"
 # ...and the FOLDER: run with no SCANNERS_STATE_DIR under a fake home, and the record must land
 # where the guard below looks, relative to that home, or a change to the gate's default would
 # leave the guard watching a folder nothing writes.
@@ -1217,14 +1344,16 @@ FAKEHOME="$TMPROOT/fakehome"; mkdir -p "$FAKEHOME"
 RK2="$(mkrepo keyprobe2)"; add_scanner "$RK2" alpha 0; commit_all "$RK2"
 ( unset SCANNERS_STATE_DIR; HOME="$FAKEHOME" fire "$RK2" "git push" >/dev/null )
 state_rel=".claude/state/scanners-passed"
-[ -f "$FAKEHOME/$state_rel/$(fx_key "$RK2").txt" ] && check "the leak guard watches the folder the gate writes to by default" ok \
+[ -f "$FAKEHOME/$state_rel/$(fx_key "$RK2")/$(git -C "$RK2" rev-parse 'HEAD^{tree}').txt" ] && check "the leak guard watches the folder the gate writes to by default" ok \
   || check "the leak guard watches the folder the gate writes to by default" "gate wrote: $(cd "$FAKEHOME" && find . -type f | tr '\n' ' ')"
 REAL_STATE="$HOME/$state_rel"
 _leaked=""
 for _fx in "$TMPROOT"/*/; do
   [ -e "$_fx/.git" ] || continue
   _fx_key="$(fx_key "$_fx")"
+  # The folder a record is kept in since #1910, and the single file it was before, both looked for.
   [ -e "$REAL_STATE/$_fx_key.txt" ] && { _leaked="$_leaked $(basename "$_fx")"; rm -f "$REAL_STATE/$_fx_key.txt"; }
+  [ -d "$REAL_STATE/$_fx_key" ] && { _leaked="$_leaked $(basename "$_fx")"; rm -rf "${REAL_STATE:?}/${_fx_key:?}"; }
 done
 [ -z "$_leaked" ] && check "no fixture wrote a pass record into the real state folder" ok \
   || check "no fixture wrote a pass record into the real state folder" "these did, and were removed:$_leaked"

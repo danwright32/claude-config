@@ -1790,6 +1790,14 @@ push that follows a fresh commit changes the tree and pays in full. Only a pass 
 failure is never skipped past, and the gate says when it scanned nothing rather than reporting zero
 scans as a clean run.
 
+The record of passes is a folder per repository under `~/.claude/state/scanners-passed/`, holding one
+file per tree, and a push adds its passes to its tree's file rather than writing over it (#1910). It
+was one file per repository, rewritten by every push, and worktrees of one repository share it, so
+two worktrees pushing in turn erased each other's passes and each ran again scans that had already
+passed on its own tree. The merge is written beside the file and renamed over it, under a lock, so a
+push writing at the same moment never loses a pass. A tree's file nobody has added to for a day is
+removed by the next write. A pass that could not be written is said, and the next push runs it again.
+
 The gate stops itself at a budget of 150 seconds, inside the 180 its registration declares (#1881).
 Claude Code lets a tool call through when it kills a PreToolUse hook at its timeout (its hooks
 documentation says so, and a headless probe on Claude Code 2.1.312 confirmed it on 2026-10-28), and
@@ -1811,6 +1819,13 @@ checkout stops it and starts again; another checkout's runs are left alone. Push
 finish: a push still goes through only once every scanner has passed on exactly what it carries. As
 with any pass, one read by a push in which another scanner failed or measured nothing is not
 remembered, so the push after it runs that scanner again.
+
+When the uncommitted files cannot be listed, a scanner still running at the budget is STOPPED, not
+left running (#1910). A run left going is worth something only because a later push can count its
+verdict, and without the uncommitted files nothing says what it read, so no push could ever count
+it. The refusal says so, says that a retry cannot help a scanner slower than the budget until the
+listing works, and gives the command that shows why it fails. The same is said, in its own words,
+when the lock library or the folder for runs is missing.
 
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
