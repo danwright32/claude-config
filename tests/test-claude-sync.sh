@@ -20461,6 +20461,98 @@ check "#409 the apply keeps this Mac's unsent gate in its own matcher group, and
 check "#409 and the arriving gate is still in its own group on this Mac" \
   "[ \"\$(mg_group_of '$MGB_H/settings.json' 'hooks/pwgate.sh')\" = 'mcp__playwright__.*' ]"
 
+section "== a changed field of a registration both sides hold is carried, in both directions (onFailure) =="
+# merge_hook_blocks named a registration by its command and nothing else, and kept PRIMARY's copy of
+# every command primary held. So a change to any other field of a registration both sides already
+# had was invisible to it, and the side that ran first won. On 2026-10-29 PR #1889 added
+# "onFailure": "block" to the scanners gate; this Mac had pulled that commit but held it unapplied
+# while its tests ran, and at 05:00 the watcher's send merged this Mac's config (primary, without
+# the field) over the payload (secondary, with it) and pushed 62f2b1c4, deleting exactly that line
+# from main. The #300 and #409 sections above only ever add or remove a whole registration, so
+# neither could see it.
+#
+# The field is carried whatever it is called: a field nothing in claude-sync has heard of travels
+# the same way, so the next one Claude Code adds is not dropped either (L620).
+unset SYNC_NO_GIT
+OFB="$WORK/onfailure-bare.git"; git init -q --bare "$OFB"
+OFA_R="$WORK/onfailure-repoA"; git clone -q "$OFB" "$OFA_R" 2>/dev/null
+OFA_H="$WORK/onfailure-homeA"; mkdir -p "$OFA_H/hooks"
+OFB_R="$WORK/onfailure-repoB"
+OFB_H="$WORK/onfailure-homeB"; mkdir -p "$OFB_H/hooks"
+
+# of_settings <home> <scangate entry fields as JSON> <other entry fields as JSON>
+#   -> a settings.json with one Bash group holding the scanners gate and one other hook, each the
+#      given fields plus its type and command, written with this home's real path as Claude Code has it
+of_settings(){
+  jq -n --arg h "$1" --argjson s "$2" --argjson o "$3" '{hooks: {PreToolUse: [{matcher: "Bash", hooks: [
+      ({type: "command", command: ($h + "/hooks/scangate.sh")} + $s),
+      ({type: "command", command: ($h + "/hooks/other.sh")} + $o) ]}]}}' > "$1/settings.json"
+}
+# of_entry <settings-or-fragment file> <hook file name> -> that entry without its command, compact
+of_entry(){
+  jq -c --arg c "$2" '[.hooks.PreToolUse[]?.hooks[]? | select((.command // "") | endswith("/hooks/" + $c)) | del(.command)]' "$1" 2>/dev/null
+}
+of_sync(){ CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1; }
+of_pull(){ CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1; }
+OF_BASE='{"timeout":180,"statusMessage":"Scanning"}'
+OF_NEW='{"timeout":180,"onFailure":"block","statusMessage":"Scanning","futureField":{"nested":[1,2]}}'
+
+# A publishes the base, and B applies it.
+of_settings "$OFA_H" "$OF_BASE" '{}'
+printf '#!/usr/bin/env bash\n' > "$OFA_H/hooks/scangate.sh"
+printf '#!/usr/bin/env bash\n' > "$OFA_H/hooks/other.sh"
+of_sync "$OFA_H" "$OFA_R"
+git clone -q "$OFB" "$OFB_R" 2>/dev/null
+of_pull "$OFB_H" "$OFB_R"
+check "onFailure B starts from the published base" \
+  "[ \"\$(of_entry '$OFB_H/settings.json' scangate.sh)\" = '[{\"type\":\"command\",\"timeout\":180,\"statusMessage\":\"Scanning\"}]' ]"
+
+# A adds onFailure and a field nobody has invented yet to the gate it already registered, and
+# publishes. B's payload is brought forward by git alone, the state a pulled but unapplied commit
+# leaves it in.
+of_settings "$OFA_H" "$OF_NEW" '{}'
+of_sync "$OFA_H" "$OFA_R"
+OF_WANT="$(jq -c '[{type: "command"} + .]' <<<"$OF_NEW")"
+check "onFailure A's install keeps both fields" \
+  "[ \"\$(of_entry '$OFA_H/settings.json' scangate.sh)\" = '$OF_WANT' ]"
+check "onFailure A's send carries both fields into the payload unchanged" \
+  "[ \"\$(of_entry '$OFA_R/payload/settings.hooks.json' scangate.sh)\" = '$OF_WANT' ]"
+OFB_BRANCH="$(git -C "$OFB_R" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+git -C "$OFB_R" pull -q --ff-only origin "$OFB_BRANCH" 2>/dev/null
+check "onFailure B's payload holds the changed entry its config has not seen" \
+  "[ \"\$(of_entry '$OFB_R/payload/settings.hooks.json' scangate.sh)\" = '$OF_WANT' ]"
+
+# B reconciles: the send half runs first, with B's stale copy as primary. This is the incident.
+of_sync "$OFB_H" "$OFB_R"
+check "onFailure the send leaves the changed entry in the payload unchanged" \
+  "[ \"\$(of_entry '$OFB_R/payload/settings.hooks.json' scangate.sh)\" = '$OF_WANT' ]"
+check "onFailure and the apply after it installs both fields on B" \
+  "[ \"\$(of_entry '$OFB_H/settings.json' scangate.sh)\" = '$OF_WANT' ]"
+
+# THE CONTROL (L324): a field this Mac changed ITSELF is primary's work, not a stale copy, and must
+# still win on the send, with the field that arrived from A kept beside it.
+jq --arg c "$OFB_H/hooks/scangate.sh" '(.hooks.PreToolUse[].hooks[] | select(.command == $c) | .timeout) = 300' \
+  "$OFB_H/settings.json" > "$OFB_H/settings.json.new" && mv "$OFB_H/settings.json.new" "$OFB_H/settings.json"
+of_sync "$OFB_H" "$OFB_R"
+check "onFailure a field this Mac changed itself still wins on the send" \
+  "[ \"\$(of_entry '$OFB_R/payload/settings.hooks.json' scangate.sh)\" = '[{\"type\":\"command\",\"timeout\":300,\"onFailure\":\"block\",\"statusMessage\":\"Scanning\",\"futureField\":{\"nested\":[1,2]}}]' ]"
+
+# The apply direction. B changes a field and does NOT send it; A changes a different registration
+# and publishes; B pulls. What arrives is primary and still holds the field as it was, so B's unsent
+# change is the secondary side's change and must survive the apply.
+jq --arg c "$OFB_H/hooks/scangate.sh" '(.hooks.PreToolUse[].hooks[] | select(.command == $c) | .statusMessage) = "Scanning B"' \
+  "$OFB_H/settings.json" > "$OFB_H/settings.json.new" && mv "$OFB_H/settings.json.new" "$OFB_H/settings.json"
+of_sync "$OFA_H" "$OFA_R"
+check "onFailure A's own send took B's timeout rather than reverting it" \
+  "[ \"\$(of_entry '$OFA_R/payload/settings.hooks.json' scangate.sh | jq -r '.[0].timeout')\" = 300 ]"
+of_settings "$OFA_H" '{"timeout":300,"onFailure":"block","statusMessage":"Scanning","futureField":{"nested":[1,2]}}' '{"timeout":5}'
+of_sync "$OFA_H" "$OFA_R"
+of_pull "$OFB_H" "$OFB_R"
+check "onFailure the apply really brought A's change in" \
+  "[ \"\$(of_entry '$OFB_H/settings.json' other.sh)\" = '[{\"type\":\"command\",\"timeout\":5}]' ]"
+check "onFailure the apply keeps this Mac's unsent change to a field" \
+  "[ \"\$(of_entry '$OFB_H/settings.json' scangate.sh | jq -r '.[0].statusMessage')\" = 'Scanning B' ]"
+
 section "== a fixed failure can be cleared, by the command the message names (claude-config#305) =="
 # record_hook_suite_result is written by hook_suite_verdict and by nothing else, and that runs only
 # when an apply actually wrote a file under hooks/. So the record is refreshed by an INCOMING
