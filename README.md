@@ -313,6 +313,11 @@ that session released. The refusal then names whose hold is in force, by the sho
 shows, and says this session needs its own: `claude-sync hold 120 "why"`. The record is parsed in
 one place, `hooks/lib/hold-record.sh`, which `claude-sync` and those hooks both read through. A
 `claude-sync` that cannot load it reads an existing record as held, says why, and clears nothing.
+When `hooks/lib/sync-clone.sh` itself cannot be loaded, the write gate refuses any call whose
+payload names `payload/`, naming the file and `claude-sync pull` as the fix, and the prompt hook
+says once a session that it could not check; both used to say nothing (#1900). Every other gate
+that refuses does the same for a library it needs, and `hooks/test-gates-fail-closed.sh` runs each
+one with each such library taken away.
 
 ### A watcher older than the claude-sync on disk restarts itself (#420, #1569)
 

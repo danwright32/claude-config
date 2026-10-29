@@ -268,6 +268,44 @@ case "$err14" in
 esac
 
 # ---------------------------------------------------------------------------
+# What it cannot read is said, never taken for nothing to say (claude-config#1900, L10).
+#
+# A prompt holding a byte that is not UTF-8: jq reads it as U+FFFD, and python3 reading its stdin in
+# text mode raised, so the session came back unknown and the warning was never given.
+fresh
+out_bad="$(printf '{"session_id":"sbad","cwd":"%s","prompt":"a\xffb"}' "$FIX/dev" \
+  | env LC_ALL=en_US.UTF-8 SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" \
+        CLAUDE_PAYLOAD_WARN_STATE_DIR="$FIX/state" bash "$HOOK" 2>/dev/null)"
+case "$out_bad" in
+  *"$FIX/dev"*) check "#1900 a prompt holding a byte that is not UTF-8 still gets the warning" ok ;;
+  *)            check "#1900 a prompt holding a byte that is not UTF-8 still gets the warning" "out=$out_bad" ;;
+esac
+
+# lib/sync-clone.sh was sourced with `|| exit 0`, so with it missing this said nothing at all, which
+# reads exactly as a checkout nothing can revert. Now it says, in its own notice, that it could not
+# check and why, once per session like every other state.
+rm -rf "$FIX/nolib"; mkdir -p "$FIX/nolib"
+cp "$HOOK" "$FIX/nolib/payload-revert-warning.sh"
+cp -R "$DIR/lib" "$FIX/nolib/lib"
+rm -f "$FIX/nolib/lib/sync-clone.sh"
+fresh
+run_nolib(){ printf '{"session_id":"%s","cwd":"%s"}' "$1" "$FIX/dev" \
+  | env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" CLAUDE_PAYLOAD_WARN_STATE_DIR="$FIX/state" \
+        bash "$FIX/nolib/payload-revert-warning.sh" 2>/dev/null; }
+out_nolib="$(run_nolib snolib)"
+case "$out_nolib" in
+  *"lib/sync-clone.sh"*) check "#1900 with lib/sync-clone.sh missing it says it could not check, naming the library" ok ;;
+  *)                     check "#1900 with lib/sync-clone.sh missing it says it could not check, naming the library" "out=$out_nolib" ;;
+esac
+case "$out_nolib" in
+  *"claude-sync pull"*) check "#1900 and says how to restore it" ok ;;
+  *)                    check "#1900 and says how to restore it" "out=$out_nolib" ;;
+esac
+out_nolib2="$(run_nolib snolib)"
+[ -z "$out_nolib2" ] && check "#1900 and says it once per session, not on every prompt" ok \
+  || check "#1900 and says it once per session, not on every prompt" "out=$out_nolib2"
+
+# ---------------------------------------------------------------------------
 # And the wiring, in the same suite, because a check nothing invokes is the defect this closes
 # (L3, L27). Same two places as the sibling: the shipped settings in the checkout, the installed
 # ones on a deployed Mac.

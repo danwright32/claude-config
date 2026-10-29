@@ -59,7 +59,7 @@ ar_payload_fields() {   # $1 = payload JSON
   printf '%s' "$1" | python3 -c '
 import json, sys
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     sys.exit(1)
 r = d.get("tool_response")
@@ -643,7 +643,7 @@ ar_payload_pr_url() {   # $1 = payload JSON
     text="$(printf '%s' "$1" | python3 -c '
 import json, sys
 try:
-    r = json.load(sys.stdin).get("tool_response") or ""
+    r = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace")).get("tool_response") or ""
 except Exception:
     sys.exit(0)
 if isinstance(r, dict):

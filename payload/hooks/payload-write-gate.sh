@@ -46,16 +46,38 @@
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+payload="$(cat 2>/dev/null || true)"
+
+# A LIBRARY THIS GATE CANNOT LOAD IS NOT NOTHING TO CHECK (claude-config#1900, L10, L1033).
+#
+# Both libraries below answer every question this gate asks: whether a watcher could revert the
+# write, whether it runs from here, whether a hold covers it, and what the command writes. They were
+# sourced with `|| exit 0`, so a hook dir missing either let every payload write through with
+# nothing said, which looks exactly like a write nothing could revert. Now the call is refused when
+# its raw payload names payload/ at all, since nothing here can read more than that, and the
+# refusal names the file. A library that sources but lacks the function asked for (an empty or cut
+# short file) is the same failure. After a call there is nothing left to refuse.
+unloaded(){   # $1 = the library file that could not be loaded
+  case "$payload" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *'"hook_event_name":"PostToolUse"'*|*'"hook_event_name": "PostToolUse"'*) exit 0 ;; esac
+  case "$payload" in *payload/*) ;; *) exit 0 ;; esac
+  cat >&2 <<MSG
+claude-sync: REFUSED a write that may be under a development checkout's payload/.
+
+payload-write-gate.sh could not load lib/$1 from $HOOK_DIR/lib, and that library is how it tells whether a watch daemon could revert this write and whether a hold covers it. A library this gate cannot load is not a sign there is nothing to check, so a call naming payload/ is refused until it is back. Reinstall the hooks with: claude-sync pull
+
+For one Bash command, and only after reading this: SKIP_PAYLOAD_WRITE_CHECK=1 <the same command>
+MSG
+  exit 2
+}
 # shellcheck source=lib/sync-clone.sh
-. "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null || exit 0
+{ . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null && declare -F sc_hold_covers >/dev/null; } || unloaded sync-clone.sh
 # shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+{ . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && declare -F ps_parse_payload >/dev/null; } || unloaded push-scope.sh
 # Missing, a file differing only by the home placeholder is reported rather than left out, which is
 # the safe side of that question.
 # shellcheck source=lib/home-token.sh
 . "$HOOK_DIR/lib/home-token.sh" 2>/dev/null || true
-
-payload="$(cat 2>/dev/null || true)"
 
 # WHICH SESSION is writing, because only its own hold protects its writes (claude-config#1886).
 # Another session's hold lets this one write today and is released whenever that session is done,
@@ -94,7 +116,13 @@ others_note(){   # $1 = where the command is in this message
 # force) are pure
 # shell in lib/sync-clone.sh, so they are asked here exactly as they are below, and a machine where
 # nothing could revert the write is not refused.
-if ps_reader_missing python3; then
+#
+# The same refusal serves a payload python3 is present for and still cannot read (claude-config
+# #1900): before it read its stdin in text mode, a byte that is not UTF-8 anywhere in the payload
+# raised, the tool name came back as a dash, and the write was allowed. The readers now decode as jq
+# does, so that byte is read, and whatever is left that they cannot read is refused here, never
+# allowed (L1033). $1 is the paragraph saying why the call could not be read.
+refuse_unread(){
   case "$payload" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
   # After a call there is nothing left to refuse, and the check made then needs the note this
   # branch never took.
@@ -112,7 +140,7 @@ if ps_reader_missing python3; then
   cat >&2 <<MSG
 claude-sync: REFUSED a write that may be under a development checkout's payload/.
 
-$(ps_reader_absent_why "python3 is not on PATH" "payload-write-gate.sh reads which tool is being called and which files it would write with it, so with python3 absent it cannot tell a write under payload/ from any other write, and a watch daemon is live on this Mac running from another clone." "python3")
+$1
 
 ${OTHERS_NOTE}A watch daemon mirrors ~/.claude up over payload/ and pushes, so an edit made to payload/ in a development checkout is not merged with the config, it is overwritten by it, silently and with no conflict to notice. On 2026-09-03 it reverted 84 files of a day's work in one commit.
 
@@ -124,20 +152,27 @@ Two ways on, and the first needs nothing:
      claude-sync hold 120 "why you are editing the checkout"
 MSG
   exit 2
+}
+if ps_reader_missing python3; then
+  refuse_unread "$(ps_reader_absent_why "python3 is not on PATH" "payload-write-gate.sh reads which tool is being called and which files it would write with it, so with python3 absent it cannot tell a write under payload/ from any other write, and a watch daemon is live on this Mac running from another clone." "python3")"
 fi
+UNREAD="payload-write-gate.sh could not read this tool call: the hook payload could not be read as JSON, so which tool is being called and which files it would write are unknown, and a watch daemon is live on this Mac running from another clone. A payload this gate cannot read is not one with nothing in it, so the call is refused rather than allowed (claude-config#1900)."
 
-IFS=$'\t' read -r tool cwd event use_id <<EOF
-$(printf '%s' "$payload" | python3 -c '
+# Read as jq reads it: a byte that is not UTF-8 becomes U+FFFD rather than raising, on the way in
+# and on the way out (claude-config#1900).
+fields="$(printf '%s' "$payload" | python3 -c '
 import json, re, sys
-try:
-    d = json.loads(sys.stdin.read())
-except Exception:
-    d = {}
+sys.stdout.reconfigure(errors="replace")
+d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+if not isinstance(d, dict):
+    sys.exit(3)
 def f(k):
     v = d.get(k) or "-"
     return re.sub(r"[\t\n]", " ", str(v))
 print("\t".join([f("tool_name"), f("cwd"), f("hook_event_name"), f("tool_use_id")]))
-' 2>/dev/null || printf -- '-\t-\t-\t-')
+' 2>/dev/null)" || refuse_unread "$UNREAD"
+IFS=$'\t' read -r tool cwd event use_id <<EOF
+$fields
 EOF
 [ "$cwd" = "-" ] && cwd="$PWD"
 
@@ -238,12 +273,12 @@ fi
 targets=""
 case "$tool" in
   Edit|Write|MultiEdit|NotebookEdit)
+    # A reader that fails here is refused rather than taken for a call that writes nothing
+    # (claude-config#1900, L1033).
     targets="$(printf '%s' "$payload" | python3 -c '
 import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-except Exception:
-    d = {}
+sys.stdout.reconfigure(errors="replace")
+d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 ti = d.get("tool_input") or {}
 seen = []
 for key in ("file_path", "notebook_path"):
@@ -256,10 +291,10 @@ for e in (ti.get("edits") or []):
         seen.append(v)
 for v in seen:
     print(v)
-' 2>/dev/null || true)"
+' 2>/dev/null)" || refuse_unread "$UNREAD"
     ;;
   Bash)
-    cmd="$(ps_parse_payload "$payload" raw 2>/dev/null || true)"
+    cmd="$(ps_parse_payload "$payload" raw 2>/dev/null)" || refuse_unread "$UNREAD"
     cmd="${cmd%%$'\x1f'*}"
     [ -n "$cmd" ] || exit 0
     # The documented override, honoured before anything else, so the person who has read the
@@ -278,7 +313,8 @@ for v in seen:
     targets="$(printf '%s' "$cmd" | GATE_CWD="$cwd" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
 import importlib.util, os, re, sys
 
-cmd = sys.stdin.read()
+sys.stdout.reconfigure(errors="replace")
+cmd = sys.stdin.buffer.read().decode("utf-8", "replace")
 GIT_WRITERS = ("checkout", "restore", "rm", "mv")
 # Which git subcommand a command runs is read by lib/shell-words.py (git_command), the one reading
 # of git every gate asks (claude-config#1188): past assignments, rtk, env and sudo, and the options
@@ -455,7 +491,7 @@ for t in targets:
     if t not in seen:
         seen.append(t)
 print("\n".join(seen))
-' 2>/dev/null || true)"
+' 2>/dev/null)" || refuse_unread "payload-write-gate.sh read this command and then could not work out which files it writes: the reading of where a shell command writes failed partway, and a watch daemon is live on this Mac running from another clone. A reading that failed is not one that found nothing, so the call is refused rather than allowed (claude-config#1900)."
     ;;
   *) exit 0 ;;
 esac

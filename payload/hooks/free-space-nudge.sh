@@ -49,7 +49,7 @@ answer="$(bash "$CHECK" 2>&1)"; verdict=$?
 session="$(printf '%s' "$input" | python3 -c '
 import json, sys
 try:
-    d = json.loads(sys.stdin.read())
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     d = {}
 print(d.get("session_id") or d.get("transcript_path") or "")
