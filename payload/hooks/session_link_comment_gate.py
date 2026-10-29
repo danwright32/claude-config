@@ -13,7 +13,8 @@ Judged here:
   gh issue close, gh pr close: --comment/-c
   gh api writing to a comments, replies or reviews endpoint (a review comment reply has no gh
     subcommand of its own)
-  the Slack send, draft and schedule tools
+  the Slack tools that write text a teammate reads (lib/slack-write-tools.txt): send, draft and
+    schedule a message, create or update a canvas, add or update a list record
 
 Commands are read by the shared gh reader (gh_issue_scan.py), the one issue_field_gate.py uses.
 Override for one command: ALLOW_SESSION_LINK_IN_COMMENT=1 <the command>.
@@ -40,11 +41,25 @@ OVERRIDE = "ALLOW_SESSION_LINK_IN_COMMENT=1"
 COMMENT_KINDS = frozenset({("issue", "comment"), ("pr", "comment"), ("pr", "review")})
 # A close posts its --comment as an ordinary comment.
 CLOSE_KINDS = frozenset({("issue", "close"), ("pr", "close")})
-# Any server: the claude.ai connector names its server Slack with a capital S, and a pattern wanting
-# a lowercase "slack" there let every claude.ai send through (claude-config#1905). The tool names
-# themselves are lowercase on every connector. The matcher in settings.hooks.json is the same
-# pattern, and test-no-session-link-in-comments.sh holds both to one list of send tools.
-SLACK_SENDS = re.compile(r"mcp__.*__slack_(send_message|send_message_draft|schedule_message)")
+# The Slack tools that write text a teammate reads, named without their server in
+# lib/slack-write-tools.txt, which the style-check mod reads too. Any server: the claude.ai connector
+# names its server Slack with a capital S, and a pattern wanting a lowercase "slack" there let every
+# claude.ai send through (claude-config#1905). It is read only for an MCP tool, so a Bash call never
+# depends on it; a list that cannot be read raises, so the wrapper says the gate did not run rather
+# than passing every Slack write unjudged.
+SLACK_WRITES_FILE = os.path.join(_HERE, "lib", "slack-write-tools.txt")
+
+
+def slack_write(tool):
+    """What a Slack tool writes, for the refusal, or None when it is not one that writes."""
+    server, _, name = tool.rpartition("__")
+    if not server.startswith("mcp__") or len(server) <= len("mcp__"):
+        return None
+    with open(SLACK_WRITES_FILE, encoding="utf-8") as f:
+        names = {l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")}
+    if name not in names:
+        return None
+    return "Slack canvas" if "canvas" in name else "Slack list" if "list" in name else "Slack message"
 API_COMMENT_ENDPOINT = re.compile(r"(?:^|/)(?:comments|replies|reviews)(?:/|\?|$)")
 API_WRITE_FLAGS = {"-f", "-F", "--field", "--raw-field", "--input"}
 API_WRITE_METHODS = {"POST", "PATCH", "PUT"}
@@ -169,10 +184,9 @@ def main():
     if tool == "Bash":
         cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else None
         what = judge_bash(tool_input.get("command") or "", cwd)
-    elif SLACK_SENDS.fullmatch(tool):
-        what = "Slack message" if LINK.search(json.dumps(tool_input)) else None
     else:
-        what = None
+        written = slack_write(tool)
+        what = written if written and LINK.search(json.dumps(tool_input)) else None
     if what:
         reason = REASON % what + (BASH_OVERRIDE if tool == "Bash" else "")
         json.dump(scan.deny_payload(reason), sys.stdout)
