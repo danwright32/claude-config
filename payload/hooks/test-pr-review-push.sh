@@ -338,6 +338,15 @@ out="$(fire_push "SKIP_PR_REVIEW=1 git push")"; rc=$?
 check_eq "the one command override lets the push through" "0" "$rc"
 check "and says to tell Dan" "Tell Dan" "$out"
 check_eq "without starting a review" "0" "$(calls)"
+# As one JSON object on stdout: plain stdout from a PreToolUse hook on exit 0 goes to the debug log
+# (hooks documentation), so neither Dan nor the session it addresses read it (claude-config#1906).
+. "$DIR/lib/hook-notice.sh"
+reset_state
+skip_json="$(pre_payload "$REPO" "SKIP_PR_REVIEW=1 git push" | bash "$PUSH_GATE" 2>/dev/null)"
+check_eq "#1906 the skip is said to Dan as a systemMessage" "" "$(hook_notice_verdict "$skip_json" 'SKIP_PR_REVIEW=1 was set')"
+check_eq "#1906 and to the session as PreToolUse context" "PreToolUse" "$(printf '%s' "$skip_json" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["hookSpecificOutput"]["hookEventName"])
+except Exception as e: print("broken: %s" % e)')"
 
 # 4f. a push of the default branch is not a branch push: no review, no wait.
 reset_state

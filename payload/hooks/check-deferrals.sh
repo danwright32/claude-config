@@ -63,14 +63,16 @@
 # skip silently.
 #
 # Fails OPEN on anything it cannot read (no repo, no detector file, no phrase list), and SAYS SO in
-# one line on stderr, because a silent skip is indistinguishable from a pass (L98).
+# one line, as a systemMessage (lib/hook-notice.sh, #1906), because a silent skip is
+# indistinguishable from a pass (L98).
 #
 # ONE exception, and it is a refusal: python3 not being installed at all (claude-config#486). Every
 # other skip above is a property of THIS push that the next one can differ on, and the line saying
-# so is read by somebody watching the transcript. A missing interpreter is a property of the
-# MACHINE, so it silences this gate on every push until it is installed, and the line saying so
-# never arrives: Claude Code discards a PreToolUse hook's stderr on exit 0. So that one is refused
-# by name rather than skipped (L490).
+# so is shown to the person. A missing interpreter is a property of the MACHINE, so it silences this
+# gate on every push until it is installed. When this was decided the line saying so never arrived
+# (it went to stderr, which Claude Code discards on exit 0); it would now, but a notice repeated on
+# every push is one people learn to skip, so that one is still refused by name rather than skipped
+# (L490).
 
 set -uo pipefail
 
@@ -117,9 +119,15 @@ if ps_has_override "$cmd" SKIP_DEFERRAL_CHECK; then
   exit 0
 fi
 
-skip() {  # $1 = what could not be measured; allows the push and says so
-  echo "check-deferrals: skipped, $1" >&2
-  exit 0
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
+# Allows the push and says so in a systemMessage: Claude Code discards a PreToolUse hook's stderr on
+# exit 0, so a skip said only there reached nobody (#1906).
+skip() {  # $1 = what could not be measured
+  hook_allow_notice "check-deferrals: skipped, $1"
 }
 
 [ -f "$DETECTOR" ] || skip "the detector lib/deferrals.py is not beside this hook, so nothing was judged."

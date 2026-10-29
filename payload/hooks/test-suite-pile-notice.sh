@@ -58,6 +58,16 @@ never_says() { # never_says <description> <text> <substring>
 silent() { # silent <description> <text>
   if [ -z "$(printf '%s' "$2" | tr -d '[:space:]')" ]; then check "$1" ok; else check "$1" "it said: ${2:0:300}"; fi
 }
+# fault_said <description> <stdout> <ERE>: a fault is said to the person and to nobody else. stdout
+# is one JSON object whose systemMessage says it, with no plain text and no additionalContext, which
+# are what reach the session on a UserPromptSubmit hook (claude-config#1906). It used to go to
+# stderr, which Claude Code discards on exit 0, so the person never heard it either.
+. "$DIR/lib/hook-notice.sh"
+fault_said() {
+  local why; why="$(hook_notice_verdict "$2" "$3")"
+  [ -z "$why" ] && case "$2" in *hookSpecificOutput*) why="it also handed the session context: ${2:0:300}" ;; esac
+  if [ -z "$why" ]; then check "$1" ok; else check "$1" "$why"; fi
+}
 
 [ -f "$HOOK" ] || { echo "FAIL: no hook at $HOOK"; echo "passed: 0, failed: 1"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
 
@@ -199,32 +209,32 @@ esac
 
 echo "suite pile notice: anything it cannot read is silent, never a guess and never a block"
 out="$(prompt u1 "$WORK/no-such-table")"; rc=$?
-silent "an unreadable process table says nothing" "$out"
+fault_said "an unreadable process table says nothing to the session, and tells the person" "$out" "process table could not be read"
 [ "$rc" -eq 0 ] && check "and the hook exits 0, so the prompt goes ahead" ok || check "and the hook exits 0, so the prompt goes ahead" "exit $rc"
 out="$(prompt u1 "$WORK/old")"
 says "and the next readable table is judged as a first sight" "$out" "piled up"
 # A session that cannot be told apart from the next one cannot be told once.
 out="$(printf '{"cwd":"."}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
   CLAUDE_SUITE_PILE_NOW="$NOW" bash "$HOOK" 2>/dev/null)"; rc=$?
-silent "a payload with no session says nothing on the prompt" "$out"
+fault_said "a payload with no session says nothing to the session, and tells the person" "$out" "neither a session id"
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
 # A record that cannot be written means it cannot stay quiet next time, so it does not speak now:
 # once too few, never once per prompt (L36).
 : > "$WORK/state-is-a-file"
 out="$(printf '{"session_id":"w1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state-is-a-file" \
   CLAUDE_SUITE_PILE_NOW="$NOW" bash "$HOOK" 2>/dev/null)"; rc=$?
-silent "a state directory that cannot be written says nothing" "$out"
+fault_said "a state directory that cannot be written says no pile, and tells the person why" "$out" "could not write"
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
 # An unreadable limit is not guessed at, and not said on every prompt either.
 out="$(printf '{"session_id":"b1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
   CLAUDE_SUITE_PILE_NOW="$NOW" SYNC_SUITE_MAX_AGE=soon bash "$HOOK" 2>/dev/null)"; rc=$?
-silent "an unreadable age limit says nothing" "$out"
+fault_said "an unreadable age limit says nothing to the session, and tells the person" "$out" "must all be whole numbers"
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
 # A copy of the hook with no library beside it.
 mkdir -p "$WORK/bare"; cp "$HOOK" "$WORK/bare/"
 out="$(printf '{"session_id":"l1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
   CLAUDE_SUITE_PILE_NOW="$NOW" bash "$WORK/bare/suite-pile-notice.sh" 2>/dev/null)"; rc=$?
-silent "a hook whose library is missing says nothing" "$out"
+fault_said "a hook whose library is missing says nothing to the session, and tells the person" "$out" "suite-pile.sh is missing"
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
 # A byte that is not UTF-8 in front of the session id stops bash's =~ under a UTF-8 locale
 # (claude-config#1885), so the payload read as carrying no session and nothing was checked.

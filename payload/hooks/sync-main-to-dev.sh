@@ -55,12 +55,13 @@ speak() {
   local m="Main to dev sync: ${said[0]}" i
   for ((i = 1; i < ${#said[@]}; i++)); do m="$m
 Main to dev sync: ${said[$i]}"; done
-  if command -v jq >/dev/null 2>&1; then
-    jq -nc --arg m "$m" '{systemMessage: $m, hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $m}}'
-  else
-    printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$m" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
-  fi
-  exit 0
+  # Built by lib/hook-notice.sh: the hand built object this replaced, used without jq, broke on a
+  # tab or any other control character in the text (#1906).
+  # shellcheck source=lib/hook-notice.sh
+  . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+    printf '%s\n' "$1" >&2
+    printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+  hook_allow_notice "$m" PostToolUse
 }
 
 if [ ! -f "$REPOS_FILE" ]; then

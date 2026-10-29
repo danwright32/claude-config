@@ -87,6 +87,10 @@ want_code(){ if [ "$CODE" = "$1" ]; then ok; else bad "$2: expected exit $1, got
 says(){ case "$ERR$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 want_says(){ if says "$1"; then ok; else bad "$2: expected to read [$1], got stderr: $ERR stdout: $OUT"; fi; }
 want_silent_on(){ if says "$1"; then bad "$2: wrongly said [$1]"; else ok; fi; }
+# A push the check could not measure is let through with exit 0 and its notice as the systemMessage
+# on stdout (claude-config#1912): exit 1, its old channel, is what "onFailure": "block" refuses.
+. "$DIR/lib/hook-notice.sh"
+want_notice(){ local why; why="$(hook_notice_verdict "$OUT" "$1")"; if [ -z "$why" ]; then ok; else bad "#1912 $2: $why"; fi; }
 
 ELSEWHERE="$WORK/elsewhere"; mkdir -p "$ELSEWHERE"
 
@@ -133,6 +137,7 @@ echo more >> "$W/README.md"; commit_all "$W"
 run_hook "$W" "git push"
 want_code 0 "a repo with no asset directory is allowed"
 want_says "ASSET CHECK SKIPPED" "and says out loud that it skipped"
+want_notice "ASSET CHECK SKIPPED" "where the person sees it, as a systemMessage (#1906)"
 want_says "no assets to judge" "and why"
 
 W="$(mk_repo skip)"
@@ -164,6 +169,7 @@ printf 'export const hero = "/brand/hero.svg";\n' > "$W/src/hero.ts"; commit_all
 run_hook "$W" "git push"
 want_code 0 "an asset referenced by its served path passes"
 want_says "Checked 3 assets under public/" "and the clean run says what it scanned"
+want_notice "Checked 3 assets under public/" "as a systemMessage (#1906)"
 want_says "1 already unreferenced before this push and left alone" "and counts the pre-existing dead asset"
 
 W="$(mk_repo refname)"
@@ -370,7 +376,8 @@ run_stub(){ ERR="$(printf '%s' "$1" | PUBLIC_ASSETS_SCANNER="$STUB" bash "$HOOK"
 PAYLOAD="$(HK_CWD="$W" python3 -c 'import json, os, sys
 sys.stdout.write(json.dumps({"tool_input": {"command": "git push"}, "cwd": os.environ["HK_CWD"]}))')"
 run_stub "$PAYLOAD"
-want_code 1 "a detector that could not measure lets the push through as a non-blocking error"
+want_code 0 "a detector that could not measure lets the push through"
+want_notice "ASSET CHECK DID NOT RUN \(Could not measure: git ls-tree failed: bad object\)" "and says so where the person sees it"
 want_says "ASSET CHECK DID NOT RUN (Could not measure: git ls-tree failed: bad object)" "and the one line carries the detector's reason"
 want_silent_on "PUSH BLOCKED" "and it is not a refusal"
 
@@ -378,21 +385,24 @@ want_silent_on "PUSH BLOCKED" "and it is not a refusal"
 # ends with, it must not become a refusal about a finding nobody measured.
 printf 'import sys\nraise RuntimeError("boom")\n' > "$STUB"
 run_stub "$PAYLOAD"
-want_code 1 "a detector that crashed is reported the same way"
+want_code 0 "a detector that crashed is reported the same way"
+want_notice "ASSET CHECK DID NOT RUN \(detector exited 1 without a summary" "as a systemMessage"
 want_says "ASSET CHECK DID NOT RUN (detector exited 1 without a summary: RuntimeError: boom)" "and names the crash rather than claiming a finding"
 want_silent_on "PUSH BLOCKED" "and a crash is never a refusal"
 
 # Findings the hook does not recognise are not a refusal either.
 printf 'import sys\nprint("public/x.svg: something new this hook has never heard of.")\nprint("Checked 1 assets under public/ against 1 files; 0 raster images added or changed in this push.")\nsys.exit(1)\n' > "$STUB"
 run_stub "$PAYLOAD"
-want_code 1 "a finding of an unknown kind is not turned into a refusal"
+want_code 0 "a finding of an unknown kind is not turned into a refusal"
+want_notice "ASSET CHECK DID NOT RUN.*could not read" "and says so as a systemMessage"
 want_says "could not read" "and says so"
 
 # The same stub exit codes the real detector uses, so the mapping is pinned in both directions.
 printf 'import sys\nprint("No public/, static/ or assets/ directory at the root of this repo, so there were no assets to judge.")\nsys.exit(2)\n' > "$STUB"
 run_stub "$PAYLOAD"
 want_code 0 "exit 2 from the detector is the skip"
-want_says "ASSET CHECK SKIPPED: No public/" "and is said on stdout"
+want_says "ASSET CHECK SKIPPED: No public/" "and is said"
+want_notice "ASSET CHECK SKIPPED: No public/" "as a systemMessage (#1906)"
 
 # The real detector on a real repo, driven the same way, still reaches the real arm.
 W="$(mk_repo real)"
@@ -400,6 +410,7 @@ echo more >> "$W/README.md"; commit_all "$W"
 run_hook "$W" "git push"
 want_code 0 "control: the real detector through the same hook is clean on a clean push"
 want_says "Checked 2 assets" "and reports what it checked"
+want_notice "Checked 2 assets" "as a systemMessage (#1906)"
 
 echo
 echo "passed: $pass, failed: $fail"

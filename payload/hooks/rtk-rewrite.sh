@@ -6,15 +6,24 @@
 # This is a thin delegating hook: all rewrite logic lives in `rtk rewrite`,
 # which is the single source of truth (src/discover/registry.rs).
 # To add or change rewrite rules, edit the Rust registry, not this file.
+#
+# Each WARNING below goes out as a systemMessage (lib/hook-notice.sh): Claude Code discards a
+# PreToolUse hook's stderr on exit 0, so a warning there reached nobody (claude-config#1906). After
+# editing this file, re-record .rtk-hook.sha256 beside it, or rtk refuses to run at all.
+# The directory is cut from the path in bash itself, since this runs before every Bash call and a
+# dirname fork there is paid on all of them.
+RTK_HOOK_DIR="${BASH_SOURCE[0]%/*}"
+# shellcheck source=lib/hook-notice.sh
+. "$RTK_HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
 if ! command -v jq &>/dev/null; then
-  echo "[rtk] WARNING: jq is not installed. Hook cannot rewrite commands. Install jq: https://jqlang.github.io/jq/download/" >&2
-  exit 0
+  hook_allow_notice "[rtk] WARNING: jq is not installed. Hook cannot rewrite commands. Install jq: https://jqlang.github.io/jq/download/"
 fi
 
 if ! command -v rtk &>/dev/null; then
-  echo "[rtk] WARNING: rtk is not installed or not in PATH. Hook cannot rewrite commands. Install: https://github.com/rtk-ai/rtk#installation" >&2
-  exit 0
+  hook_allow_notice "[rtk] WARNING: rtk is not installed or not in PATH. Hook cannot rewrite commands. Install: https://github.com/rtk-ai/rtk#installation"
 fi
 
 # Version guard: rtk rewrite was added in 0.23.0.
@@ -25,8 +34,7 @@ if [ -n "$RTK_VERSION" ]; then
   MINOR=$(echo "$RTK_VERSION" | cut -d. -f2)
   # Require >= 0.23.0
   if [ "$MAJOR" -eq 0 ] && [ "$MINOR" -lt 23 ]; then
-    echo "[rtk] WARNING: rtk $RTK_VERSION is too old (need >= 0.23.0). Upgrade: cargo install rtk" >&2
-    exit 0
+    hook_allow_notice "[rtk] WARNING: rtk $RTK_VERSION is too old (need >= 0.23.0). Upgrade: cargo install rtk"
   fi
 fi
 

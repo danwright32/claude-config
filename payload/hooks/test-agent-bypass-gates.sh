@@ -113,6 +113,10 @@ run_hook() { # run_hook <hook> <payload>
 refused() { if [ "$RC" -eq 2 ]; then check "$1" ok; else check "$1" "exit $RC, stdout: ${OUT:0:200}, stderr: ${ERR:0:300}"; fi; }
 allowed() { if [ "$RC" -eq 0 ]; then check "$1" ok; else check "$1" "exit $RC, stdout: ${OUT:0:200}, stderr: ${ERR:0:300}"; fi; }
 says() { case "$ERR$OUT" in *"$2"*) check "$1" ok ;; *) check "$1" "did not say '$2': ${ERR:0:400}" ;; esac; }
+# notices <label> <ERE>: the notice is the systemMessage on stdout, the one place Claude Code shows a
+# PreToolUse hook that exits 0, whose stderr it discards (claude-config#1906).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hook-notice.sh"
+notices() { local why; why="$(hook_notice_verdict "$OUT" "$2")"; if [ -z "$why" ]; then check "$1" ok; else check "$1" "$why"; fi; }
 
 # The control first: the main thread's own --no-verify is not this gate's business, so a refusal
 # below is the agent_id doing it and not a gate that refuses every --no-verify (L159).
@@ -391,10 +395,12 @@ transcript "$T8" 'git commit --no-verify -m wip'
 HANDBACK_CHECK_STATE_DIR="$WORK/not-a-dir/state" hb b8 'No overrides.'
 allowed "a contradicting report is let through when the refusal count cannot be kept"
 says "saying so" "could not keep count"
+notices "#1906 as a systemMessage" "could not keep count"
 
 hb b404 'No overrides.'
 allowed "an agent whose transcript cannot be found is let through"
 says "saying it could not check" "could not"
+notices "#1906 and says so where the person sees it" "HANDBACK CLAIMS CHECK DID NOT RUN"
 
 run_hook "$HB_GATE" "$(python3 -c 'import json; print(json.dumps({"tool_name":"SubagentHandback","tool_input":{"message":"No overrides."},"hook_event_name":"PreToolUse","session_id":"x","transcript_path":"/tmp/x.jsonl"}))')"
 allowed "a hand-back with no agent_id (not a subagent) is not judged"
@@ -545,6 +551,7 @@ else check "check-report answers 10, saying nothing, when nothing contradicts" "
 run_crashpy "$HB_GATE" "$(hb_payload b2 'Done. No --no-verify, no overrides.')"
 allowed "with the reader crashing, a hand-back is not refused"
 says "but it says the claims check did not run" "HANDBACK CLAIMS CHECK DID NOT RUN"
+notices "#1906 as a systemMessage" "HANDBACK CLAIMS CHECK DID NOT RUN"
 hb b2 'Done. No --no-verify, no overrides.'
 case "$ERR$OUT" in *"DID NOT RUN"*) check "with the reader working, a clean report says nothing" "it said: ${ERR:0:300}" ;; *) check "with the reader working, a clean report says nothing" ok ;; esac
 
@@ -574,6 +581,7 @@ says "naming python3" "python3"
 run_nopy "$HB_GATE" "$(hb_payload b1 'No overrides.')"
 allowed "handback-claims-gate.sh lets the report through rather than strand it"
 says "and says the check did not run" "DID NOT RUN"
+notices "#1906 as a systemMessage, built with no python3 or jq" "HANDBACK CLAIMS CHECK DID NOT RUN"
 
 # ---------------------------------------------------------------------------------------------
 echo "settings.hooks.json: each gate is registered where its header says"

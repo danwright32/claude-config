@@ -54,6 +54,16 @@ never_says() { # never_says <description> <text> <substring>
 silent() { # silent <description> <text>
   if [ -z "$(printf '%s' "$2" | tr -d '[:space:]')" ]; then check "$1" ok; else check "$1" "it said: ${2:0:300}"; fi
 }
+# fault_said <description> <stdout> <ERE>: a fault is said to the person and to nobody else. stdout
+# is one JSON object whose systemMessage says it, with no plain text and no additionalContext, which
+# are what reach the session on a UserPromptSubmit hook (claude-config#1906). It used to go to
+# stderr, which Claude Code discards on exit 0, so the person never heard it either.
+. "$DIR/lib/hook-notice.sh"
+fault_said() {
+  local why; why="$(hook_notice_verdict "$2" "$3")"
+  [ -z "$why" ] && case "$2" in *hookSpecificOutput*) why="it also handed the session context: ${2:0:300}" ;; esac
+  if [ -z "$why" ]; then check "$1" ok; else check "$1" "$why"; fi
+}
 
 [ -f "$HOOK" ] || { echo "FAIL: no hook at $HOOK"; echo "passed: 0, failed: 1"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
 
@@ -266,7 +276,7 @@ agent_for "$CLONE"
 # that it did not run rather than repeating itself on every prompt.
 out="$(printf '{"cwd":"."}' | HOME="$FHOME" CLAUDE_HOME="$FHOME/.claude" SYNC_LAUNCHAGENTS="$WORK/agents" \
        CLAUDE_SYNC_STUCK_STATE_DIR="$WORK/state" SYNC_NO_NOTIFY=1 bash "$HOOK" 2>"$WORK/err")"
-silent "a payload with no session says nothing to the session" "$out"
+fault_said "a payload with no session says nothing to the session, and tells the person" "$out" "neither a session id"
 says "and says on stderr why it did not run" "$(cat "$WORK/err")" "session"
 
 # A threshold nobody can read falls back to the default and says so, rather than being silently

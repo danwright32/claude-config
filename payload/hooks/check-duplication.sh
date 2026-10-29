@@ -83,13 +83,20 @@ cwd="${parsed#*$'\x1f'}"
 
 ps_is_git_push "$cmd" || exit 0
 
+# Every line it says on a push it lets through goes out as a systemMessage (lib/hook-notice.sh,
+# #1906). It used to be plain stdout, which the hooks documentation says a PreToolUse hook's exit 0
+# sends to the debug log, never the transcript, so the person read none of it.
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
 if ps_has_override "$cmd" SKIP_DUPLICATION_CHECK; then
-  echo "duplication check: skipped because the command carries SKIP_DUPLICATION_CHECK=1; nothing was compared."
-  exit 0
+  hook_allow_notice "duplication check: skipped because the command carries SKIP_DUPLICATION_CHECK=1; nothing was compared."
 fi
 
 # One line on every path that measured nothing, so a skip never reads as a pass (L98).
-skip() { echo "duplication check: skipped, $1"; exit 0; }
+skip() { hook_allow_notice "duplication check: skipped, $1"; }
 
 [ -f "$DETECTOR" ] || skip "the detector $DETECTOR is not installed, so nothing was compared."
 command -v python3 >/dev/null 2>&1 || skip "python3 is not on the PATH, so nothing was compared."
@@ -182,8 +189,7 @@ summary="$(printf '%s\n' "$report" | awk 'NR == 1')"
 body="$(printf '%s\n' "$report" | awk 'NR > 1')"
 
 if [ "$rc" -eq 0 ]; then
-  echo "duplication check: no new duplicate groups ($summary; against $(git rev-parse --short "$mb" 2>/dev/null))."
-  exit 0
+  hook_allow_notice "duplication check: no new duplicate groups ($summary; against $(git rev-parse --short "$mb" 2>/dev/null))."
 fi
 if [ "$rc" -ne 1 ]; then
   skip "the detector failed ($(awk 'NR == 1' "$WORK/err" 2>/dev/null)), so nothing was compared."

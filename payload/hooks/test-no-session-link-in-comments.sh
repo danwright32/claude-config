@@ -243,6 +243,18 @@ err="$(printf 'gh not json' | bash "$HOOK" 2>&1 >/dev/null)"
 if [[ "$err" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a payload that is not JSON must say the gate did not run (got: ${err:-<nothing>})"; fi
 
+# ...and says it where the person sees it, with exit 0 (claude-config#1906): Claude Code discards a
+# PreToolUse hook's stderr on exit 0, so the notice is the systemMessage on stdout.
+. "$DIR/lib/hook-notice.sh"
+out="$(bash_payload "gh pr comment 5 --body \"$LINK\"" | PATH="$TMP_DIR/bin" bash "$HOOK" 2>/dev/null)"; rc=$?
+why="$(hook_notice_verdict "$out" 'SESSION LINK GATE DID NOT RUN')"
+if [ "$rc" -eq 0 ] && [ -z "$why" ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: #1906 a broken gate must exit 0 with its notice as a systemMessage (exit $rc): $why"; fi
+out="$(printf 'gh not json' | bash "$HOOK" 2>/dev/null)"; rc=$?
+why="$(hook_notice_verdict "$out" 'SESSION LINK GATE DID NOT RUN')"
+if [ "$rc" -eq 0 ] && [ -z "$why" ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: #1906 a payload that is not JSON must exit 0 with the notice as a systemMessage (exit $rc): $why"; fi
+
 # --- Wired: the installed settings route Bash and the Slack send tools to the hook ---
 . "$DIR/lib/settings-file.sh"
 SETTINGS="$(hook_settings_file "$DIR/..")" || SETTINGS="$DIR/../no-settings-file-found"

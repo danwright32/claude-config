@@ -62,6 +62,15 @@
 #                                waiting for it (L290)
 set -uo pipefail
 
+# A check that could not run is said as a systemMessage (#1906). The hooks documentation says
+# Claude Code discards a hook's stderr on exit 0, and that a UserPromptSubmit hook's plain stdout
+# reaches only Claude, as context; its systemMessage is not among those it says are discarded.
+SSN_DIR="${BASH_SOURCE[0]%/*}"   # cut in bash, since this runs on every prompt
+# shellcheck source=lib/hook-notice.sh
+. "$SSN_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
 input="$(cat 2>/dev/null || true)"
 
 # The session, matched in bash rather than by starting python, because this runs on every prompt.
@@ -75,8 +84,7 @@ if payload_match "$input" "$re_sid"; then session="${BASH_REMATCH[1]}"
 elif payload_match "$input" "$re_tp"; then session="${BASH_REMATCH[1]}"
 fi
 if [ -z "$session" ]; then
-  echo "sync-stuck-notice: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and the sync was not checked." >&2
-  exit 0
+  hook_allow_notice "sync-stuck-notice: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and the sync was not checked."
 fi
 key="${session//[^A-Za-z0-9_-]/_}"
 [ "${#key}" -le 120 ] || key="${key: -120}"

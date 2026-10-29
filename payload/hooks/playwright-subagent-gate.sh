@@ -29,11 +29,17 @@
 # Fails OPEN on a payload it cannot read, loudly. Claude Code writes the payload, so an unreadable
 # one means the platform changed, and refusing would take the browser away from the main session,
 # the one caller this gate exists to leave alone, with no remedy inside the session. Silence would
-# leave the gate off with everything looking normal, so it says so on stderr.
+# leave the gate off with everything looking normal, so it says so in a systemMessage
+# (lib/hook-notice.sh): Claude Code discards a PreToolUse hook's stderr on exit 0 (#1906).
 
 set -uo pipefail
 
 payload="$(cat 2>/dev/null || true)"
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
 verdict="$(printf '%s' "$payload" | python3 -c '
 import json, re, sys
@@ -59,11 +65,9 @@ case "$verdict" in
     exit 0
     ;;
   unreadable$'\t'*)
-    echo "PLAYWRIGHT SUBAGENT GATE DID NOT RUN: playwright-subagent-gate.sh could not read the hook payload (${verdict#*$'\t'}), so this Playwright call was let through without checking whether a subagent made it." >&2
-    exit 0
+    hook_allow_notice "PLAYWRIGHT SUBAGENT GATE DID NOT RUN: playwright-subagent-gate.sh could not read the hook payload (${verdict#*$'\t'}), so this Playwright call was let through without checking whether a subagent made it."
     ;;
   *)
-    echo "PLAYWRIGHT SUBAGENT GATE DID NOT RUN: playwright-subagent-gate.sh failed ($(printf '%s' "$verdict" | tr '\n' ' ')), so this Playwright call was let through without checking whether a subagent made it." >&2
-    exit 0
+    hook_allow_notice "PLAYWRIGHT SUBAGENT GATE DID NOT RUN: playwright-subagent-gate.sh failed (${verdict//$'\n'/ }), so this Playwright call was let through without checking whether a subagent made it."
     ;;
 esac

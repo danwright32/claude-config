@@ -24,17 +24,21 @@ set -uo pipefail
 payload="$(cat)"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/hook-notice.sh
+. "$HERE/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
 # A crash here must not block work, but it must not be invisible either: a silent
-# failure would leave the gate switched off with everything looking normal.
+# failure would leave the gate switched off with everything looking normal. So the notice goes
+# out as a systemMessage, since Claude Code discards a PreToolUse hook's stderr on exit 0 (#1906).
 err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 out="$(printf '%s' "$payload" | GATE_DIR="$HERE" python3 "$HERE/issue_field_gate.py" 2>"$err")"
 rc=$?
 
 if [ "$rc" -ne 0 ]; then
-  echo "ISSUE FIELD GATE DID NOT RUN: require-issue-fields.sh failed (rc=$rc). This issue may be filed without a milestone, a priority or a category. $(tr '\n' ' ' <"$err")" >&2
-  exit 0
+  hook_allow_notice "ISSUE FIELD GATE DID NOT RUN: require-issue-fields.sh failed (rc=$rc). This issue may be filed without a milestone, a priority or a category. $(tr '\n' ' ' <"$err" 2>/dev/null)"
 fi
 
 printf '%s' "$out"

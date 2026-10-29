@@ -357,15 +357,25 @@ $r"
   fi
   rm -f "${parts[@]}" 2>/dev/null
 
+  # The systemMessage comes from lib/hook-notice.sh, the one builder of it (#1906); a refusal's
+  # decision and reason are added to it by jq.
   if [ -n "$reasons" ]; then
-    jq -nc --arg r "$reasons" --arg m "$notes" '{decision: "block", reason: $r} + (if $m != "" then {systemMessage: $m} else {} end)'
+    { jq -nc --arg r "$reasons" '{decision: "block", reason: $r}'; [ -z "$notes" ] || hook_notice_json "$notes"; } | jq -sc add
   elif [ -n "$notes" ]; then
-    jq -nc --arg m "$notes" '{systemMessage: $m}'
+    hook_notice_json "$notes"
   fi
   return 0
 }
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Every systemMessage this prints is built by lib/hook-notice.sh, so it is valid JSON whatever the
+# text holds and with or without jq (#1906). release_held needs the object without the exit.
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+command -v hook_notice_json >/dev/null 2>&1 || hook_notice_json() {
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; }
 if [ "${1:-}" = "--release-held" ]; then
   release_held
   exit 0
@@ -457,12 +467,7 @@ done 3<<< "$merge_lines"
 if [ "$merges_unread" = 0 ] && [ "$merge_count" -gt 0 ] && [ -z "$quizzed_lines" ]; then
   msg="PR quiz skipped: $opted_out_repos has opted out with $QUIZ_OPT_OUT_MARKER at its root. Delete that file to have merges here quizzed again."
   [ "$merge_count" -gt 1 ] && msg="PR quiz skipped: every repository this command merged in ($opted_out_repos) has opted out with $QUIZ_OPT_OUT_MARKER at its root. Delete that file to have merges there quizzed again."
-  if command -v jq >/dev/null 2>&1; then
-    jq -nc --arg m "$msg" '{systemMessage: $m}'
-  else
-    printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  fi
-  exit 0
+  hook_allow_notice "$msg"
 fi
 
 # This session's id, for the snooze (#623, the block at the top), which is checked just before the
@@ -605,8 +610,7 @@ quiz_owed_for() {  # $1 = the directory the merge runs in, $2 = the repository i
 # line straight to Dan.
 if [ -n "$session_id" ] && snooze_in_force "$session_id"; then
   qv_set snoozed +
-  jq -nc --arg m "PR quiz skipped: you snoozed it for the rest of this session. A new session quizzes again." '{systemMessage: $m}'
-  exit 0
+  hook_allow_notice "PR quiz skipped: you snoozed it for the rest of this session. A new session quizzes again."
 fi
 
 # STILL RUNNING IN THE BACKGROUND (#1768, the block above release_held). Checked after the opt out and
@@ -673,11 +677,10 @@ if [ "$ran_in_background" = 1 ]; then
     qv_set held +
     held_prs="$(while IFS= read -r m <&3; do [ -n "$m" ] && mt_pr_label "${m##*$'\t'}"; [ -n "$m" ] && printf ', '; done 3<<< "$quizzed_lines")"
     held_prs="${held_prs%, }"
-    jq -nc \
-      --arg m "PR quiz held: the merge command is still running in the background, so the quiz waits for the first turn end after GitHub says $held_prs merged." \
-      --arg c "The PR merge quiz for this command is held, not skipped: the command was moved to the background before it finished, so nothing has merged yet. Do not run the quiz now. A turn end after GitHub says $held_prs merged asks for it." \
-      '{systemMessage: $m, hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $c}}'
-    exit 0
+    hook_allow_notice \
+      "PR quiz held: the merge command is still running in the background, so the quiz waits for the first turn end after GitHub says $held_prs merged." \
+      PostToolUse \
+      "The PR merge quiz for this command is held, not skipped: the command was moved to the background before it finished, so nothing has merged yet. Do not run the quiz now. A turn end after GitHub says $held_prs merged asks for it."
   fi
   background_note="
 
