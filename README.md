@@ -1603,9 +1603,23 @@ Three gates close the three parts of that, all reading commands through one libr
   records a hook in the transcript only when it prints, so the 22 earlier hand-backs, none of which
   contradicted its commands, left no trace either way.
 
+A fourth gate reads the same library for a different thing an agent does to its own work:
+
+- `amend-force-push-gate.sh` (PreToolUse, Bash) refuses an AGENT's git command that rewrites a
+  commit it already made: `git commit --amend`, and a `git push` forced by `--force`, `-f` (alone or
+  in a cluster such as `-uf`), `--force-with-lease` or a `+refspec`, behind rtk, env, a cd or a
+  `bash -c` string, and inside a rebase's `--exec` (claude-config#1856). On 2026-10-28 the #1806
+  builder amended after a push review finding, the auto mode classifier refused it, and the push
+  that followed sent the commit without the fix; force pushes were refused the same way the same
+  night. The refusal ends on the sentence the global CLAUDE.md gives every worktree agent, from the
+  library's `REWRITE_RULE`: "Never amend a commit or force push: add a new commit and push
+  normally." The reading is the library's `rewrite-refusal`, so a message, an echo or a grep naming
+  the flags, `--fixup`, `--no-force`, and the main session are untouched. A payload it cannot read
+  is refused when it names an amend or a force, as `no-verify-gate.sh` does with a skip.
+
 ### What a push actually waits on
 
-Thirty-two PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-three PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1617,7 +1631,7 @@ they were timed:
 bash tools/time-push-gates.sh --repo <checkout>
 ```
 
-Thirteen of them came after the 2026-09-21 timing further down, which measured the first seventeen:
+Fourteen of them came after the 2026-09-21 timing further down, which measured the first seventeen:
 
 | Gate | What it costs on a push |
 | --- | --- |
@@ -1632,6 +1646,7 @@ Thirteen of them came after the 2026-09-21 timing further down, which measured t
 | `check-rtk-init.sh` (#1468) | 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
 | `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3). Reading a declared script's quoted arguments (#1574) adds one python start to a command that reaches a script file refusal, and nothing to any other: 0.09 to 0.12 seconds before, 0.11 to 0.13 after, five readings each on 2026-10-23 (load average 17 to 23). Reading a script run by its path (#1623) left a plain push and a git command holding paths only as arguments at 0.006 to 0.008 seconds, as on main, and `./build.sh && git push` now starts the reader, 0.10 to 0.11 seconds, as `bash ./build.sh && git push` does; five readings each on 2026-10-23 (load average 56 to 101). Over 30 days of this Mac's real commands naming git, gh or rtk (30,078), the fast path answered 24,204 before the reader loaded where main answered 26,842; 2,638 now reach the reader through it, 863 of them refused |
 | `stacked-branch-delete-gate.sh` (#1723) | 0.035 to 0.058 seconds on a plain `git push`, five readings on 2026-10-26 (load average 15 to 31), since a command holding no `delete` or `graphql` in any case (#1758 added the second), no short flag cluster with d and no bare `:branch` is answered before anything loads; 0.14 to 0.17 seconds on `git push -u origin feat/1723-stacked-delete`, whose branch name holds the word and so starts the shared reader to find no delete; 0.46 to 0.51 seconds on an API delete of a branch nothing is based on, five readings through the real gh against claude-config, one list of the pull requests based on it |
+| `amend-force-push-gate.sh` (#1856) | 0.021 to 0.026 seconds on the main session's `git push -u origin feat/x`, five readings on 2026-10-28 (load average 40 to 58), since a payload with no agent id leaves before anything loads; 0.105 to 0.126 seconds on a subagent's same push, which starts the shared reader to find no force; 0.105 to 0.148 seconds on a subagent's `git push --force`, refused |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 
