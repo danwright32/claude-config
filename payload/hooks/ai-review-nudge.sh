@@ -102,8 +102,11 @@ shopt -s nullglob
 
 # The session, read with a bash regex first because the fast path must start no process. A session
 # id is letters, digits, hyphens and underscores; anything else falls through to the real parser.
+# Under a UTF-8 locale =~ stops at a byte that is not UTF-8, so the id is also looked for in the C
+# locale, which reads every byte as a character (claude-config#1885).
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 session=""
-if [[ "$input" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_-]+)\" ]]; then
+if payload_match "$input" '"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]+)"'; then
   session="${BASH_REMATCH[1]}"
 fi
 

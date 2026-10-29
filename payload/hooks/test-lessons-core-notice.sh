@@ -49,6 +49,13 @@ if [ "$(id -u)" != 0 ]; then
   chmod 644 "$CLAUDE_HOME/.lessons-core-state"
 fi
 
+# A byte that is not UTF-8 in front of the session id stops bash's =~ under a UTF-8 locale
+# (claude-config#1885), so the session read as none and the notice repeated on every prompt.
+echo "fallback shrunk 1 of 150" > "$CLAUDE_HOME/.lessons-core-state"
+fire_bad(){ printf '{"cwd":"/tmp/\377","session_id":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$1" | LC_ALL=en_US.UTF-8 bash "$HOOK" 2>&1; }
+check "#1885 control: a byte that is not UTF-8 in front, the notice is said" "whole library" "$(fire_bad s5)"
+check_eq "#1885 and the session is still read, so it is said once" "" "$(fire_bad s5)"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

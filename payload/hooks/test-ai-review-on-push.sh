@@ -660,6 +660,26 @@ many_launches="$(launches)"
 check_eq "300 more review files start no more processes (was $base_launches with none)" "$base_launches" "$many_launches"
 rm -f "$AI_REVIEW_STATE_DIR"/999-*.txt
 
+# 6b2. A byte that is not UTF-8 in front of the session id stops bash's =~ under a UTF-8 locale
+# (claude-config#1885), so the session read as none and a settled prompt left the fast path for the
+# full one, starting more processes on every prompt. The same settled session must start as few
+# either way.
+fast_launches(){ # fast_launches <prompt text, as a printf format> -> commands one settled nudge started
+  nudge n1   # settle
+  # The fast path needs the session's record strictly newer than the last write, in whole seconds, so
+  # the last write is dated before it rather than waited out (L290).
+  touch -t 202001010000 "$AI_REVIEW_STATE_DIR/.updated"
+  : > "$SHIM_LOG"
+  printf '{"hook_event_name":"UserPromptSubmit","prompt":"'"$1"'","session_id":"n1","cwd":"%s"}' "$REPO" \
+    | PATH="$SHIMBIN:$REAL_PATH" LC_ALL=en_US.UTF-8 bash "$NUDGE" >/dev/null 2>&1
+  grep -c . "$SHIM_LOG" 2>/dev/null || true
+}
+settled_launches="$(fast_launches 'hi')"
+[ "$settled_launches" -lt "$base_launches" ] && ok \
+  || bad "#1885 control: a settled session takes the fast path, starting fewer than the full path's $base_launches (started $settled_launches)"
+check_eq "#1885 a byte that is not UTF-8 in front of its id does not push it off the fast path" "$settled_launches" "$(fast_launches '\377')"
+touch "$AI_REVIEW_STATE_DIR/.updated"
+
 # 6c. The same count where the per file work really was: unshown reviews of the session's OWN
 # repository (claude-config#1090). 6b's files belong to another repository, which the name filter
 # drops before any work, so it never saw that a fresh session walked every review of its own

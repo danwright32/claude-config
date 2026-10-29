@@ -21,8 +21,11 @@ input="$(cat 2>/dev/null || true)"
 state_file="${CLAUDE_HOME:-$HOME/.claude}/.lessons-core-state"
 [ -e "$state_file" ] || exit 0
 
+# Under a UTF-8 locale bash's =~ stops at a byte that is not UTF-8, so the session id is also looked
+# for in the C locale, which reads every byte as a character (claude-config#1885).
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 session=""
-if [[ "$input" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_-]+)\" ]]; then
+if payload_match "$input" '"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]+)"'; then
   session="${BASH_REMATCH[1]}"
 fi
 
