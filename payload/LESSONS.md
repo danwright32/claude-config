@@ -10349,6 +10349,9 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
 
 ## Pipeline speed
 
+- **L834. Where every pull request must contain main's latest commit before it merges, each merge sends every waiting pull request through the test job again, so merges are capped at one per test run and each extra open pull request adds a full rerun per merge without adding throughput; shorten the test job before adding parallel builders, and size parallel work to that cap.**
+  (pivot#415, 2026-10-30)
+  SHORT: When a PR must contain main's tip to merge, every merge reruns each waiting PR: shorten the test job before adding parallel builders.
 - **L833. Before adding a check that makes paid model calls on every merge, price it as cost per run times merges per day, run it on the cheapest model that proves the path, and move any comparison across several models to a schedule, because merge volume rather than the check's own size sets what it costs.**
   (pivot#404, 2026-10-30)
   SHORT: Price a paid model check as cost per run times merges a day; run it on the cheapest model, and a several model comparison on a schedule.

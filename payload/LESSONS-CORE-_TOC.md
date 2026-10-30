@@ -11,7 +11,7 @@ lessons review before any merge; read any one in full with
 - Data safety (data-safety): 45 lessons, 26 in the core
 - External systems (external-systems): 45 lessons, 17 in the core
 - Honest failure (honest-failure): 114 lessons, 33 in the core
-- Pipeline speed (pipeline-speed): 28 lessons, 24 in the core
+- Pipeline speed (pipeline-speed): 29 lessons, 24 in the core
 - Proof over green (proof-over-green): 205 lessons, 99 in the core
 - Security and privacy (security-and-privacy): 45 lessons, 13 in the core
 - State and identity (state-and-identity): 81 lessons, 20 in the core
