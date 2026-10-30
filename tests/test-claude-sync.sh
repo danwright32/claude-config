@@ -11134,28 +11134,17 @@ _wf_n="$(printf '%s\n' "$_wf_files" | grep -c . || true)"
 check "#210 there are workflow files to check" "[ \"\${_wf_n:-0}\" -ge 1 ]"
 
 # One reader, used by the real files and by the fixtures below, so the probes exercise THIS rule
-# rather than a second one written beside it (L107). A job is a two-space key under `jobs:`, and
+# rather than a second one written beside it (L107). It is lib/workflow-job-timeout.sh, the reader
+# run-all-tests.sh also uses to hold a flake recheck to the job's own limit (#1901), so the two can
+# never disagree about what a job's timeout is (L370). A job is a two-space key under `jobs:`, and
 # its block runs to the next such key or the end of the file.
-_WF_AWK="$WORK/workflow-timeouts.awk"
-cat > "$_WF_AWK" <<'WFAWK'
-function close_job() {
-  if (job != "") printf "%s\t%s\t%s\n", FILENAME, job, (t == "" ? "NONE" : t)
-  job = ""; t = ""
-}
-/^jobs:[[:space:]]*$/ { injobs = 1; next }
-injobs && /^[^[:space:]#]/ { close_job(); injobs = 0 }
-injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
-  close_job()
-  job = $1; sub(/:$/, "", job)
-  next
-}
-injobs && job != "" && /^    timeout-minutes:[[:space:]]*[0-9]+[[:space:]]*$/ {
-  t = $2
-}
-END { close_job() }
-WFAWK
+_wf_lib="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks/lib/workflow-job-timeout.sh"
+_wf_lib_ok=0
+if [ -f "$_wf_lib" ] && . "$_wf_lib"; then _wf_lib_ok=1; fi
+check "#1901 the shared workflow timeout reader loads from $_wf_lib" "[ $_wf_lib_ok -eq 1 ]"
 _wf_jobs(){   # _wf_jobs <file>... -> "<file>\t<job>\t<minutes or NONE>" per job
-  for _wf_f in "$@"; do awk -f "$_WF_AWK" "$_wf_f"; done
+  [ "$_wf_lib_ok" -eq 1 ] || return 0
+  workflow_job_timeouts "$@"
 }
 
 # The deadline to compare against is the one THAT WORKFLOW will run under, never the one this
@@ -20448,6 +20437,8 @@ check "#409 and the Bash group still holds only its own hook" \
 # The apply direction. B now has both; B registers its OWN gate under a third matcher and does not
 # send it, then pulls something new from A. What arrives is primary and B's unsent gate is secondary.
 CLAUDE_HOME="$MGB_H" SYNC_REPO="$MGB_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
+# With its script, as a real gate has: a line naming a missing script is never installed (#1913).
+printf '#!/usr/bin/env bash\n' > "$MGB_H/hooks/editgate.sh"
 jq '.hooks.PreToolUse += [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "'"$MGB_H"'/hooks/editgate.sh"}]}]' \
   "$MGB_H/settings.json" > "$MGB_H/settings.json.new" && mv "$MGB_H/settings.json.new" "$MGB_H/settings.json"
 printf '#!/usr/bin/env bash\n' > "$MGA_H/hooks/extra.sh"
@@ -20552,6 +20543,294 @@ check "onFailure the apply really brought A's change in" \
   "[ \"\$(of_entry '$OFB_H/settings.json' other.sh)\" = '[{\"type\":\"command\",\"timeout\":5}]' ]"
 check "onFailure the apply keeps this Mac's unsent change to a field" \
   "[ \"\$(of_entry '$OFB_H/settings.json' scangate.sh | jq -r '.[0].statusMessage')\" = 'Scanning B' ]"
+
+section "== a removed or moved registration is not put back, and none is installed without its script (claude-config#1902, #1913) =="
+# Two faults in the same merge. #1902: merge_hook_blocks only ever ADDED from the secondary side, so
+# a Mac sending while it held a commit unapplied (the window that stripped onFailure twice on
+# 2026-10-29, 62f2b1c4 and 7b53f19e) put back a registration the repo had removed, and undid a move
+# to another matcher group by putting the old one back and dropping the new one. #1913: since #1899 a
+# registration with "onFailure": "block" whose script is missing refuses every call it matches, and
+# the apply could leave one: it deleted the old script in the mirror and only afterwards rewrote the
+# hooks block, and with no base it kept a local line whose script the mirror had just removed.
+unset SYNC_NO_GIT
+NRB="$WORK/norestore-bare.git"; git init -q --bare "$NRB"
+NRA_R="$WORK/norestore-repoA"; git clone -q "$NRB" "$NRA_R" 2>/dev/null
+NRA_H="$WORK/norestore-homeA"; mkdir -p "$NRA_H/hooks"
+NRB_R="$WORK/norestore-repoB"
+NRB_H="$WORK/norestore-homeB"; mkdir -p "$NRB_H/hooks"
+NR_OUT="$WORK/norestore-out"; mkdir -p "$NR_OUT"
+
+# nr_settings <home> <matcher=name,name> ... -> one PreToolUse group per argument, each hook the
+#   named script in that home's hooks folder, by its real path as Claude Code holds it
+nr_settings(){
+  local home="$1"; shift
+  python3 - "$home" "$@" <<'PY_NR'
+import json, sys
+home, specs = sys.argv[1], sys.argv[2:]
+groups = []
+for spec in specs:
+    matcher, names = spec.split("=", 1)
+    groups.append({"matcher": matcher,
+                   "hooks": [{"type": "command", "command": home + "/hooks/" + n} for n in names.split(",")]})
+json.dump({"hooks": {"PreToolUse": groups}}, open(home + "/settings.json", "w"), indent=2)
+PY_NR
+}
+# Each script's content is mostly its own name: files alike enough read to git as renames of one
+# another, and the history the apply consults then names only the new path, so the old script is
+# kept as if it were this Mac's own edit and the rename below would test nothing.
+nr_script(){
+  local home="$1" n i; shift
+  for n in "$@"; do
+    { printf '#!/usr/bin/env bash\n'; for i in 1 2 3 4 5 6 7 8 9 10; do printf '# %s line %s\n' "$n" "$i"; done; } > "$home/hooks/$n"
+  done
+}
+# nr_group_of <settings-or-fragment file> <name> -> the matcher of every group naming it, one per line
+nr_group_of(){
+  jq -r --arg c "/hooks/$2" '.hooks.PreToolUse[]? | select(any(.hooks[]?; (.command // "") | endswith($c))) | .matcher // "<none>"' "$1" 2>/dev/null
+}
+nr_sync(){ CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >"$3" 2>&1; }
+nr_pull(){ CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >"$3" 2>&1; }
+nr_fetch(){ git -C "$1" pull -q --ff-only origin "$(git -C "$1" symbolic-ref --short HEAD 2>/dev/null || echo main)" 2>/dev/null; }
+# nr_shared <clone> -> the hooks fragment the shared repo holds, as that clone last saw it, tokenized
+nr_shared(){ git -C "$1" show "origin/$(git -C "$1" symbolic-ref --short HEAD 2>/dev/null || echo main):payload/settings.hooks.json" 2>/dev/null; }
+
+# Every registration in a home's settings.json whose script, under that home, is not on disk. A
+# file of its own because the rsync stand in below runs it too, in the middle of an apply.
+NR_SHIM="$WORK/norestore-shim"; mkdir -p "$NR_SHIM"
+cat > "$NR_SHIM/dangling.sh" <<'NR_DANGLING'
+#!/usr/bin/env bash
+home="$1"
+[ -f "$home/settings.json" ] || exit 0
+jq -r '.hooks // {} | to_entries[] | .value[]? | .hooks[]? | .command // empty' "$home/settings.json" 2>/dev/null |
+while IFS= read -r cmd; do
+  case "$cmd" in *"$home/"*) ;; *) continue ;; esac
+  rest="${cmd#*"$home"/}"; rest="${rest%% *}"; rest="${rest%[\"\']}"
+  [ -f "$home/$rest" ] || printf '%s\n' "$cmd"
+done
+NR_DANGLING
+chmod +x "$NR_SHIM/dangling.sh"
+
+# A publishes the base: three Bash gates.
+nr_script "$NRA_H" keep.sh gone.sh moved.sh
+nr_settings "$NRA_H" "Bash=keep.sh,gone.sh,moved.sh"
+nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a1"
+git clone -q "$NRB" "$NRB_R" 2>/dev/null
+nr_pull "$NRB_H" "$NRB_R" "$NR_OUT/b1"
+check "#1902 B starts from the published base" \
+  "[ \"\$(nr_group_of '$NRB_H/settings.json' gone.sh)\" = Bash ] && [ \"\$(nr_group_of '$NRB_H/settings.json' moved.sh)\" = Bash ]"
+
+# A removes one gate outright and moves another to a different matcher group, and publishes. B's
+# clone is brought forward by git alone: pulled, not yet applied, the window of the incident.
+rm -f "$NRA_H/hooks/gone.sh"
+nr_settings "$NRA_H" "Bash=keep.sh" "Edit|Write=moved.sh"
+nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a2"
+nr_fetch "$NRB_R"
+check "#1902 B's payload holds the removal and the move its config has not seen" \
+  "[ -z \"\$(nr_group_of '$NRB_R/payload/settings.hooks.json' gone.sh)\" ] && [ \"\$(nr_group_of '$NRB_R/payload/settings.hooks.json' moved.sh)\" = 'Edit|Write' ]"
+
+# B reconciles: the send half runs first, with B's stale config as primary.
+nr_sync "$NRB_H" "$NRB_R" "$NR_OUT/b2"
+check "#1902 the send does not put back a registration the repo removed" \
+  "[ -z \"\$(nr_group_of '$NRB_R/payload/settings.hooks.json' gone.sh)\" ]"
+check "#1902 the send keeps a moved registration in its new group, and only there" \
+  "[ \"\$(nr_group_of '$NRB_R/payload/settings.hooks.json' moved.sh)\" = 'Edit|Write' ]"
+check "#1902 and what the shared repo holds agrees" \
+  "[ -z \"\$(nr_shared '$NRB_R' | jq -r '.. | .command? // empty' | grep gone.sh)\" ]"
+check "#1902 the apply after it leaves B with the removal and the move" \
+  "[ -z \"\$(nr_group_of '$NRB_H/settings.json' gone.sh)\" ] && [ \"\$(nr_group_of '$NRB_H/settings.json' moved.sh)\" = 'Edit|Write' ]"
+check "#1902 a gate nobody touched is still registered on both sides" \
+  "[ \"\$(nr_group_of '$NRB_R/payload/settings.hooks.json' keep.sh)\" = Bash ] && [ \"\$(nr_group_of '$NRB_H/settings.json' keep.sh)\" = Bash ]"
+
+# THE CONTROLS (L324). A registration B CHANGED itself, which the repo removed meanwhile, is B's
+# work rather than a stale copy, so it is kept: a removal never beats an unsent edit (L5). And a
+# registration B added and has not sent still goes up.
+nr_script "$NRA_H" keep2.sh
+nr_settings "$NRA_H" "Bash=keep.sh,keep2.sh" "Edit|Write=moved.sh"
+nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a3"
+nr_pull "$NRB_H" "$NRB_R" "$NR_OUT/b3"
+nr_settings "$NRA_H" "Bash=keep.sh" "Edit|Write=moved.sh"
+nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a4"
+nr_fetch "$NRB_R"
+jq --arg c "$NRB_H/hooks/keep2.sh" '(.hooks.PreToolUse[].hooks[] | select(.command == $c) | .timeout) = 42' \
+  "$NRB_H/settings.json" > "$NRB_H/settings.json.new" && mv "$NRB_H/settings.json.new" "$NRB_H/settings.json"
+nr_script "$NRB_H" mine.sh
+jq --arg c "$NRB_H/hooks/mine.sh" '.hooks.PreToolUse[0].hooks += [{type: "command", command: $c}]' \
+  "$NRB_H/settings.json" > "$NRB_H/settings.json.new" && mv "$NRB_H/settings.json.new" "$NRB_H/settings.json"
+nr_sync "$NRB_H" "$NRB_R" "$NR_OUT/b4"
+check "#1902 a registration this Mac changed itself is kept, though the repo removed it" \
+  "[ \"\$(jq -r --arg c '/hooks/keep2.sh' '[.hooks.PreToolUse[].hooks[] | select(.command | endswith(\$c)) | .timeout] | join(\",\")' '$NRB_R/payload/settings.hooks.json')\" = 42 ]"
+check "#1902 a registration this Mac added and has not sent still goes up" \
+  "[ \"\$(nr_group_of '$NRB_R/payload/settings.hooks.json' mine.sh)\" = Bash ]"
+
+# A FRAGMENT NOBODY CAN READ IS HELD, NEVER READ AS EMPTY. Both directions read an unparseable
+# settings.hooks.json as an empty block. The send then published this Mac's block over it, losing
+# whatever the shared copy held that this Mac had not applied (#300's loss by another door), and with
+# the new rule would have dropped every line it holds unchanged; the apply then merged nothing over
+# this Mac's settings.json and unregistered every line the base held. So each direction now holds the
+# block back and says so, as the send already did for an unreadable settings.json. Driven in the
+# shape it would arrive in: a broken fragment committed to the shared repo, which B takes in.
+NR_BROKEN="$WORK/norestore-broken.json"; printf 'this is not json\n' > "$NR_BROKEN"
+nr_fetch "$NRA_R"
+cp "$NR_BROKEN" "$NRA_R/payload/settings.hooks.json"
+# With an identity of its own, as every other fixture commit in this file has: a Mac makes one up
+# from its host name, and the Linux runner refuses with "Author identity unknown" (CI run
+# 40946753111 printed exactly that in the check below).
+NR_GIT_ID=(-c user.name=t -c user.email=t@t)
+NR_GIT_SAID="$(git -C "$NRA_R" "${NR_GIT_ID[@]}" commit -qm "a broken hooks fragment" -- payload/settings.hooks.json 2>&1)"
+NR_BROKEN_SHA="$(git -C "$NRA_R" rev-parse HEAD)"
+NR_GIT_SAID="$NR_GIT_SAID $(git -C "$NRA_R" push -q origin HEAD 2>&1)"
+check "#1902 (the fixture's broken commit reached the shared repo; git said: $(printf '%s' "$NR_GIT_SAID" | tr '\n' ' ' | cut -c1-300))" \
+  "nr_shared '$NRA_R' | cmp -s - '$NR_BROKEN'"
+nr_fetch "$NRB_R"
+NRB_BEFORE="$(jq -c '.hooks' "$NRB_H/settings.json")"
+nr_sync "$NRB_H" "$NRB_R" "$NR_OUT/b5"
+check "#1902 the send holds the hooks block back when the shared copy cannot be read" \
+  "nr_shared '$NRB_R' | cmp -s - '$NR_BROKEN'"
+check "#1902 and says why" \
+  "grep -q 'settings.hooks.json could not be read as JSON, so this Mac.s hooks block was NOT published over it' '$NR_OUT/b5'"
+check "#1902 and the apply leaves this Mac's hooks exactly as they were" \
+  "[ \"\$(jq -c '.hooks' '$NRB_H/settings.json')\" = '$NRB_BEFORE' ]"
+check "#1902 and the apply says why" \
+  "grep -q 'the hooks section of settings.json was left exactly as it was' '$NR_OUT/b5'"
+# Repaired in the shared repo, as a person would.
+nr_fetch "$NRA_R"
+git -C "$NRA_R" "${NR_GIT_ID[@]}" revert --no-edit "$NR_BROKEN_SHA" >/dev/null 2>&1
+git -C "$NRA_R" push -q origin HEAD 2>/dev/null
+check "#1902 (the fixture's repair reached the shared repo)" \
+  "git -C '$NRA_R' show origin/\$(git -C '$NRA_R' symbolic-ref --short HEAD):payload/settings.hooks.json | jq -e . >/dev/null"
+nr_sync "$NRB_H" "$NRB_R" "$NR_OUT/b5b"
+check "#1902 once repaired, B's registrations are all in the shared copy" \
+  "[ \"\$(nr_shared '$NRB_R' | jq -r '[.. | .command? // empty | select(endswith(\"/hooks/keep.sh\") or endswith(\"/hooks/moved.sh\") or endswith(\"/hooks/mine.sh\"))] | length')\" = 3 ]"
+
+# #1913. A registers a gate whose script it never wrote, so the payload carries the line and no
+# script. The apply must not install it, must say so, and must not then send its own refusal back
+# as a removal, which would unregister it for the Mac whose script is merely late.
+# A takes in what B sent first, as its own sync would, so its edit is made on the current block.
+nr_pull "$NRA_H" "$NRA_R" "$NR_OUT/a5"
+nr_settings "$NRA_H" "Bash=keep.sh,nofile.sh" "Edit|Write=moved.sh"
+nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a6"
+nr_pull "$NRB_H" "$NRB_R" "$NR_OUT/b6"
+check "#1913 the apply does not install a registration whose script is not on disk" \
+  "[ -z \"\$(nr_group_of '$NRB_H/settings.json' nofile.sh)\" ]"
+check "#1913 and says so, naming it" \
+  "grep -q 'nofile.sh' '$NR_OUT/b6' && grep -q 'NOT registered' '$NR_OUT/b6'"
+check "#1913 every registration B holds has its script" \
+  "[ -z \"\$('$NR_SHIM/dangling.sh' '$NRB_H')\" ]"
+nr_pull "$NRB_H" "$NRB_R" "$NR_OUT/b7"
+check "#1913 an unchanged refusal is said once, not on every pull" \
+  "! grep -q 'nofile.sh' '$NR_OUT/b7'"
+nr_sync "$NRB_H" "$NRB_R" "$NR_OUT/b8"
+check "#1913 the refusal is not sent back as a removal" \
+  "[ \"\$(nr_shared '$NRB_R' | jq -r '[.. | .command? // empty | select(endswith(\"/hooks/nofile.sh\"))] | length')\" = 1 ]"
+nr_pull "$NRA_H" "$NRA_R" "$NR_OUT/a8"
+nr_script "$NRA_H" nofile.sh
+nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a9"
+nr_pull "$NRB_H" "$NRB_R" "$NR_OUT/b9"
+check "#1913 once the script arrives the registration is installed" \
+  "[ \"\$(nr_group_of '$NRB_H/settings.json' nofile.sh)\" = Bash ]"
+
+# THE ORDER. A renames a gate, script and line together. The apply used to delete the old script in
+# the mirror while settings.json still registered it, and fix the line only afterwards, so for that
+# window a blocking gate refused every call. An rsync stand in reads settings.json after every real
+# rsync, which is exactly the window, and records any registration whose script is missing.
+NR_REAL_RSYNC="$(command -v rsync)"
+cat > "$NR_SHIM/rsync" <<NR_RSYNC
+#!/usr/bin/env bash
+"$NR_REAL_RSYNC" "\$@"; rc=\$?
+printf 'ran\n' >> "$NR_OUT/shim-ran"
+"$NR_SHIM/dangling.sh" "\${NR_WATCH_HOME:-/nonexistent}" >> "$NR_OUT/shim-dangling"
+exit \$rc
+NR_RSYNC
+chmod +x "$NR_SHIM/rsync"
+nr_pull "$NRA_H" "$NRA_R" "$NR_OUT/a9b"
+nr_script "$NRA_H" renamed.sh
+rm -f "$NRA_H/hooks/keep.sh"
+nr_settings "$NRA_H" "Bash=renamed.sh,nofile.sh" "Edit|Write=moved.sh"
+nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a10"
+: > "$NR_OUT/shim-dangling"; : > "$NR_OUT/shim-ran"
+PATH="$NR_SHIM:$PATH" NR_WATCH_HOME="$NRB_H" CLAUDE_HOME="$NRB_H" SYNC_REPO="$NRB_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >"$NR_OUT/b10" 2>&1
+check "#1913 the rsync stand in really ran during the apply" \
+  "[ -s '$NR_OUT/shim-ran' ]"
+check "#1913 the renamed gate's script really was removed and its successor installed" \
+  "[ ! -e '$NRB_H/hooks/keep.sh' ] && [ -f '$NRB_H/hooks/renamed.sh' ]"
+check "#1913 at no point in the apply was a registration left pointing at a missing script" \
+  "[ ! -s '$NR_OUT/shim-dangling' ]"
+check "#1913 and the rename landed" \
+  "[ -z \"\$(nr_group_of '$NRB_H/settings.json' keep.sh)\" ] && [ \"\$(nr_group_of '$NRB_H/settings.json' renamed.sh)\" = Bash ]"
+
+# WITH NO BASE. A Mac that has never applied cannot tell a line the other Mac removed from one it
+# added itself, so it keeps local lines, and the mirror, which holds nothing back without a base,
+# removes local scripts the shared copy lacks. Whatever the mirror leaves, no line may outlive its
+# script.
+NRC_R="$WORK/norestore-repoC"; git clone -q "$NRB" "$NRC_R" 2>/dev/null
+NRC_H="$WORK/norestore-homeC"; mkdir -p "$NRC_H/hooks"
+nr_script "$NRC_H" orphan.sh
+nr_settings "$NRC_H" "Bash=orphan.sh"
+nr_pull "$NRC_H" "$NRC_R" "$NR_OUT/c1"
+check "#1913 with no base, every registration the apply leaves has its script" \
+  "[ -z \"\$('$NR_SHIM/dangling.sh' '$NRC_H')\" ]"
+check "#1913 with no base, the arriving registrations are still installed" \
+  "[ \"\$(nr_group_of '$NRC_H/settings.json' renamed.sh)\" = Bash ]"
+
+# A SETTINGS.JSON THAT LOST ITS HOOKS IS STILL HEALED BY A PULL (#300, #409). The send's new rule
+# reads a line missing from the secondary side as removed; on the apply that side is this Mac's
+# settings.json, so the same rule there would read lines lost from it as this Mac removing them, and
+# a pull would leave it without them. Lost all at once and lost in part are both driven, since only
+# the partial loss can tell the rule from the empty side guard.
+jq '.hooks.PreToolUse |= map(select(.matcher != "Bash"))' "$NRB_H/settings.json" > "$NRB_H/settings.json.new" && mv "$NRB_H/settings.json.new" "$NRB_H/settings.json"
+nr_pull "$NRB_H" "$NRB_R" "$NR_OUT/b11"
+check "#1902 a pull puts back registrations this Mac's settings.json lost part of" \
+  "[ \"\$(nr_group_of '$NRB_H/settings.json' renamed.sh)\" = Bash ] && [ \"\$(nr_group_of '$NRB_H/settings.json' moved.sh)\" = 'Edit|Write' ]"
+jq 'del(.hooks)' "$NRB_H/settings.json" > "$NRB_H/settings.json.new" && mv "$NRB_H/settings.json.new" "$NRB_H/settings.json"
+nr_pull "$NRB_H" "$NRB_R" "$NR_OUT/b12"
+check "#1902 a pull puts back every registration when settings.json lost them all" \
+  "[ \"\$(nr_group_of '$NRB_H/settings.json' renamed.sh)\" = Bash ] && [ \"\$(nr_group_of '$NRB_H/settings.json' moved.sh)\" = 'Edit|Write' ]"
+
+# ONE MAC LOSING ITS HOOKS DOES NOT TAKE THE OTHER'S WITH THEM. A Mac whose settings.json lost its
+# hooks publishes an empty block, as it always has. The other Mac's send then meets an empty shared
+# block: read as the repo removing every line it holds unchanged, the drop would publish that and
+# its own apply would empty it too. An empty secondary side drops nothing, so it publishes its block
+# back instead.
+nr_pull "$NRA_H" "$NRA_R" "$NR_OUT/a13"
+jq 'del(.hooks)' "$NRA_H/settings.json" > "$NRA_H/settings.json.new" && mv "$NRA_H/settings.json.new" "$NRA_H/settings.json"
+nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a14"
+check "#1902 a Mac that lost its hooks publishes an empty block (the case below is real)" \
+  "[ \"\$(nr_shared '$NRA_R' | jq -r '[.. | .command? // empty] | length')\" = 0 ]"
+nr_fetch "$NRB_R"
+nr_sync "$NRB_H" "$NRB_R" "$NR_OUT/b14"
+check "#1902 the other Mac keeps its registrations" \
+  "[ \"\$(nr_group_of '$NRB_H/settings.json' renamed.sh)\" = Bash ] && [ \"\$(nr_group_of '$NRB_H/settings.json' moved.sh)\" = 'Edit|Write' ]"
+check "#1902 and publishes them back" \
+  "[ \"\$(nr_group_of <(nr_shared '$NRB_R') renamed.sh)\" = Bash ]"
+
+# A SECOND HALF THAT FAILS SAYS WHAT THE FIRST HALF ALREADY DID (#1913, from the lessons review).
+# The first half can take lines out before the mirror runs; if the second half then cannot write the
+# block, "left exactly as it was" is no longer true, and the person needs the copy from before the
+# pull. Driven by an rsync stand in that breaks settings.json right after the real hooks mirror, the
+# one moment between the two halves.
+nr_pull "$NRA_H" "$NRA_R" "$NR_OUT/a15"
+rm -f "$NRA_H/hooks/moved.sh"
+nr_settings "$NRA_H" "Bash=renamed.sh,nofile.sh"
+nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a16"
+cat > "$NR_SHIM/rsync" <<NR_RSYNC_BREAK
+#!/usr/bin/env bash
+"$NR_REAL_RSYNC" "\$@"; rc=\$?
+dry=""; for a in "\$@"; do case "\$a" in --dry-run|-[!-]*n*) dry=1 ;; esac; done
+last="\${@: -1}"
+if [ -z "\$dry" ] && [ "\$last" = "\$NR_WATCH_HOME/hooks/" ]; then printf 'broken by the test\n' > "\$NR_WATCH_HOME/settings.json"; printf 'broke\n' >> "$NR_OUT/shim-broke"; fi
+exit \$rc
+NR_RSYNC_BREAK
+chmod +x "$NR_SHIM/rsync"
+: > "$NR_OUT/shim-broke"
+PATH="$NR_SHIM:$PATH" NR_WATCH_HOME="$NRB_H" CLAUDE_HOME="$NRB_H" SYNC_REPO="$NRB_R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >"$NR_OUT/b15" 2>&1
+check "#1913 (the stand in broke settings.json between the two halves)" \
+  "[ -s '$NR_OUT/shim-broke' ]"
+check "#1913 a second half that fails says the first half already took lines out" \
+  "grep -q 'already taken out' '$NR_OUT/b15'"
+check "#1913 and does not claim settings.json was left as it was" \
+  "! grep -q 'left exactly as it was' '$NR_OUT/b15'"
+check "#1913 and the copy from before the pull it names is there" \
+  "jq -e '.hooks' '$NRB_H/settings.json.syncbak' >/dev/null"
 
 section "== a fixed failure can be cleared, by the command the message names (claude-config#305) =="
 # record_hook_suite_result is written by hook_suite_verdict and by nothing else, and that runs only

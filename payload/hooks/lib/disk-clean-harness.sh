@@ -11,8 +11,8 @@
 # fixed path: a suite beside disk-remove.sh as "$DIR/lib/disk-clean-harness.sh", and a suite in the
 # skill's own folder as "$DIR/../../hooks/lib/disk-clean-harness.sh", the way the disk-full suite
 # reaches lib/suite-deadline.sh. Not in payload/skills/disk-clean/tests/: claude-sync refuses to
-# carry, and reports on every send, a skills folder with no SKILL.md, and the skill's SKILL.md is
-# phase #1808. Its own suite is hooks/test-disk-clean-harness.sh.
+# carry, and reports on every send, a skills folder with no SKILL.md, and the folder is the skill's
+# own (#1808). Its own suite is hooks/test-disk-clean-harness.sh.
 #
 # USE, in a suite:
 #
@@ -20,12 +20,15 @@
 #   dc_setup || exit 1                 # sets an EXIT trap running dc_cleanup when none is set
 #   dc_stub du 'printf "12\t%s\n" "$2"'   # give a stub behaviour; "$@" is what it was called with
 #   dc_run bash "$SCRIPT" --plan "$DC_HOME/plan.txt"
+#   dc_stub find 'exit 1'              # stand in for a core tool on DC_STANDIN_CORE, for one case
+#   dc_unstub find                     # and give the core tool back
 #   dc_calls du                        # every recorded call to du, one per line, args %q quoted
 #   dc_refusals                        # every write the guard refused (expect none)
 #   dc_check_commands                  # the static command check, over the scripts present
 #
 # WHAT dc_run GUARANTEES the command it runs, and what it does not (L463):
-#   PATH     exactly "$DC_STUBS:$DC_CORE". DC_STUBS holds one stub per name on DC_STUB_NAMES;
+#   PATH     exactly "$DC_STUBS:$DC_CORE". DC_STUBS holds one stub per name on DC_STUB_NAMES, and a
+#            stand in for a core tool on DC_STANDIN_CORE only while a test has written one;
 #            DC_CORE holds the tools on DC_CORE_TOOLS, linked from /bin or /usr/bin only, never
 #            Homebrew, so both Macs and CI run the same binaries. Nothing else is reachable by name.
 #   HOME     "$DC_HOME", and the working directory too, inside "$DC_ROOT", a directory this harness
@@ -71,6 +74,13 @@ DC_GUARDED_TOOLS="rm rmdir mkdir touch mv cp ln chmod tee sed find"
 # judge and derived-data-sweep are not system tools: they are what disk-remove.sh's two seams below
 # stand for, a category's judge and hooks/derived-data-sweep.sh (#1805).
 DC_STUB_NAMES="trash lsof du df docker git gh ps pgrep open pbcopy tmutil brew sudo xcodebuild osascript judge derived-data-sweep"
+# Core tools a test may stand in for, for one case, with dc_stub, and give back with dc_unstub
+# (#1907). Unlike a name on DC_STUB_NAMES no stand in exists until a test writes one, so the core
+# tool runs by default: every category reads the disk with find, and only a stand in can produce the
+# find that fails because a file went between two reads, a race no test can time. A stand in is
+# test code in place of the guarded wrapper, so one that must still write calls "$DC_CORE/<tool>".
+# Never on DC_STUB_NAMES too: the command check reads these calls as core.
+DC_STANDIN_CORE="find"
 # VAR=stub pairs: a variable the code under test calls a tool through, pointed at that stub.
 #   DISK_CLEAN_TRASH               /usr/bin/trash, which ignores HOME and uses the real ~/.Trash
 #   DISK_CLEAN_JUDGE               the category module disk-remove.sh runs as `<module> judge <path>`
@@ -139,9 +149,9 @@ dc_cleanup() {
 # fails loudly rather than reading an empty success (L98).
 dc_stub() { # <name> [<body>]
   local name="${1:-}" body
-  case " $DC_STUB_NAMES " in
+  case " $DC_STUB_NAMES $DC_STANDIN_CORE " in
     *" $name "*) ;;
-    *) echo "dc_stub: '$name' is not on DC_STUB_NAMES in $DC_LIB/disk-clean-harness.sh; add it there, where the command check reads it" >&2; return 2 ;;
+    *) echo "dc_stub: '$name' is not on DC_STUB_NAMES or DC_STANDIN_CORE in $DC_LIB/disk-clean-harness.sh; add it there, where the command check reads it" >&2; return 2 ;;
   esac
   [ -n "${DC_STUBS:-}" ] && [ -d "$DC_STUBS" ] || { echo "dc_stub: dc_setup has not run" >&2; return 2; }
   if [ $# -ge 2 ]; then body="$2"; else
@@ -153,6 +163,17 @@ dc_stub() { # <name> [<body>]
     printf '%s\n' "$body"
   } > "$DC_STUBS/$name"
   chmod +x "$DC_STUBS/$name"
+}
+
+# Give back what dc_stub replaced: a core tool on DC_STANDIN_CORE runs again, and a name on
+# DC_STUB_NAMES gets back the stub that refuses, never the real tool.
+dc_unstub() { # <name>
+  local name="${1:-}"
+  [ -n "${DC_STUBS:-}" ] && [ -d "$DC_STUBS" ] || { echo "dc_unstub: dc_setup has not run" >&2; return 2; }
+  case " $DC_STANDIN_CORE " in *" $name "*) rm -f "$DC_STUBS/$name"; return ;; esac
+  case " $DC_STUB_NAMES " in *" $name "*) dc_stub "$name"; return ;; esac
+  echo "dc_unstub: '$name' is not on DC_STUB_NAMES or DC_STANDIN_CORE in $DC_LIB/disk-clean-harness.sh" >&2
+  return 2
 }
 
 dc_calls() { # [<name>]

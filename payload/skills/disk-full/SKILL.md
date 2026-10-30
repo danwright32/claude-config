@@ -272,6 +272,11 @@ over the same interval (step 4 says why `du`'s growth alone can be no growth at 
 
 ## Deleting anything
 
+To clear space once the cause is known, point Dan to `/disk-clean`, which he types himself: it
+scans the caches, build folders, the Trash and forgotten files that can go, shows them on one review
+page where he ticks what goes, and removes them through `disk-remove.sh` with the result checked by
+`df`. What follows is for the few things this sequence found by path that the scan does not cover.
+
 Everything above is read only on purpose, except two deleting commands: the clearing command in
 step 6, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 7, which
 the low space warning runs on its own (Dan's decision of 2026-10-20) and which by hand runs only
