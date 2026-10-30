@@ -14,7 +14,12 @@ back.
 - `payload/agents/` — the `plan-*` agents
 - `payload/commands/` — slash commands
 - `payload/mods/`: Claude Code mods, each a plugin folder, loaded on **both** Macs (see Mods below)
-- `payload/settings.hooks.json`: **only** the `hooks` block of `settings.json`
+- `payload/settings.hooks.json`: **only** the `hooks` block of `settings.json`, merged three ways
+  in both directions rather than copied (DESIGN.md, "The hooks block is merged in BOTH directions").
+  A pull never leaves a line naming a script that is not on disk, even for the seconds it takes: it
+  takes out the lines the shared copy dropped before the scripts move, and puts the new ones in
+  after. A line whose script is still missing is left out, said once, and logged; the shared config
+  keeps it, and the first pull that finds the script registers it (#1913)
 - `payload/settings.shared.json`: the few other `settings.json` settings both Macs share, today
   `ultracode` (off since 2026-10-06), the effort level per model, as
   `modelSettings.<full model name>.effortLevel` (`high` for `claude-opus-5-5`), and
@@ -1784,11 +1789,22 @@ Two things the timing showed that no timeout could:
   declared ceiling is for the case where it asks.
 
 A scanner that already passed on exactly this tree and these uncommitted files is not run again
-(#531). Measured on 2026-09-21: 14.0 seconds cold, 0.6 seconds when nothing it reads has changed.
+(#531). The key is the commit's tree plus a digest of every file that differs from it on disk: a
+tracked file edited, staged or deleted, a staged addition, and an untracked file (`repo-files.sh
+--changed`). Until #1910 it left out tracked files edited and not committed, which the scanners read
+from disk, so a pass reached before such an edit let the next push skip scanning the edited file. Measured on 2026-09-21: 14.0 seconds cold, 0.6 seconds when nothing it reads has changed.
 That saving lands on a REPEAT attempt, a push blocked by another gate and tried again, because a
 push that follows a fresh commit changes the tree and pays in full. Only a pass is remembered, so a
 failure is never skipped past, and the gate says when it scanned nothing rather than reporting zero
 scans as a clean run.
+
+The record of passes is a folder per repository under `~/.claude/state/scanners-passed/`, holding one
+file per tree, and a push adds its passes to its tree's file rather than writing over it (#1910). It
+was one file per repository, rewritten by every push, and worktrees of one repository share it, so
+two worktrees pushing in turn erased each other's passes and each ran again scans that had already
+passed on its own tree. The merge is written beside the file and renamed over it, under a lock, so a
+push writing at the same moment never loses a pass. A tree's file nobody has added to for a day is
+removed by the next write. A pass that could not be written is said, and the next push runs it again.
 
 The gate stops itself at a budget of 150 seconds, inside the 180 its registration declares (#1881).
 Claude Code lets a tool call through when it kills a PreToolUse hook at its timeout (its hooks
@@ -1811,6 +1827,13 @@ checkout stops it and starts again; another checkout's runs are left alone. Push
 finish: a push still goes through only once every scanner has passed on exactly what it carries. As
 with any pass, one read by a push in which another scanner failed or measured nothing is not
 remembered, so the push after it runs that scanner again.
+
+When the files that differ from the commit cannot be listed, a scanner still running at the budget
+is STOPPED, not left running (#1910). A run left going is worth something only because a later push
+can count its verdict, and without that listing nothing says what it read, so no push could ever count
+it. The refusal says so, says that a retry cannot help a scanner slower than the budget until the
+listing works, and gives the command that shows why it fails. The same is said, in its own words,
+when the lock library or the folder for runs is missing.
 
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
@@ -3641,6 +3664,7 @@ defined answer for being absent or untrustworthy.
 | `.last-received` | an apply that wrote at least one file | `claude-sync status` | same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block, since that is regenerated from whatever payload is present, including one this Mac just staged itself |
 | `.hook-tests` | any run that reached a verdict on the hook suite it installed: `pull`, `sync`, the reconcile `send` falls through to, or `apply-only` | `claude-sync status`, in this clone and in any other clone on this Mac | absent means nothing has verified anything here yet and status says nothing, since it reports what needs attention. A record that will not parse is reported as unreadable, never as a pass. A pass is silent; every other outcome keeps its own wording, so a suite that FAILED and one that could NOT be run stay apart. It also carries how many suites ran and how many could not, with `?` where the runner's report could not be read, which is never written as zero. Since #218 it carries the measured wall clock too, and a PASS is no longer silent: it reports how long that run took against the deadline it is given, and says so plainly when it has used over half of it, so a suite outgrowing `SYNC_HOOK_TESTS_TIMEOUT` shows up as headroom shrinking rather than as a timeout on the day it runs out. A record written before that field existed says no duration was recorded, which is never folded into being within budget |
 | `.resurrected-reported` | a send that refused to publish a leftover copy back over a deletion, and was told to keep it with `SYNC_ACCEPT_DELETIONS=0`, and a pull that kept such a copy for the same reason (#1013); and a send that published a deleted file back as this Mac's own work (lines starting `publishing`, #1022) | that same refusal, and that same "publishing" line, to say each once per file rather than on every edit. With the default, which removes the leftover, there is nothing left to repeat and nothing is written for it | absent means nothing has been refused here, which is the normal state. Each line is the path AND a digest of its content, so a file that CHANGES is a new decision and is reported again, and a file the person deletes or edits stops matching. Losing it costs one repeated message and nothing else, which is why it is not treated as important state |
+| `.hooks-refused` | every apply that merged the hooks block, removed when nothing is refused (#1913) | the send, which takes a line refused here for one this Mac has not seen yet rather than one it removed, so the refusal is never published as a deletion; and the apply, to say each refusal once | absent means no line is being left out for want of its script, which is the normal state. Losing it while a line is refused costs one repeated message, and lets the next send read that line as removed here |
 | `.unloadable-notified` | every send and apply, recording which skills folders each cannot load notice (not sent, not applied, kept local files a send will refuse) last named, an empty set included | those same notices, to post the desktop notification only when a folder is new to the set (claude-config#968) | absent or unreadable means the next notice is posted, which is the safe side: a repeated notification is noise, a missing one is a broken skill nobody hears about. Stale costs at most one skipped notification for a folder already named. A `.unloadable-notified.XXXXXX` beside it is a write that died before its rename, and is ignored |
 | `.ci-unreadable-since` | the automatic pull, the first time it cannot read whether the shared repo's head passed its tests | that same gate, to decide when to stop waiting for an answer that is not coming | absent means the last verdict was readable, whatever it said, which is the normal state. It holds when the condition started and, once expired, when that was first reported, so the alert is raised on the transition rather than on every edit. Any readable verdict removes it, including a red one, because those mean the lookup is working. Expiring does NOT remove it: once the verdict is judged unobtainable, config keeps arriving until the lookup works again, since restarting the clock would deliver config in three hour bursts. A value that will not parse is treated as the condition starting now, which errs toward waiting rather than toward applying unjudged config |
 | `.behind-skips` | a watcher send that found itself behind and whose reconcile did not clear it | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, and the escalation that tells you once rather than on every edit | absent means sending is not stuck, which is the normal state and is said by saying nothing. It holds the count, the moment the run of skips started, the moment of the last one, when the reconcile was last attempted, and why that attempt did not clear it (#1398), which is what the notice gives as the reason; a record from before that last field reads as the general reason it always gave. Any run that gets through removes it, and so does a send that put this Mac's changes up on top of a shared commit still being tested, so the count is a measurement of the current state rather than a total that only grows. A count that will not parse is counted from zero again by the next skip, and until then status and the notice say the record could not be read, never that sending is stuck and never nothing |
