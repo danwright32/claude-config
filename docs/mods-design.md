@@ -2185,6 +2185,28 @@ not settled by either and are waiting on Dan; until he decides, the build does t
     messages Claude wrote in this Mac's transcripts to 2026-10-27: 20 hold two or more, and every
     one of the 20 hands Dan steps (a Pipedream run to open, a script to paste and deploy, a token
     to make). One such line alone, or a numbered plan of Claude's own work, does not count.
+- **A file edit handed over, told by how it closes** (#1955). On 2026-10-30 two Pivot hand offs
+  asked Dan to edit a local file and report back ("Put allow or forbid in the third column and save,
+  then tell me."; a numbered list ending "Save the file (Cmd+S). Tell me it's done.") and neither
+  fired, since neither named a command, a page or a terminal. Measured with the matcher itself over
+  the 15,216 messages Claude wrote in this Mac's transcripts of the 30 days to 2026-10-30, outside
+  the temp folders, every hit read:
+
+  | Phrase | Hits | Real | False | Kept |
+  |---|---|---|---|---|
+  | ", then tell me", not after will, would, should or 'll said of anyone but you | 4 | 4 | 0 | yes |
+  | "Tell me it's done" (or that it's saved, finished, in place) leading a sentence | 1 | 1 | 0 | yes |
+  | "press Cmd+S", "with Cmd+S", "(Cmd+S)", case kept and the plus required | 5 | 5 | 0 | yes |
+  | "Save the file", "Save your changes" leading a sentence | 0 | 0 | 0 | yes: the issue's own wording |
+  | "(Command S" matched without case or the plus | 3 | 0 | 3 | no: "(commands, git and writes)" |
+  | edit, mark, put, write or type leading a sentence, naming a file, line, row or column | 3 | 0 | 3 | no: Claude's own plan ("Write the file less often") |
+  | "save" alone leading a sentence | 3 | 0 | 3 | no: Claude's own bullet, a Save button |
+  | "and save" anywhere | 2 | 0 | 2 | no: a Save correction button |
+
+  Together the kept ones fire in 5 messages none of the earlier phrases did, all 5 steps for Dan,
+  and stop none from firing. None counts inside a quotation, after I or we in its sentence (a report
+  of an edit Claude made itself, "I saved it with Cmd+S"), or after when, if, before, once and the
+  like ("when you press Cmd+S", a key described rather than handed over).
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On

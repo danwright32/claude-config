@@ -247,6 +247,55 @@ describe('waitingPhrase', () => {
   })
 })
 
+// #1955: two hand offs in a Pivot session on 2026-10-30 asked Dan to edit a local file and report
+// back, naming no command, page or terminal, and neither fired. Quoted from the issue as written,
+// its elision included; the numbered one is also given as the list it was.
+describe('a file edit handed to Dan, closed by asking to be told (#1955)', () => {
+  const COLUMN = 'Put allow or forbid in the third column and save, then tell me.'
+  const FLAT = "On each word's line, after the number, type one of two words ... Save the file (Cmd+S). Tell me it's done."
+  const LIST = "1. On each word's line, after the number, type one of two words ...\n2. Save the file (Cmd+S).\n3. Tell me it's done."
+
+  test('both messages from the issue fire', () => {
+    expect(waitingPhrase(COLUMN)).toBe(', then tell me')
+    expect(waitingPhrase(FLAT)).toBe('Save the file')
+    expect(waitingPhrase(LIST)).toBe('Save the file')
+  })
+
+  // Each shape on its own, paraphrased from what it fired on over the 30 days to 2026-10-30.
+  test('each new shape fires alone', () => {
+    for (const [said, phrase] of [
+      ["Tell me it's done and I'll make the changes.", "Tell me it's done"],
+      ['3. Tell me that it is saved.', 'Tell me that it is saved'],
+      ['Leave the token line alone, save with Cmd+S, then run the check again.', 'with Cmd+S'],
+      ['Then press Cmd+S to save.', 'press Cmd+S'],
+      ['Check the panel is saved (Cmd+S) before you deploy.', '(Cmd+S'],
+      ['Go ahead whenever you are ready, then tell me what the sheet shows.', ', then tell me'],
+      ['Save your changes and close the editor.', 'Save your changes'],
+    ] as const)
+      expect(waitingPhrase(said)).toBe(phrase)
+  })
+
+  // A report of an edit Claude made itself, or a key described rather than handed over, is no step.
+  test('a file Claude edited itself, or a save described, passes', () => {
+    for (const said of [
+      'I edited config.json and saved it; the tests pass.',
+      'I pressed Cmd+S in the editor and the file saved.',
+      "I've saved the file with Cmd+S and rerun the scan.",
+      'The app now saves the draft when you press Cmd+S.',
+      'If you press Cmd+S twice, the second save is skipped.',
+      'The watcher will wait for CI, then tell me when it merges.',
+      "The builder should push, then tell me it's done.",
+      '- save the written text first, and check the save worked before undoing anything;',
+      'Save and Remove refuse to act if the entry no longer holds the name.',
+      "Don't tell me it's done until the second run is green.",
+      'The draft read "Save the file (Cmd+S), then tell me" before I changed it.',
+      // A word that begins with "Command", in brackets: the first measurement fired on this 3 times.
+      "The table is a snapshot of the reader's output (commands, git and writes).",
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+  })
+})
+
 // #1811: numbered steps handed to Dan in a reply. Measured on 2026-10-27 over the 19,420 messages
 // Claude wrote in this Mac's transcripts: 20 held two or more numbered lines that begin with something
 // a person does at a screen, and every one of the 20 was steps for Dan. One such line alone, or
