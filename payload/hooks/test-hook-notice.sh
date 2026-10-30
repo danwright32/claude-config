@@ -174,6 +174,7 @@ STDERR = re.compile(r'(^|[^0-9&<])1?>&2(?![0-9])')
 EXIT0 = re.compile(r'^\s*exit(\s+0)?\s*(;;|;|\)|\}|$)')
 SAME = re.compile(r'>&2(?![0-9])[^#]*?(;|&&)\s*exit(\s+0)?\s*(;;|;|\}|\)|$)')
 HEREDOC = re.compile(r'<<-?\s*[\'"]?([A-Za-z_][A-Za-z0-9_]*)[\'"]?')
+OWN_EXIT = re.compile(r'>&2(?![0-9])[^#]*?(;|&&)\s*exit\s+[1-9]')
 for path in sys.argv[1:]:
     try:
         lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
@@ -188,6 +189,10 @@ for path in sys.argv[1:]:
         here = i
         if SAME.search(line):
             print("%s:%d: %s" % (path, here + 1, s[:160])); i += 1; continue
+        # A stderr write that its own line closes with a refusal (`|| { ...>&2; exit 2; }`) is
+        # followed by that exit, whatever the next line does.
+        if OWN_EXIT.search(line):
+            i += 1; continue
         m = HEREDOC.search(line)
         j = i + 1
         if m:
@@ -241,6 +246,8 @@ exit 0
 cmd 2>/dev/null
 exit 0
 echo "refused" >&2; exit 2
+encode || { printf '%s\n' "$1" >&2; exit 2; }
+exit 0
 SH
 [ -z "$(scan "$WORK/clean.sh")" ] && ok || bad "#1906 control: the scan flagged a refusal, a notice through the library or a silenced command: $(scan "$WORK/clean.sh")"
 

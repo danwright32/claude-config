@@ -6,6 +6,8 @@ export type DesignRoundSubject = {
   label: string
   /** A builder's worktree-agent branch: where a skip on it is also kept, its worktree's own key (#1740, rules.ts worktreeKey). */
   carryTo?: string
+  /** On a builder's worktree-agent branch, the project's name, so the skip question can name the issue it works on instead (#1904, rules.ts namedByIssue). */
+  repo?: string
   /** An issue a linked worktree's branch names: the worktree's own key, whose skip counts when the issue has no answer (#1740). */
   carriedFrom?: string
 }
@@ -22,7 +24,7 @@ export type DesignRoundPending = {
   subjects: DesignRoundSubject[]
   /** The checkouts its files are in, so Dan's Settled about it is for that project, never the session's folder (#1010). */
   trees: string[]
-  /** The call itself, as rules.ts callKey knows it, so the same call sent again is recognised after Not a look change. */
+  /** The call itself, as rules.ts callKey knows it, so the same call sent again is recognised after Not a look or wording change. */
   key: string
   /** The call written out whole (rules.ts callText), which a pass must match exactly, the key being a hash. */
   call: string
@@ -30,7 +32,7 @@ export type DesignRoundPending = {
   agent?: true
 }
 
-/** Dan's Not a look change for one refused call (#1010), kept in the mod's store under `pass:<its key>`. */
+/** Dan's Not a look or wording change for one refused call (#1010), kept in the mod's store under `pass:<its key>`. */
 export type DesignRoundPass = {
   kind: 'not-look'
   /** When he answered, in milliseconds since the epoch. */

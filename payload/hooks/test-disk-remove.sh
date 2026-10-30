@@ -9,7 +9,7 @@
 # ~/.Trash. Every refusal is aimed at a sentinel in a second throwaway directory OUTSIDE the
 # harness's, standing in for the real Mac, so a refusal that fails destroys only that (L5).
 #
-# DR_UNDER_TEST names another copy of disk-remove.sh to run, with its two libraries beside it, so a
+# DR_UNDER_TEST names another copy of disk-remove.sh to run, with its three libraries beside it (predicates, record, units), so a
 # deliberately broken copy can be shown to fail these tests (L1).
 set -uo pipefail
 
@@ -45,6 +45,13 @@ gone() { { [ -e "$1" ] || [ -L "$1" ]; } && echo "$1 is still there" || echo ok;
 . "$DIR/lib/disk-clean-harness.sh" || { check "the harness is there to source" "could not source it"; finish; }
 . "$DIR/lib/disk-clean-record.sh" || { check "the record library is there to source" "could not source it"; finish; }
 check "disk-remove.sh is there to run" "$([ -f "$DR" ] && echo ok || echo "missing: $DR")"
+# Size words and Docker sizes have one copy, lib/disk-clean-units.sh, which disk-clean's scan reads
+# too (#1806), so a removal reports a size the way the scan offered it. Its functions are tested in
+# skills/disk-clean/test-disk-clean-scan.sh; the Docker and report cases below run them through here.
+. "$DIR/lib/disk-clean-units.sh" || check "lib/disk-clean-units.sh is there to source" "could not source it"
+check "disk-remove.sh sources lib/disk-clean-units.sh rather than keeping its own copy" \
+  "$(grep -qF '. "$LIB/disk-clean-units.sh"' "$DR" && grep -qF 'dcu_docker_kib "$(build_cache_kib)"' "$DR" && echo ok || echo "it does not source it, or does not read the build cache's size through dcu_docker_kib")"
+check "the units library writes sizes as disk-remove reports them" "$(eq "$(dcu_human 1572864)" "1.6 GB")"
 dc_setup || { check "the harness sets up" "dc_setup failed"; finish; }
 
 # Outside the harness's root: the stand in for the real Mac.
@@ -392,7 +399,7 @@ record s1 10; plan "$H/plan" s1 r1 r2
 run --plan "$H/plan"
 check "a truncated log is still there" "$(there "$H/w/run.log")"
 check "and empty" "$(eq "$(wc -c < "$H/w/run.log" | tr -d ' ')" 0)"
-check "and reported truncated with what it freed" "$(has "$OUT_TEXT" "truncated  $H/w/run.log  (49 KB freed")"
+check "and reported truncated with what it freed" "$(has "$OUT_TEXT" "truncated  $H/w/run.log  (50 KB freed")"
 check "truncate never runs the open check, since the point is a file held open" "$(hasnt "$(calls_of lsof)" run.log)"
 check "a folder is skipped by truncate" "$(has "$(grep -F "$H/w/logdir" <<< "$OUT_TEXT")" "truncate empties a single file")"
 check "the record marks it truncated" "$(has "$(grep '"id":"r1"' "$STATE/last-scan.json")" '"state":"truncated"')"
@@ -593,6 +600,7 @@ check "--propose with one refusal among its paths exits 5" "$(eq "$RC" 5)"
 check "it offers the folder Dan named" "$(has "$OUT_TEXT" "offered  $H/Downloads/old-installer")"
 check "it refuses a deny listed path at once, before any plan" "$(has "$OUT_TEXT" "refused  $H/Library/Mobile Documents/x/doc: never removed:")"
 check "it refuses a path that is not there" "$(has "$OUT_TEXT" "refused  $H/w/not-there: it is not there")"
+check "an offered size is in words by the one size rule, dcu_human (12 KiB)" "$(has "$OUT_TEXT" "offered  $H/Downloads/old-installer  ($(dcu_human 12), to trash)")"
 named_plan="$(sed -n 's/^Plan: \([^ ]*\) .*/\1/p' <<< "$OUT_TEXT")"
 check "it writes a plan and names it" "$([ -n "$named_plan" ] && [ -f "$named_plan" ] && echo ok || echo "said: $OUT_TEXT")"
 check "and names the command that removes them" "$(has "$OUT_TEXT" "bash ~/.claude/hooks/lib/disk-remove.sh --plan $named_plan")"
@@ -615,6 +623,16 @@ run --propose shred "$H/w/swap"
 check "--propose with a method it does not offer is refused with exit 2" "$(eq "$RC" 2)"
 run --propose truncate "$H/Downloads"
 check "--propose truncate of a folder refuses it" "$(has "$OUT_TEXT" "refused")"
+
+# Each size branch of measure, against dcu_human: under a MB, under a GB in decimal MB (1000 KiB is
+# 1 MB, never 1000 KB), and past a GB.
+mkdir -p "$H/Downloads/sized"; printf 'x\n' > "$H/Downloads/sized/f"
+for sz in 999 1000 976562 1048576; do
+  dc_stub du "for a in \"\$@\"; do case \"\$a\" in -*) ;; *) printf \"$sz\\t%s\\n\" \"\$a\" ;; esac; done"
+  run --propose trash "$H/Downloads/sized"
+  check "an offered size of $sz KiB reads as dcu_human writes it" "$(has "$OUT_TEXT" "offered  $H/Downloads/sized  ($(dcu_human "$sz"), to trash)")"
+done
+dc_stub du 'for a in "$@"; do case "$a" in -*) ;; *) printf "12\t%s\n" "$a" ;; esac; done'
 
 # ================================================================================================
 # 17. Inode reuse (claude-config#1840, L1032): a file created where a removed one was can be given

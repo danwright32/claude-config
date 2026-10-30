@@ -60,6 +60,7 @@ import json
 import os
 import re
 import subprocess
+import io
 import sys
 
 sys.dont_write_bytecode = True
@@ -447,4 +448,4 @@ def main(argv, stdin_text, github=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv, sys.stdin.read()))
+    sys.exit(main(sys.argv, io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()))

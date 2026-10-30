@@ -86,7 +86,16 @@
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+{ . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && declare -F ps_parse_payload >/dev/null; } || {
+  # A library this gate cannot load is not a push with nothing to check (claude-config#1900, L10):
+  # with it missing nothing here can tell a push from any other command, so a command naming one
+  # is refused, naming the file, and any other passes as it would have.
+  payload="$(cat)"
+  case "$payload" in *SKIP_BUNDLE_BUDGET_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *push*) ;; *) exit 0 ;; esac
+  echo "BLOCKED: check-bundle-budget.sh could not load $HOOK_DIR/lib/push-scope.sh, which reads whether this command pushes and what it carries, so this command could not be checked. A library this gate cannot load is not a push with nothing to check. Reinstall the hooks with claude-sync pull. For this one command: SKIP_BUNDLE_BUDGET_CHECK=1 <the same command>" >&2
+  exit 2
+}
 
 # What it says on a push it lets through, a skip or a verdict, goes out as ONE systemMessage
 # (lib/hook-notice.sh, #1906). It used to be plain stdout, which the hooks documentation says a

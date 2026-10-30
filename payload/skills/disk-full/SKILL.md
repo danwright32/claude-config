@@ -57,7 +57,7 @@ until zero, or why it states no rate yet (the first reading, readings too close 
 that has not yet lasted 30 minutes, free space having gone back up, or not falling at all). It
 projects only space that has stayed gone for 30 minutes, because a build or pre push check takes a
 few GB and gives it back within minutes (#1754). Judge it by the exit code, not the wording:
-0 means there is room and no fall reaching zero within six hours was measured (with no rate stated, nothing about the trend was measured yet), 3 under the 20 GB floor, 4 falling fast
+0 means there is room and no fall reaching zero within six hours was measured (with no rate stated, nothing about the trend was measured yet), 3 under the floor (FREE_SPACE_FLOOR_GB, 20 GiB, which the warning writes in decimal units as 21.5 GB), 4 falling fast
 enough to reach zero within six hours, and 2 that it could not measure, which is not the same as
 fine. When it says no rate yet, take the next reading on a later turn, ten or more minutes on,
 rather than waiting inside a command.
@@ -271,6 +271,11 @@ disk; a folder growing between two readings is, once `df` shows the disk lost ab
 over the same interval (step 4 says why `du`'s growth alone can be no growth at all).
 
 ## Deleting anything
+
+To clear space once the cause is known, point Dan to `/disk-clean`, which he types himself: it
+scans the caches, build folders, the Trash and forgotten files that can go, shows them on one review
+page where he ticks what goes, and removes them through `disk-remove.sh` with the result checked by
+`df`. What follows is for the few things this sequence found by path that the scan does not cover.
 
 Everything above is read only on purpose, except two deleting commands: the clearing command in
 step 6, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 7, which

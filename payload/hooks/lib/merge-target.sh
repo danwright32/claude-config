@@ -119,8 +119,10 @@
 # caller's folder (claude-config#1104, test-lib-self-locate.sh).
 _MT_LIB="${BASH_SOURCE[0]%/*}"; [ "$_MT_LIB" != "${BASH_SOURCE[0]}" ] || _MT_LIB=.
 _MT_LIB="$(cd "${_MT_LIB:-/}" && pwd)"
+# Missing, this file does not load either (claude-config#1900). It carried on before, so every gate
+# sourcing it read it as loaded, then found no ps_ function to ask, read no merge, and allowed it.
 # shellcheck source=push-scope.sh
-. "$_MT_LIB/push-scope.sh"
+{ . "$_MT_LIB/push-scope.sh" && declare -F ps_parse_payload >/dev/null; } || return 1
 
 # THE ONE DECLARATION of a repo's own merge tool. Every question anybody asks about
 # these tools is answered from here.

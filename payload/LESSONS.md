@@ -6222,6 +6222,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   stores and fail when any goes unreported.**
   (bidspoke#2777, 2026-10-25)
   SHORT: A scanner's canary proves it ran, not that its rules see your credential shapes; a pinned version ages, so plant one canary per shape you store.
+- **L824. A redaction keyed on a field's NAME misses the same secret stored under any other name,
+  so redact by where the value came from (a secret variable, a credential reference), and test it
+  with a secret under a name the list does not hold.**
+  (bidspoke#3063, 2026-10-29)
+  SHORT: Redaction keyed on a field's NAME misses a secret under any other name; redact by the value's source, and test with an unlisted name.
 
 ## UX completeness
 - **L803. A search box over people's or places' names must fold accents on both the query and the
@@ -7539,6 +7544,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
 
 ## External systems
+- **L825. In a Next.js app, delete a cookie with both Max-Age=0 and an Expires date in the past, and confirm the delete in a real browser, because Next re-parses Set-Cookie and drops a zero Max-Age, leaving an empty session cookie that unit tests read as deleted.**
+  (slate#4410, 2026-10-29)
+  SHORT: In Next.js delete a cookie with Max-Age=0 AND a past Expires, checked in a browser: Next drops a zero Max-Age.
 - **L819. Connecting two managed services (a database pool like Hyperdrive and a host like Supabase) follows the integration guide written for that exact pair before any setting is chosen, because the host's default connection string is often the one the guide says not to use, and the wrong choice works under light load and hangs under real concurrency.**
   (pivot#126, 2026-10-28)
   SHORT: Wire two managed services by the guide for that exact pair; the host's default string can work lightly and hang under concurrency.

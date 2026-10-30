@@ -288,6 +288,15 @@ printf '%s\n' "RE='(retry|retries|backoff)'" > "$WORK/payload/hooks/new-gate.sh"
 planted="$(grep -r -n -E -i 'retr(y|ies)[|]|[|]backoff|catch\[\[:space:\]\]|except\[\[:space:\]' "$WORK/payload" --include='*.sh')"
 if [ -n "$planted" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the copy guard did not find a planted word list"; fi
 
+# A byte that is not UTF-8 on a line ABOVE the code (claude-config#1900). Under a UTF-8 locale macOS
+# awk stops with an error at the first pattern that scans such a byte, so the catch below it was
+# never read and the file was not listed: the test gate then never asked for a failure path test.
+printf -- '--- /dev/null\n+++ b/src/byte.ts\n@@ -0,0 +1,3 @@\n+// caf\xff note\n+try { await send() }\n+catch (e) { return [] }\n' > "$WORK/bytediff"
+got="$(LC_ALL=en_US.UTF-8 fh_files < "$WORK/bytediff" | tr '\n' ' ')"
+if [ "$got" = "src/byte.ts " ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: with a byte that is not UTF-8 above it, fh_files listed [$got], expected [src/byte.ts ]"; fi
+printf '// caf\xff note\ncatch (e) { return [] }\n' > "$WORK/bytelines"
+if LC_ALL=en_US.UTF-8 fh_catch src/byte.ts "$WORK/bytelines"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: fh_catch should fire below a byte that is not UTF-8"; fi
+
 # Every gate that asks the question reads the lib (L261): the advisory, the push gate, the review.
 for caller in lessons-advisory.sh require-tests-before-push.sh lib/ai-review-run.py; do
   if grep -q 'failure-handling.sh' "$DIR/$caller"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $caller does not read lib/failure-handling.sh"; fi

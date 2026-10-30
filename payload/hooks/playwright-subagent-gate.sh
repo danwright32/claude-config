@@ -44,7 +44,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 verdict="$(printf '%s' "$payload" | python3 -c '
 import json, re, sys
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception as e:
     print("unreadable\t" + type(e).__name__); sys.exit()
 if not isinstance(d, dict):

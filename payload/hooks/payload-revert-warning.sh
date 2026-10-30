@@ -47,9 +47,15 @@ set -uo pipefail
 
 # The questions about a checkout, from the library the payload write gate shares, so the two
 # cannot come to two different answers about whether a hold is in force (claude-config#367, L370).
+#
+# A library it cannot load is not a checkout with nothing to say (claude-config#1900, L10). It was
+# sourced with `|| exit 0`, so with it missing this hook said nothing in any checkout, which reads
+# exactly as one nothing can revert. Now the state is "could not check", said once per session in
+# this hook's own notice, naming the file.
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SC_LOADED=0
 # shellcheck source=lib/sync-clone.sh
-. "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null || exit 0
+{ . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null && declare -F sc_hold_covers >/dev/null; } && SC_LOADED=1
 
 input="$(cat 2>/dev/null || true)"
 
@@ -64,10 +70,13 @@ input="$(cat 2>/dev/null || true)"
 . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+# Read as jq reads it, so a prompt holding a byte that is not UTF-8 is read rather than raising and
+# leaving the session unknown (claude-config#1900).
 read -r session cwd <<< "$(printf '%s' "$input" | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 try:
-    d = json.loads(sys.stdin.read())
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     d = {}
 print((d.get("session_id") or d.get("transcript_path") or "-"), (d.get("cwd") or "-"))
@@ -75,6 +84,22 @@ print((d.get("session_id") or d.get("transcript_path") or "-"), (d.get("cwd") or
 [ "$cwd" = "-" ] && cwd="$PWD"
 if [ "$session" = "-" ] || [ -z "$session" ]; then
   hook_allow_notice "payload-revert-warning: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and nothing was said."
+fi
+
+key="$(printf '%s' "$session" | shasum | cut -c1-12)"
+STATE_DIR="${CLAUDE_PAYLOAD_WARN_STATE_DIR:-${TMPDIR:-/tmp}}"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+STATE="$STATE_DIR/claude-payload-revert-${key}.state"
+
+# With the library missing nothing below can be asked, not even whether this is a checkout, so it
+# says that it could not check, once per session, the way every other state is said.
+if [ "$SC_LOADED" -ne 1 ]; then
+  state="no-library $HOOK_DIR/lib/sync-clone.sh"
+  previous="$(cat "$STATE" 2>/dev/null || true)"
+  printf '%s\n' "$state" > "$STATE" 2>/dev/null || true
+  [ "$state" = "$previous" ] && exit 0
+  echo "claude-sync: payload-revert-warning.sh could not load lib/sync-clone.sh from $HOOK_DIR/lib, so whether a watch daemon could overwrite edits to a development checkout's payload/ was not checked this session. That is not the same as nothing being at risk. The payload write gate refuses a call naming payload/ for the same reason until the library is back. Reinstall the hooks with: claude-sync pull"
+  exit 0
 fi
 
 # ---------------------------------------------------------------------------
@@ -144,11 +169,6 @@ else
   others="$(sc_hold_others "$sid" | tr '\n' ' ')"
   if hold_live; then state="held $root $clone"; else state="warn $root $clone${others:+ $others}"; fi
 fi
-
-key="$(printf '%s' "$session" | shasum | cut -c1-12)"
-STATE_DIR="${CLAUDE_PAYLOAD_WARN_STATE_DIR:-${TMPDIR:-/tmp}}"
-mkdir -p "$STATE_DIR" 2>/dev/null || true
-STATE="$STATE_DIR/claude-payload-revert-${key}.state"
 
 previous="$(cat "$STATE" 2>/dev/null || true)"
 # Recorded BEFORE speaking, so a notice cannot repeat itself if anything below fails: the safe

@@ -68,7 +68,7 @@ sys.stdout.write(json.dumps({"tool_input":{"command":"git push"},"cwd":os.enviro
     printf '%s' "$out" | python3 -c '
 import json, sys
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     raise SystemExit
 for line in d["hookSpecificOutput"]["additionalContext"].splitlines():

@@ -80,7 +80,7 @@ case "${BASH_SOURCE[0]}" in */*) RFC_DIR="${BASH_SOURCE[0]%/*}" ;; *) RFC_DIR=. 
 fields="$(printf '%s' "$input" | python3 -c '
 import json, sys
 try:
-    d = json.loads(sys.stdin.read())
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     d = {}
 def one(v):
