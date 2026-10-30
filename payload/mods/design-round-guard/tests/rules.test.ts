@@ -1062,6 +1062,71 @@ test("#1925: an answer's description and label, which Dan reads in the picker, a
   expect(judged('(named: string)', '(named: string, _first = true)')).toBe('passes')
 })
 
+// #1934: the question a mod hands AskUserQuestion through next(), and the header above it, are
+// words Dan reads in the picker as surely as its answers (#1925), but reached no message the check
+// read, so rewording one passed unless the same words were also said elsewhere. A question is an
+// object in a `questions` list, or one with a `question` beside its `options`: its question and header
+// read as a message's words. Cut down from the guard's own rules.ts and register.ts (asked) as they
+// stood after #1925, with a tool whose schema names question and header properties beside them.
+const Q_RULES_TS = [
+  "export const HEADER = 'Design round'",
+  "export const SKIP_QUESTION = 'Skip design rounds for this issue?'",
+  'export const skipQuestion = (named: string) => `${SKIP_QUESTION} It changes ${named}.`',
+  'export const TOOL_SPEC = {',
+  "  name: 'ask_dan',",
+  "  description: 'Ask Dan a question about a design round.',",
+  '  inputSchema: {',
+  "    type: 'object',",
+  '    properties: {',
+  "      question: { type: 'string', description: 'The question to put to him.' },",
+  "      header: { type: 'string', description: 'A short header above it.' },",
+  '    },',
+  '  },',
+  '}',
+  'export type Asked = { questions: { question: string; header: string }[] }',
+  '',
+].join('\n')
+const Q_REGISTER_TS = [
+  "import type { EngineInterface } from 'claude-code'",
+  "import { HEADER, skipQuestion } from './rules.ts'",
+  'type Next = (e: object) => Promise<{ result?: { questions?: { question?: unknown }[] } }>',
+  'export const askSkip = async ($: EngineInterface, next: Next, named: string) => {',
+  '  const asked = async (question: string, options: { label: string; description: string }[]) => {',
+  '    const r = await next({ questions: [{ question, header: HEADER, options, multiSelect: false }] })',
+  '    return r.result?.questions?.[0]?.question === question',
+  '  }',
+  '  return asked(skipQuestion(named), [])',
+  '}',
+  "export const askSettled = (next: Next) => next({ questions: [{ question: 'Is this design settled?', header: 'Settled', multiSelect: false }] })",
+  "export const askOne = (next: Next) => next({ question: 'Keep this answer?', options: [] })",
+  '',
+].join('\n')
+test("#1934: a question's text and header, which Dan reads in the picker, are held as wording, in the file asking it or the one it is worded in; a tool's schema naming them still passes", () => {
+  const edited = (text: string, from: string, to: string) => {
+    const after = text.replace(from, to)
+    if (after === text) throw new Error(`no ${from}`)
+    return after
+  }
+  const inRegister = (from: string, to: string) => holdOf([{ name: 'rules.ts', text: Q_RULES_TS }], 'register.ts', Q_REGISTER_TS, edited(Q_REGISTER_TS, from, to))
+  const inRules = (from: string, to: string) => holdOf([{ name: 'register.ts', text: Q_REGISTER_TS }], 'rules.ts', Q_RULES_TS, edited(Q_RULES_TS, from, to))
+  // A question and header written where it is asked, in a questions list or beside options.
+  expect(inRegister('Is this design settled?', 'Is the design settled?')).toBe('worded')
+  expect(inRegister("header: 'Settled'", "header: 'Design settled'")).toBe('worded')
+  expect(inRegister('Keep this answer?', 'Keep that answer?')).toBe('worded')
+  // One handed in as a parameter (asked's `question`), worded in another file, and the header's constant.
+  expect(inRules("'Skip design rounds for this issue?'", "'Skip the design rounds for this issue?'")).toBe('worded')
+  expect(inRules('It changes ${named}.', 'It would change ${named}.')).toBe('worded')
+  expect(inRules("HEADER = 'Design round'", "HEADER = 'Design rounds'")).toBe('worded')
+  // The refusal names the words it held for.
+  const hold = modHookTsHold([{ name: 'rules.ts', text: Q_RULES_TS }], 'register.ts', Q_REGISTER_TS, edited(Q_REGISTER_TS, 'Is this design settled?', 'Is the design settled?'))
+  expect(hold && 'worded' in hold ? hold.worded : '').toContain('Is the design settled?')
+  // A tool's schema describing question and header properties, read only by Claude, passes.
+  expect(inRules('The question to put to him.', 'The question to ask him.')).toBe('passes')
+  expect(inRules('A short header above it.', 'A header above it.')).toBe('passes')
+  // So does the logic around the question.
+  expect(inRegister('multiSelect: false }] })\n    return', 'multiSelect: true }] })\n    return')).toBe('passes')
+})
+
 // #1859: a hold made only because a message's words changed said the edit "changes how the screen
 // looks", and a shell write's that it "changed what the mod draws", claiming more than the check
 // measured (L11). The check says why it held (modHookTsHold), naming the words, and every refusal,
