@@ -156,6 +156,89 @@ bad_json="$(ps_parse_payload 'not json at all' segmented 2>/dev/null)"; bad_rc=$
   && check "a payload that does not parse does not answer with a command" ok \
   || check "a payload that does not parse does not answer with a command" "rc=$bad_rc out=[$bad_json]"
 
+# ---------------------------------------------------------------------------
+# A lone surrogate escape (claude-config#1944). jq 1.7.1 rejects a WHOLE payload holding one, such
+# as \ud800 with no low half after it, so every gate reading the payload with jq read nothing and
+# six merge gates let gh pr merge through. The reader swaps each lone one for \ufffd before anything
+# parses the text, the rule #1900 applied to a byte that is not UTF-8. The payloads are written as
+# literal JSON text here, since that is the only place the escape exists.
+# ---------------------------------------------------------------------------
+lone='{"tool_name":"Bash","tool_input":{"command":"gh pr merge 5 --squash","description":"cut \ud800 here"},"cwd":"/tmp/x"}'
+# Measured first, so a red below is about the reader and not about this machine's jq (L411).
+if printf '%s' "$lone" | jq -e . >/dev/null 2>&1; then
+  echo "SUITE-PART-UNMEASURED #1944 this machine's jq reads a lone surrogate escape, so the fault the reader exists for is not shown here"
+else
+  check "this machine's jq rejects a lone surrogate escape (the fault #1944 is about)" ok
+fi
+declare -F ps_clean_payload >/dev/null && declare -F ps_read_payload >/dev/null \
+  && check "#1944 the library defines ps_clean_payload and ps_read_payload" ok \
+  || check "#1944 the library defines ps_clean_payload and ps_read_payload" "missing"
+lone_parsed="$(ps_parse_payload "$lone" raw 2>/dev/null)"; lone_rc=$?
+[ "$lone_rc" -eq 0 ] && [ "${lone_parsed%%$'\x1f'*}" = "gh pr merge 5 --squash" ] \
+  && check "#1944 ps_parse_payload reads a payload holding a lone surrogate escape" ok \
+  || check "#1944 ps_parse_payload reads a payload holding a lone surrogate escape" "rc=$lone_rc out=[$lone_parsed]"
+read_back="$(printf '%s' "$lone" | ps_read_payload 2>/dev/null)"
+printf '%s' "$read_back" | jq -e . >/dev/null 2>&1 \
+  && check "#1944 ps_read_payload hands back a payload jq parses" ok \
+  || check "#1944 ps_read_payload hands back a payload jq parses" "got [$read_back]"
+[ "$(printf '%s' "$read_back" | jq -r '.tool_input.description' 2>/dev/null)" = "cut $(printf '\xef\xbf\xbd') here" ] \
+  && check "#1944 the lone escape becomes U+FFFD and nothing else moves" ok \
+  || check "#1944 the lone escape becomes U+FFFD and nothing else moves" "got [$read_back]"
+
+# clean_case <description> <input> <expected output>: ps_clean_payload with whichever readers PATH
+# holds, so each case is run under both halves of the reader below.
+clean_case() {
+  local got; got="$(ps_clean_payload "$2" 2>/dev/null)"
+  [ "$got" = "$3" ] && check "$1" ok || check "$1" "got [$got] want [$3]"
+}
+clean_cases() { # clean_cases <which reader>
+  clean_case "#1944 ($1) a lone high half becomes \\ufffd" 'a\ud800b' 'a\ufffdb'
+  clean_case "#1944 ($1) a lone low half becomes \\ufffd" 'a\udc00b' 'a\ufffdb'
+  clean_case "#1944 ($1) a high half followed by a non low escape becomes \\ufffd, and the escape after it stays" 'a\uD83D\u0041' 'a\ufffd\u0041'
+  clean_case "#1944 ($1) a whole pair stays a pair" 'a\ud83d\ude00b' 'a\ud83d\ude00b'
+  clean_case "#1944 ($1) a pair in capitals stays a pair" 'a\uD83D\uDE00b' 'a\uD83D\uDE00b'
+  clean_case "#1944 ($1) an escaped backslash before ud800 is text, not an escape" 'a\\ud800b' 'a\\ud800b'
+  clean_case "#1944 ($1) three backslashes are an escaped one and then an escape" 'a\\\ud800b' 'a\\\ufffdb'
+  clean_case "#1944 ($1) a low half after an escaped high half's text is still lone" 'a\\ud800\udc00' 'a\\ud800\ufffd'
+  clean_case "#1944 ($1) two lone halves in a row are two replacements" '\udc00\ud800' '\ufffd\ufffd'
+  clean_case "#1944 ($1) text with no escape at all is handed back untouched" '{"a":"b \\ c"}' '{"a":"b \\ c"}'
+  # A byte that is not UTF-8 beside the escape: python3 leaves it as it was, for the next reader to
+  # replace as #1900 settled, and jq reading the text raw replaces it with U+FFFD itself, which is
+  # what jq parsing it would have done. Either way it is never dropped and never refused.
+  local bytes want="$2"; bytes="$(printf 'x\xff\\ud800')"
+  [ "$(ps_clean_payload "$bytes" | od -An -tx1 | tr -d ' \n')" = "$want" ] \
+    && check "#1944 ($1) a byte that is not UTF-8 beside the escape is kept or made U+FFFD" ok \
+    || check "#1944 ($1) a byte that is not UTF-8 beside the escape is kept or made U+FFFD" "got $(ps_clean_payload "$bytes" | od -An -tx1 | tr -d ' \n') want $want"
+}
+clean_cases "default PATH" 78ff5c7566666664
+# Each reader on its own: a machine holding only jq, and one holding only python3, both still read
+# the payload, so neither half may depend on the other (ps_reader_missing jq python3).
+SCOPE_TOOLS="$(mktemp -d "${TMPDIR:-/tmp}/psclean.XXXXXXXX")"
+mkdir -p "$SCOPE_TOOLS/jq-only" "$SCOPE_TOOLS/py-only"
+for t in cat od tr; do
+  ln -s "$(command -v "$t")" "$SCOPE_TOOLS/jq-only/$t"
+  ln -s "$(command -v "$t")" "$SCOPE_TOOLS/py-only/$t"
+done
+ln -s "$(command -v jq)" "$SCOPE_TOOLS/jq-only/jq"
+ln -s "$(command -v python3)" "$SCOPE_TOOLS/py-only/python3"
+PATH="$SCOPE_TOOLS/jq-only" clean_cases "jq alone" 78efbfbd5c7566666664
+PATH="$SCOPE_TOOLS/py-only" clean_cases "python3 alone" 78ff5c7566666664
+only_jq="$(PATH="$SCOPE_TOOLS/jq-only" ps_parse_payload "$lone" raw 2>/dev/null)"
+[ "${only_jq%%$'\x1f'*}" = "gh pr merge 5 --squash" ] \
+  && check "#1944 with jq alone the payload holding the escape is read" ok \
+  || check "#1944 with jq alone the payload holding the escape is read" "got [$only_jq]"
+# A big payload carrying many escaped backslashes and many lone escapes is read quickly by either
+# half: the cleaning runs only when the text could hold one, and then once over the whole text.
+big="$(python3 -c 'import json; print(json.dumps({"tool_input": {"command": "echo x", "content": "a\\\\b \ud800 " * 20000}}))')"
+for big_path in "$PATH" "$SCOPE_TOOLS/jq-only" "$SCOPE_TOOLS/py-only"; do
+  t0=$SECONDS
+  big_out="$(PATH="$big_path" ps_parse_payload "$big" raw 2>/dev/null)"
+  [ "${big_out%%$'\x1f'*}" = "echo x" ] && [ $((SECONDS - t0)) -le 5 ] \
+    && check "#1944 ($big_path) a payload of 20,000 escaped backslashes and 20,000 lone escapes is read within 5 seconds" ok \
+    || check "#1944 ($big_path) a payload of 20,000 escaped backslashes and 20,000 lone escapes is read within 5 seconds" "took $((SECONDS - t0))s, got [${big_out:0:80}]"
+done
+rm -rf "$SCOPE_TOOLS"
+
 # And nothing may keep a private copy. Derived from the files rather than from a list
 # of the hooks somebody remembered, because a copy added later is exempt from exactly
 # the check meant to catch it (L96).
