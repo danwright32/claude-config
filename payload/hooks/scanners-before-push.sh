@@ -425,11 +425,22 @@ _sc_runs="$_sc_work/runs"
 # and the shared rule for a run recorded moments ago (lib/recorded-pid.sh, claude-config#1909).
 # Without either, nothing could stop two pushes each starting a copy, so runs are stopped at the
 # budget.
+# Each is loaded and judged on its own, so a refusal names the one that is missing (#1910, L11). The
+# record of passes needs only the lock itself, so it asks _sc_have_pidlock.
 _sc_have_lock=""
+_sc_have_pidlock=""
+_sc_lock_lib_missing=""
 # shellcheck source=lib/pid-lock.sh
-. "$HOOK_DIR/lib/pid-lock.sh" 2>/dev/null && command -v take_pid_lock >/dev/null 2>&1 \
-  && . "$HOOK_DIR/lib/recorded-pid.sh" 2>/dev/null && command -v recorded_pid_young >/dev/null 2>&1 \
-  && _sc_have_lock=1
+if . "$HOOK_DIR/lib/pid-lock.sh" 2>/dev/null && command -v take_pid_lock >/dev/null 2>&1; then
+  _sc_have_pidlock=1
+else
+  _sc_lock_lib_missing="$HOOK_DIR/lib/pid-lock.sh"
+fi
+# shellcheck source=lib/recorded-pid.sh
+if ! { . "$HOOK_DIR/lib/recorded-pid.sh" 2>/dev/null && command -v recorded_pid_young >/dev/null 2>&1; }; then
+  _sc_lock_lib_missing="${_sc_lock_lib_missing:+$_sc_lock_lib_missing and }$HOOK_DIR/lib/recorded-pid.sh"
+fi
+[ -z "$_sc_lock_lib_missing" ] && _sc_have_lock=1
 # `mkdir -p` is asked, then the folder is looked at, so a push that loses the race to make it with
 # another push at the same moment still finds it there and is not left without one.
 [ -n "$_sc_key" ] && mkdir -p "$_sc_state_dir/runs/$_sc_repo_key" 2>/dev/null
@@ -443,7 +454,7 @@ elif [ -z "$_sc_key" ]; then
   _sc_detach_fix="To see why the listing fails, run:
     bash $REPO_FILES --changed $_sc_checkout"
 elif [ -z "$_sc_have_lock" ]; then
-  _sc_detach_why="$HOOK_DIR/lib/pid-lock.sh could not be loaded, and without its lock two pushes could each start a copy"
+  _sc_detach_why="$_sc_lock_lib_missing could not be loaded, and without it two pushes could each start a copy"
   _sc_detach_fix="Reinstall the hooks with claude-sync pull."
 else
   _sc_detach_why="the folder for runs left going, $_sc_state_dir/runs/$_sc_repo_key, could not be made"
@@ -927,7 +938,7 @@ _sc_record_merge(){   # -> 0 once the tree's file holds every pass it held and t
 _sc_record_unwritten=""
 if [ -z "$failed" ] && [ -z "$unmeasured" ] && [ -n "$_sc_key" ] && [ -n "$_sc_passed_now" ]; then
   _sc_record_why=""
-  if [ -z "$_sc_have_lock" ]; then
+  if [ -z "$_sc_have_pidlock" ]; then
     _sc_record_why="the record is written only under the lock lib/pid-lock.sh gives, and it could not be loaded"
   elif ! mkdir -p "$_sc_record_dir" 2>/dev/null; then
     _sc_record_why="its folder, $_sc_record_dir, could not be made"

@@ -1312,12 +1312,16 @@ treefire "$R1910e" "git push" >/dev/null
 #     refusal says why, in words naming the cause (claude-config#1910, L11). With no key, left
 #     running, its verdict could never be matched to what a later push carries, so it would be load with no
 #     reader; stopped without a word, the slow scanner is refused on every retry and nobody is told
-#     a retry cannot help. Each cause is played by a copy of the gate missing one thing it needs.
-nokey_hooks(){   # $1 = folder  $2 = listing (the uncommitted listing fails), lock (no lock library), or state (both there)
+#     a retry cannot help. Each cause is played by a copy of the gate missing exactly one thing it
+#     needs, and every library it loads is copied in otherwise: a copy missing a second one, as
+#     happened when #1928 added lib/recorded-pid.sh to what the gate loads, names that cause instead.
+#     So each case also checks that the refusal names none of the OTHER causes.
+nokey_hooks(){   # $1 = folder  $2 = the one thing missing: listing (the listings of what is not committed fail), pidlock or recorded (that lock library is absent), or state (nothing; the state folder is made bad by the caller)
   mkdir -p "$1/lib"
   cp "$H" "$1/scanners-before-push.sh"
   cp "$DIR/lib/push-scope.sh" "$DIR/lib/load-average.sh" "$1/lib/"
-  [ "$2" = lock ] || cp "$DIR/lib/pid-lock.sh" "$1/lib/"
+  [ "$2" = pidlock ] || cp "$DIR/lib/pid-lock.sh" "$1/lib/"
+  [ "$2" = recorded ] || cp "$DIR/lib/recorded-pid.sh" "$1/lib/"
   if [ "$2" = listing ]; then
     cat > "$1/lib/repo-files.sh" <<EOF
 #!/usr/bin/env bash
@@ -1328,8 +1332,13 @@ EOF
     cp "$DIR/lib/repo-files.sh" "$1/lib/"
   fi
 }
-nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 = a state folder]
-  local hooks="$TMPROOT/nokey-$1-hooks" repo hold out rc pid
+# What the refusal says for each cause, and so must not say for any other.
+NOKEY_MARKS="repo-files.sh --changed
+lib/pid-lock.sh could not be loaded
+lib/recorded-pid.sh could not be loaded
+could not be made"
+nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 = a state folder, whose runs folder it must name too]
+  local hooks="$TMPROOT/nokey-$1-hooks" repo hold out rc pid mark others=""
   nokey_hooks "$hooks" "$2"
   repo="$(mkrepo "nokey$1")"; hold="$TMPROOT/hold-nokey-$1"; : > "$hold"
   add_held_scanner "$repo" "nk$1" "$hold" 0; commit_all "$repo"
@@ -1337,19 +1346,27 @@ nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 =
          fire "$repo" "git push")"; rc=$?
   note_held "nk$1"
   pid="$(cat "$TMPROOT/nk$1.pid" 2>/dev/null)"
+  while IFS= read -r mark; do
+    case "$3" in *"$mark"*) continue ;; esac
+    grep -q -F "$mark" <<< "$out" && others="$others [$mark]"
+  done <<< "$NOKEY_MARKS"
   if [ "$rc" -eq 2 ] && [ -n "$pid" ] && hang_wait "! kill -0 $pid 2>/dev/null" \
      && grep -q 'stopped rather than left running' <<< "$out" && grep -q -F "$3" <<< "$out" \
-     && grep -q 'a retry stops them' <<< "$out"; then
-    check "#1910 when a run cannot be left running ($2), it is stopped at the budget and the refusal says why, naming $3" ok
+     && grep -q 'a retry stops them' <<< "$out" && [ -z "$others" ] \
+     && { [ -z "${4:-}" ] || grep -q -F "$4/runs/" <<< "$out"; }; then
+    check "#1910 when a run cannot be left running ($2), it is stopped at the budget and the refusal says why, naming $3 and no other cause" ok
   else
-    check "#1910 when a run cannot be left running ($2), it is stopped at the budget and the refusal says why, naming $3" "exit=$rc pid=${pid:-none} out=$out"
+    check "#1910 when a run cannot be left running ($2), it is stopped at the budget and the refusal says why, naming $3 and no other cause" "exit=$rc pid=${pid:-none} other causes named:${others:- none} out=$out"
   fi
   rm -f "$hold"
 }
 nokey_case listing listing 'repo-files.sh --changed'
-nokey_case lock lock 'lib/pid-lock.sh'
+nokey_case pidlock pidlock 'lib/pid-lock.sh could not be loaded'
+nokey_case recorded recorded 'lib/recorded-pid.sh could not be loaded'
+# The state folder is a path under a FILE, so it can never be made. The message names the runs
+# folder inside it and says it could not be made.
 : > "$TMPROOT/nokey-notafolder"
-nokey_case state state "$TMPROOT/nokey-notafolder/state" "$TMPROOT/nokey-notafolder/state"
+nokey_case state state 'could not be made' "$TMPROOT/nokey-notafolder/state"
 
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a
