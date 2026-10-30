@@ -1935,7 +1935,10 @@ const readMod = (f: ModFile): ModRead | null => {
     outer.push([o, c])
     if (blank[o] !== '{' || /\bproperties\s*:\s*$/.test(blank.slice(Math.max(0, o - 40), o)) || statementAt(o)?.isType) continue
     const after = blank.slice(c + 1, c + 4).trimStart()
-    if (/^=(?![=>])/.test(after) || (list && blank[list[0]] === '(' && after.startsWith(':'))) continue
+    // A parameter list is one an arrow, a return type or a body follows; a call's parentheses holding
+    // a conditional (`pick(c ? { label } : x)`) are none (lessons review at 1380fed).
+    const params = !!list && blank[list[0]] === '(' && /^(?:=>|:|\{)/.test(blank.slice(list[1] + 1, list[1] + 40).trimStart())
+    if (/^=(?![=>])/.test(after) || (params && after.startsWith(':'))) continue
     const fields = new Map<string, Span>()
     let from = o + 1
     for (let j = o + 1; j <= c; j++) {

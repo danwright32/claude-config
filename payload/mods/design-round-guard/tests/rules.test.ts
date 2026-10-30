@@ -1029,6 +1029,7 @@ const ANSWERS_TS = [
   '  { label: SKIP_YES, description: `Edits that change the look go ahead on ${named} without a design round` },',
   "  { label: 'Run /design-rounds', description: 'Nothing that changes the look is edited until you settle a design round' },",
   ']',
+  "export const onlyOne = (c: boolean, pick: (o?: object) => object) => pick(c ? { label: SKIP_YES, description: 'Only this answer is shown' } : undefined)",
   'export const askAgain = ($: EngineInterface, next: (e: object) => Promise<unknown>) =>',
   "  next({ questions: [{ question: 'Is this design settled?', options: [{ value: 'yes', description: 'Edits that change the look go ahead' }] }] })",
   '',
@@ -1045,6 +1046,8 @@ test("#1925: an answer's description and label, which Dan reads in the picker, a
   expect(judged('go ahead on ${named} without', 'go ahead on ${named} with no')).toBe('worded')
   expect(judged("label: 'Run /design-rounds'", "label: 'Start /design-rounds'")).toBe('worded')
   expect(judged("export const SKIP_YES = 'Skip them'", "export const SKIP_YES = 'Skip the rounds'")).toBe('worded')
+  // An answer given by a conditional inside a call's parentheses, which is no parameter's pattern.
+  expect(judged('Only this answer is shown', 'Only this one answer is shown')).toBe('worded')
   // An answer in an options list, which names no label of its own.
   expect(judged("description: 'Edits that change the look go ahead' }", "description: 'Edits to the look go ahead' }")).toBe('worded')
   // The refusal names the words it held for.
