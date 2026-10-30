@@ -72,9 +72,9 @@ sys.stdout.write("\x1f".join([s(d.get("cwd")), s(d.get("session_id")), s(r.get("
 }
 
 # The words that open the minor findings of a lessons review, which are advisory and need no fix
-# round (claude-config#1356). Defined once here: lib/pr-review.sh writes them, and the push and merge
-# gates (mt_review_allowed in lib/merge-target.sh) find them in an allow, to hand the advisory to the
-# session and to Dan rather than print it where neither sees it.
+# round (claude-config#1356). Defined once here, and lib/pr-review.sh writes them. The push and merge
+# gates once looked for them to decide which allows to hand to the session and to Dan; since #1924
+# they hand over every allow (mt_review_allowed in lib/merge-target.sh), so nothing reads them there.
 AR_ADVISORY_LEAD="Advisory, minor findings:"
 # The words that open a refusal's request to step back after three rounds of findings
 # (claude-config#1358), which lib/pr-review.sh writes and lib/merge-when-ready.sh looks for.

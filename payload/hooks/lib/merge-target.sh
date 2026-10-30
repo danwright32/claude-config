@@ -372,24 +372,25 @@ MTEOF
   return 0
 }
 
-# What the push and merge gates print when the lessons review ALLOWS (claude-config#1356). A
-# PreToolUse hook's plain stdout on an allow is shown to neither the session nor Dan, so an allow
-# carrying minor findings, which are advisory and need no fix round, is handed over as JSON: the
-# session reads it as additionalContext and Dan sees it as a systemMessage. It decides nothing about
-# the command (no permissionDecision), so the other hooks and Dan's own confirmation still apply.
-# Every other allow is printed as before. The words that mark an advisory are AR_ADVISORY_LEAD, read
-# from lib/ai-review-common.sh, which lib/pr-review.sh writes them from; should that file not load,
-# every allow is handed over, since showing a verdict twice costs less than hiding an advisory.
+# What the push and merge gates print when the lessons review ALLOWS (claude-config#1356, #1924). A
+# PreToolUse hook's plain stdout on an allow is shown to neither the session nor Dan, so every allow
+# is handed over as JSON: the session reads it as additionalContext and Dan sees it as a
+# systemMessage. It decides nothing about the command (no permissionDecision), so the other hooks
+# and Dan's own confirmation still apply.
+#
+# Every allow, not only one carrying minor findings, which until #1924 was the only one handed over
+# while the rest were printed plain, to the debug log. That choice was reversed rather than kept,
+# because the other allows carry words meant to be read: one says its findings each repeat an
+# answered one and lists them "so an answer that no longer holds can still be acted on", one says
+# the findings were already read by a key, and the clean one, "finished with 0 findings", is the only
+# thing that tells a review that ran and passed from a gate that never ran (L98). They come once per
+# gated push or merge, not once per prompt, so they are not the noise L36 warns of.
 # The JSON is built by lib/hook-notice.sh, which needs neither jq nor python3 (#1906). It used to
 # fall back to stderr with exit 1 without them, and the gates calling this carry onFailure block,
 # which refuses the call on exit 1. Exits the hook, 0.
 mt_review_allowed() {   # $1 = the gate's name, $2 = the review's verdict
-  local text="$1: $2" lead="${AR_ADVISORY_LEAD:-}"
-  [ -n "$lead" ] || { . "$_MT_LIB/ai-review-common.sh" 2>/dev/null; lead="${AR_ADVISORY_LEAD:-}"; }
-  if [ -n "$lead" ]; then
-    case "$2" in *"$lead"*) ;; *) printf '%s\n' "$text"; exit 0 ;; esac
-  fi
-  # The object alone, with nothing on stderr, as before: the verdict is the whole of what it says.
+  local text="$1: $2"
+  # The object alone, with nothing on stderr: the verdict is the whole of what it says.
   if . "$_MT_LIB/hook-notice.sh" 2>/dev/null; then
     hook_notice_json "$text" PreToolUse
   else

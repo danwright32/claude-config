@@ -20,6 +20,12 @@
 # Notification and SessionEnd as discarding it. So it is for PreToolUse, PostToolUse,
 # UserPromptSubmit, SessionStart, Stop and the like, never for those five.
 #
+# THAT RESTS ON THE DOCUMENTATION, NOT ON A SESSION WATCHED (claude-config#1924). Three things it
+# relies on have not yet been seen in a real session: that a UserPromptSubmit systemMessage is shown
+# to the person, that several PreToolUse hooks each giving a systemMessage on one call are all shown,
+# and (issue-spool-session-end.sh) that SessionEnd stderr with exit 2 is shown at /clear. Until they
+# are, the documentation is the source; when one is seen, record here what was seen and when.
+#
 # THE RULES IT KEEPS, each a way the call it allows could otherwise be refused once the hook carries
 # onFailure block (the documentation lists invalid output among the failures):
 #   * stdout holds exactly one JSON object, so a hook calls this once, as its last word, and has

@@ -301,6 +301,21 @@ case "$out_nolib" in
   *"claude-sync pull"*) check "#1900 and says how to restore it" ok ;;
   *)                    check "#1900 and says how to restore it" "out=$out_nolib" ;;
 esac
+# Said to the person as well as the session (#1924). A UserPromptSubmit hook's plain stdout reaches
+# Claude as context and shows the person nothing, so stdout is one JSON object: the notice as a
+# systemMessage, and the same text as the prompt's additionalContext, which the session read before.
+. "$DIR/lib/hook-notice.sh"
+why_nolib="$(hook_notice_verdict "$out_nolib" 'could not load lib/sync-clone\.sh')"
+[ -z "$why_nolib" ] && check "#1924 the could not check notice is a systemMessage the person sees" ok \
+  || check "#1924 the could not check notice is a systemMessage the person sees" "$why_nolib"
+ctx_nolib="$(printf '%s' "$out_nolib" | python3 -c 'import json, sys
+try:
+    h = json.load(sys.stdin).get("hookSpecificOutput") or {}
+    print(h.get("hookEventName"), "could not load lib/sync-clone.sh" in (h.get("additionalContext") or ""))
+except Exception as e:
+    print("broken: %s" % e)' 2>&1)"
+[ "$ctx_nolib" = "UserPromptSubmit True" ] && check "#1924 and the session is still told, as the prompt's additionalContext" ok \
+  || check "#1924 and the session is still told, as the prompt's additionalContext" "got: $ctx_nolib out=$out_nolib"
 out_nolib2="$(run_nolib snolib)"
 [ -z "$out_nolib2" ] && check "#1900 and says it once per session, not on every prompt" ok \
   || check "#1900 and says it once per session, not on every prompt" "out=$out_nolib2"

@@ -7,18 +7,17 @@
 # nobody. The notice goes out as a JSON systemMessage instead, the field the documentation describes
 # as a "warning message shown to the user". This suite checks:
 #   * the library writes exactly one valid JSON object for any text, a newline or tab in a notice or
-#     its context included, with python3 and with nothing on PATH;
+#     its context included, with python3 and with nothing on PATH, and handles its event and context
+#     arguments as its header says, each rule seen to fail against a library that breaks it (#1924);
 #   * the prompt hooks say their faults that way;
 #   * no registered hook, on any event, writes a notice to stderr and then exits 0;
-#   * no PreToolUse hook prints words plain to stdout and then exits 0;
+#   * no hook on an event whose plain stdout reaches no one (every event but UserPromptSubmit and
+#     SessionStart: PreToolUse, PostToolUse, Stop and the rest) prints words plain to stdout and then
+#     exits 0, outside a branch only a person running it by hand takes (#1924);
 #   * no shell script under the hooks builds a systemMessage anywhere but the library;
 #   * every registered hook using the library sources it with the fallback.
 #
-# What the stderr scan sees: a stderr line whose next code line is exit 0 (or a bare exit), the two
-# on one line, and a here document written to stderr. What it does not: a notice written by a
-# function the hook returns from, with the exit 0 somewhere later. The plain stdout scan reads only
-# PreToolUse hooks: a PostToolUse or Stop hook can also be a command a person runs (pr-merge-quiz.sh
-# --snooze), whose stdout is read in the terminal. Those cases are found by reading.
+# What the two scans see, and what they do not, is written above scan.py below.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
@@ -112,6 +111,86 @@ except Exception as e: print("broken: %s" % e)')"
   [ "$ctx" = True ] && ok || bad "#1906 $name: with no context given, the notice itself was not handed to the session: $ctx"
 done
 
+# --- the event and context arguments, each seen to fail against a library that mishandles it -------
+# (claude-config#1924). The checks above passed a mutant once, by hand, and nothing kept that proof;
+# here every argument rule is checked against the real library, which must pass, and against a copy
+# with that one rule broken, which must fail, in each arm it lives in (L1).
+#
+# arg_faults <library> <PATH>: one line per way the event and context arguments come out wrong.
+arg_faults(){
+  env PATH="$2" HN_LIB="$1" HN_T="$TRICKY" "$BASH" -c '
+. "$HN_LIB" || exit 9
+hook_notice_json "$HN_T"; echo "@@"
+hook_notice_json "$HN_T" PostToolUse; echo "@@"
+hook_notice_json "$HN_T" PostToolUse "ctx: $HN_T"; echo "@@"
+hook_notice_json "$HN_T" PostToolUse ""; echo "@@"
+hook_notice_json "$HN_T" "Pre\"Tool Use"' 2>/dev/null | HN_WANT="$TRICKY" python3 -c '
+import json, os, sys
+want = os.environ["HN_WANT"]
+parts = sys.stdin.read().split("@@\n")
+if len(parts) != 5:
+    print("the library printed %d parts, not 5: %r" % (len(parts), parts[:2])); sys.exit()
+def obj(n, what):
+    try:
+        d = json.loads(parts[n])
+    except Exception as e:
+        print("%s: not one JSON object (%s): %r" % (what, e, parts[n][:200])); return None
+    if d.get("systemMessage") != want:
+        print("%s: the systemMessage was %r" % (what, d.get("systemMessage"))); return None
+    return d
+d = obj(0, "no event")
+if d is not None and set(d) != {"systemMessage"}:
+    print("no event: it handed the session something anyway: %r" % d)
+for n, what, ctx in ((1, "an event and no context", want), (2, "an event and a context", "ctx: " + want),
+                     (3, "an event and an empty context", "")):
+    d = obj(n, what)
+    if d is None:
+        continue
+    h = d.get("hookSpecificOutput") or {}
+    if h.get("hookEventName") != "PostToolUse":
+        print("%s: hookEventName was %r" % (what, h.get("hookEventName")))
+    elif h.get("additionalContext") != ctx:
+        print("%s: additionalContext was %r, not %r" % (what, h.get("additionalContext"), ctx))
+d = obj(4, "an event name that is not one word")
+if d is not None and "hookSpecificOutput" in d:
+    print("an event name that is not one word was passed on: %r" % d["hookSpecificOutput"])'
+}
+for arm in "$PATH" "$WORK/empty"; do
+  name="with python3"; [ "$arm" = "$WORK/empty" ] && name="with nothing on PATH"
+  got="$(arg_faults "$LIB" "$arm")"
+  [ -z "$got" ] && ok || bad "#1924 $name: the library mishandles its event or context argument: $got"
+done
+# Each mutant: <name> TAB <text in the library> TAB <what it becomes> TAB <the arms it shows in>.
+cat > "$WORK/mutants.tsv" <<'TSV'
+the event is dropped	event="${2:-}"	event=""	both
+an event is invented when none is given	event="${2:-}"	event="${2:-PostToolUse}"	both
+the context is ignored for the text	context="${3-$1}"	context="$1"	both
+an empty context is replaced by the text	context="${3-$1}"	context="${3:-$1}"	both
+an event name is not checked	case "$event" in *[!A-Za-z]*) event="" ;; esac	:	both
+python3 hands the text as the context	cut(os.environb[b"HN_CONTEXT"])	cut(os.environb[b"HN_TEXT"])	py
+bash alone hands the text as the context	"$event" "$(_hn_string "$context")"	"$event" "$(_hn_string "$text")"	bash
+TSV
+mutants=0
+while IFS=$'\t' read -r mname mold mnew marms; do
+  [ -n "$mname" ] || continue
+  mutants=$((mutants + 1))
+  if ! HN_OLD="$mold" HN_NEW="$mnew" python3 -c '
+import os, sys
+s = open(sys.argv[1]).read(); old = os.environ["HN_OLD"]
+if s.count(old) != 1: sys.exit(1)
+open(sys.argv[2], "w").write(s.replace(old, os.environ["HN_NEW"]))' "$LIB" "$WORK/mutant.sh"; then
+    bad "#1924 mutant \"$mname\": its text is not in lib/hook-notice.sh exactly once, so the check it proves is unproven. Update $WORK/mutants.tsv in this suite to the library's new wording."
+    continue
+  fi
+  for arm in "$PATH" "$WORK/empty"; do
+    a=py; name="with python3"; [ "$arm" = "$WORK/empty" ] && { a=bash; name="with nothing on PATH"; }
+    case "$marms" in both|"$a") ;; *) continue ;; esac
+    [ -n "$(arg_faults "$WORK/mutant.sh" "$arm")" ] && ok \
+      || bad "#1924 canary, $name: a library in which $mname passed the argument checks"
+  done
+done < "$WORK/mutants.tsv"
+[ "$mutants" -eq 7 ] && ok || bad "#1924 only $mutants argument mutants were read, not 7"
+
 # hook_allow_notice lets the call through: exit 0, the JSON on stdout and nothing else there, and
 # the same text on stderr for the debug log.
 out="$(HN_TEXT="the check did not run" bash -c '. "$0" && hook_allow_notice "$HN_TEXT"; echo AFTER' "$LIB" 2>"$WORK/err")"; rc=$?
@@ -164,48 +243,172 @@ mkdir -p "$WORK/catonly"; ln -s "$(command -v cat)" "$WORK/catonly/cat"; ln -s "
 prompt_hook "no python3" "python3 is not on PATH" "$WITHSESSION" stale-worktree-nudge.sh PATH="$WORK/catonly"
 
 # --- the scan --------------------------------------------------------------------------------------
-# scan <file>...: one line per place a line written to stderr is followed by exit 0, as
-# <file>:<line>: <text>. Comment lines are skipped, and a here document written to stderr is read
-# to its end before the next line is looked at.
-scan(){
-  python3 - "$@" <<'PY'
-import re, sys
+# scan.py <stderr|plain> <file>...: one line per place a hook writes a notice and then exits 0, as
+# <file>:<line>: <text>; stderr mode reads notices written to stderr, plain mode words printed plain
+# to stdout. One scanner for both, so a shape taught to one is taught to the other (#1924).
+#
+# A notice is: a line writing one (stderr: `>&2`; plain: an echo or printf of words, or `cat <<EOF`,
+# with nothing redirecting it); the closing line of a bare `{ ... }` group (`} >&2`, or in plain mode
+# one printing words with no redirect); or a CALL, in command position, of a function whose last
+# statement (before a bare `return`) is a notice and which never exits itself, so a notice written
+# in a function that returns before a later exit 0 is found at its call (#1924). It is reported when
+# the same line goes on to `exit 0`, or the next code line is `exit 0` or a bare exit. A notice its
+# own line closes with a refusal (`|| { ...>&2; exit 2; }`) is followed by that exit. Comment lines
+# are skipped, and a here document is read to its end before the next line is looked at.
+#
+# A branch taken only when the script is run with a flag its registrations never pass
+# (`if [ "${1:-}" = "--snooze-session" ]; then ... fi`) is a command a person runs in a terminal,
+# where its output is read, so it is not scanned. HN_FLAGS holds each script's registered flags.
+#
+# What it does not see: a notice whose exit 0 is not the next code line, a call inside $( ), and a
+# function that exits on some path. Those are found by reading.
+cat > "$WORK/scan.py" <<'PY'
+import json, os, re, sys
+mode = sys.argv[1]
+FLAGS = json.loads(os.environ.get("HN_FLAGS") or "{}")
 STDERR = re.compile(r'(^|[^0-9&<])1?>&2(?![0-9])')
+PLAIN = re.compile(r'''^\s*(echo\s+(-[a-zA-Z]+\s+)*["'][A-Za-z(]|printf\s+["'][A-Za-z(])''')
 EXIT0 = re.compile(r'^\s*exit(\s+0)?\s*(;;|;|\)|\}|$)')
-SAME = re.compile(r'>&2(?![0-9])[^#]*?(;|&&)\s*exit(\s+0)?\s*(;;|;|\}|\)|$)')
-HEREDOC = re.compile(r'<<-?\s*[\'"]?([A-Za-z_][A-Za-z0-9_]*)[\'"]?')
-OWN_EXIT = re.compile(r'>&2(?![0-9])[^#]*?(;|&&)\s*exit\s+[1-9]')
-for path in sys.argv[1:]:
-    try:
-        lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
-    except OSError as e:
-        print("%s:0: could not be read (%s)" % (path, e)); continue
-    i = 0
+THEN_EXIT0 = re.compile(r'^[^#]*?(;|&&)\s*exit(\s+0)?\s*(;;|;|\}|\)|$)')
+THEN_REFUSE = re.compile(r'^[^#]*?(;|&&)\s*exit\s+[1-9]')
+HEREDOC = re.compile(r'(?<!<)<<(?!<)-?\s*[\'"]?([A-Za-z_][A-Za-z0-9_]*)[\'"]?')
+FUNC = re.compile(r'^(\s*)(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{(.*)$')
+ARGBRANCH = re.compile(r'''^(\s*)if\s+\[\[?\s+"?\$\{?1(?::-)?\}?"?\s+==?\s+["']?(--[A-Za-z0-9-]+)["']?\s+\]\]?\s*;\s*then\s*$''')
+EXIT_ANY = re.compile(r'(^|[;&|{(\s])exit(\s|;|$)')
+RETURN = re.compile(r'^\s*return(\s+0)?\s*;?\s*$')
+
+def indent(line):
+    return len(line) - len(line.lstrip())
+
+def logical(lines):
+    # (line number, text, starts a here document) per line, a here document's body folded away.
+    out, i = [], 0
     while i < len(lines):
         line = lines[i]
         s = line.strip()
-        if not s or s.startswith("#") or not STDERR.search(line):
-            i += 1; continue
-        here = i
-        if SAME.search(line):
-            print("%s:%d: %s" % (path, here + 1, s[:160])); i += 1; continue
-        # A stderr write that its own line closes with a refusal (`|| { ...>&2; exit 2; }`) is
-        # followed by that exit, whatever the next line does.
-        if OWN_EXIT.search(line):
-            i += 1; continue
-        m = HEREDOC.search(line)
-        j = i + 1
-        if m:
-            while j < len(lines) and lines[j].strip() != m.group(1):
-                j += 1
-            j += 1
-        while j < len(lines) and (not lines[j].strip() or lines[j].strip().startswith("#")):
-            j += 1
-        if j < len(lines) and EXIT0.match(lines[j]):
-            print("%s:%d: %s" % (path, here + 1, s[:160]))
+        m = HEREDOC.search(line) if s and not s.startswith("#") else None
+        out.append((i + 1, line, bool(m)))
         i += 1
+        if m:
+            while i < len(lines) and lines[i].strip() != m.group(1):
+                i += 1
+            i += 1
+    return out
+
+def code(e):
+    s = e[1].strip()
+    return bool(s) and not s.startswith("#")
+
+def direct(e):
+    # Where on the line a notice it writes ends, or -1 for none.
+    line = e[1]
+    if not code(e):
+        return -1
+    if mode == "stderr":
+        m = STDERR.search(line)
+        return m.end() if m else -1
+    if PLAIN.search(line):
+        tail = line.rsplit('"', 1)[-1] if '"' in line else line
+        if re.search(r'[>|]', tail):
+            return -1
+        return line.rfind('"') + 1 if '"' in line else len(line)
+    if e[2] and re.match(r'^\s*cat\s+<<', line) and not re.search(r'[>|]', HEREDOC.sub('', line)):
+        return len(line)
+    return -1
+
+def calls(line, names):
+    # Where a call, in command position, of one of names ends, or -1.
+    for n in sorted(names):
+        m = re.search(r'(^\s*|(;|&&|\|\||\bthen|\bdo|\belse|\{)\s*)' + re.escape(n) + r'(?=\s|;|$)', line)
+        if not m:
+            continue
+        cut = re.split(r'(;|&&|\|\|)', line[m.end():], maxsplit=1)[0]
+        if re.search(r'2>|&>' if mode == "stderr" else r'[>|]', cut):
+            continue
+        return m.end()
+    return -1
+
+def scan(path):
+    try:
+        lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
+    except OSError as e:
+        print("%s:0: could not be read (%s)" % (path, e)); return
+    L = logical(lines)
+    flags = set(FLAGS.get(os.path.basename(path), []))
+    skip = set()
+    for i, e in enumerate(L):
+        m = ARGBRANCH.match(e[1]) if code(e) else None
+        if not m or m.group(2) in flags:
+            continue
+        j = i + 1
+        while j < len(L) and not (L[j][1].strip() == "fi" and indent(L[j][1]) == len(m.group(1))):
+            j += 1
+        if j < len(L):
+            skip.update(range(i, j + 1))
+    bodies = {}
+    for i, e in enumerate(L):
+        m = FUNC.match(e[1]) if code(e) else None
+        if not m:
+            continue
+        ind, name, rest = m.groups()
+        r = rest.rstrip()
+        if r.endswith("}"):
+            bodies[name] = [(e[0], s.strip(), False) for s in r[:-1].split(";") if s.strip()]
+            continue
+        body, j = [], i + 1
+        while j < len(L) and not (L[j][1].strip().startswith("}") and indent(L[j][1]) <= len(ind)):
+            if code(L[j]):
+                body.append(L[j])
+            j += 1
+        bodies[name] = body
+    noticing, changed = set(), True
+    while changed:
+        changed = False
+        for name, body in bodies.items():
+            if name in noticing or not body or any(EXIT_ANY.search(b[1]) for b in body):
+                continue
+            k = len(body) - 1
+            if RETURN.match(body[k][1]) and k > 0:
+                k -= 1
+            if direct(body[k]) >= 0 or calls(body[k][1], noticing) >= 0:
+                noticing.add(name); changed = True
+    groups, open_groups = set(), []
+    for i, e in enumerate(L):
+        if not code(e):
+            continue
+        s = e[1].strip()
+        if s == "{":
+            open_groups.append([indent(e[1]), False])
+        elif open_groups and s.startswith("}") and indent(e[1]) == open_groups[-1][0]:
+            printed = open_groups.pop()[1]
+            if mode == "plain" and printed and not re.search(r'[>|]', s):
+                groups.add(i)
+        elif open_groups and mode == "plain" and direct(e) >= 0:
+            open_groups[-1][1] = True
+    for i, e in enumerate(L):
+        if i in skip or not code(e):
+            continue
+        end = len(e[1]) if i in groups else direct(e)
+        if end < 0:
+            end = calls(e[1], noticing)
+        if end < 0:
+            continue
+        after = e[1][end:]
+        if THEN_REFUSE.search(after):
+            continue
+        hit = THEN_EXIT0.search(after)
+        if not hit:
+            j = i + 1
+            while j < len(L) and not code(L[j]):
+                j += 1
+            hit = j < len(L) and EXIT0.match(L[j][1])
+        if hit:
+            print("%s:%d: %s" % (path, e[0], e[1].strip()[:160]))
+
+for p in sys.argv[2:]:
+    scan(p)
 PY
-}
+scan(){ python3 "$WORK/scan.py" stderr "$@"; }
 
 # The scan is seen to find each shape first, and to pass what is not one (L1).
 cat > "$WORK/next-line.sh" <<'SH'
@@ -234,9 +437,44 @@ case "$v" in
      exit 0 ;;
 esac
 SH
-for f in next-line same-line group heredoc in-case; do
-  [ -n "$(scan "$WORK/$f.sh")" ] && ok || bad "#1906 canary: the scan did not find the $f shape of a stderr notice followed by exit 0"
+# A notice written by a function that returns, the exit 0 after the call (#1924): the function's
+# last word is the notice, so each call of it is one.
+cat > "$WORK/function-return.sh" <<'SH'
+note(){
+  echo "the check was skipped" >&2
+  return 0
+}
+note
+exit 0
+SH
+cat > "$WORK/function-one-line.sh" <<'SH'
+warn(){ printf '%s\n' "$1" >&2; }
+warn "nothing was judged"; exit 0
+SH
+cat > "$WORK/function-nested.sh" <<'SH'
+say(){ echo "not run" >&2; }
+skip(){
+  say
+}
+if true; then skip
+  exit 0
+fi
+SH
+for f in next-line same-line group heredoc in-case function-return function-one-line function-nested; do
+  [ -n "$(scan "$WORK/$f.sh")" ] && ok || bad "#1906 #1924 canary: the scan did not find the $f shape of a stderr notice followed by exit 0"
 done
+# A function that refuses on its own, and one whose call is silenced, are not notices.
+cat > "$WORK/function-clean.sh" <<'SH'
+die(){ echo "PUSH BLOCKED: $1" >&2; exit 2; }
+die "a reason"
+exit 0
+note(){
+  echo "a detail" >&2
+}
+note 2>/dev/null
+exit 0
+SH
+[ -z "$(scan "$WORK/function-clean.sh")" ] && ok || bad "#1924 control: the scan flagged a refusing function or a silenced call: $(scan "$WORK/function-clean.sh")"
 cat > "$WORK/clean.sh" <<'SH'
 echo "PUSH BLOCKED: reasons" >&2
 exit 2
@@ -251,34 +489,33 @@ exit 0
 SH
 [ -z "$(scan "$WORK/clean.sh")" ] && ok || bad "#1906 control: the scan flagged a refusal, a notice through the library or a silenced command: $(scan "$WORK/clean.sh")"
 
-# scan_plain <file>...: a line of words printed plain to stdout and then exit 0. For a PreToolUse
-# hook the documentation says that stdout goes to the debug log, not the transcript, so the words
-# reach nobody. A printf whose format starts with % (passing on JSON a helper built) is not words.
-scan_plain(){
-  python3 - "$@" <<'PY'
-import re, sys
-PLAIN = re.compile(r'''^\s*(echo\s+["'][A-Za-z(]|printf\s+["'][A-Za-z(])''')
-EXIT0 = re.compile(r'^\s*exit(\s+0)?\s*(;;|;|\)|\}|$)')
-for path in sys.argv[1:]:
-    lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
-    for i, line in enumerate(lines):
-        s = line.strip()
-        if not s or s.startswith("#") or not PLAIN.search(line):
-            continue
-        tail = line.rsplit('"', 1)[-1] if '"' in line else line
-        if re.search(r'[>|]', tail):
-            continue
-        j = i + 1
-        while j < len(lines) and (not lines[j].strip() or lines[j].strip().startswith("#")):
-            j += 1
-        if j < len(lines) and EXIT0.match(lines[j]):
-            print("%s:%d: %s" % (path, i + 1, s[:160]))
-PY
-}
+# scan_plain <file>...: words printed plain to stdout and then exit 0. On every event but
+# UserPromptSubmit and SessionStart the documentation sends that stdout to the debug log, not the
+# transcript, so the words reach nobody. A printf whose format starts with % (passing on JSON a
+# helper built) is not words. The same scanner as scan, reading stdout instead of stderr.
+scan_plain(){ python3 "$WORK/scan.py" plain "$@"; }
 printf 'echo "duplication check: skipped, nothing compared"\nexit 0\n' > "$WORK/plain.sh"
 printf 'printf %s\\n "$out"\nexit 0\necho "to stderr" >&2\nexit 2\necho "piped" | cat\nexit 0\n' "'%s'" > "$WORK/plain-clean.sh"
 [ -n "$(scan_plain "$WORK/plain.sh")" ] && ok || bad "#1906 canary: the plain stdout scan did not find words printed plain and then exit 0"
 [ -z "$(scan_plain "$WORK/plain-clean.sh")" ] && ok || bad "#1906 control: the plain stdout scan flagged a JSON pass through, stderr or a pipe: $(scan_plain "$WORK/plain-clean.sh")"
+# The shapes beyond one echo on the line before exit 0 (#1924): the two on one line, a group, a here
+# document, and a function that prints and returns.
+printf 'echo "skipped the check"; exit 0\n' > "$WORK/plain-same-line.sh"
+printf '{\n  echo "nothing was judged"\n  echo "for this push"\n}\nexit 0\n' > "$WORK/plain-group.sh"
+printf 'cat <<EOF\nthe check did not run\nEOF\nexit 0\n' > "$WORK/plain-heredoc.sh"
+printf 'tell(){\n  echo "the review was skipped"\n}\ntell\nexit 0\n' > "$WORK/plain-function.sh"
+for f in plain-same-line plain-group plain-heredoc plain-function; do
+  [ -n "$(scan_plain "$WORK/$f.sh")" ] && ok || bad "#1924 canary: the plain stdout scan did not find the $f shape of words printed plain before exit 0"
+done
+printf '{\n  echo "PUSH BLOCKED"\n} >&2\nexit 2\n{\n  echo "kept"\n} > "$f"\nexit 0\ncat <<EOF >&2\nto stderr\nEOF\nexit 0\n' > "$WORK/plain-group-clean.sh"
+[ -z "$(scan_plain "$WORK/plain-group-clean.sh")" ] && ok || bad "#1924 control: the plain stdout scan flagged a redirected group or here document: $(scan_plain "$WORK/plain-group-clean.sh")"
+# A branch the script takes only when run with a flag no registration passes is a command a person
+# runs (pr-merge-quiz.sh --snooze-session), whose stdout is read in a terminal, so its words are not
+# a lost notice. The same branch on a flag a registration does pass is the hook speaking, and is.
+printf 'if [ "${1:-}" = "--snooze" ]; then\n  echo "Snoozed for this session."\n  exit 0\nfi\nexit 0\n' > "$WORK/plain-terminal.sh"
+[ -z "$(HN_FLAGS='{}' scan_plain "$WORK/plain-terminal.sh")" ] && ok || bad "#1924 control: the plain stdout scan flagged a branch for a flag no registration passes: $(HN_FLAGS='{}' scan_plain "$WORK/plain-terminal.sh")"
+[ -n "$(HN_FLAGS='{"plain-terminal.sh": ["--snooze"]}' scan_plain "$WORK/plain-terminal.sh")" ] && ok \
+  || bad "#1924 canary: the plain stdout scan passed a branch for a flag the registration passes, where the hook itself prints"
 
 # scan_handbuilt <file>...: a systemMessage written anywhere but lib/hook-notice.sh. A hand built
 # object breaks on a newline, a tab or a quote in its text (check-wrapped-commands.sh,
@@ -318,52 +555,67 @@ REG="$(hook_settings_file "$DIR/.." 2>/dev/null)" || REG=""
 if [ -z "$REG" ]; then
   bad "#1906 no settings.hooks.json or settings.json beside $DIR, so no hook was scanned"
 else
-  # One line per script: <name>\t<1 when registered for PreToolUse>
-  scripts="$(python3 - "$REG" <<'PY'
+  # One line per script: <name>\t<1 when its plain stdout reaches no one>. That is every event but
+  # UserPromptSubmit and SessionStart, whose plain stdout is context for the session by design: a
+  # PreToolUse hook's goes to the debug log, and so does a PostToolUse or Stop hook's (#1924).
+  # HN_FLAGS is each script's flags as its registrations pass them, so the scan can tell a branch
+  # the hook takes from one only a person running it by hand does.
+  scripts="$(python3 - "$REG" "$WORK/flags.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
-seen = {}
+seen, flags = {}, {}
 for event, groups in d.get("hooks", {}).items():
     for group in groups:
         for h in group.get("hooks", []):
-            for word in h.get("command", "").split():
+            words = h.get("command", "").split()
+            for k, word in enumerate(words):
                 if word.endswith(".sh"):
                     name = word.rsplit("/", 1)[-1]
-                    seen[name] = seen.get(name, False) or event == "PreToolUse"
+                    seen[name] = seen.get(name, False) or event not in ("UserPromptSubmit", "SessionStart")
+                    flags.setdefault(name, set()).update(w for w in words[k + 1:] if w.startswith("--"))
+json.dump({n: sorted(f) for n, f in flags.items()}, open(sys.argv[2], "w"))
 print("\n".join("%s\t%d" % (n, p) for n, p in seen.items()))
 PY
 )"
-  hooks=(); pre_hooks=()
-  while IFS=$'\t' read -r s pre; do
+  HN_FLAGS="$(cat "$WORK/flags.json" 2>/dev/null)"; export HN_FLAGS
+  hooks=(); plain_hooks=()
+  while IFS=$'\t' read -r s plain; do
     [ -n "$s" ] || continue
     if [ -f "$DIR/$s" ]; then
       hooks+=("$DIR/$s")
-      [ "$pre" = 1 ] && pre_hooks+=("$DIR/$s")
+      [ "$plain" = 1 ] && plain_hooks+=("$DIR/$s")
     else bad "#1906 $s is registered but is not in $DIR"; fi
   done <<< "$scripts"
-  # Judged by the count it scanned (L288): on 2026-10-29 36 PreToolUse hooks were registered and 61
-  # hook scripts in all, and the ones this change moved onto the library are among them.
-  if [ "${#pre_hooks[@]}" -ge 30 ] && [ "${#hooks[@]}" -ge 50 ]; then ok
-  else bad "#1906 only ${#hooks[@]} hooks (${#pre_hooks[@]} PreToolUse) were found to scan, so the registration was not read as expected"
+  # Judged by the count it scanned (L288): on 2026-10-30 49 hook scripts were registered on an event
+  # whose plain stdout reaches no one (37 PreToolUse hooks among them) and 65 in all.
+  if [ "${#plain_hooks[@]}" -ge 45 ] && [ "${#hooks[@]}" -ge 50 ]; then ok
+  else bad "#1906 #1924 only ${#hooks[@]} hooks (${#plain_hooks[@]} whose plain stdout reaches no one) were found to scan, so the registration was not read as expected"
   fi
   for want in require-issue-fields.sh no-session-link-in-comments.sh handback-claims-gate.sh check-deferrals.sh \
               require-tests-before-push.sh simplify-before-push.sh check-public-assets.sh check-gh-watch-interval.sh \
               check-filed-issue-session.sh issue-spool-session-end.sh suite-pile-notice.sh rule-files-changed.sh; do
     case " ${hooks[*]} " in *"/$want "*) ok ;; *) bad "#1906 $want was not among the hooks scanned" ;; esac
   done
+  # The plain stdout scan reads PostToolUse and Stop hooks too (#1924), and pr-merge-quiz.sh, on
+  # both, is read with the flag its Stop registration passes it.
+  for want in pr-merge-quiz.sh sync-main-to-dev.sh check-filed-issue-session.sh session-reflection.sh require-tests-before-push.sh; do
+    case " ${plain_hooks[*]} " in *"/$want "*) ok ;; *) bad "#1924 $want was not among the hooks the plain stdout scan reads" ;; esac
+  done
+  case "$HN_FLAGS" in *'"pr-merge-quiz.sh": ["--release-held"]'*) ok ;; *) bad "#1924 the flags pr-merge-quiz.sh is registered with were not read: ${HN_FLAGS:0:300}" ;; esac
+  case " ${plain_hooks[*]} " in *"/rule-files-changed.sh "*) bad "#1924 rule-files-changed.sh, on UserPromptSubmit and SessionStart only, was read by the plain stdout scan, where its stdout is context by design" ;; *) ok ;; esac
   found="$(scan "${hooks[@]}")"
   if [ -z "$found" ]; then ok
   else
     bad "#1906 these hooks write a notice to stderr and then exit 0, where Claude Code shows it to nobody. Send it with hook_allow_notice from lib/hook-notice.sh instead:"
     printf '%s\n' "$found" | sed "s|$DIR/|  |"
   fi
-  found="$(scan_plain "${pre_hooks[@]}")"
+  found="$(scan_plain "${plain_hooks[@]}")"
   if [ -z "$found" ]; then ok
   else
-    bad "#1906 these PreToolUse hooks print words plain on stdout and then exit 0, which goes to the debug log. Send them with hook_allow_notice from lib/hook-notice.sh instead:"
+    bad "#1906 #1924 these hooks print words plain on stdout and then exit 0, on an event where that stdout goes to the debug log. Send them with hook_allow_notice from lib/hook-notice.sh instead:"
     printf '%s\n' "$found" | sed "s|$DIR/|  |"
   fi
-  echo "  scanned ${#hooks[@]} hooks, ${#pre_hooks[@]} of them PreToolUse"
+  echo "  scanned ${#hooks[@]} hooks, ${#plain_hooks[@]} of them on an event whose plain stdout reaches no one"
 
   # Every hook that sends a notice through the library sources it with the fallback the library's
   # header gives, so a missing library lets the call through saying so rather than leaving
