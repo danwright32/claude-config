@@ -285,8 +285,8 @@ says "and says on stderr why it did not run" "$(cat "$WORK/err")" "session"
 printf '2 %s %s %s\n' "$(( NOW - 300 ))" "$(( NOW - 30 ))" "$(( NOW - 30 ))" > "$CLONE/.behind-skips"
 out="$(printf '{"session_id":"badthreshold"}' | HOME="$FHOME" CLAUDE_HOME="$FHOME/.claude" SYNC_LAUNCHAGENTS="$WORK/agents" \
        CLAUDE_SYNC_STUCK_STATE_DIR="$WORK/state" CLAUDE_SYNC_STUCK_NOW="$NOW" SYNC_STUCK_NOTICE_AFTER=soon SYNC_NO_NOTIFY=1 bash "$HOOK" 2>"$WORK/err")"
-silent "an unreadable threshold is not read as zero" "$out"
-says "and says it used the default" "$(cat "$WORK/err")" "SYNC_STUCK_NOTICE_AFTER"
+fault_said "an unreadable threshold is not read as zero, and the person is told the default was used" "$out" "SYNC_STUCK_NOTICE_AFTER='soon' is not a whole number"
+says "and says it on stderr too, for the debug log" "$(cat "$WORK/err")" "SYNC_STUCK_NOTICE_AFTER"
 clear_state
 
 echo "sync stuck notice: status and the notice share one predicate"

@@ -218,8 +218,8 @@ out="$(printf '{"cwd":"."}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STAT
   CLAUDE_SUITE_PILE_NOW="$NOW" bash "$HOOK" 2>/dev/null)"; rc=$?
 fault_said "a payload with no session says nothing to the session, and tells the person" "$out" "neither a session id"
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
-# A record that cannot be written means it cannot stay quiet next time, so it does not speak now:
-# once too few, never once per prompt (L36).
+# A record that cannot be written means it cannot stay quiet next time, so it says no pile now (once
+# too few, L36), and tells the person why, on each prompt while the fault lasts (#1906).
 : > "$WORK/state-is-a-file"
 out="$(printf '{"session_id":"w1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state-is-a-file" \
   CLAUDE_SUITE_PILE_NOW="$NOW" bash "$HOOK" 2>/dev/null)"; rc=$?

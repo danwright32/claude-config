@@ -99,10 +99,14 @@ key="${session//[^A-Za-z0-9_-]/_}"
 # desktop notification (SYNC_CI_RED_ALERT_AFTER), so the session hears it when the desktop does.
 # Being wrong costs an hour of edits on one Mac in one direction, and one notice about a stretch that
 # was about to clear in the other.
+# A threshold nobody can read is told to the person as a systemMessage at the end, beside whatever
+# else this prompt says, and on stderr for the debug log (#1906); on stderr alone Claude Code
+# discarded it.
 after="${SYNC_STUCK_NOTICE_AFTER:-3600}"
+SSN_NOTE=""
 case "$after" in
   ''|*[!0-9]*)
-    echo "sync-stuck-notice: SYNC_STUCK_NOTICE_AFTER='$after' is not a whole number of seconds, so the default of 3600 is used instead." >&2
+    SSN_NOTE="sync-stuck-notice: SYNC_STUCK_NOTICE_AFTER='$after' is not a whole number of seconds, so the default of 3600 is used instead."
     after=3600 ;;
 esac
 now="${CLAUDE_SYNC_STUCK_NOW:-}"
@@ -143,7 +147,10 @@ ERRF="$STATE.err"
 # What this session has been told: one line per stretch, clone TAB kind TAB start.
 told=""
 [ -f "$STATE" ] && told="$(cat "$STATE" 2>/dev/null || true)"
-[ -n "$clones" ] || [ -n "$told" ] || exit 0
+if [ -z "$clones" ] && [ -z "$told" ]; then
+  [ -n "$SSN_NOTE" ] && hook_allow_notice "$SSN_NOTE"
+  exit 0
+fi
 
 T=$'\t'
 keep=""
@@ -255,5 +262,13 @@ else
   rm -f "$STATE" 2>/dev/null || true
 fi
 
-[ -n "$notices" ] && printf '%s\n' "$notices"
+# The notices reach the session as context, plain or, beside a note for the person, as this
+# event's additionalContext, which the hooks documentation says is injected the same way.
+if [ -n "$SSN_NOTE" ] && [ -n "$notices" ]; then
+  hook_allow_notice "$SSN_NOTE" UserPromptSubmit "$notices"
+elif [ -n "$SSN_NOTE" ]; then
+  hook_allow_notice "$SSN_NOTE"
+elif [ -n "$notices" ]; then
+  printf '%s\n' "$notices"
+fi
 exit 0
