@@ -18,6 +18,7 @@ lb_read() {
   fi
   names="$(printf '%s' "$raw" | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 # Refused by name (claude-config#1923): which labels exist decides which get created, so a list
 # holding a byte that is not UTF-8 is not judged on a stand in for the name it mangled.
 raw = sys.stdin.buffer.read()

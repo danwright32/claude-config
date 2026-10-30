@@ -362,7 +362,7 @@ except Exception as exc:
 closed = []
 if closed_path:
     try:
-        with open(closed_path) as fh:
+        with open(closed_path, errors="replace") as fh:
             closed = json.loads(fh.read() or "[]")
         if not isinstance(closed, list):
             raise ValueError("expected a list of issues")
@@ -523,6 +523,7 @@ CLOSE_MAX = 3
 CLOSE_MIN_IDEA = 3
 
 import math
+sys.stdout.reconfigure(errors="replace")
 
 close = []
 scored_close = valid + closed

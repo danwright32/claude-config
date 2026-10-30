@@ -290,14 +290,15 @@ def judge(tree):
 
 
 def walk(args):
-    """Each argument a file, or a tree walked for its .py and .sh files, tests and fixtures left out."""
+    """Each argument a file, or a tree walked for its .py and .sh files. Tests are left out (test-*,
+    test_*, *_tests.py, and tests/ and fixtures/ folders): they make bad text on purpose."""
     for a in args:
         if not os.path.isdir(a):
             yield a; continue
         for d, subs, names in os.walk(a):
-            subs[:] = sorted(s for s in subs if s not in ("fixtures", "__pycache__", "node_modules"))
+            subs[:] = sorted(s for s in subs if s not in ("fixtures", "tests", "__pycache__", "node_modules"))
             for n in sorted(names):
-                if n.endswith((".py", ".sh")) and not n.startswith(("test-", "test_")):
+                if n.endswith((".py", ".sh")) and not n.startswith(("test-", "test_")) and not n.endswith("_tests.py"):
                     yield os.path.join(d, n)
 
 
@@ -334,7 +335,7 @@ if __name__ == "__main__":
 SCAN
 
 # ---------------------------------------------------------------------------
-echo "every Python program in the hooks says how it handles text it cannot decode or encode"
+echo "every Python program in the hooks and the skills says how it handles text it cannot decode or encode"
 
 python3 "$WORK/scan.py" "$DIR" > "$WORK/hooks.scan" 2>&1
 units="$(sed -n 's/^UNITS //p' "$WORK/hooks.scan")"
@@ -346,12 +347,12 @@ hits="$(grep -v -E '^(UNITS|UNPARSED) ' "$WORK/hooks.scan" | sed "s#^$DIR/##")"
 if [ -z "$hits" ]; then ok; else bad "Python in the hooks raises on a byte that is not UTF-8 or a lone surrogate here. Give each open, subprocess and decode an errors= (\"replace\", or \"strict\" where refusing is the decision), and a program that decodes JSON and prints sys.stdout.reconfigure(errors=\"replace\") first:
 $hits"; fi
 
-# The skills: none reads stdin as text.
-python3 "$WORK/scan.py" --rules=stdin "$DIR/../skills" > "$WORK/skills.scan" 2>&1
+# The skills, held to the same rules: they read gh's answers, transcripts and files the same way.
+python3 "$WORK/scan.py" "$DIR/../skills" > "$WORK/skills.scan" 2>&1
 sunits="$(sed -n 's/^UNITS //p' "$WORK/skills.scan")"
-[ "${sunits:-0}" -ge 20 ] && ok || bad "the scan read only ${sunits:-no} Python programs under payload/skills"
+[ "${sunits:-0}" -ge 30 ] && ok || bad "the scan read only ${sunits:-no} Python programs under payload/skills"
 shits="$(grep -v -E '^UNITS ' "$WORK/skills.scan" | sed "s#^$DIR/../##")"
-if [ -z "$shits" ]; then ok; else bad "a script under payload/skills reads stdin in text mode, which raises on a byte that is not UTF-8 or reads it as something else under C; read sys.stdin.buffer and decode it, saying what happens to a byte that is not UTF-8:
+if [ -z "$shits" ]; then ok; else bad "a script under payload/skills raises on a byte that is not UTF-8 or a lone surrogate, or reads stdin in text mode, which under C reads it as something else. Read sys.stdin.buffer, and give each open, subprocess and decode an errors= saying what happens to such a byte:
 $shits"; fi
 
 # The scan is seen to fire on each shape the hooks held, in each place a program can sit, and to stay

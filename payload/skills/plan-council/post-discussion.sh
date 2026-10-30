@@ -95,19 +95,19 @@ if command -v gh >/dev/null 2>&1; then
   if [ -n "$meta" ]; then
     # Each read below decodes with errors="replace" (claude-config#1923): what it takes is an id, a
     # flag or a URL, all ASCII, so a stand in for a byte elsewhere leaves them as they were.
-    rid="$(printf '%s' "$meta" | python3 -c 'import sys,json
+    rid="$(printf '%s' "$meta" | python3 -c 'import sys,json; sys.stdout.reconfigure(errors="replace")
 try:
  d=json.loads(sys.stdin.buffer.read().decode("utf-8","replace"))["data"]["repository"]
  print(d["id"] if d.get("hasDiscussionsEnabled") else "")
 except Exception: print("")' 2>/dev/null)"
-    cat="$(printf '%s' "$meta" | python3 -c 'import sys,json
+    cat="$(printf '%s' "$meta" | python3 -c 'import sys,json; sys.stdout.reconfigure(errors="replace")
 try:
  ns=json.loads(sys.stdin.buffer.read().decode("utf-8","replace"))["data"]["repository"]["discussionCategories"]["nodes"]
  pref=[n for n in ns if n["name"].lower() in ("ideas","general","planning")]
  print((pref or ns)[0]["id"] if ns else "")
 except Exception: print("")' 2>/dev/null)"
     if [ -n "$rid" ] && [ -n "$cat" ]; then
-      url="$(gh api graphql -f query='mutation($r:ID!,$c:ID!,$t:String!,$b:String!){createDiscussion(input:{repositoryId:$r,categoryId:$c,title:$t,body:$b}){discussion{url}}}' -F r="$rid" -F c="$cat" -F t="$title" -F b="$body" 2>/dev/null | python3 -c 'import sys,json
+      url="$(gh api graphql -f query='mutation($r:ID!,$c:ID!,$t:String!,$b:String!){createDiscussion(input:{repositoryId:$r,categoryId:$c,title:$t,body:$b}){discussion{url}}}' -F r="$rid" -F c="$cat" -F t="$title" -F b="$body" 2>/dev/null | python3 -c 'import sys,json; sys.stdout.reconfigure(errors="replace")
 try: print(json.loads(sys.stdin.buffer.read().decode("utf-8","replace"))["data"]["createDiscussion"]["discussion"]["url"])
 except Exception: print("")' 2>/dev/null)"
       if [ -n "$url" ]; then echo "DISCUSSION $url"; exit 0; fi

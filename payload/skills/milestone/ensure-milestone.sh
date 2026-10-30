@@ -291,6 +291,7 @@ case "$kind" in
       # file against a milestone that is still closed (L3).
       state_now="$(printf '%s' "$reopened" | python3 -c '
 import sys, json
+sys.stdout.reconfigure(errors="replace")
 try:
     # Replaced, not refused (#1923): the state is open or closed, and a stand in for a byte in some
     # other field leaves that word as it was.
@@ -498,6 +499,7 @@ fi
 
 read -r num url <<<"$(printf '%s' "$created" | python3 -c '
 import sys, json
+sys.stdout.reconfigure(errors="replace")
 try:
     # Replaced, not refused (#1923): only the number and the URL are read, both ASCII.
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))

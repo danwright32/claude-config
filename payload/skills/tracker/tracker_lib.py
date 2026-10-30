@@ -41,7 +41,7 @@ def read_object(path, missing_ok=False):
             return None
         raise Refusal("%s is missing" % path)
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             data = json.load(f)
     except Exception as e:  # any unreadable file is refused by name, never read as empty
         raise Refusal("%s could not be read (%s). Fix or remove it, then try again; nothing was written" % (path, type(e).__name__))
@@ -54,7 +54,7 @@ def write_local_json(path, data):
     """Writes data to path (a *.local.json file) whole, or not at all."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".writing.", suffix=".local.json")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as f:
             json.dump(data, f, indent=2)
             # Test seam: "1" stands in for a full disk, "interrupt" for a run stopped by Ctrl-C.
             if os.environ.get("TRACKER_TEST_FAIL_WRITE") == "1":
@@ -97,7 +97,7 @@ def sheet_id_of(skill_md=SKILL_MD):
     """The id in SKILL.md's sheet link, the one declared home of which sheet the tracker writes.
     A SKILL.md naming no sheet, or two different ones, is a refusal, never a guess."""
     try:
-        with open(skill_md, encoding="utf-8") as f:
+        with open(skill_md, encoding="utf-8", errors="replace") as f:
             text = f.read()
     except OSError as e:
         raise Refusal("%s could not be read (%s), so which sheet the web app must answer for is unknown. Nothing was sent" % (skill_md, type(e).__name__))
@@ -247,7 +247,7 @@ def load_sheet(path):
     headers. Returns (headers, [(sheet row number, {header: text})]) for every non empty row, each
     padded to the headers' width, since the connector stops a row at its last non empty cell."""
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             raw = json.load(f)
     except Exception as e:  # unreadable is refused by name, never read as an empty sheet
         raise Refusal("%s could not be read as the sheet's JSON (%s)" % (path, type(e).__name__))
@@ -290,7 +290,7 @@ def normalize_link(link):
     if "://" not in link and ":" not in link and re.match(r"^[A-Za-z0-9.-]+\.[A-Za-z]+/", link):
         tries.append("https://" + link)
     for t in tries:
-        r = subprocess.run(["bash", SCAN_SH, "--normalize-url", t], capture_output=True, text=True)
+        r = subprocess.run(["bash", SCAN_SH, "--normalize-url", t], capture_output=True, text=True, errors="replace")
         if r.returncode == 0:
             return r.stdout.strip()
         if r.returncode != 1:
@@ -464,4 +464,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv[1:]))

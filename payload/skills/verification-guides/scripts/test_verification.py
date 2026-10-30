@@ -428,6 +428,16 @@ class CliTests(unittest.TestCase):
             self.assertIn(b"stdin-not-utf8", r.stderr)
             self.assertIn(b"offset 19", r.stderr)
 
+    def test_a_file_that_is_not_utf8_is_refused_by_name(self):
+        # claude-config#1923: an areas file holding such a byte raised and the run ended in a traceback.
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "areas.json")
+            with open(p, "wb") as f:
+                f.write(b'{"areas": [{"name": "caf\xff"}]}')
+            r = self.run_cli("areas", "validate", p)
+            self.assertEqual(r.returncode, 4, r.stderr)
+            self.assertIn("file-not-utf8", r.stderr)
+
     def test_areas_validate_names_each_cause(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "areas.json")
