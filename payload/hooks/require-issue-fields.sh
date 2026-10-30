@@ -29,9 +29,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
-# A crash here must not block work, but it must not be invisible either: a silent
-# failure would leave the gate switched off with everything looking normal. So the notice goes
-# out as a systemMessage, since Claude Code discards a PreToolUse hook's stderr on exit 0 (#1906).
 # The shared reader, which cleans the payload before the gate's python3 parses it: a lone surrogate
 # escape there raised when the command was written back out (claude-config#1944). A payload nothing
 # can parse used to pass in silence (the python3 half returns 0 on one), so it is judged by its raw
@@ -51,6 +48,9 @@ if . "$HERE/lib/push-scope.sh" 2>/dev/null; then
   fi
 fi
 
+# A crash here must not block work, but it must not be invisible either: a silent
+# failure would leave the gate switched off with everything looking normal. So the notice goes
+# out as a systemMessage, since Claude Code discards a PreToolUse hook's stderr on exit 0 (#1906).
 err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 out="$(printf '%s' "$payload" | GATE_DIR="$HERE" python3 "$HERE/issue_field_gate.py" 2>"$err")"

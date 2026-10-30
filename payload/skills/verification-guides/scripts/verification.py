@@ -683,7 +683,7 @@ def record_digest(rec):
     """
     body = {k: val for k, val in rec.items() if k not in _READER_KEYS}
     text = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return "sha256:" + hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+    return "sha256:" + hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()  # as render writes it (#1944)
 
 
 def remember_rendered(receipt_id, records, home=None):

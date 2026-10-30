@@ -19,6 +19,20 @@
 # The gates the second half of 1 runs are a table, since each judges a different command. Every
 # gate the first half finds must be in it, so a gate added later is not exempt by being unlisted
 # (L96).
+#
+# Three more, added with the shared payload reader (claude-config#1944, #1922):
+#
+#   3. A payload taken off stdin and never cleaned. jq rejects a whole payload holding a lone
+#      surrogate escape, so every registered hook, of every event, takes its payload through
+#      ps_read_payload or cleans a raw capture with ps_clean_payload before anything parses it.
+#   4. An advisory hook stopping in silence when a library will not load: every registered hook is
+#      scanned for it, and each advisory hook that sources one is run with it gone, on a call it acts
+#      on, and must say once that it did not run.
+#   5. Every hook registered to block is run on a call it judges holding the escape and on the same
+#      call with a letter in its place, and must decide alike; on that call cut short, where it must
+#      refuse naming the payload (or, by recorded decision, let it through saying so); and on an
+#      unrelated call cut short, which it must pass. Stand ins replace gh, claude and curl, so each
+#      gate runs to its decision in about a second.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {

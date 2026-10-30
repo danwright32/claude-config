@@ -46,8 +46,10 @@
 # (test-lessons-advisory.sh fails when the table and TRIG_IDS disagree), and says how to measure a
 # trigger change before shipping it: measure-lessons-advisory.sh, beside this hook.
 #
-# Fails QUIET: it is an advisor, so a broken advisor should add nothing rather
-# than nag. The one thing it will not do quietly is lose a lesson: an id that no
+# Fails QUIET on most faults: it is an advisor, so a broken advisor should add nothing rather
+# than nag. Except on a push, where a library it cannot load or a payload it cannot parse is said
+# once, "LESSONS ADVISORY DID NOT RUN" (claude-config#1922), since silence there reads as a push it
+# checked. The one thing it will not do quietly is lose a lesson: an id that no
 # longer resolves, or a lessons file it cannot read, is reported in the advisory
 # itself rather than dropped. Nor will it quietly lose the WHOLE advisory: the
 # emit at the bottom is python3, and with no python3 every lesson this matched
