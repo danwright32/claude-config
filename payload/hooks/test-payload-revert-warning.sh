@@ -25,6 +25,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 HOOK="$DIR/payload-revert-warning.sh"
 
 pass=0
@@ -272,9 +278,10 @@ esac
 #
 # A prompt holding a byte that is not UTF-8: jq reads it as U+FFFD, and python3 reading its stdin in
 # text mode raised, so the session came back unknown and the warning was never given.
+bad_byte_measured python "#1900 payload-revert-warning reading a byte that is not UTF-8" || true
 fresh
 out_bad="$(printf '{"session_id":"sbad","cwd":"%s","prompt":"a\xffb"}' "$FIX/dev" \
-  | env LC_ALL=en_US.UTF-8 SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" \
+  | env LC_ALL="$BAD_BYTE_LOCALE" SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" \
         CLAUDE_PAYLOAD_WARN_STATE_DIR="$FIX/state" bash "$HOOK" 2>/dev/null)"
 case "$out_bad" in
   *"$FIX/dev"*) check "#1900 a prompt holding a byte that is not UTF-8 still gets the warning" ok ;;

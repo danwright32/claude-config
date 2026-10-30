@@ -37,6 +37,7 @@ payload="$(cat 2>/dev/null || true)"
 
 verdict="$(printf '%s' "$payload" | python3 -c '
 import json, re, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception as e:

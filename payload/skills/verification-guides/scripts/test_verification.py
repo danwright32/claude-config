@@ -417,6 +417,17 @@ class CliTests(unittest.TestCase):
         self.assertEqual(other.returncode, 6)
         self.assertIn("record-other-sha", other.stderr)
 
+    def test_stdin_that_is_not_utf8_is_refused_by_name(self):
+        # claude-config#1923: stdin read as text raised under a UTF-8 locale and was read as
+        # something else under C. A PR body or comment holding such a byte is refused by name.
+        for args in (["done-when"], ["record", "parse"]):
+            r = subprocess.run([sys.executable, os.path.join(HERE, "verification.py")] + args,
+                               input=b"Closes #1\n- [ ] caf\xff loads\n", capture_output=True,
+                               env=dict(os.environ, VERIFICATION_HOME=tempfile.gettempdir()))
+            self.assertEqual(r.returncode, 4, r.stderr)
+            self.assertIn(b"stdin-not-utf8", r.stderr)
+            self.assertIn(b"offset 19", r.stderr)
+
     def test_areas_validate_names_each_cause(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "areas.json")

@@ -16,6 +16,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 HOOK="$DIR/no-session-link-in-comments.sh"
 
 TMP_DIR="$(mktemp -d)"
@@ -209,10 +215,10 @@ if [ "$n" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: a
 # A payload byte that is not valid UTF-8 must not make the quick exit's match fail and skip the gate.
 # Under a UTF-8 locale bash's =~ stops matching at such a byte, so the hook runs under one here, with
 # the byte in front of gh.
-UTF8_LOCALE="$(locale -a 2>/dev/null | grep -i -m1 -E '^(en_US|C)\.utf-?8$')"
+bad_byte_measured regex "#1885 the quick exit past a byte that is not UTF-8" || true
 p="$(bash_payload "true && gh pr comment 5 --body \"Agreed. $LINK\"")"
 p="${p/true/$'\xff'}"
-out="$(printf '%s' "$p" | LC_ALL="${UTF8_LOCALE:-C}" bash "$HOOK" 2>&1)"
+out="$(printf '%s' "$p" | LC_ALL="$BAD_BYTE_LOCALE" bash "$HOOK" 2>&1)"
 if [[ "$out" == *'"deny"'* || "$out" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a payload with a byte that is not UTF-8 must reach the gate (got: ${out:-<no output>})"; fi
 

@@ -37,6 +37,12 @@ suite_deadline_arm || exit $?
 export FAKE_HANG_S="$HANG_S"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 PUSH_HOOK="$DIR/ai-review-on-push.sh"
 NUDGE="$DIR/ai-review-nudge.sh"
 PROMPT="$DIR/lib/ai-review-prompt.txt"
@@ -671,9 +677,10 @@ fast_launches(){ # fast_launches <prompt text, as a printf format> -> commands o
   touch -t 202001010000 "$AI_REVIEW_STATE_DIR/.updated"
   : > "$SHIM_LOG"
   printf '{"hook_event_name":"UserPromptSubmit","prompt":"'"$1"'","session_id":"n1","cwd":"%s"}' "$REPO" \
-    | PATH="$SHIMBIN:$REAL_PATH" LC_ALL=en_US.UTF-8 bash "$NUDGE" >/dev/null 2>&1
+    | PATH="$SHIMBIN:$REAL_PATH" LC_ALL="$BAD_BYTE_LOCALE" bash "$NUDGE" >/dev/null 2>&1
   grep -c . "$SHIM_LOG" 2>/dev/null || true
 }
+bad_byte_measured regex "#1885 the fast path past a byte that is not UTF-8" || true
 settled_launches="$(fast_launches 'hi')"
 [ "$settled_launches" -lt "$base_launches" ] && ok \
   || bad "#1885 control: a settled session takes the fast path, starting fewer than the full path's $base_launches (started $settled_launches)"

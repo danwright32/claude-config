@@ -207,7 +207,7 @@ def parse_iso(s):
 
 def load_record(path):
     try:
-        with open(path) as fh:
+        with open(path, errors="replace") as fh:
             r = json.load(fh)
     except OSError as e:
         raise Refused("the sleep record could not be read (%s)" % e)
@@ -235,7 +235,7 @@ def read_notes(path):
     """The notes in the order written, and how many lines could not be read (counted, never dropped silently)."""
     notes, bad = [], 0
     try:
-        with open(path) as fh:
+        with open(path, errors="replace") as fh:
             lines = fh.read().splitlines()
     except FileNotFoundError:
         return notes, bad
@@ -321,7 +321,7 @@ def append_note(record_path, record, line):
 
 def read_power():
     try:
-        p = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=10)
+        p = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=10, errors="replace")
     except (OSError, subprocess.SubprocessError) as e:
         return "power unknown (%s)" % e
     if p.returncode != 0:
@@ -365,7 +365,7 @@ def gh_list(repo, what, since, until, deadline):
                                                   else "stateReason,closedByPullRequestsReferences"),
              "--limit", str(GH_LIMIT)]
     try:
-        p = subprocess.run(words, capture_output=True, text=True, timeout=min(GH_TIMEOUT_S, left))
+        p = subprocess.run(words, capture_output=True, text=True, timeout=min(GH_TIMEOUT_S, left), errors="replace")
     except subprocess.TimeoutExpired:
         return None, "gh did not answer within %d seconds" % min(GH_TIMEOUT_S, left)
     except OSError as e:
@@ -800,7 +800,7 @@ def confirm(repo, what, number, night, deadline, done, flags):
     else:
         try:
             p = subprocess.run(["gh", what, "view", str(number), "-R", repo, "--json", "number,title,%s" % field],
-                               capture_output=True, text=True, timeout=min(GH_TIMEOUT_S, left))
+                               capture_output=True, text=True, timeout=min(GH_TIMEOUT_S, left), errors="replace")
             if p.returncode != 0:
                 why = (p.stderr.strip() or "gh exited %d" % p.returncode).splitlines()[0][:300]
             else:
@@ -829,7 +829,7 @@ def _mark(name):
     d = os.environ.get("SLEEP_REPORT_MARKS", "")
     if d:
         try:
-            with open(os.path.join(d, "%s.%d" % (name, os.getpid())), "w"):
+            with open(os.path.join(d, "%s.%d" % (name, os.getpid())), "w", errors="replace"):
                 pass
         except OSError:
             pass
@@ -952,7 +952,7 @@ def session_reports(notes_file, record):
         if not name.endswith(".path"):
             continue
         try:
-            with open(os.path.join(folder, name)) as fh:
+            with open(os.path.join(folder, name), errors="replace") as fh:
                 dest = fh.read().strip()
         except OSError as e:
             raise Refused("where session %s's report goes could not be read (%s)" % (name[:-len(".path")], e))
@@ -1008,12 +1008,12 @@ def fallback_reports(notes_file, record, notes, named, final, now):
         os.makedirs(folder, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".%s." % sid, suffix=".tmp", dir=folder)
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", errors="replace") as fh:
                 fh.write(dest)
             os.link(tmp, os.path.join(folder, sid + ".path"))
         except FileExistsError:
             # The session named its own meanwhile: its name stands.
-            with open(os.path.join(folder, sid + ".path")) as fh:
+            with open(os.path.join(folder, sid + ".path"), errors="replace") as fh:
                 dest = fh.read().strip()
         except OSError as e:
             raise Refused("session %s's report could not be named (%s)" % (short(sid), e))
@@ -1041,7 +1041,7 @@ def _write(dest, text, what="the report"):
         # Written whole beside it and moved into place, so a reader never sees half a report.
         fd, tmp = tempfile.mkstemp(prefix=".sleep-report-", suffix=".tmp", dir=os.path.dirname(dest) or ".")
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", errors="replace") as fh:
                 fh.write(text)
             os.replace(tmp, dest)
         except BaseException:
@@ -1134,4 +1134,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv[1:]))

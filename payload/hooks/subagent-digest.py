@@ -62,7 +62,7 @@ def main():
         max_chars = MAX_DEFAULT
 
     try:
-        with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as fh:
             lines = [ln for ln in fh if ln.strip()]
     except Exception:
         return 2   # unreadable: not the same as silent
@@ -139,4 +139,5 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())

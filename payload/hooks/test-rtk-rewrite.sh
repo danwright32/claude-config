@@ -26,6 +26,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 H="$DIR/rtk-rewrite.sh"
 
 pass=0
@@ -623,9 +629,9 @@ r1880="$(starts1880 "(rtk gh run list)" "(gh run list)")"
   && check "#1880 and so is one in a subshell" ok \
   || check "#1880 and so is one in a subshell" "got [$r1880]"
 # A byte that is not UTF-8 in front of gh must not make the match fail under a UTF-8 locale.
-UTF8_1880="$(locale -a 2>/dev/null | grep -i -m1 -E '^(en_US|C)\.utf-?8$')"
+bad_byte_measured regex "#1880 an rtk gh past a byte that is not UTF-8" || true
 printf 'echo \377; rtk gh pr status\n' > "$TMPROOT/rewrite"; payload 'echo x; gh pr status'
-out1880="$(LC_ALL="${UTF8_1880:-C}" PATH="$BIN:$PATH" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null)"
+out1880="$(LC_ALL="$BAD_BYTE_LOCALE" PATH="$BIN:$PATH" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null)"
 [ -z "$out1880" ] \
   && check "#1880 a byte that is not UTF-8 before an rtk gh does not let it through" ok \
   || check "#1880 a byte that is not UTF-8 before an rtk gh does not let it through" "it rewrote: $out1880"

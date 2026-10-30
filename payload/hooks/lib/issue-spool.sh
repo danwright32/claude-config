@@ -511,7 +511,7 @@ for name in names:
     try:
         os.makedirs(kept_dir, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".keep-", dir=kept_dir)
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as out:
             out.write(header + "\n")
             for m in held + add:
                 out.write(m + "\n")
@@ -805,6 +805,7 @@ issue_spool_append() { # append <dir> <json-record>
   record="$(printf '%s' "$record" | CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-}" \
       CLAUDE_SPOOL_SESSION="$_sp_sid" CLAUDE_SPOOL_PROJECT="$_sp_proj" python3 -c '
 import json, os, sys
+sys.stdout.reconfigure(errors="replace")
 rec = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 if isinstance(rec, dict):
     if os.environ.get("CLAUDE_SUITE_RUN_ID"):
@@ -874,7 +875,7 @@ for line in open(src, encoding="utf-8", errors="replace"):
     else:
         nones.append(rec)
 
-with open(dst, "w", encoding="utf-8") as fh:
+with open(dst, "w", encoding="utf-8", errors="replace") as fh:
     for rec in findings + unparsed + list(errors.values()) + nones[-KEEP_NONE:]:
         fh.write(json.dumps(rec) + "\n")
     for line in corrupt[-KEEP_NONE:]:
@@ -1028,6 +1029,7 @@ issue_spool_pending() { # pending <dir> [session-transcript] [stamp-out] [seen-l
     CLAUDE_SPOOL_LEDGER_HEADER="$ISSUE_SPOOL_LEDGER_HEADER" \
     CLAUDE_SPOOL_READER_SESSION="$(issue_spool_session_id "${2:-}")" python3 - "$file" "${1:-}" <<'PY'
 import datetime, json, os, re, sys
+sys.stdout.reconfigure(errors="replace")
 exec(os.environ["CLAUDE_SPOOL_IDENTITY_PY"])
 exec(os.environ["CLAUDE_SPOOL_SEEN_PY"])
 
@@ -1124,7 +1126,7 @@ findings = []
 # as already shown here can be taken off the SPOOL SOURCE count of the file they sit in (#1011).
 LINE_KEYS = []
 try:
-    for _rl in open(sys.argv[1] + ".ranges", encoding="utf-8"):
+    for _rl in open(sys.argv[1] + ".ranges", encoding="utf-8", errors="replace"):
         _parts = _rl.split()
         if len(_parts) == 2:
             LINE_KEYS.extend([_parts[0]] * int(_parts[1]))
@@ -1274,12 +1276,12 @@ STAMP = os.environ.get("CLAUDE_SPOOL_STAMP_OUT") or ""
 if STAMP and shown:
     try:
         ranges = []
-        for rl in open(sys.argv[1] + ".ranges", encoding="utf-8"):
+        for rl in open(sys.argv[1] + ".ranges", encoding="utf-8", errors="replace"):
             parts = rl.split()
             if len(parts) == 2:
                 ranges.append((parts[0], int(parts[1])))
         with open(sys.argv[1], encoding="utf-8", errors="replace") as src, \
-             open(STAMP, "w", encoding="utf-8") as out:
+             open(STAMP, "w", encoding="utf-8", errors="replace") as out:
             out.write(os.environ["CLAUDE_SPOOL_STAMP_HEADER"] + "\n")
             for key, n in ranges:
                 for _ in range(n):
@@ -1298,7 +1300,7 @@ if STAMP and shown:
 # cannot settle them, for the SPOOL SOURCE line below (#1011). A write that fails leaves the line on
 # raw counts, which over counts rather than hides anything.
 try:
-    with open(sys.argv[1] + ".seen", "w", encoding="utf-8") as sk:
+    with open(sys.argv[1] + ".seen", "w", encoding="utf-8", errors="replace") as sk:
         for k, n in seen_by_key.items():
             sk.write("%s %d\n" % (k, n))
 except OSError:
@@ -1432,6 +1434,7 @@ issue_spool_muted_summary() { # muted-summary <dir> [session-transcript] -> exit
   if [ ! -s "$file" ]; then issue_spool_collect_done "$file"; return 1; fi
   CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" <<'PY_MUTED'
 import json, os, sys
+sys.stdout.reconfigure(errors="replace")
 
 MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
 unreadable = 0      # a transcript that was never written: nothing can fix this
@@ -1776,6 +1779,7 @@ issue_spool_split() {
   CLAUDE_SPOOL_IDENTITY_PY="$ISSUE_SPOOL_IDENTITY_PY" CLAUDE_SPOOL_SEEN_PY="$ISSUE_SPOOL_SEEN_PY" \
     CLAUDE_SPOOL_LEDGER_HEADER="$ISSUE_SPOOL_LEDGER_HEADER" python3 -c '
 import collections, json, os, sys
+sys.stdout.reconfigure(errors="replace")
 exec(os.environ["CLAUDE_SPOOL_IDENTITY_PY"])
 # OWNERSHIP EXPIRES (claude-config#326) by the same `unclaimed` the render uses, or a record would be
 # shown to this reader as theirs to file and then put back by the clear that follows (L70).
@@ -1784,7 +1788,7 @@ mode, key, sid, stamp, src = sys.argv[1:6]
 read = None
 if stamp:
     read = collections.Counter()
-    with open(stamp, encoding="utf-8") as sf:
+    with open(stamp, encoding="utf-8", errors="replace") as sf:
         next(sf)
         for sl in sf:
             parts = sl.split()
@@ -1793,8 +1797,8 @@ if stamp:
 later = 0
 marks = []
 if mode == "split":
-    m = open(sys.argv[6], "w", encoding="utf-8")
-    o = open(sys.argv[7], "w", encoding="utf-8")
+    m = open(sys.argv[6], "w", encoding="utf-8", errors="replace")
+    o = open(sys.argv[7], "w", encoding="utf-8", errors="replace")
 with open(src, encoding="utf-8", errors="replace") as fh:
     for line in fh:
         if not line.strip():
@@ -1856,7 +1860,7 @@ else:
         if ident not in held:
             held.add(ident)
             new.append(ident)
-    with open(path, "a" if readable else "w", encoding="utf-8") as lf:
+    with open(path, "a" if readable else "w", encoding="utf-8", errors="replace") as lf:
         if not readable:
             lf.write(header + "\n")
         for ident in new:
@@ -1952,8 +1956,8 @@ import json, os, sys
 src, keep_path, err_path, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 MUTED = {r for r in (os.environ.get("CLAUDE_SPOOL_MUTED") or "").split("\n") if r.strip()}
 
-with open(keep_path, "w", encoding="utf-8") as keep, \
-     open(err_path, "w", encoding="utf-8") as errs:
+with open(keep_path, "w", encoding="utf-8", errors="replace") as keep, \
+     open(err_path, "w", encoding="utf-8", errors="replace") as errs:
     for line in open(src, encoding="utf-8", errors="replace"):
         stripped = line.strip()
         if not stripped:

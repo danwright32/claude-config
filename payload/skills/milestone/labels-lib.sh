@@ -18,8 +18,16 @@ lb_read() {
   fi
   names="$(printf '%s' "$raw" | python3 -c '
 import json, sys
+# Refused by name (claude-config#1923): which labels exist decides which get created, so a list
+# holding a byte that is not UTF-8 is not judged on a stand in for the name it mangled.
+raw = sys.stdin.buffer.read()
 try:
-    data = json.load(sys.stdin)
+    text = raw.decode("utf-8", "strict")
+except UnicodeDecodeError as e:
+    print("NOT-UTF8\t0x%02x at offset %d" % (raw[e.start], e.start))
+    sys.exit(0)
+try:
+    data = json.loads(text)
 except Exception:
     print("PARSE-ERROR")
     sys.exit(0)
@@ -33,6 +41,10 @@ for item in data:
     if name:
         print(name.lower())
 ')" || { echo "python3 could not read the response" >"$2"; return 1; }
+  if [[ "$names" == NOT-UTF8$'\t'* ]]; then
+    echo "the label list holds a byte that is not UTF-8 (${names#*$'\t'})" >"$2"
+    return 1
+  fi
   if [[ "$names" == "PARSE-ERROR" ]]; then
     echo "unexpected response" >"$2"
     return 1

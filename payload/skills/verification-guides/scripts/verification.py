@@ -1060,7 +1060,15 @@ def _print_problems(err):
 
 
 def _read_stdin():
-    return sys.stdin.read()
+    # Refused by name rather than replaced (claude-config#1923): what arrives here is a PR body, a
+    # comment or a draft that a merge is judged on, so a byte that is not UTF-8 means the text is not
+    # what GitHub holds, and judging a stand in for it would decide the merge on text nobody wrote.
+    raw = sys.stdin.buffer.read()
+    try:
+        return raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as e:
+        fail("stdin-not-utf8", "standard input holds a byte that is not UTF-8 (0x%02x at offset %d), so it is not the text it should be"
+             % (raw[e.start], e.start))
 
 
 def _cmd(argv):

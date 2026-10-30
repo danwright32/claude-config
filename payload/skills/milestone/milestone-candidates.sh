@@ -184,8 +184,16 @@ def norm(s):
 catch_all = sys.argv[1]
 MAX_DESC = 300
 
+# Refused by name (claude-config#1923): this list decides where an idea is filed, so one holding a
+# byte that is not UTF-8 is not matched on a stand in for the title it mangled.
+raw = sys.stdin.buffer.read()
 try:
-    milestones = load(sys.stdin.read())
+    text = raw.decode("utf-8", "strict")
+except UnicodeDecodeError as exc:
+    sys.stderr.write("Could not read the MILESTONE LIST: it holds a byte that is not UTF-8 (0x%02x at offset %d).\n" % (raw[exc.start], exc.start))
+    sys.exit(3)
+try:
+    milestones = load(text)
 except Exception as exc:
     sys.stderr.write("Could not read the MILESTONE LIST: the response did not parse (%s).\n" % exc)
     sys.exit(3)
@@ -332,8 +340,16 @@ def words(text):
         out.add(s)
     return out
 
+# Refused by name (#1923), as the milestone list is: these issues decide whether an idea is a
+# duplicate, so they are not matched on a stand in for a word one of them holds.
+raw = sys.stdin.buffer.read()
 try:
-    issues = json.loads(sys.stdin.read() or "[]")
+    text = raw.decode("utf-8", "strict")
+except UnicodeDecodeError as exc:
+    sys.stderr.write("the response holds a byte that is not UTF-8 (0x%02x at offset %d)\n" % (raw[exc.start], exc.start))
+    sys.exit(3)
+try:
+    issues = json.loads(text or "[]")
     if not isinstance(issues, list):
         raise ValueError("expected a list of issues")
 except Exception as exc:

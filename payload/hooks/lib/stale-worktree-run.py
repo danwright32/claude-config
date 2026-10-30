@@ -64,14 +64,14 @@ def eastern(ts):
 
 def write_whole(path, text):
     tmp = "%s.tmp.%d" % (path, os.getpid())
-    with open(tmp, "w") as f:
+    with open(tmp, "w", errors="replace") as f:
         f.write(text)
     os.replace(tmp, path)
 
 
 def read_record(path):
     try:
-        with open(path) as f:
+        with open(path, errors="replace") as f:
             record = json.load(f)
         return record if isinstance(record, dict) else None
     except (OSError, ValueError):

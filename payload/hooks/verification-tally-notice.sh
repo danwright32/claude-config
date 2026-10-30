@@ -53,6 +53,7 @@ reason="$(printf '%s' "$due" | python3 -c '
 import json, sys
 sys.path.insert(0, sys.argv[1])
 import verification as v
+sys.stdout.reconfigure(errors="replace")
 due = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 if not due:
     sys.exit(0)

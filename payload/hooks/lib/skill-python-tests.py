@@ -165,7 +165,7 @@ def main(argv: list) -> int:
         try:
             proc = subprocess.run(
                 [sys.executable, "-B", os.path.abspath(__file__), "--one", path],
-                capture_output=True, text=True, timeout=timeout,
+                capture_output=True, text=True, timeout=timeout, errors="replace"
             )
             text = proc.stdout + proc.stderr
             counts = parse_result(proc.stdout)

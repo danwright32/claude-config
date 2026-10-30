@@ -108,7 +108,7 @@ def _gh_issue(action, args, clock, stdin=None, keep=0.0, most=GH_TIMEOUT_S):
     (lib/word-position-scan.py). Raises TimedOut when gh does not answer in the time it is given."""
     wait = max(0.1, min(most, clock.left() - keep))
     try:
-        r = subprocess.run(["gh", "issue", action] + args, input=stdin, capture_output=True, text=True, timeout=wait)
+        r = subprocess.run(["gh", "issue", action] + args, input=stdin, capture_output=True, text=True, timeout=wait, errors="replace")
     except subprocess.TimeoutExpired:
         raise TimedOut("gh did not answer within %.0f seconds" % wait)
     except OSError as e:
@@ -240,4 +240,5 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())

@@ -65,7 +65,7 @@ def entries(issue_dir):
         except OSError:
             continue
         try:
-            with open(path) as fh:
+            with open(path, errors="replace") as fh:
                 e = json.load(fh)
             if not isinstance(e, dict):
                 e = None
@@ -164,7 +164,7 @@ def branch_issues(names):
     why = None
     try:
         p = subprocess.run(["node", "--experimental-strip-types", "--no-warnings", BRANCH_ISSUES],
-                           input="\n".join(names) + "\n", capture_output=True, text=True, timeout=60)
+                           input="\n".join(names) + "\n", capture_output=True, text=True, timeout=60, errors="replace")
         if p.returncode != 0:
             why = (p.stderr.strip().split("\n") or [""])[-1] or "node exited %d" % p.returncode
         else:
@@ -194,7 +194,7 @@ def slug_of(url):
 
 def git(cwd, *args):
     try:
-        p = subprocess.run(["git", "-C", cwd] + list(args), capture_output=True, text=True, timeout=10)
+        p = subprocess.run(["git", "-C", cwd] + list(args), capture_output=True, text=True, timeout=10, errors="replace")
     except Exception:
         return ""
     return p.stdout.strip() if p.returncode == 0 else ""
@@ -221,7 +221,7 @@ def named_in_request(request):
 
 def load_json(path, what):
     try:
-        with open(path) as fh:
+        with open(path, errors="replace") as fh:
             return json.load(fh)
     except Exception as e:
         refuse("the %s could not be read as JSON (%s)" % (what, e))
@@ -229,7 +229,7 @@ def load_json(path, what):
 
 def load_lines(path):
     try:
-        with open(path) as fh:
+        with open(path, errors="replace") as fh:
             return [l.strip() for l in fh if l.strip()]
     except FileNotFoundError:
         return []
@@ -432,4 +432,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

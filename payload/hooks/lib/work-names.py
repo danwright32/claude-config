@@ -67,7 +67,7 @@ def read_registry():
     """-> (owners, sentence) or raises SystemExit(2) with the reason said."""
     reader = os.environ.get("WORK_NAMES_REGISTRY_READER") or os.path.join(HERE, "dev-update-registry.js")
     try:
-        p = subprocess.run(["node", reader, "repos"], capture_output=True, text=True, timeout=60)
+        p = subprocess.run(["node", reader, "repos"], capture_output=True, text=True, timeout=60, errors="replace")
     except FileNotFoundError:
         die("node is not on PATH, so this Mac's dev update registry could not be read, and its "
             "owners could not be checked.")
@@ -207,4 +207,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv[1:]))
