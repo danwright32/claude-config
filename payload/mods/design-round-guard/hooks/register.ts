@@ -32,6 +32,8 @@ import {
   shellBraces,
   afterVariable,
   editedText,
+  editWouldNotApply,
+  stale,
   forged,
   inScratchpad,
   isModHook,
@@ -60,6 +62,7 @@ import {
   isTestPath,
   patternMayBeLook,
   nameFromOutput,
+  nameFromVariable,
   outputTrusted,
   relTo,
   shapeKind,
@@ -877,9 +880,12 @@ const sealedAfter = async ($: EngineInterface, w: Watched, after: string | undef
 
 // `worded`, the files held only for a message's wording, with its words (#1859), which a refusal says
 // in place of the screen's look.
+// `stale`, the file an Edit or MultiEdit that would not apply names (#1954), which is told so rather
+// than held for Dan.
 type Verdict =
   | { pass: true; watch?: Watched[] }
   | { forged: string }
+  | { stale: string }
   | { unsure: string[]; why: string; worded?: Worded[] }
   | { unreadable: { files: string[]; subjects: DesignRoundSubject[]; why: string; worded?: Worded[] } }
   | { missing: { files: string[]; subjects: DesignRoundSubject[]; trees: string[]; unread: string[]; worded?: Worded[] } }
@@ -915,6 +921,9 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   const watch: Watched[] = []
   // The files held only for a message's wording (#1859), as a refusal names them.
   const worded: Worded[] = []
+  // Each file an Edit, MultiEdit or Write names, with the checkout it is in, read for an edit that
+  // would not apply (#1954).
+  const editedIn = new Map<string, string>()
   const passing = (): Verdict => (watch.length ? { pass: true, watch } : { pass: true })
   let why = ''
   for (const t of targets) {
@@ -930,7 +939,13 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // answer "git rev-parse only"): `--sha "$(git rev-parse HEAD)"` passes, a test scope list
     // (`$(cat scope.txt)`) is held.
     const output = !t.path && nameFromOutput(t.word) && (t.tool === true || !outputTrusted(t.word))
-    if (tool === 'Bash' && (output || (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
+    // A name a shell variable fills in, handed to a script or a tool (#1953: `P='app/*push*'; python3
+    // sweep.py $P`), is judged the same way, as a name no rule reads: mod-kit gives a path where the
+    // command sets it to a plain name, and judged by that path it is any file; otherwise its value is
+    // a glob the shell expands (placed in its folder by mod-kit), a loop's words or what a read takes
+    // in, none of which the guard reads. A folder variable ($PWD, $HOME) names no file.
+    const variable = !output && !t.path && t.run !== undefined && nameFromVariable(t.word)
+    if (tool === 'Bash' && (output || variable || (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
       let tree: string | null | undefined
       if (folder !== undefined) {
@@ -943,7 +958,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         }
         if (tree === null) continue
       }
-      const may = patternMayBeLook(t.word)
+      const may = variable ? 'unread' : patternMayBeLook(t.word)
       if (may === 'not') continue
       const shown = t.path ?? (folder === undefined ? t.word : `${folder}/${t.word.split('/').pop() ?? ''}`)
       // In a checkout, a pattern there waits on that issue's answer as a named file does, and one in a
@@ -959,6 +974,8 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       why ||=
         output
           ? `where the command writes ${t.word} could not be followed, and its name is a command's output, which the design round guard cannot read before it runs, so it may name a look changing file`
+          : variable
+          ? `where the command writes ${t.word} could not be followed, and its name is a shell variable's value, which the design round guard cannot read before it runs, so it may name a look changing file`
           : may === 'unread'
           ? `where the command writes ${t.word} could not be followed, and its name is a pattern the design round guard cannot read, so it may name a look changing file`
           : `where the command writes ${t.word} could not be followed, and its name is a pattern that may name a look changing file`
@@ -995,6 +1012,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       continue
     }
     if (tree === null) continue
+    if (tool !== 'Bash') editedIn.set(t.path, tree)
     // A test of a screen passes (Dan, 2026-10-08: "On, but let tests through"), judged by the path
     // inside its project, so a folder named tests above the checkout lets nothing through.
     if (modTs ? isTestPath(relTo(t.path, tree)) || !isModHookTs(relTo(t.path, tree)) : lookKindIn(t.path, tree) === null) continue
@@ -1144,6 +1162,17 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     unread.push(...(unreadIn.get(tree) ?? []))
     for (const s of lacking) if (!missing.some(m => m.key === s.key)) missing.push(s)
   }
+  // #1954: an Edit or MultiEdit held here that would not apply to the file as it stands changes
+  // nothing, since the tool refuses it, and what it would change cannot be read: it is told so, to be
+  // sent again with the file's own text, rather than held for Dan as a change it may not make. The
+  // #1951 builder's slip, a comment's parenthesis lost from its old text, was held for Dan as a change
+  // to a message's words. Only for a file whose checkout is known, read as it stands now.
+  if ((unsureFiles.length || missing.length) && (tool === 'Edit' || tool === 'MultiEdit')) {
+    for (const [path, tree] of editedIn) {
+      const now = await textNow($, path).catch(() => undefined)
+      if (now !== undefined && editWouldNotApply(now, tool, input)) return { stale: relTo(path, tree) }
+    }
+  }
   if (unsureFiles.length) return { unsure: unsureFiles, why, worded }
   if (missing.length) return { missing: { files: missingFiles, subjects: missing, trees: missingTrees, unread, worded } }
   return passing()
@@ -1165,6 +1194,8 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, c
     await drawCard($, call.id, "This would change the design round guard's own record.", 'Only your answers to its two questions write it.')
     return forged(v.forged)
   }
+  // An edit that would not apply asks nothing of Dan (#1954): no card, nothing left waiting.
+  if ('stale' in v) return stale(v.stale)
   if ('unsure' in v) {
     const c = unsureCard(v.unsure, v.worded)
     await drawCard($, call.id, c.reason, c.safeWay)
@@ -1351,6 +1382,7 @@ const afterShell = async (
 // What a check with no call id is told: the refusal the call would meet, with no id to ask Dan under.
 const previewed = (v: Exclude<Verdict, { pass: true }>): string => {
   if ('forged' in v) return forged(v.forged)
+  if ('stale' in v) return stale(v.stale)
   if ('unsure' in v) return unsure(v.unsure, v.why, v.worded)
   if ('unreadable' in v) return unreadable(v.unreadable.files, v.unreadable.subjects, v.unreadable.why, v.unreadable.worded)
   return checked(v.missing.files, v.missing.subjects, v.missing.unread, v.missing.worded)

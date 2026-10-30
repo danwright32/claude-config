@@ -584,6 +584,38 @@ export const nameFromOutput = (word: string): boolean => {
   return depth > 0 || tick || last.includes('$(') || last.includes('`')
 }
 
+// The variables that name a folder, never a file in it: the shell's own, and home.
+const FOLDER_VARIABLE = /^\$(\{(PWD|OLDPWD|HOME|TMPDIR)\}|(PWD|OLDPWD|HOME|TMPDIR)(?![\w]))$/
+
+/**
+ * Whether a word's file name, its last part, is filled in by a shell variable (#1953): a `$` outside
+ * any command substitution in the part after the last slash, as `$P`, `${P}`, `src/$f`, `${a[@]}` or
+ * zsh's `$=P`. mod-kit's write reader follows a variable the command sets to a literal, giving a path
+ * for a plain name or a folder for a pattern; this is read of a word it gave no path, whose value
+ * (a glob the shell expands, a loop's words, what a read takes in, the environment's) the guard
+ * cannot read before it runs. A variable naming a folder alone (`$PWD`, `$HOME`) names no file. A
+ * `$` in single quotes is a `$`, which mod-kit's words, their quotes taken off, cannot tell apart,
+ * so it is read as a variable too: when unsure, held. Read from the word as mod-kit gives it.
+ */
+export const nameFromVariable = (word: string): boolean => {
+  let depth = 0
+  let tick = false
+  let last = ''
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i] as string
+    if (c === '`') tick = !tick
+    else if (c === '$' && word[i + 1] === '(') {
+      depth++
+      i++
+    } else if (depth && c === '(') depth++
+    else if (depth && c === ')') depth--
+    else if (depth || tick) continue
+    else if (c === '/') last = ''
+    else last += c
+  }
+  return /\$[^\s'"(]/.test(last) && !FOLDER_VARIABLE.test(last)
+}
+
 /**
  * Whether every command substitution in a word is one Dan trusts to print no file name (#1832, Dan,
  * 2026-10-27, picker answer "git rev-parse only"): `git rev-parse` run alone, as in
@@ -666,6 +698,26 @@ export const editedText = (before: string, tool: string, input: Record<string, u
   let text: string | undefined = before
   for (const e of input.edits) if ((text = apply(text, e)) === undefined) return undefined
   return text
+}
+
+// Curly quotes as the straight ones Claude Code's Edit matches them to.
+const straightQuotes = (s: string): string => s.replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+
+/**
+ * Whether an Edit or MultiEdit would not apply to a file holding `before` (#1954): the text one of its
+ * changes replaces is not in the file as the changes before it leave it, or is in it more than once
+ * without replace_all, read even with curly quotes matched to straight ones, as Claude Code's Edit
+ * matches them. Such an edit changes nothing, since the tool refuses it. False for any other tool,
+ * and for an edit whose replaced text is empty, which Claude Code may still apply to an empty file.
+ */
+export const editWouldNotApply = (before: string, tool: string, input: Record<string, unknown>): boolean => {
+  if (tool !== 'Edit' && tool !== 'MultiEdit') return false
+  const edits = tool === 'Edit' ? [input] : Array.isArray(input.edits) ? (input.edits as Record<string, unknown>[]) : []
+  if (!edits.length || edits.some(e => typeof e?.old_string !== 'string' || typeof e.new_string !== 'string' || e.old_string === '')) return false
+  if (editedText(before, tool, input) !== undefined) return false
+  const straight = (e: Record<string, unknown>) => ({ ...e, old_string: straightQuotes(String(e.old_string)), new_string: straightQuotes(String(e.new_string)) })
+  const loose = tool === 'Edit' ? straight(input) : { ...input, edits: edits.map(straight) }
+  return editedText(straightQuotes(before), tool, loose) === undefined
 }
 
 // The most pairs of lines changedRuns compares; past it a change is one run, judged whole.
@@ -2770,6 +2822,15 @@ export const unreadable = (files: readonly string[], subjects: readonly DesignRo
 export const forged = (path: string): string =>
   `Blocked: this would change the design round guard's own record (${path}), which only Dan's answers to its two questions may write. ` +
   `To go on, start /design-rounds, or ask Dan "${SKIP_QUESTION}" as the guard says when it refuses a look changing edit.`
+
+/**
+ * What an Edit or MultiEdit that would not apply to a file the guard would hold is told (#1954,
+ * editWouldNotApply): it changes nothing, so nothing is asked of Dan, and the guard cannot read what
+ * it would change, so it is sent again with the file's own text and judged as any edit is.
+ */
+export const stale = (file: string): string =>
+  `Blocked: this edit would not apply to ${file} as it stands: the text it replaces is not in the file (after its earlier changes, for a MultiEdit), or is in it more than once without replace_all, so the design round guard cannot read what it would change. ` +
+  'Read the file and send the edit again with the text it replaces exactly as the file holds it; it is judged then as any edit is. Nothing is asked of Dan for an edit that would not apply.'
 
 export const cannotCheck = (why: string): string => `Blocked: the design round guard could not check this call (${why}), so it was stopped. Try again; if it keeps failing, tell Dan.`
 

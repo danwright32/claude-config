@@ -1958,20 +1958,77 @@ test("#1859: a toast reworded in a mod's .ts hook file is refused as a message's
   expect(drawn.includes('the words of a message')).toBe(false)
 })
 
-// #1859: an edit that would not apply cannot be read before it runs, so it is held where the file
-// draws or sends a message now. One to a file that sends a message and draws nothing said "changes how
-// the screen looks"; it says a message's words, naming none, since which would change is unknown. One
-// to a file that draws still says the look.
-test("#1859: an edit that would not apply, to a mod's .ts hook file that only sends a message, is refused as a message's words; to one that draws, as the look", withKit, async ($, on) => {
+// #1859: an edit the guard cannot apply to the file as it stands cannot be read before it runs, so it
+// is held where the file draws or sends a message now. One to a file that sends a message and draws
+// nothing said "changes how the screen looks"; it says a message's words, naming none, since which
+// would change is unknown. One to a file that draws still says the look. Since #1954 that is only an
+// edit Claude Code's Edit may still apply, its curly quotes matched to the file's straight ones: one
+// that would not apply at all is told so instead (below).
+const CURLY = (s: string) => s.replace(/'/g, '’')
+test("#1859: an edit that may apply only by Claude Code's quote matching, to a mod's .ts hook file that only sends a message, is refused as a message's words; to one that draws, as the look", withKit, async ($, on) => {
   world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT } })
   const LOOK = 'changes how the screen looks'
-  const worded = refusalOf(await call($, { tool: 'Edit', file_path: GUARD_HOOK, old_string: 'no such text', new_string: 'anything' }))
+  const worded = refusalOf(await call($, { tool: 'Edit', file_path: GUARD_HOOK, old_string: CURLY("toast('Blocked"), new_string: "toast('Stopped" }))
   expect(worded).toContain(SKIP_QUESTION)
   expect(worded).toContain('payload/mods/demo/hooks/guard.ts changes the words of a message Dan reads,')
   expect(worded.includes(LOOK)).toBe(false)
-  const look = refusalOf(await call($, { tool: 'Edit', file_path: LINES, old_string: 'no such text', new_string: 'anything' }))
+  const lines = LINES_TEXT.split('\n').find(l => l.includes("'")) as string
+  const look = refusalOf(await call($, { tool: 'Edit', file_path: LINES, old_string: CURLY(lines), new_string: lines }))
   expect(look).toContain(`payload/mods/demo/hooks/card.ts ${LOOK}`)
   expect(look.includes('the words of a message')).toBe(false)
+})
+
+// #1954: the #1951 builder's Edit to mod-kit's commands.ts was held as one that "changes the words of a
+// message Dan reads" (design-round-guard:toolu_01B72rWoH2k6ViHLqnKXaapK, 2026-10-30). Reproduced from
+// its transcript: the regex constant and the comment it added changed no message's words, and the same
+// edit with its text right passes. Its old_string had lost the parenthesis before `$NAME`, so it would
+// not apply, and the guard held it as an edit it could not read, worded as a message change, for Dan
+// to answer. An edit that would not apply at all changes nothing (the Edit tool refuses it), so it is
+// told so and to send it again with the file's own text, which is judged as any edit is; Dan is asked
+// nothing.
+const COMMENTED = `${GUARD_TEXT}// A word holding a pattern character only inside quotes ('*push*', "app/*.css") is handed on as written.
+const GLOB_CHAR = /[*?[\\]{}()~^#]/
+export const quotedGlob = (w: string) => GLOB_CHAR.test(w)
+`
+test("#1954: an edit that would not apply to a mod's hook file or a screen file is told so, never held for Dan; a regex and a comment pass, a message's words are held", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: COMMENTED } })
+  // The #1951 builder's slip: a comment's line missing its parenthesis, whatever the edit adds.
+  const slip = {
+    tool: 'Edit',
+    file_path: GUARD_HOOK,
+    old_string: '// A word holding a pattern character only inside quotes \'*push*\', "app/*.css") is handed on as written.',
+    new_string: '// A word holding a pattern character only inside quotes is handed on as written.',
+  }
+  for (const input of [
+    slip,
+    { tool: 'Edit', file_path: LINES, old_string: 'no such text', new_string: 'anything' },
+    { tool: 'MultiEdit', file_path: GUARD_HOOK, edits: [{ old_string: 'Blocked a command', new_string: 'Stopped a command' }, { old_string: 'Blocked a command', new_string: 'x' }] },
+    // Twice in the file, with no replace_all: Claude Code's Edit refuses it too.
+    { tool: 'Edit', file_path: GUARD_HOOK, old_string: 'GLOB_CHAR', new_string: 'PATTERN_CHAR' },
+  ]) {
+    const why = refusalOf(await call($, input))
+    expect({ input, stale: why.includes('would not apply'), asked: why.includes(SKIP_QUESTION) || why.includes('message Dan reads') }).toEqual({ input, stale: true, asked: false })
+  }
+  // No card for Dan, and nothing left waiting on him.
+  expect(w.cards).toEqual([])
+  expect(w.ran).toEqual([])
+  // The same edit with its text right: a comment and a regex literal change no message's words.
+  expect(refusalOf(await call($, { ...slip, old_string: slip.old_string.replace("quotes '", "quotes ('") }))).toBe('')
+  const added = { tool: 'Edit', file_path: GUARD_HOOK, old_string: 'export const refuse = async (', new_string: "// Shell examples: '*push*', \"app/*.css\" and app/\\*x are handed on; ''*x'' is not.\nconst ESCAPED = /[\\\\'\"]/\nexport const refuse = async (" }
+  expect(refusalOf(await call($, added))).toBe('')
+  expect(w.ran.length).toBe(2)
+  // A message's words changed, alone or beside them, are still held, naming the words.
+  const reword = { old_string: "toast('Blocked a command that", new_string: "toast('Stopped a command that" }
+  for (const input of [
+    { tool: 'Edit', file_path: GUARD_HOOK, ...reword },
+    { tool: 'MultiEdit', file_path: GUARD_HOOK, edits: [{ old_string: added.old_string, new_string: added.new_string }, reword] },
+  ]) {
+    const held = refusalOf(await call($, input))
+    expect(held).toContain(SKIP_QUESTION)
+    expect(held).toContain('payload/mods/demo/hooks/guard.ts changes the words of a message Dan reads')
+    expect(held).toContain('Stopped a command that')
+  }
+  expect(w.ran.length).toBe(2)
 })
 
 // #1341: a python heredoc that only reflowed a comment in this guard's own register.ts was refused as a
@@ -3091,6 +3148,40 @@ test('#1832: a script handed a name a substitution fills in is held unless git r
   for (const command of ['python3 scripts/stamp.py $(git rev-parse HEAD)', 'bash scripts/tag.sh `git rev-parse --short HEAD`'])
     expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
   expect(w.ran.length).toBe(2)
+})
+
+// #1953: a script handed an unquoted variable holding a glob passed unheld (`P='app/*push*'; python3
+// /tmp/sweep.py $P`, measured by the #1951 builder on 2026-10-30): mod-kit placed the pattern in app,
+// but the guard read the word `$P` as a name holding no pattern. The shell expands it to every file
+// the glob matches. A name a variable fills in is now held as one the guard cannot read, as a
+// command's output is (#1832), whether the variable holds a glob, a loop's words or what a read
+// takes in; one the command sets to a plain name is judged by that name, and a folder variable
+// ($PWD, $HOME) names a folder.
+test('#1953: a script or tool handed a name a shell variable fills in is held as unreadable, unless the command sets it to a plain name', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  // A glob the command sets: placed in app, a checkout with no answer, so it waits on the issue's.
+  expect(refusalOf(await call($, { tool: 'Bash', command: "P='app/*push*'; python3 /tmp/sweep.py $P" }))).toContain(SKIP_QUESTION)
+  for (const command of [
+    'for f in app/*push*; do python3 /tmp/sweep.py $f; done',
+    'git ls-files | while read f; do python3 scripts/gen.py $f; done',
+    'python3 scripts/gen.py "$TARGET"',
+    'npx prettier --write ${FILES}',
+    'python3 scripts/gen.py src/$NAME',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes('could not be followed') && why.includes("a shell variable's value") }).toEqual({ command, held: true })
+  }
+  expect(w.ran).toEqual([])
+  for (const command of [
+    // A plain name the command sets, judged by that name: no look changing file.
+    'P=notes.md; python3 /tmp/sweep.py $P',
+    // A glob the command sets in a test folder, which a test's change passes as.
+    "P='tests/*push*'; python3 /tmp/sweep.py $P",
+    // A folder variable names a folder, as a folder spelled out does.
+    'python3 scripts/check.py --dir "$PWD" $HOME',
+  ])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(3)
 })
 
 test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {
