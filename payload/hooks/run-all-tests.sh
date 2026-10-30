@@ -43,6 +43,8 @@
 #                             running job's timeout-minutes, read from its workflow file, counted
 #                             from HOOK_TESTS_JOB_STARTED, and exported so a nested run keeps it
 #   HOOK_TESTS_DEADLINE_RESERVE    seconds before that deadline every recheck must end (default 120)
+#   HOOK_TESTS_NOW            the epoch second that deadline is read against, set for tests (#1937);
+#                             unset, the real clock
 #   HOOK_TESTS_JOB_STARTED    the epoch second the CI job started, recorded by the workflow's first step
 #   HOOK_TESTS_JOBS           how many suites run at once
 #   HOOK_TESTS_BUDGET         processes this whole run may have in flight (default: cores, max 8)
@@ -207,6 +209,19 @@ case "$DEADLINE_RESERVE" in
     echo "run-all-tests: HOOK_TESTS_DEADLINE_RESERVE='$DEADLINE_RESERVE' is not a whole number of seconds. Refusing rather than guessing how close to the deadline a recheck may run." >&2
     exit 1 ;;
 esac
+# The clock that deadline is read against (claude-config#1937): the epoch second now, or the one
+# HOOK_TESTS_NOW names, which then reads the same every time it is asked. A seam for tests (L524),
+# so the time a case leaves before its deadline is SET rather than whatever the machine has left of
+# it once this run has started and the suite has run once: counted on the real clock, a busy Mac
+# spent all of a two second deadline before the recheck it was testing began (L290). The wait
+# itself stays on SECONDS, so a recheck held to a deadline still really waits for the time left.
+# Refused when it is not an epoch second, for the same reason as the deadline (L50).
+case "${HOOK_TESTS_NOW:-}" in
+  *[!0-9]*)
+    echo "run-all-tests: HOOK_TESTS_NOW='$HOOK_TESTS_NOW' is not an epoch second. Refusing rather than guessing, because the deadline is read against it." >&2
+    exit 1 ;;
+esac
+run_now() { if [ -n "${HOOK_TESTS_NOW:-}" ]; then printf '%s\n' "$HOOK_TESTS_NOW"; else date +%s; fi; }
 
 # How many suites run at once (claude-config#125). Since #120 this reads every directory in the
 # repo, which was 37 suites and about five minutes run one after another when #125 was written,
@@ -789,7 +804,7 @@ if [ "$ran" -gt 0 ]; then
       esac
     fi
     if [ -n "$_dl_min" ]; then
-      _dl_now="$(date +%s)"
+      _dl_now="$(run_now)"
       _dl_started="${HOOK_TESTS_JOB_STARTED:-}"
       _dl_from="the job's start, as its first step recorded it"
       case "$_dl_started" in
@@ -1545,7 +1560,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       _fl_stop_at=""
       _fl_skip=""
       if [ "$FLAKE_RECHECK" = "1" ] && [ -n "$RUN_DEADLINE" ]; then
-        _fl_left=$(( RUN_DEADLINE - DEADLINE_RESERVE - $(date +%s) ))
+        _fl_left=$(( RUN_DEADLINE - DEADLINE_RESERVE - $(run_now) ))
         if [ "$_fl_left" -le 0 ]; then
           _fl_skip=" (not rechecked: $DEADLINE_WHAT leaves no time to run it again)"
         else
