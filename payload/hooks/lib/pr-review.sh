@@ -133,9 +133,12 @@ PRR_LIB="$(cd "${PRR_LIB:-/}" && pwd)"
 }
 
 # The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, the
-# shell names the missing function, each setting takes its default and a group count is unreadable.
+# review cannot read its own settings or a group count, so it stops, as it does above.
 # shellcheck source=whole-number.sh
-. "$PRR_LIB/whole-number.sh" 2>/dev/null
+{ . "$PRR_LIB/whole-number.sh" 2>/dev/null && declare -F whole_above_zero >/dev/null; } || {
+  echo "The lessons review could not run: $PRR_LIB/whole-number.sh is missing, so its settings cannot be read. Nothing was reviewed. Override for one merge, explained to Dan first: SKIP_PR_REVIEW=1 <the merge command>."
+  exit 1
+}
 
 PRR_DEADLINE="${PR_REVIEW_DEADLINE_SECONDS:-600}"
 case "$PRR_DEADLINE" in ''|*[!0-9]*) PRR_DEADLINE=600 ;; esac

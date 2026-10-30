@@ -64,7 +64,10 @@ fi
 # The scan. It has to see every spelling of the old check, and none of the things that are not one,
 # before the tree is asked (L1). The pieces are ASSEMBLED, so this file holds none for it to find.
 # ---------------------------------------------------------------------------
-SCAN="$(cat <<'PY'
+# Read by `read` rather than through a command substitution, which bash 3.2 parses for quotes even
+# inside a heredoc (#1690). `read -d ""` stops at the end of input with status 1, by design.
+SCAN=""
+IFS= read -r -d "" SCAN <<'PY' || true
 import re, sys
 
 root = sys.argv[1]
@@ -108,7 +111,7 @@ for rel in sys.stdin.read().split("\n"):
 print("\n".join(found))
 sys.exit(1 if found else 0)
 PY
-)"
+[ -n "$SCAN" ] || { echo "test-whole-number: the scan program came back empty, so nothing could be judged." >&2; exit 2; }
 
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/whole-number.XXXXXXXX")" || TMPROOT=""
 case "${TMPROOT%/}" in

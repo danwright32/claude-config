@@ -32,6 +32,11 @@ bounded_run() {
   local seconds="$1"; shift
   BOUNDED_RC=0
   BOUNDED_OUT=""
+  if ! declare -F whole_above_zero >/dev/null; then
+    BOUNDED_RC=125
+    BOUNDED_OUT="bounded-run: $_BR_LIB/whole-number.sh is missing, so the bound could not be read and nothing was run"
+    return 0
+  fi
   whole_above_zero "$seconds" || { BOUNDED_RC=125; return 0; }
   BOUNDED_OUT="$(perl -e '
     my $t = shift @ARGV;

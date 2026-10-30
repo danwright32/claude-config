@@ -116,14 +116,21 @@ else
   }
 fi
 # The one test of a setting or a reading that must be a whole number above zero, 00 included as
-# zero (claude-config#1948), shared with the hooks. Resolved the same way as the five above. Missing,
-# every such value is read as unreadable: each setting takes its default or is refused, as it would
-# for any value that is not a number, and the shell names the missing function.
+# zero (claude-config#1948), shared with the hooks. Resolved the same way as the five above. NOT a
+# refusal to run when missing, like the others: the file ships beside this script, so it is missing
+# only from a checkout whose payload is incomplete, as the suite's fixture repositories are. Then
+# every value reads as unreadable, so each setting takes its default and a count to report reads as
+# none, and a setting given explicitly where it is checked on every run (SYNC_LESSON_BAND_SIZE,
+# SYNC_CLAUDE_CHECK_TIMEOUT) is refused, saying the library is missing rather than the value wrong.
 WHOLE_NUMBER_LIB="$SYNC_SELF_PAYLOAD/hooks/lib/whole-number.sh"
 [ -f "$WHOLE_NUMBER_LIB" ] || WHOLE_NUMBER_LIB="$CLAUDE_HOME/hooks/lib/whole-number.sh"
+WHOLE_NUMBER_MISSING=""
 if [ -f "$WHOLE_NUMBER_LIB" ]; then
   # shellcheck source=payload/hooks/lib/whole-number.sh
   . "$WHOLE_NUMBER_LIB"
+else
+  WHOLE_NUMBER_MISSING="lib/whole-number.sh, which reads whole number settings, is missing from both $SYNC_SELF_PAYLOAD/hooks and $CLAUDE_HOME/hooks. Restore it with git checkout -- payload/hooks/lib/whole-number.sh"
+  whole_above_zero(){ return 1; }
 fi
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
@@ -3874,7 +3881,11 @@ LESSON_BAND_SIZE="${SYNC_LESSON_BAND_SIZE:-500}"
 # find a band with room however far it walks: it would spin for ever with nothing said. A size is
 # also the width of a claim already recorded in lesson-bands, so a nonsense one is not a thing to
 # guess a default for.
-whole_above_zero "$LESSON_BAND_SIZE" || die "SYNC_LESSON_BAND_SIZE is set to '$LESSON_BAND_SIZE', which is not a whole number of numbers a band can hold, and bash would read it as zero, making every band empty. NOTHING was done. Unset it to use the default of 500, which is what the bands in $LESSON_BANDS_DIR were claimed under."
+# Only a size given explicitly needs reading: the default is a whole number by construction.
+if [ -n "${SYNC_LESSON_BAND_SIZE:-}" ] && ! whole_above_zero "$LESSON_BAND_SIZE"; then
+  [ -z "$WHOLE_NUMBER_MISSING" ] || die "SYNC_LESSON_BAND_SIZE is set to '$LESSON_BAND_SIZE' and could not be read: $WHOLE_NUMBER_MISSING. NOTHING was done."
+  die "SYNC_LESSON_BAND_SIZE is set to '$LESSON_BAND_SIZE', which is not a whole number of numbers a band can hold, and bash would read it as zero, making every band empty. NOTHING was done. Unset it to use the default of 500, which is what the bands in $LESSON_BANDS_DIR were claimed under."
+fi
 
 # Every band any Mac has claimed, as "host<TAB>start". A file that does not hold a number is
 # skipped rather than read as zero: a zero would look like a legitimate band below everyone else's
@@ -12933,8 +12944,14 @@ esac
 # How long one `claude` question may take. The check runs under the sync lock, on the watcher's and
 # the timer's path, so a claude that hangs (a login prompt, a self update) would hold every sync
 # behind it. Measured 2026-10-03: each answered in under half a second; DESIGN.md's measured numbers.
+# Only a timeout given explicitly needs reading: the default is a whole number by construction.
+_sct_given="${SYNC_CLAUDE_CHECK_TIMEOUT:-}"
 SYNC_CLAUDE_CHECK_TIMEOUT="${SYNC_CLAUDE_CHECK_TIMEOUT:-30}"
-if ! whole_above_zero "$SYNC_CLAUDE_CHECK_TIMEOUT"; then
+if [ -n "$_sct_given" ] && ! whole_above_zero "$SYNC_CLAUDE_CHECK_TIMEOUT"; then
+  if [ -n "$WHOLE_NUMBER_MISSING" ]; then
+    echo "claude-sync: SYNC_CLAUDE_CHECK_TIMEOUT='$SYNC_CLAUDE_CHECK_TIMEOUT' could not be read: $WHOLE_NUMBER_MISSING. Refusing to run rather than asking claude about the mods with a bound nobody read." >&2
+    exit 2
+  fi
   echo "claude-sync: SYNC_CLAUDE_CHECK_TIMEOUT='$SYNC_CLAUDE_CHECK_TIMEOUT' is not a positive whole number of seconds. Refusing to run rather than asking claude about the mods with no bound nobody can read." >&2
   exit 2
 fi

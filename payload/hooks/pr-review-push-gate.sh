@@ -64,12 +64,13 @@ case "$payload" in *push*) ;; *) exit 0 ;; esac
 refuse() { printf '%s\n' "$1" >&2; exit 2; }
 OVERRIDE_HOW="Override for one push, explained to Dan first: SKIP_PR_REVIEW=1 <the push command>."
 
-# The libraries it reads through (merge-target.sh sources push-scope.sh). Missing, it cannot tell a
-# push from anything else, so it refuses only what could be one, by the cheap filter above.
+# The libraries it reads through (merge-target.sh sources push-scope.sh and whole-number.sh).
+# Missing, it cannot tell a push from anything else, so it refuses only what could be one, by the
+# cheap filter above.
 if ! . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || ! declare -F ps_is_git_push >/dev/null \
-  || ! declare -F mt_push_gate_scope >/dev/null; then
+  || ! declare -F mt_push_gate_scope >/dev/null || ! declare -F whole_above_zero >/dev/null; then
   case "$payload" in *SKIP_PR_REVIEW=1*) exit 0 ;; esac
-  refuse "Refusing to push: lib/merge-target.sh or lib/push-scope.sh is missing, so pr-review-push-gate.sh cannot tell whether this command pushes, and the lessons review of the branch cannot be asked. $OVERRIDE_HOW"
+  refuse "Refusing to push: lib/merge-target.sh, lib/push-scope.sh or lib/whole-number.sh is missing, so pr-review-push-gate.sh cannot tell whether this command pushes, and the lessons review of the branch cannot be asked. $OVERRIDE_HOW"
 fi
 if ps_reader_missing jq python3; then
   case "$payload" in *SKIP_PR_REVIEW=1*) exit 0 ;; esac
@@ -116,9 +117,7 @@ read_key="$(mt_presented_read_key "$raw" ps_is_git_push)"
 WAIT="${PR_REVIEW_PUSH_WAIT_SECONDS:-100}"
 case "$WAIT" in ''|*[!0-9]*) WAIT=100 ;; esac
 POLL="${PR_REVIEW_PUSH_POLL_SECONDS:-3}"
-# The one test of a whole number above zero, 00 included as zero (claude-config#1948).
-# shellcheck source=lib/whole-number.sh
-. "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null
+# Zero however written is the default (lib/whole-number.sh, loaded by merge-target.sh, #1948).
 whole_above_zero "$POLL" || POLL=3
 SLEEP="${PR_REVIEW_PUSH_SLEEP:-sleep}"
 now_s() { if [ -n "${PR_REVIEW_PUSH_CLOCK:-}" ]; then "$PR_REVIEW_PUSH_CLOCK"; else date +%s; fi; }

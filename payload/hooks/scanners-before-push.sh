@@ -72,6 +72,17 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/push-scope.sh, which reads whether this command pushes and what it carries, so this command could not be checked. A library this gate cannot load is not a push with nothing to check. Reinstall the hooks with claude-sync pull. For this one command: SKIP_SCANNERS_CHECK=1 <the same command>" >&2
   exit 2
 }
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948), which reads
+# the budget, the lock poll and the age of a run left going. Missing, the same as above: a push is
+# refused, naming the file, and any other command passes.
+# shellcheck source=lib/whole-number.sh
+{ . "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null && declare -F whole_above_zero >/dev/null; } || {
+  payload="$(cat)"
+  case "$payload" in *SKIP_SCANNERS_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *push*) ;; *) exit 0 ;; esac
+  echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/whole-number.sh, which reads its budget and other settings, so this push was not scanned. Reinstall the hooks with claude-sync pull. For this one command: SKIP_SCANNERS_CHECK=1 <the same command>" >&2
+  exit 2
+}
 
 payload="$(cat)"
 parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
@@ -468,10 +479,7 @@ mkdir -p "$_sc_runs" 2>/dev/null
 # Six hours: far past any scanner here (the slowest, test-run-all-tests.sh, about 7 minutes under
 # load), so a run older than this is one nobody is coming back for. A setting, not a measurement.
 _sc_run_stale="${SCANNERS_RUN_STALE_SECONDS:-21600}"
-# The one test of a whole number above zero, 00 included as zero (claude-config#1948), for this
-# setting and the two below. Missing, the shell names the missing function and each default is used.
-# shellcheck source=lib/whole-number.sh
-. "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null
+# Zero however written is the default, never "stale at once" (lib/whole-number.sh, claude-config#1948).
 whole_above_zero "$_sc_run_stale" || _sc_run_stale=21600
 # A poll delay that can be injected (L524), for the wait on the suite lock further down.
 _sc_sleep="${SCANNERS_SLEEP:-sleep}"

@@ -119,10 +119,10 @@
 # caller's folder (claude-config#1104, test-lib-self-locate.sh).
 _MT_LIB="${BASH_SOURCE[0]%/*}"; [ "$_MT_LIB" != "${BASH_SOURCE[0]}" ] || _MT_LIB=.
 _MT_LIB="$(cd "${_MT_LIB:-/}" && pwd)"
-# The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, the
-# shell names the missing function and each setting it guards takes its default.
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, this
+# file does not load, for the reason below, and every gate sourcing it refuses naming it.
 # shellcheck source=whole-number.sh
-. "$_MT_LIB/whole-number.sh" 2>/dev/null
+{ . "$_MT_LIB/whole-number.sh" && declare -F whole_above_zero >/dev/null; } || return 1
 # Missing, this file does not load either (claude-config#1900). It carried on before, so every gate
 # sourcing it read it as loaded, then found no ps_ function to ask, read no merge, and allowed it.
 # shellcheck source=push-scope.sh

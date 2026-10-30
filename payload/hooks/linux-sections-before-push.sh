@@ -46,6 +46,17 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   echo "BLOCKED: linux-sections-before-push.sh could not load $HOOK_DIR/lib/push-scope.sh, which reads whether this command pushes and what it carries, so this command could not be checked. A library this gate cannot load is not a push with nothing to check. Reinstall the hooks with claude-sync pull. For this one command: SKIP_LINUX_CHECK=1 <the same command>" >&2
   exit 2
 }
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948), which reads
+# the Linux run's budget. Missing, the same as above: a push is refused, naming the file, and any
+# other command passes.
+# shellcheck source=lib/whole-number.sh
+{ . "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null && declare -F whole_above_zero >/dev/null; } || {
+  payload="$(cat)"
+  case "$payload" in *SKIP_LINUX_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *push*) ;; *) exit 0 ;; esac
+  echo "BLOCKED: linux-sections-before-push.sh could not load $HOOK_DIR/lib/whole-number.sh, which reads the Linux run's budget, so this command could not be checked. Reinstall the hooks with claude-sync pull. For this one command: SKIP_LINUX_CHECK=1 <the same command>" >&2
+  exit 2
+}
 
 payload="$(cat)"
 parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
@@ -350,9 +361,7 @@ _ls_budget_default=240
 _ls_budget="${LINUX_SECTIONS_BUDGET_SECONDS:-$_ls_budget_default}"
 # Zero written any way (00, 000) is zero (claude-config#1931): only a literal 0 fell back, and "00"
 # ran the audit with no bound at all, since perl's alarm reads it as 0. Which values are zero is
-# lib/whole-number.sh's answer (claude-config#1948); missing, the default is used.
-# shellcheck source=lib/whole-number.sh
-. "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null
+# lib/whole-number.sh's answer (claude-config#1948), loaded at the top.
 whole_above_zero "$_ls_budget" || _ls_budget=$_ls_budget_default
 _ls_docker="${SYNC_DOCKER:-docker}"
 _ls_container="claude-linux-sections-$$-$(date +%s)"
