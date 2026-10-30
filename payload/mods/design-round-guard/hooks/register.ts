@@ -250,6 +250,12 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   judged as the one file its characters name, so a quoted glob handed as data runs. A glob the
 //   shell expands, one spelled bare anywhere in the command, a quoted name that is itself a look
 //   changing or mod hook file's or holds a group, and any pattern handed to a tool are held as before.
+// - Since #1953: a name a shell variable fills in, handed to a script or a tool, is held as a name no
+//   rule reads (rules.ts nameFromVariable), as a command's output is; one the command sets to a plain
+//   name is judged by that name, and a folder variable ($PWD, $HOME) names no file.
+// - Since #1954: an Edit or MultiEdit the guard would hold that would not apply to the file as it
+//   stands (rules.ts editWouldNotApply) is told so, to be sent again with the file's own text, with
+//   no card and nothing asked of Dan, never held as a change it cannot read.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -694,7 +700,8 @@ const wordsOnly = async ($: EngineInterface, path: string, tree: string, before:
 // to a file that drew nothing since #1296, and since #1576 one to a file that draws too, so a shell
 // write and an Edit making the same change are judged alike. Any other call that cannot be read before
 // it runs (an edit that would not apply, a call naming several files) is held where the file draws
-// or sends a message now and passes where it does neither. A change to its comments alone passes (rules.ts commentOnlyChange,
+// or sends a message now and passes where it does neither; an Edit or MultiEdit so held that would not
+// apply at all is then told so instead (judged, #1954). A change to its comments alone passes (rules.ts commentOnlyChange,
 // #1341).
 const drawingChange = async (
   $: EngineInterface,
