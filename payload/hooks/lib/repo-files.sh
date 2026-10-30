@@ -46,8 +46,14 @@ if [ -n "$only_changed" ]; then
   # built from half of it would let a pass stand for files nobody compared. Without --no-renames a
   # deleted file and a staged one with the same contents are paired as one rename and only the new
   # name is printed, so the deletion went unlisted (seen in this suite's fixture).
-  if ! changed="$(git -C "$root" diff --name-only --no-renames HEAD -- "$@" 2>/dev/null)" \
-     || ! untracked="$(git -C "$root" ls-files --others --exclude-standard -- "$@" 2>/dev/null)"; then
+  #
+  # Read with -z, so a name git would otherwise quote, one with a non-ASCII character or a double
+  # quote in it, arrives as it is on disk. Quoted, it named no file there, so it read as deleted and
+  # an edit to it never changed the key. The NULs become newlines for the list this prints, under
+  # pipefail so git's own failure still refuses; a name holding a newline is the one this cannot
+  # carry, and it splits into two that each read as deleted.
+  if ! changed="$(git -C "$root" diff --name-only -z --no-renames HEAD -- "$@" 2>/dev/null | tr '\0' '\n')" \
+     || ! untracked="$(git -C "$root" ls-files -z --others --exclude-standard -- "$@" 2>/dev/null | tr '\0' '\n')"; then
     echo "repo-files: git could not list the files under $root that differ from its commit." >&2
     exit 1
   fi

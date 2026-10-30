@@ -86,6 +86,17 @@ chg="$(bash "$RF" --changed "$R" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$chg" | sort | tr '\n' ' ')" = "edited.sh gone.sh staged.sh sub/untracked-deep.sh untracked.sh " ] \
   && check "#1910 --changed lists exactly the edited, deleted, staged and untracked files" ok \
   || check "#1910 --changed lists exactly the edited, deleted, staged and untracked files" "rc=$rc got: $chg"
+# A name git would quote, non-ASCII or holding a double quote, is listed as it is on disk. Quoted,
+# it named no file there, so it read as deleted and an edit to it never changed the key.
+Q="$TMPROOT/quoted"; mkdir -p "$Q"; git -C "$Q" init -q
+git -C "$Q" config user.email t@t; git -C "$Q" config user.name t
+printf 'x\n' > "$Q/caf$(printf '\303\251').sh"; printf 'x\n' > "$Q/say\"hi\".sh"
+git -C "$Q" add -A >/dev/null 2>&1; git -C "$Q" -c commit.gpgsign=false commit -q -m seed >/dev/null 2>&1
+printf 'y\n' > "$Q/caf$(printf '\303\251').sh"; printf 'y\n' > "$Q/say\"hi\".sh"; printf 'x\n' > "$Q/new$(printf '\303\251').sh"
+chg="$(bash "$RF" --changed "$Q" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && has "caf$(printf '\303\251').sh" "$chg" && has "say\"hi\".sh" "$chg" && has "new$(printf '\303\251').sh" "$chg" \
+  && check "#1910 --changed lists a name git would quote as it is on disk" ok \
+  || check "#1910 --changed lists a name git would quote as it is on disk" "rc=$rc got: $chg"
 # A clean checkout has nothing that differs, which is an empty list and a success, never a refusal.
 C="$TMPROOT/clean"; mkdir -p "$C"; git -C "$C" init -q
 git -C "$C" config user.email t@t; git -C "$C" config user.name t
