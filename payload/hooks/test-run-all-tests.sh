@@ -72,8 +72,8 @@ export CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool-default"
 # No launch below inherits the deadline of the run this suite is part of (#1901). Under CI the
 # outer run exports the job's own, so a fixture run near the end of the job would skip the very
 # recheck a case is asserting on, and with GITHUB_ACTIONS left set a fixture run would read the real
-# workflow. The cases that are ABOUT the deadline set their own.
-unset HOOK_TESTS_DEADLINE HOOK_TESTS_DEADLINE_RESERVE HOOK_TESTS_JOB_STARTED GITHUB_ACTIONS GITHUB_WORKFLOW_REF GITHUB_JOB
+# workflow. The cases that are ABOUT the deadline set their own, and the clock it is read against.
+unset HOOK_TESTS_DEADLINE HOOK_TESTS_DEADLINE_RESERVE HOOK_TESTS_JOB_STARTED HOOK_TESTS_NOW GITHUB_ACTIONS GITHUB_WORKFLOW_REF GITHUB_JOB
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 
 # NOTHING below runs the runner without either naming a directory or pointing HOOK_TESTS_ROOT at a
@@ -2822,6 +2822,13 @@ out_dlx="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECH
 # which of the two stopped it (L11). The allowance here is set far past the deadline, which is two
 # seconds away with no reserve, so a run that went on past a few seconds was not held to the
 # deadline, and one that says it timed out ran out the wrong limit.
+# The two seconds are SET, on the runner's clock (HOOK_TESTS_NOW), never counted from a real
+# deadline taken before the runner starts (#1937). Counted that way, the runner's own start and the
+# suite's first run came out of those two seconds, so on a busy Mac the recheck was never started
+# and the FAIL line said "not rechecked": at a load average of 87 to 102 on 2026-10-29, and 8 times
+# in 8 under tools/load-window.sh (96 busy workers, load 58 to 251) on 2026-10-30. The deadline is
+# an epoch second long past by the real clock, so a runner that ignored the clock it was given
+# would not recheck at all, and this case would fail.
 DLH="$TMPROOT/dir-deadline-hang"; mkdir -p "$DLH"
 DLH_MARKER="$TMPROOT/deadline-hang-marker"
 {
@@ -2837,7 +2844,7 @@ DLH_MARKER="$TMPROOT/deadline-hang-marker"
 chmod +x "$DLH/test-hangsagain.sh"
 rm -f "$DLH_MARKER"
 out_dlh="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 HOOK_TESTS_FLAKE_RECHECK_MAX=200 \
-  HOOK_TESTS_FLAKE_RECHECK_POLL=0.05 HOOK_TESTS_DEADLINE_RESERVE=0 HOOK_TESTS_DEADLINE=$(( $(date +%s) + 2 )) \
+  HOOK_TESTS_FLAKE_RECHECK_POLL=0.05 HOOK_TESTS_DEADLINE_RESERVE=0 HOOK_TESTS_NOW=1000000 HOOK_TESTS_DEADLINE=1000002 \
   bash "$RUNNER" "$DLH" 2>&1)"; code_dlh=$?
 { [ "$code_dlh" -ne 0 ] && printf '%s\n' "$out_dlh" | grep -E '^ +FAIL +test-hangsagain\.sh.*recheck stopped after [0-9]+s.*HOOK_TESTS_DEADLINE' > /dev/null; } \
   && check "#1901 a recheck that hangs is stopped at the run's deadline, and says so" ok \
@@ -2847,6 +2854,12 @@ case "$(printf '%s\n' "$out_dlh" | grep -E '^ +FAIL +test-hangsagain\.sh')" in
   *) check "#1901 and not as a recheck that ran out its own allowance" ok ;;
 esac
 rm -f "$DLH_MARKER"
+# A clock that is not an epoch second is refused rather than guessed at (L50), because it decides
+# whether a failed suite is run again at all, exactly as the deadline it is read against does.
+out_dln="$(env -u CI -u GITHUB_ACTIONS HOOK_TESTS_TIMINGS= HOOK_TESTS_NOW=later bash "$RUNNER" "$DLP" 2>&1)"; code_dln=$?
+{ [ "$code_dln" -ne 0 ] && printf '%s\n' "$out_dln" | grep -F "HOOK_TESTS_NOW='later'" > /dev/null; } \
+  && check "#1937 a clock that is not an epoch second is refused" ok \
+  || check "#1937 a clock that is not an epoch second is refused" "exit=$code_dln out=$out_dln"
 
 # Under GitHub Actions the deadline is READ from the workflow file and job the run is in, counted
 # from the start the job's first step recorded. Two jobs with different limits, so a number copied
