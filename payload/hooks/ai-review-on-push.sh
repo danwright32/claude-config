@@ -101,7 +101,8 @@
 # key is a hash of the origin URL; see lib/ai-review-common.sh. AI_REVIEW_STATE_DIR moves it.
 #
 # Fails QUIET on a payload it cannot read, and OPEN everywhere else: nothing here can stop a push
-# that has already happened.
+# that has already happened. A library it cannot load is said once, on a call naming a push
+# (claude-config#1922).
 
 set -uo pipefail
 

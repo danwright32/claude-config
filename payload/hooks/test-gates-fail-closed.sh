@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The class guard for claude-config#1900: a gate allows nothing it could not read.
 #
-# Two ways a gate allowed what it could not read, each found in one hook and then swept:
+# Two ways a gate allowed what it could not read, each found in one hook and then swept (three more
+# follow below them):
 #
 #   1. A library sourced with `|| exit 0`. With the file missing, or cut short, the gate exited 0 on
 #      every call, which looks exactly like a call with nothing to refuse (L10, L1033). Every

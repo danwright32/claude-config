@@ -19,7 +19,8 @@
 #   - Cooldown stamp (120s per project): when one turn files several issues, the check
 #     fires once and evaluates them together instead of interrupting per issue.
 #
-# Fails QUIET: any parse error exits 0 with no output.
+# Fails QUIET: any parse error exits 0 with no output. A library it cannot load is said once, on a
+# call naming an issue create (claude-config#1922).
 
 set -uo pipefail
 
