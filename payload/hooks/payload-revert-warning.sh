@@ -61,9 +61,15 @@ input="$(cat 2>/dev/null || true)"
 
 # The session, and the directory the prompt was sent from. Keyed on the session so two open at once
 # each get their own record. With no session there is no way to tell a first prompt from a later
-# one, and guessing would either speak on every prompt or never, so it says on stderr that it could
-# not run rather than reporting silence as a clean answer (L98). stderr on a UserPromptSubmit hook
-# is not shown to the person, which is why this path stays quiet to them.
+# one, and guessing would either speak on every prompt or never, so it says that it could not run
+# rather than reporting silence as a clean answer (L98). Said as a systemMessage (#1906): the hooks
+# documentation says Claude Code discards a hook's stderr on exit 0, and that a UserPromptSubmit
+# hook's plain stdout reaches Claude as context with no visible transcript entry, so it was quiet to
+# the person, and the systemMessage is the channel the documentation gives that is shown to them.
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 # Read as jq reads it, so a prompt holding a byte that is not UTF-8 is read rather than raising and
 # leaving the session unknown (claude-config#1900).
 read -r session cwd <<< "$(printf '%s' "$input" | python3 -c '
@@ -77,8 +83,7 @@ print((d.get("session_id") or d.get("transcript_path") or "-"), (d.get("cwd") or
 ' 2>/dev/null || printf -- '- -')"
 [ "$cwd" = "-" ] && cwd="$PWD"
 if [ "$session" = "-" ] || [ -z "$session" ]; then
-  echo "payload-revert-warning: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and nothing was said." >&2
-  exit 0
+  hook_allow_notice "payload-revert-warning: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and nothing was said."
 fi
 
 key="$(printf '%s' "$session" | shasum | cut -c1-12)"

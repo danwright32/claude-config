@@ -462,6 +462,41 @@ esac
 [ "$printed_rc" -eq 1 ] \
   && check "#478 faults are answered with exit 1" ok \
   || check "#478 faults are answered with exit 1" "exit $printed_rc"
+
+# lib/hook-notice.sh builds the object for a hook from the event the hook names in its call
+# (claude-config#1906), so the event is judged at the call, and the builder's own object, whose event
+# is a placeholder it fills in, is not reported as nameless.
+CALLS="$TMPROOT/output-calls"; mkdir -p "$CALLS/hooks/lib"
+printf '#!/usr/bin/env bash\nhook_notice_json() {\n  printf %s "$1" "$2"\n}\n' "'{\"systemMessage\": \"%s\", \"hookSpecificOutput\": {\"hookEventName\": \"%s\", \"additionalContext\": \"x\"}}'" > "$CALLS/hooks/lib/hook-notice.sh"
+printf '#!/usr/bin/env bash\nhook_allow_notice "a notice naming PostToolUse in its words" PreToolUse\n' > "$CALLS/hooks/callsound.sh"
+printf '#!/usr/bin/env bash\nhook_allow_notice "x" PostCompact\n' > "$CALLS/hooks/callstranger.sh"
+printf '#!/usr/bin/env bash\nhook_notice_json "$(printf "%%s" "x")" \\\n  UserPromptSubmit \\\n  "context"\n' > "$CALLS/hooks/callmisplaced.sh"
+cat > "$CALLS/settings.json" <<'JSON'
+{"hooks": {"PreToolUse": [
+  {"matcher": "Bash", "hooks": [
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/callsound.sh"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/callstranger.sh"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/callmisplaced.sh"}
+  ]}
+]}}
+JSON
+called="$(output_faults "$CALLS/settings.json" "$CALLS/hooks" 2>&1)"
+case "$called" in
+  *"UNKNOWN EVENT callstranger.sh names PostCompact"*) check "#1906 a call naming an event that takes no hookSpecificOutput is reported" ok ;;
+  *) check "#1906 a call naming an event that takes no hookSpecificOutput is reported" "it answered: [$called]" ;;
+esac
+case "$called" in
+  *"MISREGISTERED callmisplaced.sh names UserPromptSubmit and the settings run it under PreToolUse"*) check "#1906 a call whose event, on a continuation line, is not where the hook runs is reported" ok ;;
+  *) check "#1906 a call whose event, on a continuation line, is not where the hook runs is reported" "it answered: [$called]" ;;
+esac
+case "$called" in
+  *callsound.sh*) check "#1906 a call naming the event its hook runs under is not reported, an event named inside its words included" "it answered: [$called]" ;;
+  *) check "#1906 a call naming the event its hook runs under is not reported, an event named inside its words included" ok ;;
+esac
+case "$called" in
+  *"hook-notice.sh"*) check "#1906 the builder, whose event is the placeholder its callers fill, is not reported" "it answered: [$called]" ;;
+  *) check "#1906 the builder, whose event is the placeholder its callers fill, is not reported" ok ;;
+esac
 # A tree with nothing to judge is not a clean tree, and a caller has to be able to tell them
 # apart, or a scan that read nothing reports every hook sound (L98).
 EMPTY="$TMPROOT/output-empty"; mkdir -p "$EMPTY/hooks"

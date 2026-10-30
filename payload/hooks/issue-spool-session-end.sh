@@ -12,9 +12,16 @@
 # whose transcript has been idle past a few hours, which covers a session that ended without this
 # hook running (a crash, a killed terminal), and keep the week as the last backstop.
 #
-# It reads the hook payload on stdin. It never blocks anything (SessionEnd cannot), and it always
-# exits 0, but a stamp it could not write is said on stderr, which Claude Code records in its debug
-# log, rather than passed over in silence.
+# It reads the hook payload on stdin. It never blocks anything (SessionEnd cannot), and a stamp it
+# could not write is said, never passed over in silence, through the one channel SessionEnd has to
+# the person (claude-config#1906). The hooks documentation: SessionEnd "discards their JSON output
+# fields, such as systemMessage", "Claude never sees stderr from a hook that exits 0", and exit 2 on
+# SessionEnd "Shows stderr to user only", with "no decision control" to block anything. So a notice
+# is stderr with exit 2. That rests on the documentation, not on a session watched ending.
+say() {   # $1 = the notice
+  printf '%s\n' "$1" >&2
+  exit 2
+}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload="$(cat 2>/dev/null)"
 sid="$(printf '%s' "$payload" | python3 -c '
@@ -27,10 +34,9 @@ except Exception:
 s = d.get("session_id") if isinstance(d, dict) else None
 print(s if isinstance(s, str) else "")' 2>/dev/null)"
 if [ -z "$sid" ]; then
-  echo "issue-spool-session-end: the SessionEnd payload carried no session_id, so no session was marked ended; its findings are released when its transcript goes idle instead." >&2
-  exit 0
+  say "issue-spool-session-end: the SessionEnd payload carried no session_id, so no session was marked ended; its findings are released when its transcript goes idle instead."
 fi
 if ! out="$(bash "$HERE/lib/issue-spool.sh" mark-ended "$sid" 2>&1)"; then
-  echo "issue-spool-session-end: could not mark session $sid ended: $out" >&2
+  say "issue-spool-session-end: could not mark session $sid ended: $out"
 fi
 exit 0

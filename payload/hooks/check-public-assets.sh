@@ -35,14 +35,17 @@
 # asset added by THAT commit is judged on the next push. A push on its own is the ordinary case.
 #
 # Outcomes (L11, L98):
-#   clean          exit 0, the summary line on stdout (kept in the transcript).
+#   clean          exit 0, the summary line as a JSON systemMessage (lib/hook-notice.sh, #1906).
 #   nothing to judge (no asset directory)
-#                  exit 0, ONE line on stdout saying so. Not stderr: Claude Code discards a
-#                  PreToolUse hook's stderr on exit 0, so a line there would be theatre.
+#                  exit 0, ONE line saying so, as a systemMessage too. Neither stderr nor plain
+#                  stdout reaches the person on exit 0: the hooks documentation says Claude Code
+#                  discards a hook's stderr then, and sends a PreToolUse hook's plain stdout to the
+#                  debug log, never the transcript (this header used to say the transcript kept it).
 #   could not measure
-#                  exit 1 with one line on stderr. A non-blocking error: the push runs and the first
-#                  stderr line surfaces as a hook notice, the same shape require-tests-before-push.sh
-#                  uses. Reserved for a detector that wanted to decide and could not.
+#                  exit 0 with one line as a JSON systemMessage, which the person is shown
+#                  (lib/hook-notice.sh, #1912), the same shape require-tests-before-push.sh uses. It
+#                  was exit 1, the non-blocking error, until "onFailure": "block" made exit 1 a
+#                  refusal. Reserved for a detector that wanted to decide and could not.
 #   findings       exit 2, the refusal on stderr, naming each file and what to do.
 #
 # Override: SKIP_ASSET_CHECK=1 git push ...  Explain to the user first, never skip silently.
@@ -52,9 +55,12 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # repository cannot reach (a detector that could not measure, a detector that crashed).
 SCANNER="${PUBLIC_ASSETS_SCANNER:-$HOOK_DIR/lib/public-assets.py}"
 
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 did_not_run() {
-  echo "ASSET CHECK DID NOT RUN ($1). Push allowed ungated." >&2
-  exit 1
+  hook_allow_notice "ASSET CHECK DID NOT RUN ($1). Push allowed ungated."
 }
 
 # shellcheck source=lib/push-scope.sh
@@ -94,11 +100,9 @@ last_line="$(printf '%s\n' "$out" | awk 'NF{s = $0} END{print s}')"
 
 case "$rc" in
   0)
-    printf '%s\n' "$out"
-    exit 0 ;;
+    hook_allow_notice "$out" ;;
   2)
-    printf 'ASSET CHECK SKIPPED: %s\n' "$out"
-    exit 0 ;;
+    hook_allow_notice "ASSET CHECK SKIPPED: $out" ;;
   1)
     [ -n "$summary" ] || did_not_run "detector exited 1 without a summary: $last_line" ;;
   3)

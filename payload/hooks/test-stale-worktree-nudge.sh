@@ -288,15 +288,19 @@ check_eq "outside any repository it says nothing" "" "$OUT"
 check_eq "and starts no run" "$before" "$(calls)"
 
 # Without python3 there is no way to start a run in a session of its own, and running the check
-# inline is the defect itself, so it starts nothing and says why on stderr.
+# inline is the defect itself, so it starts nothing and says why: to the person, as a systemMessage
+# with no context for the session (claude-config#1906). It used to say it on stderr only, which
+# Claude Code discards on exit 0, so nobody heard it.
 . "$DIR/lib/no-python-path.sh"
+. "$DIR/lib/hook-notice.sh"
 NOPY="$TMP/nopy"; npp_build_bin "$NOPY"
 if npp_reaches_python3 "$NOPY"; then
   bad "the premise: the bare PATH reaches no python3"
 else
   OUT="$(cd "$PROJ" && printf '{"session_id":"s15"}' | PATH="$NOPY" STALE_WT_CHECK="$STUB" STUB_RC=1 \
     "$NOPY/bash" "$SCRIPT" 2>"$TMP/err")"; RC=$?
-  check_eq "with no python3 it says nothing to the person" "" "$OUT"
+  check_eq "with no python3 it tells the person why, as a systemMessage" "" "$(hook_notice_verdict "$OUT" 'python3 is not on PATH')"
+  case "$OUT" in *hookSpecificOutput*) bad "and hands the session nothing (it did: $OUT)" ;; *) ok ;; esac
   check_eq "and exits 0" 0 "$RC"
   check "and says on stderr that python3 is why" "python3" "$(cat "$TMP/err")"
   check_eq "and never runs the check inside the prompt instead" "$before" "$(calls)"

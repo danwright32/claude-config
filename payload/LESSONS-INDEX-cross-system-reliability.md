@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L830. Check for an open PR or recent main commit on an issue before dispatching and before the PR; parallel sessions duplicate work and collide on migrations.
 - L815. A scheduled send due anywhere inside a window needs a minimum lead time, or its first run after shipping or an outage sends to everyone already inside.
 - L808. A start claim proves only that an attempt began, so a duplicate finding it must learn whether it FINISHED before reporting success.
 - L804. A worker queued for an exclusive turn counts its deadline from the turn and never takes a turn it cannot finish, or it holds the line for nothing.
@@ -114,3 +115,4 @@ which is NOT loaded into the session.
 - L796. A recovery that re-submits into the queue it waits on must first ask whether the work is already pending, or it false-alarms and lengthens the delay.
 - L798. Deleting a deployed thing's source does not undeploy it; a removal is done only when the platform's own list no longer shows it.
 - L822. Before narrowing who may use a shared resource, list its current users from its own usage record: one left out often just waits, silently.
+- L829. Parallel branches can reuse a migration version, and the second is skipped as applied; check versions before applying, and fail CI on a duplicate.

@@ -353,13 +353,14 @@ _ls_docker="${SYNC_DOCKER:-docker}"
 _ls_container="claude-linux-sections-$$-$(date +%s)"
 # A notice a person sees on a push the gate lets through: Claude Code discards a PreToolUse hook's
 # stderr on exit 0, so the text also goes out as a JSON systemMessage, the channel shown to the user.
-_ls_say(){   # $1 = the notice
+# Every caller lets the push through right after its notice, so the shared helper, which says it
+# on stderr and as a systemMessage and then exits 0, serves all three (lib/hook-notice.sh, #1906).
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2
-  # Without python3 the notice still reaches stderr above; only the JSON copy is skipped (#1931
-  # moves this onto lib/hook-notice.sh). The input is read as bytes and decoded with replacement,
-  # so a byte that is not UTF-8 cannot make the reader raise (#1920).
-  command -v python3 >/dev/null 2>&1 || return 0
-  printf '%s' "$1" | python3 -c 'import json, sys; print(json.dumps({"systemMessage": sys.stdin.buffer.read().decode("utf-8", "replace")}))' 2>/dev/null || true
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+_ls_say(){   # $1 = the notice; lets the push through
+  hook_allow_notice "$1"
 }
 if ! . "$HOOK_DIR/lib/bounded-run.sh" 2>/dev/null; then
   _ls_record stood-down >/dev/null 2>&1 || true

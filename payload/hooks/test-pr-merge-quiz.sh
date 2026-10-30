@@ -423,6 +423,31 @@ if holds "$msg" "opted out" && holds "$msg" ".no-pr-quiz"; then pass=$((pass+1))
 if [ "$(printf '%s\n' "$msg" | wc -l | tr -d ' ')" = "1" ] && [ -n "$msg" ]; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: the opt out notice is not exactly one line (got: $msg)"; fi
 
+# The notice is one valid JSON object whatever the repository is called, with jq or without it
+# (claude-config#1906). Without jq it used to be built by hand, escaping only backslashes and
+# quotes, so a folder name holding a tab made it invalid output, a hook failure nobody reads.
+NOJQ="$FIXTURE/nojq"; mkdir -p "$NOJQ"
+IFS=: read -r -a path_dirs <<< "$PATH"
+for d in "${path_dirs[@]}"; do
+  for f in "$d"/*; do
+    n="${f##*/}"
+    [ "$n" = jq ] && continue
+    [ -x "$f" ] && [ ! -e "$NOJQ/$n" ] && ln -s "$f" "$NOJQ/$n"
+  done
+done
+ODD_REPO="$FIXTURE/odd	repo"
+cp -R "$FIXTURE/repo" "$ODD_REPO"
+. "$DIR/lib/hook-notice.sh"
+for arm in "$PATH" "$NOJQ"; do
+  name="with jq"; [ "$arm" = "$NOJQ" ] && name="without jq"
+  out="$(python3 -c 'import json, sys; print(json.dumps({"tool_input": {"command": sys.argv[1]}, "cwd": sys.argv[2]}))' "$MERGE_CMD 42" "$ODD_REPO" \
+    | ( cd "$ODD_REPO" && env "PATH=$FIXTURE/bin:$arm" "$HOOK" ) 2>/dev/null)"
+  why="$(hook_notice_verdict "$out" 'odd\trepo has opted out')"
+  if [ -z "$why" ]; then pass=$((pass+1)); else
+    fail=$((fail+1)); echo "FAIL: #1906 $name, the opt out notice for a folder named with a tab is not one valid systemMessage: $why"; fi
+done
+rm -rf "$ODD_REPO"
+
 # An opted out merge is not a quiz the label gate failed to silence, so it must not count
 # toward the notice that says the gate never works (#354).
 saw fired_since_quiet 0 "an opted out merge"
