@@ -22,21 +22,26 @@
 #
 # When it cannot judge (no python3, lib/push-scope.sh or lib/shell-words.py missing, a payload
 # nothing can read) it lets the command run, since a watcher costs points and harms nothing, and says
-# so in one line with exit 1 (claude-config#1065): a non-blocking error, the one code for which Claude
-# Code shows stderr, so the guard being off is never silent (L98). Exit 0 would throw the line away.
+# so in one line, so the guard being off is never silent (L98). The line is a JSON systemMessage on
+# exit 0, which Claude Code shows (lib/hook-notice.sh, #1912). It was exit 1 (#1065), the
+# non-blocking error whose first stderr line is shown, until "onFailure": "block" made exit 1 a
+# refusal; stderr alone on exit 0 is thrown away.
 MIN_INTERVAL=60
-
-# Allow the command, saying in one line why it was not judged.
-not_judged() {   # $1 = what went wrong, as a clause
-  echo "GH WATCH INTERVAL CHECK DID NOT RUN: $1, so whether this runs a gh watcher at gh's own short default was not judged." >&2
-  exit 1
-}
 
 payload="$(cat)"
 # Every Bash call passes through here, and nearly none mention a watch: answer those at once,
 # before the shared reader is even loaded.
 case "$payload" in *watch*) ;; *) exit 0 ;; esac
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
+# Allow the command, saying in one line why it was not judged.
+not_judged() {   # $1 = what went wrong, as a clause
+  hook_allow_notice "GH WATCH INTERVAL CHECK DID NOT RUN: $1, so whether this runs a gh watcher at gh's own short default was not judged."
+}
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null \
   || not_judged "$HOOK_DIR/lib/push-scope.sh, the reader of the command, could not be loaded (reinstall the hooks with claude-sync pull)"

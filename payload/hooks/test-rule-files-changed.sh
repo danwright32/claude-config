@@ -136,14 +136,18 @@ grep -q "LESSONS-INDEX.md" <<< "$out8" \
 
 # ---------------------------------------------------------------------------
 # A payload with nothing to identify the session cannot tell a first prompt from
-# a later one, so it says nothing to the person and says why on stderr, rather
-# than inventing an answer in either direction.
+# a later one, so it reports no change to the session and tells the person why,
+# rather than inventing an answer in either direction. Told as a systemMessage
+# (claude-config#1906): it used to be stderr, which Claude Code discards on exit 0.
 # ---------------------------------------------------------------------------
 noid_out="$(printf '{"cwd":"."}' | CLAUDE_RULES_DIR="$RULES" bash "$HOOK" 2>/dev/null)"
 noid_err="$(printf '{"cwd":"."}' | CLAUDE_RULES_DIR="$RULES" bash "$HOOK" 2>&1 >/dev/null)"
-[ -z "$noid_out" ] \
-  && check "an unidentifiable session gets no notice" ok \
-  || check "an unidentifiable session gets no notice" "said: $noid_out"
+. "$(dirname "$HOOK")/lib/hook-notice.sh"
+noid_why="$(hook_notice_verdict "$noid_out" 'neither a session id nor a transcript path')"
+case "$noid_out" in *hookSpecificOutput*|*"rules changed"*) noid_why="it handed the session something: $noid_out" ;; esac
+[ -z "$noid_why" ] \
+  && check "an unidentifiable session gets no notice of changed rules, and the person is told why" ok \
+  || check "an unidentifiable session gets no notice of changed rules, and the person is told why" "$noid_why"
 grep -q "neither a session id nor a transcript path" <<< "$noid_err" \
   && check "and it says why, rather than passing as a clean check" ok \
   || check "and it says why, rather than passing as a clean check" "stderr: $noid_err"

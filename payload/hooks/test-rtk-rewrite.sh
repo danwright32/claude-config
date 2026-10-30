@@ -163,14 +163,29 @@ printf 'not json' > "$TMPROOT/payload.json"
 printf 'rtk 0.22.0\n' > "$TMPROOT/version"
 printf 'rtk git status\n' > "$TMPROOT/rewrite"
 payload 'git status'
+# "Says so" means where the person sees it. Claude Code discards a PreToolUse hook's stderr on exit
+# 0, so each warning is the systemMessage on stdout, and stdout holds nothing that rewrites the
+# command (claude-config#1906).
+. "$DIR/lib/hook-notice.sh"
+warned_only() {   # warned_only <stdout> <ERE>: prints why it is not one warning and no rewrite
+  local why; why="$(hook_notice_verdict "$1" "$2")"
+  [ -n "$why" ] && { printf '%s' "$why"; return; }
+  case "$1" in *updatedInput*|*permissionDecision*) printf 'it also rewrote or decided the command: %s' "$1" ;; esac
+}
 out_old="$(PATH="$BIN:$PATH" bash "$H" < "$TMPROOT/payload.json" 2>"$TMPROOT/olderr")"; code_old=$?
-[ -z "$out_old" ] && [ "$code_old" -eq 0 ] \
-  && check "an rtk too old to rewrite passes the command through and exits cleanly" ok \
-  || check "an rtk too old to rewrite passes the command through and exits cleanly" "out=$out_old exit=$code_old"
-grep -qi 'too old' "$TMPROOT/olderr" \
-  && check "and says so rather than going quiet" ok \
-  || check "and says so rather than going quiet" "stderr=$(cat "$TMPROOT/olderr")"
+why="$(warned_only "$out_old" 'too old')"
+[ -z "$why" ] && [ "$code_old" -eq 0 ] \
+  && check "an rtk too old to rewrite passes the command through, exits cleanly, and says so where the person sees it" ok \
+  || check "an rtk too old to rewrite passes the command through, exits cleanly, and says so where the person sees it" "exit=$code_old $why"
 printf 'rtk 0.31.0\n' > "$TMPROOT/version"
+
+# jq absent: the hook's first guard. A PATH with nothing on it.
+mkdir -p "$TMPROOT/nothing"
+out_nojq="$(PATH="$TMPROOT/nothing" "$BASH" "$H" < "$TMPROOT/payload.json" 2>/dev/null)"; code_nojq=$?
+why="$(warned_only "$out_nojq" 'jq is not installed')"
+[ -z "$why" ] && [ "$code_nojq" -eq 0 ] \
+  && check "with jq missing the command passes through and the person is told" ok \
+  || check "with jq missing the command passes through and the person is told" "exit=$code_nojq $why"
 
 # ---------------------------------------------------------------------------
 # rtk absent altogether. PATH here holds neither the stub nor anything else, so this is the state
@@ -189,12 +204,10 @@ PATH="$SYSPATH" command -v jq >/dev/null 2>&1 \
   || check "and does have jq, so the hook gets past its first guard" "no jq on $SYSPATH"
 payload 'git status'
 out_none="$(PATH="$SYSPATH" bash "$H" < "$TMPROOT/payload.json" 2>"$TMPROOT/noneerr")"; code_none=$?
-[ -z "$out_none" ] && [ "$code_none" -eq 0 ] \
-  && check "with rtk not installed the command passes through and exits cleanly" ok \
-  || check "with rtk not installed the command passes through and exits cleanly" "out=$out_none exit=$code_none"
-grep -qi 'not installed' "$TMPROOT/noneerr" \
-  && check "and says which tool is missing" ok \
-  || check "and says which tool is missing" "stderr=$(cat "$TMPROOT/noneerr")"
+why="$(warned_only "$out_none" 'rtk is not installed')"
+[ -z "$why" ] && [ "$code_none" -eq 0 ] \
+  && check "with rtk not installed the command passes through, exits cleanly, and the person is told which tool is missing" ok \
+  || check "with rtk not installed the command passes through, exits cleanly, and the person is told which tool is missing" "exit=$code_none $why"
 
 # ---------------------------------------------------------------------------
 # A TEST RUN is never rewritten into an rtk summariser (claude-config#259).

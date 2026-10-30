@@ -15,13 +15,19 @@ payload="$(cat)"
 case "$payload" in *issue*create*) ;; *) exit 0 ;; esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A crash is said as a systemMessage. The hooks documentation: "Claude never sees stderr from a hook
+# that exits 0", and a PostToolUse hook's systemMessage is not among those it discards, so that is
+# the channel that reaches Dan (#1906).
+# shellcheck source=lib/hook-notice.sh
+. "$HERE/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 out="$(printf '%s' "$payload" | GATE_DIR="$HERE" python3 "$HERE/filed_issue_session.py" 2>"$err")"
 rc=$?
 if [ "$rc" -ne 0 ]; then
-  echo "FILED ISSUE CHECK DID NOT RUN: check-filed-issue-session.sh failed (rc=$rc), so whether the issue just filed names this session was not read back from GitHub. $(tr '\n' ' ' <"$err")" >&2
-  exit 0
+  hook_allow_notice "FILED ISSUE CHECK DID NOT RUN: check-filed-issue-session.sh failed (rc=$rc), so whether the issue just filed names this session was not read back from GitHub. $(tr '\n' ' ' <"$err" 2>/dev/null)"
 fi
 printf '%s' "$out"
 exit 0

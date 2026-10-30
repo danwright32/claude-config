@@ -43,6 +43,14 @@ case "$payload" in
   *'"tool_name"'*) exit 0 ;;
 esac
 
+# A call it lets through without judging says so in a systemMessage, since Claude Code discards a
+# PreToolUse hook's stderr on exit 0 (#1906). Sourced here, after the common case has left.
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
 verdict="$(printf '%s' "$payload" | python3 -c '
 import json, os, re, sys
 try:
@@ -87,11 +95,9 @@ case "$verdict" in
     exit 0
     ;;
   unreadable$'\t'*)
-    echo "SCRATCHPAD SUBAGENT GATE DID NOT RUN: scratchpad-subagent-gate.sh could not read the hook payload (${verdict#*$'\t'}), so this write was let through without checking whether a subagent was writing into the shared scratchpad." >&2
-    exit 0
+    hook_allow_notice "SCRATCHPAD SUBAGENT GATE DID NOT RUN: scratchpad-subagent-gate.sh could not read the hook payload (${verdict#*$'\t'}), so this write was let through without checking whether a subagent was writing into the shared scratchpad."
     ;;
   *)
-    echo "SCRATCHPAD SUBAGENT GATE DID NOT RUN: scratchpad-subagent-gate.sh failed ($(printf '%s' "$verdict" | tr '\n' ' ')), so this write was let through without checking whether a subagent was writing into the shared scratchpad." >&2
-    exit 0
+    hook_allow_notice "SCRATCHPAD SUBAGENT GATE DID NOT RUN: scratchpad-subagent-gate.sh failed (${verdict//$'\n'/ }), so this write was let through without checking whether a subagent was writing into the shared scratchpad."
     ;;
 esac

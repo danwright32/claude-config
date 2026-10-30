@@ -187,6 +187,18 @@ ok = any(m.get("matcher") == "Bash" and any("check-filed-issue-session.sh" in h.
 sys.exit(0 if ok else 1)
 PY
 
+# A check that cannot run says so where Dan sees it (claude-config#1906). The hooks documentation
+# says Claude Code discards a hook's stderr on exit 0 and does not discard a PostToolUse hook's
+# systemMessage, so the notice is the systemMessage on stdout, and the hook still exits 0: the issue
+# already exists, so there is nothing to block. Reached by the hook copied without its Python half.
+mkdir -p "$TMP/lone/lib"; cp "$HOOK" "$TMP/lone/"; cp "$DIR/lib/hook-notice.sh" "$TMP/lone/lib/"
+. "$DIR/lib/hook-notice.sh"
+lone_out="$(python3 -c 'import json, sys; json.dump({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}, "tool_response": {"stdout": "", "stderr": "", "interrupted": False, "exit_code": 0}}, sys.stdout)' "gh issue create --title t $FIELDS" \
+  | bash "$TMP/lone/check-filed-issue-session.sh" 2>/dev/null)"; lone_rc=$?
+[ "$lone_rc" = 0 ] && check "#1906 a check that cannot run still exits 0" ok || check "#1906 a check that cannot run still exits 0" "exit $lone_rc"
+why="$(hook_notice_verdict "$lone_out" 'FILED ISSUE CHECK DID NOT RUN')"
+[ -z "$why" ] && check "#1906 and says so as a systemMessage" ok || check "#1906 and says so as a systemMessage" "$why"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -81,6 +81,45 @@ EMISSION = re.compile(r"""["']?hookSpecificOutput["']?\s*:\s*\{""")
 NAMED = re.compile(r"""["']?hookEventName["']?\s*:\s*["']([A-Za-z]+)["']""")
 FIELD = re.compile(r"""["']?([a-zA-Z]+)["']?\s*:\s*$""")
 
+# lib/hook-notice.sh builds the object for its callers (claude-config#1906): a hook names the event
+# in its call, `hook_allow_notice "<text>" PostToolUse`, and the builder fills it into a placeholder.
+# So the event is judged at each CALL, as an emission's is, and the builder's own object, whose event
+# is that placeholder, is recognised as the builder by defining hook_notice_json.
+CALL = re.compile(r"^[^#\n]*?\bhook_(?:allow_notice|notice_json)\b(?!\s*\(\))", re.M)
+PLACEHOLDER = re.compile(r"""["']?hookEventName["']?\s*:\s*["']%s["']""")
+BUILDER = re.compile(r"^hook_notice_json\(\)", re.M)
+
+
+def call_event(text, start):
+    """The event a library call names: the one bare word of its arguments shaped like an event name.
+    Quoted text is skipped, so an event named inside a notice's words is not taken for the argument,
+    and a backslash continuation carries the call on to the next line."""
+    words, word, i = [], "", start
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and text[i + 1:i + 2] == "\n":
+            i += 2
+            continue
+        if ch == "\n" or ch in ";&|":
+            break
+        if ch in "\"'":
+            close = ch
+            i += 1
+            while i < len(text) and text[i] != close:
+                i += 2 if (close == '"' and text[i] == "\\") else 1
+            word += "\0"
+        elif ch.isspace():
+            if word:
+                words.append(word)
+            word = ""
+        else:
+            word += ch
+        i += 1
+    if word:
+        words.append(word)
+    named = [w for w in words if re.fullmatch(r"[A-Z][A-Za-z]+", w)]
+    return named[-1] if named else None
+
 
 def walk(text, start):
     """Yield (index, character, depth) through `text` from `start`, counting braces and brackets
@@ -185,24 +224,35 @@ def faults_for(settings, hooks_dir):
     for path in hook_files(hooks_dir):
         base = os.path.basename(path)
         text = open(path, errors="replace").read()
-        for m in EMISSION.finditer(text):
+        sites = [(m, None) for m in EMISSION.finditer(text)]
+        for m in CALL.finditer(text):
+            event = call_event(text, m.end())
+            if event:
+                sites.append((m, event))
+        for m, called in sites:
             judged += 1
-            obj = object_after(text, m.end() - 1)
-            named = NAMED.search(obj)
-            if not named:
-                faults.append(
-                    f"NO EVENT NAME {base} prints hookSpecificOutput with no hookEventName, "
-                    "so Claude Code refuses the whole payload and the hook says nothing to the session"
-                )
-                continue
-            event = named.group(1)
+            if called:
+                event, fields = called, {"additionalContext"}
+            else:
+                obj = object_after(text, m.end() - 1)
+                named = NAMED.search(obj)
+                if not named and PLACEHOLDER.search(obj) and BUILDER.search(text):
+                    continue
+                if not named:
+                    faults.append(
+                        f"NO EVENT NAME {base} prints hookSpecificOutput with no hookEventName, "
+                        "so Claude Code refuses the whole payload and the hook says nothing to the session"
+                    )
+                    continue
+                event = named.group(1)
+                fields = top_level_fields(text, m.end() - 1) - {"hookEventName"}
             if event not in EVENTS:
                 faults.append(
                     f"UNKNOWN EVENT {base} names {event}, which is not an event Claude Code takes "
                     "hookSpecificOutput from, so the payload is refused"
                 )
                 continue
-            for field in sorted(top_level_fields(text, m.end() - 1) - {"hookEventName"}):
+            for field in sorted(fields):
                 if field not in EVENTS[event]:
                     faults.append(
                         f"WRONG CHANNEL {base} names {event} and carries {field}, which a {event} "

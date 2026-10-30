@@ -1838,15 +1838,12 @@ when the lock library or the folder for runs is missing.
 Every other PreToolUse gate that can refuse a call carries `onFailure: "block"` too (#1899), so a
 gate killed at its timeout, or one that crashes or cannot start, refuses the call instead of
 letting it through in silence. Claude Code counts any exit other than 0 or 2 as a failure, so the
-field is left off two kinds of hook, and `hooks/test-gate-onfailure.sh` holds the one list saying
-which hook is which and fails on a PreToolUse hook in none of them:
-
-- the hooks that never refuse (`rtk-rewrite.sh`, `lessons-advisory.sh`), where the field would turn
-  slow advice into blocked work;
-- the gates that allow a call they could not judge and say so with exit 1
-  (`require-tests-before-push.sh`, `simplify-before-push.sh`, `check-public-assets.sh`,
-  `check-gh-watch-interval.sh`), where the field would turn every "could not judge, allowed" into a
-  refusal. They stay as they were until that notice moves off exit 1.
+field is left off the hooks that never refuse (`rtk-rewrite.sh`, `lessons-advisory.sh`), where it
+would turn slow advice into blocked work, and `hooks/test-gate-onfailure.sh` holds the list saying
+which hook is which and fails on a PreToolUse hook in neither. The four gates that used to say
+"could not judge, allowed" with exit 1 (`require-tests-before-push.sh`, `simplify-before-push.sh`,
+`check-public-assets.sh`, `check-gh-watch-interval.sh`) now say it with exit 0 and a systemMessage
+(#1906, #1912), so they carry the field like the rest.
 
 The same suite runs every gate given the field on an ordinary call of each tool it is registered
 for and fails if one exits anything but 0, since such a gate would now block every call.

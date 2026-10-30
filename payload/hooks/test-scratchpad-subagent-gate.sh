@@ -82,6 +82,20 @@ out="$(printf 'not json' | bash "$G" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && case "$out" in *"DID NOT RUN"*) true ;; *) false ;; esac \
   && check "an unreadable payload is let through, loudly" ok \
   || check "an unreadable payload is let through, loudly" "rc=$rc out=$out"
+# Loudly means where the person sees it: Claude Code discards a PreToolUse hook's stderr on exit 0,
+# so the notice is the systemMessage on stdout (claude-config#1906). Both ways the reader can fail.
+. "$DIR/lib/hook-notice.sh"
+out="$(printf 'not json' | bash "$G" 2>/dev/null)"; rc=$?
+why="$(hook_notice_verdict "$out" 'SCRATCHPAD SUBAGENT GATE DID NOT RUN')"
+[ "$rc" -eq 0 ] && [ -z "$why" ] && check "#1906 an unreadable payload is said as a systemMessage" ok \
+  || check "#1906 an unreadable payload is said as a systemMessage" "rc=$rc $why"
+NOPY="$(mktemp -d "${TMPDIR:-/tmp}/sp-gate-nopy.XXXXXXXX")"
+ln -s "$(command -v cat)" "$NOPY/cat"
+out="$(payload Write "$SP/x.md" a1b2 | PATH="$NOPY" "$BASH" "$G" 2>/dev/null)"; rc=$?
+rm -rf "$NOPY"
+why="$(hook_notice_verdict "$out" 'SCRATCHPAD SUBAGENT GATE DID NOT RUN')"
+[ "$rc" -eq 0 ] && [ -z "$why" ] && check "#1906 a reader that cannot start lets the write through, said as a systemMessage" ok \
+  || check "#1906 a reader that cannot start lets the write through, said as a systemMessage" "rc=$rc $why"
 out="$(payload Read "$SP/x" a1b2 | bash "$G" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && [ -z "$out" ] && check "another tool is none of its business" ok \
   || check "another tool is none of its business" "rc=$rc out=$out"

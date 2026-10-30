@@ -573,6 +573,16 @@ check_eq "#1492 and says, once, that the refusal could not be recorded" "1" "$(g
 out="$(payload "SKIP_WRAPPED_CHECK=1 bash -c \"\$CMD\" # git" | WRAPPED_REFUSAL_LEDGER_DIR="$NOTDIR" bash "$HOOK" 2>&1)"; rc=$?
 check_eq "#1492 an unwritable record still lets the override run" "0" "$rc"
 check_eq "#1492 and says, once, that the override could not be recorded" "1" "$(grep -o 'could not be recorded' <<< "$out" | grep -c .)"
+# Said as one valid JSON object whatever the note holds (claude-config#1906). The note names the
+# record's path, so a path holding a newline and a tab is what broke the hand built object this
+# used to print, and invalid output is a hook failure, which onFailure block turns into a refusal of
+# the very override it meant to allow.
+. "$DIR/lib/hook-notice.sh"
+odd="$NOTDIR/line one
+line two	tab"
+json="$(payload "SKIP_WRAPPED_CHECK=1 bash -c \"\$CMD\" # git" | WRAPPED_REFUSAL_LEDGER_DIR="$odd" bash "$HOOK" 2>/dev/null)"; rc=$?
+check_eq "#1906 a record path holding a newline still lets the override run" "0" "$rc"
+check_eq "#1906 and says it could not be recorded as one valid systemMessage" "" "$(hook_notice_verdict "$json" 'could not be recorded in .*line one\nline two\ttab')"
 out="$(payload "bash -c 'git push'" | WRAPPED_REFUSAL_LEDGER_DIR="$NOTDIR" bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1492 an unwritable record still refuses what could not be judged" "2" "$rc"
 check "#1492 and says that too" "could not be recorded" "$out"

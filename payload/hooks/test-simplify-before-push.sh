@@ -74,13 +74,23 @@ run_hook() {   # <cwd> <command> [PATH]
   errf="$(mktemp)"
   payload="$(HK_CMD="$cmd" HK_CWD="$cwd" python3 -c 'import json,os,sys
 sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"],"tool_use_id":os.environ.get("HK_ID","toolu_test")}))')"
-  printf '%s' "$payload" | env PATH="$usepath" bash "$HOOK" 2>"$errf"
+  OUT="$(printf '%s' "$payload" | env PATH="$usepath" bash "$HOOK" 2>"$errf")"
   CODE=$?
   ERR="$(cat "$errf")"
   rm -f "$errf"
 }
 
 want_code() { if [ "$CODE" = "$1" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $2: expected exit $1, got $CODE"; fi; }
+# A push the gate could not judge is let through with exit 0 and its notice as the systemMessage on
+# stdout (claude-config#1912), where exit 1, its old channel, is what "onFailure": "block" refuses.
+. "$DIR/lib/hook-notice.sh"
+OUT=""
+want_allowed_notice() {   # want_allowed_notice <desc> [ERE, default the gate's own DID NOT RUN]
+  local why
+  why="$(hook_notice_verdict "$OUT" "${2:-SIMPLIFY GATE DID NOT RUN}")"
+  if [ "$CODE" = 0 ] && [ -z "$why" ]; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: #1912 $1: expected exit 0 with the notice as a systemMessage, got exit $CODE. $why"; fi
+}
 # here-string, not printf | grep -q, to keep test-pipefail-shortcircuit.sh clean of a new site (L183).
 want_stderr() { if grep -Eiq "$1" <<< "$ERR"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $2: stderr did not match /$1/. Got: [$ERR]"; fi; }
 want_silent() { if [ -z "$ERR" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $1: expected NO stderr, got: [$ERR]"; fi; }
@@ -191,31 +201,31 @@ else
   fail=$((fail+1)); echo "FAIL: the judge is not launched with --setting-sources local (flags: $(grep -- '^--' "$ARGS_FILE" 2>/dev/null | tr '\n' ' ' || echo 'judge never ran'))"
 fi
 
-# --- fail-open paths must SAY SO (exit 1), never vanish (L98) ---------------
+# --- fail-open paths must SAY SO, never vanish (L98), as a systemMessage on exit 0 (#1912) ------
 ERRF="$(mktemp)"
-printf 'this is not json' | env PATH="$PATH_STUB" bash "$HOOK" 2>"$ERRF"
+OUT="$(printf 'this is not json' | env PATH="$PATH_STUB" bash "$HOOK" 2>"$ERRF")"
 CODE=$?; ERR="$(cat "$ERRF")"; rm -f "$ERRF"
-want_code 1 "unparseable payload"
+want_allowed_notice "unparseable payload"
 want_stderr "payload" "unparseable payload"
 
 W="$(mk_repo)"; seed_source "$W"
 run_hook "$W" "git push" "$PATH_NOCLAUDE"
-want_code 1 "judge CLI missing"
+want_allowed_notice "judge CLI missing"
 want_stderr "judge" "judge CLI missing"
 
 W="$(mk_repo)"; seed_source "$W"
 STUB_CLAUDE_OUT="" run_hook "$W" "git push"
-want_code 1 "judge returned nothing"
+want_allowed_notice "judge returned nothing"
 want_stderr "judge" "judge returned nothing"
 
 W="$(mk_repo)"; seed_source "$W"
 STUB_CLAUDE_OUT='{"is_error":true,"result":"boom"}' run_hook "$W" "git push"
-want_code 1 "judge is_error envelope"
+want_allowed_notice "judge is_error envelope"
 want_stderr "judge" "judge is_error envelope"
 
 W="$(mk_repo)"; seed_source "$W"
 STUB_CLAUDE_OUT='{"result":"sure, looks fine"}' run_hook "$W" "git push"
-want_code 1 "judge verdict unparseable"
+want_allowed_notice "judge verdict unparseable"
 want_stderr "judge" "judge verdict unparseable"
 
 # --- a genuinely unrelated cwd gates nothing -------------------------------
@@ -223,14 +233,14 @@ NOTREPO="$(mktemp -d)"
 run_hook "$NOTREPO" "git push"
 want_code 0 "a push with no resolvable repo stays out of the way"
 
-# --- a judge that never answers in time is named as such (fail open, exit 1) ------------------------
+# --- a judge that never answers in time is named as such (fail open, exit 0, a systemMessage) ------
 # A stub timeout that reports what GNU timeout reports for a killed command, 124, with nothing
 # printed: no real wait, the condition is set rather than slept for (L290).
 TO_DIR="$TMPROOT/timeout-124"; mkdir -p "$TO_DIR"
 printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 124\n' > "$TO_DIR/timeout"; chmod +x "$TO_DIR/timeout"
 W="$(mk_repo)"; seed_source "$W"
 run_hook "$W" "git push" "$TO_DIR:$PATH_STUB"
-want_code 1 "judge timed out"
+want_allowed_notice "judge timed out"
 want_stderr "timed out after 90s" "judge timed out"
 
 # --- a push run from a SUBDIRECTORY is judged on the whole push (claude-config#1076) ----------------
@@ -316,7 +326,7 @@ if [ -z "$(col "$(row_of rec-nocli)" 8)" ]; then pass=$((pass+1)); else fail=$((
 W="$(mk_repo)"; seed_source "$W"
 printf 'not a directory\n' > "$TMPROOT/ledger-file"
 PUSH_GATE_LEDGER_DIR="$TMPROOT/ledger-file" STUB_CLAUDE_OUT="$PASS_OUT" run_hook "$W" "git push"
-want_code 1 "an unwritable record does not block the push"
+want_allowed_notice "an unwritable record does not block the push" "allowed this push \(pass\), but its record could not be written"
 want_stderr "allowed this push \(pass\), but its record could not be written" "an unwritable record is said"
 
 # --- an "unused" finding is checked against the WHOLE file, not the diff (claude-config#1722) --------

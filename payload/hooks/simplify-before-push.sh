@@ -38,25 +38,28 @@ JUDGE_MODEL="haiku"    # the simplification judgment is coarse (block only on bl
 JUDGE_TIMEOUT=90       # seconds for the model call
 DIFF_BUDGET=60000      # max bytes of source diff sent to the model
 
-# Allow the push, but surface WHY the gate did not run. Exit 1 (non-blocking error): the push still
-# runs, and the first stderr line surfaces in the transcript. Exit 0 would discard stderr, so a
-# notice there would vanish and this would be theatre (the require-tests-before-push.sh precedent).
+# Allow the push, but surface WHY the gate did not run: exit 0 with the notice as a JSON
+# systemMessage, which the person is shown (lib/hook-notice.sh, #1912). Not stderr alone, which
+# Claude Code discards on exit 0, and no longer exit 1 (the require-tests-before-push.sh precedent,
+# #735), which "onFailure": "block" would turn into a refusal saying the push was allowed.
 # Recorded first once the command is known to be a push, so a gate that could not decide is counted.
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 fail_open() {   # $1 = why  $2 = judged, when a judge was called
   if [ "${PC_PUSH:-0}" = 1 ]; then pc_record failopen "$1" "${2:-}" || :; fi
-  echo "SIMPLIFY GATE DID NOT RUN ($1). Push allowed unjudged." >&2
-  exit 1
+  hook_allow_notice "SIMPLIFY GATE DID NOT RUN ($1). Push allowed unjudged."
 }
 
-# A silent allow, recorded. A record that could not be written is said in one line (exit 1, the push
-# still runs), never swallowed and never turned into a refusal.
+# A silent allow, recorded. A record that could not be written is said in one line (a systemMessage,
+# the push still runs), never swallowed and never turned into a refusal.
 allow() {   # $1 = outcome  $2 = detail  $3 = judged
   pc_record "$1" "${2:-}" "${3:-}" && exit 0
-  echo "SIMPLIFY GATE allowed this push ($1), but its record could not be written to $(pc_ledger_path)." >&2
-  exit 1
+  hook_allow_notice "SIMPLIFY GATE allowed this push ($1), but its record could not be written to $(pc_ledger_path)."
 }
 
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || fail_open "shared push-scope library missing"
 # shellcheck source=lib/source-class.sh

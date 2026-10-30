@@ -1267,6 +1267,23 @@ left out of what the apply holds back, so its own `--delete` removes it, and the
 names the commit holding it. With `SYNC_ACCEPT_DELETIONS=0` it stays, and the pull says a send will
 not carry it, once per copy through the same `.resurrected-reported` record the send keeps.
 
+A RENAME is a deletion of its old name (#1915). git reads a commit that moves a file with its
+content unchanged as a rename, and with rename detection on, which is git's default, a listing of
+names prints only the NEW one. `unapplied_paths` then never named the old name, the list of paths
+the repo ever deleted never held it, and the copy still here at the old name read as an unsent
+local edit: every pull kept it and the next send could publish it back. So every listing whose
+names decide what is applied, kept or deleted passes `--no-renames` (`unapplied_paths` both times,
+the deleted path walk under `deleted_leftovers_here`, and the paths a dropped snapshot touched).
+Each now names exactly the paths the repo removed, so nothing is deleted that the repo still holds.
+A copy at the old name edited here and never sent is the ordinary case of both Macs changing one
+file: `preserve_local_conflicts` keeps it beside its name as a conflict copy before the apply's
+`--delete` runs. The send's test gate keeps rename detection, because the new name is the one its
+suites are found by, and pairs the old name with every check the new one has, so a red suite holds
+back both and the send does not publish the hook's removal without its replacement; it launches no
+suite a send without a rename would not. Listings left with rename detection on otherwise are those
+that only choose what to read or scan, and the overlap check before a send over untested commits,
+whose merge is itself rename aware.
+
 ## A shared file that becomes a Mac's own is moved before the mirror runs (#1526)
 
 The /pennie-dev-update registry names work repositories and was tracked in the payload, which is a

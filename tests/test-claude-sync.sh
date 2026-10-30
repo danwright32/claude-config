@@ -4506,6 +4506,81 @@ check "the next send publishes the edit"    "grep -q MY-LOCAL-FIX '$LEB/payload/
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LEAH" SYNC_REPO="$LEA" bash "$SCRIPT" sync >/dev/null 2>&1
 check "the edit round-trips to the other Mac" "grep -q MY-LOCAL-FIX '$LEAH/skills/reel/push.py'"
 
+section "== a hook the repo renamed without changing it leaves no copy at its old name (claude-config#1915) =="
+# The list of paths the repo changed since this Mac last applied was read with rename detection on,
+# so a plain mv reported only the NEW name. The copy here at the OLD name then read as a local edit
+# the repo had not touched, and every pull kept it, ready to be sent back. Two hooks are renamed in
+# one commit: one this Mac never touched, which has to go, and one it edited and never sent, whose
+# text must survive somewhere here, because the repo removing a name is not licence to lose an edit
+# made to it (L9).
+#
+# Run as the Linux CI runner runs it: no git identity anywhere, and git forbidden to invent one from
+# the host name, which a Mac otherwise does (#1918's fixture passed here and failed there). Every
+# commit in this section is the tool's own, so the tool has to supply the identity itself.
+HMVBARE="$WORK/hmvbare.git"; git init -q --bare -b main "$HMVBARE"
+HMVA="$WORK/hmvrepoA"; git clone -q "$HMVBARE" "$HMVA" 2>/dev/null
+git -C "$HMVA" config user.useConfigOnly true
+hmv_env=(env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null)
+hmv_probe="$("${hmv_env[@]}" git -C "$HMVA" commit --allow-empty -q -m probe 2>&1 || true)"
+check "#1915 (the fixture really does deny git an identity)" \
+  "grep -qi 'Author identity unknown' <<< \"\$hmv_probe\""
+HMVAH="$WORK/hmvhomeA"; mkdir -p "$HMVAH/hooks"
+echo '{"hooks":{}}' > "$HMVAH/settings.json"
+printf '#!/bin/bash\n# the hook nobody edits\necho keep-me-once\n' > "$HMVAH/hooks/plain-old.sh"
+printf '#!/bin/bash\n# the hook B edits\necho edit-me-once\n' > "$HMVAH/hooks/edited-old.sh"
+echo 'unrelated-v1' > "$HMVAH/hooks/unrelated.sh"
+"${hmv_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HMVAH" SYNC_REPO="$HMVA" bash "$SCRIPT" sync >/dev/null 2>&1
+HMVB="$WORK/hmvrepoB"; git clone -q "$HMVBARE" "$HMVB" 2>/dev/null
+git -C "$HMVB" config user.useConfigOnly true
+HMVBH="$WORK/hmvhomeB"; mkdir -p "$HMVBH"; echo '{"hooks":{}}' > "$HMVBH/settings.json"
+"${hmv_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HMVBH" SYNC_REPO="$HMVB" bash "$SCRIPT" pull >/dev/null 2>&1
+check "#1915 B starts with both hooks at their old names" \
+  "[ -f '$HMVBH/hooks/plain-old.sh' ] && [ -f '$HMVBH/hooks/edited-old.sh' ]"
+# B edits one of them and nothing sends it.
+printf '#!/bin/bash\n# the hook B edits\necho B-LOCAL-EDIT\n' > "$HMVBH/hooks/edited-old.sh"
+# A renames both, content unchanged, and sends.
+mv "$HMVAH/hooks/plain-old.sh" "$HMVAH/hooks/plain-new.sh"
+mv "$HMVAH/hooks/edited-old.sh" "$HMVAH/hooks/edited-new.sh"
+"${hmv_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HMVAH" SYNC_REPO="$HMVA" bash "$SCRIPT" sync >/dev/null 2>&1
+# The fixture is only about this fault if git itself reads the commit as a rename.
+hmv_status="$(git -C "$HMVBARE" log -1 -M --format= --name-status main -- payload 2>&1)"
+hmv_said="$(printf '%s' "$hmv_status" | tr '\n' ' ' | cut -c1-200)"
+check "#1915 (the shared repo records the move as a rename; git said: $hmv_said)" \
+  "printf '%s\n' \"\$hmv_status\" | grep -q '^R100.*plain-old\.sh.*plain-new\.sh'"
+out_hmv="$("${hmv_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HMVBH" SYNC_REPO="$HMVB" bash "$SCRIPT" pull 2>&1)"
+dbg "#1915 pull meeting the rename: $out_hmv"
+check "#1915 the hook arrives at its new name" "grep -q keep-me-once '$HMVBH/hooks/plain-new.sh'"
+check "#1915 the copy at its old name is removed" "[ ! -e '$HMVBH/hooks/plain-old.sh' ]"
+check "#1915 and the pull does not call it a local edit it kept" \
+  "! line_has \"\$out_hmv\" 'would have reverted' 'hooks/plain-old\.sh'"
+check "#1915 the edit B made to a renamed hook is still on B" \
+  "grep -rq B-LOCAL-EDIT '$HMVBH/hooks'"
+# As a conflict copy beside its old name, said out loud: both Macs changed that path, one by
+# editing it and one by removing it, which is the case preserve_local_conflicts exists for.
+check "#1915 kept as a conflict copy beside its old name" \
+  "grep -q B-LOCAL-EDIT '$HMVBH'/hooks/edited-old.sh.conflict-*"
+check "#1915 and the pull says both Macs changed it" \
+  "line_has \"\$out_hmv\" 'both Macs changed' 'hooks/edited-old\.sh'"
+check "#1915 and the renamed hook still arrives beside it" "grep -q edit-me-once '$HMVBH/hooks/edited-new.sh'"
+# Kept gone: the next pull does not bring it back, and B's next send does not publish it again.
+"${hmv_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HMVBH" SYNC_REPO="$HMVB" bash "$SCRIPT" pull >/dev/null 2>&1
+check "#1915 a second pull leaves the old name gone" "[ ! -e '$HMVBH/hooks/plain-old.sh' ]"
+# A Mac an earlier pull already left holding the old name has a marker past the rename, so the
+# changed path list is empty and only the walk of every path the repo ever deleted can name it. That
+# walk read renames the same way, so this is the copy still sitting on both Macs today.
+printf '#!/bin/bash\n# the hook nobody edits\necho keep-me-once\n' > "$HMVBH/hooks/plain-old.sh"
+out_hmv2="$("${hmv_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HMVBH" SYNC_REPO="$HMVB" bash "$SCRIPT" pull 2>&1)"
+dbg "#1915 pull meeting a copy an earlier pull kept: $out_hmv2"
+check "#1915 a copy an earlier pull kept at the old name is removed by the next one" \
+  "[ ! -e '$HMVBH/hooks/plain-old.sh' ]"
+check "#1915 and that pull names it as a copy of a file the repo removed" \
+  "line_has \"\$out_hmv2\" 'removed hooks/plain-old\.sh' 'shared config deleted it'"
+"${hmv_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HMVBH" SYNC_REPO="$HMVB" bash "$SCRIPT" send >/dev/null 2>&1
+check "#1915 B's next send does not put the old name back in the shared repo" \
+  "! git -C '$HMVBARE' cat-file -e main:payload/hooks/plain-old.sh 2>/dev/null"
+"${hmv_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HMVAH" SYNC_REPO="$HMVA" bash "$SCRIPT" sync >/dev/null 2>&1
+check "#1915 and A, which made the rename, does not get the old name back" "[ ! -e '$HMVAH/hooks/plain-old.sh' ]"
+
 section "== a pull must not revert an unsent edit to a top-level rules file =="
 # The keep-local-edits protection covered the mirrored subtrees only. Top-level
 # rules files (CLAUDE.md, LESSONS.md, RTK.md and anything they import) take a
@@ -7707,6 +7782,26 @@ check "#364 a snapshot holding work the shared repo lacks is NOT called supersed
   "! grep -q 'superseded' <<< \"\$out_sn6\""
 check "#364 and nothing is left out of the dry run as superseded" \
   "! grep -q 'superseded snapshot' <<< \"\$out_sn6\""
+
+# A SNAPSHOT THAT RENAMED A FILE (claude-config#1915). The paths it touched were listed with rename
+# detection on, so a plain mv named only the NEW path. Here the shared tip already holds that new
+# path byte for byte, and STILL holds the old one, which this Mac removed: the snapshot carries a
+# deletion the shared repo lacks, and calling it superseded tells a sync it may drop it.
+_snap_setup sn7 \
+  "mkdir -p \"\$SH/skills/t2\"; mv \"\$SH/skills/t/SKILL.md\" \"\$SH/skills/t2/SKILL.md\"; rmdir \"\$SH/skills/t\"" \
+  "mkdir -p \"\$SD/payload/skills/t2\"; cp \"\$SD/payload/skills/t/SKILL.md\" \"\$SD/payload/skills/t2/SKILL.md\"" \
+  ":"
+SN7R="$SR"; SN7H="$SH"
+sn7_status="$(git -C "$SN7R" log -1 -M --format= --name-status HEAD -- payload 2>&1)"
+sn7_said="$(printf '%s' "$sn7_status" | tr '\n' ' ' | cut -c1-200)"
+check "#1915 (the unsent snapshot records the move as a rename; git said: $sn7_said)" \
+  "printf '%s\n' \"\$sn7_status\" | grep -q '^R100.*skills/t/SKILL\.md.*skills/t2/SKILL\.md'"
+check "#1915 (and the shared tip holds both names)" \
+  "git -C '$SN7R' fetch -q origin 2>/dev/null; git -C '$SN7R' cat-file -e origin/main:payload/skills/t/SKILL.md && git -C '$SN7R' cat-file -e origin/main:payload/skills/t2/SKILL.md"
+out_sn7="$(CLAUDE_HOME="$SN7H" SYNC_REPO="$SN7R" SYNC_HOSTNAME=macsn7 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#1915 status over a snapshot that renamed a file: $out_sn7"
+check "#1915 a snapshot that renamed a file the shared tip still holds is NOT called superseded" \
+  "! grep -q 'superseded' <<< \"\$out_sn7\""
 
 # ---- the commits a drop parked are listed and expire (claude-config#365) ----
 # drop_snapshot_already_in_tip writes the commits it is about to discard under a ref of its own so
@@ -17741,6 +17836,90 @@ check "#269 a new hook whose suite is red is not published at all" \
   "[ ! -e '$HDR/payload/hooks/gamma.sh' ]"
 check "#269 and the repo is not left holding a staged copy of it" \
   "! git -C '$HDR' ls-files --error-unmatch payload/hooks/gamma.sh >/dev/null 2>&1"
+SYNC_NO_SEND_TESTS=1
+
+section "== a red suite holds back both names of a hook it covers that was renamed (claude-config#1915) =="
+# The send listed the hooks it was about to publish with rename detection on, so a hook moved
+# without changing it was listed, and paired with its suites, by its NEW name only. When that suite
+# was red, the hold back put back nothing for the new name, which the repo had never held, and left
+# the removal of the old name in the commit: the send published the hook's deletion with no
+# replacement. Both names now wait together, and no other suite is run for it, which the launch
+# count below holds to, beside a send with no rename whose suites have to be exactly the ones the
+# #269 rule names.
+#
+# Run with no git identity and useConfigOnly, as the Linux runner has (the #1918 fixture).
+unset SYNC_NO_SEND_TESTS
+HRNB="$WORK/hrn-bare.git"; git init -q --bare -b main "$HRNB"
+HRNR="$WORK/hrn-repo"; git clone -q "$HRNB" "$HRNR" 2>/dev/null
+git -C "$HRNR" config user.useConfigOnly true
+hrn_env=(env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null)
+HRNH="$WORK/hrn-home"; mkdir -p "$HRNH/hooks"
+echo '{"hooks":{}}' > "$HRNH/settings.json"
+printf '# rules\n' > "$HRNH/CLAUDE.md"
+HRN_RUNS="$WORK/hrn-runs"; : > "$HRN_RUNS"
+hrn_write_suite(){   # $1 = suite name  $2 = covered hook basename  $3 = exit code
+  local pass=1 fail=0
+  [ "$3" -eq 0 ] || { pass=0; fail=1; }
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf '# covers %s\n' "$2"
+    printf 'printf "%s\\n" >> "%s"\n' "$1" "$HRN_RUNS"
+    printf 'echo "SUITE-RESULT passed=%s failed=%s"\n' "$pass" "$fail"
+    printf 'exit %s\n' "$3"
+  } > "$HRNH/hooks/test-$1.sh"
+}
+hrn_launched(){ sort -u "$HRN_RUNS" 2>/dev/null | tr '\n' ' '; }
+printf '#!/usr/bin/env bash\necho delta\n' > "$HRNH/hooks/delta-old.sh"
+printf '#!/usr/bin/env bash\necho eps\n'   > "$HRNH/hooks/eps.sh"
+printf '#!/usr/bin/env bash\necho zeta\n'  > "$HRNH/hooks/zeta.sh"
+hrn_write_suite delta delta-old.sh 0
+hrn_write_suite eps eps.sh 0
+hrn_write_suite zeta zeta.sh 0
+out_hrn1="$("${hrn_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HRNH" SYNC_REPO="$HRNR" bash "$SCRIPT" send 2>&1)"
+dbg "#1915 first send: $out_hrn1"
+check "#1915 the hooks publish while their suites pass" \
+  "git -C '$HRNB' cat-file -e main:payload/hooks/delta-old.sh && git -C '$HRNB' cat-file -e main:payload/hooks/eps.sh"
+
+# The control first: a send with no rename, one hook edited and one deleted outright, launches the
+# suites naming those two and nothing else, as it did before.
+printf '#!/usr/bin/env bash\necho eps changed\n' > "$HRNH/hooks/eps.sh"
+rm -f "$HRNH/hooks/zeta.sh"
+: > "$HRN_RUNS"
+out_hrn2="$("${hrn_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HRNH" SYNC_REPO="$HRNR" bash "$SCRIPT" send 2>&1)"
+dbg "#1915 send with an edit and a deletion: $out_hrn2"
+check "#1915 a send with no rename launches exactly the suites naming what it changed (got: $(hrn_launched))" \
+  "[ \"\$(hrn_launched)\" = 'eps zeta ' ]"
+check "#1915 and publishes both changes" \
+  "git -C '$HRNB' show main:payload/hooks/eps.sh 2>/dev/null | grep -q 'eps changed' && ! git -C '$HRNB' cat-file -e main:payload/hooks/zeta.sh 2>/dev/null"
+
+# The rename: delta-old.sh moves to delta-new.sh unchanged, its suite follows it and is red, and an
+# unrelated rule file changes in the same send.
+mv "$HRNH/hooks/delta-old.sh" "$HRNH/hooks/delta-new.sh"
+hrn_write_suite delta delta-new.sh 1
+printf '# rules changed\n' > "$HRNH/CLAUDE.md"
+: > "$HRN_RUNS"
+out_hrn3="$("${hrn_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HRNH" SYNC_REPO="$HRNR" bash "$SCRIPT" send 2>&1)"
+dbg "#1915 send of a renamed hook whose suite is red: $out_hrn3"
+check "#1915 the shared repo still holds the hook at its old name" \
+  "git -C '$HRNB' cat-file -e main:payload/hooks/delta-old.sh"
+check "#1915 and does not hold the new name the red suite refused" \
+  "! git -C '$HRNB' cat-file -e main:payload/hooks/delta-new.sh 2>/dev/null"
+check "#1915 the rest of that send still went out" \
+  "git -C '$HRNB' show main:payload/CLAUDE.md 2>/dev/null | grep -q 'rules changed'"
+check "#1915 the rename launched only the suite that covers it (got: $(hrn_launched))" \
+  "[ \"\$(hrn_launched)\" = 'delta ' ]"
+hrn_line="$(printf '%s\n' "$out_hrn3" | sed -n '/test-delta\.sh/p')"
+check "#1915 one line names the red suite and both names it held back" \
+  "case \"\$hrn_line\" in *delta-old.sh*) case \"\$hrn_line\" in *delta-new.sh*) true ;; *) false ;; esac ;; *) false ;; esac"
+check "#1915 and the live config keeps the hook at its new name" \
+  "[ -f '$HRNH/hooks/delta-new.sh' ] && [ ! -e '$HRNH/hooks/delta-old.sh' ]"
+
+# Once the suite is green, the rename goes up whole.
+hrn_write_suite delta delta-new.sh 0
+out_hrn4="$("${hrn_env[@]}" SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HRNH" SYNC_REPO="$HRNR" bash "$SCRIPT" send 2>&1)"
+dbg "#1915 send once the suite is green: $out_hrn4"
+check "#1915 once green the rename publishes, old name gone and new name there" \
+  "git -C '$HRNB' cat-file -e main:payload/hooks/delta-new.sh && ! git -C '$HRNB' cat-file -e main:payload/hooks/delta-old.sh 2>/dev/null"
 SYNC_NO_SEND_TESTS=1
 
 
