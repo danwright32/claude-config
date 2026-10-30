@@ -30,7 +30,8 @@
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Without either library the notice still goes to stderr; it just cannot be left for later.
 . "$HERE/lib/hook-notice.sh" 2>/dev/null || hook_defer_notice() { return 1; }
-. "$HERE/lib/spool-end-marker.sh" 2>/dev/null || { SEM_SPOOL_FILE=""; SEM_TMP_FILE=""; }
+. "$HERE/lib/spool-end-marker.sh" 2>/dev/null || sem_paths() { SEM_SPOOL_FILE=""; SEM_TMP_FILE=""; }
+sem_paths
 say() {   # $1 = the notice
   local when
   when="$(TZ=America/New_York date '+%Y-%m-%d %H:%M' 2>/dev/null) ET"

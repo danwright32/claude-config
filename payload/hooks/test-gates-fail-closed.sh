@@ -345,6 +345,10 @@ declare_advisory(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_advisory sync-main-to-dev.sh     PostToolUse  "gh pr merge 5 --squash"
   declare_advisory check-filed-issue-session.sh PostToolUse "gh issue create --title x --body y"
   declare_advisory payload-revert-warning.sh UserPromptSubmit "-"
+  # issue-spool-session-end.sh is not here: it runs on SessionEnd, which discards a systemMessage,
+  # so it declares a fallback for each library instead, and test-session-end-notice.sh runs it with
+  # each one gone (claude-config#1949).
+  declare_advisory sync-stuck-notice.sh    UserPromptSubmit "-"
 } > "$WORK/advisory"
 # A stand in rtk, so rtk-rewrite.sh reaches the reading it needs the library for on a machine with no
 # rtk or a different one: it rewrites every command by putting rtk in front.

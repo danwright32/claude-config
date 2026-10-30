@@ -90,11 +90,22 @@ case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. 
 # because it is the per prompt hook that already reports on the config's own machinery, and a
 # second registration would be a second process on every prompt. Taken before anything below can
 # exit, so it is said on every path. With no marker it starts no process.
+# Without lib/spool-end-marker.sh it cannot know where a marker would be, so it says that on every
+# prompt, an install fault worth hearing. Without lib/hook-notice.sh it cannot take one, so a marker
+# that is there is named for the person to read, and with none there it says nothing.
 SSN_NOTE=""
-. "$SSN_DIR/lib/spool-end-marker.sh" 2>/dev/null || { SEM_SPOOL_FILE=""; SEM_TMP_FILE=""; }
-if [ -n "${SEM_SPOOL_FILE:-}" ] && declare -F hook_take_deferred >/dev/null 2>&1; then
-  hook_take_deferred "$SEM_SPOOL_FILE" "$SEM_TMP_FILE"
-  [ -n "$HN_DEFERRED" ] && SSN_NOTE="Left by a session that ended earlier, and said here because nothing said as a session ends has been seen to reach anyone: $HN_DEFERRED"
+. "$SSN_DIR/lib/spool-end-marker.sh" 2>/dev/null || { sem_paths() { SEM_SPOOL_FILE=""; SEM_TMP_FILE=""; }
+  SSN_NOTE="sync-stuck-notice: could not load lib/spool-end-marker.sh beside this hook, so whether a session that ended left a failure to report was not checked."; }
+sem_paths
+if [ -n "$SEM_SPOOL_FILE" ]; then
+  if declare -F hook_take_deferred >/dev/null 2>&1; then
+    hook_take_deferred "$SEM_SPOOL_FILE" "$SEM_TMP_FILE"
+    [ -n "$HN_DEFERRED" ] && SSN_NOTE="Left by a session that ended earlier, and said here because nothing said as a session ends has been seen to reach anyone: $HN_DEFERRED"
+  else
+    for _sem_f in "$SEM_SPOOL_FILE" "$SEM_TMP_FILE"; do
+      [ -e "$_sem_f" ] && SSN_NOTE="${SSN_NOTE:+$SSN_NOTE }sync-stuck-notice: a session that ended earlier left a failure in $_sem_f, and lib/hook-notice.sh is missing beside this hook, so it cannot be read out here. Read that file, then delete it."
+    done
+  fi
 fi
 
 # The session, matched in bash rather than by starting python, because this runs on every prompt.

@@ -157,6 +157,45 @@ out="$(printf '{"session_id":"t1949","prompt":"x"}' | env -u CLAUDE_ISSUE_SPOOL_
 [ -s "$FHOME/.claude-issue-spool/session-end-failed" ] && check "and a test run never takes a real marker" ok \
   || check "and a test run never takes a real marker" "it was taken; said: ${out:0:300}"
 
+echo "session end notice: each hook with a library it needs gone still does its job and says what it lost"
+# A copy of the hooks folder with one library taken away (claude-config#1949). Advisory: neither
+# hook ever exits with anything SessionEnd or a prompt would treat as a refusal, and neither goes
+# quiet about what the missing file cost.
+lib_gone() { # lib_gone <library> -> a hooks folder copy without it, printed
+  local d="$WORK/without-${1%.sh}"
+  rm -rf "$d"; mkdir -p "$d"
+  cp "$END_HOOK" "$PROMPT_HOOK" "$d/"
+  cp -R "$DIR/lib" "$d/lib"
+  rm -f "$d/lib/$1"
+  printf '%s' "$d"
+}
+rm -rf "$SPOOL"; mkdir -p "$SPOOL"; rm -f "$FTMP"/*session-end-failed* 2>/dev/null
+for gone in spool-end-marker.sh hook-notice.sh; do
+  G="$(lib_gone "$gone")"
+  printf '{"session_id":"lib-%s","hook_event_name":"SessionEnd"}' "${gone%.sh}" \
+    | env "${fixture_env[@]}" bash "$G/issue-spool-session-end.sh" >/dev/null 2>"$WORK/end.err"; rc=$?
+  [ "$rc" -eq 0 ] && [ -f "$SPOOL/ended/lib-${gone%.sh}" ] && check "with lib/$gone gone the SessionEnd hook still stamps and exits 0" ok \
+    || check "with lib/$gone gone the SessionEnd hook still stamps and exits 0" "rc=$rc err=$(cat "$WORK/end.err")"
+  printf '{"hook_event_name":"SessionEnd"}' | env "${fixture_env[@]}" bash "$G/issue-spool-session-end.sh" >/dev/null 2>"$WORK/end.err"; rc=$?
+  case "$rc:$(cat "$WORK/end.err")" in
+    2:*"no session_id"*"could not be left for the next prompt"*) check "with lib/$gone gone a failure is still said on stderr, with why it could not be left for later" ok ;;
+    *) check "with lib/$gone gone a failure is still said on stderr, with why it could not be left for later" "rc=$rc err=$(cat "$WORK/end.err")" ;;
+  esac
+  rm -f "$SPOOL/session-end-failed"
+done
+# The prompt hook without lib/spool-end-marker.sh cannot know where a marker would be, so it says so.
+G="$(lib_gone spool-end-marker.sh)"
+out="$(printf '{"session_id":"lib1","prompt":"x"}' | env "${fixture_env[@]}" bash "$G/sync-stuck-notice.sh" 2>/dev/null)"; rc=$?
+[ "$rc" -eq 0 ] && check "with lib/spool-end-marker.sh gone the prompt hook exits 0" ok || check "with lib/spool-end-marker.sh gone the prompt hook exits 0" "rc=$rc"
+said "and says it could not check for a failed session end, naming the file" "$out" "could not load lib/spool-end-marker\\.sh"
+# Without lib/hook-notice.sh it cannot take a marker, so a marker that is there is named, not dropped.
+G="$(lib_gone hook-notice.sh)"
+printf 'At some time, issue-spool-session-end: a lost one\n' > "$SPOOL/session-end-failed"
+out="$(printf '{"session_id":"lib2","prompt":"x"}' | env "${fixture_env[@]}" bash "$G/sync-stuck-notice.sh" 2>/dev/null)"; rc=$?
+[ "$rc" -eq 0 ] && check "with lib/hook-notice.sh gone the prompt hook exits 0" ok || check "with lib/hook-notice.sh gone the prompt hook exits 0" "rc=$rc"
+said "and names the marker it could not read out" "$out" "session-end-failed"
+silent "while with no marker there it stays quiet" "$(rm -f "$SPOOL/session-end-failed"; printf '{"session_id":"lib3","prompt":"x"}' | env "${fixture_env[@]}" bash "$G/sync-stuck-notice.sh" 2>/dev/null)"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
