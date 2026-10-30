@@ -195,7 +195,7 @@ def registered_events(settings, hooks_dir):
     issue_field_gate.py, which imports the scanner. A resolver that stopped at the settings would
     call the scanner unregistered and accuse it of naming the wrong event (L96)."""
     runs = {}
-    for event, groups in json.load(open(settings)).get("hooks", {}).items():
+    for event, groups in json.load(open(settings, errors="replace")).get("hooks", {}).items():
         for group in groups:
             for hook in group.get("hooks", []):
                 for token in hook.get("command", "").split():
@@ -321,4 +321,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

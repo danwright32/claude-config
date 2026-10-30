@@ -31,7 +31,7 @@ from render_card import notes_blocks  # noqa: E402
 
 def _osascript(script: str) -> subprocess.CompletedProcess:
     return subprocess.run(["osascript", "-e", script],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, errors="replace")
 
 
 def _applescript_string(s: str) -> str:
@@ -161,7 +161,7 @@ def main(argv=None) -> int:
         print(f"error: no such card: {args.card}", file=sys.stderr)
         return 1
 
-    lines = args.card.read_text().splitlines()
+    lines = args.card.read_text(errors="replace").splitlines()
     title = args.title or lines[0].lstrip("# ").strip()
     # Notes takes the title from the name property. Repeating the card's own
     # first heading in the body shows it twice.

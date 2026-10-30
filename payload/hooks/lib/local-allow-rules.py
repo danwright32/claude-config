@@ -181,7 +181,8 @@ def _value(s, i, path, out):
 def parse(raw):
     """-> (text, document, spans). spans has 'array' and 'elems' when permissions.allow is a list."""
     try:
-        text = raw.decode("utf-8")
+        # Strict, and refused by name below (#1923): the settings file is rewritten from this text.
+        text = raw.decode("utf-8", "strict")
     except UnicodeDecodeError:
         raise Unjudgeable("could not be read as JSON (it is not UTF-8 text)")
     try:
@@ -307,7 +308,7 @@ def secret_flags(rules, common):
             ["bash", "-c", '. "$1" && ar_redact', "_", common],
             # Five seconds, inside the hook's own ten, so a hung redactor is reported here rather
             # than the whole hook being killed with nothing said.
-            input="\n".join(lines) + "\n", capture_output=True, text=True, timeout=5,
+            input="\n".join(lines) + "\n", capture_output=True, text=True, timeout=5, errors="replace"
         )
     except (OSError, subprocess.SubprocessError) as e:
         raise DetectorBroken("could not check its rules for keys or tokens: the redactor did not run (%s)" % e.__class__.__name__)
@@ -344,7 +345,7 @@ def state_path(settings_file):
 def read_said(settings_file):
     _, p = state_path(settings_file)
     try:
-        with open(p) as f:
+        with open(p, errors="replace") as f:
             return set(line.strip() for line in f if line.strip())
     except OSError:
         return set()
@@ -356,7 +357,7 @@ def write_said(settings_file, keys):
     try:
         os.makedirs(d, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=d, prefix=".said.")
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", errors="replace") as f:
             f.write("".join(k + "\n" for k in sorted(keys)))
         os.replace(tmp, p)
         return None
@@ -586,4 +587,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv[1:]))

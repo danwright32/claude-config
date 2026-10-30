@@ -31,6 +31,7 @@ case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. 
 . "$_ps_dir/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
 sid="$(printf '%s' "$payload" | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:

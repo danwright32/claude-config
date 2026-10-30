@@ -364,7 +364,7 @@ def status_reads(mod, scope, name, kind):
 def exits_python(path: str, rel: str):
     findings = []
     try:
-        tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+        tree = ast.parse(open(path, encoding="utf-8", errors="replace").read(), filename=path)
     except (OSError, SyntaxError, ValueError) as exc:
         return [f"{rel}: could not be parsed, so it could not be checked: {exc}"]
     mod = Module(tree)

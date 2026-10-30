@@ -162,7 +162,7 @@ def main(argv):
         print("Usage: report.py <findings.json>", file=sys.stderr)
         return 2
     try:
-        with open(argv[1], encoding="utf-8") as fh:
+        with open(argv[1], encoding="utf-8", errors="replace") as fh:
             data = json.load(fh)
     except FileNotFoundError:
         print(f"report.py: no findings file at {argv[1]}", file=sys.stderr)
@@ -180,4 +180,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

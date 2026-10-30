@@ -126,7 +126,7 @@ def similarity(a, b):
 
 
 def git(repo, *args):
-    return subprocess.run(['git', '-C', repo, *args], capture_output=True, text=True)
+    return subprocess.run(['git', '-C', repo, *args], capture_output=True, text=True, errors="replace")
 
 
 _carried = {}
@@ -229,7 +229,7 @@ def rows_of(path):
     rows = []
     if not path:
         return rows
-    with open(path, encoding='utf-8') as f:
+    with open(path, encoding='utf-8', errors="replace") as f:
         for row in f:
             parts = row.rstrip('\n').split('\t')
             if len(parts) == 3 and parts[0] and parts[1].isdigit():
@@ -302,7 +302,7 @@ class Net:
         if left < 1:
             raise NetError(f'{what} was not tried: the time allowed for reading GitHub had run out')
         try:
-            r = subprocess.run(args, capture_output=True, text=True, timeout=left, env=self.env)
+            r = subprocess.run(args, capture_output=True, text=True, timeout=left, env=self.env, errors="replace")
         except subprocess.TimeoutExpired:
             raise NetError(f'{what} took longer than the {int(left)} s left for it')
         except OSError as e:
@@ -371,7 +371,7 @@ def main():
     earlier = rows_of(a.earlier)
     comments = None
     if a.comments:
-        with open(a.comments, encoding='utf-8') as f:
+        with open(a.comments, encoding='utf-8', errors="replace") as f:
             comments = json.load(f)
     quotes, pending = quotes_of(a.repo, comments) if comments else ([], [])
     findings = findings_of(a.review)
@@ -441,6 +441,7 @@ def main():
 
 
 if __name__ == '__main__':
+    sys.stdout.reconfigure(errors="replace")
     try:
         main()
     except Exception as e:  # the caller says this and takes every finding as new

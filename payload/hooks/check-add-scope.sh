@@ -155,6 +155,7 @@ fi
 # The agent id becomes part of a path, so it must be a plain name, or nothing is read for it.
 ids="$(printf '%s' "$payload" | python3 -c '
 import glob, json, os, re, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
@@ -180,7 +181,7 @@ if is_agent and tr.endswith(".jsonl"):
                 break
         meta = (agent_tr or looked)[:-len(".jsonl")] + ".meta.json"
         try:
-            with open(meta) as fh:
+            with open(meta, errors="replace") as fh:
                 m = json.load(fh)
             # A CLEANLY REMOVED worktree is its own case (claude-config#1876): the agent WAS
             # isolated, finished without changes, and Claude Code deleted the worktree and rewrote
@@ -276,6 +277,7 @@ if [ "$size" -lt "$from" ]; then from=0; : > "$MENTIONS"; : > "$WINDOWS"; : > "$
 if [ "$size" -gt "$from" ]; then
   tail -c "+$(( from + 1 ))" "$transcript" 2>/dev/null | ADD_SCOPE_WINDOWS="$WINDOWS" ADD_SCOPE_WORKTREE="$WORKTREE" python3 -c '
 import datetime, io, json, os, sys
+sys.stdout.reconfigure(errors="replace")
 out = []
 windows = []
 worktree = []
@@ -340,10 +342,10 @@ for line in io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace
 sys.stdout.write("\n".join(out))
 sys.stdout.write("\n" if out else "")
 if windows:
-    with open(os.environ["ADD_SCOPE_WINDOWS"], "a") as fh:
+    with open(os.environ["ADD_SCOPE_WINDOWS"], "a", errors="replace") as fh:
         fh.write("\n".join(windows) + "\n")
 if worktree:
-    with open(os.environ["ADD_SCOPE_WORKTREE"], "a") as fh:
+    with open(os.environ["ADD_SCOPE_WORKTREE"], "a", errors="replace") as fh:
         fh.write("\n".join(json.dumps(w) for w in worktree) + "\n")
 ' >> "$MENTIONS" 2>/dev/null || true
   printf '%s' "$size" > "$OFFSET" 2>/dev/null || true
@@ -371,9 +373,10 @@ SESSION_WORKTREE_FILE="$WORKTREE_FILE"
 if [ "$is_agent" = 0 ] && [ -n "$session_id" ] && [ -s "$SESSION_WORKTREE_FILE" ]; then
   own_worktree="$(ADD_SCOPE_SID="$session_id" python3 -c '
 import json, os, sys
+sys.stdout.reconfigure(errors="replace")
 sid = os.environ["ADD_SCOPE_SID"]
 uses, result, state = {}, None, None
-with open(sys.argv[1]) as fh:
+with open(sys.argv[1], errors="replace") as fh:
     for line in fh:
         try:
             w = json.loads(line)
@@ -438,7 +441,7 @@ starts, ends = {}, {}
 lines = []
 for wf in os.environ["ADD_SCOPE_WINDOWS"].splitlines():
     if wf:
-        with open(wf) as fh:
+        with open(wf, errors="replace") as fh:
             lines.extend(fh.read().splitlines())
 for line in lines:
     parts = line.split()

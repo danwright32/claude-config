@@ -29,6 +29,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 HOOK="$DIR/suite-pile-notice.sh"
 # The checkout is found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663),
 # which prints nothing for an installed copy or a copy inside some other repository.
@@ -238,9 +244,10 @@ fault_said "a hook whose library is missing says nothing to the session, and tel
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
 # A byte that is not UTF-8 in front of the session id stops bash's =~ under a UTF-8 locale
 # (claude-config#1885), so the payload read as carrying no session and nothing was checked.
-bad_prompt() { # bad_prompt <payload printf format>  -> stderr too, under en_US.UTF-8
+bad_byte_measured regex "#1885 the session id past a byte that is not UTF-8" || true
+bad_prompt() { # bad_prompt <payload printf format>  -> stderr too, under a UTF-8 locale
   printf "$1" | SYNC_PS_FIXTURE="$WORK/empty" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
-    CLAUDE_SUITE_PILE_NOW="$NOW" LC_ALL=en_US.UTF-8 bash "$HOOK" 2>&1
+    CLAUDE_SUITE_PILE_NOW="$NOW" LC_ALL="$BAD_BYTE_LOCALE" bash "$HOOK" 2>&1
 }
 out="$(bad_prompt '{"cwd":"/x/\377","prompt":"carry on"}')"
 says "#1885 control: a byte that is not UTF-8 and no session is said to carry none" "$out" "neither a session id"

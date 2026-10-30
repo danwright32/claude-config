@@ -27,6 +27,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 HOOK="$DIR/lesson-entry-check.sh"
 # The checkout is found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663),
 # which prints nothing for an installed copy or a copy inside some other repository.
@@ -376,14 +382,15 @@ echo "lesson entry check: a byte that is not UTF-8 does not make it go quiet (cl
 
 # jq reads such a byte as U+FFFD, and python3 reading its stdin in text mode raised on it: the
 # written file came back empty and the hook exited 0, the same quiet as a lesson with nothing wrong.
+bad_byte_measured python "#1900 lesson-entry-check reading a byte that is not UTF-8" || true
 printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- L2. an entry with the bold left off.\n' > "$HOME_FIX/LESSONS.md"
 out="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s","old_string":"a\xffb","new_string":"c"}}' "$HOME_FIX/LESSONS.md" \
-  | LC_ALL=en_US.UTF-8 CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
+  | LC_ALL="$BAD_BYTE_LOCALE" CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
 says "an Edit whose payload holds a byte that is not UTF-8 still has its lesson checked" "$out" '"decision":"block"'
 says "and the refusal names the entry" "$out" "L2"
 # The same byte in the lesson itself reaches the refusal's text, which is encoded by python3 too.
 printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- L2. an entry \xff with the bold left off.\n' > "$HOME_FIX/LESSONS.md"
-out="$(LC_ALL=en_US.UTF-8 run_hook Edit "$HOME_FIX/LESSONS.md")"
+out="$(LC_ALL="$BAD_BYTE_LOCALE" run_hook Edit "$HOME_FIX/LESSONS.md")"
 says "a malformed entry holding a byte that is not UTF-8 is still refused" "$out" '"decision":"block"'
 sound
 # A payload no reader can parse is not one naming no file.

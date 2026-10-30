@@ -89,7 +89,7 @@ def declared_covers(alt, declared):
 
 def faults_for(settings, hooks_dir):
     faults = []
-    events = json.load(open(settings)).get("hooks", {})
+    events = json.load(open(settings, errors="replace")).get("hooks", {})
     seen = {}
     runs = {}  # (event, hook basename) -> matchers
     for event, groups in events.items():
@@ -166,4 +166,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

@@ -58,6 +58,7 @@ answer="$(bash "$CHECK" 2>&1)"; verdict=$?
 # Keyed on the session, so two open at once each get their own record.
 session="$(printf '%s' "$input" | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:

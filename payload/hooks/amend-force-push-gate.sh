@@ -56,6 +56,7 @@ payload="$(ps_clean_payload "$payload")"
 
 parsed="$(printf '%s' "$payload" | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:

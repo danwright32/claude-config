@@ -73,7 +73,7 @@ def score(text):
 
 
 def load(path):
-    with open(path, newline="", encoding="utf-8") as fh:
+    with open(path, newline="", encoding="utf-8", errors="replace") as fh:
         rows = list(csv.reader(fh))
     header = [h.strip() for h in rows[0]]
     missing = [c for c in REQUIRED if c not in header]
@@ -220,7 +220,7 @@ def run(csv_path, state_dir, record=False):
     previous = None
     if state_path.exists():
         try:
-            previous = json.loads(state_path.read_text())
+            previous = json.loads(state_path.read_text(errors="replace"))
         except (OSError, ValueError) as e:
             raise StateUnreadable(f"{state_path} exists but cannot be read ({e}). "
                                   "Fix or delete it; the run is not proceeding as if there were no previous run.")
@@ -235,7 +235,7 @@ def run(csv_path, state_dir, record=False):
     if not record:
         return result
     state_dir.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({k: result[k] for k in ("run_date", "n", "mean_enjoy", "correlations", "buy", "coffees_logged")}, indent=2))
+    state_path.write_text(json.dumps({k: result[k] for k in ("run_date", "n", "mean_enjoy", "correlations", "buy", "coffees_logged")}, indent=2), errors="replace")
     return result
 
 
@@ -308,4 +308,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())

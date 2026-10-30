@@ -133,7 +133,7 @@ def condense(name, files, out_dir):
               + (f", {stats['odd_records']} odd records skipped" if stats["odd_records"] else "")
               + "\n")
     path = os.path.join(out_dir, f"friction_{name}.txt")
-    with open(path, "w") as fh:
+    with open(path, "w", errors="replace") as fh:
         fh.write(header)
         fh.write("\n".join(out_lines))
     print(f"{header.strip()} -> {path} ({os.path.getsize(path) // 1024}KB)")
@@ -167,4 +167,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())

@@ -76,7 +76,7 @@ def key_for_project(project_dir, cache={}):
         return cache[project_dir]
     out = subprocess.run(
         ["bash", LIB, "key", project_dir, os.path.join(project_dir, "any-session.jsonl")],
-        capture_output=True, text=True,
+        capture_output=True, text=True, errors="replace"
     )
     key = out.stdout.strip()
     if not key:
@@ -249,11 +249,11 @@ def forget_test_records(apply):
     backup = take_backup()
     before = count_records()
     for path, kept in keeps.items():
-        with open(path, "w", encoding="utf-8") as fh:
+        with open(path, "w", encoding="utf-8", errors="replace") as fh:
             for line in kept:
                 fh.write(line + "\n")
     if os.environ.get("CLAUDE_MIGRATE_ARRIVAL_SEAM"):
-        with open(os.environ["CLAUDE_MIGRATE_ARRIVAL_SEAM"], "a", encoding="utf-8") as fh:
+        with open(os.environ["CLAUDE_MIGRATE_ARRIVAL_SEAM"], "a", encoding="utf-8", errors="replace") as fh:
             fh.write(json.dumps({"ts": "seam", "status": "found",
                                  "findings": ["arrived while the tool ran"]}) + "\n")
     after = count_records()
@@ -351,7 +351,7 @@ def main():
     # cleared up; a record that exists in neither file is gone, and it is
     # precisely a record nobody has read yet (L5).
     for dst, lines in moves.items():
-        with open(os.path.join(SPOOL, dst + ".jsonl"), "a", encoding="utf-8") as fh:
+        with open(os.path.join(SPOOL, dst + ".jsonl"), "a", encoding="utf-8", errors="replace") as fh:
             for line in lines:
                 fh.write(line + "\n")
 
@@ -372,7 +372,7 @@ def main():
     # prevent; the rewrite simply has to know about the arrivals.
     for path, kept in keeps.items():
         arriving = moves.get(os.path.basename(path)[:-len(".jsonl")], [])
-        with open(path, "w", encoding="utf-8") as fh:
+        with open(path, "w", encoding="utf-8", errors="replace") as fh:
             for line in kept:
                 fh.write(line + "\n")
             for line in arriving:
@@ -381,7 +381,7 @@ def main():
     # Test seams: the two ways the final count can differ from the first, driven
     # deliberately rather than by racing a real writer.
     if os.environ.get("CLAUDE_MIGRATE_ARRIVAL_SEAM"):
-        with open(os.environ["CLAUDE_MIGRATE_ARRIVAL_SEAM"], "a", encoding="utf-8") as fh:
+        with open(os.environ["CLAUDE_MIGRATE_ARRIVAL_SEAM"], "a", encoding="utf-8", errors="replace") as fh:
             fh.write(json.dumps({"ts": "seam", "status": "found",
                                  "findings": ["arrived while the tool ran"]}) + "\n")
     if os.environ.get("CLAUDE_MIGRATE_LOSS_SEAM"):
@@ -390,7 +390,7 @@ def main():
                 continue
             lines = [l for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
             if lines:
-                open(path, "w", encoding="utf-8").writelines(lines[1:])
+                open(path, "w", encoding="utf-8", errors="replace").writelines(lines[1:])
                 break
 
     after = count_records()
@@ -412,4 +412,5 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())

@@ -192,6 +192,7 @@ pc_judge "$JUDGE_MODEL" "$JUDGE_TIMEOUT" "$RUBRIC" "$judge_input" || fail_open "
 # pass, so how often it happens is read from the record rather than guessed.
 verdict="$(printf '%s' "$PC_JUDGE_OBJ" | SIMPLIFY_FILES="$(printf '%s\n' "${SRC_PATHSPEC[@]}")" SIMPLIFY_CHAIN="${PC_COMMIT_IN_CHAIN:-0}" python3 -c '
 import sys, json, os, re, subprocess
+sys.stdout.reconfigure(errors="replace")
 
 files = set(os.environ.get("SIMPLIFY_FILES", "").split("\n")) - {""}
 chain = os.environ.get("SIMPLIFY_CHAIN") == "1"
@@ -199,7 +200,7 @@ chain = os.environ.get("SIMPLIFY_CHAIN") == "1"
 def pushed(path):
     try:
         if chain:
-            top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+            top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, errors="replace").stdout.strip()
             with open(os.path.join(top, path), encoding="utf-8", errors="replace") as fh:
                 return fh.read()
         r = subprocess.run(["git", "show", "HEAD:" + path], capture_output=True, text=True, errors="replace")

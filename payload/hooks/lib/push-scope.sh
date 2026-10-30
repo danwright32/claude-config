@@ -170,6 +170,7 @@ ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
   fi
   printf '%s' "$payload" | PS_SEP="$sep" python3 -c '
 import os, sys, json
+sys.stdout.reconfigure(errors="replace")
 sep = os.environ.get("PS_SEP", "; ")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))

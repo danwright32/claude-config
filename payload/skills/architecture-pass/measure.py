@@ -99,7 +99,7 @@ def classify_title(title):
 
 def git(repo, *args):
     try:
-        return subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True, text=True).stdout
+        return subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True, text=True, errors="replace").stdout
     except FileNotFoundError as e:
         raise MeasureError(f"git is not installed: {e}")
     except subprocess.CalledProcessError as e:
@@ -289,7 +289,7 @@ def _has_origin(repo):
 def _read_state(state_dir):
     path = os.path.join(state_dir, STATE_FILE)
     try:
-        with open(path) as f:
+        with open(path, errors="replace") as f:
             data = json.load(f)
     except FileNotFoundError:
         return {}
@@ -328,7 +328,7 @@ def record_pass(key, state_dir, today):
     os.makedirs(state_dir, exist_ok=True)
     path = os.path.join(state_dir, STATE_FILE)
     tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", errors="replace") as f:
         json.dump(data, f, indent=1, sort_keys=True)
         f.write("\n")
     os.replace(tmp, path)
@@ -370,4 +370,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())

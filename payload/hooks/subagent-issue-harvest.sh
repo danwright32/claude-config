@@ -129,9 +129,10 @@ sweep_overdue() {
     [ "$f" = "$(pending_file_for "$agent_id")" ] && continue
     state="$(python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 now, max_n, max_s = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 try:
-    rec = json.load(open(sys.argv[1]))
+    rec = json.load(open(sys.argv[1], errors="replace"))
     first, count = int(rec["first_deferred"]), int(rec["count"])
     claimed = rec.get("claimed_at")
 except Exception:
@@ -148,17 +149,17 @@ else:
 import json, os, sys
 p = sys.argv[1]
 try:
-    rec = json.load(open(p))
+    rec = json.load(open(p, errors="replace"))
 except Exception:
     rec = {}
 rec["claimed_at"] = int(sys.argv[2])
-with open(p + ".tmp", "w") as fh:
+with open(p + ".tmp", "w", errors="replace") as fh:
     json.dump(rec, fh)
 os.replace(p + ".tmp", p)
 ' "$claimed" "$now" 2>/dev/null
     defer_log "swept the overdue pending harvest in $(basename "$f")"
     perl -e 'setpgrp(0, 0); exec @ARGV' bash -c '
-      python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))[\"payload\"]))" "$1" \
+      python3 -c "import json, sys; sys.stdout.reconfigure(errors=\"replace\"); print(json.dumps(json.load(open(sys.argv[1], errors=\"replace\"))[\"payload\"]))" "$1" \
         | CLAUDE_ISSUE_HARVEST_FORCE=1 bash "$2" >/dev/null 2>&1
       st=$?
       # Released for the next sweep under the name it would look for, unless the harvest ran.
@@ -232,6 +233,7 @@ fi
 waiting_on=""
 [ -n "${CLAUDE_ISSUE_HARVEST_FORCE:-}" ] || waiting_on=$(printf '%s' "$input" | python3 -c '
 import json, re, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
@@ -288,6 +290,7 @@ if [ -n "$waiting_on" ]; then
   # than blocking, and a write that fails harvests now: a deferral nothing recorded could be lost.
   decision=$(printf '%s' "$input" | python3 -c '
 import json, os, sys
+sys.stdout.reconfigure(errors="replace")
 path, now, max_n, max_s = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 try:
     payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
@@ -296,7 +299,7 @@ except Exception:
 payload.pop("background_tasks", None)
 first, count = now, 0
 try:
-    old = json.load(open(path))
+    old = json.load(open(path, errors="replace"))
     first, count = int(old["first_deferred"]), int(old["count"])
 except Exception:
     pass
@@ -309,7 +312,7 @@ rec = {"agent_id": payload.get("agent_id"), "transcript": payload.get("agent_tra
        "first_deferred": first, "count": count, "payload": payload}
 try:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".tmp", "w") as fh:
+    with open(path + ".tmp", "w", errors="replace") as fh:
         json.dump(rec, fh)
     os.replace(path + ".tmp", path)
 except Exception:

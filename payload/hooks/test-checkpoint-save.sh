@@ -21,6 +21,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 H="$DIR/checkpoint-save.sh"
 
 pass=0
@@ -149,13 +155,14 @@ out_broken="$(run "$T_BROKEN")"; code_broken=$?
 # A byte that is not UTF-8 is read as jq reads it, never taken for a turn with nothing in it
 # (claude-config#1900). In the transcript, one such byte on any line made the whole read raise, so
 # a turn that did work was skipped in silence; in the payload, the reader holds it the same way.
+bad_byte_measured python "#1900 checkpoint-save reading a byte that is not UTF-8" || true
 T_BYTE="$PROJDIR/sessions/byte.jsonl"
 transcript "$T_BYTE" "$(printf '{"type":"user","message":{"content":"earlier \xff turn"}}')" "$(user_line 'fix the retry')" "$(tool_line Edit)"
-out_byte="$(LC_ALL=en_US.UTF-8 run "$T_BYTE")"
+out_byte="$(LC_ALL="$BAD_BYTE_LOCALE" run "$T_BYTE")"
 grep -q '"decision": *"block"' <<< "$out_byte" \
   && check "a transcript holding a byte that is not UTF-8 still asks a turn that did work to save" ok \
   || check "a transcript holding a byte that is not UTF-8 still asks a turn that did work to save" "out=${out_byte:0:200}"
-out_pbyte="$(printf '{"transcript_path":"%s","note":"a\xffb"}' "$T_WORKED" | LC_ALL=en_US.UTF-8 bash "$H" 2>/dev/null)"
+out_pbyte="$(printf '{"transcript_path":"%s","note":"a\xffb"}' "$T_WORKED" | LC_ALL="$BAD_BYTE_LOCALE" bash "$H" 2>/dev/null)"
 grep -q '"decision": *"block"' <<< "$out_pbyte" \
   && check "a payload holding a byte that is not UTF-8 still asks a turn that did work to save" ok \
   || check "a payload holding a byte that is not UTF-8 still asks a turn that did work to save" "out=${out_pbyte:0:200}"
