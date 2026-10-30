@@ -2976,6 +2976,59 @@ test('#1773 control: a screen file written by the shell, handed to a script, or 
   expect(w.ran).toEqual([])
 })
 
+// #1951: on 2026-10-30 the #1944 builder ran its own sweep script handed a search term, the quoted
+// glob '*push*', and the guard held it as a write to every file payload/hooks/*push* matches
+// (refusal design-round-guard:toolu_01QzpH83vSprUViUt7b1kBxC). With every pattern character quoted
+// the shell matches it against no file: the script is handed the characters as written, which name
+// the one file of that name, as every other argument a script is handed is read (#1586). Text a
+// command only receives is no write to the files it would match.
+const SWEEP_1951 = `cd /w/slate/payload/hooks && python3 /tmp/sweep.py check-style-guide.sh SKIP_STYLE_CHECK "a push" '*push*'`
+
+test('#1951: a quoted glob handed to a script, or searched for by grep, runs', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    SWEEP_1951,
+    // Quoted either way, or escaped, the shell matches it against nothing.
+    `python3 /tmp/sweep.py "payload/hooks/*push*"`,
+    'python3 /tmp/sweep.py payload/hooks/\\*push\\*',
+    "bash /w/slate/scripts/helper.sh --term 'app/*push*'",
+    `bash /w/slate/scripts/helper.sh "app/*[0-9]?"`,
+    // grep only reads, whatever pattern it is handed.
+    "grep -n '*push*' /w/slate/payload/hooks/check-style-guide.sh",
+    "grep -rl '*.css' /w/slate/app",
+    "cd /w/slate/payload/hooks && grep -c '*push*' *.sh",
+  ])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(8)
+})
+
+test('#1951 control: a glob the shell expands, or a quoted one that may still name a screen file, is still held', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    // The shell's own write through a glob.
+    "sed -i '' 's/a/b/' app/*.tsx",
+    "sed -i '' 's/a/b/' payload/mods/x/hooks/*.ts",
+    'cp /tmp/x.css app/*/',
+    // A glob the shell expands into the files a script is handed.
+    'python3 /tmp/sweep.py app/*push*',
+    'cd /w/slate/app && python3 /tmp/sweep.py *push*',
+    // The same characters both quoted and bare in one command, read the safe way for both.
+    "python3 /tmp/sweep.py 'app/*push*' app/*push*",
+    // Quotes that leave the pattern itself bare: empty ones around it, or quoting only its folder.
+    "python3 /tmp/sweep.py ''app/*push*''",
+    'python3 /tmp/sweep.py "app/"*push*',
+    // A quoted name that is itself a screen file's, which the script may match itself.
+    "python3 /tmp/sweep.py 'app/*.tsx'",
+    // A tool, whose operands are by its own convention patterns it expands (#1815).
+    "npx prettier --write 'app/*push*'",
+  ]) {
+    // Held asking Dan, or, where the folder a pattern lands in cannot be followed, held as unsure.
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION) || why.includes('could not be followed') }).toEqual({ command, held: true })
+  }
+  expect(w.ran).toEqual([])
+})
+
 // #1815: a tool handed a command substitution whose own text holds no pattern was let through:
 // `npx prettier --write $(git ls-files src)` rewrites every screen file under src, but the argument
 // named no path and no look changing name, so nothing was judged (measured 2026-10-27 on main). A
