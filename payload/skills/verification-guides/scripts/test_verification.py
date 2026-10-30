@@ -493,6 +493,16 @@ class WhoAmITests(unittest.TestCase):
                    "Another brief", "bbb222", later="I dispatched " + self.nonce)
         self.assertEqual(v.find_agent_id(self.nonce, self.root), "aaa111")
 
+    def test_an_unrelated_transcript_that_is_not_utf8_is_read_past(self):
+        # claude-config#1923: another agent's transcript holding such a byte is not this agent's,
+        # and must not stop the search for the one that is.
+        transcript(os.path.join(self.root, "proj/s1/subagents/agent-aaa111.jsonl"),
+                   "Run brief. Nonce " + self.nonce, "aaa111")
+        bad = os.path.join(self.root, "proj/s1/subagents/agent-000bad.jsonl")
+        with open(bad, "wb") as f:
+            f.write(b'{"agentId": "000bad", "type": "user", "message": {"content": "caf\xff"}}\n')
+        self.assertEqual(v.find_agent_id(self.nonce, self.root), "aaa111")
+
     def test_content_as_a_list_of_blocks(self):
         transcript(os.path.join(self.root, "proj/s1/subagents/agent-ccc333.jsonl"),
                    [{"type": "text", "text": "brief " + self.nonce}], "ccc333")

@@ -154,6 +154,7 @@ fi
 
 milestones_out="$(printf '%s' "$milestones_raw" | python3 -c '
 import json, re, sys
+sys.stdout.reconfigure(errors="replace")
 
 def load(text):
     # gh --paginate concatenates one JSON array per page, so decode consecutive

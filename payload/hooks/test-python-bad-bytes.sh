@@ -260,7 +260,8 @@ def judge(tree):
         if dotted(node.func) in ("input", "fileinput.input"):
             finds.append((node.lineno, "stdin"))
         f, name = node.func, dotted(node.func)
-        if name in ("json.load", "json.loads"):
+        # Any way of decoding JSON makes a lone surrogate of an escape: the decoder object too.
+        if name in ("json.load", "json.loads", "json.JSONDecoder") or (isinstance(f, ast.Attribute) and f.attr == "raw_decode"):
             decodes_json = True
         if name == "sys.stdout.reconfigure" and kw(node, "errors"):
             reconfigured = True
@@ -400,6 +401,9 @@ python3 "$WORK/scan.py" "$WORK/probe/held.py" > "$WORK/probe.out"
 for rule in "open: with open" "open: b = open" "subprocess: c =" "subprocess: d =" "decode: e =" "stdin: f =" "stdout:"; do
   grep -q -F "$rule" "$WORK/probe.out" && ok || bad "the scan does not fire on the shape '$rule' in a .py file; it said: $(tr '\n' '|' < "$WORK/probe.out")"
 done
+# A program decoding JSON through a decoder object, as the milestone list reader does.
+printf '%s\n' 'import json, sys' 'v, _ = json.JSONDecoder().raw_decode(sys.stdin.buffer.read().decode("utf-8", "replace"))' 'print(v["t"])' > "$WORK/probe/decoder.py"
+python3 "$WORK/scan.py" "$WORK/probe/decoder.py" | grep -q 'stdout:' && ok || bad "the scan does not count a JSON decoder object as decoding JSON"
 python3 "$WORK/scan.py" "$WORK/probe/fixed.py" > "$WORK/probe.out"
 [ "$(grep -c -v '^UNITS ' "$WORK/probe.out")" = 0 ] && ok || bad "the scan fires on the forms it asks for: $(tr '\n' '|' < "$WORK/probe.out")"
 python3 "$WORK/scan.py" "$WORK/probe/held.sh" > "$WORK/probe.out"

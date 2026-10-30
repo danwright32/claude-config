@@ -124,6 +124,7 @@ fi
 verdict="$(printf '%s' "$raw" | python3 -c '
 import sys, json, re
 from difflib import SequenceMatcher
+sys.stdout.reconfigure(errors="replace")
 
 RATIO = 0.72          # tuned so "Q3 hardening" vs "Q4 hardening" stops to ask
                       # but "Milestone: Auth" vs "Milestone: Billing" does not.

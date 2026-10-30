@@ -1031,7 +1031,9 @@ def find_agent_id(nonce, transcripts=None, max_age_s=3 * 86400):
                 try:
                     if os.path.getmtime(path) < cutoff:
                         continue
-                    with open(path, errors="strict") as f:
+                    # Replaced, not refused (#1923): every agent's transcript is read here, and one
+                    # holding a byte that is not UTF-8 is not a reason to stop looking for this one.
+                    with open(path, errors="replace") as f:
                         first = f.readline(4 * 1024 * 1024)
                 except OSError:
                     continue  # a transcript removed between listing and reading cannot be this agent's

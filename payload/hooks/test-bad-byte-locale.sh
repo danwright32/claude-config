@@ -54,7 +54,7 @@ stub_locale "$WORK/bare" C POSIX
 check_eq "en_US.UTF-8 first where the machine has it" "en_US.UTF-8" "$(PATH="$WORK/mac:$PATH" bad_byte_locale)"
 check_eq "a Linux machine with only C.utf8 gets C.utf8, not a locale it lacks" "C.utf8" "$(PATH="$WORK/linux:$PATH" bad_byte_locale)"
 check_eq "a machine with no UTF-8 locale gets C" "C" "$(PATH="$WORK/bare:$PATH" bad_byte_locale)"
-PATH="$WORK/bare:$PATH" bad_byte_locale >/dev/null && bad "bad_byte_locale returned 0 with no UTF-8 locale to give" || ok
+if PATH="$WORK/bare:$PATH" bad_byte_locale >/dev/null; then bad "bad_byte_locale returned 0 with no UTF-8 locale to give"; else ok; fi
 
 # On this machine, whatever it is, the answer is a locale locale -a lists, or C.
 here="$(bad_byte_locale)"
