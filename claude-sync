@@ -5416,8 +5416,14 @@ SHARED_SETTINGS_FILE="settings.shared.json"
 # The skill listing cap is shared (hook trim, 2026-10-15): every skill Claude can invoke is listed on
 # every request with its description cut at skillListingMaxDescChars characters, and a 300 cap cut
 # about 7.7K characters of listing per request against the 4096 one Mac carried.
-SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars"
-SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars"
+#
+# The output style is shared (Dan, 2026-10-30: "can we make this default in all session?
+# outputStyle=Explanatory"). /config saves it into one project's settings.local.json, so it reached
+# one project on one Mac. Only a built in style is accepted: a custom style is a file under
+# output-styles, which the payload does not carry, so its name would land naming nothing.
+SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle"
+SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle"
+SHARED_OUTPUT_STYLES="default Explanatory Learning"
 # The one definition of how the shared settings land in settings.json, used by the write and by the
 # question of whether it is applied, so the two cannot disagree: applied is "applying changes nothing".
 SHARED_SETTINGS_APPLY_JQ='def apply_shared($s): reduce ($s | to_entries[]) as $e (.;
@@ -5460,6 +5466,7 @@ shared_settings_wanted(){
   bad="$(jq -r '
     def level: . == "low" or . == "medium" or . == "high" or . == "xhigh";
     [ (if has("ultracode") and (.ultracode | type) != "boolean" then "ultracode is not a boolean (true or false)" else empty end),
+      (if has("outputStyle") and ((.outputStyle | type) != "string" or (.outputStyle as $o | $styles | split(" ") | index($o) | not)) then "outputStyle is \(.outputStyle | tojson), not one of the built in styles (\($styles | split(" ") | join(", "))); a custom style is a file the sync does not carry" else empty end),
       (if has("modelSettings") then
         (.modelSettings | if type != "object" then "modelSettings is not an object of model names" else
           to_entries[] | .key as $m |
@@ -5470,7 +5477,7 @@ shared_settings_wanted(){
           end)
         end)
       else empty end)
-    ] | join("; ")' <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
+    ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
   if [ -n "$bad" ]; then
     echo "claude-sync: refused $SHARED_SETTINGS_FILE because $bad, so nothing from it was written into settings.json. Fix the value in the repo." >&2
     printf '{}'; return 0

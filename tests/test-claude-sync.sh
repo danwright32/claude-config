@@ -22984,6 +22984,26 @@ check "a pull sets skillListingMaxDescChars from the shared settings file" "[ \"
 check "and leaves every other setting as it was" \
   "[ \"\$(jq -cS 'del(.skillListingMaxDescChars)' '$SXLH/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
 check "and the shared file in this repository carries the 300 cap" "[ \"\$(jq -r '.skillListingMaxDescChars' '$(dirname "$SCRIPT")/payload/settings.shared.json')\" = 300 ]"
+
+# THE OUTPUT STYLE IS SHARED (Dan, 2026-10-30: "can we make this default in all session?
+# outputStyle=Explanatory"). /config saves it into one project's .claude/settings.local.json, so it
+# travels in the shared file to reach every session on both Macs. Only the built in styles are
+# accepted: a custom style is a file under output-styles, which the payload does not carry, so its
+# name would land on the other Mac naming nothing.
+SXOR="$WORK/sxo-repo"; sx_repo "$SXOR" '{"outputStyle": "Explanatory"}' ''
+SXOH="$WORK/sxo-home"; mkdir -p "$SXOH"; printf '%s\n' "$SX_ORIG" > "$SXOH/settings.json"
+out_sxo="$(sx_pull "$SXOH" "$SXOR")"
+dbg "shared output style: $out_sxo"
+check "a pull sets outputStyle from the shared settings file" "[ \"\$(jq -r '.outputStyle' '$SXOH/settings.json')\" = Explanatory ]"
+check "and leaves every other setting as it was" \
+  "[ \"\$(jq -cS 'del(.outputStyle)' '$SXOH/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
+check "and the shared file in this repository carries Explanatory" "[ \"\$(jq -r '.outputStyle' '$(dirname "$SCRIPT")/payload/settings.shared.json')\" = Explanatory ]"
+SXOBR="$WORK/sxob-repo"; sx_repo "$SXOBR" '{"outputStyle": "My Own Style"}' ''
+SXOBH="$WORK/sxob-home"; mkdir -p "$SXOBH"; printf '%s\n' "$SX_ORIG" > "$SXOBH/settings.json"
+out_sxob="$(sx_pull "$SXOBH" "$SXOBR")"
+dbg "shared output style not built in: $out_sxob"
+check "an outputStyle that is not a built in style is refused, writing nothing" "[ \"\$(jq -r '.outputStyle // \"none\"' '$SXOBH/settings.json')\" = none ]"
+check "and the refusal names the value and the styles it accepts" "line_has \"\$out_sxob\" 'My Own Style' 'Explanatory'"
 # A second pull with nothing new leaves the file and its mtime alone: settings.json is a WatchPath,
 # and a needless rewrite would trigger the next sync. The mtime is SET into the past rather than
 # waited on, so a rewrite in the same second cannot hide (L290).
