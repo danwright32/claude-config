@@ -103,6 +103,20 @@ check "a clean file: says nothing" "$([ -z "$OUT" ] && echo ok || echo "said: $O
 check "a clean file: is not changed" "$(same_file "$F" "$W/orig")"
 check "a clean file: no record written" "$([ ! -e "$W/home/.claude/state/local-allow-sweep" ] && echo ok || echo "a state folder was made")"
 
+# --- a rule holding a lone surrogate escape (claude-config#1944) --------------------------------
+# The file is UTF-8 and valid JSON, and its decoder hands back a lone surrogate for the escape, which
+# hashing the rule for its fingerprint met with a bare .encode() and raised on, so nothing was said.
+world lone
+python3 -c '
+import json, sys
+json.dump({"permissions": {"allow": ["Bash(grep -rn foo * --include=x\ud800)", "Bash(git status)"], "deny": []}},
+          open(sys.argv[1], "w"), indent=2)
+' "$F"
+sweep
+check "#1944 a rule with a lone surrogate escape: exit 0" "$([ "$RC" -eq 0 ] && echo ok || echo "rc $RC")"
+check "#1944 a rule with a lone surrogate escape: no traceback" "$(lacks Traceback "a traceback")"
+check "#1944 a rule with a lone surrogate escape: it is still flagged" "$(has 'rule 1 (Bash grep)')"
+
 # --- each kind flagged ---------------------------------------------------------------------------
 world kinds
 fixture 'Bash(npm run test:*)' \

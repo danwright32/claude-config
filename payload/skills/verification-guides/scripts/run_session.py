@@ -190,7 +190,7 @@ def request_stop(rdir, reason):
     except FileExistsError:
         fd = None  # an earlier request stands, and its reason is the one recorded
     if fd is not None:
-        os.write(fd, reason.encode())
+        os.write(fd, reason.encode("utf-8", "replace"))
         os.close(fd)
     rec = read_receipt(rdir)
     pid = rec.get("supervisor_pid")
@@ -391,7 +391,7 @@ def supervise(rdir, repo_lock_fd, pipe_w):
 
 def repo_lock(home, repo):
     os.makedirs(os.path.join(home, "locks"), exist_ok=True)
-    key = hashlib.sha256(repo.encode()).hexdigest()[:16]
+    key = hashlib.sha256(repo.encode("utf-8", "surrogatepass")).hexdigest()[:16]
     return os.path.join(home, "locks", key + ".lock")
 
 
@@ -497,7 +497,7 @@ def start(repo, sha, areas_csv):
         os.makedirs(os.path.join(rdir, "guides"))
         os.ftruncate(lock_fd, 0)
         os.lseek(lock_fd, 0, os.SEEK_SET)
-        os.write(lock_fd, rid.encode())
+        os.write(lock_fd, rid.encode("utf-8", "replace"))
         update_receipt(rdir, schema=v.RECEIPT_SCHEMA, receipt_id=rid, machine=v.machine_name(), repo=repo,
                        head_sha=sha, checkout_sha=None, areas=wanted, url=doc["url"], started_at=v.utc_now(),
                        ready_at=None, stopped_at=None, stopped_by=None, stop_detail=None, serve_exit=None,
@@ -598,7 +598,7 @@ def drive(rid, area, args):
                        cwd=rec["worktree"], env=env)
     line = json.dumps({"at": v.utc_now(), "area": area, "args": list(args), "exit": r.returncode}) + "\n"
     fd = os.open(os.path.join(rdir, "drives.jsonl"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    os.write(fd, line.encode())
+    os.write(fd, line.encode("ascii", "strict"))
     os.close(fd)
     if r.returncode != 0:
         v.fail("drive-failed", "the drive helper exited %d" % r.returncode)

@@ -120,7 +120,7 @@ def copy(folder, from_dir):
         "refresh": "python3 %s/vendor-score.py copy <this folder>" % INSTALLED,
         "files": dict(sorted(hashes.items())),
     }
-    write_atomic(os.path.join(folder, MANIFEST), (json.dumps(manifest, indent=1) + "\n").encode())
+    write_atomic(os.path.join(folder, MANIFEST), (json.dumps(manifest, indent=1) + "\n").encode("ascii", "strict"))
     say("copied %d files into %s and wrote %s. Commit the folder." % (len(hashes), folder, MANIFEST))
     extra = sorted(set(os.listdir(folder)) - set(FILES) - {MANIFEST})
     if extra:

@@ -683,7 +683,7 @@ def record_digest(rec):
     """
     body = {k: val for k, val in rec.items() if k not in _READER_KEYS}
     text = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return "sha256:" + hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def remember_rendered(receipt_id, records, home=None):
@@ -798,7 +798,7 @@ def tally_append(slug, pr, head_sha, passed, kinds, home=None):
     # One write to a file opened for append, so two merges judged at once never interleave a line.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        os.write(fd, line.encode())
+        os.write(fd, line.encode("ascii", "strict"))
     finally:
         os.close(fd)
 

@@ -120,7 +120,7 @@ def read_token(run=subprocess.run):
 def slack_caller(token):
     def call(method, params):
         req = urllib.request.Request(
-            "https://slack.com/api/" + method, data=json.dumps(params).encode(),
+            "https://slack.com/api/" + method, data=json.dumps(params).encode("ascii", "strict"),
             headers={"Authorization": "Bearer " + token, "Content-Type": "application/json; charset=utf-8"},
         )
         try:

@@ -253,7 +253,7 @@ class Monitor:
     def _event(self, obj):
         fd = os.open(self.events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:
-            os.write(fd, (json.dumps(obj) + "\n").encode())
+            os.write(fd, (json.dumps(obj) + "\n").encode("ascii", "strict"))
         finally:
             os.close(fd)
 

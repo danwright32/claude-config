@@ -128,7 +128,7 @@ SETTLED_BLOCKS = ("decision-map", "design-frames")
 
 
 def _digest(body):
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+    return hashlib.sha256(body.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def seal(page):

@@ -123,6 +123,7 @@ Rules:
   subprocess  a call with text=True, universal_newlines=True or encoding= and no errors= argument
   decode      a .decode() naming no error handler, positional or errors=
   stdout      a program that decodes JSON and writes to stdout without sys.stdout.reconfigure(errors=)
+  encode      in a program that decodes JSON, a .encode() naming no error handler, positional or errors=
   stdin       sys.stdin used for anything but its buffer (or isatty, fileno, close), input(), fileinput
 """
 import ast, os, re, sys
@@ -250,6 +251,7 @@ STDIN_OK = ("buffer", "isatty", "fileno", "close")
 def judge(tree):
     finds = []
     decodes_json = writes_stdout = reconfigured = False
+    encodes = []
     # sys.stdin read as text: any use but its buffer, and the builtins that read it as text.
     fine = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr in STDIN_OK and dotted(n.value) == "sys.stdin"}
     for node in ast.walk(tree):
@@ -287,8 +289,15 @@ def judge(tree):
                 finds.append((node.lineno, "subprocess"))
             elif isinstance(f, ast.Attribute) and f.attr == "decode" and len(node.args) < 2:
                 finds.append((node.lineno, "decode"))
+            elif isinstance(f, ast.Attribute) and f.attr == "encode" and len(node.args) < 2:
+                encodes.append((node.lineno, "encode"))
     if decodes_json and writes_stdout and not reconfigured:
         finds.append((None, "stdout"))
+    # The way back (claude-config#1944): a program that decodes JSON holds a lone surrogate wherever the
+    # text carried a lone \ud800 escape, and a .encode() naming no handler raises on it, mostly while
+    # hashing a key. A program decoding no JSON gets one only from a surrogateescape it chose itself.
+    if decodes_json:
+        finds.extend(encodes)
     return finds
 
 
@@ -347,7 +356,7 @@ unparsed="$(grep '^UNPARSED' "$WORK/hooks.scan")"
 if [ -z "$unparsed" ]; then ok; else bad "the scan could not parse these, so it cannot vouch for them:
 $unparsed"; fi
 hits="$(grep -v -E '^(UNITS|UNPARSED) ' "$WORK/hooks.scan" | sed "s#^$DIR/##")"
-if [ -z "$hits" ]; then ok; else bad "Python in the hooks raises on a byte that is not UTF-8 or a lone surrogate here. Give each open, subprocess and decode an errors= (\"replace\", or \"strict\" where refusing is the decision), and a program that decodes JSON and prints sys.stdout.reconfigure(errors=\"replace\") first:
+if [ -z "$hits" ]; then ok; else bad "Python in the hooks raises on a byte that is not UTF-8 or a lone surrogate here. Give each open, subprocess, decode and (in a program that decodes JSON) encode an errors= (\"replace\", \"strict\" where refusing is the decision, or \"surrogatepass\" for a hash key), and a program that decodes JSON and prints sys.stdout.reconfigure(errors=\"replace\") first:
 $hits"; fi
 
 # The skills, held to the same rules: they read gh's answers, transcripts and files the same way.
@@ -371,6 +380,7 @@ d = subprocess.run(["git", "status"], capture_output=True, universal_newlines=Tr
 e = open(sys.argv[1], "rb").read().decode("utf-8")
 f = json.loads(sys.stdin.read())
 print(f["x"])
+g = f["x"].encode("utf-8")
 PROBE
 cat > "$WORK/probe/fixed.py" <<'PROBE'
 import json, subprocess, sys
@@ -382,6 +392,8 @@ e = open(sys.argv[1], "rb").read().decode("utf-8", "strict")
 f = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 sys.stdout.reconfigure(errors="replace")
 print(f["x"])
+g = f["x"].encode("utf-8", "surrogatepass")
+h = f["x"].encode(errors="replace")
 PROBE
 cat > "$WORK/probe/held.sh" <<'PROBE'
 #!/bin/bash
@@ -398,9 +410,14 @@ r = subprocess.run(["git", "log"], capture_output=True, text=True)
 z="$(python3 -c 'import sys; d = open(sys.argv[1]).read(); print(d.split("'"'"'")[0])' "$f")"
 PROBE
 python3 "$WORK/scan.py" "$WORK/probe/held.py" > "$WORK/probe.out"
-for rule in "open: with open" "open: b = open" "subprocess: c =" "subprocess: d =" "decode: e =" "stdin: f =" "stdout:"; do
+for rule in "open: with open" "open: b = open" "subprocess: c =" "subprocess: d =" "decode: e =" "stdin: f =" "stdout:" "encode: g ="; do
   grep -q -F "$rule" "$WORK/probe.out" && ok || bad "the scan does not fire on the shape '$rule' in a .py file; it said: $(tr '\n' '|' < "$WORK/probe.out")"
 done
+# A bare .encode() in a program that decodes no JSON holds no lone surrogate it did not choose, so it
+# is not this rule's (claude-config#1944).
+printf '%s\n' 'import hashlib, sys' 'k = hashlib.sha1(sys.argv[1].encode("utf-8")).hexdigest()' > "$WORK/probe/nojson.py"
+python3 "$WORK/scan.py" "$WORK/probe/nojson.py" > "$WORK/probe.out"
+[ "$(grep -c -v '^UNITS ' "$WORK/probe.out")" = 0 ] && ok || bad "the encode rule fires on a program that decodes no JSON: $(tr '\n' '|' < "$WORK/probe.out")"
 # A program decoding JSON through a decoder object, as the milestone list reader does.
 printf '%s\n' 'import json, sys' 'v, _ = json.JSONDecoder().raw_decode(sys.stdin.buffer.read().decode("utf-8", "replace"))' 'print(v["t"])' > "$WORK/probe/decoder.py"
 python3 "$WORK/scan.py" "$WORK/probe/decoder.py" > "$WORK/probe.out"

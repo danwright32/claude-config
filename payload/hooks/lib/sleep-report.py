@@ -304,7 +304,7 @@ def append_note(record_path, record, line):
     elif not (num(note["at"]) and 0 <= note["at"] < 1e14):
         # A time no clock gives would break every later render of the night, so it is refused here.
         raise Refused("the note's at must be ms since the epoch, got %s" % json.dumps(note["at"]))
-    data = (json.dumps(note, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
+    data = (json.dumps(note, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8", "replace")
     path = notes_path(record_path, record)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # One write in append mode: every writer's line lands whole after the others, with no lock.
