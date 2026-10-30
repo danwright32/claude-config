@@ -362,7 +362,7 @@ _ls_budget="${LINUX_SECTIONS_BUDGET_SECONDS:-$_ls_budget_default}"
 # Zero written any way (00, 000) is zero (claude-config#1931): only a literal 0 fell back, and "00"
 # ran the audit with no bound at all, since perl's alarm reads it as 0. Which values are zero is
 # lib/whole-number.sh's answer (claude-config#1948), loaded at the top.
-whole_above_zero "$_ls_budget" || _ls_budget=$_ls_budget_default
+whole_above_zero "$_ls_budget" _ls_budget || _ls_budget=$_ls_budget_default
 _ls_docker="${SYNC_DOCKER:-docker}"
 _ls_container="claude-linux-sections-$$-$(date +%s)"
 # A notice a person sees on a push the gate lets through: Claude Code discards a PreToolUse hook's

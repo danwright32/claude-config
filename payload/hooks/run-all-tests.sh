@@ -258,7 +258,7 @@ case "$_ncpu" in ''|*[!0-9]*) _ncpu=4 ;; esac
 _default_budget=$(( _ncpu > 8 ? 8 : _ncpu ))
 [ "$_default_budget" -gt 0 ] || _default_budget=1
 BUDGET="${HOOK_TESTS_BUDGET-$_default_budget}"
-if ! whole_above_zero "$BUDGET"; then
+if ! whole_above_zero "$BUDGET" BUDGET; then
   echo "run-all-tests: HOOK_TESTS_BUDGET='$BUDGET' is not a positive whole number of processes this run may have in flight. Refusing rather than guessing, because it decides how much of the machine the tests take." >&2
   exit 1
 fi
@@ -275,7 +275,7 @@ _jobs_default=$(( BUDGET / 2 ))
 [ "$_jobs_default" -ge 2 ] || _jobs_default=2
 [ "$_jobs_default" -le "$BUDGET" ] || _jobs_default="$BUDGET"
 JOBS="${HOOK_TESTS_JOBS-$_jobs_default}"
-if ! whole_above_zero "$JOBS"; then
+if ! whole_above_zero "$JOBS" JOBS; then
   echo "run-all-tests: HOOK_TESTS_JOBS='$JOBS' is not a positive whole number of suites to run at once. Refusing rather than guessing, because this decides how many processes start. Use 1 to run them one at a time." >&2
   exit 1
 fi
@@ -801,7 +801,7 @@ if [ "$ran" -gt 0 ]; then
       _dl_why="$SELF_DIR/lib/workflow-job-timeout.sh is missing"
     else
       _dl_min="$(workflow_job_timeout_minutes "$_dl_file" "$_dl_job")"
-      whole_above_zero "$_dl_min" || { _dl_min=""; _dl_why="job '$_dl_job' in $_dl_rel carries no timeout-minutes this runner can read"; }
+      whole_above_zero "$_dl_min" _dl_min || { _dl_min=""; _dl_why="job '$_dl_job' in $_dl_rel carries no timeout-minutes this runner can read"; }
     fi
     if [ -n "$_dl_min" ]; then
       _dl_now="$(run_now)"

@@ -79,7 +79,7 @@ is "a core count of zero reads as nothing, since nothing can be judged against i
 is "a core count of 00 is zero, and reads as nothing" "" "$(LOAD_AVERAGE_CORES=00 load_average_cores)"
 if load_average_busy 3 00; then check "and a load judged against 00 cores is not busy" "it said busy"; else check "and a load judged against 00 cores is not busy" ok; fi
 real_cores="$(load_average_cores)"
-if whole_above_zero "$real_cores"; then
+if whole_above_zero "$real_cores" real_cores; then
   check "this machine's own core count is a whole number above zero" ok
 else
   check "this machine's own core count is a whole number above zero" "got [$real_cores]"

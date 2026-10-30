@@ -145,7 +145,7 @@ case "$PRR_DEADLINE" in ''|*[!0-9]*) PRR_DEADLINE=600 ;; esac
 PRR_MAX_BYTES="${PR_REVIEW_MAX_BYTES:-307200}"
 case "$PRR_MAX_BYTES" in ''|*[!0-9]*) PRR_MAX_BYTES=307200 ;; esac
 PRR_MAX_GROUPS="${PR_REVIEW_MAX_GROUPS:-8}"
-whole_above_zero "$PRR_MAX_GROUPS" || PRR_MAX_GROUPS=8
+whole_above_zero "$PRR_MAX_GROUPS" PRR_MAX_GROUPS || PRR_MAX_GROUPS=8
 # The most the earlier reviews of the same pull request may add to a review's input (#1063).
 # Measured 2026-10-12 over 2,059 stored reviews: finding lines come to 859 bytes median and 3,949 at
 # most per review, and a branch had 3 reviews median, 11 at p95. 16 KB holds the p95 branch's at the
@@ -158,7 +158,7 @@ case "$PRR_HISTORY_MAX" in ''|*[!0-9]*) PRR_HISTORY_MAX=16384 ;; esac
 # retry is begun past PRR_PR_READ_BUDGET seconds from the first try. PR_REVIEW_SLEEP is the command waited through, so a
 # test never waits on a clock (L524).
 PRR_PR_TRIES="${PR_REVIEW_PR_READ_TRIES:-3}"
-whole_above_zero "$PRR_PR_TRIES" || PRR_PR_TRIES=3
+whole_above_zero "$PRR_PR_TRIES" PRR_PR_TRIES || PRR_PR_TRIES=3
 PRR_PR_WAIT="${PR_REVIEW_PR_READ_WAIT:-2}"
 case "$PRR_PR_WAIT" in ''|*[!0-9]*) PRR_PR_WAIT=2 ;; esac
 PRR_PR_READ_BUDGET=15
@@ -1321,7 +1321,7 @@ do_groups() {
   parts="$(parts_for "$run")"
   n="$(meta_of "$pending" groups)"; gbase="$(meta_of "$pending" base)"
   model="$(meta_of "$pending" model)"; dl="$(meta_of "$pending" deadline)"; st="$(meta_of "$pending" started)"
-  whole_above_zero "$n" || return 1
+  whole_above_zero "$n" n || return 1
   for k in $(seq 1 "$n"); do
     run_reviewer "$parts" "$name-g$k" "$parts/$name-g$k.diff" "$gbase" "${model:-sonnet}" "${dl:-$PRR_DEADLINE}" "${st:-$(date +%s)}" &
   done
@@ -1345,7 +1345,7 @@ assemble_groups() {
   run="$(meta_of "$pending" run)"
   [ -n "$run" ] && [ -n "$parts" ] && [ "$parts" = "$(parts_for "$run")" ] || return 1
   n="$(meta_of "$pending" groups)"
-  whole_above_zero "$n" || return 1
+  whole_above_zero "$n" n || return 1
   for k in $(seq 1 "$n"); do [ -e "$parts/$name-g$k.txt" ] || return 1; done
   mkdir "$parts/.writing" 2>/dev/null || return 1
   for k in $(seq 1 "$n"); do

@@ -300,7 +300,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/whole-number.sh
 { . "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null && declare -F whole_above_zero >/dev/null; } \
   || { LEDGER_MAX=5000; not_judged "$HOOK_DIR/lib/whole-number.sh, which reads the ledger's size setting, could not be loaded (reinstall the hooks with claude-sync pull)" reader-lib-missing; }
-whole_above_zero "$LEDGER_MAX" || LEDGER_MAX=5000
+whole_above_zero "$LEDGER_MAX" LEDGER_MAX || LEDGER_MAX=5000
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null \
   || not_judged "$HOOK_DIR/lib/push-scope.sh, the reader of the command, could not be loaded (reinstall the hooks with claude-sync pull)" reader-lib-missing

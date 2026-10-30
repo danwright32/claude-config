@@ -43,7 +43,7 @@ load_average_one_minute(){   # [command] -> the figure, or nothing
 load_average_cores(){   # -> a whole number, or nothing
   local c="${LOAD_AVERAGE_CORES:-}"
   [ -n "$c" ] || c="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null)"
-  whole_above_zero "$c" || return 0
+  whole_above_zero "$c" c || return 0
   printf '%s' "$c"
 }
 
@@ -56,7 +56,7 @@ load_average_cores(){   # -> a whole number, or nothing
 load_average_busy(){   # load cores [own load] -> exit 0 when busy
   local l="${1-}" c="${2-}" o="${3:-0}"
   case "$l" in ''|*[!0-9.]*) return 1 ;; esac
-  whole_above_zero "$c" || return 1
+  whole_above_zero "$c" c || return 1
   case "$o" in *[!0-9.]*) return 1 ;; esac
   awk -v l="$l" -v c="$c" -v o="$o" 'BEGIN { exit !(l - o > c + 0) }'
 }

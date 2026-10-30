@@ -144,7 +144,7 @@ cap="${PLAN_COUNCIL_SCAN_FILE_CAP:-5000}"
 _us_here="${BASH_SOURCE[0]%/*}"; [ "$_us_here" != "${BASH_SOURCE[0]}" ] || _us_here=.
 # shellcheck source=../../hooks/lib/whole-number.sh
 . "$_us_here/../../hooks/lib/whole-number.sh" 2>/dev/null
-whole_above_zero "$cap" || cap=5000
+whole_above_zero "$cap" cap || cap=5000
 prune=()
 for d in $SKIP_DIRS .git; do prune+=(-name "$d" -o); done
 skipf=()

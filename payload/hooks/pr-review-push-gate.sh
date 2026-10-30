@@ -118,7 +118,7 @@ WAIT="${PR_REVIEW_PUSH_WAIT_SECONDS:-100}"
 case "$WAIT" in ''|*[!0-9]*) WAIT=100 ;; esac
 POLL="${PR_REVIEW_PUSH_POLL_SECONDS:-3}"
 # Zero however written is the default (lib/whole-number.sh, loaded by merge-target.sh, #1948).
-whole_above_zero "$POLL" || POLL=3
+whole_above_zero "$POLL" POLL || POLL=3
 SLEEP="${PR_REVIEW_PUSH_SLEEP:-sleep}"
 now_s() { if [ -n "${PR_REVIEW_PUSH_CLOCK:-}" ]; then "$PR_REVIEW_PUSH_CLOCK"; else date +%s; fi; }
 

@@ -264,9 +264,9 @@ RELEASE_ASK_SECONDS="${QUIZ_RELEASE_ASK_SECONDS:-10}"
 # shell names the missing function and each default is used.
 # shellcheck source=lib/whole-number.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/whole-number.sh" 2>/dev/null
-whole_above_zero "$RELEASE_ASK_SECONDS" || RELEASE_ASK_SECONDS=10
+whole_above_zero "$RELEASE_ASK_SECONDS" RELEASE_ASK_SECONDS || RELEASE_ASK_SECONDS=10
 RELEASE_BUDGET_SECONDS="${QUIZ_RELEASE_BUDGET_SECONDS:-40}"
-whole_above_zero "$RELEASE_BUDGET_SECONDS" || RELEASE_BUDGET_SECONDS=40
+whole_above_zero "$RELEASE_BUDGET_SECONDS" RELEASE_BUDGET_SECONDS || RELEASE_BUDGET_SECONDS=40
 held_ask() {  # $1 = folder to ask in, $2 = pr, $3 = remote slug, $4 = --repo value ; prints mt_pr_view's envelope, or nothing
   local left secs
   left=$((RELEASE_BUDGET_SECONDS - SECONDS))

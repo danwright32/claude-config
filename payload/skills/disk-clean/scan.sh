@@ -60,8 +60,8 @@ WALK_LIMIT="${DISK_CLEAN_WALK_SECONDS:-900}"
 # installed beside the skills. Missing, the shell names the missing function and both are refused.
 # shellcheck source=../../hooks/lib/whole-number.sh
 . "$HERE/../../hooks/lib/whole-number.sh" 2>/dev/null
-whole_above_zero "$LIMIT" || { echo "disk-clean scan: DISK_CLEAN_CATEGORY_SECONDS is '$LIMIT', which is not a whole number of seconds, so it scanned nothing."; exit 2; }
-whole_above_zero "$WALK_LIMIT" || { echo "disk-clean scan: DISK_CLEAN_WALK_SECONDS is '$WALK_LIMIT', which is not a whole number of seconds, so it scanned nothing."; exit 2; }
+whole_above_zero "$LIMIT" LIMIT || { echo "disk-clean scan: DISK_CLEAN_CATEGORY_SECONDS is '$LIMIT', which is not a whole number of seconds, so it scanned nothing."; exit 2; }
+whole_above_zero "$WALK_LIMIT" WALK_LIMIT || { echo "disk-clean scan: DISK_CLEAN_WALK_SECONDS is '$WALK_LIMIT', which is not a whole number of seconds, so it scanned nothing."; exit 2; }
 
 ONLY=""
 while [ "$#" -gt 0 ]; do

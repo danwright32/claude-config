@@ -420,7 +420,7 @@ trig_lengths="$(
 # second one written beside it that drifts (L107).
 trig_agree(){   # $@ = the lengths -> 0 when they are all equal and above zero
   local first="${1:-0}" len
-  whole_above_zero "$first" || return 1
+  whole_above_zero "$first" first || return 1
   for len in "$@"; do [ "$len" = "$first" ] || return 1; done
   return 0
 }

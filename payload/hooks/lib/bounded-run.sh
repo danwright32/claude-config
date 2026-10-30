@@ -37,7 +37,7 @@ bounded_run() {
     BOUNDED_OUT="bounded-run: $_BR_LIB/whole-number.sh is missing, so the bound could not be read and nothing was run"
     return 0
   fi
-  whole_above_zero "$seconds" || { BOUNDED_RC=125; return 0; }
+  whole_above_zero "$seconds" seconds || { BOUNDED_RC=125; return 0; }
   BOUNDED_OUT="$(perl -e '
     my $t = shift @ARGV;
     my $pid = fork();

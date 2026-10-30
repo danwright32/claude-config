@@ -922,7 +922,7 @@ acquire_lock(){
     case "$max" in ''|*[!0-9]*) max="$PULL_LOCK_WAIT_DEFAULT" ;; esac
   fi
   case "$max" in ''|*[!0-9]*) max=90 ;; esac
-  whole_above_zero "$report_every" || report_every=30
+  whole_above_zero "$report_every" report_every || report_every=30
   lock_t0="$(date +%s)"
   last_report="$lock_t0"
   lock_wait_expired(){   # -> true once `max` seconds have really passed since the first attempt
@@ -3882,7 +3882,7 @@ LESSON_BAND_SIZE="${SYNC_LESSON_BAND_SIZE:-500}"
 # also the width of a claim already recorded in lesson-bands, so a nonsense one is not a thing to
 # guess a default for.
 # Only a size given explicitly needs reading: the default is a whole number by construction.
-if [ -n "${SYNC_LESSON_BAND_SIZE:-}" ] && ! whole_above_zero "$LESSON_BAND_SIZE"; then
+if [ -n "${SYNC_LESSON_BAND_SIZE:-}" ] && ! whole_above_zero "$LESSON_BAND_SIZE" LESSON_BAND_SIZE; then
   [ -z "$WHOLE_NUMBER_MISSING" ] || die "SYNC_LESSON_BAND_SIZE is set to '$LESSON_BAND_SIZE' and could not be read: $WHOLE_NUMBER_MISSING. NOTHING was done."
   die "SYNC_LESSON_BAND_SIZE is set to '$LESSON_BAND_SIZE', which is not a whole number of numbers a band can hold, and bash would read it as zero, making every band empty. NOTHING was done. Unset it to use the default of 500, which is what the bands in $LESSON_BANDS_DIR were claimed under."
 fi
@@ -4142,7 +4142,7 @@ highest_taken_in_band(){   # $1 = tree  $2 = band start
 # deadline fires without waiting ten seconds of real time for it (L524).
 take_reservations_lock(){
   local lock="$LESSON_RESERVATIONS_FILE.lock" max="${SYNC_LESSON_LOCK_WAIT:-10}" rc=0
-  whole_above_zero "$max" || max=10
+  whole_above_zero "$max" max || max=10
   mkdir -p "$(dirname "$LESSON_RESERVATIONS_FILE")" || die "could not create $(dirname "$LESSON_RESERVATIONS_FILE"), so no lesson number could be reserved. NOTHING was minted."
   take_pid_lock "$lock" "$max" || rc=$?
   case "$rc" in
@@ -6657,7 +6657,7 @@ SYNCBAKS
 # that names it.
 backup_keep_days(){
   local d="${SYNC_BACKUP_KEEP_DAYS:-90}"
-  whole_above_zero "$d" || d=90
+  whole_above_zero "$d" d || d=90
   printf '%s' "$d"
 }
 
@@ -9433,7 +9433,7 @@ HSCOVEOF
     IFS="$(printf '\t')" read -r partial_n partial_names <<HSPARTEOF
 $(hook_suite_partial "$out")
 HSPARTEOF
-    whole_above_zero "$partial_n" || partial_n=''
+    whole_above_zero "$partial_n" partial_n || partial_n=''
     if [ "$ran" != '?' ] && [ "$notrun" -eq 0 ] && [ -n "$partial_n" ]; then
       # Every suite ran, but not every part of them (claude-config#1452): "all N of its suites" is
       # the reassuring reading this exists to refuse, so it is not said.
@@ -10851,8 +10851,9 @@ hold_write_rows(){
 # takes it. SYNC_HOLD_LOCK_WAIT shortens the wait for the suite.
 hold_lock(){   # $1 = seconds to wait at most (optional; SYNC_HOLD_LOCK_WAIT, else ten)
   local max="${SYNC_HOLD_LOCK_WAIT:-10}"
-  whole_above_zero "$max" || max=10
-  if whole_above_zero "${1:-}"; then [ "$1" -ge "$max" ] || max="$1"; fi
+  whole_above_zero "$max" max || max=10
+  local want
+  if whole_above_zero "${1:-}" want; then [ "$want" -ge "$max" ] || max="$want"; fi
   take_pid_lock "$SYNC_HOLD_FILE.lock" "$max"
 }
 hold_unlock(){ rm -f "$SYNC_HOLD_FILE.lock" 2>/dev/null || true; }
@@ -11807,10 +11808,11 @@ hook_suite_headroom(){   # $1 = seconds the run took, or ? -> a clause, or nothi
 # What to say about the suites that could not run. Three answers, kept apart: none, some named,
 # and some whose names this record does not carry (L11).
 hook_suite_skipped(){   # $1 = the notrun count  $2 = the names, or ? / empty
-  whole_above_zero "${1:-}" || return 0
+  local n
+  whole_above_zero "${1:-}" n || return 0
   case "${2:-}" in
-    ''|'?') printf ', though %s of its suites could not run here and this record does not name them' "$1" ;;
-    *)      printf ', though %s of its suites could not run here: %s' "$1" "$(printf '%s' "$2" | tr ',' ' ')" ;;
+    ''|'?') printf ', though %s of its suites could not run here and this record does not name them' "$n" ;;
+    *)      printf ', though %s of its suites could not run here: %s' "$n" "$(printf '%s' "$2" | tr ',' ' ')" ;;
   esac
   return 0
 }
@@ -12947,7 +12949,7 @@ esac
 # Only a timeout given explicitly needs reading: the default is a whole number by construction.
 _sct_given="${SYNC_CLAUDE_CHECK_TIMEOUT:-}"
 SYNC_CLAUDE_CHECK_TIMEOUT="${SYNC_CLAUDE_CHECK_TIMEOUT:-30}"
-if [ -n "$_sct_given" ] && ! whole_above_zero "$SYNC_CLAUDE_CHECK_TIMEOUT"; then
+if [ -n "$_sct_given" ] && ! whole_above_zero "$SYNC_CLAUDE_CHECK_TIMEOUT" SYNC_CLAUDE_CHECK_TIMEOUT; then
   if [ -n "$WHOLE_NUMBER_MISSING" ]; then
     echo "claude-sync: SYNC_CLAUDE_CHECK_TIMEOUT='$SYNC_CLAUDE_CHECK_TIMEOUT' could not be read: $WHOLE_NUMBER_MISSING. Refusing to run rather than asking claude about the mods with a bound nobody read." >&2
     exit 2

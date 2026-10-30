@@ -446,6 +446,12 @@ seq_order="$(printf '%s\n' "$out_seq" | grep -E '^ +(ok|FAIL) +test-' | grep -oE
 
 # A job count nobody can read must be refused, not guessed at: it decides how much runs at once,
 # and guessing could mean either no parallelism at all or a fork bomb (L50).
+# A count with a leading zero is the number written, never octal (claude-config#1948): bash
+# arithmetic read 08 as an error and 010 as 8, so the counts are handed back with the zeros cut.
+out_oct="$(HOOK_TESTS_BUDGET=08 HOOK_TESTS_JOBS=02 bash "$RUNNER" "$P" 2>&1)"; code_oct=$?
+[ "$code_oct" -eq 0 ] && ! grep -q 'value too great' <<< "$out_oct" \
+  && check "#1948 a budget of 08 and a job count of 02 run as 8 and 2" ok \
+  || check "#1948 a budget of 08 and a job count of 02 run as 8 and 2" "exit $code_oct: $(printf '%s' "$out_oct" | head -3)"
 # 00 is zero too (claude-config#1948): only a literal 0 was refused, so 00 passed as a count.
 for bad in 0 00 -2 lots ''; do
   out_bad_jobs="$(HOOK_TESTS_JOBS="$bad" bash "$RUNNER" "$P" 2>&1)"; code_bad_jobs=$?
@@ -3462,7 +3468,7 @@ lt_plain="$(awk 'NR == 1 { print $1 }' "$LTSTORE/suites%2Ftest-plain.sh" 2>/dev/
   || check "#1297 the time a suite waited for its lock is taken off the time recorded for it" "exit=$code_lt waited='$lt_waited' store=$(ls "$LTSTORE" | tr '\n' ' ') out=$out_lt"
 # shellcheck source=lib/whole-number.sh
 . "$DIR/lib/whole-number.sh"
-if whole_above_zero "$lt_plain"; then
+if whole_above_zero "$lt_plain" lt_plain; then
   check "#1297 and a suite that did not wait keeps its measured time" ok
 else
   check "#1297 and a suite that did not wait keeps its measured time" "plain='$lt_plain'"

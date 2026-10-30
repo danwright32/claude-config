@@ -236,7 +236,7 @@ SUITE_SECTION_SAMPLES="${SUITE_SECTION_SAMPLES:-10}"
 # setting and the counts below. Missing, the shell says so and every count is refused.
 # shellcheck source=../payload/hooks/lib/whole-number.sh
 . "$(dirname "$SCRIPT")/payload/hooks/lib/whole-number.sh"
-if ! whole_above_zero "$SUITE_SECTION_SAMPLES"; then
+if ! whole_above_zero "$SUITE_SECTION_SAMPLES" SUITE_SECTION_SAMPLES; then
   echo "test suite: SUITE_SECTION_SAMPLES='$SUITE_SECTION_SAMPLES' is not a positive whole number of readings. Refusing rather than keeping none, which would leave the stall bound's check judging one reading again." >&2
   exit 4
 fi
@@ -530,7 +530,7 @@ fi
 # above the selectors, because those re-execute this file: a refusal written beside the seam would
 # sit after that re-execution and could never be reached by the run that needed it (L109).
 if [ -n "${SUITE_FIXTURE_SECTIONS:-}" ]; then
-  if ! whole_above_zero "$SUITE_FIXTURE_SECTIONS"; then
+  if ! whole_above_zero "$SUITE_FIXTURE_SECTIONS" SUITE_FIXTURE_SECTIONS; then
     echo "test suite: SUITE_FIXTURE_SECTIONS='$SUITE_FIXTURE_SECTIONS' is not a positive whole number of sections. Refusing rather than running none and reporting a pass over a set nobody chose (L98)." >&2
     exit 2
   fi
@@ -1283,11 +1283,11 @@ esac
 # The three sections set it to a tenth and scale their timeouts with it, which changes nothing
 # about what they assert.
 SUITE_POLL_INTERVAL="${SUITE_POLL_INTERVAL:-2}"
-case "$SUITE_POLL_INTERVAL" in
-  ''|*[!0-9.]*|.|*.*.*|0|0.0|0.00)
-    echo "test suite: SUITE_POLL_INTERVAL='$SUITE_POLL_INTERVAL' is not a positive number of seconds. Refusing rather than guessing: zero would spin the watchdog against the clock with no sleep at all, and this decides how finely a stall can be noticed." >&2
-    exit 4 ;;
-esac
+# Zero however written is zero, 00 and 0.000 included (lib/whole-number.sh, claude-config#1948).
+if ! decimal_above_zero "$SUITE_POLL_INTERVAL" SUITE_POLL_INTERVAL; then
+  echo "test suite: SUITE_POLL_INTERVAL='$SUITE_POLL_INTERVAL' is not a positive number of seconds. Refusing rather than guessing: zero would spin the watchdog against the clock with no sleep at all, and this decides how finely a stall can be noticed." >&2
+  exit 4
+fi
 if [ "$SUITE_TIMEOUT" -eq 0 ] && [ "$SUITE_STALL_TIMEOUT" -eq 0 ]; then
   echo "test suite: SUITE_TIMEOUT and SUITE_STALL_TIMEOUT are both 0, so this run would have no bound of any kind. A wait with no deadline cannot fail, it can only hang, and a hang reads as an ordinary slow run (L110). Set at least one." >&2
   exit 4
@@ -1486,11 +1486,11 @@ case "$SUITE_LOCK_WAIT" in
     echo "test suite: SUITE_LOCK_WAIT='$SUITE_LOCK_WAIT' is not a whole number of seconds to wait for the suite lock. Refusing rather than guessing: a guess could be no wait at all, which is the refusal it exists to avoid, or one with no end." >&2
     exit 4 ;;
 esac
-case "$SUITE_LOCK_WAIT_POLL" in
-  ''|*[!0-9.]*|.|*.*.*|0|0.0|0.00)
-    echo "test suite: SUITE_LOCK_WAIT_POLL='$SUITE_LOCK_WAIT_POLL' is not a positive number of seconds. Refusing rather than spinning against the lock with no pause between looks." >&2
-    exit 4 ;;
-esac
+# Zero however written is zero, 00 and 0.000 included (lib/whole-number.sh, claude-config#1948).
+if ! decimal_above_zero "$SUITE_LOCK_WAIT_POLL" SUITE_LOCK_WAIT_POLL; then
+  echo "test suite: SUITE_LOCK_WAIT_POLL='$SUITE_LOCK_WAIT_POLL' is not a positive number of seconds. Refusing rather than spinning against the lock with no pause between looks." >&2
+  exit 4
+fi
 _lk_wait_start=""
 _lk_waited=0
 _lk_wait_said=""
@@ -1848,7 +1848,7 @@ shard_coverage_verdict(){   # $1 = shards expected; coverage lines on stdin
   local _cv_n="${1:-}" _cv_line _cv_i _cv_f _cv_l _cv_s _cv_x _cv_k
   local _cv_first="" _cv_last="" _cv_seen=" " _cv_got=" "
   local _cv_bad="" _cv_dis="" _cv_dup="" _cv_gone="" _cv_miss="" _cv_extra="" _cv_say=""
-  whole_above_zero "$_cv_n" || { printf 'shard coverage: asked to check against "%s" shards, which is not a count of them.\n' "$_cv_n"; return 2; }
+  whole_above_zero "$_cv_n" _cv_n || { printf 'shard coverage: asked to check against "%s" shards, which is not a count of them.\n' "$_cv_n"; return 2; }
   while IFS= read -r _cv_line; do
     case "$_cv_line" in 'SUITE-SHARD-COVERAGE '*) ;; *) continue ;; esac
     _cv_i="${_cv_line#*shard=}";    _cv_i="${_cv_i%% *}"
@@ -1938,7 +1938,7 @@ _fv_get(){   # _fv_get <line> <key> -> the value, or nothing if it is not a whol
 # two faults where there is one (L11).
 fan_totals_verdict(){   # $1 = shards expected; SUITE-SECTIONS lines on stdin
   _fv_n="$1"
-  whole_above_zero "$_fv_n" || { printf 'section totals: asked to check against "%s" shards, which is not a count of them.\n' "$_fv_n"; return 2; }
+  whole_above_zero "$_fv_n" _fv_n || { printf 'section totals: asked to check against "%s" shards, which is not a count of them.\n' "$_fv_n"; return 2; }
   _fv_seen=""; _fv_bad=""; _fv_pp=""; _fv_pf=""; _fv_dis=""
   _fv_tp=0; _fv_tf=0; _fv_rp=0; _fv_rf=0; _fv_short=""
   while IFS= read -r _fv_l; do
@@ -2090,7 +2090,7 @@ fan_totals_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards expe
 _sj_src="default"
 _sj_default=4
 if [ -n "${HOOK_TESTS_SLOTS:-}" ]; then
-  if ! whole_above_zero "$HOOK_TESTS_SLOTS"; then
+  if ! whole_above_zero "$HOOK_TESTS_SLOTS" HOOK_TESTS_SLOTS; then
     echo "test suite: HOOK_TESTS_SLOTS='$HOOK_TESTS_SLOTS' is not a positive whole number of processes this suite may take. Refusing rather than guessing: it arrives from run-all-tests.sh, so a value nobody can read means that is wrong, and running four shards anyway would hide it." >&2
     exit 2
   fi
