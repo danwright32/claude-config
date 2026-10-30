@@ -118,16 +118,22 @@ cwd="${parsed#*$'\x1f'}"
 
 ps_is_git_push "$cmd" || exit 0
 
+# Every note on a push this lets through goes out as a systemMessage: Claude Code discards a
+# PreToolUse hook's stderr on exit 0, so a note there reached nobody (#1906).
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
 if ps_has_override "$cmd" SKIP_DOC_REFS_CHECK; then
-  echo "note: SKIP_DOC_REFS_CHECK=1 is set, so the issue references in this push's docs were not checked against GitHub." >&2
-  exit 0
+  hook_allow_notice "note: SKIP_DOC_REFS_CHECK=1 is set, so the issue references in this push's docs were not checked against GitHub."
 fi
 
 repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
 
-[ -f "$SCANNER" ] || { echo "note: skipping the doc issue reference check: its scanner is missing at $SCANNER, so nothing was checked." >&2; exit 0; }
+[ -f "$SCANNER" ] || hook_allow_notice "note: skipping the doc issue reference check: its scanner is missing at $SCANNER, so nothing was checked."
 
 # ---- which doc files does this push carry? -------------------------------------------
 
@@ -220,13 +226,11 @@ print(m.group(1) + "/" + m.group(2) if m else "")
 ' 2>/dev/null)"
 n_cands="$(sed '/^$/d' "$WORK/candidates" | wc -l | tr -d ' ')"
 if [ -z "$repo_slug" ]; then
-  echo "note: skipping the doc issue reference check: origin is not a GitHub remote (${origin_url:-none}), so the $n_cands pending claim(s) in this push's docs were not checked." >&2
-  exit 0
+  hook_allow_notice "note: skipping the doc issue reference check: origin is not a GitHub remote (${origin_url:-none}), so the $n_cands pending claim(s) in this push's docs were not checked."
 fi
 
 if ! command -v gh >/dev/null 2>&1; then
-  echo "note: skipping the doc issue reference check (gh not found), so the $n_cands pending claim(s) about issues in this push's docs were not checked against GitHub." >&2
-  exit 0
+  hook_allow_notice "note: skipping the doc issue reference check (gh not found), so the $n_cands pending claim(s) about issues in this push's docs were not checked against GitHub."
 fi
 
 # Distinct issue ids in first-seen order. A row's id is a bare number (this repo) or
@@ -332,24 +336,30 @@ fmt_id() {  # a bare number becomes #N; owner/repo#N stays
   case "$1" in *#*) printf '%s' "$1" ;; *) printf '#%s' "$1" ;; esac
 }
 
+# Printed on stdout; each caller sends it where its outcome is read.
 notes() {
   if [ "$capped" -gt 0 ]; then
-    echo "note: this push's docs name $n_ids distinct issues in pending sentences and only the first $CAP were asked about, so $capped of them were NOT checked. Push the docs in smaller pieces, or check the rest by hand." >&2
+    echo "note: this push's docs name $n_ids distinct issues in pending sentences and only the first $CAP were asked about, so $capped of them were NOT checked. Push the docs in smaller pieces, or check the rest by hand."
   fi
   if [ -n "$missing" ]; then
     while IFS=$'\t' read -r _ iid; do
       [ -n "$iid" ] || continue
-      echo "note: $(fmt_id "$iid") does not exist in $repo_slug, so a doc in this push points at nothing; not refused, but worth fixing." >&2
+      echo "note: $(fmt_id "$iid") does not exist in $repo_slug, so a doc in this push points at nothing; not refused, but worth fixing."
     done <<< "$missing"
   fi
 }
 
 if [ -z "$refusals" ]; then
-  if [ "$n_unreach" -gt 0 ]; then
-    first_err="$(printf '%s\n' "$unreachable" | awk -F'\t' 'NR == 1 { print $3 }')"
-    echo "note: skipping the doc issue reference check: gh could not answer for $n_unreach of the $n_ids issue(s) this push's docs name ($first_err), so nothing verified that those claims are still current." >&2
-  fi
-  notes
+  # An allowed push: its notes go out as one systemMessage, the only place Claude Code shows a
+  # PreToolUse hook that exits 0 (#1906).
+  allowed_notes="$(
+    if [ "$n_unreach" -gt 0 ]; then
+      first_err="$(printf '%s\n' "$unreachable" | awk -F'\t' 'NR == 1 { print $3 }')"
+      echo "note: skipping the doc issue reference check: gh could not answer for $n_unreach of the $n_ids issue(s) this push's docs name ($first_err), so nothing verified that those claims are still current."
+    fi
+    notes
+  )"
+  [ -n "$allowed_notes" ] && hook_allow_notice "$allowed_notes"
   exit 0
 fi
 
@@ -381,5 +391,5 @@ fi
   echo "WHY skipping is legitimate here, so they can judge whether it makes sense."
   echo "Never override silently."
 } >&2
-notes
+notes >&2
 exit 2

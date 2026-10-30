@@ -380,24 +380,22 @@ MTEOF
 # Every other allow is printed as before. The words that mark an advisory are AR_ADVISORY_LEAD, read
 # from lib/ai-review-common.sh, which lib/pr-review.sh writes them from; should that file not load,
 # every allow is handed over, since showing a verdict twice costs less than hiding an advisory.
-# Without jq or python3 to build the JSON, the verdict goes to stderr with exit 1, Claude Code's
-# non blocking error, which is shown and stops nothing. Exits the hook.
+# The JSON is built by lib/hook-notice.sh, which needs neither jq nor python3 (#1906). It used to
+# fall back to stderr with exit 1 without them, and the gates calling this carry onFailure block,
+# which refuses the call on exit 1. Exits the hook, 0.
 mt_review_allowed() {   # $1 = the gate's name, $2 = the review's verdict
   local text="$1: $2" lead="${AR_ADVISORY_LEAD:-}"
   [ -n "$lead" ] || { . "$_MT_LIB/ai-review-common.sh" 2>/dev/null; lead="${AR_ADVISORY_LEAD:-}"; }
   if [ -n "$lead" ]; then
     case "$2" in *"$lead"*) ;; *) printf '%s\n' "$text"; exit 0 ;; esac
   fi
-  if command -v jq >/dev/null 2>&1; then
-    jq -nc --arg m "$text" '{systemMessage: $m, hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}' && exit 0
+  # The object alone, with nothing on stderr, as before: the verdict is the whole of what it says.
+  if . "$_MT_LIB/hook-notice.sh" 2>/dev/null; then
+    hook_notice_json "$text" PreToolUse
+  else
+    printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${text//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
   fi
-  if command -v python3 >/dev/null 2>&1; then
-    printf '%s' "$text" | python3 -c 'import io, json, sys
-m = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
-print(json.dumps({"systemMessage": m, "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": m}}))' && exit 0
-  fi
-  printf '%s\n' "$text" >&2
-  exit 1
+  exit 0
 }
 
 # Does pr-review-push-gate.sh hold this push for the lessons review of the whole branch? The ONE

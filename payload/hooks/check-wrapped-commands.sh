@@ -208,10 +208,15 @@ record_refusal() {   # $1 = wrapper  $2 = reason category  $3 = refused|overridd
 
 # What an override that runs says about a record it could not make: Claude Code shows a
 # systemMessage to Dan, where stderr from a hook that allows the call is shown to nobody.
+# Built by lib/hook-notice.sh, never by hand: the note names the record's path, and a newline or tab
+# in it made the hand built object invalid, which Claude Code counts as a hook failure (#1906).
 say_record_note() {
   [ -n "$RECORD_NOTE" ] || return 0
-  local m="${RECORD_NOTE//\\/\\\\}"; m="${m//\"/\\\"}"
-  printf '{"systemMessage": "%s"}\n' "$m"
+  if . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null; then
+    hook_notice_json "$RECORD_NOTE"
+  else
+    printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${RECORD_NOTE//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
+  fi
 }
 
 not_judged() {   # $1 = what went wrong, as a clause  $2 = its reason category

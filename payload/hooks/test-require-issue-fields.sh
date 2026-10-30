@@ -305,6 +305,16 @@ if [[ "$nsc_out" != *'"deny"'* ]]; then pass=$((pass + 1)); else
 if [[ "$nsc_err" == *"ISSUE FIELD GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a missing scanner should announce itself, got: ${nsc_err:-<silence>}"; fi
 
+# Announced where the person sees it (claude-config#1906). The lines above are on stderr, which
+# Claude Code discards on exit 0, so each crash notice must also be the systemMessage on stdout. The
+# moved copies have no lib/hook-notice.sh beside them, so they also prove the hook's fallback.
+. "$DIR/lib/hook-notice.sh"
+for case_out in "broken gate:$broken_out" "missing gate file:$ns_out" "missing scanner:$nsc_out"; do
+  why="$(hook_notice_verdict "${case_out#*:}" 'ISSUE FIELD GATE DID NOT RUN')"
+  if [ -z "$why" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL: #1906 a ${case_out%%:*} must be told to the person as a systemMessage: $why"; fi
+done
+
 # ============================ the table is the extension point ============================
 # The point of the refactor: a new rule is one entry, not another copy of the hook. The Open
 # questions section (#1279) is the fourth, in the table like the rest.

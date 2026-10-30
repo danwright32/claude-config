@@ -30,8 +30,9 @@
 #
 # THE TRANSCRIPT is the agent's own, never the parent's (subagent-harvest.md): agent_transcript_path
 # when the payload carries it, else <the parent transcript without .jsonl>/subagents/agent-<id>.jsonl,
-# where Claude Code writes it. One that cannot be found or read is let through, saying on stderr that
-# it was not checked: refusing would strand the report over the gate's own failure (L98).
+# where Claude Code writes it. One that cannot be found or read is let through, saying in a
+# systemMessage that it was not checked (#1906): refusing would strand the report over the gate's own
+# failure, and saying it only on stderr, which Claude Code discards on exit 0, told nobody (L98).
 #
 # MEASURED on 2026-10-24 (claude-config#1674): Claude Code runs PreToolUse hooks for the
 # SubagentHandback tool. A probe agent that set SKIP_HANDBACK_PROBE=1 and handed back "no overrides were
@@ -43,6 +44,12 @@ set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload="$(cat 2>/dev/null || true)"
 case "$payload" in *'"agent_id"'*) ;; *) exit 0 ;; esac
+# Each "did not run" below goes out as a systemMessage, since Claude Code discards a PreToolUse
+# hook's stderr on exit 0 and a check that was off would otherwise read as one that passed (#1906).
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
 parsed="$(printf '%s' "$payload" | python3 -c '
 import json, os, sys
@@ -67,15 +74,13 @@ sys.stdout.write("\x1f".join([agent, t, str(d.get("cwd") or ""), str(d.get("tran
 ' 2>/dev/null)"; prc=$?
 [ "$prc" -eq 4 ] && exit 0
 if [ "$prc" -ne 0 ]; then
-  echo "HANDBACK CLAIMS CHECK DID NOT RUN: handback-claims-gate.sh could not read the hand-back's hook payload (python3 missing or the payload unreadable), so this report's claims about skipping checks were NOT compared with the agent's commands." >&2
-  exit 0
+  hook_allow_notice "HANDBACK CLAIMS CHECK DID NOT RUN: handback-claims-gate.sh could not read the hand-back's hook payload (python3 missing or the payload unreadable), so this report's claims about skipping checks were NOT compared with the agent's commands."
 fi
 IFS=$'\x1f' read -r -d '' agent transcript cwd parent report <<< "$parsed"
 report="${report%$'\n'}"
 
 if [ -z "$transcript" ] || [ ! -r "$transcript" ]; then
-  echo "HANDBACK CLAIMS CHECK DID NOT RUN: handback-claims-gate.sh could not find agent ${agent:-?}'s own transcript (${transcript:-none derived}), so this report's claims about skipping checks were NOT compared with its commands." >&2
-  exit 0
+  hook_allow_notice "HANDBACK CLAIMS CHECK DID NOT RUN: handback-claims-gate.sh could not find agent ${agent:-?}'s own transcript (${transcript:-none derived}), so this report's claims about skipping checks were NOT compared with its commands."
 fi
 
 found="$(printf '%s' "$report" | python3 "$HOOK_DIR/lib/agent-overrides.py" check-report "$transcript" 2>&1)"; rc=$?
@@ -85,8 +90,7 @@ case "$rc" in
   10) exit 0 ;;
   0) ;;
   *)
-    echo "HANDBACK CLAIMS CHECK DID NOT RUN: handback-claims-gate.sh could not compare agent $agent's report with its commands (lib/agent-overrides.py exit $rc: ${found##*$'\n'}), so its claims about skipping checks were NOT checked." >&2
-    exit 0 ;;
+    hook_allow_notice "HANDBACK CLAIMS CHECK DID NOT RUN: handback-claims-gate.sh could not compare agent $agent's report with its commands (lib/agent-overrides.py exit $rc: ${found##*$'\n'}), so its claims about skipping checks were NOT checked." ;;
 esac
 
 state="${HANDBACK_CHECK_STATE_DIR:-$HOME/.claude-handback-check}"
@@ -116,9 +120,5 @@ note="Agent $agent handed back a report that contradicts its own commands, $why.
 bash "$HOOK_DIR/lib/issue-spool.sh" note "${cwd:-.}" "$note" "handback-claims-gate.sh" "$parent" >/dev/null 2>&1 \
   || note="$note (and it could not be spooled for the end of turn review)"
 msg="handback-claims-gate.sh: $note"
-if command -v jq >/dev/null 2>&1; then
-  jq -nc --arg m "$msg" '{systemMessage: $m, hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}'
-else
-  printf '%s\n' "$msg" >&2
-fi
-exit 0
+# Dan through the systemMessage, the session through additionalContext, both built by the library.
+hook_allow_notice "$msg" PreToolUse

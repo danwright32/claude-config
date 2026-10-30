@@ -32,6 +32,11 @@ ok(){ pass=$((pass + 1)); }
 bad(){ fail=$((fail + 1)); echo "FAIL: $1"; }
 want_eq(){ if [ "$2" = "$3" ]; then ok; else bad "$1: expected [$2], got [$3]"; fi; }
 want_has(){ case "$3" in *"$2"*) ok ;; *) bad "$1: expected to contain [$2], got: $3" ;; esac; }
+# want_notice <desc> <ERE> <stdout>: what a push let through says is one JSON systemMessage. The
+# hooks documentation says a PreToolUse hook's plain stdout on exit 0 goes to the debug log, not the
+# transcript, so a line printed plain was read by nobody (claude-config#1906).
+. "$DIR/lib/hook-notice.sh"
+want_notice(){ local why; why="$(hook_notice_verdict "$3" "$2")"; if [ -z "$why" ]; then ok; else bad "#1906 $1: $why"; fi; }
 want_lacks(){ case "$3" in *"$2"*) bad "$1: must not contain [$2], got: $3" ;; *) ok ;; esac; }
 
 # ---------------------------------------------------------------------------------------------
@@ -229,6 +234,7 @@ run_hook "$W/work" "git push"
 want_eq "duplication already at the base does not block a push" 0 "$HOOK_RC"
 want_has "and the pass says what it measured" "no new duplicate groups" "$HOOK_OUT"
 want_has "and how many groups the tree already holds" "groups=1" "$HOOK_OUT"
+want_notice "and says it where the person sees it" "no new duplicate groups" "$HOOK_OUT"
 
 # 4. A repo with none of the source roots skips OUT LOUD.
 W="$(mk_repo noroots README.md 'just a readme' docs/a.md "$BOOKER_A")"
@@ -236,12 +242,14 @@ run_hook "$W" "git push"
 want_eq "a repo with no source roots is allowed" 0 "$HOOK_RC"
 want_has "and says it skipped" "duplication check: skipped" "$HOOK_OUT"
 want_has "and names the roots it looks for" "src, app, lib, components, worker, scripts" "$HOOK_OUT"
+want_notice "and says it where the person sees it" "duplication check: skipped" "$HOOK_OUT"
 
 # 5. The escape hatch, and it says so.
 W="$(mk_repo hatch src/clean.ts 'export const clean = 1;' src/a.tsx "$BOOKER_A" src/b.tsx "$BOOKER_B")"
 run_hook "$W" "SKIP_DUPLICATION_CHECK=1 git push"
 want_eq "the escape hatch allows the push" 0 "$HOOK_RC"
 want_has "and prints that it skipped rather than passing silently" "SKIP_DUPLICATION_CHECK=1" "$HOOK_OUT"
+want_notice "and says it where the person sees it" "skipped because the command carries SKIP_DUPLICATION_CHECK=1" "$HOOK_OUT"
 
 # 6. Not a push: silent.
 run_hook "$W" "git status"

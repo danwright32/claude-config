@@ -195,6 +195,33 @@ rm -f "$FAKE_API_LOG"
 OUT="$(printf '%s' "$payload" | ( cd "$FIXTURE/tp" && env "PATH=$FIXTURE/bin:$PATH" "$FIXTURE/hooks-copy/sync-main-to-dev.sh" ) 2>/dev/null)"
 check "a list under the old tracked name beside the hook is not read" no_call
 
+# --- What it says is one valid JSON object whatever the text holds (claude-config#1906) ---
+# Without jq it used to build the object by hand, escaping only backslashes, quotes and newlines,
+# so a tab in the text (here, in the path of the missing list) made it invalid, and invalid output
+# is a hook failure the person never reads. A PATH holding every tool but jq is built for it.
+NOJQ="$FIXTURE/nojq"; mkdir -p "$NOJQ"
+IFS=: read -r -a path_dirs <<< "$PATH"
+for d in "${path_dirs[@]}"; do
+  for f in "$d"/*; do
+    n="${f##*/}"
+    [ "$n" = jq ] && continue
+    [ -x "$f" ] && [ ! -e "$NOJQ/$n" ] && ln -s "$f" "$NOJQ/$n"
+  done
+done
+. "$DIR/lib/hook-notice.sh"
+odd_home="$FIXTURE/home with	a tab/.claude"
+for arm in "$PATH" "$NOJQ"; do
+  name="with jq"; [ "$arm" = "$NOJQ" ] && name="without jq"
+  rm -f "$FAKE_API_LOG"
+  OUT="$(printf '%s' "$payload" | ( cd "$FIXTURE/tp" && env "PATH=$FIXTURE/bin:$arm" "CLAUDE_HOME=$odd_home" "$HOOK" ) 2>/dev/null)"
+  check "#1906 $name, a missing list whose path holds a tab is said as one valid systemMessage" \
+    test -z "$(hook_notice_verdict "$OUT" 'no list of repositories.*home with\ta tab')"
+  ctx="$(printf '%s' "$OUT" | python3 -c 'import json, sys
+try: h = json.load(sys.stdin)["hookSpecificOutput"]; print(h["hookEventName"], "no list of repositories" in h["additionalContext"])
+except Exception as e: print("broken", e)')"
+  check "#1906 $name, and handed to the session as PostToolUse context" test "$ctx" = "PostToolUse True"
+done
+
 rm -rf "$FIXTURE"
 echo
 echo "passed: $pass   failed: $fail"

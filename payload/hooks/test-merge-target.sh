@@ -1655,6 +1655,21 @@ eq "$(grep -c 'strip_heredocs' "$HOOK_DIR/lib/merge-target.sh")" "0" "#1040 and 
 printf 'a; b' | python3 "$HOOK_DIR/lib/shell-words.py" segments >/dev/null 2>&1
 eq "$?" "64" "#1040 the segment cutter is gone from the reader"
 
+# mt_review_allowed hands an advisory allow over as one JSON object, built by lib/hook-notice.sh
+# (claude-config#1906). With neither jq nor python3 it used to say it on stderr with exit 1, and the
+# review gates that call it carry onFailure block, which refuses the call on exit 1: an allow would
+# have become a refusal. With nothing on PATH it must still exit 0 with valid JSON, a newline in the
+# verdict included.
+ra_out="$(env PATH="/nonexistent-mt-path" AR_ADVISORY_LEAD="Advisory" "$BASH" -c '. "$0/lib/merge-target.sh"; mt_review_allowed pr-review-gate "Advisory, minor findings:
+- one" ; echo "fell through"' "$HOOK_DIR" 2>/dev/null)"; ra_rc=$?
+eq "$ra_rc" "0" "#1906 an advisory allow with no jq or python3 exits 0, not the 1 onFailure block refuses"
+eq "$(printf '%s' "$ra_out" | python3 -c 'import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d["systemMessage"] == "pr-review-gate: Advisory, minor findings:\n- one", d["hookSpecificOutput"]["hookEventName"], d["hookSpecificOutput"]["additionalContext"] == d["systemMessage"])
+except Exception as e:
+    print("broken: %s" % e)')" "True PreToolUse True" "#1906 and prints one valid object, newline kept, for Dan and for the session"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

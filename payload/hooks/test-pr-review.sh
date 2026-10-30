@@ -980,6 +980,15 @@ check_eq "a merge followed by another command is still seen" "2" "$rc"
 out="$(fire_gate "SKIP_PR_REVIEW=1 gh pr merge 7 --squash")"; rc=$?
 check_eq "the override lets the merge through" "0" "$rc"
 check "and says out loud that it did" "SKIP_PR_REVIEW=1" "$out"
+# Out loud means one JSON object on stdout, the systemMessage for Dan and the context for the session
+# it tells to explain the skip: a PreToolUse hook's plain stdout on exit 0 goes to the debug log, the
+# hooks documentation says, so the line printed plain was read by neither (claude-config#1906).
+. "$DIR/lib/hook-notice.sh"
+skip_json="$(python3 -c 'import json,sys; print(json.dumps({"session_id":"s1","cwd":sys.argv[1],"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]}}))' "$REPO" "SKIP_PR_REVIEW=1 gh pr merge 7 --squash" | bash "$GATE" 2>/dev/null)"
+check_eq "#1906 the skip is said to Dan as a systemMessage" "" "$(hook_notice_verdict "$skip_json" 'SKIP_PR_REVIEW=1 was set')"
+check_eq "#1906 and to the session as PreToolUse context" "PreToolUse" "$(printf '%s' "$skip_json" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["hookSpecificOutput"]["hookEventName"])
+except Exception as e: print("broken: %s" % e)')"
 # A merge through the GitHub API is held for the review as gh pr merge is (claude-config#1181): before,
 # no merge gate recognised the REST merge endpoint or a GraphQL merge mutation at all.
 API_REST="gh api -X PUT 'repos/{owner}/{repo}/pulls/7/merge' -f merge_method=squash"

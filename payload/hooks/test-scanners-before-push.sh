@@ -152,6 +152,31 @@ o3="$(fire "$R3" "git push")"; c3=$?
 grep -qiE 'no scanner|found none|nothing to scan' <<< "$o3" \
   && check "but it says it found none rather than reporting a clean run" ok \
   || check "but it says it found none rather than reporting a clean run" "out=$o3"
+# ...and says it where the person sees it: Claude Code discards a PreToolUse hook's stderr on exit 0,
+# so the notice is the systemMessage on stdout (claude-config#1906). stdout alone is read here.
+. "$DIR/lib/hook-notice.sh"
+fire_stdout(){       # $1 = repo  $2 = the command  [$3 = env assignment]  -> sets FS_OUT and FS_RC
+  local payload
+  payload="$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$2" "$1")"
+  bounded_run "$FIRE_DEADLINE" env ${3:+"$3"} bash -c 'bash "$0" 2>/dev/null' "$H" <<< "$payload"
+  FS_OUT="$BOUNDED_OUT"; FS_RC="$BOUNDED_RC"
+}
+fire_stdout "$R3" "git push"
+why="$(hook_notice_verdict "$FS_OUT" 'found no scanner')"
+[ "$FS_RC" -eq 0 ] && [ -z "$why" ] && check "#1906 and says so as a systemMessage" ok \
+  || check "#1906 and says so as a systemMessage" "exit=$FS_RC $why"
+# A passing push says what it covered (L400), which only reaches the person as a systemMessage. $R1
+# already passed above and the gate remembers it, so this push is the one that says every scan had
+# already passed on this tree: the coverage line of a remembered pass.
+fire_stdout "$R1" "git push"
+why="$(hook_notice_verdict "$FS_OUT" 'nothing was scanned for this push. All [0-9]+ whole tree scan\(s\) had already passed')"
+[ "$FS_RC" -eq 0 ] && [ -z "$why" ] && check "#1906 a push whose scans already passed says so, as a systemMessage" ok \
+  || check "#1906 a push whose scans already passed says so, as a systemMessage" "exit=$FS_RC $why"
+# A push started underneath the gate is not gated again, and says so the same way.
+fire_stdout "$R3" "git push" SCANNERS_GATE_RUNNING=1
+why="$(hook_notice_verdict "$FS_OUT" 'not gated again')"
+[ "$FS_RC" -eq 0 ] && [ -z "$why" ] && check "#1906 a nested push says it was not gated, as a systemMessage" ok \
+  || check "#1906 a nested push says it was not gated, as a systemMessage" "exit=$FS_RC $why"
 
 # --- a repository that is not this one is left entirely alone, with nothing to say about it.
 R4="$TMPROOT/notours"; mkdir -p "$R4"; git -C "$R4" init -q

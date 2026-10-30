@@ -76,7 +76,16 @@ sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd"
   OUT="$(printf '%s' "$p" | BUNDLE_BUDGET_STATE_DIR="$STATE" bash "$HOOK" 2>"$WORKDIR/err")"; RC=$?
   ERR="$(cat "$WORKDIR/err")"
 }
-want_rc(){ if [ "$RC" = "$1" ]; then ok; else bad "$2: expected exit $1, got $RC (stdout: $OUT) (stderr: $ERR)"; fi }
+want_rc(){ if [ "$RC" = "$1" ]; then ok; else bad "$2: expected exit $1, got $RC (stdout: $OUT) (stderr: $ERR)"; fi
+  # Whatever an allowed push says goes out as one JSON systemMessage. The hooks documentation says a
+  # PreToolUse hook's plain stdout on exit 0 goes to the debug log, never the transcript, so every
+  # line this guard printed plain, the skips and the verdicts alike, was read by nobody (#1906).
+  if [ "$1" = 0 ] && [ -n "$OUT" ]; then
+    local why; why="$(hook_notice_verdict "$OUT" '.')"
+    if [ -z "$why" ]; then ok; else bad "#1906 $2: what it said is not one systemMessage: $why"; fi
+  fi
+}
+. "$DIR/lib/hook-notice.sh"
 says(){ case "$OUT$ERR" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 want_says(){ if says "$1"; then ok; else bad "$2: did not say [$1]; stdout: $OUT; stderr: $ERR"; fi }
 want_silent_on(){ if says "$1"; then bad "$2: wrongly said [$1]"; else ok; fi }
@@ -283,6 +292,9 @@ chunk "$W" ".next/static/chunks/main.js" 100000 60
 run_hook "$W" "git push"
 want_rc 0 "no origin remote lets the push through"
 want_says "no origin remote" "and says the budget has nothing to be keyed on"
+# The count of repositories ever weighed rides on every push it does not weigh (#526), this one too:
+# the function giving it was defined below the line calling it, so the count was silently dropped.
+want_says "This guard has" "and carries how many repositories this guard has ever weighed"
 
 # --- an unreadable record is named, not read as zero --------------------------------------------
 W="$(mk_repo "$WORKDIR/corrupt")"

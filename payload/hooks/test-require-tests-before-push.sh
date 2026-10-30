@@ -157,13 +157,14 @@ mk_repo() {
 
 CODE=0
 ERR=""
+OUT=""
 # run_hook <cwd> <command> [PATH to use]
 run_hook() {
   local cwd="$1" cmd="$2" usepath="${3:-$PATH_STUB}" payload errf
   errf="$(mktemp)"
   payload="$(HK_CMD="$cmd" HK_CWD="$cwd" python3 -c 'import json,os,sys
 sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"],"tool_use_id":os.environ.get("HK_ID","toolu_test")}))')"
-  printf '%s' "$payload" | env PATH="$usepath" bash "$HOOK" 2>"$errf"
+  OUT="$(printf '%s' "$payload" | env PATH="$usepath" bash "$HOOK" 2>"$errf")"
   CODE=$?
   ERR="$(cat "$errf")"
   rm -f "$errf"
@@ -172,6 +173,17 @@ sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd"
 want_code() {
   if [ "$CODE" = "$1" ]; then pass=$((pass+1));
   else fail=$((fail+1)); echo "FAIL: $2: expected exit $1, got $CODE"; fi
+}
+# A push the gate could not judge is let through with exit 0 and its notice as the systemMessage on
+# stdout (claude-config#1912). It was exit 1, the non blocking error, whose first stderr line Claude
+# Code shows; exit 1 is also what "onFailure": "block" refuses, so the notice moved to the channel
+# that is shown on exit 0. stderr still carries it, for the debug log.
+. "$DIR/lib/hook-notice.sh"
+want_allowed_notice() {   # want_allowed_notice <desc> [ERE, default the gate's own DID NOT RUN]
+  local why
+  why="$(hook_notice_verdict "$OUT" "${2:-TEST GATE DID NOT RUN}")"
+  if [ "$CODE" = 0 ] && [ -z "$why" ]; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: #1912 $1: expected exit 0 with the notice as a systemMessage, got exit $CODE. $why"; fi
 }
 want_stderr() {
   if printf '%s' "$ERR" | grep -Eiq "$1"; then pass=$((pass+1));
@@ -230,40 +242,40 @@ want_code 2 "git -C push from a non-repo cwd must BLOCK"
 run_hook "$NOTREPO" "git push"
 want_code 0 "a push with no resolvable repo stays out of the way"
 
-# --- #735: fail-open paths must SAY SO (exit 1) instead of vanishing ------
-# exit 0 discards stderr entirely, so a notice on exit 0 would be invisible.
-# exit 1 is a non-blocking error: the push still runs, and the first stderr
-# line surfaces in the transcript.
+# --- #735: fail-open paths must SAY SO instead of vanishing ---------------
+# exit 0 discards stderr entirely, so a notice there would be invisible. #735 said it with exit 1,
+# the non blocking error; #1912 moved it to exit 0 with a systemMessage, which is shown and which
+# "onFailure": "block" does not count as a failure.
 
 # Unparseable payload.
 ERRF="$(mktemp)"
-printf 'this is not json' | env PATH="$PATH_STUB" bash "$HOOK" 2>"$ERRF"
+OUT="$(printf 'this is not json' | env PATH="$PATH_STUB" bash "$HOOK" 2>"$ERRF")"
 CODE=$?; ERR="$(cat "$ERRF")"; rm -f "$ERRF"
-want_code 1 "unparseable payload"
+want_allowed_notice "unparseable payload"
 want_stderr "payload" "unparseable payload"
 
 # Judge binary missing.
 W="$(mk_repo)"; seed_source_and_test "$W"
 run_hook "$W" "git push" "$PATH_NOCLAUDE"
-want_code 1 "judge CLI missing"
+want_allowed_notice "judge CLI missing"
 want_stderr "judge" "judge CLI missing"
 
 # Judge returns nothing (unreachable or timed out).
 W="$(mk_repo)"; seed_source_and_test "$W"
 STUB_CLAUDE_OUT="" run_hook "$W" "git push"
-want_code 1 "judge returned nothing"
+want_allowed_notice "judge returned nothing"
 want_stderr "judge" "judge returned nothing"
 
 # Judge returns an is_error envelope.
 W="$(mk_repo)"; seed_source_and_test "$W"
 STUB_CLAUDE_OUT='{"is_error":true,"result":"boom"}' run_hook "$W" "git push"
-want_code 1 "judge is_error envelope"
+want_allowed_notice "judge is_error envelope"
 want_stderr "judge" "judge is_error envelope"
 
 # Judge returns prose instead of the JSON verdict.
 W="$(mk_repo)"; seed_source_and_test "$W"
 STUB_CLAUDE_OUT='{"result":"sure thing, looks good to me"}' run_hook "$W" "git push"
-want_code 1 "judge verdict unparseable"
+want_allowed_notice "judge verdict unparseable"
 want_stderr "judge" "judge verdict unparseable"
 
 # --- the gate's real verdicts must be unaffected by the above -------------
@@ -455,7 +467,7 @@ mk_repo_no_upstream() {
 
 W="$(mk_repo_no_upstream)"; seed_source_only "$W"
 run_hook "$W" "git push"
-want_code 1 "no upstream: gate is blind and must say so"
+want_allowed_notice "no upstream: gate is blind and must say so"
 want_stderr "upstream" "no upstream: gate is blind and must say so"
 
 # Nothing new to push, WITH an upstream, is a legitimate empty diff. The gate
@@ -577,7 +589,7 @@ TO_DIR="$TMPROOT/timeout-124"; mkdir -p "$TO_DIR"
 printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 124\n' > "$TO_DIR/timeout"; chmod +x "$TO_DIR/timeout"
 W="$(mk_repo)"; seed_source_and_test "$W"
 run_hook "$W" "git push" "$TO_DIR:$PATH_STUB"
-want_code 1 "judge timed out"
+want_allowed_notice "judge timed out"
 want_stderr "timed out after 90s" "judge timed out"
 
 # --- the record of what the gate did (claude-config#1075, #1077) ------------------------------------
@@ -609,6 +621,12 @@ W="$(mk_repo)"
 ( cd "$W" && printf 'nothing but words\n' > notes.md && git add notes.md && git commit -qm docs ) >/dev/null 2>&1
 HK_ID=t-nosource run_hook "$W" "git push"
 want_row t-nosource nosource "a push with no source is recorded"
+
+# A record that cannot be written is said, never swallowed, and never turns a pass into a block.
+W="$(mk_repo)"; seed_source_and_test "$W"
+printf 'not a directory\n' > "$TMPROOT/ledger-file"
+PUSH_GATE_LEDGER_DIR="$TMPROOT/ledger-file" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+want_allowed_notice "an unwritable record does not block the push" "allowed this push \(pass\), but its record could not be written"
 
 echo
 echo "passed: $pass, failed: $fail"
