@@ -190,6 +190,10 @@ check "and runs the plan it writes only once Dan has decided" \
   "$(grep -qF 'disk-remove.sh --plan' <<< "$delete_section" && grep -q 'Dan' <<< "$(grep -F -B3 -e '--plan' <<< "$delete_section")" && echo ok || echo "no --plan handed over on Dan's decision")"
 check "and carries no hand typed rm, trash or mv in its commands" \
   "$(awk '/(^|[;&|][[:space:]]*)(sudo )?(rm|trash|mv|\/usr\/bin\/trash) /' <<< "$delete_code" | awk 'END { exit NR > 0 }' && echo ok || echo "found: $(awk '/(^|[;&|][[:space:]]*)(sudo )?(rm|trash|mv) /' <<< "$delete_code")")"
+# Clearing what regenerates, the Trash and forgotten files is /disk-clean's flow, a scan and one
+# review page, so the section points at it rather than proposing them path by path (#1808).
+check "and points to /disk-clean for clearing" \
+  "$(grep -qE '(^|[ `(])/disk-clean([ `.,)]|$)' <<< "$delete_section" && [ -f "$DIR/../disk-clean/SKILL.md" ] && echo ok || echo "the section does not name /disk-clean, or that skill is missing")"
 check "and says moving to the Trash frees nothing until the Trash is emptied" \
   "$(grep -qi 'until the Trash is emptied' <<< "$delete_section" && echo ok || echo "the section does not say so")"
 if . "$HOOKS/lib/disk-clean-harness.sh" && dc_setup; then
