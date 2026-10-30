@@ -43,6 +43,7 @@ import json
 import os
 import re
 import subprocess
+import io
 import sys
 
 # The scanner is a sibling file, loaded by its explicit path rather than by name.
@@ -573,10 +574,10 @@ def main():
     # the section, so the two read it by one rule (claude-config#1320). The answer is printed, yes
     # or no, never an exit code, since a crash exits 1 too and would read as no (lessons review).
     if sys.argv[1:] == ["--holds-open-questions"]:
-        print("yes" if holds_open_questions(sys.stdin.read()) else "no")
+        print("yes" if holds_open_questions(io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()) else "no")
         return 0
     try:
-        data = json.loads(sys.stdin.read())
+        data = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
         command = (data.get("tool_input") or {}).get("command") or ""
         cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else None
     except Exception:

@@ -807,34 +807,71 @@ fi
 #     hook killed at its timeout "doesn't block the tool call", and a headless probe the same day
 #     confirmed it: a hook that slept past a 3 second timeout and would then have refused let a
 #     `touch` through. So a push under load went out with nothing scanned. The gate now enforces a
-#     budget of its own below the declared timeout, kills the scanners still running when it runs
-#     out, and refuses, saying so.
+#     budget of its own below the declared timeout, and refuses when its scanners have not finished
+#     inside it.
+#
+#     A SCANNER STILL RUNNING AT THE BUDGET IS LEFT RUNNING, ON ITS OWN (claude-config#1881 follow
+#     up). #1889 killed it, and the whole repository suite, test-run-all-tests.sh, took about 410
+#     seconds in CI and 444 on a busy Mac on 2026-10-29, so it could never finish inside 150: every push that
+#     needed it was refused, and each retry started it again from nothing. Three of three pushes by
+#     one builder were refused that way on 2026-10-29. So the gate now leaves such a run going in a
+#     process group of its own, writing to a file, refuses saying so, and a later push of the SAME
+#     tree and uncommitted files counts its verdict rather than running it again.
 #
 #     The budget is injected (SCANNERS_BUDGET_SECONDS), so these cases wait 2 seconds rather than
-#     150. A slow scanner records its process id, so "killed" is checked on the process rather than
-#     believed from a message (L1).
-add_slow_scanner(){   # $1 = repo  $2 = name  $3 = a file that, while present, makes it slow
+#     150. A held scanner records its process id and each run it makes, so "still running", "not
+#     run twice" and "stopped" are checked on the processes and the runs rather than believed from
+#     the gate's message (L1). It holds while its hold file exists, for at most 60 seconds, so a
+#     case can release it rather than sleep, and a leaked one ends on its own (L290).
+add_held_scanner(){   # $1 = repo  $2 = name  $3 = the hold file  $4 = exit code once released
   cat > "$1/payload/hooks/test-$2.sh" <<EOF
 #!/usr/bin/env bash
 git ls-files '*.sh' >/dev/null
 echo ran >> "$TMPROOT/$2.runs"
-if [ -e "$3" ]; then
-  echo \$\$ > "$TMPROOT/$2.pid"
-  sleep 30
-  echo "scanner $2 finished slowly"
-fi
-exit 0
+echo "scanner $2 started"
+echo \$\$ > "$TMPROOT/$2.pid"
+n=0
+while [ -e "$3" ] && [ "\$n" -lt 600 ]; do sleep 0.1; n=\$((n+1)); done
+echo "scanner $2 finished"
+exit ${4:-0}
 EOF
   chmod +x "$1/payload/hooks/test-$2.sh"
 }
+# The runs a held scanner has made, counted from its own record.
+held_runs(){ grep -c . "$TMPROOT/$1.runs" 2>/dev/null || true; }
+# Waits until the held scanner's recorded process has gone, with the shared ceiling only a hang
+# reaches (lib/hang-wait.sh), never a short one a loaded Mac would. 0 when it has gone.
+. "$DIR/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so the waits on a released scanner cannot be bounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+held_gone(){   # $1 = name
+  local p
+  p="$(cat "$TMPROOT/$1.pid" 2>/dev/null)"
+  [ -n "$p" ] || return 1
+  hang_wait "! kill -0 $p 2>/dev/null"
+}
+# Every held scanner this suite started, ended whatever state a failed case left it in, so none
+# outlives the suite (L235). Called at the end and from the exit trap.
+HELD_PIDS="$TMPROOT/held-pids"
+note_held(){ cat "$TMPROOT/$1.pid" >> "$HELD_PIDS" 2>/dev/null; }
+reap_held(){
+  local p
+  [ -f "$HELD_PIDS" ] || return 0
+  for p in $(cat "$HELD_PIDS" 2>/dev/null); do kill -9 "$p" 2>/dev/null; done
+  return 0
+}
+trap 'reap_held; rm -rf "$TMPROOT"' EXIT
 BUDGETSTATE="$TMPROOT/budget-state"
 budgetfire(){ SCANNERS_STATE_DIR="$BUDGETSTATE" SCANNERS_BUDGET_SECONDS=2 fire "$@"; }
 
-R1881="$(mkrepo outoftime)"; SLOW1881="$TMPROOT/slow-1881"; : > "$SLOW1881"
-add_scanner "$R1881" alpha 0; add_slow_scanner "$R1881" omega "$SLOW1881"; commit_all "$R1881"
+R1881="$(mkrepo outoftime)"; HOLD1881="$TMPROOT/hold-1881"; : > "$HOLD1881"
+add_scanner "$R1881" alpha 0; add_held_scanner "$R1881" omega "$HOLD1881" 0; commit_all "$R1881"
 _t0="$(date +%s)"
 o1881="$(budgetfire "$R1881" "git push")"; c1881=$?
 _took=$(( $(date +%s) - _t0 ))
+note_held omega
 [ "$c1881" -eq 2 ] && check "#1881 a scanner still running when the gate's budget runs out blocks the push" ok \
   || check "#1881 a scanner still running when the gate's budget runs out blocks the push" "exit=$c1881 out=$o1881"
 grep -q 'did not finish in 2 seconds' <<< "$o1881" \
@@ -843,48 +880,221 @@ grep -q 'did not finish in 2 seconds' <<< "$o1881" \
 grep -q 'test-omega.sh' <<< "$o1881" && ! grep -q 'payload/hooks/test-alpha.sh' <<< "$o1881" \
   && check "#1881 and names the scanner that did not finish, not the one that passed" ok \
   || check "#1881 and names the scanner that did not finish, not the one that passed" "out=$o1881"
-grep -q 'bash payload/hooks/test-omega.sh' <<< "$o1881" \
-  && check "#1881 and names the command that runs it directly" ok \
-  || check "#1881 and names the command that runs it directly" "out=$o1881"
 grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o1881" \
   && check "#1881 and does not call a scanner that never finished a failing one" "out=$o1881" \
   || check "#1881 and does not call a scanner that never finished a failing one" ok
-# Well under the fixture's own sleep, a number set here and not measured: the gate stopped at its
-# budget rather than waiting for the scanner.
-[ "$_took" -lt 20 ] && check "#1881 and returns at its budget rather than waiting for the scanner" ok \
-  || check "#1881 and returns at its budget rather than waiting for the scanner" "took ${_took}s"
+grep -q 'still running in the background' <<< "$o1881" && grep -q 'push again once' <<< "$o1881" \
+  && check "#1881 and says the scanner is still running in the background, and to push again once it finishes" ok \
+  || check "#1881 and says the scanner is still running in the background, and to push again once it finishes" "out=$o1881"
+# The file it names is where the scanner's own output went, read rather than believed (L1).
+_outfile="$(awk '/output: / { sub(/^.*output: /, ""); print; exit }' <<< "$o1881")"
+[ -n "$_outfile" ] && grep -q '^scanner omega started$' "$_outfile" 2>/dev/null \
+  && check "#1881 and names the file the running scanner writes its output to" ok \
+  || check "#1881 and names the file the running scanner writes its output to" "file=${_outfile:-none named} out=$o1881"
+# The gate's whole output is read through a pipe, here a command substitution, which returns only
+# when every process holding that pipe has closed it. The held scanner is still running and would
+# hold it for up to 60 seconds, so returning in a few proves the left running scanner holds none of
+# the hook's output (L235). 15 is a number set here, not measured.
+[ "$_took" -lt 15 ] && check "#1881 and returns at its budget, the running scanner holding none of its output" ok \
+  || check "#1881 and returns at its budget, the running scanner holding none of its output" "took ${_took}s"
 _slowpid="$(cat "$TMPROOT/omega.pid" 2>/dev/null)"
-if [ -n "$_slowpid" ] && kill -0 "$_slowpid" 2>/dev/null; then
-  check "#1881 and the scanner it gave up on is no longer running" "process $_slowpid is still alive"
-  kill -9 "$_slowpid" 2>/dev/null
-elif [ -n "$_slowpid" ]; then
-  check "#1881 and the scanner it gave up on is no longer running" ok
+_slowpg="$(ps -o pgid= -p "$_slowpid" 2>/dev/null | tr -d ' ')"
+_mypg="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+if [ -z "$_slowpid" ]; then
+  check "#1881 and the scanner it left is still running, in a process group of its own" "the held scanner never recorded its process id"
+elif kill -0 "$_slowpid" 2>/dev/null && [ -n "$_slowpg" ] && [ "$_slowpg" != "$_mypg" ]; then
+  check "#1881 and the scanner it left is still running, in a process group of its own" ok
 else
-  check "#1881 and the scanner it gave up on is no longer running" "the slow scanner never recorded its process id"
+  check "#1881 and the scanner it left is still running, in a process group of its own" "pid=$_slowpid alive=$(kill -0 "$_slowpid" 2>/dev/null && echo yes || echo no) its group=${_slowpg:-none} this suite's=$_mypg"
 fi
 
-# A retry reuses what finished: alpha passed inside the budget on this exact tree, so the next push
-# runs only omega, now fast, and goes through. Counted by the runs each scanner records, not by the
-# gate's own words (L1).
-rm -f "$SLOW1881"
+# A second push while it is still running is refused again, and does NOT start a second copy.
+o1881r="$(budgetfire "$R1881" "git push")"; c1881r=$?
+[ "$c1881r" -eq 2 ] && grep -q 'still running in the background' <<< "$o1881r" \
+  && check "#1881 a push while the scanner still runs is refused again" ok \
+  || check "#1881 a push while the scanner still runs is refused again" "exit=$c1881r out=$o1881r"
+[ "$(held_runs omega)" = "1" ] && check "#1881 and does not start a second copy of the running scanner" ok \
+  || check "#1881 and does not start a second copy of the running scanner" "omega runs=$(held_runs omega)"
+
+# Once it has finished and passed, a push of the same tree counts that pass and goes through,
+# without running it again. Counted by the runs the scanner records, not by the gate's words (L1).
+rm -f "$HOLD1881"
+held_gone omega || check "#1881 the held scanner finished once released" "it is still running"
 o1881b="$(budgetfire "$R1881" "git push")"; c1881b=$?
-[ "$c1881b" -eq 0 ] && check "#1881 the retry goes through once the slow scanner finishes in time" ok \
-  || check "#1881 the retry goes through once the slow scanner finishes in time" "exit=$c1881b out=$o1881b"
-[ "$(grep -c . "$TMPROOT/omega.runs" 2>/dev/null || true)" = "2" ] && grep -q '1 more were skipped' <<< "$o1881b" \
-  && check "#1881 and the retry skips the scanner that already passed inside the budget" ok \
-  || check "#1881 and the retry skips the scanner that already passed inside the budget" "omega runs=$(grep -c . "$TMPROOT/omega.runs" 2>/dev/null) out=$o1881b"
+[ "$c1881b" -eq 0 ] && check "#1881 a push after the scanner finished and passed in the background goes through" ok \
+  || check "#1881 a push after the scanner finished and passed in the background goes through" "exit=$c1881b out=$o1881b"
+[ "$(held_runs omega)" = "1" ] && grep -q '1 more were skipped' <<< "$o1881b" \
+  && check "#1881 and counts the background pass rather than running it again, and skips the one that passed in time" ok \
+  || check "#1881 and counts the background pass rather than running it again, and skips the one that passed in time" "omega runs=$(held_runs omega) out=$o1881b"
+# And the pass it counted is remembered like any other, so the next push skips both.
+o1881b2="$(budgetfire "$R1881" "git push")"; c1881b2=$?
+[ "$c1881b2" -eq 0 ] && grep -q 'All 2 whole tree scan(s) had already passed' <<< "$o1881b2" && [ "$(held_runs omega)" = "1" ] \
+  && check "#1881 and the background pass is remembered for the push after" ok \
+  || check "#1881 and the background pass is remembered for the push after" "exit=$c1881b2 omega runs=$(held_runs omega) out=$o1881b2"
+
+# Two pushes of the same tree AT ONCE, assume it runs twice: each looks for a run, and only one may
+# start one. Both are refused, since the scanner is held, and it has run once.
+R1881k="$(mkrepo bgtwice)"; HOLD1881k="$TMPROOT/hold-1881k"; : > "$HOLD1881k"
+add_held_scanner "$R1881k" kappa "$HOLD1881k" 0; commit_all "$R1881k"
+( budgetfire "$R1881k" "git push" > "$TMPROOT/twice-1.out"; echo $? > "$TMPROOT/twice-1.rc" ) &
+_tw1=$!
+( budgetfire "$R1881k" "git push" > "$TMPROOT/twice-2.out"; echo $? > "$TMPROOT/twice-2.rc" ) &
+_tw2=$!
+wait "$_tw1" "$_tw2"
+note_held kappa
+# On a failure each push's own account of kappa is shown, so a second copy names the path that
+# started it (no key, stopped, or left running) rather than only a count (L177).
+[ "$(cat "$TMPROOT/twice-1.rc" 2>/dev/null)" = "2" ] && [ "$(cat "$TMPROOT/twice-2.rc" 2>/dev/null)" = "2" ] && [ "$(held_runs kappa)" = "1" ] \
+  && check "#1881 two pushes of one tree at once start the scanner once" ok \
+  || check "#1881 two pushes of one tree at once start the scanner once" "exits=$(cat "$TMPROOT/twice-1.rc" "$TMPROOT/twice-2.rc" 2>/dev/null | tr '\n' ',') kappa runs=$(held_runs kappa); push 1: $(grep -m1 -e 'test-kappa' -e 'were stopped' -e 'still running' "$TMPROOT/twice-1.out" 2>/dev/null); push 2: $(grep -m1 -e 'test-kappa' -e 'were stopped' -e 'still running' "$TMPROOT/twice-2.out" 2>/dev/null)"
+rm -f "$HOLD1881k"
+
+# A run seen in the instant its process is still becoming the run: on Linux a process inside execve
+# shows an EMPTY command line for that instant, and the check that a recorded pid is really this
+# run reads the command line. The first push started a run and published its pid; a second push
+# looking in that instant judged it gone and started a second copy, which is how the case above
+# failed on Linux CI on 2026-10-29 (run 40877048627) while passing on this Mac. A stand in for ps
+# that shows no command line plays that instant on any system, so the second push is made to look
+# in it every time. A run started moments ago is never a recycled process id, so it must be adopted.
+FAKEPS="$TMPROOT/fakeps"; mkdir -p "$FAKEPS"
+_realps="$(command -v ps)"
+cat > "$FAKEPS/ps" <<EOF
+#!/usr/bin/env bash
+case " \$* " in *" command= "*) exit 0 ;; esac
+exec "$_realps" "\$@"
+EOF
+chmod +x "$FAKEPS/ps"
+R1881x="$(mkrepo bgexec)"; HOLD1881x="$TMPROOT/hold-1881x"; : > "$HOLD1881x"
+add_held_scanner "$R1881x" chi "$HOLD1881x" 0; commit_all "$R1881x"
+budgetfire "$R1881x" "git push" >/dev/null
+note_held chi
+o1881x="$(PATH="$FAKEPS:$PATH" budgetfire "$R1881x" "git push")"; c1881x=$?
+note_held chi
+[ "$c1881x" -eq 2 ] && [ "$(held_runs chi)" = "1" ] && grep -q 'still running in the background' <<< "$o1881x" \
+  && check "#1881 a run whose command line cannot be read yet, started moments ago, is adopted rather than started twice" ok \
+  || check "#1881 a run whose command line cannot be read yet, started moments ago, is adopted rather than started twice" "exit=$c1881x chi runs=$(held_runs chi) out=$o1881x"
+rm -f "$HOLD1881x"
+
+# The other direction: a run folder from long ago whose recorded process id now belongs to a
+# stranger is NOT that run. It is neither adopted nor stopped: a new run is started and the
+# stranger is left alone (L1011).
+R1881y="$(mkrepo bgstranger)"; HOLD1881y="$TMPROOT/hold-1881y"; : > "$HOLD1881y"
+add_held_scanner "$R1881y" upsilon "$HOLD1881y" 0; commit_all "$R1881y"
+o1881y="$(budgetfire "$R1881y" "git push")"
+note_held upsilon
+_ydir="$(awk '/output: / { sub(/^.*output: /, ""); sub(/\/out$/, ""); print; exit }' <<< "$o1881y")"
+# The run's whole process group, so the process that records its exit code dies with the scanner
+# and cannot write one after the folder is set up below.
+_yleader="$(cat "$_ydir/pid" 2>/dev/null)"
+[ -n "$_yleader" ] && kill -9 -- "-$_yleader" 2>/dev/null
+held_gone upsilon
+hang_wait "! kill -0 ${_yleader:-0} 2>/dev/null"
+# A stranger in a process group of its own, as a recycled id that is a group leader would be.
+perl -e 'setpgrp(0, 0); exec "sleep", "30"' </dev/null >/dev/null 2>&1 &
+_stranger=$!
+printf '%s' "$_stranger" > "$_ydir/pid"
+rm -f "$_ydir/rc"
+printf '%s\n' "$(( $(date +%s) - 3600 ))" > "$_ydir/started"
+o1881y2="$(budgetfire "$R1881y" "git push")"; c1881y2=$?
+note_held upsilon
+if [ -z "$_ydir" ]; then
+  check "#1881 an old run folder whose process id now belongs to a stranger is not adopted, and the stranger is left alone" "the first push named no output file: $o1881y"
+elif kill -0 "$_stranger" 2>/dev/null && [ "$(held_runs upsilon)" = "2" ] && [ "$c1881y2" -eq 2 ]; then
+  check "#1881 an old run folder whose process id now belongs to a stranger is not adopted, and the stranger is left alone" ok
+else
+  check "#1881 an old run folder whose process id now belongs to a stranger is not adopted, and the stranger is left alone" "stranger alive=$(kill -0 "$_stranger" 2>/dev/null && echo yes || echo no) upsilon runs=$(held_runs upsilon) exit=$c1881y2"
+fi
+kill -9 "$_stranger" 2>/dev/null
+rm -f "$HOLD1881y"
+
+# --- the lock itself, lib/pid-lock.sh, which this gate and claude-sync share (PR #1897). Each
+#     check runs it in a process of its own, so its pid file is that process's. A lock left by a
+#     holder that has died is taken over; one whose holder is alive is not, and the wait gives up at
+#     its deadline rather than going ahead.
+PLDIR="$TMPROOT/pidlock"; mkdir -p "$PLDIR"
+perl -e 'exit 0' & _deadpid=$!; wait "$_deadpid"
+printf '%s\n' "$_deadpid" > "$PLDIR/dead.lock"
+bash -c '. "$1/lib/pid-lock.sh" && take_pid_lock "$2" 3' _ "$DIR" "$PLDIR/dead.lock"; _plrc=$?
+[ "$_plrc" -eq 0 ] && [ "$(cat "$PLDIR/dead.lock" 2>/dev/null)" != "$_deadpid" ] && [ ! -e "$PLDIR/dead.lock.break" ] \
+  && check "#1897 pid-lock.sh takes over a lock whose holder has died" ok \
+  || check "#1897 pid-lock.sh takes over a lock whose holder has died" "rc=$_plrc lock holds $(cat "$PLDIR/dead.lock" 2>/dev/null)"
+printf '%s\n' "$$" > "$PLDIR/live.lock"
+_t0="$(date +%s)"
+bash -c '. "$1/lib/pid-lock.sh" && take_pid_lock "$2" 1' _ "$DIR" "$PLDIR/live.lock"; _plrc=$?
+_took=$(( $(date +%s) - _t0 ))
+[ "$_plrc" -eq 1 ] && [ "$(cat "$PLDIR/live.lock" 2>/dev/null)" = "$$" ] && [ "$_took" -lt 15 ] \
+  && check "#1897 pid-lock.sh leaves a live holder's lock alone and gives up at its deadline" ok \
+  || check "#1897 pid-lock.sh leaves a live holder's lock alone and gives up at its deadline" "rc=$_plrc took ${_took}s lock holds $(cat "$PLDIR/live.lock" 2>/dev/null)"
+
+# A run left in the background that FAILS is reported as a failure by the next push, from its own
+# result, and is not run again to find that out. The push after that runs it afresh, because only a
+# pass is ever remembered.
+R1881f="$(mkrepo bgfail)"; HOLD1881f="$TMPROOT/hold-1881f"; : > "$HOLD1881f"
+add_held_scanner "$R1881f" sigma "$HOLD1881f" 1; commit_all "$R1881f"
+o1881f="$(budgetfire "$R1881f" "git push")"; c1881f=$?
+note_held sigma
+rm -f "$HOLD1881f"
+held_gone sigma || check "#1881 the failing held scanner finished once released" "it is still running"
+o1881f2="$(budgetfire "$R1881f" "git push")"; c1881f2=$?
+[ "$c1881f" -eq 2 ] && [ "$c1881f2" -eq 2 ] && grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o1881f2" \
+  && grep -q 'test-sigma.sh' <<< "$o1881f2" && grep -q 'scanner sigma finished' <<< "$o1881f2" && [ "$(held_runs sigma)" = "1" ] \
+  && check "#1881 a scanner that failed in the background is reported as failing, from its own run" ok \
+  || check "#1881 a scanner that failed in the background is reported as failing, from its own run" "exits=$c1881f,$c1881f2 sigma runs=$(held_runs sigma) out=$o1881f2"
+o1881f3="$(budgetfire "$R1881f" "git push")"; c1881f3=$?
+[ "$c1881f3" -eq 2 ] && [ "$(held_runs sigma)" = "2" ] \
+  && check "#1881 and the push after that runs it afresh, since a failure is never remembered" ok \
+  || check "#1881 and the push after that runs it afresh, since a failure is never remembered" "exit=$c1881f3 sigma runs=$(held_runs sigma) out=$o1881f3"
+
+# A pass made in the background and read by a push in which ANOTHER scanner failed is not
+# remembered, by the gate's standing rule that a blocked push lets no sibling be skipped (#1146),
+# so the push after that runs it again. Pinned here so that rule is a decision, not a side effect.
+R1881s="$(mkrepo bgsibling)"; HOLD1881s="$TMPROOT/hold-1881s"; : > "$HOLD1881s"
+add_scanner "$R1881s" gamma 1; add_held_scanner "$R1881s" rho "$HOLD1881s" 0; commit_all "$R1881s"
+budgetfire "$R1881s" "git push" >/dev/null
+note_held rho
+rm -f "$HOLD1881s"
+held_gone rho || check "#1881 the sibling case's held scanner finished once released" "it is still running"
+o1881s2="$(budgetfire "$R1881s" "git push")"; c1881s2=$?
+_rho_after_read="$(held_runs rho)"
+o1881s3="$(budgetfire "$R1881s" "git push")"; c1881s3=$?
+[ "$c1881s2" -eq 2 ] && [ "$c1881s3" -eq 2 ] && [ "$_rho_after_read" = "1" ] && [ "$(held_runs rho)" = "2" ] \
+  && check "#1881 a background pass read beside a failing scanner is not remembered, so the next push runs it again" ok \
+  || check "#1881 a background pass read beside a failing scanner is not remembered, so the next push runs it again" "exits=$c1881s2,$c1881s3 rho runs=$_rho_after_read then $(held_runs rho)"
+
+# A run left in the background for a tree the checkout has since moved past is stopped, and a new
+# one started for the tree now being pushed: its verdict would be about files this push does not
+# carry.
+R1881t="$(mkrepo bgtree)"; HOLD1881t="$TMPROOT/hold-1881t"; : > "$HOLD1881t"
+add_held_scanner "$R1881t" tau "$HOLD1881t" 0; commit_all "$R1881t"
+o1881t="$(budgetfire "$R1881t" "git push")"; c1881t=$?
+note_held tau
+_taupid1="$(cat "$TMPROOT/tau.pid" 2>/dev/null)"
+echo "a change" > "$R1881t/changed.txt"; commit_all "$R1881t"
+o1881t2="$(budgetfire "$R1881t" "git push")"; c1881t2=$?
+note_held tau
+_taupid2="$(cat "$TMPROOT/tau.pid" 2>/dev/null)"
+if [ -n "$_taupid1" ] && kill -0 "$_taupid1" 2>/dev/null; then
+  check "#1881 a changed tree stops the run left for the old one" "the old run $_taupid1 is still alive"
+else
+  check "#1881 a changed tree stops the run left for the old one" ok
+fi
+[ "$c1881t2" -eq 2 ] && [ "$(held_runs tau)" = "2" ] && [ -n "$_taupid2" ] && [ "$_taupid2" != "$_taupid1" ] \
+  && kill -0 "$_taupid2" 2>/dev/null && grep -q 'still running in the background' <<< "$o1881t2" \
+  && check "#1881 and starts one for the new tree, refusing until it finishes" ok \
+  || check "#1881 and starts one for the new tree, refusing until it finishes" "exit=$c1881t2 tau runs=$(held_runs tau) pids=$_taupid1,$_taupid2 out=$o1881t2"
+rm -f "$HOLD1881t"
 
 # A scanner that finished and FAILED inside the budget is still reported as failing, with the one
 # that ran out of time named beside it, since a finding outranks a missing verdict.
-R1881c="$(mkrepo outoftimefail)"; SLOW1881c="$TMPROOT/slow-1881c"; : > "$SLOW1881c"
-add_scanner "$R1881c" gamma 1; add_slow_scanner "$R1881c" psi "$SLOW1881c"; commit_all "$R1881c"
+R1881c="$(mkrepo outoftimefail)"; HOLD1881c="$TMPROOT/hold-1881c"; : > "$HOLD1881c"
+add_scanner "$R1881c" gamma 1; add_held_scanner "$R1881c" psi "$HOLD1881c" 0; commit_all "$R1881c"
 o1881c="$(budgetfire "$R1881c" "git push")"; c1881c=$?
+note_held psi; rm -f "$HOLD1881c"
 [ "$c1881c" -eq 2 ] && grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o1881c" \
   && grep -q 'test-gamma.sh' <<< "$o1881c" && grep -q 'test-psi.sh' <<< "$o1881c" \
   && grep -q 'did not finish in 2 seconds' <<< "$o1881c" \
   && check "#1881 a failure inside the budget is reported as one, with the scanner that ran out of time named too" ok \
   || check "#1881 a failure inside the budget is reported as one, with the scanner that ran out of time named too" "exit=$c1881c out=$o1881c"
-_psipid="$(cat "$TMPROOT/psi.pid" 2>/dev/null)"; [ -n "$_psipid" ] && kill -9 "$_psipid" 2>/dev/null
 
 # The same budget with scanners that are fast lets the push through: the budget is not a refusal
 # of every push (the control for the cases above).
@@ -1025,6 +1235,7 @@ done
 [ ! -s "$FIRE_DEADLINE_LOG" ] && check "no gate call ran past its ${FIRE_DEADLINE} second call deadline" ok \
   || check "no gate call ran past its ${FIRE_DEADLINE} second call deadline" "these were stopped there: $(tr '\n' ';' < "$FIRE_DEADLINE_LOG")"
 
+reap_held
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

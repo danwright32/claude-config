@@ -41,6 +41,14 @@
 #                                    judges it again with the same rule. Exit 0 removed, 4 kept (the
 #                                    line says why), 1 could not remove it, 2 refused, 75 a sweep
 #                                    holds the lock, so nothing was touched
+#   derived-data-sweep.sh --classify <folder>...
+#                                    the rule's answer for each folder, one line each, for
+#                                    disk-clean's scan (#1806): verdict, folder and detail, separated
+#                                    by tabs. Verdicts: orphan (idle, what --delete removes), in-use
+#                                    (an orphan a build may still be using; detail says why), live
+#                                    (detail is the project), shared-cache, unattributed (detail is
+#                                    why: no-info-plist, volume-not-mounted and the like) and refused
+#                                    (not a folder directly inside DerivedData). Read only, no lock
 #
 # Two automatic sweeps never run at once ("assume it runs twice"): --start takes an flock on
 # STATE/lock BEFORE handing off, and the detached sweep inherits that lock, so it is held exactly as
@@ -102,16 +110,19 @@ MODE=list ONE=""
 while [ "$#" -gt 0 ]; do
   arg="$1"; shift
   case "$arg" in
-    --delete|--summary|--start|--last|--auto|--remove-one|--remove-one-locked)
-      [ "$MODE" = list ] || refuse "only one of --delete, --summary, --start, --last, --auto and --remove-one can be given, so it did nothing."
+    --delete|--summary|--start|--last|--auto|--remove-one|--remove-one-locked|--classify)
+      [ "$MODE" = list ] || refuse "only one of --delete, --summary, --start, --last, --auto, --remove-one and --classify can be given, so it did nothing."
       MODE="${arg#--}"
       case "$MODE" in
         remove-one|remove-one-locked)
           [ "$#" -gt 0 ] && [ -n "$1" ] || refuse "--remove-one needs the one folder to remove, so it removed nothing."
           ONE="$1"; shift ;;
+        classify)
+          [ "$#" -gt 0 ] || refuse "--classify needs at least one folder to classify, so it classified nothing."
+          break ;;
       esac ;;
     -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d'; exit 0 ;;
-    *) refuse "it does not know the argument '$arg' (the only ones are --delete, --summary, --start, --last, --auto and --remove-one), so it listed and deleted nothing." ;;
+    *) refuse "it does not know the argument '$arg' (the only ones are --delete, --summary, --start, --last, --auto, --remove-one and --classify), so it listed and deleted nothing." ;;
   esac
 done
 
@@ -322,13 +333,41 @@ if [ ! -e "$ROOT" ]; then
   # nothing, because a Mac without Xcode output has nothing to add to a disk warning.
   [ "$MODE" = summary ] && exit 0
   # Asked to remove one named folder, "nothing to look at" is not "removed" (L98).
-  case "$MODE" in remove-one*) refuse "there is no Xcode build output on this Mac (nothing at $ROOT), so $ONE is not a build cache it may remove, and it removed nothing." ;; esac
+  case "$MODE" in
+    remove-one*) refuse "there is no Xcode build output on this Mac (nothing at $ROOT), so $ONE is not a build cache it may remove, and it removed nothing." ;;
+    classify) refuse "there is no Xcode build output on this Mac (nothing at $ROOT), so $* is not a build cache it can classify, and it classified nothing." ;;
+  esac
   NO_ROOT=1
   echo "There is no Xcode build output on this Mac to look at (nothing at $ROOT)."
   exit 0
 fi
 if [ ! -d "$ROOT" ] || [ ! -r "$ROOT" ] || [ ! -x "$ROOT" ]; then
   refuse "could not read $ROOT, so nothing here says which build caches are orphaned."
+fi
+
+# ---------- --classify: the rule's answer per folder, for disk-clean's scan (#1806) ----------
+# The same functions --delete and --remove-one decide with, so disk-clean's Xcode category can never
+# disagree with them, and nothing here writes or locks. The folders are the remaining arguments.
+if [ "$MODE" = classify ]; then
+  root_phys="$(cd -P "$ROOT" 2>/dev/null && pwd -P)" || refuse "could not read $ROOT, so it classified nothing."
+  for one in "$@"; do
+    one="${one%/}"
+    one_parent="$(cd -P "${one%/*}" 2>/dev/null && pwd -P)" || one_parent=""
+    case "${one##*/}" in ''|.|..) one_parent="" ;; esac
+    if [ -z "$one_parent" ] || [ "$one_parent" != "$root_phys" ] || [ -L "$one" ] || [ ! -d "$one" ]; then
+      printf 'refused\t%s\tnot a folder directly inside %s\n' "$one" "$ROOT"
+      continue
+    fi
+    case "$(derived_data_classify "$one")" in
+      shared-cache) printf 'shared-cache\t%s\t\n' "$one" ;;
+      live) printf 'live\t%s\t%s\n' "$one" "$(derived_data_workspace_path "$one")" ;;
+      orphan)
+        if reason="$(derived_data_in_use "$one")"; then printf 'in-use\t%s\t%s\n' "$one" "$reason"
+        else printf 'orphan\t%s\t%s\n' "$one" "$(derived_data_workspace_path "$one")"; fi ;;
+      *) printf 'unattributed\t%s\t%s\n' "$one" "$(derived_data_unreadable_reason "$one")" ;;
+    esac
+  done
+  exit 0
 fi
 
 # ---------- --remove-one: one folder, for lib/disk-remove.sh (claude-config#1805) ----------

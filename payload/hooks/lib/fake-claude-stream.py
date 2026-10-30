@@ -22,6 +22,7 @@ token counts).
 """
 import json
 import os
+import io
 import sys
 
 
@@ -33,7 +34,7 @@ def out(ev):
 def main():
     out({"type": "system", "subtype": "init", "session_id": "fake"})
     out({"type": "stream_event", "event": {"type": "message_start", "message": {}}})
-    text = sys.stdin.read().strip()
+    text = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read().strip()
     out({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
     res = {"type": "result", "subtype": "success", "is_error": False, "result": text}
     extra = os.environ.get("FAKE_STREAM_RESULT")

@@ -901,6 +901,17 @@ R=$(make_repo nopycontrol 'try {
 out=$(run_hook "git push" "$R")
 assert_contains "the control still delivers the advice with python3 present" 'additionalContext' "$out"
 
+# --- A byte that is not UTF-8 in the pushed text (claude-config#1900) -----------
+# The diff is text no JSON reader has parsed, and under a UTF-8 locale macOS awk stops at such a
+# byte when a pattern scans it, and grep and sed skip or refuse the line, so every trigger read the
+# push as holding nothing. The byte sits on the line ABOVE the code each trigger is about.
+R=$(make_repo badbyte "$(printf '// caf\xff note\ntry {\n  await send()\n} catch (e) {\n  return []\n}')" src/send.ts)
+out=$(run_hook "git push" "$R" LC_ALL=en_US.UTF-8)
+assert_contains "a push holding a byte that is not UTF-8 still raises the error-path lesson" 'L11' "$out"
+R=$(make_repo badbytedestroy "$(printf '# caf\xff note\nrm -rf /var/data/customers\n')" scripts/clean.sh)
+out=$(run_hook "git push" "$R" LC_ALL=en_US.UTF-8)
+assert_contains "and still raises the destructive operation lesson" 'L5' "$out"
+
 echo "passed: $PASS, failed: $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

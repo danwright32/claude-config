@@ -873,6 +873,61 @@ test('#1740: only a skip on a worktree-agent branch carries; a skip on any other
   expect(Object.keys(w.store).some(k => k.includes('|worktree:'))).toBe(false)
 })
 
+// #1904: a refused builder's skip question named its throwaway branch, "branch
+// worktree-agent-a09a06788b6ba53ab in claude-config" (2026-10-29, for #1859), rather than the issue Dan
+// knows. The main session now names the issue the builder works on, as metadata "issue", and Dan reads
+// that issue, said to hold for this builder only. Only the label changes: his answer is kept where it
+// was, under the branch and its worktree (#1740), never the issue, so no other checkout reads it (#1306).
+test("#1904: a builder's skip question names the issue the main session gives, while the answer stays with that worktree", withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = 'main'
+  w.branches['/w/slate-wt'] = 'worktree-agent-a09a06788b6ba53ab'
+  const why = refusalOf(await call($, { ...WT_PAGE, agentId: 'agent-a1' }))
+  expect(why).toContain('branch worktree-agent-a09a06788b6ba53ab in slate')
+  const answered = await askSkip($, w, why, SKIP_YES, {}, { issue: 1859 })
+  const q = w.asked[0]?.questions[0]
+  if (!q) throw new Error('Dan was asked no question')
+  expect(q.question).toContain('This is for issue #1859 in slate (this builder only);')
+  expect(q.question).not.toContain('worktree-agent')
+  expect(q.options[0]?.description).toContain('issue #1859 in slate (this builder only)')
+  expect(contextOf(answered)).toContain(`Dan answered ${SKIP_YES}`)
+  // Kept where it always was: the branch and its worktree, never the issue.
+  expect(Object.keys(w.store).filter(k => k.startsWith('record:')).sort()).toEqual([
+    'record:/w/slate|branch:worktree-agent-a09a06788b6ba53ab',
+    'record:/w/slate|worktree:/w/slate-wt',
+  ])
+  expect(w.store['record:/w/slate|branch:worktree-agent-a09a06788b6ba53ab']).toMatchObject({ kind: 'skipped', label: 'issue #1859 in slate (this builder only)' })
+  // The builder goes on unasked, and after renaming its branch to name the issue; another worktree on
+  // the issue's own branch, and the main checkout, are still asked.
+  expect(refusalOf(await call($, { ...WT_PAGE, agentId: 'agent-a1' }))).toBe('')
+  w.branches['/w/slate-wt'] = 'design-guard-1859'
+  expect(refusalOf(await call($, { ...WT_PAGE, agentId: 'agent-a1' }))).toBe('')
+  w.branches['/w/slate-wt2'] = 'goal-box-1859'
+  expect(refusalOf(await call($, WT2_PAGE))).toContain(SKIP_QUESTION)
+  w.branches['/w/slate'] = '1859-design-guard'
+  expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+})
+
+test('#1904: an issue on the skip question renames only a builder branch, and one that is no number is refused with nothing asked', withKit, async ($, on) => {
+  const w = world($, on)
+  // An issue's own branch: the question names that issue, whatever the metadata gives.
+  await askSkip($, w, refusalOf(await call($, PAGE)), SKIP_YES, {}, { issue: 1859 })
+  expect(w.asked[0]?.questions[0]?.question).toContain('This is for issue #978 in slate;')
+  expect(Object.keys(w.store).filter(k => k.startsWith('record:'))).toEqual(['record:/w/slate|issue:978'])
+  // On a builder's branch, an issue that is no number is refused by name; nothing asked or recorded.
+  w.branches['/w/slate-wt'] = 'worktree-agent-a09a06788b6ba53ab'
+  const held = refusalOf(await call($, { ...WT_PAGE }))
+  for (const issue of ['1859', 0, 2.5]) {
+    const r = refusalOf(await askSkip($, w, held, SKIP_YES, {}, { issue }))
+    expect([issue, r.includes('is not an issue number')]).toEqual([issue, true])
+  }
+  expect(w.asked.length).toBe(1)
+  expect(Object.keys(w.store).filter(k => k.startsWith('record:'))).toEqual(['record:/w/slate|issue:978'])
+  // Without one, the branch, as before.
+  await askSkip($, w, held, SKIP_YES)
+  expect(w.asked[1]?.questions[0]?.question).toContain('This is for branch worktree-agent-a09a06788b6ba53ab in slate;')
+})
+
 // #1322: before #1306, an agent worktree's branch read as the issues its random id spelled, and Dan's
 // Skip them there was kept under #7831, #26 and #84 on 2026-10-17, where a real branch for #26 or #84
 // would inherit it. Which branch an old answer came from was never kept, so an answer under an issue
@@ -1666,7 +1721,12 @@ export const register: Register = on => {
   const placed = text.replace('const PANE_COLUMNS = 144', 'const PANE_COLUMNS = 110')
   expect(refusalOf(await call($, write(placed)))).toBe('')
   expect(w.ran.length).toBe(1)
-  expect(refusalOf(await call($, write(placed.replace('Copied the value for step', 'Copied that value for step'))))).toContain(SKIP_QUESTION)
+  const reworded = refusalOf(await call($, write(placed.replace('Copied the value for step', 'Copied that value for step'))))
+  expect(reworded).toContain(SKIP_QUESTION)
+  // #1859: held for the toast's words alone, so it says so, naming them, and never the screen's look.
+  expect(reworded).toContain('payload/mods/manual-steps/hooks/register.tsx changes the words of a message Dan reads')
+  expect(reworded).toContain('Copied that value for step')
+  expect(reworded.includes('changes how the screen looks')).toBe(false)
   expect(w.ran.length).toBe(1)
 })
 
@@ -1761,6 +1821,58 @@ test("#1841: a toast reworded in a mod's .ts hook file is asked about, by an Edi
   expect(why).toContain(SKIP_QUESTION)
   expect(why).toContain('was undone')
   expect(w.files[GUARD_HOOK]).toBe(now)
+})
+
+// #1859: an edit held only because a message's words changed was refused as one that "changes how the
+// screen looks", and a shell write's as one that "changed what the mod draws", more than the check
+// measured (L11). The refusal, the card and the shell outcome say the words changed, naming them; a
+// look change still says the look.
+test("#1859: a toast reworded in a mod's .ts hook file is refused as a message's words, never the screen's look, by an Edit or a shell write; a look change still says the look", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const LOOK = 'changes how the screen looks'
+  const why = refusalOf(await call($, { tool: 'Edit', file_path: GUARD_HOOK, old_string: 'Blocked a command that', new_string: 'Stopped a command that' }))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('payload/mods/demo/hooks/guard.ts changes the words of a message Dan reads')
+  expect(why).toContain('Stopped a command that')
+  expect(why.includes(LOOK)).toBe(false)
+  const reason = String((w.cards[w.cards.length - 1] as { reason?: string }).reason)
+  expect(reason).toContain('Stopped a command that')
+  expect(reason.includes('looks on screen')).toBe(false)
+  // What sed leaves is undone, saying it changed a message's words, never what the mod draws.
+  const now = w.files[GUARD_HOOK] as string
+  w.ctl.shell = { [GUARD_HOOK]: now.replace('Blocked a command that', 'Stopped a command that') }
+  const said = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Blocked a command/Stopped a command/' payload/mods/demo/hooks/guard.ts" }))
+  expect(said).toContain('was undone: it changed the words of a message Dan reads')
+  expect(said).toContain('Stopped a command that')
+  expect(said.includes('what the mod draws')).toBe(false)
+  expect(said.includes(LOOK)).toBe(false)
+  expect(w.files[GUARD_HOOK]).toBe(now)
+  // A look change, by an Edit or a shell write, still says the look.
+  const look = refusalOf(await call($, DIVIDER))
+  expect(look).toContain(`payload/mods/demo/hooks/card.ts ${LOOK}`)
+  expect(look.includes('the words of a message')).toBe(false)
+  const divided = LINES_TEXT.replace('  card.steps.forEach((s, i) => {\n', '  card.steps.forEach((s, i) => {\n    if (i > 0) lines.push({ divider: true })\n')
+  w.ctl.shell = { [LINES]: divided }
+  const drawn = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/x/y/' payload/mods/demo/hooks/card.ts" }))
+  expect(drawn).toContain('was undone: it changed what the mod draws on screen')
+  expect(drawn).toContain(`payload/mods/demo/hooks/card.ts ${LOOK}`)
+  expect(drawn.includes('the words of a message')).toBe(false)
+})
+
+// #1859: an edit that would not apply cannot be read before it runs, so it is held where the file
+// draws or sends a message now. One to a file that sends a message and draws nothing said "changes how
+// the screen looks"; it says a message's words, naming none, since which would change is unknown. One
+// to a file that draws still says the look.
+test("#1859: an edit that would not apply, to a mod's .ts hook file that only sends a message, is refused as a message's words; to one that draws, as the look", withKit, async ($, on) => {
+  world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT } })
+  const LOOK = 'changes how the screen looks'
+  const worded = refusalOf(await call($, { tool: 'Edit', file_path: GUARD_HOOK, old_string: 'no such text', new_string: 'anything' }))
+  expect(worded).toContain(SKIP_QUESTION)
+  expect(worded).toContain('payload/mods/demo/hooks/guard.ts changes the words of a message Dan reads,')
+  expect(worded.includes(LOOK)).toBe(false)
+  const look = refusalOf(await call($, { tool: 'Edit', file_path: LINES, old_string: 'no such text', new_string: 'anything' }))
+  expect(look).toContain(`payload/mods/demo/hooks/card.ts ${LOOK}`)
+  expect(look.includes('the words of a message')).toBe(false)
 })
 
 // #1341: a python heredoc that only reflowed a comment in this guard's own register.ts was refused as a

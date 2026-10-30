@@ -258,7 +258,7 @@
         ]
       },
       {
-        "matcher": "Bash|mcp__.*slack.*__slack_(send_message|send_message_draft|schedule_message)",
+        "matcher": "Bash|mcp__.*__slack_(send_message|send_message_draft|schedule_message|create_canvas|update_canvas|add_list_record|update_list_record)",
         "hooks": [
           {
             "type": "command",

@@ -259,14 +259,18 @@ BEGIN { block = 0; triple = ""; tmpl = 0; q = ""; qcode = 0; found = 0 }
 END { if (want != "code") exit !found }
 '
 
+# Every awk over the pushed text runs in the C locale, which reads each byte as a character. The
+# text is a diff no JSON reader has parsed, and under a UTF-8 locale macOS awk stops with an error at
+# the first pattern that scans a byte that is not UTF-8, so every line after it went unread and the
+# answer was "handles no failure" (claude-config#1900). Every pattern here is ASCII.
 fh__run() {   # $1 = want  $2 = path  [$3 = a file of lines; stdin when absent]
   local lang testfile=0
   lang="$(fh_lang "$2")"
   is_test "$2" && testfile=1
   if [ -n "${3:-}" ]; then
-    awk -v want="$1" -v lang="$lang" -v testfile="$testfile" "$FH_AWK" "$3"
+    LC_ALL=C awk -v want="$1" -v lang="$lang" -v testfile="$testfile" "$FH_AWK" "$3"
   else
-    awk -v want="$1" -v lang="$lang" -v testfile="$testfile" "$FH_AWK"
+    LC_ALL=C awk -v want="$1" -v lang="$lang" -v testfile="$testfile" "$FH_AWK"
   fi
 }
 
@@ -291,9 +295,12 @@ fh_handles_failure() {   # $1 = path  $2 = a file holding the added lines
 # A unified diff on stdin; prints each file whose ADDED lines handle failure, in diff order.
 fh_files() {
   local tmp rows f
+  # The C locale for every tool below, cut as well as awk: under a UTF-8 locale macOS cut refuses
+  # the whole file at a byte that is not UTF-8 (claude-config#1900).
+  local -x LC_ALL=C
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/claude-failure-handling.XXXXXXXX")" || return 1
   rows="$tmp/rows"
-  awk '
+  LC_ALL=C awk '
     /^\+\+\+ / { f = substr($0, 5); sub(/^b\//, "", f); if (f == "/dev/null") f = ""; next }
     /^diff --git / { f = ""; next }
     # The lessons review appends whole files AFTER its diff (lib/ai-review-common.sh), so the first
@@ -304,7 +311,7 @@ fh_files() {
   ' > "$rows"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    awk -F'\t' -v want="$f" '$1 == want { print substr($0, length(want) + 2) }' "$rows" > "$tmp/lines"
+    LC_ALL=C awk -F'\t' -v want="$f" '$1 == want { print substr($0, length(want) + 2) }' "$rows" > "$tmp/lines"
     fh_handles_failure "$f" "$tmp/lines" && printf '%s\n' "$f"
   done < <(cut -f1 "$rows" | awk '!seen[$0]++')
   rm -rf "$tmp"

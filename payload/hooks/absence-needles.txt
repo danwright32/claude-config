@@ -20,10 +20,6 @@
 # Every entry carries the reason it was accepted, because an entry with no written reason beside
 # neighbours that each have one is evidence it was never reasoned about (L233).
 
-# The needle names services the message must NOT guess at. They appear nowhere in the suite
-# precisely because the hook never writes them, which is the assertion.
-payload/hooks/test-check-free-space.sh: 1
-
 # Five, each a phrase the TOOL prints in the state being ruled out:
 #   2599  "agentMac1: launch agent"  the twin one line above says agentMac2, and the two differ by
 #         one character, so no literal run of six or more is shared. Sound, and the closest thing

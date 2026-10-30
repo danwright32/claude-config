@@ -20,7 +20,7 @@ POINTER = (
 )
 
 try:
-    data = json.load(sys.stdin)
+    data = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     prompt = data.get("prompt", "").lower()
 
     # Direct prose format signals — these always trigger regardless of verb

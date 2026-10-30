@@ -26,6 +26,7 @@ claude-sync). Prints `<path>:<line>: <text>` for each, and exits 1 when there is
 import argparse
 import os
 import re
+import io
 import sys
 
 sys.dont_write_bytecode = True
@@ -56,7 +57,7 @@ def main():
     ap.add_argument('--root', required=True)
     args = ap.parse_args()
     any_found = False
-    for rel in sys.stdin.read().split('\n'):
+    for rel in io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read().split('\n'):
         rel = rel.strip()
         if not rel or not SHELL.search(rel):
             continue

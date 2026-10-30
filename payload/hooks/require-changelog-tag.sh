@@ -62,7 +62,13 @@ payload=$(cat)
 case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
 
 # shellcheck source=lib/merge-target.sh
-. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
+{ . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null && declare -F mt_runs_merge >/dev/null; } || {
+  # A library this gate cannot load is not a merge with nothing to check (claude-config#1900,
+  # L10). Past the words above this may be a merge, so it is refused, naming the file.
+  case "$payload" in *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;; esac
+  echo "Cannot tell whether this repo needs a changelog record: require-changelog-tag.sh could not load $HOOK_DIR/lib/merge-target.sh, or lib/push-scope.sh beneath it, which reads whether this command merges a pull request and which one, so whether the change carries a changelog record could not be checked. A library this gate cannot load is not a merge with nothing to check. Reinstall the hooks with claude-sync pull. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>." >&2
+  exit 2
+}
 
 # Where the registry is comes from its one reader (claude-config#1526), resolved once node is known
 # to be here, below. CHANGELOG_REGISTRY names a file for the tests.

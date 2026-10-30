@@ -24,7 +24,16 @@
 # Fails OPEN: any parse or git error allows the push.
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+{ . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && declare -F ps_parse_payload >/dev/null; } || {
+  # A library this gate cannot load is not a push with nothing to check (claude-config#1900, L10):
+  # with it missing nothing here can tell a push from any other command, so a command naming one
+  # is refused, naming the file, and any other passes as it would have.
+  payload="$(cat)"
+  case "$payload" in *SKIP_GREP_QV_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *push*) ;; *) exit 0 ;; esac
+  echo "BLOCKED: check-grep-quiet-invert.sh could not load $HOOK_DIR/lib/push-scope.sh, which reads whether this command pushes and what it carries, so this command could not be checked. A library this gate cannot load is not a push with nothing to check. Reinstall the hooks with claude-sync pull. For this one command: SKIP_GREP_QV_CHECK=1 <the same command>" >&2
+  exit 2
+}
 
 payload="$(cat)"
 
@@ -81,7 +90,7 @@ $(git diff HEAD 2>/dev/null)"
 [ -n "$diff" ] || exit 0
 
 findings="$(printf '%s' "$diff" | python3 -c '
-import sys, re
+import io, sys, re
 
 # The literal being banned is never written in this file: it is assembled from the
 # flag letters, so this guard and the style gate have nothing to catch in the code
@@ -103,7 +112,7 @@ def flags(blob):
 
 current = "(unknown file)"
 out = []
-for line in sys.stdin:
+for line in io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace"):
     line = line.rstrip("\n")
     if line.startswith("+++ "):
         f = line[4:]

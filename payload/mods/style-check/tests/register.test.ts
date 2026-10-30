@@ -305,13 +305,46 @@ test('an ordinary command is not scanned at all', withKit, async ($, on) => {
   expect(w.runs.length).toBe(0)
 })
 
-for (const tool of ['mcp__claude_ai_Slack__slack_send_message', 'mcp__claude_ai_Slack__slack_send_message_draft', 'mcp__claude_ai_Slack__slack_schedule_message']) {
-  test(`a Slack message through ${tool.split('__').pop()} is judged`, withKit, async ($, on) => {
-    const w = world(on)
-    await $.tool.call({ tool, channel_id: 'C1', message: `hi ${DASH} there` } as never)
-    expect(w.reached).not.toContain(tool)
-  })
+// The Slack tools that write text a teammate reads are named once, in hooks/lib/slack-write-tools.txt,
+// which the session link gate reads too (claude-config#1905), so the two judge the same tools. The
+// mod reads the installed copy; this is that file as the world serves it, comment line included.
+const SLACK_LIST = '/Users/x/.claude/hooks/lib/slack-write-tools.txt'
+const SLACK_NAMES = ['slack_send_message', 'slack_send_message_draft', 'slack_schedule_message', 'slack_create_canvas', 'slack_update_canvas', 'slack_add_list_record', 'slack_update_list_record']
+const slackFiles = { [SLACK_LIST]: `# Slack tools that write text a teammate reads\n\n${SLACK_NAMES.join('\n')}\n` }
+// Both servers that carry them: the claude.ai connector (its server spelled Slack) and the Slack plugin.
+for (const server of ['mcp__claude_ai_Slack__', 'mcp__plugin_slack_slack__']) {
+  for (const name of SLACK_NAMES) {
+    const tool = server + name
+    test(`a Slack write through ${tool} is judged`, withKit, async ($, on) => {
+      const w = world(on, { files: slackFiles })
+      await $.tool.call({ tool, channel_id: 'C1', message: `hi ${DASH} there` } as never)
+      expect(w.reached).not.toContain(tool)
+      expect(w.opened).toContain(SLACK_LIST)
+    })
+  }
 }
+
+test('a Slack tool that only reads is not judged', withKit, async ($, on) => {
+  const w = world(on, { files: slackFiles })
+  await $.tool.call({ tool: 'mcp__claude_ai_Slack__slack_search_public', query: `hi ${DASH} there` } as never)
+  expect(w.reached).toContain('mcp__claude_ai_Slack__slack_search_public')
+  expect(w.runs.length).toBe(0)
+})
+
+test('a tool from another server that shares no Slack name is not judged', withKit, async ($, on) => {
+  const w = world(on, { files: slackFiles })
+  await $.tool.call({ tool: 'mcp__claude_ai_Gmail__send_message', body: `hi ${DASH} there` } as never)
+  expect(w.reached).toContain('mcp__claude_ai_Gmail__send_message')
+})
+
+test('when the Slack list cannot be read, every Slack tool is judged and the cause is logged', withKit, async ($, on) => {
+  const w = world(on)
+  await $.tool.call({ tool: 'mcp__claude_ai_Slack__slack_send_message', channel_id: 'C1', message: `hi ${DASH} there` } as never)
+  expect(w.reached).not.toContain('mcp__claude_ai_Slack__slack_send_message')
+  await $.tool.call({ tool: 'mcp__claude_ai_Slack__slack_search_public', query: `hi ${DASH} there` } as never)
+  expect(w.reached).not.toContain('mcp__claude_ai_Slack__slack_search_public')
+  expect(w.debug.join('\n')).toContain(SLACK_LIST)
+})
 
 test('when the scanner cannot run, the write goes through and says it was not checked', withKit, async ($, on) => {
   const w = world(on, { scanner: 'missing' })

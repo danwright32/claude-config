@@ -161,6 +161,37 @@ check "dc_stub refuses a name that is not on the stub list, which the command ch
 check "a seam variable points at its stub under dc_run" \
   "$([ "$(dc_run bash -c 'printf %s "$DISK_CLEAN_TRASH"' 2>&1)" = "$DC_STUBS/trash" ] && echo ok || echo "the seam was not set")"
 
+# A core tool a test may stand in for, for one case (#1907): a find that fails can only be produced
+# by a stand-in, since the race it stands for (a file gone between two reads) cannot be timed.
+# Until a test asks, the core tool runs, because every category reads the disk with find.
+bad_standin=""
+for s in ${DC_STANDIN_CORE:-}; do
+  case " $DC_CORE_TOOLS " in *" $s "*) ;; *) bad_standin="$bad_standin $s(not core)" ;; esac
+  case " $DC_STUB_NAMES " in *" $s "*) bad_standin="$bad_standin $s(also stubbed)" ;; esac
+  [ -e "$DC_STUBS/$s" ] && bad_standin="$bad_standin $s(stood in from the start)"
+done
+grep -qw find <<< "${DC_STANDIN_CORE:-}" || bad_standin="$bad_standin find(not on DC_STANDIN_CORE)"
+check "find is on the stand in list, and every name there is a core tool, on no stub list, with no stand in from the start" \
+  "$([ -z "$bad_standin" ] && echo ok || echo "$bad_standin")"
+out="$(dc_stub find 'echo "stand in find"; exit 3' 2>&1)"; rc=$?
+check "dc_stub accepts a core tool on the stand in list" "$([ "$rc" -eq 0 ] && echo ok || echo "exit $rc, said: $out")"
+: > "$DC_CALLS"
+out="$(dc_run find "$DC_HOME" -maxdepth 0 2>&1)"; rc=$?
+check "and under dc_run the stand in answers in place of the core tool" \
+  "$([ "$rc" -eq 3 ] && [ "$out" = "stand in find" ] && echo ok || echo "exit $rc, said: $out")"
+check "and its call is recorded once, with its arguments" \
+  "$([ "$(dc_calls find)" = "find $(printf '%q' "$DC_HOME") -maxdepth 0" ] && echo ok || echo "calls: $(dc_calls find)")"
+out="$(dc_unstub find 2>&1)"; rc=$?
+check "dc_unstub takes the stand in away" "$([ "$rc" -eq 0 ] && [ ! -e "$DC_STUBS/find" ] && echo ok || echo "exit $rc, said: $out")"
+out="$(dc_run find "$DC_HOME" -maxdepth 0 2>&1)"; rc=$?
+check "and the core tool runs again" "$([ "$rc" -eq 0 ] && [ "$out" = "$DC_HOME" ] && echo ok || echo "exit $rc, said: $out")"
+dc_unstub docker >/dev/null 2>&1
+out="$(dc_run docker image ls 2>&1)"; rc=$?
+check "dc_unstub of an ordinary stub puts back the one that refuses, never the real tool" \
+  "$([ "$rc" -eq 98 ] && grep -qF 'gave it no behaviour' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
+out="$(dc_unstub curl 2>&1)"; rc=$?
+check "dc_unstub refuses a name on neither list" "$([ "$rc" -ne 0 ] && echo ok || echo "exit $rc, said: $out")"
+
 # ================================================================================================
 # 2. HOME must be inside a throwaway directory the harness made, or nothing runs
 # ================================================================================================
@@ -246,6 +277,11 @@ check "touch with an option that takes a value works inside the root" \
 out="$(dc_run sed -n 1p "$OUT/sentinel" 2>&1)"; rc=$?
 check "sed that only reads a file outside the root is not refused" \
   "$([ "$rc" -eq 0 ] && [ "$out" = sentinel ] && echo ok || echo "exit $rc, said: $out")"
+# A guarded tool's calls are recorded as a stub's are, so a suite can count them: the scan's one walk
+# of the home folder is a find, and only the count of its calls can show it ran once (#1851).
+dc_run find "$DC_HOME/a" -maxdepth 0 > /dev/null 2>&1
+check "a guarded tool's call is recorded in the call log with its arguments, as a stub's is" \
+  "$(grep -qxF "find $(printf '%q' "$DC_HOME/a") -maxdepth 0" <<< "$(dc_calls find)" && echo ok || echo "calls: $(dc_calls find)")"
 
 refused "rm of a file outside the root is refused" rm "$OUT/sentinel"
 refused "rm -rf of the outside folder is refused" rm -rf "$OUT"
