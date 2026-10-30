@@ -8040,6 +8040,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   which asks the server for the page again first)
 
 ## Building with AI
+- **L832. Put a prompt cache point at the end of the text that is identical across the requests meant to share it, never after per request content, and before adding one confirm from real traffic that the text is reread within the cache's lifetime, because a cache write costs more than sending the text uncached and is pure loss when nothing reads it.**
+  (pivot#403, 2026-10-30)
+  SHORT: Put a prompt cache point where shared text ends, and confirm real traffic rereads it within its lifetime: a write nobody reads costs extra.
 - **L828. When a model call sets an output cap and the model thinks before it writes, the cap covers the thinking too, so size it for the thinking plus the longest reply, and treat any response that stopped at the cap as refused rather than shown, because the thinking can use the whole cap and leave a reply that is empty or cut off mid sentence.**
   (pivot#344, 2026-10-30)
   SHORT: A thinking model's output cap covers its thinking: size it for both, and refuse any reply that stopped at the cap.

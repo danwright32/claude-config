@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L832. Put a prompt cache point where shared text ends, and confirm real traffic rereads it within its lifetime: a write nobody reads costs extra.
 - L828. A thinking model's output cap covers its thinking: size it for both, and refuse any reply that stopped at the cap.
 - L820. An AI call handling dates must be given today's date and time zone in its context; without it a guessed date passes every format check.
 - L816. A streamed model reply ending in an error or with no finish must fail the call; the SDK still returns the partial text as if whole.
