@@ -1922,6 +1922,47 @@ const readMod = (f: ModFile): ModRead | null => {
     if (m[3]) messages.push([at, exprEnd(at + key + m[3].length)])
     else messages.push([at, at + key])
   }
+  // #1925: an answer to a question, which Dan reads in the picker: an object beside a `label` key, or
+  // one in an `options` list, its label and description read as a message's words. A tool's
+  // description and a schema's name no label and sit in no options list, so only Claude reads them
+  // and they pass (#1756, #1841); a schema's properties named label and description are schemas. Nor
+  // is a pattern taking them apart (`const { label } = o`), a parameter's (`({ label }: O) =>`), or a
+  // type's, which say nothing.
+  const outer: Span[] = []
+  for (const [o, c] of pairs) {
+    while (outer.length && (outer[outer.length - 1] as Span)[1] < o) outer.pop()
+    const list = outer[outer.length - 1]
+    outer.push([o, c])
+    if (blank[o] !== '{' || /\bproperties\s*:\s*$/.test(blank.slice(Math.max(0, o - 40), o)) || statementAt(o)?.isType) continue
+    const after = blank.slice(c + 1, c + 4).trimStart()
+    // A parameter list is one an arrow, a return type or a body follows; a call's parentheses holding
+    // a conditional (`pick(c ? { label } : x)`) are none (lessons review at 1380fed).
+    const params = !!list && blank[list[0]] === '(' && /^(?:=>|:|\{)/.test(blank.slice(list[1] + 1, list[1] + 40).trimStart())
+    if (/^=(?![=>])/.test(after) || (params && after.startsWith(':'))) continue
+    const fields = new Map<string, Span>()
+    let from = o + 1
+    for (let j = o + 1; j <= c; j++) {
+      const ch = blank[j]
+      if (j < c && (ch === '(' || ch === '[' || ch === '{')) j = close.get(j) ?? c
+      else if (j === c || ch === ',') {
+        const k = /^\s*([A-Za-z_$][\w$]*|'\s*'|"\s*")\s*(:?)/.exec(blank.slice(from, j))
+        if (k) {
+          const at = from + (k[0].length - k[0].trimStart().length)
+          const name = text.slice(at, at + (k[1] as string).length).replace(/^['"]|['"]$/g, '')
+          const v = from + k[0].length
+          if (k[2]) fields.set(name, [v, j])
+          else if (!/\S/.test(blank.slice(at + name.length, j))) fields.set(name, [at, at + name.length])
+        }
+        from = j + 1
+      }
+    }
+    const listed = !!list && blank[list[0]] === '[' && /\boptions\s*[:=]\s*$/.test(blank.slice(Math.max(0, list[0] - 40), list[0]))
+    if (!fields.has('label') && !listed) continue
+    for (const f of ['label', 'description']) {
+      const v = fields.get(f)
+      if (v && /\S/.test(blank.slice(v[0], v[1]))) messages.push([skipOn(v[0]), skipBack(v[1] - 1) + 1])
+    }
+  }
   // #1841 (Dan, 2026-10-28: "Narrow it first"): only words a person reads are a message's wording,
   // never a string a message is only computed from. Replayed, those were a regular expression
   // (keystroke guard's `open -a` pattern), a value compared or a `typeof` tag, a type's union, a

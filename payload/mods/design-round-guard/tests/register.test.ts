@@ -1823,6 +1823,32 @@ test("#1841: a toast reworded in a mod's .ts hook file is asked about, by an Edi
   expect(w.files[GUARD_HOOK]).toBe(now)
 })
 
+// #1925: the #1904 builder's Edit adding "or wording" to the skip question's answers in the guard's own
+// rules.ts went through unasked, though Dan reads each answer's description in the picker. An
+// answer's description is held as a message's words, by an Edit or a shell write; a tool's still passes.
+const ANSWERS_HOOK = `${DEMO}/answers.ts`
+const ANSWERS_TEXT = `export const TOOL_SPEC = { name: 'skip_rounds', description: 'Ask Dan whether to skip design rounds.' }
+export const skipOptions = () => [
+  { label: 'Skip them', description: 'Edits that change the look go ahead' },
+  { label: 'Run /design-rounds', description: 'Nothing that changes the look is edited until you settle a design round' },
+]
+`
+test("#1925: an answer's description reworded in a mod's .ts hook file is asked about as a message's words, by an Edit or a shell write; a tool's description passes", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [ANSWERS_HOOK]: ANSWERS_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: ANSWERS_HOOK, old_string: from, new_string: to })
+  const why = refusalOf(await call($, edit('changes the look is edited', 'changes the look or wording is edited')))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('payload/mods/demo/hooks/answers.ts changes the words of a message Dan reads')
+  expect(why).toContain('or wording')
+  expect(refusalOf(await call($, edit('Ask Dan whether to skip', 'Ask Dan if he wants to skip')))).toBe('')
+  expect(w.ran.length).toBe(1)
+  const now = w.files[ANSWERS_HOOK] as string
+  w.ctl.shell = { [ANSWERS_HOOK]: now.replace('the look go ahead', 'the look or wording go ahead') }
+  const said = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/the look go/the look or wording go/' payload/mods/demo/hooks/answers.ts" }))
+  expect(said).toContain('was undone: it changed the words of a message Dan reads')
+  expect(w.files[ANSWERS_HOOK]).toBe(now)
+})
+
 // #1859: an edit held only because a message's words changed was refused as one that "changes how the
 // screen looks", and a shell write's as one that "changed what the mod draws", more than the check
 // measured (L11). The refusal, the card and the shell outcome say the words changed, naming them; a
