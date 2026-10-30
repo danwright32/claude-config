@@ -808,7 +808,9 @@ def tally_summary(slug, home=None):
     path = tally_file(slug, home)
     prs, bad = {}, 0
     try:
-        with open(path, errors="strict") as f:
+        # Replaced (#1923): the tally only decides when to ask, and a line a stand in breaks is
+        # counted below as unreadable, so one damaged tally does not stop every other repository's.
+        with open(path, errors="replace") as f:
             lines = f.read().splitlines()
     except FileNotFoundError:
         lines = []

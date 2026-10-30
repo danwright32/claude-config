@@ -518,6 +518,13 @@ class Tally(unittest.TestCase):
             f.write("{oops\n")
         self.assertEqual(v.tally_summary(SLUG, home=self.home)["unreadable_lines"], 1)
 
+    def test_a_line_that_is_not_utf8_is_counted_not_crashed_on(self):
+        # claude-config#1923: one damaged tally must not stop tally_due for every repository.
+        self.add(1)
+        with open(v.tally_file(SLUG, home=self.home), "ab") as f:
+            f.write(b"{caf\xff\n")
+        self.assertEqual(v.tally_summary(SLUG, home=self.home)["unreadable_lines"], 1)
+
     def test_cli_due_and_mark(self):
         for pr in range(1, v.TALLY_ASK_EVERY + 1):
             self.add(pr)
