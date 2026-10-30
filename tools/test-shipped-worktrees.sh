@@ -61,7 +61,24 @@ row() {  # row <verdict> <worktree name> <text>: the report line judging that wo
 }
 exists() { [ -d "$1" ]; }
 
-git_q() { git -C "$1" "${@:2}" >/dev/null 2>&1; }
+# A fixture step: quiet when it works, and recorded with git's own words when it does not, so a
+# fixture that was not built is reported as that and never as the tool's verdict (#1919). It
+# records to a file because `agent` runs inside $(...), where a counter would be lost, and git's
+# error goes to a file rather than a capture so a background child git leaves holding stderr
+# cannot make the step wait on it.
+FIXTURE_ERRORS="$WORK/fixture-errors"; : > "$FIXTURE_ERRORS"
+git_q() {
+  git -C "$1" "${@:2}" >/dev/null 2>"$WORK/git_q.err" && return 0
+  printf '    git -C %s %s: %s\n' "$1" "${*:2}" "$(tr '\n' ' ' < "$WORK/git_q.err")" >> "$FIXTURE_ERRORS"
+  return 1
+}
+fixture_built() {  # fixture_built <what is about to be judged>: every fixture step so far worked
+  if [ -s "$FIXTURE_ERRORS" ]; then
+    bad "the fixture for $1 was not built, so what follows judges something else. The steps that failed:
+$(cat "$FIXTURE_ERRORS")"
+    : > "$FIXTURE_ERRORS"
+  else ok; fi
+}
 
 # THE STUB GH. `gh pr list --head <branch> ...` prints $STUB/<branch with / as __>.json, or an
 # empty list when there is none, which is what GitHub says about a branch with no pull request.
@@ -182,6 +199,22 @@ rm -rf "$WT/vanished"
 
 echo "shipped-worktrees: report mode judges every worktree and changes nothing"
 
+# The fixture is what the verdicts below are about, so it is proved before they are read: every
+# step worked, and git itself lists all eleven agent worktrees, the vanished one included. On
+# 2026-10-29, under a load average of 97, one run judged a fixture git listed only ten of (#1919):
+# the vanished worktree had been built, since its lines printed no error, and its record was gone
+# from the list by the time the tool read it. That has not been reproduced, so when it happens
+# again this says so, with git's own list and the records on disk, instead of a count.
+fixture_built "the report"
+listed="$(git -C "$R" worktree list --porcelain 2>&1)"
+n_listed="$(grep -c "^worktree $WT/" <<< "$listed" || true)"
+if [ "$n_listed" = 11 ]; then ok
+else
+  bad "git lists $n_listed agent worktrees, not the 11 the fixture built, so the report below judges a different fixture. git worktree list --porcelain:
+$listed
+records in $R/.git/worktrees: $(ls -a "$R/.git/worktrees" 2>&1 | tr '\n' ' ')"
+fi
+
 out="$(bash "$TOOL" "$R" 2>&1)"; rc=$?
 if [ "$rc" = 0 ]; then ok; else bad "report mode should exit 0, got $rc: ${out:0:600}"; fi
 
@@ -208,7 +241,10 @@ says "a worktree whose directory is gone is kept, with the command that clears i
 n_removable="$(grep -cE '^  REMOVABLE ' <<< "$out" | tr -d ' ')"
 n_keep="$(grep -cE '^  KEEP ' <<< "$out" | tr -d ' ')"
 if [ "$n_removable" = 2 ]; then ok; else bad "expected 2 removable, got $n_removable"; fi
-if [ "$n_keep" = 9 ]; then ok; else bad "expected 9 kept, got $n_keep"; fi
+# A wrong count prints the report it counted, since the first failure (#1919) kept only the count,
+# and a count alone cannot say which worktree went missing.
+if [ "$n_keep" = 9 ]; then ok; else bad "expected 9 kept, got $n_keep. The report:
+$out"; fi
 # The primary checkout is never a candidate.
 lacks "the primary checkout is not judged" "  REMOVABLE  $R " "$out"
 
@@ -374,6 +410,7 @@ locked_agent lk-oldlive 39 "$L_OLDLIVE"
 L_HALF="claude agent lk-half (pid 5007 start Thu Oct 15 12:00:00 2026)"
 locked_agent lk-half 40 "$L_HALF"
 
+fixture_built "the agent locks"
 out_l="$(bash "$TOOL" "$R" 2>&1)"
 says "a shipped worktree whose agent's pid is gone is removable" "#31" "$(row REMOVABLE lk-dead "$out_l")"
 says "and says its lock was left by an agent that is gone" "pid 5001 is no longer running" "$(row REMOVABLE lk-dead "$out_l")"
