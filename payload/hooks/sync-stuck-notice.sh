@@ -52,8 +52,12 @@
 # prompt cannot be told from a later one; it used to be said only on stderr, which the person never
 # saw, and a platform that stops sending the session is worth hearing about each time.
 #
+# IT ALSO CARRIES what issue-spool-session-end.sh could not say as a session ended: a marker that
+# hook leaves (lib/spool-end-marker.sh) is said here once, at the next prompt, and removed
+# (claude-config#1949). See the comment where it is taken.
+#
 # Env:
-#   SYNC_STUCK_NOTICE_AFTER      seconds a stretch must have lasted before it is said (default 3600)
+#   SYNC_STUCK_NOTICE_AFTER     seconds a stretch must have lasted before it is said (default 3600)
 #   SYNC_LAUNCHAGENTS            where the launch agents are (default ~/Library/LaunchAgents, and
 #                                none when CLAUDE_HOME is not this user's own ~/.claude)
 #   CLAUDE_HOME                  the config root (default ~/.claude), read only for that rule
@@ -80,6 +84,19 @@ input="$(cat 2>/dev/null || true)"
 case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
 . "$_ps_dir/lib/push-scope.sh" 2>/dev/null && input="$(ps_clean_payload "$input")"
 
+# A failure an ended session left behind (claude-config#1949). issue-spool-session-end.sh runs as a
+# session ends, when nothing it says has been seen to reach the person, so it leaves its failure in
+# a marker file and the first prompt after, in any session, says it here, once. This hook carries it
+# because it is the per prompt hook that already reports on the config's own machinery, and a
+# second registration would be a second process on every prompt. Taken before anything below can
+# exit, so it is said on every path. With no marker it starts no process.
+SSN_NOTE=""
+. "$SSN_DIR/lib/spool-end-marker.sh" 2>/dev/null || { SEM_SPOOL_FILE=""; SEM_TMP_FILE=""; }
+if [ -n "${SEM_SPOOL_FILE:-}" ] && declare -F hook_take_deferred >/dev/null 2>&1; then
+  hook_take_deferred "$SEM_SPOOL_FILE" "$SEM_TMP_FILE"
+  [ -n "$HN_DEFERRED" ] && SSN_NOTE="Left by a session that ended earlier, and said here because nothing said as a session ends has been seen to reach anyone: $HN_DEFERRED"
+fi
+
 # The session, matched in bash rather than by starting python, because this runs on every prompt.
 session=""
 re_sid='"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"'
@@ -91,7 +108,9 @@ if payload_match "$input" "$re_sid"; then session="${BASH_REMATCH[1]}"
 elif payload_match "$input" "$re_tp"; then session="${BASH_REMATCH[1]}"
 fi
 if [ -z "$session" ]; then
-  hook_allow_notice "sync-stuck-notice: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and the sync was not checked."
+  hook_allow_notice "${SSN_NOTE:+$SSN_NOTE
+
+}sync-stuck-notice: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and the sync was not checked."
 fi
 key="${session//[^A-Za-z0-9_-]/_}"
 [ "${#key}" -le 120 ] || key="${key: -120}"
@@ -108,10 +127,11 @@ key="${session//[^A-Za-z0-9_-]/_}"
 # else this prompt says, and on stderr for the debug log (#1906); on stderr alone Claude Code
 # discarded it.
 after="${SYNC_STUCK_NOTICE_AFTER:-3600}"
-SSN_NOTE=""
 case "$after" in
   ''|*[!0-9]*)
-    SSN_NOTE="sync-stuck-notice: SYNC_STUCK_NOTICE_AFTER='$after' is not a whole number of seconds, so the default of 3600 is used instead."
+    SSN_NOTE="${SSN_NOTE:+$SSN_NOTE
+
+}sync-stuck-notice: SYNC_STUCK_NOTICE_AFTER='$after' is not a whole number of seconds, so the default of 3600 is used instead."
     after=3600 ;;
 esac
 now="${CLAUDE_SYNC_STUCK_NOW:-}"
