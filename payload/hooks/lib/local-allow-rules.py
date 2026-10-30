@@ -303,7 +303,13 @@ def secret_flags(rules, common):
     redactor cannot run, which is never the same answer as finding nothing."""
     if not rules:
         return []
-    lines = [r.replace("\r", " ").replace("\n", " ") for r in rules]
+    # The redactor is handed each rule's own bytes and its answer is compared as bytes. A rule is a
+    # JSON string, so a lone \ud800 escape in the file is a lone surrogate here. Encoded with replace
+    # it reached the redactor as ?, came back differing from the rule, and the rule was said to hold a
+    # key or token when it held neither (claude-config#1952). surrogatepass keeps it as three bytes,
+    # which the redactor's sed, run under LC_ALL=C, reads and writes back as bytes like any others;
+    # nothing is decoded on the way back, so no byte of its answer can be lost or invented either.
+    lines = [r.replace("\r", " ").replace("\n", " ").encode("utf-8", "surrogatepass") for r in rules]
     if not os.path.isfile(common):
         raise DetectorBroken("could not check its rules for keys or tokens: %s is missing" % common)
     try:
@@ -311,11 +317,11 @@ def secret_flags(rules, common):
             ["bash", "-c", '. "$1" && ar_redact', "_", common],
             # Five seconds, inside the hook's own ten, so a hung redactor is reported here rather
             # than the whole hook being killed with nothing said.
-            input="\n".join(lines) + "\n", capture_output=True, text=True, timeout=5, errors="replace"
+            input=b"\n".join(lines) + b"\n", capture_output=True, timeout=5
         )
     except (OSError, subprocess.SubprocessError) as e:
         raise DetectorBroken("could not check its rules for keys or tokens: the redactor did not run (%s)" % e.__class__.__name__)
-    out = p.stdout.split("\n")
+    out = p.stdout.split(b"\n")
     if p.returncode != 0 or len(out) < len(lines):
         raise DetectorBroken("could not check its rules for keys or tokens: the redactor (lib/review-redact.sed through ar_redact) did not run (exit %d)" % p.returncode)
     return [out[k] != lines[k] for k in range(len(lines))]
