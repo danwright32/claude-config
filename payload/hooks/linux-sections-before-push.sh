@@ -292,8 +292,6 @@ ps_has_override "$cmd" SKIP_LINUX_CHECK && exit 0
 base="$(ps_base_ref)" || exit 0
 git rev-parse --verify --quiet "$base" >/dev/null 2>&1 || exit 0
 
-out="$(AUDIT_ON_LINUX=1 bash tests/audit-changed-sections.sh "$base" 2>&1)"; rc=$?
-
 # 0 is a pass or an honest nothing-to-do, and 2 is the audit refusing to answer, which is its own
 # problem and not evidence about this push. Only 1 means a section ran on Linux and failed, and 4
 # that the prelude before it failed while no check of its own failed.
@@ -334,6 +332,53 @@ _ls_record(){        # $1 = judged | stood-down  -> prints "<judged> of the <tot
   printf '%s of the %s' "$judged" "$total"
 }
 
+# THE RUN'S OWN BUDGET (claude-config#1899). The registration carries onFailure "block", so a run
+# Claude Code kills at the registration's 300 second timeout REFUSES the push, and the Linux run had
+# no bound of its own: one section slow on Linux would have refused every push of that change. A run
+# this gate could not finish is a push nothing judged on Linux, which its design lets through and
+# says so (above), so the gate stops the run itself first, at a budget below the declared timeout,
+# and stands down UNMEASURED. 240 seconds by default, leaving 60 of the 300 to stop the container and
+# say so on a loaded machine; the suite fails if this default ever reaches the declared timeout.
+# The 240, 300 and 60 here are settings, not measurements: how long a Linux run takes has not been
+# measured on this Mac, whose docker daemon was not running on 2026-10-29.
+#
+# The bound kills the run's whole process group (lib/bounded-run.sh), but a container outlives a
+# killed docker client, so the run is given a container name and the gate stops that container by
+# it. Without lib/bounded-run.sh nothing can bound the run, and an unbounded run is the defect, so
+# the gate stands down rather than run it.
+_ls_budget_default=240
+_ls_budget="${LINUX_SECTIONS_BUDGET_SECONDS:-$_ls_budget_default}"
+case "$_ls_budget" in ''|*[!0-9]*|0) _ls_budget=$_ls_budget_default ;; esac
+_ls_docker="${SYNC_DOCKER:-docker}"
+_ls_container="claude-linux-sections-$$-$(date +%s)"
+# A notice a person sees on a push the gate lets through: Claude Code discards a PreToolUse hook's
+# stderr on exit 0, so the text also goes out as a JSON systemMessage, the channel shown to the user.
+# Every caller lets the push through right after its notice, so the shared helper, which says it
+# on stderr and as a systemMessage and then exits 0, serves all three (lib/hook-notice.sh, #1906).
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+_ls_say(){   # $1 = the notice; lets the push through
+  hook_allow_notice "$1"
+}
+if ! . "$HOOK_DIR/lib/bounded-run.sh" 2>/dev/null; then
+  _ls_record stood-down >/dev/null 2>&1 || true
+  _ls_say "linux-sections-before-push: nothing in this push was judged on Linux, UNMEASURED: lib/bounded-run.sh is missing beside the hook, so the Linux run could not be bounded and was not started. Reinstall the hooks with claude-sync pull."
+  exit 0
+fi
+bounded_run "$_ls_budget" env AUDIT_ON_LINUX=1 LINUX_RUN_CONTAINER_NAME="$_ls_container" bash tests/audit-changed-sections.sh "$base"
+out="$BOUNDED_OUT"; rc=$BOUNDED_RC
+if [ "$rc" -eq 124 ]; then
+  # Bounded too, so a daemon that hangs cannot spend the 60 seconds left (a setting, not a
+  # measurement). A container that was never
+  # started makes this fail, which is fine: there is nothing to stop.
+  bounded_run 20 "$_ls_docker" kill "$_ls_container"
+  _ls_seen="$(_ls_record stood-down 2>/dev/null || true)"
+  _ls_say "linux-sections-before-push: the Linux run did not finish in $_ls_budget seconds, so it was stopped and nothing in this push was judged on Linux. That is UNMEASURED, not a pass.${_ls_seen:+ Linux has judged $_ls_seen push(es) here that had a section to check.} CI will still ask the question. To ask it here, run the changed sections yourself: AUDIT_ON_LINUX=1 bash tests/audit-changed-sections.sh $base"
+  exit 0
+fi
+
 if [ "$rc" -eq 4 ]; then
   # The PRELUDE failed and no changed section failed a check of its own (claude-config#625). Still a
   # block, because something this push would run fails on Linux, but worded for what was measured:
@@ -365,7 +410,7 @@ if [ "$rc" -ne 1 ]; then
   case "$out" in
     *UNMEASURED*)
       _ls_seen="$(_ls_record stood-down || true)"
-      {
+      _ls_say "$({
         echo "linux-sections-before-push: nothing in this push was judged on Linux, and that is not a pass."
         printf '%s\n' "$out"
         if [ -n "$_ls_seen" ]; then
@@ -374,7 +419,7 @@ if [ "$rc" -ne 1 ]; then
           echo "(How often that has happened could not be recorded, so this is the only place it is said.)"
         fi
         echo "CI will still ask the question. To ask it here, start Docker Desktop and push again."
-      } >&2 ;;
+      })" ;;
     *"ran on their own and passed"*|*"ran on its own and passed"*)
       _ls_record judged >/dev/null || true ;;
   esac

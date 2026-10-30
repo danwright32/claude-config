@@ -33,13 +33,23 @@ JUDGE_MODEL="sonnet"
 JUDGE_TIMEOUT=90       # seconds for the model call
 DIFF_BUDGET=60000      # max bytes of diff sent to the model
 
+# The notice library, loaded first because every allow below speaks through it.
+TG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/hook-notice.sh
+. "$TG_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
 # Allow the push, but surface WHY the gate did not run.
 #
-# Exit 1, not 0, is load-bearing. Claude Code discards a PreToolUse hook's
-# stderr entirely on exit 0, so a notice printed there would vanish and this
-# whole function would be theatre. Exit 1 is a non-blocking error: the push
-# still runs, and the FIRST line of stderr surfaces in the transcript as a hook
-# error notice (the rest goes to the debug log). Hence one line, reason first.
+# The channel is load-bearing. Claude Code discards a PreToolUse hook's stderr
+# entirely on exit 0, so a notice printed only there would vanish and this whole
+# function would be theatre. #735 said it with exit 1, the non-blocking error
+# whose first stderr line the transcript shows; but "onFailure": "block" (#1899)
+# refuses the call on exit 1, which would turn "allowed ungated" into a refusal
+# saying the push was allowed. So it is exit 0 with the notice as a JSON
+# systemMessage, which the person is shown (lib/hook-notice.sh, #1912). One line,
+# reason first, as before.
 #
 # Reserve this for paths where the gate wanted to decide and could not. The
 # ordinary silent allows (not a push, SKIP_TEST_CHECK, no source touched,
@@ -47,16 +57,14 @@ DIFF_BUDGET=60000      # max bytes of diff sent to the model
 # everyone to tune the notice out. Recorded first once the command is known to be a push.
 fail_open() {   # $1 = why  $2 = judged, when a judge was called
   if [ "${PC_PUSH:-0}" = 1 ]; then pc_record failopen "$1" "${2:-}" || :; fi
-  echo "TEST GATE DID NOT RUN ($1). Push allowed ungated." >&2
-  exit 1
+  hook_allow_notice "TEST GATE DID NOT RUN ($1). Push allowed ungated."
 }
 
-# A silent allow, recorded. A record that could not be written is said in one line (exit 1, the push
-# still runs), never swallowed and never turned into a refusal.
+# A silent allow, recorded. A record that could not be written is said in one line (a systemMessage,
+# the push still runs), never swallowed and never turned into a refusal.
 allow() {   # $1 = outcome  $2 = detail  $3 = judged
   pc_record "$1" "${2:-}" "${3:-}" && exit 0
-  echo "TEST GATE allowed this push ($1), but its record could not be written to $(pc_ledger_path)." >&2
-  exit 1
+  hook_allow_notice "TEST GATE allowed this push ($1), but its record could not be written to $(pc_ledger_path)."
 }
 
 # A refusal, recorded, its message on stdin. A record that could not be written is added to the
@@ -71,7 +79,7 @@ refuse() {   # $1 = outcome  $2 = detail  $3 = judged
 # shared with the other push hooks, so they live in one library rather than a
 # copy per hook. Deliberately NOT shared: what an empty range means. This gate
 # treats it as blindness and says so (see step 3); an advisory hook cannot.
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK_DIR="$TG_DIR"
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || fail_open "shared push-scope library missing"
 # is_test / is_source: the file classifier, shared with simplify-before-push.sh so the two gates

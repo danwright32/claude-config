@@ -117,8 +117,13 @@ esac
 mt_runs_merge "$command" || exit 0
 
 if ps_has_override "$command" SKIP_PR_REVIEW; then
-  echo "pr-review-gate: SKIP_PR_REVIEW=1 was set, so this merge was NOT held for the lessons review. Tell Dan why it was skipped; never skip it silently."
-  exit 0
+  # To Dan as a systemMessage and to the session as context: a PreToolUse hook's plain stdout on exit
+  # 0 goes to the debug log (hooks documentation), so the line printed plain reached neither (#1906).
+  # shellcheck source=lib/hook-notice.sh
+  . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+    printf '%s\n' "$1" >&2
+    printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+  hook_allow_notice "pr-review-gate: SKIP_PR_REVIEW=1 was set, so this merge was NOT held for the lessons review. Tell Dan why it was skipped; never skip it silently." PreToolUse
 fi
 
 # ONE pull request per command (claude-config#1062): the head, the review and the read key below are

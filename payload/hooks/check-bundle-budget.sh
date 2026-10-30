@@ -97,6 +97,17 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   exit 2
 }
 
+# What it says on a push it lets through, a skip or a verdict, goes out as ONE systemMessage
+# (lib/hook-notice.sh, #1906). It used to be plain stdout, which the hooks documentation says a
+# PreToolUse hook's exit 0 sends to the debug log, never the transcript, so nobody read any of it.
+# BB_NOTE holds a line said on the way, put in front of whatever is said last.
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+BB_NOTE=""
+say_and_allow(){ hook_allow_notice "${BB_NOTE:+$BB_NOTE }$1"; }
+
 payload="$(cat)"
 
 # THE MEASURER'S OWN READER, asked before anything is measured (claude-config#486, L490).
@@ -173,26 +184,10 @@ if [ -n "$own_record" ]; then
 $(git grep -l -F -e "$(basename "$own_record")" -- . ":(exclude)$own_record" 2>/dev/null)
 READERS
   if [ -n "$own_reader" ]; then
-    echo "bundle-budget: this repository commits its own bundle budget record ($own_record), read by $own_reader, so this global guard stands down here."
-    exit 0
+    say_and_allow "bundle-budget: this repository commits its own bundle budget record ($own_record), read by $own_reader, so this global guard stands down here."
   fi
-  echo "bundle-budget: this repository commits $own_record, but nothing in this repository reads it, so it judges nothing and this guard weighs the bundle as usual."
+  BB_NOTE="bundle-budget: this repository commits $own_record, but nothing in this repository reads it, so it judges nothing and this guard weighs the bundle as usual."
 fi
-
-# The record is keyed by the remote, never by the path: a worktree and its checkout are one
-# repository with one bundle, and a repository that moves keeps its budget.
-remote="$(git remote get-url origin 2>/dev/null)"
-if [ -z "$remote" ]; then
-  echo "bundle-budget: this repository has no origin remote to key a budget on, so the bundle weight was not judged.$(BUNDLE_BUDGET_STATE_DIR="${BUNDLE_BUDGET_STATE_DIR:-}" state_dir="${BUNDLE_BUDGET_STATE_DIR:-$HOME/.claude/state/bundle-budget}"; lifetime_note)"
-  exit 0
-fi
-
-head_time="$(git log -1 --format=%ct 2>/dev/null)"
-case "$head_time" in
-  ''|*[!0-9]*)
-    echo "bundle-budget: could not read HEAD's commit time, so whether the build is fresh is unknown and the bundle was not judged."
-    exit 0 ;;
-esac
 
 state_dir="${BUNDLE_BUDGET_STATE_DIR:-$HOME/.claude/state/bundle-budget}"
 
@@ -215,22 +210,37 @@ lifetime_note(){
   esac
 }
 
+# Defined above here because the line below calls it: called before its definition, the count was
+# silently dropped from this notice, since bash runs a script line by line (#1906).
+# The record is keyed by the remote, never by the path: a worktree and its checkout are one
+# repository with one bundle, and a repository that moves keeps its budget.
+remote="$(git remote get-url origin 2>/dev/null)"
+if [ -z "$remote" ]; then
+  say_and_allow "bundle-budget: this repository has no origin remote to key a budget on, so the bundle weight was not judged.$(lifetime_note)"
+fi
+
+head_time="$(git log -1 --format=%ct 2>/dev/null)"
+case "$head_time" in
+  ''|*[!0-9]*)
+    say_and_allow "bundle-budget: could not read HEAD's commit time, so whether the build is fresh is unknown and the bundle was not judged." ;;
+esac
+
 out="$(python3 "$HOOK_DIR/lib/bundle-budget.py" --repo "$repo_dir" --head-time "$head_time" \
   --remote "$remote" --state-dir "$state_dir" $accept 2>&1)"; rc=$?
 
 case "$rc" in
   0)
     # A verdict was reached: a pass, a first record, an accepted or a recorded smaller total. One
-    # line, on stdout, where a reader looking at the transcript finds it, and the push goes ahead.
-    [ -n "$out" ] && printf '%s\n' "$out"
+    # line, as a systemMessage, and the push goes ahead.
+    [ -n "$out$BB_NOTE" ] && say_and_allow "$out"
     exit 0 ;;
   4)
     # Nothing was weighed: no build output, a stale one, or a record that could not be read. The
     # push goes ahead, and the line carries how many repositories have ever been weighed.
-    printf '%s%s\n' "${out:-bundle-budget: the bundle was not weighed.}" "$(lifetime_note)"
-    exit 0 ;;
+    say_and_allow "${out:-bundle-budget: the bundle was not weighed.}$(lifetime_note)" ;;
   2)
     {
+      [ -n "$BB_NOTE" ] && printf '%s\n' "$BB_NOTE"
       printf '%s\n' "$out"
       echo ""
       echo "Find what joined the client bundle (a dependency imported from a client component or"
@@ -245,6 +255,5 @@ case "$rc" in
     } >&2
     exit 2 ;;
   *)
-    echo "bundle-budget: the measurer could not run (exit $rc), so the bundle was not judged. It said: ${out:-nothing}$(lifetime_note)"
-    exit 0 ;;
+    say_and_allow "bundle-budget: the measurer could not run (exit $rc), so the bundle was not judged. It said: ${out:-nothing}$(lifetime_note)" ;;
 esac

@@ -72,6 +72,10 @@ refused() { if [ "$RC" -eq 2 ]; then check "$1" ok; else check "$1" "exit $RC, s
 allowed() { if [ "$RC" -eq 0 ] && [ -z "$(printf '%s%s' "$OUT" "$ERR" | tr -d '[:space:]')" ]; then check "$1" ok
             else check "$1" "exit $RC, stdout: ${OUT:0:200}, stderr: ${ERR:0:200}"; fi; }
 says() { case "$ERR" in *"$2"*) check "$1" ok ;; *) check "$1" "stderr did not say '$2': ${ERR:0:300}" ;; esac; }
+# notices <label> <ERE>: a call let through says why in the systemMessage on stdout, the one place
+# Claude Code shows a PreToolUse hook that exits 0; its stderr is discarded (claude-config#1906).
+. "$DIR/lib/hook-notice.sh"
+notices() { local why; why="$(hook_notice_verdict "$OUT" "$2")"; if [ -z "$why" ]; then check "$1" ok; else check "$1" "$why"; fi; }
 
 echo "playwright subagent gate: the main session keeps the browser"
 
@@ -141,6 +145,16 @@ says "and says so too" "PLAYWRIGHT SUBAGENT GATE DID NOT RUN"
 run_raw '["a", "list"]'
 if [ "$RC" -eq 0 ]; then check "valid JSON that is not an object is the same" ok; else check "valid JSON that is not an object is the same" "exit $RC"; fi
 says "and says so" "PLAYWRIGHT SUBAGENT GATE DID NOT RUN"
+notices "#1906 where the person sees it" "PLAYWRIGHT SUBAGENT GATE DID NOT RUN"
+# The other way it can fail: its reader not running at all. python3 is taken off the PATH, so the
+# capture holds the shell's own complaint instead of a verdict.
+NOPY="$(mktemp -d "${TMPDIR:-/tmp}/pw-gate-nopy.XXXXXXXX")"
+ln -s "$(command -v cat)" "$NOPY/cat"
+errf="$(mktemp "${TMPDIR:-/tmp}/pw-gate-err.XXXXXXXX")"
+OUT="$(payload mcp__playwright__browser_click a1 general-purpose | PATH="$NOPY" "$BASH" "$HOOK" 2>"$errf")"; RC=$?
+ERR="$(cat "$errf")"; rm -rf "$errf" "$NOPY"
+if [ "$RC" -eq 0 ]; then check "#1906 a reader that cannot start lets the call through" ok; else check "#1906 a reader that cannot start lets the call through" "exit $RC"; fi
+notices "#1906 and says the gate did not run where the person sees it" "PLAYWRIGHT SUBAGENT GATE DID NOT RUN"
 
 echo "playwright subagent gate: it is wired"
 

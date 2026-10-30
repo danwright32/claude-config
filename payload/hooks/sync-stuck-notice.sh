@@ -48,8 +48,9 @@
 # FAILS LOUD, NOT NOISY. A record that is there and cannot be read, a stretch whose start cannot be
 # read, and a clone that cannot be asked are each said once, in their own words, because each is a
 # sync nobody can vouch for and none of them is a healthy one (L98). A payload with no session is
-# the one case said only on stderr, which the person does not see: without a session a first prompt
-# cannot be told from a later one, and guessing would mean speaking on every prompt.
+# said as a systemMessage on every prompt it arrives on (#1906), since without a session a first
+# prompt cannot be told from a later one; it used to be said only on stderr, which the person never
+# saw, and a platform that stops sending the session is worth hearing about each time.
 #
 # Env:
 #   SYNC_STUCK_NOTICE_AFTER      seconds a stretch must have lasted before it is said (default 3600)
@@ -61,6 +62,16 @@
 #   CLAUDE_SYNC_STUCK_NOW        the clock, as an epoch, so a test can cross the threshold without
 #                                waiting for it (L290)
 set -uo pipefail
+
+# A check that could not run is said as a systemMessage (#1906). The hooks documentation says
+# Claude Code discards a hook's stderr on exit 0, and that a UserPromptSubmit hook's plain stdout
+# reaches only Claude, as context; its systemMessage is not among those it says are discarded.
+# Cut in bash, since this runs on every prompt; a bare name (run from its own folder) is ".".
+case "${BASH_SOURCE[0]}" in */*) SSN_DIR="${BASH_SOURCE[0]%/*}" ;; *) SSN_DIR=. ;; esac
+# shellcheck source=lib/hook-notice.sh
+. "$SSN_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
 input="$(cat 2>/dev/null || true)"
 
@@ -75,8 +86,7 @@ if payload_match "$input" "$re_sid"; then session="${BASH_REMATCH[1]}"
 elif payload_match "$input" "$re_tp"; then session="${BASH_REMATCH[1]}"
 fi
 if [ -z "$session" ]; then
-  echo "sync-stuck-notice: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and the sync was not checked." >&2
-  exit 0
+  hook_allow_notice "sync-stuck-notice: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and the sync was not checked."
 fi
 key="${session//[^A-Za-z0-9_-]/_}"
 [ "${#key}" -le 120 ] || key="${key: -120}"
@@ -89,10 +99,14 @@ key="${session//[^A-Za-z0-9_-]/_}"
 # desktop notification (SYNC_CI_RED_ALERT_AFTER), so the session hears it when the desktop does.
 # Being wrong costs an hour of edits on one Mac in one direction, and one notice about a stretch that
 # was about to clear in the other.
+# A threshold nobody can read is told to the person as a systemMessage at the end, beside whatever
+# else this prompt says, and on stderr for the debug log (#1906); on stderr alone Claude Code
+# discarded it.
 after="${SYNC_STUCK_NOTICE_AFTER:-3600}"
+SSN_NOTE=""
 case "$after" in
   ''|*[!0-9]*)
-    echo "sync-stuck-notice: SYNC_STUCK_NOTICE_AFTER='$after' is not a whole number of seconds, so the default of 3600 is used instead." >&2
+    SSN_NOTE="sync-stuck-notice: SYNC_STUCK_NOTICE_AFTER='$after' is not a whole number of seconds, so the default of 3600 is used instead."
     after=3600 ;;
 esac
 now="${CLAUDE_SYNC_STUCK_NOW:-}"
@@ -133,7 +147,10 @@ ERRF="$STATE.err"
 # What this session has been told: one line per stretch, clone TAB kind TAB start.
 told=""
 [ -f "$STATE" ] && told="$(cat "$STATE" 2>/dev/null || true)"
-[ -n "$clones" ] || [ -n "$told" ] || exit 0
+if [ -z "$clones" ] && [ -z "$told" ]; then
+  [ -n "$SSN_NOTE" ] && hook_allow_notice "$SSN_NOTE"
+  exit 0
+fi
 
 T=$'\t'
 keep=""
@@ -245,5 +262,13 @@ else
   rm -f "$STATE" 2>/dev/null || true
 fi
 
-[ -n "$notices" ] && printf '%s\n' "$notices"
+# The notices reach the session as context, plain or, beside a note for the person, as this
+# event's additionalContext, which the hooks documentation says is injected the same way.
+if [ -n "$SSN_NOTE" ] && [ -n "$notices" ]; then
+  hook_allow_notice "$SSN_NOTE" UserPromptSubmit "$notices"
+elif [ -n "$SSN_NOTE" ]; then
+  hook_allow_notice "$SSN_NOTE"
+elif [ -n "$notices" ]; then
+  printf '%s\n' "$notices"
+fi
 exit 0

@@ -70,10 +70,15 @@ STATE_DIR="${STATE_DIR%/}"
 
 # The runner is python3, and it is what puts the run in a session of its own and holds the lock.
 # Without it the only way left to run the check is inside the prompt, which is the defect this
-# hook was rebuilt to end, so it starts nothing and says why where anybody looking will see it.
+# hook was rebuilt to end, so it starts nothing and says why where anybody looking will see it: a
+# systemMessage (#1906), since the hooks documentation says Claude Code discards a hook's stderr on
+# exit 0 and a UserPromptSubmit hook's plain stdout reaches only Claude.
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "stale-worktree-nudge: python3 is not on PATH, and the background run that removes finished agent worktrees runs under it, so no cleanup was started." >&2
-  exit 0
+  # shellcheck source=lib/hook-notice.sh
+  . "$DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+    printf '%s\n' "$1" >&2
+    printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+  hook_allow_notice "stale-worktree-nudge: python3 is not on PATH, and the background run that removes finished agent worktrees runs under it, so no cleanup was started."
 fi
 [ -f "$RUNNER" ] || exit 0
 

@@ -23,11 +23,15 @@
 # prompted, since nothing healthy was seen in between. Per session, because a session that was never
 # told has not been told.
 #
-# FAILS QUIET. A notice must never stand in the way of a prompt, so every path exits 0, and anything
-# it cannot read (the process table, its limits, its own library, the session, its record) means it
-# says nothing on the prompt. A record it cannot write means it could not stay quiet next time, so it
-# does not speak now either: once too few, never once per prompt (L36). Faults go to stderr, which
-# the person does not see, and `claude-sync status` remains the place that reports in full.
+# FAILS OPEN, OUT LOUD. A notice must never stand in the way of a prompt, so every path exits 0, and
+# anything it cannot read (the process table, its limits, its own library, the session, its record)
+# means it says nothing about a pile on the prompt. A record it cannot write means it could not stay
+# quiet next time, so it does not speak of the pile now either: once too few, never once per prompt
+# (L36). Each such fault is said as a systemMessage (#1906). It used to go to stderr, which the hooks
+# documentation says Claude Code discards on exit 0, so the person never saw it; a UserPromptSubmit
+# hook's plain stdout reaches only Claude, and its systemMessage is not among those the documentation
+# says are discarded. A fault that lasts is said on every prompt while it lasts, which is the cost of
+# it being seen at all. `claude-sync status` remains the place that reports in full.
 #
 # Env:
 #   SYNC_SUITE_PILE_REARM         seconds of healthy samples that end a stretch (default 600)
@@ -37,6 +41,13 @@
 #                                 costs one repeated notice and nothing else.
 #   CLAUDE_SUITE_PILE_NOW         the clock, as an epoch, so a test can cross the window (L290)
 set -uo pipefail
+
+# Cut in bash, since this runs on every prompt; a bare name (run from its own folder) is ".".
+case "${BASH_SOURCE[0]}" in */*) SPN_DIR="${BASH_SOURCE[0]%/*}" ;; *) SPN_DIR=. ;; esac
+# shellcheck source=lib/hook-notice.sh
+. "$SPN_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
 input="$(cat 2>/dev/null || true)"
 
@@ -51,19 +62,17 @@ if payload_match "$input" "$re_sid"; then session="${BASH_REMATCH[1]}"
 elif payload_match "$input" "$re_tp"; then session="${BASH_REMATCH[1]}"
 fi
 if [ -z "$session" ]; then
-  echo "suite-pile-notice: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and nothing was checked." >&2
-  exit 0
+  hook_allow_notice "suite-pile-notice: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and nothing was checked."
 fi
 key="${session//[^A-Za-z0-9_-]/_}"
 [ "${#key}" -le 120 ] || key="${key: -120}"
 
 LIB="$(dirname "${BASH_SOURCE[0]}")/lib/suite-pile.sh"
 if [ ! -f "$LIB" ]; then
-  echo "suite-pile-notice: $LIB is missing, so whether this repo's suites have piled up was not checked." >&2
-  exit 0
+  hook_allow_notice "suite-pile-notice: $LIB is missing, so whether this repo's suites have piled up was not checked."
 fi
 # shellcheck source=lib/suite-pile.sh
-. "$LIB" 2>/dev/null || { echo "suite-pile-notice: $LIB could not be read, so nothing was checked." >&2; exit 0; }
+. "$LIB" 2>/dev/null || hook_allow_notice "suite-pile-notice: $LIB could not be read, so nothing was checked."
 
 # TEN MINUTES, and a chosen number rather than a measurement. It has to be long enough that suites
 # starting and finishing around the breadth limit read as one stretch, and short enough that a pile
@@ -72,15 +81,14 @@ fi
 SYNC_SUITE_PILE_REARM="${SYNC_SUITE_PILE_REARM:-600}"
 case "$SYNC_SUITE_MAX_AGE$SYNC_SUITE_MAX_ROOTS$SYNC_SUITE_PILE_REARM" in
   ''|*[!0-9]*)
-    echo "suite-pile-notice: SYNC_SUITE_MAX_AGE='$SYNC_SUITE_MAX_AGE', SYNC_SUITE_MAX_ROOTS='$SYNC_SUITE_MAX_ROOTS' and SYNC_SUITE_PILE_REARM='$SYNC_SUITE_PILE_REARM' must all be whole numbers, so nothing was checked." >&2
-    exit 0 ;;
+    hook_allow_notice "suite-pile-notice: SYNC_SUITE_MAX_AGE='$SYNC_SUITE_MAX_AGE', SYNC_SUITE_MAX_ROOTS='$SYNC_SUITE_MAX_ROOTS' and SYNC_SUITE_PILE_REARM='$SYNC_SUITE_PILE_REARM' must all be whole numbers, so nothing was checked." ;;
 esac
 now="${CLAUDE_SUITE_PILE_NOW:-}"
 case "$now" in ''|*[!0-9]*) now="$(date +%s)" ;; esac
 
-table="$(suite_pile_table)" || { echo "suite-pile-notice: the process table could not be read, so nothing was checked." >&2; exit 0; }
+table="$(suite_pile_table)" || hook_allow_notice "suite-pile-notice: the process table could not be read, so nothing was checked."
 pile="$(printf '%s\n' "$table" | suite_pile_scan "$SYNC_SUITE_MAX_AGE" "$SYNC_SUITE_MAX_ROOTS")" \
-  || { echo "suite-pile-notice: judging the process table failed, so nothing was checked." >&2; exit 0; }
+  || hook_allow_notice "suite-pile-notice: judging the process table failed, so nothing was checked."
 
 STATE_DIR="${CLAUDE_SUITE_PILE_STATE_DIR:-${TMPDIR:-/tmp}}"
 STATE="$STATE_DIR/claude-suite-pile-${key}.state"
@@ -108,8 +116,7 @@ speak=1
 # Recorded BEFORE speaking, and a record that will not write means silence: the safe direction is
 # saying it once too few, not once per prompt for the rest of the session.
 if ! { mkdir -p "$STATE_DIR" && printf 'told %s -\n' "$now" > "$STATE"; } 2>/dev/null; then
-  echo "suite-pile-notice: could not write $STATE, so a pile was not said rather than said on every prompt." >&2
-  exit 0
+  hook_allow_notice "suite-pile-notice: could not write $STATE, so a pile was not said rather than said on every prompt."
 fi
 [ "$speak" -eq 1 ] || exit 0
 

@@ -12,60 +12,70 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/push-scope-notice.sh",
-            "timeout": 15
+            "timeout": 15,
+            "onFailure": "block"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-tests-before-push.sh",
             "timeout": 120,
+            "onFailure": "block",
             "statusMessage": "Checking pushed changes include tests"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/simplify-before-push.sh",
             "timeout": 120,
+            "onFailure": "block",
             "statusMessage": "Checking pushed source for code that should be simplified"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-style-guide.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "Checking pushed changes for style-guide violations"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-grep-quiet-invert.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "Checking pushed changes for style-guide violations"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-duplication.sh",
             "timeout": 60,
+            "onFailure": "block",
             "statusMessage": "Checking pushed changes for new duplicated code"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-public-assets.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "Checking pushed assets are referenced and images are within the size cap"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-deferrals.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "Checking pushed changes for a deferral with no issue number"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-doc-issue-refs.sh",
             "timeout": 60,
+            "onFailure": "block",
             "statusMessage": "Checking the pushed docs' issue references against GitHub"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-bundle-budget.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "Weighing the client bundle against its recorded budget"
           },
           {
@@ -76,60 +86,70 @@
           },
           {
             "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/check-closing-keyword.sh"
+            "command": "__CLAUDE_HOME__/hooks/check-closing-keyword.sh",
+            "onFailure": "block"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/block-red-merge.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "Verifying the PR is green before merging"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/design-score-gate.sh",
             "timeout": 60,
+            "onFailure": "block",
             "statusMessage": "Checking the build matches its settled design before closing"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/pr-review-gate.sh",
             "timeout": 60,
+            "onFailure": "block",
             "statusMessage": "Checking the lessons review of the branch before merging"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/pr-review-push-gate.sh",
             "timeout": 150,
+            "onFailure": "block",
             "statusMessage": "Waiting for the lessons review of the branch before pushing"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-changelog-tag.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "Checking the PR carries a changelog record"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-closing-merge.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "Checking the PR body closes no issue it says stays open"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-verification-run.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "Checking each touched area has a passing verification run"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-issue-fields.sh",
             "timeout": 15,
+            "onFailure": "block",
             "statusMessage": "Checking the issue has a milestone, priority and category"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/linux-sections-before-push.sh",
             "timeout": 300,
+            "onFailure": "block",
             "statusMessage": "Running the changed test sections on Linux"
           },
           {
@@ -141,41 +161,49 @@
           },
           {
             "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh"
+            "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh",
+            "onFailure": "block"
           },
           {
             "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/check-add-scope.sh"
+            "command": "__CLAUDE_HOME__/hooks/check-add-scope.sh",
+            "onFailure": "block"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/no-verify-gate.sh",
-            "timeout": 15
+            "timeout": 15,
+            "onFailure": "block"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/amend-force-push-gate.sh",
-            "timeout": 15
+            "timeout": 15,
+            "onFailure": "block"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-gh-watch-interval.sh",
-            "timeout": 10
+            "timeout": 10,
+            "onFailure": "block"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-rtk-init.sh",
-            "timeout": 10
+            "timeout": 10,
+            "onFailure": "block"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-wrapped-commands.sh",
-            "timeout": 10
+            "timeout": 10,
+            "onFailure": "block"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/stacked-branch-delete-gate.sh",
-            "timeout": 30
+            "timeout": 30,
+            "onFailure": "block"
           }
         ]
       },
@@ -184,7 +212,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh"
+            "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh",
+            "onFailure": "block"
           }
         ]
       },
@@ -194,7 +223,8 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/scratchpad-subagent-gate.sh",
-            "timeout": 10
+            "timeout": 10,
+            "onFailure": "block"
           }
         ]
       },
@@ -204,7 +234,8 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/monitor-action-gate.sh",
-            "timeout": 30
+            "timeout": 30,
+            "onFailure": "block"
           }
         ]
       },
@@ -214,7 +245,8 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/handback-claims-gate.sh",
-            "timeout": 30
+            "timeout": 90,
+            "onFailure": "block"
           }
         ]
       },
@@ -224,7 +256,8 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/playwright-subagent-gate.sh",
-            "timeout": 10
+            "timeout": 10,
+            "onFailure": "block"
           }
         ]
       },
@@ -235,6 +268,7 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/no-session-link-in-comments.sh",
             "timeout": 15,
+            "onFailure": "block",
             "statusMessage": "Checking the comment carries no Claude session link"
           }
         ]

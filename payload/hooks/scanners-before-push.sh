@@ -82,6 +82,13 @@ cwd="${parsed#*$'\x1f'}"
 ps_is_git_push "$cmd" || exit 0
 ps_has_override "$cmd" SKIP_SCANNERS_CHECK && exit 0
 
+# A push it lets through unscanned says so in a systemMessage, since Claude Code discards a
+# PreToolUse hook's stderr on exit 0 (#1906).
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
 # A gate that runs suites cannot run the suite that drives the gate, or it re-enters itself for
 # ever: a script that finds its subjects by a marker matches itself, because it has to name the
 # marker (L245). Measured 2026-09-21: this fanned out to dozens of processes and took the machine
@@ -91,8 +98,7 @@ ps_has_override "$cmd" SKIP_SCANNERS_CHECK && exit 0
 # name the marker will not be that file. Anything started underneath this gate finds it set and
 # refuses, whatever it is.
 if [ -n "${SCANNERS_GATE_RUNNING:-}" ]; then
-  echo "scanners-before-push: already running inside this gate, so this nested push is not gated again." >&2
-  exit 0
+  hook_allow_notice "scanners-before-push: already running inside this gate, so this nested push is not gated again."
 fi
 export SCANNERS_GATE_RUNNING=1
 
@@ -150,8 +156,7 @@ EOF
 
 scanners="${scanners%$'\n'}"
 if [ -z "$scanners" ]; then
-  echo "scanners-before-push: found no scanner in this repository, which has the marker, so nothing was scanned before this push. That is not a clean run, it is an unmeasured one." >&2
-  exit 0
+  hook_allow_notice "scanners-before-push: found no scanner in this repository, which has the marker, so nothing was scanned before this push. That is not a clean run, it is an unmeasured one."
 fi
 
 # The sections of a suite that scan: those holding a listing asked for by GLOBBED pathspec. The
@@ -1091,21 +1096,23 @@ if [ -z "$failed" ] && [ -n "$unfinished" ]; then
 fi
 
 if [ -z "$failed" ]; then
-  # What it covered, once, so the coverage of this gate is visible rather than assumed (L400).
+  # What it covered, once, so the coverage of this gate is visible rather than assumed (L400). As a
+  # systemMessage, since on stderr alone Claude Code threw it away on this exit 0 (#1906).
+  _sc_bg=""
   if [ "$_sc_bg_done" -gt 0 ]; then
-    printf 'scanners-before-push: %s of the scans below finished in the background, on exactly this tree and these uncommitted files, after an earlier push was refused while they ran.\n' "$_sc_bg_done" >&2
+    _sc_bg="$(printf 'scanners-before-push: %s of the scans below finished in the background, on exactly this tree and these uncommitted files, after an earlier push was refused while they ran.' "$_sc_bg_done")"$'\n'
   fi
   if [ "$ran" -eq 0 ] && [ "$_sc_skipped" -gt 0 ]; then
     # Every scanner was skipped, so nothing was scanned at this moment. Said in those words: a line
     # reading "0 scans passed" is what a run that scanned nothing and a clean tree have in common
     # (L98).
-    printf 'scanners-before-push: nothing was scanned for this push. All %s whole tree scan(s) had already passed on exactly this tree and these uncommitted files%s.\n' "$_sc_skipped" "$_sc_floor_note" >&2
+    _sc_covered="$(printf 'scanners-before-push: nothing was scanned for this push. All %s whole tree scan(s) had already passed on exactly this tree and these uncommitted files%s.' "$_sc_skipped" "$_sc_floor_note")"
   elif [ "$_sc_skipped" -gt 0 ]; then
-    printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones%s. %s more were skipped, having already passed on exactly this tree and these uncommitted files.\n' "$ran" "${uncommitted_n:-0}" "$_sc_floor_note" "$_sc_skipped" >&2
+    _sc_covered="$(printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones%s. %s more were skipped, having already passed on exactly this tree and these uncommitted files.' "$ran" "${uncommitted_n:-0}" "$_sc_floor_note" "$_sc_skipped")"
   else
-    printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones%s.\n' "$ran" "${uncommitted_n:-0}" "$_sc_floor_note" >&2
+    _sc_covered="$(printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones%s.' "$ran" "${uncommitted_n:-0}" "$_sc_floor_note")"
   fi
-  exit 0
+  hook_allow_notice "${_sc_bg}${_sc_covered}"
 fi
 
 {

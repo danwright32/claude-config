@@ -1835,6 +1835,32 @@ it. The refusal says so, says that a retry cannot help a scanner slower than the
 listing works, and gives the command that shows why it fails. The same is said, in its own words,
 when the lock library or the folder for runs is missing.
 
+Every other PreToolUse gate that can refuse a call carries `onFailure: "block"` too (#1899), so a
+gate killed at its timeout, or one that crashes or cannot start, refuses the call instead of
+letting it through in silence. Claude Code counts any exit other than 0 or 2 as a failure, so the
+field is left off the hooks that never refuse (`rtk-rewrite.sh`, `lessons-advisory.sh`), where it
+would turn slow advice into blocked work, and `hooks/test-gate-onfailure.sh` holds the list saying
+which hook is which and fails on a PreToolUse hook in neither. The four gates that used to say
+"could not judge, allowed" with exit 1 (`require-tests-before-push.sh`, `simplify-before-push.sh`,
+`check-public-assets.sh`, `check-gh-watch-interval.sh`) now say it with exit 0 and a systemMessage
+(#1906, #1912), so they carry the field like the rest.
+
+The same suite runs every gate given the field on an ordinary call of each tool it is registered
+for and fails if one exits anything but 0, since such a gate would now block every call.
+`handback-claims-gate.sh` went from a 30 to a 90 second timeout with it: it read a 309 MB agent
+transcript in 2.4 seconds at a load average of 7 on 2026-10-29, which leaves too little room at the
+load averages of 145 measured the day before, now that running out of time refuses the hand back.
+
+`linux-sections-before-push.sh` had no bound of its own on its Linux run, so with the field one
+slow section would have refused every push of that change. It now stops the run at a budget of 240
+seconds, inside the 300 its registration declares (`LINUX_SECTIONS_BUDGET_SECONDS` sets another),
+stops the container by the name it gave `tests/run-on-linux.sh` (killing the docker client leaves
+the container running), and lets the push through saying UNMEASURED, which is what its design says
+a run it could not finish is. That notice, and the one for a run docker could not start, also go
+out as a `systemMessage`, since Claude Code discards a PreToolUse hook's stderr on exit 0. How
+long a Linux run takes is not measured on this Mac, whose docker daemon was not running on
+2026-10-29, so 240 is a setting.
+
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
 
@@ -2413,7 +2439,7 @@ is told its share, and the product is printed at the top of every run.
 | `HOOK_TESTS_TIMINGS` | `~/.cache/claude-config/suite-timings` | Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a duration measured on this machine is not configuration, and mirroring it would make the other Mac order its runs by numbers from hardware it does not have. |
 | `HOOK_TESTS_FLAKY_OUTPUT` | `~/.cache/claude-config/flaky-suite-output` | Where the first, failing run of a suite marked FLAKY is kept, its whole output in one file named by the time and the suite, and the FAIL line names that file. That output used to live only in the run's work folder, which is removed at the end, so a flake left nothing to diagnose from but the few lines printed (#1788, L297). Only a FLAKY suite writes here: a passing run writes nothing. Pruned after each write to the newest 20 copies, by the time in their names, and nothing else in the folder is touched (`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`). Set it to empty to keep nothing, and the FAIL line says so. |
 | `HOOK_TESTS_LOCK_WAIT` | `1200` locally, always `0` under CI | How many seconds a suite may wait for a lock another run holds, handed to every suite as `SUITE_LOCK_WAIT` whatever was inherited. Twenty minutes is about three runs of the sync suite on this Mac, so a run queued behind two or three overlapping ones still reports it rather than NOT RUN (#1297). A flake recheck is asked to wait for nothing, since its deadline is set by what the suite measured; one refused its lock that way never ran, so its FAIL line says `recheck could not run: the suite lock is held by` whoever holds it, never FLAKY and never a bare FAIL that reads as the failure seen twice, and the suite stays failed (#1312). A value that is not a whole number is refused. |
-| `HOOK_TESTS_DEADLINE` | none locally; under GitHub Actions the running job's own `timeout-minutes` | The epoch second by which the run must have printed its report. No flake recheck runs past it less `HOOK_TESTS_DEADLINE_RESERVE` (default `120`, in seconds, set on 2026-10-29 from the job setup times measured beside it in the runner): one with no time left is not started and its FAIL line says `not rechecked`, and one cut short says `recheck stopped after`, naming the limit, never `recheck timed out`, which is a recheck that ran out its own allowance (#1901). That allowance, `HOOK_TESTS_FLAKE_RECHECK_MAX`, is whole seconds on the same clock, and the FAIL line names the seconds it really waited; it was a count of polls printed as seconds until #1901. Under GitHub Actions it is read from the workflow file and job the platform names (`GITHUB_WORKFLOW_REF`, `GITHUB_JOB`) through `hooks/lib/workflow-job-timeout.sh`, counted from `HOOK_TESTS_JOB_STARTED`, which the workflow's first step records, and the run says the limit it read or why it could not. Separately, a suite stopped at its own wall clock is named on a `run-all-tests: STOPPED` line the moment it is stopped, before the report and any recheck, so a job cancelled later still names it. A value that is not a whole number is refused. |
+| `HOOK_TESTS_DEADLINE` | none locally; under GitHub Actions the running job's own `timeout-minutes` | The epoch second by which the run must have printed its report. No flake recheck runs past it less `HOOK_TESTS_DEADLINE_RESERVE` (default `120`, in seconds, set on 2026-10-29 from the job setup times measured beside it in the runner): one with no time left is not started and its FAIL line says `not rechecked`, and one cut short says `recheck stopped after`, naming the limit, never `recheck timed out`, which is a recheck that ran out its own allowance (#1901). That allowance, `HOOK_TESTS_FLAKE_RECHECK_MAX`, is whole seconds on the same clock, and the FAIL line names the seconds it really waited; it was a count of polls printed as seconds until #1901. Under GitHub Actions it is read from the workflow file and job the platform names (`GITHUB_WORKFLOW_REF`, `GITHUB_JOB`) through `hooks/lib/workflow-job-timeout.sh`, counted from `HOOK_TESTS_JOB_STARTED`, which the workflow's first step records, and the run says the limit it read or why it could not. Separately, a suite stopped at its own wall clock is named on a `run-all-tests: STOPPED` line the moment it is stopped, before the report and any recheck, so a job cancelled later still names it. A value that is not a whole number is refused. The deadline is read against the real clock, or against `HOOK_TESTS_NOW`, an epoch second set for tests so the time a case leaves before its deadline does not depend on how busy the Mac is (#1937); it is refused the same way. |
 | `HOOK_TESTS_SLOTS` | set BY the runner | Each suite's share of the budget, which is the budget divided by how many suites are running at once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its own processes it may start. Point the runner at one directory holding one suite and that suite is handed the whole budget, so running the long suite on its own is as fast as it ever was. |
 
 What the budget costs, measured on this Mac on 2026-08-21 as one pair of runs back to back: 124 seconds against
