@@ -11134,28 +11134,17 @@ _wf_n="$(printf '%s\n' "$_wf_files" | grep -c . || true)"
 check "#210 there are workflow files to check" "[ \"\${_wf_n:-0}\" -ge 1 ]"
 
 # One reader, used by the real files and by the fixtures below, so the probes exercise THIS rule
-# rather than a second one written beside it (L107). A job is a two-space key under `jobs:`, and
+# rather than a second one written beside it (L107). It is lib/workflow-job-timeout.sh, the reader
+# run-all-tests.sh also uses to hold a flake recheck to the job's own limit (#1901), so the two can
+# never disagree about what a job's timeout is (L370). A job is a two-space key under `jobs:`, and
 # its block runs to the next such key or the end of the file.
-_WF_AWK="$WORK/workflow-timeouts.awk"
-cat > "$_WF_AWK" <<'WFAWK'
-function close_job() {
-  if (job != "") printf "%s\t%s\t%s\n", FILENAME, job, (t == "" ? "NONE" : t)
-  job = ""; t = ""
-}
-/^jobs:[[:space:]]*$/ { injobs = 1; next }
-injobs && /^[^[:space:]#]/ { close_job(); injobs = 0 }
-injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
-  close_job()
-  job = $1; sub(/:$/, "", job)
-  next
-}
-injobs && job != "" && /^    timeout-minutes:[[:space:]]*[0-9]+[[:space:]]*$/ {
-  t = $2
-}
-END { close_job() }
-WFAWK
+_wf_lib="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks/lib/workflow-job-timeout.sh"
+_wf_lib_ok=0
+if [ -f "$_wf_lib" ] && . "$_wf_lib"; then _wf_lib_ok=1; fi
+check "#1901 the shared workflow timeout reader loads from $_wf_lib" "[ $_wf_lib_ok -eq 1 ]"
 _wf_jobs(){   # _wf_jobs <file>... -> "<file>\t<job>\t<minutes or NONE>" per job
-  for _wf_f in "$@"; do awk -f "$_WF_AWK" "$_wf_f"; done
+  [ "$_wf_lib_ok" -eq 1 ] || return 0
+  workflow_job_timeouts "$@"
 }
 
 # The deadline to compare against is the one THAT WORKFLOW will run under, never the one this

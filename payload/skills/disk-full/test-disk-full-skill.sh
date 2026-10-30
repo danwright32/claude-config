@@ -71,8 +71,8 @@ printf '#!/bin/sh\necho "vm.swapusage: total = 0.00M  used = 0.00M  free = 0.00M
 out="$(FREE_SPACE_BYTES="$((240 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$STATE" \
   FREE_SPACE_PATH=/fixture FREE_SPACE_SYMBOL_CACHE="$TMP/no-symbol-cache" FREE_SPACE_SWAP_CMD="$TMP/swap" \
   FREE_SPACE_DISK_BYTES=$((926 * GB)) bash -c "$runnable" 2>&1)"
-check "the rate command, run as written, states the rate it measured" \
-  "$(grep -q 'about 20 GB per hour' <<< "$out" && echo ok || echo "said: $out")"
+check "the rate command, run as written, states the rate it measured (20 GiB an hour, which the one size rule words as 21.5 GB)" \
+  "$(grep -q 'about 21.5 GB per hour' <<< "$out" && echo ok || echo "said: $out")"
 check "and the exit code beside it" \
   "$(grep -qx 'exit 0' <<< "$out" && echo ok || echo "said: $out")"
 
@@ -190,6 +190,10 @@ check "and runs the plan it writes only once Dan has decided" \
   "$(grep -qF 'disk-remove.sh --plan' <<< "$delete_section" && grep -q 'Dan' <<< "$(grep -F -B3 -e '--plan' <<< "$delete_section")" && echo ok || echo "no --plan handed over on Dan's decision")"
 check "and carries no hand typed rm, trash or mv in its commands" \
   "$(awk '/(^|[;&|][[:space:]]*)(sudo )?(rm|trash|mv|\/usr\/bin\/trash) /' <<< "$delete_code" | awk 'END { exit NR > 0 }' && echo ok || echo "found: $(awk '/(^|[;&|][[:space:]]*)(sudo )?(rm|trash|mv) /' <<< "$delete_code")")"
+# Clearing what regenerates, the Trash and forgotten files is /disk-clean's flow, a scan and one
+# review page, so the section points at it rather than proposing them path by path (#1808).
+check "and points to /disk-clean for clearing" \
+  "$(grep -qE '(^|[ `(])/disk-clean([ `.,)]|$)' <<< "$delete_section" && [ -f "$DIR/../disk-clean/SKILL.md" ] && echo ok || echo "the section does not name /disk-clean, or that skill is missing")"
 check "and says moving to the Trash frees nothing until the Trash is emptied" \
   "$(grep -qi 'until the Trash is emptied' <<< "$delete_section" && echo ok || echo "the section does not say so")"
 if . "$HOOKS/lib/disk-clean-harness.sh" && dc_setup; then

@@ -101,9 +101,13 @@ check "dcr_write refuses a note key that is not a plain name" "$(dcr_write "$DC_
 # hooks/lib/disk-clean-units.sh: the one copy of size words and Docker sizes, shared with
 # disk-remove.sh, so the figure a scan offers and the figure a removal reports read alike.
 . "$DIR/../../hooks/lib/disk-clean-units.sh" || check "disk-clean-units.sh is there to source" "could not source it"
-check "dcu_human writes KB under a MB" "$(eq "$(dcu_human 512)" "512 KB")"
-check "dcu_human writes whole MB under a GB" "$(eq "$(dcu_human 2048)" "2 MB")"
-check "dcu_human writes GB to one place" "$(eq "$(dcu_human 1572864)" "1.5 GB")"
+# Decimal units, as Finder and the settled review page (#1807) write them: a KiB count is bytes / 1024.
+check "dcu_human writes decimal KB under a MB" "$(eq "$(dcu_human 512)" "524 KB")"
+check "dcu_human writes whole decimal MB under a GB" "$(eq "$(dcu_human 2048)" "2 MB")"
+check "dcu_human writes decimal GB to one place" "$(eq "$(dcu_human 1572864)" "1.6 GB")"
+check "dcu_human turns a GB at a billion bytes" "$(eq "$(dcu_human 976563)" "1.0 GB")"
+check "dcu_human writes an empty size as 0 KB" "$(eq "$(dcu_human 0)" "0 KB")"
+check "dcu_human never writes 0 KB for a few bytes" "$(eq "$(dcu_human 1)" "1 KB")"
 check "dcu_human never writes 0 for an unread size" "$(eq "$(dcu_human "")" "size unknown")"
 check "dcu_docker_kib reads Docker's decimal GB" "$(eq "$(dcu_docker_kib 1.5GB)" 1464843)"
 check "dcu_docker_kib reads kB" "$(eq "$(dcu_docker_kib 2048kB)" 2000)"
@@ -264,7 +268,7 @@ fresh
 mkdir -p "$H/Library/Caches/com.a" "$H/Library/Caches/com.part"
 dc_stub du "$du_mixed"
 run_scan --only caches
-check "a partial size makes the total at least" "$(has "$OUT_TEXT" "App caches: 2 offerable (at least 24 KB), 0 not offerable, 0 unmeasured.")"
+check "a partial size makes the total at least" "$(has "$OUT_TEXT" "App caches: 2 offerable (at least 25 KB), 0 not offerable, 0 unmeasured.")"
 fresh
 mkdir -p "$H/Library/Caches/com.unread"
 dc_stub du "$du_mixed"
@@ -295,7 +299,7 @@ check "none is unreadable" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$5 == "unrea
 check "du was run in batches, never once per item" "$([ "$(dc_calls du | wc -l | tr -d ' ')" -lt 50 ] && echo ok || echo "$(dc_calls du | wc -l | tr -d ' ') du calls")"
 
 # ================================================================================================
-# 8. The static command check over every disk-clean script, and the placeholder skill
+# 8. The static command check over every disk-clean script
 # ================================================================================================
 cc="$(dc_check_commands 2>&1)"; cc_rc=$?
 check "every command the disk-clean scripts call is stubbed, core or a builtin" "$([ "$cc_rc" -eq 0 ] && echo ok || echo "$(awk '/^fail/ && n++ < 10' <<< "$cc")")"
@@ -308,10 +312,6 @@ for m in caches trash xcode build-folders docker playwright claude-temp worktree
   check "categories/$m.sh is executable" "$([ -x "$DIR/categories/$m.sh" ] && echo ok || echo "not executable or missing")"
 done
 check "no category is named named, which disk-remove reserves" "$([ -e "$DIR/categories/named.sh" ] && echo "categories/named.sh exists" || echo ok)"
-SK="$DIR/SKILL.md"
-fm() { awk -v key="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit } NR > 1 && index($0, key ":") == 1 { v = substr($0, length(key) + 2); sub(/^[ \t]+/, "", v); print v; exit }' "$SK"; }
-check "SKILL.md names the skill" "$(eq "$(fm name)" disk-clean)"
-check "SKILL.md is never invoked on its own while it is being built" "$(eq "$(fm disable-model-invocation)" true)"
-check "SKILL.md's description says not to use it yet" "$(has "$(fm description)" "not ready")"
+# The skill itself, which replaced the placeholder in #1808, is tested by test-disk-clean-skill.sh.
 
 finish

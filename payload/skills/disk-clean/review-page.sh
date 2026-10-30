@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+#
+# review-page.sh: renders the last disk-clean scan into the one review page Dan ticks what goes on
+# (claude-config#1807), drawn to the design he settled on 2026-10-28
+# (docs/design/disk-clean-review-page.html, decisions D1 to D11).
+#
+#   bash ~/.claude/skills/disk-clean/review-page.sh --out <folder> [--clear-clipboard]
+#
+#   --out              the folder to write into, a scratchpad folder the skill gives. It gets the
+#                      page (review-lib.sh's DCRV_PAGE) and, beside it, the nonce the page carries
+#                      (DCRV_NONCE), which review-check.sh reads.
+#   --clear-clipboard  empties the clipboard first, before the page exists, so a selection copied
+#                      from an earlier page is not what gets pasted (#1808 runs it this way).
+#
+# The page is ONE self contained file: review-page.html beside this script with the scan put where
+# its REVIEW marker is. Nothing on it is fetched from anywhere. What it shows, from the record
+# (~/.claude/state/disk-clean/last-scan.json, read through hooks/lib/disk-clean-record.sh):
+#   - each kind of thing as a heading row with what can go from it on the right (D1), and a tick box
+#     before its name that ticks every item of the kind that can be ticked, never a kept one, half
+#     filled when only some are, disabled when none can be (D11). A kind's total
+#     says "At least" when anything in it that can go was only partly measured or not at all, since
+#     then the figure is a lower bound (L11);
+#   - kinds largest first by what can go, with Tools not used in 180 days and Large personal files
+#     always last, in that order, because those are Dan's own and cannot come back (D3). A kind the
+#     scan found nothing in is not drawn, as the design draws it; a kind it could not measure at all
+#     is (Dan, 2026-10-28): its heading greyed, with no tick box and no rows, and the reason the scan
+#     recorded (its status, else its note) where the total goes, after the measured kinds that
+#     regenerate and before Dan's own files;
+#   - within a kind, what can be ticked largest first and unknown sizes last (D4), then what will not
+#     be removed, greyed, each with its reason (D2), in the order the scan found them;
+#   - each row on one line: path (the home folder as ~), then its reason or detail, then its marks
+#     (D5, D7, D8), and its size;
+#   - every tick box unticked, the foot bar reading Nothing selected (D9).
+# The ordering is done by sort over keys, never inside awk, so thousands of items cost one sort.
+#
+# Exit: 0 the page and its nonce are written; 3 they are written but the clipboard could not be
+# cleared (said on stderr, with pbcopy's own words); 2 refused, writing no page: an option it does not
+# know, no --out, a folder it may not write (in test mode, one outside the throwaway directory), no
+# scan record, or one cut short.
+#
+# Commands: awk cat date mkdir mktemp mv rm sort tr, the libraries it sources, and the builtins.
+# bash 3.2 safe.
+set -uo pipefail
+
+HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
+LIBS="$HERE/../../hooks/lib"
+. "$HERE/review-lib.sh" || { echo "disk-clean review: review-lib.sh is missing beside it, so no page was written."; exit 2; }
+. "$LIBS/disk-clean-record.sh" || { echo "disk-clean review: hooks/lib/disk-clean-record.sh is missing, so no page was written."; exit 2; }
+. "$LIBS/disk-clean-units.sh" || { echo "disk-clean review: hooks/lib/disk-clean-units.sh is missing, so no page was written."; exit 2; }
+
+TEMPLATE="$HERE/review-page.html"
+S=$'\037'
+TAB=$'\t'
+refuse() { echo "disk-clean review: $1"; exit 2; }
+
+OUT="" CLEAR=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --out) [ "$#" -ge 2 ] || refuse "--out needs a folder, so no page was written."; OUT="$2"; shift 2 ;;
+    --clear-clipboard) CLEAR=1; shift ;;
+    -h|--help) awk 'NR > 1 && /^set -uo/ { exit } NR > 1 { print }' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) refuse "it does not know '$1' (it takes --out and --clear-clipboard), so no page was written." ;;
+  esac
+done
+[ -n "$OUT" ] || refuse "--out, the folder to write the page into, is missing, so no page was written."
+[ -n "${HOME:-}" ] || refuse "HOME is not set, so there is no scan record to read, and no page was written."
+if [ -n "${DISK_CLEAN_TEST_ROOT:-}" ]; then
+  dc_home_isolated "$HOME" "$DISK_CLEAN_TEST_ROOT" || refuse "test mode, but HOME ('$HOME') is not inside the throwaway directory $DISK_CLEAN_TEST_ROOT, so no page was written."
+fi
+_dcrv_allowed "$OUT/$DCRV_PAGE" || refuse "test mode, and '$OUT' is outside the throwaway directory $DISK_CLEAN_TEST_ROOT, so no page was written."
+[ -f "$TEMPLATE" ] || refuse "the page template $TEMPLATE is missing, so no page was written."
+
+REC="$HOME/.claude/state/disk-clean/last-scan.json"
+[ -f "$REC" ] || refuse "there is no scan record at $REC, so there is no scan to review, and no page was written. Scan first."
+dcr_complete "$REC" || refuse "the scan record $REC stopped partway through being written, so no page was written. Scan again."
+SID="$(dcr_header "$REC" scan_id)" || refuse "the scan record $REC names no scan, so no page was written. Scan again."
+AT="$(dcr_header "$REC" scanned_at)" || AT=""
+CATS="$(dcr_header "$REC" categories 2>/dev/null)" || CATS=""
+
+mkdir -p "$OUT" 2>/dev/null && [ -d "$OUT" ] || refuse "could not make the folder $OUT, so no page was written."
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/disk-clean-review.XXXXXXXX")" || refuse "could not make a working folder under ${TMPDIR:-/tmp}, so no page was written."
+trap 'rm -rf "$WORK"' EXIT
+
+# ---------- the clipboard, before the page exists ----------
+CLIP_FAILED=""
+if [ -n "$CLEAR" ]; then dcrv_clear_clipboard || CLIP_FAILED=1; fi
+
+# ---------- when the scan was taken, in words ----------
+# date -r <seconds> is macOS's; date -d @<seconds> is the Linux CI runner's.
+day_of() { date -r "$1" "+$2" 2>/dev/null || date -d "@$1" "+$2" 2>/dev/null; }
+scanned_words() {
+  local at="$1" now day today yday clock
+  case "$at" in ''|*[!0-9]*) printf 'at a time the record does not say'; return ;; esac
+  now="$(date +%s)" || now=""
+  day="$(day_of "$at" %Y%m%d)"; today="$(day_of "${now:-0}" %Y%m%d)"; yday="$(day_of "$(( ${now:-86400} - 86400 ))" %Y%m%d)"
+  clock="$(day_of "$at" '%I:%M %p' | awk '{ sub(/^0/, ""); print tolower($0) }')"
+  if [ -n "$day" ] && [ "$day" = "$today" ]; then printf 'today at %s' "$clock"
+  elif [ -n "$day" ] && [ "$day" = "$yday" ]; then printf 'yesterday at %s' "$clock"
+  else printf 'on %s at %s' "$(day_of "$at" '%A %d %B' | awk '{ sub(/ 0/, " "); print }')" "$clock"; fi
+}
+SCANNED="$(scanned_words "$AT")"
+
+# ---------- the nonce: written first, so a page still open from before is refused from now on ----------
+NONCE="$(dcrv_write_nonce "$OUT" "$SID")" || refuse "could not write the nonce beside the page in $OUT, so no page was written."
+
+# ---------- the rows, in the order the design settled ----------
+dcr_review_items "$REC" > "$WORK/items"
+# How the scan went for each kind, as it recorded it: kind, status, note (header values never hold a
+# tab or any other control character; disk-clean-record.sh refuses to write one).
+: > "$WORK/status"
+for c in $CATS; do
+  st="$(dcr_header "$REC" "status.$c" 2>/dev/null)" || st=""
+  nt="$(dcr_header "$REC" "note.$c" 2>/dev/null)" || nt=""
+  printf '%s\t%s\t%s\n' "$c" "$st" "$nt" >> "$WORK/status"
+done
+# Pass 1: each kind's total and rank, and one sort key line per item:
+#   rank, 0 for an item that can go or 1 for one that cannot, minus its KiB (unknown sizes after every
+#   known one, kept items in scan order), the item's place in the scan, then the item itself.
+awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v tab="$TAB" "$DCU_AWK_LIB$DCR_AWK_TITLES"'
+  # A kind the scan could not measure, with the reason it recorded: its status without the
+  # "unmeasured: " prefix, else its note, else a plain statement that it was not measured.
+  FILENAME == ARGV[1] {
+    split($0, sf, tab)
+    if (index(sf[2], "unmeasured:") == 1) {
+      why = sf[2]; sub(/^unmeasured:[ ]*/, "", why)
+      if (why == "") why = sf[3]
+      if (why == "") why = "the scan could not measure it"
+      unm[sf[1]] = why
+    }
+    next
+  }
+  {
+    ni++; seq[ni] = $0; c = $2; cat_of[ni] = c
+    if (!(c in known)) { known[c] = 1; firsts[++nfirst] = c }
+    n[c]++
+    if ($5 == "offerable") {
+      can[c]++
+      if ($6 ~ /^[0-9]+$/) kib[c] += int($6 / 1024); else lower[c] = 1
+      if ($8 == "partial") lower[c] = 1
+    }
+  }
+  END {
+    # The kinds, in the scan header order, then any the header does not name. A kind with items is
+    # drawn; so is one the scan could not measure at all, which has none (Dan, 2026-10-28).
+    m = split(cats, co, " "); nk = 0
+    for (j = 1; j <= m; j++) if (((co[j] in n) || (co[j] in unm)) && !(co[j] in placed)) { kinds[++nk] = co[j]; placed[co[j]] = 1 }
+    for (j = 1; j <= nfirst; j++) if (!(firsts[j] in placed)) { kinds[++nk] = firsts[j]; placed[firsts[j]] = 1 }
+    # A kind cut short partway still shows what it found, and its total is then a lower bound.
+    for (c in unm) if (c in n) lower[c] = 1
+    # D3: largest first by what can go (a stable insertion sort over a dozen kinds); then the kinds
+    # the scan could not measure at all, which have no size, in the scan order; your own files last.
+    nr = 0
+    for (j = 1; j <= nk; j++) {
+      c = kinds[j]; if (c == "forgotten-tools" || c == "large-files" || !(c in n)) continue
+      r = ++nr; order[r] = c
+      while (r > 1 && kib[order[r - 1]] + 0 < kib[c] + 0) { order[r] = order[r - 1]; r--; order[r] = c }
+    }
+    for (j = 1; j <= nk; j++) { c = kinds[j]; if (c != "forgotten-tools" && c != "large-files" && !(c in n)) order[++nr] = c }
+    if (("forgotten-tools" in n) || ("forgotten-tools" in unm)) order[++nr] = "forgotten-tools"
+    if (("large-files" in n) || ("large-files" in unm)) order[++nr] = "large-files"
+    for (r = 1; r <= nr; r++) {
+      c = order[r]; rank[c] = r
+      printf "%d%s%s%s%s%s%s%s%d%s%s\n", r, tab, c, tab, dcr_t(c, table), tab, (lower[c] ? "At least " : "") dcu_h(kib[c] + 0), tab, can[c] + 0, tab, ((c in n) ? "" : unm[c]) > catfile
+    }
+    for (i = 1; i <= ni; i++) {
+      split(seq[i], f, FS)
+      kept = (f[5] == "offerable") ? 0 : 1
+      key = kept ? 0 : ((f[6] ~ /^[0-9]+$/) ? -int(f[6] / 1024) : 1)
+      printf "%d%s%d%s%d%s%d%s%s\n", rank[cat_of[i]], tab, kept, tab, key, tab, i, tab, seq[i]
+    }
+  }' "$WORK/status" "$WORK/items" > "$WORK/keyed" || refuse "could not read the scan's items, so no page was written."
+[ -f "$WORK/cats" ] || : > "$WORK/cats"
+sort -t "$TAB" -k1,1n -k2,2n -k3,3n -k4,4n "$WORK/keyed" > "$WORK/sorted" || refuse "could not order the scan's items, so no page was written."
+
+# Pass 2: the markup. Every string from the record is escaped; nothing from it is ever markup.
+awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v scanned="$SCANNED" \
+  -v catfile="$WORK/cats" "$DCU_AWK_LIB$DCRV_AWK_WORDS"'
+  function h(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); gsub(/"/, "\\&quot;", s); gsub(/\047/, "\\&#39;", s); return s }
+  function short(t) {
+    if (home != "" && t == home) return "~"
+    if (home != "" && index(t, home "/") == 1) return "~" substr(t, length(home) + 1)
+    return t
+  }
+  function reason(st) {
+    if (st == "removed") return "removed already"
+    if (st == "trashed") return "moved to the Trash already"
+    if (st == "truncated") return "emptied already"
+    if (st == "gone") return "already gone"
+    if (st == "unreadable") return "this entry of the scan could not be read"
+    sub(/^(not offerable|unmeasured): /, "", st)
+    return st
+  }
+  # Every heading up to and including rank <upto> not yet drawn: a kind with items as its rows
+  # begin, and a kind the scan could not measure, which has no rows, in its place between them.
+  function heads(upto) {
+    while (drawn < upto) {
+      drawn++
+      if (why[drawn] != "") {
+        printf "<div class=\"group-head unmeasured\" data-category=\"%s\"><div class=\"head-left\"><span class=\"head-space\"></span><h2>%s</h2></div><span class=\"group-reason\">%s</span></div>\n", h(name[drawn]), h(title[drawn]), h(why[drawn])
+        unmeasured++
+        continue
+      }
+      # D11: the heading box, in the tick column of the rows, ticking every item of the kind that
+      # can be ticked; disabled when none can.
+      printf "<div class=\"group-head\" data-category=\"%s\"><label class=\"head-left\"><input class=\"tick head-tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"Tick every %s item\" data-category=\"%s\"%s><h2>%s</h2></label><span class=\"group-total\">%s</span></div>\n", h(name[drawn]), h(title[drawn]), h(name[drawn]), (can[drawn] ? "" : " disabled"), h(title[drawn]), h(total[drawn])
+    }
+  }
+  BEGIN {
+    while ((getline line < catfile) > 0) { split(line, c, tab); title[c[1]] = c[3]; total[c[1]] = c[4]; name[c[1]] = c[2]; can[c[1]] = c[5] + 0; why[c[1]] = c[6]; nkinds++ }
+    printf "<header class=\"top\"><h1>Disk clean</h1><p class=\"scanline\">Scanned %s on this Mac. Nothing is removed until you copy your selection back.</p></header>\n", h(scanned)
+    printf "<div class=\"grouped\" id=\"review\" data-scan-id=\"%s\" data-nonce=\"%s\">\n", h(sid), h(nonce)
+    FS = tab
+  }
+  {
+    r = $1; rest = $0
+    for (k = 1; k <= 4; k++) rest = substr(rest, index(rest, tab) + 1)
+    split(rest, f, sep)
+    heads(r + 0)
+    id = f[1]; st = f[5]; b = f[6]; ok = (st == "offerable")
+    p = h(short(f[4]))
+    note = ok ? f[10] : reason(st)
+    sub_ = ""
+    if (note != "") sub_ = "<span class=\"note\">" h(note) "</span>"
+    if (f[9] != "") {
+      nf = split(f[9], fl, ","); marks = ""
+      for (k = 1; k <= nf; k++) if (fl[k] != "") marks = marks "<span class=\"flag" (dcrv_flag_quiet(fl[k]) ? " quiet" : "") "\">" h(dcrv_flags(fl[k])) "</span>"
+      sub_ = sub_ "<span class=\"flags\">" marks "</span>"
+    }
+    if (sub_ != "") sub_ = "<span class=\"sub\">" sub_ "</span>"
+    known = (b ~ /^[0-9]+$/)
+    printf "<div class=\"item%s\" data-id=\"%s\"><input class=\"tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"%s\" data-id=\"%s\" data-category=\"%s\" data-bytes=\"%s\" data-partial=\"%d\"%s><div class=\"what\"><span class=\"path\">%s</span>%s</div><span class=\"size%s\">%s</span></div>\n", \
+      (ok ? "" : " kept"), h(id), p, h(id), h(name[r]), (known ? b : ""), (f[8] == "partial"), (ok ? "" : " disabled"), p, sub_, (known ? "" : " unknown"), h(dcrv_size(b, f[8]))
+    rows++
+  }
+  END {
+    heads(nkinds + 0)
+    if (!rows && unmeasured) print "<p class=\"empty\">Nothing was found to remove in what the scan could measure.</p>"
+    else if (!rows) print "<p class=\"empty\">This scan found nothing to remove.</p>"
+    print "</div>"
+  }' "$WORK/sorted" > "$WORK/body" || refuse "could not write the page's rows, so no page was written."
+
+# ---------- the page: the template with the rows where its marker is, renamed into place ----------
+awk -v body="$WORK/body" '
+  $0 == "<!-- REVIEW -->" { while ((getline line < body) > 0) print line; done = 1; next }
+  { print }
+  END { if (!done) exit 1 }' "$TEMPLATE" > "$WORK/page" || refuse "the page template $TEMPLATE has no REVIEW marker line, so no page was written."
+mv -f "$WORK/page" "$OUT/$DCRV_PAGE" || refuse "could not move the page into place in $OUT."
+
+echo "Review page for scan $SID: $OUT/$DCRV_PAGE"
+if [ -n "$CLIP_FAILED" ]; then
+  echo "The clipboard could not be cleared, so a selection copied earlier may still be on it; the checker refuses one by its nonce."
+  exit 3
+fi
+exit 0
