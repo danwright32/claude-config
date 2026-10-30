@@ -610,6 +610,14 @@ class RenderTests(unittest.TestCase):
         edited = dict(rec, checks=[dict(c, result="pass") for c in rec["checks"]])
         self.assertNotIn(v.record_digest(edited), v.load_rendered(RECEIPT_ID, self.home)[rec["area"]])
 
+    def test_a_lone_surrogate_is_hashed_as_render_writes_it(self):
+        # A note holding a lone \ud800 escape decodes to a lone surrogate. Render writes it as "?"
+        # (stdout's errors="replace"), so the digest is taken over that same text: hashing the
+        # surrogate itself made the stored digest disagree with the record read back (#1944).
+        rec = {"area": "invoices", "checks": [{"text": "t", "result": "pass", "note": "cut \ud800 here"}]}
+        printed = {"area": "invoices", "checks": [{"text": "t", "result": "pass", "note": "cut ? here"}]}
+        self.assertEqual(v.record_digest(rec), v.record_digest(printed))
+
     def test_a_refused_render_remembers_nothing(self):
         stopped_receipt(self.home)
         d = self.draft()

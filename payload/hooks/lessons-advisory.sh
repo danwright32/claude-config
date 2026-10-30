@@ -46,8 +46,10 @@
 # (test-lessons-advisory.sh fails when the table and TRIG_IDS disagree), and says how to measure a
 # trigger change before shipping it: measure-lessons-advisory.sh, beside this hook.
 #
-# Fails QUIET: it is an advisor, so a broken advisor should add nothing rather
-# than nag. The one thing it will not do quietly is lose a lesson: an id that no
+# Fails QUIET on most faults: it is an advisor, so a broken advisor should add nothing rather
+# than nag. Except on a push, where a library it cannot load or a payload it cannot parse is said
+# once, "LESSONS ADVISORY DID NOT RUN" (claude-config#1922), since silence there reads as a push it
+# checked. The one thing it will not do quietly is lose a lesson: an id that no
 # longer resolves, or a lessons file it cannot read, is reported in the advisory
 # itself rather than dropped. Nor will it quietly lose the WHOLE advisory: the
 # emit at the bottom is python3, and with no python3 every lesson this matched
@@ -61,22 +63,43 @@ set -uo pipefail
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
+# Taken raw, before the libraries load, so a library that will not load can still be told apart
+# from a call this never advises on.
+payload="$(cat)"
+
+# A library this hook cannot load, or a payload it cannot parse, is not a push with no advice
+# (claude-config#1922): it used to stop here in silence, which reads exactly like a push it checked.
+# Said once, and only on a call whose raw text names a push, the one call it advises on. It never
+# refuses: it is advice.
+did_not_run() {   # $1 = what went wrong, as a clause
+  case "$payload" in
+    *push*) hook_allow_notice "LESSONS ADVISORY DID NOT RUN: lessons-advisory.sh $1, so this push was not checked against the lessons." ;;
+  esac
+  exit 0
+}
 # shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null \
+  || did_not_run "could not load lib/push-scope.sh (reinstall the hooks with claude-sync pull)"
 # shellcheck source=lib/failure-handling.sh
-. "$HOOK_DIR/lib/failure-handling.sh" 2>/dev/null || exit 0
+. "$HOOK_DIR/lib/failure-handling.sh" 2>/dev/null \
+  || did_not_run "could not load lib/failure-handling.sh (reinstall the hooks with claude-sync pull)"
 # Which files the repository marks generated, from the reader the push review uses (claude-config#1525).
 # Without it every file is scanned, and the advisory says so rather than reading as having checked.
 # shellcheck source=lib/ai-review-common.sh
-. "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null
+. "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null || true
 
 LESSONS_FILE="${LESSONS_FILE:-$HOME/.claude/LESSONS.md}"
 COOLDOWN=90
 
-payload="$(cat)"
-
-
-parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
+# Cleaned before anything parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
+payload="$(ps_clean_payload "$payload")"
+parsed="$(ps_parse_payload "$payload" segmented)" \
+  || did_not_run "could not parse its hook payload as JSON (neither jq nor python3 read it)"
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0

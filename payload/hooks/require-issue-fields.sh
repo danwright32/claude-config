@@ -29,6 +29,25 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
+# The shared reader, which cleans the payload before the gate's python3 parses it: a lone surrogate
+# escape there raised when the command was written back out (claude-config#1944). A payload nothing
+# can parse used to pass in silence (the python3 half returns 0 on one), so it is judged by its raw
+# text, as a missing library is in the other gates (#1922). Without the library this gate runs as it
+# did before, its own python3 reading the payload as it came, and a broken gate still says so below
+# (#1906): the library is an addition to this gate, never a new way for it to stop.
+if . "$HERE/lib/push-scope.sh" 2>/dev/null; then
+  payload="$(ps_clean_payload "$payload")"
+  # One naming none of them goes on to the python3 half, exactly as before.
+  if ! ps_parse_payload "$payload" raw >/dev/null; then
+    case "$payload" in
+      *"issue create"*|*"issue edit"*|*"issue comment"*|*"pr create"*|*"pr edit"*|*"pr comment"*)
+        ps_unparsed_refuse "$payload" require-issue-fields.sh - \
+          "a gh issue create missing its milestone, priority or category, or a gh command posting a body from a file that is not there" \
+          '*issue create*' '*issue edit*' '*issue comment*' '*pr create*' '*pr edit*' '*pr comment*' ;;
+    esac
+  fi
+fi
+
 # A crash here must not block work, but it must not be invisible either: a silent
 # failure would leave the gate switched off with everything looking normal. So the notice goes
 # out as a systemMessage, since Claude Code discards a PreToolUse hook's stderr on exit 0 (#1906).

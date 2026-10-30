@@ -55,7 +55,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def sha(s):
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+    return hashlib.sha256(s.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def extra_hashes():

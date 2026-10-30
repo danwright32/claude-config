@@ -319,6 +319,15 @@ says once a session that it could not check; both used to say nothing (#1900). E
 that refuses does the same for a library it needs, and `hooks/test-gates-fail-closed.sh` runs each
 one with each such library taken away.
 
+Every hook takes its payload through `ps_read_payload` in `hooks/lib/push-scope.sh`, or cleans a raw
+capture with `ps_clean_payload` before anything parses it, because jq rejects a whole payload holding
+one lone surrogate escape such as `\ud800`, and six merge gates once let a merge through on one
+(#1944). Each lone escape becomes `�`. A refusing gate whose payload still cannot be parsed
+refuses through `ps_unparsed_refuse` when the raw text names what it judges, and passes anything
+else (#1922); an advisory hook that cannot load a library says once that it did not run. The same
+suite runs every blocking gate on a judged call holding the escape and on the same call with a
+letter in its place, and requires the same decision.
+
 ### A watcher older than the claude-sync on disk restarts itself (#420, #1569)
 
 The watcher is one long running process, so it runs the copy of `claude-sync` it loaded when it

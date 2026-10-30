@@ -21,7 +21,8 @@
 # need to reference the literal characters, or a false positive). Explain why
 # to the user first, same as the test gate -- never skip silently.
 #
-# Fails OPEN: any parse/git error allows the push.
+# Fails OPEN on a git error, which allows the push. A hook payload it cannot parse is refused when
+# its raw text names a push (claude-config#1922).
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
@@ -36,7 +37,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   exit 2
 }
 
-payload="$(cat)"
+payload="$(ps_read_payload)"
 
 # THE DETECTOR'S OWN READER, asked before anything is measured (claude-config#486, L490).
 #
@@ -66,7 +67,8 @@ if ps_reader_missing python3; then
   exit 0
 fi
 
-parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
+parsed="$(ps_parse_payload "$payload" segmented)" \
+  || ps_unparsed_refuse "$payload" check-style-guide.sh SKIP_STYLE_CHECK "a push" '*push*'
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0

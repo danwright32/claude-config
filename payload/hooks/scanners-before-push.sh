@@ -73,8 +73,9 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   exit 2
 }
 
-payload="$(cat)"
-parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
+payload="$(ps_read_payload)"
+parsed="$(ps_parse_payload "$payload" segmented)" \
+  || ps_unparsed_refuse "$payload" scanners-before-push.sh SKIP_SCANNERS_CHECK "a push" '*push*'
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0

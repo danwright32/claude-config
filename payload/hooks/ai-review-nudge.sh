@@ -95,8 +95,22 @@ set -uo pipefail
 input="$(cat 2>/dev/null || true)"
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+# A library this hook cannot load is said once, on this prompt, as a systemMessage (claude-config
+# #1922): it stopped here in silence, which reads exactly like a prompt with no new review to show.
+did_not_run() {   # $1 = the library
+  hook_allow_notice "LESSONS REVIEW NUDGE DID NOT RUN: ai-review-nudge.sh could not load lib/$1 (reinstall the hooks with claude-sync pull), so any lessons review finished since the last prompt was not shown." UserPromptSubmit
+}
 # shellcheck source=lib/ai-review-common.sh
-. "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null || exit 0
+. "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null || did_not_run ai-review-common.sh
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || did_not_run push-scope.sh
+# Cleaned before anything parses it: a lone surrogate escape, which a prompt can carry, made jq read
+# nothing (claude-config#1944).
+input="$(ps_clean_payload "$input")"
 
 shopt -s nullglob
 

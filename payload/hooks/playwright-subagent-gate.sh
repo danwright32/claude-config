@@ -41,6 +41,11 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
+# Cleaned by the shared reader before python3 parses it: a lone surrogate escape survives the parse
+# and raises when the tool name is written back out (claude-config#1944). Without the library the
+# payload is read as it came, exactly as before, so its absence takes nothing away from this gate.
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
+
 verdict="$(printf '%s' "$payload" | python3 -c '
 import json, re, sys
 sys.stdout.reconfigure(errors="replace")

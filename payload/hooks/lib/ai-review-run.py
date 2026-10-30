@@ -645,7 +645,7 @@ def warm_dir(env=None):
 
 def start_key(model, fixed):
     """One turn per cache: the model and the appended system prompt (the lessons)."""
-    return hashlib.sha256((model + "\0" + fixed).encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256((model + "\0" + fixed).encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 def start_wait_bound(deadline, env=None):

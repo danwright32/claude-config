@@ -593,9 +593,13 @@ check "#1478 control: an rtk gh issue list only echoed keeps the rewrite beside 
 NOLIB="$TMPROOT/nolib"; mkdir -p "$NOLIB"; cp "$H" "$NOLIB/rtk-rewrite.sh"
 printf 'rtk gh api repos/o/r\n' > "$TMPROOT/rewrite"; payload 'gh api repos/o/r'
 out1428nl="$(PATH="$BIN:$PATH" bash "$NOLIB/rtk-rewrite.sh" < "$TMPROOT/payload.json" 2>/dev/null)"
-[ -z "$out1428nl" ] \
+[ -z "$(printf '%s' "$out1428nl" | rewritten_to)" ] \
   && check "#1428 with no shared reader to ask, an rtk gh is not rewritten" ok \
   || check "#1428 with no shared reader to ask, an rtk gh is not rewritten" "it rewrote to: $(printf '%s' "$out1428nl" | rewritten_to)"
+# And it says so once, as a systemMessage, rather than passing the command on in silence
+# (claude-config#1922).
+case "$out1428nl" in *'"systemMessage"'*"DID NOT RUN"*"lib/push-scope.sh"*) check "#1922 with no shared reader, rtk says it did not run, naming the library" ok ;;
+  *) check "#1922 with no shared reader, rtk says it did not run, naming the library" "it said: [$out1428nl]" ;; esac
 printf 'rtk git status\n' > "$TMPROOT/rewrite"; payload 'git status'
 out1428nl="$(PATH="$BIN:$PATH" bash "$NOLIB/rtk-rewrite.sh" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
 [ "$out1428nl" = 'rtk git status' ] \
