@@ -851,6 +851,12 @@ fi
 # advice could not be delivered, on stderr with exit 1, which is the non blocking error the push
 # hooks in this repo already use to reach a reader without stopping anything.
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 . "$DIR/lib/no-python-path.sh"
 NOPY_ROOT="$WORK/nopy"
 NOPY="$NOPY_ROOT/bin"
@@ -907,11 +913,12 @@ assert_contains "the control still delivers the advice with python3 present" 'ad
 # The diff is text no JSON reader has parsed, and under a UTF-8 locale macOS awk stops at such a
 # byte when a pattern scans it, and grep and sed skip or refuse the line, so every trigger read the
 # push as holding nothing. The byte sits on the line ABOVE the code each trigger is about.
+bad_byte_measured awk "#1900 the lessons advisory past a byte that is not UTF-8" || true
 R=$(make_repo badbyte "$(printf '// caf\xff note\ntry {\n  await send()\n} catch (e) {\n  return []\n}')" src/send.ts)
-out=$(run_hook "git push" "$R" LC_ALL=en_US.UTF-8)
+out=$(run_hook "git push" "$R" LC_ALL="$BAD_BYTE_LOCALE")
 assert_contains "a push holding a byte that is not UTF-8 still raises the error-path lesson" 'L11' "$out"
 R=$(make_repo badbytedestroy "$(printf '# caf\xff note\nrm -rf /var/data/customers\n')" scripts/clean.sh)
-out=$(run_hook "git push" "$R" LC_ALL=en_US.UTF-8)
+out=$(run_hook "git push" "$R" LC_ALL="$BAD_BYTE_LOCALE")
 assert_contains "and still raises the destructive operation lesson" 'L5' "$out"
 
 echo "passed: $PASS, failed: $FAIL"

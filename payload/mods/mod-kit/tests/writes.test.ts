@@ -460,7 +460,8 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
   test('a cd before it is followed, a variable the command set is read, and a pattern keeps its folder', () => {
     expect(runs('cd /w/shop && python3 gen.py app/page.tsx').map(r => r.args[0]?.path)).toEqual(['/w/shop/app/page.tsx'])
     expect(runs('P=/w/shop/app/page.tsx; python3 gen.py "$P"').map(r => r.args)).toEqual([[{ word: '$P', path: '/w/shop/app/page.tsx' }]])
-    expect(runs("python3 gen.py 'app/*.tsx'").map(r => r.args)).toEqual([[{ word: 'app/*.tsx', folder: `${CWD}/app` }]])
+    expect(runs("python3 gen.py 'app/*.tsx'").map(r => r.args)).toEqual([[{ word: 'app/*.tsx', folder: `${CWD}/app`, quoted: true }]])
+    expect(runs('python3 gen.py app/*.tsx').map(r => r.args)).toEqual([[{ word: 'app/*.tsx', folder: `${CWD}/app` }]])
     // The script named through a variable the command set (lessons review at 856eb73): found by its value.
     expect(runs('S=scripts/gen.py; python3 "$S" app/page.tsx').map(r => [r.script, r.path, r.args.map(a => a.word)])).toEqual([['$S', `${CWD}/scripts/gen.py`, ['app/page.tsx']]])
   })
@@ -471,6 +472,19 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
     expect(runs('python3 fetch.py https://x.dev/page.html app/page.tsx').map(r => r.args.map(a => a.word))).toEqual([['app/page.tsx']])
     // The redirect is still a write the reader names, as it always was.
     expect(paths('python3 gen.py > out.html')).toEqual([`${CWD}/out.html`])
+  })
+  // #1951: a pattern whose every pattern character is quoted reaches the script as its characters,
+  // matched against no file, and is marked so; one the shell expands, or spelled both ways in the
+  // command, is not.
+  test('a quoted pattern a script is handed is marked quoted, wherever the command spells it only so', () => {
+    const quoted = (command: string) => runs(command).map(r => r.args.map(a => [a.word, a.quoted === true]))
+    expect(quoted(`cd /w/hooks && python3 /tmp/sweep.py check.sh "a push" '*push*'`)).toEqual([[['check.sh', false], ['a push', false], ['*push*', true]]])
+    expect(quoted('python3 s.py "app/*.css" app/\\*x')).toEqual([[['app/*.css', true], ['app/*x', true]]])
+    expect(quoted(`python3 s.py '*x*' *x* ''*y'' "app/"*z`)).toEqual([[['*x*', false], ['*x*', false], ['*y', false], ['app/*z', false]]])
+    expect(quoted(`P='app/*x'; python3 s.py $P`)).toEqual([[['$P', false]]])
+    expect(quoted(`npx prettier --write 'app/*'`)).toEqual([[['app/*', true]]])
+    // Only a pattern is marked: a quoted name holding none is a path, as ever.
+    expect(runs(`python3 s.py 'a b.txt'`).map(r => r.args)).toEqual([[{ word: 'a b.txt', path: `${CWD}/a b.txt` }]])
   })
   test('a script run in a substitution is read too', () => {
     expect(runs('x=$(python3 gen.py app/page.tsx)').map(r => r.args.map(a => a.path))).toEqual([[`${CWD}/app/page.tsx`]])
@@ -533,7 +547,7 @@ describe('writes: a module run with python -m and a tool run through npx (#1682)
       expect({ command, args: runs(command).map(r => r.args.map(a => a.word).filter(w => w !== 'format')) }).toEqual({ command, args: [['app/page.tsx']] })
     expect(runs('npx -p @biomejs/biome biome format --write app/page.tsx').map(r => r.script)).toEqual(['biome'])
     expect(runs('cd /w/shop && npx prettier --write app/page.tsx').map(r => r.args[0]?.path)).toEqual(['/w/shop/app/page.tsx'])
-    expect(runs("npx prettier --write 'app/*.tsx'").map(r => r.args)).toEqual([[{ word: 'app/*.tsx', folder: `${CWD}/app` }]])
+    expect(runs("npx prettier --write 'app/*.tsx'").map(r => r.args)).toEqual([[{ word: 'app/*.tsx', folder: `${CWD}/app`, quoted: true }]])
   })
   // #1815: a tool's operands are, by its own convention, the files it works on, where a script file's
   // arguments are its own (a commit, a test's name), so a guard can tell the two apart by `tool`.

@@ -132,7 +132,7 @@ def strip_strings(line):
 
 def load_phrases(path):
     phrases = []
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8", errors="replace") as fh:
         for raw in fh:
             line = raw.strip()
             if not line or line.startswith("#"):
@@ -451,4 +451,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

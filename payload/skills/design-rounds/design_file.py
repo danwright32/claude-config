@@ -128,7 +128,9 @@ SETTLED_BLOCKS = ("decision-map", "design-frames")
 
 
 def _digest(body):
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+    # replace, as the page is written: a lone surrogate (a spec title holding a lone \ud800 escape)
+    # is hashed as the ? the file will hold, so the seal still matches when it is read back (#1944).
+    return hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()
 
 
 def seal(page):
@@ -164,7 +166,7 @@ def main(argv):
         print("usage: python3 design_file.py --sealed < settled.html", file=sys.stderr)
         return 2
     try:
-        text = sys.stdin.buffer.read().decode("utf-8")
+        text = sys.stdin.buffer.read().decode("utf-8", "strict")
     except UnicodeDecodeError:
         print("not sealed: it is not UTF-8 text")
         return 1
@@ -177,4 +179,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

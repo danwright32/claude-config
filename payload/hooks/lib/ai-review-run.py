@@ -569,7 +569,7 @@ def append_ledger(state_dir, meta, text):
     line = "\t".join(str(x) for x in (
         meta.get("finished", ""), meta.get("kind", "push"), meta.get("repo", ""), meta.get("sha", ""),
         meta.get("findings", ""), ",".join(f"L{n}" for n in lessons)))
-    with open(os.path.join(state_dir, "citations.tsv"), "a", encoding="utf-8") as f:
+    with open(os.path.join(state_dir, "citations.tsv"), "a", encoding="utf-8", errors="replace") as f:
         f.write(line + "\n")
 
 
@@ -578,7 +578,7 @@ def write_finished(state_dir, name, meta, body):
     tmp = final + ".tmp"
     lines = [f"{k}={v}" for k, v in meta.items()]
     text = "\n".join(lines) + "\n\n" + (body.rstrip("\n") + "\n" if body else "")
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open(tmp, "w", encoding="utf-8", errors="replace") as f:
         f.write(text)
     os.replace(tmp, final)
     for leftover in (final + ".pending",):
@@ -645,7 +645,7 @@ def warm_dir(env=None):
 
 def start_key(model, fixed):
     """One turn per cache: the model and the appended system prompt (the lessons)."""
-    return hashlib.sha256((model + "\0" + fixed).encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256((model + "\0" + fixed).encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 def start_wait_bound(deadline, env=None):
@@ -676,7 +676,7 @@ class StartTurn:
             self._answered = True
             if self._warm:
                 try:
-                    with open(self._warm, "a", encoding="utf-8"):
+                    with open(self._warm, "a", encoding="utf-8", errors="replace"):
                         pass
                     os.utime(self._warm, None)
                 except OSError:
@@ -903,12 +903,12 @@ def main(argv):
     status, body = "error", ""
     lessons_note = ""
     try:
-        with open(a.prompt_file, encoding="utf-8") as f:
+        with open(a.prompt_file, encoding="utf-8", errors="replace") as f:
             prompt_text = f.read()
         lessons, lessons_note = lessons_block(a.lessons_dir)
         scope = ""
         if a.scope_file:
-            with open(a.scope_file, encoding="utf-8") as f:
+            with open(a.scope_file, encoding="utf-8", errors="replace") as f:
                 scope = f.read().strip() + "\n\n"
         # THE ORDER, for the prompt cache (claude-config#1599). The lessons, identical in every
         # review and most of its prompt, are the appended system prompt; the message is the two per

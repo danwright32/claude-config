@@ -78,7 +78,7 @@ def main():
     try:
         for ln in lines_from_end(f, counter):
             try:
-                obj = json.loads(ln.decode("utf-8"))
+                obj = json.loads(ln.decode("utf-8", "replace"))
             except Exception:
                 continue
             if not isinstance(obj, dict):
@@ -99,7 +99,7 @@ def main():
         stats = os.environ.get("TURN_WORKED_STATS")
         if stats:
             try:
-                with open(stats, "w") as out:
+                with open(stats, "w", errors="replace") as out:
                     out.write("%d\n" % counter[0])
             except Exception:
                 pass
@@ -107,4 +107,5 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     main()

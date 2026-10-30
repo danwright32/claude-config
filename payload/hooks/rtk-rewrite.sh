@@ -39,6 +39,11 @@ if [ -n "$RTK_VERSION" ]; then
 fi
 
 INPUT=$(cat)
+# Cleaned by the shared reader before jq reads it: a lone surrogate escape anywhere in the payload
+# made jq read nothing, so the command was never rewritten (claude-config#1944). Without the library
+# the payload is read as it came, as before; the gh reading below says what its absence costs.
+# shellcheck source=lib/push-scope.sh
+. "$RTK_HOOK_DIR/lib/push-scope.sh" 2>/dev/null && INPUT="$(ps_clean_payload "$INPUT")"
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
 if [ -z "$CMD" ]; then
@@ -299,7 +304,10 @@ rtk_names_gh() { local LC_ALL=C; [[ "$1" =~ $RTK_GH_WORD ]]; }
 if rtk_names_gh "$REWRITTEN"; then
   rtk_hook_dir="${BASH_SOURCE[0]%/*}"; [ "$rtk_hook_dir" != "${BASH_SOURCE[0]}" ] || rtk_hook_dir=.
   # shellcheck source=lib/push-scope.sh
-  . "$rtk_hook_dir/lib/push-scope.sh" 2>/dev/null || exit 0
+  # Without it gh api cannot be told from the rest, so the rewrite is not made, and that is said
+  # rather than passed in silence (claude-config#1922).
+  . "$rtk_hook_dir/lib/push-scope.sh" 2>/dev/null \
+    || hook_allow_notice "[rtk] DID NOT RUN: rtk-rewrite.sh could not load lib/push-scope.sh (reinstall the hooks with claude-sync pull), so whether this rewrite would drop a field from a GitHub API call could not be read, and the command runs unrewritten."
   ps__read "$REWRITTEN"; [ "$?" -ne 1 ] || exit 0
   rtk_rec="${PS__M_FIRST[$PS__HIT]}"; rtk_rec_end=$((rtk_rec + PS__M_COUNT[PS__HIT]))
   while [ "$rtk_rec" -lt "$rtk_rec_end" ]; do

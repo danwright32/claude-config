@@ -96,7 +96,7 @@ def deadline_s(doc):
 
 
 def git(repo, *args, check=True):
-    r = subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True, errors="replace")
     if check and r.returncode != 0:
         v.fail("git-failed", "git %s failed in %s: %s" % (" ".join(args), repo, r.stderr.strip()[:300]))
     return r
@@ -119,13 +119,13 @@ def receipt_path(rdir):
 
 
 def read_receipt(rdir):
-    with open(receipt_path(rdir)) as f:
+    with open(receipt_path(rdir), errors="replace") as f:
         return json.load(f)
 
 
 def update_receipt(rdir, **fields):
     """Merge fields into the receipt under its own lock, written whole and renamed into place."""
-    with open(os.path.join(rdir, "receipt.lock"), "a") as lock:
+    with open(os.path.join(rdir, "receipt.lock"), "a", errors="replace") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             rec = read_receipt(rdir)
@@ -133,7 +133,7 @@ def update_receipt(rdir, **fields):
             rec = {}
         rec.update(fields)
         tmp = receipt_path(rdir) + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", errors="replace") as f:
             json.dump(rec, f, indent=2)
             f.write("\n")
         os.replace(tmp, receipt_path(rdir))
@@ -148,7 +148,7 @@ def supervisor_alive(rdir):
     path = os.path.join(rdir, "supervisor.lock")
     if not os.path.exists(path):
         return False
-    with open(path, "a") as f:
+    with open(path, "a", errors="replace") as f:
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -159,7 +159,7 @@ def supervisor_alive(rdir):
 
 def wait_for_supervisor(rdir, timeout_s):
     """Block until the supervisor has exited, however it exited. Returns nothing; raises when hung."""
-    f = open(os.path.join(rdir, "supervisor.lock"), "a")
+    f = open(os.path.join(rdir, "supervisor.lock"), "a", errors="replace")
 
     def hung(signum, frame):
         raise TimeoutError()
@@ -190,7 +190,7 @@ def request_stop(rdir, reason):
     except FileExistsError:
         fd = None  # an earlier request stands, and its reason is the one recorded
     if fd is not None:
-        os.write(fd, reason.encode())
+        os.write(fd, reason.encode("utf-8", "replace"))
         os.close(fd)
     rec = read_receipt(rdir)
     pid = rec.get("supervisor_pid")
@@ -204,7 +204,7 @@ def request_stop(rdir, reason):
 
 def requested_reason(rdir):
     try:
-        with open(os.path.join(rdir, "stop-reason")) as f:
+        with open(os.path.join(rdir, "stop-reason"), errors="replace") as f:
             reason = f.read().strip()
     except FileNotFoundError:
         return "stop"
@@ -218,7 +218,7 @@ def requested_reason(rdir):
 def live_members(pgid):
     if not pgid:
         return []
-    out = subprocess.run(["ps", "-A", "-o", "pid=,pgid=,stat="], capture_output=True, text=True)
+    out = subprocess.run(["ps", "-A", "-o", "pid=,pgid=,stat="], capture_output=True, text=True, errors="replace")
     if out.returncode != 0:
         v.fail("ps-failed", "ps could not list processes: %s" % out.stderr.strip())
     live = []
@@ -252,7 +252,7 @@ def run_project_command(cmd, cwd, timeout_s, env=None):
     """Run one of the project's commands; returns (exit code or a word, output tail)."""
     try:
         r = subprocess.run(["/bin/sh", "-c", cmd], cwd=cwd, capture_output=True, text=True,
-                           timeout=timeout_s, env=env)
+                           timeout=timeout_s, env=env, errors="replace")
     except subprocess.TimeoutExpired:
         return "timeout", "did not finish within %ss" % timeout_s
     except OSError as e:
@@ -296,7 +296,7 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None)
     rec = read_receipt(rdir)
     doc = None
     try:
-        with open(os.path.join(rdir, "areas.json")) as f:
+        with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
             doc = json.load(f)
     except (OSError, ValueError) as e:
         detail = (detail + "; " if detail else "") + "areas.json copy unreadable, project stop not run: %s" % e
@@ -336,7 +336,7 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None)
 
 def supervise(rdir, repo_lock_fd, pipe_w):
     # repo_lock_fd stays open, unread, for this process's whole life: holding it is the point.
-    sup = open(os.path.join(rdir, "supervisor.lock"), "a")
+    sup = open(os.path.join(rdir, "supervisor.lock"), "a", errors="replace")
     fcntl.flock(sup, fcntl.LOCK_EX)
 
     def on_signal(signum, frame):
@@ -346,7 +346,7 @@ def supervise(rdir, repo_lock_fd, pipe_w):
         signal.signal(s, on_signal)
     proc, reason, detail, monitor = None, "supervisor_error", None, None
     try:
-        with open(os.path.join(rdir, "areas.json")) as f:
+        with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
             doc = json.load(f)
         rec = read_receipt(rdir)
         # The egress monitor starts BEFORE serve, so it covers serve's whole life, and is proved live
@@ -391,7 +391,7 @@ def supervise(rdir, repo_lock_fd, pipe_w):
 
 def repo_lock(home, repo):
     os.makedirs(os.path.join(home, "locks"), exist_ok=True)
-    key = hashlib.sha256(repo.encode()).hexdigest()[:16]
+    key = hashlib.sha256(repo.encode("utf-8", "surrogatepass")).hexdigest()[:16]
     return os.path.join(home, "locks", key + ".lock")
 
 
@@ -497,7 +497,7 @@ def start(repo, sha, areas_csv):
         os.makedirs(os.path.join(rdir, "guides"))
         os.ftruncate(lock_fd, 0)
         os.lseek(lock_fd, 0, os.SEEK_SET)
-        os.write(lock_fd, rid.encode())
+        os.write(lock_fd, rid.encode("utf-8", "replace"))
         update_receipt(rdir, schema=v.RECEIPT_SCHEMA, receipt_id=rid, machine=v.machine_name(), repo=repo,
                        head_sha=sha, checkout_sha=None, areas=wanted, url=doc["url"], started_at=v.utc_now(),
                        ready_at=None, stopped_at=None, stopped_by=None, stop_detail=None, serve_exit=None,
@@ -511,7 +511,7 @@ def start(repo, sha, areas_csv):
         if checkout != sha:
             v.fail("checkout-mismatch", "the worktree is at %s, not %s" % (checkout, sha))
         doc = v.load_areas(os.path.join(wt, v.AREAS_PATH), root=wt)
-        with open(os.path.join(rdir, "areas.json"), "w") as f:
+        with open(os.path.join(rdir, "areas.json"), "w", errors="replace") as f:
             json.dump(doc, f, indent=2)  # with timeouts filled, so the supervisor reads one shape
         for area in doc["areas"]:
             if area["name"] in wanted:
@@ -587,7 +587,7 @@ def drive(rid, area, args):
         v.fail("area-not-in-run", "area %r is not one this run serves (%s)" % (area, ", ".join(rec.get("areas", []))))
     if not supervisor_alive(rdir):
         v.fail("run-stopped", "the supervisor of run %s is gone; run run_session.py stop %s" % (rid, rid))
-    with open(os.path.join(rdir, "areas.json")) as f:
+    with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
         doc = json.load(f)
     env = dict(os.environ, VERIFICATION_URL=rec["url"], VERIFICATION_RECEIPT_DIR=rdir,
                VERIFICATION_WORKTREE=rec["worktree"], VERIFICATION_AREA=area)
@@ -598,7 +598,7 @@ def drive(rid, area, args):
                        cwd=rec["worktree"], env=env)
     line = json.dumps({"at": v.utc_now(), "area": area, "args": list(args), "exit": r.returncode}) + "\n"
     fd = os.open(os.path.join(rdir, "drives.jsonl"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    os.write(fd, line.encode())
+    os.write(fd, line.encode("ascii", "strict"))
     os.close(fd)
     if r.returncode != 0:
         v.fail("drive-failed", "the drive helper exited %d" % r.returncode)
@@ -616,14 +616,14 @@ def stop(rid):
     rec = v.load_receipt(rid)
     if not rec.get("stopped_at"):
         request_stop(rdir, "stop")
-        with open(os.path.join(rdir, "areas.json")) as f:
+        with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
             timeouts = json.load(f)["timeouts"]
         wait_for_supervisor(rdir, timeout_s=stop_wait_s(timeouts))
         rec = read_receipt(rdir)
         if not rec.get("stopped_at"):
             # The supervisor is gone and stopped nothing: killed outright. Do its work here, holding
             # its lock so two recoveries cannot overlap.
-            with open(os.path.join(rdir, "supervisor.lock"), "a") as lock:
+            with open(os.path.join(rdir, "supervisor.lock"), "a", errors="replace") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 rec = read_receipt(rdir)
                 if not rec.get("stopped_at"):
@@ -681,4 +681,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv[1:]))

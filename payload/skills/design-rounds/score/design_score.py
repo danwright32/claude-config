@@ -156,7 +156,7 @@ def pct(fraction, whole):
 
 def _load_json(path, what):
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             return json.load(fh)
     except OSError as err:
         raise Unreadable("%s %s could not be read (%s)" % (what, path, err.strerror or err))
@@ -359,7 +359,7 @@ def compare(design, built, regions):
 
 def _git(directory, *args):
     try:
-        proc = subprocess.run(["git", "-C", directory] + list(args), capture_output=True, text=True, timeout=20)
+        proc = subprocess.run(["git", "-C", directory] + list(args), capture_output=True, text=True, timeout=20, errors="replace")
     except (OSError, subprocess.SubprocessError):
         return None
     return proc.stdout.strip() if proc.returncode == 0 else None
@@ -771,7 +771,7 @@ def post(score_path, repo, pr):
         note = ("Measured at `%s`, which is not this pull request's head `%s`, so it does not count for "
                 "closing on this head." % ((s.get("commit") or "no commit")[:7], head[:7]))
     fd, body_file = tempfile.mkstemp(suffix=".md")
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as fh:
         fh.write(sg.score_comment(s, render(s), note))
     try:
         gh.call(["pr", "comment", str(pr), "--repo", repo, "--body-file", body_file], repo)
@@ -820,7 +820,7 @@ def _main(argv):
         folder = argv[2]
         s = score_capture(folder)
         if os.path.isdir(folder):
-            with open(os.path.join(folder, "score.json"), "w", encoding="utf-8") as fh:
+            with open(os.path.join(folder, "score.json"), "w", encoding="utf-8", errors="replace") as fh:
                 json.dump(s, fh, indent=1)
         else:
             s["unmeasured"].append("the capture folder %s is not there" % folder)
@@ -841,4 +841,5 @@ def _main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

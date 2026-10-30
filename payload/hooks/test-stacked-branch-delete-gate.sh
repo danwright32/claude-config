@@ -21,6 +21,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 HOOK="$DIR/stacked-branch-delete-gate.sh"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -649,15 +655,13 @@ check_eq "#1758 an updateRefs whose repository id names no repository is refused
 # 21. A byte that is not UTF-8 stops bash's =~ and the system grep matching under a UTF-8 locale
 # (claude-config#1885), so the fast path, and the crude reading used with no reader, read a delete
 # after one as absent and passed it. Each case writes such a byte into the JSON raw, in front of a
-# delete that names no "delete" (which the case pattern catches whatever the bytes), under
-# en_US.UTF-8, and expects the verdict the same command gets without it.
+# delete that names no "delete" (which the case pattern catches whatever the bytes), under a UTF-8
+# locale, and expects the verdict the same command gets without it.
 BAD=$'\xff'
-if LC_ALL=en_US.UTF-8 bash -c '[[ "$1" =~ git ]]' _ "${BAD}git"; then
-  echo "SUITE-PART-UNMEASURED #1885 the fault itself: =~ under en_US.UTF-8 here matches past a byte that is not UTF-8, so the byte cases pass with or without the fix"
-fi
+bad_byte_measured regex "#1885 the fast path past a byte that is not UTF-8" || true
 raw_payload(){ printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$1" "$REPO"; }
 utf8_run(){ # utf8_run <hook> <command>: sets out, rc and calls
-  out="$(raw_payload "$2" | LC_ALL=en_US.UTF-8 PATH="$STUB:$PATH" bash "$1" 2>&1)"; rc=$?
+  out="$(raw_payload "$2" | LC_ALL="$BAD_BYTE_LOCALE" PATH="$STUB:$PATH" bash "$1" 2>&1)"; rc=$?
   calls="$(cat "$ST/gh-calls" 2>/dev/null)"
 }
 for c in "git push origin :feat/x" "git push origin -d feat/x"; do

@@ -57,7 +57,7 @@ LIST_MAX = 8   # files named in one message before "and N more"
 
 def _read(path):
     try:
-        with open(path) as f:
+        with open(path, errors="strict") as f:
             return f.read()
     except FileNotFoundError:
         return None
@@ -461,11 +461,19 @@ def verdict(bundle, home=None, final=False):
 
 def main(argv):
     if len(argv) in (2, 3) and argv[0] == "verdict" and argv[2:] in ([], ["--final"]):
-        print(json.dumps(verdict(argv[1], final=argv[2:] == ["--final"]), indent=2))
+        try:
+            v = verdict(argv[1], final=argv[2:] == ["--final"])
+        except UnicodeDecodeError as e:
+            # Read strictly and refused by name (claude-config#1923): the bundle decides a merge.
+            print("merge_check: a file in the bundle holds a byte that is not UTF-8 (0x%02x at offset %d)"
+                  % (e.object[e.start], e.start), file=sys.stderr)
+            return 4
+        print(json.dumps(v, indent=2))
         return 0
     print("merge_check: usage: merge_check.py verdict <bundle> [--final]", file=sys.stderr)
     return 2
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv[1:]))

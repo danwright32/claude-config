@@ -97,6 +97,9 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/lib/stacked-prs.sh" 2>/dev/null || cannot_read "$HOOK_DIR/lib/stacked-prs.sh, which lists them, could not be loaded"
 command -v python3 >/dev/null 2>&1 || cannot_read "python3 is not on PATH, and the command's words are read with it"
 
+# Taken raw above so the commonest call leaves before anything loads, and cleaned before anything
+# parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
+payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" segmented)" || cannot_read "the hook payload could not be read (neither jq nor python3 could parse it as JSON)"
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
@@ -280,6 +283,7 @@ graphql_target() {   # $1 = the --hostname value, or empty; PS_RUN_ARGS of the g
   # quotes in a heredoc nested in a command substitution.
   IFS= read -r -d '' py <<'PY' || true
 import json, os, re, sys
+sys.stdout.reconfigure(errors="replace")
 
 rec_dir, cmd_text, words = sys.argv[1], sys.argv[2], sys.argv[3:]
 DELETE_REF = re.compile(r'\bdeleteRef\s*\(')

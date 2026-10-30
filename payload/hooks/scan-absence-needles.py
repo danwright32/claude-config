@@ -144,7 +144,7 @@ def main():
             detail[rel] = found
 
     try:
-        base = ratchet.read_baseline(open(baseline_path, encoding="utf-8").read())
+        base = ratchet.read_baseline(open(baseline_path, encoding="utf-8", errors="replace").read())
     except OSError:
         base = None
     if base is None:

@@ -77,7 +77,12 @@ if ps_reader_missing jq python3; then
   refuse "Refusing to push: $(ps_reader_absent_why "neither jq nor python3 is on PATH" "pr-review-push-gate.sh reads the command with one of them, so it cannot tell a push from anything else." "jq or python3") $OVERRIDE_HOW"
 fi
 
-parsed="$(ps_parse_payload "$payload" segmented)" || parsed=""
+# Taken raw above so the commonest call leaves before anything loads, and cleaned here, before
+# anything parses it: a lone surrogate escape made jq read nothing (claude-config#1944). A payload
+# still unreadable is judged by its words (#1922).
+payload="$(ps_clean_payload "$payload")"
+parsed="$(ps_parse_payload "$payload" segmented)" \
+  || ps_unparsed_refuse "$payload" pr-review-push-gate.sh SKIP_PR_REVIEW "a push" '*push*'
 command="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 ps_is_git_push "$command" || exit 0

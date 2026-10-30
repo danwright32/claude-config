@@ -74,7 +74,7 @@ def parse_link(link):
 
 def load_lines(path):
     try:
-        with open(path) as f:
+        with open(path, errors="replace") as f:
             raw = f.read().splitlines()
     except FileNotFoundError:
         raise NudgeError("No lines file at " + path + ". Put one reminder per line in it.")
@@ -107,7 +107,7 @@ def read_token(run=subprocess.run):
     try:
         done = run(
             ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, errors="replace"
         )
     except subprocess.CalledProcessError:
         raise NudgeError("No Slack token in the Keychain under " + KEYCHAIN_SERVICE + ". Store the bot token there first.")
@@ -120,7 +120,7 @@ def read_token(run=subprocess.run):
 def slack_caller(token):
     def call(method, params):
         req = urllib.request.Request(
-            "https://slack.com/api/" + method, data=json.dumps(params).encode(),
+            "https://slack.com/api/" + method, data=json.dumps(params).encode("ascii", "strict"),
             headers={"Authorization": "Bearer " + token, "Content-Type": "application/json; charset=utf-8"},
         )
         try:

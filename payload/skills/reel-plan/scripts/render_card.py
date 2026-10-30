@@ -191,7 +191,7 @@ def main() -> int:
         print(f"error: no such shell: {args.shell}", file=sys.stderr)
         return 1
 
-    shell = args.shell.read_text()
+    shell = args.shell.read_text(errors="replace")
     if MARKER not in shell:
         print(f"error: shell {args.shell} has no {MARKER} placeholder, "
               f"so there is nowhere to put the card", file=sys.stderr)
@@ -204,7 +204,7 @@ def main() -> int:
               f"Rename the input, or pass a --shell somewhere else.", file=sys.stderr)
         return 1
 
-    body = args.card.read_text()
+    body = args.card.read_text(errors="replace")
     out = shell.replace(MARKER, render_body(body))
 
     # Ticked checkboxes persist under this key. It must be unique per card:
@@ -215,7 +215,7 @@ def main() -> int:
     digest = hashlib.sha1(body.encode()).hexdigest()[:8]
     out = out.replace("{event-slug}-card-v1", f"{args.card.stem}-{digest}")
 
-    dest.write_text(out)
+    dest.write_text(out, errors="replace")
     print(f"wrote {dest}")
     return 0
 

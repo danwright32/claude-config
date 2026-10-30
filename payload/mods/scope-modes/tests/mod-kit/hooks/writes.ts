@@ -704,6 +704,10 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // ("ambiguous redirect") and writes nothing.
     const raw: string[] = []
     const from: number[] = []
+    // The words the shell hands on as written, every pattern character in them quoted (#1951), and
+    // every other word, by its text: one spelled both ways in the command is read as matched.
+    const quotedWords = new Set<string>()
+    const otherWords = new Set<string>()
     written.forEach((w, n) => {
       const prior = written[n - 1] ?? ''
       const target = WRITE_REDIRECT.test(prior) || /^\d*>&$/.test(prior)
@@ -711,8 +715,10 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
         raw.push(part)
         from.push(n)
         if (part !== w) asWritten.set(part, w)
+        ;(c.literal?.[n] === true && part === w ? quotedWords : otherWords).add(part)
       }
     })
+    const quotedOnly = (w: string) => quotedWords.has(w) && !otherWords.has(w)
     // Output redirects first, and taken out of the words, with descriptor copies (2>&1). A `>&`
     // with nothing attached takes the next word: a number or - is a descriptor copied, anything
     // else a file both outputs go to (the collision guard's reading, #654, kept in #712).
@@ -863,12 +869,14 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // word after it is the script's own argument, each given as a file it may write.
     // The script's word as the command reads it, variables read as their values.
     const scriptFile = c.script && !c.script.stdin && !c.program ? expand(c.script.files[0] ?? '') : kind === undefined && runsDirectly(args[0]) ? args[0] : undefined
-    // Each word a run is handed, as a path where its words name one.
+    // Each word a run is handed, as a path where its words name one. A pattern whose every pattern
+    // character is quoted is marked `quoted` (#1951): the shell matched it against no file, so the
+    // run is handed its characters as written.
     const handedOf = (words: readonly string[]) =>
       words.map(w => {
         const p = abs(w)
         const folder = p ? undefined : patternFolder(w, dir, home)
-        return { word: asWritten.get(w) ?? w, ...(p ? { path: p } : {}), ...(folder ? { folder } : {}) }
+        return { word: asWritten.get(w) ?? w, ...(p ? { path: p } : {}), ...(folder ? { folder } : {}), ...(folder && quotedOnly(w) ? { quoted: true as const } : {}) }
       })
     if (scriptFile) {
       const at = kind === undefined ? 0 : args.indexOf(scriptFile, 1)

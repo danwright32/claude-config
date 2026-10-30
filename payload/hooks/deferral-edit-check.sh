@@ -57,6 +57,11 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 payload="$(cat 2>/dev/null || true)"
+# Cleaned by the shared reader when it loads: a lone surrogate escape anywhere in the payload
+# (an emoji cut in half is enough) makes jq read none of it (claude-config#1944). Without the
+# library the payload is read as it came, as before.
+case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
+. "$_ps_dir/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
 [ -n "$payload" ] || exit 0
 
 findings="$(printf '%s' "$payload" | python3 "$DETECTOR" --edit-payload 2>/dev/null)" || exit 0

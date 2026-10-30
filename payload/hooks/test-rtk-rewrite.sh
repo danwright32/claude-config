@@ -26,6 +26,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 H="$DIR/rtk-rewrite.sh"
 
 pass=0
@@ -587,9 +593,13 @@ check "#1478 control: an rtk gh issue list only echoed keeps the rewrite beside 
 NOLIB="$TMPROOT/nolib"; mkdir -p "$NOLIB"; cp "$H" "$NOLIB/rtk-rewrite.sh"
 printf 'rtk gh api repos/o/r\n' > "$TMPROOT/rewrite"; payload 'gh api repos/o/r'
 out1428nl="$(PATH="$BIN:$PATH" bash "$NOLIB/rtk-rewrite.sh" < "$TMPROOT/payload.json" 2>/dev/null)"
-[ -z "$out1428nl" ] \
+[ -z "$(printf '%s' "$out1428nl" | rewritten_to)" ] \
   && check "#1428 with no shared reader to ask, an rtk gh is not rewritten" ok \
   || check "#1428 with no shared reader to ask, an rtk gh is not rewritten" "it rewrote to: $(printf '%s' "$out1428nl" | rewritten_to)"
+# And it says so once, as a systemMessage, rather than passing the command on in silence
+# (claude-config#1922).
+case "$out1428nl" in *'"systemMessage"'*"DID NOT RUN"*"lib/push-scope.sh"*) check "#1922 with no shared reader, rtk says it did not run, naming the library" ok ;;
+  *) check "#1922 with no shared reader, rtk says it did not run, naming the library" "it said: [$out1428nl]" ;; esac
 printf 'rtk git status\n' > "$TMPROOT/rewrite"; payload 'git status'
 out1428nl="$(PATH="$BIN:$PATH" bash "$NOLIB/rtk-rewrite.sh" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
 [ "$out1428nl" = 'rtk git status' ] \
@@ -636,9 +646,9 @@ r1880="$(starts1880 "(rtk gh run list)" "(gh run list)")"
   && check "#1880 and so is one in a subshell" ok \
   || check "#1880 and so is one in a subshell" "got [$r1880]"
 # A byte that is not UTF-8 in front of gh must not make the match fail under a UTF-8 locale.
-UTF8_1880="$(locale -a 2>/dev/null | grep -i -m1 -E '^(en_US|C)\.utf-?8$')"
+bad_byte_measured regex "#1880 an rtk gh past a byte that is not UTF-8" || true
 printf 'echo \377; rtk gh pr status\n' > "$TMPROOT/rewrite"; payload 'echo x; gh pr status'
-out1880="$(LC_ALL="${UTF8_1880:-C}" PATH="$BIN:$PATH" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null)"
+out1880="$(LC_ALL="$BAD_BYTE_LOCALE" PATH="$BIN:$PATH" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null)"
 [ -z "$out1880" ] \
   && check "#1880 a byte that is not UTF-8 before an rtk gh does not let it through" ok \
   || check "#1880 a byte that is not UTF-8 before an rtk gh does not let it through" "it rewrote: $out1880"

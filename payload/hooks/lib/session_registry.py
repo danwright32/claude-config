@@ -61,7 +61,7 @@ class Registry:
         if name not in self.names:
             return "gone", "session %s is not in the session registry" % sid
         try:
-            with open(os.path.join(self.path, name)) as fh:
+            with open(os.path.join(self.path, name), errors="replace") as fh:
                 r = json.load(fh)
         except Exception:
             return "unknown", "session %s has a registry record that cannot be read" % sid
@@ -83,7 +83,7 @@ class Registry:
                 continue
             path = os.path.join(self.path, name)
             try:
-                with open(path) as fh:
+                with open(path, errors="replace") as fh:
                     r = json.load(fh)
                 if not isinstance(r, dict) or not num(r.get("lastSeen")):
                     raise ValueError("shape")
@@ -131,4 +131,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

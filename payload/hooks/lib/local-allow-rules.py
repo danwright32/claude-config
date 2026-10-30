@@ -86,7 +86,10 @@ def claude_home():
 
 
 def fingerprint(rule):
-    return hashlib.sha256(rule.encode("utf-8")).hexdigest()[:FP_LEN]
+    # A rule is a JSON string, so a lone \ud800 escape in the file is a lone surrogate here, and a
+    # bare encode raised on it (claude-config#1944). surrogatepass hashes it, and gives every other
+    # rule the fingerprint it always had.
+    return hashlib.sha256(rule.encode("utf-8", "surrogatepass")).hexdigest()[:FP_LEN]
 
 
 # ---- reading the file ------------------------------------------------------------------------
@@ -181,7 +184,8 @@ def _value(s, i, path, out):
 def parse(raw):
     """-> (text, document, spans). spans has 'array' and 'elems' when permissions.allow is a list."""
     try:
-        text = raw.decode("utf-8")
+        # Strict, and refused by name below (#1923): the settings file is rewritten from this text.
+        text = raw.decode("utf-8", "strict")
     except UnicodeDecodeError:
         raise Unjudgeable("could not be read as JSON (it is not UTF-8 text)")
     try:
@@ -307,7 +311,7 @@ def secret_flags(rules, common):
             ["bash", "-c", '. "$1" && ar_redact', "_", common],
             # Five seconds, inside the hook's own ten, so a hung redactor is reported here rather
             # than the whole hook being killed with nothing said.
-            input="\n".join(lines) + "\n", capture_output=True, text=True, timeout=5,
+            input="\n".join(lines) + "\n", capture_output=True, text=True, timeout=5, errors="replace"
         )
     except (OSError, subprocess.SubprocessError) as e:
         raise DetectorBroken("could not check its rules for keys or tokens: the redactor did not run (%s)" % e.__class__.__name__)
@@ -337,14 +341,14 @@ def judge(rules, common):
 
 def state_path(settings_file):
     d = os.environ.get("LOCAL_ALLOW_STATE_DIR") or os.path.join(claude_home(), "state", "local-allow-sweep")
-    key = hashlib.sha256(os.path.realpath(settings_file).encode("utf-8")).hexdigest()[:16]
+    key = hashlib.sha256(os.path.realpath(settings_file).encode("utf-8", "surrogateescape")).hexdigest()[:16]
     return d, os.path.join(d, key)
 
 
 def read_said(settings_file):
     _, p = state_path(settings_file)
     try:
-        with open(p) as f:
+        with open(p, errors="replace") as f:
             return set(line.strip() for line in f if line.strip())
     except OSError:
         return set()
@@ -356,7 +360,7 @@ def write_said(settings_file, keys):
     try:
         os.makedirs(d, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=d, prefix=".said.")
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", errors="replace") as f:
             f.write("".join(k + "\n" for k in sorted(keys)))
         os.replace(tmp, p)
         return None
@@ -388,7 +392,7 @@ def sweep(settings_file, project, common):
         # Keyed on the reason and the bytes, so the same broken file is said once, and an edit to it
         # (which may break it differently) is said again. Added to what was said, never replacing
         # it, so a file broken for a moment and mended does not make its flagged rules new again.
-        raw_key = "unjudgeable:" + hashlib.sha256((reason + "\0").encode("utf-8") + raw).hexdigest()[:FP_LEN]
+        raw_key = "unjudgeable:" + hashlib.sha256((reason + "\0").encode("utf-8", "surrogatepass") + raw).hexdigest()[:FP_LEN]
         said = read_said(settings_file)
         if raw_key in said:
             return 0
@@ -497,7 +501,7 @@ def remove(project, rules_arg):
             return refuse("the backup folder %s is inside %s, where a copy of this file must never go (the "
                           "sync and git keep out only the exact name), so no backup was taken and the file was "
                           "not changed." % (bdir_root, what))
-    key = hashlib.sha256(os.path.realpath(settings_file).encode("utf-8")).hexdigest()[:8]
+    key = hashlib.sha256(os.path.realpath(settings_file).encode("utf-8", "surrogateescape")).hexdigest()[:8]
     bdir = os.path.join(bdir_root, "%s-%s" % (re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(os.path.realpath(project))) or "project", key))
     backup = os.path.join(bdir, "settings.local.json.%s.%d" % (time.strftime("%Y%m%dT%H%M%S"), os.getpid()))
     try:
@@ -515,14 +519,16 @@ def remove(project, rules_arg):
         return refuse("no backup could be written to %s (%s), so the file was not changed." % (bdir, e.strerror or e))
 
     # Cut the picked strings out of the raw text, last first, re-reading the spans after each cut.
+    # The text was decoded strictly, so it holds no lone surrogate (an escape stays six characters of
+    # text), and encoding it back strictly is the round trip this rewrite depends on (#1944).
     new = text
     for k in sorted(remove_idx, reverse=True):
-        _, _, sp = parse(new.encode("utf-8"))
+        _, _, sp = parse(new.encode("utf-8", "strict"))
         new = _cut(new, sp, k)
     expect = json.loads(text)
     expect["permissions"]["allow"] = [r for k, r in enumerate(rules) if k not in set(remove_idx)]
     try:
-        _, got, got_spans = parse(new.encode("utf-8"))
+        _, got, got_spans = parse(new.encode("utf-8", "strict"))
     except Unjudgeable as e:
         return refuse("the edited text did not parse (%s), so the file was not changed. Backup: %s" % (e, backup))
     if got != expect or new[: spans["array"][0]] != text[: spans["array"][0]] \
@@ -540,7 +546,7 @@ def remove(project, rules_arg):
         mode = os.stat(target).st_mode & 0o7777
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".settings.local.json.")
         with os.fdopen(fd, "wb") as f:
-            f.write(new.encode("utf-8"))
+            f.write(new.encode("utf-8", "strict"))
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
@@ -554,7 +560,7 @@ def remove(project, rules_arg):
                 os.unlink(tmp)
             except OSError:
                 pass
-    if read_bytes(settings_file) != new.encode("utf-8"):
+    if read_bytes(settings_file) != new.encode("utf-8", "strict"):
         print("The rules were written but the file does not read back as written. Put it back with: cp %s %s"
               % (shlex.quote(backup), shlex.quote(settings_file)))
         return 1
@@ -586,4 +592,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv[1:]))

@@ -290,6 +290,10 @@ release_held() {
   local stop sid f g rec keep="" unasked="" reasons="" notes="" open unknown merged closed
   local m_dir m_repo m_slug m_pr envelope state num child r msg
   stop="$(cat)"
+  # Cleaned when the shared reader loaded: a lone surrogate escape in the last message made jq read
+  # no session, and every held quiz waited for another stop (claude-config#1944). Without it the
+  # payload is read as it came, as before.
+  [ "$ps_loaded" = 1 ] && stop="$(ps_clean_payload "$stop")"
   sid="$(printf '%s' "$stop" | jq -r '.session_id // ""' 2>/dev/null)"
   valid_session_id "$sid" || return 0
   f="$(held_dir)/$sid"
@@ -380,6 +384,12 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 command -v hook_notice_json >/dev/null 2>&1 || hook_notice_json() {
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; }
+# The library, not a copy: five near copies of this had already drifted (claude-config#102). Loaded
+# before either path, since both read a payload through it (claude-config#1944). Whether it loaded is
+# kept, and each path says what its absence costs.
+ps_loaded=1
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || ps_loaded=0
 if [ "${1:-}" = "--release-held" ]; then
   release_held
   exit 0
@@ -390,13 +400,21 @@ merge_confirmed=0
 
 payload="$(cat)"
 
+# A library this hook cannot load is not a merge with no quiz to ask (claude-config#1922): it stopped
+# here in silence. Said once, as a systemMessage, on a call whose raw text names a merge.
+did_not_run() {   # $1 = the library
+  case "$payload" in
+    *merge*|*Merge*) hook_allow_notice "PR MERGE QUIZ DID NOT RUN: pr-merge-quiz.sh could not load lib/$1 (reinstall the hooks with claude-sync pull), so whether this command merged a pull request, and the quiz on it, were not asked." PostToolUse ;;
+  esac
+  exit 0
+}
+[ "$ps_loaded" = 1 ] || did_not_run push-scope.sh
 
-# The library, not a copy: five near copies of this had already drifted (claude-config#102).
 # `raw` because the shared matcher does its own splitting and has to see the heredocs intact to
 # strip them, and because quoting a command back at somebody with its newlines rewritten shows
-# them something they did not type.
-# shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+# them something they did not type. Cleaned first: a lone surrogate escape made jq read nothing
+# (claude-config#1944).
+payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" raw)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
@@ -421,7 +439,7 @@ fi
 # advising hook and the blocking gates cannot answer differently
 # (claude-config#349).
 # shellcheck source=lib/merge-target.sh
-. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
+. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || did_not_run merge-target.sh
 mt_runs_merge "$cmd" || exit 0
 
 # A REPOSITORY CAN OPT OUT, by checking in a marker file at its root (claude-config#438).

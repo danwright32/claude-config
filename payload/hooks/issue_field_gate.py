@@ -105,7 +105,7 @@ def session_line():
     """The line naming this session, from the one shared maker, or None outside a session."""
     try:
         r = subprocess.run(["bash", os.path.join(_HERE, "lib", "claude-session-line.sh")],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, timeout=5, errors="replace")
     except (OSError, subprocess.SubprocessError):
         return None
     line = r.stdout.strip()
@@ -599,4 +599,5 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())

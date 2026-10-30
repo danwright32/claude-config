@@ -16,6 +16,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 HOOK="$DIR/check-wrapped-commands.sh"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -612,15 +618,13 @@ check_eq "#1492 control: under the cap nothing is dropped" "6" "$(grep -c . "$LE
 # A byte that is not UTF-8 stops bash's =~ matching under a UTF-8 locale (claude-config#1885), so the
 # fast path read the words after one as absent and passed the command before the reader loaded. Each
 # case hands the hook such a byte in front of the words it looks for, written into the JSON raw, under
-# en_US.UTF-8, and expects the verdict the same command gets without it. The copies with no reader
+# a UTF-8 locale, and expects the verdict the same command gets without it. The copies with no reader
 # (LONE, LONE1623) refuse whatever the fast path does not pass, so they judge the fast path alone.
 BAD=$'\xff'
-if LC_ALL=en_US.UTF-8 bash -c '[[ "$1" =~ git ]]' _ "${BAD}git"; then
-  echo "SUITE-PART-UNMEASURED #1885 the fault itself: =~ under en_US.UTF-8 here matches past a byte that is not UTF-8, so the byte cases pass with or without the fix"
-fi
+bad_byte_measured regex "#1885 the fast path past a byte that is not UTF-8" || true
 raw_payload(){ printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$1" "$WORKDIR"; }
 utf8_run(){ # utf8_run <hook> <command>: sets out and rc
-  out="$(raw_payload "$2" | LC_ALL=en_US.UTF-8 bash "$1" 2>&1)"; rc=$?
+  out="$(raw_payload "$2" | LC_ALL="$BAD_BYTE_LOCALE" bash "$1" 2>&1)"; rc=$?
 }
 for c in "bash -c 'git push'" "eval x; echo ok; git status"; do
   utf8_run "$LONE/check-wrapped-commands.sh" "echo ok; $c"

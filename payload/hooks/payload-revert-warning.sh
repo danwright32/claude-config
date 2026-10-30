@@ -58,6 +58,11 @@ SC_LOADED=0
 { . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null && declare -F sc_hold_covers >/dev/null; } && SC_LOADED=1
 
 input="$(cat 2>/dev/null || true)"
+# Cleaned by the shared reader when it loads: a lone surrogate escape anywhere in the payload
+# (an emoji cut in half is enough) makes jq read none of it (claude-config#1944). Without the
+# library the payload is read as it came, as before.
+case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
+. "$_ps_dir/lib/push-scope.sh" 2>/dev/null && input="$(ps_clean_payload "$input")"
 
 # The session, and the directory the prompt was sent from. Keyed on the session so two open at once
 # each get their own record. With no session there is no way to tell a first prompt from a later

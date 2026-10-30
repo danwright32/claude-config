@@ -11,6 +11,11 @@
 set -uo pipefail
 
 payload="$(cat)"
+# Cleaned by the shared reader when it loads: a lone surrogate escape anywhere in the payload
+# (an emoji cut in half is enough) makes jq read none of it (claude-config#1944). Without the
+# library the payload is read as it came, as before.
+case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
+. "$_ps_dir/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
 # The cheap test first: almost no Bash command files an issue, and python costs every one that runs.
 case "$payload" in *issue*create*) ;; *) exit 0 ;; esac
 

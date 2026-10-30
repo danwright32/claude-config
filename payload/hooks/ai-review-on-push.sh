@@ -101,22 +101,40 @@
 # key is a hash of the origin URL; see lib/ai-review-common.sh. AI_REVIEW_STATE_DIR moves it.
 #
 # Fails QUIET on a payload it cannot read, and OPEN everywhere else: nothing here can stop a push
-# that has already happened.
+# that has already happened. A library it cannot load is said once, on a call naming a push
+# (claude-config#1922).
 
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# merge-target.sh sources push-scope.sh, and holds the push gate's own answer to which pushes it
-# holds (mt_push_gate_scope). Missing, the push gate refuses every push itself, so nothing reaches
-# this hook to review.
-# shellcheck source=lib/merge-target.sh
-. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
-declare -F mt_push_gate_scope >/dev/null || exit 0
-# shellcheck source=lib/ai-review-common.sh
-. "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null || exit 0
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
+# Taken raw, before the libraries load, so a library that will not load can still be told apart
+# from a call this never reviews.
 payload="$(cat)"
 
+# A library this hook cannot load is not a push with nothing to review (claude-config#1922): it used
+# to stop here in silence. Said once, and only on a call whose raw text names a push.
+did_not_run() {   # $1 = what went wrong, as a clause
+  case "$payload" in
+    *push*) hook_allow_notice "LESSONS REVIEW ON PUSH DID NOT RUN: ai-review-on-push.sh $1, so no lessons review of this push was started here; the merge gate will start one or say why." PostToolUse ;;
+  esac
+  exit 0
+}
+# merge-target.sh sources push-scope.sh, and holds the push gate's own answer to which pushes it
+# holds (mt_push_gate_scope).
+# shellcheck source=lib/merge-target.sh
+{ . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null && declare -F mt_push_gate_scope >/dev/null; } \
+  || did_not_run "could not load lib/merge-target.sh, or lib/push-scope.sh beneath it (reinstall the hooks with claude-sync pull)"
+# shellcheck source=lib/ai-review-common.sh
+. "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null \
+  || did_not_run "could not load lib/ai-review-common.sh (reinstall the hooks with claude-sync pull)"
+
+# Cleaned before anything parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
+payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"

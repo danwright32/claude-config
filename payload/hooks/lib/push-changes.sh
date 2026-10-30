@@ -190,6 +190,7 @@ pc_judge() {   # $1 = model  $2 = timeout seconds  $3 = system prompt (the rubri
   # Line 1 the verdict on the envelope, line 2 its time and cost, line 3 the object.
   parsed="$(printf '%s' "$envelope" | python3 -c '
 import sys, json, re
+sys.stdout.reconfigure(errors="replace")
 try:
     env = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     if not isinstance(env, dict):

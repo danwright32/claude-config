@@ -19,12 +19,32 @@
 
 set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || { echo "pr-review: lib/push-scope.sh is missing, so no lessons review was started; the merge gate will start one."; exit 0; }
-# shellcheck source=lib/ai-review-common.sh
-. "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null || { echo "pr-review: lib/ai-review-common.sh is missing, so no lessons review was started; the merge gate will say why."; exit 0; }
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
+# Taken raw, before the libraries load, so a library that will not load can still be told apart
+# from a call this never acts on.
 payload="$(cat)"
+
+# A library this hook cannot load is said once, as a systemMessage (claude-config#1922): it printed a
+# plain line on every call, which Claude Code sends to the debug log on exit 0, so nobody saw it
+# (#1906). Only on a call whose raw text names one this starts a review for.
+did_not_run() {   # $1 = the library, $2 = who acts instead
+  case "$payload" in
+    *"pr create"*|*push*|*commit*)
+      hook_allow_notice "pr-review DID NOT RUN: ai-review-on-pr.sh could not load lib/$1 (reinstall the hooks with claude-sync pull), so no lessons review was started; $2." PostToolUse ;;
+  esac
+  exit 0
+}
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || did_not_run push-scope.sh "the merge gate will start one"
+# shellcheck source=lib/ai-review-common.sh
+. "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null || did_not_run ai-review-common.sh "the merge gate will say why"
+
+# Cleaned before anything parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
+payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"

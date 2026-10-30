@@ -510,3 +510,17 @@ describe("pipeline: where a word's expansions outside quotes are, under a shell 
     expect(pipeline('echo $A').map(c => c.splits)).toEqual([undefined])
   })
 })
+
+// #1951: a word whose every pattern character is quoted or escaped is handed on as written, matched
+// against no file, so each command says which of its words are; a pattern character left bare, or
+// any expansion in the word, leaves it one the shell may expand.
+describe('pipeline: which words the shell hands on as written, every pattern character quoted (#1951)', () => {
+  test('a pattern quoted, double quoted, escaped or quoted in part is literal; one left bare or holding an expansion is not', () => {
+    expect(pipeline(`python3 s.py '*push*' "app/*.css" app/\\*x app/'*'.tsx`).map(c => c.literal)).toEqual([[false, false, true, true, true, true]])
+    expect(pipeline(`python3 s.py *push* ''*x'' "app/"*x '$P*' "$(ls)*" x\\(1\\)y(2)`).map(c => c.literal)).toEqual([undefined, undefined])
+    // A word holding no pattern character, quoted or not, is no literal pattern.
+    expect(pipeline(`python3 s.py 'a push' plain`).map(c => c.literal)).toEqual([undefined])
+    // A shell's script is read by its own quotes.
+    expect(pipeline(`bash -c "python3 s.py '*x*' *y*"`).map(c => c.literal)).toEqual([[false, false, true, false]])
+  })
+})

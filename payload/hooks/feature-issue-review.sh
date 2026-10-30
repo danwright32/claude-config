@@ -9,6 +9,11 @@
 set -euo pipefail
 
 input=$(cat)
+# Cleaned by the shared reader when it loads: a lone surrogate escape anywhere in the payload
+# (an emoji cut in half is enough) makes jq read none of it (claude-config#1944). Without the
+# library the payload is read as it came, as before.
+case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
+. "$_ps_dir/lib/push-scope.sh" 2>/dev/null && input="$(ps_clean_payload "$input")"
 
 # Detached-run guard: see session-reflection.sh. A headless `claude -p` launched by an app has no
 # reader, so an issue-review re-prompt spends the run on ceremony and can never reach a person

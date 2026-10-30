@@ -280,7 +280,7 @@ def _since_path(state, repo):
 
 def _read_since(state, repo):
     try:
-        with open(_since_path(state, repo)) as fh:
+        with open(_since_path(state, repo), errors="replace") as fh:
             value = fh.read().strip()
         parse(value)
         return value
@@ -291,7 +291,7 @@ def _read_since(state, repo):
 def _write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = "%s.tmp.%d" % (path, os.getpid())
-    with open(tmp, "w") as fh:
+    with open(tmp, "w", errors="replace") as fh:
         fh.write(text)
     os.replace(tmp, path)
 
@@ -350,7 +350,7 @@ def run(argv, github, now, out):
         out.write(line + "\n")
     out.write(("Dry run, nothing written. " if dry else "") + summary + "\n")
     if scheduled:
-        with open(os.path.join(state, "log"), "a") as fh:
+        with open(os.path.join(state, "log"), "a", errors="replace") as fh:
             for line in checker.said:
                 fh.write("%s %s\n" % (now, line))
             fh.write(summary + "\n")
@@ -372,7 +372,7 @@ def main(argv, github=None, now=None, out=None):
     os.makedirs(state, exist_ok=True)
     lock = _take_lock(state)
     if lock is None:
-        with open(os.path.join(state, "log"), "a") as fh:
+        with open(os.path.join(state, "log"), "a", errors="replace") as fh:
             fh.write("%s: another run holds %s, so this one checked nothing.\n" % (now, os.path.join(state, "lock")))
         return 0
     try:
@@ -381,7 +381,7 @@ def main(argv, github=None, now=None, out=None):
         said = "The check for Match the settled design issues closed below 100% crashed: %s" % (
             traceback.format_exc().strip().splitlines()[-1])
         _write(os.path.join(state, "result.%d.%d" % (int(time.time()), os.getpid())), said + "\n")
-        with open(os.path.join(state, "log"), "a") as fh:
+        with open(os.path.join(state, "log"), "a", errors="replace") as fh:
             fh.write("%s %s\n%s\n" % (now, said, traceback.format_exc()))
         return 1
     finally:

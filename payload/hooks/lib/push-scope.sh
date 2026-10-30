@@ -31,10 +31,107 @@
 # exception is the reading of a command (ps__read, claude-config#1040), kept per
 # command so one hook asking several questions reads it once; see its comment.
 
-# True when the command runs a git push, judged by the LEADING TOKENS of each
-# shell segment. Substring matching is wrong here: a command whose payload
-# merely mentions a push (an echo, a doc write, a commit message) would fire a
-# hook that has nothing to act on.
+# ---- taking the hook payload off stdin, legible to every reader (claude-config#1944) ----
+# jq 1.7.1, the Mac's jq, rejects a WHOLE payload holding one lone surrogate escape: \ud800 with no
+# low half after it, or a low half with no high one before it ("Invalid \uXXXX\uXXXX surrogate pair
+# escape", exit 5). Any tool input can carry one (an emoji cut in half is enough), and every gate that
+# read its payload with jq then read nothing: six merge gates let gh pr merge through, measured on
+# 2026-10-30. python3 reads the escape, and then raises on whichever .encode() or print meets it.
+#
+# So the payload is cleaned once, where it is taken off stdin, before anything parses it: each lone
+# surrogate escape becomes �, the rule #1900 applied to a byte that is not UTF-8, and the text
+# every reader then sees is the same. A whole pair is left alone, and so is "\\ud800", which is an
+# escaped backslash followed by text. Only an escape is changed on purpose: a byte that is not UTF-8
+# passes through python3's half as it was, for whichever reader takes it next to replace (#1900),
+# and jq's half, which reads the text as UTF-8, makes it U+FFFD itself, as jq parsing it would.
+#
+#   ps_read_payload           stdin = the payload; prints it cleaned. A hook's capture is
+#                             payload="$(ps_read_payload)", in place of payload="$(cat)".
+#   ps_clean_payload <text>   prints <text> cleaned. ps_parse_payload runs it too, for a caller
+#                             holding a payload taken some other way.
+#
+# The cleaning reads what jq or python3 can read, like ps_parse_payload: python3 first, which keeps
+# every byte as it was, then jq reading the text raw. With neither, the text is handed back as it
+# came, and ps_reader_missing says why nothing can read it. A text that cannot hold the escape at all,
+# which is nearly every payload, never starts either: a bash pattern decides that.
+#
+# Both halves find the escapes the way JSON does, which is the whole difficulty: a backslash run is
+# read in pairs from its start, so "\\ud800" is an escaped backslash and then text, and "\\\ud800" an
+# escaped backslash and then an escape. python3 says that with a lookbehind. jq's regex functions are
+# quadratic in the number of matches (20,000 escapes took 45 seconds), so its half splits the text on
+# escaped backslashes, then each piece on \u, and judges each escape by its neighbours. Each half
+# prints only once it has finished, so a reader failing partway cannot leave half a payload in front
+# of the next one's whole one; the trailing x keeps a final newline the capture would otherwise drop.
+PS_CLEAN_JQ='
+def half: .[0:2] | ascii_downcase
+  | if IN("d8", "d9", "da", "db") then "high" elif IN("dc", "dd", "de", "df") then "low" else "" end;
+def hexed: .[2:4] | test("^[0-9a-fA-F]{2}$");
+def fix:
+  if index("\\u") == null then . else
+    split("\\u") as $s | ($s | length) as $n
+    | [range(1; $n) as $i | $s[$i] | {c: ., h: (if hexed then half else "" end)}] as $e
+    | def starts($k): $e[$k].h == "high" and ($e[$k].c | length) == 4 and $k + 1 < ($n - 1) and $e[$k + 1].h == "low";
+      $s[0] + ([range(0; $n - 1) as $k
+        | if starts($k) or ($k > 0 and starts($k - 1)) or $e[$k].h == "" then "\\u" + $e[$k].c
+          else "\\ufffd" + ($e[$k].c[4:]) end] | join(""))
+  end;
+(split("\\\\") | map(fix) | join("\\\\")) + "x"'
+ps_clean_payload() {   # $1 = payload text
+  local p="${1-}" out
+  case "$p" in
+    *'\u'[dD][89abcdefABCDEF]*) ;;
+    *) printf '%s' "$p"; return 0 ;;
+  esac
+  if command -v python3 >/dev/null 2>&1; then
+    out="$(printf '%s' "$p" | python3 -c '
+import re, sys
+pat = re.compile(rb"(?<!\\)((?:\\\\)*)\\u([dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2}|[dD][89a-fA-F][0-9a-fA-F]{2})")
+def fix(m):
+    return m.group(0) if len(m.group(2)) > 4 else m.group(1) + b"\\ufffd"
+sys.stdout.buffer.write(pat.sub(fix, sys.stdin.buffer.read()) + b"x")' 2>/dev/null)" \
+      && [ "${out: -1}" = x ] && { printf '%s' "${out%x}"; return 0; }
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    out="$(printf '%s' "$p" | jq -R -s -j "$PS_CLEAN_JQ" 2>/dev/null)" \
+      && [ "${out: -1}" = x ] && { printf '%s' "${out%x}"; return 0; }
+  fi
+  printf '%s' "$p"
+}
+
+ps_read_payload() {   # stdin = the hook payload
+  ps_clean_payload "$(cat)"
+}
+
+# What a refusing gate does when ps_parse_payload could not read its payload for any other reason
+# (claude-config#1922): truncated, an escape JSON does not have, anything neither jq nor python3
+# accepts. Most gates ended `parsed="$(ps_parse_payload ...)" || exit 0`, so such a payload was let
+# through in silence, which looks exactly like a call with nothing to refuse (L10, L98).
+#
+# It is #1900's rule for a library that would not load: nothing here can tell which command this is,
+# so the raw text decides. A payload naming any one of the gate's words is refused, saying why; any
+# other passes as it would have, since refusing every unreadable call would be a gate nobody keeps
+# (L36, L54). The gate's override is read from the raw text the same way, so the refusal is never a
+# dead end (L109). One helper and one sentence for every gate, rather than a wording per hook (L613).
+#
+#   ps_unparsed_refuse <payload> <gate file name> <override variable, or -> <what it judges> <glob>...
+#     exits: 0 when the call passes, 2 after saying why on stderr. It never returns.
+ps_unparsed_refuse() {
+  local payload="$1" gate="$2" override="$3" judged="$4" w named=""
+  shift 4
+  if [ "$override" != "-" ]; then
+    case "$payload" in *"$override=1"*) exit 0 ;; esac
+  fi
+  for w in "$@"; do
+    # shellcheck disable=SC2254 # each word is a pattern by design
+    case "$payload" in $w) named=1; break ;; esac
+  done
+  [ -n "$named" ] || exit 0
+  printf 'BLOCKED: %s could not parse its hook payload as JSON (neither jq nor python3 read it), and the payload names %s, so whether this command is %s could not be checked. A payload this gate cannot read is not a command with nothing to check (claude-config#1922).%s\n' \
+    "$gate" "${w//\*/}" "$judged" \
+    "$([ "$override" != "-" ] && printf ' For this one command: %s=1 <the same command>.' "$override")" >&2
+  exit 2
+}
+
 # ---- reading the hook payload, once (claude-config#102) ----
 # This lived in five near copies across the hooks, and they had already drifted: three flattened a
 # newline into "; " and two did not, which is how claude-config#97 came to live in exactly the
@@ -51,7 +148,7 @@
 #              rather than splitting it, and would otherwise be shown something the person did
 #              not write.
 ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
-  local payload="${1:-}" mode="${2:-segmented}" sep
+  local payload mode="${2:-segmented}" sep
   case "$mode" in
     segmented) sep="; " ;;
     raw)       sep="" ;;
@@ -59,6 +156,8 @@ ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
     # see a command at all, and the safe side of that is not a default (L50).
     *)         return 2 ;;
   esac
+  # A caller that captured the payload some other way still gets it cleaned (#1944).
+  payload="$(ps_clean_payload "${1:-}")"
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$payload" | jq -j --arg sep "$sep" '
       ((.tool_input.command // "") | if $sep == "" then . else gsub("\n"; $sep) end)
@@ -67,6 +166,7 @@ ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
   fi
   printf '%s' "$payload" | PS_SEP="$sep" python3 -c '
 import os, sys, json
+sys.stdout.reconfigure(errors="replace")
 sep = os.environ.get("PS_SEP", "; ")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
@@ -144,6 +244,10 @@ ps_add_scope_unreadable() {   # $1 = command
   ps_reader_missing python3
 }
 
+# True when the command runs a git push, judged by the LEADING TOKENS of each
+# shell segment. Substring matching is wrong here: a command whose payload
+# merely mentions a push (an echo, a doc write, a commit message) would fire a
+# hook that has nothing to act on.
 ps_is_git_push() { ps__runs_git_sub "$1" push; }
 
 # Is this command a `git commit`, in COMMAND POSITION (claude-config#599)? The same walker as the

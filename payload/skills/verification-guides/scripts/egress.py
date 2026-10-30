@@ -179,7 +179,7 @@ class Monitor:
         if not os.access(self.sandbox, os.X_OK):
             raise Unavailable("%s is not on this machine, so the served app cannot run under the reporting"
                               " sandbox" % self.sandbox)
-        with open(self.profile, "w") as f:
+        with open(self.profile, "w", errors="replace") as f:
             f.write(profile_text(self.tag))
         self.allowed_ips, self.unresolved = resolve(self.allow)
         predicate = 'sender == "Sandbox" AND eventMessage CONTAINS "%s"' % self.tag
@@ -241,7 +241,7 @@ class Monitor:
         """The remote addresses `pid` holds open on `port`, read now, while the connection may be open."""
         try:
             r = subprocess.run([LSOF, "-a", "-n", "-P", "-p", str(pid), "-i", "-F", "n"],
-                               capture_output=True, text=True, timeout=10)
+                               capture_output=True, text=True, timeout=10, errors="replace")
         except (OSError, subprocess.TimeoutExpired) as e:
             return [], "lsof could not read the sockets of pid %d: %s" % (pid, e)
         # lsof exits 1 when the process holds no matching socket any more, which is an answer (the
@@ -253,7 +253,7 @@ class Monitor:
     def _event(self, obj):
         fd = os.open(self.events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:
-            os.write(fd, (json.dumps(obj) + "\n").encode())
+            os.write(fd, (json.dumps(obj) + "\n").encode("ascii", "strict"))
         finally:
             os.close(fd)
 
@@ -263,11 +263,11 @@ class Monitor:
         """Run one canary under a profile tagged for it alone, and return that tag."""
         self.canaries_fired += 1
         tag = "%s-%d" % (self.canary_tag, self.canaries_fired)
-        with open(self.canary_profile, "w") as f:
+        with open(self.canary_profile, "w", errors="replace") as f:
             f.write(profile_text(tag))
         try:
             r = subprocess.run([self.sandbox, "-f", self.canary_profile, sys.executable, "-c", CANARY],
-                               capture_output=True, text=True, timeout=CANARY_RUN_MAX_S)
+                               capture_output=True, text=True, timeout=CANARY_RUN_MAX_S, errors="replace")
         except (OSError, subprocess.TimeoutExpired) as e:
             raise Unavailable("the canary could not run under %s: %s" % (self.sandbox, e))
         out = r.stdout.strip()

@@ -118,6 +118,7 @@ hook_allow_notice() {
 hook_notice_verdict() {
   HN_OUT="$1" HN_WANT="$2" python3 -c '
 import json, os, re, sys
+sys.stdout.reconfigure(errors="replace")
 raw = os.environ["HN_OUT"]
 try:
     d = json.loads(raw)

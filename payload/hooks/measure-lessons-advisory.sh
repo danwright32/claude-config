@@ -67,6 +67,7 @@ sys.stdout.write(json.dumps({"tool_input":{"command":"git push"},"cwd":os.enviro
     fired=$((fired+1))
     printf '%s' "$out" | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:

@@ -19,6 +19,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 LIB="$DIR/lib/failure-handling.sh"
 # The checkout is found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663),
 # which prints nothing for an installed copy or a copy inside some other repository.
@@ -291,11 +297,12 @@ if [ -n "$planted" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: 
 # A byte that is not UTF-8 on a line ABOVE the code (claude-config#1900). Under a UTF-8 locale macOS
 # awk stops with an error at the first pattern that scans such a byte, so the catch below it was
 # never read and the file was not listed: the test gate then never asked for a failure path test.
+bad_byte_measured awk "#1900 fh_files and fh_catch past a byte that is not UTF-8" || true
 printf -- '--- /dev/null\n+++ b/src/byte.ts\n@@ -0,0 +1,3 @@\n+// caf\xff note\n+try { await send() }\n+catch (e) { return [] }\n' > "$WORK/bytediff"
-got="$(LC_ALL=en_US.UTF-8 fh_files < "$WORK/bytediff" | tr '\n' ' ')"
+got="$(LC_ALL="$BAD_BYTE_LOCALE" fh_files < "$WORK/bytediff" | tr '\n' ' ')"
 if [ "$got" = "src/byte.ts " ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: with a byte that is not UTF-8 above it, fh_files listed [$got], expected [src/byte.ts ]"; fi
 printf '// caf\xff note\ncatch (e) { return [] }\n' > "$WORK/bytelines"
-if LC_ALL=en_US.UTF-8 fh_catch src/byte.ts "$WORK/bytelines"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: fh_catch should fire below a byte that is not UTF-8"; fi
+if LC_ALL="$BAD_BYTE_LOCALE" fh_catch src/byte.ts "$WORK/bytelines"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: fh_catch should fire below a byte that is not UTF-8"; fi
 
 # Every gate that asks the question reads the lib (L261): the advisory, the push gate, the review.
 for caller in lessons-advisory.sh require-tests-before-push.sh lib/ai-review-run.py; do

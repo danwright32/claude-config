@@ -482,8 +482,12 @@ export type ModKitWrites = {
    * `tool` marks a module run with `python -m` or a tool run through `npx` (#1815): a program whose
    * operands are, by its own convention, the files it works on, where a script file's arguments are
    * its own (a commit, a test's name), so a guard can judge the two apart.
+   * `quoted`, on an argument given by its `folder`, marks a pattern whose every pattern character is
+   * quoted or after a backslash, with no expansion in it, wherever the command spells it (#1951:
+   * `'*push*'`): the shell matched it against no file, so the run is handed its characters as
+   * written. A tool may still expand it itself, and so may a script.
    */
-  runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string }[] }[]
+  runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true }[] }[]
 }
 
 /**

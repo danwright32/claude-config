@@ -91,7 +91,12 @@ if ps_reader_missing jq python3; then
   exit 0
 fi
 
-parsed=$(ps_parse_payload "$payload" raw) || parsed=""
+# Taken raw above so the commonest call leaves before anything loads, and cleaned here, before
+# anything parses it: a lone surrogate escape made jq read nothing, and this gate let the merge
+# through (claude-config#1944). A payload still unreadable is judged by its words (#1922).
+payload="$(ps_clean_payload "$payload")"
+parsed=$(ps_parse_payload "$payload" raw) \
+  || ps_unparsed_refuse "$payload" block-red-merge.sh ALLOW_RED_MERGE "a merge of a pull request" '*merge*' '*Merge*' '*enqueuePullRequest*'
 command="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 

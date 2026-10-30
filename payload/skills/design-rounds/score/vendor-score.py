@@ -120,7 +120,7 @@ def copy(folder, from_dir):
         "refresh": "python3 %s/vendor-score.py copy <this folder>" % INSTALLED,
         "files": dict(sorted(hashes.items())),
     }
-    write_atomic(os.path.join(folder, MANIFEST), (json.dumps(manifest, indent=1) + "\n").encode())
+    write_atomic(os.path.join(folder, MANIFEST), (json.dumps(manifest, indent=1) + "\n").encode("ascii", "strict"))
     say("copied %d files into %s and wrote %s. Commit the folder." % (len(hashes), folder, MANIFEST))
     extra = sorted(set(os.listdir(folder)) - set(FILES) - {MANIFEST})
     if extra:
@@ -137,7 +137,7 @@ def check(folder, against):
         say("%s has no %s, so it cannot be checked. Write the copy with: %s" % (folder, MANIFEST, refresh_command(folder)))
         return 2
     try:
-        with open(mpath) as fh:
+        with open(mpath, errors="replace") as fh:
             man = json.load(fh)
     except (OSError, ValueError) as e:
         say("%s could not be read (%s), so the copy cannot be checked" % (mpath, e))
@@ -225,4 +225,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

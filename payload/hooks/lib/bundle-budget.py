@@ -151,7 +151,7 @@ def read_record(path):
     if not os.path.exists(path):
         return "none", None
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
     except OSError:
         return "unreadable", None
@@ -169,7 +169,7 @@ def write_record(path, remote, total, source, why):
             f"# source: {source}\n"
             f"total: {total}\n")
     tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", errors="replace") as fh:
         fh.write(body)
     os.replace(tmp, path)
 

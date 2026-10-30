@@ -46,7 +46,7 @@ class InputError(Exception):
 
 def load_json(path, what):
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             text = f.read()
     except OSError as e:
         raise InputError(f"cannot read the {what} {path}: {e.strerror or e}")
@@ -315,7 +315,7 @@ def cmd_snap(src, dst):
         raise InputError(f"{dst} already exists; a snapshot is never overwritten, so name a new file")
     snap = {"format": SNAP_FORMAT, **j}
     tmp = dst + ".partial"
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open(tmp, "w", encoding="utf-8", errors="replace") as f:
         json.dump(snap, f, indent=1, sort_keys=True)
     os.replace(tmp, dst)
     jj = j["journey"]
@@ -361,4 +361,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv[1:]))

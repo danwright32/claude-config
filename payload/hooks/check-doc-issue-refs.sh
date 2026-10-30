@@ -83,7 +83,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 }
 SCANNER="$HOOK_DIR/lib/doc-issue-refs.py"
 
-payload="$(cat)"
+payload="$(ps_read_payload)"
 
 # THE DETECTOR'S OWN READER, asked before anything is measured (claude-config#486, L490).
 #
@@ -111,7 +111,8 @@ if ps_reader_missing python3; then
   exit 0
 fi
 
-parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
+parsed="$(ps_parse_payload "$payload" segmented)" \
+  || ps_unparsed_refuse "$payload" check-doc-issue-refs.sh SKIP_DOC_REFS_CHECK "a push" '*push*'
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0
@@ -273,6 +274,7 @@ printf '%s\n' "$ids" | sed '/^$/d' | xargs -P 6 -I{} bash -c 'lookup "$1"' _ {} 
 #   UNREACHABLE\t<id>\t<first line of gh's error>
 verdicts="$(DR_WORK="$WORK" python3 - <<'PY'
 import json, os, sys
+sys.stdout.reconfigure(errors="replace")
 work = os.environ["DR_WORK"]
 rows = []
 with open(os.path.join(work, "candidates"), encoding="utf-8", errors="replace") as fh:
@@ -291,7 +293,7 @@ for f in os.listdir(adir):
         continue
     key = f[:-5]
     try:
-        code = int(open(os.path.join(adir, key + ".code")).read().strip() or "1")
+        code = int(open(os.path.join(adir, key + ".code"), errors="replace").read().strip() or "1")
     except ValueError:
         code = 1
     body = open(os.path.join(adir, key + ".json"), encoding="utf-8", errors="replace").read()

@@ -74,6 +74,9 @@ MSG
 { . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null && declare -F sc_hold_covers >/dev/null; } || unloaded sync-clone.sh
 # shellcheck source=lib/push-scope.sh
 { . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && declare -F ps_parse_payload >/dev/null; } || unloaded push-scope.sh
+# Taken raw above, for the refusal a missing library gives, and cleaned now, before anything parses
+# it: a lone surrogate escape reads as nothing to jq and raises in python3's print (claude-config#1944).
+payload="$(ps_clean_payload "$payload")"
 # Missing, a file differing only by the home placeholder is reported rather than left out, which is
 # the safe side of that question.
 # shellcheck source=lib/home-token.sh

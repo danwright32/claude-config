@@ -64,6 +64,7 @@ _sleep_read() {
   fi
   out="$(python3 - "$file" "$now" "$boot" "$session" <<'PY' 2>&1
 import json, math, sys
+sys.stdout.reconfigure(errors="replace")
 
 def num(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
@@ -79,7 +80,7 @@ TOLERANCE_S = 300
 
 path, now, boot, session = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
 try:
-    with open(path) as fh:
+    with open(path, errors="replace") as fh:
         text = fh.read()
 except Exception as e:
     say("unreadable", "the sleep record could not be read (%s)" % e)

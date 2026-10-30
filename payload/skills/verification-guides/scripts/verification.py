@@ -326,7 +326,7 @@ def egress_host_ok(host):
 
 def load_areas(path, root=None):
     try:
-        with open(path) as f:
+        with open(path, errors="strict") as f:
             text = f.read()
     except FileNotFoundError:
         fail("areas-missing", "%s does not exist: this project has not opted in to verification guides" % path)
@@ -415,7 +415,7 @@ def parse_guide(text):
 
 def load_guide(path):
     try:
-        with open(path) as f:
+        with open(path, errors="strict") as f:
             return parse_guide(f.read())
     except FileNotFoundError:
         fail("guide-missing", "%s does not exist" % path)
@@ -657,7 +657,7 @@ def load_receipt(receipt_id, home=None):
     rdir = receipt_dir(receipt_id, home)
     path = os.path.join(rdir, "receipt.json")
     try:
-        with open(path) as f:
+        with open(path, errors="strict") as f:
             text = f.read()
     except FileNotFoundError:
         fail("receipt-missing", "no receipt %s at %s" % (receipt_id, path))
@@ -683,7 +683,7 @@ def record_digest(rec):
     """
     body = {k: val for k, val in rec.items() if k not in _READER_KEYS}
     text = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return "sha256:" + hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()  # as render writes it (#1944)
 
 
 def remember_rendered(receipt_id, records, home=None):
@@ -698,7 +698,7 @@ def remember_rendered(receipt_id, records, home=None):
     lines = "".join(json.dumps({"schema": RENDERED_SCHEMA, "area": r["area"], "digest": record_digest(r),
                                 "at": utc_now()}) + "\n" for r in records)
     try:
-        with open(path, "a") as f:
+        with open(path, "a", errors="replace") as f:
             f.write(lines)
     except OSError as e:
         fail("render-not-remembered", "the fingerprint of what was rendered could not be written to %s (%s),"
@@ -713,7 +713,7 @@ def load_rendered(receipt_id, home=None):
     """
     path = os.path.join(receipt_dir(receipt_id, home), "rendered.jsonl")
     try:
-        with open(path) as f:
+        with open(path, errors="strict") as f:
             lines = f.read().splitlines()
     except FileNotFoundError:
         return {}
@@ -743,7 +743,7 @@ def load_drives(receipt_id, home=None):
     """
     path = os.path.join(receipt_dir(receipt_id, home), "drives.jsonl")
     try:
-        with open(path) as f:
+        with open(path, errors="strict") as f:
             lines = f.read().splitlines()
     except FileNotFoundError:
         return []
@@ -798,7 +798,7 @@ def tally_append(slug, pr, head_sha, passed, kinds, home=None):
     # One write to a file opened for append, so two merges judged at once never interleave a line.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        os.write(fd, line.encode())
+        os.write(fd, line.encode("ascii", "strict"))
     finally:
         os.close(fd)
 
@@ -808,7 +808,9 @@ def tally_summary(slug, home=None):
     path = tally_file(slug, home)
     prs, bad = {}, 0
     try:
-        with open(path) as f:
+        # Replaced (#1923): the tally only decides when to ask, and a line a stand in breaks is
+        # counted below as unreadable, so one damaged tally does not stop every other repository's.
+        with open(path, errors="replace") as f:
             lines = f.read().splitlines()
     except FileNotFoundError:
         lines = []
@@ -839,7 +841,7 @@ def _asked_path(slug, home=None):
 def _asked_at(slug, home=None):
     """How many pull requests the tally held when Dan was last asked; 0 when he never was."""
     try:
-        with open(_asked_path(slug, home)) as f:
+        with open(_asked_path(slug, home), errors="replace") as f:
             return int(f.read().strip() or 0)
     except (OSError, ValueError):
         return 0
@@ -881,7 +883,7 @@ def tally_due(home=None, every=TALLY_ASK_EVERY, mark=False):
                         "asked_at": asked, "unreadable_lines": s["unreadable_lines"]})
             if mark:
                 tmp = _asked_path(slug, home) + ".tmp"
-                with open(tmp, "w") as f:
+                with open(tmp, "w", errors="replace") as f:
                     f.write(str(n))
                 os.replace(tmp, _asked_path(slug, home))
     return due
@@ -1031,6 +1033,8 @@ def find_agent_id(nonce, transcripts=None, max_age_s=3 * 86400):
                 try:
                     if os.path.getmtime(path) < cutoff:
                         continue
+                    # Replaced, not refused (#1923): every agent's transcript is read here, and one
+                    # holding a byte that is not UTF-8 is not a reason to stop looking for this one.
                     with open(path, errors="replace") as f:
                         first = f.readline(4 * 1024 * 1024)
                 except OSError:
@@ -1060,7 +1064,15 @@ def _print_problems(err):
 
 
 def _read_stdin():
-    return sys.stdin.read()
+    # Refused by name rather than replaced (claude-config#1923): what arrives here is a PR body, a
+    # comment or a draft that a merge is judged on, so a byte that is not UTF-8 means the text is not
+    # what GitHub holds, and judging a stand in for it would decide the merge on text nobody wrote.
+    raw = sys.stdin.buffer.read()
+    try:
+        return raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as e:
+        fail("stdin-not-utf8", "standard input holds a byte that is not UTF-8 (0x%02x at offset %d), so it is not the text it should be"
+             % (raw[e.start], e.start))
 
 
 def _cmd(argv):
@@ -1107,7 +1119,7 @@ def _cmd(argv):
         return 0
     if argv[:2] == ["record", "render"] and len(argv) == 4 and argv[2] == "--pr-body":
         try:
-            with open(argv[3]) as f:
+            with open(argv[3], errors="strict") as f:
                 body = f.read()
         except OSError as e:
             fail("render-bad-draft", "the PR body file %s could not be read: %s" % (argv[3], e))
@@ -1138,6 +1150,12 @@ def main(argv):
     except VerificationError as e:
         _print_problems(e)
         return e.code
+    except UnicodeDecodeError as e:
+        # Its files are read strictly and refused here by name (claude-config#1923): an areas file,
+        # guide or receipt decides a merge, so it is not judged on a stand in for a byte it holds.
+        print("verification: file-not-utf8: a file this reads holds a byte that is not UTF-8 (0x%02x at offset %d)"
+              % (e.object[e.start], e.start), file=sys.stderr)
+        return 4
     if rc is None:
         print("verification: usage: see the docstring at the top of %s" % os.path.abspath(__file__), file=sys.stderr)
         return 2
@@ -1145,4 +1163,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv[1:]))
