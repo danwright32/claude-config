@@ -116,7 +116,10 @@ read_key="$(mt_presented_read_key "$raw" ps_is_git_push)"
 WAIT="${PR_REVIEW_PUSH_WAIT_SECONDS:-100}"
 case "$WAIT" in ''|*[!0-9]*) WAIT=100 ;; esac
 POLL="${PR_REVIEW_PUSH_POLL_SECONDS:-3}"
-case "$POLL" in ''|*[!0-9]*|0) POLL=3 ;; esac
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948).
+# shellcheck source=lib/whole-number.sh
+. "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null
+whole_above_zero "$POLL" || POLL=3
 SLEEP="${PR_REVIEW_PUSH_SLEEP:-sleep}"
 now_s() { if [ -n "${PR_REVIEW_PUSH_CLOCK:-}" ]; then "$PR_REVIEW_PUSH_CLOCK"; else date +%s; fi; }
 

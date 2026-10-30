@@ -100,11 +100,12 @@ commit_all(){ git -C "$1" add -A >/dev/null 2>&1; git -C "$1" commit -q -m "fixt
   exit 1
 }
 FIRE_DEADLINE="${SCANNERS_TEST_FIRE_DEADLINE:-60}"
-case "$FIRE_DEADLINE" in
-  ''|*[!0-9]*|0)
-    echo "test-scanners-before-push: SCANNERS_TEST_FIRE_DEADLINE='$FIRE_DEADLINE' is not a whole number of seconds above zero. Refusing to run the gate calls unbounded." >&2
-    exit 2 ;;
-esac
+# shellcheck source=lib/whole-number.sh
+. "$DIR/lib/whole-number.sh"
+if ! whole_above_zero "$FIRE_DEADLINE"; then
+  echo "test-scanners-before-push: SCANNERS_TEST_FIRE_DEADLINE='$FIRE_DEADLINE' is not a whole number of seconds above zero. Refusing to run the gate calls unbounded." >&2
+  exit 2
+fi
 FIRE_DEADLINE_LOG="$TMPROOT/fire-deadlines"
 fire(){              # $1 = repo  $2 = the command  -> prints the hook's output, exits with its code
   local payload
@@ -414,7 +415,7 @@ o38="$(fire "$R38" "git push")"; c38=$?
 # a copy of the gate whose repo-files.sh refuses the listings of what is not committed, the count's
 # and, since #1910, the key's, and nothing else.
 FAKEHOOKS="$TMPROOT/fakehooks"; mkdir -p "$FAKEHOOKS/lib"
-cp "$H" "$FAKEHOOKS/scanners-before-push.sh"; cp "$DIR/lib/push-scope.sh" "$FAKEHOOKS/lib/push-scope.sh"
+cp "$H" "$FAKEHOOKS/scanners-before-push.sh"; cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$FAKEHOOKS/lib/"
 cat > "$FAKEHOOKS/lib/repo-files.sh" <<EOF
 #!/usr/bin/env bash
 case "\$1" in --uncommitted|--changed) echo "repo-files: git could not list the files under \$2 that are not committed." >&2; exit 1 ;; esac
@@ -1348,7 +1349,7 @@ treefire "$R1910e" "git push" >/dev/null
 nokey_hooks(){   # $1 = folder  $2 = the one thing missing: listing (the listings of what is not committed fail), pidlock or recorded (that lock library is absent), or state (nothing; the state folder is made bad by the caller)
   mkdir -p "$1/lib"
   cp "$H" "$1/scanners-before-push.sh"
-  cp "$DIR/lib/push-scope.sh" "$DIR/lib/load-average.sh" "$1/lib/"
+  cp "$DIR/lib/push-scope.sh" "$DIR/lib/load-average.sh" "$DIR/lib/whole-number.sh" "$1/lib/"
   [ "$2" = pidlock ] || cp "$DIR/lib/pid-lock.sh" "$1/lib/"
   [ "$2" = recorded ] || cp "$DIR/lib/recorded-pid.sh" "$1/lib/"
   if [ "$2" = listing ]; then

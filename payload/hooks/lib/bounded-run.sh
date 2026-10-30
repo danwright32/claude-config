@@ -20,15 +20,19 @@
 #     would cancel the bound and leave the command unbounded: callers treat 0 as "off" and must not
 #     call this with it, so it refuses with 125 rather than run unbounded. Zero written any way
 #     (00, 000) is zero: only the literal 0 was refused, so "00" reached alarm and ran the command
-#     unbounded (claude-config#1931). Leading zeros are cut before the test, not read as octal.
+#     unbounded (claude-config#1931). Which values are zero is lib/whole-number.sh's answer
+#     (claude-config#1948); with that file missing every bound is refused, never run unbounded.
+
+# Its own folder by parameter expansion, never dirname (claude-config#1104, test-lib-self-locate.sh).
+_BR_LIB="${BASH_SOURCE[0]%/*}"; [ "$_BR_LIB" != "${BASH_SOURCE[0]}" ] || _BR_LIB=.
+# shellcheck source=whole-number.sh
+. "$_BR_LIB/whole-number.sh" 2>/dev/null
 
 bounded_run() {
   local seconds="$1"; shift
   BOUNDED_RC=0
   BOUNDED_OUT=""
-  case "$seconds" in ''|*[!0-9]*) BOUNDED_RC=125; return 0 ;; esac
-  seconds="${seconds#"${seconds%%[!0]*}"}"
-  [ -n "$seconds" ] || { BOUNDED_RC=125; return 0; }
+  whole_above_zero "$seconds" || { BOUNDED_RC=125; return 0; }
   BOUNDED_OUT="$(perl -e '
     my $t = shift @ARGV;
     my $pid = fork();

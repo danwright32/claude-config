@@ -170,7 +170,11 @@ payload_match "$payload" "$GUARDED_WORD" || exit 0
 LEDGER_DIR="${WRAPPED_REFUSAL_LEDGER_DIR:-$HOME/.claude/state/wrapped-commands}"
 LEDGER="$LEDGER_DIR/refusals.tsv"
 LEDGER_MAX="${WRAPPED_REFUSAL_LEDGER_MAX:-5000}"
-case "$LEDGER_MAX" in ''|*[!0-9]*|0) LEDGER_MAX=5000 ;; esac
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, the
+# shell names the missing function and the default is used.
+# shellcheck source=lib/whole-number.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/whole-number.sh" 2>/dev/null
+whole_above_zero "$LEDGER_MAX" || LEDGER_MAX=5000
 RECORD_NOTE=""
 
 # Appends one line for this refusal. Sets RECORD_NOTE, the one sentence saying so, when the line

@@ -232,11 +232,14 @@ SUITE_SECTION_TIMINGS="${SUITE_SECTION_TIMINGS-${XDG_CACHE_HOME:-$HOME/.cache}/c
 # hour or two of runs: enough that one run on a quieter machine among them gives the section's real
 # cost, and few enough that a section which genuinely grew is judged by its new cost within ten runs.
 SUITE_SECTION_SAMPLES="${SUITE_SECTION_SAMPLES:-10}"
-case "$SUITE_SECTION_SAMPLES" in
-  ''|*[!0-9]*|0)
-    echo "test suite: SUITE_SECTION_SAMPLES='$SUITE_SECTION_SAMPLES' is not a positive whole number of readings. Refusing rather than keeping none, which would leave the stall bound's check judging one reading again." >&2
-    exit 4 ;;
-esac
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948), for this
+# setting and the counts below. Missing, the shell says so and every count is refused.
+# shellcheck source=../payload/hooks/lib/whole-number.sh
+. "$(dirname "$SCRIPT")/payload/hooks/lib/whole-number.sh"
+if ! whole_above_zero "$SUITE_SECTION_SAMPLES"; then
+  echo "test suite: SUITE_SECTION_SAMPLES='$SUITE_SECTION_SAMPLES' is not a positive whole number of readings. Refusing rather than keeping none, which would leave the stall bound's check judging one reading again." >&2
+  exit 4
+fi
 
 # A record is keyed on the section's TITLE, never its position. Sections are added and removed
 # constantly and every index after the insertion point shifts, so an index keyed store would
@@ -527,11 +530,10 @@ fi
 # above the selectors, because those re-execute this file: a refusal written beside the seam would
 # sit after that re-execution and could never be reached by the run that needed it (L109).
 if [ -n "${SUITE_FIXTURE_SECTIONS:-}" ]; then
-  case "$SUITE_FIXTURE_SECTIONS" in
-    ''|*[!0-9]*|0)
-      echo "test suite: SUITE_FIXTURE_SECTIONS='$SUITE_FIXTURE_SECTIONS' is not a positive whole number of sections. Refusing rather than running none and reporting a pass over a set nobody chose (L98)." >&2
-      exit 2 ;;
-  esac
+  if ! whole_above_zero "$SUITE_FIXTURE_SECTIONS"; then
+    echo "test suite: SUITE_FIXTURE_SECTIONS='$SUITE_FIXTURE_SECTIONS' is not a positive whole number of sections. Refusing rather than running none and reporting a pass over a set nobody chose (L98)." >&2
+    exit 2
+  fi
   # Not combinable with the knobs that SELECT sections. Those choose from the real file and this
   # replaces it, so a run given both would report a result about neither, and two knobs sitting
   # beside each other is exactly how one gets reached for by mistake (claude-config#110).
@@ -1846,9 +1848,7 @@ shard_coverage_verdict(){   # $1 = shards expected; coverage lines on stdin
   local _cv_n="${1:-}" _cv_line _cv_i _cv_f _cv_l _cv_s _cv_x _cv_k
   local _cv_first="" _cv_last="" _cv_seen=" " _cv_got=" "
   local _cv_bad="" _cv_dis="" _cv_dup="" _cv_gone="" _cv_miss="" _cv_extra="" _cv_say=""
-  case "$_cv_n" in
-    ''|*[!0-9]*|0) printf 'shard coverage: asked to check against "%s" shards, which is not a count of them.\n' "$_cv_n"; return 2 ;;
-  esac
+  whole_above_zero "$_cv_n" || { printf 'shard coverage: asked to check against "%s" shards, which is not a count of them.\n' "$_cv_n"; return 2; }
   while IFS= read -r _cv_line; do
     case "$_cv_line" in 'SUITE-SHARD-COVERAGE '*) ;; *) continue ;; esac
     _cv_i="${_cv_line#*shard=}";    _cv_i="${_cv_i%% *}"
@@ -1938,9 +1938,7 @@ _fv_get(){   # _fv_get <line> <key> -> the value, or nothing if it is not a whol
 # two faults where there is one (L11).
 fan_totals_verdict(){   # $1 = shards expected; SUITE-SECTIONS lines on stdin
   _fv_n="$1"
-  case "$_fv_n" in
-    ''|*[!0-9]*|0) printf 'section totals: asked to check against "%s" shards, which is not a count of them.\n' "$_fv_n"; return 2 ;;
-  esac
+  whole_above_zero "$_fv_n" || { printf 'section totals: asked to check against "%s" shards, which is not a count of them.\n' "$_fv_n"; return 2; }
   _fv_seen=""; _fv_bad=""; _fv_pp=""; _fv_pf=""; _fv_dis=""
   _fv_tp=0; _fv_tf=0; _fv_rp=0; _fv_rf=0; _fv_short=""
   while IFS= read -r _fv_l; do
@@ -2092,11 +2090,10 @@ fan_totals_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards expe
 _sj_src="default"
 _sj_default=4
 if [ -n "${HOOK_TESTS_SLOTS:-}" ]; then
-  case "$HOOK_TESTS_SLOTS" in
-    *[!0-9]*|0)
-      echo "test suite: HOOK_TESTS_SLOTS='$HOOK_TESTS_SLOTS' is not a positive whole number of processes this suite may take. Refusing rather than guessing: it arrives from run-all-tests.sh, so a value nobody can read means that is wrong, and running four shards anyway would hide it." >&2
-      exit 2 ;;
-  esac
+  if ! whole_above_zero "$HOOK_TESTS_SLOTS"; then
+    echo "test suite: HOOK_TESTS_SLOTS='$HOOK_TESTS_SLOTS' is not a positive whole number of processes this suite may take. Refusing rather than guessing: it arrives from run-all-tests.sh, so a value nobody can read means that is wrong, and running four shards anyway would hide it." >&2
+    exit 2
+  fi
   _sj_default="$HOOK_TESTS_SLOTS"
   _sj_src="HOOK_TESTS_SLOTS"
 fi
@@ -11964,7 +11961,8 @@ check "#44 neither band is moved by the refusal" \
 # A size that is not a whole number is refused rather than taken. Bash arithmetic reads a non
 # numeric value as ZERO (L50), and a band zero numbers wide has no room by construction, so the
 # rollover above would walk from band to band for ever, silently, with the run appearing to hang.
-for _bd_bad in abc 0 12.5; do
+# 00 is zero too (claude-config#1948): only a literal 0 was refused, so 00 passed as a size.
+for _bd_bad in abc 0 00 12.5; do
   bd_bad_rc=0
   out_bdbad="$(SYNC_LESSON_BAND_SIZE="$_bd_bad" SYNC_HOSTNAME=MacSeven SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDE" SYNC_REPO="$BDR3" bash "$SCRIPT" next-lesson 2>&1)" || bd_bad_rc=$?
   check "#44 a band size of '$_bd_bad' is refused, not read as zero" "[ \"\$bd_bad_rc\" -ne 0 ]"

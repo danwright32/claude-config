@@ -115,6 +115,16 @@ else
     return 2
   }
 fi
+# The one test of a setting or a reading that must be a whole number above zero, 00 included as
+# zero (claude-config#1948), shared with the hooks. Resolved the same way as the five above. Missing,
+# every such value is read as unreadable: each setting takes its default or is refused, as it would
+# for any value that is not a number, and the shell names the missing function.
+WHOLE_NUMBER_LIB="$SYNC_SELF_PAYLOAD/hooks/lib/whole-number.sh"
+[ -f "$WHOLE_NUMBER_LIB" ] || WHOLE_NUMBER_LIB="$CLAUDE_HOME/hooks/lib/whole-number.sh"
+if [ -f "$WHOLE_NUMBER_LIB" ]; then
+  # shellcheck source=payload/hooks/lib/whole-number.sh
+  . "$WHOLE_NUMBER_LIB"
+fi
 LAST_APPLIED_FILE="$SYNC_REPO/.last-applied"   # commit whose payload is on this Mac
 TOKEN="__CLAUDE_HOME__"
 MERGED_RULE_FILES=""   # rule files merged this run (see merge_rule_files)
@@ -905,7 +915,7 @@ acquire_lock(){
     case "$max" in ''|*[!0-9]*) max="$PULL_LOCK_WAIT_DEFAULT" ;; esac
   fi
   case "$max" in ''|*[!0-9]*) max=90 ;; esac
-  case "$report_every" in ''|*[!0-9]*|0) report_every=30 ;; esac
+  whole_above_zero "$report_every" || report_every=30
   lock_t0="$(date +%s)"
   last_report="$lock_t0"
   lock_wait_expired(){   # -> true once `max` seconds have really passed since the first attempt
@@ -3864,9 +3874,7 @@ LESSON_BAND_SIZE="${SYNC_LESSON_BAND_SIZE:-500}"
 # find a band with room however far it walks: it would spin for ever with nothing said. A size is
 # also the width of a claim already recorded in lesson-bands, so a nonsense one is not a thing to
 # guess a default for.
-case "$LESSON_BAND_SIZE" in
-  ''|*[!0-9]*|0) die "SYNC_LESSON_BAND_SIZE is set to '$LESSON_BAND_SIZE', which is not a whole number of numbers a band can hold, and bash would read it as zero, making every band empty. NOTHING was done. Unset it to use the default of 500, which is what the bands in $LESSON_BANDS_DIR were claimed under." ;;
-esac
+whole_above_zero "$LESSON_BAND_SIZE" || die "SYNC_LESSON_BAND_SIZE is set to '$LESSON_BAND_SIZE', which is not a whole number of numbers a band can hold, and bash would read it as zero, making every band empty. NOTHING was done. Unset it to use the default of 500, which is what the bands in $LESSON_BANDS_DIR were claimed under."
 
 # Every band any Mac has claimed, as "host<TAB>start". A file that does not hold a number is
 # skipped rather than read as zero: a zero would look like a legitimate band below everyone else's
@@ -4123,7 +4131,7 @@ highest_taken_in_band(){   # $1 = tree  $2 = band start
 # deadline fires without waiting ten seconds of real time for it (L524).
 take_reservations_lock(){
   local lock="$LESSON_RESERVATIONS_FILE.lock" max="${SYNC_LESSON_LOCK_WAIT:-10}" rc=0
-  case "$max" in ''|*[!0-9]*|0) max=10 ;; esac
+  whole_above_zero "$max" || max=10
   mkdir -p "$(dirname "$LESSON_RESERVATIONS_FILE")" || die "could not create $(dirname "$LESSON_RESERVATIONS_FILE"), so no lesson number could be reserved. NOTHING was minted."
   take_pid_lock "$lock" "$max" || rc=$?
   case "$rc" in
@@ -6638,7 +6646,7 @@ SYNCBAKS
 # that names it.
 backup_keep_days(){
   local d="${SYNC_BACKUP_KEEP_DAYS:-90}"
-  case "$d" in ''|*[!0-9]*|0) d=90 ;; esac
+  whole_above_zero "$d" || d=90
   printf '%s' "$d"
 }
 
@@ -9414,7 +9422,7 @@ HSCOVEOF
     IFS="$(printf '\t')" read -r partial_n partial_names <<HSPARTEOF
 $(hook_suite_partial "$out")
 HSPARTEOF
-    case "$partial_n" in ''|*[!0-9]*|0) partial_n='' ;; esac
+    whole_above_zero "$partial_n" || partial_n=''
     if [ "$ran" != '?' ] && [ "$notrun" -eq 0 ] && [ -n "$partial_n" ]; then
       # Every suite ran, but not every part of them (claude-config#1452): "all N of its suites" is
       # the reassuring reading this exists to refuse, so it is not said.
@@ -10832,8 +10840,8 @@ hold_write_rows(){
 # takes it. SYNC_HOLD_LOCK_WAIT shortens the wait for the suite.
 hold_lock(){   # $1 = seconds to wait at most (optional; SYNC_HOLD_LOCK_WAIT, else ten)
   local max="${SYNC_HOLD_LOCK_WAIT:-10}"
-  case "$max" in ''|*[!0-9]*|0) max=10 ;; esac
-  case "${1:-}" in ''|*[!0-9]*|0) ;; *) [ "$1" -ge "$max" ] || max="$1" ;; esac
+  whole_above_zero "$max" || max=10
+  if whole_above_zero "${1:-}"; then [ "$1" -ge "$max" ] || max="$1"; fi
   take_pid_lock "$SYNC_HOLD_FILE.lock" "$max"
 }
 hold_unlock(){ rm -f "$SYNC_HOLD_FILE.lock" 2>/dev/null || true; }
@@ -11788,7 +11796,7 @@ hook_suite_headroom(){   # $1 = seconds the run took, or ? -> a clause, or nothi
 # What to say about the suites that could not run. Three answers, kept apart: none, some named,
 # and some whose names this record does not carry (L11).
 hook_suite_skipped(){   # $1 = the notrun count  $2 = the names, or ? / empty
-  case "${1:-}" in ''|'?'|0) return 0 ;; *[!0-9]*) return 0 ;; esac
+  whole_above_zero "${1:-}" || return 0
   case "${2:-}" in
     ''|'?') printf ', though %s of its suites could not run here and this record does not name them' "$1" ;;
     *)      printf ', though %s of its suites could not run here: %s' "$1" "$(printf '%s' "$2" | tr ',' ' ')" ;;
@@ -12926,11 +12934,10 @@ esac
 # the timer's path, so a claude that hangs (a login prompt, a self update) would hold every sync
 # behind it. Measured 2026-10-03: each answered in under half a second; DESIGN.md's measured numbers.
 SYNC_CLAUDE_CHECK_TIMEOUT="${SYNC_CLAUDE_CHECK_TIMEOUT:-30}"
-case "$SYNC_CLAUDE_CHECK_TIMEOUT" in
-  ''|*[!0-9]*|0)
-    echo "claude-sync: SYNC_CLAUDE_CHECK_TIMEOUT='$SYNC_CLAUDE_CHECK_TIMEOUT' is not a positive whole number of seconds. Refusing to run rather than asking claude about the mods with no bound nobody can read." >&2
-    exit 2 ;;
-esac
+if ! whole_above_zero "$SYNC_CLAUDE_CHECK_TIMEOUT"; then
+  echo "claude-sync: SYNC_CLAUDE_CHECK_TIMEOUT='$SYNC_CLAUDE_CHECK_TIMEOUT' is not a positive whole number of seconds. Refusing to run rather than asking claude about the mods with no bound nobody can read." >&2
+  exit 2
+fi
 
 SYNC_SCRATCH_DU_TIMEOUT="${SYNC_SCRATCH_DU_TIMEOUT:-30}"
 case "$SYNC_SCRATCH_DU_TIMEOUT" in
