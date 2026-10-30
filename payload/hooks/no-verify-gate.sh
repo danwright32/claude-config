@@ -74,6 +74,9 @@ refuse_unread() {   # $1 = the text to look in, $2 = why it could not be read
 if ! . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || ps_reader_missing python3; then
   refuse_unread "$payload" "python3 (or lib/push-scope.sh) is missing; install python3"
 fi
+# Cleaned before it is parsed: a lone surrogate escape survives python3's parse and raises when the
+# command is written back out (claude-config#1944).
+payload="$(ps_clean_payload "$payload")"
 
 parsed="$(printf '%s' "$payload" | python3 -c '
 import json, sys

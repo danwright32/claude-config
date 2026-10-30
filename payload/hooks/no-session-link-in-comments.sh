@@ -41,6 +41,24 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # A crash must not block work, but it must not be invisible either, so the notice goes out as a
 # systemMessage: Claude Code discards a PreToolUse hook's stderr on exit 0 (#1906).
+# The shared reader, which cleans the payload before the gate's python3 parses it: a lone surrogate
+# escape there raised when the text was written back out (claude-config#1944). A payload nothing can
+# parse used to pass with a notice, so one whose raw text carries the link, in either spelling the
+# python3 half matches, is refused (#1922). Without the library this gate runs as it did before, its
+# own python3 reading the payload as it came, and a broken gate still says so below (#1906): the
+# library is an addition to this gate, never a new way for it to stop.
+if . "$HERE/lib/push-scope.sh" 2>/dev/null; then
+  payload="$(ps_clean_payload "$payload")"
+  # One naming no link goes on to the python3 half, which says the gate did not run.
+  if ! ps_parse_payload "$payload" raw >/dev/null; then
+    case "$payload" in
+      *claude.ai/code/session_*|*Claude-Session:*)
+        ps_unparsed_refuse "$payload" no-session-link-in-comments.sh ALLOW_SESSION_LINK_IN_COMMENT \
+          "a comment or message carrying the Claude session link" '*claude.ai/code/session_*' '*Claude-Session:*' ;;
+    esac
+  fi
+fi
+
 err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 out="$(printf '%s' "$payload" | GATE_DIR="$HERE" python3 "$HERE/session_link_comment_gate.py" 2>"$err")"

@@ -32,8 +32,21 @@ payload="$(cat)"
 # `raw` because this hook searches the whole command rather than splitting it, and quoting a
 # command back at somebody with its newlines rewritten shows them something they did not type.
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A library this hook cannot load is said once, as a systemMessage, on a call whose raw text names an
+# issue create, the one call it checks (claude-config#1922): it stopped here in silence.
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 # shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || {
+  case "$payload" in
+    *"issue create"*) hook_allow_notice "DURABLE LESSON CHECK DID NOT RUN: durable-lesson-check.sh could not load lib/push-scope.sh (reinstall the hooks with claude-sync pull), so this issue was not checked for a lesson it should record." PostToolUse ;;
+  esac
+  exit 0
+}
+# Cleaned before anything parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
+payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" raw)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 [ -n "$cmd" ] || exit 0

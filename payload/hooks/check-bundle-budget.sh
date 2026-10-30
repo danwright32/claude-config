@@ -108,7 +108,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BB_NOTE=""
 say_and_allow(){ hook_allow_notice "${BB_NOTE:+$BB_NOTE }$1"; }
 
-payload="$(cat)"
+payload="$(ps_read_payload)"
 
 # THE MEASURER'S OWN READER, asked before anything is measured (claude-config#486, L490).
 #
@@ -135,7 +135,8 @@ if ps_reader_missing python3; then
   exit 0
 fi
 
-parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
+parsed="$(ps_parse_payload "$payload" segmented)" \
+  || ps_unparsed_refuse "$payload" check-bundle-budget.sh SKIP_BUNDLE_BUDGET_CHECK "a push" '*push*'
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0

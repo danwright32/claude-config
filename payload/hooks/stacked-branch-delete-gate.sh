@@ -97,6 +97,9 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/lib/stacked-prs.sh" 2>/dev/null || cannot_read "$HOOK_DIR/lib/stacked-prs.sh, which lists them, could not be loaded"
 command -v python3 >/dev/null 2>&1 || cannot_read "python3 is not on PATH, and the command's words are read with it"
 
+# Taken raw above so the commonest call leaves before anything loads, and cleaned before anything
+# parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
+payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" segmented)" || cannot_read "the hook payload could not be read (neither jq nor python3 could parse it as JSON)"
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"

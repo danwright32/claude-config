@@ -51,7 +51,13 @@ if ps_reader_missing python3; then
   refuse "$(ps_reader_absent_why 'python3 is not on PATH' 'design-score-gate.py, which reads this command and the score posted on GitHub, runs on it, so with python3 absent nothing here can tell whether this closes a Match the settled design issue below 100%.' 'python3')"
 fi
 
-parsed=$(ps_parse_payload "$payload" raw) || parsed=""
+# Taken raw above so the commonest call leaves before anything loads, and cleaned here, before
+# anything parses it: a lone surrogate escape made jq read nothing, and this gate let the merge
+# through (claude-config#1944). A payload still unreadable is judged by its words (#1922).
+payload="$(ps_clean_payload "$payload")"
+parsed=$(ps_parse_payload "$payload" raw) \
+  || ps_unparsed_refuse "$payload" design-score-gate.sh - "a close of a Match the settled design issue, or a merge that closes one" \
+    '*close*' '*Close*' '*delete*' '*DELETE*' '*transfer*' '*merge*' '*Merge*' '*enqueuePullRequest*' '*PATCH*' '*patch*' '*--input*' '*milestones*'
 command="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cwd" ] || cwd="$PWD"

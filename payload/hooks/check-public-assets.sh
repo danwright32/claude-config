@@ -66,8 +66,13 @@ did_not_run() {
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || did_not_run "shared push-scope library missing"
 
-payload="$(cat)"
-parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
+payload="$(ps_read_payload)"
+# A payload nothing can parse is not a push with no assets (claude-config#1922): one whose raw text
+# names a push is let through saying so, the way this gate lets through anything it could not measure.
+parsed="$(ps_parse_payload "$payload" segmented)" || {
+  case "$payload" in *push*) did_not_run "hook payload did not parse" ;; esac
+  exit 0
+}
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0

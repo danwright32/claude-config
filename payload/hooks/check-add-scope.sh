@@ -53,8 +53,16 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   exit 2
 }
 
-payload="$(cat 2>/dev/null || true)"
-parsed="$(ps_parse_payload "$payload" segmented 2>/dev/null)" || parsed=""
+payload="$(ps_read_payload)"
+# A payload a reader is present for and still cannot parse names its add only in its raw text, so it
+# is judged by that, as a missing library is above (claude-config#1922). With no reader at all the
+# branch below says so in its own words.
+if ps_reader_missing jq python3; then
+  parsed=""
+else
+  parsed="$(ps_parse_payload "$payload" segmented 2>/dev/null)" \
+    || ps_unparsed_refuse "$payload" check-add-scope.sh SKIP_ADD_SCOPE_CHECK "a git add that takes more than it names" '*git add*'
+fi
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cwd" ] || cwd="$PWD"

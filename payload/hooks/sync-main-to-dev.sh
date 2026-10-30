@@ -33,15 +33,32 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # otherwise skip the rule silently, which is how a rule kept in memory gets missed (L27, L11).
 # An empty file is the deliberate way to sync nothing here.
 REPOS_FILE="${CLAUDE_HOME:-$HOME/.claude}/hooks/main-to-dev-repos.local.txt"
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+# A library this hook cannot load is not a merge with nothing to sync (claude-config#1922): it
+# stopped here in silence. Said once, as a systemMessage, on a call whose raw text names a merge.
+did_not_run() {   # $1 = the library
+  case "$payload" in
+    *merge*|*Merge*)
+      # shellcheck source=lib/hook-notice.sh
+      . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+        printf '%s\n' "$1" >&2
+        printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+      hook_allow_notice "Main to dev sync DID NOT RUN: sync-main-to-dev.sh could not load lib/$1 (reinstall the hooks with claude-sync pull), so whether this merge needed main merged into dev was not checked." PostToolUse ;;
+  esac
+  exit 0
+}
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || did_not_run push-scope.sh
 
+# Cleaned before anything parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
+payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" raw)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0
 if grep -Eq '(^|[[:space:];&|])SKIP_MAIN_DEV_SYNC=1([[:space:]]|$)' <<< "$cmd"; then exit 0; fi
 
-. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
+# shellcheck source=lib/merge-target.sh
+. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || did_not_run merge-target.sh
 mt_runs_merge "$cmd" || exit 0
 
 

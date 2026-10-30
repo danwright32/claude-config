@@ -106,6 +106,36 @@ ps_read_payload() {   # stdin = the hook payload
   ps_clean_payload "$(cat)"
 }
 
+# What a refusing gate does when ps_parse_payload could not read its payload for any other reason
+# (claude-config#1922): truncated, an escape JSON does not have, anything neither jq nor python3
+# accepts. Most gates ended `parsed="$(ps_parse_payload ...)" || exit 0`, so such a payload was let
+# through in silence, which looks exactly like a call with nothing to refuse (L10, L98).
+#
+# It is #1900's rule for a library that would not load: nothing here can tell which command this is,
+# so the raw text decides. A payload naming any one of the gate's words is refused, saying why; any
+# other passes as it would have, since refusing every unreadable call would be a gate nobody keeps
+# (L36, L54). The gate's override is read from the raw text the same way, so the refusal is never a
+# dead end (L109). One helper and one sentence for every gate, rather than a wording per hook (L613).
+#
+#   ps_unparsed_refuse <payload> <gate file name> <override variable, or -> <what it judges> <glob>...
+#     exits: 0 when the call passes, 2 after saying why on stderr. It never returns.
+ps_unparsed_refuse() {
+  local payload="$1" gate="$2" override="$3" judged="$4" w named=""
+  shift 4
+  if [ "$override" != "-" ]; then
+    case "$payload" in *"$override=1"*) exit 0 ;; esac
+  fi
+  for w in "$@"; do
+    # shellcheck disable=SC2254 # each word is a pattern by design
+    case "$payload" in $w) named=1; break ;; esac
+  done
+  [ -n "$named" ] || exit 0
+  printf 'BLOCKED: %s could not parse its hook payload as JSON (neither jq nor python3 read it), and the payload names %s, so whether this command is %s could not be checked. A payload this gate cannot read is not a command with nothing to check (claude-config#1922).%s\n' \
+    "$gate" "${w//\*/}" "$judged" \
+    "$([ "$override" != "-" ] && printf ' For this one command: %s=1 <the same command>.' "$override")" >&2
+  exit 2
+}
+
 # ---- reading the hook payload, once (claude-config#102) ----
 # This lived in five near copies across the hooks, and they had already drifted: three flattened a
 # newline into "; " and two did not, which is how claude-config#97 came to live in exactly the

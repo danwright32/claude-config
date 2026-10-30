@@ -83,9 +83,10 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 }
 DETECTOR="$HOOK_DIR/lib/duplication.py"
 
-payload="$(cat)"
+payload="$(ps_read_payload)"
 
-parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
+parsed="$(ps_parse_payload "$payload" segmented)" \
+  || ps_unparsed_refuse "$payload" check-duplication.sh SKIP_DUPLICATION_CHECK "a push" '*push*'
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0

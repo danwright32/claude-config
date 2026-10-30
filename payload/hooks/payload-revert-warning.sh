@@ -58,6 +58,11 @@ SC_LOADED=0
 { . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null && declare -F sc_hold_covers >/dev/null; } && SC_LOADED=1
 
 input="$(cat 2>/dev/null || true)"
+# Cleaned by the shared reader when it loads: a lone surrogate escape anywhere in the payload
+# (an emoji cut in half is enough) makes jq read none of it (claude-config#1944). Without the
+# library the payload is read as it came, as before.
+case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
+. "$_ps_dir/lib/push-scope.sh" 2>/dev/null && input="$(ps_clean_payload "$input")"
 
 # The session, and the directory the prompt was sent from. Keyed on the session so two open at once
 # each get their own record. With no session there is no way to tell a first prompt from a later
@@ -98,8 +103,9 @@ if [ "$SC_LOADED" -ne 1 ]; then
   previous="$(cat "$STATE" 2>/dev/null || true)"
   printf '%s\n' "$state" > "$STATE" 2>/dev/null || true
   [ "$state" = "$previous" ] && exit 0
-  echo "claude-sync: payload-revert-warning.sh could not load lib/sync-clone.sh from $HOOK_DIR/lib, so whether a watch daemon could overwrite edits to a development checkout's payload/ was not checked this session. That is not the same as nothing being at risk. The payload write gate refuses a call naming payload/ for the same reason until the library is back. Reinstall the hooks with: claude-sync pull"
-  exit 0
+  # As a systemMessage, which the person is shown, and as context for the session (claude-config
+  # #1922): a plain line reached the session alone.
+  hook_allow_notice "claude-sync: payload-revert-warning.sh DID NOT RUN: it could not load lib/sync-clone.sh from $HOOK_DIR/lib, so whether a watch daemon could overwrite edits to a development checkout's payload/ was not checked this session. That is not the same as nothing being at risk. The payload write gate refuses a call naming payload/ for the same reason until the library is back. Reinstall the hooks with: claude-sync pull" UserPromptSubmit
 fi
 
 # ---------------------------------------------------------------------------

@@ -72,7 +72,7 @@ PC_GATE=simplify
 # ---------------------------------------------------------------------------
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
 # ---------------------------------------------------------------------------
-payload="$(cat)"
+payload="$(ps_read_payload)"
 parsed="$(ps_parse_payload "$payload" segmented)" || fail_open "hook payload did not parse"
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"

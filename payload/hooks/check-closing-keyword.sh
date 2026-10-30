@@ -27,7 +27,8 @@
 # phrasing itself, e.g. this hook's own tests). Explain why to the user first, never skip
 # silently, same rule as the test gate and the style gate.
 #
-# Fails OPEN on a parse error: a command whose text cannot be read is allowed. Fails CLOSED when
+# Fails CLOSED on a parse error for a command whose raw text names a pull request or a commit (it
+# failed open until claude-config#1922), and open for any other. Fails CLOSED too when
 # the detector itself cannot run: python3 or lib/closing-keyword.py missing, or the detector
 # exiting with an error, refuses a command that could link an issue, because a detector that
 # did not run finds nothing (L98).
@@ -79,7 +80,12 @@ if ps_reader_missing python3; then
   exit 0
 fi
 
-parsed="$(ps_parse_payload "$payload" raw)" || exit 0
+# Taken raw above, before the library that cleans it loaded, and cleaned here before anything parses
+# it: a lone surrogate escape made jq read nothing (claude-config#1944). A payload still unreadable
+# is judged by its words, as a missing library is above (#1922).
+payload="$(ps_clean_payload "$payload")"
+parsed="$(ps_parse_payload "$payload" raw)" \
+  || ps_unparsed_refuse "$payload" check-closing-keyword.sh SKIP_CLOSING_CHECK "a pull request body or a commit message" '*pr create*' '*pr edit*' '*git commit*'
 cmd="${parsed%%$'\x1f'*}"
 [ -n "$cmd" ] || exit 0
 

@@ -60,6 +60,11 @@
 set -uo pipefail
 
 input="$(cat 2>/dev/null || true)"
+# Cleaned by the shared reader when it loads: a lone surrogate escape anywhere in the payload
+# (an emoji cut in half is enough) makes jq read none of it (claude-config#1944). Without the
+# library the payload is read as it came, as before.
+case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
+. "$_ps_dir/lib/push-scope.sh" 2>/dev/null && input="$(ps_clean_payload "$input")"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK="${STALE_WT_CHECK:-$DIR/check-stale-worktrees.sh}"

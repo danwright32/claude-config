@@ -227,6 +227,26 @@ only_jq="$(PATH="$SCOPE_TOOLS/jq-only" ps_parse_payload "$lone" raw 2>/dev/null)
 [ "${only_jq%%$'\x1f'*}" = "gh pr merge 5 --squash" ] \
   && check "#1944 with jq alone the payload holding the escape is read" ok \
   || check "#1944 with jq alone the payload holding the escape is read" "got [$only_jq]"
+# A payload nothing can parse for any other reason (claude-config#1922): the gate refuses it when the
+# raw text names what it judges, and lets anything else through, which is #1900's rule for a library
+# that would not load. The override, read from the raw text the same way, still passes it.
+unparsed(){ # unparsed <payload> -> RC and OUT, from a subshell, since the helper exits
+  OUT="$( ps_unparsed_refuse "$1" demo-gate.sh SKIP_DEMO_CHECK "a push" '*push*' 2>&1 )"; RC=$?
+}
+unparsed '{"tool_name":"Bash","tool_input":{"command":"git push origin x"'
+[ "$RC" -eq 2 ] && check "#1922 an unparseable payload naming a push is refused" ok || check "#1922 an unparseable payload naming a push is refused" "rc=$RC out=[$OUT]"
+case "$OUT" in *demo-gate.sh*payload*SKIP_DEMO_CHECK=1*) check "#1922 the refusal names the gate, the payload and the override" ok ;; *) check "#1922 the refusal names the gate, the payload and the override" "out=[$OUT]" ;; esac
+unparsed '{"tool_name":"Bash","tool_input":{"command":"ls -la"'
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && check "#1922 an unparseable payload naming nothing judged passes" ok || check "#1922 an unparseable payload naming nothing judged passes" "rc=$RC out=[$OUT]"
+unparsed '{"tool_name":"Bash","tool_input":{"command":"SKIP_DEMO_CHECK=1 git push origin x"'
+[ "$RC" -eq 0 ] && check "#1922 the override still passes an unparseable payload" ok || check "#1922 the override still passes an unparseable payload" "rc=$RC out=[$OUT]"
+OUT="$( ps_unparsed_refuse '{"x"' demo-gate.sh - "a merge" '*merge*' '*Merge*' 2>&1 )"; RC=$?
+[ "$RC" -eq 0 ] && check "#1922 with no override and no judged word it passes" ok || check "#1922 with no override and no judged word it passes" "rc=$RC"
+OUT="$( ps_unparsed_refuse '{"gh pr Merge"' demo-gate.sh - "a merge" '*merge*' '*Merge*' 2>&1 )"; RC=$?
+[ "$RC" -eq 2 ] && case "$OUT" in *OVERRIDE*|*=1*) false ;; *) true ;; esac \
+  && check "#1922 any one of the words is enough, and a gate with no override offers none" ok \
+  || check "#1922 any one of the words is enough, and a gate with no override offers none" "rc=$RC out=[$OUT]"
+
 # A big payload carrying many escaped backslashes and many lone escapes is read quickly by either
 # half: the cleaning runs only when the text could hold one, and then once over the whole text.
 big="$(python3 -c 'import json; print(json.dumps({"tool_input": {"command": "echo x", "content": "a\\\\b \ud800 " * 20000}}))')"
