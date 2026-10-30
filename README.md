@@ -1789,11 +1789,22 @@ Two things the timing showed that no timeout could:
   declared ceiling is for the case where it asks.
 
 A scanner that already passed on exactly this tree and these uncommitted files is not run again
-(#531). Measured on 2026-09-21: 14.0 seconds cold, 0.6 seconds when nothing it reads has changed.
+(#531). The key is the commit's tree plus a digest of every file that differs from it on disk: a
+tracked file edited, staged or deleted, a staged addition, and an untracked file (`repo-files.sh
+--changed`). Until #1910 it left out tracked files edited and not committed, which the scanners read
+from disk, so a pass reached before such an edit let the next push skip scanning the edited file. Measured on 2026-09-21: 14.0 seconds cold, 0.6 seconds when nothing it reads has changed.
 That saving lands on a REPEAT attempt, a push blocked by another gate and tried again, because a
 push that follows a fresh commit changes the tree and pays in full. Only a pass is remembered, so a
 failure is never skipped past, and the gate says when it scanned nothing rather than reporting zero
 scans as a clean run.
+
+The record of passes is a folder per repository under `~/.claude/state/scanners-passed/`, holding one
+file per tree, and a push adds its passes to its tree's file rather than writing over it (#1910). It
+was one file per repository, rewritten by every push, and worktrees of one repository share it, so
+two worktrees pushing in turn erased each other's passes and each ran again scans that had already
+passed on its own tree. The merge is written beside the file and renamed over it, under a lock, so a
+push writing at the same moment never loses a pass. A tree's file nobody has added to for a day is
+removed by the next write. A pass that could not be written is said, and the next push runs it again.
 
 The gate stops itself at a budget of 150 seconds, inside the 180 its registration declares (#1881).
 Claude Code lets a tool call through when it kills a PreToolUse hook at its timeout (its hooks
@@ -1816,6 +1827,42 @@ checkout stops it and starts again; another checkout's runs are left alone. Push
 finish: a push still goes through only once every scanner has passed on exactly what it carries. As
 with any pass, one read by a push in which another scanner failed or measured nothing is not
 remembered, so the push after it runs that scanner again.
+
+When the files that differ from the commit cannot be listed, a scanner still running at the budget
+is STOPPED, not left running (#1910). A run left going is worth something only because a later push
+can count its verdict, and without that listing nothing says what it read, so no push could ever count
+it. The refusal says so, says that a retry cannot help a scanner slower than the budget until the
+listing works, and gives the command that shows why it fails. The same is said, in its own words,
+when the lock library or the folder for runs is missing.
+
+Every other PreToolUse gate that can refuse a call carries `onFailure: "block"` too (#1899), so a
+gate killed at its timeout, or one that crashes or cannot start, refuses the call instead of
+letting it through in silence. Claude Code counts any exit other than 0 or 2 as a failure, so the
+field is left off two kinds of hook, and `hooks/test-gate-onfailure.sh` holds the one list saying
+which hook is which and fails on a PreToolUse hook in none of them:
+
+- the hooks that never refuse (`rtk-rewrite.sh`, `lessons-advisory.sh`), where the field would turn
+  slow advice into blocked work;
+- the gates that allow a call they could not judge and say so with exit 1
+  (`require-tests-before-push.sh`, `simplify-before-push.sh`, `check-public-assets.sh`,
+  `check-gh-watch-interval.sh`), where the field would turn every "could not judge, allowed" into a
+  refusal. They stay as they were until that notice moves off exit 1.
+
+The same suite runs every gate given the field on an ordinary call of each tool it is registered
+for and fails if one exits anything but 0, since such a gate would now block every call.
+`handback-claims-gate.sh` went from a 30 to a 90 second timeout with it: it read a 309 MB agent
+transcript in 2.4 seconds at a load average of 7 on 2026-10-29, which leaves too little room at the
+load averages of 145 measured the day before, now that running out of time refuses the hand back.
+
+`linux-sections-before-push.sh` had no bound of its own on its Linux run, so with the field one
+slow section would have refused every push of that change. It now stops the run at a budget of 240
+seconds, inside the 300 its registration declares (`LINUX_SECTIONS_BUDGET_SECONDS` sets another),
+stops the container by the name it gave `tests/run-on-linux.sh` (killing the docker client leaves
+the container running), and lets the push through saying UNMEASURED, which is what its design says
+a run it could not finish is. That notice, and the one for a run docker could not start, also go
+out as a `systemMessage`, since Claude Code discards a PreToolUse hook's stderr on exit 0. How
+long a Linux run takes is not measured on this Mac, whose docker daemon was not running on
+2026-10-29, so 240 is a setting.
 
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
