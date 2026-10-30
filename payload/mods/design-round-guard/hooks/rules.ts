@@ -1956,9 +1956,14 @@ const readMod = (f: ModFile): ModRead | null => {
         from = j + 1
       }
     }
-    const listed = !!list && blank[list[0]] === '[' && /\boptions\s*[:=]\s*$/.test(blank.slice(Math.max(0, list[0] - 40), list[0]))
-    if (!fields.has('label') && !listed) continue
-    for (const f of ['label', 'description']) {
+    const listedIn = (key: 'options' | 'questions') => !!list && blank[list[0]] === '[' && new RegExp(`\\b${key}\\s*[:=]\\s*$`).test(blank.slice(Math.max(0, list[0] - 40), list[0]))
+    // #1934: the question itself, which Dan reads above those answers: an object in a `questions`
+    // list, or one with a `question` beside its `options`, its question and header read the same way.
+    // A schema's properties named question and header are schemas, and a type's say nothing, as above.
+    const answer = fields.has('label') || listedIn('options')
+    const asks = listedIn('questions') || (fields.has('question') && fields.has('options'))
+    if (!answer && !asks) continue
+    for (const f of [...(answer ? ['label', 'description'] : []), ...(asks ? ['question', 'header'] : [])]) {
       const v = fields.get(f)
       if (v && /\S/.test(blank.slice(v[0], v[1]))) messages.push([skipOn(v[0]), skipBack(v[1] - 1) + 1])
     }
