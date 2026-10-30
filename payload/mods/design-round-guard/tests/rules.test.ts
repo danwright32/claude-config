@@ -1005,6 +1005,63 @@ test("#1841: the wording of a toast, a refusal or a tool's result in a mod's .ts
   expect(holdOf([{ name: 'place.ts', text: "const x = 'open" }], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe('look')
 })
 
+// #1925: on 2026-10-29 the #1904 builder's Edit adding "or wording" to the skip question's answers in
+// the guard's own rules.ts (skipOptions) went through unasked, though Dan reads each answer's
+// description in the picker. Those answers reached no message the check read, while a tool's
+// description, which only Claude reads, passes by #1756 and #1841. An answer is an object beside a
+// `label`, or one in an `options` list. Cut down from the guard's rules.ts as it stood before #1926,
+// with a tool and a schema beside it.
+const ANSWERS_TS = [
+  "import type { EngineInterface } from 'claude-code'",
+  "export const SKIP_YES = 'Skip them'",
+  'export const TOOL_SPEC = {',
+  "  name: 'skip_rounds',",
+  "  description: 'Ask Dan whether to skip design rounds for an issue.',",
+  '  inputSchema: {',
+  "    type: 'object',",
+  '    properties: {',
+  "      label: { type: 'string', description: 'The name of the issue to ask about.' },",
+  "      description: { type: 'string', description: 'What the refused edit changes.' },",
+  '    },',
+  '  },',
+  '}',
+  'export const skipOptions = (named: string) => [',
+  '  { label: SKIP_YES, description: `Edits that change the look go ahead on ${named} without a design round` },',
+  "  { label: 'Run /design-rounds', description: 'Nothing that changes the look is edited until you settle a design round' },",
+  ']',
+  "export const onlyOne = (c: boolean, pick: (o?: object) => object) => pick(c ? { label: SKIP_YES, description: 'Only this answer is shown' } : undefined)",
+  'export const askAgain = ($: EngineInterface, next: (e: object) => Promise<unknown>) =>',
+  "  next({ questions: [{ question: 'Is this design settled?', options: [{ value: 'yes', description: 'Edits that change the look go ahead' }] }] })",
+  '',
+].join('\n')
+test("#1925: an answer's description and label, which Dan reads in the picker, are held as wording; a tool's or a schema's description still passes", () => {
+  const edit = (from: string, to: string) => {
+    const after = ANSWERS_TS.replace(from, to)
+    if (after === ANSWERS_TS) throw new Error(`no ${from}`)
+    return after
+  }
+  const judged = (from: string, to: string) => holdOf([], 'rules.ts', ANSWERS_TS, edit(from, to))
+  // The #1904 builder's edit, to an answer's description beside its label, and the same to its label.
+  expect(judged('Nothing that changes the look is edited', 'Nothing that changes the look or wording is edited')).toBe('worded')
+  expect(judged('go ahead on ${named} without', 'go ahead on ${named} with no')).toBe('worded')
+  expect(judged("label: 'Run /design-rounds'", "label: 'Start /design-rounds'")).toBe('worded')
+  expect(judged("export const SKIP_YES = 'Skip them'", "export const SKIP_YES = 'Skip the rounds'")).toBe('worded')
+  // An answer given by a conditional inside a call's parentheses, which is no parameter's pattern.
+  expect(judged('Only this answer is shown', 'Only this one answer is shown')).toBe('worded')
+  // An answer in an options list, which names no label of its own.
+  expect(judged("description: 'Edits that change the look go ahead' }", "description: 'Edits to the look go ahead' }")).toBe('worded')
+  // The refusal names the words it held for.
+  const hold = modHookTsHold([], 'rules.ts', ANSWERS_TS, edit('Nothing that changes the look is edited', 'Nothing that changes the look or wording is edited'))
+  expect(hold && 'worded' in hold ? hold.worded : '').toContain('Nothing that changes the look or wording')
+  // A tool's description, and its schema's, read only by Claude, pass: properties named label and
+  // description among them, whose values are schemas, not answers.
+  expect(judged('Ask Dan whether to skip', 'Ask Dan if he wants to skip')).toBe('passes')
+  expect(judged('The name of the issue to ask about.', 'The issue to ask about.')).toBe('passes')
+  expect(judged('What the refused edit changes.', 'What the edit that was refused changes.')).toBe('passes')
+  // The logic beside the answers says no new words.
+  expect(judged('(named: string)', '(named: string, _first = true)')).toBe('passes')
+})
+
 // #1859: a hold made only because a message's words changed said the edit "changes how the screen
 // looks", and a shell write's that it "changed what the mod draws", claiming more than the check
 // measured (L11). The check says why it held (modHookTsHold), naming the words, and every refusal,
