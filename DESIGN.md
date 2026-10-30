@@ -1490,6 +1490,56 @@ touched nothing else. The hook and its test both travelled; only the registratio
 not applied. `sync` cannot refuse, because reconciling is what it is for, and its send half runs
 first. That is why the merge belongs in the staging rather than in a guard above it.
 
+### On the way out, a removal or a move made in the repo is not undone (#1902)
+
+The rule above only ever adds from the secondary side. So a Mac sending while it holds a commit
+unapplied, the window that stripped `onFailure` twice on 2026-10-29 (62f2b1c4, 7b53f19e), put back a
+registration the repo had removed, and undid a move to another matcher group: it kept its own stale
+line in the old group, and the moved line was never added because its command was already in
+primary. #1896 had already made the merge carry a changed FIELD; this is the same window for a whole
+line.
+
+So the send passes `drop-stale`: an entry primary holds unchanged from the base, and the secondary
+side no longer holds at that event and group, is dropped, and a secondary entry is kept when that
+event, group and command are in neither primary nor base, so a moved line lands in its new group. An
+entry this Mac changed is its own work and is kept even when the repo removed it, because a removal
+never beats an unsent edit.
+
+It is deliberately the send only. On the apply, primary is what arrived and secondary is this Mac's
+`settings.json`, and the same rule would read a `settings.json` that has lost its hooks as this Mac
+removing every one of them: a pull, which today heals such a Mac by putting the shared block back,
+would leave it with nothing. A local removal is still published by the send half of `sync`, which
+runs first. Two more guards keep the old rule: an empty secondary side drops nothing, and with no
+base nothing can be told apart, so nothing is dropped. The empty side is the other Mac's case: a Mac
+whose `settings.json` has lost its hooks publishes an empty block, as it always has, and a Mac that
+read that as the repo removing every line it holds would publish the loss again and then empty its
+own settings on the apply. Kept to the old rule it publishes its block back instead.
+
+A shared `settings.hooks.json` that cannot be parsed is held, in both directions, never read as an
+empty block. The send used to fall back to empty and publish this Mac's block over it, which lost
+whatever the shared copy held that this Mac had not applied (the #300 loss by another door); the
+apply used to merge nothing over `settings.json` and unregister every line the base held. Each now
+leaves its side as it is and says which file could not be read, as the send already did for an
+unreadable `settings.json`.
+
+### On the way in, no line ever names a missing script (#1913)
+
+Since #1899 a gate registered with `"onFailure": "block"` whose script cannot start refuses every
+call it matches; for the payload write gate that is every Bash call and every edit. The apply used to
+mirror the scripts first, deleting a removed or renamed gate's script while `settings.json` still
+registered it, and rewrite the block only afterwards. With no base it also kept a local line whose
+script the mirror had just removed.
+
+So the apply works out the merged block before any file moves and writes it in two halves around the
+mirror: first it takes out every line the merged block no longer holds (keeping this Mac's own copy
+of each line that stays), then the mirror deletes and installs the scripts, then it writes the merged
+block less every line whose script, under the config home, is not on disk. A command naming nothing
+under the config home is not judged, since the sync neither installs nor removes it. A refused line
+is said once, logged and notified, and recorded in `.hooks-refused`. The send reads that record and
+takes the line out of the base, so the payload's copy reads as not yet seen here and is kept: a
+refusal on one Mac must never travel as a deletion that unregisters the gate on the Mac whose script
+is fine. The first pull that finds the script registers it and clears the record.
+
 ## A conflict in a file this tool GENERATES is not a conflict
 
 The lessons index is derived: it is rebuilt from `LESSONS.md` on every send and every apply. When it
