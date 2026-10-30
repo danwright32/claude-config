@@ -110,9 +110,10 @@ printf '%s\n' '. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || not_judged "x"' > 
 [ -z "$(allowing_sources "$WORK/probe3")" ] && ok || bad "the scan fires on a source whose failure branch refuses"
 
 # The behaviour, gate by gate: the command each judges, and the override it honours (or -). A gate
-# that allows with exit 1 by recorded decision says so in its third field, with its issue: that
-# exit is the only one whose message Claude Code shows while letting the call run (#735, #1065),
-# and #1912 holds those four.
+# that lets a call it could not judge through by recorded decision says so in its third field, with
+# its issue. Those four said it with exit 1 (#735, #1065), the one exit whose message Claude Code
+# showed while letting the call run; #1912 moved them to exit 0 with the notice as a systemMessage
+# (lib/hook-notice.sh), which is shown and which onFailure block does not count as a failure.
 declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
 {
   declare_gate payload-write-gate.sh       "echo hi > payload/LESSONS.md"   SKIP_PAYLOAD_WRITE_CHECK
@@ -136,10 +137,10 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate stacked-branch-delete-gate.sh "git push origin :feat/x"      -
   declare_gate check-wrapped-commands.sh   "eval \$CMD && git status"       -
   declare_gate pr-review-gate.sh           "cat x/helper-key"               -
-  declare_gate require-tests-before-push.sh  "git push origin feature"      "exit1 #1065"
-  declare_gate simplify-before-push.sh       "git push origin feature"      "exit1 #1065"
-  declare_gate check-public-assets.sh        "git push origin feature"      "exit1 #735"
-  declare_gate check-gh-watch-interval.sh    "gh run watch 5"               "exit1 #1065"
+  declare_gate require-tests-before-push.sh  "git push origin feature"      "allow0 #1912"
+  declare_gate simplify-before-push.sh       "git push origin feature"      "allow0 #1912"
+  declare_gate check-public-assets.sh        "git push origin feature"      "allow0 #1912"
+  declare_gate check-gh-watch-interval.sh    "gh run watch 5"               "allow0 #1912"
 } > "$WORK/table"
 
 payload_for(){ # payload_for <command> <cwd>
@@ -148,10 +149,12 @@ payload_for(){ # payload_for <command> <cwd>
 # The libraries a gate needs, and, for each, the libraries that one sources in turn. Left out are
 # the ones it sources as optional, whose absence it carries on past: `|| true`, or a bare `. x &&`
 # that only turns a feature on (scanners-before-push.sh's pid lock), since the gate then goes on to
-# judge the command with what it has.
+# judge the command with what it has. So is lib/hook-notice.sh, sourced with the fallback its header
+# gives (`|| hook_allow_notice() {`): without it the gate judges exactly as before and says any
+# notice through that fallback, which test-hook-notice.sh runs with the library gone (#1906).
 libs_of(){ # libs_of <gate file>
   local l
-  grep -E "$SRC_RE" "$1" | grep -v -E '\|\|[[:space:]]*true' \
+  grep -E "$SRC_RE" "$1" | grep -v -E '\|\|[[:space:]]*true' | grep -v -E '\|\|[[:space:]]*hook_allow_notice\(\)' \
     | grep -v -E '^[[:space:]]*\.[^|]*&&[^|]*$' | grep -o -E 'lib/[a-z-]+\.sh' | sort -u | while IFS= read -r l; do
     printf '%s\n' "${l#lib/}"
     [ -f "$DIR/$l" ] && grep -E '^(\.|source)[[:space:]]+"\$[A-Za-z_]+/[a-z-]+\.sh"' "$DIR/$l" | grep -o -E '/[a-z-]+\.sh' | sed 's#^/##'
@@ -167,7 +170,9 @@ run_gate(){ # run_gate <gate copy> <command> <cwd> -> OUT and RC
 }
 n=0
 for g in "${GATES[@]}"; do
-  grep -q -E "$SRC_RE" "$DIR/$g" || continue
+  # Only a library the gate needs: one it sources as optional is not taken away.
+  libs="$(libs_of "$DIR/$g")"
+  [ -n "$libs" ] || continue
   row="$(awk -F '\t' -v g="$g" '$1 == g' "$WORK/table")"
   if [ -z "$row" ]; then
     bad "$g sources a library and can refuse, and is not in this suite's table, so nothing runs it with that library gone"
@@ -175,8 +180,8 @@ for g in "${GATES[@]}"; do
   fi
   IFS=$'\t' read -r _ judged override <<< "$row"
   want=2
-  case "$override" in exit1*) want=1 ;; esac
-  for lib in $(libs_of "$DIR/$g"); do
+  case "$override" in allow0*) want=0 ;; esac
+  for lib in $libs; do
     n=$((n + 1))
     T="$WORK/$n"
     mkdir -p "$T/repo"
@@ -185,7 +190,7 @@ for g in "${GATES[@]}"; do
     rm -f "$T/lib/$lib"
     run_gate "$T/$g" "$judged" "$T/repo"
     if [ "$RC" -eq "$want" ]; then ok; else bad "$g with lib/$lib missing: '$judged' should exit $want, exited $RC, said: ${OUT:0:200}"; fi
-    # Named by the file, or for the gates that allow with exit 1 by the library's own name. A
+    # Named by the file, or for the gates that allow by the library's own name. A
     # library missing beneath another is reported as the one the gate sourced, which is what failed
     # to load from where the gate stands.
     named=0

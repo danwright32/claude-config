@@ -6719,7 +6719,10 @@ unapplied_paths(){
   head="$(repo_head)"
   [ -n "$head" ] || return 0
   [ "$head" != "$last" ] || return 0
-  changed="$(git -C "$SYNC_REPO" diff --name-only "$last" "$head" -- payload 2>/dev/null || true)"
+  # --no-renames here and in the log below (claude-config#1915). With rename detection on, git's
+  # default, a file the repo moved without changing it is listed by its NEW name only, so this
+  # Mac's copy at the old name read as a local edit and every pull kept it.
+  changed="$(git -C "$SYNC_REPO" diff --name-only --no-renames "$last" "$head" -- payload 2>/dev/null || true)"
   [ -n "$changed" ] || return 0
   if branch="$(sync_branch)" \
     && upstream="$(git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" 2>/dev/null)" \
@@ -6735,7 +6738,7 @@ unapplied_paths(){
       while IFS= read -r _b; do [ -n "$_b" ] && base_list+=("$_b"); done <<< "$bases"
       # -m so a merge commit the shared repo holds names what it changed too: over counting holds
       # back more, which is the safe direction.
-      if theirs="$(git -C "$SYNC_REPO" log -m --format= --name-only "${base_list[@]}" --not "$last" -- payload 2>/dev/null)"; then
+      if theirs="$(git -C "$SYNC_REPO" log -m --no-renames --format= --name-only "${base_list[@]}" --not "$last" -- payload 2>/dev/null)"; then
         changed="$(printf '%s\n' "$changed" | awk 'FILENAME == ARGV[1] { if ($0 != "") t[$0] = 1; next } ($0 in t)' <(printf '%s\n' "$theirs") -)"
       fi
     fi
@@ -6855,8 +6858,9 @@ deleted_leftovers_here(){
   have_git || return 0
   git -C "$SYNC_REPO" rev-parse --verify -q HEAD >/dev/null 2>&1 || return 0
   # -z, so a name git would otherwise QUOTE (a space, a non ASCII letter) comes back as the file's
-  # own name and can match it (second review of #1093).
-  ever_deleted="$(git -C "$SYNC_REPO" log -z --format= --name-only --diff-filter=D HEAD -- payload 2>/dev/null | tr '\0' '\n' || true)"
+  # own name and can match it (second review of #1093). --no-renames, so a file the repo moved
+  # without changing it counts as deleted at its old name, which it is (claude-config#1915).
+  ever_deleted="$(git -C "$SYNC_REPO" log -z --no-renames --format= --name-only --diff-filter=D HEAD -- payload 2>/dev/null | tr '\0' '\n' || true)"
   [ -n "$ever_deleted" ] || return 0
   ever_deleted="
 $ever_deleted
@@ -8318,8 +8322,9 @@ tip_holds_local_commits_inner(){   # $1 = branch
   git -C "$SYNC_REPO" diff --quiet HEAD 2>/dev/null || return 1
   # Three dots: the paths THIS clone's unpushed commits touched since the two sides last agreed.
   # Two dots would also list everything the other Mac changed, so a clone merely behind would be
-  # measured on files it never touched.
-  paths="$(git -C "$SYNC_REPO" diff --name-only "origin/$branch...HEAD" 2>/dev/null || true)"
+  # measured on files it never touched. --no-renames, so a commit that moved a file names the old
+  # path too: its removal is work the tip may lack, and is checked like any other (claude-config#1915).
+  paths="$(git -C "$SYNC_REPO" diff --name-only --no-renames "origin/$branch...HEAD" 2>/dev/null || true)"
   # Unpushed commits that change no file are a state this has no reading of, and dropping commits
   # on a reading it does not have is the one thing it must not do.
   [ -n "$paths" ] || return 1
@@ -10529,6 +10534,22 @@ CHANGED
 $scans
 SCANS
   fi
+
+  # BOTH NAMES OF A RENAME (claude-config#1915). The listings above detect renames, so a file moved
+  # with its content unchanged is paired by its NEW name only, and that is the right name to find its
+  # suites by. But a red suite then held back only the new name, which the repo never held, and the
+  # removal of the old name went up in the commit: the send published the file's deletion with no
+  # replacement. So the old name is paired with every check the new one is, and the two wait
+  # together. Only checks already paired are named, so this launches no suite a send without a
+  # rename would not.
+  local rn_st rn_old rn_new rn_more=""
+  while IFS="$(printf '\t')" read -r rn_st rn_old rn_new; do
+    case "$rn_st" in R*) ;; *) continue ;; esac
+    [ -n "$rn_old" ] && [ -n "$rn_new" ] || continue
+    rn_more="$rn_more$(awk -F'\t' -v n="$rn_new" -v o="$rn_old" '$1 == "C" && $3 == n { print "C\t" $2 "\t" o }' "$pairs" 2>/dev/null)
+"
+  done < <(git -C "$SYNC_REPO" -c core.quotePath=false diff --cached -M --name-status -- payload 2>/dev/null)
+  printf '%s' "$rn_more" | grep . >> "$pairs" 2>/dev/null || true
 
   uncovered="$(awk -F'\t' '$1=="U"{print $3}' "$pairs" 2>/dev/null | sort -u | tr '\n' ' ')"
 

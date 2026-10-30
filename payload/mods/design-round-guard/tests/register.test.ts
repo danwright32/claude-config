@@ -137,6 +137,11 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     writeFails?: (path: string) => boolean
     afterWrite?: (path: string) => void
     rmFails?: boolean
+    // #1933: the paths a Bash command takes away when it runs; the files git has never tracked (every
+    // other file the test put is tracked); and git's ls-files failing to run.
+    gone?: string[]
+    untracked?: string[]
+    lsFilesFails?: boolean
     readFailsAfterRun?: string
     unreadable?: string
     branchFails?: boolean
@@ -225,8 +230,18 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       if (ctl.sealed?.includes(stdin)) return ok('sealed\n')
       return { value: { exitCode: 1, stdout: 'not sealed: it has changed since make-settled.py sealed it\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
+    // Whether git tracks a file (#1933): `git -C <tree> ls-files -z -- :(literal,icase)<path>`, which
+    // names it when it is tracked and prints nothing when it is not.
+    if (cmd === 'git' && args[0] === '-C' && args[2] === 'ls-files' && args.length === 6) {
+      gitRuns.push(e.argv.join(' '))
+      if (ctl.lsFilesFails) throw new Error('spawn git ENOENT')
+      const rel = String(args[5]).replace(/^:\(literal,icase\)/, '')
+      const path = `${args[1]}/${rel}`.toLowerCase()
+      const tracked = Object.keys(files).some(f => f.toLowerCase() === path) && !(ctl.untracked ?? []).some(f => f.toLowerCase() === path)
+      return ok(tracked ? `${rel}\0` : '')
+    }
     // Taking away a file a shell write made (#1296): `rm -f -- <path>`.
-    if (cmd === 'rm' && args[0] === '-f' && args[1] === '--' && args.length === 3) {
+    if (cmd === 'rm'&& args[0] === '-f' && args[1] === '--' && args.length === 3) {
       if (ctl.rmFails) return { value: { exitCode: 1, stdout: '', stderr: `rm: ${args[2]}: Operation not permitted\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
       removed.push(String(args[2]))
       delete files[String(args[2])]
@@ -331,6 +346,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     }
     ran.push({ tool: String(tool), input })
     if (tool === 'Bash') for (const [path, text] of Object.entries(ctl.shell ?? {})) files[path] = text
+    if (tool === 'Bash') for (const path of ctl.gone ?? []) delete files[path]
     if (tool === 'Bash' && ctl.readFailsAfterRun) ctl.unreadable = ctl.readFailsAfterRun
     return { result: 'written', text: 'written' } as never
   })
@@ -1847,6 +1863,63 @@ test("#1925: an answer's description reworded in a mod's .ts hook file is asked 
   const said = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/the look go/the look or wording go/' payload/mods/demo/hooks/answers.ts" }))
   expect(said).toContain('was undone: it changed the words of a message Dan reads')
   expect(w.files[ANSWERS_HOOK]).toBe(now)
+})
+
+// #1934: rewording the question a mod hands AskUserQuestion through next(), or the header above it,
+// went through unasked unless the same words were said in another message too, though Dan reads both
+// in the picker. Held as a message's words by an Edit or a shell write, as an answer's are (#1925).
+const QUESTION_HOOK = `${DEMO}/question.ts`
+const QUESTION_TEXT = `export const askSettled = (next: (e: object) => Promise<unknown>) =>
+  next({ questions: [{ question: 'Is this design settled?', header: 'Settled', options: [{ label: 'Yes', description: 'It is settled' }], multiSelect: false }] })
+`
+test("#1934: a question's text or header reworded in a mod's .ts hook file is asked about as a message's words, by an Edit or a shell write; the logic beside it passes", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [QUESTION_HOOK]: QUESTION_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: QUESTION_HOOK, old_string: from, new_string: to })
+  const why = refusalOf(await call($, edit('Is this design settled?', 'Is the design settled?')))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('payload/mods/demo/hooks/question.ts changes the words of a message Dan reads')
+  expect(why).toContain('Is the design settled?')
+  expect(refusalOf(await call($, edit("header: 'Settled'", "header: 'Design settled'")))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('multiSelect: false', 'multiSelect: true')))).toBe('')
+  expect(w.ran.length).toBe(1)
+  const now = w.files[QUESTION_HOOK] as string
+  w.ctl.shell = { [QUESTION_HOOK]: now.replace('Is this design', 'Is the design') }
+  const said = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Is this design/Is the design/' payload/mods/demo/hooks/question.ts" }))
+  expect(said).toContain('was undone: it changed the words of a message Dan reads')
+  expect(w.files[QUESTION_HOOK]).toBe(now)
+})
+
+// #1933: on 2026-10-29 the #1925 builder copied rules.ts to hooks/rules-before-1925.tmp.ts by mistake,
+// and its rm was undone as words of a message Dan reads taken away, leaving the copy stranded in the
+// hooks folder until Dan answered. A file git has never tracked holds no words of the mod as it ships,
+// so taking it away passes, by git's own index (ls-files). A tracked hook file's removal is still undone
+// and asked about, and so is one git cannot answer for.
+const SCRATCH_COPY = `${DEMO}/guard-before-1933.tmp.ts`
+const OLD_DRAWS = `${DEMO}/register-old.tsx`
+test('#1933: removing a mod hook file git has never tracked passes; removing a tracked one, or one git cannot answer for, is still undone and asked about', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [SCRATCH_COPY]: GUARD_TEXT, [OLD_DRAWS]: DRAWS_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  w.ctl.untracked = [SCRATCH_COPY, OLD_DRAWS]
+  w.ctl.gone = [SCRATCH_COPY]
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm payload/mods/demo/hooks/guard-before-1933.tmp.ts' }))).toBe('')
+  expect(w.files[SCRATCH_COPY]).toBeUndefined()
+  expect(w.gitRuns).toContain('git -C /w/slate ls-files -z -- :(literal,icase)payload/mods/demo/hooks/guard-before-1933.tmp.ts')
+  // A TSX one that draws, untracked, the same.
+  w.ctl.gone = [OLD_DRAWS]
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm -f payload/mods/demo/hooks/register-old.tsx' }))).toBe('')
+  expect(w.files[OLD_DRAWS]).toBeUndefined()
+  // The tracked hook file: put back and asked about, as before.
+  w.ctl.gone = [GUARD_HOOK]
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'rm payload/mods/demo/hooks/guard.ts' }))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('was undone')
+  expect(w.files[GUARD_HOOK]).toBe(GUARD_TEXT)
+  // Where git cannot say, the file counts as tracked.
+  w.files[SCRATCH_COPY] = GUARD_TEXT
+  w.ctl.gone = [SCRATCH_COPY]
+  w.ctl.lsFilesFails = true
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm payload/mods/demo/hooks/guard-before-1933.tmp.ts' }))).toContain('was undone')
+  expect(w.files[SCRATCH_COPY]).toBe(GUARD_TEXT)
+  expect(w.ran.length).toBe(4)
 })
 
 // #1859: an edit held only because a message's words changed was refused as one that "changes how the

@@ -205,7 +205,15 @@ run_push() {  # run_push <cwd> <command> -> RC, MSG
   local p
   p="$(HK_CMD="$2" HK_CWD="$1" python3 -c 'import json,os,sys
 sys.stdout.write(json.dumps({"tool_name":"Bash","tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
-  MSG="$(printf '%s' "$p" | bash "$PUSH_HOOK" 2>&1 >/dev/null)"; RC=$?
+  MSG="$(printf '%s' "$p" | bash "$PUSH_HOOK" 2>&1 >"$WORK/push-stdout")"; RC=$?
+  OUT="$(cat "$WORK/push-stdout")"
+}
+# want_notice <ERE> <desc>: an allowed push's notice is the systemMessage on stdout, the one place
+# Claude Code shows a PreToolUse hook that exits 0 (claude-config#1906).
+. "$DIR/lib/hook-notice.sh"
+want_notice() {
+  local why; why="$(hook_notice_verdict "$OUT" "$1")"
+  if [ -z "$why" ]; then check "$2" ok; else check "$2" "$why"; fi
 }
 want_rc() {  # want_rc <expected> <desc>
   if [ "$RC" = "$1" ]; then check "$2" ok; else check "$2" "expected exit $1, got $RC; said: ${MSG:0:300}"; fi
@@ -362,6 +370,7 @@ mkdir -p "$WORK/lonely" && ( cd "$WORK/lonely" && "${G[@]}" init -q -b main . &&
 run_push "$WORK/lonely" "git push"
 want_rc 0 "push hook: a repo with one commit and no upstream is allowed"
 want_says "check-deferrals: skipped" "push hook: and it says it skipped rather than passing silently"
+want_notice "check-deferrals: skipped" "#1906 push hook: and says it where the person sees it"
 
 # Not a push: nothing to judge, nothing said.
 W="$(mk_repo p11)"

@@ -34,16 +34,20 @@ may_post() {
 may_post "$payload" || exit 0
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/hook-notice.sh
+. "$HERE/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
-# A crash must not block work, but it must not be invisible either.
+# A crash must not block work, but it must not be invisible either, so the notice goes out as a
+# systemMessage: Claude Code discards a PreToolUse hook's stderr on exit 0 (#1906).
 err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 out="$(printf '%s' "$payload" | GATE_DIR="$HERE" python3 "$HERE/session_link_comment_gate.py" 2>"$err")"
 rc=$?
 
 if [ "$rc" -ne 0 ]; then
-  echo "SESSION LINK GATE DID NOT RUN: no-session-link-in-comments.sh failed (rc=$rc). A comment may post with the Claude session link in it. $(tr '\n' ' ' <"$err")" >&2
-  exit 0
+  hook_allow_notice "SESSION LINK GATE DID NOT RUN: no-session-link-in-comments.sh failed (rc=$rc). A comment may post with the Claude session link in it. $(tr '\n' ' ' <"$err" 2>/dev/null)"
 fi
 
 printf '%s' "$out"

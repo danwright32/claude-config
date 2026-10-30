@@ -2209,10 +2209,20 @@ SESSION_END_HOOK="$DIR/issue-spool-session-end.sh"
 printf '{"session_id":"end-g","hook_event_name":"SessionEnd","reason":"prompt_input_exit"}' | bash "$SESSION_END_HOOK" >/dev/null 2>&1; hook_rc=$?
 [ "$hook_rc" -eq 0 ] && [ -f "$CLAUDE_ISSUE_SPOOL_DIR/ended/end-g" ] && check "#1291 the SessionEnd hook stamps its session ended" ok \
   || check "#1291 the SessionEnd hook stamps its session ended" "rc=$hook_rc"
+# Said with exit 2 (claude-config#1906). On SessionEnd the hooks documentation says Claude Code
+# discards a hook's JSON output, systemMessage included, and stderr on exit 0, while exit 2 "Shows
+# stderr to user only"; SessionEnd has no decision control, so exit 2 cannot block the session ending.
 hook_err="$(printf '{"hook_event_name":"SessionEnd"}' | bash "$SESSION_END_HOOK" 2>&1 >/dev/null)"; hook_rc=$?
 case "$hook_rc:$hook_err" in
-  0:*"no session_id"*) check "#1291 a payload with no session says so and never blocks" ok ;;
-  *) check "#1291 a payload with no session says so and never blocks" "rc=$hook_rc err=$hook_err" ;;
+  2:*"no session_id"*) check "#1906 a payload with no session says so, on stderr with exit 2, the one channel SessionEnd shows" ok ;;
+  *) check "#1906 a payload with no session says so, on stderr with exit 2, the one channel SessionEnd shows" "rc=$hook_rc err=$hook_err" ;;
+esac
+# A stamp it could not write is said the same way: here the spool library is missing beside a copy.
+mkdir -p "$TMPROOT/end-lone"; cp "$SESSION_END_HOOK" "$TMPROOT/end-lone/"
+hook_err="$(printf '{"session_id":"end-h","hook_event_name":"SessionEnd"}' | bash "$TMPROOT/end-lone/issue-spool-session-end.sh" 2>&1 >/dev/null)"; hook_rc=$?
+case "$hook_rc:$hook_err" in
+  2:*"could not mark session end-h ended"*) check "#1906 a stamp it could not write is said with exit 2" ok ;;
+  *) check "#1906 a stamp it could not write is said with exit 2" "rc=$hook_rc err=$hook_err" ;;
 esac
 SETTINGS_1291="$(. "$DIR/lib/settings-file.sh"; hook_settings_file "$DIR/..")"
 on_end="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum("issue-spool-session-end.sh" in h.get("command", "") for m in d["hooks"].get("SessionEnd", []) for h in m.get("hooks", [])))' "$SETTINGS_1291" 2>&1)"

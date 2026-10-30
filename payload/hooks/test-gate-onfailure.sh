@@ -8,7 +8,7 @@
 # #1881 builder). Under load, which is when overruns happen, every gate without it failed open in
 # silence. #1889 gave the scanners gate the field; this suite holds the rest to it.
 #
-# THE ONE PLACE THE CLASSIFICATION LIVES is the three lists below. Every PreToolUse hook in
+# THE ONE PLACE THE CLASSIFICATION LIVES is the two lists below. Every PreToolUse hook in
 # settings.hooks.json must be in exactly one of them, and a hook in none fails here, so a new hook
 # cannot arrive unclassified and so unchecked (L96).
 #
@@ -17,13 +17,10 @@
 #   ADVISORY   never refuses: it only advises, rewrites or records. onFailure block would turn a slow
 #              advisory hook into one that blocks work, so it must NOT carry it, and this suite also
 #              checks the script holds no refusal, so a hook that starts refusing has to move.
-#   FAILOPEN1  can refuse, but when it cannot judge it DELIBERATELY lets the call run and says so
-#              with exit 1, the non blocking error (require-tests-before-push.sh's #735 precedent:
-#              exit 0 discards stderr, so the notice would vanish). onFailure block counts exit 1 as
-#              a failure, so it would turn every "could not judge, allowed" into a refusal whose
-#              message says the call was allowed, reversing that recorded decision. Each stays as it
-#              is until its notice moves off exit 1, and this suite checks each still has that exit 1
-#              path, so the exemption cannot outlive its reason (L346).
+#
+# A gate that lets a call through because it could not judge says so with exit 0 and a JSON
+# systemMessage (lib/hook-notice.sh, #1906, #1912), never exit 1, which onFailure block refuses.
+# The four that used exit 1 for it (#735, #1065) moved off it in #1912 and are REFUSING now.
 #
 # Because onFailure block also blocks on ANY exit other than 0 or 2, a refusing gate that stumbles on
 # an ordinary call would now block every call it is registered for. So each REFUSING gate is also
@@ -78,6 +75,10 @@ REFUSING=(
   handback-claims-gate.sh
   playwright-subagent-gate.sh
   no-session-link-in-comments.sh
+  require-tests-before-push.sh
+  simplify-before-push.sh
+  check-public-assets.sh
+  check-gh-watch-interval.sh
 )
 
 # Never refuses: rtk-rewrite.sh rewrites a command for rtk and passes every one through, and
@@ -86,16 +87,6 @@ REFUSING=(
 ADVISORY=(
   rtk-rewrite.sh
   lessons-advisory.sh
-)
-
-# Refuse, but say "could not judge, allowed" with exit 1: the test and simplify judges when their
-# model or a library is unavailable (#735), the asset check when its detector cannot measure, and the
-# gh watch interval check when it cannot read the command (#1065).
-FAILOPEN1=(
-  require-tests-before-push.sh
-  simplify-before-push.sh
-  check-public-assets.sh
-  check-gh-watch-interval.sh
 )
 
 . "$DIR/lib/settings-file.sh" 2>/dev/null || { echo "FAIL: lib/settings-file.sh is missing beside this suite"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
@@ -136,9 +127,8 @@ while IFS=$'\t' read -r script onfail matcher; do
   n=0
   in_list "$script" "${REFUSING[@]}" && n=$((n + 1))
   in_list "$script" "${ADVISORY[@]}" && n=$((n + 1))
-  in_list "$script" "${FAILOPEN1[@]}" && n=$((n + 1))
   if [ "$n" -eq 1 ]; then ok
-  else bad "#1899 $script (PreToolUse, matcher $matcher) is in $n of the lists in $(basename "$0"), not exactly one. Read its exit paths and put it in REFUSING (it can refuse), ADVISORY (it never refuses) or FAILOPEN1 (it refuses, but allows with exit 1 when it cannot judge)."
+  else bad "#1899 $script (PreToolUse, matcher $matcher) is in $n of the lists in $(basename "$0"), not exactly one. Read its exit paths and put it in REFUSING (it can refuse) or ADVISORY (it never refuses)."
   fi
 
   if in_list "$script" "${REFUSING[@]}"; then
@@ -147,13 +137,10 @@ while IFS=$'\t' read -r script onfail matcher; do
   elif in_list "$script" "${ADVISORY[@]}"; then
     [ "$onfail" != "block" ] && ok \
       || bad "#1899 $script never refuses, but its registration has onFailure block, so a slow or failed advisory run would now block the call. Remove it, or move the hook to REFUSING if it now refuses."
-  elif in_list "$script" "${FAILOPEN1[@]}"; then
-    [ "$onfail" != "block" ] && ok \
-      || bad "#1899 $script lets the call run with exit 1 when it cannot judge, and onFailure block turns that exit 1 into a refusal. Move its notice off exit 1 first, then move it to REFUSING."
   fi
 done <<< "$ROWS"
 
-for s in "${REFUSING[@]}" "${ADVISORY[@]}" "${FAILOPEN1[@]}"; do
+for s in "${REFUSING[@]}" "${ADVISORY[@]}"; do
   in_list "$s" "${registered[@]}" && ok \
     || bad "#1899 $s is listed in $(basename "$0") but registered for no PreToolUse event, so the list is stale. Take it out."
 done
@@ -168,12 +155,6 @@ for s in "${ADVISORY[@]}"; do
   if [ -n "$hit" ]; then
     bad "#1899 $s is listed as never refusing, but its code holds a refusal ($hit). Move it to REFUSING and give its registration onFailure block."
   else ok; fi
-done
-for s in "${FAILOPEN1[@]}"; do
-  code="$(code_of "$s")"
-  if grep -q -E '(^|[^0-9])exit 1([^0-9]|$)' <<< "$code"; then ok
-  else bad "#1899 $s is exempt from onFailure block because it allows with exit 1 when it cannot judge, but its code no longer exits 1. Move it to REFUSING and give its registration onFailure block."
-  fi
 done
 
 # --- the ordinary call probe ---------------------------------------------------------------------

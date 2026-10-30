@@ -5,9 +5,9 @@ lessons review before any merge; read any one in full with
 `~/claude-config-sync/claude-sync lesson L174`, or a whole section in
 ~/.claude/LESSONS-INDEX-<section>.md.
 
-- Building with AI (building-with-ai): 18 lessons, 8 in the core
+- Building with AI (building-with-ai): 19 lessons, 8 in the core
 - Codebase hygiene (codebase-hygiene): 51 lessons, 30 in the core
-- Cross-system reliability (cross-system-reliability): 109 lessons, 35 in the core
+- Cross-system reliability (cross-system-reliability): 111 lessons, 35 in the core
 - Data safety (data-safety): 45 lessons, 26 in the core
 - External systems (external-systems): 45 lessons, 17 in the core
 - Honest failure (honest-failure): 113 lessons, 33 in the core

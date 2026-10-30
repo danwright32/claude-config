@@ -237,6 +237,11 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 // - Since #1832: a script file handed a name a command substitution fills in is held the same way,
 //   unless every substitution in it is `git rev-parse`, alone or with -C (rules.ts outputTrusted; Dan,
 //   2026-10-27: "git rev-parse only"), so a commit handed as `--sha` passes and a scope list is held.
+// - Since #1925 and #1934: the words Dan reads in a mod's picker are a message's too (rules.ts
+//   readMod): an answer's label and description, and the question's own text and header.
+// - Since #1933: a shell command taking away a mod hook file git has never tracked (untracked, by
+//   git's own index) passes, as a scratch copy a session made there by mistake holds no words of the
+//   mod as it ships. A tracked one's removal is judged as before, and so is one git cannot answer for.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -328,7 +333,9 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // `from`, for a git checkout or restore, is where git puts the file back from (#1158).
 // `run`, for a file a script run is handed as its argument, is that script's file (#1586).
 // `tool`, on such a file, is set when the run is a tool through npx or a module through python -m (#1815).
-type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true }
+// `removes`, for a file the shell command takes away (rm, unlink, the source mv moves), as mod-kit
+// reads it, never one it empties or writes (#1933).
+type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true; removes?: true }
 
 // Every file a call writes or removes, and whether it may write the guard's own record where its
 // words do not say what it writes.
@@ -348,7 +355,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   const scratch = namesScratchpad(command, at.session, at.temps)
   for (const f of w.files) targets.push({ word: f.word, ...(f.path ? { path: f.path } : {}), ...(f.folder ? { folder: f.folder } : {}) })
   // A removal or an emptying changes the look as surely as a write; a stamp, a folder or a mode does not.
-  for (const c of w.changes) if (c.does === 'remove' || c.does === 'truncate') targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}) })
+  for (const c of w.changes)
+    if (c.does === 'remove' || c.does === 'truncate') targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}), ...(c.does === 'remove' ? { removes: true as const } : {}) })
   // What git itself changes (#1136, Dan, 2026-10-13): a checkout of a path or a restore puts a file
   // back, git rm and git mv take it away or move it, each changing the look as a write does. A git
   // pathspec matched across folders (`:/x`, a pattern) has no path, so it is held as a write that
@@ -516,6 +524,20 @@ const putBack = async ($: EngineInterface, path: string, tree: string, from: str
     return { text: r.stdout }
   } catch (err) {
     return { why: `${said} could not be run: ${message(err)}` }
+  }
+}
+
+// #1933: whether git has never tracked the file at `path` in the checkout `tree`, by its own index
+// (`git ls-files`, which names a tracked file, a staged one included, and prints nothing for any
+// other). Matched literally, so a name holding a pattern's characters is no pattern, and in any case,
+// as this Mac's disk finds a file. Anything git cannot answer counts as tracked, so the removal is
+// judged as before rather than passed.
+const neverTracked = async ($: EngineInterface, path: string, tree: string): Promise<boolean> => {
+  try {
+    const r = await $.process.run(['git', '-C', tree, 'ls-files', '-z', '--', `:(literal,icase)${relTo(path, tree)}`], { timeoutMs: 5000 })
+    return r.exitCode === 0 && !r.isStdoutTruncated && r.stdout === ''
+  } catch {
+    return false
   }
 }
 
@@ -954,6 +976,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // A test of a screen passes (Dan, 2026-10-08: "On, but let tests through"), judged by the path
     // inside its project, so a folder named tests above the checkout lets nothing through.
     if (modTs ? isTestPath(relTo(t.path, tree)) || !isModHookTs(relTo(t.path, tree)) : lookKindIn(t.path, tree) === null) continue
+    // #1933: taking away a mod hook file git has never tracked (a scratch copy made there by mistake)
+    // takes no words of the mod as it ships away, and passes. What the same command writes there is a
+    // target of its own, judged as ever.
+    if (t.removes && (modTs || isModHook(relTo(t.path, tree))) && (await neverTracked($, t.path, tree))) continue
     // A settled design make-settled.py wrote, under docs/design exactly as it sealed it, passes unasked
     // whatever the issue's answers (#1524, Dan, 2026-10-23: "Let it through"): it changes no screen of
     // the product, and the design it holds was settled on the issue it came from. Any other text there,

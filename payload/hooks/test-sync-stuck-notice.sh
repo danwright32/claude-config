@@ -60,6 +60,16 @@ never_says() { # never_says <description> <text> <substring>
 silent() { # silent <description> <text>
   if [ -z "$(printf '%s' "$2" | tr -d '[:space:]')" ]; then check "$1" ok; else check "$1" "it said: ${2:0:300}"; fi
 }
+# fault_said <description> <stdout> <ERE>: a fault is said to the person and to nobody else. stdout
+# is one JSON object whose systemMessage says it, with no plain text and no additionalContext, which
+# are what reach the session on a UserPromptSubmit hook (claude-config#1906). It used to go to
+# stderr, which Claude Code discards on exit 0, so the person never heard it either.
+. "$DIR/lib/hook-notice.sh"
+fault_said() {
+  local why; why="$(hook_notice_verdict "$2" "$3")"
+  [ -z "$why" ] && case "$2" in *hookSpecificOutput*) why="it also handed the session context: ${2:0:300}" ;; esac
+  if [ -z "$why" ]; then check "$1" ok; else check "$1" "$why"; fi
+}
 
 [ -f "$HOOK" ] || { echo "FAIL: no hook at $HOOK"; echo "passed: 0, failed: 1"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
 
@@ -268,11 +278,12 @@ out="$(prompt noagents)"
 silent "with no automatic sync installed there is nothing to report" "$out"
 agent_for "$CLONE"
 
-# No session to key on means a first prompt cannot be told from a later one, so it says on stderr
-# that it did not run rather than repeating itself on every prompt.
+# No session to key on means a first prompt cannot be told from a later one, so it says that it did
+# not run, to the person as a systemMessage (#1906) and on stderr for the debug log, and hands the
+# session nothing.
 out="$(printf '{"cwd":"."}' | HOME="$FHOME" CLAUDE_HOME="$FHOME/.claude" SYNC_LAUNCHAGENTS="$WORK/agents" \
        CLAUDE_SYNC_STUCK_STATE_DIR="$WORK/state" SYNC_NO_NOTIFY=1 bash "$HOOK" 2>"$WORK/err")"
-silent "a payload with no session says nothing to the session" "$out"
+fault_said "a payload with no session says nothing to the session, and tells the person" "$out" "neither a session id"
 says "and says on stderr why it did not run" "$(cat "$WORK/err")" "session"
 
 # A threshold nobody can read falls back to the default and says so, rather than being silently
@@ -280,8 +291,8 @@ says "and says on stderr why it did not run" "$(cat "$WORK/err")" "session"
 printf '2 %s %s %s\n' "$(( NOW - 300 ))" "$(( NOW - 30 ))" "$(( NOW - 30 ))" > "$CLONE/.behind-skips"
 out="$(printf '{"session_id":"badthreshold"}' | HOME="$FHOME" CLAUDE_HOME="$FHOME/.claude" SYNC_LAUNCHAGENTS="$WORK/agents" \
        CLAUDE_SYNC_STUCK_STATE_DIR="$WORK/state" CLAUDE_SYNC_STUCK_NOW="$NOW" SYNC_STUCK_NOTICE_AFTER=soon SYNC_NO_NOTIFY=1 bash "$HOOK" 2>"$WORK/err")"
-silent "an unreadable threshold is not read as zero" "$out"
-says "and says it used the default" "$(cat "$WORK/err")" "SYNC_STUCK_NOTICE_AFTER"
+fault_said "an unreadable threshold is not read as zero, and the person is told the default was used" "$out" "SYNC_STUCK_NOTICE_AFTER='soon' is not a whole number"
+says "and says it on stderr too, for the debug log" "$(cat "$WORK/err")" "SYNC_STUCK_NOTICE_AFTER"
 clear_state
 
 echo "sync stuck notice: status and the notice share one predicate"

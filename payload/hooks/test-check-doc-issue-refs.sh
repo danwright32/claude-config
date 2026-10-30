@@ -219,8 +219,13 @@ run_hook() {  # $1 bin dir (or "" for PATH untouched), $2 cwd, $3 command, [$4 =
   p="$(HK_CMD="$3" HK_CWD="$2" python3 -c 'import json,os,sys
 sys.stdout.write(json.dumps({"tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
   if [ -n "${4:-}" ]; then path="$4"; elif [ -n "$1" ]; then path="$1:$PATH"; else path="$PATH"; fi
-  MSG="$(printf '%s' "$p" | PATH="$path" bash "$HOOK" 2>&1 >/dev/null)"; CODE=$?
+  MSG="$(printf '%s' "$p" | PATH="$path" bash "$HOOK" 2>&1 >"$WORKDIR/hook-stdout")"; CODE=$?
+  OUT="$(cat "$WORKDIR/hook-stdout")"
 }
+# want_notice <ERE> <desc>: a push let through says so in the systemMessage on stdout, the one place
+# Claude Code shows a PreToolUse hook that exits 0; its stderr is discarded (claude-config#1906).
+. "$DIR/lib/hook-notice.sh"
+want_notice() { local why; why="$(hook_notice_verdict "$OUT" "$1")"; if [ -z "$why" ]; then ok; else bad "#1906 $2: $why"; fi; }
 want_code() { if [ "$CODE" = "$1" ]; then ok; else bad "$2: expected exit $1, got $CODE; said: $MSG"; fi; }
 want_says() { case "$MSG" in *"$1"*) ok ;; *) bad "$2: message did not say [$1], said: [$MSG]" ;; esac; }
 want_quiet() { if [ -z "$MSG" ]; then ok; else bad "$1: expected no output, said: [$MSG]"; fi; }
@@ -295,6 +300,13 @@ want_code 0 "gh missing fails open"
 want_says "gh not found" "gh missing says why"
 want_says "not checked" "gh missing says nothing was checked, so it cannot read as a pass"
 want_says "1 pending claim" "gh missing says how many claims went unchecked"
+want_notice "gh not found.*not checked" "gh missing is said where the person sees it"
+
+# --- an origin that is not GitHub: nothing to ask, said out loud -------------------------
+R="$(mk_repo "https://gitlab.example.com/acme/widgets.git")"; commit_file "$R" docs/pii.md "$PENDING_DOC"
+run_hook "$(mk_bin)" "$R" "git push"
+want_code 0 "an origin that is not GitHub fails open"
+want_notice "not a GitHub remote.*not checked" "and says the claims were not checked, where the person sees it"
 
 # --- gh present but unauthenticated: the same fail open, its own words -------------------
 BIN="$(mk_bin)"; echo auth > "$BIN/mode"
@@ -304,6 +316,7 @@ want_code 0 "an unauthenticated gh fails open"
 want_says "could not answer" "an unauthenticated gh says it could not answer"
 want_says "401" "the fail open line carries gh's own reason"
 want_says "nothing verified" "the fail open line says nothing was verified"
+want_notice "could not answer.*401.*nothing verified" "the unauthenticated fail open is said where the person sees it"
 
 # --- gh cannot reach GitHub: fail open too ------------------------------------------------
 BIN="$(mk_bin)"; echo network > "$BIN/mode"
@@ -311,6 +324,7 @@ R="$(mk_repo "$GH_URL")"; commit_file "$R" docs/pii.md "$PENDING_DOC"
 run_hook "$BIN" "$R" "git push"
 want_code 0 "a network failure fails open"
 want_says "error connecting" "the network failure is quoted"
+want_notice "error connecting" "the network failure is said where the person sees it"
 
 # --- an unreachable answer beside a real closed finding: still refused ------------------
 # The fake cannot fail per issue, so this uses a missing issue as the second answer: the
@@ -328,6 +342,7 @@ R="$(mk_repo "$GH_URL")"; commit_file "$R" docs/pii.md "$PENDING_DOC"
 run_hook "$BIN" "$R" "SKIP_DOC_REFS_CHECK=1 git push"
 want_code 0 "SKIP_DOC_REFS_CHECK=1 lets the push through"
 want_says "not checked" "the skip says out loud that nothing was checked"
+want_notice "SKIP_DOC_REFS_CHECK=1 is set.*not checked" "the skip is said where the person sees it"
 [ "$(calls "$BIN")" = "0" ] && ok || bad "the skip must not cost a lookup"
 # The override is read by the shared helper the other push gates use (an inline VAR=1 anywhere
 # in the one Bash command), and this suite does not re-decide its reach. What it does assert is
