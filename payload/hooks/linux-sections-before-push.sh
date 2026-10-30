@@ -355,7 +355,11 @@ _ls_container="claude-linux-sections-$$-$(date +%s)"
 # stderr on exit 0, so the text also goes out as a JSON systemMessage, the channel shown to the user.
 _ls_say(){   # $1 = the notice
   printf '%s\n' "$1" >&2
-  printf '%s' "$1" | python3 -c 'import json, sys; print(json.dumps({"systemMessage": sys.stdin.read()}))' 2>/dev/null || true
+  # Without python3 the notice still reaches stderr above; only the JSON copy is skipped (#1931
+  # moves this onto lib/hook-notice.sh). The input is read as bytes and decoded with replacement,
+  # so a byte that is not UTF-8 cannot make the reader raise (#1920).
+  command -v python3 >/dev/null 2>&1 || return 0
+  printf '%s' "$1" | python3 -c 'import json, sys; print(json.dumps({"systemMessage": sys.stdin.buffer.read().decode("utf-8", "replace")}))' 2>/dev/null || true
 }
 if ! . "$HOOK_DIR/lib/bounded-run.sh" 2>/dev/null; then
   _ls_record stood-down >/dev/null 2>&1 || true
