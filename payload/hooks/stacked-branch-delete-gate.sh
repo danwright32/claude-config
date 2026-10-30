@@ -280,6 +280,7 @@ graphql_target() {   # $1 = the --hostname value, or empty; PS_RUN_ARGS of the g
   # quotes in a heredoc nested in a command substitution.
   IFS= read -r -d '' py <<'PY' || true
 import json, os, re, sys
+sys.stdout.reconfigure(errors="replace")
 
 rec_dir, cmd_text, words = sys.argv[1], sys.argv[2], sys.argv[3:]
 DELETE_REF = re.compile(r'\bdeleteRef\s*\(')

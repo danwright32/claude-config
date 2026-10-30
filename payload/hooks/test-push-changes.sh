@@ -13,6 +13,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 LIB="$DIR/lib/push-changes.sh"
 
 pass=0
@@ -188,8 +194,9 @@ if [ "$(pc_call_id '{"tool_name":"Bash","tool_use_id": "toolu_01AbC","tool_input
 if [ -z "$(pc_call_id '{"tool_input":{"command":"git push"}}')" ]; then ok; else no "pc_call_id invented an id"; fi
 # Claude Code writes the id after the command, and under a UTF-8 locale bash's =~ stops at a byte
 # that is not UTF-8, so one in the command hid the id (claude-config#1885).
+bad_byte_measured regex "#1885 pc_call_id past a byte that is not UTF-8" || true
 bad_payload="$(printf '{"tool_input":{"command":"echo \377"},"tool_use_id": "toolu_01AbC"}')"
-if [ "$(export LC_ALL=en_US.UTF-8; pc_call_id "$bad_payload")" = toolu_01AbC ]; then ok; else no "#1885 pc_call_id lost the id behind a byte that is not UTF-8"; fi
+if [ "$(export LC_ALL="$BAD_BYTE_LOCALE"; pc_call_id "$bad_payload")" = toolu_01AbC ]; then ok; else no "#1885 pc_call_id lost the id behind a byte that is not UTF-8"; fi
 
 # ---- one copy: neither gate keeps its own (L613) ------------------------------------------------
 # What each gate used to carry a copy of. A gate that grows one again fails here, named.

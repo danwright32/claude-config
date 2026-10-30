@@ -96,7 +96,7 @@ class Refuse(Exception):
 def remote_slug(directory):
     try:
         proc = subprocess.run(["git", "-C", directory, "config", "--get", "remote.origin.url"],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, timeout=10, errors="replace")
     except (OSError, subprocess.SubprocessError):
         return None
     url = proc.stdout.strip()
@@ -448,4 +448,5 @@ def main(argv, stdin_text, github=None):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv, io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()))

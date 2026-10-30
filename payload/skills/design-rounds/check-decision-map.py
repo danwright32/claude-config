@@ -139,7 +139,7 @@ def main(argv):
 
     if len(argv) == 3:
         try:
-            with open(argv[2], encoding="utf-8") as fh:
+            with open(argv[2], encoding="utf-8", errors="replace") as fh:
                 plan = json.load(fh)
         except (OSError, ValueError) as err:
             unreadable("the plan %s could not be read as JSON: %s" % (argv[2], err))
@@ -166,4 +166,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

@@ -109,7 +109,7 @@ def checkout_dir(project):
         return project, ""
     try:
         out = subprocess.run(["bash", helper, "checkout-dir", project],
-                             capture_output=True, text=True, timeout=TIMEOUT)
+                             capture_output=True, text=True, timeout=TIMEOUT, errors="replace")
     except Exception:
         return project, ""
     resolved = (out.stdout or "").strip()
@@ -126,7 +126,7 @@ def checkout_dir(project):
     # remedy, and the remedy here is the reader's to apply (L11).
     try:
         listed = subprocess.run(["bash", helper, "checkout-candidates", project],
-                                capture_output=True, text=True, timeout=TIMEOUT)
+                                capture_output=True, text=True, timeout=TIMEOUT, errors="replace")
         found = [c for c in (listed.stdout or "").split("\n") if c.strip()]
     except Exception:
         found = []
@@ -145,7 +145,7 @@ def open_issues(project):
         out = subprocess.run(
             ["gh", "issue", "list", "--state", "open", "--limit", "300",
              "--json", "number,title,body"],
-            cwd=where, capture_output=True, text=True, timeout=TIMEOUT)
+            cwd=where, capture_output=True, text=True, timeout=TIMEOUT, errors="replace")
     except Exception as exc:
         return [], "gh could not be run (%s)" % type(exc).__name__
     if out.returncode != 0:
@@ -225,4 +225,5 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())

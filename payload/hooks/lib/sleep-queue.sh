@@ -91,7 +91,7 @@ _sq_generation() {
     printf 'the Mac is not asleep (the sleep record reads %s), so there is no night to queue or claim for\n' "$(sleep_state "$rec" "$now")"
     return 1
   fi
-  gen="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("generation") or "")' "$rec" 2>/dev/null)"
+  gen="$(python3 -c 'import json,sys; sys.stdout.reconfigure(errors="replace"); print(json.load(open(sys.argv[1], errors="replace")).get("generation") or "")' "$rec" 2>/dev/null)"
   case "$gen" in
     ''|*[!A-Za-z0-9._-]*) printf 'the sleep record names no generation this reader accepts\n'; return 1 ;;
   esac
@@ -193,6 +193,7 @@ _sq_gh_source() {
   case "$1" in
     accounts) _sq_gh_as "" auth status --json hosts 2>/dev/null | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 for a in json.loads(sys.stdin.buffer.read().decode("utf-8", "replace")).get("hosts", {}).get("github.com", []):
     if a.get("state") == "success" and a.get("login"):
         print(a["login"])' ;;
@@ -261,7 +262,8 @@ sleep_queue() {
     fi
     [ "$rc" = 0 ] && { python3 -c '
 import json, sys
-print(json.dumps([json.loads(l) for l in open(sys.argv[1]) if l.strip()]))' "$tmp/goal.jsonl" > "$tmp/issues.json" 2>"$tmp/goal.err" || { _sq_refuse "a goal issue came back as something other than JSON"; rc=3; }; }
+sys.stdout.reconfigure(errors="replace")
+print(json.dumps([json.loads(l) for l in open(sys.argv[1], errors="replace") if l.strip()]))' "$tmp/goal.jsonl" > "$tmp/issues.json" 2>"$tmp/goal.err" || { _sq_refuse "a goal issue came back as something other than JSON"; rc=3; }; }
   fi
   [ "$rc" = 0 ] && { _sq_fetch "$tmp/prs.json" "open pull requests of $slug" prs "$slug" "$limit" || rc=3; }
   [ "$rc" = 0 ] && { _sq_fetch "$tmp/branches" "branches of $slug" branches "$slug" || rc=3; }

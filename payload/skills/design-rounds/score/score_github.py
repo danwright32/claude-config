@@ -254,7 +254,7 @@ class GitHub:
 
     def _other_accounts(self):
         if self._others is None:
-            proc = self.run([self.gh, "auth", "status"], capture_output=True, text=True)
+            proc = self.run([self.gh, "auth", "status"], capture_output=True, text=True, errors="replace")
             self._others = sorted(set(re.findall(r"account ([A-Za-z0-9_.-]+)", proc.stdout + proc.stderr)))
         return self._others
 
@@ -272,7 +272,7 @@ class GitHub:
             tried.add(account)
             env = dict(os.environ)
             if account:
-                tok = self.run([self.gh, "auth", "token", "-u", account], capture_output=True, text=True)
+                tok = self.run([self.gh, "auth", "token", "-u", account], capture_output=True, text=True, errors="replace")
                 if tok.returncode != 0 or not tok.stdout.strip():
                     continue
                 env["GH_TOKEN"] = tok.stdout.strip()

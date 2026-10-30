@@ -42,12 +42,13 @@ fi
 # this one process, into a variable, never through argv.
 IFS= read -r -d '' CHECKED_prog <<'PY' || true
 import json, re, sys
+sys.stdout.reconfigure(errors="replace")
 config, example, script_gs = sys.argv[1:4]
 def fail(msg):
     sys.stderr.write(msg + "\n")
     sys.exit(1)
 try:
-    with open(config) as f:
+    with open(config, errors="replace") as f:
         cfg = json.load(f)
     if not isinstance(cfg, dict):
         raise ValueError
@@ -55,14 +56,14 @@ except Exception:
     fail("%s could not be read as a JSON object. Fix it, or recreate it with setup (see SKILL.md)." % config)
 placeholders = {"url": set(), "token": set()}
 try:
-    with open(example) as f:
+    with open(example, errors="replace") as f:
         ex = json.load(f)
     placeholders["url"].add(ex["url"])
     placeholders["token"].add(ex["token"])
 except Exception:
     fail("%s is missing or unreadable, so the placeholders in config.local.json cannot be checked. Refusing to send." % example)
 try:
-    gs = open(script_gs).read()
+    gs = open(script_gs, errors="replace").read()
     m = re.search(r"^const TOKEN = '([^']*)';", gs, re.M)
     n = re.search(r"^const TOKEN_MIN_LENGTH = (\d+);", gs, re.M)
     if not m or not n:
@@ -106,7 +107,7 @@ SHEET_ID="$(python3 "$LIB" sheet-id)" || exit 1
 # sheet refuses it before reading or writing anything (claude-config#1080).
 post(){   # $1 = the request body without its key, as a JSON object; $2 = "sheet" for the sheet check, "update" or "preview" for those
   local payload
-  payload=$(TRACKER_TOKEN="$TOKEN" TRACKER_SHEET_ID="$SHEET_ID" python3 -c "import json,os,sys;b=json.loads(sys.argv[1]);b['key']=os.environ['TRACKER_TOKEN'];b['sheetId']=os.environ['TRACKER_SHEET_ID'];print(json.dumps(b))" "$1")
+  payload=$(TRACKER_TOKEN="$TOKEN" TRACKER_SHEET_ID="$SHEET_ID" python3 -c "import json,os,sys;sys.stdout.reconfigure(errors='replace');b=json.loads(sys.argv[1]);b['key']=os.environ['TRACKER_TOKEN'];b['sheetId']=os.environ['TRACKER_SHEET_ID'];print(json.dumps(b))" "$1")
   # NOTE: no -X POST. --data makes the first request a POST; Apps Script 302-redirects
   # to a googleusercontent URL that only serves GET, so curl must switch to GET on the
   # redirect. -X POST would force a re-POST there and return 405.
@@ -120,6 +121,7 @@ post(){   # $1 = the request body without its key, as a JSON object; $2 = "sheet
   # failure naming the web app's own error (claude-config#677).
   python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 body, expect, want = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     reply = json.loads(body)
@@ -170,7 +172,7 @@ case "${1:-}" in
     ;;
   append)
     DATA="${2:?usage: tracker.sh append '<json object of header:value>'}"
-    BODY=$(python3 -c "import json,sys;print(json.dumps({'data':json.loads(sys.argv[1])}))" "$DATA")
+    BODY=$(python3 -c "import json,sys;sys.stdout.reconfigure(errors='replace');print(json.dumps({'data':json.loads(sys.argv[1])}))" "$DATA")
     sheet_check
     post "$BODY"
     ;;
@@ -194,6 +196,7 @@ case "${1:-}" in
     elif [ "${1-}" = "--restore" ]; then RESTORE=yes; shift; fi
     IFS= read -r -d '' BODY_prog <<'PY' || true
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 usage, link, name, cells, argc = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
 preview, expect, restore = sys.argv[6] == "preview", sys.argv[7], sys.argv[8] == "yes"
 def refuse(why):

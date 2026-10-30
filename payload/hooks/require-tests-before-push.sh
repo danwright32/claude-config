@@ -465,6 +465,7 @@ pc_judge "$JUDGE_MODEL" "$JUDGE_TIMEOUT" "$RUBRIC" "$judge_input" || fail_open "
 
 verdict="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
 import sys, json
+sys.stdout.reconfigure(errors="replace")
 try:
     obj = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     missing = obj.get("missing") or []

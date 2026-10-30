@@ -129,7 +129,7 @@ def available_screens():
 
 def _read_screen_file(path, what):
     try:
-        with open(path, encoding="utf-8") as handle:
+        with open(path, encoding="utf-8", errors="replace") as handle:
             return handle.read()
     except OSError as err:
         raise ChromeError("the %s file could not be read: %s (%s)" % (what, path, err))
@@ -287,12 +287,12 @@ def measure_screen_windows(page, frames, chrome_bin, deadline=60):
     work = tempfile.mkdtemp(prefix="dr-measure.")
     try:
         path = os.path.join(work, "measure.html")
-        with open(path, "w", encoding="utf-8") as fh:
+        with open(path, "w", encoding="utf-8", errors="replace") as fh:
             fh.write(probe)
         proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox",
                                "--virtual-time-budget=5000", "--dump-dom", "file://" + path],
                               capture_output=True, text=True,
-                              env=dict(os.environ, HEADLESS_DOM_CHROME=chrome_bin, HEADLESS_DOM_DEADLINE=str(deadline)))
+                              env=dict(os.environ, HEADLESS_DOM_CHROME=chrome_bin, HEADLESS_DOM_DEADLINE=str(deadline)), errors="replace")
     finally:
         shutil.rmtree(work, ignore_errors=True)
     m = re.search(r'<pre id="DR-MEASURE">(.*?)</pre>', proc.stdout, re.S)
@@ -377,7 +377,7 @@ def load_chrome(chrome, base):
         if chrome.get("width") not in (None, width):
             raise ChromeError("the chrome says it is %s wide, and its picture is %d" % (chrome.get("width"), width))
         with open(path, "rb") as fh:
-            picture = base64.b64encode(fh.read()).decode("ascii")
+            picture = base64.b64encode(fh.read()).decode("ascii", "replace")
         return {"kind": "png", "slot": slot, "width": width, "height": height, "picture": picture, "source": source}
     if not path.lower().endswith((".html", ".htm")):
         raise ChromeError("the captured chrome %s is neither a page (.html) nor a picture (.png)" % path)

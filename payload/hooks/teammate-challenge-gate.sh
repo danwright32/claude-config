@@ -35,6 +35,7 @@ fi
 
 id=$(printf '%s' "$input" | python3 -c '
 import sys, json
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:

@@ -29,6 +29,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 . "$DIR/lib/settings-file.sh"
 SETTINGS="$(hook_settings_file "$DIR/..")"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/gfc.XXXXXXXX")" || exit 1
@@ -207,12 +213,10 @@ done
 echo "every python3 reader of stdin reads what jq reads (claude-config#1900)"
 
 # Measured first, so a red below is about the hooks and not this machine: python3 reading its stdin
-# in text mode under en_US.UTF-8 raises on a byte that is not UTF-8.
-if printf 'a\xffb' | LC_ALL=en_US.UTF-8 python3 -c 'import sys; sys.stdin.read()' 2>/dev/null; then
-  echo "SUITE-PART-UNMEASURED #1900 python3 text mode stdin under en_US.UTF-8 here reads a byte that is not UTF-8 without raising, so the fault this guards is not shown on this machine"
-else ok; fi
+# in text mode under a UTF-8 locale raises on a byte that is not UTF-8.
+bad_byte_measured python "#1900 python3 text mode stdin on a byte that is not UTF-8" && ok
 # And the form every reader uses reads it.
-if [ "$(printf 'a\xffb' | LC_ALL=en_US.UTF-8 python3 -c 'import sys; print(len(sys.stdin.buffer.read().decode("utf-8", "replace")))')" = "3" ]; then ok
+if [ "$(printf 'a\xffb' | LC_ALL="$BAD_BYTE_LOCALE" python3 -c 'import sys; print(len(sys.stdin.buffer.read().decode("utf-8", "replace")))')" = "3" ]; then ok
 else bad "sys.stdin.buffer.read().decode(\"utf-8\", \"replace\") did not read a byte that is not UTF-8 as one character"; fi
 
 # Text mode stdin: .read(), iterating it, json.load on it, or handing it on as a file.
@@ -220,11 +224,16 @@ TEXT_RE='sys\.stdin\.read\(|json\.load\(sys\.stdin\)|in sys\.stdin([^.]|$)|retur
 text_reads(){ # text_reads <file>... -> file:line of each text mode read of stdin
   grep -n -E "$TEXT_RE" "$@" 2>/dev/null
 }
+# The hooks, and every script under payload/skills, which reads gh's answers the same way (#1923).
 files=()
 for f in "$DIR"/*.sh "$DIR"/*.py "$DIR"/lib/*.sh "$DIR"/lib/*.py; do
   case "$(basename "$f")" in test-*|test_*) continue ;; esac
   files+=("$f")
 done
+nhooks="${#files[@]}"
+while IFS= read -r f; do files+=("$f"); done < <(
+  find "$DIR/../skills" -name fixtures -prune -o -type f \( -name '*.sh' -o -name '*.py' \) ! -name 'test-*' ! -name 'test_*' -print 2>/dev/null | sort)
+[ "$(( ${#files[@]} - nhooks ))" -ge 20 ] && ok || bad "only $(( ${#files[@]} - nhooks )) scripts were found under $DIR/../skills, so the stdin scan is not reading the skills"
 hits="$(text_reads "${files[@]}" | sed "s#^$DIR/##")"
 if [ -z "$hits" ]; then ok; else bad "a python3 reader takes stdin in text mode, which raises on a byte jq reads as U+FFFD; read sys.stdin.buffer and decode with errors=\"replace\":
 $hits"; fi
