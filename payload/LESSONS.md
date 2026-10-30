@@ -8037,6 +8037,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   which asks the server for the page again first)
 
 ## Building with AI
+- **L828. When a model call sets an output cap and the model thinks before it writes, the cap covers the thinking too, so size it for the thinking plus the longest reply, and treat any response that stopped at the cap as refused rather than shown, because the thinking can use the whole cap and leave a reply that is empty or cut off mid sentence.**
+  (pivot#344, 2026-10-30)
+  SHORT: A thinking model's output cap covers its thinking: size it for both, and refuse any reply that stopped at the cap.
 - **L820. Any AI call that writes, reads or reasons about a date must be given today's date, and the time zone it means, as a fact in its context, because a model with no date resolves 'last Friday' or 'next month' to a guess from its training and a well formed guess passes every format check.**
   (pivot#155, 2026-10-28)
   SHORT: An AI call handling dates must be given today's date and time zone in its context; without it a guessed date passes every format check.
