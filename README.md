@@ -2390,6 +2390,7 @@ is told its share, and the product is printed at the top of every run.
 | `HOOK_TESTS_TIMINGS` | `~/.cache/claude-config/suite-timings` | Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a duration measured on this machine is not configuration, and mirroring it would make the other Mac order its runs by numbers from hardware it does not have. |
 | `HOOK_TESTS_FLAKY_OUTPUT` | `~/.cache/claude-config/flaky-suite-output` | Where the first, failing run of a suite marked FLAKY is kept, its whole output in one file named by the time and the suite, and the FAIL line names that file. That output used to live only in the run's work folder, which is removed at the end, so a flake left nothing to diagnose from but the few lines printed (#1788, L297). Only a FLAKY suite writes here: a passing run writes nothing. Pruned after each write to the newest 20 copies, by the time in their names, and nothing else in the folder is touched (`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`). Set it to empty to keep nothing, and the FAIL line says so. |
 | `HOOK_TESTS_LOCK_WAIT` | `1200` locally, always `0` under CI | How many seconds a suite may wait for a lock another run holds, handed to every suite as `SUITE_LOCK_WAIT` whatever was inherited. Twenty minutes is about three runs of the sync suite on this Mac, so a run queued behind two or three overlapping ones still reports it rather than NOT RUN (#1297). A flake recheck is asked to wait for nothing, since its deadline is set by what the suite measured; one refused its lock that way never ran, so its FAIL line says `recheck could not run: the suite lock is held by` whoever holds it, never FLAKY and never a bare FAIL that reads as the failure seen twice, and the suite stays failed (#1312). A value that is not a whole number is refused. |
+| `HOOK_TESTS_DEADLINE` | none locally; under GitHub Actions the running job's own `timeout-minutes` | The epoch second by which the run must have printed its report. No flake recheck runs past it less `HOOK_TESTS_DEADLINE_RESERVE` (default `120`, in seconds, set on 2026-10-29 from the job setup times measured beside it in the runner): one with no time left is not started and its FAIL line says `not rechecked`, and one cut short says `recheck stopped after`, naming the limit, never `recheck timed out`, which is a recheck that ran out its own allowance (#1901). That allowance, `HOOK_TESTS_FLAKE_RECHECK_MAX`, is whole seconds on the same clock, and the FAIL line names the seconds it really waited; it was a count of polls printed as seconds until #1901. Under GitHub Actions it is read from the workflow file and job the platform names (`GITHUB_WORKFLOW_REF`, `GITHUB_JOB`) through `hooks/lib/workflow-job-timeout.sh`, counted from `HOOK_TESTS_JOB_STARTED`, which the workflow's first step records, and the run says the limit it read or why it could not. Separately, a suite stopped at its own wall clock is named on a `run-all-tests: STOPPED` line the moment it is stopped, before the report and any recheck, so a job cancelled later still names it. A value that is not a whole number is refused. |
 | `HOOK_TESTS_SLOTS` | set BY the runner | Each suite's share of the budget, which is the budget divided by how many suites are running at once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its own processes it may start. Point the runner at one directory holding one suite and that suite is handed the whole budget, so running the long suite on its own is as fast as it ever was. |
 
 What the budget costs, measured on this Mac on 2026-08-21 as one pair of runs back to back: 124 seconds against
@@ -2667,7 +2668,11 @@ limit are one notice. It reads the process table and nothing else, and says noth
 Measured 2026-09-19 on this Mac: about 58ms per prompt.
 
 Every suite in this repo arms `hooks/lib/suite-deadline.sh`, so it bounds its own wall clock however
-it was started, and whatever it started is killed if it is stopped from outside. The limit is
+it was started, and whatever it started is killed if it is stopped from outside. A child it saw
+moments before the suite went counts as the suite's own even when its command line has changed
+since, as it does for a child seen while still starting (on Linux, an empty command line inside
+execve), by the rule `hooks/lib/recorded-pid.sh` holds for every check of a recorded process id
+(claude-config#1909). The limit is
 `SUITE_WALL_DEFAULT`, one number for every suite, derived and dated in DESIGN.md's measured numbers
 table from the slowest suite that takes it, and overridden for one run by `SUITE_WALL_TIMEOUT`,
 which set to 0 turns the deadline off. `tests/test-claude-sync.sh` is the one suite with a limit of
@@ -2794,9 +2799,18 @@ a detail), for disk-clean's scan below; it is read only and takes no lock.
 
 ## Measuring what could go: disk-clean's scan
 
-`skills/disk-clean/scan.sh` is the read only half of the disk-clean skill being built in the Disk
-cleanup skill milestone (claude-config#1806); its SKILL.md is a placeholder that says not to use it
-until #1808. It removes nothing. It runs a Full Disk Access probe first (listing `~/Library/Mail`),
+`/disk-clean`, which Dan types and Claude never starts on its own (`disable-model-invocation`), is the
+flow in `skills/disk-clean/SKILL.md` (claude-config#1808): the scan, a report with the Full Disk
+Access result first and every unmeasured kind named with its reason, one review page opened in
+Chrome (`review-page.sh`), the pasted selection checked against the scan (`review-check.sh`), one
+confirm picker naming what goes, `disk-remove.sh` on the checker's plan, and the result reported as
+the verified per item total beside `df -m` before and after. Anything needing Dan's password is handed
+to him as one command; the skill never runs `sudo`. `test-disk-clean-skill.sh` derives every exit
+code each of those four scripts can return from its source and fails when the skill does not say what
+to tell Dan for one, and runs the review page and checker commands as written through the harness.
+
+`skills/disk-clean/scan.sh` is the read only half of that flow (claude-config#1806). It removes
+nothing. It runs a Full Disk Access probe first (listing `~/Library/Mail`),
 one pruned walk of the home folder (never into `~/Library`, the Trash, key folders, sync clients,
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
@@ -2814,8 +2828,7 @@ disk-clean harness.
 
 ## Removing anything: disk-remove.sh
 
-`hooks/lib/disk-remove.sh` is the one place the disk-full skill, and the disk-clean skill being
-built in the Disk cleanup skill milestone, remove anything (claude-config#1805). It never takes a
+`hooks/lib/disk-remove.sh` is the one place the disk-full and disk-clean skills remove anything (claude-config#1805). It never takes a
 path to remove on its command line. `--plan <file>` reads a plan naming a scan and the ids of the
 items Dan chose in it, and takes every path, method and category from that scan's own record, so
 nothing is removed that a scan did not measure and offer. The record is `last-scan.json` (written

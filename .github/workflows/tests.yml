@@ -113,6 +113,14 @@ jobs:
     # to finish afterwards, against a job that measured about fourteen minutes on 2026-09-19.
     timeout-minutes: 40
     steps:
+      # FIRST, before anything that takes time (claude-config#1901). The runner reads this job's
+      # timeout-minutes above from this file and holds every flake recheck to end before it, so a
+      # suite that hangs is named before the job is cancelled. Counted from the runner's own start
+      # instead, the minutes the steps before it took would be missing, which is the direction that
+      # lets the job be cancelled first. tests/test-ci-workflow.sh holds this step in first place.
+      - name: Record when the job started
+        run: echo "HOOK_TESTS_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       # Pinned to a commit, with the version beside it, so the code that runs cannot change under
       # the same tag, and on a major that runs on Node 24 rather than the deprecated Node 20
       # (claude-config#597). tests/test-ci-workflow.sh refuses a tag, or a major still on Node 20.
