@@ -59,6 +59,14 @@ RULES_DIR="${CLAUDE_RULES_DIR:-$HOME/.claude}"
 [ -d "$RULES_DIR" ] || exit 0
 [ -f "$RULES_DIR/CLAUDE.md" ] || [ -d "$RULES_DIR/mods" ] || exit 0
 
+# The notice library. The folder is cut in bash, since this runs on every prompt; a bare name (run
+# from its own folder) is ".".
+case "${BASH_SOURCE[0]}" in */*) RFC_DIR="${BASH_SOURCE[0]%/*}" ;; *) RFC_DIR=. ;; esac
+# shellcheck source=lib/hook-notice.sh
+. "$RFC_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
 # Keyed on the session, so two sessions open at once each get their own baseline.
 # With neither field there is no way to tell a first prompt from a later one, and
 # guessing would either report every prompt as stale or never report at all, so
@@ -67,12 +75,6 @@ RULES_DIR="${CLAUDE_RULES_DIR:-$HOME/.claude}"
 # Claude Code discards a hook's stderr on exit 0, and that on UserPromptSubmit and
 # SessionStart plain stdout goes to Claude as context, so the systemMessage, which
 # neither event is documented to discard, is the channel shown to the person.
-# shellcheck source=lib/hook-notice.sh
-# Cut in bash, since this runs on every prompt; a bare name (run from its own folder) is ".".
-case "${BASH_SOURCE[0]}" in */*) RFC_DIR="${BASH_SOURCE[0]%/*}" ;; *) RFC_DIR=. ;; esac
-. "$RFC_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
-  printf '%s\n' "$1" >&2
-  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 #
 # The same one python3 reads which event this is, so the start path costs no extra process. The
 # fields are joined with the unit separator, never a tab: `read` folds a run of tabs into one, so an

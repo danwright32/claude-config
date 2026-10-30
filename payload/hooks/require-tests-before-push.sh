@@ -33,6 +33,13 @@ JUDGE_MODEL="sonnet"
 JUDGE_TIMEOUT=90       # seconds for the model call
 DIFF_BUDGET=60000      # max bytes of diff sent to the model
 
+# The notice library, loaded first because every allow below speaks through it.
+TG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/hook-notice.sh
+. "$TG_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
 # Allow the push, but surface WHY the gate did not run.
 #
 # The channel is load-bearing. Claude Code discards a PreToolUse hook's stderr
@@ -48,11 +55,6 @@ DIFF_BUDGET=60000      # max bytes of diff sent to the model
 # ordinary silent allows (not a push, SKIP_TEST_CHECK, no source touched,
 # docs-only) are correct verdicts, not failures: making them talk would train
 # everyone to tune the notice out. Recorded first once the command is known to be a push.
-# shellcheck source=lib/hook-notice.sh
-TG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-. "$TG_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
-  printf '%s\n' "$1" >&2
-  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 fail_open() {   # $1 = why  $2 = judged, when a judge was called
   if [ "${PC_PUSH:-0}" = 1 ]; then pc_record failopen "$1" "${2:-}" || :; fi
   hook_allow_notice "TEST GATE DID NOT RUN ($1). Push allowed ungated."

@@ -225,7 +225,7 @@ out="$(printf '{"session_id":"w1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_P
   CLAUDE_SUITE_PILE_NOW="$NOW" bash "$HOOK" 2>/dev/null)"; rc=$?
 fault_said "a state directory that cannot be written says no pile, and tells the person why" "$out" "could not write"
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
-# An unreadable limit is not guessed at, and not said on every prompt either.
+# An unreadable limit is not guessed at; it is told to the person on each prompt while it lasts.
 out="$(printf '{"session_id":"b1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
   CLAUDE_SUITE_PILE_NOW="$NOW" SYNC_SUITE_MAX_AGE=soon bash "$HOOK" 2>/dev/null)"; rc=$?
 fault_said "an unreadable age limit says nothing to the session, and tells the person" "$out" "must all be whole numbers"
