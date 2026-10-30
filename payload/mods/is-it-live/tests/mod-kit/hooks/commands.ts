@@ -146,8 +146,17 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
 // `bare`, where given, is filled with each word's expansions written outside quotes (#1834): by the
 // word's place in the text, the place in the word, quotes removed, of each $ starting a variable
 // ($NAME or ${NAME}) that no quote or backslash covers, whose value bash splits into words.
+//
+// `literal`, where given, is filled with the place in the text of each word the shell hands on as
+// its characters, matching it against no file (#1951): one holding a pattern character (GLOB_CHAR)
+// only inside quotes or after a backslash, with none bare and no expansion anywhere in it, so
+// `'*push*'`, "app/*.css" and app/\*x are, while ''*x'', "app/"*x and '$P' are not.
 type Split = { words: string[]; starts: number[]; from?: number }
-const split = (cmd: string, bare?: Map<number, number[]>): Split[] => {
+// The characters that make a word a pattern the shell may expand: a glob's, a brace's, and zsh's
+// groups and extended glob characters, read wider than any one shell's so a word is never taken for
+// one it hands on as written while some shell would match it against files.
+const GLOB_CHAR = /[*?[\]{}()~^#]/
+const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>): Split[] => {
   const cmds: Split[] = []
   let words: string[] = []
   let starts: number[] = []
@@ -155,6 +164,19 @@ const split = (cmd: string, bare?: Map<number, number[]>): Split[] => {
   let start = 0
   let inWord = false
   let wordBare: number[] = []
+  // For `literal`: whether the word being read holds a pattern character quoted, one bare, and an
+  // expansion (a $ or a backtick, quoted or not, or a substitution).
+  let globQuoted = false
+  let globBare = false
+  let expands = false
+  const quotedChar = (c: string) => {
+    if (GLOB_CHAR.test(c)) globQuoted = true
+    if (c === '$' || c === '`') expands = true
+  }
+  const bareChar = (c: string) => {
+    if (GLOB_CHAR.test(c)) globBare = true
+    if (c === '$' || c === '`') expands = true
+  }
   let quote: '"' | "'" | undefined
   // Parentheses opened inside a word ($(, <(, $((), whose closing ones belong to the word too.
   let wordParens = 0
@@ -170,12 +192,16 @@ const split = (cmd: string, bare?: Map<number, number[]>): Split[] => {
     inWord = true
     start = i
     wordBare = []
+    globQuoted = false
+    globBare = false
+    expands = false
   }
   const endWord = () => {
     if (inWord) {
       words.push(word)
       starts.push(start)
       if (bare && wordBare.length) bare.set(start, wordBare)
+      if (literal && globQuoted && !globBare && !expands) literal.add(start)
     }
     word = ''
     inWord = false
@@ -227,12 +253,18 @@ const split = (cmd: string, bare?: Map<number, number[]>): Split[] => {
     if (quote) {
       const sub = quote === '"' && c !== '<' && c !== '>' ? subEnd(cmd, i) : undefined
       if (c === quote) quote = undefined
-      else if (c === '\\' && quote === '"' && i + 1 < cmd.length) word += cmd[++i]
-      else if (sub !== undefined) {
+      else if (c === '\\' && quote === '"' && i + 1 < cmd.length) {
+        quotedChar(cmd[i + 1] as string)
+        word += cmd[++i]
+      } else if (sub !== undefined) {
         // In double quotes too, a quote inside a substitution belongs to it, never closing these.
+        expands = true
         word += cmd.slice(i, sub + 1)
         i = sub
-      } else word += c
+      } else {
+        quotedChar(c)
+        word += c
+      }
       continue
     }
     // A clause's pattern is no command: its words are dropped at the ) that ends it, and an esac
@@ -266,6 +298,7 @@ const split = (cmd: string, bare?: Map<number, number[]>): Split[] => {
       // readLine. A process substitution is a word of its own.
       if (c === '<' || c === '>') endWord()
       begin(i)
+      expands = true
       word += cmd.slice(i, sub + 1)
       i = sub
     } else if (c === '"' || c === "'") {
@@ -293,13 +326,16 @@ const split = (cmd: string, bare?: Map<number, number[]>): Split[] => {
       starts.push(at)
     } else if (c === '\\' && i + 1 < cmd.length) {
       begin(i)
+      quotedChar(cmd[i + 1] as string)
       word += cmd[++i]
     } else if (c === '(' && inWord) {
       wordParens++
+      bareChar(c)
       word += c
     } else if (c === ')' && wordParens > 0) {
       wordParens--
       begin(i)
+      bareChar(c)
       word += c
     } else if (c === '(' || c === ')') {
       // A subshell's parenthesis is a command of its own (#700), so what runs inside it is read in
@@ -347,6 +383,7 @@ const split = (cmd: string, bare?: Map<number, number[]>): Split[] => {
       word += c
     } else {
       begin(i)
+      bareChar(c)
       if (c === '$' && /[A-Za-z_{]/.test(cmd[i + 1] ?? '')) wordBare.push(word.length)
       word += c
     }
@@ -560,6 +597,9 @@ const printfText = (args: readonly string[]): string | undefined => {
  * `splits`, on a command run by a shell that splits an unquoted expansion's value into words (#1834,
  * splitsWords: bash, sh, dash, ksh, never zsh), gives for each word the places in it, quotes removed,
  * of each $ outside quotes whose value that shell splits; absent where no word has one.
+ * `literal` gives for each word whether the shell hands it on as its characters, matching it against
+ * no file (#1951): every pattern character in it quoted or after a backslash, and no expansion in
+ * it; absent where no word is one.
  */
 export type Command = {
   words: string[]
@@ -574,6 +614,7 @@ export type Command = {
   substitution?: true
   asWritten?: true
   splits?: number[][]
+  literal?: boolean[]
 }
 
 /**
@@ -612,8 +653,8 @@ const ownRedirects = (words: readonly string[]): string[] => {
 // reads its script there, when what they read is the rest of that script. What a find -exec runs
 // is read after it, as a command of its own. The script is read as that shell splits words (#1834),
 // and `splits` is where each word's expansions outside quotes are, when the shell running this one
-// splits their values.
-const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][]) => {
+// splits their values. `literal` is which words the shell hands on as written (#1951).
+const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][], literal?: boolean[]) => {
   const stdin = ownStdin(words, fed) ?? feed.stdin
   const kind = kindOf(words[0])
   const { program, script } = kind ? readProgram(words, stdin) : {}
@@ -643,6 +684,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
     ...(script ? { script } : {}),
     ...(verdict ? { verdict } : {}),
     ...(splits && splits.some(s => s.length) ? { splits } : {}),
+    ...(literal && literal.some(Boolean) ? { literal } : {}),
   })
   // Its {} stands for each thing find finds, which this reader writes as the folder find starts
   // from, so the command carries those folders as `found`: what it changes at one of them is that
@@ -704,7 +746,9 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   const heredocAt = new Map(heredocs.map(h => [h.at, h]))
   // Each word's expansions outside quotes, by its place in the text (#1834).
   const bare = new Map<number, number[]>()
-  const read = split(text, bare)
+  // Each word the shell hands on as written, by its place in the text (#1951).
+  const literal = new Set<number>()
+  const read = split(text, bare, literal)
   const begun = read.map(r => begins(r.words, r.starts))
   // Each substitution, by the command it sits in: the last one starting at or before it.
   const ran = new Map<number, string[]>()
@@ -761,7 +805,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
     if (b.xargs || outer.xargs) feed = { ...feed, xargs: true }
     if (outer.found) feed = { ...feed, found: outer.found }
-    emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined)
+    emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined, b.starts.map(s => literal.has(s)))
   })
   return out
 }
