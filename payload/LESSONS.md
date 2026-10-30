@@ -6,6 +6,9 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L827. A duration recorded for an operation that retries covers every attempt and the waits between them, so a per attempt timeout sized from it grows by whole timeouts on a bad day; size a per attempt limit only from per attempt timings, and record those if nothing does.**
+  (bidspoke#3098, 2026-10-30)
+  SHORT: A retried operation's recorded duration spans every attempt, so size a per attempt timeout only from per attempt timings.
 - **L823. Code that ships under a different loader than its tests use, such as a script Node runs by stripping types while Vitest compiles it fully, is proven only by loading it the way it ships, so turn on the compiler setting that refuses what that loader cannot run (erasableSyntaxOnly for Node type stripping).**
   (pivot#229, 2026-10-29)
   SHORT: Tests compiled differently from how code ships prove nothing about loading; refuse what the shipping loader can't run (erasableSyntaxOnly).
