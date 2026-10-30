@@ -42,7 +42,8 @@ class World:
         return [args for _, args in self.calls if args[:1] == ["api"] and ("POST" in args or "PATCH" in args)]
 
     # --- subprocess.run -----------------------------------------------------------------------
-    def run(self, argv, capture_output=True, text=False, env=None, cwd=None):
+    def run(self, argv, capture_output=True, text=False, env=None, cwd=None, errors=None):
+        # errors: how the real one decodes a byte that is not UTF-8 (claude-config#1923); answers here are text.
         args = list(argv[1:])
         token = (env or {}).get("GH_TOKEN", "")
         self.calls.append((token, args))

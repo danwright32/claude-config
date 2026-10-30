@@ -80,7 +80,9 @@ def git(repo, *args):
 
 def text(raw, what):
     try:
-        return raw.decode("utf-8")
+        # Strict, and refused by name below (#1923): this text is merged and written back as the
+        # README, so a stand in for a byte would change the file rather than read it.
+        return raw.decode("utf-8", "strict")
     except UnicodeDecodeError:
         raise Unread("%s is not UTF-8" % what)
 
@@ -91,7 +93,7 @@ def merge_file(ours, base, theirs, diff3=False):
         paths = []
         for name, body in (("ours", ours), ("base", base), ("theirs", theirs)):
             p = os.path.join(d, name)
-            with open(p, "w", encoding="utf-8", newline="") as f:
+            with open(p, "w", encoding="utf-8", newline="", errors="replace") as f:
                 f.write(body)
             paths.append(p)
         cmd = ["git", "merge-file", "-p", "--marker-size=%d" % MARK, "-L", "ours", "-L", "base", "-L", "theirs"]
@@ -324,7 +326,7 @@ def resolve(repo):
             resolved.add(key)
     result = "\n".join(out)
     check_structure(result, ours_rows, theirs_rows, resolved)
-    with open(os.path.join(repo, "README.md"), "w", encoding="utf-8", newline="") as f:
+    with open(os.path.join(repo, "README.md"), "w", encoding="utf-8", newline="", errors="replace") as f:
         f.write(result)
     return report
 

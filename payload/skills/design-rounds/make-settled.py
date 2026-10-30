@@ -111,7 +111,7 @@ def fail(message):
 def read(path, what):
     if not os.path.isfile(path):
         fail("the %s is not there: %s" % (what, path))
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8", errors="replace") as fh:
         return fh.read()
 
 
@@ -286,10 +286,10 @@ def main(argv):
     # The decision map is held to check-decision-map.py's own rule, on the file as written, before it
     # is put where anyone can use it.
     fd, tmp = tempfile.mkstemp(suffix=".html", dir=os.path.dirname(os.path.abspath(out_path)) or ".")
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as fh:
         fh.write(page)
     check = subprocess.run([sys.executable, os.path.join(HERE, "check-decision-map.py"), tmp],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, errors="replace")
     if check.returncode != 0:
         os.unlink(tmp)
         fail("the decision map does not hold:\n" + check.stdout + check.stderr)
@@ -523,4 +523,5 @@ Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), fu
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

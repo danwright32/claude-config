@@ -13,6 +13,7 @@ skill this Mac does not have would read exactly like guidance.
 import json
 import os
 import sys
+sys.stdout.reconfigure(errors="replace")
 
 POINTER = (
     "[no-ai-tells] This prompt asks for prose. Before showing any draft, load the no-ai-tells "
@@ -69,7 +70,7 @@ try:
     if is_writing:
         skill_path = os.path.expanduser("~/.claude/skills/no-ai-tells/SKILL.md")
         try:
-            with open(skill_path, "r") as f:
+            with open(skill_path, "r", errors="replace") as f:
                 f.read(1)
         except Exception as exc:
             # Said out loud, because this is the worst of the three outcomes and it used to be the

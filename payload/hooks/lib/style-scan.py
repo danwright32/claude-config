@@ -60,7 +60,7 @@ def relative_to_repo(path):
     try:
         top = subprocess.run(
             ["git", "-C", d or "/", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, errors="replace"
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         top = ""

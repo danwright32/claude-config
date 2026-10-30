@@ -137,7 +137,7 @@ def check(folder, against):
         say("%s has no %s, so it cannot be checked. Write the copy with: %s" % (folder, MANIFEST, refresh_command(folder)))
         return 2
     try:
-        with open(mpath) as fh:
+        with open(mpath, errors="replace") as fh:
             man = json.load(fh)
     except (OSError, ValueError) as e:
         say("%s could not be read (%s), so the copy cannot be checked" % (mpath, e))
@@ -225,4 +225,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

@@ -124,6 +124,7 @@ fi
 verdict="$(printf '%s' "$raw" | python3 -c '
 import sys, json, re
 from difflib import SequenceMatcher
+sys.stdout.reconfigure(errors="replace")
 
 RATIO = 0.72          # tuned so "Q3 hardening" vs "Q4 hardening" stops to ask
                       # but "Milestone: Auth" vs "Milestone: Billing" does not.
@@ -183,8 +184,16 @@ def load(text):
     return [m for m in flat if isinstance(m, dict) and m.get("title")]
 
 want = sys.argv[1]
+# Refused by name (claude-config#1923): whether a title already exists decides whether one is
+# created, so a list holding a byte that is not UTF-8 is not matched on a stand in for it.
+raw = sys.stdin.buffer.read()
 try:
-    milestones = load(sys.stdin.read())
+    text = raw.decode("utf-8", "strict")
+except UnicodeDecodeError as e:
+    print("NOT-UTF8\t0x%02x at offset %d" % (raw[e.start], e.start))
+    sys.exit(0)
+try:
+    milestones = load(text)
 except Exception:
     print("PARSE-ERROR")
     sys.exit(0)
@@ -283,8 +292,11 @@ case "$kind" in
       # file against a milestone that is still closed (L3).
       state_now="$(printf '%s' "$reopened" | python3 -c '
 import sys, json
+sys.stdout.reconfigure(errors="replace")
 try:
-    print(json.load(sys.stdin).get("state", ""))
+    # Replaced, not refused (#1923): the state is open or closed, and a stand in for a byte in some
+    # other field leaves that word as it was.
+    print(json.loads(sys.stdin.buffer.read().decode("utf-8", "replace")).get("state", ""))
 except Exception:
     print("")
 ')"
@@ -332,6 +344,10 @@ except Exception:
       echo "Only if this genuinely is a feature being planned right now, ask the user first, then re-run with --create-approved."
       exit 5
     fi
+    ;;
+  NOT-UTF8)
+    echo "Could not read the milestone list for $repo: it holds a byte that is not UTF-8 ($f2), so whether \"$title\" already exists cannot be told. Nothing was created." >&2
+    exit 6
     ;;
   *)
     echo "Could not read the milestone list for $repo (unexpected response)." >&2
@@ -484,8 +500,10 @@ fi
 
 read -r num url <<<"$(printf '%s' "$created" | python3 -c '
 import sys, json
+sys.stdout.reconfigure(errors="replace")
 try:
-    d = json.load(sys.stdin)
+    # Replaced, not refused (#1923): only the number and the URL are read, both ASCII.
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     print(d.get("number", ""), d.get("html_url", ""))
 except Exception:
     print("", "")

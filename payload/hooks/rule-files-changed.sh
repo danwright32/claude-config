@@ -81,6 +81,7 @@ case "${BASH_SOURCE[0]}" in */*) RFC_DIR="${BASH_SOURCE[0]%/*}" ;; *) RFC_DIR=. 
 # empty field in the middle would hand its neighbour's value to the wrong name.
 fields="$(printf '%s' "$input" | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:

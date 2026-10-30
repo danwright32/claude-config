@@ -334,7 +334,7 @@ def _open_list(path):
         return None
     if path == "-":
         return io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
-    return open(path, "r", encoding="utf-8")
+    return open(path, "r", encoding="utf-8", errors="replace")
 
 
 def main(argv):

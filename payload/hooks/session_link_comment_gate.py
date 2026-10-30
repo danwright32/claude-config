@@ -55,7 +55,7 @@ def slack_write(tool):
     server, _, name = tool.rpartition("__")
     if not server.startswith("mcp__") or len(server) <= len("mcp__"):
         return None
-    with open(SLACK_WRITES_FILE, encoding="utf-8") as f:
+    with open(SLACK_WRITES_FILE, encoding="utf-8", errors="replace") as f:
         names = {l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")}
     if name not in names:
         return None
@@ -194,4 +194,5 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())

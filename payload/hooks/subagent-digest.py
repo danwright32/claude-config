@@ -61,15 +61,23 @@ def main():
     except ValueError:
         max_chars = MAX_DEFAULT
 
+    # errors="replace" (claude-config#1923): one byte that is not UTF-8 made the whole transcript
+    # unreadable, and the agent was filed as having said nothing. A stand in for it now costs at most
+    # the line it sits on. A file holding such bytes where NO line reads as a record is still
+    # unreadable, below; plain text with no records stays silent (both pinned in their suites).
     try:
-        with open(sys.argv[1], "r", encoding="utf-8") as fh:
-            lines = [ln for ln in fh if ln.strip()]
+        with open(sys.argv[1], "rb") as fh:
+            raw = fh.read()
     except Exception:
         return 2   # unreadable: not the same as silent
+    text = raw.decode("utf-8", "replace")
+    mangled = "�" in text and "�" not in raw.decode("utf-8", "ignore")
+    lines = [ln for ln in text.split("\n") if ln.strip()]   # not splitlines: a record may hold U+2028
 
     said = []
     touched = []
     task = None
+    records = 0
     for ln in lines:
         try:
             obj = json.loads(ln)
@@ -80,6 +88,7 @@ def main():
         # nothing" and spooled a clean empty record (claude-config#898).
         if not isinstance(obj, dict):
             continue
+        records += 1
         # The same for every level below it: a message, content or tool input of another shape is
         # read as empty rather than raising.
         msg = obj.get("message")
@@ -118,6 +127,8 @@ def main():
                 if isinstance(path, str) and path and path not in touched:
                     touched.append(path)
 
+    if mangled and not records:
+        return 2   # bytes that are not UTF-8, and not one line a record: not a transcript at all
     body = "\n\n".join(said).strip()
     if not body:
         return 1   # read fine, the agent simply said nothing
@@ -139,4 +150,5 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())

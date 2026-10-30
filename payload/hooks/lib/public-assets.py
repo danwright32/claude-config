@@ -125,7 +125,7 @@ def ls_tree(repo, rev):
         if len(parts) < 4 or parts[1] != b"blob":
             continue
         size = int(parts[3]) if parts[3].isdigit() else 0
-        entries[path.decode("utf-8", "surrogateescape")] = (parts[2].decode(), size)
+        entries[path.decode("utf-8", "surrogateescape")] = (parts[2].decode("utf-8", "replace"), size)
     return entries
 
 

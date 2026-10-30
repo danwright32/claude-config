@@ -338,7 +338,7 @@ class Renderer:
         subtitle = self.text(s["subtitle"], "subtitle")
         if self.errors:
             raise SpecError("\n".join(self.errors))
-        tpl = open(os.path.join(HERE, "template.html"), encoding="utf-8").read()
+        tpl = open(os.path.join(HERE, "template.html"), encoding="utf-8", errors="replace").read()
         page = (tpl.replace("__TITLE__", E(s["title"]))
                 .replace("__SUBTITLE__", subtitle)
                 .replace("__LEGEND__", legend)
@@ -359,7 +359,7 @@ def main(argv):
         print(__doc__.strip())
         return 2
     try:
-        spec = json.load(open(argv[1], encoding="utf-8"))
+        spec = json.load(open(argv[1], encoding="utf-8", errors="replace"))
     except (OSError, ValueError) as e:
         print(f"build_page: could not read the spec {argv[1]}: {e}")
         return 2
@@ -368,7 +368,7 @@ def main(argv):
     except SpecError as e:
         print("build_page: refused, nothing written:\n" + str(e))
         return 2
-    with open(argv[2], "w", encoding="utf-8") as f:
+    with open(argv[2], "w", encoding="utf-8", errors="replace") as f:
         f.write(page)
     n_c = sum(len(j.get("changes", [])) for j in spec["journeys"])
     print(f"build_page: wrote {argv[2]}: {len(spec['journeys'])} journeys, {n_c} node changes")
@@ -376,4 +376,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

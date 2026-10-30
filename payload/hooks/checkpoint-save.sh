@@ -36,6 +36,7 @@ fi
 
 CC_HOOK_INPUT="$input" python3 <<'PY'
 import sys, json, os, re
+sys.stdout.reconfigure(errors="replace")
 
 try:
     data = json.loads(os.environ.get("CC_HOOK_INPUT", "") or "{}")

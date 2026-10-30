@@ -58,6 +58,7 @@ ar_payload_fields() {   # $1 = payload JSON
   fi
   printf '%s' "$1" | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
@@ -280,7 +281,7 @@ ar__helper_key_mac() {   # $1 = a key -> its HMAC-SHA256 under the secret, or re
   printf '%s' "$1" | python3 -c '
 import hashlib, hmac, sys
 with open(sys.argv[1], "rb") as fh:
-    secret = bytes.fromhex(fh.read().decode("ascii").strip())
+    secret = bytes.fromhex(fh.read().decode("ascii", "strict").strip())
 sys.stdout.write(hmac.new(secret, sys.stdin.buffer.read(), hashlib.sha256).hexdigest())
 ' "$f" 2>/dev/null
 }
@@ -642,6 +643,7 @@ ar_payload_pr_url() {   # $1 = payload JSON
   else
     text="$(printf '%s' "$1" | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     r = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace")).get("tool_response") or ""
 except Exception:

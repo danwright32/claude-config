@@ -108,7 +108,7 @@ def read_file(path, what):
     if not os.path.isfile(path):
         fail("the %s file is not there: %s" % (what, path))
     try:
-        with open(path, encoding="utf-8") as handle:
+        with open(path, encoding="utf-8", errors="replace") as handle:
             return handle.read()
     except OSError as err:
         fail("the %s file could not be read: %s (%s)" % (what, path, err))
@@ -118,7 +118,7 @@ def load_spec(path):
     if not os.path.isfile(path):
         fail("the spec is not there: %s" % path)
     try:
-        with open(path, encoding="utf-8") as handle:
+        with open(path, encoding="utf-8", errors="replace") as handle:
             return json.load(handle)
     except (ValueError, OSError) as err:
         fail("the spec could not be read as JSON: %s (%s)" % (path, err))
@@ -868,9 +868,9 @@ def main(argv):
 
     picker_path = os.path.splitext(out_path)[0] + ".picker.json"
     try:
-        with open(out_path, "w", encoding="utf-8") as handle:
+        with open(out_path, "w", encoding="utf-8", errors="replace") as handle:
             handle.write(page)
-        with open(picker_path, "w", encoding="utf-8") as handle:
+        with open(picker_path, "w", encoding="utf-8", errors="replace") as handle:
             json.dump(picker_options(spec, variants), handle, indent=2)
             handle.write("\n")
     except OSError as err:
@@ -883,4 +883,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv))

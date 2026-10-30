@@ -417,6 +417,27 @@ class CliTests(unittest.TestCase):
         self.assertEqual(other.returncode, 6)
         self.assertIn("record-other-sha", other.stderr)
 
+    def test_stdin_that_is_not_utf8_is_refused_by_name(self):
+        # claude-config#1923: stdin read as text raised under a UTF-8 locale and was read as
+        # something else under C. A PR body or comment holding such a byte is refused by name.
+        for args in (["done-when"], ["record", "parse"]):
+            r = subprocess.run([sys.executable, os.path.join(HERE, "verification.py")] + args,
+                               input=b"Closes #1\n- [ ] caf\xff loads\n", capture_output=True,
+                               env=dict(os.environ, VERIFICATION_HOME=tempfile.gettempdir()))
+            self.assertEqual(r.returncode, 4, r.stderr)
+            self.assertIn(b"stdin-not-utf8", r.stderr)
+            self.assertIn(b"offset 19", r.stderr)
+
+    def test_a_file_that_is_not_utf8_is_refused_by_name(self):
+        # claude-config#1923: an areas file holding such a byte raised and the run ended in a traceback.
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "areas.json")
+            with open(p, "wb") as f:
+                f.write(b'{"areas": [{"name": "caf\xff"}]}')
+            r = self.run_cli("areas", "validate", p)
+            self.assertEqual(r.returncode, 4, r.stderr)
+            self.assertIn("file-not-utf8", r.stderr)
+
     def test_areas_validate_names_each_cause(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "areas.json")
@@ -470,6 +491,16 @@ class WhoAmITests(unittest.TestCase):
                    "Run brief. Nonce " + self.nonce, "aaa111")
         transcript(os.path.join(self.root, "proj/s1/subagents/agent-bbb222.jsonl"),
                    "Another brief", "bbb222", later="I dispatched " + self.nonce)
+        self.assertEqual(v.find_agent_id(self.nonce, self.root), "aaa111")
+
+    def test_an_unrelated_transcript_that_is_not_utf8_is_read_past(self):
+        # claude-config#1923: another agent's transcript holding such a byte is not this agent's,
+        # and must not stop the search for the one that is.
+        transcript(os.path.join(self.root, "proj/s1/subagents/agent-aaa111.jsonl"),
+                   "Run brief. Nonce " + self.nonce, "aaa111")
+        bad = os.path.join(self.root, "proj/s1/subagents/agent-000bad.jsonl")
+        with open(bad, "wb") as f:
+            f.write(b'{"agentId": "000bad", "type": "user", "message": {"content": "caf\xff"}}\n')
         self.assertEqual(v.find_agent_id(self.nonce, self.root), "aaa111")
 
     def test_content_as_a_list_of_blocks(self):

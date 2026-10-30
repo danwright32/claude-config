@@ -53,6 +53,7 @@ case "$payload" in *'"agent_id"'*) ;; *) exit 0 ;; esac
 
 parsed="$(printf '%s' "$payload" | python3 -c '
 import json, os, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:

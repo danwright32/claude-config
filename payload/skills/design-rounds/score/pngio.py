@@ -92,10 +92,10 @@ def read_png(path):
         length, kind = struct.unpack(">I4s", blob[pos:pos + 8])
         body = blob[pos + 8:pos + 8 + length]
         if len(body) != length or pos + 12 + length > len(blob):
-            raise PngError("%s: is cut short inside its %s chunk" % (path, kind.decode("latin-1")))
+            raise PngError("%s: is cut short inside its %s chunk" % (path, kind.decode("latin-1", "replace")))
         crc = struct.unpack(">I", blob[pos + 8 + length:pos + 12 + length])[0]
         if zlib.crc32(kind + body) & 0xFFFFFFFF != crc:
-            raise PngError("%s: its %s chunk is damaged (checksum does not match)" % (path, kind.decode("latin-1")))
+            raise PngError("%s: its %s chunk is damaged (checksum does not match)" % (path, kind.decode("latin-1", "replace")))
         if kind == b"IHDR":
             header = struct.unpack(">IIBBBBB", body)
         elif kind == b"PLTE":

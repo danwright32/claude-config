@@ -19,6 +19,12 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 pass=0; fail=0
@@ -69,22 +75,20 @@ for f in "${files[@]}"; do
   [ "$line" = "$(grep -h -m1 '^payload_match()' "$DIR/check-wrapped-commands.sh")" ] || { same=0; echo "  $f defines payload_match differently: $line"; }
 done
 [ "$same" = 1 ] && ok || bad "every hook's payload_match is the same one line"
-# Each probe runs only where this machine's en_US.UTF-8 shows the behaviour it guards: a locale that
+# Each probe runs only where this machine's UTF-8 locale shows the behaviour it guards: a locale that
 # is missing falls back to C, and glibc does not count U+00A0 as a space, so there a probe would pass
 # or fail whatever the helper did (L411).
-probe(){ (export LC_ALL=en_US.UTF-8; payload_match "$1" "$2" && echo yes || echo no); }
-plain(){ (export LC_ALL=en_US.UTF-8; [[ $1 =~ $2 ]] && echo yes || echo no); }
+probe(){ (export LC_ALL="$BAD_BYTE_LOCALE"; payload_match "$1" "$2" && echo yes || echo no); }
+plain(){ (export LC_ALL="$BAD_BYTE_LOCALE"; [[ $1 =~ $2 ]] && echo yes || echo no); }
 hidden="x$(printf '\377') git"
-if [ "$(plain "$hidden" '(^|[^A-Za-z0-9_])git')" = no ]; then
+if bad_byte_measured regex "#1885 payload_match past a byte that is not UTF-8"; then
   [ "$(probe "$hidden" '(^|[^A-Za-z0-9_])git')" = yes ] && ok || bad "payload_match misses a word behind a byte that is not UTF-8"
-else
-  echo "SUITE-PART-UNMEASURED #1885 payload_match past a byte that is not UTF-8: =~ under en_US.UTF-8 here already matches past it"
 fi
 nbsp="x$(printf '\302\240')-d"
 if [ "$(plain "$nbsp" '[[:space:]]-d')" = yes ]; then
   [ "$(probe "$nbsp" '[[:space:]]-d')" = yes ] && ok || bad "payload_match lost the session locale's reading of a Unicode space"
 else
-  echo "SUITE-PART-UNMEASURED #1885 payload_match keeping a Unicode space as [[:space:]]: en_US.UTF-8 here does not count U+00A0 as one"
+  echo "SUITE-PART-UNMEASURED #1885 payload_match keeping a Unicode space as [[:space:]]: $BAD_BYTE_LOCALE here does not count U+00A0 as one"
 fi
 [ "$(probe "x git" 'svn')" = no ] && ok || bad "payload_match matched what is not there"
 
