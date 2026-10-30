@@ -1669,6 +1669,19 @@ try:
     print(d["systemMessage"] == "pr-review-gate: Advisory, minor findings:\n- one", d["hookSpecificOutput"]["hookEventName"], d["hookSpecificOutput"]["additionalContext"] == d["systemMessage"])
 except Exception as e:
     print("broken: %s" % e)')" "True PreToolUse True" "#1906 and prints one valid object, newline kept, for Dan and for the session"
+# A clean allow is handed over the same way (#1924). It was printed plain, and a PreToolUse hook's
+# plain stdout on exit 0 goes to the debug log, so "finished with 0 findings" and the allow that
+# says a repeated finding was already answered ("Shown here so an answer that no longer holds can
+# still be acted on") reached nobody, and a review that ran clean read exactly like one that never
+# ran (L98).
+ra_out="$(env AR_ADVISORY_LEAD="Advisory, minor findings:" "$BASH" -c '. "$0/lib/merge-target.sh"; mt_review_allowed pr-review-push-gate "The lessons review of x at abc1234 finished with 0 findings." ; echo "fell through"' "$HOOK_DIR" 2>/dev/null)"; ra_rc=$?
+eq "$ra_rc" "0" "#1924 a clean allow exits 0"
+eq "$(printf '%s' "$ra_out" | python3 -c 'import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d["systemMessage"] == "pr-review-push-gate: The lessons review of x at abc1234 finished with 0 findings.", d["hookSpecificOutput"]["hookEventName"], d["hookSpecificOutput"]["additionalContext"] == d["systemMessage"])
+except Exception as e:
+    print("broken: %s" % e)')" "True PreToolUse True" "#1924 and is one object Dan sees as a systemMessage and the session reads, not plain stdout nobody sees"
 
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"

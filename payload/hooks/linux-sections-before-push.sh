@@ -348,7 +348,11 @@ _ls_record(){        # $1 = judged | stood-down  -> prints "<judged> of the <tot
 # the gate stands down rather than run it.
 _ls_budget_default=240
 _ls_budget="${LINUX_SECTIONS_BUDGET_SECONDS:-$_ls_budget_default}"
-case "$_ls_budget" in ''|*[!0-9]*|0) _ls_budget=$_ls_budget_default ;; esac
+# Zero written any way (00, 000) is zero, so leading zeros are cut first (claude-config#1931): only a
+# literal 0 fell back, and "00" ran the audit with no bound at all, since perl's alarm reads it as 0.
+case "$_ls_budget" in ''|*[!0-9]*) _ls_budget=$_ls_budget_default ;; esac
+_ls_budget="${_ls_budget#"${_ls_budget%%[!0]*}"}"
+[ -n "$_ls_budget" ] || _ls_budget=$_ls_budget_default
 _ls_docker="${SYNC_DOCKER:-docker}"
 _ls_container="claude-linux-sections-$$-$(date +%s)"
 # A notice a person sees on a push the gate lets through: Claude Code discards a PreToolUse hook's

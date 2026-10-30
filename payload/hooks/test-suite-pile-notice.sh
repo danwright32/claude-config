@@ -211,6 +211,18 @@ echo "suite pile notice: anything it cannot read is told to the person, never a 
 out="$(prompt u1 "$WORK/no-such-table")"; rc=$?
 fault_said "an unreadable process table says nothing to the session, and tells the person" "$out" "process table could not be read"
 [ "$rc" -eq 0 ] && check "and the hook exits 0, so the prompt goes ahead" ok || check "and the hook exits 0, so the prompt goes ahead" "exit $rc"
+says "and says it is said once in this session (#1931)" "$out" "once in this session"
+# Once per session (#1931, L36): #1906 made a fault visible, and then said it on every prompt while it
+# lasted, the repetition that teaches a person to skip it. The next prompt in the same session, the
+# fault unchanged, is quiet; another session is told; and a different fault is new and is said.
+out="$(prompt u1 "$WORK/no-such-table" $(( NOW + 60 )))"; rc=$?
+silent "#1931 the same fault on the next prompt in the same session is quiet" "$out"
+[ "$rc" -eq 0 ] && check "#1931 and exits 0" ok || check "#1931 and exits 0" "exit $rc"
+out="$(prompt u2 "$WORK/no-such-table")"
+fault_said "#1931 another session is told of it once too" "$out" "process table could not be read"
+out="$(printf '{"session_id":"u1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
+  CLAUDE_SUITE_PILE_NOW="$NOW" SYNC_SUITE_MAX_AGE=soon bash "$HOOK" 2>/dev/null)"
+fault_said "#1931 a different fault in the same session is new, and is said" "$out" "must all be whole numbers"
 out="$(prompt u1 "$WORK/old")"
 says "and the next readable table is judged as a first sight" "$out" "piled up"
 # A session that cannot be told apart from the next one cannot be told once.
@@ -219,12 +231,24 @@ out="$(printf '{"cwd":"."}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STAT
 fault_said "a payload with no session says nothing to the session, and tells the person" "$out" "neither a session id"
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
 # A record that cannot be written means it cannot stay quiet next time, so it says no pile now (once
-# too few, L36), and tells the person why, on each prompt while the fault lasts (#1906).
-: > "$WORK/state-is-a-file"
-out="$(printf '{"session_id":"w1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state-is-a-file" \
-  CLAUDE_SUITE_PILE_NOW="$NOW" bash "$HOOK" 2>/dev/null)"; rc=$?
+# too few, L36), and tells the person why (#1906). That fault is the one whose own record cannot go
+# where the others do, so it is kept in TMPDIR instead, and is said once per session like the rest
+# (#1931).
+: > "$WORK/state-is-a-file"; mkdir -p "$WORK/tmp"
+unwritable() { printf '{"session_id":"%s"}' "$1" | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state-is-a-file" \
+  TMPDIR="$2" CLAUDE_SUITE_PILE_NOW="$NOW" bash "$HOOK" 2>/dev/null; }
+out="$(unwritable w1 "$WORK/tmp")"; rc=$?
 fault_said "a state directory that cannot be written says no pile, and tells the person why" "$out" "could not write"
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
+out="$(unwritable w1 "$WORK/tmp")"; rc=$?
+silent "#1931 and the next prompt in that session is quiet, its record kept in TMPDIR" "$out"
+# With nowhere at all to keep a record, a fault cannot be held to once, and it is said on every
+# prompt rather than never: a fault nobody hears is the defect #1906 closed.
+: > "$WORK/tmp-is-a-file"
+out="$(unwritable w2 "$WORK/tmp-is-a-file")"
+fault_said "#1931 with nowhere to keep a record, the fault is still said" "$out" "could not write"
+out="$(unwritable w2 "$WORK/tmp-is-a-file")"
+fault_said "#1931 and said again on the next prompt, since it could not be recorded as said" "$out" "could not write"
 # An unreadable limit is not guessed at; it is told to the person on each prompt while it lasts.
 out="$(printf '{"session_id":"b1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
   CLAUDE_SUITE_PILE_NOW="$NOW" SYNC_SUITE_MAX_AGE=soon bash "$HOOK" 2>/dev/null)"; rc=$?
