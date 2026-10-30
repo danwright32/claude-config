@@ -125,7 +125,13 @@ fi
 # The checkout is mounted READ ONLY and copied inside, so a run cannot touch the working tree this
 # was launched from. The suite writes scratch, clones fixtures and kills process trees; none of that
 # belongs anywhere near the tree somebody is editing (L2).
-"$DOCKER" run --rm -i \
+#
+# A caller that may have to stop the run names the container through LINUX_RUN_CONTAINER_NAME
+# (claude-config#1899): killing the docker client does not stop the container it started, so the
+# push gate that bounds this run stops the container by that name when the run overruns its budget.
+name_args=()
+[ -n "${LINUX_RUN_CONTAINER_NAME:-}" ] && name_args=(--name "$LINUX_RUN_CONTAINER_NAME")
+"$DOCKER" run --rm -i ${name_args[@]+"${name_args[@]}"} \
   -v "$ROOT:/src:ro" \
   -e SECTION_ONLY -e SECTION_UNTIL -e SECTION_LIST -e SUITE_JOBS -e SUITE_DEBUG \
   -e TARGET="$target" \
