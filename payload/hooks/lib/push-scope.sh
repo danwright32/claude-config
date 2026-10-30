@@ -31,10 +31,6 @@
 # exception is the reading of a command (ps__read, claude-config#1040), kept per
 # command so one hook asking several questions reads it once; see its comment.
 
-# True when the command runs a git push, judged by the LEADING TOKENS of each
-# shell segment. Substring matching is wrong here: a command whose payload
-# merely mentions a push (an echo, a doc write, a commit message) would fire a
-# hook that has nothing to act on.
 # ---- taking the hook payload off stdin, legible to every reader (claude-config#1944) ----
 # jq 1.7.1, the Mac's jq, rejects a WHOLE payload holding one lone surrogate escape: \ud800 with no
 # low half after it, or a low half with no high one before it ("Invalid \uXXXX\uXXXX surrogate pair
@@ -248,6 +244,10 @@ ps_add_scope_unreadable() {   # $1 = command
   ps_reader_missing python3
 }
 
+# True when the command runs a git push, judged by the LEADING TOKENS of each
+# shell segment. Substring matching is wrong here: a command whose payload
+# merely mentions a push (an echo, a doc write, a commit message) would fire a
+# hook that has nothing to act on.
 ps_is_git_push() { ps__runs_git_sub "$1" push; }
 
 # Is this command a `git commit`, in COMMAND POSITION (claude-config#599)? The same walker as the

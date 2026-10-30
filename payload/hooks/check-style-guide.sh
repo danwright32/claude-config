@@ -21,7 +21,8 @@
 # need to reference the literal characters, or a false positive). Explain why
 # to the user first, same as the test gate -- never skip silently.
 #
-# Fails OPEN: any parse/git error allows the push.
+# Fails OPEN on a git error, which allows the push. A hook payload it cannot parse is refused when
+# its raw text names a push (claude-config#1922).
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh

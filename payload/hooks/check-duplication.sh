@@ -66,8 +66,8 @@
 # Override: SKIP_DUPLICATION_CHECK=1 git push ...   Explain why to the user first, in plain
 # language, same as the test gate. Never skip silently. The skip prints one line either way.
 #
-# Fails OPEN: any parse or git error prints one line saying what could not be measured and allows
-# the push.
+# Fails OPEN on a git error: it prints one line saying what could not be measured and allows the
+# push. A hook payload it cannot parse is refused when its raw text names a push (claude-config#1922).
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
