@@ -914,11 +914,12 @@ before; the refusal counts and lists only those, then the minor ones apart under
 and the key covers the review as a whole. A finding is minor only when its line ends with the
 format's own `[severity: minor]`, or with that followed only by the runner's own
 `[review harness: not placed, ...]` mark (#1357): a missing, unknown or misplaced severity counts as major, and so
-does any finding the review records that no minor line accounts for. On an allow carrying the
-advisory, the push and merge gates hand it over as JSON (`mt_review_allowed` in
-`lib/merge-target.sh`), as additionalContext for the session and a systemMessage for Dan, because a
-PreToolUse hook's plain output on an allow reaches neither; `merge-when-ready.sh` prints it in its
-log. The stored review is unchanged, so the report and every later review still see the minor ones.
+does any finding the review records that no minor line accounts for. On every allow, the advisory
+one and the clean one alike (#1924), the push and merge gates hand the verdict over as JSON
+(`mt_review_allowed` in `lib/merge-target.sh`), as additionalContext for the session and a
+systemMessage for Dan, because a PreToolUse hook's plain output on an allow reaches neither, and a
+review that passed must read differently from one that never ran; `merge-when-ready.sh` prints it in
+its log. The stored review is unchanged, so the report and every later review still see the minor ones.
 
 After three rounds of findings, step back (claude-config#1358). A review runs on every commit, push
 and pull request update with no limit on rounds, and measured on 2026-10-19 over 704 branches, 18%
@@ -1862,7 +1863,8 @@ load averages of 145 measured the day before, now that running out of time refus
 
 `linux-sections-before-push.sh` had no bound of its own on its Linux run, so with the field one
 slow section would have refused every push of that change. It now stops the run at a budget of 240
-seconds, inside the 300 its registration declares (`LINUX_SECTIONS_BUDGET_SECONDS` sets another),
+seconds, inside the 300 its registration declares (`LINUX_SECTIONS_BUDGET_SECONDS` sets another;
+zero, written any way, `00` included, means the default, #1931),
 stops the container by the name it gave `tests/run-on-linux.sh` (killing the docker client leaves
 the container running), and lets the push through saying UNMEASURED, which is what its design says
 a run it could not finish is. That notice, and the one for a run docker could not start, also go
@@ -2722,7 +2724,9 @@ says the same thing on a prompt (claude-config#466): both call `hooks/lib/suite-
 cannot disagree, and the notice names the same `kill -9` line (or sends you to status when it is
 longer than fifty pids). It is said once per stretch in each session, and a stretch ends only after
 `SYNC_SUITE_PILE_REARM` (default `600`) seconds of no pile, so suites flickering across the breadth
-limit are one notice. It reads the process table and nothing else, and says nothing on any error.
+limit are one notice. It reads the process table and nothing else. Anything it cannot read (the
+table, its limits, its library, its own record) it says once per session for each kind of fault, as
+a message shown to you, rather than on every prompt (claude-config#1906, #1931).
 Measured 2026-09-19 on this Mac: about 58ms per prompt.
 
 Every suite in this repo arms `hooks/lib/suite-deadline.sh`, so it bounds its own wall clock however

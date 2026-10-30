@@ -103,9 +103,9 @@ if [ "$SC_LOADED" -ne 1 ]; then
   previous="$(cat "$STATE" 2>/dev/null || true)"
   printf '%s\n' "$state" > "$STATE" 2>/dev/null || true
   [ "$state" = "$previous" ] && exit 0
-  # As a systemMessage, which the person is shown, and as context for the session (claude-config
-  # #1922): a plain line reached the session alone.
-  hook_allow_notice "claude-sync: payload-revert-warning.sh DID NOT RUN: it could not load lib/sync-clone.sh from $HOOK_DIR/lib, so whether a watch daemon could overwrite edits to a development checkout's payload/ was not checked this session. That is not the same as nothing being at risk. The payload write gate refuses a call naming payload/ for the same reason until the library is back. Reinstall the hooks with: claude-sync pull" UserPromptSubmit
+  # To the person as a systemMessage, and to the session as the prompt's additionalContext, which is
+  # what its plain stdout was (#1924): plain, the person never saw it.
+  hook_allow_notice "claude-sync: payload-revert-warning.sh could not load lib/sync-clone.sh from $HOOK_DIR/lib, so whether a watch daemon could overwrite edits to a development checkout's payload/ was not checked this session. That is not the same as nothing being at risk. The payload write gate refuses a call naming payload/ for the same reason until the library is back. Reinstall the hooks with: claude-sync pull" UserPromptSubmit
 fi
 
 # ---------------------------------------------------------------------------

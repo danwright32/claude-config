@@ -394,7 +394,8 @@ for h in "${ALL_HOOKS[@]}"; do
     advisory_payload "$event" "$acts" "$T/repo" > "$WORK/in.json"
     OUT="$( cd "$T/repo" && HOME="$T" PATH="$WORK/advbin:$PATH" CLAUDE_DETACHED_RUN= bash "$T/$h" < "$WORK/in.json" 2>/dev/null )"; RC=$?
     if [ "$RC" -eq 0 ]; then ok; else bad "$h with lib/$lib missing: an advisory hook must allow, exited $RC"; fi
-    v="$(hook_notice_verdict "$OUT" '(?i)did not run' 2>&1)"
+    # "did not run", or "could not load", which is how payload-revert-warning.sh says it (#1924).
+    v="$(hook_notice_verdict "$OUT" '(?i)did not run|could not load' 2>&1)"
     if [ -z "$v" ]; then ok; else bad "$h with lib/$lib missing should say once that it did not run: $v"; fi
     case "$OUT" in *"${lib%.sh}"*) ok ;; *)
       named=0

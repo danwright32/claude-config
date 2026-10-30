@@ -30,8 +30,12 @@
 # (L36). Each such fault is said as a systemMessage (#1906). It used to go to stderr, which the hooks
 # documentation says Claude Code discards on exit 0, so the person never saw it; a UserPromptSubmit
 # hook's plain stdout reaches only Claude, and its systemMessage is not among those the documentation
-# says are discarded. A fault that lasts is said on every prompt while it lasts, which is the cost of
-# it being seen at all. `claude-sync status` remains the place that reports in full.
+# says are discarded. Each fault is said ONCE PER SESSION for each kind of fault (#1931): #1906 said a
+# lasting fault on every prompt while it lasted, and a notice repeated on every prompt is the one a
+# person learns to skip (L36). A different fault in the same session is new, and is said. The one
+# fault said on every prompt is a payload with no session, since without one there is no session to
+# be told once (sync-stuck-notice.sh says that one the same way). `claude-sync status` remains the
+# place that reports in full.
 #
 # Env:
 #   SYNC_SUITE_PILE_REARM         seconds of healthy samples that end a stretch (default 600)
@@ -71,13 +75,28 @@ if [ -z "$session" ]; then
 fi
 key="${session//[^A-Za-z0-9_-]/_}"
 [ "${#key}" -le 120 ] || key="${key: -120}"
+STATE_DIR="${CLAUDE_SUITE_PILE_STATE_DIR:-${TMPDIR:-/tmp}}"
+
+# fault_once <kind> <notice>: say a fault of this hook's own, once per session for each kind, and let
+# the prompt through. The record is a marker file per session and kind, kept beside the pile record,
+# or in TMPDIR when that directory is the thing that cannot be written. With nowhere to keep it, the
+# fault is said on this prompt and the next, since a fault nobody hears is what #1906 closed.
+fault_once() {
+  local d m
+  for d in "$STATE_DIR" "${TMPDIR:-/tmp}"; do
+    m="${d%/}/claude-suite-pile-${key}.fault-$1"
+    [ -e "$m" ] && exit 0
+    { mkdir -p "$d" && : > "$m"; } 2>/dev/null && break
+  done
+  hook_allow_notice "$2 This is said once in this session."
+}
 
 LIB="$(dirname "${BASH_SOURCE[0]}")/lib/suite-pile.sh"
 if [ ! -f "$LIB" ]; then
-  hook_allow_notice "suite-pile-notice: $LIB is missing, so whether this repo's suites have piled up was not checked."
+  fault_once lib-missing "suite-pile-notice: $LIB is missing, so whether this repo's suites have piled up was not checked."
 fi
 # shellcheck source=lib/suite-pile.sh
-. "$LIB" 2>/dev/null || hook_allow_notice "suite-pile-notice: $LIB could not be read, so nothing was checked."
+. "$LIB" 2>/dev/null || fault_once lib-unreadable "suite-pile-notice: $LIB could not be read, so nothing was checked."
 
 # TEN MINUTES, and a chosen number rather than a measurement. It has to be long enough that suites
 # starting and finishing around the breadth limit read as one stretch, and short enough that a pile
@@ -86,16 +105,15 @@ fi
 SYNC_SUITE_PILE_REARM="${SYNC_SUITE_PILE_REARM:-600}"
 case "$SYNC_SUITE_MAX_AGE$SYNC_SUITE_MAX_ROOTS$SYNC_SUITE_PILE_REARM" in
   ''|*[!0-9]*)
-    hook_allow_notice "suite-pile-notice: SYNC_SUITE_MAX_AGE='$SYNC_SUITE_MAX_AGE', SYNC_SUITE_MAX_ROOTS='$SYNC_SUITE_MAX_ROOTS' and SYNC_SUITE_PILE_REARM='$SYNC_SUITE_PILE_REARM' must all be whole numbers, so nothing was checked." ;;
+    fault_once settings "suite-pile-notice: SYNC_SUITE_MAX_AGE='$SYNC_SUITE_MAX_AGE', SYNC_SUITE_MAX_ROOTS='$SYNC_SUITE_MAX_ROOTS' and SYNC_SUITE_PILE_REARM='$SYNC_SUITE_PILE_REARM' must all be whole numbers, so nothing was checked." ;;
 esac
 now="${CLAUDE_SUITE_PILE_NOW:-}"
 case "$now" in ''|*[!0-9]*) now="$(date +%s)" ;; esac
 
-table="$(suite_pile_table)" || hook_allow_notice "suite-pile-notice: the process table could not be read, so nothing was checked."
+table="$(suite_pile_table)" || fault_once table "suite-pile-notice: the process table could not be read, so nothing was checked."
 pile="$(printf '%s\n' "$table" | suite_pile_scan "$SYNC_SUITE_MAX_AGE" "$SYNC_SUITE_MAX_ROOTS")" \
-  || hook_allow_notice "suite-pile-notice: judging the process table failed, so nothing was checked."
+  || fault_once judge "suite-pile-notice: judging the process table failed, so nothing was checked."
 
-STATE_DIR="${CLAUDE_SUITE_PILE_STATE_DIR:-${TMPDIR:-/tmp}}"
 STATE="$STATE_DIR/claude-suite-pile-${key}.state"
 # The record: "told <epoch the last pile was seen> <epoch healthy samples began, or ->".
 told=0; healthy_since="-"
@@ -121,7 +139,7 @@ speak=1
 # Recorded BEFORE speaking, and a record that will not write means silence: the safe direction is
 # saying it once too few, not once per prompt for the rest of the session.
 if ! { mkdir -p "$STATE_DIR" && printf 'told %s -\n' "$now" > "$STATE"; } 2>/dev/null; then
-  hook_allow_notice "suite-pile-notice: could not write $STATE, so a pile was not said rather than said on every prompt."
+  fault_once record "suite-pile-notice: could not write $STATE, so a pile was not said rather than said on every prompt."
 fi
 [ "$speak" -eq 1 ] || exit 0
 

@@ -493,6 +493,15 @@ run "$R1" 'git push'
 unset LINUX_SECTIONS_BUDGET_SECONDS
 [ "$RC" -eq 2 ] && check "#1899 an unreadable budget still runs and judges the sections" ok \
                 || check "#1899 an unreadable budget still runs and judges the sections" "rc=$RC out=$OUT"
+# Zero written any way is zero (#1931): 0, 00 and 000 are each a budget of no seconds, which would
+# stand down every push as UNMEASURED, so each falls back to the default and the sections are judged.
+for _zero in 0 00 000; do
+  export LINUX_SECTIONS_BUDGET_SECONDS="$_zero"
+  run "$R1" 'git push'
+  unset LINUX_SECTIONS_BUDGET_SECONDS
+  [ "$RC" -eq 2 ] && check "#1931 a budget of '$_zero' is read as zero and still runs and judges the sections" ok \
+                  || check "#1931 a budget of '$_zero' is read as zero and still runs and judges the sections" "rc=$RC out=$OUT"
+done
 
 # The default budget sits below the timeout the registration declares, read from both files, so
 # moving either without the other fails here.

@@ -960,9 +960,9 @@ if [ -z "$failed" ] && [ -z "$unmeasured" ] && [ -n "$_sc_key" ] && [ -n "$_sc_p
   fi
   [ -n "$_sc_record_why" ] \
     && _sc_record_unwritten="The scanners that passed were not remembered, because $_sc_record_why, so a retry runs them again."
-  # A push that goes through says it here, before the line saying what it covered. A refused one says
-  # it in its refusal, below.
-  [ -n "$_sc_record_unwritten" ] && [ -z "$unfinished" ] && printf 'scanners-before-push: %s\n' "$_sc_record_unwritten" >&2
+  # A push that goes through says it in its systemMessage, before the line saying what it covered
+  # (#1931): on stderr alone, which Claude Code discards on exit 0, it reached nobody. A refused one
+  # says it in its refusal, below.
 fi
 
 # Every run with a verdict has now been read, so its folder goes, and the record above is the one
@@ -1113,7 +1113,9 @@ if [ -z "$failed" ]; then
   else
     _sc_covered="$(printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones%s.' "$ran" "${uncommitted_n:-0}" "$_sc_floor_note")"
   fi
-  hook_allow_notice "${_sc_bg}${_sc_covered}"
+  _sc_unremembered=""
+  [ -n "$_sc_record_unwritten" ] && _sc_unremembered="scanners-before-push: ${_sc_record_unwritten}"$'\n'
+  hook_allow_notice "${_sc_unremembered}${_sc_bg}${_sc_covered}"
 fi
 
 {

@@ -73,6 +73,19 @@ check "a bound of 0 runs nothing and comes back as 125" \
 bounded_run abc sh -c ": > '$TMP/ran'"
 check "a bound that is not a number runs nothing either" \
   "$([ "$BOUNDED_RC" -eq 125 ] && [ ! -e "$TMP/ran" ] && echo ok || echo "rc $BOUNDED_RC")"
+# Zero written with leading zeros is zero (claude-config#1931). "00" passed the check for a literal
+# 0 and reached perl's alarm, which reads it as 0 and so set no bound at all: the command ran
+# unbounded, the one outcome this library exists to prevent.
+for zero in 00 000; do
+  bounded_run "$zero" sh -c ": > '$TMP/ran'"
+  check "a bound of $zero runs nothing and comes back as 125, never unbounded" \
+    "$([ "$BOUNDED_RC" -eq 125 ] && [ ! -e "$TMP/ran" ] && echo ok || echo "rc $BOUNDED_RC, ran: $([ -e "$TMP/ran" ] && echo yes || echo no)")"
+  rm -f "$TMP/ran"
+done
+# A bound with a leading zero that is not zero is still that many seconds, as perl reads it.
+bounded_run 05 sh -c ": > '$TMP/ran'"
+check "and a bound of 05 runs the command" "$([ -e "$TMP/ran" ] && [ "$BOUNDED_RC" -eq 0 ] && echo ok || echo "rc $BOUNDED_RC")"
+rm -f "$TMP/ran"
 # The control on the two above: the same command with a real bound does run (L159).
 bounded_run 30 sh -c ": > '$TMP/ran'"
 check "and the same command with a real bound does run" "$([ -e "$TMP/ran" ] && [ "$BOUNDED_RC" -eq 0 ] && echo ok || echo "rc $BOUNDED_RC")"
