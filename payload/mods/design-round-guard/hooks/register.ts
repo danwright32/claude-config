@@ -242,6 +242,11 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 // - Since #1933: a shell command taking away a mod hook file git has never tracked (untracked, by
 //   git's own index) passes, as a scratch copy a session made there by mistake holds no words of the
 //   mod as it ships. A tracked one's removal is judged as before, and so is one git cannot answer for.
+// - Since #1951: a pattern a script file is handed with every pattern character quoted or escaped
+//   (mod-kit's `quoted`: the search term '*push*'), which the shell matched against no file, is
+//   judged as the one file its characters name, so a quoted glob handed as data runs. A glob the
+//   shell expands, one spelled bare anywhere in the command, a quoted name that is itself a look
+//   changing or mod hook file's or holds a group, and any pattern handed to a tool are held as before.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -335,7 +340,9 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // `tool`, on such a file, is set when the run is a tool through npx or a module through python -m (#1815).
 // `removes`, for a file the shell command takes away (rm, unlink, the source mv moves), as mod-kit
 // reads it, never one it empties or writes (#1933).
-type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true; removes?: true }
+// `quoted`, for a pattern a script file is handed with every pattern character quoted, read as the
+// one file its characters name (#1951).
+type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true; removes?: true; quoted?: true }
 
 // Every file a call writes or removes, and whether it may write the guard's own record where its
 // words do not say what it writes.
@@ -370,7 +377,21 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // The spool helper's note writes none of what it is handed (#1747, rules.ts spoolNote).
   for (const r of w.runs ?? []) {
     if (spoolNote(r, at.home)) continue
-    for (const a of r.args) targets.push({ word: a.word, ...(a.path ? { path: a.path } : {}), ...(a.folder ? { folder: a.folder } : {}), ...(r.tool ? { tool: true as const } : {}), run: r.path ?? r.script })
+    for (const a of r.args) {
+      // A pattern the shell matched against no file, every pattern character quoted (#1951: the
+      // search term '*push*' a sweep script was handed), reaches a script file as its characters, so
+      // it is judged as the one file they name, as every other argument a script is handed is
+      // (#1586): what a script then matches itself is what it chooses, which is not read, as with a
+      // folder it is handed. Read so only where that name is no look changing file, no mod's hook
+      // file and holds no group (#1773 reads groups as the names they spell); otherwise, and for a
+      // tool, which expands its own operands (#1815), it is the pattern it was.
+      const literal = a.quoted && !r.tool && a.folder ? `${a.folder}/${a.word.split('/').pop() ?? ''}` : undefined
+      if (literal && shapeKind(literal) === null && !isModHookTs(literal) && !isModHook(literal) && !isGroupPattern(literal.split('/').pop() ?? '')) {
+        targets.push({ word: a.word, path: literal, run: r.path ?? r.script, quoted: true })
+        continue
+      }
+      targets.push({ word: a.word, ...(a.path ? { path: a.path } : {}), ...(a.folder ? { folder: a.folder } : {}), ...(r.tool ? { tool: true as const } : {}), run: r.path ?? r.script })
+    }
   }
   for (const u of w.unnamed) {
     // A program whose text names every file it writes is judged by those files (#830).
@@ -410,7 +431,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // A write the words do not name, or a destination the reader could not follow, may be the record
   // when the command names the plugin store at all: refused, failing closed as ask before saving does
   // for lasting memory (lessons review of #991).
-  const unfollowed = w.unnamed.length > 0 || targets.some(t => !t.path)
+  // A quoted pattern read as its one name (#1951) is still one the script may match itself.
+  const unfollowed = w.unnamed.length > 0 || targets.some(t => !t.path || t.quoted)
   return { targets, storeMentioned: unfollowed && mentionsStore(command) }
 }
 

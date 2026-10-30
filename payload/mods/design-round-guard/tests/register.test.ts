@@ -3026,6 +3026,9 @@ test('#1951 control: a glob the shell expands, or a quoted one that may still na
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect({ command, held: why.includes(SKIP_QUESTION) || why.includes('could not be followed') }).toEqual({ command, held: true })
   }
+  // A quoted pattern in the plugin store, which a script may match against the guard's own record,
+  // is refused as a forged answer, as one it could not follow always was.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `python3 /tmp/sweep.py '${HOME}/.claude/plugins/store/*'` }))).toContain('own record')
   expect(w.ran).toEqual([])
 })
 
