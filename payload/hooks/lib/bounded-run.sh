@@ -18,13 +18,17 @@
 #     sets BOUNDED_OUT to everything it printed (standard error included) and BOUNDED_RC to its
 #     exit code, or 124 when the bound ran out. A bound of 0 is NOT handed to perl's alarm, where it
 #     would cancel the bound and leave the command unbounded: callers treat 0 as "off" and must not
-#     call this with it, so it refuses with 125 rather than run unbounded.
+#     call this with it, so it refuses with 125 rather than run unbounded. Zero written any way
+#     (00, 000) is zero: only the literal 0 was refused, so "00" reached alarm and ran the command
+#     unbounded (claude-config#1931). Leading zeros are cut before the test, not read as octal.
 
 bounded_run() {
   local seconds="$1"; shift
   BOUNDED_RC=0
   BOUNDED_OUT=""
-  case "$seconds" in ''|*[!0-9]*|0) BOUNDED_RC=125; return 0 ;; esac
+  case "$seconds" in ''|*[!0-9]*) BOUNDED_RC=125; return 0 ;; esac
+  seconds="${seconds#"${seconds%%[!0]*}"}"
+  [ -n "$seconds" ] || { BOUNDED_RC=125; return 0; }
   BOUNDED_OUT="$(perl -e '
     my $t = shift @ARGV;
     my $pid = fork();

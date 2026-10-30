@@ -1281,10 +1281,14 @@ add_counting_scanner "$R1910l" nu "$RAN1910l"; commit_all "$R1910l"
 LOCK1910="$TMPROOT/recordlock-state"
 _rec1910="$LOCK1910/$(fx_key "$R1910l")"; mkdir -p "$_rec1910"
 printf '%s\n' "$$" > "$_rec1910/pidlock"
-o1910l="$(SCANNERS_STATE_DIR="$LOCK1910" fire "$R1910l" "git push")"; c1910l=$?
-[ "$c1910l" -eq 0 ] && [ -z "$(cat "$_rec1910"/*.txt 2>/dev/null)" ] && grep -q 'not remembered' <<< "$o1910l" \
-  && check "#1910 the record is written only under its lock, and a pass that could not be written is said" ok \
-  || check "#1910 the record is written only under its lock, and a pass that could not be written is said" "exit=$c1910l record: $(cat "$_rec1910"/*.txt 2>/dev/null | tr '\n' ';') out=$o1910l"
+# Said where the person sees it (#1931): this push goes through, so the line is part of the
+# systemMessage, and stdout alone is read. On stderr, which Claude Code discards on exit 0, it reached
+# nobody.
+fire_stdout "$R1910l" "git push" "SCANNERS_STATE_DIR=$LOCK1910"
+why1910l="$(hook_notice_verdict "$FS_OUT" 'The scanners that passed were not remembered, because another push held its lock')"
+[ "$FS_RC" -eq 0 ] && [ -z "$(cat "$_rec1910"/*.txt 2>/dev/null)" ] && [ -z "$why1910l" ] \
+  && check "#1910 the record is written only under its lock, and a pass that could not be written is said, as a systemMessage (#1931)" ok \
+  || check "#1910 the record is written only under its lock, and a pass that could not be written is said, as a systemMessage (#1931)" "exit=$FS_RC record: $(cat "$_rec1910"/*.txt 2>/dev/null | tr '\n' ';') $why1910l"
 rm -f "$_rec1910/pidlock"
 # Once the lock is free the pass is written, and the push after that skips it.
 SCANNERS_STATE_DIR="$LOCK1910" fire "$R1910l" "git push" >/dev/null
