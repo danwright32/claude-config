@@ -77,7 +77,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # refused, naming the file, and any other command passes.
 # shellcheck source=lib/whole-number.sh
 { . "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null && declare -F whole_above_zero >/dev/null; } || {
-  payload="$(cat)"
+  payload="$(ps_read_payload)"
   case "$payload" in *SKIP_SCANNERS_CHECK=1*) exit 0 ;; esac
   case "$payload" in *push*) ;; *) exit 0 ;; esac
   echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/whole-number.sh, which reads its budget and other settings, so this push was not scanned. Reinstall the hooks with claude-sync pull. For this one command: SKIP_SCANNERS_CHECK=1 <the same command>" >&2
