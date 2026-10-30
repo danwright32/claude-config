@@ -403,7 +403,8 @@ for rule in "open: with open" "open: b = open" "subprocess: c =" "subprocess: d 
 done
 # A program decoding JSON through a decoder object, as the milestone list reader does.
 printf '%s\n' 'import json, sys' 'v, _ = json.JSONDecoder().raw_decode(sys.stdin.buffer.read().decode("utf-8", "replace"))' 'print(v["t"])' > "$WORK/probe/decoder.py"
-python3 "$WORK/scan.py" "$WORK/probe/decoder.py" | grep -q 'stdout:' && ok || bad "the scan does not count a JSON decoder object as decoding JSON"
+python3 "$WORK/scan.py" "$WORK/probe/decoder.py" > "$WORK/probe.out"
+grep -q 'stdout:' "$WORK/probe.out" && ok || bad "the scan does not count a JSON decoder object as decoding JSON"
 python3 "$WORK/scan.py" "$WORK/probe/fixed.py" > "$WORK/probe.out"
 [ "$(grep -c -v '^UNITS ' "$WORK/probe.out")" = 0 ] && ok || bad "the scan fires on the forms it asks for: $(tr '\n' '|' < "$WORK/probe.out")"
 python3 "$WORK/scan.py" "$WORK/probe/held.sh" > "$WORK/probe.out"
