@@ -17,7 +17,9 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$DIR/../.." && pwd)"
+# The checkout, as lib/checkout-root.sh finds it (#1663); installed in ~/.claude there is none, and
+# the scan below reads the payload it sits in instead.
+ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null)" || ROOT="$(cd "$DIR/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/bbl.XXXXXXXX")" || exit 1
 case "${WORK%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$WORK'" >&2; exit 2 ;; esac
 trap 'rm -rf "$WORK"' EXIT

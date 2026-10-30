@@ -1126,7 +1126,7 @@ findings = []
 # as already shown here can be taken off the SPOOL SOURCE count of the file they sit in (#1011).
 LINE_KEYS = []
 try:
-    for _rl in open(sys.argv[1] + ".ranges", encoding="utf-8", errors="replace"):
+    for _rl in open(sys.argv[1] + ".ranges", encoding="utf-8", errors="strict"):
         _parts = _rl.split()
         if len(_parts) == 2:
             LINE_KEYS.extend([_parts[0]] * int(_parts[1]))
@@ -1276,7 +1276,7 @@ STAMP = os.environ.get("CLAUDE_SPOOL_STAMP_OUT") or ""
 if STAMP and shown:
     try:
         ranges = []
-        for rl in open(sys.argv[1] + ".ranges", encoding="utf-8", errors="replace"):
+        for rl in open(sys.argv[1] + ".ranges", encoding="utf-8", errors="strict"):
             parts = rl.split()
             if len(parts) == 2:
                 ranges.append((parts[0], int(parts[1])))
@@ -1788,7 +1788,9 @@ mode, key, sid, stamp, src = sys.argv[1:6]
 read = None
 if stamp:
     read = collections.Counter()
-    with open(stamp, encoding="utf-8", errors="replace") as sf:
+    # Strict (#1923): a stamp that is not UTF-8 is a damaged record of what was shown, and the clear
+    # refuses it (#381) rather than filing on a stand in for what it said.
+    with open(stamp, encoding="utf-8", errors="strict") as sf:
         next(sf)
         for sl in sf:
             parts = sl.split()

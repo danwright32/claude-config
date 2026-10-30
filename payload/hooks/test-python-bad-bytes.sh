@@ -100,6 +100,8 @@ echo "a skill reading a response that is not UTF-8 refuses it by name"
 
 # lb_read lists a repository's labels before any is created. A byte that is not UTF-8 raised under a
 # UTF-8 locale and was reported as an unexpected response, and under C was read as something else.
+# The other cases here raise under any locale; this one's before differs by locale, so it is measured.
+bad_byte_measured python "#1923 lb_read on a label list that is not UTF-8" || true
 mkdir -p "$WORK/bin"
 printf '#!/bin/sh\nprintf %s\n' "'[{\"name\":\"caf\\377\"}]'" > "$WORK/bin/gh"
 chmod +x "$WORK/bin/gh"
