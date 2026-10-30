@@ -2,7 +2,7 @@
 name: design-rounds
 description: Use when a product or feature is about to get its look settled, when the first screen is about to be designed or built, when an existing screen is being redesigned, or when a choice between visual directions (layout, type, density, chrome, colour) has to be made with Dan. Also use when a settled design decision needs to survive past the session that made it.
 ---
-<!-- design-round-guard contract: 2 -->
+<!-- design-round-guard contract: 3 -->
 
 # Design rounds
 
@@ -214,10 +214,10 @@ nothing on screen changes, build no switcher, and close one of two ways.
 
 - **A refused edit is waiting** (the design round guard named its id): ask the guard's own
   question about it, one AskUserQuestion with
-  `"metadata": { "source": "design-round-guard:<the id the refusal named>", "onScreen": "Nothing on screen changes: <what the edit does instead, in plain words>", "contract": 2 }`
+  `"metadata": { "source": "design-round-guard:<the id the refusal named>", "onScreen": "Nothing on screen changes: <what the edit does instead, in plain words>", "contract": 3 }`
   and the question "Skip design rounds for this issue?". The guard words it, and its answer
-  **Not a look change** lets that one edit through, recorded as his word, while every
-  other look changing edit stays held. Then send the refused call again, unchanged.
+  **Not a look or wording change** lets that one edit through, recorded as his word, while
+  every other look changing edit stays held. Then send the refused call again, unchanged.
 - **Nothing is waiting**: there is nothing to unblock, so ask nothing and carry on.
 
 ## What Dan reads first: what changes on screen
@@ -231,6 +231,14 @@ file path: "I don't know what the file name means or what this change will do"
 (claude-config#1138). So the guard refuses to ask without the sentence, or with one that names a
 file, and nothing is asked until it is given. A subagent that was refused reports the sentence
 with the line the refusal gave it, and the main session asks with it.
+
+When the refused edit was a builder's, on its worktree's starting branch (`worktree-agent-<id>`,
+which names no issue), add the number of the issue that builder works on to the skip question's
+metadata, `"issue": <the issue number>`, so Dan reads "issue #N in <project> (this builder only)"
+rather than the throwaway branch (claude-config#1904). Only what he reads changes: his answer is
+still kept for that builder's worktree alone, never for the issue, so another worktree and the main
+checkout are still asked. Leave it out when no builder is waiting; an issue that is not a whole
+number is refused and nothing is asked.
 
 A Claude Code mod's own hook file (`mods/<mod>/hooks/<file>.tsx`) counts as a screen file, because
 it draws Claude Code's panels, but an edit to one that touches none of its JSX and names none of
@@ -254,13 +262,13 @@ Ask it exactly like this, one question in one AskUserQuestion call:
 ```json
 {
   "questions": [{ "question": "Is this design settled?", "header": "Design round", "options": [{ "label": "Settled", "description": "x" }, { "label": "Not yet", "description": "x" }], "multiSelect": false }],
-  "metadata": { "source": "design-settled", "path": "<a folder or file in the project's checkout>", "contract": 2 }
+  "metadata": { "source": "design-settled", "path": "<a folder or file in the project's checkout>", "contract": 3 }
 }
 ```
 
 - The guard words the question and its two answers itself (Settled, Not yet), naming the
   issue it records for, so what you put there is replaced; the metadata is what matters.
-- `"contract": 2` is the version of these steps the guard must know. A session keeps the
+- `"contract": 3` is the version of these steps the guard must know. A session keeps the
   guard it started with while these steps are read fresh, so when the guard answers that it
   predates the steps you read, nothing was asked or recorded: tell Dan, and go on in a new
   session. Asking again in this one gets the same answer (claude-config#1057).

@@ -390,6 +390,45 @@ stop_and_check between TERM \
 # KILL while blocked on the child, which no handler of the suite's own could ever answer.
 stop_and_check blocked KILL "out=\"\$(bash '$HOLDER' '$TMPROOT/blocked.child')\"" 137
 
+# A child the watchdog saw in the instant it was becoming what it runs (claude-config#1909). On
+# Linux a process inside execve shows an EMPTY command line for that instant, and on both systems a
+# child between fork and exec shows its parent's. The watchdog remembers each child's command line
+# and kills only what still shows the same one, so a child caught in that instant read as somebody
+# else's process once the suite had gone, and was left running for ever: the misreading PR #1897
+# found in the scanners gate. A stand in for ps that shows no command lines while the suite is alive
+# plays that instant on every look the watchdog keeps, and the real ones after, on any system.
+BLANKPS="$TMPROOT/blankps"; mkdir -p "$BLANKPS"
+cat > "$BLANKPS/ps" <<EOF
+#!/usr/bin/env bash
+t="\$(cat '$TMPROOT/blank.target' 2>/dev/null)"
+case " \$* " in
+  *" pid=,ppid=,command= "*)
+    if [ -n "\$t" ] && kill -0 "\$t" 2>/dev/null; then exec "$(command -v ps)" -axo pid=,ppid=; fi ;;
+esac
+exec "$(command -v ps)" "\$@"
+EOF
+chmod +x "$BLANKPS/ps"
+mk_armed "$TMPROOT/blank.sh" "echo \$\$ > '$TMPROOT/blank.target'; bash '$HOLDER' '$TMPROOT/blank.child' & while :; do sleep 0.2; done"
+PATH="$BLANKPS:$PATH" SUITE_WALL_TIMEOUT="$HANG_S" SUITE_WALL_POLL=0.05 SUITE_WALL_PIDFILE="$TMPROOT/blank.wd" \
+  bash "$TMPROOT/blank.sh" > "$TMPROOT/blank.out" 2>&1 &
+bl_pid=$!
+ALL_PIDS="$ALL_PIDS $bl_pid"
+wait_file "$TMPROOT/blank.child" && bl_child="$(cat "$TMPROOT/blank.child")" || bl_child=""
+ALL_PIDS="$ALL_PIDS $bl_child"
+# Stopped only once the watchdog has seen the child WITH NO COMMAND LINE, so what is judged is the
+# instant this case is about rather than a look that happened to read it whole.
+if hang_wait "awk -F'\t' -v p='$bl_child' '\$1 == p && \$2 == \"\" { f = 1 } END { exit !f }' '$TMPROOT/blank.wd.seen' 2>/dev/null"; then
+  kill -TERM "$bl_pid" 2>/dev/null
+  wait_gone "$bl_pid" || true
+  if [ -n "$bl_child" ] && wait_gone "$bl_child"; then
+    check "#1909 a child seen with no command line, moments before the suite was stopped, is gone too" ok
+  else
+    check "#1909 a child seen with no command line, moments before the suite was stopped, is gone too" "child pid '${bl_child:-never started}' is still running"
+  fi
+else
+  check "#1909 a child seen with no command line, moments before the suite was stopped, is gone too" "the watchdog never saw the child with no command line: $(cat "$TMPROOT/blank.wd.seen" 2>/dev/null)"
+fi
+
 
 # ---------------------------------------------------------------------------
 # What the limit may be.
