@@ -3303,6 +3303,9 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L831. A limit meant to stop a runaway must be sized well above the busiest real use and must alert when it is hit, because a limit sized to the busiest day seen so far blocks the next busier legitimate day while reporting nothing wrong.** (project-enrollment-tracker#1978, 2026-10-30)
+  SHORT: Size a runaway limit well above the busiest real use and alert when hit; one sized to the busiest day seen blocks the next busier real day.
+
 - **L821. A deadline raced against work must report a timeout only when the deadline actually won, because a timer that resolves when cancelled runs every .then attached to it, so a timeout message or side effect hung there fires on the path where the work answered in time and reads as a failure that never happened.** (bidspoke#2968, 2026-10-28)
   SHORT: Report a raced deadline's timeout only if it won; a timer resolving on cancel runs its .then on the path that answered in time.
 
