@@ -8911,6 +8911,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L830. Before dispatching work on an issue, check for an open pull request or a recent commit on main that already addresses it, and recheck before opening the pull request, because a second session on the same repository can claim the same issue, and two migrations named for the same date collide so that one is silently treated as applied.**
+  (pivot#351, 2026-10-30)
+  SHORT: Check for an open PR or recent main commit on an issue before dispatching and before the PR; parallel sessions duplicate work and collide on migrations.
 - **L815. A scheduled send that is due anywhere inside a time window must also carry a minimum lead time, because its first run after shipping, or after any outage, sends to everyone already inside the window, including people for whom it is now too late.**
   (slate#4287, 2026-10-27)
   SHORT: A scheduled send due anywhere inside a window needs a minimum lead time, or its first run after shipping or an outage sends to everyone already inside.
@@ -10147,6 +10150,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Deleting a deployed thing's source does not undeploy it; a removal is done only when the platform's own list no longer shows it.
 - **L822. Before narrowing who may use a shared resource (a runner group, an allowlist, a token's scope), list every current user from the resource's own usage record and admit each one that should keep it, because a user left out often does not fail loudly: its work waits for a turn that never comes.** (project-enrollment-tracker#1961, 2026-10-29)
   SHORT: Before narrowing who may use a shared resource, list its current users from its own usage record: one left out often just waits, silently.
+- **L829. Two branches built in parallel can give their migrations the same version, and the migration tool records applied migrations by version alone, so the second is skipped as already applied with no error. Check a new migration's version against every applied migration and every open branch before applying it, and keep a CI check that fails on two migration files sharing a version.** (bidspoke#3003, 2026-10-30)
+  SHORT: Parallel branches can reuse a migration version, and the second is skipped as applied; check versions before applying, and fail CI on a duplicate.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
