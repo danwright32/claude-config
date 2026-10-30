@@ -19,12 +19,14 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-tests-before-push.sh",
             "timeout": 120,
+            "onFailure": "block",
             "statusMessage": "Checking pushed changes include tests"
           },
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/simplify-before-push.sh",
             "timeout": 120,
+            "onFailure": "block",
             "statusMessage": "Checking pushed source for code that should be simplified"
           },
           {
@@ -52,6 +54,7 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-public-assets.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "Checking pushed assets are referenced and images are within the size cap"
           },
           {
@@ -181,7 +184,8 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-gh-watch-interval.sh",
-            "timeout": 10
+            "timeout": 10,
+            "onFailure": "block"
           },
           {
             "type": "command",
