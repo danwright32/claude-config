@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L833. Price a paid model check as cost per run times merges a day; run it on the cheapest model, and a several model comparison on a schedule.
 - L784. A gate choosing work from a branch's changed files diffs from the merge base, never the upstream tip, or main's changes are blamed on the branch.
 - L759. Keep repo checkouts and worktrees out of cloud synced folders, whose sync churn starves file watching and fails local gates.
 - L395. A speed improvement claimed from ONE reading per arm cannot be told from noise

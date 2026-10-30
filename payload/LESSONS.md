@@ -10349,6 +10349,9 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
 
 ## Pipeline speed
 
+- **L833. Before adding a check that makes paid model calls on every merge, price it as cost per run times merges per day, run it on the cheapest model that proves the path, and move any comparison across several models to a schedule, because merge volume rather than the check's own size sets what it costs.**
+  (pivot#404, 2026-10-30)
+  SHORT: Price a paid model check as cost per run times merges a day; run it on the cheapest model, and a several model comparison on a schedule.
 - **L784. A gate that decides what to run from the files a branch changed must diff from the
   branch's merge base, never from its upstream's tip, because once main moves a two dot diff names
   every file main changed since and blames them on the branch.**
