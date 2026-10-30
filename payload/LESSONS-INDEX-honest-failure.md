@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L831. Size a runaway limit well above the busiest real use and alert when hit; one sized to the busiest day seen blocks the next busier real day.
 - L821. Report a raced deadline's timeout only if it won; a timer resolving on cancel runs its .then on the path that answered in time.
 - L800. A near-limit monitor reading only what finished cannot see an operation killed at the limit, so count the kills from a source that sees them.
 - L795. An alert opened from one short-lived process's state must clear from a reading any process can take, or eviction leaves it open forever.

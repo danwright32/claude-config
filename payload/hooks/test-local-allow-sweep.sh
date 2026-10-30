@@ -117,6 +117,27 @@ check "#1944 a rule with a lone surrogate escape: exit 0" "$([ "$RC" -eq 0 ] && 
 check "#1944 a rule with a lone surrogate escape: no traceback" "$(lacks Traceback "a traceback")"
 check "#1944 a rule with a lone surrogate escape: it is still flagged" "$(has 'rule 1 (Bash grep)')"
 
+# --- the key or token flag on a rule holding a lone surrogate escape (claude-config#1952) ----------
+# The redactor was handed the rules encoded with errors=replace, so the surrogate reached it as ? and
+# the line that came back differed from the rule: a rule holding neither a key nor a token was said
+# to hold one. Rule 1 is clean apart from the escape, rule 2 holds a real token beside one, and rule
+# 3 is the same clean rule with no escape, so the two cases differ only in the escape.
+world lonekey
+python3 -c '
+import json, sys
+json.dump({"permissions": {"allow": ["Bash(git status\ud800)",
+                                     "Bash(npx wrangler whoami --api-key %s \ud800)" % sys.argv[2],
+                                     "Bash(git status)"], "deny": []}},
+          open(sys.argv[1], "w"), indent=2)
+' "$F" "$FAKE_FLAG"
+sweep
+check "#1952 lone surrogate: exit 0" "$([ "$RC" -eq 0 ] && echo ok || echo "rc $RC")"
+check "#1952 lone surrogate: no traceback" "$(lacks Traceback "a traceback")"
+check "#1952 a clean rule holding the escape is not said to hold a key or token" "$(lacks 'rule 1 (Bash git)' 'rule 1 flagged')"
+check "#1952 a rule holding a real token beside the escape is still flagged" "$(has 'rule 2 (Bash npx): holds a key or token')"
+check "#1952 the token is not printed" "$(lacks "$FAKE_FLAG" 'the flag token')"
+check "#1952 the same clean rule without the escape is not flagged" "$(lacks 'rule 3' 'rule 3 flagged')"
+
 # --- each kind flagged ---------------------------------------------------------------------------
 world kinds
 fixture 'Bash(npm run test:*)' \
