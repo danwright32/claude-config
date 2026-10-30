@@ -293,7 +293,9 @@ check_eq "#1574 every mode of lib/shell-words.py is listed in its docstring" "no
 # the quoting, as an older shell-words.py installed beside a newer guard would.
 OLDREADER="$WORKDIR/oldreader"; mkdir -p "$OLDREADER/lib"
 cp "$HOOK" "$OLDREADER/"
-cp "$DIR/lib/push-scope.sh" "$OLDREADER/lib/"
+# Every library but the reader under test is the real one, whole-number.sh included (#1948), or the
+# refusals below would be the gate refusing over a missing library rather than over this reader.
+cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$OLDREADER/lib/"
 sed 's/mode == "data-blanked"/mode == "not-a-mode-1574"/' "$DIR/lib/shell-words.py" > "$OLDREADER/lib/shell-words.py"
 out="$(payload "bash $SPOOL note . \"git push\" \"builder\"" | bash "$OLDREADER/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1574 a reader that cannot read the note's quoting refuses it" "2" "$rc"
