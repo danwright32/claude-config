@@ -113,15 +113,20 @@ cd "$repo_dir" 2>/dev/null || exit 0
 REPO_FILES="$HOOK_DIR/lib/repo-files.sh"
 SCANS='ls-files|repo-files[.]sh'
 suites="$(bash "$REPO_FILES" . '*test-*.sh' 2>/dev/null)"
-# The uncommitted files, listed once and kept for the key below. A listing that fails leaves their
-# number UNKNOWN, said in those words, never a zero that reads as a clean tree of drafts (#1146, L90).
-_sc_uncommitted_unread=""
+# The uncommitted files, counted for the line saying what the scanners read; the key is built from
+# the wider listing just below (#1910). A listing that fails leaves their number UNKNOWN, said in
+# those words, never a zero that reads as a clean tree of drafts (#1146, L90).
 if _sc_uncommitted_list="$(bash "$REPO_FILES" --uncommitted . 2>/dev/null)"; then
   uncommitted_n="$(printf '%s' "$_sc_uncommitted_list" | grep -c . || true)"
 else
-  _sc_uncommitted_list=""; _sc_uncommitted_unread=1
   uncommitted_n="an unknown number of"
 fi
+# Every path whose contents may differ from the commit, a tracked file edited and not committed
+# included, listed once for the key below (#1910). The count above is of new files only, which is
+# what the coverage line reports; the key needs every file the scanners read that the tree does not
+# already account for.
+_sc_changed_unread=""
+_sc_changed_list="$(bash "$REPO_FILES" --changed . 2>/dev/null)" || { _sc_changed_list=""; _sc_changed_unread=1; }
 scanners=""
 while IFS= read -r s; do
   [ -n "$s" ] || continue
@@ -277,10 +282,14 @@ _sc_n=0
 # the whole repository on every push even when nothing they read has changed, which is most pushes.
 #
 # THE KEY is what the scanners actually read: the commit tree (which holds every tracked file, the
-# scanners' own source included, so an edited scanner keys differently) plus a digest of the files
-# that are staged or untracked, which #522 taught them to read and which change without a commit.
-# Computing it is two git calls and a hash of a handful of files, far cheaper than the scan it
-# saves, which is the test that decides whether a cache like this is worth having at all (L431).
+# scanners' own source included, so an edited scanner keys differently) plus a digest of every path
+# whose contents on disk may differ from it: a tracked file edited, staged or deleted, a staged
+# addition, and an untracked file, which #522 taught the scanners to read. Until #1910 the digest
+# covered only the staged additions and untracked files, while the scanners read tracked files from
+# disk, so a pass reached before an edit to a tracked file let the next push skip scanning the
+# edited file. Computing it is a few git calls and a hash of a handful of files, far cheaper than
+# the scan it saves, which is the test that decides whether a cache like this is worth having at
+# all (L431).
 #
 # MEASURED on this Mac 2026-09-21: 14.0 seconds cold against 0.6 with every scanner skipped. The
 # saving lands on a REPEAT attempt, a push blocked by another gate and tried again, because a push
@@ -296,21 +305,37 @@ _sc_n=0
 _sc_state_dir="${SCANNERS_STATE_DIR:-$HOME/.claude/state/scanners-passed}"
 _sc_key=""
 _sc_tree="$(git rev-parse HEAD^{tree} 2>/dev/null || true)"
-# Read from the one listing made above. When that listing failed the uncommitted files are unknown,
+# Read from the one listing made above. When that listing failed the files that differ are unknown,
 # and a key without them would remember a pass that a later push with different drafts could skip
-# on, so there is no key at all: nothing is skipped and nothing remembered (#1146).
-if [ -n "$_sc_tree" ] && [ -z "$_sc_uncommitted_unread" ]; then
-  _sc_uncommitted_digest="$( { while IFS= read -r _u; do
+# on, so there is no key at all: nothing is skipped and nothing remembered (#1146). A deleted path
+# is hashed as absent, so a deletion changes the key as an edit does.
+if [ -n "$_sc_tree" ] && [ -z "$_sc_changed_unread" ]; then
+  _sc_changed_digest="$( { while IFS= read -r _u; do
         [ -n "$_u" ] || continue
-        printf '%s ' "$_u"; shasum -a 256 "$_u" 2>/dev/null | awk '{print $1}'
-      done <<UNCOMMITTED
-$_sc_uncommitted_list
-UNCOMMITTED
+        printf '%s ' "$_u"
+        if [ -f "$_u" ]; then shasum -a 256 "$_u" 2>/dev/null | awk '{print $1}'; else echo absent; fi
+      done <<CHANGED
+$_sc_changed_list
+CHANGED
       } | shasum -a 256 2>/dev/null | awk '{print $1}')"
-  _sc_key="$_sc_tree-${_sc_uncommitted_digest:-none}"
+  _sc_key="$_sc_tree-${_sc_changed_digest:-none}"
 fi
 _sc_repo_key="$(printf '%s' "$(git remote get-url origin 2>/dev/null || pwd -P)" | shasum -a 256 2>/dev/null | awk '{print $1}')"
-_sc_passed_file="$_sc_state_dir/$_sc_repo_key.txt"
+# THE RECORD IS ONE FILE PER TREE, MERGED INTO, NEVER WRITTEN OVER (claude-config#1910). It was one
+# file per repository origin, rewritten whole by every push, and worktrees of one repository share
+# their origin: two of them pushing in turn erased each other's passes, so each ran again scans that
+# had already passed on its own tree. Now a repository's record is a folder holding a file for each
+# tree, and a push adds its passes to its tree's file, keeping the lines already there, which are
+# other checkouts' passes on the same tree with other uncommitted files. The merge is written to a
+# file beside it and renamed over it, under the record's lock, so a reader never sees half of one
+# and a writer at the same moment never loses a pass (L5); see _sc_record_merge, where it is written.
+_sc_record_dir="$_sc_state_dir/$_sc_repo_key"
+_sc_passed_file="$_sc_record_dir/$_sc_tree.txt"
+# A tree's file nobody has added to for a day is removed by the next write, so the folder does not
+# grow with every tree ever pushed. A day is far past a retry after another gate's refusal, which is
+# where the saving lands, and keeps the window short in which a scanner reading something outside
+# the repository could be skipped on an old pass. A setting, not a measurement.
+_sc_record_keep=86400
 _sc_skipped=0
 _sc_passed_now=""
 
@@ -366,8 +391,8 @@ start_one(){         # $1 = the suite path   $2 = a section, or empty
 # never starts a second copy. The gate is no weaker for it: a push goes through only once every
 # scanner has passed on exactly the input being pushed.
 #
-# THE INPUT is the key above, the commit tree plus the digest of the uncommitted files, the same key
-# the record of passes uses, so a run's verdict counts exactly where a remembered pass would (L370).
+# THE INPUT is the key above, the commit tree plus the digest of every file that differs from it on
+# disk (#1910), the same key the record of passes uses, so a run's verdict counts exactly where a remembered pass would (L370).
 # A run is kept at <state>/runs/<repo>/<scanner>.<key>, where <scanner> is a digest of the suite and
 # its section. The checkout that started it is recorded beside it, because two checkouts of one
 # repository, worktrees, push different trees at once: a run is SUPERSEDED, stopped and removed,
@@ -380,26 +405,59 @@ start_one(){         # $1 = the suite path   $2 = a section, or empty
 # next push leaves the key equal and the verdict about a tree that existed only in between. A run
 # inside the budget has always had that window; a run in the background widens it.
 #
-# Without a key (the uncommitted files could not be listed) nothing can be matched later, so runs go
-# in this hook's own work folder and are stopped at the budget, as #1889 did.
+# Without a key (the files that differ from the commit could not be listed) nothing can be matched
+# later, so runs go in this hook's own work folder and are stopped at the budget, as #1889 did.
+#
+# WHY THAT CASE IS STOPPED RATHER THAN LEFT TO FINISH (claude-config#1910). A run left going is
+# worth something only because a later push can count its verdict, and it can count it only where
+# it knows the run read exactly what that push carries. Without that listing nothing says what the
+# run read, so its verdict could never be counted by any push: left running it would be
+# minutes of load with no reader (L46). It is stopped, and the refusal says why, and that a retry
+# cannot help a scanner slower than the budget until the cause is fixed, naming the command that
+# shows it, so the slow scanner is not refused on every retry with nobody told why (L11, L111). The
+# same is said, in its own words, when the lock or the folder for runs is missing.
 _sc_checkout="$(pwd -P)"
 _sc_detach=""
+_sc_detach_why=""
+_sc_detach_fix=""
 _sc_runs="$_sc_work/runs"
 # The lock that lets one push at a time decide about a scanner's runs, shared with claude-sync (L370),
 # and the shared rule for a run recorded moments ago (lib/recorded-pid.sh, claude-config#1909).
 # Without either, nothing could stop two pushes each starting a copy, so runs are stopped at the
 # budget.
+# Each is loaded and judged on its own, so a refusal names the one that is missing (#1910, L11). The
+# record of passes needs only the lock itself, so it asks _sc_have_pidlock.
 _sc_have_lock=""
+_sc_have_pidlock=""
+_sc_lock_lib_missing=""
 # shellcheck source=lib/pid-lock.sh
-. "$HOOK_DIR/lib/pid-lock.sh" 2>/dev/null && command -v take_pid_lock >/dev/null 2>&1 \
-  && . "$HOOK_DIR/lib/recorded-pid.sh" 2>/dev/null && command -v recorded_pid_young >/dev/null 2>&1 \
-  && _sc_have_lock=1
+if . "$HOOK_DIR/lib/pid-lock.sh" 2>/dev/null && command -v take_pid_lock >/dev/null 2>&1; then
+  _sc_have_pidlock=1
+else
+  _sc_lock_lib_missing="$HOOK_DIR/lib/pid-lock.sh"
+fi
+# shellcheck source=lib/recorded-pid.sh
+if ! { . "$HOOK_DIR/lib/recorded-pid.sh" 2>/dev/null && command -v recorded_pid_young >/dev/null 2>&1; }; then
+  _sc_lock_lib_missing="${_sc_lock_lib_missing:+$_sc_lock_lib_missing and }$HOOK_DIR/lib/recorded-pid.sh"
+fi
+[ -z "$_sc_lock_lib_missing" ] && _sc_have_lock=1
 # `mkdir -p` is asked, then the folder is looked at, so a push that loses the race to make it with
 # another push at the same moment still finds it there and is not left without one.
 [ -n "$_sc_key" ] && mkdir -p "$_sc_state_dir/runs/$_sc_repo_key" 2>/dev/null
 if [ -n "$_sc_key" ] && [ -n "$_sc_have_lock" ] && [ -d "$_sc_state_dir/runs/$_sc_repo_key" ]; then
   _sc_detach=1
   _sc_runs="$_sc_state_dir/runs/$_sc_repo_key"
+elif [ -z "$_sc_tree" ]; then
+  _sc_detach_why="this checkout has no commit, so there is no tree a result could be counted against"
+elif [ -z "$_sc_key" ]; then
+  _sc_detach_why="the files that differ from the commit could not be listed, so nothing says what a run read and no later push could count its result"
+  _sc_detach_fix="To see why the listing fails, run:
+    bash $REPO_FILES --changed $_sc_checkout"
+elif [ -z "$_sc_have_lock" ]; then
+  _sc_detach_why="$_sc_lock_lib_missing could not be loaded, and without it two pushes could each start a copy"
+  _sc_detach_fix="Reinstall the hooks with claude-sync pull."
+else
+  _sc_detach_why="the folder for runs left going, $_sc_state_dir/runs/$_sc_repo_key, could not be made"
 fi
 mkdir -p "$_sc_runs" 2>/dev/null
 # Six hours: far past any scanner here (the slowest, test-run-all-tests.sh, about 7 minutes under
@@ -852,10 +910,53 @@ done
 # in it failed to read, so each scanner that finished passed on exactly this key, and remembering
 # those is what lets a retry on a busy machine run only the scanners that did not finish. The ones
 # stopped wrote no exit code, so they are never remembered and always run again.
-if [ -z "$failed" ] && [ -z "$unmeasured" ] && [ -n "$_sc_key" ] && [ -n "$_sc_passed_now" ]; then
-  if mkdir -p "$_sc_state_dir" 2>/dev/null; then
-    printf '%s' "$_sc_passed_now" > "$_sc_passed_file" 2>/dev/null || true
+#
+# MERGED INTO THE TREE'S FILE, UNDER ITS LOCK (claude-config#1910, see where the record is named).
+# Read, joined with this push's passes, written whole to a file beside it and only then renamed over
+# it, so the record is never empty or half written at any instant, and a read that fails writes
+# nothing rather than a record missing what was there (L5). The lock is take_pid_lock, the one the
+# runs above are decided under, held for the milliseconds of the merge. A record that cannot be
+# written is said, never passed over: the push is no less scanned, but a retry runs those again.
+_sc_record_merge(){   # -> 0 once the tree's file holds every pass it held and this push's
+  local old="" tmp="$_sc_passed_file.$$" p age
+  if [ -f "$_sc_passed_file" ]; then old="$(cat "$_sc_passed_file" 2>/dev/null)" || return 1; fi
+  if ! printf '%s\n%s' "$old" "$_sc_passed_now" | grep . | sort -u > "$tmp" 2>/dev/null \
+     || ! mv -f "$tmp" "$_sc_passed_file" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null
+    return 1
   fi
+  for p in "$_sc_record_dir"/*.txt; do
+    [ -f "$p" ] && [ "$p" != "$_sc_passed_file" ] || continue
+    age="$(_sc_age "$p")"
+    case "$age" in ''|*[!0-9]*) continue ;; esac
+    [ "$age" -gt "$_sc_record_keep" ] && rm -f "$p"
+  done
+  # The single file per repository kept before #1910, which nothing reads any more.
+  rm -f "$_sc_state_dir/$_sc_repo_key.txt" 2>/dev/null
+  return 0
+}
+_sc_record_unwritten=""
+if [ -z "$failed" ] && [ -z "$unmeasured" ] && [ -n "$_sc_key" ] && [ -n "$_sc_passed_now" ]; then
+  _sc_record_why=""
+  if [ -z "$_sc_have_pidlock" ]; then
+    _sc_record_why="the record is written only under the lock lib/pid-lock.sh gives, and it could not be loaded"
+  elif ! mkdir -p "$_sc_record_dir" 2>/dev/null; then
+    _sc_record_why="its folder, $_sc_record_dir, could not be made"
+  else
+    _sc_lock "$_sc_record_dir/pidlock"; _sc_lock_rc=$?
+    case "$_sc_lock_rc" in
+      0)
+        _sc_record_merge || _sc_record_why="$_sc_passed_file could not be read or written"
+        rm -f "$_sc_record_dir/pidlock" ;;
+      1) _sc_record_why="another push held its lock for 5 seconds; if this repeats, delete $_sc_record_dir/pidlock (and $_sc_record_dir/pidlock.break if it is there)" ;;
+      *) _sc_record_why="its lock could not be taken in $_sc_record_dir" ;;
+    esac
+  fi
+  [ -n "$_sc_record_why" ] \
+    && _sc_record_unwritten="The scanners that passed were not remembered, because $_sc_record_why, so a retry runs them again."
+  # A push that goes through says it here, before the line saying what it covered. A refused one says
+  # it in its refusal, below.
+  [ -n "$_sc_record_unwritten" ] && [ -z "$unfinished" ] && printf 'scanners-before-push: %s\n' "$_sc_record_unwritten" >&2
 fi
 
 # Every run with a verdict has now been read, so its folder goes, and the record above is the one
@@ -915,11 +1016,21 @@ _sc_unfinished_note(){
   fi
   printf '%s' "$unfinished"
   echo ""
+  # Why they could not be left running, from the one place that decided it (#1910).
+  if [ -z "$_sc_detach" ]; then
+    echo "They were stopped rather than left running, because $_sc_detach_why."
+    echo "Until that is fixed a retry stops them at the same point, so a scanner that needs more than"
+    echo "${_sc_budget} seconds cannot pass here."
+    [ -n "$_sc_detach_fix" ] && printf '%s\n' "$_sc_detach_fix"
+    echo ""
+  fi
   echo "This gate stops itself at ${_sc_budget} seconds, inside the timeout its registration declares, because"
   echo "Claude Code lets a push through when it kills a hook at that timeout, with nothing scanned."
   # Said only as far as the write below the read back did it: passes are kept when there is a key
-  # and nothing failed or went unmeasured.
-  if [ -n "$_sc_detach" ] && [ -z "$failed" ] && [ -z "$unmeasured" ]; then
+  # and nothing failed or went unmeasured, and the record could be written (#1910).
+  if [ -n "$_sc_record_unwritten" ]; then
+    echo "$_sc_record_unwritten"
+  elif [ -n "$_sc_detach" ] && [ -z "$failed" ] && [ -z "$unmeasured" ]; then
     echo "Every scanner that did finish and pass is remembered, so a retry does not run those again."
   elif [ -n "$_sc_key" ] && [ -z "$failed" ] && [ -z "$unmeasured" ]; then
     echo "Every scanner that did finish and pass is remembered, so a retry runs only the ones above."
@@ -927,7 +1038,7 @@ _sc_unfinished_note(){
     echo "Nothing that finished in this run is remembered, because another scanner failed or measured"
     echo "nothing, so a retry runs those again."
   elif [ -z "$_sc_key" ]; then
-    echo "The uncommitted files could not be listed, so nothing that finished could be remembered, and a"
+    echo "Nothing that finished could be remembered either, with no key to remember it against, so a"
     echo "retry runs every scanner again."
   else
     echo "Nothing from this run is remembered, because another scanner failed or measured nothing, so a"
@@ -941,7 +1052,8 @@ _sc_unfinished_note(){
     echo "once every scanner has passed on exactly what it carries."
     return 0
   fi
-  echo "Retry the push when the machine is quieter, or run each one directly to see it through:"
+  echo "A retry passes only if every one finishes inside the budget, so retry when the machine is quieter,"
+  echo "or run each one directly to see it through:"
   printf '%s' "$unfinished_cmds"
 }
 
