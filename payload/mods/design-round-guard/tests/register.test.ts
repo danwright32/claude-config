@@ -3179,9 +3179,16 @@ test('#1953: a script or tool handed a name a shell variable fills in is held as
     "P='tests/*push*'; python3 /tmp/sweep.py $P",
     // A folder variable names a folder, as a folder spelled out does.
     'python3 scripts/check.py --dir "$PWD" $HOME',
+    // A for loop over plain words hands the script each word, judged as named: no look changing file.
+    'for t in a.sh b.sh; do python3 scripts/run.py tests/$t; done',
+    // A $ in single quotes or after a backslash is no variable: a regex, prose, an escaped name.
+    `python3 scripts/grep.py 'x$' 'costs $5' \\$NAME`,
   ])
     expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
-  expect(w.ran.length).toBe(3)
+  expect(w.ran.length).toBe(5)
+  // A loop's word that is a screen file is judged as that file.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'for f in page.tsx; do python3 scripts/gen.py app/$f; done' }))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(5)
 })
 
 test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {

@@ -252,7 +252,8 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   changing or mod hook file's or holds a group, and any pattern handed to a tool are held as before.
 // - Since #1953: a name a shell variable fills in, handed to a script or a tool, is held as a name no
 //   rule reads (rules.ts nameFromVariable), as a command's output is; one the command sets to a plain
-//   name is judged by that name, and a folder variable ($PWD, $HOME) names no file.
+//   name, or a for loop over plain words, is judged by each name mod-kit gives, a folder variable
+//   ($PWD, $HOME) names no file, and one mod-kit marks unexpanded (every $ quoted) holds no value.
 // - Since #1954: an Edit or MultiEdit the guard would hold that would not apply to the file as it
 //   stands (rules.ts editWouldNotApply) is told so, to be sent again with the file's own text, with
 //   no card and nothing asked of Dan, never held as a change it cannot read.
@@ -351,7 +352,9 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // reads it, never one it empties or writes (#1933).
 // `quoted`, for a pattern a script file is handed with every pattern character quoted, read as the
 // one file its characters name (#1951).
-type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true; removes?: true; quoted?: true }
+// `unexpanded`, for a file a run is handed whose every $ is in single quotes or after a backslash
+// (mod-kit's mark, #1953), which holds no variable's value.
+type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true; removes?: true; quoted?: true; unexpanded?: true }
 
 // Every file a call writes or removes, and whether it may write the guard's own record where its
 // words do not say what it writes.
@@ -399,7 +402,14 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
         targets.push({ word: a.word, path: literal, run: r.path ?? r.script, quoted: true })
         continue
       }
-      targets.push({ word: a.word, ...(a.path ? { path: a.path } : {}), ...(a.folder ? { folder: a.folder } : {}), ...(r.tool ? { tool: true as const } : {}), run: r.path ?? r.script })
+      targets.push({
+        word: a.word,
+        ...(a.path ? { path: a.path } : {}),
+        ...(a.folder ? { folder: a.folder } : {}),
+        ...(r.tool ? { tool: true as const } : {}),
+        ...(a.unexpanded ? { unexpanded: true as const } : {}),
+        run: r.path ?? r.script,
+      })
     }
   }
   for (const u of w.unnamed) {
@@ -951,7 +961,8 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // command sets it to a plain name, and judged by that path it is any file; otherwise its value is
     // a glob the shell expands (placed in its folder by mod-kit), a loop's words or what a read takes
     // in, none of which the guard reads. A folder variable ($PWD, $HOME) names no file.
-    const variable = !output && !t.path && t.run !== undefined && nameFromVariable(t.word)
+    // One whose every $ is quoted or escaped (a regex 'x$', prose 'costs $5') holds no value at all.
+    const variable = !output && !t.path && t.run !== undefined && !t.unexpanded && nameFromVariable(t.word)
     if (tool === 'Bash' && (output || variable || (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
       let tree: string | null | undefined

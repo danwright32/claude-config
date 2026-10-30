@@ -594,8 +594,9 @@ const FOLDER_VARIABLE = /^\$(\{(PWD|OLDPWD|HOME|TMPDIR)\}|(PWD|OLDPWD|HOME|TMPDI
  * for a plain name or a folder for a pattern; this is read of a word it gave no path, whose value
  * (a glob the shell expands, a loop's words, what a read takes in, the environment's) the guard
  * cannot read before it runs. A variable naming a folder alone (`$PWD`, `$HOME`) names no file. A
- * `$` in single quotes is a `$`, which mod-kit's words, their quotes taken off, cannot tell apart,
- * so it is read as a variable too: when unsure, held. Read from the word as mod-kit gives it.
+ * for loop over plain words mod-kit gives as each word, with a path. A word whose every `$` is in
+ * single quotes or after a backslash mod-kit marks `unexpanded`, which the caller reads first; one
+ * holding any other `$` is read so here. Read from the word as mod-kit gives it.
  */
 export const nameFromVariable = (word: string): boolean => {
   let depth = 0
