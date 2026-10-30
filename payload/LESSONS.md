@@ -7544,6 +7544,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
 
 ## External systems
+- **L826. A request timeout cleared when the response headers arrive leaves reading the body with no limit, so a server that answers then trickles holds the caller open; keep the timer running until the body is fully read.**
+  (bidspoke#3089, 2026-10-30)
+  SHORT: A request timeout cleared when headers arrive leaves the body read unbounded; keep the timer running until the body is fully read.
 - **L825. In a Next.js app, delete a cookie with both Max-Age=0 and an Expires date in the past, and confirm the delete in a real browser, because Next re-parses Set-Cookie and drops a zero Max-Age, leaving an empty session cookie that unit tests read as deleted.**
   (slate#4410, 2026-10-29)
   SHORT: In Next.js delete a cookie with Max-Age=0 AND a past Expires, checked in a browser: Next drops a zero Max-Age.
