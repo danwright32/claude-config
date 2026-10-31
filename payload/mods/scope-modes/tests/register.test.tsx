@@ -16,6 +16,7 @@ import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 import { branchAt } from './mod-kit/hooks/branch.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
 import { acknowledge, ackOff, ackOn, ackOnSaid, MODE_DEF } from '../hooks/modes.ts'
+import { PAGE_TOOL, publishInstead } from '../hooks/mod-kit/deliver.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
 // mod-kit's band, card and send retry, the status bar's setModes, and the session registry's list.
@@ -1139,10 +1140,11 @@ test("each mode's note on every prompt carries the same definition its acknowled
   await command($ as never, 'build')
   await command($ as never, 'away')
   const away = ctxOf(await say($ as never, 'carry on'))
-  expect(away).toContain(MODE_DEF.away.will)
+  expect(away).toContain(`${MODE_DEF.away.will} (${PAGE_TOOL}).`)
   expect(away).toContain(MODE_DEF.away.willNot)
   await command($ as never, 'home')
-  expect(ctxOf(await say($ as never, 'carry on'))).toContain(MODE_DEF.home.will)
+  // Home names the tool for its fallback too (#1935), as away's note does.
+  expect(ctxOf(await say($ as never, 'carry on'))).toContain(`Dan is back at the Mac: ${MODE_DEF.home.will} (${PAGE_TOOL}).`)
 })
 
 // A message Dan types while a turn runs reaches prompt.submit at Enter carrying that turn's id
@@ -2648,7 +2650,7 @@ test('another mod holds its own item while away, and is told nothing was held at
   expect(JSON.parse(await holdIt())).toEqual({
     isHeld: true,
     card: { guard: 'Away', reason: 'Held for when you are back: Paste the key into Stripe.', safeWay: 'Claude publishes a private page for your phone instead.' },
-    deny: 'Held: Dan is away from the Mac, so "Paste the key into Stripe" waits for him to come back. Publish what he needs to see as a private claude.ai page instead (the Artifact tool).',
+    deny: `Held: Dan is away from the Mac, so "Paste the key into Stripe" waits for him to come back. ${publishInstead('what he needs to see')}`,
   })
   await command($ as never, 'home')
   expect((w.bands[w.bands.length - 1] as Row).lines[1]).toEqual([{ text: 'Paste the key into Stripe ' }, { button: 'held-1', label: 'Do it' }])

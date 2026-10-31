@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { appNameOf, classify, judge, refusalText, type Refusal } from './keys.ts'
+import { publishInstead } from './mod-kit/deliver.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // Keystroke guard (claude-config#608). A Go ahead holds for its app until ten minutes pass with
