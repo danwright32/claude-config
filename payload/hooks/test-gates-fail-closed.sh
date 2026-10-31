@@ -175,9 +175,22 @@ libs_of(){ # libs_of <gate file>
   grep -E "$SRC_RE" "$1" | grep -v -E '\|\|[[:space:]]*true' | grep -v -E '\|\|[[:space:]]*[a-z_]+\(\)' \
     | grep -v -E '^[[:space:]]*\.[^|]*&&[^|]*$' | grep -o -E 'lib/[a-z-]+\.sh' | sort -u | while IFS= read -r l; do
     printf '%s\n' "${l#lib/}"
-    [ -f "$DIR/$l" ] && grep -E '^(\.|source)[[:space:]]+"\$[A-Za-z_]+/[a-z-]+\.sh"' "$DIR/$l" | grep -o -E '/[a-z-]+\.sh' | sed 's#^/##'
+    [ -f "$DIR/$l" ] && grep -E '^[[:space:]]*(\{[[:space:]]*)?(\.|source)[[:space:]]+"\$[A-Za-z_]+/[a-z-]+\.sh"' "$DIR/$l" | grep -o -E '/[a-z-]+\.sh' | sed 's#^/##'
   done | sort -u
 }
+
+# A library a gate needs is followed into the libraries IT loads, in either shape a library here
+# loads one: a bare source, or `{ . "$X/y.sh" && declare -F f >/dev/null; } || return 1`, which is
+# how merge-target.sh loads push-scope.sh and whole-number.sh (claude-config#1948). The second
+# shape was not read, so neither was ever taken away beneath the five gates that load merge-target.sh.
+printf '%s\n' '. "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || { echo "missing merge-target.sh" >&2; exit 2; }' > "$WORK/probe-gate"
+probe_libs="$(libs_of "$WORK/probe-gate" | tr '\n' ' ')"
+probe_missing=""
+for want in merge-target.sh push-scope.sh whole-number.sh; do
+  case " $probe_libs" in *" $want "*) ;; *) probe_missing="$probe_missing $want" ;; esac
+done
+[ -z "$probe_missing" ] && ok \
+  || bad "libs_of does not follow a library into the ones it loads as { . lib && declare -F f; } || return 1: it listed [$probe_libs] for a gate loading lib/merge-target.sh, without$probe_missing"
 
 # Each run is fed from a file rather than a pipe from python3, which a gate leaving early would
 # kill, and in a folder named by a number: a folder named after the gate or the library would put
@@ -345,6 +358,10 @@ declare_advisory(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_advisory sync-main-to-dev.sh     PostToolUse  "gh pr merge 5 --squash"
   declare_advisory check-filed-issue-session.sh PostToolUse "gh issue create --title x --body y"
   declare_advisory payload-revert-warning.sh UserPromptSubmit "-"
+  # issue-spool-session-end.sh is not here: it runs on SessionEnd, which discards a systemMessage,
+  # so it declares a fallback for each library instead, and test-session-end-notice.sh runs it with
+  # each one gone (claude-config#1949).
+  declare_advisory sync-stuck-notice.sh    UserPromptSubmit "-"
 } > "$WORK/advisory"
 # A stand in rtk, so rtk-rewrite.sh reaches the reading it needs the library for on a machine with no
 # rtk or a different one: it rewrites every command by putting rtk in front.

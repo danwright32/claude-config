@@ -8917,6 +8917,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L835. A deploy must refuse to upload a commit older than the one already live, because a rerun of an old pipeline run uploads its old build last and the platform serves the newest upload, rolling the whole site back with every step reporting success.**
+  (bidspoke#3158, 2026-10-30)
+  SHORT: A deploy refuses to upload a commit older than the live one: a rerun of an old run uploads last and rolls the site back while every step passes.
 - **L830. Before dispatching work on an issue, check for an open pull request or a recent commit on main that already addresses it, and recheck before opening the pull request, because a second session on the same repository can claim the same issue, and two migrations named for the same date collide so that one is silently treated as applied.**
   (pivot#351, 2026-10-30)
   SHORT: Check for an open PR or recent main commit on an issue before dispatching and before the PR; parallel sessions duplicate work and collide on migrations.
@@ -10349,6 +10352,9 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
 
 ## Pipeline speed
 
+- **L834. Where every pull request must contain main's latest commit before it merges, each merge sends every waiting pull request through the test job again, so merges are capped at one per test run and each extra open pull request adds a full rerun per merge without adding throughput; shorten the test job before adding parallel builders, and size parallel work to that cap.**
+  (pivot#415, 2026-10-30)
+  SHORT: When a PR must contain main's tip to merge, every merge reruns each waiting PR: shorten the test job before adding parallel builders.
 - **L833. Before adding a check that makes paid model calls on every merge, price it as cost per run times merges per day, run it on the cheapest model that proves the path, and move any comparison across several models to a schedule, because merge volume rather than the check's own size sets what it costs.**
   (pivot#404, 2026-10-30)
   SHORT: Price a paid model check as cost per run times merges a day; run it on the cheapest model, and a several model comparison on a schedule.

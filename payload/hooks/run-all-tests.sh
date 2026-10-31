@@ -104,6 +104,10 @@ fi
 if [ -f "$SELF_DIR/lib/workflow-job-timeout.sh" ]; then
   . "$SELF_DIR/lib/workflow-job-timeout.sh"
 fi
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, every
+# count below is refused as unreadable, and the shell names the missing function.
+# shellcheck source=lib/whole-number.sh
+. "$SELF_DIR/lib/whole-number.sh" 2>/dev/null
 
 # This script's own directory holds `test-*.sh` files, and one of them tests this
 # script, so a bare run discovers that suite and runs it, and it runs this script
@@ -254,11 +258,10 @@ case "$_ncpu" in ''|*[!0-9]*) _ncpu=4 ;; esac
 _default_budget=$(( _ncpu > 8 ? 8 : _ncpu ))
 [ "$_default_budget" -gt 0 ] || _default_budget=1
 BUDGET="${HOOK_TESTS_BUDGET-$_default_budget}"
-case "$BUDGET" in
-  ''|*[!0-9]*|0)
-    echo "run-all-tests: HOOK_TESTS_BUDGET='$BUDGET' is not a positive whole number of processes this run may have in flight. Refusing rather than guessing, because it decides how much of the machine the tests take." >&2
-    exit 1 ;;
-esac
+if ! whole_above_zero "$BUDGET" BUDGET; then
+  echo "run-all-tests: HOOK_TESTS_BUDGET='$BUDGET' is not a positive whole number of processes this run may have in flight. Refusing rather than guessing, because it decides how much of the machine the tests take." >&2
+  exit 1
+fi
 # Half the budget runs at once by default, so the suites that shard still shard and the machine is
 # not oversubscribed four times over. Setting HOOK_TESTS_JOBS overrides how many run at once and
 # the shares follow from it, which keeps the total one number either way.
@@ -272,11 +275,10 @@ _jobs_default=$(( BUDGET / 2 ))
 [ "$_jobs_default" -ge 2 ] || _jobs_default=2
 [ "$_jobs_default" -le "$BUDGET" ] || _jobs_default="$BUDGET"
 JOBS="${HOOK_TESTS_JOBS-$_jobs_default}"
-case "$JOBS" in
-  ''|*[!0-9]*|0)
-    echo "run-all-tests: HOOK_TESTS_JOBS='$JOBS' is not a positive whole number of suites to run at once. Refusing rather than guessing, because this decides how many processes start. Use 1 to run them one at a time." >&2
-    exit 1 ;;
-esac
+if ! whole_above_zero "$JOBS" JOBS; then
+  echo "run-all-tests: HOOK_TESTS_JOBS='$JOBS' is not a positive whole number of suites to run at once. Refusing rather than guessing, because this decides how many processes start. Use 1 to run them one at a time." >&2
+  exit 1
+fi
 
 # The repo this run is about, worked out BEFORE the directories are chosen, because two things
 # need it now: discovery (further down) and the timing record (#144), which keys a suite on its
@@ -799,9 +801,7 @@ if [ "$ran" -gt 0 ]; then
       _dl_why="$SELF_DIR/lib/workflow-job-timeout.sh is missing"
     else
       _dl_min="$(workflow_job_timeout_minutes "$_dl_file" "$_dl_job")"
-      case "$_dl_min" in
-        ''|*[!0-9]*|0) _dl_min=""; _dl_why="job '$_dl_job' in $_dl_rel carries no timeout-minutes this runner can read" ;;
-      esac
+      whole_above_zero "$_dl_min" _dl_min || { _dl_min=""; _dl_why="job '$_dl_job' in $_dl_rel carries no timeout-minutes this runner can read"; }
     fi
     if [ -n "$_dl_min" ]; then
       _dl_now="$(run_now)"

@@ -15,6 +15,13 @@
 #                        rather than measuring whatever this Mac is doing (L290)
 #   LOAD_AVERAGE_CORES   how many cores to judge it against, for the same reason
 
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, a
+# core count reads as nothing and a machine as not busy, the two answers that excuse nothing.
+# Its own folder by parameter expansion, never dirname (claude-config#1104, test-lib-self-locate.sh).
+_LA_LIB="${BASH_SOURCE[0]%/*}"; [ "$_LA_LIB" != "${BASH_SOURCE[0]}" ] || _LA_LIB=.
+# shellcheck source=whole-number.sh
+. "$_LA_LIB/whole-number.sh" 2>/dev/null
+
 # The one minute load average, or NOTHING when it cannot be read. Nothing, never a zero: a zero is
 # the most reassuring figure available and would read as an idle machine (L90). The command can be
 # passed as the first argument, which is how measure-section-time.sh hands its own seam through.
@@ -36,7 +43,7 @@ load_average_one_minute(){   # [command] -> the figure, or nothing
 load_average_cores(){   # -> a whole number, or nothing
   local c="${LOAD_AVERAGE_CORES:-}"
   [ -n "$c" ] || c="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null)"
-  case "$c" in ''|*[!0-9]*|0) return 0 ;; esac
+  whole_above_zero "$c" c || return 0
   printf '%s' "$c"
 }
 
@@ -49,7 +56,7 @@ load_average_cores(){   # -> a whole number, or nothing
 load_average_busy(){   # load cores [own load] -> exit 0 when busy
   local l="${1-}" c="${2-}" o="${3:-0}"
   case "$l" in ''|*[!0-9.]*) return 1 ;; esac
-  case "$c" in ''|*[!0-9]*|0) return 1 ;; esac
+  whole_above_zero "$c" c || return 1
   case "$o" in *[!0-9.]*) return 1 ;; esac
   awk -v l="$l" -v c="$c" -v o="$o" 'BEGIN { exit !(l - o > c + 0) }'
 }

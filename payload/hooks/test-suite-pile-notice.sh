@@ -228,7 +228,7 @@ out="$(prompt u2 "$WORK/no-such-table")"
 fault_said "#1931 another session is told of it once too" "$out" "process table could not be read"
 out="$(printf '{"session_id":"u1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
   CLAUDE_SUITE_PILE_NOW="$NOW" SYNC_SUITE_MAX_AGE=soon bash "$HOOK" 2>/dev/null)"
-fault_said "#1931 a different fault in the same session is new, and is said" "$out" "must all be whole numbers"
+fault_said "#1931 a different fault in the same session is new, and is said" "$out" "is not a whole number"
 out="$(prompt u1 "$WORK/old")"
 says "and the next readable table is judged as a first sight" "$out" "piled up"
 # A session that cannot be told apart from the next one cannot be told once.
@@ -258,8 +258,24 @@ fault_said "#1931 and said again on the next prompt, since it could not be recor
 # An unreadable limit is not guessed at; it is told to the person on each prompt while it lasts.
 out="$(printf '{"session_id":"b1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
   CLAUDE_SUITE_PILE_NOW="$NOW" SYNC_SUITE_MAX_AGE=soon bash "$HOOK" 2>/dev/null)"; rc=$?
-fault_said "an unreadable age limit says nothing to the session, and tells the person" "$out" "must all be whole numbers"
+fault_said "an unreadable age limit says nothing to the session, and tells the person" "$out" "SYNC_SUITE_MAX_AGE='soon' is not a whole number"
 [ "$rc" -eq 0 ] && check "and exits 0" ok || check "and exits 0" "exit $rc"
+# It names only the setting that failed (#1948, L11). It used to list all three with their values
+# and say they "must all be whole numbers", and a session reading it told Dan that a
+# SYNC_SUITE_MAX_ROOTS of 8 was wrong too.
+never_says "and names only that setting, not the two that are fine" "$out" "SYNC_SUITE_MAX_ROOTS"
+never_says "nor the rearm" "$out" "SYNC_SUITE_PILE_REARM"
+out="$(printf '{"session_id":"b2"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
+  CLAUDE_SUITE_PILE_NOW="$NOW" SYNC_SUITE_MAX_ROOTS=eight SYNC_SUITE_PILE_REARM=10m bash "$HOOK" 2>/dev/null)"
+fault_said "two unreadable settings are both named, with their values" "$out" "SYNC_SUITE_MAX_ROOTS='eight' and SYNC_SUITE_PILE_REARM='10m' are not whole numbers"
+never_says "and the one that is fine is not" "$out" "SYNC_SUITE_MAX_AGE"
+out="$(printf '{"session_id":"b3"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
+  CLAUDE_SUITE_PILE_NOW="$NOW" SYNC_SUITE_MAX_AGE=1h SYNC_SUITE_MAX_ROOTS=lots SYNC_SUITE_PILE_REARM=x bash "$HOOK" 2>/dev/null)"
+fault_said "three are named in one sentence" "$out" "SYNC_SUITE_MAX_AGE='1h', SYNC_SUITE_MAX_ROOTS='lots' and SYNC_SUITE_PILE_REARM='x' are not whole numbers"
+# A setting of zero is a whole number and is not refused, as before.
+out="$(printf '{"session_id":"b4"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \
+  CLAUDE_SUITE_PILE_NOW="$NOW" SYNC_SUITE_PILE_REARM=0 bash "$HOOK" 2>/dev/null)"
+never_says "control: a rearm of 0 is not called unreadable" "$out" "not a whole number"
 # A copy of the hook with no library beside it.
 mkdir -p "$WORK/bare"; cp "$HOOK" "$WORK/bare/"
 out="$(printf '{"session_id":"l1"}' | SYNC_PS_FIXTURE="$WORK/old" CLAUDE_SUITE_PILE_STATE_DIR="$WORK/state" \

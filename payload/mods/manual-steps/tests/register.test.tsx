@@ -1254,6 +1254,16 @@ const wrote = (text: string) => JSON.stringify({ type: 'assistant', message: { c
 const DOWNBEAT_STEP = "One thing is still yours to do. In Settings, Venues, Carnegie Hall, click the × next to jbentley, then type ... and click Add. Tell me when it's done"
 const DOWNBEAT_REFLECTION = 'The only thing still open is the Settings swap I described above'
 
+// #1955: the two Pivot hand offs of 2026-10-30, each asking Dan to edit a local file and report back.
+test('a file edit handed to Dan in prose blocks the turn end, and a file Claude edited itself does not (#1955)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  expect((await turnStop($, 'Put allow or forbid in the third column and save, then tell me.')).block).toMatch(/mcp__manual-steps__steps\b/)
+  const list = "1. On each word's line, after the number, type one of two words ...\n2. Save the file (Cmd+S).\n3. Tell me it's done."
+  expect((await turnStop($, list)).block).toMatch(/mcp__manual-steps__steps\b/)
+  expect((await turnStop($, 'I edited config.json and saved it; the tests pass.')).block).toBeUndefined()
+})
+
 test('a step in an earlier message of the turn blocks, though the last message is a reflection that names no step (#1608)', withKit, async ($, on) => {
   const reflection = 'I am least sure about the venue cache. Nothing else to add.'
   world(on, { turn: [prompt(), wrote(DOWNBEAT_STEP), prompt(), wrote(reflection)].join('\n') })

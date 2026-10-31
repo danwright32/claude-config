@@ -446,7 +446,14 @@ seq_order="$(printf '%s\n' "$out_seq" | grep -E '^ +(ok|FAIL) +test-' | grep -oE
 
 # A job count nobody can read must be refused, not guessed at: it decides how much runs at once,
 # and guessing could mean either no parallelism at all or a fork bomb (L50).
-for bad in 0 -2 lots ''; do
+# A count with a leading zero is the number written, never octal (claude-config#1948): bash
+# arithmetic read 08 as an error and 010 as 8, so the counts are handed back with the zeros cut.
+out_oct="$(HOOK_TESTS_BUDGET=08 HOOK_TESTS_JOBS=02 bash "$RUNNER" "$P" 2>&1)"; code_oct=$?
+[ "$code_oct" -eq 0 ] \
+  && check "#1948 a budget of 08 and a job count of 02 run as 8 and 2" ok \
+  || check "#1948 a budget of 08 and a job count of 02 run as 8 and 2" "exit $code_oct: ${out_oct:0:300}"
+# 00 is zero too (claude-config#1948): only a literal 0 was refused, so 00 passed as a count.
+for bad in 0 00 -2 lots ''; do
   out_bad_jobs="$(HOOK_TESTS_JOBS="$bad" bash "$RUNNER" "$P" 2>&1)"; code_bad_jobs=$?
   [ "$code_bad_jobs" -ne 0 ] \
     && check "a job count of '$bad' is refused rather than guessed at" ok \
@@ -570,6 +577,8 @@ fi
 DEP="$TMPROOT/deployed"
 mkdir -p "$DEP"
 cp "$RUNNER" "$DEP/run-all-tests.sh"
+# The one library it cannot run without, as an installed copy always has it beside it (#1948).
+mkdir -p "$DEP/lib" && cp "$DIR/lib/whole-number.sh" "$DEP/lib/"
 mk_suite "$DEP" plain 0
 mk_notrun_suite "$DEP" auditsrepo "needs the repository, and there is none here"
 # HOOK_TESTS_RUNNING is unset for this one call. It is set whenever this suite is itself being run
@@ -3595,10 +3604,13 @@ lt_plain="$(awk 'NR == 1 { print $1 }' "$LTSTORE/suites%2Ftest-plain.sh" 2>/dev/
 [ "$code_lt" -eq 0 ] && [ "$lt_waited" = 0 ] \
   && check "#1297 the time a suite waited for its lock is taken off the time recorded for it" ok \
   || check "#1297 the time a suite waited for its lock is taken off the time recorded for it" "exit=$code_lt waited='$lt_waited' store=$(ls "$LTSTORE" | tr '\n' ' ') out=$out_lt"
-case "$lt_plain" in
-  ''|*[!0-9]*|0) check "#1297 and a suite that did not wait keeps its measured time" "plain='$lt_plain'" ;;
-  *) check "#1297 and a suite that did not wait keeps its measured time" ok ;;
-esac
+# shellcheck source=lib/whole-number.sh
+. "$DIR/lib/whole-number.sh"
+if whole_above_zero "$lt_plain" lt_plain; then
+  check "#1297 and a suite that did not wait keeps its measured time" ok
+else
+  check "#1297 and a suite that did not wait keeps its measured time" "plain='$lt_plain'"
+fi
 case "$out_lt" in *'note: waited 1000s for the suite lock'*) true ;; *) false ;; esac \
   && check "#1297 and the wait is said beside that suite's verdict" ok \
   || check "#1297 and the wait is said beside that suite's verdict" "out=$out_lt"
