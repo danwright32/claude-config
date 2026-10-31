@@ -729,7 +729,7 @@ HOOK="$SAVED_HOOK"
 # A byte that is not UTF-8 anywhere in the payload: jq reads it as U+FFFD, and python3's text mode
 # stdin raised on it, so the tool name came back as a dash and the write was allowed (claude-config
 # #1900). The byte sits in a field the gate does not judge, so the refusal is about the write.
-bad_byte_measured python "#1900 payload-write-gate reading a byte that is not UTF-8" || true
+bad_byte_measured python-stdin "#1900 payload-write-gate reading a byte that is not UTF-8" || true
 rm -f "$HOLD"
 OUT="$(printf '{"tool_name":"Edit","session_id":"","cwd":"%s","tool_input":{"file_path":"%s","old_string":"a\xffb","new_string":"c"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
   | env LC_ALL="$BAD_BYTE_LOCALE" SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
