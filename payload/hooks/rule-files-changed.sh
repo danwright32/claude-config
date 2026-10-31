@@ -17,10 +17,22 @@
 # cannot reload anything (only a new session picks these up), but it can stop the
 # staleness being silent.
 #
-# It runs on SessionStart too, where it says nothing and only records "what this
-# session first saw" (claude-config#1544). That is the moment the session loads its
-# rule files and names its mods; taken at the first prompt instead, the baseline
-# already held whatever changed in between, so that change was never reported.
+# It runs on SessionStart too, where it records "what this session first saw"
+# (claude-config#1544). That is the moment the session loads its rule files and
+# names its mods; taken at the first prompt instead, the baseline already held
+# whatever changed in between, so that change was never reported.
+#
+# THE PROJECT'S RULES, AT A START ONLY (claude-config#1939). The one thing a start
+# says: that the project's primary checkout is on its default branch, behind origin,
+# and origin has changed one of its rule files since, so this session loaded the
+# older copy (lib/project-rules-behind.sh holds the question and why it is asked).
+# It lives here rather than in a hook of its own because this is the hook that says
+# a session's rule files are not the current ones, and it already runs at the start
+# with a per session record; check-project-list.sh answers a different question,
+# whether the listed project folders exist. It is a different staleness from the
+# rest of this file (older than origin when loaded, rather than changed on disk
+# since), so it is asked only at a start and costs two git processes when the
+# checkout is current. Said once per session for each answer.
 #
 # ONE notice per divergence, not one per prompt: after speaking it records the new
 # state, so the next prompt is quiet until something changes again. A notice on
@@ -72,6 +84,11 @@ case "${BASH_SOURCE[0]}" in */*) RFC_DIR="${BASH_SOURCE[0]%/*}" ;; *) RFC_DIR=. 
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
+# Whether the project's primary checkout is behind origin on its own rule files, asked at a start
+# only (claude-config#1939). Without the library the start goes on as before, saying nothing.
+# shellcheck source=lib/project-rules-behind.sh
+. "$RFC_DIR/lib/project-rules-behind.sh" 2>/dev/null && _prb_loaded=1
+
 # Keyed on the session, so two sessions open at once each get their own baseline.
 # With neither field there is no way to tell a first prompt from a later one, and
 # guessing would either report every prompt as stale or never report at all, so
@@ -94,10 +111,10 @@ except Exception:
 def one(v):
     return str(v or "").replace("\x1f", " ").replace("\n", " ")
 print("\x1f".join(one(x) for x in (d.get("session_id") or d.get("transcript_path"),
-                                   d.get("hook_event_name"), d.get("source"))))
+                                   d.get("hook_event_name"), d.get("source"), d.get("cwd"))))
 ' 2>/dev/null || true)"
-session="" event="" source=""
-IFS=$'\x1f' read -r session event source <<< "$fields" || true
+session="" event="" source="" cwd=""
+IFS=$'\x1f' read -r session event source cwd <<< "$fields" || true
 if [ -z "$session" ]; then
   hook_allow_notice "rule-files-changed: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and no comparison was made."
 fi
@@ -240,8 +257,9 @@ mod_snapshot() {
 # superlinear in the number of matches under the bash macOS ships (claude-config#117).
 words() { tr '\n' ' ' | sed 's/ $//'; }
 
-# At a start there is nothing to say, only the record to take, and SessionStart's stdout would go
-# into the session's context, so it goes no further than that.
+# At a start there is nothing to say about the global rule files, only the record to take. The one
+# thing a start can say, the project's rules being older than origin's, goes out as the hook's one
+# JSON notice, which shows it to the person and hands it to the session as context.
 if [ "$event" = "SessionStart" ]; then
   if [ -f "$RULES_DIR/CLAUDE.md" ]; then
     case "$source" in
@@ -258,6 +276,22 @@ if [ "$event" = "SessionStart" ]; then
     since_baseline "$MODS_STATE" mod_snapshot
     # Recorded with the baseline it belongs to, and only then, so a kept baseline keeps its process.
     [ -n "$_had_mods" ] || [ ! -s "$MODS_STATE" ] || printf '%s\n' "$PROC_NOW" > "$MODS_PROC" 2>/dev/null || true
+  fi
+  # The project's own rule files, against origin (claude-config#1939): the one thing said at a start.
+  # Asked after both records are taken, so nothing here can cost the baselines above. Once per
+  # session for each answer: a compaction or a resume re-reads the same stale file from disk, and
+  # being told again then would be the repetition this hook exists to avoid (L36); a new session,
+  # which loaded the stale copy afresh, is told again on purpose. Recorded before it is said, and
+  # compared by PRB_KEY, never the text, which carries the ref's age and so differs at every start.
+  if [ "${_prb_loaded:-}" = 1 ]; then
+    project_rules_behind "${cwd:-${CLAUDE_PROJECT_DIR:-}}"
+    if [ -n "$PRB_TEXT" ]; then
+      PRB_STATE="$STATE_DIR/claude-project-rules-${key}.state"
+      if [ "$(cat "$PRB_STATE" 2>/dev/null)" != "$PRB_KEY" ]; then
+        printf '%s' "$PRB_KEY" > "$PRB_STATE" 2>/dev/null || true
+        hook_allow_notice "$PRB_TEXT" SessionStart "$PRB_CONTEXT"
+      fi
+    fi
   fi
   exit 0
 fi

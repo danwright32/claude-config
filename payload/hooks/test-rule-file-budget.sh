@@ -435,6 +435,118 @@ case "$growth_now" in
   UNREAD\ *) printf 'SUITE-PART-UNMEASURED how fast the rule files every session loads grow: %s\n' "${growth_now#UNREAD }" ;;
 esac
 
+echo "rule file budget: each project's memory index"
+
+# THE MEMORY INDEX (claude-config#1939). Claude Code loads each project's auto memory index,
+# ~/.claude/projects/<key>/memory/MEMORY.md, where <key> is the project's folder with every character
+# that is not a letter or digit made a dash, into every request of every session in that project, and
+# nothing bounded it. Bidspoke's had grown to 15,861 characters, about 5,700 tokens, 1.6% of the
+# interactive and 2.2% of the subagent tokens read over 16 to 30 October, before it was cut by hand to
+# 6,459 on 30 October with nothing to stop it growing back. It counts toward neither large-memory-files
+# banner (see the header), so no banner would ever have reported it: this is the only thing that does.
+#
+# 8,000 characters is CHOSEN, not measured (decided for #1939 on 2026-10-30 under the rule that
+# claude-config decisions do not wait on Dan, his choices being 8,000, 10,000 or the global file
+# budget): room above the 6,459 Bidspoke was cut to, and well short of the 15,861 it drifted to. The
+# global budget, 140,000, could never fire on a file this size. Counted in characters, read as text,
+# and shown in tokens at the 2.78 characters a token the issue measured.
+#
+# REPORTED, NEVER REFUSED, for the reason the total above is a note: these files are written by
+# Claude Code's auto memory in OTHER projects, this repository does not own them, and this suite runs
+# inside every push and every pull here, so a refusal would stall the config syncing between the Macs
+# over a file in some other project's folder. A SUITE-NOTE reaches the push report and the pull's
+# summary. Every index on this Mac is read, including those of projects that have moved and will never
+# load theirs again; one whose project folder holds no session transcript from the last
+# MEMORY_INDEX_ACTIVE_DAYS days is named apart, so the ones a session is actually paying for come first
+# (L36) and none is hidden (L540).
+MEMORY_INDEX_BUDGET=8000
+CHARS_PER_TOKEN=2.78
+MEMORY_INDEX_ACTIVE_DAYS=30
+# memory_index_report <projects folder> [<now, epoch seconds>]: one line each, MISSING <folder> when
+# there is no such folder, else COUNT <n>, LARGEST <chars> <key>, and OVER <chars> <active|dormant|never>
+# <date of the newest session or -> <key> for each index past the budget, largest first.
+memory_index_report() {
+  python3 - "$1" "${2:-}" "$MEMORY_INDEX_BUDGET" "$MEMORY_INDEX_ACTIVE_DAYS" <<'PY' 2>/dev/null
+import glob, os, sys, time
+root, now, budget, days = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+now = int(now) if now else int(time.time())
+if not os.path.isdir(root):
+    print("MISSING %s" % root); sys.exit()
+rows = []
+for key in sorted(os.listdir(root)):
+    f = os.path.join(root, key, "memory", "MEMORY.md")
+    if not os.path.isfile(f):
+        continue
+    with open(f, "rb") as fh:
+        n = len(fh.read().decode("utf-8", "replace"))
+    newest = max([os.path.getmtime(t) for t in glob.glob(os.path.join(root, key, "*.jsonl"))] or [0])
+    if not newest:
+        state, when = "never", "-"
+    else:
+        state = "active" if now - newest <= days * 86400 else "dormant"
+        when = time.strftime("%Y-%m-%d", time.gmtime(newest))
+    rows.append((n, key, state, when))
+print("COUNT %d" % len(rows))
+if rows:
+    big = max(rows)
+    print("LARGEST %d %s" % (big[0], big[1]))
+for n, key, state, when in sorted(rows, reverse=True):
+    if n > budget:
+        print("OVER %d %s %s %s" % (n, state, when, key))
+PY
+}
+# memory_index_note <report>: the one line note for a report, or nothing for a MISSING one.
+memory_index_note() {
+  printf '%s\n' "$1" | python3 -c '
+import sys
+budget, per_token, days, home = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3], sys.argv[4]
+# A key under the home folder is shown with that prefix as ~, which is all the full key adds.
+def name(k):
+    return "~" + k[len(home):] if home and k.startswith(home + "-") else k
+count, largest, used, idle = 0, None, [], []
+sys.stdout.reconfigure(errors="replace")
+for line in sys.stdin.buffer.read().decode("utf-8", "replace").splitlines():
+    w = line.split(" ")
+    if w[0] == "MISSING":
+        sys.exit()
+    if w[0] == "COUNT":
+        count = int(w[1])
+    elif w[0] == "LARGEST":
+        largest = (int(w[1]), name(" ".join(w[2:])))
+    elif w[0] == "OVER":
+        n, state, when, key = int(w[1]), w[2], w[3], name(" ".join(w[4:]))
+        if state == "active":
+            used.append("%s %s characters (about %s tokens, last session %s)" % (key, format(n, ","), format(round(n / per_token), ","), when))
+        else:
+            idle.append("%s %s (%s)" % (key, format(n, ","), "no session recorded" if state == "never" else "last session " + when))
+b = format(budget, ",")
+if not count:
+    print("there is no project memory index on this Mac to measure against the %s character budget." % b)
+elif not used and not idle:
+    print("all %d project memory indexes are within the %s character budget, the largest %s at %s characters." % (count, b, largest[1], format(largest[0], ",")))
+else:
+    parts = []
+    if used:
+        parts.append(", ".join(used))
+    if idle:
+        parts.append("and over it with no session in the last %s days: %s" % (days, ", ".join(idle)))
+    print("%d of %d project memory indexes are over the %s character budget for a file loaded on every request of its project (%s characters a token): %s. Shorten an index to one short line per memory, with the detail in the memory files." % (len(used) + len(idle), count, b, per_token, "; ".join(parts)))
+' "$MEMORY_INDEX_BUDGET" "$CHARS_PER_TOKEN" "$MEMORY_INDEX_ACTIVE_DAYS" "${HOME//[!A-Za-z0-9]/-}" 2>/dev/null
+}
+if command -v python3 >/dev/null 2>&1; then
+  MI_ROOT="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+  mi_now_report="$(memory_index_report "$MI_ROOT")"
+  case "$mi_now_report" in
+    MISSING\ *) printf 'SUITE-PART-UNMEASURED each project'"'"'s memory index: there is no %s on this machine, so no index was measured\n' "$MI_ROOT" ;;
+    '') printf 'SUITE-PART-UNMEASURED each project'"'"'s memory index: reading %s gave no answer at all\n' "$MI_ROOT" ;;
+    *)
+      printf '%s\n' "$mi_now_report" | sed 's/^/  /'
+      printf 'SUITE-NOTE %s\n' "$(memory_index_note "$mi_now_report")" ;;
+  esac
+else
+  echo "SUITE-PART-UNMEASURED each project's memory index: python3 is not installed here"
+fi
+
 echo "rule file budget: no single index entry is longer than the cap"
 
 # The per-lesson cost is what actually decides the total, because the number of lessons only
@@ -595,6 +707,53 @@ else
   printf '@LESSONS-INDEX-a.md\nrules\n' > "$INST/CLAUDE.md"; cp "$GH/payload/LESSONS-INDEX-a.md" "$INST/"
   reading="$(RUN_ALL_TESTS_CHECKOUT="$GH" growth_reading "$INST")"
   case "$reading" in "UNREAD "*"LESSONS-INDEX-a.md"*) ok ;; *) bad "an installed copy loading a different set from the checkout was given the checkout's rate: $reading" ;; esac
+fi
+# THE MEMORY INDEX BUDGET (claude-config#1939), driven against a fixture projects folder with a set
+# clock, so it is seen to report an index over the budget and to stay quiet about one at or under it.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "SUITE-PART-UNMEASURED python3 is not installed here, so the memory index budget was not checked against its fixtures"
+else
+  MI="$probe/projects"
+  MI_NOW=1775865600   # 2026-04-11T00:00:00Z, set, never read from the clock (L713)
+  python3 - "$MI" "$MI_NOW" <<'PY'
+import os, sys
+root, now = sys.argv[1], int(sys.argv[2])
+def index(key, n, session_days_ago=None):
+    d = os.path.join(root, key)
+    os.makedirs(os.path.join(d, "memory"), exist_ok=True)
+    # The last 100 characters are two byte ones, so a byte count and a character count disagree.
+    open(os.path.join(d, "memory", "MEMORY.md"), "w", encoding="utf-8").write("x" * (n - 100) + "é" * 100)
+    if session_days_ago is not None:
+        t = os.path.join(d, "s.jsonl")
+        open(t, "w").write("{}\n")
+        os.utime(t, (now - session_days_ago * 86400, now - session_days_ago * 86400))
+index("-Users-x-Active", 8001, 1)
+index("-Users-x-Small", 7999, 1)
+index("-Users-x-Exact", 8000, 2)
+index("-Users-x-Old", 9000, 40)
+index("-Users-x-Never", 12000)
+os.makedirs(os.path.join(root, "-Users-x-NoMemory"), exist_ok=True)
+PY
+  mi_report="$(memory_index_report "$MI" "$MI_NOW")"
+  case "$mi_report" in *"COUNT 5"*) ok ;; *) bad "the memory index report did not count the five indexes in the fixture (a folder with no memory/MEMORY.md is not one): $mi_report" ;; esac
+  case "$mi_report" in *"OVER 8001 "*"-Users-x-Active"*) ok ;; *) bad "an index one character over the budget was not reported with its size: $mi_report" ;; esac
+  case "$mi_report" in *"-Users-x-Small"*|*"-Users-x-Exact"*) bad "an index at or under the budget was reported: $mi_report" ;; *) ok ;; esac
+  case "$mi_report" in *"OVER 8101"*|*"OVER 8100"*) bad "the index was measured in bytes rather than characters: $mi_report" ;; *) ok ;; esac
+  mi_note="$(memory_index_note "$mi_report")"
+  case "$mi_note" in *"3 of 5 project memory indexes"*"8,000 character budget"*) ok ;; *) bad "the memory index note does not say how many of how many are over which budget: $mi_note" ;; esac
+  case "$mi_note" in *"-Users-x-Active 8,001 characters (about 2,878 tokens"*) ok ;; *) bad "the memory index note does not name the index over the budget with its size in characters and tokens: $mi_note" ;; esac
+  case "$mi_note" in *"no session in the last 30 days"*"-Users-x-Old 9,000"*) ok ;; *) bad "an index over the budget whose project has had no session in 30 days is not named apart from the ones in use: $mi_note" ;; esac
+  case "$mi_note" in *"-Users-x-Never 12,000"*) ok ;; *) bad "an index over the budget whose project has no session record is not named: $mi_note" ;; esac
+  case "$mi_note" in *"-Users-x-Small"*|*"-Users-x-Exact"*) bad "the note names an index within the budget: $mi_note" ;; *) ok ;; esac
+  rm -rf "$MI/-Users-x-Active" "$MI/-Users-x-Old" "$MI/-Users-x-Never"
+  mi_note="$(memory_index_note "$(memory_index_report "$MI" "$MI_NOW")")"
+  case "$mi_note" in *"all 2 project memory indexes are within the 8,000 character budget"*"-Users-x-Exact at 8,000"*) ok ;; *) bad "with every index within the budget the note does not say so and name the largest: $mi_note" ;; esac
+  case "$(memory_index_report "$probe/no-such-projects" "$MI_NOW")" in "MISSING "*) ok ;; *) bad "a projects folder that does not exist was not reported as missing" ;; esac
+  mi_home_key="${HOME//[!A-Za-z0-9]/-}-Apps-Proj"
+  mkdir -p "$MI/$mi_home_key/memory"
+  head -c 8500 /dev/zero | tr '\0' 'x' > "$MI/$mi_home_key/memory/MEMORY.md"
+  mi_note="$(memory_index_note "$(memory_index_report "$MI" "$MI_NOW")")"
+  case "$mi_note" in *"~-Apps-Proj 8,500"*) ok ;; *) bad "a key under the home folder is not shown with that prefix as ~: $mi_note" ;; esac
 fi
 if [ "$ENTRY_CAP" -lt 550 ]; then ok; else
   bad "the entry cap is at or above the longest rule sentence in the file, so it cannot shorten anything"
