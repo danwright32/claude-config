@@ -1240,6 +1240,22 @@ with nothing to tell it from a suite. On 2026-10-30 that writer appended `output
 style), so no sync record could have explained it. A store nobody encloses, such as a
 fixture's own home, and every store of a run started on its own, are judged exactly as before.
 
+A run started on its own still had that writer to face, because `settings.json` is saved by the
+person at the keyboard (Claude Code's /model, a plugin toggle, a permission granted for good, or a
+hand edit) as well as by the sync (#1969). Who wrote the file cannot be asked: macOS records no
+writing process without root, and a write leaves no open handle to find afterwards. What changed
+can be read, from the copy taken before the run, so a change to `settings.json` is excused as a
+person's edit only when three things hold together: both copies are JSON objects, at least one
+setting was carried over with its value untouched, and every setting that changed is one no code in
+this config writes. claude-sync is the only writer of that file in the repository, and the settings
+it writes (the hooks block, `env` for the mods, `statusLine`, and every key `SHARED_SETTINGS_ALLOWED`
+admits) are listed in `LIVE_SETTINGS_CONFIG_KEYS` and stay counted whoever changed them;
+`test-live-settings-edit.sh` fails when claude-sync writes a setting the list does not name. The name
+of a setting alone would excuse a suite that writes that name, so it is never the only test. What the
+rule lets through, and the verdict says so: a suite that edits the real file in place, keeping every
+other setting, and changes only a setting this config never writes. No suite here writes it that way;
+they write whole fixture files, or edit the hooks block, and both are still caught.
+
 ## An absence is a deletion only where something was there before (#627, #781)
 
 The mirror cannot tell "this Mac deleted it" from "this Mac never had it" by looking at the folder,

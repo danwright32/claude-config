@@ -340,6 +340,72 @@ live_store_regenerated_with_lessons(){ # <path> -> 0 when that is the change it 
   [ "$now" -ge "$before" ]
 }
 
+# Was settings.json changed by a PERSON picking a setting? (claude-config#1969)
+#
+# settings.json has a writer that is neither the sync nor a suite: whoever is at the keyboard.
+# Claude Code saves it on /model, on a plugin toggle and on a permission granted for good, and Dan
+# edits it by hand. On 2026-10-30 one hand edit at 6:41 PM ET was enough to fail a full run as
+# live-store-pollution (#1964 traced it). live_store_only_gained cannot excuse that: a key added at
+# the end puts a comma on the line before it, and Claude Code rewrites the whole file in its own
+# layout, so every save reads as lines changed.
+#
+# WHO wrote it cannot be asked. macOS keeps no record of which process wrote a file (fs_usage and
+# dtrace see it live, and both need root), a process holding it open is gone by the time the run
+# ends, and a write is instantaneous, so neither looking for an open handle nor asking whether the
+# writer sat in the run's process group has anything to look at. WHAT changed can be read, from the
+# copy taken before the run, and three facts together separate the two writers:
+#
+#   1. Both copies are JSON objects. A suite that empties, truncates or half writes the file fails
+#      this; a person's save through Claude Code never does.
+#   2. At least one setting is carried over with its value untouched. A person changes a setting
+#      in a file they keep; a suite's fixture replaces the file, and on a real Mac carries nothing
+#      over, because nothing a suite writes reproduces this Mac's own hooks block value for value.
+#   3. Every setting that changed is one NO code in this config writes. The only code here that
+#      writes settings.json is claude-sync (measured 2026-10-31, every payload hook, mod and tool),
+#      so a suite bound to the real path, writing it through the code it tests, changes one of the
+#      settings below. Those stay counted whoever changed them, a person's /effort pick on a shared
+#      model included, because the two are indistinguishable there and a suite is the costlier
+#      mistake to excuse. A real apply is excused already, by the sync's own record.
+#
+# The name of a setting alone would excuse a suite that writes that name; it is the three together
+# that do the work. What still gets through, and is said in the verdict rather than hidden: a suite
+# that edits the real file in place, keeping every other setting, and changes only a setting this
+# config never writes. No suite in this repository writes settings.json that way (they write whole
+# fixture files, or edit the hooks block), and test-live-settings-edit.sh holds every other shape.
+#
+# The list cannot be read from claude-sync at run time, because this file is installed without it,
+# so it is typed here and test-live-settings-edit.sh fails when claude-sync writes a setting it does
+# not name: hooks (the hooks block), env (CLAUDE_CODE_PLUGIN_DIRS, the mods), statusLine (#772), and
+# every setting SHARED_SETTINGS_ALLOWED lets payload/settings.shared.json carry (#695).
+LIVE_SETTINGS_CONFIG_KEYS="hooks env statusLine ultracode modelSettings skillListingMaxDescChars outputStyle"
+live_settings_changed_by_hand(){ # <path> -> 0, printing the settings that changed, when that is the change
+  local path="$1" copy changed
+  [ "$path" = "${CLAUDE_HOME:-$HOME/.claude}/settings.json" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1        # nothing to read it with, so it stays counted
+  [ -n "${_live_copies:-}" ] && [ -f "$_live_copies/index" ] || return 1
+  copy="$(awk -F"$(printf '\t')" -v f="$path" '$1 == f { print $2; exit }' "$_live_copies/index")"
+  [ -n "$copy" ] && [ -f "$copy" ] || return 1     # absent before, so this is a creation
+  [ -f "$path" ] || return 1                        # gone now, which is a deletion
+  # One jq call reads both copies and prints the changed settings, one per line, or fails when
+  # either copy is not a JSON object or nothing at all was carried over untouched.
+  changed="$(jq -n -r --slurpfile was "$copy" --slurpfile now "$path" '
+    if ($was | length) != 1 or ($now | length) != 1 then error("not one document") else . end
+    | $was[0] as $a | $now[0] as $b
+    | if ($a | type) != "object" or ($b | type) != "object" then error("not an object") else . end
+    | ([$a, $b] | map(keys) | add | unique) as $all
+    | [ $all[] as $k | select((($a | has($k)) != ($b | has($k))) or ($a[$k] != $b[$k])) | $k ] as $diff
+    | if ($all | length) == ($diff | length) then error("nothing carried over") else . end
+    | $diff[]' 2>/dev/null)" || return 1
+  [ -n "$changed" ] || return 1                     # rewritten with every value the same
+  local k
+  while IFS= read -r k; do
+    case " $LIVE_SETTINGS_CONFIG_KEYS " in *" $k "*) return 1 ;; esac
+  done <<CHANGEDSETTINGS
+$changed
+CHANGEDSETTINGS
+  printf '%s' "$changed" | tr '\n' ' ' | sed 's/ $//; s/ /, /g'
+}
+
 # Did the SYNC apply config into this Mac while the run was going? (claude-config#277)
 #
 # The stores on the list above are the config the sync installs, and the watch daemon installs it
@@ -1929,6 +1995,11 @@ if [ -n "${_live_before:-}" ] && [ "$_live_before" != "$_live_after" ]; then
     fi
     if live_store_regenerated_with_lessons "$_lc_path"; then
       _lc_noted="$_lc_noted  $_lc_path: regenerated from LESSONS.md, which gained lines in the same window, keeping at least as many lines as it had, which is what recording a lesson does to a generated lessons file.
+"
+      continue
+    fi
+    if _lc_settings="$(live_settings_changed_by_hand "$_lc_path")"; then
+      _lc_noted="$_lc_noted  $_lc_path: only $_lc_settings changed, none of them a setting this config writes, with the rest of the file carried over as it was, which is a person's own settings edit (Claude Code's /model, a plugin toggle, a permission, or by hand). A suite editing the real file in place that way would read the same, and none here does (claude-config#1969).
 "
       continue
     fi
