@@ -113,6 +113,46 @@ describe("writes: a shell's own output redirect (#760)", () => {
   })
 })
 
+// #1976: the job watcher judged a background command quiet while it logged every minute to the file
+// its standard output was redirected into. Only the redirect says where standard output goes, so the
+// reader gives those files apart, in `stdout`, beside `files`, where a tee or a copy is no different.
+describe('writes: where standard output is sent (#1976)', () => {
+  const stdout = (command: string, cwd = CWD) => read(command, cwd).stdout
+  test('a redirect of standard output, however it is spelled, gives its file', () => {
+    expect(stdout('bash merge-when-ready.sh 1965 > merge.log 2>&1')).toEqual([{ word: 'merge.log', path: `${CWD}/merge.log` }])
+    expect(stdout('make >> build.log')).toEqual([{ word: 'build.log', path: `${CWD}/build.log` }])
+    expect(stdout('make 1>build.log')).toEqual([{ word: 'build.log', path: `${CWD}/build.log` }])
+    expect(stdout('make >| build.log')).toEqual([{ word: 'build.log', path: `${CWD}/build.log` }])
+    expect(stdout('make &> build.log')).toEqual([{ word: 'build.log', path: `${CWD}/build.log` }])
+    expect(stdout('make &>> build.log')).toEqual([{ word: 'build.log', path: `${CWD}/build.log` }])
+    expect(stdout('make >& build.log')).toEqual([{ word: 'build.log', path: `${CWD}/build.log` }])
+  })
+  test('a cd before it is followed, and each command of the line gives its own', () => {
+    expect(stdout('cd /repo && npm test > /tmp/t.log; make > m.log')).toEqual([
+      { word: '/tmp/t.log', path: '/tmp/t.log' },
+      { word: 'm.log', path: '/repo/m.log' },
+    ])
+  })
+  test('a tee, a copy, another descriptor alone, a descriptor copy and a device are none', () => {
+    expect(stdout('make 2>&1 | tee build.log')).toBeUndefined()
+    expect(stdout('cp a.log b.log')).toBeUndefined()
+    expect(stdout('make 2> err.log')).toBeUndefined()
+    expect(stdout('make >&2')).toBeUndefined()
+    expect(stdout('make > /dev/null 2>&1')).toBeUndefined()
+    expect(read('make 2>&1 | tee build.log').files).toEqual([{ word: 'build.log', path: `${CWD}/build.log` }])
+  })
+  test('a target that cannot be named is given as written, with no path', () => {
+    expect(stdout('make > "$LOG"')).toEqual([{ word: '$LOG' }])
+    expect(stdout('make > logs/*.log')).toEqual([{ word: 'logs/*.log', folder: `${CWD}/logs` }])
+  })
+  test('a variable the command set is read as its value', () => {
+    expect(stdout('LOG=/tmp/m.log; make > "$LOG"')).toEqual([{ word: '$LOG', path: '/tmp/m.log' }])
+  })
+  test("a substitution's redirect is the job's too", () => {
+    expect(stdout('echo "$(make > m.log)"')).toEqual([{ word: 'm.log', path: `${CWD}/m.log` }])
+  })
+})
+
 describe('writes: a cd before the write', () => {
   test('a relative path after a cd is resolved in the folder it changed into', () => {
     expect(paths("cd ~/.claude/projects/p/memory && cat > note.md <<'EOF'\n- rule\nEOF")).toEqual([`${HOME}/.claude/projects/p/memory/note.md`])
