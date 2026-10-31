@@ -421,6 +421,25 @@ dcs_walk_state() { # <find exit code> <stderr file>
   elif [ "$1" -ne 0 ]; then printf 'partial: find exited %s\n' "$1"
   else printf 'complete\n'; fi
 }
+# The folders the walk could not read, from find's stderr, sorted, one per line as "<folder> (<find's
+# reason>)" with the home folder written ~ (#1903). The count alone could not say whether a folder
+# might hold a project, nor whether it was macOS protecting it (Operation not permitted) or its own
+# permissions (Permission denied). find writes "find: <folder>: <reason>", and a folder's name may
+# hold ": " itself, so only the last one is find's; a line in any other shape is kept as written.
+dcs_walk_unreadable() { # <stderr file>
+  awk -v h="$HOME" -v ph="${DCS_HOME:-$HOME}" '
+    NF == 0 { next }
+    index($0, "find: ") != 1 { print; next }
+    {
+      s = substr($0, 7); cut = 0
+      for (i = length(s) - 1; i > 0; i--) if (substr(s, i, 2) == ": ") { cut = i; break }
+      if (cut) { p = substr(s, 1, cut - 1); r = substr(s, cut + 2) } else { p = s; r = "" }
+      if (p == h || p == ph) p = "~"
+      else if (index(p, h "/") == 1) p = "~" substr(p, length(h) + 1)
+      else if (index(p, ph "/") == 1) p = "~" substr(p, length(ph) + 1)
+      print (r == "" ? p : p " (" r ")")
+    }' "$1" 2>/dev/null | LC_ALL=C sort
+}
 
 # ---------------------------------------------------------------------------------------------
 # Flags a reviewer must see

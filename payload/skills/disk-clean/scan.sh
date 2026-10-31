@@ -33,7 +33,9 @@
 #                                MacBook, 2026-10-27)
 #
 # THE RECORD'S HEADER carries, beyond scan_id and scanned_at: fda (granted, "denied: ..." or
-# "unmeasured: ..."), walk (complete, "partial: ..." or "unmeasured: ..."), categories (the ones this
+# "unmeasured: ..."), walk (complete, "partial: ..." or "unmeasured: ..."), walk_unreadable (only when
+# the walk could not read a folder: each one as "<folder> (<find's reason>)", joined by "; "),
+# categories (the ones this
 # scan ran, in order), status.<category> (measured or "unmeasured: <why>") and, where a category has
 # one, note.<category>. Each item carries id, category, method, target, bytes, state, identity, size
 # (measured, partial, reported, denied, unread), flags (credential, icloud, icloud-only-part) and
@@ -177,6 +179,16 @@ if [ -n "$need_walk" ]; then
   else WALK_STATE="$(dcs_walk_state "$BOUND_RC" "$W/walk.err")"; fi
   note walk "$WALK_STATE"
   echo "Walk of the home folder: $WALK_STATE."
+  # Which folders it could not read, every one in the header and the first ten printed (#1903).
+  if [ -s "$W/walk.err" ]; then
+    dcs_walk_unreadable "$W/walk.err" > "$W/walk.unread"
+    if [ -s "$W/walk.unread" ]; then
+      note walk_unreadable "$(awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }' "$W/walk.unread")"
+      echo "Folders the walk could not read: $(awk '
+        NR <= 10 { printf "%s%s", (NR > 1 ? ", " : ""), $0 }
+        END { if (NR > 10) printf ", and %d more", NR - 10; printf "." }' "$W/walk.unread")"
+    fi
+  fi
 fi
 
 # ---------- 4. each category ----------
