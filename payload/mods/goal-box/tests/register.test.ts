@@ -321,38 +321,38 @@ test('not while a merge is unconfirmed or a deploy is not live: refused naming e
 // the box asks GitHub itself, as each account, with `gh pr view`. It counts only an answer that says
 // MERGED for that exact pull request in that exact repository; a call that failed, or an answer about
 // another number or repository, still holds the box.
-const SLATE = 'try-pennie/slate'
+const WORK_REPO = 'acme-hq/booking'
 const RAN = 1_799_999_000_000
 const MERGED_AT = 1_799_999_500_000
-const waiting = (pr: number, more: Partial<Owed> = {}): Owed => ({ key: `wait:${SLATE}#${pr}@${RAN}`, how: 'waiting', pr, at: RAN, cwd: '/gone/worktree', selector: String(pr), named: SLATE, repo: SLATE, ...more })
+const waiting = (pr: number, more: Partial<Owed> = {}): Owed => ({ key: `wait:${WORK_REPO}#${pr}@${RAN}`, how: 'waiting', pr, at: RAN, cwd: '/gone/worktree', selector: String(pr), named: WORK_REPO, repo: WORK_REPO, ...more })
 const answer = (pr: number, more: Record<string, unknown> = {}): Gh => ({
   exitCode: 0,
-  stdout: JSON.stringify({ number: pr, state: 'MERGED', mergedAt: new Date(MERGED_AT).toISOString(), url: `https://github.com/${SLATE}/pull/${pr}`, ...more }),
+  stdout: JSON.stringify({ number: pr, state: 'MERGED', mergedAt: new Date(MERGED_AT).toISOString(), url: `https://github.com/${WORK_REPO}/pull/${pr}`, ...more }),
 })
 
 test('a background merge GitHub says is MERGED, for that number in that repository, holds nothing once its card is made', withLive, async ($, on) => {
-  const { views } = world(on, { owed: [waiting(4284)], verdicts: { [`${SLATE}#4284`]: { state: 'live', at: MERGED_AT + 1 } }, view: q => answer(Number(q.pr)) })
+  const { views } = world(on, { owed: [waiting(4284)], verdicts: { [`${WORK_REPO}#4284`]: { state: 'live', at: MERGED_AT + 1 } }, view: q => answer(Number(q.pr)) })
   await start($)
   await says($, 'Finish milestone 77')
   expect((await box($, ASKED)).deny).toBeUndefined()
   // Asked by its repository, never the folder it was merged from (which may be gone), with every field the check reads.
-  expect(views).toEqual([{ pr: '4284', repo: SLATE, fields: 'number,state,mergedAt,url' }])
+  expect(views).toEqual([{ pr: '4284', repo: WORK_REPO, fields: 'number,state,mergedAt,url' }])
 })
 
 test('a background merge GitHub confirms but no card has been made for holds the box as owed its card, not as unconfirmed', withLive, async ($, on) => {
-  world(on, { owed: [waiting(4284)], verdicts: { [`${SLATE}#4284`]: { state: 'live', at: RAN - 1 } }, view: q => answer(Number(q.pr)) })
+  world(on, { owed: [waiting(4284)], verdicts: { [`${WORK_REPO}#4284`]: { state: 'live', at: RAN - 1 } }, view: q => answer(Number(q.pr)) })
   await start($)
   await says($, 'Finish milestone 77')
   const r = await box($, ASKED)
-  expect(r.deny).toMatch(/try-pennie\/slate#4284 was merged and has no is it live card yet/)
+  expect(r.deny).toMatch(/acme-hq\/booking#4284 was merged and has no is it live card yet/)
   expect(r.deny).not.toMatch(/not been confirmed/)
 })
 
 test('a merge GitHub only answers for as another account is confirmed: asked as each account gh is logged in to', withLive, async ($, on) => {
   const { views } = world(on, {
     owed: [waiting(4284)],
-    verdicts: { [`${SLATE}#4284`]: { state: 'live', at: MERGED_AT } },
-    view: q => (q.token ? answer(Number(q.pr)) : { exitCode: 1, stdout: '', stderr: 'GraphQL: Could not resolve to a Repository with the name try-pennie/slate.' }),
+    verdicts: { [`${WORK_REPO}#4284`]: { state: 'live', at: MERGED_AT } },
+    view: q => (q.token ? answer(Number(q.pr)) : { exitCode: 1, stdout: '', stderr: 'GraphQL: Could not resolve to a Repository with the name acme-hq/booking.' }),
   })
   await start($)
   await says($, 'Finish milestone 77')
@@ -361,14 +361,14 @@ test('a merge GitHub only answers for as another account is confirmed: asked as 
 })
 
 test('no other answer confirms a background merge: a failed call, another number, another repository, open, or no merge time', withLive, async ($, on) => {
-  const { w } = world(on, { owed: [waiting(4284)], verdicts: { [`${SLATE}#4284`]: { state: 'live', at: MERGED_AT + 1 } } })
+  const { w } = world(on, { owed: [waiting(4284)], verdicts: { [`${WORK_REPO}#4284`]: { state: 'live', at: MERGED_AT + 1 } } })
   await start($)
   await says($, 'Finish milestone 77')
   const refused: [string, Gh, RegExp][] = [
     ['a call that failed for every account', { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' }, /error connecting to api\.github\.com/],
     ['an answer about another pull request', answer(4285), /#4285/],
-    ['an answer whose number and link disagree', answer(4284, { url: `https://github.com/${SLATE}/pull/4285` }), /pull\/4285/],
-    ['an answer about another repository', answer(4284, { url: 'https://github.com/try-pennie/other/pull/4284' }), /try-pennie\/other/],
+    ['an answer whose number and link disagree', answer(4284, { url: `https://github.com/${WORK_REPO}/pull/4285` }), /pull\/4285/],
+    ['an answer about another repository', answer(4284, { url: 'https://github.com/acme-hq/other/pull/4284' }), /acme-hq\/other/],
     ['a pull request still open', answer(4284, { state: 'OPEN', mergedAt: null }), /OPEN/],
     ['a merge with no time', answer(4284, { mergedAt: null }), /no time/],
     ['an answer that is not JSON', { exitCode: 0, stdout: 'MERGED' }, /could not be read/],
@@ -376,25 +376,25 @@ test('no other answer confirms a background merge: a failed call, another number
   for (const [what, g, why] of refused) {
     w.view = () => g
     const deny = (await box($, ASKED)).deny ?? ''
-    expect({ what, unconfirmed: /the merge of try-pennie\/slate#4284 has not been confirmed yet/.test(deny), why: why.test(deny) }).toEqual({ what, unconfirmed: true, why: true })
+    expect({ what, unconfirmed: /the merge of acme-hq\/booking#4284 has not been confirmed yet/.test(deny), why: why.test(deny) }).toEqual({ what, unconfirmed: true, why: true })
   }
   w.view = q => answer(Number(q.pr))
   expect((await box($, ASKED)).deny).toBeUndefined()
 })
 
 test('a pull request the helper was run for twice is asked about once and named once', withLive, async ($, on) => {
-  const { views } = world(on, { owed: [waiting(4290), waiting(4290, { key: `wait:${SLATE}#4290@${RAN + 5}`, at: RAN + 5 })] })
+  const { views } = world(on, { owed: [waiting(4290), waiting(4290, { key: `wait:${WORK_REPO}#4290@${RAN + 5}`, at: RAN + 5 })] })
   await start($)
   await says($, 'Finish milestone 77')
   const r = await box($, ASKED)
-  expect(r.deny?.match(/try-pennie\/slate#4290/g)).toHaveLength(1)
+  expect(r.deny?.match(/acme-hq\/booking#4290/g)).toHaveLength(1)
   expect(views.filter(v => !v.token)).toHaveLength(1)
 })
 
 test('a background merge naming no repository is asked about in the folder it was merged from, and named by the link GitHub gives', withLive, async ($, on) => {
   const { views } = world(on, {
     owed: [{ key: `wait:/repo#4284@${RAN}`, how: 'waiting', pr: 4284, at: RAN, cwd: '/repo', selector: '4284' }],
-    verdicts: { [`${SLATE}#4284`]: { state: 'live', at: MERGED_AT + 1 } },
+    verdicts: { [`${WORK_REPO}#4284`]: { state: 'live', at: MERGED_AT + 1 } },
     view: q => (q.cwd === '/repo' && !q.repo ? answer(Number(q.pr)) : { exitCode: 1, stdout: '', stderr: 'unexpected' }),
   })
   await start($)
@@ -405,19 +405,19 @@ test('a background merge naming no repository is asked about in the folder it wa
 
 // is it live crosses a carded merge off its record only at a turn end, so a card made since then is
 // read from its verdicts: one made since the merge settles it, one older (another merge's) does not.
-const MERGED_4305: Owed = { key: `${SLATE}#4305`, how: 'merged', pr: 4305, at: RAN, cwd: '/repo', repo: SLATE }
+const MERGED_4305: Owed = { key: `${WORK_REPO}#4305`, how: 'merged', pr: 4305, at: RAN, cwd: '/repo', repo: WORK_REPO }
 test('a merge is it live has not yet crossed off is settled by a card made since it merged', withLive, async ($, on) => {
-  world(on, { owed: [MERGED_4305], verdicts: { [`${SLATE}#4305`]: { state: 'live', at: RAN + 1 } } })
+  world(on, { owed: [MERGED_4305], verdicts: { [`${WORK_REPO}#4305`]: { state: 'live', at: RAN + 1 } } })
   await start($)
   await says($, 'Finish milestone 77')
   expect((await box($, ASKED)).deny).toBeUndefined()
 })
 
 test('a card made before the merge does not settle it', withLive, async ($, on) => {
-  world(on, { owed: [MERGED_4305], verdicts: { [`${SLATE}#4305`]: { state: 'live', at: RAN - 1 } } })
+  world(on, { owed: [MERGED_4305], verdicts: { [`${WORK_REPO}#4305`]: { state: 'live', at: RAN - 1 } } })
   await start($)
   await says($, 'Finish milestone 77')
-  expect((await box($, ASKED)).deny).toMatch(/try-pennie\/slate#4305 was merged and has no is it live card yet/)
+  expect((await box($, ASKED)).deny).toMatch(/acme-hq\/booking#4305 was merged and has no is it live card yet/)
 })
 
 // L50: is it live's record is another mod's state, read here; one not in the shape its contract
