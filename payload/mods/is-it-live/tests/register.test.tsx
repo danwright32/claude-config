@@ -1064,6 +1064,17 @@ test('a not a pull request answer never lets go of a merge GitHub confirmed, eve
   expect((await turnEnd($)).block).toContain('#412 (its repository was not read from the command)')
 })
 
+test("a not a pull request answer for another repository leaves a background merge of the session folder's PR waiting (#1943)", withKit, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
+  const w = world(on, { prView: argv => (argv.includes(OTHER) ? { exitCode: 1, stdout: '', stderr: notAPr('412') } : github(prs)(argv)) })
+  await start($)
+  w.w.bash = { text: 'Command running in background with ID: b7.', backgroundTaskId: 'b7' }
+  await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 412 --squash', { run_in_background: true })
+  expect((await card($, { ...CARD, repo: OTHER })).deny).toContain('not a pull request')
+  prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: JUST }
+  expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+})
+
 // The refusal named one pull request twice ("No is it live card yet for danwright32/claude-config#1958,
 // danwright32/claude-config#1958"): the helper run twice in the background for one pull request kept a
 // wait for each run, and both became the same merge once GitHub said it merged.
