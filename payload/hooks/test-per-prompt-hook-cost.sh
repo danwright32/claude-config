@@ -334,6 +334,55 @@ check "the kept start runs in the world the $LARGE deep start recorded in" "$s_s
 [ "${s_seed_sums:-0}" -eq 2 ] && [ "${s_kept_sums:-0}" -eq 1 ] \
   && check "a SessionStart that keeps its record takes no snapshot (1 shasum, the key, against 2 to take one)" ok \
   || check "a SessionStart that keeps its record takes no snapshot" "shasum ran ${s_kept_sums:-0} times keeping and ${s_seed_sums:-0} taking one, expected 1 and 2"
+# The same start also asks whether the project's primary checkout is behind origin on its rule files
+# (claude-config#1939, lib/project-rules-behind.sh). It runs at every session start in every project,
+# so in a checkout that is current it must cost two git processes and nothing more (one to find the
+# primary, one to read HEAD and origin together), however many files the project's CLAUDE.md
+# imports, and outside any checkout one. No fetch: a fetch would be a third git, and it is counted.
+git_starts(){ # git_starts <N imports> <current|plain> -> sets G_COUNT, git processes at one start
+  local i=0
+  fresh "gitstart$2$1"; populate rule-files-changed.sh "$SMALL"
+  if [ "$2" = current ]; then
+    rmdir "$F/proj"
+    git init -q --bare "$F/origin.git"
+    git clone -q "$F/origin.git" "$F/seed" 2>/dev/null
+    git -C "$F/seed" checkout -q -b main 2>/dev/null
+    mkdir -p "$F/seed/docs"; : > "$F/seed/CLAUDE.md"
+    while [ "$i" -lt "$1" ]; do
+      printf '@docs/r%d.md\n' "$i" >> "$F/seed/CLAUDE.md"; printf 'r\n' > "$F/seed/docs/r$i.md"
+      i=$((i + 1))
+    done
+    git -C "$F/seed" add -A
+    git -C "$F/seed" -c user.name=t -c user.email=t@e commit -q -m one
+    git -C "$F/seed" push -q origin main 2>/dev/null
+    git -C "$F/origin.git" symbolic-ref HEAD refs/heads/main
+    git clone -q "$F/origin.git" "$F/proj" 2>/dev/null
+  fi
+  run_hook SessionStart rule-files-changed.sh
+  G_COUNT="$(grep -c '^git$' "$SHIM_LOG" 2>/dev/null)"
+}
+if command -v git >/dev/null 2>&1; then
+  git_starts "$SMALL" current; g_small="${G_COUNT:-0}"; g_world="$F"
+  git_starts "$LARGE" current; g_large="${G_COUNT:-0}"
+  git_starts 0 plain; g_plain="${G_COUNT:-0}"
+  echo "  SessionStart rule-files-changed.sh, project rules: $g_small git with $SMALL imports, $g_large with $LARGE, $g_plain outside a checkout"
+  # The control: the fixture really is a current clone on its default branch, or two would be the
+  # cost of an early exit rather than of the full equality test (L102).
+  if [ "$(git -C "$g_world/proj" rev-parse HEAD 2>/dev/null)" = "$(git -C "$g_world/proj" rev-parse origin/HEAD 2>/dev/null)" ] \
+     && [ "$(git -C "$g_world/proj" rev-parse --abbrev-ref HEAD 2>/dev/null)" = main ]; then
+    check "the control: the current checkout fixture is on main at origin's commit" ok
+  else
+    check "the control: the current checkout fixture is on main at origin's commit" "it is not, so the counts below measure some other path"
+  fi
+  [ "$g_small" -eq 2 ] && [ "$g_large" -eq 2 ] \
+    && check "a session start in a current checkout starts two git processes, with $SMALL or $LARGE imports" ok \
+    || check "a session start in a current checkout starts two git processes, with $SMALL or $LARGE imports" "$g_small with $SMALL, $g_large with $LARGE"
+  [ "$g_plain" -eq 1 ] && check "a session start outside any checkout starts one git process" ok \
+    || check "a session start outside any checkout starts one git process" "it started $g_plain"
+else
+  echo "SUITE-PART-UNMEASURED what a session start costs in a git checkout: git is not installed here"
+fi
+
 # local-allow-sweep.sh also runs at SessionStart (claude-config#1582). What it reads that piles up is
 # the project's own .claude/settings.local.json, which gains a rule at every "don't ask again". With no
 # such file it must start nothing at all; with one, the same processes whether it holds 2 rules or 200,

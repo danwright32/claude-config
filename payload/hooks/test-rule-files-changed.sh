@@ -274,10 +274,14 @@ smod() { # smod <name>: a mod folder under the start fixture
 smod first-mod
 # The Claude Code process a run belongs to is SET here, through the hook's seam, rather than read
 # from this suite's own process tree: one process unless a case names another (claude-config#1684).
+# The session's folder is this run's own, outside any checkout: a start also asks whether the project
+# checkout there is behind origin on its rule files (claude-config#1939), and "." would put that
+# question to whatever repository this suite was run from, so the quiet starts below would pass or
+# fail on the state of a real checkout (L2). test-project-rules-behind.sh drives that half.
 event() { # event <session-id> <hook_event_name> [source] -> stdout of one run
-  python3 - "$1" "$2" "${3:-}" <<'PY' | CLAUDE_RULES_PROCESS="${PROC:-4242}" CLAUDE_RULES_DIR="$START" bash "$HOOK" 2>/dev/null
+  python3 - "$1" "$2" "${3:-}" "$TMPROOT" <<'PY' | CLAUDE_RULES_PROCESS="${PROC:-4242}" CLAUDE_RULES_DIR="$START" bash "$HOOK" 2>/dev/null
 import json, sys
-d = {"session_id": sys.argv[1], "cwd": ".", "hook_event_name": sys.argv[2]}
+d = {"session_id": sys.argv[1], "cwd": sys.argv[4], "hook_event_name": sys.argv[2]}
 if sys.argv[2] == "SessionStart":
     d["source"] = sys.argv[3]
 else:

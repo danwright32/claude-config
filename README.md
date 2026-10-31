@@ -450,6 +450,14 @@ budget in `hooks/test-rule-file-budget.sh` and the platform's own banner at 150,
 the single file was 100,899 characters on 2026-09-19 and growing about 1,130 a day. Splitting removed
 that deadline and lost no rule. It saved no tokens either; the core is what does that.
 
+The same suite reads every project's memory index on the Mac it runs on,
+`~/.claude/projects/<key>/memory/MEMORY.md`, which Claude Code loads into every request of a session
+in that project and which counts toward neither banner (#1939). The budget is 8,000 characters,
+shown in tokens at 2.78 characters a token. An index past it is reported by name and size in a
+SUITE-NOTE, which reaches the push report and the pull's summary; it never fails the suite, because
+those files belong to other projects and a refusal would stall the sync over them. Indexes of
+projects with no session in the last 30 days are named apart, after the ones in use.
+
 The files are generated from `LESSONS.md` on every send and every apply, never maintained beside it.
 A hand edit to one is overwritten on the next run, and a file whose section has been renamed or
 removed is deleted, which is the point: a list kept by hand next to the thing it mirrors drifts, and
@@ -3237,6 +3245,23 @@ way on 2026-10-25, where the resumed process loaded a mod that arrived after the
 (#1684). The hook tells it by its parent, Claude Code's own process, recorded beside the mods record;
 a resume in the same process, or one whose first process was not recorded, keeps the record. The interactive `/resume` picker is
 not offered in a headless session, so it is the one path not measured.
+
+The same hook says one thing at a session start (#1939): that the project's primary checkout is on
+its default branch, behind origin, and origin has changed one of its rule files since, so the session
+loaded the older copy. A session in a worktree nested inside the checkout counts, because Claude Code
+reads CLAUDE.md in every folder above the one a session starts in. The rule files are CLAUDE.md,
+`.claude/CLAUDE.md`, AGENTS.md, `.claude/rules/` and every file they import with an @path. The notice
+names each file with the characters the session loaded against the characters on origin, how far
+behind the checkout is, and how old the origin ref it compared against is, read from the ref's files,
+because the hook never fetches: a network call at every start would cost seconds on a slow link, and
+worktrees keep the shared origin ref fresh. When the branch has no commits of its own and no changes
+to tracked files (untracked and ignored files do not count), it names the one command that would
+fast forward it, `git -C '<checkout>' pull --ff-only`, and never runs it, since another session may
+be standing on that checkout. Said once per session for each answer, so a compaction or a resume is
+not told twice; a new session, which loaded the old file again, is. A current checkout costs two git
+processes and says nothing, held by `hooks/test-per-prompt-hook-cost.sh`. Bidspoke is why: its
+CLAUDE.md was cut from 36,964 to 20,423 characters on 2026-10-29, and a day later all 12 sessions
+since had loaded the old one from a primary checkout 22 commits behind.
 
 ### status says when this Mac's mods are older than the shared repo's (#1535)
 
