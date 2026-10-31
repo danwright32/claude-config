@@ -382,7 +382,7 @@ echo "lesson entry check: a byte that is not UTF-8 does not make it go quiet (cl
 
 # jq reads such a byte as U+FFFD, and python3 reading its stdin in text mode raised on it: the
 # written file came back empty and the hook exited 0, the same quiet as a lesson with nothing wrong.
-bad_byte_measured python "#1900 lesson-entry-check reading a byte that is not UTF-8" || true
+bad_byte_measured python-stdin "#1900 lesson-entry-check reading a byte that is not UTF-8" || true
 printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- L2. an entry with the bold left off.\n' > "$HOME_FIX/LESSONS.md"
 out="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s","old_string":"a\xffb","new_string":"c"}}' "$HOME_FIX/LESSONS.md" \
   | LC_ALL="$BAD_BYTE_LOCALE" CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"

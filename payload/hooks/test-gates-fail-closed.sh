@@ -245,7 +245,7 @@ echo "every python3 reader of stdin reads what jq reads (claude-config#1900)"
 
 # Measured first, so a red below is about the hooks and not this machine: python3 reading its stdin
 # in text mode under a UTF-8 locale raises on a byte that is not UTF-8.
-bad_byte_measured python "#1900 python3 text mode stdin on a byte that is not UTF-8" && ok
+bad_byte_measured python-stdin "#1900 python3 text mode stdin on a byte that is not UTF-8" && ok
 # And the form every reader uses reads it.
 if [ "$(printf 'a\xffb' | LC_ALL="$BAD_BYTE_LOCALE" python3 -c 'import sys; print(len(sys.stdin.buffer.read().decode("utf-8", "replace")))')" = "3" ]; then ok
 else bad "sys.stdin.buffer.read().decode(\"utf-8\", \"replace\") did not read a byte that is not UTF-8 as one character"; fi

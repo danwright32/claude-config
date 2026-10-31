@@ -51,11 +51,17 @@ const isPipe = (word: string) => /^[<>]\(/.test(word)
 // write names its file (#743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` was given as $F,
 // with no path, and ask before saving let it through). The word is still given as written. Only a
 // value the reader can be sure of: one holding a command's output or anything else it cannot name;
-// one a loop, read, mapfile, getopts or printf -v sets, appended to or unset; one given a second,
+// one a loop other than a for over plain words (below), read, mapfile, getopts or printf -v sets,
+// appended to or unset; one given a second,
 // different value (the reader cannot tell a ; from an && or ||, so which stands is unknown); and
 // every value once an eval or a sourced file may have changed it, is left as written. A value set
 // inside a subshell ends with it. An unquoted value is split into words where the shell running the
 // command splits it (#1834: bash, sh, dash and ksh do, zsh does not), and a quoted one is kept whole.
+// A for loop over plain words (#1953) gives its variable each of them: a word naming it is read once
+// for each, as that many words, a word holding a space read whole and as each piece (eachOf). A loop
+// over anything else (a pattern, an expansion, a ~ or a #), or a variable also set some other way, is
+// left as written. A word whose every $
+// is in single quotes or after a backslash (Command.unexpanded) is never read as a value.
 const SETS = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/
 const APPENDS = /^([A-Za-z_][A-Za-z0-9_]*)\+=/
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -65,6 +71,12 @@ const READS = new Set(['read', 'mapfile', 'readarray', 'getopts', 'unset'])
 const LOOPS = new Set(['for', 'select'])
 const RUNS_TEXT = new Set(['eval', 'source', '.'])
 type Vars = Map<string, string | null>
+// A loop word the reader follows: nothing the shell expands or matches against files. One holding a
+// space (an issue's title, quoted) is followed too, read whole and as each piece a shell splitting
+// the variable's value would make (eachOf).
+const PLAIN_WORD = /^[^*?[\]{}()~^#$`\\]+$/
+// The most words a loop, or several loops in one word, may give a word before it is left as written.
+const MAX_EACH = 1024
 
 /**
  * A word as an absolute path, or undefined when it cannot be named: built from a variable other
@@ -575,6 +587,9 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   const seen = new Set<string>()
   let dir: string | undefined = cwd
   let vars: Vars = new Map()
+  // Each variable a for loop over plain words sets, with its words (#1953); a name here is in no
+  // vars entry.
+  let each = new Map<string, string[]>()
   // Each word of the command being read that a variable's value replaced, as it was written. Matched
   // by string, so a literal word equal to a variable's value in the same command is given as the
   // variable: the side that makes a reader ask rather than pass, the path the same either way. A
@@ -665,11 +680,42 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     if (begun) out.push(word)
     return out
   }
-  const unknown = (name: string) => vars.set(name, null)
+  const unknown = (name: string) => {
+    each.delete(name)
+    vars.set(name, null)
+  }
+  // A word read once for each word of every loop variable in it (#1953), or as it is past MAX_EACH.
+  // A value holding a space is read whole, as a quoted use hands it on, and as each piece a shell
+  // splitting it would make, with and without the text around it: more readings than the shell
+  // makes, never fewer. Such a variable named twice in one word leaves the word as written.
+  const eachOf = (w: string): string[] => {
+    let out = [w]
+    for (const m of w.matchAll(VARIABLE)) {
+      const values = each.get((m[1] ?? m[2]) as string)
+      if (!values) continue
+      const at = new RegExp(`${m[0].replace(/[$}{]/g, '\\$&')}${m[1] === undefined ? '(?![A-Za-z0-9_])' : ''}`, 'g')
+      const next: string[] = []
+      for (const o of out)
+        for (const v of values) {
+          next.push(o.replace(at, () => v))
+          if (!/\s/.test(v)) continue
+          const found = [...o.matchAll(at)]
+          if (found.length !== 1) return [w]
+          const head = o.slice(0, found[0]?.index ?? 0)
+          const tail = o.slice((found[0]?.index ?? 0) + m[0].length)
+          for (const piece of v.split(/\s+/).filter(Boolean)) next.push(head + piece + tail, piece, head + piece, piece + tail)
+        }
+      if (next.length > MAX_EACH) return [w]
+      out = [...new Set(next)]
+    }
+    return out
+  }
   const assign = (word: string) => {
     const m = SETS.exec(word)
     if (!m) return
     const name = m[1] as string
+    // A loop's variable given a value as well: which stands is unknown.
+    if (each.has(name)) return unknown(name)
     // Home is spelled out where a value starts with it, as the shell expands ~ in an assignment.
     let value = expand(m[2] as string)
     if (home) value = value.replace(HOME_VAR, home).replace(/^~(?=\/|$)/, home)
@@ -681,16 +727,19 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   // folder as it is. The variables outside it are kept the same way.
   const outside: (string | undefined)[] = []
   const varsOutside: Vars[] = []
+  const eachOutside: Map<string, string[]>[] = []
   for (const c of cmds) {
     const written = c.words
     if (written.length === 1 && written[0] === '(') {
       outside.push(dir)
       varsOutside.push(new Map(vars))
+      eachOutside.push(new Map(each))
       continue
     }
     if (written[0] === ')') {
       if (outside.length) dir = outside.pop()
       if (varsOutside.length) vars = varsOutside.pop() as Vars
+      if (eachOutside.length) each = eachOutside.pop() as Map<string, string[]>
     }
     if (written.length && written.every(w => SETS.test(w))) {
       written.forEach(assign)
@@ -708,15 +757,28 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // every other word, by its text: one spelled both ways in the command is read as matched.
     const quotedWords = new Set<string>()
     const otherWords = new Set<string>()
+    // The words whose every $ is in single quotes or after a backslash (#1953), by their text, and
+    // every other word: one spelled both ways is read as expanded.
+    const textWords = new Set<string>()
+    const liveWords = new Set<string>()
+    const textOnly = (w: string) => textWords.has(w) && !liveWords.has(w)
     written.forEach((w, n) => {
       const prior = written[n - 1] ?? ''
       const target = WRITE_REDIRECT.test(prior) || /^\d*>&$/.test(prior)
-      for (const part of target ? [expand(w)] : fields(w, c.splits?.[n])) {
-        raw.push(part)
-        from.push(n)
-        if (part !== w) asWritten.set(part, w)
-        ;(c.literal?.[n] === true && part === w ? quotedWords : otherWords).add(part)
-      }
+      const asText = c.unexpanded?.[n] === true
+      for (const read of asText ? [w] : target ? [expand(w)] : fields(w, c.splits?.[n]))
+        for (const [k, part] of (asText ? [read] : eachOf(read)).entries()) {
+          // A redirect's target a loop gives several words is a write of each: its operator again.
+          if (target && k > 0) {
+            raw.push(prior)
+            from.push(n - 1)
+          }
+          raw.push(part)
+          from.push(n)
+          if (part !== w) asWritten.set(part, w)
+          ;(c.literal?.[n] === true && part === w ? quotedWords : otherWords).add(part)
+          ;(asText ? textWords : liveWords).add(part)
+        }
     })
     const quotedOnly = (w: string) => quotedWords.has(w) && !otherWords.has(w)
     // Output redirects first, and taken out of the words, with descriptor copies (2>&1). A `>&`
@@ -760,10 +822,19 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
       continue
     }
     if (LOOPS.has(name)) {
-      if (rest[0] !== undefined) unknown(rest[0])
+      const v = rest[0]
+      const words = rest.slice(2)
+      // `for v in a b c` over plain words, the variable set no other way (#1953): each word, joined
+      // to those of another such loop over it. Anything else leaves it unknown.
+      if (v !== undefined && name === 'for' && NAME.test(v) && rest[1] === 'in' && words.length && words.every(x => PLAIN_WORD.test(x)) && !vars.has(v)) {
+        const all = [...new Set([...(each.get(v) ?? []), ...words])]
+        if (all.length <= MAX_EACH) each.set(v, all)
+        else unknown(v)
+      } else if (v !== undefined) unknown(v)
       continue
     }
-    if (RUNS_TEXT.has(name)) for (const k of vars.keys()) unknown(k)
+    // Text run by eval or source may set any variable, a loop's included (lessons review of #1968).
+    if (RUNS_TEXT.has(name)) for (const k of [...vars.keys(), ...each.keys()]) unknown(k)
     const v = name === 'printf' ? rest.indexOf('-v') : -1
     if (v >= 0 && rest[v + 1] !== undefined) unknown(rest[v + 1] as string)
     // Whether this command changes files given as operands, for one xargs runs.
@@ -876,7 +947,13 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
       words.map(w => {
         const p = abs(w)
         const folder = p ? undefined : patternFolder(w, dir, home)
-        return { word: asWritten.get(w) ?? w, ...(p ? { path: p } : {}), ...(folder ? { folder } : {}), ...(folder && quotedOnly(w) ? { quoted: true as const } : {}) }
+        return {
+          word: asWritten.get(w) ?? w,
+          ...(p ? { path: p } : {}),
+          ...(folder ? { folder } : {}),
+          ...(folder && quotedOnly(w) ? { quoted: true as const } : {}),
+          ...(textOnly(w) ? { unexpanded: true as const } : {}),
+        }
       })
     if (scriptFile) {
       const at = kind === undefined ? 0 : args.indexOf(scriptFile, 1)
