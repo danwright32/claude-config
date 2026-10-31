@@ -4202,10 +4202,33 @@ check "push carries a newly referenced rules file"  "[ -f '$DVR/payload/EXTRA.md
 check "push follows a reference two hops deep"      "[ -f '$DVR/payload/DEEP.md' ]"
 # and they must arrive on the other Mac
 DVH2="$WORK/dv-home2"; mkdir -p "$DVH2"; echo '{"hooks":{}}' > "$DVH2/settings.json"
-if out_dv="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DVH2" SYNC_REPO="$DVR" bash "$SCRIPT" pull 2>&1)"; then rc_dv=0; else rc_dv=$?; fi
+rc_dv=0
+out_dv="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$DVH2" SYNC_REPO="$DVR" bash "$SCRIPT" pull 2>&1)" || rc_dv=$?
 check "pull delivers the referenced rules file"     "[ -f '$DVH2/EXTRA.md' ]"
 check "pull delivers the two-hop rules file"        "[ -f '$DVH2/DEEP.md' ]"
 check "the pull succeeds (no dangling reference)"   "[ \"\$rc_dv\" -eq 0 ]"
+# When it does not, what the pull said is the diagnosis, so it is printed (L177). The one failure
+# of these two checks under load (claude-config#1974) kept only the two FAIL lines, and the cause
+# had to be found again from nothing.
+[ "$rc_dv" -eq 0 ] || printf '%s\n' "$out_dv" | sed 's/^/    the pull said: /'
+# WHY THEY FAILED (claude-config#1974). top_files_in read each rule file's imports through process
+# substitution, which starts a child the shell never waits for, then printed the list it built. In
+# bash 3.2, which runs this on a Mac, that child can finish while the printf is still writing, and
+# its SIGCHLD interrupts the write: printf reports "write error: Interrupted system call" and the
+# rest of the list is gone. The tail is what goes, and the tail is the deepest import, so the apply
+# never copied DEEP.md and the dangling reference check then failed the pull. It needs a loaded Mac
+# to happen (a probe of the same shape lost its tail once in 30,000 calls at a load of 268), so the
+# guard is on the shape: each function that derives the rule file set prints its answer, and starts
+# nothing it does not wait for. lesson_index_imports_in printed from inside a loop reading process
+# substitution, the same fault, and is held to the same shape.
+_tf_async='<\(|[^&<>]&[[:space:]]*($|;|#)'
+for _tf_fn in top_files_in imports_in_file lesson_index_files_present lesson_index_imports_in; do
+  _tf_body="$(awk -v f="$_tf_fn" '$0 ~ "^" f "\\(\\)\\{" {on=1} on {print} on && /^}/ {exit}' "$SCRIPT")"
+  check "#1974 $_tf_fn's source was found (else the check below proves nothing)" \
+    "grep -q '^$_tf_fn(){' <<< \"\$_tf_body\" && grep -q 'printf' <<< \"\$_tf_body\""
+  check "#1974 $_tf_fn starts no process it does not wait for (no process substitution, no &)" \
+    "! grep -v '^[[:space:]]*#' <<< \"\$_tf_body\" | grep -q -E \"\$_tf_async\""
+done
 check "the still-listed defaults are unaffected"    "[ -f '$DVH2/CLAUDE.md' ]"
 # status must describe the derived set too, not just the old hard-coded names
 printf '# root rules CHANGED\n@EXTRA.md\n' > "$DVH/CLAUDE.md"
