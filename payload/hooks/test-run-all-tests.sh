@@ -2410,8 +2410,8 @@ rm -f "$LS/suites"/test-macstore*.sh "$RH/.zshrc" "$RH/.claude-sync-watch.pid" "
 #
 # On 2026-10-30 two checks in this file failed once: the fixture runs inside them reported
 # live-store-pollution for ~/.claude/settings.json. Measured afterwards, the change was the line
-# "outputStyle": "Explanatory" appended at 18:41 ET, which claude-sync never writes (most likely
-# Claude Code saving a picked output style). The fixture run read the real clone register
+# "outputStyle": "Explanatory" appended at 18:41 ET, which claude-sync did not write then (a hand
+# edit; the sync has shared it since #1962). The fixture run read the real clone register
 # (nothing here points CLAUDE_HOME elsewhere), so no sync record could ever have explained it, and
 # none was written in its window. Its suites were fixtures that cannot touch that file, so the only
 # change its bracket could see was somebody else's, while the run it was started under bracketed the
