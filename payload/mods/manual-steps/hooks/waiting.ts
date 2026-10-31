@@ -122,9 +122,17 @@ const CMD_S = /(?:\b[Pp]ress(?:ing)?\s+|\b[Ww]ith\s+|\()(?:\*\*)?(?:(?:Cmd|Comma
 // "I saved it with Cmd+S"), or of a later, conditional press ("when you press Cmd+S"): no step now.
 const NOT_DANS = /(?:\b(?:I|I've|I'd|I'm|We|we|We've|we've)\b|(?<!\byou )\b(?:will|would|should)\b|(?<!\byou)'ll\b)/
 const LATER = /\b(?:before|when|whenever|if|until|after|once|in case)\s+(?:you\s+)?$/i
+// A sentence ends at a full stop, question or exclamation mark followed by white space, or at a line
+// break: never at the dot inside "config.json" or "v2.1", which cut "I saved config.json with Cmd+S"
+// down to "json with Cmd+S" and lost the "I" (lessons review of #1965 at 60730eb).
+const sentenceStart = (before: string): number => {
+  let start = 0
+  for (const m of before.matchAll(/[.!?](?=\s)|\n/g)) start = m.index + 1
+  return start
+}
 const dansNow = (plain: string, at: number): boolean => {
   const before = plain.slice(0, at)
-  const sentence = before.slice(before.search(/[^.!?\n]*$/))
+  const sentence = before.slice(sentenceStart(before))
   return !quotedOnLine(before) && !NOT_DANS.test(sentence) && !LATER.test(sentence)
 }
 

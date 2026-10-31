@@ -281,6 +281,10 @@ describe('a file edit handed to Dan, closed by asking to be told (#1955)', () =>
       'I edited config.json and saved it; the tests pass.',
       'I pressed Cmd+S in the editor and the file saved.',
       "I've saved the file with Cmd+S and rerun the scan.",
+      // A dot inside a file name or a version is no sentence end (lessons review of #1965 at 60730eb).
+      'I saved config.json with Cmd+S and the hook reloaded.',
+      'We moved to v2.1 and pressed Cmd+S on each file.',
+      'I wrote settings.local.json, then tell me was dropped from the draft.',
       'The app now saves the draft when you press Cmd+S.',
       'If you press Cmd+S twice, the second save is skipped.',
       'The watcher will wait for CI, then tell me when it merges.',
