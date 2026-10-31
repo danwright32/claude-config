@@ -159,6 +159,11 @@ m3="$(msg "$(PROJECT_RULES_NOW="$now" start s-behind-3 "$W/primary")")"
 case "$m3" in *"3 hours ago"*) check "the age of the origin ref is read from its files, against the clock given" ok ;;
   *) check "the age of the origin ref is read from its files, against the clock given" "said: $m3" ;; esac
 
+# A reading of the counts that fails still names the file, and says what it could not read (L11).
+m4="$(msg "$(PROJECT_RULES_PYTHON=false start s-behind-4 "$W/primary")")"
+case "$m4" in *"CLAUDE.md (the character counts could not be read here)"*) check "a failed count reading still names the stale file and says the counts were not read" ok ;;
+  *) check "a failed count reading still names the stale file and says the counts were not read" "said: $m4" ;; esac
+
 # ---------------------------------------------------------------------------
 # 3. Behind, but only on code: the rule files are what the session would load anyway. Nothing.
 # ---------------------------------------------------------------------------

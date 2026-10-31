@@ -41,10 +41,17 @@
 #       sets PRB_TEXT (for the person) and PRB_CONTEXT (for the session) when the checkout is behind
 #       on a rule file, and leaves both empty otherwise. Always returns 0.
 #
-# Env: PROJECT_RULES_NOW, the clock in epoch seconds, for a test to render the age deterministically.
+# Env: PROJECT_RULES_NOW, the clock in epoch seconds, for a test to render the age deterministically;
+#      PROJECT_RULES_PYTHON, the interpreter that reads the counts (default python3), for a test to
+#      make that reading fail.
 
 PRB_TEXT=""
 PRB_CONTEXT=""
+
+# The shared number check, from beside this file whoever sources it.
+case "${BASH_SOURCE[0]}" in */*) _prb_dir="${BASH_SOURCE[0]%/*}" ;; *) _prb_dir=. ;; esac
+# shellcheck source=whole-number.sh
+. "$_prb_dir/whole-number.sh" 2>/dev/null || true
 
 project_rules_behind() {
   PRB_TEXT=""; PRB_CONTEXT=""
@@ -81,8 +88,10 @@ project_rules_behind() {
   # Past here the checkout is on its default branch and not at origin's commit.
   counts="$(git -C "$primary" rev-list --left-right --count "HEAD...$origin_ref" 2>/dev/null)" || return 0
   read -r ahead behind <<< "$counts"
-  case "$behind" in ''|0|*[!0-9]*) return 0 ;; esac
-  case "$ahead" in ''|*[!0-9]*) ahead=0 ;; esac
+  # Read through the one whole number check (lib/whole-number.sh, claude-config#1948). Missing, it
+  # answers 127, read as not behind, so the start says nothing rather than something unmeasured.
+  whole_above_zero "$behind" behind 2>/dev/null || return 0
+  whole_above_zero "$ahead" ahead 2>/dev/null || ahead=0
 
   # 3. Which rule files origin changed since this checkout's commit.
   local files=() changed
@@ -92,7 +101,7 @@ project_rules_behind() {
 
   # 4. The counts and the age, in one python3, which reads origin's copies through one git.
   local detail
-  detail="$(printf '%s\n' "$changed" | PRB_NOW="${PROJECT_RULES_NOW:-}" python3 -c '
+  detail="$(printf '%s\n' "$changed" | PRB_NOW="${PROJECT_RULES_NOW:-}" "${PROJECT_RULES_PYTHON:-python3}" -c '
 import os, subprocess, sys, time
 primary, common, ref, label = sys.argv[1:5]
 paths = [p for p in sys.stdin.buffer.read().decode("utf-8", "replace").splitlines() if p]
@@ -141,11 +150,17 @@ else:
             print("%d %s%s ago" % (n, unit, "" if n == 1 else "s")); break
     else:
         print("under a minute ago")
-' "$primary" "$common" "$origin_ref" "origin/$branch" 2>/dev/null)" || return 0
+' "$primary" "$common" "$origin_ref" "origin/$branch" 2>/dev/null)" || detail=""
   local named age
   named="$(printf '%s\n' "$detail" | sed -n 1p)"
   age="$(printf '%s\n' "$detail" | sed -n 2p)"
-  [ -n "$named" ] || return 0
+  # By here the files are known to differ, so a reading that failed (no python3, an unreadable
+  # object) still names them, and says the sizes and the age were not read rather than going quiet
+  # about a stale checkout (L11).
+  if [ -z "$named" ]; then
+    named="$(printf '%s\n' "$changed" | tr '\n' ',' | sed 's/,$//; s/,/, /g') (the character counts could not be read here)"
+    age="at a time that could not be read"
+  fi
 
   local s_behind="commits" s_ahead="commits" offer
   [ "$behind" = 1 ] && s_behind="commit"
