@@ -139,7 +139,12 @@ fi
 
 # Not a git checkout, or nothing tracked under it yet: a bounded walk instead.
 cap="${PLAN_COUNCIL_SCAN_FILE_CAP:-5000}"
-case "$cap" in ''|*[!0-9]*|0) cap=5000 ;; esac
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948), from the hooks
+# installed beside the skills. Missing, the shell names the missing function and the default is used.
+_us_here="${BASH_SOURCE[0]%/*}"; [ "$_us_here" != "${BASH_SOURCE[0]}" ] || _us_here=.
+# shellcheck source=../../hooks/lib/whole-number.sh
+. "$_us_here/../../hooks/lib/whole-number.sh" 2>/dev/null
+whole_above_zero "$cap" cap || cap=5000
 prune=()
 for d in $SKIP_DIRS .git; do prune+=(-name "$d" -o); done
 skipf=()

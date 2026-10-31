@@ -46,6 +46,17 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   echo "BLOCKED: linux-sections-before-push.sh could not load $HOOK_DIR/lib/push-scope.sh, which reads whether this command pushes and what it carries, so this command could not be checked. A library this gate cannot load is not a push with nothing to check. Reinstall the hooks with claude-sync pull. For this one command: SKIP_LINUX_CHECK=1 <the same command>" >&2
   exit 2
 }
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948), which reads
+# the Linux run's budget. Missing, the same as above: a push is refused, naming the file, and any
+# other command passes.
+# shellcheck source=lib/whole-number.sh
+{ . "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null && declare -F whole_above_zero >/dev/null; } || {
+  payload="$(ps_read_payload)"
+  case "$payload" in *SKIP_LINUX_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *push*) ;; *) exit 0 ;; esac
+  echo "BLOCKED: linux-sections-before-push.sh could not load $HOOK_DIR/lib/whole-number.sh, which reads the Linux run's budget, so this command could not be checked. Reinstall the hooks with claude-sync pull. For this one command: SKIP_LINUX_CHECK=1 <the same command>" >&2
+  exit 2
+}
 
 payload="$(ps_read_payload)"
 parsed="$(ps_parse_payload "$payload" segmented)" \
@@ -349,11 +360,10 @@ _ls_record(){        # $1 = judged | stood-down  -> prints "<judged> of the <tot
 # the gate stands down rather than run it.
 _ls_budget_default=240
 _ls_budget="${LINUX_SECTIONS_BUDGET_SECONDS:-$_ls_budget_default}"
-# Zero written any way (00, 000) is zero, so leading zeros are cut first (claude-config#1931): only a
-# literal 0 fell back, and "00" ran the audit with no bound at all, since perl's alarm reads it as 0.
-case "$_ls_budget" in ''|*[!0-9]*) _ls_budget=$_ls_budget_default ;; esac
-_ls_budget="${_ls_budget#"${_ls_budget%%[!0]*}"}"
-[ -n "$_ls_budget" ] || _ls_budget=$_ls_budget_default
+# Zero written any way (00, 000) is zero (claude-config#1931): only a literal 0 fell back, and "00"
+# ran the audit with no bound at all, since perl's alarm reads it as 0. Which values are zero is
+# lib/whole-number.sh's answer (claude-config#1948), loaded at the top.
+whole_above_zero "$_ls_budget" _ls_budget || _ls_budget=$_ls_budget_default
 _ls_docker="${SYNC_DOCKER:-docker}"
 _ls_container="claude-linux-sections-$$-$(date +%s)"
 # A notice a person sees on a push the gate lets through: Claude Code discards a PreToolUse hook's
@@ -411,6 +421,27 @@ if [ "$rc" -eq 4 ]; then
   } >&2
   exit 2
 fi
+# Any exit other than 0, 1, 2, 4 and 124 is one this gate does not recognise (claude-config#1947):
+# the 125 lib/bounded-run.sh returns for a budget it refuses, a run killed by a signal, an audit that
+# crashed. None of them judged anything, and the gate used to let the push through in silence, since
+# the output says neither UNMEASURED nor that sections passed. It still lets the push through, since
+# the question was not answered here, and says so with the exit code.
+case "$rc" in
+  0|1|2) ;;
+  *)
+    _ls_seen="$(_ls_record stood-down 2>/dev/null || true)"
+    _ls_say "$({
+      echo "linux-sections-before-push: the Linux run ended with exit code $rc, which this gate does not recognise, so nothing in this push was judged on Linux. That is UNMEASURED, not a pass."
+      [ -n "$out" ] && printf '%s\n' "$out"
+      if [ -n "$_ls_seen" ]; then
+        echo "Linux has judged $_ls_seen push(es) here that had a section to check."
+      else
+        echo "(How often that has happened could not be recorded, so this is the only place it is said.)"
+      fi
+      echo "CI will still ask the question. To ask it here, run the changed sections yourself: AUDIT_ON_LINUX=1 bash tests/audit-changed-sections.sh $base"
+    })"
+    exit 0 ;;
+esac
 if [ "$rc" -ne 1 ]; then
   case "$out" in
     *UNMEASURED*)

@@ -75,11 +75,15 @@ fi
 is "the core count can be set" "8" "$(LOAD_AVERAGE_CORES=8 load_average_cores)"
 is "a core count that is not a whole number reads as nothing" "" "$(LOAD_AVERAGE_CORES=eight load_average_cores)"
 is "a core count of zero reads as nothing, since nothing can be judged against it" "" "$(LOAD_AVERAGE_CORES=0 load_average_cores)"
+# 00 is zero too (claude-config#1948): only a literal 0 was refused, so 00 passed as a count.
+is "a core count of 00 is zero, and reads as nothing" "" "$(LOAD_AVERAGE_CORES=00 load_average_cores)"
+if load_average_busy 3 00; then check "and a load judged against 00 cores is not busy" "it said busy"; else check "and a load judged against 00 cores is not busy" ok; fi
 real_cores="$(load_average_cores)"
-case "$real_cores" in
-  ''|*[!0-9]*|0) check "this machine's own core count is a whole number above zero" "got [$real_cores]" ;;
-  *) check "this machine's own core count is a whole number above zero" ok ;;
-esac
+if whole_above_zero "$real_cores" real_cores; then
+  check "this machine's own core count is a whole number above zero" ok
+else
+  check "this machine's own core count is a whole number above zero" "got [$real_cores]"
+fi
 
 # ---- the sentence ----
 busy="more than this machine has cores"

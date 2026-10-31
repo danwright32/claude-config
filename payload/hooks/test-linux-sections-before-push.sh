@@ -197,6 +197,31 @@ run "$R3" 'git push'; o3="$OUT"
 [ "$RC" -eq 0 ] && check "an audit that could not answer does not block the push" ok \
                 || check "an audit that could not answer does not block the push" "rc=$RC out=$o3"
 
+# --- AN EXIT THE GATE DOES NOT RECOGNISE (claude-config#1947). Only 0, 1, 2, 4 and 124 mean
+#     something here. Anything else, such as the 125 lib/bounded-run.sh returns for a budget it
+#     refuses, or a run killed by a signal, judged nothing, and the gate let the push through in
+#     silence. It still lets the push through, and says UNMEASURED with the exit code where a person
+#     sees it, and counts it as a push Linux did not judge.
+for _odd in 125 3 137; do
+  _r="$(mkrepo "odd-$_odd" "$_odd")"
+  LINUX_SECTIONS_STATE_DIR="$TMPROOT/linux-state-odd-$_odd" run "$_r" 'git push'; _o="$OUT"
+  [ "$RC" -eq 0 ] && check "#1947 a Linux run ending $_odd does not block the push" ok \
+                  || check "#1947 a Linux run ending $_odd does not block the push" "rc=$RC out=$_o"
+  _smo="$(printf '%s\n' "$_o" | awk '/^\{/' | python3 -c 'import json, sys
+for l in sys.stdin:
+    print(json.loads(l).get("systemMessage", ""))' 2>/dev/null)"
+  case "$_smo" in *UNMEASURED*"exit code $_odd"*|*"exit code $_odd"*UNMEASURED*) check "#1947 and a run ending $_odd is said as UNMEASURED with its exit code, as a systemMessage" ok ;;
+    *) check "#1947 and a run ending $_odd is said as UNMEASURED with its exit code, as a systemMessage" "systemMessage=${_smo:-none} out=$_o" ;; esac
+  case "$_smo" in *'LISTED alpha'*) check "#1947 and carries what the run printed for $_odd" ok ;;
+    *) check "#1947 and carries what the run printed for $_odd" "systemMessage=${_smo:-none}" ;; esac
+  grep -q 'stood-down' "$TMPROOT/linux-state-odd-$_odd"/* 2>/dev/null \
+    && check "#1947 and the record counts a run ending $_odd as a push Linux did not judge" ok \
+    || check "#1947 and the record counts a run ending $_odd as a push Linux did not judge" "$(cat "$TMPROOT/linux-state-odd-$_odd"/* 2>/dev/null)"
+done
+# The control on the loop above: the recognised 0 and 2 are not reported as an unexpected exit.
+case "$o2$o3" in *'exit code'*) check "#1947 and an exit the gate does recognise is not called unexpected" "out=$o2$o3" ;;
+  *) check "#1947 and an exit the gate does recognise is not called unexpected" ok ;; esac
+
 # A repository this does not apply to: no runner, so nothing to run and nothing to say.
 R4="$(mkrepo norunner 1)"; rm -f "$R4/tests/run-on-linux.sh"
 run "$R4" 'git push'; o4="$OUT"
