@@ -5481,7 +5481,8 @@ shared_settings_wanted(){
   # Each value must be one Claude Code reads one way only (review of #775): ultracode a boolean, since
   # "yes" or null may be read either way, and an effort one of the four levels it saves. max lasts a
   # session and is never saved, and a model named by an alias sits under the full name Claude Code
-  # reads first, so either would land and change nothing.
+  # reads first, so either would land and change nothing. outputStyle is one of the built in styles,
+  # since a custom one is a file the sync does not carry.
   bad="$(jq -r '
     def level: . == "low" or . == "medium" or . == "high" or . == "xhigh";
     [ (if has("ultracode") and (.ultracode | type) != "boolean" then "ultracode is not a boolean (true or false)" else empty end),
