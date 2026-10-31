@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
-import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, proofOf, refusalOf } from './merges.ts'
+import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
@@ -170,7 +170,7 @@ const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, h
     let o: IsItLiveOwed | undefined
     if (p.kind === 'merged') {
       const repo = await repoOfLink($, p.url, named)
-      o = { key: repo ? `${fold(repo)}#${p.pr}` : `#${p.pr}@${at}`, how: 'merged', pr: p.pr, at, cwd, ...(repo ? { repo } : {}) }
+      o = { key: repo ? `${fold(repo)}#${p.pr}` : `#${p.pr}@${at}`, how: 'merged', pr: p.pr, at: owedFrom(at, p), cwd, ...(repo ? { repo } : {}) }
     } else if (m.pr === undefined || p.kind === 'closed' || p.kind === 'not a pr' || (p.kind === 'open' && !how.background)) {
       // Merged nothing (refused, still open, closed, or the number is an issue's, #1943), or names
       // no number to hold it by.
@@ -221,7 +221,7 @@ const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
       if (p.kind === 'closed' || p.kind === 'not a pr') continue
       if (p.kind === 'merged') {
         const repo = await repoOfLink($, p.url, o.named)
-        x = { key: repo ? `${fold(repo)}#${p.pr}` : `#${p.pr}@${o.at}`, how: 'merged', pr: p.pr, at: o.at, cwd: o.cwd, ...(repo ? { repo } : {}) }
+        x = { key: repo ? `${fold(repo)}#${p.pr}` : `#${p.pr}@${o.at}`, how: 'merged', pr: p.pr, at: owedFrom(o.at, p), cwd: o.cwd, ...(repo ? { repo } : {}) }
       }
     }
     if (kept.some(k => k.key === (x as IsItLiveOwed).key)) continue

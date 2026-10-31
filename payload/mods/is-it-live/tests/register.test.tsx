@@ -1087,6 +1087,26 @@ test('one pull request merged through more than one run is named once in the ref
   expect((await turnEnd($)).block).toBeUndefined()
 })
 
+test('a card made after the first run that merged a pull request settles it, however many runs merged it after (#1943)', withKit, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'MERGED', mergedAt: T0 + 30_000 } }
+  const w = world(on, { prView: github(prs) })
+  await start($)
+  w.w.bash = { text: 'Command running in background with ID: b7.', backgroundTaskId: 'b7' }
+  await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 412 --squash', { run_in_background: true })
+  // The helper reports the merge and Claude makes the card, with no turn end between.
+  await w.clock.advance(60_000)
+  expect((await card($, CARD)).deny).toBeUndefined()
+  // Run again in the foreground, it finds the pull request merged: the same merge, already carded.
+  await w.clock.advance(60_000)
+  w.w.bash = { text: '' }
+  await bash($, 'gh pr merge 412 --squash')
+  expect((await turnEnd($)).block).toBeUndefined()
+  // And once more after a turn end has settled it.
+  await w.clock.advance(60_000)
+  await bash($, 'gh pr merge 412 --squash')
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
 test('GitHub naming an older merge under that number is not taken for this one, and a card that finds it unmerged clears it (#1244)', withKit, async ($, on) => {
   const w = world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: T0 - 86_400_000 } }) })
   await start($)

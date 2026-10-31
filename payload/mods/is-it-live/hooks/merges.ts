@@ -49,7 +49,7 @@ export const WAIT_MS = 24 * 60 * 60_000
  * before the command ran is not proven to be the one it merged: the same number in another
  * repository, asked in the wrong folder, would read as merged too (L237).
  */
-export type Proof = { kind: 'merged'; pr: number; url: string } | { kind: 'open' } | { kind: 'closed' } | { kind: 'not a pr' } | { kind: 'unproven'; why: string }
+export type Proof = { kind: 'merged'; pr: number; url: string; at: number } | { kind: 'open' } | { kind: 'closed' } | { kind: 'not a pr' } | { kind: 'unproven'; why: string }
 
 /**
  * Whether GitHub's refusal says the number is no pull request in the repository asked (an issue, or
@@ -72,8 +72,16 @@ export const proofOf = (stdout: string, since: number): Proof => {
   const at = typeof v.mergedAt === 'string' ? Date.parse(v.mergedAt) : NaN
   if (Number.isNaN(at)) return { kind: 'unproven', why: 'GitHub gave no time for the merge' }
   if (at < since - SKEW_MS) return { kind: 'unproven', why: `the #${v.number} GitHub found from this folder merged at ${v.mergedAt}, before this command ran, so it may be another repository's` }
-  return { kind: 'merged', pr: v.number, url: v.url }
+  return { kind: 'merged', pr: v.number, url: v.url, at }
 }
+
+/**
+ * From when a card settles a merge GitHub confirmed: the command's time, or GitHub's time for the
+ * merge where that is earlier (#1943). A pull request merges once, so a card made since it merged is
+ * its card, and a later run that finds it already merged (the helper run again, or in the foreground
+ * after the background) owes no second one.
+ */
+export const owedFrom = (commandAt: number, p: { at: number }): number => Math.min(commandAt, p.at)
 
 /** How an owed merge is named: its repository and number, or the number alone, said. */
 export const nameOf = (o: Pick<IsItLiveOwed, 'repo' | 'pr'>) => (o.repo ? `${o.repo}#${o.pr}` : `#${o.pr} (its repository was not read from the command)`)
