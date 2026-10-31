@@ -103,7 +103,9 @@ probe_nb="$(printf 'probe.sh\n' | python3 "$SCAN" --root "$TMPROOT" | grep -c ':
 
 # A file that cannot be read is reported, never passed as clean (L98).
 missing="$(printf 'no-such-file.sh\n' | python3 "$SCAN" --root "$TMPROOT")"; missing_rc=$?
-[ "$missing_rc" = 1 ] && printf '%s' "$missing" | grep -q 'could not be read' \
+missing_named=0
+case "$missing" in *'could not be read'*) missing_named=1 ;; esac
+[ "$missing_rc" = 1 ] && [ "$missing_named" = 1 ] \
   && check "#1984 a file the scan cannot read fails it" ok \
   || check "#1984 a file the scan cannot read fails it" "exit $missing_rc: $missing"
 
