@@ -32,6 +32,8 @@ import { isDevice } from './inputs.ts'
 // ran on this Mac in the 14 days measured.
 
 const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?)$/
+// The redirects among them that send standard output, with `>& file` and `1>& file` (#1976).
+const STDOUT_REDIRECT = /^(1?>>?|1?>\||&>>?|1?>&)$/
 const UNNAMEABLE = /[$`*?[\]{}]/
 // A path part shaped like a web framework's route parameter (#1010): Next.js's [id], [...slug] and
 // [[...slug]], SvelteKit's [id=matcher], and a pages router file such as [id].tsx. It names that
@@ -575,6 +577,8 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   const byGit: NonNullable<ModKitWrites['byGit']> = []
   // The script files a command runs, with what each is handed (#1586), kept apart as byGit is.
   const runs: NonNullable<ModKitWrites['runs']> = []
+  // Where standard output is sent by a redirect (#1976), kept apart as byGit is.
+  const stdout: NonNullable<ModKitWrites['stdout']> = []
   const byGitAdd = (word: string, at: string | undefined, does: 'write' | 'remove', tree: boolean, from: string | undefined) => {
     // A pathspec read from the top of the checkout (`:/docs`) or with magic (`:(glob)x`) is no path
     // here; a pattern git matches itself, across folders, names no one folder (#1123).
@@ -626,6 +630,16 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     })
   }
   const named = (w: string, edits?: true, shown?: string) => add(w, absolutePath(w, dir, home), edits ? { edits } : undefined, shown)
+  // A redirect target standard output goes into (#1976), named as `files` names it; a device or a
+  // process substitution is no file, and one named twice is given once.
+  const toStdout = (w: string, shown: string | undefined) => {
+    const path = absolutePath(w, dir, home)
+    if (!w || isPipe(w) || isDevice(path ?? w)) return
+    const word = shown ?? asWritten.get(w) ?? w
+    if (stdout.some(x => (path ? x.path === path : !x.path && x.word === word))) return
+    const folder = path ? undefined : patternFolder(w, dir, home)
+    stdout.push({ word, ...(path ? { path } : {}), ...(folder ? { folder } : {}) })
+  }
   const changed = (word: string, does: ModKitChange['does'], tree?: boolean) => {
     tree = tree || foundRoots.includes(word)
     const path = absolutePath(word, dir, home)
@@ -790,9 +804,13 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
       if (WRITE_REDIRECT.test(w)) {
         const target = raw[++i]
         if (target !== undefined) named(target, undefined, written[from[i] as number])
+        if (target !== undefined && STDOUT_REDIRECT.test(w)) toStdout(target, written[from[i] as number])
       } else if (/^\d*>&$/.test(w)) {
         const target = raw[++i]
-        if (target !== undefined && !/^(?:\d+|-)$/.test(target)) named(target, undefined, written[from[i] as number])
+        if (target !== undefined && !/^(?:\d+|-)$/.test(target)) {
+          named(target, undefined, written[from[i] as number])
+          if (STDOUT_REDIRECT.test(w)) toStdout(target, written[from[i] as number])
+        }
       } else if (/^\d*>&[0-9-]*$/.test(w)) continue
       else words.push(w)
     }
@@ -1006,7 +1024,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   // waits for ever, so the call never runs. Taken out here, where every input is gathered, rather than
   // at each place one is named; the write stays, as one whose input cannot be known before it runs.
   const readable = unnamed.map(u => (u.inputs.some(isDevice) ? { ...u, inputs: u.inputs.filter(p => !isDevice(p)) } : u))
-  return { files, changes, unnamed: readable, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}) }
+  return { files, changes, unnamed: readable, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}), ...(stdout.length ? { stdout } : {}) }
 }
 
 // The options of git mv, rm, checkout and restore that take the next word as their value.
@@ -1102,6 +1120,10 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
   for (const r of from.runs ?? []) {
     const list = (into.runs ??= [])
     if (!list.some(x => JSON.stringify(x) === JSON.stringify(r))) list.push(r)
+  }
+  for (const o of from.stdout ?? []) {
+    const list = (into.stdout ??= [])
+    if (!list.some(x => (o.path ? x.path === o.path : !x.path && x.word === o.word))) list.push(o)
   }
 }
 

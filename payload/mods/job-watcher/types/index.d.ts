@@ -54,6 +54,12 @@ export type WatchedJob = {
   startedAt: number
   kept?: WatchedJobKept
   owner?: { id: string; name: string }
+  /**
+   * #1976: the files a redirect sends its standard output to (`> log 2>&1`), absolute, as mod-kit's
+   * write reader names them when the job is recorded; absent when there are none or none can be
+   * named. Its quiet time is measured from these as well as from its output file.
+   */
+  logs?: string[]
 }
 
 /** Something the watcher will tell Claude, addressed to a background agent's loop by its id, or to this conversation without one. wake: start a turn of this idle conversation to say it (#1234). */
@@ -78,6 +84,8 @@ export type JobWatch = {
   harness?: string
   measured?: 'runs' | 'unknown'
   stalledBy?: 'silent' | 'repeating'
+  /** #1976: each of the job's logs by path, with its size at the last look that could read it. */
+  logSizes?: Record<string, number>
 }
 declare module 'claude-code' {
   interface EngineInterface {

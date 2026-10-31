@@ -2,6 +2,7 @@ import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { ACK_LEAD, acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF, modeDoes, type Mode } from '../hooks/modes.ts'
 import { FINISHED, NEW_WORK, newWork } from '../hooks/winddown.ts'
+import { PAGE_TOOL, PRIVATE_PAGE } from '../hooks/mod-kit/deliver.ts'
 
 const MODES = Object.keys(MODE_DEF) as Mode[]
 
@@ -56,6 +57,14 @@ describe('the acknowledgement of a mode switch (#1055)', () => {
     expect(modeDoes('sleep')).toContain('hold every result for when you wake')
     expect(modeDoes('sleep')).toContain('hand you anything before you wake')
     expect(modeDoes('sleep')).not.toMatch(/quiet as when you are away/)
+  })
+  // #1935: at home a result whose app Dan said Not now to bringing forward goes where away sends
+  // every result, in the one wording mod-kit keeps; the tool's name is only for Claude's note.
+  test('home and away name the same private page, home only once bringing an app forward is declined (#1935)', () => {
+    expect(modeDoes('away')).toContain(`deliver results as ${PRIVATE_PAGE}`)
+    expect(modeDoes('home')).toContain(`or as ${PRIVATE_PAGE} when bringing that app forward is declined`)
+    expect(modeDoes('home')).toContain('images and PDFs in Preview')
+    for (const mode of ['home', 'away'] as const) expect(modeDoes(mode)).not.toContain(PAGE_TOOL)
   })
   test('sleep says how it ends, and waking opens with sleep mode being off (#1086)', () => {
     expect(ackOn('sleep')).toContain('Sleep mode is on. I will ')
