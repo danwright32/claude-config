@@ -1,4 +1,5 @@
 import { MODE_DEF } from './modes.ts'
+import { PRIVATE_PAGE } from './mod-kit/deliver.ts'
 import { overnightData } from './overnightdata.ts'
 
 // #1284: while asleep, nothing is handed to Dan, in any session. Dan, 2026-10-17: "some sessions
@@ -74,7 +75,7 @@ export const heldAtWake = (held: readonly HeldDelivery[]): string => {
   if (!held.length) return ''
   const n = held.length === 1 ? 'one thing' : `${held.length} things`
   return [
-    `While Dan slept, this session held ${n} it would have handed him: ${held.map(h => h.label).join('; ')}. Deliver each now, where he is now (at home on the Mac as CLAUDE.md says, away as a private claude.ai page), making again the call held, as the block below gives it; anything since replaced by a newer copy is delivered once, as the newer copy.`,
+    `While Dan slept, this session held ${n} it would have handed him: ${held.map(h => h.label).join('; ')}. Deliver each now, where he is now (at home on the Mac as CLAUDE.md says, away as ${PRIVATE_PAGE}), making again the call held, as the block below gives it; anything since replaced by a newer copy is delivered once, as the newer copy.`,
     overnightData({ holds: 'the calls this session made overnight that were held until Dan woke', offer: 'delivered to Dan as each call was made; none is offered through a picker', lines: held.map(h => h.call) }),
   ].join('\n')
 }
