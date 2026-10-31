@@ -240,7 +240,10 @@ done
 H="$T/recheck-hang"; mkdir -p "$H"
 {
   printf '#!/usr/bin/env bash\n'
-  printf 'if [ -e "%s/hangs" ]; then sleep 30; exit 0; fi\n' "$RMARK"
+  # The recheck waits on a condition nothing makes true, so only the runner stopping it ends it, and
+  # the one ceiling only a hang reaches bounds it if that stop ever failed (lib/hang-wait.sh).
+  printf '. "%s"\n' "$DIR/lib/hang-wait.sh"
+  printf 'if [ -e "%s/hangs" ]; then hang_wait false; exit 0; fi\n' "$RMARK"
   printf 'touch "%s/hangs"\n' "$RMARK"
   printf 'echo "FAIL: it failed, and it will hang if run again"\n'
   printf 'printf %s\\\\n "%s passed=0 failed=1"\n' "'%s'" "$MARK"
