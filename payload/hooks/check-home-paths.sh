@@ -104,6 +104,7 @@ list_note=""
 skill_anchored=()     # names left out only at the top of skills/
 skill_anywhere=()     # names left out at any depth under skills/
 if [ -n "$UNMANAGED_SKILLS_LIB_LOADED" ] && declare -F skill_excludes >/dev/null; then
+  loop_input="$(skill_excludes)" || true
   while IFS= read -r _ex; do
     _name="${_ex#--exclude=}"
     case "$_name" in
@@ -111,7 +112,9 @@ if [ -n "$UNMANAGED_SKILLS_LIB_LOADED" ] && declare -F skill_excludes >/dev/null
       /*) skill_anchored+=("${_name#/}") ;;
       *)  skill_anywhere+=("$_name") ;;
     esac
-  done < <(skill_excludes)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 fi
 if [ "$((${#skill_anchored[@]} + ${#skill_anywhere[@]}))" -eq 0 ]; then
   list_note="check-home-paths: could not read the list of skills the sync never carries ($UNMANAGED_LIB), so every skill was scanned, including any the sync would leave behind."
@@ -122,6 +125,7 @@ skill_targets=()  # the top level entries of skills/ the sync carries
 for d in "${SYNCED_DIRS[@]}"; do
   [ -d "$ROOT/$d" ] || continue
   if [ "$d" != skills ]; then targets+=("$ROOT/$d"); continue; fi
+  loop_input="$(find "$ROOT/skills" -mindepth 1 -maxdepth 1 2>/dev/null | sort)" || true
   while IFS= read -r e; do
     [ -n "$e" ] || continue
     _base="${e##*/}"
@@ -130,11 +134,16 @@ for d in "${SYNCED_DIRS[@]}"; do
       [ "$_base" = "$_n" ] && { _skip=1; break; }
     done
     [ "$_skip" -eq 1 ] || skill_targets+=("$e")
-  done < <(find "$ROOT/skills" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 done
+loop_input="$(find "$ROOT" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort)" || true
 while IFS= read -r f; do
   [ -n "$f" ] && targets+=("$f")
-done < <(find "$ROOT" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort)
+done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 
 # The deeper exclusions, as grep options and as find pruning, so the lines scanned and the files
 # counted describe the same set.

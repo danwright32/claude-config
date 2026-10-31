@@ -524,13 +524,16 @@ earlier_reviews() {
   while IFS=$'\t' read -r d fin s rf _; do
     [ -n "$s" ] || continue
     sect=""
+    local loop_input; loop_input="$(awk 'found { print } /^$/ && !found { found = 1 }' "$rf" 2>/dev/null)" || true
     while IFS= read -r line; do
       [[ "$line" =~ $re ]] || continue
       # The same point raised by several reviews is listed once, at the newest that raised it.
       case "$seen" in *$'\n'"$line"$'\n'*) continue ;; esac
       seen="$seen$line"$'\n'
       sect="$sect$line"$'\n'"    $(line_since "$s" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")"$'\n'
-    done < <(awk 'found { print } /^$/ && !found { found = 1 }' "$rf" 2>/dev/null)
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
     [ -n "$sect" ] || continue
     sects+=("--- the review of ${s:0:7} raised ---"$'\n'"$sect"); heads+=("$s")
   done <<ROWS
@@ -730,7 +733,10 @@ pr_words() {   # $1 = the most its description and comments may take, in bytes
   local avail=$((cap - $(bytes_of "$head"$'\n'"$notes")))
   # Newest first, kept while they fit, then put back in the order they were written. A comment that
   # records a lessons review finding (PRR_JQ_DEFS) is marked so.
-  local found_mark=", recording a lessons review finding" found=0
+  local found_mark=", recording a lessons review finding" found=0 loop_input
+  loop_input="$(printf '%s' "$prr_pr_env" | jq -j --arg mark "$found_mark" "$PRR_JQ_DEFS"' [(.view.comments // [])[]
+    | select(trusted)] | reverse | .[]
+    | "\(.author.login // "someone") (\(.authorAssociation | ascii_downcase)), \(.createdAt // "at an unknown time")\(if records_finding then $mark else "" end)\u001f\(text)\u001e"' 2>/dev/null)" || true
   while IFS= read -r -d $'\x1e' rec; do
     if [ "$left" -eq 0 ]; then
       item="$(pr_item "comment by ${rec%%$'\x1f'*}" "${rec#*$'\x1f'}" $((avail / 4)))"$'\n'
@@ -741,9 +747,9 @@ pr_words() {   # $1 = the most its description and comments may take, in bytes
       fi
     fi
     left=$((left + 1))
-  done < <(printf '%s' "$prr_pr_env" | jq -j --arg mark "$found_mark" "$PRR_JQ_DEFS"' [(.view.comments // [])[]
-    | select(trusted)] | reverse | .[]
-    | "\(.author.login // "someone") (\(.authorAssociation | ascii_downcase)), \(.createdAt // "at an unknown time")\(if records_finding then $mark else "" end)\u001f\(text)\u001e"' 2>/dev/null)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   [ "$found" -gt 0 ] && notes="$notes  ($found comment(s) below record a lessons review finding and the answer it got, from a review on either Mac.)"$'\n'
   [ "$left" -gt 0 ] && notes="$notes  ($left older comment(s) left out: the pull request's words take at most $cap bytes of the history budget, PR_REVIEW_HISTORY_MAX_BYTES.)"$'\n'
   [ -n "$items" ] || [ "$left" -gt 0 ] || items="  no comments by people with write access."$'\n'
@@ -947,10 +953,14 @@ narrow_plan() {
     before_names="$(git -c core.quotepath=false diff --no-renames --name-only "$lbase" "$last" 2>/dev/null)"
   fi
   changed="$(git -c core.quotepath=false diff --no-renames --name-only "$last" "$full_sha" 2>/dev/null)"
+  local loop_input
+  loop_input="$(awk 'FILENAME == ARGV[1] { if ($0 != "") mine[$0] = 1; next } ($0 in mine) && !seen[$0]++' \
+             <(printf '%s\n%s\n' "$now_names" "$before_names") <(printf '%s\n' "$changed"))" || true
   while IFS= read -r p; do
     [ -n "$p" ] && narrow_specs+=(":(literal)$p")
-  done < <(awk 'FILENAME == ARGV[1] { if ($0 != "") mine[$0] = 1; next } ($0 in mine) && !seen[$0]++' \
-             <(printf '%s\n%s\n' "$now_names" "$before_names") <(printf '%s\n' "$changed"))
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   if [ "${#narrow_specs[@]}" -eq 0 ]; then
     narrow_note="nothing in the files this branch changes is different from ${last:0:7}, the last reviewed head of this pull request, so this review reads the whole branch"
     return 0
@@ -970,9 +980,11 @@ narrow_start() {
   local marks="$AR_STATE_DIR/$name.marks" model="${AI_REVIEW_MODEL:-sonnet}" started fitted in out size p shown=""
   for p in "${narrow_specs[@]}"; do shown="$shown${p#:(literal)}"$'\n'; done
   # The file list still names every file of the branch, each one not shown marked as read before.
-  awk -v s="${since:0:7}" 'FILENAME == ARGV[1] { if ($0 != "") shown[$0] = 1; next }
+  # A pipeline, so the process substitution's child is that part's and not this shell's, which
+  # never waits for it (claude-config#1984).
+  printf '%s' "$shown" | awk -v s="${since:0:7}" 'FILENAME == ARGV[1] { if ($0 != "") shown[$0] = 1; next }
     $0 != "" && !($0 in shown) { printf "%s\t(changed by this branch before %s and not since, so read by the earlier reviews: not shown below)\n", $0, s }' \
-    <(printf '%s' "$shown") <(git -c core.quotepath=false diff --name-only "$mb" "$full_sha" 2>/dev/null) > "$marks" 2>/dev/null
+    /dev/stdin <(git -c core.quotepath=false diff --name-only "$mb" "$full_sha" 2>/dev/null) > "$marks" 2>/dev/null
   {
     file_list "$marks"
     narrow_block
@@ -1247,7 +1259,7 @@ GEN
     | LC_ALL=C awk '/^diff --git / { if (n) print b; n++; b = 0 } { b += length($0) + 1 } END { if (n) print b }')"
   if [ -n "$ng_names" ]; then
     if [ "$(printf '%s\n' "$ng_names" | grep -c .)" = "$(printf '%s\n' "$ng_sizes" | grep -c .)" ]; then
-      paste <(printf '%s\n' "$ng_sizes") <(printf '%s\n' "$ng_names") >> "$rows"
+      printf '%s\n' "$ng_names" | paste <(printf '%s\n' "$ng_sizes") - >> "$rows"
     else
       while IFS= read -r p; do
         [ -n "$p" ] || continue
@@ -1671,8 +1683,9 @@ show_part() {   # $1 = fix | advisory
   if [ "$1" = advisory ]; then
     { printf '\n'; printf '%s' "$adv_lines"; } > "$f"
   else
-    awk 'FILENAME == ARGV[1] { if ($0 != "") skip[$0] = 1; next } found && ($0 in skip) { next } { print } /^$/ { found = 1 }' \
-      <(printf '%s%s' "$ans_lines" "$adv_lines") "$final" > "$f" 2>/dev/null
+    printf '%s%s' "$ans_lines" "$adv_lines" \
+      | awk 'FILENAME == ARGV[1] { if ($0 != "") skip[$0] = 1; next } found && ($0 in skip) { next } { print } /^$/ { found = 1 }' \
+          /dev/stdin "$final" > "$f" 2>/dev/null
   fi
   ar_capped_body "$f" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS" \
     | awk -v a="$f" -v b="$final" '{ i = index($0, a); if (i) $0 = substr($0, 1, i - 1) b substr($0, i + length(a)); print }'

@@ -4218,17 +4218,23 @@ check "the pull succeeds (no dangling reference)"   "[ \"\$rc_dv\" -eq 0 ]"
 # rest of the list is gone. The tail is what goes, and the tail is the deepest import, so the apply
 # never copied DEEP.md and the dangling reference check then failed the pull. It needs a loaded Mac
 # to happen (a probe of the same shape lost its tail once in 30,000 calls at a load of 268), so the
-# guard is on the shape: each function that derives the rule file set prints its answer, and starts
-# nothing it does not wait for. lesson_index_imports_in printed from inside a loop reading process
-# substitution, the same fault, and is held to the same shape.
-_tf_async='<\(|[^&<>]&[[:space:]]*($|;|#)'
-for _tf_fn in top_files_in imports_in_file lesson_index_files_present lesson_index_imports_in; do
-  _tf_body="$(awk -v f="$_tf_fn" '$0 ~ "^" f "\\(\\)\\{" {on=1} on {print} on && /^}/ {exit}' "$SCRIPT")"
-  check "#1974 $_tf_fn's source was found (else the check below proves nothing)" \
-    "grep -q '^$_tf_fn(){' <<< \"\$_tf_body\" && grep -q 'printf' <<< \"\$_tf_body\""
-  check "#1974 $_tf_fn starts no process it does not wait for (no process substitution, no &)" \
-    "! grep -v '^[[:space:]]*#' <<< \"\$_tf_body\" | grep -q -E \"\$_tf_async\""
-done
+# guard is on the shape.
+#
+# THE WHOLE FILE, NOT FOUR FUNCTIONS (claude-config#1984). #1983 held the four functions deriving
+# the rule file set to it, and 46 more loops read process substitution elsewhere. Every function
+# here prints into a pipe on some path: the watcher runs the whole sync inside
+# `out="$( watch_tick 2>&1 )"`, and this suite captures every command it runs. So the shared scan
+# (payload/hooks/lib/unwaited-children.py, which test-unwaited-children.sh holds the hooks to) reads
+# all of claude-sync: no `< <(...)`, no `cmd <(...)` run by this shell itself, and no `&` in a
+# function that never waits. A process substitution inside `$(...)` or a pipeline is allowed, since
+# its child is then the subshell's, which prints nothing itself (measured in that suite).
+_uw_out="$(printf 'claude-sync\n' | python3 "$(dirname "$SCRIPT")/payload/hooks/lib/unwaited-children.py" \
+  --root "$(dirname "$SCRIPT")" --background --count 2>&1)"; _uw_rc=$?
+_uw_lines="$(printf '%s\n' "$_uw_out" | sed -n 's/^judged 1 files, \([0-9]*\) code lines$/\1/p')"
+check "#1984 the scan read claude-sync (else the check below proves nothing)" "[ \"\${_uw_lines:-0}\" -gt 1000 ]"
+check "#1984 claude-sync starts no child it does not wait for (no process substitution read by this shell, no unwaited &)" \
+  "[ \"\$_uw_rc\" -eq 0 ]"
+[ "$_uw_rc" -eq 0 ] || printf '%s\n' "$_uw_out" | sed 's/^/    unwaited: /'
 check "the still-listed defaults are unaffected"    "[ -f '$DVH2/CLAUDE.md' ]"
 # status must describe the derived set too, not just the old hard-coded names
 printf '# root rules CHANGED\n@EXTRA.md\n' > "$DVH/CLAUDE.md"

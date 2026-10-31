@@ -171,6 +171,7 @@ if [ "$commit_in_chain" -eq 1 ]; then
   # whole working tree, and the refusal says so (L98, L11).
   [ "${pending_list%%$'\n'*}" = "WIDENED" ] && scope_unknown=1
   top="$(git rev-parse --show-toplevel 2>/dev/null)"
+  loop_input="$(printf '%s\n' "$pending_list" | tail -n +2)" || true
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     if git -C "$top" ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
@@ -187,7 +188,9 @@ $(git -C "$top" diff HEAD -- "$f" "${EXCLUDES[@]}" 2>/dev/null || git -C "$top" 
       esac
       pending_diff="${pending_diff}$(cd "$top" && new_file_block "$f")"
     fi
-  done < <(printf '%s\n' "$pending_list" | tail -n +2)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 fi
 
 [ -n "$committed_diff$pending_diff" ] || exit 0
