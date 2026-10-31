@@ -486,8 +486,11 @@ export type ModKitWrites = {
    * quoted or after a backslash, with no expansion in it, wherever the command spells it (#1951:
    * `'*push*'`): the shell matched it against no file, so the run is handed its characters as
    * written. A tool may still expand it itself, and so may a script.
+   * `unexpanded` marks an argument whose every $ and backtick is in single quotes or after a
+   * backslash, wherever the command spells it (#1953: a regex 'x$', prose 'costs $5'): the shell
+   * hands it on as written, so it holds no variable's value.
    */
-  runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true }[] }[]
+  runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true; unexpanded?: true }[] }[]
   /**
    * The files a redirect sends standard output into (#1976), present when there are any: `>`, `>>`,
    * `>|`, `1>`, `&>`, `&>>` and `>& file`, each also in `files`, its `word`, `path` and `folder` as

@@ -155,13 +155,14 @@ out_broken="$(run "$T_BROKEN")"; code_broken=$?
 # A byte that is not UTF-8 is read as jq reads it, never taken for a turn with nothing in it
 # (claude-config#1900). In the transcript, one such byte on any line made the whole read raise, so
 # a turn that did work was skipped in silence; in the payload, the reader holds it the same way.
-bad_byte_measured python "#1900 checkpoint-save reading a byte that is not UTF-8" || true
+bad_byte_measured python-file "#1900 checkpoint-save reading a transcript holding a byte that is not UTF-8" || true
 T_BYTE="$PROJDIR/sessions/byte.jsonl"
 transcript "$T_BYTE" "$(printf '{"type":"user","message":{"content":"earlier \xff turn"}}')" "$(user_line 'fix the retry')" "$(tool_line Edit)"
 out_byte="$(LC_ALL="$BAD_BYTE_LOCALE" run "$T_BYTE")"
 grep -q '"decision": *"block"' <<< "$out_byte" \
   && check "a transcript holding a byte that is not UTF-8 still asks a turn that did work to save" ok \
   || check "a transcript holding a byte that is not UTF-8 still asks a turn that did work to save" "out=${out_byte:0:200}"
+bad_byte_measured python-stdin "#1900 checkpoint-save reading a payload holding a byte that is not UTF-8" || true
 out_pbyte="$(printf '{"transcript_path":"%s","note":"a\xffb"}' "$T_WORKED" | LC_ALL="$BAD_BYTE_LOCALE" bash "$H" 2>/dev/null)"
 grep -q '"decision": *"block"' <<< "$out_pbyte" \
   && check "a payload holding a byte that is not UTF-8 still asks a turn that did work to save" ok \

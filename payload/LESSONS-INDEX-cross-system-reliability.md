@@ -117,3 +117,4 @@ which is NOT loaded into the session.
 - L798. Deleting a deployed thing's source does not undeploy it; a removal is done only when the platform's own list no longer shows it.
 - L822. Before narrowing who may use a shared resource, list its current users from its own usage record: one left out often just waits, silently.
 - L829. Parallel branches can reuse a migration version, and the second is skipped as applied; check versions before applying, and fail CI on a duplicate.
+- L836. Close a PR as contained in main only if its CURRENT head is inside a merged PR; one that says it carried the branch names an older head.
