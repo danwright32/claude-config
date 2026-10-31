@@ -505,6 +505,10 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
     // Set some other way too, its value is unknown, as an assignment given two values is.
     expect(args('for f in a.md; do :; done; f=$(ls); python3 gen.py $f')).toEqual([[['$f', null]]])
     expect(args('f=$(ls); for f in a.md; do python3 gen.py $f; done')).toEqual([[['$f', null]]])
+    // Text run by eval or source may set the loop's variable to anything, so its value is unknown
+    // after it, as every other variable's is (lessons review of #1968 at a47a667).
+    expect(args('for f in a.md; do eval "f=app/page.tsx"; python3 gen.py $f; done')).toEqual([[['$f', null]]])
+    expect(args('for f in a.md; do . ./setf.sh; python3 gen.py $f; done')).toEqual([[['$f', null]]])
   })
   // #1953: a $ in single quotes or after a backslash is no variable, but the run's argument read the
   // same as one, its quotes taken off, so a script handed a regex ('x$') or prose ('costs $5') read as

@@ -51,7 +51,8 @@ const isPipe = (word: string) => /^[<>]\(/.test(word)
 // write names its file (#743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` was given as $F,
 // with no path, and ask before saving let it through). The word is still given as written. Only a
 // value the reader can be sure of: one holding a command's output or anything else it cannot name;
-// one a loop, read, mapfile, getopts or printf -v sets, appended to or unset; one given a second,
+// one a loop other than a for over plain words (below), read, mapfile, getopts or printf -v sets,
+// appended to or unset; one given a second,
 // different value (the reader cannot tell a ; from an && or ||, so which stands is unknown); and
 // every value once an eval or a sourced file may have changed it, is left as written. A value set
 // inside a subshell ends with it. An unquoted value is split into words where the shell running the
@@ -831,7 +832,8 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
       } else if (v !== undefined) unknown(v)
       continue
     }
-    if (RUNS_TEXT.has(name)) for (const k of vars.keys()) unknown(k)
+    // Text run by eval or source may set any variable, a loop's included (lessons review of #1968).
+    if (RUNS_TEXT.has(name)) for (const k of [...vars.keys(), ...each.keys()]) unknown(k)
     const v = name === 'printf' ? rest.indexOf('-v') : -1
     if (v >= 0 && rest[v + 1] !== undefined) unknown(rest[v + 1] as string)
     // Whether this command changes files given as operands, for one xargs runs.
