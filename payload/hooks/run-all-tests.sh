@@ -536,8 +536,9 @@ suite_checks(){   # suite_checks <suite path> -> whole checks, or nothing
 
 # The line printed the moment each suite finishes (claude-config#1979). The report below waits for
 # every suite and is sorted, so until it the runner said nothing for the whole run, about 15 minutes
-# on a quiet Mac: run in the background, the job watcher called it "no new output for 11 minutes"
-# while it was healthy, and a person could not tell a working run from a hung one (#1583's class).
+# on a quiet Mac (as #1979 reported it, 2026-10-31): run in the background, the job watcher called
+# it "no new output for 11 minutes" while it was healthy, and a person could not tell a working run
+# from a hung one (#1583's class).
 #
 # It says the exit status, never ok or FAIL: the verdict is decided below, from the result line, a
 # missing command or a flake recheck, and a line claiming it here would claim what it did not

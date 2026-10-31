@@ -2,7 +2,8 @@
 # Tests for the line run-all-tests.sh prints as each suite finishes (claude-config#1979).
 #
 # The runner printed its header and then nothing until every suite had finished, because it sorts
-# the results before printing them: about 15 minutes on a quiet Mac. Run in the background, as
+# the results before printing them: about 15 minutes on a quiet Mac, as #1979 put it on
+# 2026-10-31, and 25 minutes under load on that day's run of this change. Run in the background, as
 # builders do several times a session, the job watcher reported it as "no new output for 11
 # minutes" while it was healthy, and nobody reading the output could tell a working run from a hung
 # one (the class of #1583). So each suite's finish now prints one line, and the sorted report at the
@@ -109,7 +110,7 @@ mk_result_suite "$G" first 1 0 0
 chmod +x "$G/test-waits.sh"
 fixture_run "$G" > "$GLOG"; gcode=$?
 gout="$(cat "$GLOG")"
-printf '%s\n' "$gout" | grep -q -E '^ +ok +test-waits\.sh' \
+grep -q -E '^ +ok +test-waits\.sh' <<< "$gout" \
   && check "#1979 the runner's output gains a line while another suite is still running" ok \
   || check "#1979 the runner's output gains a line while another suite is still running" "exit=$gcode out=$gout"
 [ "$(cat "$GSEEN" 2>/dev/null)" = report-not-begun ] \
@@ -120,23 +121,23 @@ printf '%s\n' "$gout" | grep -q -E '^ +ok +test-waits\.sh' \
   || check "#1979 and the run still passes" "exit=$gcode out=$gout"
 
 # ---- 2. What each line says ----
-glines="$(printf '%s\n' "$gout" | grep -F "$PREFIX" || true)"
-[ "$(printf '%s\n' "$glines" | grep -c .)" -eq 2 ] \
+glines="$(grep -F "$PREFIX" <<< "$gout" || true)"
+[ "$(grep -c . <<< "$glines")" -eq 2 ] \
   && check "#1979 one progress line per suite" ok \
   || check "#1979 one progress line per suite" "lines=$glines"
 # The count of suites done, of how many, the time since the run began, the suite and its exit status.
 shape='^run-all-tests progress: [0-9]+ of [0-9]+ suite\(s\) finished, (([0-9]+h )?[0-9]+m )?[0-9]+[sm] in, test-[a-z]+\.sh exited [0-9]+$'
-[ -z "$(printf '%s\n' "$glines" | grep -v -E "$shape")" ] \
+[ -z "$(grep -v -E "$shape" <<< "$glines")" ] \
   && check "#1979 each line carries the count, the time since the run began, the suite and its exit status" ok \
   || check "#1979 each line carries the count, the time since the run began, the suite and its exit status" "lines=$glines"
-printf '%s\n' "$glines" | grep -q -E '^run-all-tests progress: 1 of 2 suite\(s\) finished, .* test-first\.sh exited 0$' \
-  && printf '%s\n' "$glines" | grep -q -E '^run-all-tests progress: 2 of 2 suite\(s\) finished, .* test-waits\.sh exited 0$' \
+grep -q -E '^run-all-tests progress: 1 of 2 suite\(s\) finished, .* test-first\.sh exited 0$' <<< "$glines" \
+  && grep -q -E '^run-all-tests progress: 2 of 2 suite\(s\) finished, .* test-waits\.sh exited 0$' <<< "$glines" \
   && check "#1979 the count goes up by one per suite, in the order they finished" ok \
   || check "#1979 the count goes up by one per suite, in the order they finished" "lines=$glines"
 # The job watcher calls a job stuck when the end of its output is the same line, or the same short
 # pass of lines, over and over (mods/job-watcher/hooks/jobs.ts). A count that rises on every line
 # keeps any two of them apart, so a long run reads as working rather than as repeating itself.
-[ "$(printf '%s\n' "$glines" | sort -u | grep -c .)" -eq "$(printf '%s\n' "$glines" | grep -c .)" ] \
+[ "$(sort -u <<< "$glines" | grep -c .)" -eq "$(grep -c . <<< "$glines")" ] \
   && check "#1979 no two progress lines are the same, so the job watcher cannot read them as repeating" ok \
   || check "#1979 no two progress lines are the same, so the job watcher cannot read them as repeating" "lines=$glines"
 
@@ -146,40 +147,41 @@ F="$T/fails"
 mk_result_suite "$F" bad 0 1 1
 mk_result_suite "$F" good 1 0 0
 fout="$(fixture_run "$F")"; fcode=$?
-flines="$(printf '%s\n' "$fout" | grep -F "$PREFIX" || true)"
-printf '%s\n' "$flines" | grep -q -E 'test-bad\.sh exited 1$' \
+flines="$(grep -F "$PREFIX" <<< "$fout" || true)"
+grep -q -E 'test-bad\.sh exited 1$' <<< "$flines" \
   && check "#1979 a failing suite's progress line gives its exit status" ok \
   || check "#1979 a failing suite's progress line gives its exit status" "out=$fout"
-last_progress="$(printf '%s\n' "$fout" | grep -n -F "$PREFIX" | tail -1 | sed 's/:.*//')"
-first_verdict="$(printf '%s\n' "$fout" | grep -n -E '^ +(ok|FAIL) +test-' | head -1 | sed 's/:.*//')"
+last_progress="$(grep -n -F "$PREFIX" <<< "$fout" | sed -n '$s/:.*//p')"
+first_verdict="$(grep -n -E '^ +(ok|FAIL) +test-' <<< "$fout" | sed -n '1s/:.*//p')"
 { [ -n "$last_progress" ] && [ -n "$first_verdict" ] && [ "$last_progress" -lt "$first_verdict" ]; } \
   && check "#1979 every progress line comes before the sorted report" ok \
   || check "#1979 every progress line comes before the sorted report" "last progress at '$last_progress', first verdict at '$first_verdict': $fout"
-[ "$fcode" -ne 0 ] && printf '%s\n' "$fout" | tail -1 | grep -q -E '^1 of 2 SUITES FAILED: test-bad\.sh$' \
+[ "$fcode" -ne 0 ] && [ "$(sed -n '$p' <<< "$fout")" = '1 of 2 SUITES FAILED: test-bad.sh' ] \
   && check "#1979 and the report still ends with its own verdict line, failing the run" ok \
   || check "#1979 and the report still ends with its own verdict line, failing the run" "exit=$fcode out=$fout"
-printf '%s\n' "$gout" | tail -1 | grep -q -E '^ALL 2 SUITES PASSED$' \
+[ "$(sed -n '$p' <<< "$gout")" = 'ALL 2 SUITES PASSED' ] \
   && check "#1979 and a passing run still ends with ALL N SUITES PASSED" ok \
   || check "#1979 and a passing run still ends with ALL N SUITES PASSED" "out=$gout"
 
 # ---- 3. Every reader of the runner's output reads past the new lines (L683) ----
 # The lines judged are the ones the runner really printed, a failing suite's among them, never a
 # copy typed here (L48).
-all_lines="$(printf '%s\n%s\n' "$glines" "$flines" | grep . || true)"
-[ "$(printf '%s\n' "$all_lines" | grep -c .)" -ge 4 ] \
+all_lines="$(grep . <<< "$glines
+$flines" || true)"
+[ "$(grep -c . <<< "$all_lines")" -ge 4 ] \
   && check "#1979 (control) the readers below are handed real progress lines" ok \
   || check "#1979 (control) the readers below are handed real progress lines" "lines=$all_lines"
 
 # This repository's own readers anchor on `^run-all-tests: ` and something after it: the suite
 # stopped at its wall clock (test-run-all-tests.sh), the launch order, the CI log's launch order
 # line. The progress line shares no prefix with them, so none of those patterns can reach it.
-[ -z "$(printf '%s\n' "$all_lines" | grep -E '^run-all-tests: ' || true)" ] \
+[ -z "$(grep -E '^run-all-tests: ' <<< "$all_lines" || true)" ] \
   && check "#1979 no progress line starts with the runner's own 'run-all-tests: ' prefix" ok \
   || check "#1979 no progress line starts with the runner's own 'run-all-tests: ' prefix" "lines=$all_lines"
 # The report's own verdict lines, read by test-run-all-tests.sh and by people, start with
 # whitespace then ok, FAIL, NOT RUN or UNMEASURED; the summary lines start with ALL, a count, or NO.
 # And a suite's own markers, read out of its output by the runner and the scanners gate, start SUITE-.
-[ -z "$(printf '%s\n' "$all_lines" | grep -E '^[[:space:]]|^ALL |^[0-9]|^NO |^SUITE-|SUITES|SUITE\(S\)' || true)" ] \
+[ -z "$(grep -E '^[[:space:]]|^ALL |^[0-9]|^NO |^SUITE-|SUITES|SUITE\(S\)' <<< "$all_lines" || true)" ] \
   && check "#1979 no progress line has the shape of a verdict or summary line" ok \
   || check "#1979 no progress line has the shape of a verdict or summary line" "lines=$all_lines"
 
@@ -202,10 +204,10 @@ printf '%s\n' "$all_lines" > "$T/nested.lines"
 } > "$N/test-guessed.sh"
 chmod +x "$N/test-carries.sh" "$N/test-guessed.sh"
 nout="$(fixture_run "$N")"; ncode=$?
-printf '%s\n' "$nout" | grep -q -E '^ +ok +test-carries\.sh +1 passed, 0 failed' \
+grep -q -E '^ +ok +test-carries\.sh +1 passed, 0 failed' <<< "$nout" \
   && check "#1979 a suite whose output carries progress lines reads as its result line says" ok \
   || check "#1979 a suite whose output carries progress lines reads as its result line says" "out=$nout"
-printf '%s\n' "$nout" | grep -q -E '^ +ok +test-guessed\.sh +passed: 3, failed: 0' \
+grep -q -E '^ +ok +test-guessed\.sh +passed: 3, failed: 0' <<< "$nout" \
   && check "#1979 and a score guessed from prose is the suite's tally, not a progress line" ok \
   || check "#1979 and a score guessed from prose is the suite's tally, not a progress line" "out=$nout"
 case "$nout" in
@@ -231,7 +233,7 @@ if [ -n "$CHECKOUT" ] && [ -f "$CHECKOUT/.github/workflows/tests.yml" ] && [ -f 
   wf_hit=""
   while IFS= read -r pat; do
     [ -n "$pat" ] || continue
-    printf '%s\n' "$all_lines" | grep -q -- "$pat" && wf_hit="$wf_hit [$pat]"
+    grep -q -- "$pat" <<< "$all_lines" && wf_hit="$wf_hit [$pat]"
   done <<WFPATTERNS
 $wf_greps
 slot(s) each
@@ -240,9 +242,9 @@ WFPATTERNS
     && check "#1979 no progress line matches what the CI step reads from the run's log" ok \
     || check "#1979 no progress line matches what the CI step reads from the run's log" "matched:$wf_hit"
   # tools/prove-it-fails.sh counts a run's FAIL lines, case blind.
-  pif="$(grep -o "grep -icE '[^']*'" "$CHECKOUT/tools/prove-it-fails.sh" | head -1 | sed "s/^grep -icE '//; s/'\$//")"
+  pif="$(grep -o "grep -icE '[^']*'" "$CHECKOUT/tools/prove-it-fails.sh" | sed -n "1s/^grep -icE '//; 1s/'\$//p")"
   if [ -n "$pif" ]; then
-    [ "$(printf '%s\n' "$all_lines" | grep -icE -- "$pif" || true)" = 0 ] \
+    [ "$(grep -icE -- "$pif" <<< "$all_lines" || true)" = 0 ] \
       && check "#1979 tools/prove-it-fails.sh counts no progress line as a FAIL" ok \
       || check "#1979 tools/prove-it-fails.sh counts no progress line as a FAIL" "pattern $pif matched in: $all_lines"
   else
@@ -253,9 +255,9 @@ else
 fi
 # The scanners gate, installed beside this file, keeps a scanner's FAIL lines with an awk pattern.
 # The one naming FAIL, since the gate has other awk patterns (its comment readers come first).
-sbp="$(grep -o "awk '/[^/]*FAIL[^/]*/" "$DIR/scanners-before-push.sh" | head -1 | sed "s#^awk '/##; s#/\$##")"
+sbp="$(grep -o "awk '/[^/]*FAIL[^/]*/" "$DIR/scanners-before-push.sh" | sed -n "1s#^awk '/##; 1s#/\$##p")"
 if [ -n "$sbp" ]; then
-  [ -z "$(printf '%s\n' "$all_lines" | awk "/$sbp/" )" ] \
+  [ -z "$(awk "/$sbp/" <<< "$all_lines")" ] \
     && check "#1979 the scanners gate keeps no progress line as a FAIL line" ok \
     || check "#1979 the scanners gate keeps no progress line as a FAIL line" "pattern $sbp matched in: $all_lines"
 else
