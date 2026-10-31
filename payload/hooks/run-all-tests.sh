@@ -534,6 +534,26 @@ suite_checks(){   # suite_checks <suite path> -> whole checks, or nothing
   suite_record_field "$1" 2
 }
 
+# The line printed the moment each suite finishes (claude-config#1979). The report below waits for
+# every suite and is sorted, so until it the runner said nothing for the whole run, about 15 minutes
+# on a quiet Mac: run in the background, the job watcher called it "no new output for 11 minutes"
+# while it was healthy, and a person could not tell a working run from a hung one (#1583's class).
+#
+# It says the exit status, never ok or FAIL: the verdict is decided below, from the result line, a
+# missing command or a flake recheck, and a line claiming it here would claim what it did not
+# measure (L11). Its prefix, "run-all-tests progress:", is shared with no line any reader matches:
+# not "run-all-tests: ", which this repository's suites and CI anchor on, not the report's indented
+# verdict lines, and not its summary lines. test-runner-progress.sh holds every reader to that.
+progress_line(){   # progress_line <done> <of> <suite name> <exit status> <seconds since the run began>
+  local _pl_s="$5" _pl_t
+  case "$_pl_s" in ''|*[!0-9]*) _pl_s=0 ;; esac
+  if [ "$_pl_s" -ge 3600 ]; then _pl_t="$(( _pl_s / 3600 ))h $(( _pl_s % 3600 / 60 ))m"
+  elif [ "$_pl_s" -ge 60 ]; then _pl_t="$(( _pl_s / 60 ))m $(( _pl_s % 60 ))s"
+  else _pl_t="${_pl_s}s"
+  fi
+  printf 'run-all-tests progress: %s of %s suite(s) finished, %s in, %s exited %s\n' "$1" "$2" "$_pl_t" "$3" "$4"
+}
+
 # The ONE place a suite's own score is read (claude-config#126). Exactly, so there is nothing to
 # recognise and nothing to guess: thirty six suites once wrote their totals five different ways and
 # the reader got it wrong twice in one day. Two things now need this line, the verdict and the
@@ -1191,7 +1211,9 @@ LIVECOPY
     # the here-document the loop reads its launch list from, so one suite reading stdin to the end
     # took every name still waiting: each then reported no exit status, "killed or never started",
     # and 93 of 101 failed on 2026-10-13. Linux CI's bash never showed it.
-    ( SECONDS=0
+    # _run_at is this run's own clock when the suite launched, read before SECONDS is reset, so its
+    # progress line can say how long the whole run has been going.
+    ( _run_at="$SECONDS"; SECONDS=0
       HOOK_TESTS_SLOTS="${LANES[$lane]}" bash "$suite" > "$WORK/$idx.out" 2>&1; _src=$?
       # Less any time it said it spent waiting for a lock another run held (#1297): that is the
       # other run's cost, and recorded as this suite's it would set launch order and the slowest
@@ -1216,7 +1238,19 @@ LIVECOPY
       # The load the moment it finished, read for every suite because a failure is only known once
       # its output is judged below, by which time the moment has passed (claude-config#1083).
       load_average_one_minute > "$WORK/$idx.load" 2>/dev/null
-      printf '%s' "$_src" > "$WORK/$idx.rc" ) < /dev/null &
+      printf '%s' "$_src" > "$WORK/$idx.rc"
+      # Its place in the order suites finished, taken by creating done.<n>: mkdir either makes the
+      # folder or fails because another suite just did, so two suites finishing at once never print
+      # the same count. It starts from how many are taken already, so it is normally one mkdir, and
+      # it is bounded, so a work folder that has gone cannot spin it; the count is then unknown.
+      _done_n=1
+      set -- "$WORK"/done.*
+      [ -e "$1" ] && _done_n=$(( $# + 1 ))
+      until mkdir "$WORK/done.$_done_n" 2>/dev/null; do
+        _done_n=$(( _done_n + 1 ))
+        [ "$_done_n" -le "$ran" ] || { _done_n='?'; break; }
+      done
+      progress_line "$_done_n" "$ran" "${suite##*/}" "$_src" "$(( _run_at + SECONDS ))" ) < /dev/null &
     lane_pid[$lane]=$!
   done <<LAUNCH
 $launch_order
