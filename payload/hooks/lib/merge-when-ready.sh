@@ -93,7 +93,9 @@
 # cannot take a turn says so and goes on as before, and every gate judges every merge. A turn is
 # never taken that the run cannot finish (claude-config#1604): its deadline counts from the turn, the
 # wait in line has a budget of its own, and the turn is not taken when the time it would leave is
-# shorter than the repository's recent check runs took (see turn_weigh).
+# shorter than the repository's recent check runs took (see turn_weigh). A run passed over is
+# decided by that line budget alone while it waits again, and its deadline counts only while it
+# holds the turn (claude-config#1975, see budget_left).
 #
 # WHAT IT REFUSES TO CARRY. Only the merge method is passed to gh, and --delete-branch is carried
 # out here once the merge has landed: the open pull requests based on the branch are moved onto the
@@ -156,10 +158,11 @@
 # Environment (each also a test seam): MWR_POLL_SECONDS (60), MWR_POLL_MAX_SECONDS (180: the ceiling
 # the wait on checks and review grows to), lib/gh-poll.sh's own settings (GH_POLL_PER_MINUTE,
 # GH_POLL_STATE_DIR and the rest), MWR_DEADLINE_SECONDS (10800, counted from when the run first
-# takes the repository's turn, claude-config#1604), MWR_LINE_SECONDS (10800: how long it may wait
-# before that with the line standing still, counting only time in which nothing ahead of it
-# advanced, claude-config#1697; a setting, not a measurement), MWR_LINE_MAX_SECONDS (32400: the
-# ceiling on the whole wait before that, however much the line moves, room for about 27 merges of 20
+# takes the repository's turn, claude-config#1604, and only while it holds it, #1975),
+# MWR_LINE_SECONDS (10800: how long it may wait in line with the line standing still, counting only
+# time in which nothing ahead of it advanced, claude-config#1697; a setting, not a measurement),
+# MWR_LINE_MAX_SECONDS (32400: the
+# ceiling on the whole wait in line, however much the line moves, room for about 27 merges of 20
 # minutes ahead of it where Slate's line of 15 ran out of three hours on 2026-10-24; a setting),
 # MWR_MAX_POLLS (derived from those and the pace, bounding the loop by count as well as by clock, L704),
 # MWR_SETTLE_SECONDS (300: how long the base must have been still before a pull request it moved
@@ -783,10 +786,10 @@ updated_from=""; updated_at=0; catching_up=""
 # nothing merged. Three turns in a row went that way, and nothing of that session's merged for about
 # three hours. So the deadline, MWR_DEADLINE_SECONDS, now counts from the moment this run first took
 # the turn (taken_at), and the time before it, in line or before the first look took a place, has a
-# budget of its own, MWR_LINE_SECONDS. Neither restarts: a run passed over and back in line is
-# still on the deadline it started when it first took the turn, so the longest a run can last is
-# the wait in line at its longest (since #1697 its ceiling, below) and the deadline added together,
-# which is what is-it-live's window is held to (test-merge-when-ready.sh).
+# budget of its own, MWR_LINE_SECONDS. Neither restarts, so the longest a run can last is the wait
+# in line at its longest (since #1697 its ceiling, below) and the deadline added together, which is
+# what is-it-live's window is held to (test-merge-when-ready.sh). A run passed over and back in line
+# keeps the deadline it has not yet held, which no longer runs while it waits (#1975, below).
 # A run that could take no turn at all goes on as before #1515, on its deadline from its start.
 #
 # THE LINE BUDGET FOLLOWS THE LINE (claude-config#1697). A fixed three hours in line ran out on
@@ -801,16 +804,37 @@ updated_from=""; updated_at=0; catching_up=""
 # again behind), so the whole wait also has a ceiling, MWR_LINE_MAX_SECONDS, nine hours, and each
 # stop says which of the two ended it (L11). The longest a run can last is now that ceiling plus the
 # deadline from the turn, which is-it-live's window is held to (L227, test-merge-when-ready.sh).
-taken_at=""
-line_seen_ticket=""; line_seen_ahead=0; line_moved_at=""; line_long_said=""
+#
+# ONE RULE FOR A RUN WAITING IN LINE, HOWEVER OFTEN IT HAS HELD THE TURN (claude-config#1975). On
+# 2026-10-30 #1962 took the turn, held it the hour a waiter allows, was passed over and joined the
+# line again, and stopped at 181m saying in the same second that it kept its place because the line
+# still moved and that it was out of time at the end of its 180m deadline from taking the turn. The
+# deadline went on counting through its wait in line, so the line rule, which is what decides for a
+# run in line, never got to. Now the deadline counts only time this run holds the turn (dl_used for
+# the holds that are over, dl_from for the one under way), and every wait in line, the first or one
+# after being passed over, is decided by the line rule alone, its time in line being the run's time
+# less the time it held the turn. A run passed over takes the turn back with the deadline it has not
+# held, so it is weighed (turn_weigh) on that and not on the time it waited. #1604's bound stands:
+# time in line is at most MWR_LINE_MAX_SECONDS and time holding the turn at most the deadline, so a
+# run still lasts at most the two added together.
+taken_at=""; dl_used=0; dl_from=""
+line_from="$t0"; line_seen_ticket=""; line_seen_ahead=0; line_moved_at=""; line_long_said=""
+# The turn this run held has gone (passed over, or no longer its): the deadline stops counting, and
+# its new wait in line starts the still budget afresh, from the moment it joined the line again.
+turn_lost(){   # $1 = now
+  [ -n "$dl_from" ] || return 0
+  dl_used=$(( dl_used + $1 - dl_from )); dl_from=""
+  line_from="$1"; line_moved_at=""; line_seen_ticket=""; line_seen_ahead=0
+}
 budget_left(){   # sets BUDGET_LEFT (seconds) and BUDGET_SAID (which budget, in words)
   local t still total; t="$(now)"
-  if [ -n "$taken_at" ]; then
-    BUDGET_LEFT=$(( DEADLINE - (t - taken_at) )); BUDGET_SAID="its $(span "$DEADLINE") deadline from taking the turn"
+  if [ -n "$dl_from" ]; then
+    BUDGET_LEFT=$(( DEADLINE - dl_used - (t - dl_from) )); BUDGET_SAID="its $(span "$DEADLINE") deadline from taking the turn"
+    [ "$dl_used" -eq 0 ] || BUDGET_SAID="$BUDGET_SAID, counted only while it held the turn"
   elif [ "$turn_state" = off ]; then
     BUDGET_LEFT=$(( DEADLINE - (t - t0) )); BUDGET_SAID="its $(span "$DEADLINE") deadline"
   else
-    still=$(( LINE - (t - ${line_moved_at:-$t0}) )); total=$(( LINE_MAX - (t - t0) ))
+    still=$(( LINE - (t - ${line_moved_at:-$line_from}) )); total=$(( LINE_MAX - (t - t0 - dl_used) ))
     if [ "$still" -le "$total" ]; then
       BUDGET_LEFT="$still"
       if [ -n "$line_seen_ticket" ]; then
@@ -820,7 +844,7 @@ budget_left(){   # sets BUDGET_LEFT (seconds) and BUDGET_SAID (which budget, in 
       fi
     else
       BUDGET_LEFT="$total"
-      if [ "${line_moved_at:-$t0}" -gt "$t0" ]; then
+      if [ "${line_moved_at:-$line_from}" -gt "$line_from" ]; then
         BUDGET_SAID="its $(span "$LINE_MAX") ceiling in line (MWR_LINE_MAX_SECONDS), with the line still moving (it last moved $(dur $(( t - line_moved_at ))) ago) but not yet to it"
       else
         BUDGET_SAID="its $(span "$LINE_MAX") ceiling in line (MWR_LINE_MAX_SECONDS)"
@@ -839,10 +863,11 @@ line_note(){   # $1 = now
   return "$moved"
 }
 # Said once, when the wait in line passes MWR_LINE_SECONDS with the line still moving, so a run that
-# keeps its place says why rather than reading like one that should have stopped.
+# keeps its place says why rather than reading like one that should have stopped. Its time in line is
+# the run's time less the time it held the turn (claude-config#1975), as the ceiling counts it.
 line_long_note(){
   local t; t="$(now)"
-  [ -z "$line_long_said" ] && [ $(( t - t0 )) -ge "$LINE" ] && [ "${line_moved_at:-$t0}" -gt "$t0" ] && [ $(( t - line_moved_at )) -lt "$LINE" ] || return 0
+  [ -z "$line_long_said" ] && [ $(( t - t0 - dl_used )) -ge "$LINE" ] && [ "${line_moved_at:-$line_from}" -gt "$line_from" ] && [ $(( t - line_moved_at )) -lt "$LINE" ] || return 0
   line_long_said=1
   say "#$pr has waited over $(span "$LINE") in line, but the line is still moving (it last moved $(dur $(( t - line_moved_at ))) ago), so it keeps its place: it stops only once nothing ahead of it has moved for $(span "$LINE") (MWR_LINE_SECONDS), or at $(span "$LINE_MAX") in line (MWR_LINE_MAX_SECONDS)."
 }
@@ -1061,7 +1086,9 @@ turn_left=0; turn_weighed=""
 turn_weigh(){   # $1 = now
   local rrc what="how long $slug's recent check runs took"
   turn_weighed=""
-  if [ -n "$taken_at" ]; then turn_left=$(( DEADLINE - ($1 - taken_at) )); else turn_left="$DEADLINE"; fi
+  # What it has not held of its deadline: the whole of it the first time, and after being passed
+  # over, the deadline less the time it held the turn, never less its wait in line (#1975).
+  turn_left=$(( DEADLINE - dl_used ))
   with_retries "$what" read_check_times; rrc=$?
   if [ "$rrc" -ne 0 ]; then
     turn_weighed="; $(signin_or_unread "$what" "$rrc"), so it was weighed against nothing"
@@ -1092,9 +1119,17 @@ turn_check(){
   turn_look "$t" "$TURN_HOLD"
   turn_say_passed
   if [ -n "$TURN_GONE" ]; then
-    say "#$pr's place in the line to merge in $slug is gone: a run waiting for the turn takes it over once one pull request has held it for $(mins "$TURN_HOLD"). Joining the line again."
+    if [ -n "$dl_from" ]; then
+      turn_lost "$t"
+      clock=" Its $(span "$DEADLINE") deadline stops counting while it waits, with $(dur $(( DEADLINE - dl_used ))) of it left for when it takes the turn back."
+    else
+      clock=""
+    fi
+    say "#$pr's place in the line to merge in $slug is gone: a run waiting for the turn takes it over once one pull request has held it for $(mins "$TURN_HOLD"). Joining the line again.$clock"
     TURN_TICKET=""; turn_state=""
     if ! turn_join "$pr" "$t"; then
+      # Going on with no turn after holding one: its deadline counts again from here (#1975).
+      [ -z "$taken_at" ] || dl_from="$t"
       turn_state=off
       say "Could not join the line to merge in $slug again ($TURN_ERR), so this goes on without a turn: another helper on this Mac may merge under it."
       return 0
@@ -1102,6 +1137,9 @@ turn_check(){
     turn_look "$t" "$TURN_HOLD"
     turn_say_passed
   fi
+  # A turn this run held that is no longer its, though its place was not reported gone: the same
+  # as being passed over, for its deadline and its wait in line (claude-config#1975).
+  [ "$TURN_MINE" = 1 ] || turn_lost "$t"
   # Whether the line moved since the last look, for the budget in line (claude-config#1697).
   [ "$TURN_MINE" = 1 ] || line_note "$t" || true
   if [ "$TURN_MINE" = 1 ]; then
@@ -1118,7 +1156,7 @@ turn_check(){
       else
         say "Took the turn to merge in $slug: other helpers on this Mac wait until #$pr has merged or stopped, for up to $(mins "$TURN_HOLD"). $clock$turn_weighed."
       fi
-      turn_state=held; turn_waited_from=""
+      turn_state=held; turn_waited_from=""; dl_from="$t"
       [ -n "$taken_at" ] || taken_at="$t"
     fi
     return 0
