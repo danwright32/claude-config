@@ -1229,6 +1229,17 @@ they are only ever loaded for that config. `run-all-tests.sh` hands every suite 
 its own, as it does the issue spool, rather than bracketing the real log among its live stores: the
 live watcher appends to it throughout a run, and an append is the one change that bracket excuses.
 
+A run of `run-all-tests.sh` started under another run (a suite testing the runner against fixture
+suites) judges only the live stores no enclosing run already brackets (#1964). Each run exports the
+stores it and its enclosing runs bracket, with its own run id, and a nested run hands over only the
+stores on that list, and only when that id begins the id it was started under. The enclosing run's
+window contains the nested one's, so a fixture suite that writes the real `~/.claude` is still caught
+there; what the nested bracket added was a second, shorter window that a legitimate writer lands in
+with nothing to tell it from a suite. On 2026-10-30 that writer appended `outputStyle` to
+`settings.json`, a key claude-sync never writes (most likely Claude Code saving a picked output
+style), so no sync record could have explained it. A store nobody encloses, such as a
+fixture's own home, and every store of a run started on its own, are judged exactly as before.
+
 ## An absence is a deletion only where something was there before (#627, #781)
 
 The mirror cannot tell "this Mac deleted it" from "this Mac never had it" by looking at the folder,

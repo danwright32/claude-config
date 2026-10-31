@@ -2406,6 +2406,144 @@ while IFS= read -r f; do
 done <<< "$MAC_STORES"
 rm -f "$LS/suites"/test-macstore*.sh "$RH/.zshrc" "$RH/.claude-sync-watch.pid" "$RH/.claude-sync-hold"
 
+# A RUN STARTED UNDER ANOTHER RUN LEAVES THE STORES THAT RUN BRACKETS TO IT (claude-config#1964).
+#
+# On 2026-10-30 two checks in this file failed once: the fixture runs inside them reported
+# live-store-pollution for ~/.claude/settings.json. Measured afterwards, the change was the line
+# "outputStyle": "Explanatory" appended at 18:41 ET, which claude-sync never writes (most likely
+# Claude Code saving a picked output style). The fixture run read the real clone register
+# (nothing here points CLAUDE_HOME elsewhere), so no sync record could ever have explained it, and
+# none was written in its window. Its suites were fixtures that cannot touch that file, so the only
+# change its bracket could see was somebody else's, while the run it was started under bracketed the
+# very same files over a window that contains it.
+#
+# So a nested run judges only the stores no enclosing run already brackets. Reproduced here as it
+# happened: the planted Mac's own run, a suite in it starting a second run of the runner, and a
+# writer OUTSIDE both rewriting settings.json the way Claude Code does (a key appended at the end,
+# which changes the line before it) at a moment the inner run is certainly inside its window.
+N64="$LS/n1964"
+mkdir -p "$N64"
+n64_layers(){ # n64_layers <inner suite body> [CLAUDE_HOME for the inner run] -> builds outer and inner
+  rm -rf "$N64/outer" "$N64/inner" "$N64/inner.out" "$N64/inner.code"
+  mkdir -p "$N64/outer" "$N64/inner"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf '%s\n' "$1"
+  } > "$N64/inner/test-inner.sh"
+  chmod +x "$N64/inner/test-inner.sh"
+  # The middle suite passes whatever the inner run says, so the outer run's verdict is about its
+  # live stores alone. The inner run's own verdict is kept beside it to be read.
+  {
+    printf '#!/usr/bin/env bash\n'
+    if [ -n "${2:-}" ]; then
+      printf 'CLAUDE_HOME="%s" bash "%s" "%s" > "%s" 2>&1\n' "$2" "$RUNNER" "$N64/inner" "$N64/inner.out"
+    else
+      printf 'bash "%s" "%s" > "%s" 2>&1\n' "$RUNNER" "$N64/inner" "$N64/inner.out"
+    fi
+    printf 'printf "%%s\\n" "$?" > "%s"\n' "$N64/inner.code"
+    printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+  } > "$N64/outer/test-middle.sh"
+  chmod +x "$N64/outer/test-middle.sh"
+}
+n64_run(){ # n64_run -> the planted Mac's own run over the outer layer, with no run enclosing it
+  env -u SYNC_CLONE_REGISTRY -u SYNC_ZSHRC -u SYNC_WATCH_PID_FILE -u SYNC_HOLD_FILE \
+    -u HOOK_TESTS_LIVE_BRACKETED -u HOOK_TESTS_LIVE_BRACKETED_RUN \
+    HOME="$RH" CLAUDE_HOME="$RH/.claude" \
+    CLAUDE_ISSUE_SPOOL_DIR="$LS/spool" HOOK_TESTS_ROOT="$LS" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 \
+    bash "$RUNNER" "$N64/outer" 2>&1
+}
+HW_LIB="$DIR/lib/hang-wait.sh"
+printf '{\n  "model": "opus"\n}\n' > "$RH/.claude/settings.json"
+touch -t 202001010000 "$LS/realclone/.last-applied"
+rm -f "$N64/go" "$N64/done"
+n64_layers ". \"$HW_LIB\"
+: > \"$N64/go\"
+if hang_wait '[ -f \"$N64/done\" ]'; then printf 'SUITE-RESULT passed=1 failed=0\n'; else printf 'the outside writer never wrote\nSUITE-RESULT passed=0 failed=1\n'; exit 1; fi"
+# The outside writer: a child of THIS file, so a descendant of neither run, and timed by the inner
+# suite's signal rather than by a clock, so it lands inside the inner window however loaded the Mac.
+(
+  hang_wait '[ -f "$N64/go" ]' || exit 0
+  printf '{\n  "model": "opus",\n  "outputStyle": "Explanatory"\n}\n' > "$RH/.claude/settings.json"
+  : > "$N64/done"
+) &
+n64_writer=$!
+out_n64a="$(n64_run)"; code_n64a=$?
+kill "$n64_writer" 2>/dev/null; wait "$n64_writer" 2>/dev/null
+inner_n64a="$(cat "$N64/inner.out" 2>/dev/null)"
+code_inner_n64a="$(cat "$N64/inner.code" 2>/dev/null)"
+# The positive control first: the write really landed while the inner run was going (L246).
+[ -f "$N64/done" ] && grep -q outputStyle "$RH/.claude/settings.json" \
+  && printf '%s\n' "$inner_n64a" | grep -E '^ +ok +test-inner\.sh' > /dev/null \
+  && check "#1964 (control) the outside writer rewrote settings.json inside the inner run" ok \
+  || check "#1964 (control) the outside writer rewrote settings.json inside the inner run" "outer=$out_n64a inner=$inner_n64a"
+[ "$code_inner_n64a" = 0 ] \
+  && check "#1964 a run started under another run is not failed by somebody else rewriting a store that run brackets" ok \
+  || check "#1964 a run started under another run is not failed by somebody else rewriting a store that run brackets" "exit=$code_inner_n64a inner=$inner_n64a"
+case "$inner_n64a" in
+  *"live-store-pollution"*|*"SUITES CHANGED A LIVE STORE"*)
+    check "#1964 and it does not call the change pollution" "inner=$inner_n64a" ;;
+  *) check "#1964 and it does not call the change pollution" ok ;;
+esac
+case "$inner_n64a" in
+  *"judged by the run this one was started under"*)
+    check "#1964 and it says which run judges those stores instead" ok ;;
+  *) check "#1964 and it says which run judges those stores instead" "inner=$inner_n64a" ;;
+esac
+
+# The half that must never loosen: a fixture suite inside the inner run that DOES write the real
+# home is still caught, by the outer run, whose window contains every write its nested runs' suites
+# make. Without this the deferral would be a hole rather than a handover (L2).
+printf 'the real rules\n' > "$RH/.claude/CLAUDE.md"
+n64_layers "printf 'a whole file a suite bound to the real path wrote\n' > \"$RH/.claude/CLAUDE.md\"
+printf 'SUITE-RESULT passed=1 failed=0\n'"
+out_n64b="$(n64_run)"; code_n64b=$?
+[ "$code_n64b" -ne 0 ] \
+  && check "#1964 a nested run's suite writing the real home still fails the run it was started under" ok \
+  || check "#1964 a nested run's suite writing the real home still fails the run it was started under" "exit=$code_n64b out=$out_n64b"
+case "$out_n64b" in
+  *"SUITES CHANGED A LIVE STORE"*"$RH/.claude/CLAUDE.md"*)
+    check "#1964 and that run names the store" ok ;;
+  *) check "#1964 and that run names the store" "out=$out_n64b" ;;
+esac
+
+# A list this run is NOT nested under is no bracket at all: one left in a shell, or exported by an
+# unrelated run, would otherwise switch the guard off for a run nobody encloses. Same polluting
+# suite, run on its own with such a list in its environment.
+printf 'the real rules\n' > "$RH/.claude/CLAUDE.md"
+out_n64d="$(env -u SYNC_CLONE_REGISTRY -u SYNC_ZSHRC -u SYNC_WATCH_PID_FILE -u SYNC_HOLD_FILE \
+  HOOK_TESTS_LIVE_BRACKETED="$RH/.claude/CLAUDE.md" HOOK_TESTS_LIVE_BRACKETED_RUN="run-all-tests.1.1" \
+  CLAUDE_SUITE_RUN_ID="some-other-run" \
+  HOME="$RH" CLAUDE_HOME="$RH/.claude" \
+  CLAUDE_ISSUE_SPOOL_DIR="$LS/spool" HOOK_TESTS_ROOT="$LS" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 \
+  bash "$RUNNER" "$N64/inner" 2>&1)"; code_n64d=$?
+case "$out_n64d" in
+  *"SUITES CHANGED A LIVE STORE"*"$RH/.claude/CLAUDE.md"*)
+    [ "$code_n64d" -ne 0 ] \
+      && check "#1964 a bracket list from a run this one is not nested in hands nothing over" ok \
+      || check "#1964 a bracket list from a run this one is not nested in hands nothing over" "exit=$code_n64d out=$out_n64d" ;;
+  *) check "#1964 a bracket list from a run this one is not nested in hands nothing over" "exit=$code_n64d out=$out_n64d" ;;
+esac
+
+# And a nested run whose stores are NOT the enclosing run's still judges its own: a different home
+# is not bracketed by anybody else, so handing it over would leave it unwatched.
+mkdir -p "$N64/cfg"
+printf 'the fixture rules\n' > "$N64/cfg/CLAUDE.md"
+n64_layers "printf 'a whole file a suite wrote\n' > \"$N64/cfg/CLAUDE.md\"
+printf 'SUITE-RESULT passed=1 failed=0\n'" "$N64/cfg"
+out_n64c="$(n64_run)"; code_n64c=$?
+inner_n64c="$(cat "$N64/inner.out" 2>/dev/null)"
+code_inner_n64c="$(cat "$N64/inner.code" 2>/dev/null)"
+case "$inner_n64c" in
+  *"SUITES CHANGED A LIVE STORE"*"$N64/cfg/CLAUDE.md"*)
+    [ "$code_inner_n64c" != 0 ] \
+      && check "#1964 a nested run against a home nobody else brackets still guards it" ok \
+      || check "#1964 a nested run against a home nobody else brackets still guards it" "exit=$code_inner_n64c inner=$inner_n64c" ;;
+  *) check "#1964 a nested run against a home nobody else brackets still guards it" "exit=$code_inner_n64c inner=$inner_n64c" ;;
+esac
+rm -rf "$N64"
+printf 'the real rules\n' > "$RH/.claude/CLAUDE.md"
+rm -f "$RH/.claude/settings.json"
+
 # Lines ADDED to a rule file, with none removed, is what the other writers of these stores do:
 # another Claude session recording a lesson inserts it into the section it belongs in, and that
 # failed two green runs on 2026-09-02 with the message saying a suite had written it. A checksum
