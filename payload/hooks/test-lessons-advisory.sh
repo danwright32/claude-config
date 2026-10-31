@@ -17,6 +17,8 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lessons-advisory.sh"
+# shellcheck source=lib/whole-number.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/whole-number.sh"
 PASS=0
 FAIL=0
 WORK="$(mktemp -d)"
@@ -418,7 +420,7 @@ trig_lengths="$(
 # second one written beside it that drifts (L107).
 trig_agree(){   # $@ = the lengths -> 0 when they are all equal and above zero
   local first="${1:-0}" len
-  case "$first" in ''|*[!0-9]*|0) return 1 ;; esac
+  whole_above_zero "$first" first || return 1
   for len in "$@"; do [ "$len" = "$first" ] || return 1; done
   return 0
 }

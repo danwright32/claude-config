@@ -448,7 +448,7 @@ span "$MERGE 7 --repo acme/widget; cd $gitrepo && $MERGE 8" "$root/plain" \
 # told, so a command whose plain cut shows two merges is refused by name rather than read as one
 # merge (lessons review of #1072, L490): the wrapper route has no other reader check in front of it.
 LONE_MT="$root/lone-mt"; mkdir -p "$LONE_MT"
-cp "$HOOK_DIR/lib/merge-target.sh" "$HOOK_DIR/lib/push-scope.sh" "$LONE_MT/"
+cp "$HOOK_DIR/lib/merge-target.sh" "$HOOK_DIR/lib/push-scope.sh" "$HOOK_DIR/lib/whole-number.sh" "$LONE_MT/"
 lone_why="$(bash -c '. "$1/merge-target.sh"; mt_merge_span_why "$2" "$3"' _ "$LONE_MT" \
   "cd $root/plain && ./scripts/merge-when-green.sh 7; cd $root/deep && ./scripts/merge-when-green.sh 8" "$root/parent")"; rc=$?
 if [ "$rc" -eq 0 ] && [[ "$lone_why" == *"shell-words.py"* ]]; then pass
