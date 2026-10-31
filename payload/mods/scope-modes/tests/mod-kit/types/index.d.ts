@@ -488,6 +488,15 @@ export type ModKitWrites = {
    * written. A tool may still expand it itself, and so may a script.
    */
   runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true }[] }[]
+  /**
+   * The files a redirect sends standard output into (#1976), present when there are any: `>`, `>>`,
+   * `>|`, `1>`, `&>`, `&>>` and `>& file`, each also in `files`, its `word`, `path` and `folder` as
+   * there. Only the redirect says where standard output goes, so a tee, a copy, a redirect of another
+   * descriptor alone (`2> err.log`), a descriptor copy (`>&2`) and a device give none. Kept apart, as
+   * `byGit` is, for the job watcher, which judges a background command writing its own log by that
+   * log's growth as well as by its output file's.
+   */
+  stdout?: { word: string; path?: string; folder?: string }[]
 }
 
 /**

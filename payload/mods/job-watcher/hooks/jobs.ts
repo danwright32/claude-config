@@ -142,6 +142,17 @@ export const isPollLoop = (command: string): boolean => /\b(until|while)\b[\s\S]
 // whether it runs rather than by its output, the harmless way to be wrong (L648).
 export const holdsOutputBack = (command: string): boolean => /(?:^|[^|])\|&?\s*(?:tail|head)\b/.test(command)
 
+// #1976: what a quiet spell's words add for a job that sends its output to logs of its own (a
+// redirect of standard output, read by mod-kit's write reader): the logs read, which were quiet too,
+// and those that could not be read, which say nothing (L11). Empty for a job with none.
+export const logClause = (read: readonly string[], unread: readonly string[]): string => {
+  const its = (paths: readonly string[], last: string) =>
+    `${paths.length === 1 ? 'its log' : 'its logs'} ${paths.length < 2 ? (paths[0] ?? '') : `${paths.slice(0, -1).join(', ')} ${last} ${paths[paths.length - 1]}`}`
+  const quiet = read.length ? `, in its output or in ${its(read, 'or')}` : ''
+  const lost = unread.length ? `, and ${its(unread, 'and')} could not be read` : ''
+  return quiet + lost
+}
+
 export type Sample = {
   /** The end of the job's output file. */
   tail: string
