@@ -49,7 +49,16 @@ export const WAIT_MS = 24 * 60 * 60_000
  * before the command ran is not proven to be the one it merged: the same number in another
  * repository, asked in the wrong folder, would read as merged too (L237).
  */
-export type Proof = { kind: 'merged'; pr: number; url: string } | { kind: 'open' } | { kind: 'closed' } | { kind: 'unproven'; why: string }
+export type Proof = { kind: 'merged'; pr: number; url: string } | { kind: 'open' } | { kind: 'closed' } | { kind: 'not a pr' } | { kind: 'unproven'; why: string }
+
+/**
+ * Whether GitHub's refusal says the number is no pull request in the repository asked (an issue, or
+ * nothing at all): gh's own words for it, measured on Try-Pennie/slate#4342, a lesson sweep issue
+ * (#1943). That is an answer, not a failure to ask: a merge naming it merged nothing, and no card can
+ * ever be made for it, so it is never owed one. Any other refusal (GitHub not answering, no access)
+ * proves nothing either way and stays unproven.
+ */
+export const isNotAPr = (error: string): boolean => /Could not resolve to a PullRequest/i.test(error)
 export const proofOf = (stdout: string, since: number): Proof => {
   let v: { number?: unknown; state?: unknown; mergedAt?: unknown; url?: unknown }
   try {

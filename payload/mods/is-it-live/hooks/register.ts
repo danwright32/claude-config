@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
-import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, letGoOf, mergeCallOf, nudgeOf, proofOf, refusalOf } from './merges.ts'
+import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, proofOf, refusalOf } from './merges.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
@@ -121,7 +121,8 @@ const owedOf = async ($: EngineInterface): Promise<IsItLiveOwed[]> => (await $.s
 // merge exit 0, and `--delete-branch` in a worktree fails after merging (L161).
 const ask = async ($: EngineInterface, m: { selector?: string; named?: string }, cwd: string, since: number): Promise<Proof> => {
   const r = await run($, ['gh', 'pr', 'view', ...(m.selector !== undefined ? [m.selector] : []), ...(m.named ? ['--repo', m.named] : []), '--json', VIEW_FIELDS], cwd)
-  return r.error !== undefined ? { kind: 'unproven', why: `GitHub could not be asked: ${r.error}` } : proofOf(r.out as string, since)
+  if (r.error !== undefined) return isNotAPr(r.error) ? { kind: 'not a pr' } : { kind: 'unproven', why: `GitHub could not be asked: ${r.error}` }
+  return proofOf(r.out as string, since)
 }
 
 // The repository GitHub's own link for the PR names, read by mod-kit's one reader, as a card is kept.
@@ -170,8 +171,9 @@ const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, h
     if (p.kind === 'merged') {
       const repo = await repoOfLink($, p.url, named)
       o = { key: repo ? `${fold(repo)}#${p.pr}` : `#${p.pr}@${at}`, how: 'merged', pr: p.pr, at, cwd, ...(repo ? { repo } : {}) }
-    } else if (m.pr === undefined || p.kind === 'closed' || (p.kind === 'open' && !how.background)) {
-      // Merged nothing (refused, still open, closed), or names no number to hold it by.
+    } else if (m.pr === undefined || p.kind === 'closed' || p.kind === 'not a pr' || (p.kind === 'open' && !how.background)) {
+      // Merged nothing (refused, still open, closed, or the number is an issue's, #1943), or names
+      // no number to hold it by.
       o = undefined
     } else if (how.background) {
       o = { key: `wait:${named ?? cwd}#${m.pr}@${at}`, how: 'waiting', pr: m.pr, at, cwd, ...(m.selector !== undefined ? { selector: m.selector } : {}), ...(named ? { named, repo: named } : {}) }
@@ -200,7 +202,11 @@ const carded = async ($: EngineInterface, o: IsItLiveOwed): Promise<boolean> => 
 }
 
 // The merges still owed a card at a turn end: a background merge GitHub now says merged becomes
-// owed, one closed or past its wait is let go, and a merge with a card is settled.
+// owed, one closed, past its wait or naming no pull request is let go, and a merge with a card is
+// settled. Kept once per key (#1943): the helper run twice in the background for one PR, or once
+// there and once in the foreground, leaves a wait for each run, and every one of them becomes the
+// same merge once GitHub says it merged, which the refusal then named once per run. The first kept
+// is the earliest, so any card made since the PR merged settles it.
 const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
   const now = await $.clock.now()
   const kept: IsItLiveOwed[] = []
@@ -212,12 +218,13 @@ const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
         continue
       }
       const p = await ask($, o, o.cwd, o.at)
-      if (p.kind === 'closed') continue
+      if (p.kind === 'closed' || p.kind === 'not a pr') continue
       if (p.kind === 'merged') {
         const repo = await repoOfLink($, p.url, o.named)
         x = { key: repo ? `${fold(repo)}#${p.pr}` : `#${p.pr}@${o.at}`, how: 'merged', pr: p.pr, at: o.at, cwd: o.cwd, ...(repo ? { repo } : {}) }
       }
     }
+    if (kept.some(k => k.key === (x as IsItLiveOwed).key)) continue
     if (x.how !== 'waiting' && (await carded($, x))) continue
     kept.push(x)
   }
@@ -293,6 +300,13 @@ export const register: Register = on => {
 
     // The merge, from GitHub: a card for an unmerged change would be the false "done" it exists to stop.
     const pr = await run($, ['gh', 'pr', 'view', String(input.pr), '--repo', input.repo, '--json', 'state,title,url'])
+    if (pr.error !== undefined && isNotAPr(pr.error)) {
+      // GitHub says the number is no pull request there (an issue, #1943), so no card can ever be
+      // made for it: whatever this session owes under it, in that repository or in one never read,
+      // is let go, or the turn end would ask for it again at every stop.
+      await $.state.set(owedRef, (await owedOf($)).filter(o => !(o.pr === input.pr && (!o.repo || fold(o.repo) === fold(input.repo)))))
+      return { deny: `No card: #${input.pr} in ${input.repo} is not a pull request, so no card is owed for it.` }
+    }
     if (pr.error !== undefined) return { deny: `No card: could not confirm #${input.pr} is merged (${pr.error}).` }
     let facts: { state?: string; title?: string; url?: string }
     try {

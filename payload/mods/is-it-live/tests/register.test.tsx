@@ -190,7 +190,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   const toasts: string[] = []
   const copies: string[] = []
   const runs: string[][] = []
-  mock.clock(on, { now: T0 })
+  const clock = mock.clock(on, { now: T0 })
   mock.store(on, w.stored)
   on('process.run', ($, e) => {
     // mod-kit's repo reader, standing in: its byte for byte copy, as the kit reads (#951).
@@ -251,7 +251,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, toasts, copies, runs }
+  return { w, toasts, copies, runs, clock }
 }
 
 const CARD = {
@@ -843,10 +843,14 @@ test("a link mod-kit cannot read keeps the card under the repository Claude gave
 type Pr = { state: 'MERGED' | 'OPEN' | 'CLOSED'; mergedAt?: number }
 // GitHub, answering `gh pr view <n> [--repo r]` for the PRs it holds; a PR named by no --repo is the
 // session folder's repository's.
-const github = (prs: Record<string, Pr>) => (argv: string[]): Gh => {
+// `issues` are numbers the repository holds as issues, which GitHub answers as it really does when
+// asked for a pull request of that number (#1943, measured on Try-Pennie/slate#4342, 2026-10-31).
+const notAPr = (n: string) => `GraphQL: Could not resolve to a PullRequest with the number of ${n}. (repository.pullRequest)`
+const github = (prs: Record<string, Pr>, issues: string[] = []) => (argv: string[]): Gh => {
   const n = argv[3] !== undefined && !argv[3].startsWith('-') ? argv[3] : undefined
   const at = argv.indexOf('--repo')
   const repo = at >= 0 ? (argv[at + 1] as string) : REPO
+  if (n !== undefined && issues.includes(`${repo}#${n}`)) return { exitCode: 1, stdout: '', stderr: notAPr(n) }
   const p = n === undefined ? undefined : prs[`${repo}#${n}`]
   if (!p) return { exitCode: 1, stdout: '', stderr: 'no pull requests found' }
   return {
@@ -1006,6 +1010,70 @@ test('a merge the helper makes in the background is asked of GitHub at the turn 
   expect((await turnEnd($)).block).toBeUndefined()
   prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: JUST }
   expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+})
+
+// #1943: a Slate session was asked for a card for Try-Pennie/slate#4342, a closed lesson sweep issue,
+// at five turn ends: a merge command naming the issue's number, its failure hidden by a pipe, was
+// recorded as a merge GitHub could not confirm, and the card tool's refusal settled nothing.
+test('a merge naming an issue number owes no card, in the foreground or the background (#1943)', withKit, async ($, on) => {
+  const w = world(on, { prView: github({}, [`${OTHER}#4342`, `${REPO}#4343`]) })
+  await start($)
+  // Piped through tail, the failed merge exits 0: GitHub's answer that the number is no pull request settles it.
+  expect(said(await bash($, `gh pr merge 4342 --repo ${OTHER} --squash 2>&1 | tail -3`))).not.toContain('is it live')
+  expect(said(await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 4343 --squash | tail -5'))).not.toContain('is it live')
+  expect((await turnEnd($)).block).toBeUndefined()
+  // Run by the helper in the background, it is not waited on either, so no turn end asks GitHub about it again.
+  w.w.bash = { text: 'Command running in background with ID: b7.', backgroundTaskId: 'b7' }
+  expect(said(await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 4343 --squash', { run_in_background: true }))).not.toContain('is it live')
+  w.runs.length = 0
+  expect((await turnEnd($)).block).toBeUndefined()
+  expect(views(w.runs)).toEqual([])
+})
+
+test('a number the card tool finds is no pull request stops being owed, so a misreading costs one refusal, never one per turn end (#1943)', withKit, async ($, on) => {
+  // GitHub is not answering when the merge runs, so it is owed as unconfirmed.
+  const w = world(on, { prView: () => ({ exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' }) })
+  await start($)
+  expect(said(await bash($, `gh pr merge 4342 --repo ${OTHER} --squash`))).toContain('GitHub did not confirm that #4342 merged just now')
+  expect((await turnEnd($)).block).toContain(`${OTHER}#4342`)
+  // Back up, GitHub says the number is an issue: the card tool refuses it, saying so, and that settles it.
+  w.w.prView = github({}, [`${OTHER}#4342`])
+  const refused = await card($, { ...CARD, repo: OTHER, pr: 4342 })
+  expect(refused.deny).toContain('#4342')
+  expect(refused.deny).toContain('not a pull request')
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a refusal for a number that is no pull request in one repository leaves the same number owed in another (#1943)', withKit, async ($, on) => {
+  const w = world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST } }, [`${OTHER}#412`]) })
+  await start($)
+  await bash($, 'gh pr merge 412 --squash')
+  expect((await card($, { ...CARD, repo: OTHER })).deny).toContain('not a pull request')
+  expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+  expect(w.runs.length).toBeGreaterThan(0)
+})
+
+// The refusal named one pull request twice ("No is it live card yet for danwright32/claude-config#1958,
+// danwright32/claude-config#1958"): the helper run twice in the background for one pull request kept a
+// wait for each run, and both became the same merge once GitHub said it merged.
+test('one pull request merged through more than one run is named once in the refusal (#1943)', withKit, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
+  const w = world(on, { prView: github(prs) })
+  await start($)
+  w.w.bash = { text: 'Command running in background with ID: b7.', backgroundTaskId: 'b7' }
+  await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 412 --squash', { run_in_background: true })
+  await w.clock.advance(60_000)
+  await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 412 --squash', { run_in_background: true })
+  prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: T0 + 90_000 }
+  await w.clock.advance(60_000)
+  w.w.bash = { text: '' }
+  // And once more in the foreground, which finds it merged.
+  await bash($, 'gh pr merge 412 --squash')
+  const block = (await turnEnd($)).block ?? ''
+  expect(block.split(`${REPO}#412`).length - 1).toBe(1)
+  // One card settles it.
+  expect((await card($, CARD)).deny).toBeUndefined()
+  expect((await turnEnd($)).block).toBeUndefined()
 })
 
 test('GitHub naming an older merge under that number is not taken for this one, and a card that finds it unmerged clears it (#1244)', withKit, async ($, on) => {
