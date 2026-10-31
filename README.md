@@ -2226,6 +2226,13 @@ those (`bash payload/hooks/run-all-tests.sh tests tools`). A directory it was to
 holds no suite is a failure, not a quiet pass, because reading nothing and reading everything green
 look identical otherwise.
 
+The report is sorted and waits for every suite, so as each one finishes the runner prints a line
+such as `run-all-tests progress: 37 of 239 suite(s) finished, 4m 12s in, test-x.sh exited 0`, and a
+run in the background is seen to be working rather than hung (#1979). It gives the exit status, not
+the verdict, which the report below decides. Nothing reads these lines: their prefix is shared with
+no line claude-sync, CI, the gates or the suites match, and `test-runner-progress.sh` holds each of
+those readers to that.
+
 Four other outcomes are told apart rather than folded into pass or fail. A suite whose output says
 `command not found` fails, naming the line, whatever its own score says: a case calling a helper
 that does not exist adds no pass and no fail, so it otherwise reads as one that passed (#1044). A
