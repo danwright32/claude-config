@@ -73,7 +73,7 @@ fixture_run(){ # fixture_run <suites dir>: the runner over that directory, two s
     SYNC_HOLD_FILE="$T/hold" \
     CLAUDE_ISSUE_SPOOL_DIR="$T/spool" \
     HOOK_TESTS_FLAKY_OUTPUT="$T/flaky" \
-    HOOK_TESTS_ROOT="$T" HOOK_TESTS_TIMINGS= HOOK_TESTS_JOBS=2 HOOK_TESTS_FLAKE_RECHECK=0 \
+    HOOK_TESTS_ROOT="$T" HOOK_TESTS_TIMINGS= HOOK_TESTS_JOBS=2 HOOK_TESTS_FLAKE_RECHECK="${FIXTURE_RECHECK:-0}" \
     bash "$RUNNER" "$1" 2>&1
 }
 mk_result_suite(){ # mk_result_suite <dir> <name> <passed> <failed> <exit>
@@ -163,14 +163,115 @@ first_verdict="$(grep -n -E '^ +(ok|FAIL) +test-' <<< "$fout" | sed -n '1s/:.*//
   && check "#1979 and a passing run still ends with ALL N SUITES PASSED" ok \
   || check "#1979 and a passing run still ends with ALL N SUITES PASSED" "out=$gout"
 
+# ---- 2b. A flake recheck says when it starts and when it ends (claude-config#1988) ----
+# After the last suite the runner reruns each failed one to see whether it is a flake, and each
+# recheck may take three times the suite's own time, so a run with a failure went quiet again for
+# minutes after the last progress line: the hung look #1979 ended, back at the end of the run.
+#
+# Three failed suites. test-flaky.sh fails the first time and, on its recheck, passes only once the
+# runner's own output has gained the line saying that recheck started, so FLAKY on its FAIL line is
+# the proof the line arrived while the recheck was still running. Its wait is on that condition,
+# bounded by the recheck's own allowance (L290); before #1988 the line never came, the allowance ran
+# out, and the FAIL line said the recheck timed out instead. test-solid.sh fails both times, so its
+# recheck ends with exit status 1. test-hangs.sh hangs on its recheck, in a run of its own with a one
+# second allowance so it costs about a second (L524), and its recheck is stopped.
+R="$T/recheck"; RLOG="$T/recheck.log"; RMARK="$T/recheck.marks"
+mkdir -p "$R" "$RMARK"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '. "%s"\n' "$DIR/lib/hang-wait.sh"
+  printf 'if [ -e "%s/flaky" ]; then\n' "$RMARK"
+  printf '  if hang_wait %q; then printf %s\\\\n "%s passed=1 failed=0"; exit 0; fi\n' \
+    "grep -q '^${PREFIX}flake recheck [0-9]* started, .* test-flaky\\.sh' \"$RLOG\"" "'%s'" "$MARK"
+  printf '  echo "FAIL: no line saying this recheck started reached the runner output while it ran"\n'
+  printf '  printf %s\\\\n "%s passed=0 failed=1"; exit 1\n' "'%s'" "$MARK"
+  printf 'fi\n'
+  printf 'touch "%s/flaky"\n' "$RMARK"
+  printf 'echo "FAIL: the first run of a flake"\n'
+  printf 'printf %s\\\\n "%s passed=0 failed=1"\n' "'%s'" "$MARK"
+  printf 'exit 1\n'
+} > "$R/test-flaky.sh"
+chmod +x "$R/test-flaky.sh"
+mk_result_suite "$R" solid 0 1 1
+FIXTURE_RECHECK=1 HOOK_TESTS_FLAKE_RECHECK_MAX=30 HOOK_TESTS_FLAKE_RECHECK_POLL=0.05 fixture_run "$R" > "$RLOG"; rcode=$?
+rout="$(cat "$RLOG")"
+grep -q -E '^ +FAIL +test-flaky\.sh .* FLAKY' <<< "$rout" \
+  && check "#1988 the line saying a recheck started reaches the output while that recheck is still running" ok \
+  || check "#1988 the line saying a recheck started reaches the output while that recheck is still running" "exit=$rcode out=$rout"
+grep -q -E '^ +FAIL +test-solid\.sh' <<< "$rout" && ! grep -q -E '^ +FAIL +test-solid\.sh .*FLAKY' <<< "$rout" && [ "$rcode" -ne 0 ] \
+  && check "#1988 (control) the suite failing twice is still a plain failure, and the run is red" ok \
+  || check "#1988 (control) the suite failing twice is still a plain failure, and the run is red" "exit=$rcode out=$rout"
+rlines="$(grep -F "${PREFIX}flake recheck " <<< "$rout" || true)"
+# What each says: the recheck's number in this run, the time since the run began, the suite, and
+# its allowance as it starts or its exit status and how long it took as it ends. The exit status,
+# never FLAKY or FAIL, which the FAIL line decides from the recheck's whole output (L11).
+r_start='^run-all-tests progress: flake recheck [0-9]+ started, (([0-9]+h )?[0-9]+m )?[0-9]+[sm] in, test-[a-z]+\.sh allowed up to [0-9]+s$'
+r_end='^run-all-tests progress: flake recheck [0-9]+ ended, (([0-9]+h )?[0-9]+m )?[0-9]+[sm] in, test-[a-z]+\.sh exited [0-9]+ after [0-9]+s$'
+r_stop='^run-all-tests progress: flake recheck [0-9]+ stopped, (([0-9]+h )?[0-9]+m )?[0-9]+[sm] in, test-[a-z]+\.sh still running after [0-9]+s$'
+[ "$(grep -c . <<< "$rlines")" -eq 4 ] && [ -z "$(grep -v -E "$r_start|$r_end" <<< "$rlines")" ] \
+  && check "#1988 each recheck prints one line as it starts and one as it ends, in the agreed shape" ok \
+  || check "#1988 each recheck prints one line as it starts and one as it ends, in the agreed shape" "lines=$rlines"
+grep -q -E '^run-all-tests progress: flake recheck 1 started, .* test-flaky\.sh allowed up to 30s$' <<< "$rlines" \
+  && grep -q -E '^run-all-tests progress: flake recheck 1 ended, .* test-flaky\.sh exited 0 after [0-9]+s$' <<< "$rlines" \
+  && grep -q -E '^run-all-tests progress: flake recheck 2 started, .* test-solid\.sh allowed up to 30s$' <<< "$rlines" \
+  && grep -q -E '^run-all-tests progress: flake recheck 2 ended, .* test-solid\.sh exited 1 after [0-9]+s$' <<< "$rlines" \
+  && check "#1988 the lines number each recheck and give its suite, allowance and exit status" ok \
+  || check "#1988 the lines number each recheck and give its suite, allowance and exit status" "lines=$rlines"
+# Each recheck's lines come in order and before the FAIL line they lead to, which is printed only
+# once its recheck is over.
+r_order_ok=1
+for s in flaky solid; do
+  a="$(grep -n -E "^${PREFIX}flake recheck [0-9]+ started, .* test-$s\\.sh " <<< "$rout" | sed -n '1s/:.*//p')"
+  b="$(grep -n -E "^${PREFIX}flake recheck [0-9]+ ended, .* test-$s\\.sh " <<< "$rout" | sed -n '1s/:.*//p')"
+  c="$(grep -n -E "^ +FAIL +test-$s\\.sh" <<< "$rout" | sed -n '1s/:.*//p')"
+  { [ -n "$a" ] && [ -n "$b" ] && [ -n "$c" ] && [ "$a" -lt "$b" ] && [ "$b" -lt "$c" ]; } || r_order_ok=0
+done
+[ "$r_order_ok" -eq 1 ] \
+  && check "#1988 a recheck's start line, then its end line, then the FAIL line for that suite" ok \
+  || check "#1988 a recheck's start line, then its end line, then the FAIL line for that suite" "out=$rout"
+[ "$(sort -u <<< "$rlines" | grep -c .)" -eq "$(grep -c . <<< "$rlines")" ] \
+  && check "#1988 no two recheck lines are the same, so the job watcher cannot read them as repeating" ok \
+  || check "#1988 no two recheck lines are the same, so the job watcher cannot read them as repeating" "lines=$rlines"
+[ "$(sed -n '$p' <<< "$rout")" = '2 of 2 SUITES FAILED: test-flaky.sh test-solid.sh' ] \
+  && check "#1988 and the report still ends with its own verdict line" ok \
+  || check "#1988 and the report still ends with its own verdict line" "out=$rout"
+
+# The recheck that hangs, and is stopped at the end of its allowance.
+H="$T/recheck-hang"; mkdir -p "$H"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'if [ -e "%s/hangs" ]; then sleep 30; exit 0; fi\n' "$RMARK"
+  printf 'touch "%s/hangs"\n' "$RMARK"
+  printf 'echo "FAIL: it failed, and it will hang if run again"\n'
+  printf 'printf %s\\\\n "%s passed=0 failed=1"\n' "'%s'" "$MARK"
+  printf 'exit 1\n'
+} > "$H/test-hangs.sh"
+chmod +x "$H/test-hangs.sh"
+hout="$(FIXTURE_RECHECK=1 HOOK_TESTS_FLAKE_RECHECK_MAX=1 HOOK_TESTS_FLAKE_RECHECK_POLL=0.05 fixture_run "$H")"; hcode=$?
+hlines="$(grep -F "${PREFIX}flake recheck " <<< "$hout" || true)"
+[ "$(grep -c . <<< "$hlines")" -eq 2 ] \
+  && grep -q -E "$r_start" <<< "$(sed -n 1p <<< "$hlines")" \
+  && grep -q -E "$r_stop" <<< "$(sed -n 2p <<< "$hlines")" \
+  && grep -q -E 'test-hangs\.sh still running after [0-9]+s$' <<< "$hlines" \
+  && check "#1988 a recheck that hangs says it started, then that it was stopped still running" ok \
+  || check "#1988 a recheck that hangs says it started, then that it was stopped still running" "exit=$hcode out=$hout"
+grep -q -E '^ +FAIL +test-hangs\.sh .*recheck timed out' <<< "$hout" && [ "$hcode" -ne 0 ] \
+  && check "#1988 and its FAIL line still says the recheck timed out, failing the run" ok \
+  || check "#1988 and its FAIL line still says the recheck timed out, failing the run" "exit=$hcode out=$hout"
+
 # ---- 3. Every reader of the runner's output reads past the new lines (L683) ----
-# The lines judged are the ones the runner really printed, a failing suite's among them, never a
-# copy typed here (L48).
+# The lines judged are the ones the runner really printed, a failing suite's and every kind of
+# recheck line among them, never a copy typed here (L48).
 all_lines="$(grep . <<< "$glines
-$flines" || true)"
+$flines
+$rlines
+$hlines" || true)"
 [ "$(grep -c . <<< "$all_lines")" -ge 4 ] \
   && check "#1979 (control) the readers below are handed real progress lines" ok \
   || check "#1979 (control) the readers below are handed real progress lines" "lines=$all_lines"
+grep -q -E "$r_start" <<< "$all_lines" && grep -q -E "$r_end" <<< "$all_lines" && grep -q -E "$r_stop" <<< "$all_lines" \
+  && check "#1988 (control) and recheck lines that started, ended and were stopped among them" ok \
+  || check "#1988 (control) and recheck lines that started, ended and were stopped among them" "lines=$all_lines"
 
 # This repository's own readers anchor on `^run-all-tests: ` and something after it: the suite
 # stopped at its wall clock (test-run-all-tests.sh), the launch order, the CI log's launch order
