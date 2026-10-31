@@ -302,9 +302,11 @@ export const register: Register = on => {
     const pr = await run($, ['gh', 'pr', 'view', String(input.pr), '--repo', input.repo, '--json', 'state,title,url'])
     if (pr.error !== undefined && isNotAPr(pr.error)) {
       // GitHub says the number is no pull request there (an issue, #1943), so no card can ever be
-      // made for it: whatever this session owes under it, in that repository or in one never read,
-      // is let go, or the turn end would ask for it again at every stop.
-      await $.state.set(owedRef, (await owedOf($)).filter(o => !(o.pr === input.pr && (!o.repo || fold(o.repo) === fold(input.repo)))))
+      // made for it: a merge this session could not confirm, or is still waiting on, under it, in
+      // that repository or in one never read, is let go, or the turn end would ask for it again at
+      // every stop. A merge GitHub confirmed is a pull request, so the answer is about another
+      // repository's number, and it stays owed.
+      await $.state.set(owedRef, (await owedOf($)).filter(o => !(o.how !== 'merged' && o.pr === input.pr && (!o.repo || fold(o.repo) === fold(input.repo)))))
       return { deny: `No card: #${input.pr} in ${input.repo} is not a pull request, so no card is owed for it.` }
     }
     if (pr.error !== undefined) return { deny: `No card: could not confirm #${input.pr} is merged (${pr.error}).` }

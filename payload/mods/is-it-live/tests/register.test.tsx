@@ -1053,6 +1053,17 @@ test('a refusal for a number that is no pull request in one repository leaves th
   expect(w.runs.length).toBeGreaterThan(0)
 })
 
+test('a not a pull request answer never lets go of a merge GitHub confirmed, even one whose repository was not read (#1943)', withKit, async ($, on) => {
+  // GitHub confirms the merge, but its link cannot be read, so the merge is owed with no repository.
+  const confirmed: Gh = { exitCode: 0, stdout: JSON.stringify({ number: 412, state: 'MERGED', mergedAt: new Date(JUST).toISOString(), url: 'https://example.com/pull/412' }) }
+  world(on, { prView: argv => (argv.includes(OTHER) ? { exitCode: 1, stdout: '', stderr: notAPr('412') } : confirmed) })
+  await start($)
+  expect(said(await bash($, 'gh pr merge 412 --squash'))).toContain('You merged #412')
+  // Claude names the wrong repository for it: that answer is about another repository's number.
+  expect((await card($, { ...CARD, repo: OTHER })).deny).toContain('not a pull request')
+  expect((await turnEnd($)).block).toContain('#412 (its repository was not read from the command)')
+})
+
 // The refusal named one pull request twice ("No is it live card yet for danwright32/claude-config#1958,
 // danwright32/claude-config#1958"): the helper run twice in the background for one pull request kept a
 // wait for each run, and both became the same merge once GitHub said it merged.
