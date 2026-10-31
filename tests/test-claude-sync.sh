@@ -22993,7 +22993,7 @@ SXOH="$WORK/sxo-home"; mkdir -p "$SXOH"; printf '%s\n' "$SX_ORIG" > "$SXOH/setti
 out_sxo="$(sx_pull "$SXOH" "$SXOR")"
 dbg "shared output style: $out_sxo"
 check "a pull sets outputStyle from the shared settings file" "[ \"\$(jq -r '.outputStyle' '$SXOH/settings.json')\" = Explanatory ]"
-check "and leaves every other setting as it was" \
+check "and leaves every setting but outputStyle as it was" \
   "[ \"\$(jq -cS 'del(.outputStyle)' '$SXOH/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
 check "and the shared file in this repository carries Explanatory" "[ \"\$(jq -r '.outputStyle' '$(dirname "$SCRIPT")/payload/settings.shared.json')\" = Explanatory ]"
 SXOBR="$WORK/sxob-repo"; sx_repo "$SXOBR" '{"outputStyle": "My Own Style"}' ''
