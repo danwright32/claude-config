@@ -929,6 +929,9 @@ if [ "$ran" -gt 0 ]; then
   # A run started UNDER another run extends that run's id rather than replacing it
   # (claude-config#880), so the outer run can claim a record its nested run's suites wrote by
   # prefix, and a stamp from some unrelated run elsewhere on this machine is not this run's.
+  # The id it was started under is kept, because the live store bracket below asks whether an
+  # enclosing run already watches the same files (claude-config#1964).
+  _runner_parent_run="${CLAUDE_SUITE_RUN_ID:-}"
   CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:+$CLAUDE_SUITE_RUN_ID/}run-all-tests.$$.$(date +%s)"
   export CLAUDE_SUITE_RUN_ID
 
@@ -1022,9 +1025,11 @@ if [ "$ran" -gt 0 ]; then
 # A LIST, so adding a store is one line rather than a new guard. Compared on content, which is
   # what a rule file being damaged actually looks like: a suite that rewrites LESSONS.md with the
   # same number of bytes changes no size at all, and a size-only bracket would report that as
-  # clean (L63). Attribution is deliberately NOT attempted here: unlike the spool, nothing else on
-  # this machine legitimately writes these during a test run, so any change at all is this run's
-  # doing and there is nothing to tell apart.
+  # clean (L63). Attribution was deliberately NOT attempted here at first, on the belief that
+  # nothing else on this machine legitimately writes these during a test run. That was false: the
+  # sync applies into them (#277), another session recording a lesson adds to them (#277), and Claude
+  # Code itself rewrites settings.json when a setting is picked (#1964). The verdict below names
+  # which of those it can recognise.
   _live_stores="${CLAUDE_HOME:-$HOME/.claude}/LESSONS.md
 ${CLAUDE_HOME:-$HOME/.claude}/LESSONS-INDEX.md
 ${CLAUDE_HOME:-$HOME/.claude}/CLAUDE.md
@@ -1050,6 +1055,55 @@ $(store_for_this_home "${SYNC_HOLD_FILE:-}" "$HOME/.claude-sync-hold")"
   # one is caught by the same comparison. Skipping it would make creating a file the one write
   # this cannot see (L98, L214). That half was a claim until #272: neither it nor the comparison
   # had ever been seen to fire, and both now are (L1).
+  #
+  # A RUN STARTED UNDER ANOTHER RUN leaves to it every store that run already brackets
+  # (claude-config#1964). Suites start the runner against fixture suites all the time (about 120
+  # launches in test-run-all-tests.sh alone), and with CLAUDE_HOME left alone each of those bracketed
+  # Dan's real ~/.claude. Their suites cannot write there, so the only change such a bracket can ever
+  # see is somebody else's: on 2026-10-30 "outputStyle" was appended to settings.json while one ran
+  # (a key claude-sync never writes, most likely Claude Code saving a picked output style), a write no
+  # sync record explains, and two checks failed as live-store-pollution.
+  # The enclosing run brackets the same file over a window that contains the nested one, so a nested
+  # suite that really did write it is still caught, once, there; judging it here as well only adds
+  # a second, shorter window that a legitimate writer lands in with nothing to tell it from a suite.
+  #
+  # Handed over per store, and only to a run this one is really nested in: the list comes with the
+  # id of the run that exported it, and counts only when that id begins the id this run was started
+  # under. A store no enclosing run brackets (a fixture's own home, a seam pointed elsewhere) is
+  # judged here exactly as before, and so is everything in a run started on its own.
+  _live_handed_n=0; _live_enclosing=""
+  case "$_runner_parent_run" in
+    '') ;;
+    "${HOOK_TESTS_LIVE_BRACKETED_RUN:-(none)}"|"${HOOK_TESTS_LIVE_BRACKETED_RUN:-(none)}"/*)
+      if [ -n "${HOOK_TESTS_LIVE_BRACKETED:-}" ]; then
+        _live_enclosing="$HOOK_TESTS_LIVE_BRACKETED
+"
+        _live_own=""
+        while IFS= read -r _lh_f; do
+          [ -n "$_lh_f" ] || continue
+          case "
+$HOOK_TESTS_LIVE_BRACKETED
+" in
+            *"
+$_lh_f
+"*) _live_handed_n=$((_live_handed_n + 1)) ;;
+            *) _live_own="$_live_own$_lh_f
+" ;;
+          esac
+        done <<LIVEHANDED
+$_live_stores
+LIVEHANDED
+        _live_stores="$_live_own"
+      fi ;;
+  esac
+  if [ "$_live_handed_n" -gt 0 ]; then
+    echo "run-all-tests: $_live_handed_n live store(s) are judged by the run this one was started under, which brackets them over a window containing this run's, so they are not judged here as well"
+  fi
+  # And handed on: a run started under this one sees every store bracketed by this run or by any run
+  # enclosing it, each of whose windows contains its own.
+  HOOK_TESTS_LIVE_BRACKETED="$_live_enclosing$_live_stores"
+  HOOK_TESTS_LIVE_BRACKETED_RUN="$CLAUDE_SUITE_RUN_ID"
+  export HOOK_TESTS_LIVE_BRACKETED HOOK_TESTS_LIVE_BRACKETED_RUN
   _live_fingerprint(){
     local f
     while IFS= read -r f; do

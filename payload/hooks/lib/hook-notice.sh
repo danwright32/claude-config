@@ -20,11 +20,21 @@
 # Notification and SessionEnd as discarding it. So it is for PreToolUse, PostToolUse,
 # UserPromptSubmit, SessionStart, Stop and the like, never for those five.
 #
-# THAT RESTS ON THE DOCUMENTATION, NOT ON A SESSION WATCHED (claude-config#1924). Three things it
-# relies on have not yet been seen in a real session: that a UserPromptSubmit systemMessage is shown
-# to the person, that several PreToolUse hooks each giving a systemMessage on one call are all shown,
-# and (issue-spool-session-end.sh) that SessionEnd stderr with exit 2 is shown at /clear. Until they
-# are, the documentation is the source; when one is seen, record here what was seen and when.
+# THAT RESTED ON THE DOCUMENTATION, NOT ON A SESSION WATCHED (claude-config#1924, #1949). Three
+# things it relies on were checked in real sessions on 2026-10-30:
+#   * A UserPromptSubmit systemMessage IS shown to the person. SEEN: suite-pile-notice's bad
+#     setting notice appeared on the first prompt as "UserPromptSubmit says: ..." and did not
+#     repeat on the second.
+#   * SessionEnd stderr with exit 2 at /clear: NOTHING WAS SHOWN, but that does not settle it. The
+#     check made ~/.claude-issue-spool read only (chmod 500) and /clear printed no
+#     issue-spool-session-end line. The stamp is written into its ended/ folder, which stayed
+#     writable, and both test sessions were stamped ended (18:10 and 18:11 ET), so the hook
+#     succeeded and had nothing to print. Whether exit 2 stderr reaches the person is still
+#     unseen, so issue-spool-session-end.sh no longer relies on it: it also leaves its failure for
+#     the next prompt to say, through hook_defer_notice and sync-stuck-notice.sh, which uses the
+#     channel that was seen. Checking it for real means making the ended/ folder read only.
+#   * Several PreToolUse hooks each giving a systemMessage on one call are all shown: NOT YET SEEN.
+#     The documentation is still the source for that one.
 #
 # THE RULES IT KEEPS, each a way the call it allows could otherwise be refused once the hook carries
 # onFailure block (the documentation lists invalid output among the failures):
@@ -47,6 +57,16 @@
 #   hook_notice_verdict <stdout> <ERE>
 #       for the suites: print why <stdout> is not exactly one JSON object whose systemMessage
 #       matches <ERE> (Python's re), or nothing when it is.
+#   hook_defer_notice <text> <file>...
+#       for a hook on an event with no channel seen to reach the person (SessionEnd): append <text>
+#       to the first <file> it can write, trying each in turn, for a prompt hook to say later.
+#       Returns 1 when none of them could be written.
+#   hook_take_deferred <file>...
+#       for that prompt hook: set HN_DEFERRED to every deferred text in the <file>s and remove
+#       them, so each is said once. A file is claimed by renaming it first, so two sessions
+#       prompting at once cannot both say it. With nothing deferred it starts no process, since
+#       it runs on every prompt. A file it cannot remove is said with a note that it will be said
+#       again, rather than repeating with no explanation.
 #
 # A HOOK SOURCES IT WITH A FALLBACK, the same three lines in each, so a missing library cannot leave
 # hook_allow_notice undefined, where "command not found" would carry on into the gate's own logic
@@ -113,6 +133,35 @@ hook_allow_notice() {
   printf '%s\n' "$1" >&2
   hook_notice_json "$@"
   exit 0
+}
+
+hook_defer_notice() {
+  local text="$1" f; shift
+  for f in "$@"; do
+    [ -n "$f" ] || continue
+    mkdir -p "${f%/*}" 2>/dev/null
+    printf '%s\n' "$text" >> "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+hook_take_deferred() {
+  local f t text
+  HN_DEFERRED=""
+  for f in "$@"; do
+    [ -n "$f" ] && [ -e "$f" ] || continue
+    t="$f.taking.$$"
+    if mv -f "$f" "$t" 2>/dev/null; then
+      text="$(cat "$t" 2>/dev/null)"
+      rm -f "$t" 2>/dev/null
+    elif [ -e "$f" ]; then
+      text="$(cat "$f" 2>/dev/null) (This could not be removed from $f, so it will be said again at every prompt until that file is deleted.)"
+    else
+      continue   # another session's prompt took it between the look and the rename
+    fi
+    [ -n "$text" ] && HN_DEFERRED="${HN_DEFERRED:+$HN_DEFERRED
+}$text"
+  done
 }
 
 hook_notice_verdict() {

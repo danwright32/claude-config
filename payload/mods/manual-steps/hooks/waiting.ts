@@ -103,6 +103,39 @@ const notQuoted = (plain: string, at: number): boolean => !quotedOnLine(plain.sl
 const NUMBERED = new RegExp(String.raw`^[ \t]*(?:\d+[.)]|step \d+[.:])[ \t]+(?:\*\*)?${ACTION}\b`, 'gim')
 const numberedTwice = (plain: string): boolean => (plain.match(NUMBERED) ?? []).length >= 2
 
+// #1955: a file edit handed to Dan that names no command, page or terminal ("Put allow or forbid in
+// the third column and save, then tell me."), told by how it closes: asking to be told, or saving.
+// Measured over the 15,216 messages Claude wrote in this Mac's transcripts of the 30 days to
+// 2026-10-30 (docs/mods-design.md "Manual steps"). An imperative to edit, mark, put or write leading a
+// sentence fired 3 times, all false (Claude's own plan, "Write the file less often"), and "save"
+// alone 3, all false (Claude's own bullet, a Save button), so neither is here.
+// "Tell me it's done", a sentence of its own: 1 fired, a step.
+const TELL_ME_DONE = new RegExp(`${LEAD}tell me (?:it's|it is|that it's|that it is|that's) (?:done|saved|finished|in place|filled in)\\b`, 'gim')
+// ", then tell me" after an instruction: 4 fired, all steps, none caught before.
+const THEN_TELL_ME = /,? then tell me\b/gi
+// "Save the file", "Save your changes", leading a sentence: none fired in the 30 days.
+const SAVE_FILE = new RegExp(`${LEAD}save (?:the|this|that|your) (?:file|sheet|document|changes|edits)\\b`, 'gim')
+// The save key handed over: "Press **Cmd+S**", "save with Cmd+S", "(Cmd+S)": 5 fired, all steps.
+// Case kept and the plus required: without them "(commands, git and writes)" fired 3 times.
+const CMD_S = /(?:\b[Pp]ress(?:ing)?\s+|\b[Ww]ith\s+|\()(?:\*\*)?(?:(?:Cmd|Command|CMD)\s*[+-]\s*|⌘\s*)S\b/g
+// Said of what Claude, or something else, will do or did ("The watcher will wait, then tell me",
+// "I saved it with Cmd+S"), or of a later, conditional press ("when you press Cmd+S"): no step now.
+const NOT_DANS = /(?:\b(?:I|I've|I'd|I'm|We|we|We've|we've)\b|(?<!\byou )\b(?:will|would|should)\b|(?<!\byou)'ll\b)/
+const LATER = /\b(?:before|when|whenever|if|until|after|once|in case)\s+(?:you\s+)?$/i
+// A sentence ends at a full stop, question or exclamation mark followed by white space, or at a line
+// break: never at the dot inside "config.json" or "v2.1", which cut "I saved config.json with Cmd+S"
+// down to "json with Cmd+S" and lost the "I" (lessons review of #1965 at 60730eb).
+const sentenceStart = (before: string): number => {
+  let start = 0
+  for (const m of before.matchAll(/[.!?](?=\s)|\n/g)) start = m.index + 1
+  return start
+}
+const dansNow = (plain: string, at: number): boolean => {
+  const before = plain.slice(0, at)
+  const sentence = before.slice(sentenceStart(before))
+  return !quotedOnLine(before) && !NOT_DANS.test(sentence) && !LATER.test(sentence)
+}
+
 // What a phrase must also be, beyond being there, to count.
 const ALSO: ReadonlyMap<RegExp, (plain: string, at: number, end: number) => boolean> = new Map([
   [WAITING, handsOverAStep],
@@ -111,6 +144,8 @@ const ALSO: ReadonlyMap<RegExp, (plain: string, at: number, end: number) => bool
   [NEEDS_YOU_TO, notQuoted],
   [YOUR_STEP, notQuoted],
   [NUMBERED, numberedTwice],
+  [THEN_TELL_ME, dansNow],
+  [CMD_S, dansNow],
 ])
 
 // Each says a step is Dan's to do. "waiting on you" never matches "waiting on your", and a step is
@@ -144,6 +179,11 @@ export const PHRASES: readonly RegExp[] = [
   /\bgo to\b[^.!?\n]{1,100}\b(?:and|then) (?:click|tap|press|select|choose|type|paste|turn (?:on|off)|toggle)\b/gi,
   // #1811: two or more numbered steps that each begin with an action at a screen.
   NUMBERED,
+  // #1955: a file edit handed over, told by how it closes.
+  TELL_ME_DONE,
+  THEN_TELL_ME,
+  SAVE_FILE,
+  CMD_S,
 ]
 
 // #1811: Claude saying plainly that none of the steps it handed over are Dan's to do now, which
