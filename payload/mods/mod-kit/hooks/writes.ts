@@ -58,8 +58,9 @@ const isPipe = (word: string) => /^[<>]\(/.test(word)
 // inside a subshell ends with it. An unquoted value is split into words where the shell running the
 // command splits it (#1834: bash, sh, dash and ksh do, zsh does not), and a quoted one is kept whole.
 // A for loop over plain words (#1953) gives its variable each of them: a word naming it is read once
-// for each, as that many words. A loop over anything else (a pattern, an expansion, a word holding a
-// space or a quote), or a variable also set some other way, is left as written. A word whose every $
+// for each, as that many words, a word holding a space read whole and as each piece (eachOf). A loop
+// over anything else (a pattern, an expansion, a ~ or a #), or a variable also set some other way, is
+// left as written. A word whose every $
 // is in single quotes or after a backslash (Command.unexpanded) is never read as a value.
 const SETS = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/
 const APPENDS = /^([A-Za-z_][A-Za-z0-9_]*)\+=/
