@@ -73,7 +73,12 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: 
   } catch {
     return { reason: `The question about ${app} was dismissed.` }
   }
-  if (answer !== 'Go ahead') return { reason: `You said not now to ${typing ? `typing into ${app}` : `bringing ${app} to the front`}.` }
+  // A Not now to bringing an app forward names the next step (#1935): what it would have shown goes
+  // where away mode delivers every result. Typing has no result to show, so it gets none.
+  if (answer !== 'Go ahead') {
+    if (typing) return { reason: `You said not now to typing into ${app}.` }
+    return { reason: `You said not now to bringing ${app} to the front.`, safeWay: publishInstead('what it would have shown') }
+  }
   // A yes is remembered only for an app the guard could name: one for "an app" would cover every
   // app it cannot name (lessons review).
   if (named) lastActive.set(app, await $.clock.now())

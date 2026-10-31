@@ -1,5 +1,6 @@
 import type { ScopeModesPlace, ScopeModesScope } from '../types/index.d.ts'
 import { FINISHED, NEW_WORK } from './winddown.ts'
+import { PRIVATE_PAGE } from './mod-kit/deliver.ts'
 
 // What each mode does, as one definition (#1055). The acknowledgement Claude opens its reply with
 // when Dan switches a mode, and the note each prompt carries while the mode is on, are both built
@@ -46,13 +47,14 @@ export const MODE_DEF: Record<Mode, ModeDef> = {
   },
   away: {
     name: 'Away',
-    will: 'deliver results as a private claude.ai page, readable on the phone',
+    will: `deliver results as ${PRIVATE_PAGE}, readable on the phone`,
     // What away holds (#1269, Dan 2026-10-16 ET), said as what Claude must not do.
     willNot: 'show a dialog, run a script whose text cannot be read, type or click into anything but a test build, or open a page for Dan to read on the Mac: those wait in the held card until home (bringing apps forward, opening files and test automation run)',
   },
   home: {
     name: 'Home',
-    will: 'deliver results on the Mac as CLAUDE.md says (HTML in Chrome, drafts in BBEdit, images and PDFs in Preview)',
+    // Where away delivers, once Dan has said Not now to bringing the app forward (#1935).
+    will: `deliver results on the Mac as CLAUDE.md says (HTML in Chrome, drafts in BBEdit, images and PDFs in Preview), or as ${PRIVATE_PAGE} when bringing that app forward is declined`,
     willNot: 'run anything held while away until its button in the held card is pressed',
   },
   // What sleep mode does in every session (#840 to #844): quiet, every result held until wake where
