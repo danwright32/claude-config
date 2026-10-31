@@ -134,11 +134,21 @@ nopy "git status"
 check_eq "#1478 control: with no python3 a command naming no wrapper passes in silence" "0|" "$rc|$out"
 
 # 4. The shared reader missing is the same: refused as not judged, naming what is missing.
-LONE="$WORKDIR/lone"; mkdir -p "$LONE"
+LONE="$WORKDIR/lone"; mkdir -p "$LONE/lib"
 cp "$HOOK" "$LONE/"
+# Only the library each step names is missing: lib/whole-number.sh is there throughout (#1948).
+cp "$DIR/lib/whole-number.sh" "$LONE/lib/"
 out="$(payload "bash -c 'git push'" | bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1478 with lib/push-scope.sh missing a wrapper beside git is refused" "2" "$rc"
 check "#1478 and names the missing file" "lib/push-scope.sh" "$out"
+# And the same for lib/whole-number.sh, which reads the ledger's size (#1948).
+LONEW="$WORKDIR/lone-whole"; mkdir -p "$LONEW/lib"
+cp "$HOOK" "$LONEW/"; cp "$DIR/lib/push-scope.sh" "$DIR/lib/shell-words.py" "$LONEW/lib/"
+out="$(payload "bash -c 'git push'" | bash "$LONEW/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1948 with lib/whole-number.sh missing a wrapper beside git is refused" "2" "$rc"
+check "#1948 and names the missing file" "lib/whole-number.sh" "$out"
+out="$(payload "git status" | bash "$LONEW/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1948 control: with lib/whole-number.sh missing a command naming no wrapper passes in silence" "0|" "$rc|$out"
 mkdir -p "$LONE/lib"; cp "$DIR/lib/push-scope.sh" "$LONE/lib/"
 out="$(payload "bash -c 'git push'" | bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1478 with lib/shell-words.py missing it is refused" "2" "$rc"
@@ -283,7 +293,9 @@ check_eq "#1574 every mode of lib/shell-words.py is listed in its docstring" "no
 # the quoting, as an older shell-words.py installed beside a newer guard would.
 OLDREADER="$WORKDIR/oldreader"; mkdir -p "$OLDREADER/lib"
 cp "$HOOK" "$OLDREADER/"
-cp "$DIR/lib/push-scope.sh" "$OLDREADER/lib/"
+# Every library but the reader under test is the real one, whole-number.sh included (#1948), or the
+# refusals below would be the gate refusing over a missing library rather than over this reader.
+cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$OLDREADER/lib/"
 sed 's/mode == "data-blanked"/mode == "not-a-mode-1574"/' "$DIR/lib/shell-words.py" > "$OLDREADER/lib/shell-words.py"
 out="$(payload "bash $SPOOL note . \"git push\" \"builder\"" | bash "$OLDREADER/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1574 a reader that cannot read the note's quoting refuses it" "2" "$rc"
@@ -295,7 +307,7 @@ check_eq "#1610 a reader that cannot read the duplicate check refuses it" "2" "$
 # a whole script entry, or the token in front, is no match there, so it refuses rather than passes.
 PRE1610="$WORKDIR/pre1610"; mkdir -p "$PRE1610/lib"
 cp "$HOOK" "$PRE1610/"
-cp "$DIR/lib/push-scope.sh" "$PRE1610/lib/"
+cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$PRE1610/lib/"
 python3 -c '
 import re, sys
 src = open(sys.argv[1]).read()

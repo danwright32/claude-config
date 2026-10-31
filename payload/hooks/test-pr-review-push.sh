@@ -325,7 +325,8 @@ check_not "never as findings" "until these are read" "$out"
 reset_state
 HOOKCOPY="$WORKDIR/hookcopy"; mkdir -p "$HOOKCOPY/lib"
 cp "$PUSH_GATE" "$HOOKCOPY/"
-for f in push-scope.sh merge-target.sh ai-review-common.sh shell-words.py; do
+# Everything but the checker itself, whole-number.sh included, which merge-target.sh loads (#1948).
+for f in push-scope.sh merge-target.sh whole-number.sh ai-review-common.sh shell-words.py; do
   [ -e "$DIR/lib/$f" ] && cp "$DIR/lib/$f" "$HOOKCOPY/lib/"
 done
 out="$(pre_payload "$REPO" "git push" | bash "$HOOKCOPY/pr-review-push-gate.sh" 2>&1)"; rc=$?

@@ -260,9 +260,13 @@ qv_notice() {
 # is one. Its standard error is dropped there, since bounded_run hands back both streams as one and
 # the envelope is read as JSON.
 RELEASE_ASK_SECONDS="${QUIZ_RELEASE_ASK_SECONDS:-10}"
-case "$RELEASE_ASK_SECONDS" in ''|*[!0-9]*|0) RELEASE_ASK_SECONDS=10 ;; esac
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, the
+# shell names the missing function and each default is used.
+# shellcheck source=lib/whole-number.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/whole-number.sh" 2>/dev/null
+whole_above_zero "$RELEASE_ASK_SECONDS" RELEASE_ASK_SECONDS || RELEASE_ASK_SECONDS=10
 RELEASE_BUDGET_SECONDS="${QUIZ_RELEASE_BUDGET_SECONDS:-40}"
-case "$RELEASE_BUDGET_SECONDS" in ''|*[!0-9]*|0) RELEASE_BUDGET_SECONDS=40 ;; esac
+whole_above_zero "$RELEASE_BUDGET_SECONDS" RELEASE_BUDGET_SECONDS || RELEASE_BUDGET_SECONDS=40
 held_ask() {  # $1 = folder to ask in, $2 = pr, $3 = remote slug, $4 = --repo value ; prints mt_pr_view's envelope, or nothing
   local left secs
   left=$((RELEASE_BUDGET_SECONDS - SECONDS))

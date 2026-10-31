@@ -103,9 +103,18 @@ fi
 # killed and then rebuilt the same afternoon is said again. Being wrong costs one repeated notice in
 # one direction, and a rebuilt pile going unsaid for up to ten minutes in the other.
 SYNC_SUITE_PILE_REARM="${SYNC_SUITE_PILE_REARM:-600}"
-case "$SYNC_SUITE_MAX_AGE$SYNC_SUITE_MAX_ROOTS$SYNC_SUITE_PILE_REARM" in
-  ''|*[!0-9]*)
-    fault_once settings "suite-pile-notice: SYNC_SUITE_MAX_AGE='$SYNC_SUITE_MAX_AGE', SYNC_SUITE_MAX_ROOTS='$SYNC_SUITE_MAX_ROOTS' and SYNC_SUITE_PILE_REARM='$SYNC_SUITE_PILE_REARM' must all be whole numbers, so nothing was checked." ;;
+# Each is a whole number, zero included. The notice names only the ones that are not, with their
+# values (#1948, L11): it listed all three and said they "must all be whole numbers", and a session
+# reading it told Dan that a SYNC_SUITE_MAX_ROOTS of 8 was wrong too.
+bad_settings=()
+for setting in SYNC_SUITE_MAX_AGE SYNC_SUITE_MAX_ROOTS SYNC_SUITE_PILE_REARM; do
+  case "${!setting}" in ''|*[!0-9]*) bad_settings+=("$setting='${!setting}'") ;; esac
+done
+case "${#bad_settings[@]}" in
+  0) ;;
+  1) fault_once settings "suite-pile-notice: ${bad_settings[0]} is not a whole number, so nothing was checked." ;;
+  2) fault_once settings "suite-pile-notice: ${bad_settings[0]} and ${bad_settings[1]} are not whole numbers, so nothing was checked." ;;
+  *) fault_once settings "suite-pile-notice: ${bad_settings[0]}, ${bad_settings[1]} and ${bad_settings[2]} are not whole numbers, so nothing was checked." ;;
 esac
 now="${CLAUDE_SUITE_PILE_NOW:-}"
 case "$now" in ''|*[!0-9]*) now="$(date +%s)" ;; esac
