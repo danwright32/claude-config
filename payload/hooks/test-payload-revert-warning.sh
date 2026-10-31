@@ -278,7 +278,7 @@ esac
 #
 # A prompt holding a byte that is not UTF-8: jq reads it as U+FFFD, and python3 reading its stdin in
 # text mode raised, so the session came back unknown and the warning was never given.
-bad_byte_measured python "#1900 payload-revert-warning reading a byte that is not UTF-8" || true
+bad_byte_measured python-stdin "#1900 payload-revert-warning reading a byte that is not UTF-8" || true
 fresh
 out_bad="$(printf '{"session_id":"sbad","cwd":"%s","prompt":"a\xffb"}' "$FIX/dev" \
   | env LC_ALL="$BAD_BYTE_LOCALE" SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" \
