@@ -8917,6 +8917,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L1035. On macOS, where /bin/bash is 3.2, a shell function whose output a caller captures must never read through process substitution or leave a background child running, because the unwaited child's exit can interrupt bash's write and bash 3.2 silently drops the rest of the output.**
+  (claude-config#1974, 2026-10-31)
+  SHORT: A captured bash function on macOS must not read through <(...) or leave a child running: bash 3.2 drops output when its exit interrupts a write.
+
 - **L835. A deploy must refuse to upload a commit older than the one already live, because a rerun of an old pipeline run uploads its old build last and the platform serves the newest upload, rolling the whole site back with every step reporting success.**
   (bidspoke#3158, 2026-10-30)
   SHORT: A deploy refuses to upload a commit older than the live one: a rerun of an old run uploads last and rolls the site back while every step passes.
@@ -10161,6 +10165,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Before narrowing who may use a shared resource, list its current users from its own usage record: one left out often just waits, silently.
 - **L829. Two branches built in parallel can give their migrations the same version, and the migration tool records applied migrations by version alone, so the second is skipped as already applied with no error. Check a new migration's version against every applied migration and every open branch before applying it, and keep a CI check that fails on two migration files sharing a version.** (bidspoke#3003, 2026-10-30)
   SHORT: Parallel branches can reuse a migration version, and the second is skipped as applied; check versions before applying, and fail CI on a duplicate.
+- **L836. Before closing a pull request as already contained in main, check that its CURRENT head is an ancestor of a merged pull request's head, because a merged PR that says it carried the branch names the head as it was then, and any commit pushed after that is lost when the branch is closed.** (pivot#499, 2026-10-31)
+  SHORT: Close a PR as contained in main only if its CURRENT head is inside a merged PR; one that says it carried the branch names an older head.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

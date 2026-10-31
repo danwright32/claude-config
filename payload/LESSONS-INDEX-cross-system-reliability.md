@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L1035. A captured bash function on macOS must not read through <(...) or leave a child running: bash 3.2 drops output when its exit interrupts a write.
 - L835. A deploy refuses to upload a commit older than the live one: a rerun of an old run uploads last and rolls the site back while every step passes.
 - L830. Check for an open PR or recent main commit on an issue before dispatching and before the PR; parallel sessions duplicate work and collide on migrations.
 - L815. A scheduled send due anywhere inside a window needs a minimum lead time, or its first run after shipping or an outage sends to everyone already inside.
@@ -117,3 +118,4 @@ which is NOT loaded into the session.
 - L798. Deleting a deployed thing's source does not undeploy it; a removal is done only when the platform's own list no longer shows it.
 - L822. Before narrowing who may use a shared resource, list its current users from its own usage record: one left out often just waits, silently.
 - L829. Parallel branches can reuse a migration version, and the second is skipped as applied; check versions before applying, and fail CI on a duplicate.
+- L836. Close a PR as contained in main only if its CURRENT head is inside a merged PR; one that says it carried the branch names an older head.
