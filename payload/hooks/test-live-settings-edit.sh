@@ -51,13 +51,13 @@ trap 'rm -rf "$T"' EXIT
 # of: each judges its own throwaway home as a run started on its own would.
 unset HOOK_TESTS_DEADLINE HOOK_TESTS_DEADLINE_RESERVE HOOK_TESTS_JOB_STARTED HOOK_TESTS_NOW GITHUB_ACTIONS GITHUB_WORKFLOW_REF GITHUB_JOB
 unset HOOK_TESTS_LIVE_BRACKETED HOOK_TESTS_LIVE_BRACKETED_RUN
-mkdir -p "$T/home" "$T/suites" "$T/spool"
-SETTINGS="$T/home/settings.json"
+mkdir -p "$T/cfg" "$T/suites" "$T/spool"
+SETTINGS="$T/cfg/settings.json"
 # The register names a clone that does not exist, so no apply of the sync can explain anything here.
 printf '%s\n' "$T/no-such-clone" > "$T/registry"
 
 ls_run(){ # every live store seam pointed at the throwaway home, so nothing real is bracketed
-  CLAUDE_HOME="$T/home" \
+  CLAUDE_HOME="$T/cfg" \
   SYNC_CLONE_REGISTRY="$T/registry" \
   SYNC_ZSHRC="$T/zshrc" \
   SYNC_WATCH_PID_FILE="$T/watch.pid" \
@@ -260,17 +260,17 @@ caught "#1969 a rewrite that changed no setting at all is still counted" "$code8
 # The control beside all of it: another store in the same home, rewritten by a suite, is caught by
 # the same fixture, so a red above is about settings.json and not about a run that brackets nothing.
 seed
-printf 'the live rules\n' > "$T/home/CLAUDE.md"
+printf 'the live rules\n' > "$T/cfg/CLAUDE.md"
 rm -f "$T/suites"/test-*.sh
 {
   printf '#!/usr/bin/env bash\n'
-  printf 'printf "a whole file a suite wrote\\n" > "%s"\n' "$T/home/CLAUDE.md"
+  printf 'printf "a whole file a suite wrote\\n" > "%s"\n' "$T/cfg/CLAUDE.md"
   printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
 } > "$T/suites/test-rules.sh"
 chmod +x "$T/suites/test-rules.sh"
 out9="$(ls_run)"; code9=$?
 case "$out9" in
-  *"SUITES CHANGED A LIVE STORE"*"$T/home/CLAUDE.md"*)
+  *"SUITES CHANGED A LIVE STORE"*"$T/cfg/CLAUDE.md"*)
     [ "$code9" -ne 0 ] && check "#1969 (control) a rule file a suite rewrote is still caught beside it" ok \
       || check "#1969 (control) a rule file a suite rewrote is still caught beside it" "exit=$code9 out=$out9" ;;
   *) check "#1969 (control) a rule file a suite rewrote is still caught beside it" "exit=$code9 out=$out9" ;;
@@ -282,9 +282,14 @@ rm -f "$T/suites"/test-*.sh
 # read the sync's own constants at run time. A setting the sync starts writing and the list does not
 # name would become one a suite could change unnoticed, so the two are compared here wherever the
 # checkout is present (L96).
-SYNC_SCRIPT="$(cd "$DIR/../.." 2>/dev/null && pwd)/claude-sync"
-HOOKS_JSON="$DIR/../settings.hooks.json"
-if [ -f "$SYNC_SCRIPT" ] && [ -f "$HOOKS_JSON" ] && command -v jq >/dev/null 2>&1; then
+# Asked of lib/checkout-root.sh, never by counting folders up: installed, two levels up is the home
+# folder. Inside a checkout the settings lookup answers with the payload's hooks block, which is the
+# statement of what the sync installs.
+CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null)" || CHECKOUT=""
+. "$DIR/lib/settings-file.sh"
+HOOKS_JSON="$(hook_settings_file "$DIR/.." 2>/dev/null)" || HOOKS_JSON=""
+SYNC_SCRIPT="${CHECKOUT:+$CHECKOUT/claude-sync}"
+if [ -n "$CHECKOUT" ] && [ -f "$SYNC_SCRIPT" ] && [ -n "$HOOKS_JSON" ]; then
   shared="$(grep -m1 '^SHARED_SETTINGS_ALLOWED=' "$SYNC_SCRIPT" | sed -E 's/^[^=]*="([^"]*)".*/\1/')"
   [ -n "$shared" ] \
     && check "#1969 claude-sync's shared settings list was read" ok \
@@ -306,7 +311,7 @@ if [ -f "$SYNC_SCRIPT" ] && [ -f "$HOOKS_JSON" ] && command -v jq >/dev/null 2>&
   case " $written " in *" env "*) check "#1969 the scan found the mods write" ok ;;
     *) check "#1969 the scan found the mods write" "no .env.CLAUDE_CODE_PLUGIN_DIRS assignment found in $SYNC_SCRIPT" ;; esac
 else
-  echo "SUITE-PART-UNMEASURED the comparison with the settings claude-sync writes, because this copy has no claude-sync, settings.hooks.json or jq beside it"
+  echo "SUITE-PART-UNMEASURED the comparison with the settings claude-sync writes, because this copy is not in a claude-config checkout, so claude-sync is not beside it"
 fi
 
 echo "passed: $pass, failed: $fail"
