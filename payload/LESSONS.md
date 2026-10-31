@@ -8917,6 +8917,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L835. A deploy must refuse to upload a commit older than the one already live, because a rerun of an old pipeline run uploads its old build last and the platform serves the newest upload, rolling the whole site back with every step reporting success.**
+  (bidspoke#3158, 2026-10-30)
+  SHORT: A deploy refuses to upload a commit older than the live one: a rerun of an old run uploads last and rolls the site back while every step passes.
 - **L830. Before dispatching work on an issue, check for an open pull request or a recent commit on main that already addresses it, and recheck before opening the pull request, because a second session on the same repository can claim the same issue, and two migrations named for the same date collide so that one is silently treated as applied.**
   (pivot#351, 2026-10-30)
   SHORT: Check for an open PR or recent main commit on an issue before dispatching and before the PR; parallel sessions duplicate work and collide on migrations.

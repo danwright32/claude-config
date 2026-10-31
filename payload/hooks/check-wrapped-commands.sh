@@ -169,8 +169,9 @@ payload_match "$payload" "$GUARDED_WORD" || exit 0
 
 LEDGER_DIR="${WRAPPED_REFUSAL_LEDGER_DIR:-$HOME/.claude/state/wrapped-commands}"
 LEDGER="$LEDGER_DIR/refusals.tsv"
+# Read as a whole number above zero once lib/whole-number.sh is loaded, below (claude-config#1948):
+# 00 used to pass, and the trim then kept `tail -n 00` lines, emptying the ledger.
 LEDGER_MAX="${WRAPPED_REFUSAL_LEDGER_MAX:-5000}"
-case "$LEDGER_MAX" in ''|*[!0-9]*|0) LEDGER_MAX=5000 ;; esac
 RECORD_NOTE=""
 
 # Appends one line for this refusal. Sets RECORD_NOTE, the one sentence saying so, when the line
@@ -292,6 +293,14 @@ first_unexcused() {   # $1 = command
 }
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948), for the
+# ledger's size, read before any refusal can be recorded. Missing, the ledger is kept at its default
+# size for this refusal, and the command is refused like any other this gate cannot judge with all
+# it needs.
+# shellcheck source=lib/whole-number.sh
+{ . "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null && declare -F whole_above_zero >/dev/null; } \
+  || { LEDGER_MAX=5000; not_judged "$HOOK_DIR/lib/whole-number.sh, which reads the ledger's size setting, could not be loaded (reinstall the hooks with claude-sync pull)" reader-lib-missing; }
+whole_above_zero "$LEDGER_MAX" LEDGER_MAX || LEDGER_MAX=5000
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null \
   || not_judged "$HOOK_DIR/lib/push-scope.sh, the reader of the command, could not be loaded (reinstall the hooks with claude-sync pull)" reader-lib-missing

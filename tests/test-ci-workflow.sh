@@ -246,10 +246,13 @@ r="$(start_recorded_first "$REAL")"
   || check "#1901 the real workflow records the job start in its first step" "$r"
 . "$DIR/../payload/hooks/lib/workflow-job-timeout.sh"
 m="$(workflow_job_timeout_minutes "$REAL" suite)"
-case "$m" in
-  ''|*[!0-9]*|0) check "#1901 the runner can read the suite job's timeout-minutes from the real workflow" "read '$m'" ;;
-  *) check "#1901 the runner can read the suite job's timeout-minutes from the real workflow ($m)" ok ;;
-esac
+# shellcheck source=../payload/hooks/lib/whole-number.sh
+. "$DIR/../payload/hooks/lib/whole-number.sh"
+if whole_above_zero "$m" m; then
+  check "#1901 the runner can read the suite job's timeout-minutes from the real workflow ($m)" ok
+else
+  check "#1901 the runner can read the suite job's timeout-minutes from the real workflow" "read '$m'"
+fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

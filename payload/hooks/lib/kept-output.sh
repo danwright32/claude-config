@@ -18,6 +18,12 @@
 # ever removed: anything else in the folder is left alone. The copy just written is never pruned.
 
 KEPT_OUTPUT_KEEP="${KEPT_OUTPUT_KEEP:-20}"
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, every
+# keep is refused as unreadable and nothing is kept, which the caller already says.
+# Its own folder by parameter expansion, never dirname (claude-config#1104, test-lib-self-locate.sh).
+_KO_LIB="${BASH_SOURCE[0]%/*}"; [ "$_KO_LIB" != "${BASH_SOURCE[0]}" ] || _KO_LIB=.
+# shellcheck source=whole-number.sh
+. "$_KO_LIB/whole-number.sh" 2>/dev/null
 
 # kept_output_save <folder> <label>, with the output on stdin. Sets KEPT_OUTPUT_PATH to the file it
 # wrote and returns 0, or sets KEPT_OUTPUT_WHY to why nothing was kept and returns 1. Run in the
@@ -26,11 +32,10 @@ kept_output_save(){
   KEPT_OUTPUT_PATH=""; KEPT_OUTPUT_WHY=""
   local dir="$1" label keep stamp tmp
   keep="$KEPT_OUTPUT_KEEP"
-  case "$keep" in
-    ''|*[!0-9]*|0)
-      KEPT_OUTPUT_WHY="KEPT_OUTPUT_KEEP must be a whole number above 0, not '$keep'"
-      cat > /dev/null; return 1 ;;
-  esac
+  if ! whole_above_zero "$keep" keep; then
+    KEPT_OUTPUT_WHY="KEPT_OUTPUT_KEEP must be a whole number above 0, not '$keep'"
+    cat > /dev/null; return 1
+  fi
   if [ -z "$dir" ]; then
     KEPT_OUTPUT_WHY="no folder was named to keep it in"
     cat > /dev/null; return 1

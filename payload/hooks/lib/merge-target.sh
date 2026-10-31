@@ -119,6 +119,10 @@
 # caller's folder (claude-config#1104, test-lib-self-locate.sh).
 _MT_LIB="${BASH_SOURCE[0]%/*}"; [ "$_MT_LIB" != "${BASH_SOURCE[0]}" ] || _MT_LIB=.
 _MT_LIB="$(cd "${_MT_LIB:-/}" && pwd)"
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, this
+# file does not load, for the reason below, and every gate sourcing it refuses naming it.
+# shellcheck source=whole-number.sh
+{ . "$_MT_LIB/whole-number.sh" && declare -F whole_above_zero >/dev/null; } || return 1
 # Missing, this file does not load either (claude-config#1900). It carried on before, so every gate
 # sourcing it read it as loaded, then found no ps_ function to ask, read no merge, and allowed it.
 # shellcheck source=push-scope.sh
@@ -1690,7 +1694,7 @@ mt__signin_trim(){  # $1 = ledger  $2 = now
 # holder died, whose worst case is the race the lock exists for.
 mt__signin_lock(){  # $1 = ledger
   local lock="$1.lock" k=0 tries="${MT_SIGNIN_LOCK_TRIES:-}"
-  case "$tries" in ''|*[!0-9]*|0) tries=100 ;; esac
+  whole_above_zero "$tries" tries || tries=100
   while [ "$k" -lt "$tries" ]; do
     mkdir "$lock" 2>/dev/null && return 0
     if [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
@@ -1708,8 +1712,8 @@ mt__signin_lock(){  # $1 = ledger
 mt_signin_trend(){  # [$1 = now]
   local now="${1:-}" at="${MT_SIGNIN_ALERT_AT:-}" win="${MT_SIGNIN_WINDOW_SECONDS:-}" ledger
   case "$now" in ''|*[!0-9]*) now="$(mt__signin_now)" ;; esac
-  case "$at" in ''|*[!0-9]*|0) at=5 ;; esac
-  case "$win" in ''|*[!0-9]*|0) win=86400 ;; esac
+  whole_above_zero "$at" at || at=5
+  whole_above_zero "$win" win || win=86400
   ledger="$(mt__signin_ledger)"
   [ -f "$ledger" ] || return 0
   awk -F'\t' -v since="$((now - win))" -v hours="$(( (win + 1799) / 3600 ))" -v at="$at" -v path="$ledger" '

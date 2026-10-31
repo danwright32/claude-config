@@ -103,6 +103,12 @@ if KEPT_OUTPUT_KEEP=0 kept_output_save "$TMPROOT/five" "x" <<< "x"; then
 else
   case "$KEPT_OUTPUT_WHY" in *"whole number above 0"*) check "a keep of 0 is refused, saying why" ok ;; *) check "a keep of 0 is refused, saying why" "why=$KEPT_OUTPUT_WHY" ;; esac
 fi
+# 00 is zero too (claude-config#1948): only a literal 0 was refused, so 00 passed as a count.
+if KEPT_OUTPUT_KEEP=00 kept_output_save "$TMPROOT/five" "x" <<< "x"; then
+  check "a keep of 00 is refused, as zero" "it returned 0"
+else
+  case "$KEPT_OUTPUT_WHY" in *"whole number above 0"*) check "a keep of 00 is refused, as zero" ok ;; *) check "a keep of 00 is refused, as zero" "why=$KEPT_OUTPUT_WHY" ;; esac
+fi
 if KEPT_OUTPUT_KEEP=lots kept_output_save "$TMPROOT/five" "x" <<< "x"; then
   check "a keep that is not a number is refused" "it returned 0"
 else

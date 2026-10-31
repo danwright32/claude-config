@@ -22,6 +22,7 @@ payload/hooks/test-run-all-tests.sh
 payload/hooks/test-suite-result-line.sh
 payload/hooks/test-suite-scratch-isolation.sh
 payload/hooks/test-two-file-awk.sh
+payload/hooks/test-whole-number.sh
 tests/test-ci-environment-tools.sh
 tests/test-claude-sync.sh
 tests/test-dev-update-registry.sh

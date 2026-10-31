@@ -1864,11 +1864,16 @@ load averages of 145 measured the day before, now that running out of time refus
 `linux-sections-before-push.sh` had no bound of its own on its Linux run, so with the field one
 slow section would have refused every push of that change. It now stops the run at a budget of 240
 seconds, inside the 300 its registration declares (`LINUX_SECTIONS_BUDGET_SECONDS` sets another;
-zero, written any way, `00` included, means the default, #1931),
+zero, written any way, `00` included, means the default, #1931, read by `lib/whole-number.sh`,
+the one test of a whole number above zero every setting uses, #1948),
 stops the container by the name it gave `tests/run-on-linux.sh` (killing the docker client leaves
 the container running), and lets the push through saying UNMEASURED, which is what its design says
 a run it could not finish is. That notice, and the one for a run docker could not start, also go
-out as a `systemMessage`, since Claude Code discards a PreToolUse hook's stderr on exit 0. How
+out as a `systemMessage`, since Claude Code discards a PreToolUse hook's stderr on exit 0. A run
+that ends with any exit the gate does not recognise (anything but 0, 1, 2, 4 and 124, such as the
+125 `lib/bounded-run.sh` returns for a bound it refuses, or a run killed by a signal) judged nothing
+either, and is said the same way, UNMEASURED with its exit code, rather than let through in silence
+(#1947). How
 long a Linux run takes is not measured on this Mac, whose docker daemon was not running on
 2026-10-29, so 240 is a setting.
 
