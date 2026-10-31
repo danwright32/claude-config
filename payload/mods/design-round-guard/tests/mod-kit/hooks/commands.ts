@@ -151,12 +151,16 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
 // its characters, matching it against no file (#1951): one holding a pattern character (GLOB_CHAR)
 // only inside quotes or after a backslash, with none bare and no expansion anywhere in it, so
 // `'*push*'`, "app/*.css" and app/\*x are, while ''*x'', "app/"*x and '$P' are not.
+//
+// `unexpanded`, where given, is filled with the place in the text of each word holding a $ or a
+// backtick only inside single quotes or after a backslash (#1953), which the shell hands on as
+// written: `'x$'`, 'costs $5', \$HOME and "a\$b" are, while $P, "$P", '$P'$Q and "$(x)" are not.
 type Split = { words: string[]; starts: number[]; from?: number }
 // The characters that make a word a pattern the shell may expand: a glob's, a brace's, and zsh's
 // groups and extended glob characters, read wider than any one shell's so a word is never taken for
 // one it hands on as written while some shell would match it against files.
 const GLOB_CHAR = /[*?[\]{}()~^#]/
-const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>): Split[] => {
+const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>): Split[] => {
   const cmds: Split[] = []
   let words: string[] = []
   let starts: number[] = []
@@ -173,9 +177,20 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>)
     if (GLOB_CHAR.test(c)) globQuoted = true
     if (c === '$' || c === '`') expands = true
   }
+  // For `unexpanded`: whether the word being read holds a $ or a backtick the shell hands on as
+  // written (in single quotes, or after a backslash), and one it expands (bare, in double quotes, or
+  // a substitution).
+  let dollarText = false
+  let dollarLive = false
+  const dollar = (c: string, live: boolean) => {
+    if (c !== '$' && c !== '`') return
+    if (live) dollarLive = true
+    else dollarText = true
+  }
   const bareChar = (c: string) => {
     if (GLOB_CHAR.test(c)) globBare = true
     if (c === '$' || c === '`') expands = true
+    dollar(c, true)
   }
   let quote: '"' | "'" | undefined
   // Parentheses opened inside a word ($(, <(, $((), whose closing ones belong to the word too.
@@ -195,6 +210,8 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>)
     globQuoted = false
     globBare = false
     expands = false
+    dollarText = false
+    dollarLive = false
   }
   const endWord = () => {
     if (inWord) {
@@ -202,6 +219,7 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>)
       starts.push(start)
       if (bare && wordBare.length) bare.set(start, wordBare)
       if (literal && globQuoted && !globBare && !expands) literal.add(start)
+      if (unexpanded && dollarText && !dollarLive) unexpanded.add(start)
     }
     word = ''
     inWord = false
@@ -255,14 +273,17 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>)
       if (c === quote) quote = undefined
       else if (c === '\\' && quote === '"' && i + 1 < cmd.length) {
         quotedChar(cmd[i + 1] as string)
+        dollar(cmd[i + 1] as string, false)
         word += cmd[++i]
       } else if (sub !== undefined) {
         // In double quotes too, a quote inside a substitution belongs to it, never closing these.
         expands = true
+        dollarLive = true
         word += cmd.slice(i, sub + 1)
         i = sub
       } else {
         quotedChar(c)
+        dollar(c, quote === '"')
         word += c
       }
       continue
@@ -299,6 +320,7 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>)
       if (c === '<' || c === '>') endWord()
       begin(i)
       expands = true
+      dollarLive = true
       word += cmd.slice(i, sub + 1)
       i = sub
     } else if (c === '"' || c === "'") {
@@ -327,6 +349,7 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>)
     } else if (c === '\\' && i + 1 < cmd.length) {
       begin(i)
       quotedChar(cmd[i + 1] as string)
+      dollar(cmd[i + 1] as string, false)
       word += cmd[++i]
     } else if (c === '(' && inWord) {
       wordParens++
@@ -600,6 +623,9 @@ const printfText = (args: readonly string[]): string | undefined => {
  * `literal` gives for each word whether the shell hands it on as its characters, matching it against
  * no file (#1951): every pattern character in it quoted or after a backslash, and no expansion in
  * it; absent where no word is one.
+ * `unexpanded` gives for each word whether its every $ and backtick is in single quotes or after a
+ * backslash, so the shell hands it on with no expansion (#1953); absent where no word is one. Read for
+ * every shell, where `splits` is for one that splits words.
  */
 export type Command = {
   words: string[]
@@ -615,6 +641,7 @@ export type Command = {
   asWritten?: true
   splits?: number[][]
   literal?: boolean[]
+  unexpanded?: boolean[]
 }
 
 /**
@@ -654,7 +681,7 @@ const ownRedirects = (words: readonly string[]): string[] => {
 // is read after it, as a command of its own. The script is read as that shell splits words (#1834),
 // and `splits` is where each word's expansions outside quotes are, when the shell running this one
 // splits their values. `literal` is which words the shell hands on as written (#1951).
-const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][], literal?: boolean[]) => {
+const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][], literal?: boolean[], unexpanded?: boolean[]) => {
   const stdin = ownStdin(words, fed) ?? feed.stdin
   const kind = kindOf(words[0])
   const { program, script } = kind ? readProgram(words, stdin) : {}
@@ -685,6 +712,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
     ...(verdict ? { verdict } : {}),
     ...(splits && splits.some(s => s.length) ? { splits } : {}),
     ...(literal && literal.some(Boolean) ? { literal } : {}),
+    ...(unexpanded && unexpanded.some(Boolean) ? { unexpanded } : {}),
   })
   // Its {} stands for each thing find finds, which this reader writes as the folder find starts
   // from, so the command carries those folders as `found`: what it changes at one of them is that
@@ -748,7 +776,9 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   const bare = new Map<number, number[]>()
   // Each word the shell hands on as written, by its place in the text (#1951).
   const literal = new Set<number>()
-  const read = split(text, bare, literal)
+  // Each word whose every $ and backtick the shell hands on as written, by its place (#1953).
+  const unexpanded = new Set<number>()
+  const read = split(text, bare, literal, unexpanded)
   const begun = read.map(r => begins(r.words, r.starts))
   // Each substitution, by the command it sits in: the last one starting at or before it.
   const ran = new Map<number, string[]>()
@@ -805,7 +835,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
     if (b.xargs || outer.xargs) feed = { ...feed, xargs: true }
     if (outer.found) feed = { ...feed, found: outer.found }
-    emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined, b.starts.map(s => literal.has(s)))
+    emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined, b.starts.map(s => literal.has(s)), b.starts.map(s => unexpanded.has(s)))
   })
   return out
 }

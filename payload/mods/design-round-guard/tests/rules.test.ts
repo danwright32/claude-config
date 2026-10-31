@@ -51,6 +51,8 @@ import {
   textsOf,
   patternMayBeLook,
   nameFromOutput,
+  nameFromVariable,
+  editWouldNotApply,
   outputTrusted,
   inScratchpad,
   namesScratchpad,
@@ -260,6 +262,32 @@ test('#1815: a name a command substitution fills in is known by its last part, r
   // A substitution in the folder only, none at all, or a variable, which is no command's output.
   for (const w of ['$(git rev-parse --show-toplevel)/notes.md', '/api/issues/$(cat id)/events/?full=true', '`pwd`/x.md', 'app/page.tsx', '$HOME/x', '${D}/spec.json', 'if (a || b) {', 'cost $5'])
     expect([w, nameFromOutput(w)]).toEqual([w, false])
+})
+
+// #1953: a name a shell variable fills in, read by its last part outside any substitution.
+test('#1953: a name a shell variable fills in is known by its last part; a folder variable and one only in a folder or a substitution are not', () => {
+  for (const w of ['$P', '${P}', 'src/$f', '$PWD/$r', '${args[@]}', '$=T', '--sha=$SHA', 'x-$i.png', '$HOMEDIR', '$PWD2', 'cost $5'])
+    expect([w, nameFromVariable(w)]).toEqual([w, true])
+  for (const w of ['$PWD', '${PWD}', '$HOME', '${HOME}', '$OLDPWD', '$TMPDIR', '$HOME/x.md', '${D}/spec.json', '$(git -C $W rev-parse HEAD)', '`echo $X`', 'src/$(cat $F)', 'notes.md', 'app/*push*', 'cost$'])
+    expect([w, nameFromVariable(w)]).toEqual([w, false])
+})
+
+// #1954: an Edit or MultiEdit whose text is not in the file, or is there twice without replace_all,
+// would not apply; one Claude Code's Edit may still apply by matching curly quotes to straight ones,
+// one replacing empty text, and any other tool are not read so.
+test('#1954: an edit would not apply where its text is missing or repeated, read past curly quotes', () => {
+  const text = "const a = 'x'\nconst b = 'x'\n"
+  const edit = (old_string: string, extra: Record<string, unknown> = {}) => ({ old_string, new_string: 'y', ...extra })
+  expect(editWouldNotApply(text, 'Edit', edit('const c'))).toBe(true)
+  expect(editWouldNotApply(text, 'Edit', edit("'x'"))).toBe(true)
+  expect(editWouldNotApply(text, 'MultiEdit', { edits: [edit('const a'), edit('const a')] })).toBe(true)
+  expect(editWouldNotApply(text, 'Edit', edit("'x'", { replace_all: true }))).toBe(false)
+  expect(editWouldNotApply(text, 'Edit', edit('const a'))).toBe(false)
+  expect(editWouldNotApply(text, 'Edit', edit('a = ‘x’'))).toBe(false)
+  expect(editWouldNotApply(text, 'MultiEdit', { edits: [edit('const a'), edit('b = “x')] })).toBe(true)
+  expect(editWouldNotApply(text, 'Edit', edit(''))).toBe(false)
+  expect(editWouldNotApply(text, 'Write', { content: 'y' })).toBe(false)
+  expect(editWouldNotApply(text, 'MultiEdit', { edits: [] })).toBe(false)
 })
 
 // #1832, Dan, 2026-10-27 (picker answer "git rev-parse only"): of the substitutions a script is
