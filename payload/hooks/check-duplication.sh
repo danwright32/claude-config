@@ -176,7 +176,7 @@ if [ "$from_worktree" -eq 1 ]; then
   fi
   pending_list="$(ps_pending_files "$cmd")"
   [ "${pending_list%%$'\n'*}" = "WIDENED" ] && pending_widened=1
-  local loop_input; loop_input="$(printf '%s\n' "$pending_list" | tail -n +2)" || true
+  loop_input="$(printf '%s\n' "$pending_list" | tail -n +2)" || true
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     # Only the source roots are compared, on both sides.
