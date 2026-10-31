@@ -1236,8 +1236,8 @@ stores on that list, and only when that id begins the id it was started under. T
 window contains the nested one's, so a fixture suite that writes the real `~/.claude` is still caught
 there; what the nested bracket added was a second, shorter window that a legitimate writer lands in
 with nothing to tell it from a suite. On 2026-10-30 that writer appended `outputStyle` to
-`settings.json`, a key claude-sync never writes (most likely Claude Code saving a picked output
-style), so no sync record could have explained it. A store nobody encloses, such as a
+`settings.json` by hand, a key claude-sync did not write then (it shares it since #1962, and
+a change to it is now counted, #1969), so no sync record could have explained it. A store nobody encloses, such as a
 fixture's own home, and every store of a run started on its own, are judged exactly as before.
 
 A run started on its own still had that writer to face, because `settings.json` is saved by the

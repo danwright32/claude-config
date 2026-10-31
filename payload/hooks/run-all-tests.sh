@@ -1127,7 +1127,7 @@ $(store_for_this_home "${SYNC_HOLD_FILE:-}" "$HOME/.claude-sync-hold")"
   # launches in test-run-all-tests.sh alone), and with CLAUDE_HOME left alone each of those bracketed
   # Dan's real ~/.claude. Their suites cannot write there, so the only change such a bracket can ever
   # see is somebody else's: on 2026-10-30 "outputStyle" was appended to settings.json while one ran
-  # (a key claude-sync never writes, most likely Claude Code saving a picked output style), a write no
+  # (a key claude-sync did not write then, shared by it only since #1962), a hand edit no
   # sync record explains, and two checks failed as live-store-pollution.
   # The enclosing run brackets the same file over a window that contains the nested one, so a nested
   # suite that really did write it is still caught, once, there; judging it here as well only adds
