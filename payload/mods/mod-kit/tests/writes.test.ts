@@ -489,6 +489,37 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
   test('a script run in a substitution is read too', () => {
     expect(runs('x=$(python3 gen.py app/page.tsx)').map(r => r.args.map(a => a.path))).toEqual([[`${CWD}/app/page.tsx`]])
   })
+  // #1953: a for loop's variable was given as written, so a guard holding a name a variable fills
+  // in held `for t in a.sh b.sh; do bash run.sh $t; done`, 199 of the 431 such arguments over this
+  // Mac's commands. A loop over plain words gives the variable each of them, as an assignment gives
+  // its value; one over a pattern, an expansion or a word holding a space is still given as written.
+  test('a for loop over plain words hands a script each word; any other loop hands it the word as written', () => {
+    const args = (command: string) => runs(command).map(r => r.args.map(a => [a.word, a.path ?? null]))
+    expect(args('for t in a.sh b.sh; do python3 run.py tests/$t; done')).toEqual([[['tests/$t', `${CWD}/tests/a.sh`], ['tests/$t', `${CWD}/tests/b.sh`]]])
+    expect(args('for f in page.tsx; do python3 gen.py "app/${f}"; done')).toEqual([[['app/${f}', `${CWD}/app/page.tsx`]]])
+    for (const loop of ['for f in app/*.tsx', 'for f in $LIST', "for f in 'a*' b", 'for f in $(ls)', 'for f'])
+      expect({ loop, args: args(`${loop}; do python3 gen.py $f; done`) }).toEqual({ loop, args: [[['$f', null]]] })
+    // A word holding a space (an issue's title) is read whole and as each piece a split would make,
+    // with and without the text around it: more readings than any shell makes, never fewer.
+    expect(args('for f in "a b" c; do python3 gen.py x/$f; done').map(r => r.map(([, p]) => (p as string).slice(CWD.length + 1)))).toEqual([['x/a b', 'x/a', 'a', 'x/b', 'b', 'x/c']])
+    // Set some other way too, its value is unknown, as an assignment given two values is.
+    expect(args('for f in a.md; do :; done; f=$(ls); python3 gen.py $f')).toEqual([[['$f', null]]])
+    expect(args('f=$(ls); for f in a.md; do python3 gen.py $f; done')).toEqual([[['$f', null]]])
+    // Text run by eval or source may set the loop's variable to anything, so its value is unknown
+    // after it, as every other variable's is (lessons review of #1968 at a47a667).
+    expect(args('for f in a.md; do eval "f=app/page.tsx"; python3 gen.py $f; done')).toEqual([[['$f', null]]])
+    expect(args('for f in a.md; do . ./setf.sh; python3 gen.py $f; done')).toEqual([[['$f', null]]])
+  })
+  // #1953: a $ in single quotes or after a backslash is no variable, but the run's argument read the
+  // same as one, its quotes taken off, so a script handed a regex ('x$') or prose ('costs $5') read as
+  // handed a variable's value. Such a word is marked `unexpanded`, and is never read as a value.
+  test('a word whose every $ is quoted or escaped is marked unexpanded, and is never read as a value', () => {
+    const marked = (command: string) => runs(command).map(r => r.args.map(a => [a.word, a.unexpanded === true]))
+    expect(marked(`python3 s.py 'x$' 'costs $5' \\$HOME "a\\$b"`)).toEqual([[['x$', true], ['costs $5', true], ['$HOME', true], ['a$b', true]]])
+    expect(marked(`python3 s.py $P "$P" "a $P" '$P'$Q \`x\` "$(x)"`)).toEqual([[['$P', false], ['$P', false], ['a $P', false], ['$P$Q', false], ['`x`', false], ['$(x)', false]]])
+    // Quoted where the command set the name, it is still the word as written.
+    expect(runs(`P=a.md; python3 s.py '$P'`).map(r => r.args)).toEqual([[{ word: '$P', unexpanded: true }]])
+  })
   test('what is no script file run names no run: inline code, standard input, awk -f, a plain command', () => {
     for (const command of [
       "python3 -c 'print(1)' app/page.tsx",
@@ -647,7 +678,9 @@ describe("writes: a known tool's mode that changes no file it is handed hands no
     // A variable it cannot read, or one whose value the shell splits into words, may be --write.
     expect(words('npx prettier $MODE src')).toEqual([['$MODE', 'src']])
     expect(words('npx prettier --check ${FLAGS} src')).toEqual([['${FLAGS}', 'src']])
-    expect(words('for f in src/a.ts; do npx prettier $f; done')).toEqual([['$f']])
+    expect(words('for f in $LIST; do npx prettier $f; done')).toEqual([['$f']])
+    // A loop over plain words gives its words (#1953): no flag among them, so nothing is written.
+    expect(words('for f in src/a.ts; do npx prettier $f; done')).toEqual([])
     expect(words('F="src --write"; npx prettier --check $F')).toEqual([['$F']])
     expect(words('F=--write; npx prettier --check $F src')).toEqual([['src']])
     expect(words('npx eslint "$@"')).toEqual([['$@']])
@@ -904,10 +937,14 @@ describe('writes: a path held in a variable', () => {
     expect(paths('F=CLAUDE.md; cd sub && echo x >> "$F"')).toEqual([`${CWD}/sub/CLAUDE.md`])
     expect(paths('D=~/.claude/projects/p/memory; cd "$D" && echo x > note.md')).toEqual([`${HOME}/.claude/projects/p/memory/note.md`])
   })
+  // #1953: a for loop over plain words names each of them, as many writes.
+  test('a for loop over plain words names a write of each', () => {
+    expect(paths('for F in a.md b.md; do echo x >> "$F"; done')).toEqual([`${CWD}/a.md`, `${CWD}/b.md`])
+  })
   test('a variable the reader cannot be sure of is given as written', () => {
     // Set from a command's output, by a loop, by read, by eval, or unset.
     expect(paths('F=$(mktemp); echo x > "$F"')).toEqual(['(as written) $F'])
-    expect(paths('for F in a.md b.md; do echo x >> "$F"; done')).toEqual(['(as written) $F'])
+    expect(paths('for F in *.md; do echo x >> "$F"; done')).toEqual(['(as written) $F'])
     expect(paths('F=a.md; while read -r F; do echo x >> "$F"; done < list')).toEqual(['(as written) $F'])
     expect(paths(`F=a.md; eval "F=b.md"; echo x > "$F"`)).toEqual(['(as written) $F'])
     expect(paths('F=a.md; unset F; echo x > "$F"')).toEqual(['(as written) $F'])
