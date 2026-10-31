@@ -2198,17 +2198,19 @@ retake(){ # retake <deadline> <recent run took>: the turn taken, taken over 2500
   printf '%s\n' "$LEAVE9; printf '%s' '$GREEN' > \"\$ST/rollup\"" >> "$ST/on-sleep"
   out="$(BIN_DIR="$BIN" MWR_DEADLINE_SECONDS="$1" run 7 --squash)"; rc=$?
 }
+# It held the turn 42m 10s (30s, then the 2500s jump) and waited 30s in line before it came back;
+# since #1975 the wait in line is not taken off its deadline, so 17m 50s is left (17m 20s before).
 retake 3600 1200
 check_eq "#1604 a run with less time left than a check run does not take the turn back" "3" "$rc"
 check "#1604 it took the turn at first, with time enough" "Took the turn to merge in acme/widget" "$out"
-check "#1604 then says why it will not take it again" "Did not take the turn to merge in acme/widget back: 17m 20s is left of #7's 60m deadline, shorter than the 20m 00s its recent check runs took" "$out"
+check "#1604 then says why it will not take it again" "Did not take the turn to merge in acme/widget back: 17m 50s is left of #7's 60m deadline, shorter than the 20m 00s its recent check runs took" "$out"
 check_eq "#1604 its place is given up, so the next in line goes now" "" "$(tickets)"
 check_eq "#1604 nothing was updated or merged" "0 0" "$(count gh-calls 'pr update-branch') $(count gh-calls 'pr merge')"
 # Control, the other way (L497): with check runs shorter than the time left, it takes the turn back.
 retake 3600 600
 check_eq "#1604 control: with time enough left it takes the turn back and merges" "0" "$rc"
 check "#1604 control: saying it is its turn again, with the time it has left" "It is #7's turn to merge in acme/widget now" "$out"
-check "#1604 control: and how much of its deadline is left" "17m 20s of its 60m deadline is left" "$out"
+check "#1604 control: and how much of its deadline is left" "17m 50s of its 60m deadline is left" "$out"
 check_not "#1604 control: never a refusal" "Did not take the turn" "$out"
 
 # A whole deadline shorter than the check runs can never be finished: it stops at once, for a person.
@@ -2334,6 +2336,93 @@ if [[ "${wait_s:-}" =~ ^[0-9]+$ ]]; then
 else
   bad "#1697 WAIT_MS was not read from is-it-live's merges.ts"
 fi
+
+# A run passed over and back in line (claude-config#1975). On 2026-10-30 #1962 took the turn, held
+# it the hour any one pull request may, was passed over and joined the line again, and stopped at
+# 181m saying in one second both that it keeps its place because the line still moved and that it
+# was out of time at the end of its 180m deadline from taking the turn: the deadline went on
+# counting through the wait in line, so the line rule never governed it. Now the deadline counts
+# only time the run holds the turn (or goes on without one), and the line rule governs every wait
+# in line, its time in line counting only time spent waiting. Scaled down by twelve, every figure a
+# fixture setting: deadline 15m (180m), line 15m (180m), ceiling 45m (540m), passed over at 5m
+# (60m), each holder ahead leaving after 4m.
+# drive: run after every fake sleep. At DRIVE_STEAL_AT seconds in, this run's ticket (1) is taken
+# away and DRIVE_AHEAD join ahead of it, as a waiter passing it over would leave things; then every
+# DRIVE_LEAVE_EVERY seconds the first of them leaves, and once none is left the checks go green.
+cat > "$BIN/drive" <<EOS
+#!/usr/bin/env bash
+rel=\$(( \$(cat "\$ST/clock") - 1000000 ))
+q="\$MWR_TURN_DIR/acme/widget"
+if [ ! -e "\$ST/stolen" ] && [ "\$rel" -ge "\$DRIVE_STEAL_AT" ]; then
+  rm -f "\$q/1" "\$q/1.head"
+  for p in \$DRIVE_AHEAD; do "$BIN/take-turn" acme/widget "\$p"; done
+  printf '%s' "\$rel" > "\$ST/stolen"; printf '%s' "\$rel" > "\$ST/last-leave"
+  exit 0
+fi
+[ -e "\$ST/stolen" ] && [ "\${DRIVE_LEAVE_EVERY:-0}" -gt 0 ] || exit 0
+[ \$(( rel - \$(cat "\$ST/last-leave") )) -ge "\$DRIVE_LEAVE_EVERY" ] || exit 0
+for t in \$(ls "\$q" | grep -E '^[0-9]+\$' | sort -n); do
+  grep -qx "pr 7" "\$q/\$t" && continue
+  rm -f "\$q/\$t" "\$q/\$t.head"; break
+done
+printf '%s' "\$rel" > "\$ST/last-leave"
+others=0
+for t in \$(ls "\$q" | grep -E '^[0-9]+\$'); do grep -qx "pr 7" "\$q/\$t" || others=\$(( others + 1 )); done
+[ "\$others" -gt 0 ] || [ -n "\${DRIVE_NO_GREEN:-}" ] || printf '%s' '$GREEN' > "\$ST/rollup"
+EOS
+chmod +x "$BIN/drive"
+drive_queue(){ local i; for i in $(seq 1 400); do printf '"$BIN_DIR/drive"\n' >> "$ST/on-sleep"; done; }
+# secs_of <line>: the elapsed figure a said line carries ([Xm YYs]), in seconds.
+secs_of(){ sed -n 's/^merge-when-ready: \[\([0-9]*\)m \([0-9]*\)s\].*/\1 \2/p' <<<"$1" | head -1 | awk '{print $1 * 60 + $2}'; }
+# Every run here: deadline 15m, line budget 15m, ceiling 45m, and no holder passed over by this run.
+line_run(){ MWR_DEADLINE_SECONDS=900 MWR_LINE_SECONDS=900 MWR_LINE_MAX_SECONDS=2700 MWR_TURN_HOLD_SECONDS=100000 BIN_DIR="$BIN" run 7 --squash; }
+
+# Passed over at 5m, then five ahead each leaving after 4m: it waits 20m in line, past its 15m line
+# budget and past 15m from taking the turn, with the line never still for 15m, so it keeps waiting,
+# says once (and only once its time in line is past the budget) that it keeps its place, takes the
+# turn back with the deadline it had not used, and merges.
+fresh "$OLD" 0 "$PENDING"; drive_queue
+out="$(DRIVE_STEAL_AT=300 DRIVE_AHEAD="9 10 11 12 13" DRIVE_LEAVE_EVERY=240 line_run)"; rc=$?
+check_eq "#1975 a run passed over and waiting in a moving line past its deadline from the turn merges" "0" "$rc"
+check "#1975 it was passed over and joined the line again" "#7's place in the line to merge in acme/widget is gone" "$out"
+check "#1975 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1975 the run lasted past its deadline from the turn" "yes" "$( [ "$(el)" -gt 900 ] && echo yes || echo no)"
+check_not "#1975 never out of time" "Out of time" "$out"
+check_not "#1975 never at the end of its deadline from taking the turn" "deadline from taking the turn" "$out"
+note="$(grep 'but the line is still moving' <<<"$out")"
+check_eq "#1975 it says once that it keeps its place" "1" "$(grep -c . <<<"$note")"
+check_eq "#1975 and only once its time in line, not its whole run, is past the line budget (5m held + 15m in line)" "yes" "$( s="$(secs_of "$note")"; [ -n "$s" ] && [ "$s" -ge 1200 ] && echo yes || echo no)"
+check "#1975 it takes the turn back with the deadline it held the turn for taken off, not its wait in line" "10m 00s of its 15m deadline is left" "$out"
+
+# Control, the line standing still (L497): passed over the same way, nobody ahead ever leaves, so it
+# stops at its line budget, said as the line standing still, 15m after it joined the line again.
+fresh "$OLD" 0 "$PENDING"; drive_queue
+out="$(DRIVE_STEAL_AT=300 DRIVE_AHEAD="9" line_run)"; rc=$?
+check_eq "#1975 control: behind a line that stopped moving it still stops" "3" "$rc"
+check "#1975 control: said as nothing ahead having moved for the budget" "nothing ahead of it in line has moved for 15m (MWR_LINE_SECONDS)" "$out"
+check_not "#1975 control: never as its deadline from the turn" "deadline from taking the turn" "$out"
+check_not "#1975 control: never as the line still moving" "still moving" "$out"
+check_eq "#1975 control: 15m after joining the line again at 5m" "yes" "$( e="$(el)"; [ "$e" -ge 1200 ] && [ "$e" -lt 1260 ] && echo yes || echo no)"
+check_eq "#1975 control: nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# The ceiling still holds: a line that keeps moving but never reaches it ends at 45m in line, counted
+# from the time it spent in line (none before the turn, 45m after it), said as the ceiling.
+fresh "$OLD" 0 "$PENDING"; drive_queue
+out="$(DRIVE_STEAL_AT=300 DRIVE_AHEAD="$(seq -s ' ' 9 20)" DRIVE_LEAVE_EVERY=240 line_run)"; rc=$?
+check_eq "#1975 ceiling: a moving line that never reaches it still stops" "3" "$rc"
+check "#1975 ceiling: said as the ceiling with the line still moving" "at the end of its 45m ceiling in line (MWR_LINE_MAX_SECONDS), with the line still moving" "$out"
+check_not "#1975 ceiling: never as its deadline from the turn" "deadline from taking the turn" "$out"
+check_eq "#1975 ceiling: 45m in line after the 5m it held the turn" "yes" "$( e="$(el)"; [ "$e" -ge 3000 ] && [ "$e" -lt 3060 ] && echo yes || echo no)"
+check_eq "#1975 ceiling: nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# The deadline still bounds the time it holds the turn, over both holds: passed over at 5m, back
+# at 9m with 10m left, and its checks never finish, so it stops at 19m, 15m of holding in all.
+fresh "$OLD" 0 "$PENDING"; drive_queue
+out="$(DRIVE_STEAL_AT=300 DRIVE_AHEAD="9" DRIVE_LEAVE_EVERY=240 DRIVE_NO_GREEN=1 line_run)"; rc=$?
+check_eq "#1975 deadline: a run holding the turn again still runs out" "3" "$rc"
+check "#1975 deadline: at the end of its deadline, said as counted only while it held the turn" "at the end of its 15m deadline from taking the turn, counted only while it held the turn" "$out"
+check_eq "#1975 deadline: 5m held, 4m in line, then the 10m it had left" "yes" "$( e="$(el)"; [ "$e" -ge 1140 ] && [ "$e" -lt 1200 ] && echo yes || echo no)"
+check_eq "#1975 deadline: nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 # =================================================================================================
 # 26. The phase it publishes for tools/load-window.sh (claude-config#1676): waiting while it sleeps

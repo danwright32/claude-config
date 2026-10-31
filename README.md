@@ -1426,7 +1426,14 @@ reached it in nine hours (room for about 27 merges of 20 minutes; a setting). Wh
 its looks at GitHub grow to three minutes apart as checks' do, since nothing there needs reading
 every minute, while the turn itself is read on this Mac at every base look, so a turn passing is
 still taken at once: a line of 15 waiters read once a minute was about 900 of the account's 5,000
-GraphQL points an hour. Neither budget restarts, so a run lasts at most twelve hours. And
+GraphQL points an hour. A run that held the turn, was passed over and joined the line again is
+decided by the line budget alone while it waits (claude-config#1975): on 2026-10-30 #1962 was
+passed over, kept its place in a line that was still moving, and stopped in the same second "at the
+end of its 180m deadline from taking the turn", because the deadline went on counting while it
+waited. Now the deadline counts only time a run holds the turn, it takes the turn back with what it
+has not held, and its time in line, which the ceiling measures, leaves out the time it held the
+turn. Neither budget restarts, so a run still lasts at most twelve hours: nine in line and three
+holding the turn. And
 each time the turn comes to a run it first reads how long the repository's recent check runs took
 (the longest of the ten most recent heads among its latest successful pull request runs, each head
 timed from its first run created to its last finished; claude-config's took 15 to 23 minutes on
