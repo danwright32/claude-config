@@ -1,5 +1,6 @@
 import type { ModKitBandRow, ModKitCommand } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { ScopeModesHeld } from '../types/index.d.ts'
+import { publishInstead } from './mod-kit/deliver.ts'
 
 // Away and home (#621). While Dan is away what needs him at the Mac is held, and on coming home each
 // session shows what it held in one boxed card in the band, nothing running until he presses its
@@ -165,7 +166,7 @@ export const heldTool = (tool: string, input: Record<string, unknown>): string |
  */
 export const heldRefusal = (label: string): { card: { guard: string; reason: string; safeWay: string }; deny: string } => ({
   card: { guard: 'Away', reason: `Held for when you are back: ${label}.`, safeWay: 'Claude publishes a private page for your phone instead.' },
-  deny: `Held: Dan is away from the Mac, so "${label}" waits for him to come back. Publish what he needs to see as a private claude.ai page instead (the Artifact tool).`,
+  deny: `Held: Dan is away from the Mac, so "${label}" waits for him to come back. ${publishInstead('what he needs to see')}`,
 })
 
 /**

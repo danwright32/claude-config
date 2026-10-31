@@ -1229,6 +1229,18 @@ they are only ever loaded for that config. `run-all-tests.sh` hands every suite 
 its own, as it does the issue spool, rather than bracketing the real log among its live stores: the
 live watcher appends to it throughout a run, and an append is the one change that bracket excuses.
 
+A suite that starts `run-all-tests.sh` against fixture suites hands those runs a config folder of
+their own (#1970): it sources `lib/fixture-runner-home.sh` and calls `fixture_runner_home` once,
+before its first launch, which plants every store the runner reads from `CLAUDE_HOME` (each with a
+little content, so a fixture run still compares real files) and points `CLAUDE_HOME` and the Mac
+store seams under a throwaway directory. Before it, the fixture runs in `test-run-all-tests.sh` (151
+of them in one traced full run on 2026-10-31, and no other suite's) bracketed the real `~/.claude`,
+and a suite run on its own, the way builders run one, has no enclosing run to leave them to, so a
+sync install or a settings save landing in one fixture run's window failed an unrelated case. What
+that gives up: a fixture suite writing the real folder is not caught by the fixture run around it.
+Those fixtures are written by the suite that starts them, and the guard on that suite is the run it
+is part of, whose window contains every fixture run's.
+
 A run of `run-all-tests.sh` started under another run (a suite testing the runner against fixture
 suites) judges only the live stores no enclosing run already brackets (#1964). Each run exports the
 stores it and its enclosing runs bracket, with its own run id, and a nested run hands over only the

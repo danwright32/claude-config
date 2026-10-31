@@ -1949,25 +1949,42 @@ imports_in_file(){   # $1 = file
 # while the dangling-reference check flagged it as missing.
 # Space-delimited strings, not arrays: bash 3.2 (the macOS default) treats
 # "${arr[@]}" on an empty array as an unbound variable under `set -u`.
+#
+# NO PROCESS SUBSTITUTION HERE, and nothing else this function does not wait for (claude-config#1974).
+# Every caller reads the answer through `$(...)`, so the printf at the end writes into a pipe, and a
+# write to a pipe can block for a moment on a loaded Mac. Bash 3.2 does not restart a write that a
+# signal interrupts: printf says "write error: Interrupted system call" and the rest of the list is
+# lost. Process substitution starts a child the shell never waits for, so its SIGCHLD arrives
+# whenever it happens to exit, which can be during that write. The tail of the list is what goes,
+# and the tail is the deepest import: on 2026-10-30, at a load of 52, a pull never copied a rule file
+# two imports down and the dangling reference check failed the pull. A command substitution is
+# waited for before it returns, so by the printf every child here has exited and been reaped.
+# tests/test-claude-sync.sh holds this function to that shape.
 top_files_in(){   # $1 = directory
-  local seen=" " pending="${TOP_FILES_SEED[*]}" f imp
+  local seen=" " pending="${TOP_FILES_SEED[*]}" f imp imps
   while ! is_blank "$pending"; do
     f="${pending%% *}"; pending="${pending#"$f"}"; pending="${pending# }"
     [ -n "$f" ] || continue
     case "$seen" in *" $f "*) continue ;; esac
     seen+="$f "
+    imps="$(imports_in_file "$1/$f")"
     while IFS= read -r imp; do
       [ -n "$imp" ] && pending+=" $imp"
-    done < <(imports_in_file "$1/$f")
+    done <<IMPORTS
+$imps
+IMPORTS
   done
   # The library files travel whether or not CLAUDE.md imports them (claude-config#564): with the
   # lessons core in use they are no longer imports, and a set derived from imports alone would stop
   # sending them, leaving the other Mac's library frozen at the day the core was switched on.
+  imps="$(lesson_index_files_present "$1")"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$seen" in *" $f "*) continue ;; esac
     seen+="$f "
-  done < <(lesson_index_files_present "$1")
+  done <<INDEXFILES
+$imps
+INDEXFILES
   printf '%s\n' $seen
   return 0
 }
@@ -2503,11 +2520,17 @@ lesson_index_files_present(){   # $1 = tree
 # The generated index files a tree's CLAUDE.md IMPORTS, one per line. Recognised by the same shape
 # every other reader here uses, so the imports and the files on disk cannot be judged by two
 # different ideas of what is derived (L41).
+# Through a command substitution, never process substitution, for the reason top_files_in gives
+# (claude-config#1974): each printf here writes into the caller's pipe, and a child still running
+# while it does can interrupt the write and lose the line.
 lesson_index_imports_in(){   # $1 = tree
-  local imp
+  local imp imps
+  imps="$(imports_in_file "$1/CLAUDE.md")"
   while IFS= read -r imp; do
     if is_derived_rule_file "$imp"; then printf '%s\n' "$imp"; fi
-  done < <(imports_in_file "$1/CLAUDE.md")
+  done <<IMPORTS
+$imps
+IMPORTS
   return 0
 }
 

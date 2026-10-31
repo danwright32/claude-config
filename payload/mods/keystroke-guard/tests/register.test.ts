@@ -2,6 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
+import { publishInstead } from '../hooks/mod-kit/deliver.ts'
 
 const OVERTURE = '/Applications/Overture.app/Contents/MacOS/Overture'
 const DEBUG = '/Users/x/Build/Debug/Overture.app/Contents/MacOS/Overture'
@@ -274,12 +275,50 @@ test('a focus stealer gets the agreed question but no process check', withKit, a
   expect(w.reached).toContain('Bash')
 })
 
-test('a declined focus stealer says so in its own words', withKit, async ($, on) => {
+// #1935: on 2026-10-29 a design could not be opened in Preview or Chrome after a Not now, the
+// refusal named no next step, and it was described in prose. The refusal now gives the step away
+// mode delivers by: a private page, in the one wording mod-kit keeps (hooks/mod-kit/deliver.ts).
+const PUBLISH = publishInstead('what it would have shown')
+
+test('a declined focus stealer says so in its own words, and says to publish a page instead (#1935)', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world($, on, { front: 10, running: {}, answer: 'Not now' })
   const r = await $.tool.call(bash('open -a "Google Chrome" report.html'))
-  expect(refusal(r)).toBe('Blocked: You said not now to bringing Google Chrome to the front.')
+  expect(refusal(r)).toBe(`Blocked: You said not now to bringing Google Chrome to the front. ${PUBLISH}`)
+  expect(refusal(r)).toContain('the Artifact tool')
   expect(w.toasts).toContain('Blocked bringing Google Chrome to the front.')
+  expect(w.cards).toEqual([{ toolUseId: 't1', guard: 'Keystroke guard', reason: 'You said not now to bringing Google Chrome to the front.', safeWay: PUBLISH }])
+})
+
+test('a declined image opened in Preview is told to publish a page instead (#1935)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: {}, answer: 'Not now' })
+  const r = await $.tool.call(bash('open -a Preview /tmp/design.png'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe(`Blocked: You said not now to bringing Preview to the front. ${PUBLISH}`)
+})
+
+test('a refusal for any other reason does not say to publish a page (#1935 control)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  // Declined typing: a keystroke has no result to show, so no page stands in for it.
+  const mac: World = { front: 10, running: { 10: OVERTURE }, answer: 'Not now' }
+  world($, on, mac)
+  const declinedTyping = refusal(await $.tool.call(bash(KEY, 'a')))
+  // A dismissed question about bringing an app forward, which is not a Not now.
+  mac.answer = 'dismiss'
+  const dismissed = refusal(await $.tool.call(bash('open -a "Google Chrome" report.html', 'b')))
+  // A wrong frontmost app.
+  mac.answer = 'Go ahead'
+  mac.front = 77
+  mac.running[77] = LIGHTROOM
+  const wrongFront = refusal(await $.tool.call(bash(KEY, 'c')))
+  for (const said of [declinedTyping, dismissed, wrongFront]) {
+    expect(said).toMatch(/^Blocked: /)
+    expect(said).not.toContain('Artifact')
+    expect(said).not.toContain('claude.ai page')
+  }
+  expect(declinedTyping).toBe('Blocked: You said not now to typing into Overture.')
+  expect(dismissed).toBe('Blocked: The question about Google Chrome was dismissed.')
 })
 
 test('an ordinary command is not asked about', withKit, async ($, on) => {
