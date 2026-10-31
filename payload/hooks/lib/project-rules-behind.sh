@@ -39,13 +39,15 @@
 #
 #   project_rules_behind <cwd>
 #       sets PRB_TEXT (for the person) and PRB_CONTEXT (for the session) when the checkout is behind
-#       on a rule file, and leaves both empty otherwise. Always returns 0.
+#       on a rule file, and PRB_KEY, the answer without anything that drifts on its own (the age), for
+#       a caller to say it once per answer; all three empty otherwise. Always returns 0.
 #
 # Env: PROJECT_RULES_NOW, the clock in epoch seconds, for a test to render the age deterministically;
 #      PROJECT_RULES_PYTHON, the interpreter that reads the counts (default python3), for a test to
 #      make that reading fail.
 
 PRB_TEXT=""
+PRB_KEY=""
 PRB_CONTEXT=""
 
 # The shared number check, from beside this file whoever sources it.
@@ -54,7 +56,7 @@ case "${BASH_SOURCE[0]}" in */*) _prb_dir="${BASH_SOURCE[0]%/*}" ;; *) _prb_dir=
 . "$_prb_dir/whole-number.sh" 2>/dev/null || true
 
 project_rules_behind() {
-  PRB_TEXT=""; PRB_CONTEXT=""
+  PRB_TEXT=""; PRB_CONTEXT=""; PRB_KEY=""
   local cwd="${1:-}" common primary here lines head_sha origin_sha head_ref origin_ref branch counts ahead behind
   [ -n "$cwd" ] || return 0
   command -v git >/dev/null 2>&1 || return 0
@@ -181,6 +183,9 @@ else:
   local first
   first="$(printf '%s\n' "$changed" | sed -n 1p)"
   PRB_CONTEXT="$PRB_TEXT Before relying on what the loaded copy says, read the current one, for example with: git -C '$primary' show origin/$branch:$first"
+  # Which checkout, at which commit, against which origin commit, about which files: the answer
+  # itself. The age is left out, since it reads differently every few minutes with nothing changed.
+  PRB_KEY="$primary|$branch|$head_sha|$origin_sha|$(printf '%s\n' "$changed" | tr '\n' '|')"
   return 0
 }
 

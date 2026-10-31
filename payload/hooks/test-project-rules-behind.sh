@@ -147,6 +147,9 @@ case "$(ctx "$out")" in *"show origin/main:CLAUDE.md"*) check "the session is to
   && check "the hook never moves or touches the checkout" ok \
   || check "the hook never moves or touches the checkout" "HEAD or the tree changed"
 silent "the same session starting again (a compaction or resume) is not told twice" "$(start s-behind "$W/primary" compact)"
+# Hours later the age in the text reads differently, and the answer is still the same one.
+later="$(python3 -c 'import time; print(int(time.time()) + 5 * 3600)')"
+silent "a compaction hours later, whose age reads differently, is still not told twice" "$(PROJECT_RULES_NOW="$later" start s-behind "$W/primary" compact)"
 silent "and its prompts never repeat it" "$(prompt s-behind "$W/primary")"
 m2="$(msg "$(start s-behind-2 "$W/primary")")"
 case "$m2" in *CLAUDE.md*) check "a new session, which loaded the stale copy too, is told" ok ;;

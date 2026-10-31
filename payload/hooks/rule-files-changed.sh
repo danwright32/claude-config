@@ -281,13 +281,14 @@ if [ "$event" = "SessionStart" ]; then
   # Asked after both records are taken, so nothing here can cost the baselines above. Once per
   # session for each answer: a compaction or a resume re-reads the same stale file from disk, and
   # being told again then would be the repetition this hook exists to avoid (L36); a new session,
-  # which loaded the stale copy afresh, is told again on purpose. Recorded before it is said.
+  # which loaded the stale copy afresh, is told again on purpose. Recorded before it is said, and
+  # compared by PRB_KEY, never the text, which carries the ref's age and so differs at every start.
   if [ "${_prb_loaded:-}" = 1 ]; then
     project_rules_behind "${cwd:-${CLAUDE_PROJECT_DIR:-}}"
     if [ -n "$PRB_TEXT" ]; then
       PRB_STATE="$STATE_DIR/claude-project-rules-${key}.state"
-      if [ "$(cat "$PRB_STATE" 2>/dev/null)" != "$PRB_TEXT" ]; then
-        printf '%s' "$PRB_TEXT" > "$PRB_STATE" 2>/dev/null || true
+      if [ "$(cat "$PRB_STATE" 2>/dev/null)" != "$PRB_KEY" ]; then
+        printf '%s' "$PRB_KEY" > "$PRB_STATE" 2>/dev/null || true
         hook_allow_notice "$PRB_TEXT" SessionStart "$PRB_CONTEXT"
       fi
     fi
