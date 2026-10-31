@@ -6,8 +6,9 @@
 # run-all-tests.sh brackets the live stores of the config it is asked about: the rule files and
 # settings.json under CLAUDE_HOME, and, only when that is this user's own ~/.claude, the clone
 # register, the shell rc and the watcher's two markers in HOME. A suite that tests the runner starts
-# it against fixture suites over and over (about 120 launches in test-run-all-tests.sh alone), and
-# with CLAUDE_HOME left alone every one of those launches bracketed Dan's real ~/.claude. Under the
+# it against fixture suites over and over (151 launches from test-run-all-tests.sh in one traced full
+# run on 2026-10-31, and none from any other suite), and with CLAUDE_HOME left alone every one of
+# those launches bracketed Dan's real ~/.claude. Under the
 # full runner that is harmless since #1964, which leaves those stores to the enclosing run. Run on its
 # own, the way builders run one suite, nothing encloses it, so each fixture run judges the real folder
 # over its own short window, and the only change it can ever see there is somebody else's: a
