@@ -228,7 +228,7 @@ mkdir -p "$WORK/rules"; printf 'rules\n' > "$WORK/rules/CLAUDE.md"
 prompt_hook "a payload with no session" "neither a session id" "$NOSESSION" rule-files-changed.sh CLAUDE_RULES_DIR="$WORK/rules"
 prompt_hook "a payload with no session" "neither a session id" "$NOSESSION" suite-pile-notice.sh
 prompt_hook "a payload with no session" "neither a session id" "$NOSESSION" sync-stuck-notice.sh
-prompt_hook "settings that are not whole numbers" "must all be whole numbers" "$WITHSESSION" suite-pile-notice.sh SYNC_SUITE_MAX_AGE=soon
+prompt_hook "settings that are not whole numbers" "is not a whole number" "$WITHSESSION" suite-pile-notice.sh SYNC_SUITE_MAX_AGE=soon
 # Run by its bare name from its own folder, as a person trying a hook by hand does, a hook that cuts
 # its folder from its path in bash must still find the library rather than fall back.
 for bare in sync-stuck-notice.sh suite-pile-notice.sh rtk-rewrite.sh; do

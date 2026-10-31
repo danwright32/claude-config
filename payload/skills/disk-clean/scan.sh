@@ -56,8 +56,12 @@ WALKERS=" build-folders worktrees runaway-logs forgotten-tools large-files "
 
 LIMIT="${DISK_CLEAN_CATEGORY_SECONDS:-600}"
 WALK_LIMIT="${DISK_CLEAN_WALK_SECONDS:-900}"
-case "$LIMIT" in ''|*[!0-9]*|0) echo "disk-clean scan: DISK_CLEAN_CATEGORY_SECONDS is '$LIMIT', which is not a whole number of seconds, so it scanned nothing."; exit 2 ;; esac
-case "$WALK_LIMIT" in ''|*[!0-9]*|0) echo "disk-clean scan: DISK_CLEAN_WALK_SECONDS is '$WALK_LIMIT', which is not a whole number of seconds, so it scanned nothing."; exit 2 ;; esac
+# The one test of a whole number above zero, 00 included as zero (claude-config#1948), from the hooks
+# installed beside the skills. Missing, the shell names the missing function and both are refused.
+# shellcheck source=../../hooks/lib/whole-number.sh
+. "$HERE/../../hooks/lib/whole-number.sh" 2>/dev/null
+whole_above_zero "$LIMIT" LIMIT || { echo "disk-clean scan: DISK_CLEAN_CATEGORY_SECONDS is '$LIMIT', which is not a whole number of seconds, so it scanned nothing."; exit 2; }
+whole_above_zero "$WALK_LIMIT" WALK_LIMIT || { echo "disk-clean scan: DISK_CLEAN_WALK_SECONDS is '$WALK_LIMIT', which is not a whole number of seconds, so it scanned nothing."; exit 2; }
 
 ONLY=""
 while [ "$#" -gt 0 ]; do

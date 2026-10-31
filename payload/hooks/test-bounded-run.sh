@@ -89,6 +89,16 @@ rm -f "$TMP/ran"
 # The control on the two above: the same command with a real bound does run (L159).
 bounded_run 30 sh -c ": > '$TMP/ran'"
 check "and the same command with a real bound does run" "$([ -e "$TMP/ran" ] && [ "$BOUNDED_RC" -eq 0 ] && echo ok || echo "rc $BOUNDED_RC")"
+rm -f "$TMP/ran"
+# Which bounds are zero is lib/whole-number.sh's answer (claude-config#1948). A copy without it
+# beside it runs nothing, comes back as 125, and says which file is missing, rather than a bare 125
+# a caller reads as a bound it refused.
+mkdir -p "$TMP/lone"; cp "$DIR/lib/bounded-run.sh" "$TMP/lone/"
+lone="$(bash -c '. "$1/bounded-run.sh"; bounded_run 30 sh -c ": > \"$2\""; printf "%s|%s" "$BOUNDED_RC" "$BOUNDED_OUT"' _ "$TMP/lone" "$TMP/ran")"
+case "$lone" in
+  125\|*whole-number.sh*) check "with lib/whole-number.sh missing it runs nothing, comes back 125 and names the file" "$([ ! -e "$TMP/ran" ] && echo ok || echo "it ran the command")" ;;
+  *) check "with lib/whole-number.sh missing it runs nothing, comes back 125 and names the file" "said [$lone]" ;;
+esac
 
 echo ""
 echo "passed: $pass, failed: $fail"
