@@ -2198,8 +2198,9 @@ retake(){ # retake <deadline> <recent run took>: the turn taken, taken over 2500
   printf '%s\n' "$LEAVE9; printf '%s' '$GREEN' > \"\$ST/rollup\"" >> "$ST/on-sleep"
   out="$(BIN_DIR="$BIN" MWR_DEADLINE_SECONDS="$1" run 7 --squash)"; rc=$?
 }
-# It held the turn 42m 10s (30s, then the 2500s jump) and waited 30s in line before it came back;
-# since #1975 the wait in line is not taken off its deadline, so 17m 50s is left (17m 20s before).
+# It held the turn 42m 10s (a look, then the jump) and waited a look in line before it came back,
+# all fixture settings, not measured; since #1975 the wait in line is not taken off its deadline,
+# so 17m 50s is left (17m 20s before).
 retake 3600 1200
 check_eq "#1604 a run with less time left than a check run does not take the turn back" "3" "$rc"
 check "#1604 it took the turn at first, with time enough" "Took the turn to merge in acme/widget" "$out"
@@ -2373,7 +2374,7 @@ EOS
 chmod +x "$BIN/drive"
 drive_queue(){ local i; for i in $(seq 1 400); do printf '"$BIN_DIR/drive"\n' >> "$ST/on-sleep"; done; }
 # secs_of <line>: the elapsed figure a said line carries ([Xm YYs]), in seconds.
-secs_of(){ sed -n 's/^merge-when-ready: \[\([0-9]*\)m \([0-9]*\)s\].*/\1 \2/p' <<<"$1" | head -1 | awk '{print $1 * 60 + $2}'; }
+secs_of(){ local l="${1%%$'\n'*}"; [[ "$l" =~ ^merge-when-ready:\ \[([0-9]+)m\ ([0-9]+)s\] ]] && printf '%s' $(( 10#${BASH_REMATCH[1]} * 60 + 10#${BASH_REMATCH[2]} )); }
 # Every run here: deadline 15m, line budget 15m, ceiling 45m, and no holder passed over by this run.
 line_run(){ MWR_DEADLINE_SECONDS=900 MWR_LINE_SECONDS=900 MWR_LINE_MAX_SECONDS=2700 MWR_TURN_HOLD_SECONDS=100000 BIN_DIR="$BIN" run 7 --squash; }
 
