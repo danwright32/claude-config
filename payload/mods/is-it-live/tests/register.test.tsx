@@ -844,7 +844,7 @@ type Pr = { state: 'MERGED' | 'OPEN' | 'CLOSED'; mergedAt?: number }
 // GitHub, answering `gh pr view <n> [--repo r]` for the PRs it holds; a PR named by no --repo is the
 // session folder's repository's.
 // `issues` are numbers the repository holds as issues, which GitHub answers as it really does when
-// asked for a pull request of that number (#1943, measured on Try-Pennie/slate#4342, 2026-10-31).
+// asked for a pull request of that number (#1943, measured on slate#4342, 2026-10-31).
 const notAPr = (n: string) => `GraphQL: Could not resolve to a PullRequest with the number of ${n}. (repository.pullRequest)`
 const github = (prs: Record<string, Pr>, issues: string[] = []) => (argv: string[]): Gh => {
   const n = argv[3] !== undefined && !argv[3].startsWith('-') ? argv[3] : undefined
@@ -1012,7 +1012,7 @@ test('a merge the helper makes in the background is asked of GitHub at the turn 
   expect((await turnEnd($)).block).toContain(`${REPO}#412`)
 })
 
-// #1943: a Slate session was asked for a card for Try-Pennie/slate#4342, a closed lesson sweep issue,
+// #1943: a Slate session was asked for a card for slate#4342, a closed lesson sweep issue,
 // at five turn ends: a merge command naming the issue's number, its failure hidden by a pipe, was
 // recorded as a merge GitHub could not confirm, and the card tool's refusal settled nothing.
 test('a merge naming an issue number owes no card, in the foreground or the background (#1943)', withKit, async ($, on) => {

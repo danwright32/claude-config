@@ -53,7 +53,7 @@ export type Proof = { kind: 'merged'; pr: number; url: string } | { kind: 'open'
 
 /**
  * Whether GitHub's refusal says the number is no pull request in the repository asked (an issue, or
- * nothing at all): gh's own words for it, measured on Try-Pennie/slate#4342, a lesson sweep issue
+ * nothing at all): gh's own words for it, measured on slate#4342, a lesson sweep issue
  * (#1943). That is an answer, not a failure to ask: a merge naming it merged nothing, and no card can
  * ever be made for it, so it is never owed one. Any other refusal (GitHub not answering, no access)
  * proves nothing either way and stays unproven.
