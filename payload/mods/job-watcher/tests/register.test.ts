@@ -2,6 +2,7 @@ import { expect, mock } from 'claude-code/testing'
 import { awaitAtEnd, endHeld, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import { shortCommand } from '../hooks/jobs.ts'
+import { commandWrites } from './mod-kit/hooks/writes.ts'
 
 // A stand-in for the session registry: what the watcher records there comes back as a transcript
 // line the world collects (an inline plugin cannot reach this file's variables), and the sessions
@@ -29,7 +30,12 @@ const deps: { name: string; register: Register } = {
           blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
           commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
-          writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
+          // #1976: mod-kit's write reader, answered by the world with its copy (tests/mod-kit).
+          writes: async (input: unknown) => {
+            const r = await built.process.run(['__writes', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return JSON.parse(r.stdout)
+          },
           git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
           pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
           workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
@@ -191,6 +197,11 @@ type World = {
    * crashes on an uncaught exception (exit 1 and a traceback, as Python does, #1869), or a run that throws.
    */
   reader?: 'refuses' | 'none' | 'crash' | 'crashExit1' | 'throws'
+  /**
+   * #1976: the files a job sends its output to, by path: their size and when each last changed
+   * (seconds), or unreadable; the test may change them as it goes.
+   */
+  logs?: Record<string, { size: number; mtime?: number; unreadable?: boolean }>
 }
 const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
@@ -209,6 +220,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     tools: [] as unknown[],
     /** Each stat of an output file: one per job per look. */
     stats: 0,
+    /** Each stat of a file a job sends its output to (#1976), by its path. */
+    logStats: [] as string[],
     /** Each lsof of an output file. */
     lsofs: 0,
     /** Each time the session list was asked for. */
@@ -242,6 +255,17 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   const byGroup = (g: number) => list.findIndex((_, i) => groupOf(i) === g)
   on('process.run', async ($, e) => {
     const [cmd, ...args] = e.argv
+    // #1976: mod-kit's write reader, read with its copy, as the stand-in above asks for it.
+    if (cmd === '__writes') {
+      const input = JSON.parse(args[0] ?? '{}') as { command: string; cwd: string; home: string }
+      return ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home)))
+    }
+    const log = cmd === 'stat' ? o.logs?.[args[args.length - 1] ?? ''] : undefined
+    if (log) {
+      w.logStats.push(args[args.length - 1] as string)
+      if (log.unreadable) return res(1, '', `stat: ${args[args.length - 1]}: Permission denied`)
+      return ok(args.includes('%z %m') ? `${log.size} ${log.mtime ?? 0}\n` : `${log.size}\n`)
+    }
     if (cmd === 'stat') w.stats += 1
     if (cmd === 'lsof') w.lsofs += 1
     const late = list.find(j => j.slow?.cmd === cmd && (list.length === 1 || args.includes(outOf(`job${list.indexOf(j) + 1}`))))
@@ -369,6 +393,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     return { value: undefined }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  // The folder a Bash call runs in, where the write reader places a relative redirect (#1976).
+  on('session.cwd', () => ({ value: '/repo' }) as never)
   on('prompt.submit', ($, e) => {
     // A notice from Claude Code (the tests of #706) is not one the watcher submitted.
     if (e.origin.kind !== 'task-notification') w.submitted.push({ text: e.text, origin: e.origin })
@@ -576,6 +602,110 @@ test('a held output job whose ps stops answering is judged from its last real ou
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).not.toMatch(/no new output/)
   await clock.advance(2 * MIN)
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toMatch(/no new output for 1[12] minutes/)
+})
+
+// #1976: on 2026-10-30 four merge helpers, each started as `bash merge-when-ready.sh ... > <log> 2>&1`
+// and logging every minute or two, read as quiet for an hour: their output went to the log, so the
+// task's output file never grew. A job is judged by the files a redirect sends its standard output
+// to as well, read with mod-kit's write reader; a tee (output in both places) and a target the
+// reader cannot name are judged as before.
+const MLOG = '/tmp/merge-1965.log'
+const LOGGED = `bash ~/.claude/hooks/lib/merge-when-ready.sh 1965 --repo o/r > ${MLOG} 2>&1`
+const STATUS = { tool: 'Bash', command: 'git status' } as never
+// Each minute's look, with the log growing before it when `grows`.
+const minutes = async (clock: { advance: (ms: number) => Promise<void> }, n: number, log?: { size: number }) => {
+  for (let m = 0; m < n; m++) {
+    if (log) log.size += 40
+    await clock.advance(MIN)
+  }
+}
+test('a job sending its output to a log it keeps writing is never quiet (#1976)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const log = { size: 0 }
+  const w = world(on, { tail: '', size: 0 }, { logs: { [MLOG]: log } })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOGGED, run_in_background: true } as never)
+  expect(w.extra[w.extra.length - 1]).toEqual([{ id: 'job1', command: LOGGED, outputPath: OUT, pgid: 501, startedAt: 0, logs: [MLOG] }])
+  await minutes(clock, 31, log)
+  expect(noticesOf(await $.tool.call(STATUS))).not.toMatch(/no new output/)
+  expect((await jobsOf($)).map(j => [j.state, j.stall, j.quietMs])).toEqual([['running', null, null]])
+  expect(w.logStats.length).toBe(31)
+})
+
+test('a job whose log stops growing too is quiet, and the notice names the log (#1976)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const log = { size: 0 }
+  world(on, { tail: '', size: 0 }, { logs: { [MLOG]: log } })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOGGED, run_in_background: true } as never)
+  // It last grew at the third minute's look, so eleven minutes later it is quiet.
+  await minutes(clock, 3, log)
+  await minutes(clock, 10)
+  expect(noticesOf(await $.tool.call(STATUS))).not.toMatch(/no new output/)
+  await minutes(clock, 1)
+  expect(noticesOf(await $.tool.call(STATUS))).toContain(
+    `Background job job1 (${shortCommand(LOGGED)}) has had no new output for 11 minutes, in its output or in its log ${MLOG}. Stop it with TaskStop, or keep it if that is expected.`,
+  )
+  expect((await jobsOf($)).map(j => [j.state, j.stall, j.quietMs])).toEqual([['stalled', 'silent', 11 * MIN]])
+})
+
+test('a job teeing its output to a log is judged by its output alone, as before (#1976)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const TEED = 'npm test 2>&1 | tee /tmp/test.log'
+  const log = { size: 0 }
+  const w = world(on, { tail: '', size: 0 }, { logs: { '/tmp/test.log': log } })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: TEED, run_in_background: true } as never)
+  expect(w.extra[w.extra.length - 1]).toEqual([{ id: 'job1', command: TEED, outputPath: OUT, pgid: 501, startedAt: 0 }])
+  await minutes(clock, 11, log)
+  expect(noticesOf(await $.tool.call(STATUS))).toContain(`Background job job1 (${shortCommand(TEED)}) has had no new output for 11 minutes. Stop it with TaskStop`)
+  expect(w.logStats).toEqual([])
+})
+
+test('a job whose redirect target the reader cannot name is judged by its output alone, as before (#1976)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const UNNAMED = 'make > "$LOG" 2>&1'
+  const w = world(on, { tail: '', size: 0 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: UNNAMED, run_in_background: true } as never)
+  expect(w.extra[w.extra.length - 1]).toEqual([{ id: 'job1', command: UNNAMED, outputPath: OUT, pgid: 501, startedAt: 0 }])
+  await minutes(clock, 11)
+  expect(noticesOf(await $.tool.call(STATUS))).toContain(`Background job job1 (${shortCommand(UNNAMED)}) has had no new output for 11 minutes. Stop it with TaskStop`)
+  expect(w.logStats).toEqual([])
+})
+
+test('a log that cannot be read counts for nothing, and the quiet notice says it could not be read (#1976)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const LOCKED = 'make > /tmp/make.log 2>&1'
+  world(on, { tail: '', size: 0 }, { logs: { '/tmp/make.log': { size: 0, unreadable: true } } })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOCKED, run_in_background: true } as never)
+  await minutes(clock, 11)
+  expect(noticesOf(await $.tool.call(STATUS))).toContain(
+    `Background job job1 (${shortCommand(LOCKED)}) has had no new output for 11 minutes, and its log /tmp/make.log could not be read. Stop it with TaskStop`,
+  )
+})
+
+test('a write reader that cannot be asked records the job as before and says so in the debug log (#1976)', { plugins: [deps, { name: 'kit-lacks-writes', register: (() => undefined) as Register }] }, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const log = { size: 0 }
+  const w = world(on, { tail: '', size: 0 }, { logs: { [MLOG]: log } })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOGGED, run_in_background: true } as never)
+  expect(w.extra[w.extra.length - 1]).toEqual([{ id: 'job1', command: LOGGED, outputPath: OUT, pgid: 501, startedAt: 0 }])
+  expect(w.debug.join('\n')).toMatch(/job-watcher: could not read where background job job1 \(.*\) sends its output, so it is judged by its output file alone: /)
+  await minutes(clock, 11, log)
+  expect(noticesOf(await $.tool.call(STATUS))).toContain(`Background job job1 (${shortCommand(LOGGED)}) has had no new output for 11 minutes. Stop it with TaskStop`)
+})
+
+test('a job kept as quiet by design is never reported, whatever its log does (#1976)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { logs: { [MLOG]: { size: 40 } } })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOGGED, run_in_background: true } as never)
+  await $.tool.call({ tool: 'mcp__job-watcher__keep_job', task_id: 'job1', name: 'merge helper', reason: 'waits in the merge queue', quiet: true } as never)
+  await minutes(clock, 31)
+  expect(noticesOf(await $.tool.call(STATUS))).not.toMatch(/no new output/)
 })
 
 test('a healthy job says nothing', withDeps, async ($, on) => {
@@ -1108,6 +1238,34 @@ test('the judge is told the command, the run time, the output tail and that it r
   expect(prompt).toContain('2h 14m')
   expect(prompt).toContain('Connection refused')
   expect(prompt).toMatch(/repeat/)
+})
+
+// #1976: a leftover merge helper logging to its own file read as silent to the judge, and as stuck,
+// so a stop verdict could end it while it worked. Its log's last change counts as its output's.
+test('a leftover still writing its log is described as still writing, and never stopped (#1976)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: '', size: 0, mtime: 0 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, LOGGED, { logs: [MLOG] })])] },
+    logs: { [MLOG]: { size: 900, mtime: 59 * 60 } },
+    verdict: () => STOP('merge helper'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked[0]?.prompt ?? '').toMatch(/still writing/)
+  expect(w.kills).toEqual([])
+})
+
+test('a leftover whose log has stopped too is silent, with its log named to the judge (#1976)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: '', size: 0, mtime: 0 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, LOGGED, { logs: [MLOG] })])] },
+    logs: { [MLOG]: { size: 900, mtime: 30 * 60 } },
+    verdict: () => STOP('merge helper'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked[0]?.prompt ?? '').toContain(`no new output for 30 minutes, in its output or in its log ${MLOG}`)
+  expect(w.kills).toEqual([['-TERM', '-501']])
 })
 
 test('a silent leftover is described to the judge as silent', withDeps, async ($, on) => {
