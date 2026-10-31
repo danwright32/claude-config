@@ -76,6 +76,19 @@ export CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool-default"
 unset HOOK_TESTS_DEADLINE HOOK_TESTS_DEADLINE_RESERVE HOOK_TESTS_JOB_STARTED HOOK_TESTS_NOW GITHUB_ACTIONS GITHUB_WORKFLOW_REF GITHUB_JOB
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 
+# And EVERY launch below runs against a config folder of its own, never Dan's real ~/.claude
+# (claude-config#1970). Left alone, each launch bracketed the real folder, and run on its own, the
+# way builders run one suite, nothing enclosed it, so a sync install or a Claude Code settings save
+# landing in one fixture run's window failed a case about something else entirely (#1964). The
+# library plants every store the runner reads, so a fixture run still reads and compares real files,
+# and names the Mac's stores through their seams too. The cases that are ABOUT a home or a seam name
+# their own on the launch, which overrides this.
+. "$DIR/lib/fixture-runner-home.sh" && fixture_runner_home "$TMPROOT/fixture-home" || {
+  echo "FAIL: test-run-all-tests: could not give the fixture runs a config folder of their own, so they would judge the real ~/.claude. Refusing to run."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 # NOTHING below runs the runner without either naming a directory or pointing HOOK_TESTS_ROOT at a
 # fixture. This file is itself a `test-*.sh` in a directory the runner reads, so a bare invocation
 # would discover this suite and run it, from inside itself, for as long as the machine held out.
@@ -433,6 +446,26 @@ case "$ph_seen" in
        && check "every suite is handed a phase record folder of its own" ok \
        || check "every suite is handed a phase record folder of its own" "the folder it was handed exists: $ph_seen" ;;
 esac
+
+# And every launch in THIS file runs against a config folder of its own, never Dan's real ~/.claude
+# (claude-config#1970). Measured on 2026-10-31 with every runner launch of a full run traced: 151
+# launches from this file had CLAUDE_HOME unset, so each bracketed the real folder, and run on its own
+# nothing enclosed them (#1964 covers only a run under the runner). Asked of a fixture suite, as the
+# seams above are, so it is what a launch here really inherits rather than what an assignment says.
+FH="$TMPROOT/dir-fixture-home"
+mkdir -p "$FH"
+printf '#!/usr/bin/env bash\nfor v in CLAUDE_HOME SYNC_CLONE_REGISTRY SYNC_ZSHRC SYNC_WATCH_PID_FILE SYNC_HOLD_FILE; do printf "%%s=%%s\\n" "$v" "${!v-unset}"; done > "$(dirname "$0")/home.seen"\nprintf "SUITE-RESULT passed=1 failed=0\\n"\n' > "$FH/test-fixture-home.sh"
+HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$FH" >/dev/null 2>&1
+fh_bad=""
+fh_n=0
+while IFS= read -r fh_line; do
+  [ -n "$fh_line" ] || continue
+  fh_n=$((fh_n + 1))
+  case "${fh_line#*=}" in "$TMPROOT"/*) ;; *) fh_bad="$fh_bad $fh_line" ;; esac
+done < "$FH/home.seen"
+[ "$fh_n" -eq 5 ] && [ -z "$fh_bad" ] \
+  && check "#1970 every launch here runs against a config folder and Mac stores of its own" ok \
+  || check "#1970 every launch here runs against a config folder and Mac stores of its own" "read $fh_n of 5, outside this suite's throwaway directory:$fh_bad"
 
 # One at a time is the escape hatch, and it has to keep working: it is what somebody reaches for
 # when a suite only fails alongside others.

@@ -558,6 +558,16 @@ plainest reading of the decisions above:
   merge helper piped through `tail -6` read as stalled. One whose group cannot be read is judged
   by its output, as before, since nothing better was measured. Chosen over telling builders to stop
   piping background merges through `tail`, because a rule in a brief is a hope (L27).
+- **Output sent to a log (#1976).** A command whose standard output a redirect sends to a file of
+  its own (`bash merge-when-ready.sh ... > <log> 2>&1`) never grows its output file, so on
+  2026-10-30 four healthy merge helpers logging every minute read as quiet for an hour. The files a
+  redirect sends standard output to are read by mod-kit's write reader (its `stdout`) when the job
+  is recorded, and a change in any counts as output, so the job is quiet only once they have stopped
+  too; Claude's notice then names them (or says one could not be read). The status bar's line is
+  unchanged: its quiet time is measured from the same last growth. A tee reaches the output file as
+  well and a target the reader cannot name (a variable, a pattern) measures nothing, so both are
+  judged by the output file alone, as before. Chosen over relying on `quiet` at each keep, which
+  has to be remembered every time.
 
 Decided with Dan on 2026-10-04 (his approval of a lessons review finding on #721, recorded on
 #706): the leftover judge reads a job's text only as data. The repeated line or pass a leftover
