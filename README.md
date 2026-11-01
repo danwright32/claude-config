@@ -144,10 +144,10 @@ Plugin-managed skills are excluded so plugin updates don't cause churn, and so i
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
 folder under `skills/`, where Claude Code sets aside a skill it removes or replaces (#1009). The
 lists live in `payload/hooks/lib/unmanaged-skills.sh` (`PLUGIN_SKILLS`, `PLATFORM_SKILL_DIRS` and
-`SKILL_TRASH_DIRS`), which `claude-sync`, `hooks/check-home-paths.sh` and the skill scans in
-`hooks/test-gates-fail-closed.sh` and `hooks/test-python-bad-bytes.sh` all read (#2001), so no
-check judges a skill the sync does not send. A send never carries them and a pull never deletes a
-Mac's own copy. Edit that file to change them.
+`SKILL_TRASH_DIRS`), which `claude-sync` (its copy and its check of what a pull has applied, #2004),
+`hooks/check-home-paths.sh` and the skill scans in `hooks/test-gates-fail-closed.sh` and
+`hooks/test-python-bad-bytes.sh` all read (#2001), so no check judges a skill the sync does not send.
+A send never carries them and a pull never deletes a Mac's own copy. Edit that file to change them.
 
 A send never puts back a file the shared repo deleted when this Mac's copy is a leftover: the
 version the repo deleted, or an earlier version nothing on this Mac has written since the deletion

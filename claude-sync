@@ -317,6 +317,7 @@ require_unmanaged_skill_list(){
 if [ -z "$UNMANAGED_SKILLS_LIB_LOADED" ]; then
   unmanaged_skill_entry(){ unmanaged_skill_list_unreadable "no skills entry was judged"; exit 1; }
   skill_excludes(){ printf -- '--exclude=*\n'; unmanaged_skill_list_unreadable "every skills entry was left out of this step"; exit 1; }
+  carried_skill_paths(){ unmanaged_skill_list_unreadable "no skills path was judged"; exit 1; }
 fi
 
 # `audits` is here since claude-config#224. LESSONS.md cites audits/2026-07-27-issue-audit/ and
@@ -8122,7 +8123,7 @@ LOOP_INPUT
 # against a counterpart that will never exist, those read as "not applied" on
 # every run, which is the same permanent wedge this guard was just fixed for.
 payload_path_applied(){   # $1 = path relative to payload/
-  local p="$1" frag s name
+  local p="$1" frag carried
   case "$p" in
     settings.hooks.json)
       [ -f "$PAYLOAD/$p" ] || return 0
@@ -8165,11 +8166,19 @@ payload_path_applied(){   # $1 = path relative to payload/
       return $?
       ;;
   esac
-  for s in $(skill_excludes); do
-    name="${s#--exclude=}"; name="${name#/}"
-    [ -n "$name" ] || continue
-    case "$p" in "skills/$name"|"skills/$name"/*) return 0 ;; esac
-  done
+  # A skills/ path the apply never writes (a plugin skill, the platform's downloads, a .trash folder)
+  # has nothing to apply. Judged by carried_skill_paths, the shared reading of skill_excludes, so it
+  # matches exactly what rsync leaves out: an anchored name only at the top of skills/, an unanchored
+  # one at any depth. This used to parse the excludes itself and match every name at the top only,
+  # so a .trash folder inside a real skill read as unapplied for ever (claude-config#2004, L263).
+  # A filter that fails (the list unreadable, its stand in exiting) answers "not applied" rather
+  # than "left out": an empty answer from a broken reader must not read as an exclusion.
+  case "$p" in
+    skills/*)
+      carried="$(carried_skill_paths skills <<< "$p")" || return 1
+      [ -n "$carried" ] || return 0
+      ;;
+  esac
   if [ ! -e "$PAYLOAD/$p" ]; then
     # the repo removed it: applied here once this Mac no longer has it either
     [ ! -e "$CLAUDE_HOME/$p" ]
