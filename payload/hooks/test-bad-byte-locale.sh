@@ -160,9 +160,13 @@ fi
 echo "every suite with bad byte cases runs them under the helper's locale, and measures it"
 
 # Suites anywhere in the repository, and their helpers, minus this suite and the helper itself.
+# Each list is read into a variable first, never through process substitution, whose child bash 3.2
+# never waits for and whose exit can cut short what this suite prints next (L1035, #1989).
 suites=()
-while IFS= read -r f; do suites+=("$f"); done < <(
-  find "$ROOT" \( -name .git -o -name worktrees -o -name node_modules \) -prune -o -type f \( -name 'test-*.sh' -o -name 'test_*.py' \) -print | sort)
+suite_list="$(find "$ROOT" \( -name .git -o -name worktrees -o -name node_modules \) -prune -o -type f \( -name 'test-*.sh' -o -name 'test_*.py' \) -print | sort)"
+while IFS= read -r f; do [ -n "$f" ] && suites+=("$f"); done <<SUITE_LIST
+$suite_list
+SUITE_LIST
 [ "${#suites[@]}" -ge 100 ] && ok || bad "only ${#suites[@]} suites were found under $ROOT, so the scan is reading the wrong tree"
 # Naming en_US.UTF-8, or picking a locale from locale -a by hand: the second is a copy of the helper
 # that measures nothing, which two suites held (L613).
@@ -188,11 +192,15 @@ if [ -z "$unmeasured" ]; then ok; else bad "a suite runs cases under the helper'
 # A kind the helper does not know says UNMEASURED on every machine, so its cases never count, and the
 # line reads like any honest UNMEASURED (#1957, where python became python-stdin and python-file).
 unknown_kinds(){ # unknown_kinds <file>... -> file:kind for each bad_byte_measured naming a kind not in bad_byte_kinds
-  local f k
+  local f k named
   for f in "$@"; do
+    named="$(grep -o -E 'bad_byte_measured [A-Za-z0-9_-]+' "$f" 2>/dev/null | sed 's/^bad_byte_measured //')"
     while IFS= read -r k; do
+      [ -n "$k" ] || continue
       case " $kinds " in *" $k "*) ;; *) printf '%s:%s\n' "${f#"$ROOT"/}" "$k" ;; esac
-    done < <(grep -o -E 'bad_byte_measured [A-Za-z0-9_-]+' "$f" 2>/dev/null | sed 's/^bad_byte_measured //')
+    done <<NAMED
+$named
+NAMED
   done
 }
 others=()

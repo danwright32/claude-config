@@ -743,13 +743,18 @@ label_timed_out=0
 gate_out="$(mktemp "${TMPDIR:-/tmp}/pr-merge-quiz.XXXXXX" 2>/dev/null)" || gate_out=""
 if [ -n "$gate_out" ]; then
   set -m
+  # Reaped on both paths below before this hook writes anything, and nothing is written while it runs
+  # (#1989): a gate exiting while the decision is printed would cut it short under bash 3.2 (L1035).
   ( quiz_is_owed; printf '%s %s\n' "$?" "$QUIZ_VERDICT" > "$gate_out" ) </dev/null >/dev/null 2>&1 &
   gate_pid=$!
   set +m
   gate_t0=$SECONDS
   while kill -0 "$gate_pid" 2>/dev/null && [ $((SECONDS - gate_t0)) -lt "$label_deadline" ]; do sleep 0.1; done
   if kill -0 "$gate_pid" 2>/dev/null; then
-    kill -TERM -- "-$gate_pid" 2>/dev/null || kill -TERM "$gate_pid" 2>/dev/null
+    # KILL, which nothing in the gate can ignore, so the wait straight after returns at once. A TERM
+    # left a gh that ignored it running after the hook had answered, and the gate unreaped.
+    kill -KILL -- "-$gate_pid" 2>/dev/null || kill -KILL "$gate_pid" 2>/dev/null
+    wait "$gate_pid" 2>/dev/null
     label_timed_out=1
     gate_rc=0; QUIZ_VERDICT="label-timeout"
   else

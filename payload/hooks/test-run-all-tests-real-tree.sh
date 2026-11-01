@@ -122,7 +122,12 @@ pu_root="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$pu_root" ] && [ -f "$pu_root/payload/hooks/run-all-tests.sh" ] || pu_root="${RUN_ALL_TESTS_CHECKOUT:-}"
 if [ -n "$pu_root" ] && [ -f "$pu_root/payload/hooks/run-all-tests.sh" ]; then
   pu_files=()
-  while IFS= read -r pu_f; do pu_files+=("$pu_root/$pu_f"); done < <(bash "$DIR/lib/repo-files.sh" "$pu_root" | grep -E '(^|/)(test-[^/]*\.sh|[^/]*_tests\.py)$')
+  # Read into a variable first, never through process substitution, whose child bash 3.2 never waits
+  # for and whose exit can cut short what this suite prints next (L1035, #1989).
+  pu_list="$(bash "$DIR/lib/repo-files.sh" "$pu_root" | grep -E '(^|/)(test-[^/]*\.sh|[^/]*_tests\.py)$')"
+  while IFS= read -r pu_f; do [ -n "$pu_f" ] && pu_files+=("$pu_root/$pu_f"); done <<PU_LIST
+$pu_list
+PU_LIST
   if [ "${#pu_files[@]}" -lt 50 ]; then
     check "#1444 the source scan read the repository's suites" "it found only ${#pu_files[@]} suite files in $pu_root, so it read almost nothing"
   else

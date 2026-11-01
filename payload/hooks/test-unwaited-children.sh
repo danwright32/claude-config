@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A whole tree scan: a send touching these paths runs this suite (claude-config#809).
-# send-gate: scans hooks/
-# No hook starts a child its shell never waits for while that shell is writing (claude-config#1984).
+# send-gate: scans hooks/ skills/ mods/
+# No shell here starts a child it never waits for while it is writing (claude-config#1984, #1989).
 #
 # macOS bash 3.2 never waits for a process substitution's child, so its SIGCHLD lands whenever the
 # child exits, and a builtin printf or echo writing into a pipe at that moment is interrupted and NOT
@@ -11,8 +11,15 @@
 # a decision, a refusal's reason, a notice. lib/unwaited-children.py names the shapes; claude-sync
 # itself is held to the same scan by tests/test-claude-sync.sh.
 #
-# Test files are not judged: a suite's verdict is its exit code and SUITE-RESULT line (L184), and
-# several of them carry the shape as fixture text for the scanners they test.
+# Two reaches (#1989). The hooks are held to all of it, background jobs included: a worker a hook
+# starts and never waits for is the hook's own child, and a fast failing one exits while the hook is
+# still printing. Every other shell file the repository ships, the skills, tools/ and every suite,
+# is held to the process substitution shapes. A suite writes into a pipe whenever it is run by hand
+# or by Claude, and a function in one whose output the suite captures is #1974's shape exactly.
+#
+# Fixture text is told from code by the shell's own grammar, never by a file's name: what sits in a
+# quoted string, a heredoc's body or a comment is data, so a suite quoting the shape for a scanner it
+# tests is not a site, and the same text written as code in the same suite is. Both are driven below.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -48,6 +55,10 @@ _P='<''('
   printf 'printf "argument "; cat %ssh -c '"'"'ps -o ppid= -p $PPID'"'"')\n' "$_P"
   printf 'printf "pipeline "; cat %ssh -c '"'"'ps -o ppid= -p $PPID'"'"') | cat\n' "$_P"
   printf 'x="$(cat %ssh -c '"'"'ps -o ppid= -p $PPID'"'"'))"; echo "substitution $x"\n' "$_P"
+  # A job put in the background is this shell's child; one started by a subshell that ends at once,
+  # `( cmd & )`, is not (#1989): its own parent is that subshell, or launchd once the subshell has gone.
+  printf 'sleep 1 & echo "background $(ps -o ppid= -p $!)"; wait\n'
+  printf '( sh -c '"'"'echo "doublefork $PPID"'"'"' & )\n'
 } > "$TMPROOT/parent.sh"
 # Prints ok, "unmeasured: <why>" when <bash> is not bash 3, or "mismatch: <what it said>".
 child_split_verdict() { # <bash>
@@ -62,7 +73,9 @@ child_split_verdict() { # <bash>
   of() { printf '%s\n' "$parents" | awk -v k="$1" '$1 == k { print $2 }'; }
   if [ -n "$main" ] && [ "$(of redirect)" = "$main" ] && [ "$(of argument)" = "$main" ] \
      && [ -n "$(of pipeline)" ] && [ "$(of pipeline)" != "$main" ] \
-     && [ -n "$(of substitution)" ] && [ "$(of substitution)" != "$main" ]; then
+     && [ -n "$(of substitution)" ] && [ "$(of substitution)" != "$main" ] \
+     && [ "$(of background)" = "$main" ] \
+     && [ -n "$(of doublefork)" ] && [ "$(of doublefork)" != "$main" ]; then
     echo ok
   else
     echo "mismatch: the scan's split no longer matches this bash; what it said: $(printf '%s' "$parents" | tr '\n' ' ')"
@@ -85,9 +98,9 @@ check "#1984 on bash 3 a split that no longer matches still fails" \
 if [ -x /bin/bash ] && command -v ps >/dev/null 2>&1; then
   verdict="$(child_split_verdict /bin/bash)"
   case "$verdict" in
-    ok) check "#1984 /bin/bash makes the child its own in the redirect and simple command forms, and a subshell's in a pipeline or substitution" ok ;;
-    unmeasured:*) echo "SUITE-PART-UNMEASURED whose child a process substitution is, because ${verdict#unmeasured: }" ;;
-    *) check "#1984 /bin/bash makes the child its own in the redirect and simple command forms, and a subshell's in a pipeline or substitution" "${verdict#mismatch: }" ;;
+    ok) check "#1984 /bin/bash makes the child its own in the redirect, simple command and background forms, and a subshell's in a pipeline, a substitution or ( cmd & )" ok ;;
+    unmeasured:*) echo "SUITE-PART-UNMEASURED whose child a process substitution or a background job is, because ${verdict#unmeasured: }" ;;
+    *) check "#1984 /bin/bash makes the child its own in the redirect, simple command and background forms, and a subshell's in a pipeline, a substitution or ( cmd & )" "${verdict#mismatch: }" ;;
   esac
 else
   echo "SUITE-PART-UNMEASURED whose child a process substitution is, because /bin/bash or ps is absent here"
@@ -115,10 +128,20 @@ _H='<''<'
   printf 'g(){\n  sleep 1 > /dev/null 2>&1 &\n  wait "$!"\n}\n'                          # 26-29 not: waited
   printf 'h(){\n  true && echo a >&2 && echo b &> /dev/null\n}\n'                         # 30-32 not: no background
   printf 'z="$(paste %sprintf a) \\\n  %sprintf b))"\n' "$_P" "$_P"                      # 33-34 not: substitution
+  # Background jobs a shell can start safely, and the ones it cannot (#1989).
+  printf '( sleep 1 </dev/null >/dev/null 2>&1 & )\n'                                    # 35 not: started by a subshell that ends at once
+  printf '( sleep 1 & printf "r %%s\\n" "$!" >> rec ) </dev/null >/dev/null 2>&1\n'      # 36 not: a subshell that can write to no pipe
+  printf '( sleep 1 & echo "$!" ) >/dev/null\n'                                         # 37 background: its stderr is still the pipe
+  printf 'sleep 1 &\ndisown "$!"\n'                                                     # 38-39 background: never waited for
+  printf 'sleep 2 &\n# kept\nkept=$!\nwait "$kept"\n'                                   # 40-43 not: kept and waited
+  printf 'sleep 3 &\nlost=$!\n'                                                         # 44-45 background: kept, never waited
+  printf 'w(){\n  sleep 4 > /dev/null 2>&1 &\n  inflight="$inflight $!"\n}\n'            # 46-49 not: waited below by name
+  printf 'wait $inflight 2>/dev/null\n'                                                 # 50
+  printf 'x="$(sleep 5 & echo "$!")"\n'                                                 # 51 background: the substitution writes into its pipe
 } > "$TMPROOT/probe.sh"
 probe="$(printf 'probe.sh\n' | python3 "$SCAN" --root "$TMPROOT" --background)"; probe_rc=$?
 probe_got="$(printf '%s\n' "$probe" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%s ", p[2], $2 }')"
-want="2:redirect 3:redirect 4:argument 23:background "
+want="2:redirect 3:redirect 4:argument 23:background 37:background 38:background 44:background 51:background "
 [ "$probe_rc" = 1 ] && [ "$probe_got" = "$want" ] \
   && check "#1984 the scan reports each unwaited shape, and nothing else" ok \
   || check "#1984 the scan reports each unwaited shape, and nothing else" "exit $probe_rc, got '$probe_got' where '$want' was wanted:
@@ -129,6 +152,48 @@ probe_nb="$(printf 'probe.sh\n' | python3 "$SCAN" --root "$TMPROOT" | grep -c ':
   && check "#1984 background jobs are judged only when asked for" ok \
   || check "#1984 background jobs are judged only when asked for" "$probe_nb reported without --background"
 
+# A bare `wait` reaps every job still in the table, so it answers for each kept one, and not for one
+# that was disowned, which it no longer waits for (#1989).
+{
+  printf '#!/usr/bin/env bash\n'                                    # 1
+  printf 'for i in 1 2; do\n  ( sleep 1 ) < /dev/null &\n  lane[$i]=$!\ndone\n'  # 2-5 not: kept, and the bare wait reaps them
+  printf 'sleep 9 &\ndisown "$!"\n'                                 # 6-7 background: the bare wait does not wait for it
+  printf 'wait\n'                                                   # 8
+} > "$TMPROOT/probe-bare.sh"
+bare="$(printf 'probe-bare.sh\n' | python3 "$SCAN" --root "$TMPROOT" --background)"; bare_rc=$?
+bare_got="$(printf '%s\n' "$bare" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%s ", p[2], $2 }')"
+[ "$bare_rc" = 1 ] && [ "$bare_got" = "6:background " ] \
+  && check "#1989 a bare wait answers for every kept job and not for a disowned one" ok \
+  || check "#1989 a bare wait answers for every kept job and not for a disowned one" "exit $bare_rc, got '$bare_got' where '6:background ' was wanted:
+$bare"
+
+# Fixture text against code, in files named as suites are, both ways (#1989). A suite that writes the
+# shape into a fixture for the scanner it tests, through a heredoc, a quoted string or a check whose
+# subject is a substitution, has no site; the same suite with the shape written as code has exactly
+# that one. The decision is the grammar's, so nothing about the name `test-` excuses anything.
+mkdir -p "$TMPROOT/suites"
+{
+  printf '#!/usr/bin/env bash\n'                                                         # 1
+  printf 'f="$1"\n'                                                                      # 2
+  printf 'cat > "$f" %s'"'"'EOF'"'"'\n' "$_H"                                            # 3
+  printf 'while read -r l; do echo "$l"; done < %sfind .)\n' "$_P"                       # 4  heredoc body
+  printf 'EOF\n'                                                                         # 5
+  printf "printf '%%s\\\\n' 'done < %sls)' 'comm -23 %ssort a) %ssort b) > out' >> \"\$f\"\n" "$_P" "$_P" "$_P"  # 6 quoted
+  printf 'check "they agree" "$(diff %ssort a) %ssort b) > /dev/null && echo ok)"\n' "$_P" "$_P"  # 7 a substitution's own
+} > "$TMPROOT/suites/test-fixture.sh"
+cp "$TMPROOT/suites/test-fixture.sh" "$TMPROOT/suites/test-real.sh"
+printf 'while read -r l; do echo "$l"; done < %sfind .)\n' "$_P" >> "$TMPROOT/suites/test-real.sh"  # 8 code
+fx="$(printf 'test-fixture.sh\n' | python3 "$SCAN" --root "$TMPROOT/suites")"; fx_rc=$?
+[ "$fx_rc" = 0 ] && [ -z "$fx" ] \
+  && check "#1989 a suite quoting the shape as fixture text has no site" ok \
+  || check "#1989 a suite quoting the shape as fixture text has no site" "exit $fx_rc: $fx"
+rl="$(printf 'test-real.sh\n' | python3 "$SCAN" --root "$TMPROOT/suites")"; rl_rc=$?
+rl_got="$(printf '%s\n' "$rl" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%s ", p[2], $2 }')"
+[ "$rl_rc" = 1 ] && [ "$rl_got" = "8:redirect " ] \
+  && check "#1989 the same suite with the shape written as code has exactly that site" ok \
+  || check "#1989 the same suite with the shape written as code has exactly that site" "exit $rl_rc, got '$rl_got' where '8:redirect ' was wanted:
+$rl"
+
 # A file that cannot be read is reported, never passed as clean (L98).
 missing="$(printf 'no-such-file.sh\n' | python3 "$SCAN" --root "$TMPROOT")"; missing_rc=$?
 missing_named=0
@@ -138,10 +203,10 @@ case "$missing" in *'could not be read'*) missing_named=1 ;; esac
   || check "#1984 a file the scan cannot read fails it" "exit $missing_rc: $missing"
 
 # ---------------------------------------------------------------------------
-# The real hooks: none at all.
+# The real hooks: none at all, background jobs included (#1989).
 # ---------------------------------------------------------------------------
 FILES="$(cd "$DIR" && find . -maxdepth 2 -name '*.sh' ! -name 'test-*' ! -name 'test_*' -type f | sed 's|^\./||' | sort)"
-found="$(printf '%s\n' "$FILES" | python3 "$SCAN" --root "$DIR" --count)"; found_rc=$?
+found="$(printf '%s\n' "$FILES" | python3 "$SCAN" --root "$DIR" --background --count)"; found_rc=$?
 judged="$(printf '%s\n' "$found" | sed -n 's/^judged \([0-9]*\) files.*/\1/p')"
 [ "${judged:-0}" -gt 50 ] \
   && check "the hook scripts were read" ok \
@@ -155,7 +220,38 @@ $found
     lines=\"\$(producer)\"
     while IFS= read -r l; do ...; done ${_H}LINES
     \$lines
-    LINES"
+    LINES
+  A worker nobody waits for is started by a subshell that ends at once, so it is never this hook's child:
+    ( worker </dev/null >/dev/null 2>&1 & )
+  One that is waited for keeps its pid (pid=\$!) and is reaped with wait \"\$pid\"."
+
+# ---------------------------------------------------------------------------
+# Every other shell file the repository ships: the skills, tools/, tests/ and every suite (#1989).
+# Process substitution only; a background job there is not judged (see the scan's docstring).
+# ---------------------------------------------------------------------------
+ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
+  echo "SUITE-PART-UNMEASURED the skills, tools and suites, because $DIR/.. is not the payload of a claude-config checkout, so there is no list of the repository's shell files to read"
+else
+  REPO_SH="$(bash "$DIR/lib/repo-files.sh" "$ROOT" 2>/dev/null | awk '/\.sh$/ || $0 == "claude-sync"' | sort)"
+  repo_suites="$(printf '%s\n' "$REPO_SH" | awk -F/ '$NF ~ /^test-/ { n++ } END { print n + 0 }')"
+  repo_outside="$(printf '%s\n' "$REPO_SH" | awk '/^(tools|tests)\// || /^payload\/skills\// { n++ } END { print n + 0 }')"
+  [ "$repo_suites" -gt 100 ] && [ "$repo_outside" -gt 100 ] \
+    && check "#1989 the repository's suites, skills and tools are in what is read" ok \
+    || check "#1989 the repository's suites, skills and tools are in what is read" "$repo_suites suites and $repo_outside files under payload/skills, tools and tests were listed in $ROOT, so the check below read too little"
+  repo_found="$(printf '%s\n' "$REPO_SH" | python3 "$SCAN" --root "$ROOT" --count)"; repo_rc=$?
+  repo_judged="$(printf '%s\n' "$repo_found" | sed -n 's/^judged \([0-9]*\) files.*/\1/p')"
+  [ "${repo_judged:-0}" -gt 300 ] \
+    && check "#1989 the repository's shell files were read" ok \
+    || check "#1989 the repository's shell files were read" "judged '${repo_judged:-none}' files under $ROOT:
+$repo_found"
+  [ "$repo_rc" = 0 ] \
+    && check "#1989 no skill, tool or suite reads through process substitution in its own shell" ok \
+    || check "#1989 no skill, tool or suite reads through process substitution in its own shell" "exit $repo_rc; bash 3.2 can drop what the script prints next when that child exits:
+$repo_found
+  Read the output into a variable first and feed the loop from a here document, as above. A loop
+  with no guard against an empty line gains one: a here document of an empty variable is one line."
+fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

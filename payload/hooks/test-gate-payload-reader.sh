@@ -147,12 +147,17 @@ print("\n".join(out))
 # here carries and lib/hook-registration.py already reads; with no header it is treated as IN
 # scope, because the safe side of an unknown is being checked (L72).
 stands_between_action_and_effect() {  # $1 = settings file  $2 = hook basename  $3 = the file
-  local ev found=0
+  local ev found=0 events
+  # Read into a variable first, never through process substitution, whose child bash 3.2 never waits
+  # for and whose exit can cut short what the caller prints next (L1035, #1989).
+  events="$(events_of "$1" "$2")"
   while IFS= read -r ev; do
     [ -n "$ev" ] || continue
     found=1
     case " $GATE_EVENTS " in *" $ev "*) return 0 ;; esac
-  done < <(events_of "$1" "$2")
+  done <<EVENTS
+$events
+EVENTS
   [ "$found" -eq 1 ] && return 1
   grep -Eqi '^#.*\b(Stop|SubagentStop) hook' "$3" && return 1
   return 0
@@ -201,7 +206,10 @@ has_code_line() {  # $1 = file, $2 = an extended regular expression
 
 # One offender per line: "<hook>: <what it is missing>". Nothing on stdout is a clean scan.
 scan_gates() {  # $1 = settings file, $2 = hooks directory
-  local name file parse_at check_at det_at det_check_at loud
+  local name file parse_at check_at det_at det_check_at loud names
+  # Its output is captured, so the list is read into a variable first rather than through process
+  # substitution, whose unwaited child bash 3.2 lets cut a printf below short (L1035, #1989).
+  names="$(in_scope_files "$1" "$2")"
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     case "$name" in test-*|run-all-tests.sh) continue ;; esac
@@ -260,7 +268,9 @@ scan_gates() {  # $1 = settings file, $2 = hooks directory
       printf '%s: reaches for python3 at line %s, above the check at line %s, so it has already answered by the time the check is reached\n' \
         "$name" "$det_at" "$det_check_at"
     fi
-  done < <(in_scope_files "$1" "$2")
+  done <<NAMES
+$names
+NAMES
 }
 
 echo "gate payload reader: the scan itself"

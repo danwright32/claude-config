@@ -129,13 +129,14 @@ fi
 start_run(){
   which_repo || return 0   # not a repository: there is nothing to judge
   mkdir -p "$STATE_DIR" 2>/dev/null || true
-  # No stdin, no stdout, no stderr, not waited for, not in this shell's job table: a run that held
-  # the hook's stdout would hold the prompt for as long as it ran (L235).
-  nohup python3 "$RUNNER" --check "$CHECK" --repo "$top" --state-dir "$STATE_DIR" --key "$rkey" \
-    </dev/null >/dev/null 2>&1 &
-  local pid=$!
-  disown "$pid" 2>/dev/null || true
-  [ -z "${STATE:-}" ] || printf 'runner %s\n' "$pid" >>"$STATE" 2>/dev/null || true
+  # No stdin, no stdout, no stderr, not waited for: a run that held the hook's stdout would hold the
+  # prompt for as long as it ran (L235). Started by a subshell whose own output is /dev/null, so the
+  # runner is never this hook's child and that subshell, which records its pid, can write into no
+  # pipe (L1035, #1989).
+  ( nohup python3 "$RUNNER" --check "$CHECK" --repo "$top" --state-dir "$STATE_DIR" --key "$rkey" \
+      </dev/null >/dev/null 2>&1 &
+    [ -z "${STATE:-}" ] || printf 'runner %s\n' "$!" >>"$STATE" 2>/dev/null || true
+  ) </dev/null >/dev/null 2>&1
 }
 
 # With no session there is nothing to key the record on, and it starts a run on every prompt: said

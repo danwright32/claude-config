@@ -23,9 +23,27 @@ WHAT IT REPORTS, one line per site, `<path>:<line>: <kind>: <text>`:
                `$(...)`, a `( ... )` or another process substitution, nor in a pipeline: there the
                child belongs to the subshell bash forks for that part, which prints nothing itself.
 
-  background   (with --background only) a command put in the background with `&` in a function
-               that never calls `wait`: that child exits whenever it likes. claude-sync is held to
-               this; the hooks start detached workers on purpose and are not (yet).
+  background   (with --background only) a command put in the background with `&` that this shell
+               never reaps: that child exits whenever it likes. claude-sync and the hooks are held
+               to this (#1989); the skills, tools and suites are not judged on it. A job passes when
+               any of these holds:
+                 - it is the last thing a `( ... )` subshell does, `( worker & )`: the subshell ends
+                   at once, so the worker is the subshell's child, then launchd's, never this
+                   shell's (measured by test-unwaited-children.sh). The remedy for a worker nobody
+                   waits for;
+                 - the subshell starting it sends both its stdout and its stderr to /dev/null,
+                   `( worker & echo "$!" >> f ) >/dev/null 2>&1`: whatever that subshell writes after
+                   the fork cannot reach a pipe;
+                 - the statement straight after it keeps its pid (`p=$!`, `lane[$i]=$!`,
+                   `inflight="$inflight $!"`) and the file has a `wait` naming that variable, or a
+                   bare `wait`;
+                 - it is in a function that calls `wait` (#1984's rule).
+               What the last two cannot see is ORDER: a kept child that exits, or is killed, while
+               this shell prints something before its `wait` is the hazard all the same. So every
+               such job in the hooks carries, beside it, why nothing is written between its start
+               and its reaping, and a kill is followed by the wait at once (pr-merge-quiz.sh,
+               run-all-tests.sh). A disowned job is not waited for by a bare `wait`, and `disown`
+               never stops the SIGCHLD, so a disowned job passes only as a subshell's.
 
 Enough of the shell is followed to know which text is code: single, double and $'...' quotes, a
 comment, a backslash, a heredoc's body, and a stack of `$(`, `<(`, `>(`, `(` and `${` so a
@@ -33,6 +51,11 @@ substitution is known to be open across lines. lib/shell_code_lines.py is the sh
 which LINES are code, but it keeps no stack of parentheses (a `)` closing a process substitution
 reads there as closing the command substitution around it), and this question is about exactly
 that, so the walk is its own. A `case` pattern's `)` is recognised by an open `case` and ignored.
+
+Fixture text is told from code by that same grammar and nothing else, never by a file's name (#1989):
+a suite quoting the shape for a scanner it tests, in a heredoc, a quoted string or a comment, has no
+site, and the same text as code in a suite is one. A fixture that has to exist as a file is written
+by its suite at run time, as every suite here does, so no shipped file holds the shape as data.
 
 Reads the paths to judge, relative to --root, one per line on stdin. Exits 1 when it reports
 anything. --count prints, last, how many files and code lines it judged, so a caller can refuse a
@@ -49,19 +72,70 @@ FUNC = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{")
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Where a word is a command rather than an argument, so `case` there opens a case statement.
 CMDPOS = re.compile(r"(^|[;&|({]|\bthen|\bdo|\belse)\s*$")
+# Where `wait` is the command run, a test's included, so `echo wait` is no wait.
+WAITPOS = re.compile(r"(^|[;&|({!]|\bthen|\bdo|\belse|\bif|\belif|\bwhile|\buntil)\s*$")
+# The statement straight after a background job keeping its pid: `p=$!`, `local p=$!`,
+# `lane[$i]=$!`, `inflight="$inflight $!"`.
+KEEPS = re.compile(r"^(?:local\s+|declare\s+)?([A-Za-z_]\w*)(?:\[[^\]]*\])?\+?=(\"[^\"]*\"|\S*)")
+REDIR = re.compile(r"(\d*)(&>>|&>|>>|>&|>)\s*(\S+)")
+# Where a statement ends, for reading what follows a `)` or a `wait`.
+STMT_END = re.compile(r";|\|\||&&|\||(?<![<>])&(?!>)|\)")
+
+
+def stmt_rest(text):
+    """The text up to the end of the statement it starts."""
+    m = STMT_END.search(text)
+    return text[:m.start()] if m else text
+
+
+def silenced(rest):
+    """True when the redirections after a subshell's `)` send both its stdout and stderr to /dev/null,
+    read left to right as the shell applies them, so `2>&1 >/dev/null` leaves stderr on the pipe."""
+    target = {1: 'pipe', 2: 'pipe'}
+    for fd, op, word in REDIR.findall(stmt_rest(rest)):
+        if op in ('&>', '&>>'):
+            target[1] = target[2] = word
+        elif op == '>&':
+            src = int(fd) if fd else 1
+            if word.isdigit() and int(word) in target:
+                target[src] = target[int(word)]
+            elif src in target:
+                target[src] = word
+        else:
+            src = int(fd) if fd else 1
+            if src in target:
+                target[src] = word
+    return target[1] == '/dev/null' and target[2] == '/dev/null'
 
 
 class Walk:
     def __init__(self):
         self.stack = []          # frames: 'cs' $( , 'ps' <( >( , 'par' ( , 'brace' ${ , 'dq' " , 'case'
+        self.ids = []            # an id per frame in stack, so a subshell's `)` can be matched to its `&`s
+        self.next_id = 0
         self.quote = None        # None, "'" or "$'" while inside a single quoted string
         self.heredocs = []       # (strip_tabs, word) opened and not yet read
         self.stmts = {}          # depth -> {'piped': bool, 'sites': [(line, text)], 'end': bool}
         self.found = []          # (line, kind, text)
         self.func = None
-        self.func_bg = []        # background sites in the current function
+        self.func_id = None
+        self.func_count = 0
         self.func_wait = False
+        self.func_waited = {}    # function id -> whether it calls wait anywhere
+        self.bg = []             # background jobs: dicts read once the whole file has been walked
+        self.silenced = set()    # ids of ( ) subshells whose stdout and stderr both go to /dev/null
+        self.waits = []          # (names it waits for, whether it is a bare wait)
+        self.code_mask = set()   # line numbers that start in code and hold some
         self.code_lines = 0
+
+    def push(self, kind):
+        self.stack.append(kind)
+        self.next_id += 1
+        self.ids.append(self.next_id)
+
+    def pop(self):
+        self.ids.pop()
+        return self.stack.pop()
 
     # The frames that make an argument process substitution belong to a subshell.
     def enclosed(self):
@@ -107,14 +181,14 @@ def judge(text, background=False):
         if in_code_at_start and not w.stack:
             m = FUNC.match(line)
             if m:
-                w.func, w.func_bg, w.func_wait = m.group(1), [], False
+                w.func_count += 1
+                w.func, w.func_id, w.func_wait = m.group(1), w.func_count, False
             elif line.startswith('}') and w.func is not None:
-                if background and not w.func_wait:
-                    for bn, bt in w.func_bg:
-                        w.found.append((bn, 'background', bt))
-                w.func = None
+                w.func_waited[w.func_id] = w.func_wait
+                w.func, w.func_id = None, None
         if in_code_at_start and line.strip() and not line.lstrip().startswith('#'):
             w.code_lines += 1
+            w.code_mask.add(n)
         walk_line(w, line, n, background)
         # A newline ends a statement at the current depth unless it continues.
         if w.quote is None and (not w.stack or w.stack[-1] not in ('dq', 'brace')):
@@ -126,8 +200,45 @@ def judge(text, background=False):
                     s['end'] = True
     for d in sorted(list(w.stmts.keys()), reverse=True):
         w.end_stmt(d)
+    if w.func_id is not None:
+        w.func_waited[w.func_id] = w.func_wait
+    if background:
+        judge_background(w, lines)
     # One line per site: a command with two process substitutions is one site.
     return sorted(set(w.found)), w.code_lines
+
+
+def kept_name(w, lines, job):
+    """The name the statement straight after a background job keeps its pid in, or None."""
+    after = job['after'].strip()
+    if not after or after.startswith('#'):
+        after = ''
+        for k in range(job['line'], len(lines)):   # lines[k] is line k + 1, the next one on
+            if (k + 1) in w.code_mask:
+                after = lines[k].strip()
+                break
+    m = KEEPS.match(after)
+    if m and '$!' in m.group(2):
+        return m.group(1)
+    return None
+
+
+def judge_background(w, lines):
+    bare = any(b for _, b in w.waits)
+    waited = set()
+    for names, _ in w.waits:
+        waited.update(names)
+    for job in w.bg:
+        # Started by a subshell that ends at once, or that can write to no pipe: never this shell's child,
+        # or a child of a shell that cannot be writing into a pipe when it exits.
+        if job['double'] or any(p in w.silenced for p in job['pars']):
+            continue
+        name = kept_name(w, lines, job)
+        if name is not None and (bare or name in waited):
+            continue
+        if job['func'] is not None and w.func_waited.get(job['func']):
+            continue
+        w.found.append((job['line'], 'background', job['text']))
 
 
 def walk_line(w, line, n, background):
@@ -154,13 +265,13 @@ def walk_line(w, line, n, background):
                 i += 2
                 continue
             if c == '"':
-                w.stack.pop()
+                w.pop()
             elif line.startswith('$(', i):
-                w.stack.append('cs')
+                w.push('cs')
                 i += 2
                 continue
             elif line.startswith('${', i):
-                w.stack.append('brace')
+                w.push('brace')
                 i += 2
                 continue
             i += 1
@@ -174,18 +285,18 @@ def walk_line(w, line, n, background):
             i += 1
             continue
         if c == '"':
-            w.stack.append('dq')
+            w.push('dq')
             i += 1
             continue
         if top == 'brace':
             if c == '}':
-                w.stack.pop()
+                w.pop()
             elif line.startswith('$(', i):
-                w.stack.append('cs')
+                w.push('cs')
                 i += 2
                 continue
             elif line.startswith('${', i):
-                w.stack.append('brace')
+                w.push('brace')
                 i += 2
                 continue
             i += 1
@@ -206,11 +317,11 @@ def walk_line(w, line, n, background):
             i += 3
             continue
         if line.startswith('$(', i):
-            w.stack.append('cs')
+            w.push('cs')
             i += 2
             continue
         if line.startswith('${', i):
-            w.stack.append('brace')
+            w.push('brace')
             i += 2
             continue
         if (c == '<' or c == '>') and line.startswith('(', i + 1):
@@ -220,17 +331,19 @@ def walk_line(w, line, n, background):
                 w.found.append((n, 'redirect', text))
             elif not w.enclosed():
                 w.stmt()['sites'].append((n, text))
-            w.stack.append('ps')
+            w.push('ps')
             i += 2
             continue
         if c == '(':
-            w.stack.append('par')
+            w.push('par')
             i += 1
             continue
         if c == ')':
             if top in ('cs', 'ps', 'par'):
                 w.end_stmt()
-                w.stack.pop()
+                if top == 'par' and silenced(line[i + 1:]):
+                    w.silenced.add(w.ids[-1])
+                w.pop()
             i += 1
             continue
         if c == '|':
@@ -253,10 +366,13 @@ def walk_line(w, line, n, background):
             prev = line[i - 1] if i > 0 else ''
             nxt = line[i + 1] if i + 1 < L else ''
             if prev not in '<>' and nxt != '>':
-                if w.func is not None:
-                    w.func_bg.append((n, text))
-                elif background:
-                    w.found.append((n, 'background', text))
+                after = line[i + 1:]
+                w.bg.append({
+                    'line': n, 'text': text, 'after': after, 'func': w.func_id,
+                    'pars': [fid for f, fid in zip(w.stack, w.ids) if f == 'par'],
+                    # `( cmd & )`: the job is the last thing its subshell does.
+                    'double': top == 'par' and after.lstrip().startswith(')'),
+                })
                 w.end_stmt()
             i += 1
             continue
@@ -265,14 +381,19 @@ def walk_line(w, line, n, background):
             word = m.group(0)
             boundary = i == 0 or not (line[i - 1].isalnum() or line[i - 1] in '_-./$')
             if boundary and word == 'case' and CMDPOS.search(line[:i]):
-                w.stack.append('case')
+                w.push('case')
             elif boundary and word == 'esac' and 'case' in w.stack:
                 while w.stack and w.stack[-1] != 'case':
-                    w.stack.pop()
+                    w.pop()
                 if w.stack:
-                    w.stack.pop()
+                    w.pop()
             elif boundary and word == 'wait':
                 w.func_wait = True
+                if WAITPOS.search(line[:i]):
+                    args = stmt_rest(line[m.end():])
+                    names = set(re.findall(r"\$\{?#?([A-Za-z_]\w*)", args))
+                    rest = REDIR.sub('', re.sub(r"\d*<\s*\S+", '', args)).strip()
+                    w.waits.append((names, rest == ''))
             i = m.end()
             continue
         i += 1

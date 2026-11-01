@@ -76,6 +76,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 0
 fi
 printf '%s\n' "$NOW" >"$STATE/last-start" 2>/dev/null || true
-nohup python3 "$RUNNER" --scheduled --state-dir "$STATE" </dev/null >/dev/null 2>&1 &
-disown "$!" 2>/dev/null || true
+# Started by a subshell that ends at once, so it is never this hook's child (L1035, #1989). Nothing
+# is printed after it today; this keeps that from mattering if something ever is.
+( nohup python3 "$RUNNER" --scheduled --state-dir "$STATE" </dev/null >/dev/null 2>&1 & )
 exit 0
