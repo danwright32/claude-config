@@ -181,6 +181,8 @@ $bare"
   printf '[ $(( a %sb) )) = 1 ]\n' "$_P"                           # 8  not: a comparison, not a substitution
   printf 'sleep 1 &\n'                                              # 9  background
   printf 'echo $(( 1 & 1 )) & echo done\n'                          # 10 background: the job after the arithmetic
+  printf 'if (( a & 1 )); then :; fi\n'                             # 11 not: an arithmetic command after if
+  printf 'while (( n & 1 )); do break; done\n'                      # 12 not: and after while
 } > "$TMPROOT/probe-arith.sh"
 ar="$(printf 'probe-arith.sh\n' | python3 "$SCAN" --root "$TMPROOT" --background)"; ar_rc=$?
 ar_got="$(printf '%s\n' "$ar" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%s ", p[2], $2 }')"

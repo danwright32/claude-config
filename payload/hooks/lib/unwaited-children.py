@@ -362,7 +362,8 @@ def walk_line(w, line, n, background):
             w.push('arith')
             i += 3
             continue
-        if line.startswith('((', i) and CMDPOS.search(line[:i]):
+        # WAITPOS, not CMDPOS: an arithmetic command is a test too, `if (( a & 1 ))`, `while (( n ))`.
+        if line.startswith('((', i) and WAITPOS.search(line[:i]):
             w.push('arith')
             i += 2
             continue
