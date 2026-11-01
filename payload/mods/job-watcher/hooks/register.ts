@@ -417,14 +417,22 @@ const redirectLogs = async ($: EngineInterface, id: string, command: string): Pr
     return []
   }
 }
-// Each of a job's logs as one stat reads it (`format`, the stat -f format), by path: undefined for
-// one that could not be read, which says nothing about the job (L11).
-const statLogs = async ($: EngineInterface, logs: readonly string[] | undefined, format: string): Promise<Map<string, number[] | undefined>> => {
-  const out = new Map<string, number[] | undefined>()
-  for (const p of logs ?? []) {
-    const fields = (await run($, ['stat', '-f', format, p]))?.trim().split(/\s+/).map(Number)
-    out.set(p, fields?.length && fields.every(Number.isFinite) ? fields : undefined)
+// A file's size and last change (ms), read by the engine's own stat (#2016), never a stat process:
+// the BSD stat -f this ran is "file system status" to GNU stat on Linux, which printed no size
+// there. Undefined for a file that could not be read, which says nothing about the job (L11).
+type FileStat = { size: number; mtimeMs: number }
+const statFile = async ($: EngineInterface, path: string): Promise<FileStat | undefined> => {
+  try {
+    const s = await $.fs.stat(path)
+    return Number.isFinite(s.size) && Number.isFinite(s.mtimeMs) ? { size: s.size, mtimeMs: s.mtimeMs } : undefined
+  } catch {
+    return undefined
   }
+}
+// Each of a job's logs as statFile reads it, by path.
+const statLogs = async ($: EngineInterface, logs: readonly string[] | undefined): Promise<Map<string, FileStat | undefined>> => {
+  const out = new Map<string, FileStat | undefined>()
+  for (const p of logs ?? []) out.set(p, await statFile($, p))
   return out
 }
 const readOf = (stats: Map<string, unknown>) => [...stats].filter(([, v]) => v !== undefined).map(([p]) => p)
@@ -492,14 +500,15 @@ const runsNow = async ($: EngineInterface, pgid: number | null): Promise<boolean
   }
 }
 
-// Whether a file is not there: stat refuses with "No such file or directory". Any other failure
-// (a permission, a timeout) says nothing either way, so it is never gone.
+// Whether a file is not there: the engine's stat rejects naming ENOENT (measured of the real engine
+// 2026-11-01: "<mod>: $.fs.stat(<path>) failed: ENOENT", and EACCES or ENOTDIR for the others). Any
+// other failure says nothing either way, so it is never gone (#2016).
 const isGone = async ($: EngineInterface, path: string): Promise<boolean> => {
   try {
-    const r = await $.process.run(['stat', '-f', '%z', path], { timeoutMs: 10_000 })
-    return r.exitCode !== 0 && /No such file or directory/.test(r.stderr)
-  } catch {
+    await $.fs.stat(path)
     return false
+  } catch (err) {
+    return /\bENOENT\b/.test(message(err))
   }
 }
 
@@ -818,7 +827,8 @@ const measure = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet
   }
   // An untraced job whose output file is no longer there has nothing left to watch: Claude Code
   // removes a task's output with the task, so the entry is stale, and was shown stuck for an hour on
-  // 2026-10-05 (#784). Only a stat that says the file does not exist counts, never a failed one.
+  // 2026-10-05 (#784). Only a stat that says the file does not exist (ENOENT, #2016) counts, never
+  // a failed one.
   if (await isGone($, job.outputPath)) return 'ended'
   if (live() && !quiet && !w.toldUntraced) {
     w.toldUntraced = true
@@ -934,10 +944,9 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
     w.state = 'running'
     w.stalledBy = undefined
   }
-  const statOut = await run($, ['stat', '-f', '%z', job.outputPath])
-  const size = statOut === undefined ? NaN : Number(statOut.trim())
+  const size = (await statFile($, job.outputPath))?.size ?? NaN
   const tail = await run($, ['tail', '-c', '4096', job.outputPath])
-  const logStats = await statLogs($, job.logs, '%z')
+  const logStats = await statLogs($, job.logs)
   // A look given up while it read acts on nothing it read (#706).
   if (!live()) return
   // The first look dates what is already there from the job's start: it grew before anyone looked.
@@ -963,8 +972,8 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
   // first read of each dates what is already there from before, as the output file's does.
   if (logStats.size) {
     const sizes = { ...(w.logSizes ?? {}) }
-    for (const [p, fields] of logStats) {
-      const n = fields?.[0]
+    for (const [p, st] of logStats) {
+      const n = st?.size
       if (n === undefined) continue
       if (sizes[p] !== undefined && sizes[p] !== n) w.lastGrowth = now
       sizes[p] = n
@@ -1181,10 +1190,10 @@ const claim = async ($: EngineInterface, dir: string | undefined, job: Leftover,
   const first = await make()
   if (first === 'made') return { path }
   if (first === 'unknown') return 'unknown'
-  const at = Number((await run($, ['stat', '-f', '%m', path]))?.trim())
+  const at = (await statFile($, path))?.mtimeMs
   // Gone between the two: the session that held it has just judged it.
-  if (!Number.isFinite(at)) return 'taken'
-  if (now - at * 1000 <= CLAIM_MS) return 'taken'
+  if (at === undefined) return 'taken'
+  if (now - at <= CLAIM_MS) return 'taken'
   const aside = `${path}.stale-${now}`
   const moved = await $.process.run(['mv', path, aside], { timeoutMs: 10_000 }).catch(() => undefined)
   // Another session moved it first, and takes it over.
@@ -1286,13 +1295,13 @@ const judgeClaimed = async ($: EngineInterface, job: Leftover, group: number, no
   const held = await groupsHolding($, job.outputPath)
   if (held === 'nobody' || (Array.isArray(held) && !held.includes(group))) return undefined
   if ((await ownedByRunning($, group)) === true) return undefined
-  const stat = (await run($, ['stat', '-f', '%z %m', job.outputPath]))?.trim().split(/\s+/).map(Number)
+  const stat = await statFile($, job.outputPath)
   const tail = await run($, ['tail', '-c', '4096', job.outputPath])
-  const size = stat?.[0]
-  const mtime = stat?.[1]
+  const size = stat?.size
+  const mtime = stat?.mtimeMs
   // #1976: the logs it sends its output to, whose last change counts as its output's.
-  const logStats = await statLogs($, job.logs, '%z %m')
-  const logsChanged = [...logStats.values()].flatMap(f => (f?.[1] === undefined ? [] : [f[1]]))
+  const logStats = await statLogs($, job.logs)
+  const logsChanged = [...logStats.values()].flatMap(f => (f === undefined ? [] : [f.mtimeMs]))
   // An output file that cannot be read is said as such to the judge, never passed off as a job
   // still writing (L11).
   let state: string
@@ -1300,7 +1309,7 @@ const judgeClaimed = async ($: EngineInterface, job: Leftover, group: number, no
   if (tail === undefined || size === undefined || mtime === undefined || !Number.isFinite(size) || !Number.isFinite(mtime)) {
     state = 'its output file could not be read, so whether it is stuck is unknown'
   } else {
-    const a = assess({ tail, size, lastGrowth: Math.max(mtime, ...logsChanged) * 1000 }, now)
+    const a = assess({ tail, size, lastGrowth: Math.max(mtime, ...logsChanged) }, now)
     stuck = a.state !== 'running'
     // Measured facts only: the repeated text itself is the job's, and reaches the judge only inside
     // the fenced output below, never in the lines addressed to it (lessons review of #721, L28).

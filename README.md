@@ -2667,12 +2667,16 @@ CI's environment step is the list the container is built from, and
 invokes an interpreter or tool from its checked set (python3, perl, node, jq, rsync, pgrep and a few
 more) that the step does not name (#624).
 
-`tests/test-stat-order.sh` fails when claude-sync or any shell file in the repository asks BSD
-stat's `-f` before GNU's `-c`. On the Linux runner `stat -f` means "file system status", so a BSD
-first read answers with a block about the filesystem instead of failing, and only CI could see it.
-The rule, which accepts GNU first on one line or BSD in the `else` of an `if stat -c` probe, lives in
-`hooks/lib/stat-order.sh`, whose fixtures are in `hooks/test-stat-order-rule.sh`. The disk cleaning skill's own files are left to that skill's guard, which
-names its one BSD only read on purpose; this suite checks a guard is there. The readers it fixed are
+`tests/test-stat-order.sh` fails when claude-sync or any shell, TypeScript or JavaScript file in the
+repository asks BSD stat's `-f` before GNU's `-c`. On the Linux runner `stat -f` means "file system
+status", so a BSD first read answers with a block about the filesystem instead of failing, and only
+CI could see it. The rule, which accepts GNU first on one line or BSD in the `else` of an `if stat -c`
+probe, lives in `hooks/lib/stat-order.sh`, whose fixtures are in `hooks/test-stat-order-rule.sh`. In
+a script file it reads an argument list such as `['stat', '-f', ...]` as the line it runs, and a
+`??` between two as `||` (#2016); a mod is better served by `$.fs.stat`, which runs no stat at all,
+and job-watcher and scope-modes now use it. The disk cleaning skill's own files are left to that
+skill's guard, which reads the same shared rule and adds only its one BSD only read allowed on
+purpose (#2014); this suite runs that guard, so a slip there fails both. The readers it fixed are
 also run under stand ins shaped like each stat, since a Mac never runs the GNU half (#2003).
 
 The older knob still exists for when you want everything up to a point rather than one section:
