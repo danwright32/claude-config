@@ -242,6 +242,36 @@ says "#1618 the end recorded is the yield, on the injected clock" "yielded after
 fp="$(cat "$case_dir/f.pid" 2>/dev/null)"
 if [ -n "$fp" ] && gone "$fp"; then ok; else bad "#1618 the yielded window's command is gone (pid '$fp')"; fi
 
+# The yielding line is printed only once the workers and the command are stopped and reaped (#2015):
+# they are this run's own children, and on bash 3.2 one that exits while the run is writing into a
+# pipe cuts the line short (L1035). A stand in pgrep marks, in the same output, each look the run
+# takes at whether a group it is stopping is empty, which only the stopping does.
+fresh yieldorder
+cat > "$case_dir/hook.2" <<SH
+printf '%s\n' "\$HELPER_PID 1 00:01 bash tools/load-window.sh" > "$case_dir/ps"
+SH
+cat > "$case_dir/hook.4" <<SH
+printf '%s\n' "50002 1 00:01 bash /Users/x/.claude/hooks/lib/merge-when-ready.sh 12 --squash" >> "$case_dir/ps"
+SH
+mkdir -p "$case_dir/bin"
+REAL_PGREP="$(command -v pgrep)"
+cat > "$case_dir/bin/pgrep" <<SH
+#!/bin/sh
+[ "\$1" != -g ] || echo "pgrep-mark: looked at group \$2" >> "$case_dir/out"
+exec "$REAL_PGREP" "\$@"
+SH
+chmod +x "$case_dir/bin/pgrep"
+: > "$case_dir/out"
+PATH="$case_dir/bin:$PATH" bash "$TOOL" --seconds 60 --workers 1 -- bash "$W/forever.sh" "$case_dir/f" >> "$case_dir/out" 2>&1; RC=$?
+first_mark="$(grep -n 'pgrep-mark: ' "$case_dir/out" | head -1 | cut -d: -f1)"
+first_early="$(grep -n 'Stopping early: ' "$case_dir/out" | head -1 | cut -d: -f1)"
+eq "#2015 the window still yields with 75" 75 "$RC"
+if [ -n "$first_mark" ] && [ -n "$first_early" ] && [ "$first_early" -gt "$first_mark" ]; then ok; else
+  bad "#2015 the yielding line comes after the workers and the command are stopped (first stop look at line '${first_mark:-none}', yielding line at '${first_early:-none}'): $(head -c 1500 "$case_dir/out")"
+fi
+fp="$(cat "$case_dir/f.pid" 2>/dev/null)"
+if [ -n "$fp" ] && gone "$fp"; then ok; else bad "#2015 the yielded window's command is gone (pid '$fp')"; fi
+
 # =================================================================================================
 # 9. One window at a time: another window's live ticket is waited for; a dead holder is passed over
 #    at once (L409); a live holder past the bound is passed over by the one waiting (L523).
