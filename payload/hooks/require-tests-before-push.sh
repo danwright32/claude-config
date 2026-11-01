@@ -41,7 +41,8 @@ DIFF_BUDGET=60000      # max bytes of diff sent to the model in one call
 # DIFF_BUDGET. At most this many, so a push's judge cost is bounded at 1 + TEST_PARTS_MAX calls.
 TEST_PARTS_MAX=3
 PART_OVERLAP=4096      # bytes of a file repeated at the start of the next part, so a test cut in two is whole in one
-# The hook's own finish line, inside the 120 seconds its registration gives it: a further call is
+# The hook's own finish line, inside the 120 seconds its registration in settings.hooks.json sets
+# (a setting, not measured; these two are settings too): a further call is
 # started only with PART_MIN_SECONDS left, and its timeout never runs past this. A hook killed at
 # its timeout refuses with no reason ("onFailure": "block"), so the gate stops first and says why.
 # REQUIRE_TESTS_DEADLINE_SECONDS sets another, for the suite; it can only end the readings sooner.
@@ -498,11 +499,13 @@ judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\nTEST FILES CHANGED IN THIS PUSH, 
 # They were not chosen: a test that reaches a file through another (an index, a script run by path)
 # names nothing, so the pair leaves it out and the refusal rests on a test the reviewer never saw.
 #
-# Cost, for the issue's push: 34,407 bytes of tests beside more than 30,000 of code. The first call
-# sends 60,000 bytes of diff (30,000 of each); the remaining 4,407 bytes, plus up to PART_OVERLAP
-# repeated from before the cut, fit one further call of about 30,000 bytes of code and 8,500 of
-# tests. Two calls, about 105,000 bytes in all, and the second only when the first says untested.
-# The most any push costs is 1 + TEST_PARTS_MAX calls of at most DIFF_BUDGET bytes of diff each.
+# Cost. The limit: at most 1 + TEST_PARTS_MAX calls for any push, each of at most DIFF_BUDGET bytes
+# of diff, the further ones made only when the first call says untested. The issue's push, as the
+# issue recorded it on 2026-10-31, carried 34,407 bytes of test changes beside more than DIFF_BUDGET
+# / 2 of code, so the first call shows half the budget of each and the test bytes past that, plus up
+# to PART_OVERLAP repeated, fit one further call. Measured on 2026-11-01 with the suite's stub judge
+# on a push of that shape (35,072 bytes of test changes, about 31 KB of code): two calls, sent
+# 60,781 and 39,788 bytes.
 
 # Splits the test changes from byte $1 on into parts of at most $2 bytes, in directory $3, as
 # part.1, part.2 and so on, each with part.N.files naming the test files it holds. A part that starts
@@ -566,7 +569,7 @@ if real:
 for n, (body, files) in enumerate(parts, 1):
     with open("%s/part.%d" % (out, n), "wb") as f:
         f.write(b"".join(body))
-    with open("%s/part.%d.files" % (out, n), "w") as f:
+    with open("%s/part.%d.files" % (out, n), "w", encoding="utf-8", errors="replace") as f:
         f.write("".join(x + "\n" for x in sorted(files)))
 print(len(parts))
 ' "$1" "$2" "$3" "$PART_OVERLAP"
@@ -587,7 +590,10 @@ use_call_costs() {
   PC_JUDGE_BYTES="$J_BYTES"; PC_JUDGE_MS="$J_MS"; PC_JUDGE_COST="$J_COST"
 }
 
-PART_RUBRIC="$(cat <<'EOF'
+# Read outside a command substitution: macOS bash 3.2 refuses a quoted heredoc inside one the day
+# its body gains an unpaired apostrophe (#1690).
+PART_RUBRIC=""
+IFS= read -r -d '' PART_RUBRIC <<'EOF' || true
 You are a further reader for a strict test-coverage gate on a git push. The push's test changes
 were too large to show in one reading. A first reader was shown the code being pushed and the
 first part of the test changes, and found that the numbered changes listed in the input have no
@@ -608,7 +614,6 @@ Output STRICT JSON on a single line, no prose and no code fence:
 {"covered":[1,3]}
 "covered" lists the numbers of the changes these test changes cover, and is [] when they cover none.
 EOF
-)"
 
 # Sets RT_STATE to pass (every change found tested), block (every part read, some change in none of
 # them) or cantjudge (stopped before every part was read, RT_WHY saying why and RT_UNSEEN naming the
@@ -651,6 +656,7 @@ MISSING_EOF
     add_call_cost
     answer="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
 import sys, json
+sys.stdout.reconfigure(errors="replace")
 try:
     obj = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     cov = obj.get("covered")

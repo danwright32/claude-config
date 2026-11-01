@@ -472,8 +472,8 @@ n_calls="$(calls_in "$JUDGE_LOG")"
 if [ "$n_calls" = 4 ]; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL: #1998 260 KB of tests took $n_calls judge calls, expected the cap of 4"; fi
 
-# Out of time: the hook must finish inside the 120 seconds its registration gives it, so a later
-# call is not started without time for it, and the push is refused saying so.
+# Out of time: the hook must finish inside the 120 seconds its registration sets (a setting, not
+# measured), so a later call is not started without time for it, and the push is refused saying so.
 JUDGE_LOG="$TMPROOT/judge-log-1998e"; mkdir -p "$JUDGE_LOG"
 printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
 W="$(mk_repo)"; seed_issue_push "$W"

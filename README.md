@@ -1946,7 +1946,8 @@ many parts it was read in. At most three further calls are made, and none is sta
 than 20 seconds left of the 110 the gate allows itself inside the 120 its registration declares;
 whatever was not read, and a further call that fails, is refused as could not judge, naming the
 test files no reading was shown in full. That path refused before, so it fails closed where the
-first call fails open. The issue's push costs two calls, about 61,000 and 40,000 bytes; the first
+first call fails open. A push of the issue's shape cost two calls, sent 60,781 and 39,788 bytes,
+measured on 2026-11-01 with the suite's stub judge (these limits are settings, not measured); the first
 call is now told the rest is read separately and to judge only what it was shown, where it used to
 be told not to call untested anything whose test might be past the cut, which invited a pass over
 tests nobody read.
