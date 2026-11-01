@@ -611,14 +611,21 @@ suite_checks(){   # suite_checks <suite path> -> whole checks, or nothing
 # measure (L11). Its prefix, "run-all-tests progress:", is shared with no line any reader matches:
 # not "run-all-tests: ", which this repository's suites and CI anchor on, not the report's indented
 # verdict lines, and not its summary lines. test-runner-progress.sh holds every reader to that.
-progress_line(){   # progress_line <done> <of> <suite name> <exit status> <seconds since the run began>
-  local _pl_s="$5" _pl_t
+#
+# progress_say is the ONE place that prefix and the time since the run began are written: the line
+# per finished suite and the lines per flake recheck (#1988) both come through it, so they cannot
+# drift apart into a shape some reader does match.
+progress_say(){   # progress_say <what happened> <seconds since the run began> <the suite, and what it did>
+  local _pl_s="$2" _pl_t
   case "$_pl_s" in ''|*[!0-9]*) _pl_s=0 ;; esac
   if [ "$_pl_s" -ge 3600 ]; then _pl_t="$(( _pl_s / 3600 ))h $(( _pl_s % 3600 / 60 ))m"
   elif [ "$_pl_s" -ge 60 ]; then _pl_t="$(( _pl_s / 60 ))m $(( _pl_s % 60 ))s"
   else _pl_t="${_pl_s}s"
   fi
-  printf 'run-all-tests progress: %s of %s suite(s) finished, %s in, %s exited %s\n' "$1" "$2" "$_pl_t" "$3" "$4"
+  printf 'run-all-tests progress: %s, %s in, %s\n' "$1" "$_pl_t" "$3"
+}
+progress_line(){   # progress_line <done> <of> <suite name> <exit status> <seconds since the run began>
+  progress_say "$1 of $2 suite(s) finished" "$5" "$3 exited $4"
 }
 
 # The ONE place a suite's own score is read (claude-config#126). Exactly, so there is nothing to
@@ -756,6 +763,8 @@ failed=0
 failed_names=""
 flaky=0
 flaky_names=""
+# How many flake rechecks this run has started, which numbers each one's progress lines (#1988).
+rechecks=0
 empty_dirs=""
 guessed_names=""
 
@@ -1738,6 +1747,15 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         # by its exit status alone (claude-config#1044).
         # Asked to wait for no lock: the deadline above is set by what the suite measured, so a
         # recheck queued behind another run would be called hung for waiting (#1297, L11).
+        #
+        # Said as it starts and as it ends (claude-config#1988). The rechecks run after the last
+        # suite has finished, one at a time, each allowed up to three times the suite's own time, so
+        # without these a run with a failure went quiet for minutes after the last progress line,
+        # the hung look #1979 ended. Numbered, so no two lines are the same and the job watcher
+        # cannot read them as repeating. The end line gives the exit status, never FLAKY: that is
+        # decided below from the recheck's whole output (L11).
+        rechecks=$(( rechecks + 1 ))
+        progress_say "flake recheck $rechecks started" "$SECONDS" "$name allowed up to ${_fl_max}s"
         ( HOOK_TESTS_FLAKE_RECHECK=0 SUITE_LOCK_WAIT=0 bash "$suite" > "$WORK/$((idx - 1)).recheck" 2>&1; _fl_rc=$?; exit "$_fl_rc" ) < /dev/null &
         _fl_pid=$!
         # Both limits on one clock, SECONDS, in seconds: whichever comes first ends the wait, and
@@ -1759,6 +1777,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
           # not run out its allowance and is not known to hang (#1901).
           runner_kill_tree "$_fl_pid" 2>/dev/null || true
           kill -9 "$_fl_pid" 2>/dev/null || true
+          progress_say "flake recheck $rechecks stopped" "$SECONDS" "$name still running after $(( SECONDS - _fl_began ))s"
           if [ "$_fl_by_deadline" -eq 1 ]; then
             _flake=" (recheck stopped after $(( SECONDS - _fl_began ))s, so this report is printed before $DEADLINE_WHAT)"
           else
@@ -1766,6 +1785,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
           fi
         else
           wait "$_fl_pid"; _fl_rc=$?
+          progress_say "flake recheck $rechecks ended" "$SECONDS" "$name exited $_fl_rc after $(( SECONDS - _fl_began ))s"
           _fl_out="$(cat "$WORK/$((idx - 1)).recheck" 2>/dev/null)"
           _fl_holder="$(suite_lock_holder "$_fl_out")"
           if [ "$_fl_rc" -eq 0 ] && suite_output_clean "$_fl_out"; then
