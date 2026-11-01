@@ -126,6 +126,20 @@ its checkout looks. Suites that run a copy give it the scanner rather than being
 use says so on stderr and writes a line to the sync log, and the change watcher ignores it and
 scans, since it sends on every change for as long as it runs.
 
+Text that is never a file is held to the same rule (#1995), because this repository squash merges
+with the commit messages as the body: a name in a message lands in main. The scanner reads labelled
+text too (`--texts0-from`), and two gates ask it. `scanners-before-push.sh` reads the messages of
+the commits a push adds, never one already on the upstream or the remote's default branch (a branch
+with no upstream is judged against the default branch, a repository with no remote branch at all in
+full), before any scanner suite runs, and refuses naming the commit and line with how to reword a
+commit nobody has pushed. A push chained after its own commit is refused too, since that message is
+not written yet, and so are messages it could not judge. `check-work-names-merge.sh` reads the title,
+the description and every commit message of a pull request before it merges, in any repository whose
+base commit holds `payload/hooks/lib/work-names.py` (every other merge leaves after two reads), by
+every route and from `merge-when-ready.sh`; a list of 100 commits or more, one page of what gh reads and so possibly cut short, is refused. The merge gate has no override, and the push refusal
+offers none (the gate's own `SKIP_SCANNERS_CHECK=1` still skips the whole gate, as it always has),
+so a message pushed past it is still judged at the merge. The remedy is always to reword.
+
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
 folder under `skills/`, where Claude Code sets aside a skill it removes or replaces (#1009). The
@@ -960,8 +974,8 @@ Every gate judges ONE repository, and every merge gate ONE pull request, per com
 doing the same thing twice in different places is refused rather than judged by its first
 occurrence (claude-config#1062): `push-scope-notice.sh` refuses a command pushing from more than one
 repository, `check-add-scope.sh` one adding in more than one, and `block-red-merge.sh`,
-`pr-review-gate.sh`, `require-changelog-tag.sh` and `check-closing-merge.sh` one merging more than
-one pull request. The
+`pr-review-gate.sh`, `require-changelog-tag.sh`, `check-closing-merge.sh` and
+`check-work-names-merge.sh` one merging more than one pull request. The
 remedy each gives is to run them as separate commands. `ai-review-on-pr.sh`, which only starts
 reviews, starts one in every repository a command commits, pushes or opens a pull request in. The
 changelog gate refuses a command merging several pull requests only when one of them is in a
@@ -1281,12 +1295,12 @@ repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/nam
 (claude-config#851). It updates the branch, starts the new head's lessons review alongside its
 checks, waits for both, updates again if the base has moved meanwhile, and
 then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
-`require-changelog-tag.sh`, `check-closing-merge.sh`, `design-score-gate.sh` and
-`require-verification-run.sh` and merges only
+`require-changelog-tag.sh`, `check-closing-merge.sh`, `check-work-names-merge.sh` (#1995),
+`design-score-gate.sh` and `require-verification-run.sh` and merges only
 when every one allows it, so it decides nothing any gate would refuse. What a gate allows with
 something to say, such as the verification gate's warn mode verdict, is written to its log. The changelog record gate is also asked at the first look, before any update, wait or
-review, because nothing those do can add a missing label, and so is the closing keyword gate,
-because nothing they do can change a body. Asking only the first two let nine Slate
+review, because nothing those do can add a missing label, and so are the closing keyword gate
+and the work names gate, because nothing they do can change a body or a title. Asking only the first two let nine Slate
 pull requests merge with no `changelog/*` label (claude-config#1178), so its suite now checks the
 gates it names against every PreToolUse Bash hook that recognises a merge, and a merge gate added
 to the hooks block but not to the helper fails it. The head it merges is its branch's tip: GitHub's
@@ -1717,7 +1731,7 @@ A fourth gate reads the same library for a different thing an agent does to its 
 
 ### What a push actually waits on
 
-Thirty-three PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-four PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1745,7 +1759,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 
 | Gate | What it costs on a push |
 | --- | --- |
-| `scanners-before-push.sh` (#518) | 2026-10-28: killed at its declared 180 second bound on three cold readings of three, so not a measurement, at load average 142 to 148. Earlier: 25.4 to 26.5 seconds on a branch push at load 12 to 18 on 2026-10-13 (the timing below), the gate every push waits on; 0.6 seconds on a repeat attempt over an unchanged tree, 2026-09-21 |
+| `scanners-before-push.sh` (#518) | 2026-10-28: killed at its declared 180 second bound on three cold readings of three, so not a measurement, at load average 142 to 148. Earlier: 25.4 to 26.5 seconds on a branch push at load 12 to 18 on 2026-10-13 (the timing below), the gate every push waits on; 0.6 seconds on a repeat attempt over an unchanged tree, 2026-09-21. Since #1995 it first reads the messages of the commits the push adds, before any suite: 0.137 to 0.161 seconds over one commit, five readings on 2026-10-31 at load average 61, each including two python starts for the timing |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 | `require-tests-before-push.sh` | not timed on 2026-10-28, since it can ask a model. Earlier: 0.3 seconds on each of two pushes on 2026-09-21, when the change carried a test and it asked no model; a sonnet call of up to 120 seconds when it has to ask |
@@ -1773,6 +1787,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 | `require-changelog-tag.sh` (#1181) | 2026-10-28: 0.009 to 0.020 seconds. Earlier: 0.014 seconds, five readings on 2026-10-13, the same way as `block-red-merge.sh` |
 | `stacked-branch-delete-gate.sh` (#1723) | 2026-10-28: 0.010 to 0.018 seconds. Earlier: 0.035 to 0.058 seconds on a plain `git push`, five readings on 2026-10-26 (load average 15 to 31), since a command holding no `delete` or `graphql` in any case (#1758 added the second), no short flag cluster with d and no bare `:branch` is answered before anything loads; 0.14 to 0.17 seconds on `git push -u origin feat/1723-stacked-delete`, whose branch name holds the word and so starts the shared reader to find no delete; 0.46 to 0.51 seconds on an API delete of a branch nothing is based on, five readings through the real gh against claude-config, one list of the pull requests based on it |
 | `check-closing-merge.sh` (#1550) | 2026-10-28: 0.009 to 0.016 seconds. Earlier: 0.007 to 0.008 seconds on a push naming no merge, five readings on 2026-10-24 (load average 8 to 9), since it leaves before loading anything; 0.051 to 0.053 seconds on a push whose branch name holds the word (`feat/1550-closing-merge-gate`), which loads the shared reader to find no merge. On a merge, 0.51 to 0.69 seconds, five readings through the real gh against claude-config #1639: one read of the pull request's body and closing issues, run beside `block-red-merge.sh`, which reads the same pull request |
+| `check-work-names-merge.sh` (#1995) | 2026-10-31: 0.029 to 0.044 seconds on a plain `git push`, five readings at load average 62 to 64, timed from outside and so including a python start of about 0.02 seconds; it leaves before loading anything on a command naming no merge. On a merge, two GitHub reads: the pull request's title, description and commits, and the scanner at its base commit |
 | `design-score-gate.sh` (#1364) | 2026-10-28: 0.009 to 0.015 seconds. Earlier: 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `check-rtk-init.sh` (#1468) | 2026-10-28: 0.009 to 0.014 seconds. Earlier: 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
 | `pr-review-gate.sh` (#560) | 2026-10-28: 0.010 to 0.013 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it acts on a merge, not a push |
