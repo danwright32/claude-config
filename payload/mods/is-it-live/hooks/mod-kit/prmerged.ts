@@ -51,6 +51,15 @@ export const isNotAPr = (error: string): boolean => /Could not resolve to a Pull
 const unseen = (r: GhRun) => /Could not resolve to a Repository/i.test(r.stderr)
 const lineOf = (r: GhRun) => r.stderr.trim().split('\n')[0] || r.stdout.trim().split('\n')[0] || `gh exited ${r.exitCode}`
 const fold = (repo: string) => repo.toLowerCase()
+/**
+ * Why no account's answer could be read, from the failures askAnyAccount gives (#2000, shared with
+ * every other read made as each account): the first line of the first from an account that could see
+ * the repository, which says more than one that could not, else of the first.
+ */
+export const failureOf = (failures: readonly GhRun[]): string => {
+  const f = failures.find(x => !unseen(x)) ?? failures[0]
+  return f ? lineOf(f) : 'gh gave no answer'
+}
 const said = (err: unknown) => (err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : String(err))
 
 export const askPr = async (readers: PrReaders, o: PrAsked): Promise<PrAnswer> => {
@@ -66,8 +75,7 @@ export const askPr = async (readers: PrReaders, o: PrAsked): Promise<PrAnswer> =
   }
   if (!('stdout' in asked)) {
     if (asked.failures.some(f => isNotAPr(f.stderr))) return { kind: 'not a pr' }
-    // The account that could see the repository says more than one that could not.
-    return { kind: 'unproven', why: `GitHub could not be asked: ${lineOf(asked.failures.find(f => !unseen(f)) ?? (asked.failures[0] as GhRun))}` }
+    return { kind: 'unproven', why: `GitHub could not be asked: ${failureOf(asked.failures)}` }
   }
   let v: { number?: unknown; state?: unknown; mergedAt?: unknown; url?: unknown }
   try {
