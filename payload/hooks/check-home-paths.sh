@@ -85,7 +85,8 @@ SYNCED_DIRS=(hooks agents commands skills)
 # The entries come from lib/unmanaged-skills.sh, the same file claude-sync reads, never a copy of
 # its names here (L41). It is read from beside THIS script, which is ~/.claude/hooks/lib on a Mac,
 # where no repo sits beside the hooks, and payload/hooks/lib in the repo. The matching is read off
-# its skill_excludes lines, so it is the sync's own: `--exclude=NAME` leaves NAME out at any depth
+# its skill_excludes lines by its skill_exclude_names, the one reading the skill scans share too
+# (claude-config#2001), so it is the sync's own: `--exclude=NAME` leaves NAME out at any depth
 # under skills/, as rsync does, and `--exclude=/NAME` leaves out only the entry at the top of
 # skills/, so a folder that merely happens to be called synced inside a real skill is still read.
 #
@@ -103,18 +104,10 @@ fi
 list_note=""
 skill_anchored=()     # names left out only at the top of skills/
 skill_anywhere=()     # names left out at any depth under skills/
-if [ -n "$UNMANAGED_SKILLS_LIB_LOADED" ] && declare -F skill_excludes >/dev/null; then
-  loop_input="$(skill_excludes)" || true
-  while IFS= read -r _ex; do
-    _name="${_ex#--exclude=}"
-    case "$_name" in
-      '') ;;
-      /*) skill_anchored+=("${_name#/}") ;;
-      *)  skill_anywhere+=("$_name") ;;
-    esac
-  done <<LOOP_INPUT
-$loop_input
-LOOP_INPUT
+if [ -n "$UNMANAGED_SKILLS_LIB_LOADED" ] && declare -F skill_exclude_names >/dev/null; then
+  skill_exclude_names
+  skill_anchored=(${SKILL_EXCLUDE_TOP[@]+"${SKILL_EXCLUDE_TOP[@]}"})
+  skill_anywhere=(${SKILL_EXCLUDE_ANY[@]+"${SKILL_EXCLUDE_ANY[@]}"})
 fi
 if [ "$((${#skill_anchored[@]} + ${#skill_anywhere[@]}))" -eq 0 ]; then
   list_note="check-home-paths: could not read the list of skills the sync never carries ($UNMANAGED_LIB), so every skill was scanned, including any the sync would leave behind."

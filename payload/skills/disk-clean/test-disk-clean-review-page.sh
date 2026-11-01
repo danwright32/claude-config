@@ -230,6 +230,19 @@ render --out "$OUT"
 check "a kind with nothing to tick has its heading box disabled (D11)" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(heading caches)" && echo ok || echo "it can be ticked: $(heading caches)")"
 check "while a kind with something to tick does not" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(heading trash)" && echo "it is disabled" || echo ok)"
 
+# A kind's total is the shared tally's (lib/disk-clean-units.sh, #1866): an item whose size was
+# never read beside one that was makes it "At least", and a kind where no size was read at all has
+# an unknown total, never "At least 0 KB" (L90).
+fresh
+printf '%s\n' "caches-1${S}caches${S}delete${S}$H/Library/Caches/a${S}4194304${S}offerable${S}1:1${S}measured${S}${S}" \
+  "caches-2${S}caches${S}delete${S}$H/Library/Caches/b${S}${S}offerable${S}1:2${S}denied${S}${S}" \
+  "trash-1${S}trash${S}delete${S}$H/.Trash/c${S}${S}offerable${S}1:3${S}unread${S}${S}" > "$H/items.txt"
+write_record "$H/items.txt" "trash caches"
+render --out "$OUT"
+check "a kind holding an item with no size read beside a read one totals at least" "$(has "$(heading caches)" '<span class="group-total">At least 4 MB</span>')"
+check "a kind with no size read at all has an unknown total" "$(has "$(heading trash)" '<span class="group-total">Size unknown</span>')"
+check "never at least 0 KB" "$(hasnt "$HTML" "At least 0 KB")"
+
 # The heading box's rules (D11), run in node from the page's own script: what CI's runner and
 # both Macs have. Without node this part is reported as unmeasured, never as a pass (L411).
 if command -v node >/dev/null 2>&1; then
