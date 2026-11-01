@@ -116,8 +116,8 @@ export type Holds = string[]
 
 /** is it live's record of this session's merges, as its state holds it (it may not be loaded). */
 export type MergeFacts = {
-  owed: { pr: number; repo?: string; how: string }[]
-  verdicts: Record<string, { state: string }>
+  owed: { pr: number; repo?: string; how: string; at: number; cwd?: string }[]
+  verdicts: Record<string, { state: string; at: number }>
 }
 
 /**
@@ -129,33 +129,84 @@ export const mergeFactsOf = (owed: unknown, verdicts: unknown): MergeFacts | { w
   const v = verdicts ?? {}
   if (!Array.isArray(o)) return { why: 'its owed merges are not a list' }
   for (const x of o) {
-    const e = x as { pr?: unknown; repo?: unknown; how?: unknown } | null
-    if (!e || typeof e !== 'object' || typeof e.pr !== 'number' || typeof e.how !== 'string' || (e.repo !== undefined && typeof e.repo !== 'string')) return { why: `an owed merge is not a pull request it can name (${JSON.stringify(x)})` }
+    const e = x as { pr?: unknown; repo?: unknown; how?: unknown; at?: unknown; cwd?: unknown } | null
+    if (!e || typeof e !== 'object' || typeof e.pr !== 'number' || typeof e.how !== 'string' || typeof e.at !== 'number' || (e.repo !== undefined && typeof e.repo !== 'string') || (e.cwd !== undefined && typeof e.cwd !== 'string')) return { why: `an owed merge is not a pull request it can name (${JSON.stringify(x)})` }
   }
   if (typeof v !== 'object' || Array.isArray(v)) return { why: 'its verdicts are not a record' }
   for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
     if (!x || typeof x !== 'object' || typeof (x as { state?: unknown }).state !== 'string') return { why: `the verdict for ${k} has no state` }
+    if (typeof (x as { at?: unknown }).at !== 'number') return { why: `the verdict for ${k} has no time` }
   }
   return { owed: o as MergeFacts['owed'], verdicts: v as MergeFacts['verdicts'] }
 }
 
 const prName = (repo: string | undefined, pr: number) => (repo ? `${repo}#${pr}` : `#${pr}`)
+const fold = (repo: string) => repo.toLowerCase()
 
-/** The merges is it live says are not settled: a merge still owed its card, a deploy not confirmed live. */
-export const mergeHolds = (f: MergeFacts): Holds => {
+/** What the box asks GitHub about a background merge: the fields mergedIn reads. */
+export const VIEW_FIELDS = 'number,state,mergedAt,url'
+
+/**
+ * Which pull request a background merge GitHub is asked about is: its repository where is it live
+ * read one from the command, else the folder the helper ran in (where gh resolves the same one). Two
+ * runs of the helper for one pull request are one question and one hold.
+ */
+export const waitKey = (o: { pr: number; repo?: string; cwd?: string }) => `${o.repo ? fold(o.repo) : `folder:${o.cwd ?? ''}`}#${o.pr}`
+
+/**
+ * What GitHub's answer to `gh pr view <pr> --json number,state,mergedAt,url` says (#1818): the merge's
+ * link and time only when it says MERGED for that number, its link naming that number too; anything
+ * else, why not. The link's repository is read on by mod-kit's one reader and checked by the caller,
+ * so an answer about another number or another repository never confirms a merge (L179, L237).
+ */
+export const mergedIn = (stdout: string, pr: number): { url: string; at: number } | { why: string } => {
+  let v: { number?: unknown; state?: unknown; mergedAt?: unknown; url?: unknown }
+  try {
+    v = JSON.parse(stdout)
+  } catch {
+    return { why: "GitHub's answer could not be read" }
+  }
+  if (!v || typeof v !== 'object') return { why: "GitHub's answer could not be read" }
+  if (v.state !== 'MERGED') return { why: `GitHub answered state ${JSON.stringify(v.state)}` }
+  if (v.number !== pr) return { why: `GitHub answered for #${String(v.number)}` }
+  if (typeof v.url !== 'string' || /\/pull\/(\d+)\/?$/.exec(v.url)?.[1] !== String(pr)) return { why: `GitHub's link ${JSON.stringify(v.url)} is not #${pr}'s` }
+  const at = typeof v.mergedAt === 'string' ? Date.parse(v.mergedAt) : NaN
+  if (Number.isNaN(at)) return { why: 'GitHub gave no time for the merge' }
+  return { url: v.url, at }
+}
+
+/** What GitHub said of each background merge, by waitKey: merged in that repository at that time, or why it is not confirmed. */
+export type Confirmed = Record<string, { repo: string; at: number } | { why: string }>
+
+/**
+ * Whether a card made since `since` is kept for the pull request this session: under its repository,
+ * or for a merge whose repository was never read, under any repository with that number (as is it
+ * live's own turn end settles it). is it live crosses a carded merge off only at a turn end, so a
+ * card made since then is read here rather than its record.
+ */
+const carded = (verdicts: MergeFacts['verdicts'], repo: string | undefined, pr: number, since: number) =>
+  Object.entries(verdicts).some(([k, v]) => (repo ? fold(k) === `${fold(repo)}#${pr}` : k.endsWith(`#${pr}`)) && v.at >= since)
+
+/**
+ * The merges is it live says are not settled: a merge still owed its card, a background merge GitHub
+ * has not confirmed (`confirmed`, asked by the box itself, #1818), a deploy not confirmed live. Each
+ * said once.
+ */
+export const mergeHolds = (f: MergeFacts, confirmed: Confirmed = {}): Holds => {
   const out: Holds = []
+  const owedCard = (name: string) => `${name} was merged and has no is it live card yet: check its deploy and call the card tool`
   for (const o of f.owed) {
-    out.push(
-      o.how === 'waiting'
-        ? `the merge of ${prName(o.repo, o.pr)} has not been confirmed yet`
-        : `${prName(o.repo, o.pr)} was merged and has no is it live card yet: check its deploy and call the card tool`,
-    )
+    if (o.how === 'waiting') {
+      const c = confirmed[waitKey(o)]
+      if (!c || 'why' in c) out.push(`the merge of ${prName(o.repo, o.pr)} has not been confirmed yet${c ? ` (${c.why})` : ''}`)
+      else if (!carded(f.verdicts, c.repo, o.pr, Math.min(o.at, c.at))) out.push(owedCard(`${c.repo}#${o.pr}`))
+    } else if (!carded(f.verdicts, o.repo, o.pr, o.at)) out.push(owedCard(prName(o.repo, o.pr)))
   }
   for (const [key, v] of Object.entries(f.verdicts)) {
     if (v.state === 'deploying') out.push(`${key} is still deploying: check it is live and call the is it live card tool again`)
     else if (v.state === 'unconfirmed') out.push(`${key}'s deploy was not confirmed live`)
   }
-  return out
+  return [...new Set(out)]
 }
 
 /** The box this call would show, or every reason it may not be shown now. */
