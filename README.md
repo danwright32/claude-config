@@ -1954,6 +1954,18 @@ call is now told the rest is read separately and to judge only what it was shown
 be told not to call untested anything whose test might be past the cut, which invited a pass over
 tests nobody read.
 
+A branch that merges main and then pushes is judged on its own change, not on everything main
+gained since the branch was last pushed (#2028). On 2026-11-01 four Pivot pull requests were each
+refused for size alone after merging a busy main, and each needed a one time override. Both gates
+now compare the push against what merging the newest main commit it holds into its last pushed
+commit gives (`git merge-tree`, which touches neither the index nor the working tree), and leave
+main's commit subjects out of what the judge reads. What remains is the branch's own commits plus
+anything the merge commit holds that is in neither parent, so a conflict resolution, or an edit
+slipped into a merge, is still judged; a file that conflicted is always judged, however it was
+resolved. When no default branch is known (no `origin/HEAD`, `origin/main` or `origin/master`) or
+git cannot work out the merge (it needs 2.38 or later), the whole push is judged as before, never
+none of it, and a refusal says main's changes were in it and why.
+
 Every push either gate reaches is recorded, overrides included (#1075), one line each in
 `~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
 cleaning (the lessons review keeps its outcome ledger beside it for the same reason). Read it with:
