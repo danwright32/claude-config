@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # The checks of test-run-all-tests.sh that read THIS repository's own files rather than a fixture
 # tree it builds (claude-config#1997).
+# send-gate: scans hooks/ skills/ mods/
+#
+# The line above is what has a claude-sync send run this suite (README "send-gate", #809): it reads
+# every test-*.sh and *_tests.py in the repository and the runner beside it, and under payload/ those
+# live in hooks/, skills/ and mods/. Without it a send never ran these scans (claude-config#2020).
 #
 # The scanners gate before a push runs, whole, every suite that lists the repository's files, on
 # the premise that running a whole suite costs a few seconds. test-run-all-tests.sh lists them for
