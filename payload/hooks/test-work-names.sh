@@ -11,7 +11,7 @@
 #      registry is said rather than read as empty, and an unreadable one is refused.
 #   4. Nothing the scanner prints repeats a name it found (CI logs of a public repository are
 #      public too), only where it is.
-#   5. Text that is not a file, a commit message or a pull request's title and description, is read
+#   6. Text that is not a file, a commit message or a pull request's title and description, is read
 #      by the same rule from a labelled stream (claude-config#1995), and a stream cut short is refused.
 # The two parts that need the repository, (1) nothing this repository publishes names one and (5) a
 # send refuses to publish a file naming one, are tests/test-work-names-tree.sh, since this suite is
@@ -119,7 +119,7 @@ scan_tree "$RH" clean.md
 check "an unreadable registry is refused, never read as empty (exit $scan_rc): $scan_out" [ "$scan_rc" -eq 2 ]
 check "and says why" has "$scan_out" "not valid JSON"
 
-# ---------------------------------------------------------------- 5. text that is not a file
+# ---------------------------------------------------------------- 6. text that is not a file
 # A commit message or a pull request's title and description reaches main in a squash merge without
 # ever being a file (claude-config#1995), so the same scanner reads labelled text too: a NUL
 # separated stream of label, text, label, text, which `git log -z --format='commit %h%x00%B'`

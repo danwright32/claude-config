@@ -194,6 +194,12 @@ esac
 # or commit list is an answer that cannot be judged, never an empty one.
 shape=$(printf '%s' "$view" | jq -r 'if (.title|type) == "string" and (.body|type) == "string" and (.commits|type) == "array" then "ok" else "bad" end' 2>/dev/null)
 [ "$shape" = ok ] || deny "$WHAT: GitHub's answer about the pull request carried no title, description or commit list to read."
+# gh reads the commits through GitHub's API a page of 100 at a time and is not known to ask for the
+# next page here, so a list of 100 or more may be cut short, and the messages past it would pass
+# unread. A list that may be partial is not a clean one (L98); such a pull request is rare here.
+commit_count=$(printf '%s' "$view" | jq -r '.commits | length' 2>/dev/null)
+case "$commit_count" in ''|*[!0-9]*) commit_count=100 ;; esac
+[ "$commit_count" -lt 100 ] || deny "$WHAT: GitHub's answer listed $commit_count commits, as many as one page of it holds, so the list may be cut short and the messages past it were never read. Squash the branch to fewer commits (git reset --soft to its base and commit again, then a force push from the main session) and merge again."
 
 command -v python3 >/dev/null 2>&1 || deny "$WHAT: $(ps_detector_absent_why "python3 is not on PATH" "check-work-names-merge.sh reads the text through lib/work-names.py, so with it absent nothing here can tell a clean title from one naming a work organisation." "python3")"
 [ -f "$SCANNER" ] || deny "$WHAT: $SCANNER is missing, and it is the rule this gate applies. Restore it with claude-sync pull."

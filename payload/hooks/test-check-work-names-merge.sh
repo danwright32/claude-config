@@ -170,6 +170,15 @@ expect_deny "an answer about another repository is refused" "someone/else"
 printf '%s' '{"number":7,"url":"https://github.com/acme/widget/pull/7","baseRefOid":"b0b0","title":"t","body":"b"}' > "$WORK/pr.json"
 run_hook "$MERGE 7 --squash"
 expect_deny "an answer with no commit list cannot be judged" "Cannot tell"
+# gh reads a pull request's commits a page at a time and hands back one page, so a list as long as a
+# page may be cut short, with the later messages never seen: that is no clean list.
+python3 -c '
+import json
+commits = [{"oid": "%040x" % i, "messageHeadline": "Step %d" % i, "messageBody": ""} for i in range(100)]
+print(json.dumps({"number": 7, "url": "https://github.com/acme/widget/pull/7", "baseRefOid": "b0b0",
+                  "title": "t", "body": "b", "commits": commits}))' > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash"
+expect_deny "a commit list as long as one page of gh's answer may be cut short, and is refused" "100 commits"
 pr_json "Add the reader" "Adds the reader." "clean" > "$WORK/pr.json"
 run_hook "$MERGE 7 --squash" WORK_NAMES_REGISTRY_READER="$WORK/registry-broken.js"
 expect_deny "a scanner that cannot judge refuses rather than passes" "gave no verdict"

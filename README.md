@@ -136,7 +136,7 @@ commit nobody has pushed. A push chained after its own commit is refused too, si
 not written yet, and so are messages it could not judge. `check-work-names-merge.sh` reads the title,
 the description and every commit message of a pull request before it merges, in any repository whose
 base commit holds `payload/hooks/lib/work-names.py` (every other merge leaves after two reads), by
-every route and from `merge-when-ready.sh`. The merge gate has no override, and the push refusal
+every route and from `merge-when-ready.sh`; a list of 100 commits or more, one page of what gh reads and so possibly cut short, is refused. The merge gate has no override, and the push refusal
 offers none (the gate's own `SKIP_SCANNERS_CHECK=1` still skips the whole gate, as it always has),
 so a message pushed past it is still judged at the merge. The remedy is always to reword.
 
