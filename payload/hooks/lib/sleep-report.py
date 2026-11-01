@@ -48,7 +48,9 @@ report knows, and the fields each reads (every other field is kept, and shown no
   start      power                          written here at /sleep
   claim      repo, issue, attempts          a worker took an issue (phase 5; written by sleep-queue.sh)
   released   repo, issue, state, text?      a claim given back, free or unstarted (sleep-queue.sh)
-  done       repo, issue?, pr?, text        finished; checked against GitHub at wake
+  done       repo, issue?, pr?, text        finished; checked against GitHub at wake, so the
+                                            writer refuses one without an owner/name repo and
+                                            a pr or issue (#2011)
   parked     repo, issue, branch?, text     set aside with why (phase 8: 2 hours or 2 attempts)
   failed     repo, issue?, text             could not be done (a refusal, an error)
   question   repo, issue, text, options     something only Dan can answer, asked before bed in a
