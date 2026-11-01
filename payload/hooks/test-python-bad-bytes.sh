@@ -315,6 +315,10 @@ def walk(args):
 
 
 def main(argv):
+    if argv and argv[0] == "--list":
+        for path in walk(argv[1:]):
+            print(path)
+        return
     rules = None
     if argv and argv[0].startswith("--rules="):
         rules = set(argv[0].split("=", 1)[1].split(","))
@@ -360,12 +364,39 @@ if [ -z "$hits" ]; then ok; else bad "Python in the hooks raises on a byte that 
 $hits"; fi
 
 # The skills, held to the same rules: they read gh's answers, transcripts and files the same way.
-python3 "$WORK/scan.py" "$DIR/../skills" > "$WORK/skills.scan" 2>&1
+# Only what the sync carries: lib/unmanaged-skills.sh is the one list of what it leaves alone (#2001).
+. "$DIR/lib/unmanaged-skills.sh" && declare -F carried_skill_paths >/dev/null || {
+  echo "FAIL: $(basename "$0"): lib/unmanaged-skills.sh is missing or holds no carried_skill_paths, so the skills scan cannot tell a skill the sync carries from one it leaves alone."
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$((fail + 1))"
+  exit 1
+}
+skill_scan(){ # skill_scan <skills dir> -> the scan's report on each program there the sync carries
+  local progs=() p
+  while IFS= read -r p; do progs+=("$p"); done < <(python3 "$WORK/scan.py" --list "$1" | carried_skill_paths "$1")
+  python3 "$WORK/scan.py" ${progs[@]+"${progs[@]}"}
+}
+skill_scan "$DIR/../skills" > "$WORK/skills.scan" 2>&1
 sunits="$(sed -n 's/^UNITS //p' "$WORK/skills.scan")"
 [ "${sunits:-0}" -ge 30 ] && ok || bad "the scan read only ${sunits:-no} Python programs under payload/skills"
 shits="$(grep -v -E '^UNITS ' "$WORK/skills.scan" | sed "s#^$DIR/../##")"
 if [ -z "$shits" ]; then ok; else bad "a script under payload/skills raises on a byte that is not UTF-8 or a lone surrogate, or reads stdin in text mode, which under C reads it as something else. Read sys.stdin.buffer, and give each open, subprocess and decode an errors= saying what happens to such a byte:
 $shits"; fi
+
+# Run from the installed copy, the skills folder also holds what the sync never carries: the Claude
+# app's downloads under skills/synced and Claude Code's skills/.trash (claude-config#2001). A script
+# there is nobody's to fix, so the scan leaves out exactly what lib/unmanaged-skills.sh says the sync
+# leaves out, and still reads the same script in a real skill, including one inside a folder of the
+# real skill that merely happens to be called synced.
+for d in synced/acct/skill-a/scripts .trash/stamp/skill-a/scripts real-skill/scripts real-skill/synced real-skill/.trash/old; do
+  mkdir -p "$WORK/skills/$d"
+  printf '%s\n' 'import sys' 'print(open(sys.argv[1]).read())' > "$WORK/skills/$d/stylometry.py"
+done
+skill_scan "$WORK/skills" > "$WORK/fixture.scan" 2>&1
+got="$(grep -v '^UNITS ' "$WORK/fixture.scan" | sed -e "s#^$WORK/skills/##" -e 's#:.*##' | sort -u | tr '\n' ' ')"
+[ "$got" = "real-skill/scripts/stylometry.py real-skill/synced/stylometry.py " ] && ok \
+  || bad "#2001 the scan should report the real skill's scripts and nothing under skills/synced or any .trash, reported: $got"
+[ "$(sed -n 's/^UNITS //p' "$WORK/fixture.scan")" = 2 ] && ok \
+  || bad "#2001 the scan should read exactly the real skill's two programs, said: $(tr '\n' '|' < "$WORK/fixture.scan")"
 
 # The scan is seen to fire on each shape the hooks held, in each place a program can sit, and to stay
 # quiet on the forms it asks for.
