@@ -2920,7 +2920,9 @@ each category's status. A walk that could not read a folder records each one by 
 reason in `walk_unreadable` (Operation not permitted for a folder macOS protects, Permission denied
 for its own permissions), and the scan prints the first ten (#1903). It refuses (exit 75) while a `disk-remove.sh` run holds its lock. Its suites
 are `skills/disk-clean/test-disk-clean-scan.sh` and `test-disk-clean-categories.sh`, both through the
-disk-clean harness.
+disk-clean harness. `test-disk-clean-stat-order.sh` reads every disk-clean script and test, derived
+from where they live, and fails on a `stat` that asks BSD's `-f` before GNU's `-c`, which is right
+on the Mac and wrong on the Linux runner (#1874).
 
 ## Removing anything: disk-remove.sh
 
