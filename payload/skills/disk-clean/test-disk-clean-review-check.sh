@@ -148,6 +148,25 @@ run_check
 check "a payload laid out over several lines is accepted" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT_TEXT")"
 check "and planned" "$(eq "$(tail -1 "$PLAN")" "item trash-1")"
 
+# A selection holding an offerable item whose size was never read: totalled by the shared tally
+# (lib/disk-clean-units.sh, #1866), so the total is "at least" beside a size that was read, and
+# unknown, never 0 KB, when no size in that category was read at all (L90).
+fresh
+{ standard_items
+  item caches-5 caches delete "$H/Library/Caches/com.denied" "" offerable 1:7 denied "" ""
+  item trash-2 trash delete "$H/.Trash/locked" "" offerable 1:8 unread "" ""
+} > "$H/items-unread.txt"
+write_record "$H/items-unread.txt"
+new_nonce
+payload "$SID" "$N" 3 caches-1 caches-5 trash-2
+run_check
+check "a selection holding an item with no size read is accepted" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT_TEXT")"
+check "beside a size that was read, the total is at least, and the unread one is named" \
+  "$(has "$OUT_TEXT" "App caches: 2 items, at least 3.2 GB, plus 1 whose size was not read")"
+check "with no size read in the category, the total is unknown, said once" \
+  "$(grep -qxF "Trash: 1 item, size unknown" <<< "$OUT_TEXT" && echo ok || echo "said: $(grep '^Trash' <<< "$OUT_TEXT")")"
+check "and never 0 KB" "$(hasnt "$OUT_TEXT" "0 KB")"
+
 # ================================================================================================
 # 4. The checker's refusals: each distinct, and none writes a plan
 # ================================================================================================
