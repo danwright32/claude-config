@@ -1,6 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import { callShell, commandWrites } from '../hooks/writes.ts'
+import { pipeline } from '../hooks/commands.ts'
+import { callShell, commandWrites, pipelineIn } from '../hooks/writes.ts'
 
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and
 // missed inline scripts, rsync, install, ln, dd, a patch, every file but the last of a sed -i, and a
@@ -168,6 +169,40 @@ describe('writes: a cd before the write', () => {
   test('a bare cd goes home; cd - goes somewhere this cannot know, so a relative path after it is given as written', () => {
     expect(paths('cd && echo x > a.md')).toEqual([`${HOME}/a.md`])
     expect(paths('cd - && echo x > CLAUDE.md')).toEqual(['(as written) CLAUDE.md'])
+  })
+  // #2000: popd goes back to a folder pushd kept, which this does not keep, so the folder after it is
+  // not known; it was read as the folder pushd moved to.
+  test('a relative path after a popd is given as written', () => {
+    expect(paths('pushd sub && popd && echo x > a.md')).toEqual(['(as written) a.md'])
+  })
+})
+
+// #2000: is it live asked GitHub about a merge in the session's folder, so a command that changed
+// folder first (`cd <other checkout> && merge-when-ready.sh 12`) was asked about the session folder's
+// own #12 (L237). The folder each command runs in is read by the write reader's own following of a
+// cd, never by a second follower in a mod.
+describe('pipelineIn: the folder each command runs in', () => {
+  const folders = (command: string) => pipelineIn(command, CWD, HOME).map(c => [c.words[0], c.folder])
+  test('the commands are the ones pipeline gives, each with the folder it runs in', () => {
+    for (const command of ['gh pr merge 12 --squash', 'X=/w/b; cd $X && gh pr merge 12', 'cd /w/b && echo "$(cd /w/c && pwd)" | tee f; gh pr merge 3', "bash <<'EOF'\ncd /w/b\ngh pr merge 4\nEOF", '(cd sub && make) > out'])
+      expect(pipelineIn(command, CWD, HOME).map(({ folder: _f, ...c }) => c)).toEqual(pipeline(command))
+  })
+  test('the folder a cd leaves it in: absolute, relative, home, and through a variable the command set', () => {
+    expect(folders('gh pr merge 12')).toEqual([['gh', CWD]])
+    expect(folders('cd /w/booking && gh pr merge 12')).toEqual([['cd', CWD], ['gh', '/w/booking']])
+    expect(folders('cd ../other; bash ~/.claude/hooks/lib/merge-when-ready.sh 12')).toEqual([['cd', CWD], ['bash', '/Users/dan/Apps/other']])
+    expect(folders('cd ~/Apps/other && gh pr merge 12')).toEqual([['cd', CWD], ['gh', `${HOME}/Apps/other`]])
+    expect(folders('W=/w/other; cd "$W" && gh pr merge 12')).toEqual([['cd', CWD], ['gh', '/w/other']])
+    expect(folders('pushd /w/other && gh pr merge 12')).toEqual([['pushd', CWD], ['gh', '/w/other']])
+  })
+  test('a cd inside a subshell or a substitution ends with it', () => {
+    expect(folders('(cd /w/other && gh pr merge 12); gh pr merge 13')).toEqual([['(', CWD], ['cd', CWD], ['gh', '/w/other'], [')', '/w/other'], ['gh', CWD]])
+    expect(folders('echo "$(cd /w/other && pwd)"; gh pr merge 13').at(-1)).toEqual(['gh', CWD])
+  })
+  test('null where the folder cannot be followed: a variable the command did not set, cd -, a popd', () => {
+    expect(folders('cd "$WT" && gh pr merge 12')).toEqual([['cd', CWD], ['gh', null]])
+    expect(folders('cd - && gh pr merge 12')).toEqual([['cd', CWD], ['gh', null]])
+    expect(folders('pushd /w/other && popd && gh pr merge 12')).toEqual([['pushd', CWD], ['popd', '/w/other'], ['gh', null]])
   })
 })
 
