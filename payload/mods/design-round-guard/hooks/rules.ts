@@ -1722,6 +1722,28 @@ const readMod = (f: ModFile): ModRead | null => {
     if (c === '>') return blank[p - 1] !== '='
     return isWord(p) && !NOT_CALLS.has(wordBack(p))
   }
+  // #2038: a callback handed to a method of what a call returns, where the function called is a
+  // parameter by its bare name (the engine's `on` in `on('tool.call', saveCall).catch(cb)`), takes
+  // its values from that function, as a callback handed to it does, never from the words handed to
+  // it: the event name beside a hook's reference is no message. A function of the mod's own, whose
+  // result its arguments make (`lines('Saved').forEach(cb)`), is still read through those arguments.
+  for (const f of fns) {
+    if (!Array.isArray(f.receiver)) continue
+    const o = (f.receiver as Span)[0]
+    if (blank[o] !== '(' || !isCall(o)) continue
+    const p = skipBack(o - 1)
+    if (!isWord(p)) continue
+    const id = wordBack(p)
+    const at = p - id.length + 1
+    if (blank[skipBack(at - 1)] === '.') continue
+    for (const [g, k] of fns.map((g, k) => [g, k] as const).filter(([g]) => g !== f && g.from <= at && at < g.to).sort((a, b) => b[0].from - a[0].from)) {
+      if (locals.some(l => l.owner === k && l.name === id)) break
+      if (g.params.some(ps => ps.includes(id))) {
+        f.receiver = { at, name: id }
+        break
+      }
+    }
+  }
   // Where each name is called: its offset and its call's `(`. A function's own declaration is no call.
   const calls = new Map<string, number[]>()
   for (const m of blank.matchAll(/[A-Za-z_$][\w$]*/g)) {
