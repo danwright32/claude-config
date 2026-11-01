@@ -930,7 +930,7 @@ reset_fake; rm -f "$TMP/listener.parent"; echo 4242 > "$FAKE/knob-exempt-gid"; e
 PATH="$TMP/nodewrap:$PATH" fakeenv bash "$EGRESS" selftest > "$TMP/selftest-parent.out" 2>&1 & st=$!
 hang_wait '! kill -0 "$st" 2>/dev/null' 0.05
 if kill -0 "$st" 2>/dev/null; then kill "$st" 2>/dev/null; rc=hung; else wait "$st"; rc=$?; fi
-st_owner="$(sed -n 's/.* load \([0-9][0-9]*\) [0-9][0-9]* .*/\1/p' "$FAKE/sudo.calls" 2>/dev/null | head -1)"
+st_owner="$(awk '/ load [0-9]+ [0-9]+ / { for (i = 1; i < NF; i++) if ($i == "load") { print $(i + 1); exit } }' "$FAKE/sudo.calls" 2>/dev/null)"
 st_parent="$(cat "$TMP/listener.parent" 2>/dev/null)"
 [ "$rc" = 0 ] && [ -n "$st_owner" ] && [ -n "$st_parent" ] && [ "$st_parent" != "$st_owner" ] && ok \
   || bad "the self test's listener is not the self test's own child (rc $rc, self test pid '$st_owner', listener started by '$st_parent')" "$(cat "$TMP/selftest-parent.out") $(cat "$FAKE/sudo.calls" 2>/dev/null)"

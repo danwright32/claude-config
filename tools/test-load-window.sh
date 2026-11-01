@@ -263,8 +263,8 @@ SH
 chmod +x "$case_dir/bin/pgrep"
 : > "$case_dir/out"
 PATH="$case_dir/bin:$PATH" bash "$TOOL" --seconds 60 --workers 1 -- bash "$W/forever.sh" "$case_dir/f" >> "$case_dir/out" 2>&1; RC=$?
-first_mark="$(grep -n 'pgrep-mark: ' "$case_dir/out" | head -1 | cut -d: -f1)"
-first_early="$(grep -n 'Stopping early: ' "$case_dir/out" | head -1 | cut -d: -f1)"
+first_mark="$(awk '/pgrep-mark: / { print NR; exit }' "$case_dir/out")"
+first_early="$(awk '/Stopping early: / { print NR; exit }' "$case_dir/out")"
 eq "#2015 the window still yields with 75" 75 "$RC"
 if [ -n "$first_mark" ] && [ -n "$first_early" ] && [ "$first_early" -gt "$first_mark" ]; then ok; else
   bad "#2015 the yielding line comes after the workers and the command are stopped (first stop look at line '${first_mark:-none}', yielding line at '${first_early:-none}'): $(head -c 1500 "$case_dir/out")"
