@@ -16,6 +16,8 @@
 #   2. No source files changed in the pushed commits ........... allow
 #   3. Source changed but push contains ZERO tests ............. BLOCK (no model)
 #   4. Source + some tests -> model grades per-change coverage . allow / BLOCK
+#      Test changes too large for one call are read in further calls, at most 1 + TEST_PARTS_MAX
+#      in all, so no refusal rests on a test the model was not shown (#1998, step 6 below).
 #
 # Override: SKIP_TEST_CHECK=1 git push ...   (docs/config/copy-only, or a
 # refactor already covered by existing tests; state why).
@@ -25,13 +27,26 @@
 # AND says why, via fail_open() below. Blocking on infrastructure trouble is
 # worse than allowing, but a push that was never gated must not look identical
 # to a push the gate approved. (#735)
+# One exception: a further call reading tests past the first call's cut refuses, as could not
+# judge, when it fails. The first call has already called a change untested by then, and before
+# #1998 that alone refused the push, so failing open there would loosen the gate.
 #
 # Every push it reaches is recorded, override included, in the ledger the simplify gate writes too
 # (claude-config#1075, #1077): lib/push-gate-report.py reads it.
 
 JUDGE_MODEL="sonnet"
 JUDGE_TIMEOUT=90       # seconds for the model call
-DIFF_BUDGET=60000      # max bytes of diff sent to the model
+DIFF_BUDGET=60000      # max bytes of diff sent to the model in one call
+# Test changes past the first call's cut go to further calls (claude-config#1998), each within
+# DIFF_BUDGET. At most this many, so a push's judge cost is bounded at 1 + TEST_PARTS_MAX calls.
+TEST_PARTS_MAX=3
+PART_OVERLAP=4096      # bytes of a file repeated at the start of the next part, so a test cut in two is whole in one
+# The hook's own finish line, inside the 120 seconds its registration gives it: a further call is
+# started only with PART_MIN_SECONDS left, and its timeout never runs past this. A hook killed at
+# its timeout refuses with no reason ("onFailure": "block"), so the gate stops first and says why.
+# REQUIRE_TESTS_DEADLINE_SECONDS sets another, for the suite; it can only end the readings sooner.
+TESTS_DEADLINE=110
+PART_MIN_SECONDS=20
 
 # The notice library, loaded first because every allow below speaks through it.
 TG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -96,6 +111,12 @@ PC_GATE=tests
 # files it applies to, so a label reading "Fail the run" is not error handling.
 # shellcheck source=lib/failure-handling.sh
 . "$HOOK_DIR/lib/failure-handling.sh" 2>/dev/null || fail_open "shared failure-handling library missing"
+# The one reader of a number above zero (claude-config#1948), for the deadline setting only. Missing,
+# whole_above_zero is not found, which reads as a value that failed, so the default deadline stands.
+# shellcheck source=lib/whole-number.sh
+. "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null || true
+whole_above_zero "${REQUIRE_TESTS_DEADLINE_SECONDS:-}" TESTS_DEADLINE 2>/dev/null || :
+[ "$TESTS_DEADLINE" -le 110 ] 2>/dev/null || TESTS_DEADLINE=110
 
 # ---------------------------------------------------------------------------
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
@@ -398,7 +419,10 @@ fi
 if [ -z "$tests_cut" ]; then
   t_label="TEST FILE CHANGES (new OR modified existing tests in this push, every one of them shown whole):"
 else
-  t_label="TEST FILE CHANGES (TRUNCATED: the first $t_budget of $t_len bytes. Cut partway or not shown at all: $tests_cut. A change whose test may be in those files cannot be called untested from this diff):"
+  # The rest of the tests is shown to further calls (#1998), so this one is asked to judge only what
+  # it was shown. It was told a change whose test might be in the unseen files could not be called
+  # untested, which invited a pass resting on tests nobody had read.
+  t_label="TEST FILE CHANGES (TRUNCATED: the first $t_budget of $t_len bytes. Cut partway or not shown at all: $tests_cut. The gate shows the rest of the test changes to further reviewers, so judge only from the test changes shown here: a change that nothing shown here tests is untested here):"
 fi
 if [ "$c_len" -gt "$c_budget" ]; then
   c_label="THE REST OF THE DIFF (everything that is not a test file; TRUNCATED: the first $c_budget of $c_len bytes):"
@@ -457,11 +481,217 @@ source_list_str="$source_list"; [ -n "$source_list_str" ] || source_list_str="  
 judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\nTEST FILES CHANGED IN THIS PUSH, new OR modified existing -- all count as tests:\n%s\nSOURCE FILES CHANGED IN THIS PUSH:\n%s\nFAILURE HANDLING FILES (their added code catches, raises, branches on an error or status, or retries):\n%s\nDIFF:\n%s\n' \
   "$msgs" "$test_list_str" "$source_list_str" "$failure_files" "$diff")"
 
+# ---------------------------------------------------------------------------
+# 6. The rest of the tests, when the first call was cut short of them (claude-config#1998).
+# ---------------------------------------------------------------------------
+# A cut used to end the judging: a "no test" verdict over tests the reviewer was not shown all of
+# was refused as COULD NOT JUDGE, so a push whose test sat past the cut (34,407 bytes of test
+# changes on 2026-10-31) could only get through one commit at a time. Now the test changes past the
+# cut are split into parts, each shown to a further call beside the code the first call saw and the
+# changes it found untested, and a change stays untested only if no part tests it. So a refusal
+# for a missing test rests on every test change having been in front of a reviewer (L11), and
+# whatever could not be shown, past TEST_PARTS_MAX parts or the deadline, or a part whose call
+# failed, is still refused as could not judge, naming its files: this path refused before #1998
+# and must not start letting pushes through unjudged.
+#
+# Per file pairs (each source file with the tests that name it) were the other way the issue named.
+# They were not chosen: a test that reaches a file through another (an index, a script run by path)
+# names nothing, so the pair leaves it out and the refusal rests on a test the reviewer never saw.
+#
+# Cost, for the issue's push: 34,407 bytes of tests beside more than 30,000 of code. The first call
+# sends 60,000 bytes of diff (30,000 of each); the remaining 4,407 bytes, plus up to PART_OVERLAP
+# repeated from before the cut, fit one further call of about 30,000 bytes of code and 8,500 of
+# tests. Two calls, about 105,000 bytes in all, and the second only when the first says untested.
+# The most any push costs is 1 + TEST_PARTS_MAX calls of at most DIFF_BUDGET bytes of diff each.
+
+# Splits the test changes from byte $1 on into parts of at most $2 bytes, in directory $3, as
+# part.1, part.2 and so on, each with part.N.files naming the test files it holds. A part that starts
+# inside a file opens with that file's header line and up to PART_OVERLAP bytes of the lines before,
+# so a test the split cuts through is whole in one part; the first part starts that far before the
+# cut. A line longer than half a part is carried in pieces. Prints the number of parts.
+split_rest_of_tests() {   # $1 = cut offset  $2 = part size  $3 = directory; the diff on stdin
+  python3 -c '
+import sys
+cut, limit, out = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+overlap = min(int(sys.argv[4]), limit // 4)
+data = sys.stdin.buffer.read()
+piece = max(limit // 2, 1)
+lines = []
+for l in data.splitlines(keepends=True):
+    while len(l) > piece:
+        lines.append(l[:piece]); l = l[piece:]
+    lines.append(l)
+hdr, cur = [], None
+for i, l in enumerate(lines):
+    if l.startswith(b"diff --git "):
+        cur = i
+    hdr.append(cur)
+def name(h):
+    w = lines[h].split()[-1].decode("utf-8", "replace")
+    return w[2:] if w.startswith("b/") else w
+off, s = 0, len(lines)
+for i, l in enumerate(lines):
+    if off + len(l) > cut:
+        s = i; break
+    off += len(l)
+back = 0
+while s < len(lines) and hdr[s] is not None and s > hdr[s] + 1 and back + len(lines[s - 1]) <= overlap:
+    s -= 1; back += len(lines[s])
+if s < len(lines) and hdr[s] is not None and s == hdr[s] + 1:
+    s = hdr[s]
+NOTE = b"(this file continues from the reading before)\n"
+def opening(i, repeat):
+    h = hdr[i]
+    if h is None or i == h:
+        return [], set()
+    pre, j, got = [], i - 1, 0
+    while repeat and j > h and got + len(lines[j]) <= overlap:
+        pre.insert(0, lines[j]); got += len(lines[j]); j -= 1
+    return [lines[h], NOTE] + pre, {name(h)}
+parts = []
+i = s
+body, files = opening(i, False)
+size, real = sum(map(len, body)), 0
+while i < len(lines):
+    l = lines[i]
+    if real and size + len(l) > limit:
+        parts.append((body, files))
+        body, files = opening(i, True)
+        size, real = sum(map(len, body)), 0
+    if l.startswith(b"diff --git "):
+        files.add(name(i))
+    body.append(l); size += len(l); real += 1; i += 1
+if real:
+    parts.append((body, files))
+for n, (body, files) in enumerate(parts, 1):
+    with open("%s/part.%d" % (out, n), "wb") as f:
+        f.write(b"".join(body))
+    with open("%s/part.%d.files" % (out, n), "w") as f:
+        f.write("".join(x + "\n" for x in sorted(files)))
+print(len(parts))
+' "$1" "$2" "$3" "$PART_OVERLAP"
+}
+
+# What every call cost, summed into the PC_JUDGE_* values the record reads, so the row for the push
+# carries all of its calls rather than the last one.
+J_BYTES=0; J_MS=""; J_COST=""; J_START=""; J_END=""
+add_call_cost() {
+  [ -n "$J_START" ] || J_START="$PC_JUDGE_START"
+  [ -n "$PC_JUDGE_END" ] && J_END="$PC_JUDGE_END"
+  J_BYTES=$(( J_BYTES + ${PC_JUDGE_BYTES:-0} ))
+  case "$PC_JUDGE_MS" in ''|*[!0-9]*) ;; *) J_MS=$(( ${J_MS:-0} + PC_JUDGE_MS )) ;; esac
+  case "$PC_JUDGE_COST" in ''|*[!0-9.eE-]*) ;; *) J_COST="$(awk -v a="${J_COST:-0}" -v b="$PC_JUDGE_COST" 'BEGIN { printf "%.6f", a + b }')" ;; esac
+}
+use_call_costs() {
+  PC_JUDGE_MODEL="$JUDGE_MODEL"; PC_JUDGE_START="$J_START"; PC_JUDGE_END="$J_END"
+  PC_JUDGE_BYTES="$J_BYTES"; PC_JUDGE_MS="$J_MS"; PC_JUDGE_COST="$J_COST"
+}
+
+PART_RUBRIC="$(cat <<'EOF'
+You are a further reader for a strict test-coverage gate on a git push. The push's test changes
+were too large to show in one reading. A first reader was shown the code being pushed and the
+first part of the test changes, and found that the numbered changes listed in the input have no
+test in that part. You are shown the code again and ANOTHER part of the push's test changes, one
+the first reader was not shown in full.
+
+For each numbered change, decide whether THESE test changes add or modify a test that would fail if
+that specific change were reverted or broken. A MODIFIED existing test counts exactly the same as a
+brand-new test. Judge only the numbered changes, and only from the test changes shown to you.
+SPECIAL CASE: if the change touches error handling or a retry, or a background or scheduled job, or
+a call to an external API/service, it is covered ONLY if these test changes exercise a failure or
+edge case for it (a rejected/erroring call, a timeout, a duplicate/concurrent invocation, a
+malformed response). Which files add error handling or a retry is the FAILURE HANDLING FILES list
+in the input, decided from the code; a word such as fail, error or retry in a string, a label, a
+test name, fixture data or a comment never makes a change error handling.
+
+Output STRICT JSON on a single line, no prose and no code fence:
+{"covered":[1,3]}
+"covered" lists the numbers of the changes these test changes cover, and is [] when they cover none.
+EOF
+)"
+
+# Sets RT_STATE to pass (every change found tested), block (every part read, some change in none of
+# them) or cantjudge (stopped before every part was read, RT_WHY saying why and RT_UNSEEN naming the
+# test files no reading was shown in full), RT_MISSING to the changes still untested, one per line,
+# and RT_READINGS to the readings made, the first call included. $1 = the first call's missing
+# changes, one per line.
+judge_rest_of_tests() {
+  local dir n k i left t nums part_in list obj answer covered x
+  local -a miss=()
+  RT_STATE=cantjudge; RT_WHY=""; RT_UNSEEN=""; RT_MISSING="$1"; RT_READINGS=1
+  i=0
+  while IFS= read -r x; do [ -n "$x" ] || continue; i=$((i+1)); miss[i]="$x"; nums="${nums:+$nums }$i"; done <<MISSING_EOF
+$1
+MISSING_EOF
+  dir="$(mktemp -d)" || { RT_WHY="the gate could not make a scratch directory to split the test changes in"; RT_UNSEEN="$tests_cut"; return 0; }
+  n="$(printf '%s' "$diff_tests" | split_rest_of_tests "$t_budget" "$(( DIFF_BUDGET - ${#code_diff} ))" "$dir" 2>/dev/null)"
+  if ! [ "$n" -ge 1 ] 2>/dev/null; then
+    rm -rf "$dir"; RT_WHY="the gate could not split the rest of the test changes into parts"; RT_UNSEEN="$tests_cut"; return 0
+  fi
+  RT_PARTS=$n
+  k=1
+  while [ "$k" -le "$n" ]; do
+    if [ "$k" -gt "$TEST_PARTS_MAX" ]; then
+      RT_WHY="the test changes needed $((n + 1)) readings and the gate makes at most $((TEST_PARTS_MAX + 1)) for one push"; break
+    fi
+    left=$(( TESTS_DEADLINE - SECONDS ))
+    if [ "$left" -lt "$PART_MIN_SECONDS" ]; then
+      RT_WHY="it ran out of time: ${SECONDS} seconds had gone and the hook must finish inside 120"; break
+    fi
+    t=$JUDGE_TIMEOUT; [ "$left" -lt "$t" ] && t=$left
+    list=""
+    for x in $nums; do list="${list}${x}. ${miss[x]}"$'\n'; done
+    part_in="$(printf 'COMMIT MESSAGES:\n%s\n\nCHANGES THE FIRST READER FOUND NO TEST FOR:\n%s\nFAILURE HANDLING FILES (their added code catches, raises, branches on an error or status, or retries):\n%s\n\n%s\n%s\n\nMORE TEST FILE CHANGES (reading %s of %s of the test changes the first reader was not shown in full):\n%s\n' \
+      "$msgs" "$list" "$failure_files" "$c_label" "$code_diff" "$k" "$n" "$(cat "$dir/part.$k")")"
+    RT_READINGS=$((RT_READINGS + 1))
+    if ! pc_judge "$JUDGE_MODEL" "$t" "$PART_RUBRIC" "$part_in"; then
+      add_call_cost
+      RT_WHY="reading $k of the rest failed: $PC_JUDGE_ERR"; break
+    fi
+    add_call_cost
+    answer="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
+import sys, json
+try:
+    obj = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+    cov = obj.get("covered")
+    if not isinstance(cov, list) or any(isinstance(x, bool) or not isinstance(x, int) for x in cov):
+        print("ERR")
+    else:
+        print("OK " + " ".join(str(x) for x in cov))
+except Exception:
+    print("ERR")
+' 2>/dev/null)"
+    case "$answer" in
+      OK*) covered=" ${answer#OK} " ;;
+      *) RT_WHY="reading $k of the rest answered without a list of covered changes, so its answer could not be read"; break ;;
+    esac
+    local still=""
+    for x in $nums; do case "$covered" in *" $x "*) ;; *) still="${still:+$still }$x" ;; esac; done
+    nums="$still"
+    k=$((k + 1))
+    [ -n "$nums" ] || break
+  done
+  RT_MISSING=""
+  for x in $nums; do RT_MISSING="${RT_MISSING}  - ${miss[x]}"$'\n'; done
+  if [ -z "$nums" ]; then
+    RT_STATE=pass
+  elif [ -z "$RT_WHY" ]; then
+    RT_STATE=block
+  else
+    RT_UNSEEN="$(i=$k; while [ "$i" -le "$n" ]; do cat "$dir/part.$i.files"; i=$((i + 1)); done | awk 'NF && !seen[$0]++' | tr '\n' ' ')"
+    RT_UNSEEN="${RT_UNSEEN% }"
+    [ -n "$RT_UNSEEN" ] || RT_UNSEEN="$tests_cut"
+  fi
+  rm -rf "$dir"
+  return 0
+}
+
 # One isolated model call, shared with the simplify gate (lib/push-changes.sh, which carries the
 # measurement behind its flags). It names a judge that was missing, timed out (they have different
 # fixes from one that is down), returned nothing, an error envelope or no JSON object, and this gate
 # fails open on each, saying which.
 pc_judge "$JUDGE_MODEL" "$JUDGE_TIMEOUT" "$RUBRIC" "$judge_input" || fail_open "$PC_JUDGE_ERR" judged
+add_call_cost
 
 verdict="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
 import sys, json
@@ -482,20 +712,36 @@ except Exception:
 case "$verdict" in
   BLOCK*)
     missing_detail="$(printf '%s\n' "$verdict" | sed '1d; s/^  - //' | paste -sd '|' -)"
+    missing_shown="$(printf '%s\n' "$verdict" | sed '1d')"
+    parts_note=""
     # A "no test" verdict over test changes the reviewer could not see all of is not a finding
-    # that tests are missing: a test past the cut reads to it exactly like no test (#723, L11). It
-    # is refused as COULD NOT JUDGE, naming what was cut, rather than waved through: a gate that
-    # could not read the push does not approve it (L42), and a smaller push is always judgeable.
+    # that tests are missing: a test past the cut reads to it exactly like no test (#723, L11). So
+    # the rest of the tests is read in further calls (#1998, step 6 above). What those calls could
+    # not read is refused as COULD NOT JUDGE, naming its files, rather than waved through: a gate
+    # that could not read the push does not approve it (L42), and a smaller push is always judgeable.
     if [ -n "$tests_cut" ]; then
+      judge_rest_of_tests "$(printf '%s\n' "$verdict" | sed '1d; s/^  - //')"
+      use_call_costs
+      missing_detail="$(printf '%s' "$RT_MISSING" | sed 's/^  - //' | paste -sd '|' -)"
+      missing_shown="${RT_MISSING%$'\n'}"
+      case "$RT_STATE" in
+        pass) allow pass "test changes read in $RT_READINGS readings" judged ;;
+        block) parts_note="The push's test changes ($t_len bytes) were too many for one reading, so the
+reviewer read them in $RT_READINGS parts, every byte of them, and no part held a test
+for the changes above."$'\n\n' ;;
+        *)
       refuse cantjudge "$missing_detail" judged <<REFUSAL
 PUSH BLOCKED: the test gate could not judge this push in full.
 
 The reviewer said these changes have no test:
-$(printf '%s\n' "$verdict" | sed '1d')
+$missing_shown
 
-but the push's test changes are $t_len bytes and it could read only the first $t_budget,
-so these test files were cut partway or not shown to it at all:
-    $tests_cut
+The push's test changes are $t_len bytes, too many for one reading. The first reading
+was shown $t_budget bytes of them and the rest was split into further readings, but
+the gate stopped after $RT_READINGS readings, because
+$RT_WHY.
+These test files were not shown in full to any reading that answered:
+    $RT_UNSEEN
 A test in one of them reads to the reviewer exactly like no test, so this is not a
 finding that tests are missing. Push fewer commits at a time (one commit, or split the
 branch) so each push's tests fit, then push again.
@@ -506,14 +752,16 @@ BEFORE overriding you MUST explain to the user, in plain non-technical
 language, WHY skipping is legitimate here so they can judge whether it
 makes sense. Never override silently.
 REFUSAL
+          ;;
+      esac
     fi
     refuse block "$missing_detail" judged <<REFUSAL
 PUSH BLOCKED: some changes in this push have no test covering them.
 
 Distinct changes still needing a test:
-$(printf '%s\n' "$verdict" | sed '1d')
+$missing_shown
 
-Add a test for each, then push again.
+${parts_note}Add a test for each, then push again.
 $(widened_note)
 OVERRIDE: if the gate is wrong (the change is genuinely test-exempt,
 or an existing test already covers it), re-run with:

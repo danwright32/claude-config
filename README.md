@@ -1918,6 +1918,24 @@ a file the push does not carry, or any other kind stands as the judge gave it. A
 is listed under its own heading beside a block, and recorded in the row's detail as `withdrawn:`
 beside a pass, so how often it fires is read from the record.
 
+The test judge is shown at most 60,000 bytes of diff in one call, test changes first. On 2026-10-31
+a push carrying 34,407 bytes of test changes beside a large code change was shown the first 30,000,
+the judge called a change untested whose test sat past the cut, and the push got through only one
+commit at a time (#1998). Now, when the first call was cut short of the tests and calls something
+untested, the rest of the test changes is split into parts of up to 60,000 bytes less the code the
+first call saw, and each part goes to a further call with that code and the changes still called
+untested, which answers which of them the part tests. A part that starts inside a file repeats up
+to 4 KB of the lines before it, so a test the split cuts through is whole in one part. A change is
+refused as untested only when every part has been read and none tests it, and the refusal says how
+many parts it was read in. At most three further calls are made, and none is started with fewer
+than 20 seconds left of the 110 the gate allows itself inside the 120 its registration declares;
+whatever was not read, and a further call that fails, is refused as could not judge, naming the
+test files no reading was shown in full. That path refused before, so it fails closed where the
+first call fails open. The issue's push costs two calls, about 61,000 and 40,000 bytes; the first
+call is now told the rest is read separately and to judge only what it was shown, where it used to
+be told not to call untested anything whose test might be past the cut, which invited a pass over
+tests nobody read.
+
 Every push either gate reaches is recorded, overrides included (#1075), one line each in
 `~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
 cleaning (the lessons review keeps its outcome ledger beside it for the same reason). Read it with:
