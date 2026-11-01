@@ -280,6 +280,9 @@ W="$(mk_repo stranger src/clean.ts 'export const clean = 1;')"
     && printf '%s\n' 'export const mine = 2;' > src/mine.ts )
 run_hook "$W" "cd $W && git add src/mine.ts && git commit -qm mine && git push"
 want_eq "untracked copies the add does not name are not this commit's" 0 "$HOOK_RC"
+#     Reading the pending files says nothing of its own: #1984 put a `local` at the script's top
+#     level here, and bash printed "local: can only be used in a function" on every such push.
+want_lacks "#1984 reading the pending files prints no shell error" "can only be used in a function" "$HOOK_ERR"
 #     The control in the same repository: an add naming both copies carries the pair.
 run_hook "$W" "cd $W && git add src/a.tsx src/b.tsx && git commit -qm pair && git push"
 want_eq "and naming both copies is judged" 2 "$HOOK_RC"

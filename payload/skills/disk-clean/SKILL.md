@@ -49,7 +49,9 @@ Report what it printed, in plain words, in this order:
    (timed out, a tool missing, Docker not running), never as zero and never left out, since an
    unmeasured kind may be the large one. A walk that was partial or unmeasured is said the same way,
    with the kinds that read it (build folders, worktrees, runaway logs, forgotten tools and large
-   files).
+   files). For a partial walk, name each folder it could not read, as the scan printed them, with
+   the reason beside each: Operation not permitted is macOS protecting the folder, which Full Disk
+   Access usually lifts, and Permission denied is the folder's own permissions, which it does not.
 
 - **Exit 0**: the scan was written, unmeasured kinds included. Report it as above and go on to step 2.
 - **Exit 2**: it refused, or its record could not be written, so there is nothing to review. Tell

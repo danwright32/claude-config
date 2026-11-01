@@ -550,6 +550,10 @@ ar_append_full_files() {   # $1 = input file, $2 = base, $3 = head, $4 = byte bu
   # A generated file's full text is the bulk ar_review_diff exists to leave out (claude-config#591),
   # and its header already says so, so it is skipped here rather than counted as not fitting.
   gen="$(ar_generated_paths "$base" "$head" "$@")"
+  local loop_input
+  loop_input="$(git -c core.quotepath=false diff --name-only --diff-filter=AM "$base" "$head" -- "$@" 2>/dev/null \
+           | while IFS= read -r f; do [ -n "$f" ] && printf '%s %s\n' "$(git cat-file -s "$head:$f" 2>/dev/null || echo x)" "$f"; done \
+           | sort -n)" || true
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     fsize="${line%% *}"; f="${line#* }"
@@ -565,9 +569,9 @@ $f
     else
       left=$((left + 1)); names="$names $f"
     fi
-  done < <(git -c core.quotepath=false diff --name-only --diff-filter=AM "$base" "$head" -- "$@" 2>/dev/null \
-           | while IFS= read -r f; do [ -n "$f" ] && printf '%s %s\n' "$(git cat-file -s "$head:$f" 2>/dev/null || echo x)" "$f"; done \
-           | sort -n)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   printf '%s %s%s' "$in" "$left" "$names"
 }
 

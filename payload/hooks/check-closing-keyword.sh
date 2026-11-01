@@ -117,7 +117,9 @@ else
       is_target=1
       break
     fi
-  done < <(printf '%s' "$segs")
+  done <<LOOP_INPUT
+$segs
+LOOP_INPUT
 fi
 [ "$is_target" -eq 1 ] || exit 0
 

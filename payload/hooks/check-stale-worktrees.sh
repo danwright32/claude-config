@@ -146,6 +146,7 @@ flush(){
   esac
   cur=""; curbranch=""; curhead=""; curlock=""
 }
+loop_input="$(git -C "$top" worktree list --porcelain 2>/dev/null || true)" || true
 while IFS= read -r line; do
   case "$line" in
     "worktree "*) [ -n "$cur" ] && flush; cur="${line#worktree }" ;;
@@ -153,7 +154,9 @@ while IFS= read -r line; do
     "branch "*)   curbranch="${line#branch refs/heads/}" ;;
     locked|"locked "*) curlock="$line" ;;
   esac
-done < <(git -C "$top" worktree list --porcelain 2>/dev/null || true)
+done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 [ -n "$cur" ] && flush
 
 # The progress markers, one file per removal in flight, named for the worktree and holding its
