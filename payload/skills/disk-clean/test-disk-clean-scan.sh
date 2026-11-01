@@ -331,9 +331,9 @@ check "every size measured in full keeps the plain total" "$(has "$OUT_TEXT" "Ap
 # ================================================================================================
 # 6c. The "at least" rule has one copy, lib/disk-clean-units.sh's tally (#1866, L370)
 # ================================================================================================
-# The closing summary above and the low space warning's scan_note (check-free-space.sh, whose own
-# suite drives the same cases) both total offerable items through dcu_tally and decide the wording
-# through dcu_total_kind, so the two cannot drift.
+# The closing summary above, the low space warning's scan_note (check-free-space.sh), the review
+# page and the review checker all total offerable items through dcu_tally and take the wording from
+# its kind, so they cannot drift. Each one's own suite drives the cases through its surface.
 . "$DIR/../../hooks/lib/disk-clean-units.sh" || check "the units library is there to source" "could not source it"
 # One offerable item per line: key, bytes, size (bytes empty when no size was read).
 tally_of() { # <key> <rows>
@@ -353,14 +353,22 @@ check "a partial size: at least" "$(eq "$(kind 2 0 1)" lower)"
 check "every size read in full: exact" "$(eq "$(kind 2 0 0)" exact)"
 check "nothing to total: exact (the caller says 0, or nothing found)" "$(eq "$(kind 0 0 0)" exact)"
 check "a tally it cannot read is unknown, never a figure" "$(eq "$(kind x 0 0)" unknown)"
-CFS="$DIR/../../hooks/check-free-space.sh"
-for f in "$SCAN" "$CFS"; do
-  check "$(basename "$f") totals through dcu_tally and words it through dcu_total_kind" \
-    "$(grep -q 'dcu_tally(' "$f" && grep -q 'dcu_total_kind ' "$f" && echo ok || echo "it does not call both")"
+kind_in_awk() { # <key> <rows>
+  printf '%s\n' "$2" | awk -F '\t' -v k="$1" "${DCU_AWK_TALLY:-}"'{ dcu_tally($1, $2, $3) } END { print dcu_tally_kind(k) }'
+}
+check "the awk reading of a tally is the same rule: unknown, lower, exact, exact for nothing" \
+  "$(eq "$(kind_in_awk c "$rows") $(kind_in_awk b "$rows") $(kind_in_awk d "$rows") $(kind_in_awk a "$rows") $(kind_in_awk z "$rows")" "unknown lower lower exact exact")"
+# Every place disk-clean totals what can go calls the tally and reads its wording from it: the scan's
+# closing summary, the low space warning, the review page's kind totals, the review checker's
+# selection totals (the last two joined #1866 after carrying a narrower rule of their own).
+for f in "$SCAN" "$DIR/../../hooks/check-free-space.sh" "$DIR/review-page.sh" "$DIR/review-check.sh"; do
+  check "$(basename "$f") totals through dcu_tally and words it through the tally's kind" \
+    "$(grep -q 'dcu_tally(' "$f" && grep -qE 'dcu_tally_kind\(|dcu_total_kind ' "$f" && echo ok || echo "it does not call both")"
 done
-# No second copy of the rule anywhere disk-clean lives: the size test that makes a total a lower
-# bound is written only in the units library.
-copies="$(grep -r -l --include='*.sh' -F '!= "report''ed"' "$DIR" "$DIR/../../hooks" | grep -v '/disk-clean-units\.sh$')"
+# No second copy of the rule anywhere disk-clean lives: the size tests that make a total a lower
+# bound (the shared one, and the narrower one the review page and checker kept) are written only in
+# the units library. Each pattern is split in two here so this file does not match itself.
+copies="$(grep -r -l --include='*.sh' -F -e '!= "report''ed"' -e '$8 == "part''ial"' "$DIR" "$DIR/../../hooks" | grep -v '/disk-clean-units\.sh$')"
 check "no disk-clean script but the units library carries the at least rule" "$([ -z "$copies" ] && echo ok || echo "copies in: $copies")"
 
 # ================================================================================================

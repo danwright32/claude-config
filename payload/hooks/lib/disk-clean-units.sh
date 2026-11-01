@@ -20,19 +20,25 @@
 #                          runs all three over the same values and fails on any difference
 #   dcu_docker_kib <size>  a size as Docker prints it (decimal units: 1.2GB, 512kB, 0B) in KiB;
 #                          fails, printing nothing, on anything else
-#   DCU_AWK_TALLY          the one copy of how offerable items add up to a total (#1866), as awk
-#                          functions: dcu_tally(<key>, <bytes>, <size>) counts one offerable item
-#                          under <key>, and dcu_tally_line(<key>) prints "<items> <unsized> <KiB>
-#                          <partial>" for it. Used by the scan's closing summary and the low space
-#                          warning's scan_note (check-free-space.sh), which read different layouts
-#                          of the same record, so each passes its own fields
+#   DCU_AWK_TALLY          the one copy of how offerable items add up to a total and how that
+#                          total is worded (#1866), as awk functions. dcu_tally(<key>, <bytes>,
+#                          <size>) counts one offerable item under <key>; dcu_tally_kib(<key>),
+#                          dcu_tally_unsized(<key>) and dcu_tally_kind(<key>) read the total back,
+#                          and dcu_tally_line(<key>) is "<items> <unsized> <KiB> <partial>" for a
+#                          caller that keeps the numbers. dcu_kind(<items>, <unsized>, <partial>)
+#                          is the wording: "unknown" when no item's size was read (never 0),
+#                          "lower" when one had none or was read only in part (the total is "at
+#                          least"), "exact" otherwise, including when there was nothing to total,
+#                          and "unknown" for a tally that is not numbers. Used by the scan's
+#                          closing summary, the low space warning's scan_note (check-free-space.sh),
+#                          the review page's kind totals and the review checker's selection
+#                          totals, which read different layouts of the same record, so each
+#                          passes its own fields
 #   dcu_total_kind <items> <unsized> <partial>
-#                          how a total of those is worded: "unknown" when no item's size was read
-#                          (never 0), "lower" when one had none or was read only in part (the total
-#                          is "at least"), "exact" otherwise, including when there was nothing to
-#                          total; "unknown" for a tally that is not numbers
+#                          dcu_kind for a caller holding the numbers in the shell (scan_note keeps
+#                          them between prompts): one awk, so the rule is never written twice
 #
-# Commands: awk (dcu_docker_kib only) and the builtins. bash 3.2 safe. Sourcing defines functions and does nothing else.
+# Commands: awk (dcu_docker_kib and dcu_total_kind only) and the builtins. bash 3.2 safe. Sourcing defines functions and does nothing else.
 
 DCU_AWK_LIB='
 function dcu_h(k,    b, n) {
@@ -55,16 +61,21 @@ function dcu_tally(key, bytes, size) {
   if (bytes == "") dcu_tu[key]++
   else { dcu_tb[key] += bytes; if (size != "measured" && size != "reported" && size != "") dcu_tp[key] = 1 }
 }
+function dcu_kind(n, u, p) {
+  if (n !~ /^[0-9]+$/ || u !~ /^[0-9]+$/ || p !~ /^[0-9]+$/) return "unknown"
+  if (n + 0 > 0 && u + 0 == n + 0) return "unknown"
+  if (u + 0 > 0 || p + 0 != 0) return "lower"
+  return "exact"
+}
+function dcu_tally_kib(key) { return sprintf("%.0f", dcu_tb[key] / 1024) }
+function dcu_tally_unsized(key) { return dcu_tu[key] + 0 }
+function dcu_tally_kind(key) { return dcu_kind((dcu_tn[key] + 0) "", (dcu_tu[key] + 0) "", (dcu_tp[key] + 0) "") }
 function dcu_tally_line(key) {
-  return sprintf("%d %d %.0f %d", dcu_tn[key], dcu_tu[key], dcu_tb[key] / 1024, dcu_tp[key])
+  return sprintf("%d %d %s %d", dcu_tn[key], dcu_tu[key], dcu_tally_kib(key), dcu_tp[key])
 }
 '
 dcu_total_kind() { # <items> <unsized> <partial> -> unknown | lower | exact
-  local a
-  for a in "${1:-}" "${2:-}" "${3:-}"; do case "$a" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac; done
-  if [ "$1" -gt 0 ] && [ "$2" -eq "$1" ]; then printf 'unknown'
-  elif [ "$2" -gt 0 ] || [ "$3" -ne 0 ]; then printf 'lower'
-  else printf 'exact'; fi
+  awk -v n="${1:-}" -v u="${2:-}" -v p="${3:-}" "$DCU_AWK_TALLY"'BEGIN { printf "%s", dcu_kind(n, u, p) }'
 }
 
 # The same rule in shell arithmetic, so a caller sizing every item spends no process on it.

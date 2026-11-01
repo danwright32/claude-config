@@ -242,10 +242,10 @@ for c in $RUN; do
       if ($6 == "offerable") dcu_tally(c, $5, $8)
       else if (index($6, "unmeasured: ") == 1) u++; else x++
     }
-    END { printf "%d %d %d %s", n, x, u, dcu_tally_line(c) }' "$W/items")"
-  # n, not offerable, unmeasured, then the tally: offerable, unsized, KiB, partial.
+    END { printf "%d %d %d %s %s", n, x, u, dcu_tally_line(c), dcu_tally_kind(c) }' "$W/items")"
+  # n, not offerable, unmeasured, then the tally: offerable, unsized, KiB, partial, and its kind.
   set -- $line
-  case "$(dcu_total_kind "$4" "$5" "$7")" in
+  case "$8" in
     unknown) total="$(dcu_human "")" ;;
     lower) total="at least $(dcu_human "$6")" ;;
     *) total="$(dcu_human "$6")" ;;
