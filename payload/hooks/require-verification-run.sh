@@ -290,6 +290,7 @@ judge || judge_failed
 if [ "$(printf '%s' "$verdict" | jq -r 'has("need")' 2>/dev/null)" = "true" ]; then
   mkdir -p "$WORK/guides" "$WORK/compare"
   # Split by parameter expansion, never `IFS=$'\t' read`, which collapses an empty field.
+  loop_input="$(printf '%s' "$verdict" | jq -r '.need.guides[]? | "\(.area)\t\(.path)"')" || true
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     area="${line%%$'\t'*}"; gpath="${line#*$'\t'}"
@@ -300,12 +301,17 @@ if [ "$(printf '%s' "$verdict" | jq -r 'has("need")' 2>/dev/null)" = "true" ]; t
       3) rm -f "$WORK/guides/$area.md"; : > "$WORK/guides/$area.absent" ;;
       *) rm -f "$WORK/guides/$area.md"; printf '%s' "$VR_FAIL" > "$WORK/guides/$area.err" ;;
     esac
-  done < <(printf '%s' "$verdict" | jq -r '.need.guides[]? | "\(.area)\t\(.path)"')
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
+  loop_input="$(printf '%s' "$verdict" | jq -r '.need.compares[]?')" || true
   while IFS= read -r sha; do
     [ -n "$sha" ] || continue
     vr_get "$WORK/compare/$sha.json" "the changes from $sha to the head $head" "repos/$api_slug/compare/$sha...$head"
     keep_or_fail "$WORK/compare/$sha.json" "$?"
-  done < <(printf '%s' "$verdict" | jq -r '.need.compares[]?')
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   judge --final || judge_failed
 fi
 

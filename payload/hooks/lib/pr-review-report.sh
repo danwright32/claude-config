@@ -256,9 +256,12 @@ reasons() { # $1 = a file of status words: prints "word count, word count" in a 
 
 # Openings, by pull request and by opening. Both share one predicate: an opening is covered when its
 # own folder and head have a finished review (the pair both ledgers write).
+# The openings go through a file, never a process substitution, whose child this shell would never
+# wait for (claude-config#1984).
+awk -F '\t' '$1 == "o"' "$work/placed" > "$work/placed-openings"
 awk -F '\t' 'FILENAME == ARGV[1] { if ($7 == "ok" || $7 == "empty-diff") done[$4 "\t" $5] = 1; next }
-  { print (($3 "\t" $4) in done) ? 1 : 0 }' "$work/reviews" <(awk -F '\t' '$1 == "o"' "$work/placed") > "$work/covered"
-paste "$work/covered" <(awk -F '\t' '$1 == "o"' "$work/placed") > "$work/openings"
+  { print (($3 "\t" $4) in done) ? 1 : 0 }' "$work/reviews" "$work/placed-openings" > "$work/covered"
+paste "$work/covered" "$work/placed-openings" > "$work/openings"
 # Unknowns: openings that could not be placed on a pull request because the folder is gone or no
 # commit was recorded. Each MAY be a pull request of its own, so they are counted, split by whether
 # the opening had a finished review (uk_hit) or not (uk_miss), for the verdict's range below. GitHub

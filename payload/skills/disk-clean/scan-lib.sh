@@ -421,6 +421,33 @@ dcs_walk_state() { # <find exit code> <stderr file>
   elif [ "$1" -ne 0 ]; then printf 'partial: find exited %s\n' "$1"
   else printf 'complete\n'; fi
 }
+# The folders the walk could not read, from find's stderr, sorted, one per line as "<folder> (<find's
+# reason>)" with the home folder written ~ (#1903). The count alone could not say whether a folder
+# might hold a project, nor whether it was macOS protecting it (Operation not permitted) or its own
+# permissions (Permission denied). BSD find writes "find: <folder>: <reason>"; GNU find (CI's Linux
+# runner) names itself by its path ("/usr/bin/find: ") and quotes the folder, in curly quotes under a
+# UTF-8 locale and straight ones under C, so both prefixes are read and either pair of quotes is taken
+# off. A folder's name may hold ": " itself, so only the last one is find's; a line in any other shape
+# is kept as written. Bytes, not characters (LC_ALL=C), so the curly quotes are three bytes each.
+dcs_walk_unreadable() { # <stderr file>
+  LC_ALL=C awk -v h="$HOME" -v ph="${DCS_HOME:-$HOME}" '
+    NF == 0 { next }
+    {
+      if (index($0, "find: ") == 1) s = substr($0, 7)
+      else if (match($0, /^[^ :]*\/find: /)) s = substr($0, RLENGTH + 1)
+      else { print; next }
+      cut = 0
+      for (i = length(s) - 1; i > 0; i--) if (substr(s, i, 2) == ": ") { cut = i; break }
+      if (cut) { p = substr(s, 1, cut - 1); r = substr(s, cut + 2) } else { p = s; r = "" }
+      lq = "\342\200\230"; rq = "\342\200\231"; n = length(p)
+      if (n >= 6 && substr(p, 1, 3) == lq && substr(p, n - 2) == rq) p = substr(p, 4, n - 6)
+      else if (n >= 2 && substr(p, 1, 1) == "\047" && substr(p, n) == "\047") p = substr(p, 2, n - 2)
+      if (p == h || p == ph) p = "~"
+      else if (index(p, h "/") == 1) p = "~" substr(p, length(h) + 1)
+      else if (index(p, ph "/") == 1) p = "~" substr(p, length(ph) + 1)
+      print (r == "" ? p : p " (" r ")")
+    }' "$1" 2>/dev/null | LC_ALL=C sort
+}
 
 # ---------------------------------------------------------------------------------------------
 # Flags a reviewer must see
