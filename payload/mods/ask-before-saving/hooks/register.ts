@@ -1,5 +1,5 @@
 import { update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Hook, MatchedHook, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingIndexCover, AskBeforeSavingQuestion } from '../types/index.d.ts'
@@ -115,6 +115,24 @@ let saves = 0
 // An error as words: a call to another mod's noun that failed for a member its loaded copy lacks is
 // said as the two mods out of step, never as the raw TypeError (#1299, mod-kit's hooks/skew.ts).
 const message = (err: unknown) => errorText(err, 'ask-before-saving')
+
+// A hook that failed before it could judge a call is run once more from its catch, and the call is
+// held only when that fails too (#2026). On 2026-11-01 a subagent's read only python run was
+// refused as a possible save because Claude Code's hooks worker missed a heartbeat under load, and
+// the same call passed when sent again: a stall passes, so the second look usually judges the call
+// as it would have been judged, a call writing no lasting memory going on and a save held or asked
+// about as ever. It is the same judgement, through the same readers (mod-kit's for what a command
+// writes), never a second one. The engine runs a catch in a fresh copy of the module when the worker
+// was lost, and its own time there is short (a second, its $ calls not counted); the judgement's own
+// time is a few string scans, everything slow in it a $ call. A second failure holds the call,
+// whatever the first was, so a save is never let through unjudged.
+const againOrHeld = async <R>(run: () => R | Promise<R>, held: () => R): Promise<R> => {
+  try {
+    return await run()
+  } catch {
+    return held()
+  }
+}
 
 // Dan typed an answer instead of choosing one (#1145): nothing is recorded, and mod-kit's one
 // wording, shared with the design round guard, tells him so in a toast and tells Claude to say so,
@@ -547,6 +565,203 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
   }
 }
 
+// One hook over the three tools, matched as any one of them. Named, so its catch can run it again (#2026).
+const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($, e, next) => {
+  const tool = e.tool
+  const raw = e as unknown as Record<string, unknown>
+  const id = String(raw.tool_use_id ?? '')
+  const input = argsOf(raw)
+
+  // A subagent's call (#777): judged here, where the loop is known, refused when it would save
+  // lasting memory, and never asked about. One the tool.check hook beneath must let through.
+  if (e.agentId !== undefined) {
+    const at = await whereOf($)
+    const targets = await lastingTargets($, tool, input, at)
+    if (targets.files.length) {
+      const where = targets.files.join(', ')
+      const listed = (await $.agent.list()).some(a => a.id === e.agentId)
+      // Claude Code's own background loop (the memory writer): the main session decides with Dan.
+      if (!listed)
+        await tell(
+          $,
+          `A background loop of Claude Code's (the memory writer, or another agent no list names) tried to save to ${where} and was refused, so nothing was saved. ` +
+            `What it would have saved: ${await savedText($, tool, input, at)}. If it is worth keeping, save it yourself, and you will be told how to ask Dan first.`,
+        )
+      return { deny: agentRefusal(targets) }
+    }
+    const key = saveKey(tool, input, at.cwd, at.home)
+    fromAgent.set(key, (fromAgent.get(key) ?? 0) + 1)
+    try {
+      return await next(e)
+    } finally {
+      const left = (fromAgent.get(key) ?? 1) - 1
+      if (left > 0) fromAgent.set(key, left)
+      else fromAgent.delete(key)
+    }
+  }
+
+  // Dan's own words made it permanent: saved without asking, through every other mod's checks, and
+  // Claude says what it saved. And a save Dan answered For good, sent again: what became of it is
+  // said here, the one place its result can be read.
+  let key: string | undefined
+  let files: string[] = []
+  if (madePermanent((await $.state.get(promptRef)).value)) {
+    const at = await whereOf($)
+    files = (await lastingTargets($, tool, input, at)).files
+    if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
+  }
+  let r: Awaited<ReturnType<typeof next>>
+  let used: AskBeforeSavingApproval | undefined
+  let covered: AskBeforeSavingIndexCover | undefined
+  try {
+    r = await next(e)
+  } finally {
+    // Taken by the tool.check hook when the call reached it; dropped here when a guard refused first.
+    if (key !== undefined) approved.delete(key)
+    used = taken.get(id)
+    taken.delete(id)
+    covered = coverTaken.get(id)
+    coverTaken.delete(id)
+  }
+  // A save sent on an approval, For good or Dan's Add to LESSONS.md in the durable lesson picker
+  // (#867). The approval is spent only once the write lands (#1691, L30): one that did not (an Edit
+  // whose text was not found or whose file was not read yet, a guard or settings hook beneath
+  // refusing it) gives it back for the rest of its time, so the call sent again is not asked about,
+  // and records why, so its lapse never calls it unused; Dan, who answered believing it saved, is
+  // told it was not. A shell command that ran and failed may have written part of what it does, so
+  // its approval is spent: running it again would write that part twice.
+  if (used !== undefined) {
+    const where = used.files.join(', ')
+    const lesson = used.lesson !== undefined
+    if (r.deny === undefined && !r.isError) {
+      const saved = `${lesson ? 'Added' : 'Saved'} to ${where}, as Dan answered ${pressed(used)}.`
+      const cover = lesson ? undefined : await coverFor($, used)
+      return { ...r, context: [...(r.context ?? []), cover ? `${saved} ${cover}` : saved] }
+    }
+    const why = String(r.deny ?? r.text ?? 'the tool reported an error')
+    const not = lesson ? 'Not added' : 'Not saved'
+    $.ui.toast(`${not} to ${where}: ${why}`, { timeoutMs: 10_000 })
+    if (tool === 'Bash' && r.deny === undefined) return r
+    const back: AskBeforeSavingApproval = { ...used, refused: why }
+    if (!stands(back.until, await $.clock.now())) {
+      $.ui.toast(lapsedFor(back), { timeoutMs: 10_000 })
+      return r
+    }
+    await update($, approvalsRef, a => [...(a ?? []), back])
+    // A refusal carries no context: Claude reads the refusal itself.
+    if (r.deny !== undefined) return r
+    const again = lesson ? 'correct the call and send it again, and it is added' : 'send the same call again once what failed is put right, and it is saved'
+    return { ...r, context: [...(r.context ?? []), `${not} to ${where}. Dan's ${pressed(used)} still stands until it lapses: ${again} without asking him.`] }
+  }
+  // The index line a saved memory file's For good covered (#1794), spent once it lands. One that did
+  // not land gives its cover back for the rest of the approval's time, as the approval itself is
+  // given back, but a shell command that ran and failed may have appended part of it, so it is spent.
+  if (covered !== undefined) {
+    const index = display(covered.index, (await whereOf($)).home)
+    if (r.deny === undefined && !r.isError)
+      return { ...r, context: [...(r.context ?? []), `Added the line linking ${covered.name} to ${index}, under Dan's For good on saving ${covered.files.join(', ')}.`] }
+    if ((tool === 'Bash' && r.deny === undefined) || !stands(covered.until, await $.clock.now())) return r
+    const back = covered
+    await update($, coversRef, a => [...(a ?? []), back])
+    return r
+  }
+  // A save Dan answered For good, sent again, refused before the tool.check hook could take its
+  // approval (#764): by another guard's tool.call hook (a deny), or by a settings hook, which since
+  // #875 decides before tool.check (an errored result). Dan is told now that it did not go through,
+  // and the approval, which still stands for a later send, records why, so its lapse never calls it
+  // unused. A call that reached tool.check took its approval, so one still standing was not reached.
+  const refusedWhy = r.deny ?? (r.isError ? (r.text ?? 'the call was refused') : undefined)
+  if (refusedWhy !== undefined && ((await $.state.get(approvalsRef)).value ?? []).length) {
+    const at = await whereOf($)
+    const k = saveKey(tool, input, at.cwd, at.home)
+    // Typed through a cast: the assignment is inside a callback, which narrowing cannot see (lessons review of #806).
+    let hit = undefined as AskBeforeSavingApproval | undefined
+    // Reset at the top of the callback, as takeApproval does, in case update runs it again.
+    await update($, approvalsRef, a => {
+      hit = undefined
+      return (a ?? []).map(x => (savesThis(x, k) ? (hit = { ...x, refused: refusedWhy }) : x))
+    })
+    if (hit) {
+      $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${refusedWhy}`, { timeoutMs: 10_000 })
+      return r
+    }
+    // And a lesson Dan approved in the durable lesson picker, added by a call another guard refused
+    // before the tool.check hook could take its approval (#867): said the same way.
+    const added = await lessonAdded($, tool, input, at)
+    if (added === undefined) return r
+    const now = await $.clock.now()
+    let fit = undefined as AskBeforeSavingApproval | undefined
+    await update($, approvalsRef, a => {
+      fit = undefined
+      return (a ?? []).map(x => (!fit && stands(x.until, now) && addsThis(x, added) ? (fit = { ...x, refused: refusedWhy }) : x))
+    })
+    if (fit) $.ui.toast(`Not added to ${fit.files.join(', ')}: ${refusedWhy}`, { timeoutMs: 10_000 })
+    return r
+  }
+  if (!files.length || r.deny !== undefined || r.isError) return r
+  return { ...r, context: [...(r.context ?? []), `Saved to ${files.join(', ')} without asking, because Dan's message made it a standing rule. Now say in one line what you saved and where.`] }
+}
+
+// Refused at tool.check (#875), which the engine raises inside tool.call once every mod's tool.call
+// hook and the settings PreToolUse hooks have passed the call on, so Claude is told to ask only
+// about a write every guard lets through. It was classic.PreToolUse, which never ran: Claude Code's
+// built-in security default sends every classic event past the user tier this mod loads in, for a
+// Team or Enterprise organization (a headless debug run, 2026-10-06), and the built-in's own
+// tool.check hook runs this tier first and keeps a refusal.
+const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
+  const tool = e.tool
+  if (!TOOLS.has(tool)) return next(e)
+  // A query ($.tool.check) carries no call id and runs nothing: no question waits on a save that is
+  // only being looked at, and the real call is judged when it is made.
+  if (e.tool_use_id === undefined) return next(e)
+  const raw: Record<string, unknown> = { ...((e.input ?? {}) as Record<string, unknown>), tool, tool_use_id: e.tool_use_id }
+  const input = argsOf(raw)
+  const at = await whereOf($)
+  const key = saveKey(tool, input, at.cwd, at.home)
+  if (approved.delete(key) || fromAgent.has(key)) return next(e)
+  const targets = await lastingTargets($, tool, input, at)
+  const { files } = targets
+  if (!files.length) return next(e)
+  // A save Dan answered For good, sent again: on to the settings hooks and the permission check
+  // beneath (the auto mode classifier among them), never asked about again.
+  const { live, lapsed } = await takeApproval($, key)
+  if (live) {
+    taken.set(String(raw.tool_use_id ?? ''), live)
+    return next(e)
+  }
+  // A lesson Dan answered Add to LESSONS.md for in the durable lesson picker (#867), added by a call
+  // that only adds it to the lessons file: on beneath like a For good save, never asked about again.
+  const added = await lessonAdded($, tool, input, at)
+  const lesson = added === undefined ? { live: undefined, lapsed: undefined } : await takeLesson($, added)
+  if (lesson.live) {
+    taken.set(String(raw.tool_use_id ?? ''), lesson.live)
+    return next(e)
+  }
+  // The one index line a saved memory file's For good covers (#1794): on beneath the same way.
+  const cover = await takeCover($, tool, input, at, targets)
+  if (cover) {
+    coverTaken.set(String(raw.tool_use_id ?? ''), cover)
+    return next(e)
+  }
+  // The settings hooks beneath (the payload write gate among them) decide first, so Dan is never
+  // asked about a save one of them refuses (#707). next(e) here runs those hooks, never the write.
+  const decided = await next(e)
+  if (decided.decision === 'deny') return decided
+
+  // Dan is asleep (#841): he is not asked tonight. The save goes to his morning report instead,
+  // and nothing waits on an answer.
+  const asleep = await whileAsleep($, targets, await savedText($, tool, input, at))
+  if (asleep !== null) return { decision: 'deny', reason: asleep }
+
+  const id = String(raw.tool_use_id ?? '') || `save-${++saves}`
+  const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }
+  // One waiting question per save: the same save refused again replaces the one before.
+  await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
+  const ask = askInstruction(id, files, targets.guessed, targets.handed)
+  const late = lapsed ?? lesson.lapsed
+  return { decision: 'deny', reason: late ? `${lapsedNote(late)} ${ask}` : ask }
+}
+
 export const register: Register = on => {
   // The noun (#1483): whether a call carries a live, unspent approval Dan gave for exactly what it
   // writes, For good by what it saves (savesThis) or in the durable lesson picker by the lesson it
@@ -588,202 +803,16 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // One hook over the three tools, matched as any one of them.
-  on('tool.call', { tool: TOOL_NAMES }, async ($, e, next) => {
-    const tool = e.tool
-    const raw = e as unknown as Record<string, unknown>
-    const id = String(raw.tool_use_id ?? '')
-    const input = argsOf(raw)
+  // A hook that failed after passing the call on had it judged beneath, by the tool.check hook and
+  // every guard there, and maybe run: its result is replayed, never refused as a save it may already
+  // be (`next` there runs nothing again). One that failed before is judged once more (#2026).
+  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) =>
+    next.called ? next(e) : againOrHeld(() => saveCall($, e, next), () => ({ deny: cannotCheck(next.error) })),
+  )
 
-    // A subagent's call (#777): judged here, where the loop is known, refused when it would save
-    // lasting memory, and never asked about. One the tool.check hook beneath must let through.
-    if (e.agentId !== undefined) {
-      const at = await whereOf($)
-      const targets = await lastingTargets($, tool, input, at)
-      if (targets.files.length) {
-        const where = targets.files.join(', ')
-        const listed = (await $.agent.list()).some(a => a.id === e.agentId)
-        // Claude Code's own background loop (the memory writer): the main session decides with Dan.
-        if (!listed)
-          await tell(
-            $,
-            `A background loop of Claude Code's (the memory writer, or another agent no list names) tried to save to ${where} and was refused, so nothing was saved. ` +
-              `What it would have saved: ${await savedText($, tool, input, at)}. If it is worth keeping, save it yourself, and you will be told how to ask Dan first.`,
-          )
-        return { deny: agentRefusal(targets) }
-      }
-      const key = saveKey(tool, input, at.cwd, at.home)
-      fromAgent.set(key, (fromAgent.get(key) ?? 0) + 1)
-      try {
-        return await next(e)
-      } finally {
-        const left = (fromAgent.get(key) ?? 1) - 1
-        if (left > 0) fromAgent.set(key, left)
-        else fromAgent.delete(key)
-      }
-    }
-
-    // Dan's own words made it permanent: saved without asking, through every other mod's checks, and
-    // Claude says what it saved. And a save Dan answered For good, sent again: what became of it is
-    // said here, the one place its result can be read.
-    let key: string | undefined
-    let files: string[] = []
-    if (madePermanent((await $.state.get(promptRef)).value)) {
-      const at = await whereOf($)
-      files = (await lastingTargets($, tool, input, at)).files
-      if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
-    }
-    let r: Awaited<ReturnType<typeof next>>
-    let used: AskBeforeSavingApproval | undefined
-    let covered: AskBeforeSavingIndexCover | undefined
-    try {
-      r = await next(e)
-    } finally {
-      // Taken by the tool.check hook when the call reached it; dropped here when a guard refused first.
-      if (key !== undefined) approved.delete(key)
-      used = taken.get(id)
-      taken.delete(id)
-      covered = coverTaken.get(id)
-      coverTaken.delete(id)
-    }
-    // A save sent on an approval, For good or Dan's Add to LESSONS.md in the durable lesson picker
-    // (#867). The approval is spent only once the write lands (#1691, L30): one that did not (an Edit
-    // whose text was not found or whose file was not read yet, a guard or settings hook beneath
-    // refusing it) gives it back for the rest of its time, so the call sent again is not asked about,
-    // and records why, so its lapse never calls it unused; Dan, who answered believing it saved, is
-    // told it was not. A shell command that ran and failed may have written part of what it does, so
-    // its approval is spent: running it again would write that part twice.
-    if (used !== undefined) {
-      const where = used.files.join(', ')
-      const lesson = used.lesson !== undefined
-      if (r.deny === undefined && !r.isError) {
-        const saved = `${lesson ? 'Added' : 'Saved'} to ${where}, as Dan answered ${pressed(used)}.`
-        const cover = lesson ? undefined : await coverFor($, used)
-        return { ...r, context: [...(r.context ?? []), cover ? `${saved} ${cover}` : saved] }
-      }
-      const why = String(r.deny ?? r.text ?? 'the tool reported an error')
-      const not = lesson ? 'Not added' : 'Not saved'
-      $.ui.toast(`${not} to ${where}: ${why}`, { timeoutMs: 10_000 })
-      if (tool === 'Bash' && r.deny === undefined) return r
-      const back: AskBeforeSavingApproval = { ...used, refused: why }
-      if (!stands(back.until, await $.clock.now())) {
-        $.ui.toast(lapsedFor(back), { timeoutMs: 10_000 })
-        return r
-      }
-      await update($, approvalsRef, a => [...(a ?? []), back])
-      // A refusal carries no context: Claude reads the refusal itself.
-      if (r.deny !== undefined) return r
-      const again = lesson ? 'correct the call and send it again, and it is added' : 'send the same call again once what failed is put right, and it is saved'
-      return { ...r, context: [...(r.context ?? []), `${not} to ${where}. Dan's ${pressed(used)} still stands until it lapses: ${again} without asking him.`] }
-    }
-    // The index line a saved memory file's For good covered (#1794), spent once it lands. One that did
-    // not land gives its cover back for the rest of the approval's time, as the approval itself is
-    // given back, but a shell command that ran and failed may have appended part of it, so it is spent.
-    if (covered !== undefined) {
-      const index = display(covered.index, (await whereOf($)).home)
-      if (r.deny === undefined && !r.isError)
-        return { ...r, context: [...(r.context ?? []), `Added the line linking ${covered.name} to ${index}, under Dan's For good on saving ${covered.files.join(', ')}.`] }
-      if ((tool === 'Bash' && r.deny === undefined) || !stands(covered.until, await $.clock.now())) return r
-      const back = covered
-      await update($, coversRef, a => [...(a ?? []), back])
-      return r
-    }
-    // A save Dan answered For good, sent again, refused before the tool.check hook could take its
-    // approval (#764): by another guard's tool.call hook (a deny), or by a settings hook, which since
-    // #875 decides before tool.check (an errored result). Dan is told now that it did not go through,
-    // and the approval, which still stands for a later send, records why, so its lapse never calls it
-    // unused. A call that reached tool.check took its approval, so one still standing was not reached.
-    const refusedWhy = r.deny ?? (r.isError ? (r.text ?? 'the call was refused') : undefined)
-    if (refusedWhy !== undefined && ((await $.state.get(approvalsRef)).value ?? []).length) {
-      const at = await whereOf($)
-      const k = saveKey(tool, input, at.cwd, at.home)
-      // Typed through a cast: the assignment is inside a callback, which narrowing cannot see (lessons review of #806).
-      let hit = undefined as AskBeforeSavingApproval | undefined
-      // Reset at the top of the callback, as takeApproval does, in case update runs it again.
-      await update($, approvalsRef, a => {
-        hit = undefined
-        return (a ?? []).map(x => (savesThis(x, k) ? (hit = { ...x, refused: refusedWhy }) : x))
-      })
-      if (hit) {
-        $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${refusedWhy}`, { timeoutMs: 10_000 })
-        return r
-      }
-      // And a lesson Dan approved in the durable lesson picker, added by a call another guard refused
-      // before the tool.check hook could take its approval (#867): said the same way.
-      const added = await lessonAdded($, tool, input, at)
-      if (added === undefined) return r
-      const now = await $.clock.now()
-      let fit = undefined as AskBeforeSavingApproval | undefined
-      await update($, approvalsRef, a => {
-        fit = undefined
-        return (a ?? []).map(x => (!fit && stands(x.until, now) && addsThis(x, added) ? (fit = { ...x, refused: refusedWhy }) : x))
-      })
-      if (fit) $.ui.toast(`Not added to ${fit.files.join(', ')}: ${refusedWhy}`, { timeoutMs: 10_000 })
-      return r
-    }
-    if (!files.length || r.deny !== undefined || r.isError) return r
-    return { ...r, context: [...(r.context ?? []), `Saved to ${files.join(', ')} without asking, because Dan's message made it a standing rule. Now say in one line what you saved and where.`] }
-  }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
-
-  // Refused at tool.check (#875), which the engine raises inside tool.call once every mod's tool.call
-  // hook and the settings PreToolUse hooks have passed the call on, so Claude is told to ask only
-  // about a write every guard lets through. It was classic.PreToolUse, which never ran: Claude Code's
-  // built-in security default sends every classic event past the user tier this mod loads in, for a
-  // Team or Enterprise organization (a headless debug run, 2026-10-06), and the built-in's own
-  // tool.check hook runs this tier first and keeps a refusal.
-  on('tool.check', async ($, e, next) => {
-    const tool = e.tool
-    if (!TOOLS.has(tool)) return next(e)
-    // A query ($.tool.check) carries no call id and runs nothing: no question waits on a save that is
-    // only being looked at, and the real call is judged when it is made.
-    if (e.tool_use_id === undefined) return next(e)
-    const raw: Record<string, unknown> = { ...((e.input ?? {}) as Record<string, unknown>), tool, tool_use_id: e.tool_use_id }
-    const input = argsOf(raw)
-    const at = await whereOf($)
-    const key = saveKey(tool, input, at.cwd, at.home)
-    if (approved.delete(key) || fromAgent.has(key)) return next(e)
-    const targets = await lastingTargets($, tool, input, at)
-    const { files } = targets
-    if (!files.length) return next(e)
-    // A save Dan answered For good, sent again: on to the settings hooks and the permission check
-    // beneath (the auto mode classifier among them), never asked about again.
-    const { live, lapsed } = await takeApproval($, key)
-    if (live) {
-      taken.set(String(raw.tool_use_id ?? ''), live)
-      return next(e)
-    }
-    // A lesson Dan answered Add to LESSONS.md for in the durable lesson picker (#867), added by a call
-    // that only adds it to the lessons file: on beneath like a For good save, never asked about again.
-    const added = await lessonAdded($, tool, input, at)
-    const lesson = added === undefined ? { live: undefined, lapsed: undefined } : await takeLesson($, added)
-    if (lesson.live) {
-      taken.set(String(raw.tool_use_id ?? ''), lesson.live)
-      return next(e)
-    }
-    // The one index line a saved memory file's For good covers (#1794): on beneath the same way.
-    const cover = await takeCover($, tool, input, at, targets)
-    if (cover) {
-      coverTaken.set(String(raw.tool_use_id ?? ''), cover)
-      return next(e)
-    }
-    // The settings hooks beneath (the payload write gate among them) decide first, so Dan is never
-    // asked about a save one of them refuses (#707). next(e) here runs those hooks, never the write.
-    const decided = await next(e)
-    if (decided.decision === 'deny') return decided
-
-    // Dan is asleep (#841): he is not asked tonight. The save goes to his morning report instead,
-    // and nothing waits on an answer.
-    const asleep = await whileAsleep($, targets, await savedText($, tool, input, at))
-    if (asleep !== null) return { decision: 'deny', reason: asleep }
-
-    const id = String(raw.tool_use_id ?? '') || `save-${++saves}`
-    const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }
-    // One waiting question per save: the same save refused again replaces the one before.
-    await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
-    const ask = askInstruction(id, files, targets.guessed, targets.handed)
-    const late = lapsed ?? lesson.lapsed
-    return { decision: 'deny', reason: late ? `${lapsedNote(late)} ${ask}` : ask }
-  }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(next.error) }))
+  // At tool.check `next` only reads the verdict beneath and runs nothing, so a failed check is judged
+  // once more whether or not it had read it (#2026).
+  on('tool.check', saveCheck).catch(($, e, next) => againOrHeld(() => saveCheck($, e, next), () => ({ decision: 'deny', reason: cannotCheck(next.error) })))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
   // given the mod's own answers, and Dan's answer is read from the dialog's result.
