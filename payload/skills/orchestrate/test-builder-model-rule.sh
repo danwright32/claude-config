@@ -96,6 +96,9 @@ scan() { # scan <root>   prints every markdown file under root that sets an Agen
   grep -r -l -E 'model: "(sonnet|opus|haiku)"' --include='*.md' "$1" 2>/dev/null
 }
 if [ -n "$PAYLOAD" ]; then
+  # Read into a variable first, never through process substitution, whose child bash 3.2 never
+  # waits for (L1035, claude-config#1989).
+  setters="$(scan "$PAYLOAD")"
   unpointed=""
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -103,7 +106,9 @@ if [ -n "$PAYLOAD" ]; then
       "$HOME_FILE"|*/LESSONS*|*/audits/*) continue ;;
     esac
     grep -q -F "$RULE_NAME" "$f" || unpointed="$unpointed $f"
-  done < <(scan "$PAYLOAD")
+  done <<SETTERS
+$setters
+SETTERS
   check "every other document that sets an Agent model names the rule's section" \
     "$([ -z "$unpointed" ] && echo ok || echo "no pointer in:$unpointed")"
 else
