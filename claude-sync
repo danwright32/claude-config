@@ -4553,15 +4553,27 @@ record_mods_seen(){
 # this Mac held files in that tree before (L5).
 TREES_SEEN_FILE="$SYNC_REPO/.trees-seen"
 # Does this tree hold a file a send would carry? Placeholders, OS litter, bytecode, the engine's
-# generated plugin types and a Mac's own *.local.json or a copy of one (#675, #1089) are not content. $2.. are the --exclude= values the send uses for the tree
-# (the plugin managed skills), matched against each file's first path component.
-tree_holds_files(){   # $1 = a directory  $2.. = rsync --exclude values
-  local dir="$1" f rel top e n skip; shift
+# generated plugin types and a Mac's own *.local.json or a copy of one (#675, #1089) are not content.
+# In a skills tree, neither is anything the shared skill list leaves out (a plugin skill, the Claude
+# app's downloads, a .trash folder at any depth): that is judged by carried_skill_paths, the one
+# reading of skill_excludes, so it matches exactly what rsync leaves out. This used to parse the
+# excludes itself and match an unanchored name only as the first part of a path, so a skills folder
+# holding only a .trash inside a skill read as holding files, was recorded as held, and the next send
+# mirrored it over the shared copy as a deletion (claude-config#2017, L263). A filter that fails (the
+# list unreadable, its stand in exiting) answers "holds files": an empty answer from a broken reader
+# must not read as nothing to carry. $2.. are the caller's own anchored excludes (a held back path, a
+# skill refused as unloadable), never the shared skill list, which callers leave out.
+tree_holds_files(){   # $1 = a directory  $2.. = anchored rsync --exclude=/path values
+  local dir="${1%/}" f rel e n skip listing; shift
   [ -d "$dir" ] || return 1
+  listing="$(find "$dir" -type f 2>/dev/null)"
+  if [ "${dir##*/}" = skills ]; then
+    listing="$(carried_skill_paths "$dir" <<< "$listing")" || return 0
+  fi
   while IFS= read -r f; do
     # An empty listing still feeds one empty line through the here document.
     [ -n "$f" ] || continue
-    rel="${f#"$dir"/}"; top="${rel%%/*}"
+    rel="${f#"$dir"/}"
     # At the top of the tree as well as below it (review of #785).
     case "$rel" in .gitkeep|.DS_Store|*/.DS_Store|*.pyc|__pycache__/*|*/__pycache__/*|.claude-plugin/types/*|*/.claude-plugin/types/*|*.conflict-*) continue ;; esac
     # A Mac's own file or a copy of one, by name, from the one list the send excludes (#1089).
@@ -4574,17 +4586,18 @@ tree_holds_files(){   # $1 = a directory  $2.. = rsync --exclude values
     for e in "$@"; do
       n="${e#--exclude=}"
       case "$n" in
-        # Anchored, as the send writes a held back path or a platform folder: that path or below it.
+        # Anchored, as the send writes a held back path: that path or below it.
         /*) n="${n#/}"; n="${n%/}"
             case "$rel" in "$n"|"$n"/*) skip=1; break ;; esac ;;
-        # Unanchored, as the plugin managed skills are listed: a first path component.
-        *) n="${n%/}"; [ "$top" = "$n" ] && { skip=1; break; } ;;
+        # An unanchored value is not this function's to read (the shared skill list is judged above),
+        # so it leaves nothing out: a misread exclude errs toward "holds files", never toward empty.
+        *) ;;
       esac
     done
     [ -n "$skip" ] && continue
     return 0
   done <<FILES
-$(find "$dir" -type f 2>/dev/null)
+$listing
 FILES
   return 1
 }
@@ -4615,14 +4628,13 @@ $1
   return 1
 }
 record_trees_seen(){   # $1 = keep on an apply, which never drops a tree from the record
-  local d ex s out="" prior
+  local d out="" prior
   prior="
 $(trees_seen_list)
 "
   for d in "${MIRROR_DIRS[@]}" skills; do
-    ex=()
-    [ "$d" = skills ] && for s in $(skill_excludes); do ex+=("$s"); done
-    if tree_holds_files "$CLAUDE_HOME/$d" ${ex[@]+"${ex[@]}"}; then
+    # The shared skill list is read inside tree_holds_files (claude-config#2017).
+    if tree_holds_files "$CLAUDE_HOME/$d"; then
       out="$out$d
 "
     # An apply can leave a tree empty because it HELD BACK this Mac's deletion of its last file
@@ -5020,23 +5032,27 @@ SWPROT
   fi
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
-    local ex=() p
+    # ex is what the mirror leaves out; hx is the part of it this run added (refused skills, held back
+    # paths), which is all tree_holds_files is handed, since it reads the shared skill list itself
+    # (claude-config#2017).
+    local ex=() hx=() p
     if [ "$d" = skills ]; then
       local s; for s in $(skill_excludes); do ex+=("$s"); done
       REFUSED_SKILL_EXCLUDES=()
       refuse_unloadable_skills "$CLAUDE_HOME/skills" "sent"
-      ex+=(${REFUSED_SKILL_EXCLUDES[@]+"${REFUSED_SKILL_EXCLUDES[@]}"})
+      hx+=(${REFUSED_SKILL_EXCLUDES[@]+"${REFUSED_SKILL_EXCLUDES[@]}"})
     fi
     while IFS= read -r p; do
-      case "$p" in "$d"/?*) ex+=(--exclude="/${p#"$d"/}") ;; esac
+      case "$p" in "$d"/?*) hx+=(--exclude="/${p#"$d"/}") ;; esac
     done <<PROT
 $protected
 PROT
+    ex+=(${hx[@]+"${hx[@]}"})
     # AN EMPTY FOLDER THIS MAC NEVER HELD FILES IN CLEARS NOTHING (claude-config#627). Mirrored with
     # --delete, it emptied that tree in the shared copy, and an empty folder is what a fresh Mac has.
     # Judged without the held back paths (they are excluded from the mirror, not content here), and
     # only where the shared copy has something to lose.
-    if ! tree_holds_files "$CLAUDE_HOME/$d" ${ex[@]+"${ex[@]}"} && tree_holds_files "$PAYLOAD/$d" && ! tree_was_held "$d"; then
+    if ! tree_holds_files "$CLAUDE_HOME/$d" ${hx[@]+"${hx[@]}"} && tree_holds_files "$PAYLOAD/$d" && ! tree_was_held "$d"; then
       echo "claude-sync: NOT clearing $d from the shared copy: this Mac's $CLAUDE_HOME/$d is empty and has never held files here, which is what a fresh Mac's folder looks like, not a deletion. Nothing there was changed; a pull fills this Mac's folder." >&2
       continue
     fi
