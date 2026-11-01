@@ -7,7 +7,9 @@
 #                        checkout is what defines what a send carries. It does not fall back to the
 #                        copy installed under the live config: an older list there would silently
 #                        change what is sent. Its rsync calls take skill_excludes, and its check of
-#                        whether a path is applied asks carried_skill_paths (claude-config#2004).
+#                        whether a path is applied asks carried_skill_paths (claude-config#2004), as
+#                        does its check of whether a skills folder holds anything a send would
+#                        carry, tree_holds_files (claude-config#2017).
 #   check-home-paths.sh  sources the copy beside itself, which is payload/hooks/lib in the repo and
 #                        ~/.claude/hooks/lib on a Mac, where no repo sits beside it. hooks/ is a
 #                        mirrored directory, so the installed copy is the one the last apply wrote.
@@ -69,7 +71,8 @@ skill_excludes(){
 
 # The same lines read as names, for every reader that walks skills/ itself rather than through
 # rsync: check-home-paths.sh, the scans in test-gates-fail-closed.sh and test-python-bad-bytes.sh
-# (claude-config#2001), and claude-sync's payload_path_applied (claude-config#2004). Read off
+# (claude-config#2001), and claude-sync's payload_path_applied (claude-config#2004) and
+# tree_holds_files (claude-config#2017). Read off
 # skill_excludes, so they match what rsync leaves out: a line `--exclude=/NAME` goes into
 # SKILL_EXCLUDE_TOP (only the entry at the top of skills/), and a line `--exclude=NAME` into
 # SKILL_EXCLUDE_ANY (any file or folder of that name at any depth).
