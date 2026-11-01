@@ -49,18 +49,46 @@ _P='<''('
   printf 'printf "pipeline "; cat %ssh -c '"'"'ps -o ppid= -p $PPID'"'"') | cat\n' "$_P"
   printf 'x="$(cat %ssh -c '"'"'ps -o ppid= -p $PPID'"'"'))"; echo "substitution $x"\n' "$_P"
 } > "$TMPROOT/parent.sh"
-if [ -x /bin/bash ] && command -v ps >/dev/null 2>&1; then
-  parents="$(/bin/bash "$TMPROOT/parent.sh" 2>&1 | tr -s ' ')"
+# Prints ok, "unmeasured: <why>" when <bash> is not bash 3, or "mismatch: <what it said>".
+child_split_verdict() { # <bash>
+  local b="$1" major parents main
+  major="$("$b" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null)"
+  if [ "$major" != 3 ]; then
+    echo "unmeasured: $b is bash ${major:-of unknown version}, and the split is bash 3.2's, the bash this Mac's scripts run on (L1035)"
+    return
+  fi
+  parents="$("$b" "$TMPROOT/parent.sh" 2>&1 | tr -s ' ')"
   main="$(printf '%s\n' "$parents" | awk '$1 == "main" { print $2 }')"
   of() { printf '%s\n' "$parents" | awk -v k="$1" '$1 == k { print $2 }'; }
   if [ -n "$main" ] && [ "$(of redirect)" = "$main" ] && [ "$(of argument)" = "$main" ] \
      && [ -n "$(of pipeline)" ] && [ "$(of pipeline)" != "$main" ] \
      && [ -n "$(of substitution)" ] && [ "$(of substitution)" != "$main" ]; then
-    check "#1984 /bin/bash makes the child its own in the redirect and simple command forms, and a subshell's in a pipeline or substitution" ok
+    echo ok
   else
-    check "#1984 /bin/bash makes the child its own in the redirect and simple command forms, and a subshell's in a pipeline or substitution" "the scan's split no longer matches this bash; what it said:
-$parents"
+    echo "mismatch: the scan's split no longer matches this bash; what it said: $(printf '%s' "$parents" | tr '\n' ' ')"
   fi
+}
+# The split is bash 3.2's: CI's Linux runner has a newer /bin/bash, which starts these children
+# differently, so there the measurement says what it could not measure rather than failing (L411),
+# and on 3.2 a split that moved still fails. Both seen with stand in shells that report a version
+# and print a split no bash makes.
+for v in 5 3; do
+  printf '#!/bin/sh\ncase "$*" in *BASH_VERSINFO*) echo %s; exit 0 ;; esac\nprintf "main 100\\nredirect 100\\nargument 100\\npipeline 100\\nsubstitution 100\\n"\n' "$v" > "$TMPROOT/bash$v"
+  chmod +x "$TMPROOT/bash$v"
+done
+verdict5="$(child_split_verdict "$TMPROOT/bash5")"
+verdict3="$(child_split_verdict "$TMPROOT/bash3")"
+check "#1984 a bash other than 3 is reported unmeasured, naming its version, not failed" \
+  "$([[ "$verdict5" == "unmeasured: "*"bash 5"* ]] && echo ok || echo "got: $verdict5")"
+check "#1984 on bash 3 a split that no longer matches still fails" \
+  "$([[ "$verdict3" == "mismatch: "* ]] && echo ok || echo "got: $verdict3")"
+if [ -x /bin/bash ] && command -v ps >/dev/null 2>&1; then
+  verdict="$(child_split_verdict /bin/bash)"
+  case "$verdict" in
+    ok) check "#1984 /bin/bash makes the child its own in the redirect and simple command forms, and a subshell's in a pipeline or substitution" ok ;;
+    unmeasured:*) echo "SUITE-PART-UNMEASURED whose child a process substitution is, because ${verdict#unmeasured: }" ;;
+    *) check "#1984 /bin/bash makes the child its own in the redirect and simple command forms, and a subshell's in a pipeline or substitution" "${verdict#mismatch: }" ;;
+  esac
 else
   echo "SUITE-PART-UNMEASURED whose child a process substitution is, because /bin/bash or ps is absent here"
 fi
