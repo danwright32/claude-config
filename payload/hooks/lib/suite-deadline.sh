@@ -160,6 +160,8 @@ suite_deadline_arm(){   # [$1] = the suite's own limit in seconds, when it is no
   [ "$limit" -eq 0 ] && return 0
   _suite_deadline_limit="$limit"
   trap '_suite_deadline_expired' USR1
+  # Safe as it is (#1989): started by a subshell that ends at once, so the watchdog is never the
+  # suite's child and its exit cannot interrupt anything the suite writes (L1035).
   ( bash "$_suite_deadline_dir/suite-deadline.sh" --watch "$$" "$limit" "$started" "$poll" "$pidfile" \
       </dev/null >/dev/null 2>&1 & )
   return 0

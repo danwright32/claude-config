@@ -652,8 +652,13 @@ fi
 
 # Every shell script under the hooks, registered or a library, builds a systemMessage only through
 # lib/hook-notice.sh. Suites are left out: they read the field and write fixtures of it.
+# Read into a variable first, never through process substitution, whose child bash 3.2 never waits
+# for and whose exit can cut short what this suite prints next (L1035, #1989).
 shell_files=()
-while IFS= read -r f; do shell_files+=("$f"); done < <(find "$DIR" -name '*.sh' ! -name 'test-*.sh' ! -path "$LIB" -type f | sort)
+shell_list="$(find "$DIR" -name '*.sh' ! -name 'test-*.sh' ! -path "$LIB" -type f | sort)"
+while IFS= read -r f; do [ -n "$f" ] && shell_files+=("$f"); done <<SHELL_LIST
+$shell_list
+SHELL_LIST
 if [ "${#shell_files[@]}" -ge 100 ]; then ok
 else bad "#1906 only ${#shell_files[@]} shell scripts were found under $DIR to scan for a hand built systemMessage"
 fi

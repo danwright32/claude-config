@@ -124,21 +124,25 @@ check "and says why" has "$scan_out" "not valid JSON"
 # ever being a file (claude-config#1995), so the same scanner reads labelled text too: a NUL
 # separated stream of label, text, label, text, which `git log -z --format='commit %h%x00%B'`
 # writes as it stands. A hit is the label and line, never the text.
-texts(){   # stdin = the stream (fed by redirection, so the rc reaches this shell) -> output, rc in text_rc
-  text_out="$( HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" python3 "$SCAN" --texts0-from - 2>&1 )"; text_rc=$?
+# The stream is printf's arguments, piped to the scanner inside the substitution: its exit status is
+# the scanner's (printf cannot fail here), and no process substitution is left for bash 3.2 never to
+# wait for, whose exit can cut short a line this suite prints (L1035, #1989). A NUL cannot be held in
+# a variable, so a here document is no use for this stream.
+texts(){   # printf format and arguments making the stream -> output, rc in text_rc
+  text_out="$( printf "$@" | HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" python3 "$SCAN" --texts0-from - 2>&1 )"; text_rc=$?
 }
-texts < <(printf 'commit 1a2b3c4\0Fix the reader\n\nrefs widget#3\n\0commit 5d6e7f8\0Quote the refusal\n\nseen in %s/widget#4\n' "$FAKE_ORG")
+texts 'commit 1a2b3c4\0Fix the reader\n\nrefs widget#3\n\0commit 5d6e7f8\0Quote the refusal\n\nseen in %s/widget#4\n' "$FAKE_ORG"
 check "a name in a commit message is found (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
 check "and named by its label and line: $text_out" has "$text_out" "commit 5d6e7f8:3: a work organisation name"
 check "and only that one: $text_out" lacks "$text_out" "commit 1a2b3c4:"
 check "the summary counts messages, not files: $text_out" has "$text_out" "checked 2 messages"
 check "and carries the file check's own remedy: $text_out" has "$text_out" "write name#123, never owner/name#123"
 check "the output never repeats the name it found: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "acme-hq"
-texts < <(printf 'title\0Add the %s reader\0description\0\0' "$(printf '%s' "$FAKE_ORG" | tr '[:upper:]' '[:lower:]')")
+texts 'title\0Add the %s reader\0description\0\0' "$(printf '%s' "$FAKE_ORG" | tr '[:upper:]' '[:lower:]')"
 check "a title is found, and an empty description is a text, not a gap: $text_out" has "$text_out" "title:1: a work organisation name"
-texts < <(printf 'commit 1a2b3c4\0Fix the reader\n\nrefs widget#3\n')
+texts 'commit 1a2b3c4\0Fix the reader\n\nrefs widget#3\n'
 check "(control) a clean message passes (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
-texts < <(printf 'commit 1a2b3c4\0Fix the reader\0commit 5d6e7f8')
+texts 'commit 1a2b3c4\0Fix the reader\0commit 5d6e7f8'
 check "a label with no text is a stream that cannot be read, never a clean one (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
 check "and says so: $text_out" has "$text_out" "label with no text"
 
