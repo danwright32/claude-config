@@ -33,6 +33,9 @@ mod_contract(){   # $1 = mod folder
 for skill in "$dir"/skills/*/SKILL.md; do
   [ -f "$skill" ] || continue
   rel="${skill#"$dir"/}"
+  # Each list read into a variable first, never through process substitution, whose child bash 3.2
+  # never waits for and whose exit can cut short a line this prints (L1035, claude-config#1989).
+  stamps="$(grep -o -E '<!-- *[A-Za-z0-9_-]+ contract: *[0-9]+ *-->' "$skill")"
   while IFS= read -r stamp; do
     [ -n "$stamp" ] || continue
     mod="$(printf '%s' "$stamp" | sed -E 's/^<!-- *([A-Za-z0-9_-]+) contract: *([0-9]+) *-->$/\1/')"
@@ -56,14 +59,19 @@ for skill in "$dir"/skills/*/SKILL.md; do
       failed=1
     fi
     # Every example of the metadata in the skill carries the same number.
+    examples="$(grep -o -E '"contract": *[0-9]+' "$skill" | sed -E 's/.*: *//')"
     while IFS= read -r ex; do
       [ -n "$ex" ] || continue
       if [ "$ex" != "$n" ]; then
         echo "check-mod-skill-contracts: $rel shows \"contract\": $ex in an example, and states contract $n with $mod"
         failed=1
       fi
-    done < <(grep -o -E '"contract": *[0-9]+' "$skill" | sed -E 's/.*: *//')
-  done < <(grep -o -E '<!-- *[A-Za-z0-9_-]+ contract: *[0-9]+ *-->' "$skill")
+    done <<EXAMPLES
+$examples
+EXAMPLES
+  done <<STAMPS
+$stamps
+STAMPS
 done
 
 for m in "$dir"/mods/*/; do

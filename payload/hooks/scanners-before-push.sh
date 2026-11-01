@@ -573,6 +573,10 @@ _sc_launch(){        # $1 = run index   $2 = the runs in flight at once
 # this hook, that ends when the run has written its exit code or is gone. The run itself is never a
 # child of this hook, so the watcher is what is waited on and, at the budget, what is stopped. Its
 # output is closed, so it holds nothing open either (L235). It looks five times a second.
+#
+# Safe as it is although a watcher can end at any moment (#1989, L1035): from the first launch to the
+# wait in _sc_wait_bounded this hook writes only into files, never its own stdout or stderr, and that
+# wait reaps every watcher, a stopped one included, before the verdict is written.
 _sc_watch(){   # $1 = run index
   local rd
   rd="$(cat "$_sc_work/$1.dir")"
@@ -701,6 +705,7 @@ _sc_wait_bounded(){    # waits for this round's runs until the budget runs out, 
     _sc_stop_inflight
   else
     trap '_sc_out_of_time=1; _sc_stop_inflight' USR1
+    # Safe as it is (#1989): nothing is written until it has been killed and waited for below.
     perl -e 'sleep shift; kill "USR1", shift' "$left" "$$" </dev/null >/dev/null 2>&1 &
     watchdog=$!
     # A wait interrupted by the watchdog's signal returns at once, after the trap has stopped the

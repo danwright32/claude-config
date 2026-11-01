@@ -70,14 +70,20 @@ fixture_git remote add origin git@github.com:acme/widgets.git
 fixture_git update-ref refs/remotes/origin/main HEAD
 STATE="$TMP/state"
 ran=0
+# Read into a variable first, never through process substitution, whose child bash 3.2 never waits
+# for and whose exit can cut short what this suite prints next (L1035, claude-config#1989).
+measure_lines="$(grep -E '^python3 ~/\.claude/skills/architecture-pass/measure\.py ' <<< "$CODE")"
 while IFS= read -r line; do
+  [ -n "$line" ] || continue
   runnable="${line//\~\/.claude\/skills\/architecture-pass\//$DIR/}"
   runnable="${runnable//<repo>/$REPO}"
   runnable="${runnable//<scratch>/$TMP}"
   out="$(ARCH_PASS_STATE_DIR="$STATE" ARCH_PASS_TODAY=2026-10-27 bash -c "$runnable" 2>&1)"; rc=$?
   ran=$((ran + 1))
   check "the command runs as written: $line" "$([ "$rc" -eq 0 ] && echo ok || echo "exit $rc: $out")"
-done < <(grep -E '^python3 ~/\.claude/skills/architecture-pass/measure\.py ' <<< "$CODE")
+done <<MEASURE_LINES
+$measure_lines
+MEASURE_LINES
 check "and the suite ran every one of them" "$([ "$ran" -ge 4 ] && echo ok || echo "only $ran measure.py lines ran")"
 check "the hotspots and kinds output landed where the skill reads it" \
   "$(python3 -c 'import json,sys; [json.load(open(p)) for p in sys.argv[1:]]' "$TMP/hotspots.json" "$TMP/kinds.json" 2>&1 && echo ok)"

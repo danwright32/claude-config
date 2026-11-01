@@ -316,12 +316,17 @@ eq "$(mt_pinned_how "$tools_root/pet" "")" "venv/bin/python tools/wait_for_check
 # Every declared tool must be a route the matcher recognises, or the declaration says one
 # thing and the matcher another, which is the drift this replaced (L58, L263). Derived from
 # the declaration rather than listed again here, so a tool added later is covered by this
-# check without anybody remembering to extend it.
+# check without anybody remembering to extend it. Read into a variable first, never through process
+# substitution, whose child bash 3.2 never waits for and whose exit can cut short what this suite
+# prints next (L1035, #1989).
+decl_paths="$(mt_declared_tool_paths)"
 while IFS= read -r decl_path; do
   [ -n "$decl_path" ] || continue
   if mt_runs_merge "$(mt_pinned_how_for "$decl_path" 7)"; then pass; else
     fail "a declared tool is not recognised as a merge: $decl_path"; fi
-done < <(mt_declared_tool_paths)
+done <<DECL_PATHS
+$decl_paths
+DECL_PATHS
 # And the declaration is not empty, because a loop over nothing passes every assertion in it
 # at once (L98).
 if [ "$(mt_declared_tool_paths | grep -c .)" -ge 3 ]; then pass; else

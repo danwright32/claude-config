@@ -262,8 +262,12 @@ for f in "$DIR"/*.sh "$DIR"/*.py "$DIR"/lib/*.sh "$DIR"/lib/*.py; do
   files+=("$f")
 done
 nhooks="${#files[@]}"
-while IFS= read -r f; do files+=("$f"); done < <(
-  find "$DIR/../skills" -name fixtures -prune -o -type f \( -name '*.sh' -o -name '*.py' \) ! -name 'test-*' ! -name 'test_*' -print 2>/dev/null | sort)
+# Read into a variable first, never through process substitution, whose child bash 3.2 never waits
+# for and whose exit can cut short what this suite prints next (L1035, #1989).
+skill_scripts="$(find "$DIR/../skills" -name fixtures -prune -o -type f \( -name '*.sh' -o -name '*.py' \) ! -name 'test-*' ! -name 'test_*' -print 2>/dev/null | sort)"
+while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<SKILL_SCRIPTS
+$skill_scripts
+SKILL_SCRIPTS
 [ "$(( ${#files[@]} - nhooks ))" -ge 20 ] && ok || bad "only $(( ${#files[@]} - nhooks )) scripts were found under $DIR/../skills, so the stdin scan is not reading the skills"
 hits="$(text_reads "${files[@]}" | sed "s#^$DIR/##")"
 if [ -z "$hits" ]; then ok; else bad "a python3 reader takes stdin in text mode, which raises on a byte jq reads as U+FFFD; read sys.stdin.buffer and decode with errors=\"replace\":

@@ -59,9 +59,13 @@ if ! git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 top="$(git -C "$dir" rev-parse --show-toplevel)"
 
-# The decision records: tracked markdown, chosen by name or by directory.
+# The decision records: tracked markdown, chosen by name or by directory. Read into a variable first,
+# never through process substitution, whose child bash 3.2 never waits for and whose exit can cut
+# short what this prints next (L1035, claude-config#1989). A variable cannot hold the NULs of -z, so
+# each name ends in the record separator \036 instead, which no file name here holds.
 records=()
-while IFS= read -r -d '' f; do
+ls_records="$(git -C "$top" ls-files -z -- '*.md' '*.MD' | tr '\0' '\036')" || true
+while IFS= read -r -d $'\036' f; do
   base="$(basename "$f")"
   upper="$(printf '%s' "$base" | tr '[:lower:]' '[:upper:]')"
   case "$upper" in
@@ -70,7 +74,9 @@ while IFS= read -r -d '' f; do
   case "/$f" in
     */docs/*.md|*/doc/*.md|*/adr/*.md|*/docs/*.MD|*/doc/*.MD|*/adr/*.MD) records+=("$f") ;;
   esac
-done < <(git -C "$top" ls-files -z -- '*.md' '*.MD')
+done <<LS_RECORDS
+$ls_records
+LS_RECORDS
 
 line_date() { # line_date <file> <line>: the date the line was committed, or "uncommitted"
   local sha
@@ -92,6 +98,7 @@ for term in "${terms[@]}"; do
   echo "== \"$term\""
   hits=0
   if [ "${#records[@]}" -gt 0 ]; then
+    doc_hits="$(cd "$top" && grep -n -i -F -H -- "$term" "${records[@]}" 2>/dev/null)" || true
     while IFS= read -r hit; do
       [ -n "$hit" ] || continue
       hits=$((hits + 1))
@@ -99,7 +106,9 @@ for term in "${terms[@]}"; do
         file="${hit%%:*}"; rest="${hit#*:}"; line="${rest%%:*}"; text="${rest#*:}"
         printf '  %s:%s (%s) %s\n' "$file" "$line" "$(line_date "$file" "$line")" "$(printf '%s' "$text" | cut -c1-240)"
       fi
-    done < <(cd "$top" && grep -n -i -F -H -- "$term" "${records[@]}" 2>/dev/null)
+    done <<DOC_HITS
+$doc_hits
+DOC_HITS
   fi
   [ "$hits" -gt "$MAX_DOC_HITS" ] && echo "  ... and $((hits - MAX_DOC_HITS)) more document lines"
   found=$((found + hits))

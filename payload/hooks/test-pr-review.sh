@@ -957,13 +957,19 @@ done
 # by name, so a session cannot source the library and call it. Found by reading each function's body,
 # never from a list here, which would check only what somebody remembered to add (L96).
 reach_n=0
+# Read into a variable first, never through process substitution, whose child bash 3.2 never waits
+# for and whose exit can cut short what this suite prints next (L1035, #1989).
+lib_fns="$(bash -c '. "$1"; declare -F' _ "$DIR/lib/ai-review-common.sh" | awk '{ print $3 }')"
 while IFS= read -r fn; do
+  [ -n "$fn" ] || continue
   body="$(bash -c '. "$1"; declare -f "$2"' _ "$DIR/lib/ai-review-common.sh" "$fn")"
   case "$body" in *ar__helper_secret*|*ar__helper_key_mac*|*helper-keys*|*readkeys*) ;; *) continue ;; esac
   reach_n=$((reach_n + 1))
   out="$(fire_gate "$fn")"; rc=$?
   check_eq "#1719 the gate refuses a command calling $fn, which reaches the secret or the read keys" "2" "$rc"
-done < <(bash -c '. "$1"; declare -F' _ "$DIR/lib/ai-review-common.sh" | awk '{ print $3 }')
+done <<LIB_FNS
+$lib_fns
+LIB_FNS
 [ "$reach_n" -ge 8 ] && ok \
   || bad "#1719 the scan found $reach_n functions reaching the secret or the read keys, fewer than the 8 the library holds, so it read nothing"
 out="$(fire_gate "./scripts/merge-when-green.sh 7")"; rc=$?

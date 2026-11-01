@@ -5774,10 +5774,15 @@ _hb_write(){   # _hb_write <kind>: that fault and only that fault, plus an unpub
 # that makes the other Mac's pull refuse outright, so holding the index back has to hold the list
 # of imports back with it whenever the two would disagree (#7).
 _hb_imports_resolve(){
-  local imp
+  local imp imps
+  # Read into a variable first, never through process substitution, whose child bash 3.2 never waits
+  # for and whose exit can cut short what the suite prints next (L1035, #1989).
+  imps="$(sed -n 's/^@//p' "$HB/payload/CLAUDE.md")"
   while IFS= read -r imp; do
     case "$imp" in LESSONS-INDEX*) [ -f "$HB/payload/$imp" ] || return 1 ;; esac
-  done < <(sed -n 's/^@//p' "$HB/payload/CLAUDE.md")
+  done <<IMPS
+$imps
+IMPS
   return 0
 }
 
@@ -13187,15 +13192,20 @@ _sf_titles(){    # $1 = suite file -> one section title per line
   return 0
 }
 _sf_report(){    # $1 = suite file -> "filter<TAB>how many sections it names", for any naming two or more
-  local _sf_f _sf_t _sf_n
+  local _sf_f _sf_t _sf_n _sf_list
   _sf_t="$(_sf_titles "$1")"
+  # Its output is captured, so the filters are read into a variable first rather than through process
+  # substitution, whose unwaited child bash 3.2 lets cut the printf below short (L1035, #1989).
+  _sf_list="$(_sf_filters "$1")"
   while IFS= read -r _sf_f; do
     [ -n "$_sf_f" ] || continue
     _sf_n="$(printf '%s\n' "$_sf_t" | grep -icF -- "$_sf_f" || true)"
     case "$_sf_n" in ''|*[!0-9]*) _sf_n=0 ;; esac
     [ "$_sf_n" -ge 2 ] || continue
     printf '%s\t%s\n' "$_sf_f" "$_sf_n"
-  done < <(_sf_filters "$1")
+  done <<SF_LIST
+$_sf_list
+SF_LIST
   return 0
 }
 # Proved on a file built to hold one of each, because a scan run only over the real suite reports an
