@@ -162,7 +162,7 @@ full_run_slot_take(){   # $1 = what this run is about (its checkout)
       return 75
     fi
     if [ "$TURN_HEAD_TICKET" != "$last_head" ]; then
-      echo "run-all-tests: waiting for this Mac's full suite slot: $msg. Whole runs take turns so parallel builders do not compete for the Mac (claude-config#2012); a run naming directories that hold under half the suites, a single suite and SECTION_ONLY never wait. Waiting up to $(turn_dur "$wait"), then this run refuses."
+      echo "run-all-tests: waiting for this Mac's full suite slot: $msg. Whole runs take turns so parallel builders do not compete for the Mac (claude-config#2012); a run naming directories that hold under half the suites or only one or two, a single suite and SECTION_ONLY never wait. Waiting up to $(turn_dur "$wait"), then this run refuses."
       last_head="$TURN_HEAD_TICKET"; last_say="$elapsed"
     elif [ $(( elapsed - last_say )) -ge "$say" ]; then
       echo "run-all-tests: still waiting for this Mac's full suite slot, $(turn_dur "$elapsed") so far: $msg."
