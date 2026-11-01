@@ -194,7 +194,12 @@ for f in "$PAYLOAD/CLAUDE.md" "$PAYLOAD/hooks/review/"*.md "$REPO_ROOT/README.md
 done
 for d in "$PAYLOAD/skills" "$PAYLOAD/agents" "$PAYLOAD/commands"; do
   [ -d "$d" ] || continue
-  while IFS= read -r f; do scan_files+=("$f"); done < <(find "$d" -type f \( -name '*.md' -o -name '*.sh' \) 2>/dev/null)
+  # Read into a variable first, never through process substitution, whose child bash 3.2 never waits
+  # for and whose exit can cut short what this suite prints next (L1035, #1989).
+  found_in_d="$(find "$d" -type f \( -name '*.md' -o -name '*.sh' \) 2>/dev/null)"
+  while IFS= read -r f; do [ -n "$f" ] && scan_files+=("$f"); done <<FOUND_IN_D
+$found_in_d
+FOUND_IN_D
 done
 bad="$(grep -nE "$NOTE_EXPANSION_PAT" "${scan_files[@]}" 2>/dev/null | cut -c1-200)"
 [ -z "$bad" ] \

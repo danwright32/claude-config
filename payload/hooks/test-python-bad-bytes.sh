@@ -371,8 +371,13 @@ $hits"; fi
   exit 1
 }
 skill_scan(){ # skill_scan <skills dir> -> the scan's report on each program there the sync carries
-  local progs=() p
-  while IFS= read -r p; do progs+=("$p"); done < <(python3 "$WORK/scan.py" --list "$1" | carried_skill_paths "$1")
+  local progs=() p listed
+  # Read into a variable first, never through process substitution, whose child bash 3.2 never waits
+  # for and whose exit can cut short what this suite prints next (L1035, #1989).
+  listed="$(python3 "$WORK/scan.py" --list "$1" | carried_skill_paths "$1")"
+  while IFS= read -r p; do [ -n "$p" ] && progs+=("$p"); done <<LISTED
+$listed
+LISTED
   python3 "$WORK/scan.py" ${progs[@]+"${progs[@]}"}
 }
 skill_scan "$DIR/../skills" > "$WORK/skills.scan" 2>&1

@@ -684,13 +684,16 @@ EOF
 # `$DIR`), which is the convention every source line here follows; a path that is ONLY a variable
 # cannot be resolved from text and is covered by the lib/ rule or not at all.
 sourced_under_pipefail() { # sourced_under_pipefail <newline separated repo relative paths>
-  local rel f arg tail dir
+  local rel f arg tail dir sourced
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     case "$rel" in *.sh|claude-sync) ;; *) continue ;; esac
     f="$ROOT/$rel"
     [ -f "$f" ] || continue
     grep -q 'pipefail' "$f" 2>/dev/null || continue
+    # Its output is captured, so the list is read into a variable first rather than through process
+    # substitution, whose unwaited child bash 3.2 lets cut the printf below short (L1035, #1989).
+    sourced="$(sed -nE 's/^[[:space:]]*(\.|source)[[:space:]]+"?([^"[:space:];&|]+)"?.*/\2/p' "$f" 2>/dev/null)"
     while IFS= read -r arg; do
       case "$arg" in
         '$'*/*) tail="${arg#*/}" ;;
@@ -699,7 +702,9 @@ sourced_under_pipefail() { # sourced_under_pipefail <newline separated repo rela
       esac
       dir="${rel%/*}"; [ "$dir" = "$rel" ] && dir=""
       printf '%s\n' "${dir:+$dir/}$tail"
-    done < <(sed -nE 's/^[[:space:]]*(\.|source)[[:space:]]+"?([^"[:space:];&|]+)"?.*/\2/p' "$f" 2>/dev/null)
+    done <<SOURCED
+$sourced
+SOURCED
   done <<< "$1"
 }
 # Everything this ratchet reads, committed or not, through the one lister every scanner here uses
@@ -937,6 +942,8 @@ fi
 # and every one that is left is in a `test-*.sh`. A new one anywhere else fails this suite on the
 # day it lands, rather than being added to the list.
 _ship_bad=""; _ship_seen=0
+# Read into a variable first, never through process substitution (L1035, #1989).
+_ship_rows="$(ratchet_read_baseline "$(cat "$BASELINE")")"
 while read -r _sc_path _sc_n; do
   case "$_sc_n" in ''|*[!0-9]*) continue ;; esac
   [ -n "$_sc_path" ] || continue
@@ -945,7 +952,9 @@ while read -r _sc_path _sc_n; do
   case "${_sc_path##*/}" in test-*) continue ;; esac
   _ship_bad="$_ship_bad
   $_sc_path: $_sc_n"
-done < <(ratchet_read_baseline "$(cat "$BASELINE")")
+done <<SHIP_ROWS
+$_ship_rows
+SHIP_ROWS
 # Reading NOTHING is not a clean answer. The first version of this named the wrong variable, read
 # an empty file, and passed while measuring nothing, which is the exact failure this whole suite is
 # organised against (L98, and it was caught by reading the code rather than by the check).

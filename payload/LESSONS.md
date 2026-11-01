@@ -3303,6 +3303,8 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L837. An alert raised about one part of a subject must clear when that part recovers: a part that cannot be measured yet (past a horizon, not synced) is 'could not tell' for itself only, because letting it hold the whole subject's alert open means the alert never clears and its all clear never posts.** (slate#4449, 2026-11-01)
+  SHORT: An alert about one part of a subject clears when that part recovers; an unmeasurable part must not hold the whole subject's alert open.
 - **L831. A limit meant to stop a runaway must be sized well above the busiest real use and must alert when it is hit, because a limit sized to the busiest day seen so far blocks the next busier legitimate day while reporting nothing wrong.** (project-enrollment-tracker#1978, 2026-10-30)
   SHORT: Size a runaway limit well above the busiest real use and alert when hit; one sized to the busiest day seen blocks the next busier real day.
 

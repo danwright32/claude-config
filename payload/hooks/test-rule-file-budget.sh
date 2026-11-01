@@ -198,7 +198,7 @@ rule_file_text() {  # $1 = payload relative path; prints it, nothing when it is 
   return 0
 }
 loaded_files() {
-  local queue="CLAUDE.md" seen="" current rest target
+  local queue="CLAUDE.md" seen="" current rest target targets
   while [ -n "$queue" ]; do
     current="${queue%%|*}"
     rest="${queue#*|}"
@@ -207,10 +207,16 @@ loaded_files() {
     case "|$seen|" in *"|$current|"*) continue ;; esac
     seen="${seen:+$seen|}$current"
     printf '%s\n' "$current"
+    # Its output is captured, so each file's imports are read into a variable first rather than
+    # through process substitution, whose unwaited child bash 3.2 lets cut the printf above short on
+    # the next turn, dropping a file from the set (L1035, #1974's shape, #1989).
+    targets="$(rule_file_text "$current" | grep -oE '^@[^[:space:]]+' 2>/dev/null | sed 's/^@//')"
     while IFS= read -r target; do
       [ -n "$target" ] || continue
       queue="${queue:+$queue|}$target"
-    done < <(rule_file_text "$current" | grep -oE '^@[^[:space:]]+' 2>/dev/null | sed 's/^@//')
+    done <<TARGETS
+$targets
+TARGETS
   done
 }
 
@@ -218,7 +224,11 @@ echo "rule file budget: what loads into every session"
 
 count=0
 total=0
+# The loaded set is read once into a variable, never through process substitution, whose child bash
+# 3.2 never waits for and whose exit can cut short a line printed below (L1035, #1989).
+loaded_set="$(loaded_files)"
 while IFS= read -r rel; do
+  [ -n "$rel" ] || continue
   count=$((count + 1))
   if [ ! -f "$PAYLOAD/$rel" ]; then
     bad "an import points at a file that is not there: $rel"
@@ -244,7 +254,9 @@ while IFS= read -r rel; do
   else ok; fi
 
   printf '  %-42s %8s bytes (recorded %s, ratchet %s, budget %s, warns at %s)\n' "$rel" "$bytes" "$want" "$ceiling" "$BUDGET" "$WARN_LIMIT"
-done < <(loaded_files)
+done <<LOADED_SET
+$loaded_set
+LOADED_SET
 
 # A walk that found nothing passes every assertion inside it at once, and would read as a
 # clean run of a check that measured no files at all (L98).
@@ -293,7 +305,9 @@ while IFS= read -r rel; do
   [ -f "$PAYLOAD/$rel" ] || continue
   core_files=$((core_files + 1))
   core_total=$((core_total + $(wc -c < "$PAYLOAD/$rel" | tr -d ' ')))
-done < <(loaded_files)
+done <<LOADED_SET
+$loaded_set
+LOADED_SET
 core_ceiling="$(ratchet_ceiling "$CORE_RECORDED")"
 if [ "$core_files" -eq 0 ]; then
   ok
@@ -355,11 +369,16 @@ growth_repo() {  # $1 = payload directory
   return 0
 }
 loaded_total_at() {  # $1 = repo  $2 = revision -> bytes of the set loaded at that revision
-  local rel n sum=0
+  local rel n sum=0 set_then
+  # Captured, so read into a variable first, never through process substitution (L1035, #1989).
+  set_then="$(LF_REPO="$1" LF_REV="$2" loaded_files)"
   while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
     n="$(git -C "$1" cat-file -s "$2:payload/$rel" 2>/dev/null)" || n=0
     sum=$(( sum + ${n:-0} ))
-  done < <(LF_REPO="$1" LF_REV="$2" loaded_files)
+  done <<SET_THEN
+$set_then
+SET_THEN
   printf '%s' "$sum"
 }
 # One line: RATE <grown> <days> <newest date> | FLAT <days> <newest date> | UNREAD <why>.
@@ -376,7 +395,11 @@ growth_reading() {  # $1 = payload directory
   fi
   end="$(git -C "$repo" log -1 --format=%ct HEAD 2>/dev/null)"
   case "$end" in ''|*[!0-9]*) printf 'UNREAD the newest commit of %s has no readable date' "$repo"; return 0 ;; esac
-  while IFS= read -r rel; do paths+=("payload/$rel"); done < <(LF_REPO="$repo" LF_REV=HEAD loaded_files)
+  local head_list
+  head_list="$(LF_REPO="$repo" LF_REV=HEAD loaded_files)"
+  while IFS= read -r rel; do [ -n "$rel" ] && paths+=("payload/$rel"); done <<HEAD_LIST
+$head_list
+HEAD_LIST
   # The newest commit that added or removed an import line in a loaded file: where this set began.
   shape="$(git -C "$repo" log -1 --format='%H %ct' -G'^@[^[:space:]]' HEAD -- "${paths[@]}" 2>/dev/null)"
   start=$(( end - GROWTH_WINDOW_DAYS * 86400 ))
