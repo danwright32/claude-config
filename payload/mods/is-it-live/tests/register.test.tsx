@@ -168,9 +168,17 @@ type World = {
   copied: boolean
   stored?: Record<string, unknown>
   kitFails?: boolean
-  prView?: (argv: string[]) => Gh | undefined
+  prView?: (argv: string[], init: Asked) => Gh | undefined
   bash: BashOut
+  /** #1991: the folder the session's shell is in, and folders removed since, where every command fails. */
+  cwd: string
+  gone: string[]
+  /** #1991: the accounts plain `gh auth status` names, and the token `gh auth token -u` gives for each. */
+  logins: string[]
+  tokens: Record<string, string>
 }
+/** How a command was run: the folder it ran in and the account token handed to it, if any. */
+type Asked = { cwd?: string; token?: string }
 
 // GitHub, the clipboard, the store, toasts and Claude Code's own band beneath the mod.
 const world = (on: On, init: Partial<World> = {}) => {
@@ -185,11 +193,16 @@ const world = (on: On, init: Partial<World> = {}) => {
     repoName: { exitCode: 0, stdout: `${REPO}\n` },
     copied: true,
     bash: { text: '' },
+    cwd: '/Users/dan/Apps/slate',
+    gone: [],
+    logins: ['danwright32'],
+    tokens: {},
     ...init,
   }
   const toasts: string[] = []
   const copies: string[] = []
   const runs: string[][] = []
+  const asked: (Asked & { argv: string[] })[] = []
   const clock = mock.clock(on, { now: T0 })
   mock.store(on, w.stored)
   on('process.run', ($, e) => {
@@ -210,9 +223,19 @@ const world = (on: On, init: Partial<World> = {}) => {
     }
     runs.push([...e.argv])
     const a = e.argv.join(' ')
-    const viewed = a.startsWith('gh pr view') && w.prView ? w.prView([...e.argv]) : undefined
-    const g = viewed
+    const init = (e as { init?: { cwd?: string; env?: Record<string, string> } }).init
+    const how: Asked = { ...(init?.cwd ? { cwd: init.cwd } : {}), ...(init?.env?.GH_TOKEN ? { token: init.env.GH_TOKEN } : {}) }
+    asked.push({ argv: [...e.argv], ...how })
+    const tokenOf = a.startsWith('gh auth token -u ') ? w.tokens[e.argv[4] as string] : undefined
+    const viewed = a.startsWith('gh pr view') && w.prView ? w.prView([...e.argv], how) : undefined
+    const g: Gh = how.cwd !== undefined && w.gone.includes(how.cwd)
+      ? { exitCode: 1, stdout: '', stderr: `chdir: ${how.cwd}: no such file or directory` }
+      : viewed
       ? viewed
+      : a === 'gh auth status'
+      ? { exitCode: 0, stdout: '', stderr: w.logins.map(l => `  Logged in to github.com account ${l} (keyring)`).join('\n') }
+      : a.startsWith('gh auth token -u ')
+      ? (tokenOf ? { exitCode: 0, stdout: `${tokenOf}\n` } : { exitCode: 1, stdout: '', stderr: 'no oauth token found' })
       : a.startsWith('gh pr view')
       ? w.pr
       : a.startsWith('gh issue view')
@@ -228,7 +251,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   })
   on('session.repo', () => ({ value: { root: '/Users/dan/Apps/slate', remote: w.remote, isOwn: false } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
-  on('session.cwd', () => ({ value: '/Users/dan/Apps/slate' }) as never)
+  on('session.cwd', () => ({ value: w.cwd }) as never)
   // Claude Code's own Bash tool and turn end, beneath the mod.
   on('tool.call', { tool: 'Bash' }, () => {
     const b = w.bash
@@ -251,7 +274,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, toasts, copies, runs, clock }
+  return { w, toasts, copies, runs, asked, clock }
 }
 
 const CARD = {
@@ -1010,6 +1033,108 @@ test('a merge the helper makes in the background is asked of GitHub at the turn 
   expect((await turnEnd($)).block).toBeUndefined()
   prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: JUST }
   expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+})
+
+// #1991: a merge the helper makes in the background stays waiting until a turn end hears from GitHub
+// that it merged, and three things kept that from ever happening, each tested here: the turn end asked
+// as the active gh account alone, in the folder the helper ran in (a worktree that may since be gone),
+// and refused a merge that happened before the helper run started (a run made after the merge).
+const WORK = 'acme-hq/booking'
+const BACKGROUND: BashOut = { text: 'Command running in background with ID: b7.', backgroundTaskId: 'b7' }
+const unseen = (repo: string): Gh => ({ exitCode: 1, stdout: '', stderr: `GraphQL: Could not resolve to a Repository with the name '${repo}'. (repository)` })
+// What the mod keeps as owed, read from its session state by another mod, as the goal box reads it.
+const owedReader: { name: string; register: Register } = {
+  name: 'owed-reader',
+  register: on => {
+    on('command.run', { command: '__owed' }, async $ => {
+      const owed = (await $.state.get({ plugin: 'is-it-live', key: 'owed' } as never)) as { value?: unknown }
+      return { text: JSON.stringify(owed.value ?? []) }
+    })
+  },
+}
+const withKitAndOwed = { plugins: [modKit, owedReader] }
+const owedNowOf = async ($: unknown) => {
+  const r = (await ($ as { command: { run: (x: never) => Promise<unknown> } }).command.run({ command: '__owed', args: '', origin: { kind: 'human' }, presentation: {} } as never)) as { text?: string }
+  return JSON.parse(String(r.text)) as { how: string; key: string }[]
+}
+
+test('a background merge only another gh account can see is confirmed at the turn end, asked as each account (#1991)', withKit, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${WORK}#4284`]: { state: 'OPEN' } }
+  const w = world(on, {
+    logins: ['danwright32', 'acme-dan'],
+    tokens: { 'acme-dan': 'gho_test_not_a_token' },
+    prView: (argv, how) => (how.token ? github(prs)(argv) : unseen(WORK)),
+  })
+  await start($)
+  w.w.bash = BACKGROUND
+  await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 4284 --repo ${WORK} --squash`, { run_in_background: true })
+  expect((await turnEnd($)).block).toBeUndefined()
+  prs[`${WORK}#4284`] = { state: 'MERGED', mergedAt: JUST }
+  expect((await turnEnd($)).block).toContain(`${WORK}#4284`)
+  // Asked as the active account first, then with the other account's token.
+  const last = w.asked.filter(a => a.argv.slice(0, 3).join(' ') === 'gh pr view').slice(-2)
+  expect(last.map(a => a.token ?? 'active')).toEqual(['active', 'gho_test_not_a_token'])
+})
+
+test('a background merge is asked about by its repository, never in the folder the helper ran in, which may be gone (#1991)', withKit, async ($, on) => {
+  const HERE = '/Users/dan/Apps/booking/.claude/worktrees/agent-1'
+  const prs: Record<string, Pr> = { [`${WORK}#4284`]: { state: 'OPEN' } }
+  const w = world(on, { cwd: HERE, prView: github(prs) })
+  await start($)
+  w.w.bash = BACKGROUND
+  await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 4284 --repo ${WORK} --squash`, { run_in_background: true })
+  // The worktree is removed, then the pull request merges.
+  w.w.gone = [HERE]
+  prs[`${WORK}#4284`] = { state: 'MERGED', mergedAt: JUST }
+  expect((await turnEnd($)).block).toContain(`${WORK}#4284`)
+})
+
+test("a background merge naming no repository is held by the repository GitHub's link named when it ran, so a folder removed since does not strand it (#1991)", withKit, async ($, on) => {
+  const HERE = '/Users/dan/Apps/booking/.claude/worktrees/agent-2'
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
+  const w = world(on, { cwd: HERE, prView: github(prs) })
+  await start($)
+  w.w.bash = BACKGROUND
+  await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 412 --squash', { run_in_background: true })
+  w.w.gone = [HERE]
+  prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: JUST }
+  expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+})
+
+test('a background merge GitHub says merged before the helper run started is that merge: owed its card, and settled by a card made since it merged (#1991)', withKitAndOwed, async ($, on) => {
+  const MERGED = T0 - 3_600_000
+  const prs: Record<string, Pr> = { [`${WORK}#4284`]: { state: 'MERGED', mergedAt: MERGED } }
+  const w = world(on, { prView: github(prs) })
+  await start($)
+  // The helper run again an hour after the pull request merged.
+  w.w.bash = BACKGROUND
+  await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 4284 --repo ${WORK} --squash`, { run_in_background: true })
+  expect((await turnEnd($)).block).toContain(`${WORK}#4284`)
+  expect((await owedNowOf($)).map(o => o.how)).toEqual(['merged'])
+})
+
+test('a card made after an earlier merge settles a later background run of the helper for it, leaving nothing owed or waiting (#1991)', withKitAndOwed, async ($, on) => {
+  const MERGED = T0 - 3_600_000
+  const kept = { repo: WORK, pr: 4284, title: 't', url: `https://github.com/${WORK}/pull/4284`, state: 'live', at: MERGED + 60_000 }
+  const w = world(on, { prView: github({ [`${WORK}#4284`]: { state: 'MERGED', mergedAt: MERGED } }), stored: { [`cards:${WORK}`]: [kept] } })
+  await start($)
+  w.w.bash = BACKGROUND
+  await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 4284 --repo ${WORK} --squash`, { run_in_background: true })
+  expect((await turnEnd($)).block).toBeUndefined()
+  expect(await owedNowOf($)).toEqual([])
+})
+
+test('a background merge GitHub cannot be asked about, or answers for another repository, stays waiting and is never owed (#1991)', withKitAndOwed, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${WORK}#4284`]: { state: 'OPEN' } }
+  const w = world(on, { prView: github(prs) })
+  await start($)
+  w.w.bash = BACKGROUND
+  await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 4284 --repo ${WORK} --squash`, { run_in_background: true })
+  w.w.prView = () => ({ exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' })
+  expect((await turnEnd($)).block).toBeUndefined()
+  w.w.prView = () => ({ exitCode: 0, stdout: JSON.stringify({ number: 4284, state: 'MERGED', mergedAt: new Date(JUST).toISOString(), url: 'https://github.com/acme-hq/other/pull/4284' }) })
+  expect((await turnEnd($)).block).toBeUndefined()
+  expect((await owedNowOf($)).map(o => o.how)).toEqual(['waiting'])
 })
 
 // #1943: a Slate session was asked for a card for slate#4342, a closed lesson sweep issue,
