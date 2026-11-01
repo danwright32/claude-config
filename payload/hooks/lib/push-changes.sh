@@ -81,11 +81,14 @@ pc_resolve() {   # $1 = command
     # Every path the commit takes beyond the index, deletions included, for pc_push_tree.
     PC_PENDING_ALL="$(printf '%s\n' "$pending_list" | tail -n +2)"
     top="$(git rev-parse --show-toplevel 2>/dev/null)"
+    local loop_input; loop_input="$(printf '%s\n' "$pending_list" | tail -n +2)" || true
     while IFS= read -r f; do
       [ -n "$f" ] && [ -e "$top/$f" ] || continue
       pending="$pending
 $f"
-    done < <(printf '%s\n' "$pending_list" | tail -n +2)
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   fi
 
   PC_FILES="$(printf '%s\n%s\n' "$committed" "$pending" | sed '/^$/d' | sort -u)"
@@ -117,11 +120,15 @@ pc_diff() {   # $@ = pathspecs (a path, ".", or ":(exclude)..." items)
   # One join against PC_FILES rather than a search per untracked file: a tree can hold hundreds of
   # untracked files the push has nothing to do with. The list goes in through the environment, never
   # as a first file, so an empty list cannot be mistaken for the stream (test-two-file-awk.sh).
+  local loop_input
+  loop_input="$(git ls-files --others --exclude-standard --full-name -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null \
+             | PC_WANT="$PC_FILES" awk 'BEGIN { n = split(ENVIRON["PC_WANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 } ($0 in want)')" || true
   while IFS= read -r u; do
     [ -f "$u" ] || continue
     git diff --no-index -- /dev/null "$u" 2>/dev/null
-  done < <(git ls-files --others --exclude-standard --full-name -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null \
-             | PC_WANT="$PC_FILES" awk 'BEGIN { n = split(ENVIRON["PC_WANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 } ($0 in want)')
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 0
 }
 

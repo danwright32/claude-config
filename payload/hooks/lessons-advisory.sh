@@ -149,6 +149,7 @@ if [ "$commit_in_chain" -eq 1 ]; then
 $(git diff "${diff_opts[@]}" --cached 2>/dev/null)"
   pending_list="$(ps_pending_files "$cmd")"
   [ "${pending_list%%$'\n'*}" = "WIDENED" ] && pending_widened=1
+  loop_input="$(printf '%s\n' "$pending_list" | tail -n +2)" || true
   while IFS= read -r f; do
     [ -n "$f" ] && [ -f "$repo_root/$f" ] || continue
     one="$(git -C "$repo_root" diff "${diff_opts[@]}" -- "$f" 2>/dev/null)"
@@ -156,7 +157,9 @@ $(git diff "${diff_opts[@]}" --cached 2>/dev/null)"
     [ -n "$one" ] || one="$(git -C "$repo_root" diff --no-index "${diff_opts[@]}" /dev/null "$f" 2>/dev/null)"
     raw="$raw
 $one"
-  done < <(printf '%s\n' "$pending_list" | tail -n +2)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 fi
 [ -n "$(printf '%s' "$raw" | tr -d '[:space:]')" ] || exit 0
 

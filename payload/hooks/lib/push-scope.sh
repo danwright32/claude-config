@@ -281,9 +281,12 @@ ps__runs_git_sub() {   # $1 = command, $2 = the git subcommand
     done
     return 1
   fi
+  local loop_input; loop_input="$(ps__crude_cut "$cmd")" || true
   while IFS= read -r seg; do
     case "$seg" in *"$sub"*) ps_runs_git "$seg" "$sub" && return 0 ;; esac
-  done < <(ps__crude_cut "$cmd")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 1
 }
 
@@ -378,7 +381,9 @@ ps__read() {   # $1 = command
     PS__R_CMD+=("$cmd"); PS__R_ASSIGNS+=("$assigns"); PS__R_TOOL+=("$tool"); PS__R_WRAP+=("$wrap")
     [ "$alone" = 1 ] && [ "$text" != "$1" ] && alone_at+=($((first + count)))
     count=$((count + 1))
-  done < <(printf '%s' "$out")
+  done <<LOOP_INPUT
+$out
+LOOP_INPUT
   PS__M_KEY+=("$1"); PS__M_RC+=("$rc"); PS__M_FIRST+=("$first"); PS__M_COUNT+=("$count")
   PS__HIT=$n
   # Each command that is alone is its own reading too: one record, in no directory of its own.
@@ -486,9 +491,12 @@ ps_is_gh_pr_create() {   # $1 = command
     done
     return 1
   fi
+  local loop_input; loop_input="$(ps__crude_cut "$cmd")" || true
   while IFS= read -r seg; do
     case "$seg" in *create*) ps_runs_gh "$seg" pr create && return 0 ;; esac
-  done < <(ps__crude_cut "$cmd")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 1
 }
 
@@ -556,8 +564,19 @@ ps__tool_field() {   # $1 = a tool_field, $2 = gh | git | rtk, $3 = subcommand, 
   PS_RUN_SUB="${field%%$'\x1d'*}"; field="${field#*$'\x1d'}"
   PS_RUN_ACT="${field%%$'\x1d'*}"; field="${field#*$'\x1d'}"
   PS_RUN_SUB="${PS_RUN_SUB%%[)\}]*}"; PS_RUN_ACT="${PS_RUN_ACT%%[)\}]*}"
-  # To the end of the field, never a line: a --body runs over several.
-  [ -n "$field" ] && IFS=$'\x1f' read -r -d '' -a PS_RUN_ARGS < <(printf '%s' "$field")
+  # To the end of the field, never a line: a --body runs over several. From a here string, never a
+  # process substitution, whose child this shell would never wait for (claude-config#1984). The
+  # here string adds one newline at the very end, so it comes off the last argument again, and a
+  # field ending in a separator, which read gives no empty last argument, loses the one the newline
+  # made.
+  if [ -n "$field" ]; then
+    IFS=$'\x1f' read -r -d '' -a PS_RUN_ARGS <<< "$field" || true
+    local _last=$(( ${#PS_RUN_ARGS[@]} - 1 ))
+    if [ "$_last" -ge 0 ]; then
+      PS_RUN_ARGS[$_last]="${PS_RUN_ARGS[$_last]%$'\n'}"
+      case "$field" in *$'\x1f') unset "PS_RUN_ARGS[$_last]" ;; esac
+    fi
+  fi
   [ "$PS_RUN_SUB" = "$3" ] || return 1
   [ -z "${4:-}" ] || [ "$PS_RUN_ACT" = "$4" ]
 }
@@ -1036,16 +1055,24 @@ ps_add_takes_all() {   # $1 = command
 # changed against the index (a deletion included, so a caller checks the file exists) and untracked
 # files. Nothing for a command with no commit's worth of extra work (INDEX).
 ps_pending_files() {   # $1 = command
-  local scope kind pth verdict=EXACT
+  local scope kind pth verdict=EXACT paths
   scope="$(ps_add_scope "$1")"
   kind="${scope%%$'\n'*}"
+  # The paths under the first line, read whole here and fed to each loop from a here document,
+  # never through process substitution: the printf below would be writing while a child this shell
+  # never waits for could exit, and bash 3.2 drops the rest of a write that signal interrupts
+  # (claude-config#1984, L1035).
+  paths="$(printf '%s\n' "$scope" | tail -n +2)" || true
   case "$kind" in
     UNKNOWN) verdict=WIDENED ;;
     PATHS)
       while IFS= read -r pth; do
         [ -n "$pth" ] || continue
         [ -e "$pth" ] || { verdict=WIDENED; break; }
-      done < <(printf '%s\n' "$scope" | tail -n +2) ;;
+      done <<LOOP_INPUT
+$paths
+LOOP_INPUT
+      ;;
   esac
   printf '%s\n' "$verdict"
   {
@@ -1059,13 +1086,19 @@ ps_pending_files() {   # $1 = command
           while IFS= read -r pth; do
             [ -n "$pth" ] || continue
             git ls-files --others --exclude-standard --full-name -- "$pth" 2>/dev/null
-          done < <(printf '%s\n' "$scope" | tail -n +2) ;;
+          done <<LOOP_INPUT
+$paths
+LOOP_INPUT
+          ;;
         PATHS)
           while IFS= read -r pth; do
             [ -n "$pth" ] || continue
             git diff --name-only -- "$pth" 2>/dev/null
             git ls-files --others --exclude-standard --full-name -- "$pth" 2>/dev/null
-          done < <(printf '%s\n' "$scope" | tail -n +2) ;;
+          done <<LOOP_INPUT
+$paths
+LOOP_INPUT
+          ;;
       esac
     fi
   } | awk 'NF && !seen[$0]++'

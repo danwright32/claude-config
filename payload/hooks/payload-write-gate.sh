@@ -236,7 +236,9 @@ if [ "$event" = "PostToolUse" ]; then
     rel=""
     while IFS= read -r root; do
       case "$f" in "$root/payload/"*) rel="${f#"$root/payload/"}"; break ;; esac
-    done < <(printf '%s\n' "$roots_list")
+    done <<LOOP_INPUT
+$roots_list
+LOOP_INPUT
     inst="$installed/$rel"
     if [ -n "$rel" ] && {
       { [ ! -e "$f" ] && [ ! -e "$inst" ]; } ||
@@ -245,7 +247,9 @@ if [ "$event" = "PostToolUse" ]; then
           home_detok "$installed" < "$f" | cmp -s - "$inst"; }; }; }
     }; then matched=$((matched + 1)); else differ="$differ$f
 "; fi
-  done < <(printf '%s\n' "$changed")
+  done <<LOOP_INPUT
+$changed
+LOOP_INPUT
   changed="$(printf '%s' "$differ" | sed '/^$/d')"
   [ -n "$changed" ] || exit 0
   n="$(printf '%s\n' "$changed" | grep -c .)"

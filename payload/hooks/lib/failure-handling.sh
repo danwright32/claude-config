@@ -309,11 +309,14 @@ fh_files() {
     /^===== FULL FILE / { exit }
     /^\+/ { if (f != "") print f "\t" substr($0, 2) }
   ' > "$rows"
+  local loop_input; loop_input="$(cut -f1 "$rows" | awk '!seen[$0]++')" || true
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     LC_ALL=C awk -F'\t' -v want="$f" '$1 == want { print substr($0, length(want) + 2) }' "$rows" > "$tmp/lines"
     fh_handles_failure "$f" "$tmp/lines" && printf '%s\n' "$f"
-  done < <(cut -f1 "$rows" | awk '!seen[$0]++')
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   rm -rf "$tmp"
   return 0
 }

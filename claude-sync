@@ -1388,6 +1388,7 @@ PLUGINPATHS
 # "skill<TAB>plugin<TAB>where". One definition, used by the check and by status.
 duplicate_plugin_skills(){
   local name plug where
+  local loop_input; loop_input="$(plugin_skill_names)" || true
   while IFS="$(printf '\t')" read -r name plug; do
     [ -n "${name:-}" ] || continue
     where=""
@@ -1397,7 +1398,9 @@ duplicate_plugin_skills(){
     fi
     [ -n "$where" ] || continue
     printf '%s\t%s\t%s\n' "$name" "$plug" "$where"
-  done < <(plugin_skill_names)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 0
 }
 
@@ -1405,10 +1408,13 @@ duplicate_plugin_skills(){
 # two apart without re-deriving the answer.
 report_duplicate_plugin_skills(){
   local name plug where found=""
+  local loop_input; loop_input="$(duplicate_plugin_skills)" || true
   while IFS="$(printf '\t')" read -r name plug where; do
     [ -n "${name:-}" ] || continue
     found+="  $name: provided by the $plug plugin AND by $where, so it is listed twice in every session"$'\n'
-  done < <(duplicate_plugin_skills)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   [ -z "$found" ] && return 1
   echo "--- skills provided twice (#49) ---"
   printf '%s' "$found"
@@ -1523,10 +1529,13 @@ duplicate_local_skill_jobs(){   # prints "description<TAB>folder folder ..."
 # Returns 0 when it found something, 1 when there was nothing, matching its neighbour above.
 report_duplicate_skill_jobs(){
   local d folders found=""
+  local loop_input; loop_input="$(duplicate_local_skill_jobs)" || true
   while IFS="$(printf '\t')" read -r d folders; do
     [ -n "${d:-}" ] || continue
     found="$found  $folders: same description, so they are two skills competing for one job and the choice between them is arbitrary"$'\n'
-  done < <(duplicate_local_skill_jobs)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   [ -z "$found" ] && return 1
   echo "--- skills claiming the same job (claude-config#331) ---"
   printf '%s' "$found"
@@ -1578,15 +1587,19 @@ unloadable_skill_entries(){   # $1 = a skills directory
 # them on every send, and saying it twice per sync is how a warning stops being read (#62).
 protect_unloadable_local_skills(){
   local entry reason
+  local loop_input; loop_input="$(unloadable_skill_entries "$CLAUDE_HOME/skills")" || true
   while IFS="$(printf '\t')" read -r entry reason; do
     [ -n "${entry:-}" ] || continue
     REFUSED_SKILL_EXCLUDES+=(--exclude="/$entry")
-  done < <(unloadable_skill_entries "$CLAUDE_HOME/skills")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 0
 }
 
 refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where it is going (a verb for the report)  $3 = "prune" to clear entries holding no files at all
   local entry reason named="" entries=""
+  local loop_input; loop_input="$(unloadable_skill_entries "$1")" || true
   while IFS="$(printf '\t')" read -r entry reason; do
     [ -n "${entry:-}" ] || continue
     # An entry holding NO FILES has nothing to lose, and git cannot carry the deletion of an empty
@@ -1608,7 +1621,9 @@ refuse_unloadable_skills(){   # $1 = the skills directory to judge  $2 = where i
     # somebody has to fix, so the line above is all it gets (claude-config#968).
     entries+="$entry"$'\n'
     named+="  skills/$entry: $reason"$'\n'
-  done < <(unloadable_skill_entries "$1")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   # Recorded even when nothing is refused, so a set that empties is remembered as empty and the same
   # folder turning up again later is news again.
   if [ -z "$named" ]; then
@@ -1808,12 +1823,15 @@ tokenize_payload(){
   [ -n "${CLAUDE_HOME:-}" ] || return 0
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$PAYLOAD/$d" ] || continue
+    local loop_input; loop_input="$(grep -rIl --exclude-dir=.git -F -- "$CLAUDE_HOME" "$PAYLOAD/$d" 2>/dev/null || true)" || true
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       tmp="$(scratch_file)"
       if tok < "$f" > "$tmp" 2>/dev/null; then cat "$tmp" > "$f"; fi
       rm -f "$tmp"
-    done < <(grep -rIl --exclude-dir=.git -F -- "$CLAUDE_HOME" "$PAYLOAD/$d" 2>/dev/null || true)
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   done
   return 0
 }
@@ -1850,6 +1868,7 @@ apply_source_dir(){   # $1 = a mirrored tree name -> prints the directory to cop
   dst="$(scratch_home_ready)/$(expanded_root_name)/$1"
   mkdir -p "$dst" 2>/dev/null || { printf '%s' "$src"; return 0; }
   rsync -a --delete "${COMMON_EXCLUDES[@]}" "$src/" "$dst/" 2>/dev/null || { printf '%s' "$src"; return 0; }
+  local loop_input; loop_input="$(grep -rIl --exclude-dir=.git -F -- "$TOKEN" "$src" 2>/dev/null || true)" || true
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
     rel="${hit#"$src"/}"
@@ -1857,7 +1876,9 @@ apply_source_dir(){   # $1 = a mirrored tree name -> prints the directory to cop
     tmp="$(scratch_file)"
     if detok < "$dst/$rel" > "$tmp" 2>/dev/null; then cat "$tmp" > "$dst/$rel"; fi
     rm -f "$tmp"
-  done < <(grep -rIl --exclude-dir=.git -F -- "$TOKEN" "$src" 2>/dev/null || true)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   printf '%s' "$dst"
 }
 
@@ -2109,7 +2130,8 @@ over_cap_lesson_entries(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:Lnnn 
   # floor is ZERO here, deliberately: the budget hook measures the whole generated index and a
   # handful of entries there means it measured nothing, while this reads whatever LESSONS.md holds,
   # which is legitimately one entry on a fresh Mac.
-  lesson_index_cap_scan "$cap" 0 < <(lesson_index_body "$src" 2>/dev/null) \
+  local body; body="$(lesson_index_body "$src" 2>/dev/null)" || true
+  lesson_index_cap_scan "$cap" 0 <<< "$body" \
     | awk -v f="$LESSONS_FILE" -v cap="$cap" '
         /^OVER / { printf "%s:%s (%d characters against a %d cap)\n", f, $2, $3, cap }'
   return 0
@@ -2125,10 +2147,13 @@ malformed_lesson_entries(){   # $1 = tree to inspect
     # than a place any of them live. Without this the check is red on every machine for ever, about
     # a file nobody writes by hand.
     lesson_source_file "$f" || continue
+    local loop_input; loop_input="$(grep -nE "$LESSON_DECL_RE" "$1/$f" 2>/dev/null | grep -vE "^[0-9]+:- \*\*L[0-9]+\." || true)" || true
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       printf '%s:%s\n' "$f" "$line"
-    done < <(grep -nE "$LESSON_DECL_RE" "$1/$f" 2>/dev/null | grep -vE "^[0-9]+:- \*\*L[0-9]+\." || true)
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   done
   return 0
 }
@@ -2141,11 +2166,14 @@ duplicate_lesson_numbers(){   # $1 = tree to inspect
     # Counted from the numbers a file CLAIMS, not from the canonical entries alone, or two entries
     # sharing one number are a duplicate only while both happen to be written correctly, and the
     # pair that is hardest to notice is the pair the scan cannot see (claude-config#164).
+    local loop_input; loop_input="$(lesson_numbers_in "$1/$f" | sed 's/^/L/' | sort | uniq -c \
+             | awk '$1 > 1 { printf "%s used %s times\n", $2, $1 }')" || true
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       printf '%s: %s\n' "$f" "$line"
-    done < <(lesson_numbers_in "$1/$f" | sed 's/^/L/' | sort | uniq -c \
-             | awk '$1 > 1 { printf "%s used %s times\n", $2, $1 }')
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   done
   return 0
 }
@@ -2242,6 +2270,15 @@ drifted_short_forms(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:Lnnn (...
 repeated_lesson_entries(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:L1 and L2 hold ..." lines
   local src="$1/$LESSONS_FILE" group nums first ids id n
   [ -f "$src" ] || return 0
+  local loop_input; loop_input="$(lesson_entries_render "$src" entries | awk -F'\t' '
+    $1 == "ENTRY" {
+      key = $4
+      gsub(/[[:space:]]+/, " ", key)
+      if (!(key in members)) order[++n] = key
+      members[key] = (key in members) ? members[key] " " $2 : $2
+      count[key]++
+    }
+    END { for (i = 1; i <= n; i++) if (count[order[i]] > 1) print members[order[i]] }')" || true
   while IFS= read -r group; do
     [ -n "$group" ] || continue
     ids=""
@@ -2256,15 +2293,9 @@ repeated_lesson_entries(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:L1 an
       *" "*) printf '%s:%s hold the same rule (ids %s, from %s)\n' "$LESSONS_FILE" "$nums" "$ids" "$(lesson_rule_text "$src" "$first" | cut -c1-60)" ;;
       *)     printf '%s:%s hold the same rule (id %s)\n' "$LESSONS_FILE" "$nums" "$ids" ;;
     esac
-  done < <(lesson_entries_render "$src" entries | awk -F'\t' '
-    $1 == "ENTRY" {
-      key = $4
-      gsub(/[[:space:]]+/, " ", key)
-      if (!(key in members)) order[++n] = key
-      members[key] = (key in members) ? members[key] " " $2 : $2
-      count[key]++
-    }
-    END { for (i = 1; i <= n; i++) if (count[order[i]] > 1) print members[order[i]] }')
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 0
 }
 
@@ -2778,10 +2809,13 @@ index_lesson_numbers_all(){ grep -hoE '^- L[0-9]+\.'      "$@" 2>/dev/null | gre
 lesson_index_union_faults(){   # $1 = tree holding LESSONS.md and the generated files
   local src="$1/$LESSONS_FILE" files=() f missing extra repeated
   [ -f "$src" ] || return 0
+  local loop_input; loop_input="$(lesson_index_files_present "$1")" || true
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     files+=("$1/$f")
-  done < <(lesson_index_files_present "$1")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   if [ "${#files[@]}" -eq 0 ]; then
     printf 'NOFILES\t\n'
     return 0
@@ -2939,6 +2973,7 @@ write_lesson_index_files(){   # $1 = tree holding LESSONS.md  -> prints the name
   split="$(scratch_file)" || return 1
   lesson_entries_render "$src" split > "$split" 2>/dev/null || { rm -f "$split"; return 1; }
   [ -s "$split" ] || { rm -f "$split"; return 1; }
+  local loop_input; loop_input="$(awk -F'\t' '!seen[$1]++ { printf "%s\t%s\n", $1, $2 }' "$split")" || true
   while IFS="$(printf '\t')" read -r slug title; do
     [ -n "$slug" ] || continue
     name="$LESSON_INDEX_PREFIX-$slug.md"
@@ -2963,7 +2998,9 @@ write_lesson_index_files(){   # $1 = tree holding LESSONS.md  -> prints the name
       short=1
     fi
     rm -f "$out"
-  done < <(awk -F'\t' '!seen[$1]++ { printf "%s\t%s\n", $1, $2 }' "$split")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   is_blank "$wanted" && { rm -f "$split"; return 1; }
   if [ "$short" -eq 1 ]; then
     rm -f "$split"
@@ -2973,6 +3010,7 @@ write_lesson_index_files(){   # $1 = tree holding LESSONS.md  -> prints the name
   fi
   # THE SWEEP. Driven by the same list the writes above were, so a file this run produced can
   # never be the one it deletes.
+  local loop_input; loop_input="$(lesson_index_files_present "$1")" || true
   while IFS= read -r b; do
     [ -n "$b" ] || continue
     case "
@@ -2980,7 +3018,9 @@ $wanted" in *"
 $b
 "*) continue ;; esac
     rm -f "$1/$b" 2>/dev/null || true
-  done < <(lesson_index_files_present "$1")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   local imports
   imports="$(write_lesson_core_files "$1" "$split" "$wanted")"
   rm -f "$split"
@@ -3083,6 +3123,7 @@ write_lesson_core_files(){   # $1 = tree, $2 = split rendering, $3 = library nam
   case "$state" in
     active*)
       ids="$(lesson_core_list_ids "$1/$LESSON_CORE_LIST" 2>/dev/null)"
+      local loop_input; loop_input="$(awk -F'\t' '!seen[$1]++ { printf "%s\t%s\n", $1, $2 }' "$2")" || true
       while IFS="$(printf '\t')" read -r slug title; do
         [ -n "$slug" ] || continue
         lines="$(printf '%s\n' "$ids" | awk -F'\t' -v s="$slug" '
@@ -3097,7 +3138,9 @@ write_lesson_core_files(){   # $1 = tree, $2 = split rendering, $3 = library nam
         chars=$((chars + $(printf '%s\n' "$lines" | wc -c)))
         wanted+="$name
 "
-      done < <(awk -F'\t' '!seen[$1]++ { printf "%s\t%s\n", $1, $2 }' "$2")
+      done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
       # The table of contents goes LAST, so it is imported after the core it describes, and only
       # beside a core that rendered something: added to an empty list it would be the only import,
       # and the library would stop loading with nothing in its place.
@@ -3115,6 +3158,7 @@ write_lesson_core_files(){   # $1 = tree, $2 = split rendering, $3 = library nam
       ;;
   esac
   # THE SWEEP: every core file this run did not write, which is all of them when there is no core.
+  local loop_input; loop_input="$(lesson_core_files_present "$1")" || true
   while IFS= read -r b; do
     [ -n "$b" ] || continue
     case "
@@ -3122,7 +3166,9 @@ $wanted" in *"
 $b
 "*) continue ;; esac
     rm -f "$1/$b" 2>/dev/null || true
-  done < <(lesson_core_files_present "$1")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   if [ "$live" -eq 1 ]; then
     [ "$(cat "$1/$LESSON_CORE_STATE" 2>/dev/null)" = "$state" ] || printf '%s\n' "$state" > "$1/$LESSON_CORE_STATE" 2>/dev/null
   fi
@@ -3820,6 +3866,7 @@ lesson_entry_text(){   # $1 = lessons file  $2 = number  $3 = which entry (defau
 # the second lesson under a duplicated number finds that lesson rather than nothing.
 lesson_number_for_id(){   # $1 = lessons file  $2 = id -> "Lnnn k", or nothing
   local n k total
+  local loop_input; loop_input="$(lesson_numbers_in "$1" | sort -un)" || true
   while IFS= read -r n; do
     [ -n "$n" ] || continue
     total="$(lesson_entry_count "$1" "L$n")"; k=1
@@ -3827,7 +3874,9 @@ lesson_number_for_id(){   # $1 = lessons file  $2 = id -> "Lnnn k", or nothing
       if [ "$(lesson_id "$1" "L$n" "$k")" = "$2" ]; then printf 'L%s %s' "$n" "$k"; return 0; fi
       k=$((k + 1))
     done
-  done < <(lesson_numbers_in "$1" | sort -un)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 1
 }
 
@@ -3938,10 +3987,13 @@ recorded_lesson_band(){
 # numbers stay readable: 1 to 500, 501 to 1000, and so on.
 next_free_band(){
   local h start highest=0
+  local loop_input; loop_input="$(lesson_bands)" || true
   while IFS="$(printf '\t')" read -r h start; do
     [ -n "${start:-}" ] || continue
     [ "$start" -gt "$highest" ] && highest="$start"
-  done < <(lesson_bands)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   if [ "$highest" -eq 0 ]; then printf '1'; else printf '%s' "$((highest + LESSON_BAND_SIZE))"; fi
   return 0
 }
@@ -3953,13 +4005,16 @@ next_free_band(){
 colliding_band_holders(){   # $1 = this Mac's band
   local h start me
   me="$(sync_hostname)"
+  local loop_input; loop_input="$(lesson_bands)" || true
   while IFS="$(printf '\t')" read -r h start; do
     [ -n "${h:-}" ] || continue
     [ "$h" = "$me" ] && continue
     [ "${start:-}" = "$1" ] || continue
     [ "$h" \< "$me" ] || continue
     printf '%s\n' "$h"
-  done < <(lesson_bands)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 0
 }
 
@@ -3976,6 +4031,7 @@ colliding_band_holders(){   # $1 = this Mac's band
 overlapping_band_holders(){   # $1 = this Mac's band
   local h start me mine gap
   me="$(sync_hostname)"; mine="$1"
+  local loop_input; loop_input="$(lesson_bands)" || true
   while IFS="$(printf '\t')" read -r h start; do
     [ -n "${h:-}" ] || continue
     [ "$h" = "$me" ] && continue
@@ -3984,7 +4040,9 @@ overlapping_band_holders(){   # $1 = this Mac's band
     gap=$(( start > mine ? start - mine : mine - start ))
     [ "$gap" -lt "$LESSON_BAND_SIZE" ] || continue
     printf '%s\t%s\n' "$h" "$start"
-  done < <(lesson_bands)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 0
 }
 
@@ -4058,10 +4116,13 @@ lesson_band_locked(){
 highest_lesson_in_band(){   # $1 = band start  $2.. = files
   local band="$1"; shift
   local n highest=$((band - 1)) top=$((band + LESSON_BAND_SIZE - 1))
+  local loop_input; loop_input="$(lesson_numbers_in "$@")" || true
   while IFS= read -r n; do
     [ -n "$n" ] || continue
     [ "$n" -ge "$band" ] && [ "$n" -le "$top" ] && [ "$n" -gt "$highest" ] && highest="$n"
-  done < <(lesson_numbers_in "$@")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   printf '%s' "$highest"
   return 0
 }
@@ -4150,7 +4211,10 @@ highest_reserved_in_band(){   # $1 = band start
 # The highest number taken inside a band: written in either copy, or reserved.
 highest_taken_in_band(){   # $1 = tree  $2 = band start
   local f files=() written reserved
-  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(minting_lesson_files "$1")
+  local loop_input; loop_input="$(minting_lesson_files "$1")" || true
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   written=$(($2 - 1))
   # Answered before the array is expanded: under set -u, bash 3.2 errors on expanding an EMPTY
   # array, and a tree with no rule files in it is the fixture every new clone starts from (L486).
@@ -4261,7 +4325,10 @@ lesson_band_with_room(){   # $1 = tree
 
 next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whole range
   local f highest=0 n band="${2:-}" files=()
-  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(minting_lesson_files "$1")
+  local loop_input; loop_input="$(minting_lesson_files "$1")" || true
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   if [ -n "$band" ]; then
     # Written in either copy, or reserved by an ask still inside its window (claude-config#1148).
     highest="$(highest_taken_in_band "$1" "$band")"
@@ -4429,12 +4496,15 @@ hook_block_select(){   # $1 = a hooks object  $2 = a JSON array of {k, s, c}  $3
 # is not judged here.
 hook_regs_without_script(){   # $1 = a hooks object -> a JSON array of {k, s, c}, possibly []
   local home="${CLAUDE_HOME%/}" cmd rest missing=""
+  local loop_input; loop_input="$(jq -r '[ .[]? | .[]? | .hooks[]? | .command // empty ] | unique[]' <<<"$1" 2>/dev/null || true)" || true
   while IFS= read -r cmd; do
     [ -n "$cmd" ] || continue
     case "$cmd" in *"$home/"*) ;; *) continue ;; esac
     rest="${cmd#*"$home"/}"; rest="${rest%%[[:space:]]*}"; rest="${rest%[\"\']}"
     [ -f "$home/$rest" ] || missing+="$cmd"$'\n'
-  done < <(jq -r '[ .[]? | .[]? | .hooks[]? | .command // empty ] | unique[]' <<<"$1" 2>/dev/null || true)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   jq -cn --argjson h "$1" --arg m "$missing" '
     ($m | split("\n") | map(select(length > 0))) as $gone
     | [ $h | to_entries[] | .key as $k | .value[]? | objects | del(.hooks) as $s
@@ -4708,6 +4778,11 @@ refuse_resurrected_deletions(){
   local p delcommit restored="" removed="" readded="" rewritten="" where="" h vcommit verdict _v
   have_git || return 0
   git -C "$SYNC_REPO" rev-parse --verify -q HEAD >/dev/null 2>&1 || return 0
+  # -z, so a name git would otherwise QUOTE (a space, a non ASCII letter) arrives as the file's own
+  # name: quoted, it named no file, the comparison could not be made, and the leftover published
+  # (second review of #1093).
+  local loop_input
+  loop_input="$(git -C "$SYNC_REPO" ls-files -z --others --exclude-standard -- payload 2>/dev/null | tr '\0' '\n' || true)"
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     # The staged copy as git would store it. Already tokenized (tokenize_payload ran before this),
@@ -4743,10 +4818,9 @@ refuse_resurrected_deletions(){
     fi
     restored+="${p#payload/}"$'\n'
     where="${where:+$where; }${p#payload/} is in ${vcommit:0:8}, and ${delcommit:0:8} is the commit that removed it"
-  # -z, so a name git would otherwise QUOTE (a space, a non ASCII letter) arrives as the file's own
-  # name: quoted, it named no file, the comparison could not be made, and the leftover published
-  # (second review of #1093).
-  done < <(git -C "$SYNC_REPO" ls-files -z --others --exclude-standard -- payload 2>/dev/null | tr '\0' '\n' || true)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   # Said once per path AND content, like the refusal below (third review of #1022). The send that
   # says it normally commits the file, so it is not met again; but a later step can still hold it
   # back (a hook whose suite fails), and the watcher then meets the same copy on every save.
@@ -5132,8 +5206,9 @@ $f"*) continue ;; esac      # this send is not publishing it, or anything render
   # Mac is not replacing, deleting a file that lessons file still has a section for is the same
   # partial state read the other way round: the rules of that section would stop reaching any
   # session on the other Mac.
-  local pf
+  local pf loop_input
   if [ -f "$CLAUDE_HOME/$LESSONS_FILE" ] && [ "$lessons_held" -eq 0 ]; then
+    loop_input="$(lesson_index_files_present "$PAYLOAD")" || true
     while IFS= read -r pf; do
       [ -n "$pf" ] || continue
       [ -f "$CLAUDE_HOME/$pf" ] && continue
@@ -5141,7 +5216,9 @@ $f"*) continue ;; esac      # this send is not publishing it, or anything render
 $protected" in *"
 $pf"*) continue ;; esac
       rm -f "$PAYLOAD/$pf" 2>/dev/null || true
-    done < <(lesson_index_files_present "$PAYLOAD")
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   fi
   # After everything has been mirrored in, and before the scan, so what is scanned and what is
   # committed are the same bytes the other Mac will receive.
@@ -5290,6 +5367,7 @@ scan_secrets(){
   local line file match where fp findings=""
   # each grep -o hit is "path:matchedtext"; accept it if the fingerprint of where it is and what it
   # matched is allowlisted, and never a private key header
+  local loop_input; loop_input="$(grep -rIoE "$pat|$apat" "$PAYLOAD" ${extra[@]+"${extra[@]}"} 2>/dev/null || true)" || true
   while IFS= read -r line; do
     [ -z "$line" ] && continue
     file="${line%%:*}"; match="${line#*:}"
@@ -5305,7 +5383,9 @@ scan_secrets(){
       *) findings+="$where
 " ;;
     esac
-  done < <(grep -rIoE "$pat|$apat" "$PAYLOAD" ${extra[@]+"${extra[@]}"} 2>/dev/null || true)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   findings="$(printf '%s' "$findings" | sort -u | tr '\n' ' ')"
   # The refusal is RECORDED as well as said (claude-config#947), because the state it leaves behind
   # outlives the run that said it: the staged edits stay uncommitted in the clone, and a later pull
@@ -6870,6 +6950,10 @@ past_release_paths(){
 $(unloadable_skill_entries "$CLAUDE_HOME/skills")
 UNLOADABLE
     fi
+    # Against the payload as STORED: a tokenized file then differs by construction, and the
+    # predicate answers no for it because its stored form is exactly what the repo holds now.
+    local loop_input
+    loop_input="$(rsync -ainc "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null || true)"
     while IFS= read -r line; do
       change="${line%%[[:space:]]*}"
       path="${line#"$change"}"
@@ -6878,9 +6962,9 @@ UNLOADABLE
       case "$path" in */|.|./) continue ;; esac
       case "$change" in '>'*|'c'*) ;; *) continue ;; esac
       local_copy_is_past_release "$d/$path" && printf '%s\n' "$d/$path"
-    # Against the payload as STORED: a tokenized file then differs by construction, and the
-    # predicate answers no for it because its stored form is exactly what the repo holds now.
-    done < <(rsync -ainc "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null || true)
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   done
   for tf in $(top_files_in "$CLAUDE_HOME"); do
     [ -f "$CLAUDE_HOME/$tf" ] || continue
@@ -6920,6 +7004,7 @@ $ever_deleted
     [ -d "$CLAUDE_HOME/$d" ] || continue
     local ex=()
     [ "$d" = skills ] && { local s; for s in $(skill_excludes); do ex+=("$s"); done; }
+    local loop_input; loop_input="$(rsync -ain --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)" || true
     while IFS= read -r line; do
       change="${line%%[[:space:]]*}"
       path="${line#"$change"}"
@@ -6941,7 +7026,9 @@ payload/$d/$path
       case "$verdict" in 'leftover '*) ;; *) continue ;; esac
       read -r _v vcommit delcommit <<< "$verdict"
       printf '%s\t%s\t%s\n' "$d/$path" "$vcommit" "$delcommit"
-    done < <(rsync -ain --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   done
   return 0
 }
@@ -6978,6 +7065,7 @@ $(printf '%s\n' "$1" | cut -f1)
     [ -d "$CLAUDE_HOME/$d" ] || continue
     local ex=()
     [ "$d" = skills ] && { local s; for s in $(skill_excludes); do ex+=("$s"); done; }
+    local loop_input; loop_input="$(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)" || true
     while IFS= read -r line; do
       change="${line%%[[:space:]]*}"
       path="${line#"$change"}"
@@ -7014,7 +7102,9 @@ $d/$path
       # payload every tokenized file differs by construction, so all of them read as locally
       # ahead: held back on every apply, announced on every pull as unsent edits, and the other
       # Mac's changes to them would never land (#87).
-    done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   done
   # Top-level rules files reach ~/.claude by a plain copy, not by the rsync above,
   # and were left out of this protection when it was written. So the revert this
@@ -7396,11 +7486,14 @@ citation_candidates(){   # $1 = number, e.g. L2
   if [ "${SYNC_NO_CITATION_PREFILTER:-0}" = "1" ]; then
     for f in "${roots[@]}"; do
       if [ -d "$f" ]; then
+        local loop_input; loop_input="$(find "$f" -type f 2>/dev/null)" || true
         while IFS= read -r g; do
           [ -n "$g" ] || continue
           grep -Iq . "$g" 2>/dev/null || continue
           printf '%s\n' "${g#"$CLAUDE_HOME"/}"
-        done < <(find "$f" -type f 2>/dev/null)
+        done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
       else
         printf '%s\n' "${f#"$CLAUDE_HOME"/}"
       fi
@@ -7410,11 +7503,14 @@ citation_candidates(){   # $1 = number, e.g. L2
   # -I skips binary files, which the per-file walk did with its own grep. -l stops at the first
   # match per file, and a symlink is skipped so that both paths answer with the same set: the walk
   # used `find -type f`, which never yielded one.
+  local loop_input; loop_input="$(grep -rIlE "(^|[^A-Za-z0-9])${num}([^0-9]|\$)" "${roots[@]}" 2>/dev/null || true)" || true
   while IFS= read -r g; do
     [ -n "$g" ] || continue
     [ -L "$g" ] && continue
     printf '%s\n' "${g#"$CLAUDE_HOME"/}"
-  done < <(grep -rIlE "(^|[^A-Za-z0-9])${num}([^0-9]|\$)" "${roots[@]}" 2>/dev/null || true)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 0
 }
 
@@ -7465,6 +7561,7 @@ do_cite_pin(){
   local src="$CLAUDE_HOME/LESSONS.md" num id tmp n=0
   [ -f "$src" ] || die "no LESSONS.md at $src, so there is nothing to pin citations against."
   tmp="$(scratch_file)"
+  local loop_input; loop_input="$(cited_lesson_numbers)" || true
   while IFS= read -r num; do
     [ -n "$num" ] || continue
     id="$(lesson_id "$src" "$num" 2>/dev/null || true)"
@@ -7473,7 +7570,9 @@ do_cite_pin(){
     [ -n "$id" ] || continue
     printf '%s\t%s\n' "$num" "$id" >> "$tmp"
     n=$(( n + 1 ))
-  done < <(cited_lesson_numbers)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   if [ "$n" -eq 0 ]; then
     rm -f "$tmp"
     die "found no lesson citation anywhere in $PAYLOAD, which cannot be right. Nothing was written; the old pin file is untouched."
@@ -7501,11 +7600,14 @@ do_cite_check(){
   done < "$LESSON_PIN_FILE"
   # Reading an empty pin file is not a clean answer (L98).
   [ "$n" -gt 0 ] || die "the pin file at $LESSON_PIN_FILE holds no rows, so nothing was checked."
+  local loop_input; loop_input="$(cited_lesson_numbers)" || true
   while IFS= read -r num; do
     [ -n "$num" ] || continue
     lesson_id "$src" "$num" >/dev/null 2>&1 || continue
     grep -q "^$num	" "$LESSON_PIN_FILE" 2>/dev/null || unpinned="$unpinned $num"
-  done < <(cited_lesson_numbers)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   local bad=0
   if [ -n "$moved" ]; then
     bad=1
@@ -7567,12 +7669,15 @@ settle_renumber_mentions(){   # $1 = merged file (tmp)  $2 = arriving file  $3 =
       echo "claude-sync: $3: rewrote $rewritten body mention(s) of $oldnum to $newnum on lines this Mac wrote, which could only have meant the renumbered lesson; mentions on published lines keep $oldnum, which now names the other Mac's entry." >&2
       notify "$3: rewrote mentions of $oldnum to $newnum"
     fi
+    local loop_input; loop_input="$(citing_synced_files "$oldnum")" || true
     while IFS="$(printf '\t')" read -r othern stale; do
       [ -n "$othern" ] || continue
       [ "$othern" = "$3" ] && continue
       echo "claude-sync: $othern also mentions $oldnum on $stale line(s). $oldnum now names the other Mac's entry, so check whether each mention meant the renumbered lesson (now $newnum); nothing was rewritten there." >&2
       notify "$othern: check mentions of $oldnum after the renumber"
-    done < <(citing_synced_files "$oldnum")
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   done
   return 0
 }
@@ -7606,6 +7711,7 @@ merge_rule_files(){
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
+  local loop_input; loop_input="$(unapplied_paths)" || true
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     case "$p" in */*) continue ;; esac   # top-level rule files only
@@ -7697,7 +7803,9 @@ $p"
       reported="$reported$p "
     fi
     rm -f "$tmpb" "$tmpr"
-  done < <(unapplied_paths)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   if ! is_blank "$reported"; then
     echo "claude-sync: both Macs had edited these rule files, so their entries were MERGED and nothing was dropped (your previous copy is beside them as .syncbak): ${reported}" >&2
     notify "merged rule files: ${reported}"
@@ -7940,6 +8048,7 @@ preserve_local_conflicts(){
   [ -n "$last" ] || return 0
   sfx="$(conflict_suffix)"
   sweep_resolved_copies
+  local loop_input; loop_input="$(unapplied_paths)" || true
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     # merged above, so both sides are already in the file: not a conflict
@@ -7983,7 +8092,9 @@ $p$sfx"
     detail=""
     [ -f "$PAYLOAD/$p" ] && detail="$(only_in_first "$local_f" "$PAYLOAD/$p")"
     if ! is_blank "$detail"; then saved+="$p [only in yours: ${detail% }] "; else saved+="$p "; fi
-  done < <(unapplied_paths)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   if ! is_blank "$resolved"; then
     # Its own message, and deliberately not folded into the one below: a file that needed no copy
     # and one whose only copy is now sitting beside it are different outcomes, and reporting them
@@ -8072,10 +8183,13 @@ payload_path_applied(){   # $1 = path relative to payload/
 # the only way to tell that apart from the other Mac's unapplied work is to compare the bytes.
 payload_fully_applied(){
   local p
+  local loop_input; loop_input="$(unapplied_paths)" || true
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     payload_path_applied "$p" || return 1
-  done < <(unapplied_paths)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 0
 }
 
@@ -10464,9 +10578,12 @@ SUITE_ENV_STRIP=()
 suite_env_strip(){
   local v
   SUITE_ENV_STRIP=()
+  local loop_input; loop_input="$(compgen -e | grep '^SYNC_')" || true
   while IFS= read -r v; do
     [ -n "$v" ] && SUITE_ENV_STRIP+=(-u "$v")
-  done < <(compgen -e | grep '^SYNC_')
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 0
 }
 
@@ -10525,6 +10642,7 @@ send_hook_tests(){
 
   # Every (suite, file) pair this send has to judge, rather than a list of suites. Which files a
   # red suite costs a trip is the whole of #269, and a list of suites alone cannot answer it.
+  local loop_input; loop_input="$(git -C "$SYNC_REPO" diff --cached --name-only -- payload/hooks 2>/dev/null)" || true
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in *.sh|*.py) ;; *) continue ;; esac
@@ -10549,7 +10667,9 @@ COVERS
            printf 'U\t-\t%s\n' "$base"
          fi ;;
     esac
-  done < <(git -C "$SYNC_REPO" diff --cached --name-only -- payload/hooks 2>/dev/null) > "$pairs" 2>/dev/null
+  done > "$pairs" 2>/dev/null <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 
   # The whole tree scans (claude-config#809): every declared scan whose scope a changed payload path
   # falls under is paired with each such path, so a red scan holds back exactly what it judged. A
@@ -10593,12 +10713,15 @@ SCANS
   # together. Only checks already paired are named, so this launches no suite a send without a
   # rename would not.
   local rn_st rn_old rn_new rn_more=""
+  local loop_input; loop_input="$(git -C "$SYNC_REPO" -c core.quotePath=false diff --cached -M --name-status -- payload 2>/dev/null)" || true
   while IFS="$(printf '\t')" read -r rn_st rn_old rn_new; do
     case "$rn_st" in R*) ;; *) continue ;; esac
     [ -n "$rn_old" ] && [ -n "$rn_new" ] || continue
     rn_more="$rn_more$(awk -F'\t' -v n="$rn_new" -v o="$rn_old" '$1 == "C" && $3 == n { print "C\t" $2 "\t" o }' "$pairs" 2>/dev/null)
 "
-  done < <(git -C "$SYNC_REPO" -c core.quotePath=false diff --cached -M --name-status -- payload 2>/dev/null)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   printf '%s' "$rn_more" | grep . >> "$pairs" 2>/dev/null || true
 
   uncovered="$(awk -F'\t' '$1=="U"{print $3}' "$pairs" 2>/dev/null | sort -u | tr '\n' ' ')"
@@ -10610,6 +10733,7 @@ SCANS
   # Deduplicated. A suite that both changed itself and covers a changed hook appears twice, and
   # running it twice is the cost this issue exists to bound.
   local key sdigest scopes_of title path
+  local loop_input; loop_input="$(awk -F'\t' '$1=="C"{print $2}' "$pairs" 2>/dev/null | sort -u)" || true
   while IFS= read -r suite; do
     [ -n "$suite" ] || continue
     # A section is <suite path>::<title>; anything else is a whole suite.
@@ -10687,7 +10811,9 @@ SCANS
                timed_out_suites="$timed_out_suites$suite
 " ;;
     esac
-  done < <(awk -F'\t' '$1=="C"{print $2}' "$pairs" 2>/dev/null | sort -u)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 
   if [ -n "$uncovered" ]; then
     echo "claude-sync: sent, but NO SUITE covers these changed hook(s), so nothing verified them here: $uncovered" >&2
@@ -11453,6 +11579,7 @@ conflict_copy_live(){   # $1 = absolute path of a .conflict-* copy
 report_conflict_copies(){
   local f age now found="" live outstanding
   now="$(date +%s)"
+  local loop_input; loop_input="$(conflict_copy_paths)" || true
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     # Seconds, not whole days: a copy made this morning used to report itself as zero of them,
@@ -11468,7 +11595,9 @@ report_conflict_copies(){
     else
       found+="  ${f#"$CLAUDE_HOME"/} ($(duration_in_words "$age") old, nothing in it is missing from the live file: safe to delete)"$'\n'
     fi
-  done < <(conflict_copy_paths)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   # Silent when there are none. A standing line saying "no conflicts" would be printed on
   # every single status and stop being read long before a real one ever appeared.
   [ -z "$found" ] && return 0
@@ -11489,6 +11618,7 @@ report_conflict_copies(){
 # on a marker written when the conflict happened could not notice either (L121).
 report_pending_conflicts(){
   local f live outstanding pending=""
+  local loop_input; loop_input="$(conflict_copy_paths)" || true
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$PRESERVED_CONFLICTS" in *"
@@ -11497,7 +11627,9 @@ ${f#"$CLAUDE_HOME"/}"*) continue ;; esac   # announced by this very run, a line 
     outstanding="$(only_in_first "$f" "$live")"
     is_blank "$outstanding" && continue
     pending+="${f#"$CLAUDE_HOME"/} [still only there: ${outstanding}] "
-  done < <(conflict_copy_paths)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   is_blank "$pending" && return 0
   echo "claude-sync: an earlier conflict set a copy of your version aside and it is STILL not resolved, so this content is in no file anything loads: ${pending}Take what you need into the live file beside it, then delete the copy. Nothing else reports this." >&2
   notify "still unresolved: ${pending}"
@@ -12182,11 +12314,14 @@ mods_lag_records(){
   # The few files holding this Mac's home path, hashed again with the placeholder put back.
   tokhashes=""
   if [ -d "$CLAUDE_HOME/mods" ]; then
+    local loop_input; loop_input="$(grep -rIlF --exclude-dir=types -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods" 2>/dev/null)" || true
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       tokhashes="${tokhashes}$(tok < "$f" | git -C "$SYNC_REPO" hash-object --stdin 2>/dev/null)	${f#"$CLAUDE_HOME/mods/"}
 "
-    done < <(grep -rIlF --exclude-dir=types -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods" 2>/dev/null)
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   fi
   # "<kind>\t<rel>\t<hash>\t<hash with the placeholder>": missing (on the tip only), differs, or
   # local (installed only). A file the same on both sides is dropped here.
@@ -12214,6 +12349,7 @@ mods_lag_records(){
         # installed is the one this Mac has, and the change just after it is the oldest it lacks. No
         # match at all is a copy the repo never held: this Mac's own work, not a lag.
         since=""; seen=""; prev=""; ct=""
+        local loop_input; loop_input="$(git -C "$SYNC_REPO" log --format='C %ct' --raw --no-abbrev "$up" -- "payload/mods/$rel" 2>/dev/null)" || true
         while IFS= read -r line; do
           case "$line" in
             'C '*) ct="${line#C }" ;;
@@ -12222,7 +12358,9 @@ mods_lag_records(){
               if [ "$h" = "$mine" ] || [ "$h" = "$mine2" ]; then seen=1; since="$prev"; break; fi
               prev="$ct" ;;
           esac
-        done < <(git -C "$SYNC_REPO" log --format='C %ct' --raw --no-abbrev "$up" -- "payload/mods/$rel" 2>/dev/null)
+        done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
         [ -n "$seen" ] && [ -n "$since" ] && printf '%s\t%s\n' "$since" "$rel" ;;
       local)
         # Lagging since the shared repo removed it, if what is installed is what it removed.
@@ -12610,6 +12748,7 @@ local_vs_payload_records(){
     # answer comes from payload_local_view, which is the same view the apply uses. Only the files
     # rsync already flagged are re-read, so the ordinary case, where nothing differs, costs nothing
     # extra, and every other kind of difference is still reported exactly as before.
+    local loop_input; loop_input="$(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' || true)" || true
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       # rsync -i prints the itemize flags, one space, then the path. A `*deleting` line has more
@@ -12640,7 +12779,9 @@ local_vs_payload_records(){
         esac
       fi
       printf 'diff\t%s\n' "$d: $line"
-    done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" $ex "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null | grep -vE '^$' || true)
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   done
   for f in $(top_files_in "$CLAUDE_HOME"); do
     [ -f "$CLAUDE_HOME/$f" ] || continue
@@ -12711,12 +12852,15 @@ report_unapplied_payload(){
   head="$(repo_head)"
   [ -n "$head" ] || return 0
   [ "$head" != "$last" ] || return 0
+  local loop_input; loop_input="$(unapplied_paths)" || true
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     payload_path_applied "$p" && continue
     held="${held:+$held
 }$p"
-  done < <(unapplied_paths)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   [ -n "$held" ] || return 0
   echo "--- config this clone holds and has not applied ---"
   # ONE LINE PER FILE, each carrying the path AND what is true of it. A list of names under a
