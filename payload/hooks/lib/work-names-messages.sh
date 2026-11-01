@@ -29,7 +29,16 @@
 #   WNM_BASE    the commit the added ones start from, for a reset that rewords them, or empty
 # Seam: WNM_SCANNER (default lib/work-names.py beside this file).
 
-WNM_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# This file's own folder, by parameter expansion with only builtins after it (claude-config#1104):
+# under a PATH without dirname the usual line borrows the CALLER's folder in silence. With no folder
+# to be found the scanner path is left empty, which the check below reads as a scanner missing.
+WNM_HERE=""
+case "${BASH_SOURCE[0]:-}" in
+  */*) WNM_HERE="${BASH_SOURCE[0]%/*}"; [ -n "$WNM_HERE" ] || WNM_HERE=/ ;;
+  '') ;;
+  *) WNM_HERE=. ;;
+esac
+[ -n "$WNM_HERE" ] && WNM_HERE="$(cd "$WNM_HERE" 2>/dev/null && pwd)"
 
 wnm_push_messages() {   # $1 = the push command
   local scanner="${WNM_SCANNER:-$WNM_HERE/work-names.py}" up def stream rc
