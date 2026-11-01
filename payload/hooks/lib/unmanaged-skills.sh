@@ -72,9 +72,12 @@ skill_excludes(){
 # `--exclude=/NAME` goes into SKILL_EXCLUDE_TOP (only the entry at the top of skills/), and a line
 # `--exclude=NAME` into SKILL_EXCLUDE_ANY (any file or folder of that name at any depth).
 skill_exclude_names(){
-  local ex name
+  local ex name excludes
   SKILL_EXCLUDE_TOP=()
   SKILL_EXCLUDE_ANY=()
+  # Read whole first, then fed from a here document: bash 3.2 never waits for a process
+  # substitution's child, and its exit can cut short what the caller prints (L1035, #1984).
+  excludes="$(skill_excludes)" || true
   while IFS= read -r ex; do
     name="${ex#--exclude=}"
     case "$name" in
@@ -82,7 +85,9 @@ skill_exclude_names(){
       /*) SKILL_EXCLUDE_TOP+=("${name#/}") ;;
       *)  SKILL_EXCLUDE_ANY+=("$name") ;;
     esac
-  done < <(skill_excludes)
+  done <<EXCLUDES
+$excludes
+EXCLUDES
 }
 
 # A filter: paths on stdin, one per line, and out only those the sync carries. $1 is the skills
