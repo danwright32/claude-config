@@ -218,8 +218,10 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     kills: [] as string[][],
     asked: [] as { model: string; prompt: string }[],
     tools: [] as unknown[],
-    /** Each stat of an output file: one per job per look. */
+    /** Each stat of an output file, through $.fs.stat (#2016): one per job per look. */
     stats: 0,
+    /** Each stat PROCESS run, which the watcher never starts (#2016): BSD's stat -f is file system status on Linux. */
+    statProcesses: 0,
     /** Each stat of a file a job sends its output to (#1976), by its path. */
     logStats: [] as string[],
     /** Each lsof of an output file. */
@@ -260,13 +262,10 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       const input = JSON.parse(args[0] ?? '{}') as { command: string; cwd: string; home: string }
       return ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home)))
     }
-    const log = cmd === 'stat' ? o.logs?.[args[args.length - 1] ?? ''] : undefined
-    if (log) {
-      w.logStats.push(args[args.length - 1] as string)
-      if (log.unreadable) return res(1, '', `stat: ${args[args.length - 1]}: Permission denied`)
-      return ok(args.includes('%z %m') ? `${log.size} ${log.mtime ?? 0}\n` : `${log.size}\n`)
+    if (cmd === 'stat') {
+      w.statProcesses += 1
+      return res(1, '', 'stat: the watcher reads files through $.fs.stat, never a stat process (#2016)')
     }
-    if (cmd === 'stat') w.stats += 1
     if (cmd === 'lsof') w.lsofs += 1
     const late = list.find(j => j.slow?.cmd === cmd && (list.length === 1 || args.includes(outOf(`job${list.indexOf(j) + 1}`))))
     if (late?.slow && o.clock) await o.clock.sleep(late.slow.ms)
@@ -321,10 +320,6 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       for (const j of list) if (j.goneOnClaim) j.gone = true
       return ok('')
     }
-    if (cmd === 'stat' && claimName(args[args.length - 1]) !== undefined) {
-      const at = w.claims.get(claimName(args[args.length - 1]) as string)
-      return at === undefined ? res(1, '', 'stat: No such file or directory') : ok(`${at}\n`)
-    }
     if (cmd === 'mv') {
       const from = claimName(args[args.length - 2])
       if (from === undefined || !w.claims.has(from)) return res(1, '', 'mv: No such file or directory')
@@ -359,11 +354,37 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       return ok('')
     }
     const j = list[byPath(args[args.length - 1])]
-    if ((cmd === 'stat' || cmd === 'tail') && j?.missing) return res(1, '', `${cmd}: ${args[args.length - 1]}: No such file or directory`)
-    if ((cmd === 'stat' || cmd === 'tail') && (!j || j.unreadable)) return res(1, '', `${cmd}: Permission denied`)
-    if (cmd === 'stat' && j) return ok(args.includes('%z %m') ? `${j.size} ${j.mtime ?? 0}\n` : `${j.size}\n`)
+    if (cmd === 'tail' && j?.missing) return res(1, '', `${cmd}: ${args[args.length - 1]}: No such file or directory`)
+    if (cmd === 'tail' && (!j || j.unreadable)) return res(1, '', `${cmd}: Permission denied`)
     if (cmd === 'tail' && j) return ok(j.tail)
     return res(1, '', 'unexpected')
+  })
+  // What the engine's $.fs.stat answers (#2016): size and when it last changed, in milliseconds,
+  // or a rejection naming the error code, as measured of the real engine on 2026-11-01
+  // ("<mod>: $.fs.stat(<path>) failed: ENOENT", or EACCES). A deny is how a test rejects the call,
+  // and the engine names the call before it: a hook that throws is skipped, and the call then fails
+  // with no code at all.
+  const refusedStat = (code: string) => ({ deny: code }) as never
+  const statOf = (size: number, mtimeSeconds: number, kind: 'file' | 'dir' = 'file') => ({ value: { kind, size, mtimeMs: mtimeSeconds * 1000, isLink: false } }) as never
+  on('fs.stat', async ($, e) => {
+    const path = e.path
+    const log = o.logs?.[path]
+    if (log) {
+      w.logStats.push(path)
+      if (log.unreadable) return refusedStat('EACCES')
+      return statOf(log.size, log.mtime ?? 0)
+    }
+    if (path.startsWith(`${CLAIMS}/`)) {
+      const at = w.claims.get(path.slice(CLAIMS.length + 1))
+      return at === undefined ? refusedStat('ENOENT') : statOf(0, at, 'dir')
+    }
+    w.stats += 1
+    const late = list.find(j => j.slow?.cmd === 'stat' && (list.length === 1 || path === outOf(`job${list.indexOf(j) + 1}`)))
+    if (late?.slow && o.clock) await o.clock.sleep(late.slow.ms)
+    const j = list[byPath(path)]
+    if (j?.missing) return refusedStat('ENOENT')
+    if (!j || j.unreadable) return refusedStat('EACCES')
+    return statOf(j.size, j.mtime ?? 0)
   })
   on('model.complete', ($, e) => {
     const req = e as unknown as { model: string; prompt: string }
@@ -2560,7 +2581,7 @@ test('a repeating poll loop whose line is not an error is waiting too, never sta
 test('an untraced job whose output file is gone is dropped, not reported (#784)', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const job: Job = { tail: 'x\n', size: 2, holder: 'error' }
-  world(on, job)
+  const w = world(on, job)
   await start($)
   await $.tool.call({ tool: 'Bash', command: 'bash suite.sh', run_in_background: true } as never)
   expect((await jobsOf($)).length).toBe(1)
@@ -2569,6 +2590,40 @@ test('an untraced job whose output file is gone is dropped, not reported (#784)'
   expect(await jobsOf($)).toEqual([])
   const r = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(contextOf(r)).toBe('')
+  // #2016: read through $.fs.stat, never a stat process, whose BSD -f is file system status on Linux.
+  expect(w.statProcesses).toBe(0)
+})
+
+// #2016: only a stat that says the file is not there (ENOENT) drops an untraced job; one refused
+// for any other reason (EACCES) says nothing either way, so the job is kept and said as untraced.
+test('an untraced job whose output file stat refuses for another reason is kept, never dropped as gone (#2016)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'x\n', size: 2, holder: 'error' }
+  const w = world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'bash suite.sh', run_in_background: true } as never)
+  job.unreadable = true
+  await clock.advance(MIN + 1)
+  expect((await jobsOf($)).length).toBe(1)
+  expect(w.statProcesses).toBe(0)
+})
+
+// #2016: a look, and a leftover's judging with its logs and claim, read every size and time through
+// $.fs.stat: not one stat process is started.
+test('no look or leftover judgement ever starts a stat process (#2016)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: '', size: 0, mtime: 0 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, LOGGED, { logs: [MLOG] })])] },
+    logs: { [MLOG]: { size: 900, mtime: 30 * 60 } },
+    claims: { 'old1-501': (60 * MIN - 11 * MIN) / 1000 },
+    verdict: () => STOP('merge helper'),
+    clock,
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked[0]?.prompt ?? '').toContain(`no new output for 30 minutes, in its output or in its log ${MLOG}`)
+  expect(w.logStats).toEqual([MLOG])
+  expect(w.statProcesses).toBe(0)
 })
 
 // This conversation's own turn (#1234), as the engine raises it: a main loop turn carries no agentId.
