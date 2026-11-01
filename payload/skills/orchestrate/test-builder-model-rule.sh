@@ -29,9 +29,14 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PAYLOAD="$(cd "$DIR/../.." && pwd)"
+# The checkout, found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663).
+# Empty for an installed copy in ~/.claude/skills or a copy inside some other repository, and then
+# the checks that read the payload say they were not measured rather than judging other files.
+REPO="$(bash "$DIR/../../hooks/lib/checkout-root.sh" "$DIR/../.." 2>/dev/null || true)"
+PAYLOAD=""
+[ -n "$REPO" ] && PAYLOAD="$REPO/payload"
 HOME_FILE="${BUILDER_RULE_HOME:-$DIR/SKILL.md}"
-CLAUDE_MD="${BUILDER_RULE_CLAUDE_MD:-$PAYLOAD/CLAUDE.md}"
+CLAUDE_MD="${BUILDER_RULE_CLAUDE_MD:-${PAYLOAD:+$PAYLOAD/CLAUDE.md}}"
 
 # The home's name, the words every pointer quotes. Renaming it means changing every pointer, which
 # check 4 then enforces.
@@ -78,24 +83,32 @@ check "each Agent call in a wave carries its row's model" \
   "$(grep -q -F 'carrying the `model` its board row shows' "$HOME_FILE" 2>/dev/null && echo ok || echo "the wave line does not pass the model")"
 
 # ---- 3. the cap stays at four ----
-check "the cap in the global CLAUDE.md still says four" \
-  "$(grep -q -F '**At most four agents running at once.**' "$CLAUDE_MD" 2>/dev/null && echo ok || echo "the cap line is gone or changed in $CLAUDE_MD")"
+if [ -n "$CLAUDE_MD" ]; then
+  check "the cap in the global CLAUDE.md still says four" \
+    "$(grep -q -F '**At most four agents running at once.**' "$CLAUDE_MD" 2>/dev/null && echo ok || echo "the cap line is gone or changed in $CLAUDE_MD")"
+else
+  echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the cap in its CLAUDE.md was not read"
+fi
 
 # ---- 4. any other document setting an Agent model names the home ----
 # Generated lessons files and dated audits record history, not dispatch rules.
 scan() { # scan <root>   prints every markdown file under root that sets an Agent model
   grep -r -l -E 'model: "(sonnet|opus|haiku)"' --include='*.md' "$1" 2>/dev/null
 }
-unpointed=""
-while IFS= read -r f; do
-  [ -n "$f" ] || continue
-  case "$f" in
-    "$HOME_FILE"|*/LESSONS*|*/audits/*) continue ;;
-  esac
-  grep -q -F "$RULE_NAME" "$f" || unpointed="$unpointed $f"
-done < <(scan "$PAYLOAD")
-check "every other document that sets an Agent model names the rule's section" \
-  "$([ -z "$unpointed" ] && echo ok || echo "no pointer in:$unpointed")"
+if [ -n "$PAYLOAD" ]; then
+  unpointed=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+      "$HOME_FILE"|*/LESSONS*|*/audits/*) continue ;;
+    esac
+    grep -q -F "$RULE_NAME" "$f" || unpointed="$unpointed $f"
+  done < <(scan "$PAYLOAD")
+  check "every other document that sets an Agent model names the rule's section" \
+    "$([ -z "$unpointed" ] && echo ok || echo "no pointer in:$unpointed")"
+else
+  echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the payload was not scanned for a second copy of the rule"
+fi
 
 # The scan must be able to see a copy, or its silence measures nothing (L1).
 fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/builder-model-rule.XXXXXX")"
