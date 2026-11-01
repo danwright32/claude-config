@@ -23568,6 +23568,80 @@ check "#627 a Mac that held hooks and deleted the last one still clears them fro
   "! git -C '$E27B' show main:payload/hooks/a.sh >/dev/null 2>&1"
 check "#627 while its other trees stay where they were" "git -C '$E27B' show main:payload/agents/x.md >/dev/null 2>&1"
 
+section "== a skills folder holding only a nested .trash is empty to the send, as rsync reads the excludes (#2017) =="
+# tree_holds_files parsed skill_excludes itself and matched an unanchored name (.trash, a plugin
+# skill) only as the FIRST part of a path, while rsync leaves it out at any depth (L263, the same
+# split #2004 fixed in payload_path_applied). So a skills folder holding nothing but a .trash folder
+# inside a skill read as holding files. The send's own call is saved by the refusal of a folder with
+# no SKILL.md, but the record of trees this Mac held (.trees-seen) passes only the shared excludes,
+# so it recorded skills as held, and the NEXT send read the empty folder as a deletion and mirrored
+# it over the shared copy with --delete, clearing every skill there. It now reads the paths through
+# carried_skill_paths, the shared reading.
+TS17B="$WORK/t2017-bare.git"; git init -q --bare -b main "$TS17B"
+TS17A="$WORK/t2017-A"; git clone -q "$TS17B" "$TS17A" 2>/dev/null
+TS17HA="$WORK/t2017-homeA"; mkdir -p "$TS17HA"; echo '{"hooks":{}}' > "$TS17HA/settings.json"; printf '# rules\n' > "$TS17HA/CLAUDE.md"
+mkskill "$TS17HA/skills/s2017/SKILL.md" 'a skill for #2017'
+CLAUDE_HOME="$TS17HA" SYNC_REPO="$TS17A" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send >/dev/null 2>&1
+check "#2017 fixture: the first Mac's skill reached the shared repo" \
+  "git -C '$TS17B' show main:payload/skills/s2017/SKILL.md >/dev/null 2>&1"
+# A fresh Mac whose skills folder holds only a .trash folder inside a skill, below the top of skills/.
+TS17C="$WORK/t2017-B"; git clone -q "$TS17B" "$TS17C" 2>/dev/null
+TS17HB="$WORK/t2017-homeB"; mkdir -p "$TS17HB/skills/old-skill/.trash/1791477119124-1742-63QYDV/gone"
+echo '{"hooks":{}}' > "$TS17HB/settings.json"; printf '# rules\n' > "$TS17HB/CLAUDE.md"
+mkskill "$TS17HB/skills/old-skill/.trash/1791477119124-1742-63QYDV/gone/SKILL.md" 'a skill set aside'
+out_2017="$(CLAUDE_HOME="$TS17HB" SYNC_REPO="$TS17C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1 || true)"
+dbg "#2017 the fresh Mac's send: $out_2017"
+check "#2017 a skills folder holding only a nested .trash does not clear the skills from the shared repo" \
+  "git -C '$TS17B' show main:payload/skills/s2017/SKILL.md >/dev/null 2>&1"
+check "#2017 and the send says why it left the skills alone" "line_has \"\$out_2017\" 'NOT clearing skills' 'never held'"
+check "#2017 and the nested .trash never reaches the shared repo" \
+  "! git -C '$TS17B' ls-tree -r --name-only main -- payload/skills | grep -q '\.trash'"
+check "#2017 the send does not record the skills folder as one this Mac held files in" \
+  "! grep -qx skills '$TS17C/.trees-seen'"
+# The next send is where a wrong record bit: the folder read as held, so as a deletion.
+out_2017b="$(CLAUDE_HOME="$TS17HB" SYNC_REPO="$TS17C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1 || true)"
+dbg "#2017 the fresh Mac's second send: $out_2017b"
+check "#2017 so a second send from that Mac still leaves the shared skills where they are" \
+  "git -C '$TS17B' show main:payload/skills/s2017/SKILL.md >/dev/null 2>&1"
+# THE FAILURE PATH. An empty answer from the filter means "nothing here travels", so a filter that
+# FAILS (the list unreadable, so the tool's stand in runs and exits) must answer "holds files", or a
+# broken reader would read every skills folder as empty. Called directly, as #2004's is: every run
+# that reaches skills/ stops first at require_unmanaged_skill_list, so the stand in is the last line.
+TS17_TREE="$WORK/t2017-tree/skills"; mkdir -p "$TS17_TREE/old-skill/.trash/x"
+echo 'set aside' > "$TS17_TREE/old-skill/.trash/x/SKILL.md"
+TS17_FN_OK="$WORK/t2017-fn-ok.sh"; TS17_FN_BAD="$WORK/t2017-fn-bad.sh"
+sed -n '/^LOCAL_FILE_GLOBS=/p;/^tree_holds_files(){/,/^}/p' "$SCRIPT" > "$TS17_FN_OK"
+sed -n '/^LOCAL_FILE_GLOBS=/p;/^unmanaged_skill_list_unreadable(){/,/^}/p;/^  carried_skill_paths(){ /p;/^tree_holds_files(){/,/^}/p' "$SCRIPT" > "$TS17_FN_BAD"
+ts17_rc_ok=0
+bash -c 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3"' _ \
+  "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$TS17_FN_OK" "$TS17_TREE" >/dev/null 2>&1 || ts17_rc_ok=$?
+ts17_rc_bad=0
+ts17_err_bad="$(UNMANAGED_SKILLS_LIB=/nowhere bash -c 'set -eo pipefail; . "$1"; tree_holds_files "$2"' _ "$TS17_FN_BAD" "$TS17_TREE" 2>&1)" || ts17_rc_bad=$?
+dbg "#2017 failure path: ok rc=$ts17_rc_ok, bad rc=$ts17_rc_bad, said: $ts17_err_bad"
+check "#2017 fixture: the tool's stand in for an unreadable list was extracted" "grep -q '^  carried_skill_paths(){ ' '$TS17_FN_BAD'"
+check "#2017 with the shared list read, a skills folder holding only a nested .trash is empty" "[ \"\$ts17_rc_ok\" -eq 1 ]"
+check "#2017 with the list unreadable, it answers holds files rather than empty, and says why" \
+  "[ \"\$ts17_rc_bad\" -eq 0 ] && line_has \"\$ts17_err_bad\" 'cannot read the list of skills' 'no skills path was judged'"
+# The controls, read the same way: `synced` is anchored to the top of skills/, so a `synced` folder
+# inside a real skill is content, while the top level one, the Claude app's downloads, is not.
+TS17_SYN="$WORK/t2017-syn/skills"; mkdir -p "$TS17_SYN/real-skill/synced"
+echo 'ordinary config in a folder that happens to be called synced' > "$TS17_SYN/real-skill/synced/kept.md"
+TS17_TOP="$WORK/t2017-top/skills"; mkdir -p "$TS17_TOP/synced/acct"
+echo 'a downloaded skill' > "$TS17_TOP/synced/acct/dl.md"
+ts17_rc_syn=0
+bash -c 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3"' _ \
+  "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$TS17_FN_OK" "$TS17_SYN" >/dev/null 2>&1 || ts17_rc_syn=$?
+ts17_rc_top=0
+bash -c 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3"' _ \
+  "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$TS17_FN_OK" "$TS17_TOP" >/dev/null 2>&1 || ts17_rc_top=$?
+check "#2017 a synced folder inside a real skill is content" "[ \"\$ts17_rc_syn\" -eq 0 ]"
+check "#2017 while the top level synced folder alone is not" "[ \"\$ts17_rc_top\" -eq 1 ]"
+# A held back path is still the caller's own anchored exclude, judged as before.
+ts17_rc_held=0
+bash -c 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3" --exclude=/real-skill' _ \
+  "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$TS17_FN_OK" "$TS17_SYN" >/dev/null 2>&1 || ts17_rc_held=$?
+check "#2017 and a skill the caller holds back is still left out" "[ \"\$ts17_rc_held\" -eq 1 ]"
+
 section "== a watcher stops when it has been replaced or orphaned, and a tick is one watcher (#604) =="
 # 2026-10-03: status reported 5 claude-sync watch processes, nested up to 4 deep, one of them a root
 # running for almost 5 days, where one watcher is expected. The refusal in do_watch (#251) stops a
