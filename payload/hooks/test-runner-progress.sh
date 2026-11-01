@@ -168,9 +168,10 @@ first_verdict="$(grep -n -E '^ +(ok|FAIL) +test-' <<< "$fout" | sed -n '1s/:.*//
 # recheck may take three times the suite's own time, so a run with a failure went quiet again for
 # minutes after the last progress line: the hung look #1979 ended, back at the end of the run.
 #
-# Three failed suites. test-flaky.sh fails the first time and, on its recheck, passes only once the
-# runner's own output has gained the line saying that recheck started, so FLAKY on its FAIL line is
-# the proof the line arrived while the recheck was still running. Its wait is on that condition,
+# Two failed suites in one run, and a third in a run of its own. test-flaky.sh fails the first time
+# and, on its recheck, passes only once the runner's own output has gained the line saying that
+# recheck started, so FLAKY on its FAIL line is the proof the line arrived while the recheck was
+# still running. Its wait is on that condition,
 # bounded by the recheck's own allowance (L290); before #1988 the line never came, the allowance ran
 # out, and the FAIL line said the recheck timed out instead. test-solid.sh fails both times, so its
 # recheck ends with exit status 1. test-hangs.sh hangs on its recheck, in a run of its own with a one
