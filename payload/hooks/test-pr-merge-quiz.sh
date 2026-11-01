@@ -789,7 +789,7 @@ STUBBORN="$FIXTURE/stubbornbin"; mkdir -p "$STUBBORN"
 cat > "$STUBBORN/gh" <<'SH'
 case "$*" in
   *"auth status"*) : ;;
-  *"pr view"*) echo "$$" > "$STUBBORN_PID_FILE"; exec perl -e '$SIG{TERM} = "IGNORE"; sleep 30' ;;
+  *"pr view"*) echo "$$" > "$STUBBORN_PID_FILE"; exec perl -e '$SIG{TERM} = "IGNORE"; sleep 900' ;;
 esac
 SH
 chmod +x "$STUBBORN/gh"
@@ -797,9 +797,11 @@ rm -f "$FIXTURE/stubborn.pid"
 stubborn_out="$(printf '%s' "$slow_payload" | ( cd "$FIXTURE/repo" && env "PATH=$STUBBORN:$PATH" STUBBORN_PID_FILE="$FIXTURE/stubborn.pid" QUIZ_LABEL_DEADLINE_SECONDS=1 "$HOOK" ) 2>/dev/null)"
 stubborn_pid="$(cat "$FIXTURE/stubborn.pid" 2>/dev/null)"
 stubborn_left=""
+# Waited on with the one ceiling only a hang reaches (lib/hang-wait.sh), never a judgement of speed;
+# the stand in outlives that ceiling, so it is gone in time only if the hook stopped it.
+. "$DIR/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; fail=$((fail+1)); }
 if [ -n "$stubborn_pid" ]; then
-  for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$stubborn_pid" 2>/dev/null || break; sleep 0.2; done
-  kill -0 "$stubborn_pid" 2>/dev/null && stubborn_left=1
+  hang_wait "! kill -0 $stubborn_pid 2>/dev/null" 0.1 || stubborn_left=1
 fi
 if [ -n "$stubborn_pid" ] && [ -z "$stubborn_left" ] && holds "$stubborn_out" '"decision":"block"'; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: #1989 a label gate past its deadline is stopped even when it ignores TERM, and the quiz still fires (gate pid '${stubborn_pid:-never recorded}', still running: ${stubborn_left:-no}; got: ${stubborn_out:0:120})"; fi
