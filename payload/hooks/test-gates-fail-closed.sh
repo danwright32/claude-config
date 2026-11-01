@@ -262,8 +262,17 @@ for f in "$DIR"/*.sh "$DIR"/*.py "$DIR"/lib/*.sh "$DIR"/lib/*.py; do
   files+=("$f")
 done
 nhooks="${#files[@]}"
-while IFS= read -r f; do files+=("$f"); done < <(
-  find "$DIR/../skills" -name fixtures -prune -o -type f \( -name '*.sh' -o -name '*.py' \) ! -name 'test-*' ! -name 'test_*' -print 2>/dev/null | sort)
+# Only what the sync carries: lib/unmanaged-skills.sh is the one list of what it leaves alone (#2001).
+. "$DIR/lib/unmanaged-skills.sh" && declare -F carried_skill_paths >/dev/null || {
+  echo "FAIL: $(basename "$0"): lib/unmanaged-skills.sh is missing or holds no carried_skill_paths, so the stdin scan cannot tell a skill the sync carries from one it leaves alone."
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$((fail + 1))"
+  exit 1
+}
+skill_scripts(){ # skill_scripts <skills dir> -> each script there the stdin scan reads
+  find "$1" -name fixtures -prune -o -type f \( -name '*.sh' -o -name '*.py' \) ! -name 'test-*' ! -name 'test_*' -print 2>/dev/null \
+    | carried_skill_paths "$1" | sort
+}
+while IFS= read -r f; do files+=("$f"); done < <(skill_scripts "$DIR/../skills")
 [ "$(( ${#files[@]} - nhooks ))" -ge 20 ] && ok || bad "only $(( ${#files[@]} - nhooks )) scripts were found under $DIR/../skills, so the stdin scan is not reading the skills"
 hits="$(text_reads "${files[@]}" | sed "s#^$DIR/##")"
 if [ -z "$hits" ]; then ok; else bad "a python3 reader takes stdin in text mode, which raises on a byte jq reads as U+FFFD; read sys.stdin.buffer and decode with errors=\"replace\":
@@ -272,6 +281,23 @@ printf '%s\n' '    d = json.load(sys.stdin)' 'for line in sys.stdin:' 'x = sys.s
 [ "$(text_reads "$WORK/probe-py" | wc -l | tr -d ' ')" = "3" ] && ok || bad "the stdin scan does not fire on each of the three shapes the hooks held"
 printf '%s\n' 'x = sys.stdin.buffer.read().decode("utf-8", "replace")' > "$WORK/probe-py2"
 [ -z "$(text_reads "$WORK/probe-py2")" ] && ok || bad "the stdin scan fires on the buffered read it asks for"
+
+# Run from the installed copy, the skills folder also holds what the sync never carries: the Claude
+# app's downloads under skills/synced and Claude Code's skills/.trash (claude-config#2001). A reader
+# there is nobody's to fix, so the scan leaves out exactly what lib/unmanaged-skills.sh says the sync
+# leaves out, and still reads the same script in a real skill, including one inside a folder of the
+# real skill that merely happens to be called synced.
+for d in synced/acct/skill-a/scripts .trash/stamp/skill-a/scripts real-skill/scripts real-skill/synced real-skill/.trash/old; do
+  mkdir -p "$WORK/skills/$d"
+  printf '%s\n' 'import sys' 'x = sys.stdin.read()' > "$WORK/skills/$d/reader.py"
+done
+got="$(skill_scripts "$WORK/skills" | sed "s#^$WORK/skills/##" | tr '\n' ' ')"
+[ "$got" = "real-skill/scripts/reader.py real-skill/synced/reader.py " ] && ok \
+  || bad "#2001 the stdin scan should read the real skill's scripts and nothing under skills/synced or any .trash, read: $got"
+skill_hits=()
+while IFS= read -r f; do skill_hits+=("$f"); done < <(skill_scripts "$WORK/skills")
+[ "$(text_reads ${skill_hits[@]+"${skill_hits[@]}"} | wc -l | tr -d ' ')" = 2 ] && ok \
+  || bad "#2001 the stdin scan should still report the text mode reader in each of the real skill's two scripts"
 
 # ---------------------------------------------------------------------------
 echo "every hook takes its payload through the shared reader (claude-config#1944)"
