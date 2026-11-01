@@ -18159,7 +18159,7 @@ rm -rf "$WTR/tests"
 # silently returns that class to main (L96: the list is what the measurement found, and a scan
 # not on it is not run on a send).
 _wt_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
-for _wt_s in test-pipefail-shortcircuit.sh test-hook-coverage.sh test-playwright-subagent-gate.sh test-suite-result-line.sh; do
+for _wt_s in test-pipefail-shortcircuit.sh test-hook-coverage.sh test-playwright-subagent-gate.sh test-suite-result-line.sh test-run-all-tests-real-tree.sh; do
   check "#809 $_wt_s declares what it scans" \
     "grep -q '^# send-gate: scans ' '$_wt_root/payload/hooks/$_wt_s'"
 done
@@ -18209,6 +18209,53 @@ check "#809 and it runs to a verdict rather than refusing over another run's loc
 check "#809 every declared scope exists under payload/" \
   "[ -z '$_wt_missing' ] || { echo '    missing:$_wt_missing' >&2; false; }"
 SYNC_NO_SEND_TESTS=1
+
+section "== a send runs the runner's real tree scans, and holds back a suite printing an unmeasured part the runner cannot read (#2020) =="
+# #2007 moved the source scans of #1444 and #1452 into test-run-all-tests-real-tree.sh, which
+# carried no send-gate declaration, so a claude-sync send never ran them, and a suite printing an
+# unmeasured part in a shape the runner does not read reached the other Mac unscanned. It declares
+# what it reads now. Shown with the REAL suite, in a sync clone shaped as it expects: the runner
+# beside it, a skills/milestone suite, and the fifty suite files below which it refuses to judge.
+RT20B="$WORK/rt2020-bare.git"; git init -q --bare -b main "$RT20B"
+RT20R="$WORK/rt2020-repo"; git clone -q "$RT20B" "$RT20R" 2>/dev/null
+mkdir -p "$RT20R/tests" "$RT20R/tools"
+rt20_i=1
+while [ "$rt20_i" -le 50 ]; do
+  printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20R/tests/test-filler-$rt20_i.sh"
+  rt20_i=$((rt20_i + 1))
+done
+printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20R/tools/test-tool.sh"
+git -C "$RT20R" add tests tools && git -C "$RT20R" -c user.name=t -c user.email=t@e commit -q -m fillers 2>/dev/null && git -C "$RT20R" push -q origin main 2>/dev/null
+RT20H="$WORK/rt2020-home"; mkdir -p "$RT20H/hooks/lib"
+echo '{"hooks":{}}' > "$RT20H/settings.json"; printf '# rules\n' > "$RT20H/CLAUDE.md"
+rt20_src="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks"
+cp "$rt20_src/test-run-all-tests-real-tree.sh" "$rt20_src/run-all-tests.sh" "$RT20H/hooks/"
+cp "$rt20_src/lib/suite-deadline.sh" "$rt20_src/lib/recorded-pid.sh" "$rt20_src/lib/repo-files.sh" \
+  "$rt20_src/lib/whole-number.sh" "$rt20_src/lib/load-average.sh" "$RT20H/hooks/lib/"
+mkskill "$RT20H/skills/milestone/SKILL.md" 'a skill holding a suite'
+printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/skills/milestone/test-ms.sh"
+printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/hooks/test-clean.sh"
+rt20_send(){ env -u SYNC_NO_SEND_TESTS CLAUDE_HOME="$RT20H" SYNC_REPO="$RT20R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1; }
+out_2020a="$(rt20_send)"
+dbg "#2020 first send: $out_2020a"
+check "#2020 fixture: the real tree suite is green on a clean tree, so the clean suite beside it publishes" \
+  "[ -f '$RT20R/payload/hooks/test-clean.sh' ] && [ -f '$RT20R/payload/hooks/test-run-all-tests-real-tree.sh' ]"
+# The defect: a new suite printing an unmeasured part in the wrong shape. It names no hook, and the
+# real tree suite names no such file, so only the declaration can bring the scan to it. The word is
+# assembled, or this file's own text would be the stray print the real scan finds.
+printf '#!/usr/bin/env bash\necho "%s%s: no zsh here, so its reading was not measured"\necho "SUITE-RESULT passed=1 failed=0"\n' 'UNMEAS' 'URED' > "$RT20H/hooks/test-stray.sh"
+out_2020b="$(rt20_send)"; rc_2020b=$?
+dbg "#2020 send of a suite printing a stray unmeasured part: $out_2020b"
+check "#2020 a send of a suite printing an unmeasured part the runner cannot read holds it back" \
+  "[ ! -e '$RT20R/payload/hooks/test-stray.sh' ]"
+check "#2020 and one line names the real tree suite and the file it held back" \
+  "line_has \"\$out_2020b\" 'NOT publishing' 'test-stray.sh' 'test-run-all-tests-real-tree.sh'"
+check "#2020 and the send still delivers rather than failing whole" "[ $rc_2020b -eq 0 ]"
+# The control: the same suite printing the agreed line instead is scanned and published.
+printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "SUITE""-PART-UNMEASURED" "zsh, absent here"\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/hooks/test-stray.sh"
+out_2020c="$(rt20_send)"
+dbg "#2020 send once the suite prints the agreed line: $out_2020c"
+check "#2020 once it prints the agreed line, the suite publishes" "[ -f '$RT20R/payload/hooks/test-stray.sh' ]"
 
 
 section "== a suite past its deadline is stopped with everything it started, within a bound (#464) =="
