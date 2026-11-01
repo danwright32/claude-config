@@ -207,6 +207,8 @@ dc_stub find "\"$DC_CORE/find\" \"\$@\"; rc=\$?
 if [ \"\$1\" = \"\$HOME\" ]; then
   echo \"find: \$HOME/Pictures/Photo Booth Library: Operation not permitted\" >&2
   echo \"find: /Volumes/elsewhere: Permission denied\" >&2
+  echo \"/usr/bin/find: ‘\$HOME/Apps/gnu one’: Permission denied\" >&2
+  echo \"find: '\$HOME/Apps/gnu: two': Operation not permitted\" >&2
   echo \"find: fts_read: Interrupted system call\" >&2
   echo \"something else entirely\" >&2
   rc=1
@@ -216,9 +218,13 @@ run_scan --only build-folders
 UNREAD="$(dcr_header "$REC" walk_unreadable)"
 check "a folder macOS protects is named with its own reason" "$(has "$UNREAD" "~/Pictures/Photo Booth Library (Operation not permitted)")"
 check "a folder outside the home folder keeps its whole path" "$(has "$UNREAD" "/Volumes/elsewhere (Permission denied)")"
+# GNU find (CI's Linux runner) names itself by its path and quotes the folder, in curly quotes under a
+# UTF-8 locale and straight ones under C; the folder is read the same either way.
+check "GNU find's path prefix and curly quotes are read as the folder" "$(has "$UNREAD" "~/Apps/gnu one (Permission denied)")"
+check "GNU find's straight quotes are read as the folder, a colon in its name kept" "$(has "$UNREAD" "~/Apps/gnu: two (Operation not permitted)")"
 check "a find line naming no folder is kept as find wrote it" "$(has "$UNREAD" "fts_read (Interrupted system call)")"
 check "a line in no shape find uses is kept as written" "$(has "$UNREAD" "something else entirely")"
-check "every line is counted in the walk's state" "$(has "$(dcr_header "$REC" walk)" "partial: 4 folder")"
+check "every line is counted in the walk's state" "$(has "$(dcr_header "$REC" walk)" "partial: 6 folder")"
 dc_unstub find
 run_scan --only build-folders
 check "a complete walk records no unreadable folders" "$(dcr_header "$REC" walk_unreadable > /dev/null 2>&1 && echo "recorded: $(dcr_header "$REC" walk_unreadable)" || echo ok)"
