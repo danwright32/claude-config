@@ -180,7 +180,55 @@ check "find is run once over the home folder for the walk, never once per catego
 mkdir -p "$H/Apps/locked/x"; chmod 000 "$H/Apps/locked"
 run_scan --only build-folders
 check "a folder the walk cannot read makes the walk partial, saying how many" "$(has "$(dcr_header "$REC" walk)" "partial: 1 folder")"
+# Which folders, and why, recorded and printed, never only the count (#1903): Permission denied is the
+# folder's own permissions, Operation not permitted is macOS protecting it, and only the name tells
+# whether it could hold a project.
+check "the header names the folder the walk could not read, with find's reason" \
+  "$(eq "$(dcr_header "$REC" walk_unreadable)" "~/Apps/locked (Permission denied)")"
+check "and the scan prints it" "$(has "$OUT_TEXT" "Folders the walk could not read: ~/Apps/locked (Permission denied).")"
 chmod 700 "$H/Apps/locked"
+# A name holding find's own separator is kept whole: only the last ": " is find's.
+mkdir -p "$H/Apps/odd: name/x"; chmod 000 "$H/Apps/odd: name"
+run_scan --only build-folders
+check "a folder whose name holds a colon and a space is named whole" \
+  "$(eq "$(dcr_header "$REC" walk_unreadable)" "~/Apps/odd: name (Permission denied)")"
+chmod 700 "$H/Apps/odd: name"; rm -rf "$H/Apps/odd: name"
+# Twelve: every one in the header, the first ten printed and the rest counted.
+for n in 01 02 03 04 05 06 07 08 09 10 11 12; do mkdir -p "$H/Apps/l$n/x"; chmod 000 "$H/Apps/l$n"; done
+run_scan --only build-folders
+check "twelve unreadable folders are counted in the walk's state" "$(has "$(dcr_header "$REC" walk)" "partial: 12 folder")"
+check "the header names all twelve" "$(eq "$(dcr_header "$REC" walk_unreadable | tr ';' '\n' | grep -c 'Permission denied')" 12)"
+check "the scan prints the first ten and counts the rest" "$(has "$OUT_TEXT" "~/Apps/l10 (Permission denied), and 2 more.")"
+check "and never prints the eleventh by name" "$(hasnt "$OUT_TEXT" "~/Apps/l11")"
+for n in 01 02 03 04 05 06 07 08 09 10 11 12; do chmod 700 "$H/Apps/l$n"; done
+# What chmod cannot make: a folder macOS protects, a folder outside the home folder, and a line in no
+# shape find uses, each from a stand in that runs the real find and adds them to the walk's stderr.
+dc_stub find "\"$DC_CORE/find\" \"\$@\"; rc=\$?
+if [ \"\$1\" = \"\$HOME\" ]; then
+  echo \"find: \$HOME/Pictures/Photo Booth Library: Operation not permitted\" >&2
+  echo \"find: /Volumes/elsewhere: Permission denied\" >&2
+  echo \"/usr/bin/find: ‘\$HOME/Apps/gnu one’: Permission denied\" >&2
+  echo \"find: '\$HOME/Apps/gnu: two': Operation not permitted\" >&2
+  echo \"find: fts_read: Interrupted system call\" >&2
+  echo \"something else entirely\" >&2
+  rc=1
+fi
+exit \$rc"
+run_scan --only build-folders
+UNREAD="$(dcr_header "$REC" walk_unreadable)"
+check "a folder macOS protects is named with its own reason" "$(has "$UNREAD" "~/Pictures/Photo Booth Library (Operation not permitted)")"
+check "a folder outside the home folder keeps its whole path" "$(has "$UNREAD" "/Volumes/elsewhere (Permission denied)")"
+# GNU find (CI's Linux runner) names itself by its path and quotes the folder, in curly quotes under a
+# UTF-8 locale and straight ones under C; the folder is read the same either way.
+check "GNU find's path prefix and curly quotes are read as the folder" "$(has "$UNREAD" "~/Apps/gnu one (Permission denied)")"
+check "GNU find's straight quotes are read as the folder, a colon in its name kept" "$(has "$UNREAD" "~/Apps/gnu: two (Operation not permitted)")"
+check "a find line naming no folder is kept as find wrote it" "$(has "$UNREAD" "fts_read (Interrupted system call)")"
+check "a line in no shape find uses is kept as written" "$(has "$UNREAD" "something else entirely")"
+check "every line is counted in the walk's state" "$(has "$(dcr_header "$REC" walk)" "partial: 6 folder")"
+dc_unstub find
+run_scan --only build-folders
+check "a complete walk records no unreadable folders" "$(dcr_header "$REC" walk_unreadable > /dev/null 2>&1 && echo "recorded: $(dcr_header "$REC" walk_unreadable)" || echo ok)"
+check "and prints none" "$(hasnt "$OUT_TEXT" "could not read:")"
 
 # ================================================================================================
 # 5. It never removes anything, and refuses while a removal runs

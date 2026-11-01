@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
-import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askText, boxText, cardOf, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, type Holds, type Linked } from './box.ts'
+import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, VIEW_FIELDS, askText, boxText, cardOf, decide, linkedIn, mergeFactsOf, mergeHolds, mergedIn, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { errorText } from './mod-kit/skew.ts'
 
@@ -17,7 +17,8 @@ import { errorText } from './mod-kit/skew.ts'
 // 2. No /goal: the session's own judgement that the work Dan asked for is finished. A judgement can
 //    only be the model's, so it calls this mod's tool (a rule in a prompt alone is a hope, L27), and
 //    the tool enforces what can be read: no box while an agent the session started is running, a
-//    merge or a deploy is not confirmed (is it live's own record), or a pull request the session
+//    merge or a deploy is not confirmed (is it live's own record, with a background merge it still
+//    calls waiting asked of GitHub again here, #1818), or a pull request the session
 //    touched is still open (GitHub, asked as each account), and at most one box per request (a
 //    second needs a new message from Dan, mod-kit's one reader of his own words). What reminds the
 //    session to call it is the SESSION REFLECTION's last line (hooks/review/session-reflection.md,
@@ -126,10 +127,40 @@ const agentHolds = async ($: EngineInterface): Promise<Holds> => {
   }
 }
 
+/**
+ * A background merge, asked of GitHub by the box itself (#1818): is it live asks again only at a turn
+ * end, as the active account and from the folder the helper ran in (which may since be gone), so its
+ * record could still say waiting long after `gh pr view` said MERGED. Asked as each account, by the
+ * repository is it live read where it read one, else in that folder; confirmed only when GitHub says
+ * MERGED for that number and its link names that repository.
+ */
+const confirmMerge = async ($: EngineInterface, o: { pr: number; repo?: string; cwd?: string }): Promise<Confirmed[string]> => {
+  const cwd = o.repo ? undefined : o.cwd
+  const gh = (argv: string[], env?: Record<string, string>, stdin?: string) =>
+    $.process.run(argv, { timeoutMs: 20_000, ...(cwd ? { cwd } : {}), ...(env ? { env } : {}), ...(stdin !== undefined ? { stdin } : {}) })
+  try {
+    const r = await askAnyAccount(gh, ['pr', 'view', String(o.pr), ...(o.repo ? ['--repo', o.repo] : []), '--json', VIEW_FIELDS])
+    if (!('stdout' in r)) return { why: `GitHub could not be asked: ${ghLine(r.failures.find(f => !notFound(f)) ?? (r.failures[0] as GhRun))}` }
+    const p = mergedIn(r.stdout, o.pr)
+    if ('why' in p) return p
+    const repo = await $.modkit.linkRepo({ link: p.url })
+    if (!repo) return { why: `GitHub's link ${p.url} names no repository` }
+    if (o.repo && repo.toLowerCase() !== o.repo.toLowerCase()) return { why: `GitHub answered for ${repo}#${o.pr}` }
+    return { repo, at: p.at }
+  } catch (err) {
+    return { why: `GitHub could not be asked: ${errorText(err, MOD)}` }
+  }
+}
+
 const mergeHoldsNow = async ($: EngineInterface): Promise<Holds> => {
   const facts = mergeFactsOf((await $.state.get(owedRef)).value as unknown, (await $.state.get(verdictsRef)).value as unknown)
   if ('why' in facts) return [`is it live's record of this session's merges could not be read (${facts.why}), so whether a merge or deploy is settled is not known`]
-  return mergeHolds(facts)
+  const confirmed: Confirmed = {}
+  for (const o of facts.owed) {
+    if (o.how !== 'waiting' || waitKey(o) in confirmed) continue
+    confirmed[waitKey(o)] = await confirmMerge($, o)
+  }
+  return mergeHolds(facts, confirmed)
 }
 
 /**
