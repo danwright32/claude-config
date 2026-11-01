@@ -3858,7 +3858,13 @@ file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.
   had already shown MERGED (#1818). The box now asks GitHub about each one itself, `gh pr view <pr>
   --json number,state,mergedAt,url` as each account, by the repository is it live read (else in that
   folder), and counts only MERGED for that number with a link naming that repository (L179); any
-  other answer, or a call that failed, still holds the box and says why. A merge so confirmed, or one
+  other answer, or a call that failed, still holds the box and says why. Since #1991 that question is
+  mod-kit's one check (`hooks/prmerged.ts`, copied into each mod using it), which is it live's turn
+  end asks through too, so its record no longer goes stale the three ways it did: it now asks as each
+  account, by the repository (a background merge naming none is held by the one GitHub's link named
+  when the helper started), and counts a merge GitHub confirms whatever its time, the answer's number
+  and link making it this pull request. One GitHub says was closed, or whose number is no pull
+  request there, merged nothing: is it live lets it go and the box holds nothing for it. A merge so confirmed, or one
   is it live has not yet crossed off, is settled by a card made since it merged, read from the
   verdicts, since is it live crosses a carded merge off only at a turn end. The pull requests are
   Claude Code's own `pr-link` transcript records (888 across 54 transcripts on 2026-10-24: 93 first

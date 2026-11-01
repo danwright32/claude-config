@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
+import { askPr, type PrReaders } from './mod-kit/prmerged.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
@@ -125,6 +126,18 @@ const ask = async ($: EngineInterface, m: { selector?: string; named?: string },
   return proofOf(r.out as string, since)
 }
 
+// How mod-kit's one check of whether a pull request merged (#1991) runs a command and reads a link
+// here: as each account, by the repository where one was read, and saying a member mod-kit's loaded
+// copy lacks as that.
+const prReaders = ($: EngineInterface): PrReaders => ({
+  run: async (argv, init) => {
+    const r = await $.process.run(argv, { timeoutMs: 20_000, ...init })
+    return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr }
+  },
+  linkRepo: async link => $.modkit.linkRepo({ link }),
+  describe: msg,
+})
+
 // The repository GitHub's own link for the PR names, read by mod-kit's one reader, as a card is kept.
 const repoOfLink = async ($: EngineInterface, url: string, named: string | undefined): Promise<string | undefined> => {
   try {
@@ -176,7 +189,11 @@ const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, h
       // no number to hold it by.
       o = undefined
     } else if (how.background) {
-      o = { key: `wait:${named ?? cwd}#${m.pr}@${at}`, how: 'waiting', pr: m.pr, at, cwd, ...(m.selector !== undefined ? { selector: m.selector } : {}), ...(named ? { named, repo: named } : {}) }
+      // Held by the repository it names, else the one GitHub's link for it names now (#1991), so
+      // every later turn end asks GitHub by it, never in this folder, which may be gone by then.
+      const seen = !named && 'url' in p && p.url ? await repoOfLink($, p.url, undefined) : undefined
+      const repo = named ?? seen
+      o = { key: `wait:${named ?? cwd}#${m.pr}@${at}`, how: 'waiting', pr: m.pr, at, cwd, ...(m.selector !== undefined ? { selector: m.selector } : {}), ...(named ? { named } : {}), ...(repo ? { repo } : {}) }
     } else if (p.kind === 'unproven' && !how.failed) {
       o = { key: named ? `${named}#${m.pr}` : `#${m.pr}@${at}`, how: 'unproven', pr: m.pr, at, cwd, why: p.why, ...(named ? { repo: named } : {}) }
     }
@@ -203,7 +220,10 @@ const carded = async ($: EngineInterface, o: IsItLiveOwed): Promise<boolean> => 
 
 // The merges still owed a card at a turn end: a background merge GitHub now says merged becomes
 // owed, one closed, past its wait or naming no pull request is let go, and a merge with a card is
-// settled. Kept once per key (#1943): the helper run twice in the background for one PR, or once
+// settled. A background merge is asked through mod-kit's one check (#1991), shared with the goal box:
+// as each account, by its repository (in the folder only where none was read), and a merge GitHub
+// confirms counts whatever its time, since the helper may have been run again after it merged; the
+// answer's number and link make it this pull request, not the time. Kept once per key (#1943): the helper run twice in the background for one PR, or once
 // there and once in the foreground, leaves a wait for each run, and every one of them becomes the
 // same merge once GitHub says it merged, which the refusal then named once per run. The first kept
 // is the earliest, so any card made since the PR merged settles it.
@@ -217,12 +237,9 @@ const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
         $.ui.log(`is-it-live: stopped asking GitHub about #${o.pr}, merged in the background, after ${WAIT_MS / 3_600_000} hours`, { to: 'debug' })
         continue
       }
-      const p = await ask($, o, o.cwd, o.at)
-      if (p.kind === 'closed' || p.kind === 'not a pr') continue
-      if (p.kind === 'merged') {
-        const repo = await repoOfLink($, p.url, o.named)
-        x = { key: repo ? `${fold(repo)}#${p.pr}` : `#${p.pr}@${o.at}`, how: 'merged', pr: p.pr, at: owedFrom(o.at, p), cwd: o.cwd, ...(repo ? { repo } : {}) }
-      }
+      const a = await askPr(prReaders($), { pr: o.pr, ...(o.repo ? { repo: o.repo } : {}), cwd: o.cwd })
+      if (a.kind === 'closed' || a.kind === 'not a pr') continue
+      if (a.kind === 'merged') x = { key: `${fold(a.repo)}#${o.pr}`, how: 'merged', pr: o.pr, at: owedFrom(o.at, a), cwd: o.cwd, repo: a.repo }
     }
     if (kept.some(k => k.key === (x as IsItLiveOwed).key)) continue
     if (x.how !== 'waiting' && (await carded($, x))) continue
