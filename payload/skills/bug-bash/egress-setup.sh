@@ -77,8 +77,11 @@ gid="$(dscl . -read "/Groups/$GROUP" PrimaryGroupID 2>/dev/null | awk '{print $2
 # 2. The helper, behind directories only root can write: a directory anyone else could write would
 # let them swap the file root runs.
 install -d -o root -g wheel -m 755 /usr/local/libexec || die 1 "could not make /usr/local/libexec."
+# This script stops above off macOS, and its PATH reaches only the system's BSD stat, so GNU's form
+# never answers here. It is asked first anyway, as every stat in the repository asks it
+# (tests/test-stat-order.sh, #2003): BSD refuses -c with nothing on stdout, so the read is the same.
 for d in / /usr /usr/local /usr/local/libexec; do
-  read -r owner mode <<< "$(stat -f '%Su %Lp' "$d")"
+  read -r owner mode <<< "$(stat -c '%U %a' "$d" 2>/dev/null || stat -f '%Su %Lp' "$d")"
   [ "$owner" = root ] && [ $(( 8#$mode & 8#022 )) -eq 0 ] \
     || die 1 "$d is owned by $owner with mode $mode, so a program other than root could replace the helper. Not installing it."
 done

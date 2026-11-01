@@ -28,4 +28,5 @@ tests/test-claude-sync.sh
 tests/test-dev-update-registry.sh
 tests/test-moved-to-local.sh
 tests/test-payload-secret-scan.sh
+tests/test-stat-order.sh
 tests/test-work-names-tree.sh
