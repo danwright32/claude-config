@@ -475,7 +475,10 @@ export const overnightRules = (self: string, rootPath: string, goal: string) => 
     'Overnight rules (sleep mode): Dan is asleep and asks nothing tonight.',
     `Tonight's goal, as Dan set it: ${quoted(goal)}. Work only toward it: never any other issue or task, however urgent.`,
     `If the goal names issues, or a milestone, its open issues (read them with gh issue list --milestone), claim them with \`bash ~/.claude/hooks/lib/sleep-queue.sh next ${root} ${me} <the goal's issue numbers>\`, naming every one of them each time; it claims the first one free, prints the issue and a worktree of its own, and claims nothing without them. Work only in that worktree, never switch branches in the primary checkout.`,
-    'If the goal names no issue, work the task itself in a worktree of its own (git worktree add under .claude/worktrees), never in the primary checkout, committing as you go and noting each step done with sleep_note (kind progress, with text), since only a claim\'s commits are read as progress.',
+    // #2011: the report credits a merge only from a done note naming its repository and number (a
+    // claim's release writes one; a goal naming no issue has no claim), so the rules ask for it, by
+    // an example (L270), and sleep_note refuses a done note without them.
+    'If the goal names no issue, work the task itself in a worktree of its own (git worktree add under .claude/worktrees), never in the primary checkout, committing as you go and noting each step done with sleep_note (kind progress, with text), since only a claim\'s commits are read as progress; note each pull request you merge as done, as in `sleep_note \'{"kind":"done","repo":"owner/name","pr":<its number>,"text":"<what it did>"}\'` (an issue closed with no pull request: issue in place of pr), or the report calls it unaccounted for.',
     `If \`next\` prints attempts=${LIMITS.attempts + 1} or more, release that issue as parked at once and claim the next.`,
     'Work it test first, open a pull request, and follow the repository\'s own merge rules.',
     `When an issue is finished, or cannot be, end the claim with \`bash ~/.claude/hooks/lib/sleep-queue.sh release ${root} <issue> ${me} done|parked|failed "<why>"\` (it writes the note for the report), then claim the next of the goal's issues.`,

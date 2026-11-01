@@ -2,7 +2,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
-import { askPr, type PrReaders } from './mod-kit/prmerged.ts'
+import { askAnyAccount } from './mod-kit/ghaccounts.ts'
+import { askPr, failureOf, type PrReaders } from './mod-kit/prmerged.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
@@ -117,15 +118,6 @@ const msg = (err: unknown) => errorText(err, MOD)
 
 const owedOf = async ($: EngineInterface): Promise<IsItLiveOwed[]> => (await $.state.get(owedRef)).value ?? []
 
-// What GitHub says about the PR a merge named, asked in the folder the session's shell is in, since
-// a merge naming no repository is the checkout's there. Never the exit code: `| tail` makes a failed
-// merge exit 0, and `--delete-branch` in a worktree fails after merging (L161).
-const ask = async ($: EngineInterface, m: { selector?: string; named?: string }, cwd: string, since: number): Promise<Proof> => {
-  const r = await run($, ['gh', 'pr', 'view', ...(m.selector !== undefined ? [m.selector] : []), ...(m.named ? ['--repo', m.named] : []), '--json', VIEW_FIELDS], cwd)
-  if (r.error !== undefined) return isNotAPr(r.error) ? { kind: 'not a pr' } : { kind: 'unproven', why: `GitHub could not be asked: ${r.error}` }
-  return proofOf(r.out as string, since)
-}
-
 // How mod-kit's one check of whether a pull request merged (#1991) runs a command and reads a link
 // here: as each account, by the repository where one was read, and saying a member mod-kit's loaded
 // copy lacks as that.
@@ -137,6 +129,32 @@ const prReaders = ($: EngineInterface): PrReaders => ({
   linkRepo: async link => $.modkit.linkRepo({ link }),
   describe: msg,
 })
+
+// One read of GitHub as each account gh is logged in to (mod-kit's askAnyAccount, #2000), in `cwd`
+// where given: a repository only another logged in account can see answers too, as the turn end's
+// check asks (#1991). GitHub saying the number is no pull request is the repository's own answer, so
+// no other account is asked after it. Why none answered is said as mod-kit's check says it.
+type Read = { out: string } | { error: string; notAPr?: true }
+const readGitHub = async ($: EngineInterface, args: string[], cwd?: string): Promise<Read> => {
+  const { run: runIn } = prReaders($)
+  try {
+    const a = await askAnyAccount((argv, env) => runIn(argv, { ...(cwd ? { cwd } : {}), ...(env ? { env } : {}) }), args, r => !isNotAPr(r.stderr))
+    if ('stdout' in a) return { out: a.stdout }
+    return { error: failureOf(a.failures), ...(a.failures.some(f => isNotAPr(f.stderr)) ? { notAPr: true as const } : {}) }
+  } catch (err) {
+    return { error: msg(err) }
+  }
+}
+
+// What GitHub says about the PR a merge named: by the repository the command names, else in the
+// folder the command ran in (where its cd left it, #2000), since a merge naming no repository is the
+// checkout's there. Never the exit code: `| tail` makes a failed merge exit 0, and `--delete-branch`
+// in a worktree fails after merging (L161).
+const ask = async ($: EngineInterface, m: { selector?: string; named?: string }, cwd: string, since: number): Promise<Proof> => {
+  const r = await readGitHub($, ['pr', 'view', ...(m.selector !== undefined ? [m.selector] : []), ...(m.named ? ['--repo', m.named] : []), '--json', VIEW_FIELDS], m.named ? undefined : cwd)
+  if ('error' in r) return r.notAPr ? { kind: 'not a pr' } : { kind: 'unproven', why: `GitHub could not be asked: ${r.error}` }
+  return proofOf(r.out, since)
+}
 
 // The repository GitHub's own link for the PR names, read by mod-kit's one reader, as a card is kept.
 const repoOfLink = async ($: EngineInterface, url: string, named: string | undefined): Promise<string | undefined> => {
@@ -152,18 +170,24 @@ const repoOfLink = async ($: EngineInterface, url: string, named: string | undef
 // the gh pr merge it runs by mod-kit alone (#1251).
 // A mod-kit whose loaded copy lacks the merge helper's reader (#1281) leaves the gh merges read by
 // the readers it has: whether a command ran the helper is the one thing not known, kept as `skew`.
-const mergesIn = async ($: EngineInterface, command: string): Promise<{ calls: MergeCall[]; skew?: unknown }> => {
+// Each merge carries the folder its command runs in, read by mod-kit from the cd before it (#2000),
+// null where that cannot be followed. A mod-kit loaded before it could say gives no folder: the
+// session's then, unless the command changes folder anywhere, when it is not known.
+const mergesIn = async ($: EngineInterface, command: string, cwd: string): Promise<{ calls: MergeCall[]; skew?: unknown }> => {
   const out: MergeCall[] = []
   let skew: unknown
-  for (const c of await $.modkit.pipeline({ command })) {
+  const cmds = await $.modkit.pipeline({ command, cwd, home: (await $.env.get('HOME')) ?? '' })
+  const moves = cmds.some(c => /^(?:cd|pushd|popd)$/.test(c.words[0]?.split('/').pop() ?? ''))
+  for (const c of cmds) {
+    const folder = { folder: 'folder' in c ? (c.folder ?? null) : moves ? null : cwd }
     const direct = mergeCallOf(await $.modkit.gh({ words: c.words }))
     if (direct) {
-      out.push(direct)
+      out.push({ ...direct, ...folder })
       continue
     }
     try {
       const viaHelper = mergeCallOf(await $.modkit.mergeHelper(c))
-      if (viaHelper) out.push(viaHelper)
+      if (viaHelper) out.push({ ...viaHelper, ...folder })
     } catch (err) {
       if (missingOf(err)?.kind !== 'member') throw err
       skew = err
@@ -173,13 +197,17 @@ const mergesIn = async ($: EngineInterface, command: string): Promise<{ calls: M
 }
 
 // What each merge in a finished Bash call owes, kept, and the line its result carries.
-const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, how: { failed: boolean; background: boolean; agent: boolean }): Promise<string[]> => {
-  const cwd = await $.session.cwd()
+const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, how: { failed: boolean; background: boolean; agent: boolean }, session: string): Promise<string[]> => {
   const lines: string[] = []
   const added: IsItLiveOwed[] = []
   for (const m of calls) {
     const named = m.named ?? undefined
-    const p: Proof = m.named === null ? { kind: 'unproven', why: 'the repository it names could not be read' } : await ask($, { ...(m.selector !== undefined ? { selector: m.selector } : {}), ...(named ? { named } : {}) }, cwd, at)
+    // Asked by the repository the command names, else in the folder it ran in (#2000), never in the
+    // session's folder when either cannot be read (L237): that folder's checkout may hold another
+    // repository's pull request of the same number.
+    const cwd = m.folder ?? session
+    const unread = m.named === null ? 'the repository it names could not be read' : !named && m.folder === null ? 'the folder it ran in could not be read from the command' : undefined
+    const p: Proof = unread ? { kind: 'unproven', why: unread } : await ask($, { ...(m.selector !== undefined ? { selector: m.selector } : {}), ...(named ? { named } : {}) }, cwd, at)
     let o: IsItLiveOwed | undefined
     if (p.kind === 'merged') {
       const repo = await repoOfLink($, p.url, named)
@@ -188,9 +216,11 @@ const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, h
       // Merged nothing (refused, still open, closed, or the number is an issue's, #1943), or names
       // no number to hold it by.
       o = undefined
-    } else if (how.background) {
+    } else if (how.background && !unread) {
       // Held by the repository it names, else the one GitHub's link for it names now (#1991), so
       // every later turn end asks GitHub by it, never in this folder, which may be gone by then.
+      // One whose repository or folder could not be read is owed as unconfirmed below, since a wait
+      // could only ask in the session's folder (#2000).
       const seen = !named && 'url' in p && p.url ? await repoOfLink($, p.url, undefined) : undefined
       const repo = named ?? seen
       o = { key: `wait:${named ?? cwd}#${m.pr}@${at}`, how: 'waiting', pr: m.pr, at, cwd, ...(m.selector !== undefined ? { selector: m.selector } : {}), ...(named ? { named } : {}), ...(repo ? { repo } : {}) }
@@ -316,23 +346,25 @@ export const register: Register = on => {
     if (why) return { deny: `No card: ${why}` }
 
     // The merge, from GitHub: a card for an unmerged change would be the false "done" it exists to stop.
-    const pr = await run($, ['gh', 'pr', 'view', String(input.pr), '--repo', input.repo, '--json', 'state,title,url'])
-    if (pr.error !== undefined && isNotAPr(pr.error)) {
+    // Asked as each account (#2000), so a repository only another logged in account can see has its card.
+    const pr = await readGitHub($, ['pr', 'view', String(input.pr), '--repo', input.repo, '--json', 'state,title,url'])
+    if ('error' in pr && pr.notAPr) {
       // GitHub says the number is no pull request there (an issue, #1943), so no card can ever be
       // made for it: a merge this session could not confirm under it, in that repository or in one
       // never read, is let go, as is one waiting in the background on that repository, or the turn
       // end would ask for it again at every stop. A merge GitHub confirmed is a pull request, and a
-      // background merge naming no repository is the session folder's, which each turn end asks
-      // GitHub about itself, so for either the answer is about another repository's number.
+      // background merge whose repository was not read is the checkout's in the folder its command
+      // ran in (where a cd before it left the shell, #2000), which each turn end asks GitHub about
+      // itself, so for either the answer is about another repository's number.
       const settled = (o: IsItLiveOwed) =>
         o.pr === input.pr && (o.how === 'unproven' ? !o.repo || fold(o.repo) === fold(input.repo) : o.how === 'waiting' && o.repo !== undefined && fold(o.repo) === fold(input.repo))
       await $.state.set(owedRef, (await owedOf($)).filter(o => !settled(o)))
       return { deny: `No card: #${input.pr} in ${input.repo} is not a pull request, so no card is owed for it.` }
     }
-    if (pr.error !== undefined) return { deny: `No card: could not confirm #${input.pr} is merged (${pr.error}).` }
+    if ('error' in pr) return { deny: `No card: could not confirm #${input.pr} is merged (${pr.error}).` }
     let facts: { state?: string; title?: string; url?: string }
     try {
-      facts = JSON.parse(pr.out as string)
+      facts = JSON.parse(pr.out)
     } catch {
       return { deny: `No card: GitHub's answer about #${input.pr} could not be read.` }
     }
@@ -351,15 +383,16 @@ export const register: Register = on => {
     let requester = input.requester
     let message = input.message
     if (requester?.via === 'issue') {
-      const issue = await run($, ['gh', 'issue', 'view', String(requester.issue), '--repo', input.repo, '--json', 'author'])
+      // Asked as each account (#2000), as the pull request is.
+      const issue = await readGitHub($, ['issue', 'view', String(requester.issue), '--repo', input.repo, '--json', 'author'])
       let author: string | undefined
       try {
-        author = issue.out !== undefined ? (JSON.parse(issue.out) as { author?: { login?: string } }).author?.login : undefined
+        author = 'out' in issue ? (JSON.parse(issue.out) as { author?: { login?: string } }).author?.login : undefined
       } catch {
         author = undefined
       }
       const mine = author ? await accountsOf($) : undefined
-      if (!author || !mine || 'error' in mine) return { deny: `No card: could not read who filed issue #${requester.issue} (${issue.error ?? (mine && 'error' in mine ? mine.error : undefined) ?? 'no author in the answer'}).` }
+      if (!author || !mine || 'error' in mine) return { deny: `No card: could not read who filed issue #${requester.issue} (${('error' in issue ? issue.error : undefined) ?? (mine && 'error' in mine ? mine.error : undefined) ?? 'no author in the answer'}).` }
       if (mine.note) notes.push(`Who filed issue #${requester.issue}: is it live ${mine.note}.`)
       // GitHub logins are one name in any case.
       if (mine.logins.some(l => fold(l) === fold(author as string))) {
@@ -440,7 +473,8 @@ export const register: Register = on => {
     const done = await next(e)
     if (done.deny !== undefined) return done
     try {
-      const { calls, skew } = await mergesIn($, command)
+      const session = await $.session.cwd()
+      const { calls, skew } = await mergesIn($, command, session)
       // Said where Claude reads it on each such call, since a merge this missed would go unseen; Dan
       // is told once (#1281).
       const unread: string[] = []
@@ -451,7 +485,7 @@ export const register: Register = on => {
       }
       if (!calls.length) return unread.length ? { ...done, context: [...(done.context ?? []), ...unread] } : done
       const background = input.run_in_background === true || typeof (done.result as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId === 'string'
-      const lines = [...(await afterMerges($, calls, at, { failed: done.isError === true, background, agent: e.agentId !== undefined })), ...unread]
+      const lines = [...(await afterMerges($, calls, at, { failed: done.isError === true, background, agent: e.agentId !== undefined }, session)), ...unread]
       return lines.length ? { ...done, context: [...(done.context ?? []), ...lines] } : done
     } catch (err) {
       // Said where Claude reads it: a merge this missed would otherwise go unseen (fail loud).
