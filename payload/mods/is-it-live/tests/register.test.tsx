@@ -157,7 +157,7 @@ const withKit = { plugins: [modKit] }
 const withOldKit = { plugins: [modKit, { name: 'kit-lacks-merge-helper', register: (() => undefined) as Register }] }
 
 const T0 = 1_800_000_000_000
-const REPO = 'danwright32/slate'
+const REPO = 'acme-hq/scheduler'
 type Gh = { exitCode: number; stdout: string; stderr?: string }
 // #1244: `prView`, when given, answers each `gh pr view` first (by its arguments), and `bash` is
 // what Claude Code's own Bash tool gives back beneath the mod.
@@ -199,7 +199,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     repoName: { exitCode: 0, stdout: `${REPO}\n` },
     copied: true,
     bash: { text: '' },
-    cwd: '/Users/dan/Apps/slate',
+    cwd: '/Users/dan/Apps/scheduler',
     gone: [],
     logins: ['danwright32'],
     tokens: {},
@@ -255,7 +255,7 @@ const world = (on: On, init: Partial<World> = {}) => {
               : { exitCode: 1, stdout: '', stderr: 'unexpected' }
     return { value: { exitCode: g.exitCode, stdout: g.stdout, stderr: g.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
-  on('session.repo', () => ({ value: { root: '/Users/dan/Apps/slate', remote: w.remote, isOwn: false } }) as never)
+  on('session.repo', () => ({ value: { root: '/Users/dan/Apps/scheduler', remote: w.remote, isOwn: false } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
   on('session.cwd', () => ({ value: w.cwd }) as never)
   on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? '/Users/dan' : undefined }) as never)
@@ -290,7 +290,7 @@ const CARD = {
   deploy: 'live',
   checked: 'Loaded /bookings and saw the venue filter.',
   changed: 'The bookings list now filters by venue. Old bookings keep their venue.',
-  see: { link: 'https://slate.example.com/bookings', clicks: ['Open Bookings', 'Pick a venue in the filter'] },
+  see: { link: 'https://scheduler.example.com/bookings', clicks: ['Open Bookings', 'Pick a venue in the filter'] },
 }
 type Out = { deny?: string; result?: unknown; text?: string; context?: readonly string[] }
 const card = async ($: unknown, input: Record<string, unknown>) =>
@@ -314,7 +314,7 @@ const press = async ($: unknown, key: string) => {
 const live = async ($: unknown) =>
   String(((await ($ as { command: { run: (x: never) => Promise<unknown> } }).command.run({ command: 'live', args: '', origin: { kind: 'human' }, presentation: {} } as never)) as { text?: string }).text)
 const start = async ($: unknown) => {
-  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: '/Users/dan/Apps/slate', surface: 'terminal', isInteractive: true } as never)
+  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: '/Users/dan/Apps/scheduler', surface: 'terminal', isInteractive: true } as never)
 }
 
 test('verified live: the card leads with Live, confirms the merge with GitHub, and is toasted, with no message when nobody else asked', withKit, async ($, on) => {
@@ -323,7 +323,7 @@ test('verified live: the card leads with Live, confirms the merge with GitHub, a
   const r = await card($, CARD)
   expect(r.deny).toBeUndefined()
   expect(textOf(r).split('\n')[0]).toBe('Live: Filter bookings by venue')
-  expect(textOf(r)).toContain('See it: https://slate.example.com/bookings')
+  expect(textOf(r)).toContain('See it: https://scheduler.example.com/bookings')
   expect((r.context ?? []).join(' ')).toContain('no sentence that repeats it')
   expect(w.runs[0]).toEqual(['gh', 'pr', 'view', '412', '--repo', REPO, '--json', 'state,title,url'])
   expect(w.toasts).toEqual(['Live: Filter bookings by venue'])
@@ -432,10 +432,10 @@ test('someone else asked in an issue: the message is pinned in the band, Copy co
   expect(r.deny).toBeUndefined()
   const lines = await shown($)
   expect(lines).toEqual(['Message for Kris', 'The venue filter is live now, have a look.'])
-  await press($, 'is-it-live:copy-danwright32-slate-412')
+  await press($, 'is-it-live:copy-acme-hq-scheduler-412')
   expect(w.copies).toEqual(['The venue filter is live now, have a look.'])
   expect(await live($)).toContain('Not sent yet:\n- Message for Kris (#412)')
-  await press($, 'is-it-live:sent-danwright32-slate-412')
+  await press($, 'is-it-live:sent-acme-hq-scheduler-412')
   expect(await shown($)).toEqual(['engine band'])
   expect(await live($)).not.toContain('Not sent yet')
 })
@@ -488,7 +488,7 @@ test('a message Dan already marked sent is not said to wait when a later card fo
   world(on)
   const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' }
   await card($, { ...CARD, ...ask })
-  await press($, 'is-it-live:sent-danwright32-slate-412')
+  await press($, 'is-it-live:sent-acme-hq-scheduler-412')
   const r = await card($, { ...CARD, ...ask, deploy: 'failed', checked: 'The deploy check timed out.' })
   expect(textOf(r)).not.toContain('waits until')
   expect((r.context ?? []).join(' ')).not.toContain('is held')
@@ -507,7 +507,7 @@ test('a deploying card naming who asked, with no message yet, is made, and says 
 test('a Copy the clipboard refuses says so, rather than seeming to work', withKit, async ($, on) => {
   const w = world(on, { copied: false })
   await card($, { ...CARD, requester: { name: 'Kris', via: 'named' }, message: 'It is live now.' })
-  await press($, 'is-it-live:copy-danwright32-slate-412')
+  await press($, 'is-it-live:copy-acme-hq-scheduler-412')
   expect(w.toasts.join('\n')).toContain('Not copied: no-clipboard')
 })
 
@@ -622,28 +622,28 @@ test("Copy and Mark sent work on a message for a PR in another repository than t
 
 test("a card Claude spelled in another case than the session folder's remote is listed, copied and marked sent", withKit, async ($, on) => {
   const w = world(on)
-  await card($, { ...CARD, repo: 'DanWright32/Slate', requester: { name: 'Kris', via: 'named' }, message: 'It is live.' })
+  await card($, { ...CARD, repo: 'acme-hq/Scheduler', requester: { name: 'Kris', via: 'named' }, message: 'It is live.' })
   expect(await live($)).toContain('- Live: Filter bookings by venue (#412)')
-  await press($, 'is-it-live:copy-danwright32-slate-412')
+  await press($, 'is-it-live:copy-acme-hq-scheduler-412')
   expect(w.copies).toEqual(['It is live.'])
-  await press($, 'is-it-live:sent-danwright32-slate-412')
+  await press($, 'is-it-live:sent-acme-hq-scheduler-412')
   expect(await live($)).not.toContain('Not sent yet')
 })
 
 test('cards kept under a key in another case are still listed, and a new card loses none of them', withKit, async ($, on) => {
-  const old = { repo: 'danwright32/Slate', pr: 300, title: 'Old change', url: 'https://github.com/danwright32/slate/pull/300', state: 'live', at: T0 - 1000, requester: { name: 'Kris', via: 'named' }, message: 'Old news.' }
-  world(on, { stored: { 'cards:danwright32/Slate': [old] } })
+  const old = { repo: 'acme-hq/Scheduler', pr: 300, title: 'Old change', url: 'https://github.com/acme-hq/scheduler/pull/300', state: 'live', at: T0 - 1000, requester: { name: 'Kris', via: 'named' }, message: 'Old news.' }
+  world(on, { stored: { 'cards:acme-hq/Scheduler': [old] } })
   expect(await live($)).toBe(['- Live: Old change (#300)', '', 'Not sent yet:', '- Message for Kris (#300): Old news.'].join('\n'))
   await card($, CARD)
   expect(await live($)).toBe(['- Live: Filter bookings by venue (#412)', '- Live: Old change (#300)', '', 'Not sent yet:', '- Message for Kris (#300): Old news.'].join('\n'))
 })
 
 test('/live after a rename lists and pins the cards of both names newest first, never grouped by name (lessons review of #710)', withKit, async ($, on) => {
-  const old = (pr: number, at: number) => ({ repo: 'danwright32/old-slate', pr, title: `Change ${pr}`, url: `https://github.com/danwright32/old-slate/pull/${pr}`, state: 'live', at, requester: { name: 'Kris', via: 'named' }, message: `About ${pr}.` })
-  const now = (pr: number, at: number) => ({ ...old(pr, at), repo: 'danwright32/slate', url: `https://github.com/danwright32/slate/pull/${pr}` })
+  const old = (pr: number, at: number) => ({ repo: 'acme-hq/old-scheduler', pr, title: `Change ${pr}`, url: `https://github.com/acme-hq/old-scheduler/pull/${pr}`, state: 'live', at, requester: { name: 'Kris', via: 'named' }, message: `About ${pr}.` })
+  const now = (pr: number, at: number) => ({ ...old(pr, at), repo: 'acme-hq/scheduler', url: `https://github.com/acme-hq/scheduler/pull/${pr}` })
   world(on, {
-    remote: 'git@github.com:danwright32/old-slate.git',
-    stored: { 'cards:danwright32/old-slate': [old(300, T0 - 1000), old(302, T0 - 3000)], 'cards:danwright32/slate': [now(301, T0 - 2000)] },
+    remote: 'git@github.com:acme-hq/old-scheduler.git',
+    stored: { 'cards:acme-hq/old-scheduler': [old(300, T0 - 1000), old(302, T0 - 3000)], 'cards:acme-hq/scheduler': [now(301, T0 - 2000)] },
   })
   expect((await live($)).split('\n').slice(0, 3)).toEqual(['- Live: Change 300 (#300)', '- Live: Change 301 (#301)', '- Live: Change 302 (#302)'])
   // Each unsent message is pinned again, the newest first in the band too.
@@ -651,25 +651,25 @@ test('/live after a rename lists and pins the cards of both names newest first, 
 })
 
 test('/live after a rename lists a PR kept under both names once, as its newest card (#720)', withKit, async ($, on) => {
-  const old = (pr: number, at: number, title: string) => ({ repo: 'danwright32/old-slate', pr, title, url: `https://github.com/danwright32/old-slate/pull/${pr}`, state: 'live', at })
-  const now = (pr: number, at: number, title: string) => ({ ...old(pr, at, title), repo: 'danwright32/slate', url: `https://github.com/danwright32/slate/pull/${pr}` })
+  const old = (pr: number, at: number, title: string) => ({ repo: 'acme-hq/old-scheduler', pr, title, url: `https://github.com/acme-hq/old-scheduler/pull/${pr}`, state: 'live', at })
+  const now = (pr: number, at: number, title: string) => ({ ...old(pr, at, title), repo: 'acme-hq/scheduler', url: `https://github.com/acme-hq/scheduler/pull/${pr}` })
   // The newer card is under the old name, which /live reads first, so neither a per name key nor
   // the last name read can pick it.
   world(on, {
-    remote: 'git@github.com:danwright32/old-slate.git',
-    stored: { 'cards:danwright32/old-slate': [old(300, T0 - 1000, 'Newer')], 'cards:danwright32/slate': [now(300, T0 - 5000, 'Older')] },
+    remote: 'git@github.com:acme-hq/old-scheduler.git',
+    stored: { 'cards:acme-hq/old-scheduler': [old(300, T0 - 1000, 'Newer')], 'cards:acme-hq/scheduler': [now(300, T0 - 5000, 'Older')] },
   })
   expect(await live($)).toBe('- Live: Newer (#300)')
 })
 
 test('/live after a rename keeps the unsent message an older card under the other name owes, and Mark sent finds it (#720)', withKit, async ($, on) => {
-  const old = { repo: 'danwright32/old-slate', pr: 300, title: 'Older', url: 'https://github.com/danwright32/old-slate/pull/300', state: 'live', at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' }
-  const now = { repo: 'danwright32/slate', pr: 300, title: 'Newer', url: 'https://github.com/danwright32/slate/pull/300', state: 'live', at: T0 - 1000 }
-  world(on, { remote: 'git@github.com:danwright32/old-slate.git', stored: { 'cards:danwright32/old-slate': [old], 'cards:danwright32/slate': [now] } })
+  const old = { repo: 'acme-hq/old-scheduler', pr: 300, title: 'Older', url: 'https://github.com/acme-hq/old-scheduler/pull/300', state: 'live', at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' }
+  const now = { repo: 'acme-hq/scheduler', pr: 300, title: 'Newer', url: 'https://github.com/acme-hq/scheduler/pull/300', state: 'live', at: T0 - 1000 }
+  world(on, { remote: 'git@github.com:acme-hq/old-scheduler.git', stored: { 'cards:acme-hq/old-scheduler': [old], 'cards:acme-hq/scheduler': [now] } })
   expect(await live($)).toBe('- Live: Newer (#300)\n\nNot sent yet:\n- Message for Kris (#300): About 300.')
   expect((await shown($)).filter(t => t.startsWith('About'))).toEqual(['About 300.'])
   // The pinned row is the older card's own, so Mark sent finds that card and takes the row away.
-  await press($, 'is-it-live:sent-danwright32-old-slate-300')
+  await press($, 'is-it-live:sent-acme-hq-old-scheduler-300')
   expect((await shown($)).filter(t => t.startsWith('About'))).toEqual([])
   expect(await live($)).toBe('- Live: Newer (#300)')
 })
@@ -677,26 +677,26 @@ test('/live after a rename keeps the unsent message an older card under the othe
 // #1335 lessons review: whether the message is out is the PR's newest card's state, wherever the
 // message is kept, so /live's band and list agree.
 test('/live after a rename shows or holds an older card\'s message by the newest card\'s state (#1335)', withKit, async ($, on) => {
-  const old = (state: string) => ({ repo: 'danwright32/old-slate', pr: 300, title: 'Older', url: 'https://github.com/danwright32/old-slate/pull/300', state, at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' })
-  const now = (state: string) => ({ repo: 'danwright32/slate', pr: 300, title: 'Newer', url: 'https://github.com/danwright32/slate/pull/300', state, at: T0 - 1000 })
-  world(on, { remote: 'git@github.com:danwright32/old-slate.git', stored: { 'cards:danwright32/old-slate': [old('deploying')], 'cards:danwright32/slate': [now('live')] } })
+  const old = (state: string) => ({ repo: 'acme-hq/old-scheduler', pr: 300, title: 'Older', url: 'https://github.com/acme-hq/old-scheduler/pull/300', state, at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' })
+  const now = (state: string) => ({ repo: 'acme-hq/scheduler', pr: 300, title: 'Newer', url: 'https://github.com/acme-hq/scheduler/pull/300', state, at: T0 - 1000 })
+  world(on, { remote: 'git@github.com:acme-hq/old-scheduler.git', stored: { 'cards:acme-hq/old-scheduler': [old('deploying')], 'cards:acme-hq/scheduler': [now('live')] } })
   expect(await live($)).toBe('- Live: Newer (#300)\n\nNot sent yet:\n- Message for Kris (#300): About 300.')
   expect((await shown($)).filter(t => t.startsWith('About'))).toEqual(['About 300.'])
 })
 
 test('/live after a rename holds an older live card\'s message while the newest card for the PR is deploying (#1335)', withKit, async ($, on) => {
-  const old = { repo: 'danwright32/old-slate', pr: 300, title: 'Older', url: 'https://github.com/danwright32/old-slate/pull/300', state: 'live', at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' }
-  const now = { repo: 'danwright32/slate', pr: 300, title: 'Newer', url: 'https://github.com/danwright32/slate/pull/300', state: 'deploying', at: T0 - 1000 }
-  world(on, { remote: 'git@github.com:danwright32/old-slate.git', stored: { 'cards:danwright32/old-slate': [old], 'cards:danwright32/slate': [now] } })
+  const old = { repo: 'acme-hq/old-scheduler', pr: 300, title: 'Older', url: 'https://github.com/acme-hq/old-scheduler/pull/300', state: 'live', at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' }
+  const now = { repo: 'acme-hq/scheduler', pr: 300, title: 'Newer', url: 'https://github.com/acme-hq/scheduler/pull/300', state: 'deploying', at: T0 - 1000 }
+  world(on, { remote: 'git@github.com:acme-hq/old-scheduler.git', stored: { 'cards:acme-hq/old-scheduler': [old], 'cards:acme-hq/scheduler': [now] } })
   expect(await live($)).toBe('- Merged, deploying: Newer (#300)\n\nNot sent yet:\n- Message for Kris waits until #300 is live.')
   expect((await shown($)).filter(t => t.startsWith('About'))).toEqual([])
 })
 
 test("/live in a checkout whose origin still has the repo's old name lists the cards kept under the name GitHub gives it now", withKit, async ($, on) => {
-  const w = world(on, { remote: 'git@github.com:danwright32/old-slate.git' })
+  const w = world(on, { remote: 'git@github.com:acme-hq/old-scheduler.git' })
   await card($, CARD)
   expect(await live($)).toBe('- Live: Filter bookings by venue (#412)')
-  expect(w.runs).toContainEqual(['gh', 'repo', 'view', 'danwright32/old-slate', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'])
+  expect(w.runs).toContainEqual(['gh', 'repo', 'view', 'acme-hq/old-scheduler', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'])
 })
 
 // #979 review: mod-kit's reader failing is said as the repository not being read, never as a
@@ -708,7 +708,7 @@ test("/live says the session's repository could not be read when mod-kit's reade
 })
 
 test('/live says so when GitHub cannot be asked for the repo\'s current name, and lists what is kept under the remote\'s', withKit, async ($, on) => {
-  world(on, { remote: 'git@github.com:danwright32/old-slate.git', repoName: { exitCode: 1, stdout: '', stderr: 'HTTP 502' } })
+  world(on, { remote: 'git@github.com:acme-hq/old-scheduler.git', repoName: { exitCode: 1, stdout: '', stderr: 'HTTP 502' } })
   await card($, CARD)
   expect(await live($)).toBe(
     'No merged changes have a card in this project yet.\n\nGitHub could not be asked for the name this repository has now (HTTP 502), so any cards kept under another name for it may be missing.',
@@ -738,7 +738,7 @@ test('a message Dan marked sent stays sent when the card is made again with it, 
   world(on)
   const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'It is live now.' }
   await card($, { ...CARD, ...ask })
-  await press($, 'is-it-live:sent-danwright32-slate-412')
+  await press($, 'is-it-live:sent-acme-hq-scheduler-412')
   await card($, { ...CARD, ...ask })
   expect(await shown($)).toEqual(['engine band'])
   expect(await live($)).not.toContain('Not sent yet')
@@ -874,7 +874,7 @@ type Pr = { state: 'MERGED' | 'OPEN' | 'CLOSED'; mergedAt?: number }
 // GitHub, answering `gh pr view <n> [--repo r]` for the PRs it holds; a PR named by no --repo is the
 // session folder's repository's.
 // `issues` are numbers the repository holds as issues, which GitHub answers as it really does when
-// asked for a pull request of that number (#1943, measured on slate#4342, 2026-10-31).
+// asked for a pull request of that number (#1943, measured on scheduler#4342, 2026-10-31).
 const notAPr = (n: string) => `GraphQL: Could not resolve to a PullRequest with the number of ${n}. (repository.pullRequest)`
 const github = (prs: Record<string, Pr>, issues: string[] = []) => (argv: string[]): Gh => {
   const n = argv[3] !== undefined && !argv[3].startsWith('-') ? argv[3] : undefined
@@ -897,7 +897,7 @@ const turnEnd = async ($: unknown, isActive = false) =>
     hook_event_name: 'Stop',
     session_id: 's1',
     transcript_path: '/t',
-    cwd: '/Users/dan/Apps/slate',
+    cwd: '/Users/dan/Apps/scheduler',
     stop_hook_active: isActive,
     last_assistant_message: 'Merged and done.',
   })) as { block?: string }
@@ -966,7 +966,7 @@ test('a merge is recognised as plain gh, through rtk, and through the merge help
     prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${REPO}#413`]: { state: 'MERGED', mergedAt: JUST }, [`${OTHER}#7`]: { state: 'MERGED', mergedAt: JUST } }),
   })
   await start($)
-  expect(said(await bash($, 'cd /Users/dan/Apps/slate && gh pr merge 412 --squash'))).toContain(`You merged ${REPO}#412.`)
+  expect(said(await bash($, 'cd /Users/dan/Apps/scheduler && gh pr merge 412 --squash'))).toContain(`You merged ${REPO}#412.`)
   expect(said(await bash($, 'rtk gh pr merge 413 --squash --delete-branch'))).toContain(`You merged ${REPO}#413.`)
   expect(said(await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --repo ${OTHER} --squash --delete-branch`))).toContain(`You merged ${OTHER}#7.`)
   expect(views(runs).map(r => r.slice(3).join(' '))).toEqual(['412 --json number,state,mergedAt,url', '413 --json number,state,mergedAt,url', `7 --repo ${OTHER} --json number,state,mergedAt,url`])
@@ -1018,7 +1018,7 @@ test('a card another session made after the merge clears it; one made before doe
   const kept = (pr: number, at: number) => ({ repo: REPO, pr, title: 't', url: `https://github.com/${REPO}/pull/${pr}`, state: 'live', at })
   world(on, {
     prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${REPO}#413`]: { state: 'MERGED', mergedAt: JUST } }),
-    stored: { 'cards:danwright32/slate': [kept(412, T0 + 5), kept(413, T0 - 1)] },
+    stored: { 'cards:acme-hq/scheduler': [kept(412, T0 + 5), kept(413, T0 - 1)] },
   })
   await start($)
   await bash($, 'gh pr merge 412 --squash')
@@ -1144,7 +1144,7 @@ test('a background merge GitHub cannot be asked about, or answers for another re
   expect((await owedNowOf($)).map(o => o.how)).toEqual(['waiting'])
 })
 
-// #1943: a Slate session was asked for a card for slate#4342, a closed lesson sweep issue,
+// #1943: a Scheduler session was asked for a card for scheduler#4342, a closed lesson sweep issue,
 // at five turn ends: a merge command naming the issue's number, its failure hidden by a pipe, was
 // recorded as a merge GitHub could not confirm, and the card tool's refusal settled nothing.
 test('a merge naming an issue number owes no card, in the foreground or the background (#1943)', withKit, async ($, on) => {
@@ -1283,7 +1283,7 @@ test("a subagent's merge is named for its report, and the session that dispatche
 
 test('a session with nobody at its prompt is never refused a turn end (#1244)', withKit, async ($, on) => {
   world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST } }) })
-  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: '/Users/dan/Apps/slate', surface: null, isInteractive: false } as never)
+  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: '/Users/dan/Apps/scheduler', surface: null, isInteractive: false } as never)
   await bash($, 'gh pr merge 412 --squash')
   expect((await turnEnd($)).block).toBeUndefined()
 })
