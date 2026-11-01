@@ -358,18 +358,34 @@ kind_in_awk() { # <key> <rows>
 }
 check "the awk reading of a tally is the same rule: unknown, lower, exact, exact for nothing" \
   "$(eq "$(kind_in_awk c "$rows") $(kind_in_awk b "$rows") $(kind_in_awk d "$rows") $(kind_in_awk a "$rows") $(kind_in_awk z "$rows")" "unknown lower lower exact exact")"
+# The words a total is said in have one copy too (#2013): dcu_tally_words, which the review checker
+# prints and the review page's bottom bar is checked against (its own suite runs both).
+words_of() { # <key> <rows>
+  awk -F '\t' -v k="$1" "${DCU_AWK_LIB:-}${DCU_AWK_TALLY:-}${DCU_AWK_WORDS:-}"'{ dcu_tally($1, $2, $3) } END { print dcu_tally_words(k) }' <<< "$2" 2>&1
+}
+check "no size read at all is said as size unknown, never 0 KB" "$(eq "$(words_of c "$rows")" "size unknown")"
+check "an unsized item beside a sized one is at least, and the unread one is counted" "$(eq "$(words_of b "$rows")" "at least 1 KB, plus 1 whose size was not read")"
+check "a partial size is at least, with nothing unread to count" "$(eq "$(words_of d "$rows")" "at least 5 KB")"
+check "every size read in full is said as the figure alone" "$(eq "$(words_of a "$rows")" "4 KB")"
+# Whether one item's bytes are a lower bound is one predicate, dcu_part, which the tally counts by and
+# the review page marks each row by, so the page's running total adds them up the same way (#2013).
+check "dcu_part: measured, reported and a record from before sizes are whole; partial and denied are not; no bytes is never partial" \
+  "$(eq "$(awk "${DCU_AWK_TALLY:-}"'BEGIN { print dcu_part("1024", "measured") dcu_part("1024", "reported") dcu_part("1024", "") dcu_part("1024", "partial") dcu_part("1024", "denied") dcu_part("", "denied") }' 2>&1)" "000110")"
 # Every place disk-clean totals what can go calls the tally and reads its wording from it: the scan's
 # closing summary, the low space warning, the review page's kind totals, the review checker's
 # selection totals (the last two joined #1866 after carrying a narrower rule of their own).
 for f in "$SCAN" "$DIR/../../hooks/check-free-space.sh" "$DIR/review-page.sh" "$DIR/review-check.sh"; do
   check "$(basename "$f") totals through dcu_tally and words it through the tally's kind" \
-    "$(grep -q 'dcu_tally(' "$f" && grep -qE 'dcu_tally_kind\(|dcu_total_kind ' "$f" && echo ok || echo "it does not call both")"
+    "$(grep -q 'dcu_tally(' "$f" && grep -qE 'dcu_tally_kind\(|dcu_total_kind |dcu_tally_words\(' "$f" && echo ok || echo "it does not call both")"
 done
 # No second copy of the rule anywhere disk-clean lives: the size tests that make a total a lower
 # bound (the shared one, and the narrower one the review page and checker kept) are written only in
 # the units library. Each pattern is split in two here so this file does not match itself.
 copies="$(grep -r -l --include='*.sh' -F -e '!= "report''ed"' -e '$8 == "part''ial"' "$DIR" "$DIR/../../hooks" | grep -v '/disk-clean-units\.sh$')"
 check "no disk-clean script but the units library carries the at least rule" "$([ -z "$copies" ] && echo ok || echo "copies in: $copies")"
+copies="$(grep -r -l --include='*.sh' -F -e '" whose size was not ''read"' "$DIR" "$DIR/../../hooks" | grep -v -e '/disk-clean-units\.sh$' -e '/test-[^/]*\.sh$')"
+check "no disk-clean script but the units library words an unread count" "$([ -z "$copies" ] && echo ok || echo "copies in: $copies")"
+check "the review checker words its totals through dcu_tally_words" "$(grep -q 'dcu_tally_words(' "$DIR/review-check.sh" && echo ok || echo "it does not")"
 
 # ================================================================================================
 # 7. Thousands of items (L101): every one recorded, sized in one batch, in bounded time
