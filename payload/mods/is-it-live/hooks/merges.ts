@@ -1,6 +1,7 @@
 import type { ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { IsItLiveOwed } from '../types/index.d.ts'
 import { MOD } from './card.ts'
+import { VIEW_FIELDS, isNotAPr } from './mod-kit/prmerged.ts'
 
 // The card after every merge (#1244). The card used to appear only when Claude chose to call a
 // deferred tool whose description, the one place that said to call it, Claude never saw. Now a
@@ -30,8 +31,10 @@ export const mergeCallOf = (a: ModKitGh | undefined): MergeCall | undefined => {
   }
 }
 
-/** What GitHub is asked about a merge: the fields proofOf reads. */
-export const VIEW_FIELDS = 'number,state,mergedAt,url'
+// What GitHub is asked about a merge, and its words for a number that is no pull request (#1943):
+// mod-kit's one check of whether a pull request merged (hooks/mod-kit/prmerged.ts, #1991), which the
+// turn end asks through, and which the command's own question here reads with too.
+export { VIEW_FIELDS, isNotAPr }
 /** How far GitHub's clock may sit behind this Mac's before a merge reads as older than the command. */
 export const SKEW_MS = 10 * 60_000
 /**
@@ -47,18 +50,15 @@ export const WAIT_MS = 24 * 60 * 60_000
  * What GitHub said about the PR a merge named, for a command that ran at `since`: merged by it, open
  * or closed (so it merged nothing), or not proven either way, with why. A PR GitHub found merged
  * before the command ran is not proven to be the one it merged: the same number in another
- * repository, asked in the wrong folder, would read as merged too (L237).
+ * repository, asked in the wrong folder, would read as merged too (L237). GitHub's link for the PR
+ * rides on an open answer and on a merge found older than the command, so a background merge naming
+ * no repository is held by the repository that link names (#1991), and every later turn end asks
+ * GitHub by it rather than in a folder that may be gone. GitHub's refusal saying the number is no
+ * pull request (isNotAPr) is an answer, not a failure to ask: a merge naming it merged nothing, and no
+ * card can ever be made for it, so it is never owed one. Any other refusal proves nothing either way.
  */
-export type Proof = { kind: 'merged'; pr: number; url: string; at: number } | { kind: 'open' } | { kind: 'closed' } | { kind: 'not a pr' } | { kind: 'unproven'; why: string }
+export type Proof = { kind: 'merged'; pr: number; url: string; at: number } | { kind: 'open'; url?: string } | { kind: 'closed' } | { kind: 'not a pr' } | { kind: 'unproven'; why: string; url?: string }
 
-/**
- * Whether GitHub's refusal says the number is no pull request in the repository asked (an issue, or
- * nothing at all): gh's own words for it, measured on slate#4342, a lesson sweep issue
- * (#1943). That is an answer, not a failure to ask: a merge naming it merged nothing, and no card can
- * ever be made for it, so it is never owed one. Any other refusal (GitHub not answering, no access)
- * proves nothing either way and stays unproven.
- */
-export const isNotAPr = (error: string): boolean => /Could not resolve to a PullRequest/i.test(error)
 export const proofOf = (stdout: string, since: number): Proof => {
   let v: { number?: unknown; state?: unknown; mergedAt?: unknown; url?: unknown }
   try {
@@ -66,12 +66,13 @@ export const proofOf = (stdout: string, since: number): Proof => {
   } catch {
     return { kind: 'unproven', why: "GitHub's answer could not be read" }
   }
-  if (v.state === 'OPEN') return { kind: 'open' }
+  const url = typeof v.url === 'string' && /\/pull\/(\d+)\/?$/.exec(v.url)?.[1] === String(v.number) ? { url: v.url } : {}
+  if (v.state === 'OPEN') return { kind: 'open', ...url }
   if (v.state === 'CLOSED') return { kind: 'closed' }
   if (v.state !== 'MERGED' || typeof v.number !== 'number' || typeof v.url !== 'string') return { kind: 'unproven', why: `GitHub answered state ${JSON.stringify(v.state)}` }
   const at = typeof v.mergedAt === 'string' ? Date.parse(v.mergedAt) : NaN
   if (Number.isNaN(at)) return { kind: 'unproven', why: 'GitHub gave no time for the merge' }
-  if (at < since - SKEW_MS) return { kind: 'unproven', why: `the #${v.number} GitHub found from this folder merged at ${v.mergedAt}, before this command ran, so it may be another repository's` }
+  if (at < since - SKEW_MS) return { kind: 'unproven', why: `the #${v.number} GitHub found from this folder merged at ${v.mergedAt}, before this command ran, so it may be another repository's`, ...url }
   return { kind: 'merged', pr: v.number, url: v.url, at }
 }
 

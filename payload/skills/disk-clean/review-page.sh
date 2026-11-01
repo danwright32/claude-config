@@ -17,9 +17,10 @@
 # (~/.claude/state/disk-clean/last-scan.json, read through hooks/lib/disk-clean-record.sh):
 #   - each kind of thing as a heading row with what can go from it on the right (D1), and a tick box
 #     before its name that ticks every item of the kind that can be ticked, never a kept one, half
-#     filled when only some are, disabled when none can be (D11). A kind's total
-#     says "At least" when anything in it that can go was only partly measured or not at all, since
-#     then the figure is a lower bound (L11);
+#     filled when only some are, disabled when none can be (D11). A kind's total is the shared
+#     tally's (hooks/lib/disk-clean-units.sh, #1866): "Size unknown" when no size of what can go in
+#     it was read, never 0; "At least" when some was read but something was only partly measured or
+#     not at all, or the kind was cut short, since then the figure is a lower bound (L11);
 #   - kinds largest first by what can go, with Tools not used in 180 days and Large personal files
 #     always last, in that order, because those are Dan's own and cannot come back (D3). A kind the
 #     scan found nothing in is not drawn, as the design draws it; a kind it could not measure at all
@@ -116,7 +117,7 @@ done
 # Pass 1: each kind's total and rank, and one sort key line per item:
 #   rank, 0 for an item that can go or 1 for one that cannot, minus its KiB (unknown sizes after every
 #   known one, kept items in scan order), the item's place in the scan, then the item itself.
-awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v tab="$TAB" "$DCU_AWK_LIB$DCR_AWK_TITLES"'
+awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v tab="$TAB" "$DCU_AWK_LIB$DCU_AWK_TALLY$DCR_AWK_TITLES"'
   # A kind the scan could not measure, with the reason it recorded: its status without the
   # "unmeasured: " prefix, else its note, else a plain statement that it was not measured.
   FILENAME == ARGV[1] {
@@ -133,20 +134,23 @@ awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v ta
     ni++; seq[ni] = $0; c = $2; cat_of[ni] = c
     if (!(c in known)) { known[c] = 1; firsts[++nfirst] = c }
     n[c]++
-    if ($5 == "offerable") {
-      can[c]++
-      if ($6 ~ /^[0-9]+$/) kib[c] += int($6 / 1024); else lower[c] = 1
-      if ($8 == "partial") lower[c] = 1
-    }
+    # What can go is totalled by the shared tally (hooks/lib/disk-clean-units.sh, #1866), the one
+    # the scan and the low space warning total by: never 0 for a size nobody read (L90).
+    if ($5 == "offerable") { can[c]++; dcu_tally(c, $6, $8) }
   }
   END {
+    for (c in n) kib[c] = dcu_tally_kib(c)
     # The kinds, in the scan header order, then any the header does not name. A kind with items is
     # drawn; so is one the scan could not measure at all, which has none (Dan, 2026-10-28).
     m = split(cats, co, " "); nk = 0
     for (j = 1; j <= m; j++) if (((co[j] in n) || (co[j] in unm)) && !(co[j] in placed)) { kinds[++nk] = co[j]; placed[co[j]] = 1 }
     for (j = 1; j <= nfirst; j++) if (!(firsts[j] in placed)) { kinds[++nk] = firsts[j]; placed[firsts[j]] = 1 }
-    # A kind cut short partway still shows what it found, and its total is then a lower bound.
-    for (c in unm) if (c in n) lower[c] = 1
+    # A kind cut short partway still shows what it found, and its total is then a lower bound,
+    # unless no size in it was read at all, when it is unknown.
+    for (c in n) {
+      kind[c] = dcu_tally_kind(c)
+      if (kind[c] == "exact" && (c in unm)) kind[c] = "lower"
+    }
     # D3: largest first by what can go (a stable insertion sort over a dozen kinds); then the kinds
     # the scan could not measure at all, which have no size, in the scan order; your own files last.
     nr = 0
@@ -160,7 +164,8 @@ awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v ta
     if (("large-files" in n) || ("large-files" in unm)) order[++nr] = "large-files"
     for (r = 1; r <= nr; r++) {
       c = order[r]; rank[c] = r
-      printf "%d%s%s%s%s%s%s%s%d%s%s\n", r, tab, c, tab, dcr_t(c, table), tab, (lower[c] ? "At least " : "") dcu_h(kib[c] + 0), tab, can[c] + 0, tab, ((c in n) ? "" : unm[c]) > catfile
+      total = (kind[c] == "unknown") ? "Size unknown" : ((kind[c] == "lower") ? "At least " : "") dcu_h(kib[c] + 0)
+      printf "%d%s%s%s%s%s%s%s%d%s%s\n", r, tab, c, tab, dcr_t(c, table), tab, total, tab, can[c] + 0, tab, ((c in n) ? "" : unm[c]) > catfile
     }
     for (i = 1; i <= ni; i++) {
       split(seq[i], f, FS)

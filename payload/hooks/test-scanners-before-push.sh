@@ -415,7 +415,7 @@ o38="$(fire "$R38" "git push")"; c38=$?
 # a copy of the gate whose repo-files.sh refuses the listings of what is not committed, the count's
 # and, since #1910, the key's, and nothing else.
 FAKEHOOKS="$TMPROOT/fakehooks"; mkdir -p "$FAKEHOOKS/lib"
-cp "$H" "$FAKEHOOKS/scanners-before-push.sh"; cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$FAKEHOOKS/lib/"
+cp "$H" "$FAKEHOOKS/scanners-before-push.sh"; cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$DIR/lib/work-names-messages.sh" "$DIR/lib/work-names.py" "$DIR/lib/dev-update-registry.js" "$FAKEHOOKS/lib/"
 cat > "$FAKEHOOKS/lib/repo-files.sh" <<EOF
 #!/usr/bin/env bash
 case "\$1" in --uncommitted|--changed) echo "repo-files: git could not list the files under \$2 that are not committed." >&2; exit 1 ;; esac
@@ -821,6 +821,17 @@ if [ -n "$REAL" ] && [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
   grep -q '^SUITE tests/test-claude-sync.sh$' <<< "$_sel" \
     && check "and the four minute suite is never selected whole" "it would run whole: $_sel" \
     || check "and the four minute suite is never selected whole" ok
+  # The runner's own suite is the slowest whole suite there is: it starts the runner on dozens of
+  # fixture trees, and on 2026-10-31 this gate recorded 510 seconds for it against a budget of 150,
+  # so every push was refused once and waited for it (claude-config#1997). Only a few of its checks
+  # read this repository's files, and those live in a scanner of their own, which IS selected, so
+  # they still run before every push while the fixture runs do not.
+  grep -q '^SUITE payload/hooks/test-run-all-tests\.sh$' <<< "$_sel" \
+    && check "#1997 and the runner's own suite is never selected whole" "it would run whole, about 500 seconds against the budget: $_sel" \
+    || check "#1997 and the runner's own suite is never selected whole" ok
+  grep -q '^SUITE payload/hooks/test-run-all-tests-real-tree\.sh$' <<< "$_sel" \
+    && check "#1997 and the runner suite's checks over this repository's files are selected" ok \
+    || check "#1997 and the runner suite's checks over this repository's files are selected" "got=$_sel"
 else
   # The INSTALLED copy of these hooks sits in ~/.claude, where there is no repository and never
   # will be, so there is no selection to read and that is not a fault. Said out loud rather than
@@ -1349,7 +1360,7 @@ treefire "$R1910e" "git push" >/dev/null
 nokey_hooks(){   # $1 = folder  $2 = the one thing missing: listing (the listings of what is not committed fail), pidlock or recorded (that lock library is absent), or state (nothing; the state folder is made bad by the caller)
   mkdir -p "$1/lib"
   cp "$H" "$1/scanners-before-push.sh"
-  cp "$DIR/lib/push-scope.sh" "$DIR/lib/load-average.sh" "$DIR/lib/whole-number.sh" "$1/lib/"
+  cp "$DIR/lib/push-scope.sh" "$DIR/lib/load-average.sh" "$DIR/lib/whole-number.sh" "$DIR/lib/work-names-messages.sh" "$DIR/lib/work-names.py" "$DIR/lib/dev-update-registry.js" "$1/lib/"
   [ "$2" = pidlock ] || cp "$DIR/lib/pid-lock.sh" "$1/lib/"
   [ "$2" = recorded ] || cp "$DIR/lib/recorded-pid.sh" "$1/lib/"
   if [ "$2" = listing ]; then
@@ -1397,6 +1408,95 @@ nokey_case recorded recorded 'lib/recorded-pid.sh could not be loaded'
 # folder inside it and says it could not be made.
 : > "$TMPROOT/nokey-notafolder"
 nokey_case state state 'could not be made' "$TMPROOT/nokey-notafolder/state"
+
+# --- the messages of the commits a push adds name no work organisation (claude-config#1995). This
+#     repository squash merges with the commit messages as the body, so a message naming one lands
+#     in main without ever being a file the whole tree scan reads. The gate runs the same scanner,
+#     lib/work-names.py, over the messages of exactly the commits the push adds: never one already
+#     on the remote's default branch or already pushed to the branch's upstream. The organisation is
+#     an invented one, handed to the scanner by hash; the registry reader is a stub, so what this
+#     Mac's own registry holds cannot decide a case.
+WN_HASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
+WN_READER="$TMPROOT/wn-registry-missing.js"
+printf 'console.log(JSON.stringify({state: "missing", file: "/nowhere/repos.local.json"}))\n' > "$WN_READER"
+WN_BROKEN="$TMPROOT/wn-registry-broken.js"
+printf 'console.log("not json")\n' > "$WN_BROKEN"
+wn_fire(){           # $1 = repo  $2 = command  [$3 = registry reader] -> output, the gate's exit code
+  ( export WORK_NAMES_EXTRA_HASHES="$WN_HASH" WORK_NAMES_REGISTRY_READER="${3:-$WN_READER}"; fire "$1" "$2" )
+}
+wn_commit(){ git -C "$1" commit -q --allow-empty -m "$2" >/dev/null 2>&1; }
+# A repository with a remote whose main holds one commit naming the organisation, already published,
+# and a branch cut from it with no upstream yet.
+WNB="$TMPROOT/wn-remote.git"; git init -q --bare "$WNB"
+RW="$(mkrepo wnames)"; add_scanner "$RW" alpha 0; commit_all "$RW"
+wn_commit "$RW" "Old history
+
+quoted Acme-HQ/widget#1 before the scan existed"
+git -C "$RW" branch -M main; git -C "$RW" remote add origin "$WNB"
+git -C "$RW" push -q origin main >/dev/null 2>&1; git -C "$RW" fetch -q origin >/dev/null 2>&1
+git -C "$RW" checkout -q -b feature
+wn_commit "$RW" "Add the reader
+
+refs widget#3"
+out="$(wn_fire "$RW" "git push -u origin feature")"; rc=$?
+[ "$rc" -eq 0 ] && check "#1995 (control) a branch whose new commits are clean is let through, the published one naming it is not judged" ok \
+  || check "#1995 (control) a branch whose new commits are clean is let through, the published one naming it is not judged" "exit=$rc out=$out"
+wn_commit "$RW" "Quote the refusal
+
+it named acme-hq/widget#4 in the fixture"
+named="$(git -C "$RW" rev-parse --short HEAD)"
+out="$(wn_fire "$RW" "git push -u origin feature")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "commit $named:3: a work organisation name" <<< "$out" \
+  && check "#1995 a new commit whose message names a work organisation stops the push, naming the commit and line" ok \
+  || check "#1995 a new commit whose message names a work organisation stops the push, naming the commit and line" "exit=$rc out=$out"
+grep -q -F "write name#123, never owner/name#123" <<< "$out" \
+  && check "#1995 and the refusal carries the file check's own remedy" ok \
+  || check "#1995 and the refusal carries the file check's own remedy" "out=$out"
+grep -q -F "git reset --soft" <<< "$out" \
+  && check "#1995 and says how to reword a commit nobody has pushed" ok \
+  || check "#1995 and says how to reword a commit nobody has pushed" "out=$out"
+grep -q -i "acme-hq" <<< "$out" \
+  && check "#1995 and never repeats the name" "out=$out" \
+  || check "#1995 and never repeats the name" ok
+grep -q "scanner alpha ran" <<< "$out" \
+  && check "#1995 a refusal over a message comes before any scanner suite is spent" "out=$out" \
+  || check "#1995 a refusal over a message comes before any scanner suite is spent" ok
+# Once that commit is on the branch's upstream it has been pushed, and is not this gate's business.
+git -C "$RW" push -q -u origin feature >/dev/null 2>&1
+wn_commit "$RW" "Follow up
+
+refs widget#5"
+out="$(wn_fire "$RW" "git push")"; rc=$?
+[ "$rc" -eq 0 ] && check "#1995 a commit already on the upstream is not judged again, only what the push adds" ok \
+  || check "#1995 a commit already on the upstream is not judged again, only what the push adds" "exit=$rc out=$out"
+# A repository with no remote at all: nothing is published, so every commit is one the push adds.
+RN="$(mkrepo wnames-noremote)"; add_scanner "$RN" alpha 0; commit_all "$RN"
+wn_commit "$RN" "First
+
+from ACME-HQ/widget#6"
+out="$(wn_fire "$RN" "git push")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "commit $(git -C "$RN" rev-parse --short HEAD):3:" <<< "$out" \
+  && check "#1995 with no remote to compare against, every commit is judged, never none" ok \
+  || check "#1995 with no remote to compare against, every commit is judged, never none" "exit=$rc out=$out"
+# A command that commits before it pushes: the message it is about to write is not in git yet, so it
+# cannot be read, and that is said, never passed.
+RC2="$(mkrepo wnames-chain)"; add_scanner "$RC2" alpha 0; commit_all "$RC2"
+out="$(wn_fire "$RC2" "git commit -q --allow-empty -m next && git push")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "not written yet" <<< "$out" \
+  && check "#1995 a push chained after its commit is refused, saying the message could not be read yet" ok \
+  || check "#1995 a push chained after its commit is refused, saying the message could not be read yet" "exit=$rc out=$out"
+# A scanner that cannot judge (here, a registry it cannot read) is no clean push.
+out="$(wn_fire "$RC2" "git push" "$WN_BROKEN")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "could not judge" <<< "$out" \
+  && check "#1995 messages the scanner could not judge stop the push, saying so" ok \
+  || check "#1995 messages the scanner could not judge stop the push, saying so" "exit=$rc out=$out"
+# A copy of the gate without the library that reads the messages is no push with clean messages.
+WN_NOLIB="$TMPROOT/wn-nolib-hooks"; mkdir -p "$WN_NOLIB/lib"
+cp "$H" "$WN_NOLIB/scanners-before-push.sh"; cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$WN_NOLIB/lib/"
+out="$(H="$WN_NOLIB/scanners-before-push.sh" wn_fire "$RC2" "git push")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "wn-nolib-hooks/lib/work-names-messages.sh, which reads the messages" <<< "$out" \
+  && check "#1995 a gate that cannot load the message reader refuses the push, naming the file" ok \
+  || check "#1995 a gate that cannot load the message reader refuses the push, naming the file" "exit=$rc out=$out"
 
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a

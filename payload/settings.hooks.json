@@ -204,6 +204,13 @@
             "command": "__CLAUDE_HOME__/hooks/stacked-branch-delete-gate.sh",
             "timeout": 30,
             "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-work-names-merge.sh",
+            "timeout": 30,
+            "onFailure": "block",
+            "statusMessage": "Checking the PR's title, description and commit messages name no work organisation"
           }
         ]
       },

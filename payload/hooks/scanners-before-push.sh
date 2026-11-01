@@ -27,6 +27,20 @@
 # `--list` prints the selection without running any of it, so what this gate covers can be read
 # without paying for it (L102).
 #
+# THAT PREMISE IS A NUMBER, and it held for every whole suite but one (claude-config#1997). The
+# durations this gate itself recorded for each run, read on 2026-10-31 at a load average of about
+# 80 on 12 cores: every whole suite it selected finished in 1 to 55 seconds, except
+# test-run-all-tests.sh at 510 (457 and 673 in two more runs that evening), against the budget of
+# 150 below, so every push here was refused once and waited for it. That suite starts the runner on
+# dozens of fixture trees; its only checks that read this repository were moved to
+# test-run-all-tests-real-tree.sh, 1.6 seconds at a load average of 239, so they still run here and
+# the fixture runs do not. Re-measure it rather than trusting these figures: each run's duration in
+# seconds is written to "$_sc_state_dir/runs/<checkout key>/<slot>-last", where the slot is the
+# first 20 hex digits of the sha256 of the suite's path and its section, each followed by a newline
+# (see _sc_slot), and a refusal for time names every scanner still running with its last duration.
+# A whole suite that takes a large share of the budget is the premise expiring: give its checks
+# over this repository a suite of their own, as #1997 did.
+#
 # It is repo-agnostic by construction: a repository with no payload/hooks/run-all-tests.sh is not
 # this one, and the hook does nothing at all there rather than running suites it knows nothing
 # about the cost of.
@@ -52,6 +66,10 @@
 # scanner: 15.3 seconds on a push touching no test section and 18.3 on one that does. Every other
 # gate a push waits on costs 0.3 seconds, so this gate is three quarters of the whole wait, which
 # is 20 to 26 seconds (claude-config#523, and the table in README.md).
+#
+# Before any suite it also judges the MESSAGES of the commits the push adds for a work organisation
+# name (claude-config#1995), and that one fails CLOSED: messages it could not judge, a commit the
+# command has not written yet, or its library missing each refuse the push. See where it is asked.
 #
 # Override: SKIP_SCANNERS_CHECK=1 git push ...   Explain why to the user first, never silently.
 
@@ -81,6 +99,16 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   case "$payload" in *SKIP_SCANNERS_CHECK=1*) exit 0 ;; esac
   case "$payload" in *push*) ;; *) exit 0 ;; esac
   echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/whole-number.sh, which reads its budget and other settings, so this push was not scanned. Reinstall the hooks with claude-sync pull. For this one command: SKIP_SCANNERS_CHECK=1 <the same command>" >&2
+  exit 2
+}
+# The reader of the messages of the commits a push adds (claude-config#1995), asked further down.
+# Missing, the same as above: a push is refused, naming the file, and any other command passes.
+# shellcheck source=lib/work-names-messages.sh
+{ . "$HOOK_DIR/lib/work-names-messages.sh" 2>/dev/null && declare -F wnm_push_messages >/dev/null; } || {
+  payload="$(ps_read_payload)"
+  case "$payload" in *SKIP_SCANNERS_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *push*) ;; *) exit 0 ;; esac
+  echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/work-names-messages.sh, which reads the messages of the commits this push adds for a work organisation name, so they were not checked. A library this gate cannot load is not a push with clean messages. Reinstall the hooks with claude-sync pull." >&2
   exit 2
 }
 
@@ -120,6 +148,45 @@ cd "$repo_dir" 2>/dev/null || exit 0
 
 # Not this repository, so there is nothing here this hook knows how to run.
 [ -f payload/hooks/run-all-tests.sh ] || exit 0
+
+# THE MESSAGES of the commits this push adds name no work organisation (claude-config#1995). This
+# repository is public and squash merges with the commit messages as the body, so a message naming
+# one lands in main without ever being a file the scanners below read; on 2026-10-31 one reached a
+# commit and was caught only by reading it by hand. Asked first, because it costs a second and needs
+# no suite, and a refusal here should not wait behind them. The rule is lib/work-names.py's, the one
+# the whole tree suite runs over the files; lib/work-names-messages.sh decides only which commits a
+# push adds (never one already on the upstream or the remote's default branch) and hands it their
+# messages. Messages it could not judge, or a commit this command has not written yet, are said and
+# refused, never passed as clean (L98). The refusal carries no override line: it is a privacy rule,
+# and its remedy, rewording a commit nobody has pushed, is always open. SKIP_SCANNERS_CHECK above
+# still skips this with the rest of the gate, and check-work-names-merge.sh, which has no override,
+# reads the same messages again before the pull request merges.
+wnm_push_messages "$cmd"; _wn_rc=$?
+case "$_wn_rc" in
+  0) ;;
+  1)
+    {
+      echo "PUSH BLOCKED: a commit this push adds names a work organisation in its message. This"
+      echo "repository is public, and a squash merge copies every commit message into main."
+      echo ""
+      printf '%s\n' "$WNM_OUT"
+      echo ""
+      echo "Judged: $WNM_JUDGED. None of them has been pushed, so reword them before the push and"
+      echo "nothing published changes. For the last commit alone, git commit --amend in the main"
+      if [ -n "$WNM_BASE" ]; then
+        echo "session; for any of them, git reset --soft $WNM_BASE and commit again with a clean message."
+      else
+        echo "session; for an earlier one, reset to the commit before it with git reset --soft and commit again."
+      fi
+    } >&2
+    exit 2 ;;
+  3)
+    echo "PUSH BLOCKED: $WNM_OUT for a work organisation name. Make the commit first, then push on its own, so its message is judged with the others this push adds." >&2
+    exit 2 ;;
+  *)
+    echo "PUSH BLOCKED: this gate could not judge the messages of the commits this push adds for a work organisation name: $WNM_OUT. Messages nobody could read are not clean ones." >&2
+    exit 2 ;;
+esac
 
 # Every suite that reads the repository's own files, committed or NOT (claude-config#522). Picked
 # from what git tracks, a scanner just written was not run until the push after the one that added
@@ -477,8 +544,9 @@ else
   _sc_detach_why="the folder for runs left going, $_sc_state_dir/runs/$_sc_repo_key, could not be made"
 fi
 mkdir -p "$_sc_runs" 2>/dev/null
-# Six hours: far past any scanner here (the slowest, test-run-all-tests.sh, about 7 minutes under
-# load), so a run older than this is one nobody is coming back for. A setting, not a measurement.
+# Six hours: far past any scanner here (the slowest whole suite it ran, test-run-all-tests.sh at
+# about 7 minutes under load, has been out of its selection since #1997; see the premise at the
+# top), so a run older than this is one nobody is coming back for. A setting, not a measurement.
 _sc_run_stale="${SCANNERS_RUN_STALE_SECONDS:-21600}"
 # Zero however written is the default, never "stale at once" (lib/whole-number.sh, claude-config#1948).
 whole_above_zero "$_sc_run_stale" _sc_run_stale || _sc_run_stale=21600

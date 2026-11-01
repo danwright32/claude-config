@@ -615,10 +615,8 @@ run --plan "$named_plan"
 check "running the plan trashes the folder that was proposed" "$(gone "$H/Downloads/old-installer")"
 check "and skips a file replaced since it was proposed" "$(has "$OUT_TEXT" "it is not the item that was proposed")"
 check "which is still there" "$(there "$H/w/swap")"
-# GNU stat (the Ubuntu CI runner) takes -f as "file system status" and exits 0 with a meaningless
-# answer, while BSD stat refuses GNU's -c, so the identity and size readers must ask -c first.
-bsd_first="$(awk '/stat -f/ && !/stat -c[^|]*\|\|[^|]*stat -f/ && !/^[[:space:]]*#/ { print FNR ": " $0 }' "$DR")"
-check "every stat in disk-remove.sh asks GNU's -c before BSD's -f" "$([ -z "$bsd_first" ] && echo ok || echo "BSD first: $bsd_first")"
+# That the identity and size readers ask GNU's -c before BSD's -f is held, for this file and every
+# other disk-clean script and test, by skills/disk-clean/test-disk-clean-stat-order.sh (#1874).
 run --propose shred "$H/w/swap"
 check "--propose with a method it does not offer is refused with exit 2" "$(eq "$RC" 2)"
 run --propose truncate "$H/Downloads"
