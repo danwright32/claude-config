@@ -86,6 +86,8 @@ check "each Agent call in a wave carries its row's model" \
 if [ -n "$CLAUDE_MD" ]; then
   check "the cap in the global CLAUDE.md still says four" \
     "$(grep -q -F '**At most four agents running at once.**' "$CLAUDE_MD" 2>/dev/null && echo ok || echo "the cap line is gone or changed in $CLAUDE_MD")"
+  check "the global CLAUDE.md points builders at the rule's section" \
+    "$(grep -F "$RULE_NAME" "$CLAUDE_MD" 2>/dev/null | grep -q -F 'skills/orchestrate/SKILL.md' && echo ok || echo "no pointer in $CLAUDE_MD")"
 else
   echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the cap in its CLAUDE.md was not read"
 fi
