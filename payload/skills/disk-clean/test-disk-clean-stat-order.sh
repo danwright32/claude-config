@@ -9,6 +9,9 @@
 #   on one line        stat -c '%s' "$p" 2>/dev/null || stat -f '%z' "$p" 2>/dev/null
 #   behind a probe     if stat -c '%d:%i' / >/dev/null 2>&1; then <GNU> else <BSD> fi
 #
+# The rule itself is hooks/lib/stat-order.sh, shared with the repository's guard (#2014); this suite
+# keeps no copy of it, only the allowance below, applied to the rule's result.
+#
 # This guard used to read disk-remove.sh alone (test-disk-remove.sh), so the same slip anywhere else
 # was caught by nothing until a Linux run failed: test-disk-clean-categories.sh carried it until
 # #1851. Fix the class (L30): the files are DERIVED, never listed (L96): every shell file in this
@@ -57,29 +60,21 @@ trap 'rm -rf "$TMP"' EXIT
 # BSD's flag, spelled so this file holds no literal BSD first stat for the guard to read in itself.
 BSD="stat -""f"
 
-# Prints "<file>:<line>: <text>" for every stat that asks BSD's -f without GNU's -c first, and
-# "allowed <name>" for each named form it met. One awk pass over every file named (L297). Comment
-# lines are not code and are skipped. A probe is open from its `if stat -c` to the next `fi`, and BSD
-# is allowed only after its `else`: a nested if inside a probe closes it early, which refuses more,
-# never less.
-stat_order_scan() { # <file>...
-  awk -v xf="$BSD '%Xf'" '
-    FNR == 1 { probe = 0; inelse = 0 }
-    /^[[:space:]]*#/ { next }
-    {
-      # Padded, so a word at either end of the line needs no anchor inside a group, which not
-      # every awk reads alike (BSD awk here, gawk or mawk on Linux).
-      l = " " $0 " "
-      if (l ~ /[^[:alnum:]_]if stat -c /) { probe = 1; inelse = 0 }
-      if (probe && l ~ /[;[:space:]]else[;[:space:]]/) inelse = 1
-      if (l ~ /stat -[f]/) {
-        if (l ~ /stat -c[^|]*\|\|[^|]*stat -[f]/) ;
-        else if (probe && inelse) ;
-        else if (FILENAME ~ /\/scan-lib\.sh$/ && index(l, xf)) print "allowed dcs_dataless"
-        else print FILENAME ":" FNR ": " $0
-      }
-      if (probe && l ~ /[;[:space:]]fi[;[:space:]]/) { probe = 0; inelse = 0 }
-    }' "$@"
+# The rule is the shared one (#2014, L370): hooks/lib/stat-order.sh, which the repository's guard
+# reads too. This suite owns only its allowance, a filter on the rule's result: a refusal of the
+# macOS flags read in a file named scan-lib.sh becomes "allowed dcs_dataless", and every other
+# refusal stands. The installed copy sits in the same place under ~/.claude, so this holds there too.
+. "$HOOKS/lib/stat-order.sh" || { check "the shared stat order rule loads" "hooks/lib/stat-order.sh did not load"; finish; }
+dcs_allowance() { # reads stat_order_scan's "<file>:<line>: <text>" lines on stdin
+  awk -v xf="$BSD '%Xf'" '{
+    if (match($0, /:[0-9]+: /)) { file = substr($0, 1, RSTART - 1); text = substr($0, RSTART + RLENGTH) }
+    else { file = ""; text = $0 }
+    if (file ~ /\/scan-lib\.sh$/ && index(text, xf)) print "allowed dcs_dataless"
+    else print
+  }'
+}
+dcs_scan() { # <file>...
+  stat_order_scan "$@" | dcs_allowance
 }
 
 # The files: derived, never listed (L96). Every shell file in this skill, and every one under hooks/
@@ -112,17 +107,17 @@ printf '%s\n' \
   "fi" \
   "if stat -c '%d:%i' / >/dev/null 2>&1; then xargs -0 stat -c '%b' < \"\$l\"" \
   "else xargs -0 $BSD '%b' < \"\$l\"; fi" > "$TMP/good.sh"
-bad="$(stat_order_scan "$TMP/bad.sh")"
+bad="$(dcs_scan "$TMP/bad.sh")"
 check "BSD first with GNU as the fallback is refused" "$(has "$bad" "bad.sh:1: ")"
 check "BSD alone is refused" "$(has "$bad" "bad.sh:2: ")"
 check "a probe that asks BSD is refused" "$(has "$bad" "bad.sh:3: ")"
 check "BSD in the THEN branch of a GNU probe is refused" "$(has "$bad" "bad.sh:5: ")"
 check "the macOS flags read is refused in any file but scan-lib.sh" "$(has "$bad" "bad.sh:9: ")"
-good="$(stat_order_scan "$TMP/good.sh")"
+good="$(dcs_scan "$TMP/good.sh")"
 check "GNU first on one line, a comment, and BSD in the else branch of a GNU probe all pass" "$([ -z "$good" ] && echo ok || echo "refused: $good")"
 mkdir -p "$TMP/lib"
 sed -n '9p' "$TMP/bad.sh" > "$TMP/lib/scan-lib.sh"
-xf="$(stat_order_scan "$TMP/lib/scan-lib.sh")"
+xf="$(dcs_scan "$TMP/lib/scan-lib.sh")"
 check "the macOS flags read in a file named scan-lib.sh is allowed, by name, and nothing else is said" "$([ "$xf" = "allowed dcs_dataless" ] && echo ok || echo "said: $xf")"
 
 # The slip #1851 fixed, put back into a copy of the real file: its GNU first identity read swapped
@@ -133,7 +128,7 @@ sed "s/stat -c '%d:%i' \"\$H\/Downloads\/movie.mov\" 2>\/dev\/null || $BSD '%d:%
   "$CAT" > "$TMP/swapped/test-disk-clean-categories.sh"
 check "the copy really was swapped" "$(cmp -s "$CAT" "$TMP/swapped/test-disk-clean-categories.sh" && echo "sed changed nothing" || echo ok)"
 check "the guard refuses the categories suite with its identity read asked BSD first" \
-  "$(has "$(stat_order_scan "$TMP/swapped/test-disk-clean-categories.sh")" "test-disk-clean-categories.sh:")"
+  "$(has "$(dcs_scan "$TMP/swapped/test-disk-clean-categories.sh")" "test-disk-clean-categories.sh:")"
 
 # ================================================================================================
 # 2. The files it reads: every disk-clean script and test, derived
@@ -151,9 +146,26 @@ check "every file it reads is there" "$(while IFS= read -r f; do [ -f "$f" ] || 
 # ================================================================================================
 files=()
 while IFS= read -r f; do files+=("$f"); done <<< "$set_list"
-real="$(stat_order_scan "${files[@]}")"
+real="$(dcs_scan "${files[@]}")"
 check "every stat in every disk-clean script and test asks GNU's -c before BSD's -f" \
   "$(grep -v '^allowed ' <<< "$real" | grep . | sed 's/^/BSD first: /' || echo ok)"
 check "the named form dcs_dataless is still met, so its allowance is still wanted" "$(has "$real" "allowed dcs_dataless")"
+
+# ================================================================================================
+# 4. One rule (#2014, L370): this suite reads stat through the shared rule and keeps no copy of it
+# ================================================================================================
+check "this suite defines no stat order rule of its own" \
+  "$(grep -n -E '^[[:space:]]*stat_order_scan[[:space:]]*\(\)' "$DIR/$(basename "${BASH_SOURCE[0]}")" | sed 's/^/its own copy at line /' | grep . || echo ok)"
+check "and the rule it reads is the shared one in hooks/lib/stat-order.sh" \
+  "$(grep -qE '^[[:space:]]*\.[[:space:]]+"\$HOOKS/lib/stat-order\.sh"' "$DIR/$(basename "${BASH_SOURCE[0]}")" && echo ok || echo "it does not source \$HOOKS/lib/stat-order.sh")"
+# The allowance fails once the line it names stops matching (L346): a copy of scan-lib.sh whose
+# flags read is gone gives the real files check above nothing to find.
+mkdir -p "$TMP/gone"
+grep -v -F "$BSD '%Xf'" "$DIR/scan-lib.sh" > "$TMP/gone/scan-lib.sh"
+check "the copy of scan-lib.sh really lost its flags read" "$(cmp -s "$DIR/scan-lib.sh" "$TMP/gone/scan-lib.sh" && echo "grep removed nothing" || echo ok)"
+gone="$(dcs_scan "$TMP/gone/scan-lib.sh")"
+check "with the flags read gone, the allowance is no longer met, so its check above fails" \
+  "$(grep -q '^allowed dcs_dataless$' <<< "$gone" && echo "still said: $gone" || echo ok)"
+check "and nothing else in that copy is refused" "$([ -z "$gone" ] && echo ok || echo "said: $gone")"
 
 finish

@@ -8,8 +8,10 @@ import { githubRepo } from './mod-kit/hooks/repo.ts'
 const github: GithubOf = async remote => githubRepo(remote)
 
 // Sleep mode phase 3 (#834): the wake check reads what really happened since sleep began, because a
-// text match always has a way around it. Each read is answered here by a stand in for gh, git and
-// stat, keyed on the command line, so each case says what GitHub and the disk hold.
+// text match always has a way around it. Each read is answered here by a stand in for gh and git,
+// keyed on the command line, so each case says what GitHub and the disk hold. The installed
+// LESSONS.md's last change is read through $.fs.stat in the hooks, never a stat process (#2016), and
+// is stood in from the same world under `mtime <path>`, in milliseconds.
 const SINCE = Date.UTC(2026, 9, 8, 3, 0) // 11:00 PM ET on Oct 7
 const AFTER = '2026-10-08T05:00:00Z'
 const BEFORE = '2026-10-08T01:00:00Z'
@@ -24,11 +26,20 @@ const QUIET: World = {
   [`gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100`]: ok('[]'),
   'git -C /Users/x/claude-config-sync remote -v': ok('origin\tgit@github.com:o/claude-config.git (fetch)\n'),
   'gh api repos/o/claude-config/commits?path=payload/LESSONS.md&since=2026-10-08T03:00:00Z': ok('[]'),
-  'stat -f %m /Users/x/.claude/LESSONS.md': ok('1700000000\n'),
+  'mtime /Users/x/.claude/LESSONS.md': ok('1700000000000'),
   'gh api repos/o/r/milestones?state=all&per_page=100': ok('[]'),
   'gh api repos/o/claude-config/milestones?state=all&per_page=100': ok('[]'),
   'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok('[]'),
   'gh run list -R o/claude-config --json workflowName,event,createdAt,url --limit 100': ok('[]'),
+}
+// What $.fs.stat says of a path, from the world: its last change, or a rejection with the reason, as
+// the engine rejects (measured 2026-11-01: "<mod>: $.fs.stat(<path>) failed: ENOENT").
+const mtimeFrom = (world: World, asked?: string[]) => async (path: string) => {
+  const key = `mtime ${path}`
+  asked?.push(key)
+  const r = world[key] ?? fail(`unexpected: ${key}`)
+  if (r.exitCode !== 0) throw new Error(r.stderr)
+  return Number(r.stdout)
 }
 const check = async (over: World = {}, read: GithubOf = github) => {
   const world = { ...QUIET, ...over }
@@ -37,7 +48,7 @@ const check = async (over: World = {}, read: GithubOf = github) => {
     const key = argv.join(' ')
     asked.push(key)
     return world[key] ?? fail(`unexpected: ${key}`)
-  }, { since: SINCE, home: HOME, github: read, now: () => SINCE })
+  }, { since: SINCE, home: HOME, github: read, now: () => SINCE, mtimeOf: mtimeFrom(world, asked) })
   return { ...r, asked }
 }
 
@@ -71,7 +82,7 @@ describe('the wake check', () => {
       'gh api repos/o/s/milestones?state=all&per_page=100': ok('[]'),
       'gh run list -R o/s --json workflowName,event,createdAt,url --limit 100': ok('[]'),
       'gh api repos/o/claude-config/commits?path=payload/LESSONS.md&since=2026-10-08T03:00:00Z': ok(JSON.stringify([{ sha: 'abcdef1234', commit: { message: 'Add L999\n\nbody' } }])),
-      'stat -f %m /Users/x/.claude/LESSONS.md': ok(`${Math.floor(SINCE / 1000) + 60}\n`),
+      'mtime /Users/x/.claude/LESSONS.md': ok(String(SINCE + 60_000)),
       'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok(JSON.stringify([
         { workflowName: 'Deploy', event: 'push', createdAt: AFTER, url: 'https://github.com/o/r/actions/runs/1' },
         { workflowName: 'CI', event: 'push', createdAt: AFTER, url: 'https://github.com/o/r/actions/runs/2' },
@@ -101,6 +112,22 @@ describe('the wake check', () => {
       'deploy runs in o/r were not checked (gh run list: the answer was not JSON)',
     ])
   })
+  // #2016: the installed LESSONS.md is read through $.fs.stat, never BSD's stat -f, which on Linux
+  // describes the file system instead and printed no time there.
+  test('the installed LESSONS.md is read without running stat at all', async () => {
+    const r = await check()
+    expect(r.asked).toContain('mtime /Users/x/.claude/LESSONS.md')
+    expect(r.asked.filter(a => a.startsWith('stat '))).toEqual([])
+  })
+  test('an installed LESSONS.md that cannot be read is said as not checked, with the reason', async () => {
+    const r = await check({ 'mtime /Users/x/.claude/LESSONS.md': fail('scope-modes: $.fs.stat(/Users/x/.claude/LESSONS.md) failed: ENOENT') })
+    expect(r.hits).toEqual([])
+    expect(r.unmeasured).toEqual(['the installed LESSONS.md was not checked (its last change could not be read: scope-modes: $.fs.stat(/Users/x/.claude/LESSONS.md) failed: ENOENT)'])
+  })
+  test('an installed LESSONS.md whose last change reads as no time is said as not checked, never as before sleep (L50)', async () => {
+    const r = await check({ 'mtime /Users/x/.claude/LESSONS.md': ok('0') })
+    expect(r.unmeasured).toEqual(['the installed LESSONS.md was not checked (its last change could not be read: no time was given)'])
+  })
   test('a time GitHub did not give, or gave unreadable, is unknown: said, never compared away nor called overnight (L50)', async () => {
     const r = await check({
       'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify([{ title: 'No date' }, { title: 'Garbled', updated_at: 'garbled' }])),
@@ -124,7 +151,7 @@ describe('the wake check', () => {
   })
   test('every repository the notes of the night name is read too, private ones included, whatever the events show', async () => {
     const world: World = { ...QUIET, 'gh api repos/o/private/milestones?state=all&per_page=100': ok(JSON.stringify([{ title: 'Secret', updated_at: AFTER }])), 'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100': ok('[]') }
-    const r = await wakeCheck(async argv => world[argv.join(' ')] ?? fail(`unexpected: ${argv.join(' ')}`), { since: SINCE, home: HOME, github, repos: ['O/Private'], now: () => SINCE })
+    const r = await wakeCheck(async argv => world[argv.join(' ')] ?? fail(`unexpected: ${argv.join(' ')}`), { since: SINCE, home: HOME, github, repos: ['O/Private'], now: () => SINCE, mtimeOf: mtimeFrom(world) })
     expect(r.hits).toEqual(['Milestone touched overnight: o/private "Secret"'])
     expect(r.unmeasured).toEqual([])
   })
@@ -137,11 +164,11 @@ describe('the wake check', () => {
         t += 25_000 // each read takes 25 s
         return QUIET[argv.join(' ')] ?? fail('unexpected')
       },
-      { since: SINCE, home: HOME, github, now: () => t, budgetMs: 60_000 },
+      { since: SINCE, home: HOME, github, now: () => t, budgetMs: 60_000, mtimeOf: mtimeFrom(QUIET, asked) },
     )
     // Three GitHub reads use the 60 s; the local reads still run, and nothing after them on GitHub.
     expect(asked.filter(a => a.startsWith('gh '))).toEqual(['gh api user --jq .login', 'gh api users/dan/events?per_page=100&page=1', 'gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100'])
-    expect(asked.filter(a => !a.startsWith('gh '))).toEqual(['git -C /Users/x/claude-config-sync remote -v', 'stat -f %m /Users/x/.claude/LESSONS.md'])
+    expect(asked.filter(a => !a.startsWith('gh '))).toEqual(['git -C /Users/x/claude-config-sync remote -v', 'mtime /Users/x/.claude/LESSONS.md'])
     expect(r.unmeasured).toEqual(['the overnight check stopped at its 60 s limit, so the rest of GitHub was not read'])
   })
   test('each GitHub read is given only the time left, and the whole check 30 s by default (#834 review of 98a40f1)', async () => {
@@ -153,7 +180,7 @@ describe('the wake check', () => {
         t += 12_000 // each read takes 12 s
         return QUIET[argv.join(' ')] ?? fail('unexpected')
       },
-      { since: SINCE, home: HOME, github, now: () => t },
+      { since: SINCE, home: HOME, github, now: () => t, mtimeOf: mtimeFrom(QUIET) },
     )
     // 30 s, 18 s and 6 s left as the three reads start; never more than 20 s for one read.
     expect(given).toEqual([20_000, 18_000, 6_000])
@@ -238,7 +265,7 @@ describe('the events, page by page back to sleep (#1160)', () => {
         t += 12_000 // each read takes 12 s: the login, then pages 1 and 2 use the 30 s
         return world[argv.join(' ')] ?? fail('unexpected')
       },
-      { since: SINCE, home: HOME, github, now: () => t },
+      { since: SINCE, home: HOME, github, now: () => t, mtimeOf: mtimeFrom(world) },
     )
     expect(asked).not.toContain(page(3))
     expect(r.unmeasured).toEqual([

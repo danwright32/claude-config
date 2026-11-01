@@ -1194,7 +1194,8 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
   }
   let found
   try {
-    found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos, github: githubOf($), now: () => $.clock.now() })
+    // #2016: the installed LESSONS.md is dated by the engine's own stat, which reads the same on Linux.
+    found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos, github: githubOf($), now: () => $.clock.now(), mtimeOf: async p => (await $.fs.stat(p)).mtimeMs })
   } catch (err) {
     found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`] }
   }
