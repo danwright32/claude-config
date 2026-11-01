@@ -288,7 +288,11 @@ type Opts = {
   usage?: { cost?: { usd: number }; rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[] } | { throws: string }
   /** /repo is a linked worktree rather than a primary checkout (#834). */
   linkedWorktree?: boolean
-  /** The wake check's reads (#834), each command line's own answer: its output, or a failure. */
+  /**
+   * The wake check's reads (#834), each command line's own answer: its output, or a failure. The
+   * installed LESSONS.md is read through $.fs.stat (#2016), answered under `mtime <path>` in
+   * milliseconds, or the failure $.fs.stat rejects with.
+   */
   night?: Record<string, string | { fails: string }>
   /** How long each of the wake check's GitHub reads takes on the engine's clock, never the real one (#1147). */
   nightReadMs?: number
@@ -446,6 +450,8 @@ const world = (on: On, o: Opts = {}) => {
     sent: [] as { to: unknown; text: string }[],
     prompts: [] as string[],
     runs: [] as string[][],
+    /** Each time the wake check dated the installed LESSONS.md through $.fs.stat (#2016). */
+    lessonsStats: 0,
     /** Every mv, ln and rm, in order, as the Mac saw them (#843). */
     fileOps: [] as string[][],
     asked: [] as string[],
@@ -542,6 +548,15 @@ const world = (on: On, o: Opts = {}) => {
   // something else.
   on('fs.stat', ($, e) => {
     if (w.refusing) return refused('fs.stat')
+    // The installed LESSONS.md the wake check dates (#2016): a quiet night's, changed long before.
+    if (e.path === '/Users/x/.claude/LESSONS.md' && !(e.path in w.files)) {
+      w.lessonsStats += 1
+      const said = o.night?.[`mtime ${e.path}`]
+      // A deny is how a test rejects the call: a hook that throws is skipped. The engine names the
+      // call before the reason, as the real one does ("scope-modes: $.fs.stat(<path>) failed: ENOENT").
+      if (said !== undefined && typeof said !== 'string') return { deny: said.fails } as never
+      return { value: { kind: 'file', size: 1, mtimeMs: said === undefined ? 1000 : Number(said), isLink: false } } as never
+    }
     if (isOther(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: false } } as never
     if (e.path in w.files) return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } } as never
     if ((isCheckout(e.path) && !isGone(e.path)) || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`))) return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } } as never
@@ -842,7 +857,6 @@ const world = (on: On, o: Opts = {}) => {
     }
     if (cmd === 'gh' && a[0] === 'api' && /^(?:users\/dan\/events|repos\/[^/]+\/[^/]+\/(?:milestones|commits))/.test(a[1] ?? '')) return ok('[]')
     if (cmd === 'gh' && (a[0] === 'search' || (a[0] === 'run' && a[1] === 'list'))) return ok('[]')
-    if (cmd === 'stat') return ok('1\n')
     if (cmd === 'gh') {
       const gh = o.gh ?? { pr: null, issues: {} }
       if (gh.fails) return fail(1, gh.fails)
@@ -5294,6 +5308,9 @@ test('the wake check reads every repository the night notes named, private ones 
   await command($ as never, 'wake')
   expect(w.runs.some(r => r.join(' ') === 'gh api repos/o/private/milestones?state=all&per_page=100')).toBe(true)
   expect(w.runs.some(r => r.join(' ') === 'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100')).toBe(true)
+  // #2016: the installed LESSONS.md is dated through $.fs.stat, and no stat process runs at all.
+  expect(w.lessonsStats).toBe(1)
+  expect(w.runs.filter(r => r[0] === 'stat')).toEqual([])
 })
 
 test('/wake puts what the overnight check found first, in the reply and the notes', withDeps, async ($, on) => {
@@ -5301,12 +5318,12 @@ test('/wake puts what the overnight check found first, in the reply and the note
     ...worker,
     night: {
       'gh api users/dan/events?per_page=100&page=1': JSON.stringify([{ type: 'IssuesEvent', created_at: new Date(T0 - MIN).toISOString(), repo: { name: 'o/r' }, payload: { action: 'opened', issue: { number: 9, title: 'Filed overnight' } } }]),
-      'stat -f %m /Users/x/.claude/LESSONS.md': { fails: 'stat: No such file or directory' },
+      'mtime /Users/x/.claude/LESSONS.md': { fails: 'ENOENT' },
     },
   })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight"\. Not checked: the installed LESSONS\.md was not checked \(stat: stat: No such file or directory\)\. The night's report is at /)
+  expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight"\. Not checked: the installed LESSONS\.md was not checked \(its last change could not be read: scope-modes: \$\.fs\.stat[^)]*ENOENT\)\. The night's report is at /)
   const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
   // Written before the night's end note, so the final render puts them at the top of the report.
   expect(notes.map(n => n.kind)).toEqual(['outward', 'unmeasured', 'woke'])

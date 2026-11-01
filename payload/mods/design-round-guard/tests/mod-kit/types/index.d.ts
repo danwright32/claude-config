@@ -177,8 +177,14 @@ export type ModKit = {
    * backtick, and never one a substitution runs. Only there may a guard read the text as the
    * interpreter does; the reader's own `targets` and `code` (writes) are given by the same answer,
    * so no mod works it out from `heredocs` itself.
+   *
+   * Given `cwd`, the folder the call starts in, and `home`, each command also carries `folder`
+   * (#2000): the absolute folder it runs in, where a cd or pushd before it leaves the shell, read as
+   * `writes` reads one (relative and home folders, a variable the command set, a subshell's cd ending
+   * with it), or null where that cannot be followed (a variable it did not set, cd -, a popd). A mod
+   * asking about what a command acts on in its folder asks this, never the session's folder (L237).
    */
-  pipeline: (input: { command: string }) => Promise<ModKitCommand[]>
+  pipeline: (input: { command: string; cwd?: string; home?: string }) => Promise<ModKitCommand[]>
   /**
    * Where a python program holds text rather than code (#1171): each comment after its `#`, and
    * each string literal between its quotes, `formatted` for an f-string or a t-string, whose braces
@@ -354,6 +360,8 @@ export type ModKitCommand = {
    * zsh), for each word the places in it, quotes removed, of each $ outside quotes (#1834).
    */
   splits?: number[][]
+  /** The folder it runs in, given only when `pipeline` was given `cwd`; null where a cd before it cannot be followed. */
+  folder?: string | null
 }
 
 /** The languages whose inline code the reader judges. */

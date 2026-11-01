@@ -16,9 +16,10 @@ const LOAD = `load the card tool with ToolSearch with the query "select:${TOOL}"
  * A merge a command makes at once: the PR as it names it (a number, a link or a branch; none for the
  * checkout's own), its number where that says it, and the repository it names (lower case; null when
  * it names one that cannot be read). Undefined for anything but `gh pr merge`, and for --auto and
- * --disable-auto, which merge nothing at the time they run.
+ * --disable-auto, which merge nothing at the time they run. `folder` is the folder its command runs
+ * in, where a cd before it left the shell (#2000), null where that cannot be read; register.ts adds it.
  */
-export type MergeCall = { selector?: string; pr?: number; named?: string | null }
+export type MergeCall = { selector?: string; pr?: number; named?: string | null; folder?: string | null }
 export const mergeCallOf = (a: ModKitGh | undefined): MergeCall | undefined => {
   if (!a || a.sub !== 'pr' || a.act !== 'merge') return undefined
   if (a.flags.some(f => f.name === '--auto' || f.name === '--disable-auto')) return undefined
