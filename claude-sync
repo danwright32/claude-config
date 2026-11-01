@@ -761,14 +761,15 @@ SYNC_GIT_IDENTITY=(-c user.name="claude-config-sync" -c user.email="sync@localho
 # ---------- the two things BSD and GNU spell differently ----------
 # Asked for once here rather than at seven call sites, because neither accepts the other's flag and
 # the failure is not a clean one: `stat -f %m FILE` on GNU means "file system status" and prints a
-# multi-line block about the filesystem while exiting non-zero, so a plain `||` fallback would
-# concatenate that block with the real answer. Each result is therefore VALIDATED as a bare number
-# before it is believed, and an unreadable path prints nothing at all, which every caller already
-# treats as no evidence rather than as a value (L50).
+# multi-line block about the filesystem while exiting non-zero, so a BSD first `||` fallback would
+# concatenate that block with the real answer. GNU's -c is therefore asked FIRST, which BSD refuses
+# with nothing on stdout, as every stat in the repository does (tests/test-stat-order.sh, #2003).
+# The result is still VALIDATED as a bare number before it is believed, and an unreadable path
+# prints nothing at all, which every caller already treats as no evidence rather than as a value
+# (L50).
 file_mtime(){   # path -> unix timestamp, or nothing
   local m
-  m="$(stat -f %m "$1" 2>/dev/null || true)"
-  case "$m" in ''|*[!0-9]*) m="$(stat -c %Y "$1" 2>/dev/null || true)" ;; esac
+  m="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true)"
   case "$m" in ''|*[!0-9]*) return 0 ;; esac
   printf '%s\n' "$m"
 }
@@ -782,11 +783,14 @@ file_mtime(){   # path -> unix timestamp, or nothing
 # grows with exactly the condition the report exists to describe, so the worse the leftovers, the
 # slower the command that tells you about them, and status is the command a person is told to run.
 #
-# Three ways of asking, in order, and the shape of the answer decides whether it is used. Not
-# merely whether it is EMPTY: GNU stat reads -f as "file system status" rather than as a format, so
-# the BSD spelling there produces plenty of output that is not a list of mtimes at all, and taking
-# non-empty for usable would feed that straight into the age test (L156, L215). So every line has
-# to look like one, and anything else falls through to the next way of asking.
+# Two ways of asking, in order, and the shape of the answer decides whether it is used. The batch
+# goes first, in the spelling a probe says this stat speaks: GNU's -c is asked first, as every stat
+# in the repository asks it (tests/test-stat-order.sh, #2003), and BSD's -f only where -c is
+# refused. The answer is judged by its shape, not merely by whether it is EMPTY: GNU stat reads -f
+# as "file system status" rather than as a format, so the BSD spelling there produces plenty of
+# output that is not a list of mtimes at all, and taking non-empty for usable would feed that
+# straight into the age test (L156, L215). So every line has to look like one, and anything else
+# falls through to the next way of asking.
 #
 # The last way is the original one, a process per path. It is not a formality: an answer of nothing
 # would be indistinguishable from a directory with no leftovers in it, which is the reassuring
@@ -799,22 +803,23 @@ file_mtimes(){   # newline separated paths on stdin -> "<mtime><TAB><path>" per 
   [ -n "$list" ] || return 0
   tab="$(printf '\t')"
   if [ "${SYNC_NO_BATCH_STAT:-0}" != "1" ]; then
-    for out in bsd gnu; do
-      case "$out" in
-        bsd) out="$(printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 stat -f "%m%t%N" 2>/dev/null || true)" ;;
-        gnu) out="$(printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 stat -c "%Y${tab}%n" 2>/dev/null || true)" ;;
-      esac
-      [ -n "$out" ] || continue
-      # Rejected if ANY line is the wrong shape, never if merely some are: a half understood answer
-      # would silently drop whatever it could not express, and those are leftovers nobody reclaims.
-      # `grep -v`, never `grep -qv`: the quiet form leaves on its first match and kills the
-      # producer, and under pipefail the pipeline then reports that death rather than the answer
-      # (L183). This one reads all of its input, so there is no early exit to be killed by.
+    if stat -c %Y / >/dev/null 2>&1; then
+      out="$(printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 stat -c "%Y${tab}%n" 2>/dev/null || true)"
+    else
+      out="$(printf '%s\n' "$list" | tr '\n' '\0' | xargs -0 stat -f "%m%t%N" 2>/dev/null || true)"
+    fi
+    # Rejected if ANY line is the wrong shape, never if merely some are: a half understood answer
+    # would silently drop whatever it could not express, and those are leftovers nobody reclaims.
+    # `grep -v`, never `grep -qv`: the quiet form leaves on its first match and kills the
+    # producer, and under pipefail the pipeline then reports that death rather than the answer
+    # (L183). This one reads all of its input, so there is no early exit to be killed by.
+    if [ -n "$out" ]; then
       bad="$(printf '%s\n' "$out" | grep -vE "^[0-9]+${tab}" || true)"
-      [ -n "$bad" ] && continue
-      printf '%s\n' "$out"
-      return 0
-    done
+      if [ -z "$bad" ]; then
+        printf '%s\n' "$out"
+        return 0
+      fi
+    fi
   fi
   while IFS= read -r p; do
     [ -n "$p" ] || continue
