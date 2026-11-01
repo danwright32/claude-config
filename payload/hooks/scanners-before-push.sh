@@ -53,6 +53,10 @@
 # gate a push waits on costs 0.3 seconds, so this gate is three quarters of the whole wait, which
 # is 20 to 26 seconds (claude-config#523, and the table in README.md).
 #
+# Before any suite it also judges the MESSAGES of the commits the push adds for a work organisation
+# name (claude-config#1995), and that one fails CLOSED: messages it could not judge, a commit the
+# command has not written yet, or its library missing each refuse the push. See where it is asked.
+#
 # Override: SKIP_SCANNERS_CHECK=1 git push ...   Explain why to the user first, never silently.
 
 # The clock starts here, before anything else, because Claude Code's timeout for this hook starts
@@ -81,6 +85,16 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   case "$payload" in *SKIP_SCANNERS_CHECK=1*) exit 0 ;; esac
   case "$payload" in *push*) ;; *) exit 0 ;; esac
   echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/whole-number.sh, which reads its budget and other settings, so this push was not scanned. Reinstall the hooks with claude-sync pull. For this one command: SKIP_SCANNERS_CHECK=1 <the same command>" >&2
+  exit 2
+}
+# The reader of the messages of the commits a push adds (claude-config#1995), asked further down.
+# Missing, the same as above: a push is refused, naming the file, and any other command passes.
+# shellcheck source=lib/work-names-messages.sh
+{ . "$HOOK_DIR/lib/work-names-messages.sh" 2>/dev/null && declare -F wnm_push_messages >/dev/null; } || {
+  payload="$(ps_read_payload)"
+  case "$payload" in *SKIP_SCANNERS_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *push*) ;; *) exit 0 ;; esac
+  echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/work-names-messages.sh, which reads the messages of the commits this push adds for a work organisation name, so they were not checked. A library this gate cannot load is not a push with clean messages. Reinstall the hooks with claude-sync pull." >&2
   exit 2
 }
 
@@ -120,6 +134,45 @@ cd "$repo_dir" 2>/dev/null || exit 0
 
 # Not this repository, so there is nothing here this hook knows how to run.
 [ -f payload/hooks/run-all-tests.sh ] || exit 0
+
+# THE MESSAGES of the commits this push adds name no work organisation (claude-config#1995). This
+# repository is public and squash merges with the commit messages as the body, so a message naming
+# one lands in main without ever being a file the scanners below read; on 2026-10-31 one reached a
+# commit and was caught only by reading it by hand. Asked first, because it costs a second and needs
+# no suite, and a refusal here should not wait behind them. The rule is lib/work-names.py's, the one
+# the whole tree suite runs over the files; lib/work-names-messages.sh decides only which commits a
+# push adds (never one already on the upstream or the remote's default branch) and hands it their
+# messages. Messages it could not judge, or a commit this command has not written yet, are said and
+# refused, never passed as clean (L98). The refusal carries no override line: it is a privacy rule,
+# and its remedy, rewording a commit nobody has pushed, is always open. SKIP_SCANNERS_CHECK above
+# still skips this with the rest of the gate, and check-work-names-merge.sh, which has no override,
+# reads the same messages again before the pull request merges.
+wnm_push_messages "$cmd"; _wn_rc=$?
+case "$_wn_rc" in
+  0) ;;
+  1)
+    {
+      echo "PUSH BLOCKED: a commit this push adds names a work organisation in its message. This"
+      echo "repository is public, and a squash merge copies every commit message into main."
+      echo ""
+      printf '%s\n' "$WNM_OUT"
+      echo ""
+      echo "Judged: $WNM_JUDGED. None of them has been pushed, so reword them before the push and"
+      echo "nothing published changes. For the last commit alone, git commit --amend in the main"
+      if [ -n "$WNM_BASE" ]; then
+        echo "session; for any of them, git reset --soft $WNM_BASE and commit again with a clean message."
+      else
+        echo "session; for an earlier one, reset to the commit before it with git reset --soft and commit again."
+      fi
+    } >&2
+    exit 2 ;;
+  3)
+    echo "PUSH BLOCKED: $WNM_OUT for a work organisation name. Make the commit first, then push on its own, so its message is judged with the others this push adds." >&2
+    exit 2 ;;
+  *)
+    echo "PUSH BLOCKED: this gate could not judge the messages of the commits this push adds for a work organisation name: $WNM_OUT. Messages nobody could read are not clean ones." >&2
+    exit 2 ;;
+esac
 
 # Every suite that reads the repository's own files, committed or NOT (claude-config#522). Picked
 # from what git tracks, a scanner just written was not run until the push after the one that added
