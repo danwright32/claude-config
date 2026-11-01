@@ -11,6 +11,8 @@
 #      registry is said rather than read as empty, and an unreadable one is refused.
 #   4. Nothing the scanner prints repeats a name it found (CI logs of a public repository are
 #      public too), only where it is.
+#   5. Text that is not a file, a commit message or a pull request's title and description, is read
+#      by the same rule from a labelled stream (claude-config#1995), and a stream cut short is refused.
 # The two parts that need the repository, (1) nothing this repository publishes names one and (5) a
 # send refuses to publish a file naming one, are tests/test-work-names-tree.sh, since this suite is
 # also installed beside the hooks, where there is no repository.
@@ -116,6 +118,29 @@ printf '{ not json\n' > "$RH/.claude/skills/pennie-dev-update/repos.local.json"
 scan_tree "$RH" clean.md
 check "an unreadable registry is refused, never read as empty (exit $scan_rc): $scan_out" [ "$scan_rc" -eq 2 ]
 check "and says why" has "$scan_out" "not valid JSON"
+
+# ---------------------------------------------------------------- 5. text that is not a file
+# A commit message or a pull request's title and description reaches main in a squash merge without
+# ever being a file (claude-config#1995), so the same scanner reads labelled text too: a NUL
+# separated stream of label, text, label, text, which `git log -z --format='commit %h%x00%B'`
+# writes as it stands. A hit is the label and line, never the text.
+texts(){   # stdin = the stream (fed by redirection, so the rc reaches this shell) -> output, rc in text_rc
+  text_out="$( HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" python3 "$SCAN" --texts0-from - 2>&1 )"; text_rc=$?
+}
+texts < <(printf 'commit 1a2b3c4\0Fix the reader\n\nrefs widget#3\n\0commit 5d6e7f8\0Quote the refusal\n\nseen in %s/widget#4\n' "$FAKE_ORG")
+check "a name in a commit message is found (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
+check "and named by its label and line: $text_out" has "$text_out" "commit 5d6e7f8:3: a work organisation name"
+check "and only that one: $text_out" lacks "$text_out" "commit 1a2b3c4:"
+check "the summary counts messages, not files: $text_out" has "$text_out" "checked 2 messages"
+check "and carries the file check's own remedy: $text_out" has "$text_out" "write name#123, never owner/name#123"
+check "the output never repeats the name it found: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "acme-hq"
+texts < <(printf 'title\0Add the %s reader\0description\0\0' "$(printf '%s' "$FAKE_ORG" | tr '[:upper:]' '[:lower:]')")
+check "a title is found, and an empty description is a text, not a gap: $text_out" has "$text_out" "title:1: a work organisation name"
+texts < <(printf 'commit 1a2b3c4\0Fix the reader\n\nrefs widget#3\n')
+check "(control) a clean message passes (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+texts < <(printf 'commit 1a2b3c4\0Fix the reader\0commit 5d6e7f8')
+check "a label with no text is a stream that cannot be read, never a clean one (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
+check "and says so: $text_out" has "$text_out" "label with no text"
 
 # The two built in hashes cover every owner in the registry on a Mac that has one, so the check CI
 # runs (with no registry) is the same check for the organisations that matter. Only measurable where

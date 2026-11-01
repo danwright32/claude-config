@@ -20,7 +20,8 @@
 # NOTHING HERE DECIDES A MERGE. The gates a typed merge meets cannot see a merge made inside a
 # script, so before it merges this hands the EXACT merge command it is about to run to the same
 # gates, block-red-merge.sh, pr-review-gate.sh, require-changelog-tag.sh, check-closing-merge.sh
-# (#1550), design-score-gate.sh and require-verification-run.sh (#1529), as a hook payload, and merges
+# (#1550), check-work-names-merge.sh (#1995), design-score-gate.sh and require-verification-run.sh
+# (#1529), as a hook payload, and merges
 # only when every one allows it. Green, up to date, pinned, reviewed, carrying its changelog record,
 # closing no issue its body says stays open and, when it closes a Match the settled design issue, at 100% of its
 # design match score (#1364) are therefore judged by the one implementation of each rule, never by a
@@ -35,8 +36,9 @@
 # here fails the suite. The changelog gate is also asked once BEFORE the wait: a record does not
 # depend on the head or its checks, so a missing one is known at once, and finding it after a CI
 # run and a lessons review costs both (L667). It is asked again at the merge, because a label can
-# be taken off while this waits. The closing keyword gate is asked at the same two moments, for the
-# same reasons: a body does not depend on the head, and it can be edited while this waits. What this file decides is only WHEN to ask: it waits
+# be taken off while this waits. The closing keyword gate and the work names gate are asked at the
+# same two moments, for the same reasons: a body does not depend on the head, and it can be edited
+# while this waits. What this file decides is only WHEN to ask: it waits
 # while the head's checks are unfinished, while a workflow run GitHub has created for the head has not
 # finished (its checks may not have registered yet, claude-config#1087), or while its review is still
 # running (pr-review.sh check exit 3),
@@ -179,7 +181,7 @@
 # and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
 # for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
 # measurement), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
-# MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
+# MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_WORK_NAMES_GATE, MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
 #
 # AFTER A MERGE THAT LANDED it removes the merged branch's agent worktree when
 # check-stale-worktrees.sh --just-merged allows it, and never the folder it was run from
@@ -199,6 +201,7 @@ CHANGELOG_GATE="${MWR_CHANGELOG_GATE:-$MWR_HOOKS/require-changelog-tag.sh}"
 DESIGN_GATE="${MWR_DESIGN_GATE:-$MWR_HOOKS/design-score-gate.sh}"
 VERIFY_GATE="${MWR_VERIFY_GATE:-$MWR_HOOKS/require-verification-run.sh}"
 CLOSING_GATE="${MWR_CLOSING_GATE:-$MWR_HOOKS/check-closing-merge.sh}"
+WORK_NAMES_GATE="${MWR_WORK_NAMES_GATE:-$MWR_HOOKS/check-work-names-merge.sh}"
 REVIEW_LIB="${MWR_REVIEW_LIB:-$MWR_LIB/pr-review.sh}"
 SLEEP="${MWR_SLEEP:-sleep}"
 num_or(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
@@ -1314,6 +1317,11 @@ while :; do
     if ! why="$(ask_gate "$CLOSING_GATE" "$(merge_text "$head")")"; then
       stop 1 "Stopped: check-closing-merge.sh refused the merge of #$pr before any wait: $why Nothing was merged; run this again once that is dealt with."
     fi
+    # A work organisation named in the title, description or a commit message, for the same reason:
+    # none of them depends on the head's checks (claude-config#1995).
+    if ! why="$(ask_gate "$WORK_NAMES_GATE" "$(merge_text "$head")")"; then
+      stop 1 "Stopped: check-work-names-merge.sh refused the merge of #$pr before any wait: $why Nothing was merged; run this again once that is dealt with."
+    fi
   fi
 
   # The repository's turn, before any update, wait or lessons review is spent on a head another
@@ -1485,6 +1493,11 @@ while :; do
   # Asked again here because the body can be edited while this waits (claude-config#1550).
   if ! why="$(ask_gate "$CLOSING_GATE" "$cmd")"; then
     stop 1 "Stopped: check-closing-merge.sh refused the merge of #$pr at ${head:0:7}: $why"
+  fi
+  # Asked again here because the title, the description and the commits can change while this waits
+  # (claude-config#1995).
+  if ! why="$(ask_gate "$WORK_NAMES_GATE" "$cmd")"; then
+    stop 1 "Stopped: check-work-names-merge.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi
   # A pull request whose closing keywords name a Match the settled design issue merges only at 100% on
   # both halves of the design match score at this head (claude-config#1364).

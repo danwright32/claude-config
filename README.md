@@ -126,6 +126,20 @@ its checkout looks. Suites that run a copy give it the scanner rather than being
 use says so on stderr and writes a line to the sync log, and the change watcher ignores it and
 scans, since it sends on every change for as long as it runs.
 
+Text that is never a file is held to the same rule (#1995), because this repository squash merges
+with the commit messages as the body: a name in a message lands in main. The scanner reads labelled
+text too (`--texts0-from`), and two gates ask it. `scanners-before-push.sh` reads the messages of
+the commits a push adds, never one already on the upstream or the remote's default branch (a branch
+with no upstream is judged against the default branch, a repository with no remote branch at all in
+full), before any scanner suite runs, and refuses naming the commit and line with how to reword a
+commit nobody has pushed. A push chained after its own commit is refused too, since that message is
+not written yet, and so are messages it could not judge. `check-work-names-merge.sh` reads the title,
+the description and every commit message of a pull request before it merges, in any repository whose
+base commit holds `payload/hooks/lib/work-names.py` (every other merge leaves after two reads), by
+every route and from `merge-when-ready.sh`. The merge gate has no override, and the push refusal
+offers none (the gate's own `SKIP_SCANNERS_CHECK=1` still skips the whole gate, as it always has),
+so a message pushed past it is still judged at the merge. The remedy is always to reword.
+
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
 folder under `skills/`, where Claude Code sets aside a skill it removes or replaces (#1009). The
@@ -960,8 +974,8 @@ Every gate judges ONE repository, and every merge gate ONE pull request, per com
 doing the same thing twice in different places is refused rather than judged by its first
 occurrence (claude-config#1062): `push-scope-notice.sh` refuses a command pushing from more than one
 repository, `check-add-scope.sh` one adding in more than one, and `block-red-merge.sh`,
-`pr-review-gate.sh`, `require-changelog-tag.sh` and `check-closing-merge.sh` one merging more than
-one pull request. The
+`pr-review-gate.sh`, `require-changelog-tag.sh`, `check-closing-merge.sh` and
+`check-work-names-merge.sh` one merging more than one pull request. The
 remedy each gives is to run them as separate commands. `ai-review-on-pr.sh`, which only starts
 reviews, starts one in every repository a command commits, pushes or opens a pull request in. The
 changelog gate refuses a command merging several pull requests only when one of them is in a
@@ -1281,12 +1295,12 @@ repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/nam
 (claude-config#851). It updates the branch, starts the new head's lessons review alongside its
 checks, waits for both, updates again if the base has moved meanwhile, and
 then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
-`require-changelog-tag.sh`, `check-closing-merge.sh`, `design-score-gate.sh` and
-`require-verification-run.sh` and merges only
+`require-changelog-tag.sh`, `check-closing-merge.sh`, `check-work-names-merge.sh` (#1995),
+`design-score-gate.sh` and `require-verification-run.sh` and merges only
 when every one allows it, so it decides nothing any gate would refuse. What a gate allows with
 something to say, such as the verification gate's warn mode verdict, is written to its log. The changelog record gate is also asked at the first look, before any update, wait or
-review, because nothing those do can add a missing label, and so is the closing keyword gate,
-because nothing they do can change a body. Asking only the first two let nine Slate
+review, because nothing those do can add a missing label, and so are the closing keyword gate
+and the work names gate, because nothing they do can change a body or a title. Asking only the first two let nine Slate
 pull requests merge with no `changelog/*` label (claude-config#1178), so its suite now checks the
 gates it names against every PreToolUse Bash hook that recognises a merge, and a merge gate added
 to the hooks block but not to the helper fails it. The head it merges is its branch's tip: GitHub's
