@@ -699,7 +699,7 @@ check "#1730 and which" "what the lessons review of " "$rec"
 check "#1730 its pid is the reviewer's own" "ai-review-run.py" "$(ps -o command= -p "$rpid" 2>/dev/null)"
 st="$(meta "$(final_of "$HEAD_SHA").pending" started)"
 check_eq "#1730 good until its deadline plus the slack, never open ended" "$((st + PR_REVIEW_DEADLINE_SECONDS + 60))" "$(sed -n 's/^until //p' "$rec_file")"
-check "#1730 a reader believes it busy" "$rpid	" "$(reviews_busy)"
+check_eq "#1730 a reader believes it busy, by its pid compared whole (#1959)" "$rpid" "$(reviews_busy | cut -f1)"
 : > "$HOLD"
 wait_final "$HEAD_SHA" || bad "#1730 the held review did not finish once let go"
 hang_wait "! compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 a review that finished left its phase record behind"
@@ -710,7 +710,7 @@ HOLD="$WORKDIR/hold-3g3b"; rm -f "$HOLD"
 FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 the second review published no phase record in ${HANG_S}s"
 rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
-check "#1730 control: busy while it runs" "$rpid	" "$(reviews_busy)"
+check_eq "#1730 control: busy while it runs" "$rpid" "$(reviews_busy | cut -f1)"
 kill -KILL "$rpid" 2>/dev/null
 # Gone: not running, or killed and not yet reaped (state Z), read whole rather than piped into a
 # matcher that can leave early under pipefail.

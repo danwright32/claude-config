@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import type { AgentSeen, Jobs, JobsEntry, JobWatch, WatchedJob, WatchedJobKept, WatcherNotice } from '../types/index.d.ts'
-import { assess, harnessFinished, holdRefusal, holdsOutputBack, inFlight, isErrorLine, isPollLoop, leftoverLine, listedStatuses, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, startedTask, type InFlight, type Outcome, type Verdict } from './jobs.ts'
+import { assess, harnessFinished, holdRefusal, holdsOutputBack, inFlight, isErrorLine, isPollLoop, leftoverLine, listedStatuses, logClause, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, startedTask, type InFlight, type Outcome, type Verdict } from './jobs.ts'
 
 // Background job watcher (claude-config#611). Every background job is recorded with its process
 // group, traced through the output file it writes (never by matching its command text, L1011), into
@@ -158,7 +158,13 @@ const refusalsOf = recordOf<number>('count of refused stops', x => Number.isInte
 const seenOf = recordOf<AgentSeen>('last sign of life of an agent', x => isRecord(x) && typeof x.at === 'number' && typeof x.inFlight === 'number' && typeof x.told === 'boolean')
 const watchesOf = recordOf<JobWatch>(
   'measure of a job',
-  x => isRecord(x) && (x.lastSize === null || typeof x.lastSize === 'number') && typeof x.lastGrowth === 'number' && typeof x.state === 'string' && typeof x.told === 'boolean',
+  x =>
+    isRecord(x) &&
+    (x.lastSize === null || typeof x.lastSize === 'number') &&
+    typeof x.lastGrowth === 'number' &&
+    typeof x.state === 'string' &&
+    typeof x.told === 'boolean' &&
+    (x.logSizes === undefined || (isRecord(x.logSizes) && Object.values(x.logSizes).every(n => typeof n === 'number' && Number.isFinite(n)))),
 )
 const noticesOf = (value: unknown): WatcherNotice[] => {
   if (value === undefined) return []
@@ -395,6 +401,34 @@ const run = async ($: EngineInterface, argv: string[]): Promise<string | undefin
     return undefined
   }
 }
+
+// #1976: the files a redirect sends a job's standard output to (`> log 2>&1`), read by mod-kit's
+// write reader in the folder the call ran in, never by a match on the command here. A merge helper
+// started that way logged every minute while its output file never grew, and was called quiet for an
+// hour. A target the reader cannot name (a variable, a pattern) is left out, as is a tee, whose
+// output reaches the output file too, so such a job is judged by its output file alone, as before; a
+// reader that cannot be asked leaves every one out, said in the debug log.
+const redirectLogs = async ($: EngineInterface, id: string, command: string): Promise<string[]> => {
+  try {
+    const w = await $.modkit.writes({ command, cwd: await $.session.cwd(), home: (await $.env.get('HOME')) ?? '' })
+    return [...new Set((w.stdout ?? []).flatMap(o => (o.path ? [o.path] : [])))]
+  } catch (err) {
+    $.ui.log(`job-watcher: could not read where background job ${id} (${shortCommand(command)}) sends its output, so it is judged by its output file alone: ${message(err)}`, { to: 'debug' })
+    return []
+  }
+}
+// Each of a job's logs as one stat reads it (`format`, the stat -f format), by path: undefined for
+// one that could not be read, which says nothing about the job (L11).
+const statLogs = async ($: EngineInterface, logs: readonly string[] | undefined, format: string): Promise<Map<string, number[] | undefined>> => {
+  const out = new Map<string, number[] | undefined>()
+  for (const p of logs ?? []) {
+    const fields = (await run($, ['stat', '-f', format, p]))?.trim().split(/\s+/).map(Number)
+    out.set(p, fields?.length && fields.every(Number.isFinite) ? fields : undefined)
+  }
+  return out
+}
+const readOf = (stats: Map<string, unknown>) => [...stats].filter(([, v]) => v !== undefined).map(([p]) => p)
+const unreadOf = (stats: Map<string, unknown>) => [...stats].filter(([, v]) => v === undefined).map(([p]) => p)
 
 // The registry's copy of the list, which a later session's leftover judge reads once this one closes.
 const publish = ($: EngineInterface, list: JobList) => $.sessions.setExtra({ key: 'jobs', value: [...list.values()] })
@@ -903,6 +937,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
   const statOut = await run($, ['stat', '-f', '%z', job.outputPath])
   const size = statOut === undefined ? NaN : Number(statOut.trim())
   const tail = await run($, ['tail', '-c', '4096', job.outputPath])
+  const logStats = await statLogs($, job.logs, '%z')
   // A look given up while it read acts on nothing it read (#706).
   if (!live()) return
   // The first look dates what is already there from the job's start: it grew before anyone looked.
@@ -923,6 +958,18 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
   if (size !== w.lastSize) {
     w.lastSize = size
     w.lastGrowth = now
+  }
+  // #1976: a log the job sends its output to counts as its output, a change in it as growth; the
+  // first read of each dates what is already there from before, as the output file's does.
+  if (logStats.size) {
+    const sizes = { ...(w.logSizes ?? {}) }
+    for (const [p, fields] of logStats) {
+      const n = fields?.[0]
+      if (n === undefined) continue
+      if (sizes[p] !== undefined && sizes[p] !== n) w.lastGrowth = now
+      sizes[p] = n
+    }
+    w.logSizes = sizes
   }
   if (held) return runsHeld()
   // Read again for quiet: a keep that landed while this look waited is honoured (L443).
@@ -975,12 +1022,14 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
     } else await notStopped($, job, w, said, why, true, live)
   } else if (a.state !== 'running' && !w.told) {
     w.told = true
-    const how = a.state === 'silent' ? `with no new output for ${Math.round(a.forMs / 60_000)} minutes` : `that keeps repeating "${repeated(a)}"`
+    // #1976: a quiet spell names the logs the job writes to, which were quiet too, or could not be read.
+    const logs = logClause(readOf(logStats), unreadOf(logStats))
+    const how = a.state === 'silent' ? `with no new output for ${Math.round(a.forMs / 60_000)} minutes${logs}` : `that keeps repeating "${repeated(a)}"`
     const what = waits
       ? `is still waiting: a poll loop ${how}`
       : a.state === 'repeating'
         ? `keeps repeating "${repeated(a)}"`
-        : `has had no new output for ${Math.round(a.forMs / 60_000)} minutes`
+        : `has had no new output for ${Math.round(a.forMs / 60_000)} minutes${logs}`
     await say($, job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) ${what}. ${remedyFor(current, w)}, or keep it if that is expected.`)
   }
 }
@@ -1152,7 +1201,15 @@ const release = async ($: EngineInterface, path: string) => {
 type Leftover = Job & { session: string }
 const isJob = (x: unknown): x is Job => {
   const j = x as Partial<Job> | null
-  return !!j && typeof j.id === 'string' && typeof j.command === 'string' && typeof j.outputPath === 'string' && typeof j.startedAt === 'number' && (j.pgid === null || typeof j.pgid === 'number')
+  return (
+    !!j &&
+    typeof j.id === 'string' &&
+    typeof j.command === 'string' &&
+    typeof j.outputPath === 'string' &&
+    typeof j.startedAt === 'number' &&
+    (j.pgid === null || typeof j.pgid === 'number') &&
+    (j.logs === undefined || (Array.isArray(j.logs) && j.logs.every(l => typeof l === 'string')))
+  )
 }
 
 const judge = async ($: EngineInterface, prompt: string): Promise<Verdict | undefined> => {
@@ -1233,6 +1290,9 @@ const judgeClaimed = async ($: EngineInterface, job: Leftover, group: number, no
   const tail = await run($, ['tail', '-c', '4096', job.outputPath])
   const size = stat?.[0]
   const mtime = stat?.[1]
+  // #1976: the logs it sends its output to, whose last change counts as its output's.
+  const logStats = await statLogs($, job.logs, '%z %m')
+  const logsChanged = [...logStats.values()].flatMap(f => (f?.[1] === undefined ? [] : [f[1]]))
   // An output file that cannot be read is said as such to the judge, never passed off as a job
   // still writing (L11).
   let state: string
@@ -1240,12 +1300,12 @@ const judgeClaimed = async ($: EngineInterface, job: Leftover, group: number, no
   if (tail === undefined || size === undefined || mtime === undefined || !Number.isFinite(size) || !Number.isFinite(mtime)) {
     state = 'its output file could not be read, so whether it is stuck is unknown'
   } else {
-    const a = assess({ tail, size, lastGrowth: mtime * 1000 }, now)
+    const a = assess({ tail, size, lastGrowth: Math.max(mtime, ...logsChanged) * 1000 }, now)
     stuck = a.state !== 'running'
     // Measured facts only: the repeated text itself is the job's, and reaches the judge only inside
     // the fenced output below, never in the lines addressed to it (lessons review of #721, L28).
     const repeats = a.state === 'repeating' ? (a.lines.length === 1 ? 'the same line' : `a pass of ${a.lines.length} lines`) : ''
-    state = a.state === 'repeating' ? `it keeps repeating ${repeats}, shown at the end of its output below` : a.state === 'silent' ? `no new output for ${Math.round(a.forMs / 60_000)} minutes` : 'still writing'
+    state = a.state === 'repeating' ? `it keeps repeating ${repeats}, shown at the end of its output below` : a.state === 'silent' ? `no new output for ${Math.round(a.forMs / 60_000)} minutes${logClause(readOf(logStats), unreadOf(logStats))}` : 'still writing'
   }
   const v = await judge($, promptFor(job, now - job.startedAt, tail ?? '(could not be read)', state))
   if (!v) return { kind: 'unjudged', name: short, session: job.session }
@@ -1514,6 +1574,7 @@ export const register: Register = on => {
         if (agentId !== undefined) await recordStarter($, started.id, agentId)
         try {
           const owner = agentId === undefined ? undefined : { id: agentId, name: await agentName($, agentId) }
+          const logs = await redirectLogs($, started.id, String(input.command ?? ''))
           const record: Job = {
             id: started.id,
             command: String(input.command ?? ''),
@@ -1521,6 +1582,7 @@ export const register: Register = on => {
             pgid: await traceGroup($, started.outputPath),
             startedAt: await $.clock.now(),
             ...(owner ? { owner } : {}),
+            ...(logs.length ? { logs } : {}),
           }
           await changeJobs($, list => {
             list.set(started.id, record)

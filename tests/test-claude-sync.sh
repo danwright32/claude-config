@@ -15804,6 +15804,14 @@ dbg "pull whose runner ran everything: $out_ag1"
 check "#188 and the closing line reads the same two suites out of it" \
   "line_has \"\$out_ag1\" 'Pulled shared config' 'hook suite passed here' 'all 2 of its suites'"
 check "#188 and records both suites as having run" "[ \"\$(ag_field ran)\" = '2' ] && [ \"\$(ag_field notrun)\" = '0' ]"
+# The runner prints a progress line as each suite finishes (claude-config#1979), so the output the
+# pull just read carried two of them ahead of the report. The control first, that they really were
+# there, then that the pull read past them: the counts above are the verdict's, and nothing from a
+# progress line reached the closing line as a note (the pull carries any line starting "note:").
+check "#1979 (control) the real runner's output the pull read carried a progress line per suite" \
+  "[ \"\$(printf '%s\n' \"\$ag_direct1\" | grep -c '^run-all-tests progress: ')\" = '2' ]"
+check "#1979 and the pull reads nothing from them into its closing line" \
+  "line_has \"\$out_ag1\" 'Pulled shared config' 'all 2 of its suites' && ! line_has \"\$out_ag1\" 'Pulled shared config' 'noted' && ! line_has \"\$out_ag1\" 'Pulled shared config' 'progress'"
 
 rm -f "$AGSUITES"/test-*.sh
 mk_ag_suite alpha; mk_ag_notrun beta

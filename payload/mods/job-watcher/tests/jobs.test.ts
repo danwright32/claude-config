@@ -1,8 +1,24 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { assess, harnessFinished, holdRefusal, holdsOutputBack, inFlight, listedStatuses, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob, startedTask } from '../hooks/jobs.ts'
+import { assess, harnessFinished, holdRefusal, holdsOutputBack, inFlight, listedStatuses, isErrorLine, isPollLoop, leftoverLine, logClause, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob, startedTask } from '../hooks/jobs.ts'
 
 const MIN = 60_000
+
+// #1976: what a quiet spell adds for a job sending its output to logs of its own.
+describe('the logs a quiet job writes to, as its notice names them', () => {
+  test('none adds nothing', () => {
+    expect(logClause([], [])).toBe('')
+  })
+  test('the logs read were quiet too, each named', () => {
+    expect(logClause(['/tmp/a.log'], [])).toBe(', in its output or in its log /tmp/a.log')
+    expect(logClause(['/tmp/a.log', '/tmp/b.log'], [])).toBe(', in its output or in its logs /tmp/a.log or /tmp/b.log')
+    expect(logClause(['/tmp/a.log', '/tmp/b.log', '/tmp/c.log'], [])).toBe(', in its output or in its logs /tmp/a.log, /tmp/b.log or /tmp/c.log')
+  })
+  test('one that could not be read is said as such, never as quiet', () => {
+    expect(logClause([], ['/tmp/a.log', '/tmp/b.log'])).toBe(', and its logs /tmp/a.log and /tmp/b.log could not be read')
+    expect(logClause(['/tmp/a.log'], ['/tmp/b.log'])).toBe(', in its output or in its log /tmp/a.log, and its log /tmp/b.log could not be read')
+  })
+})
 
 describe('a background job, from what starting it said', () => {
   const STARTED_TEXT = 'Command running in background with ID: btv0drbh3. Output is being written to: /private/tmp/x/tasks/btv0drbh3.output. You will be notified when it completes.'

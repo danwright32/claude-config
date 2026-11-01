@@ -49,8 +49,14 @@ pass=0; fail=0
 ok(){ pass=$((pass + 1)); }
 bad(){ fail=$((fail + 1)); echo "FAIL: $1"; }
 check(){ if [[ "$3" == *"$2"* ]]; then ok; else bad "$1"; echo "  expected: $2"; echo "  actual: $3"; fi }
-check_not(){ if [[ "$3" != *"$2"* ]]; then ok; else bad "$1 (should not contain '$2')"; echo "  actual: $3"; fi }
 check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3')"; fi }
+# sid_among <sid> <ids, one per line>: true when one of the lines IS the id, compared whole, never
+# a line merely holding it, since a short id is a substring of many others (#1959).
+sid_among(){
+  local line
+  while IFS= read -r line; do [ "$line" = "$1" ] && return 0; done <<<"$2"
+  return 1
+}
 G(){ git -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 
 # The timeout Claude Code gives this hook, read from the settings that install it rather than
@@ -133,7 +139,21 @@ check_eq "the hook returns inside its ${TIMEOUT}s timeout while the check is sti
 if reached "$TMP/gate-slow"; then ok; else bad "the check was started at all, rather than skipped to return quickly"; fi
 # It runs in a session of its own, so nothing aimed at the session the prompt came from (the
 # terminal closing, Ctrl+C, a kill of the hook's group) reaches a removal part way through (L617).
-check_not "the run is in a session of its own, not the prompt's" "$(python3 -c 'import os; print(os.getsid(0))')" "$(cat "$STUB_SIDS")"
+prompt_sid="$(python3 -c 'import os; print(os.getsid(0))')"
+run_sids="$(cat "$STUB_SIDS")"
+[ -n "$run_sids" ] && ok || bad "the run recorded the session it ran in, so the next check has something to compare"
+if sid_among "$prompt_sid" "$run_sids"; then
+  bad "the run is in a session of its own, not the prompt's (prompt $prompt_sid, run $run_sids)"
+else ok; fi
+# Session ids are compared whole (#1959). Under launchd the prompt's session is 1, and a run in
+# session 51697 was taken for it because its id holds a 1, so the suite failed with nothing wrong.
+if sid_among 1 "51697"; then
+  bad "#1959 a prompt in session 1 is not taken for a run in session 51697"
+else ok; fi
+# And the comparison still catches the fault it exists for: the run left in the prompt's session.
+if sid_among 51697 "$(printf '4\n51697')"; then ok; else
+  bad "#1959 a run in the prompt's own session, 51697, is still caught"
+fi
 : >"$TMP/gate-slow"; settle slow
 fire slow
 check "and the answer it could not give in time is given on the next prompt" "removed agent-x" "$OUT"
