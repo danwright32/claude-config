@@ -179,7 +179,7 @@ sort -t "$TAB" -k1,1n -k2,2n -k3,3n -k4,4n "$WORK/keyed" > "$WORK/sorted" || ref
 
 # Pass 2: the markup. Every string from the record is escaped; nothing from it is ever markup.
 awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v scanned="$SCANNED" \
-  -v catfile="$WORK/cats" "$DCU_AWK_LIB$DCRV_AWK_WORDS"'
+  -v catfile="$WORK/cats" "$DCU_AWK_LIB$DCU_AWK_TALLY$DCRV_AWK_WORDS"'
   function h(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); gsub(/"/, "\\&quot;", s); gsub(/\047/, "\\&#39;", s); return s }
   function short(t) {
     if (home != "" && t == home) return "~"
@@ -234,7 +234,7 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     if (sub_ != "") sub_ = "<span class=\"sub\">" sub_ "</span>"
     known = (b ~ /^[0-9]+$/)
     printf "<div class=\"item%s\" data-id=\"%s\"><input class=\"tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"%s\" data-id=\"%s\" data-category=\"%s\" data-bytes=\"%s\" data-partial=\"%d\"%s><div class=\"what\"><span class=\"path\">%s</span>%s</div><span class=\"size%s\">%s</span></div>\n", \
-      (ok ? "" : " kept"), h(id), p, h(id), h(name[r]), (known ? b : ""), (f[8] == "partial"), (ok ? "" : " disabled"), p, sub_, (known ? "" : " unknown"), h(dcrv_size(b, f[8]))
+      (ok ? "" : " kept"), h(id), p, h(id), h(name[r]), (known ? b : ""), dcu_part((known ? b : ""), f[8]), (ok ? "" : " disabled"), p, sub_, (known ? "" : " unknown"), h(dcrv_size(b, f[8]))
     rows++
   }
   END {
