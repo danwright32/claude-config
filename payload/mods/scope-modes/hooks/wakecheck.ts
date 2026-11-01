@@ -34,18 +34,19 @@ const at = (s: unknown) => (typeof s === 'string' ? Date.parse(s) : Number.NaN)
  * What GitHub and the disk say happened since `since` (ms), read through `run`. `repos` are the
  * repositories the night's notes name, each read whatever the events feed shows (#834 review: a
  * private repository the feed leaves out is still read). `github` reads a remote's address, the
- * live sync clone's among them, as mod-kit's one reader does (#951).
+ * live sync clone's among them, as mod-kit's one reader does (#951). `mtimeOf` dates a file (ms),
+ * rejecting with the reason when it cannot (#2016).
  */
 export const wakeCheck = async (
   runAny: Runner,
-  o: { since: number; home: string; github: GithubOf; repos?: string[]; now: Clock; budgetMs?: number },
+  o: { since: number; home: string; github: GithubOf; repos?: string[]; now: Clock; budgetMs?: number; mtimeOf: (path: string) => Promise<number> },
 ): Promise<WakeFindings> => {
   const hits: string[] = []
   const unmeasured: string[] = []
   // GitHub's reads together keep to one deadline (L110): wake and its reply wait on them, and then
   // on the report's own final render, which has its own 90 s, so this check takes 30 s at most.
   // Each read is given only the time left (never more than 20 s), a read past the deadline is not
-  // made, and that is said once; the local reads (git, stat) always run.
+  // made, and that is said once; the local reads (git, the file stat) always run.
   // Timed on the clock the caller passes, the engine's in the hooks, so a test that moves the
   // engine's clock moves this deadline and never waits for real (#1147, L524).
   const { now } = o
@@ -188,9 +189,16 @@ export const wakeCheck = async (
       for (const c of commits ?? []) lessonHits.push(`LESSONS.md changed overnight on GitHub: ${(c.sha ?? '').slice(0, 7)} "${firstLine(c.commit?.message ?? '')}"`)
     }
   }
-  const st = await run(['stat', '-f', '%m', `${o.home}/.claude/LESSONS.md`])
-  const mtime = Number(st.stdout.trim()) * 1000
-  if (st.exitCode !== 0 || !Number.isFinite(mtime) || mtime <= 0) unmeasured.push(`the installed LESSONS.md was not checked (stat: ${firstLine(st.stderr) || 'no time printed'})`)
+  // Dated by the caller's file stat, $.fs.stat in the hooks (#2016), never a stat process: BSD's
+  // stat -f, which this ran, is file system status to GNU stat on Linux and printed no time there.
+  let mtime = Number.NaN
+  let unreadMtime = 'no time was given'
+  try {
+    mtime = await o.mtimeOf(`${o.home}/.claude/LESSONS.md`)
+  } catch (err) {
+    unreadMtime = firstLine(String((err as Error)?.message ?? err)) || 'the read failed'
+  }
+  if (!Number.isFinite(mtime) || mtime <= 0) unmeasured.push(`the installed LESSONS.md was not checked (its last change could not be read: ${unreadMtime})`)
   else if (mtime >= o.since) lessonHits.push(`The installed LESSONS.md changed overnight, at ${etWhen(mtime)}`)
 
   // Milestones touched and deploy runs, in each repository.

@@ -1,5 +1,5 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
-import { git, placed, readLine, type Command, type Line } from './commands.ts'
+import { git, pipeline, placed, readLine, type Command, type Line } from './commands.ts'
 import { codeOnly, codeTargets } from './code.ts'
 import { kindOf, readProgram, splitsWords } from './program.ts'
 import { isDevice } from './inputs.ts'
@@ -569,7 +569,12 @@ const npxTool = (args: readonly string[]): { name: string; args: number } | unde
  * patch, a program that writes or runs a process or cannot be read, a script on standard input, a
  * command xargs gives its files), each with the files to read to find out, such as the patch.
  */
-export const writes = (cmds: readonly Command[], cwd: string | undefined, home: string): ModKitWrites => {
+export const writes = (cmds: readonly Command[], cwd: string | undefined, home: string): ModKitWrites => readWrites(cmds, cwd, home).writes
+
+// The writes, and the folder each command runs in, by its place in `cmds` (#2000): where a cd before
+// it leaves the shell, followed as a relative path is, undefined where that cannot be followed.
+const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: string): { writes: ModKitWrites; folders: (string | undefined)[] } => {
+  const folders: (string | undefined)[] = []
   const files: ModKitWrite[] = []
   const changes: ModKitChange[] = []
   const unnamed: ModKitWrites['unnamed'] = []
@@ -743,6 +748,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   const varsOutside: Vars[] = []
   const eachOutside: Map<string, string[]>[] = []
   for (const c of cmds) {
+    folders.push(dir)
     const written = c.words
     if (written.length === 1 && written[0] === '(') {
       outside.push(dir)
@@ -860,6 +866,11 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     if (name === 'cd' || name === 'pushd') {
       const target = rest.find(a => !a.startsWith('-') || a === '-')
       dir = target === undefined ? home || undefined : target === '-' ? undefined : absolutePath(target, dir, home)
+      continue
+    }
+    // popd goes back to the folder pushd kept, which this does not keep (#2000).
+    if (name === 'popd') {
+      dir = undefined
       continue
     }
     if (name === 'tee') for (const f of operands(rest, new Set()).ops) named(f)
@@ -1024,7 +1035,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   // waits for ever, so the call never runs. Taken out here, where every input is gathered, rather than
   // at each place one is named; the write stays, as one whose input cannot be known before it runs.
   const readable = unnamed.map(u => (u.inputs.some(isDevice) ? { ...u, inputs: u.inputs.filter(p => !isDevice(p)) } : u))
-  return { files, changes, unnamed: readable, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}), ...(stdout.length ? { stdout } : {}) }
+  return { writes: { files, changes, unnamed: readable, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}), ...(stdout.length ? { stdout } : {}) }, folders }
 }
 
 // The options of git mv, rm, checkout and restore that take the next word as their value.
@@ -1145,6 +1156,42 @@ const lineWrites = (line: Line, cwd: string | undefined, home: string, inSubstit
   const at = cmds.some(c => MOVES.has(baseOf(c.words[0] ?? ''))) ? undefined : cwd
   for (const c of line) if ('sub' in c) merge(out, lineWrites(c.sub, at, home, true))
   return out
+}
+
+// Each command of a line, in the order `pipeline` flattens it, with the folder it runs in: a
+// substitution's commands placed as lineWrites places them (in the line's folder, unknown where the
+// line changes folder, since it may run before the cd or after).
+const lineFolders = (line: Line, cwd: string | undefined, home: string, inSubstitution = false): { c: Command; folder: string | undefined }[] => {
+  const cmds = line.filter((c): c is Command => !('sub' in c)).map(c => placed(c, inSubstitution))
+  const { folders } = readWrites(cmds, cwd, home)
+  const at = cmds.some(c => MOVES.has(baseOf(c.words[0] ?? ''))) ? undefined : cwd
+  let n = 0
+  return line.flatMap(c => {
+    if ('sub' in c) return lineFolders(c.sub, at, home, true)
+    const k = n++
+    return [{ c: cmds[k] as Command, folder: folders[k] }]
+  })
+}
+
+/**
+ * The commands `pipeline` gives a Bash call, each with `folder`, the absolute folder it runs in
+ * (#2000): `cwd`, or where a cd or pushd before it leaves the shell, followed by the write reader's
+ * own reading of one (a relative or home folder, a variable the command set, a subshell's cd ending
+ * with it); null where that cannot be followed (a variable the command did not set, cd -, a popd).
+ * A reader asking about the folder a command acts on (is it live's question to GitHub about a merge)
+ * asks this, so a `cd <other checkout> && ...` is never asked about in the session's folder (L237).
+ * The folders are read with the assignments a reader otherwise drops, which `pipeline` does not give,
+ * so its commands are matched to these in order and handed on exactly as it gives them.
+ */
+export const pipelineIn = (command: string, cwd: string, home: string): (Command & { folder: string | null })[] => {
+  const read = lineFolders(readLine(command, { assignments: true }), cwd, home)
+  const same = (a: Command, b: Command) => a.words.length === b.words.length && a.words.every((w, i) => w === b.words[i])
+  let at = 0
+  return pipeline(command).map(c => {
+    while (at < read.length && !same(read[at]?.c as Command, c)) at++
+    const found = read[at++]
+    return { ...c, folder: found?.folder ?? null }
+  })
 }
 
 /**

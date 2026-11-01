@@ -486,6 +486,70 @@ n_calls="$(calls_in "$JUDGE_LOG")"
 if [ "$n_calls" = 1 ]; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL: #1998 with no time left the gate made $n_calls calls, expected 1"; fi
 
+# --- claude-config#2021: the deadline setting's two untested edges ----------
+# REQUIRE_TESTS_DEADLINE_SECONDS (#2009) can only end the further readings SOONER: it is capped at
+# the hook's own 110, and it is read through lib/whole-number.sh, without which the 110 stands. The
+# hook times itself with bash's SECONDS, which bash takes from the environment, so a run handed
+# SECONDS=95 starts 95 seconds in: under a deadline of 110 that leaves 15, short of the 20 a further
+# reading needs, and under anything past 115 it leaves enough. Every number here is one the hook or
+# this test sets, not measured. That clock is what both edges are read through, with the judge
+# stubbed as above; no real model is called.
+#
+# The control first: a run started at 0 under a setting of 500 makes the further reading, so a
+# refusal below comes from the clock and the cap, not from the large value breaking the reading.
+JUDGE_LOG="$TMPROOT/judge-log-2021ctl"; mkdir -p "$JUDGE_LOG"
+printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
+W="$(mk_repo)"; seed_issue_push "$W"
+REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 0 "#2021 the control: a setting of 500 from a start at 0 still makes the further reading and allows"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 2 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 the control made $n_calls judge calls, expected 2"; fi
+
+# 1. A setting above 110 is held to 110: 95 seconds in, it leaves no time for a further reading
+# (a start this test sets, not measured).
+JUDGE_LOG="$TMPROOT/judge-log-2021cap"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; seed_issue_push "$W"
+SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 2 "#2021 a setting above 110 is held to 110, so 95 seconds in no further reading starts"
+want_stderr "ran out of time" "#2021 and the refusal says it ran out of time"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 1 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 a setting of 500 was not held to 110: 95 seconds in the gate made $n_calls judge calls, expected 1"; fi
+
+# 2. Without lib/whole-number.sh the setting cannot be read, and the default 110 stands. A copy of
+# the hook and its libraries with that one file taken away, so the real tree is never touched.
+NWN="$TMPROOT/no-whole-number"; mkdir -p "$NWN"
+cp "$HOOK" "$NWN/require-tests-before-push.sh"
+cp -R "$DIR/lib" "$NWN/lib"
+rm -f "$NWN/lib/whole-number.sh"
+REAL_HOOK="$HOOK"; HOOK="$NWN/require-tests-before-push.sh"
+if [ ! -e "$NWN/lib/whole-number.sh" ] && [ -f "$NWN/lib/push-changes.sh" ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 fixture: the copy without lib/whole-number.sh was not made as intended"; fi
+# A setting of 1, unread, so the default leaves time for the further reading from a start at 0.
+JUDGE_LOG="$TMPROOT/judge-log-2021nw1"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; seed_issue_push "$W"
+REQUIRE_TESTS_DEADLINE_SECONDS=1 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 0 "#2021 without lib/whole-number.sh the default deadline stands: a setting of 1 is not read, and the further reading runs"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 2 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh the gate made $n_calls judge calls, expected 2 under the default deadline"; fi
+case "$ERR" in *'command not found'*) fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh the hook printed a shell error: $ERR" ;; *) pass=$((pass+1)) ;; esac
+# And the default is 110, not the setting taken raw: 95 seconds in, a setting of 500 still leaves
+# no time for a further reading (a start this test sets, not measured).
+JUDGE_LOG="$TMPROOT/judge-log-2021nw2"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; seed_issue_push "$W"
+SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 2 "#2021 without lib/whole-number.sh the deadline is the default 110, so 95 seconds in no further reading starts"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 1 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh, 95 seconds in, the gate made $n_calls judge calls, expected 1"; fi
+HOOK="$REAL_HOOK"
+
 # --- claude-config#930, end to end: the push that was refused --------------
 # A push changing only a suite file inside an Xcode test target folder changes no source, so the
 # gate has nothing to judge and stays silent. Before #930 it was refused at the zero test floor.
