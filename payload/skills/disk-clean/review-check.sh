@@ -171,15 +171,16 @@ mv -f "$tmp" "$PLAN" || { rm -f "$tmp"; refuse 2 "could not move the plan into p
 # ---------- what it will remove, for the confirm step ----------
 echo "Plan written to $PLAN: $N_IDS item(s) from scan $LAST."
 cats="$(dcr_header "$REC" categories 2>/dev/null)" || cats=""
-awk -F "$S" -v cats="$cats" -v table="$DCR_TITLES" "$DCU_AWK_LIB$DCR_AWK_TITLES$DCRV_AWK_WORDS"'
+awk -F "$S" -v cats="$cats" -v table="$DCR_TITLES" "$DCU_AWK_LIB$DCU_AWK_TALLY$DCR_AWK_TITLES$DCRV_AWK_WORDS"'
   FILENAME == ARGV[1] { want[$0] = 1; next }
   !($1 in want) { next }
   {
     c = $2
     if (!(c in seen)) { seen[c] = 1; order[++nc] = c }
     k = ++count[c]; line[c, k] = $0
-    if ($6 ~ /^[0-9]+$/) kib[c] += int($6 / 1024); else unread[c]++
-    if ($8 == "partial") partial[c] = 1
+    # Every chosen item is offerable (checked above), so each is totalled by the shared tally
+    # (hooks/lib/disk-clean-units.sh, #1866): never 0 for a size nobody read (L90).
+    dcu_tally(c, $6, $8)
   }
   END {
     # The scan order (the Trash first), then any category the header does not name.
@@ -188,8 +189,13 @@ awk -F "$S" -v cats="$cats" -v table="$DCR_TITLES" "$DCU_AWK_LIB$DCR_AWK_TITLES$
     for (j = 1; j <= nc; j++) if (!(order[j] in put)) out[++done] = order[j]
     for (j = 1; j <= done; j++) {
       c = out[j]
-      words = count[c] (count[c] == 1 ? " item" : " items") ", " (partial[c] ? "at least " : "") dcu_h(kib[c])
-      if (unread[c]) words = words ", plus " unread[c] " whose size was not read"
+      kind = dcu_tally_kind(c); unread = dcu_tally_unsized(c)
+      words = count[c] (count[c] == 1 ? " item" : " items") ", "
+      if (kind == "unknown") words = words dcu_h("")
+      else {
+        words = words (kind == "lower" ? "at least " : "") dcu_h(dcu_tally_kib(c))
+        if (unread) words = words ", plus " unread " whose size was not read"
+      }
       print ""
       print dcr_t(c, table) ": " words
       for (k = 1; k <= count[c]; k++) {

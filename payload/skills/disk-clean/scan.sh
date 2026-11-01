@@ -231,27 +231,26 @@ fi
 echo ""
 for c in $RUN; do
   status="$(dcr_header "$DCS_RECORD" "status.$c" 2>/dev/null)"
-  # UNREAD IS NEVER 0 (L90, L11), worded as the low space warning words the same record (#1809): an
-  # offerable item with no bytes, or whose size is partial, denied or unread rather than measured
-  # or reported, makes the total "at least"; when no offerable item's size was read at all, the
-  # total is unknown, never 0 KB (#1851).
-  line="$(awk -F "$S" -v c="$c" '
+  # UNREAD IS NEVER 0 (L90, L11): totalled and worded by lib/disk-clean-units.sh's tally, the one
+  # the low space warning words the same record by (#1809, #1866). An offerable item with no bytes,
+  # or whose size was not read in full, makes the total "at least"; when no offerable item's size
+  # was read at all, the total is unknown, never 0 KB (#1851).
+  line="$(awk -F "$S" -v c="$c" "$DCU_AWK_TALLY"'
     # The items file: id, category, method, target, bytes, state (then identity, size, flags, detail).
     $2 == c {
       n++
-      if ($6 == "offerable") {
-        o++
-        if ($5 == "") unsized++
-        else { b += $5; if ($8 != "measured" && $8 != "reported" && $8 != "") part = 1 }
-      }
+      if ($6 == "offerable") dcu_tally(c, $5, $8)
       else if (index($6, "unmeasured: ") == 1) u++; else x++
     }
-    END { printf "%d %d %d %d %.0f %d %d", n, o, x, u, b / 1024, unsized, part }' "$W/items")"
+    END { printf "%d %d %d %s %s", n, x, u, dcu_tally_line(c), dcu_tally_kind(c) }' "$W/items")"
+  # n, not offerable, unmeasured, then the tally: offerable, unsized, KiB, partial, and its kind.
   set -- $line
-  if [ "$2" -gt 0 ] && [ "$6" -eq "$2" ]; then total="$(dcu_human "")"
-  elif [ "$6" -gt 0 ] || [ "$7" -eq 1 ]; then total="at least $(dcu_human "$5")"
-  else total="$(dcu_human "$5")"; fi
-  words="$2 offerable ($total), $3 not offerable, $4 unmeasured"
+  case "$8" in
+    unknown) total="$(dcu_human "")" ;;
+    lower) total="at least $(dcu_human "$6")" ;;
+    *) total="$(dcu_human "$6")" ;;
+  esac
+  words="$4 offerable ($total), $2 not offerable, $3 unmeasured"
   if [ "$status" = measured ]; then echo "$(dcr_title "$c"): $words."
   else echo "$(dcr_title "$c"): $status. Found before that: $words."; fi
   n="$(dcr_header "$DCS_RECORD" "note.$c" 2>/dev/null)" && echo "  $n"
