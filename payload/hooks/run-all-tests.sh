@@ -1286,6 +1286,11 @@ LIVECOPY
     # the here-document the loop reads its launch list from, so one suite reading stdin to the end
     # took every name still waiting: each then reported no exit status, "killed or never started",
     # and 93 of 101 failed on 2026-10-13. Linux CI's bash never showed it.
+    #
+    # Safe as it is although its exit lands whenever it likes (#1989, L1035): from the first launch to
+    # the bare wait after this loop the runner writes nothing (it only reads the list, looks and
+    # sleeps), so no exit can interrupt one of its writes; the suite's own progress line is written by
+    # the job itself, whose children are all waited for in the foreground.
     # _run_at is this run's own clock when the suite launched, read before SECONDS is reset, so its
     # progress line can say how long the whole run has been going.
     ( _run_at="$SECONDS"; SECONDS=0
@@ -1755,6 +1760,8 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         # decided below from the recheck's whole output (L11).
         rechecks=$(( rechecks + 1 ))
         progress_say "flake recheck $rechecks started" "$SECONDS" "$name allowed up to ${_fl_max}s"
+        # Nothing is written while it runs (the loop below only looks and sleeps), and it is reaped on
+        # both paths before the next line is, so its exit cannot interrupt a write (L1035, #1989).
         ( HOOK_TESTS_FLAKE_RECHECK=0 SUITE_LOCK_WAIT=0 bash "$suite" > "$WORK/$((idx - 1)).recheck" 2>&1; _fl_rc=$?; exit "$_fl_rc" ) < /dev/null &
         _fl_pid=$!
         # Both limits on one clock, SECONDS, in seconds: whichever comes first ends the wait, and
@@ -1776,6 +1783,9 @@ run-all-tests: this suite left no exit status, so it was killed or never started
           # not run out its allowance and is not known to hang (#1901).
           runner_kill_tree "$_fl_pid" 2>/dev/null || true
           kill -9 "$_fl_pid" 2>/dev/null || true
+          # Reaped here, before the line below, or its exit lands while that line is being written and
+          # bash 3.2 cuts the write short (L1035, #1989). After a KILL the wait returns at once.
+          wait "$_fl_pid" 2>/dev/null || true
           progress_say "flake recheck $rechecks stopped" "$SECONDS" "$name still running after $(( SECONDS - _fl_began ))s"
           if [ "$_fl_by_deadline" -eq 1 ]; then
             _flake=" (recheck stopped after $(( SECONDS - _fl_began ))s, so this report is printed before $DEADLINE_WHAT)"

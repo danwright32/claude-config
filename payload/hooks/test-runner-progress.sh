@@ -262,6 +262,16 @@ hlines="$(grep -F "${PREFIX}flake recheck " <<< "$hout" || true)"
 grep -q -E '^ +FAIL +test-hangs\.sh .*recheck timed out' <<< "$hout" && [ "$hcode" -ne 0 ] \
   && check "#1988 and its FAIL line still says the recheck timed out, failing the run" ok \
   || check "#1988 and its FAIL line still says the recheck timed out, failing the run" "exit=$hcode out=$hout"
+# And the recheck it killed is reaped before that stopped line is written (#1989). Killed and left,
+# the recheck's exit landed whenever it did, and the stopped line printed straight after the kill is
+# the write bash 3.2 cuts short when that exit interrupts it (L1035). Read from the runner's text,
+# because the race itself cannot be brought on at will: a probe of its shape lost its tail once in
+# 30,000 calls at a load of 268 (#1974). Between the KILL and the stopped line there must be a wait
+# on that same recheck.
+reap_between="$(awk '/kill -9 "\$_fl_pid"/ { on = 1; next } on && /progress_say "flake recheck \$rechecks stopped"/ { exit } on { print }' "$DIR/run-all-tests.sh")"
+grep -q -E '^[[:space:]]*wait "\$_fl_pid"' <<< "$reap_between" \
+  && check "#1989 a recheck killed at its allowance is reaped before its stopped line is printed" ok \
+  || check "#1989 a recheck killed at its allowance is reaped before its stopped line is printed" "between the kill and the stopped line in run-all-tests.sh: ${reap_between:-nothing, or the kill was not found}"
 
 # ---- 3. Every reader of the runner's output reads past the new lines (L683) ----
 # The lines judged are the ones the runner really printed, a failing suite's and every kind of

@@ -311,14 +311,15 @@ started="$(date +%s)"
 } > "$pending_file" 2>/dev/null || { rm -f "$diff_file"; say "skipped: could not write $pending_file."; }
 touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
 
-# Detached: no stdin, no stdout, no stderr, not waited for, not in this shell's job table.
-nohup python3 "$HOOK_DIR/lib/ai-review-run.py" \
+# Detached: no stdin, no stdout, no stderr, not waited for. Started by a subshell that ends at once,
+# so it is never this hook's child: a runner that fails fast would otherwise exit while the line below
+# is being written, and bash 3.2 drops the rest of a write its SIGCHLD interrupts (L1035, #1989).
+( nohup python3 "$HOOK_DIR/lib/ai-review-run.py" \
   --state-dir "$AR_STATE_DIR" --key "$repo_key" --sha "$head_sha" \
   --repo-label "$repo_label" --branch "$branch" --repo-dir "$repo_dir" \
   --model "$model" --prompt-file "$HOOK_DIR/lib/ai-review-prompt.txt" \
   --lessons-dir "${AI_REVIEW_LESSONS_DIR:-$HOOK_DIR/..}" \
   --diff-file "$diff_file" --deadline "$AR_DEADLINE" --started "$started" \
-  </dev/null >/dev/null 2>&1 &
-disown "$!" 2>/dev/null || true
+  </dev/null >/dev/null 2>&1 & )
 
 say "review of $repo_label $branch ($short_mb..$short_head, $((size / 1024)) KB of code diff, $context_note) started in the background with $model; findings will appear on a later prompt."

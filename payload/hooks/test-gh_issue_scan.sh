@@ -396,8 +396,14 @@ for cmd in sys.argv[3:]:
         print("DIFF shared=%r fallback=%r" % (a, b))
 PY
 }
+# Each answer list is read into a variable first, never through process substitution, whose child
+# bash 3.2 never waits for and whose exit can cut short what this suite prints next (L1035, #1989).
+# No answer is an empty line, so an empty list stays an empty array.
 fb_lines=()
-while IFS= read -r line; do fb_lines+=("$line"); done < <(fb_compare "${FB_SHAPES[@]}")
+fb_out="$(fb_compare "${FB_SHAPES[@]}")"
+while IFS= read -r line; do [ -n "$line" ] && fb_lines+=("$line"); done <<FB_OUT
+$fb_out
+FB_OUT
 [ "${#fb_lines[@]}" -eq "${#FB_SHAPES[@]}" ] && check "#1449 every shape was read by both copies" ok \
   || check "#1449 every shape was read by both copies" "${#fb_lines[@]} answers for ${#FB_SHAPES[@]} shapes"
 for k in "${!FB_SHAPES[@]}"; do
@@ -405,7 +411,10 @@ for k in "${!FB_SHAPES[@]}"; do
     || check "#1449 the fallback reads it as the shared reader does: ${FB_SHAPES[$k]}" "${fb_lines[$k]:-no answer}"
 done
 fb_lines=()
-while IFS= read -r line; do fb_lines+=("$line"); done < <(fb_compare "${FB_OVER_READ[@]}")
+fb_out="$(fb_compare "${FB_OVER_READ[@]}")"
+while IFS= read -r line; do [ -n "$line" ] && fb_lines+=("$line"); done <<FB_OUT
+$fb_out
+FB_OUT
 for k in "${!FB_OVER_READ[@]}"; do
   [ "${fb_lines[$k]:-}" = "MORE" ] && check "#1449 the fallback reads more here, never less: ${FB_OVER_READ[$k]}" ok \
     || check "#1449 the fallback reads more here, never less: ${FB_OVER_READ[$k]}" "${fb_lines[$k]:-no answer}"

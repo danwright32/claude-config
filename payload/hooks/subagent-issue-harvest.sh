@@ -158,13 +158,15 @@ with open(p + ".tmp", "w", errors="replace") as fh:
 os.replace(p + ".tmp", p)
 ' "$claimed" "$now" 2>/dev/null
     defer_log "swept the overdue pending harvest in $(basename "$f")"
-    perl -e 'setpgrp(0, 0); exec @ARGV' bash -c '
+    # Started by a subshell that ends at once, so the sweep is never this hook's child and one that
+    # fails fast cannot interrupt whatever this hook writes next (L1035, #1989).
+    ( perl -e 'setpgrp(0, 0); exec @ARGV' bash -c '
       python3 -c "import json, sys; sys.stdout.reconfigure(errors=\"replace\"); print(json.dumps(json.load(open(sys.argv[1], errors=\"replace\"))[\"payload\"]))" "$1" \
         | CLAUDE_ISSUE_HARVEST_FORCE=1 bash "$2" >/dev/null 2>&1
       st=$?
       # Released for the next sweep under the name it would look for, unless the harvest ran.
       if [ "$st" -eq 0 ]; then rm -f "$1"; else mv "$1" "${1%.claimed.*}.claimed" 2>/dev/null; fi
-    ' sweep "$claimed" "$self_path" >/dev/null 2>&1 &
+    ' sweep "$claimed" "$self_path" >/dev/null 2>&1 & )
   done
   return 0
 }
