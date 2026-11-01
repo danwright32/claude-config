@@ -597,15 +597,15 @@ done_re="sleep_note '(\\{\"kind\":\"done\"[^']*\\})'"
 [[ "$src" =~ $done_re ]] && example="${BASH_REMATCH[1]}"
 has "the overnight rules show the done note a goal naming no issue writes for a merge" '"kind":"done"' "$example"
 line="${example//owner\/name/o/n}"; line="${line//<its number>/80}"; line="${line//<what it did>/Merged the parser}"
-record g14 '["'"$U3"'"]' "$SLEEPDIR/ended/g14.json"
-CLAUDE_CODE_SESSION_ID=$U3 NOW=1791442000000 py note --record "$SLEEPDIR/ended/g14.json" --line '{"kind":"heartbeat","repo":"o/n"}' >/dev/null 2>&1
-CLAUDE_CODE_SESSION_ID=$U3 NOW=1791443000000 py note --record "$SLEEPDIR/ended/g14.json" --line '{"kind":"progress","text":"Wrote the parser"}' >/dev/null 2>&1
+record g15 '["'"$U3"'"]' "$SLEEPDIR/ended/g15.json"
+CLAUDE_CODE_SESSION_ID=$U3 NOW=1791442000000 py note --record "$SLEEPDIR/ended/g15.json" --line '{"kind":"heartbeat","repo":"o/n"}' >/dev/null 2>&1
+CLAUDE_CODE_SESSION_ID=$U3 NOW=1791443000000 py note --record "$SLEEPDIR/ended/g15.json" --line '{"kind":"progress","text":"Wrote the parser"}' >/dev/null 2>&1
 if [ -n "$example" ]; then
-  CLAUDE_CODE_SESSION_ID=$U3 NOW=1791444000000 py note --record "$SLEEPDIR/ended/g14.json" --line "$line" >/dev/null 2>&1; rc=$?
+  CLAUDE_CODE_SESSION_ID=$U3 NOW=1791444000000 py note --record "$SLEEPDIR/ended/g15.json" --line "$line" >/dev/null 2>&1; rc=$?
   check_eq "the rules' done note is accepted by the writer" 0 "$rc"
 fi
-CLAUDE_CODE_SESSION_ID=$U3 NOW=1791457000000 py note --record "$SLEEPDIR/ended/g14.json" --line '{"kind":"stopped","text":"goal met"}' >/dev/null 2>&1
-echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"'"$U3"'","generation":"g14"}' >> "$SLEEPDIR/notes/g14.jsonl"
+CLAUDE_CODE_SESSION_ID=$U3 NOW=1791457000000 py note --record "$SLEEPDIR/ended/g15.json" --line '{"kind":"stopped","text":"goal met"}' >/dev/null 2>&1
+echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"'"$U3"'","generation":"g15"}' >> "$SLEEPDIR/notes/g15.jsonl"
 {
   printf '['
   pr 80 "The parser" 20 "fix-parser" 'Nothing.' "[$(ref 90 o/n)]"; printf ,
@@ -618,8 +618,8 @@ echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"'"$U3"'","generation":"g14"}' >>
   iss 91 "Other issue" 23 "[$(ref 81 o/n)]"
   printf ']'
 } > "$FAKE/gh-issue-o_n"
-NOW=$WOKE py render --record "$SLEEPDIR/ended/g14.json" --final >/dev/null 2>&1
-r="$(report_of g14)"
+NOW=$WOKE py render --record "$SLEEPDIR/ended/g15.json" --final >/dev/null 2>&1
+r="$(report_of g15)"
 look="$(printf '%s\n' "$r" | sed -n '/^## Needs a look/,/^## /p')"
 has "#2011 the merge the session noted is done" "o/n PR #80 The parser, merged 3:20 AM ET" "$r"
 lacks "#2011 and is never listed as unaccounted" "o/n PR #80 merged with no session accounting for it" "$look"
@@ -801,11 +801,11 @@ has "naming the session" "aaaa1111" "$out"
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
 # read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
-check_eq "every report this suite wrote carries its stamp" 12 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "every report this suite wrote carries its stamp" 13 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
 leaked="$(find "$REAL_DOWNLOADS" -maxdepth 1 -type f -newer "$WORK/began" -size -1024k -exec grep -l -F -- "$STAMP" {} + 2>/dev/null)"
 check_eq "the real Downloads gained nothing this suite wrote" "" "$leaked"
 # Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
-check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
+check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g15.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
 echo
 echo "passed: $pass, failed: $fail"
