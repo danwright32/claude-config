@@ -633,7 +633,6 @@ MISSING_EOF
   if ! [ "$n" -ge 1 ] 2>/dev/null; then
     rm -rf "$dir"; RT_WHY="the gate could not split the rest of the test changes into parts"; RT_UNSEEN="$tests_cut"; return 0
   fi
-  RT_PARTS=$n
   k=1
   while [ "$k" -le "$n" ]; do
     if [ "$k" -gt "$TEST_PARTS_MAX" ]; then
