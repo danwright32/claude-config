@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import { askPr, VIEW_FIELDS, type PrAnswer } from '../hooks/prmerged.ts'
+import { askPr, failureOf, VIEW_FIELDS, type PrAnswer } from '../hooks/prmerged.ts'
 import type { GhRun } from '../hooks/ghaccounts.ts'
 import { linkRepo } from '../hooks/repo.ts'
 
@@ -79,4 +79,14 @@ test('a runner or link reader that throws is said, never thrown on', async () =>
   expect(thrown).toEqual({ kind: 'unproven', why: 'GitHub could not be asked: spawn gh ENOENT' })
   const unread = await askPr({ run: async () => answer(), linkRepo: async () => { throw new Error('mod-kit has no linkRepo') }, describe: () => 'said by the caller' }, { pr: 4284, repo: REPO })
   expect(unread).toEqual({ kind: 'unproven', why: `GitHub's link https://github.com/${REPO}/pull/4284 could not be read (said by the caller)` })
+})
+
+// #2000: is it live's other reads made as each account say why none answered the same way.
+test("why no account answered: the first line from an account that could see the repository, else the first, and never a throw on none", () => {
+  const hidden = ran(1, '', `GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)`)
+  const refused = ran(1, '', 'HTTP 502: Bad Gateway\nmore detail')
+  expect(failureOf([hidden, refused])).toBe('HTTP 502: Bad Gateway')
+  expect(failureOf([hidden])).toBe(`GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)`)
+  expect(failureOf([ran(4, '', '')])).toBe('gh exited 4')
+  expect(failureOf([])).toBe('gh gave no answer')
 })

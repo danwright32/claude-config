@@ -122,6 +122,17 @@ describe('the goal (#1242)', () => {
     expect(RULES).toMatch(/If the goal names no issue, work the task itself in a worktree of its own/)
     expect(RULES).toContain('kind progress')
   })
+  // #2011: the report credits a merge only from a done note naming its repository and pull request,
+  // so a goal naming no issue, which has no claim and no queue release to write one, is told to
+  // write it, shown by an example carrying both (L270).
+  test('a goal that names no issue notes each pull request it merges as done, with its repository and number (#2011)', () => {
+    const example = /sleep_note '(\{"kind":"done"[^']*\})'/.exec(RULES)?.[1] ?? ''
+    const note = JSON.parse(example.replace('<its number>', '12') || '{}') as { repo?: unknown, pr?: unknown, text?: unknown }
+    expect(note.repo).toBe('owner/name')
+    expect(note.pr).toBe(12)
+    expect(typeof note.text).toBe('string')
+    expect(RULES).toMatch(/issue in place of pr/)
+  })
   test('the session stops with a note once the goal is met or nothing more toward it can be done', () => {
     expect(RULES).toContain(`sleep_note '{"kind":"stopped","by":"s1","text":"<why>"}'`)
     expect(RULES).toMatch(/When the goal is met, `next` prints none, or nothing more toward it can be done tonight/)

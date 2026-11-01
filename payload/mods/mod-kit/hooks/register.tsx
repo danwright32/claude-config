@@ -11,7 +11,7 @@ import { sendTwice } from './send.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './repo.ts'
 import { branchAt } from './branch.ts'
 import { workingTree } from './tree.ts'
-import { callShell, commandWrites } from './writes.ts'
+import { callShell, commandWrites, pipelineIn } from './writes.ts'
 import { pythonText } from './code.ts'
 import { isDans } from './origin.ts'
 import { followAccount, loginStarted, readAccount, registerLogin } from './login.ts'
@@ -299,7 +299,8 @@ export const register: Register = (on, options) => {
       // The one reader of a transcript's /goal (#1252), each read bounded at 5 seconds (chosen, not
       // measured: a grep of one file).
       goal: async ({ transcript }) => goalAt(transcript, argv => built.process.run(argv, { timeoutMs: 5_000 })),
-      pipeline: async ({ command }) => pipeline(command),
+      // Each command with the folder it runs in where the caller says where the call starts (#2000).
+      pipeline: async ({ command, cwd, home }) => (cwd === undefined ? pipeline(command) : pipelineIn(command, cwd, home ?? '')),
       pythonText: async ({ code }) => pythonText(code),
       // The bottom of every login (#1205): each mod following it takes it in on its way down.
       login: async () => undefined,

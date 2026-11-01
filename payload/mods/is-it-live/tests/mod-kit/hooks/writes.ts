@@ -1,0 +1,1212 @@
+import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
+import { git, pipeline, placed, readLine, type Command, type Line } from './commands.ts'
+import { codeOnly, codeTargets } from './code.ts'
+import { kindOf, readProgram, splitsWords } from './program.ts'
+import { isDevice } from './inputs.ts'
+
+// The one reader of which files a Bash call changes (#705, L613), over the simple commands the
+// shared reader gives. Ask before saving kept its own copy and missed inline scripts, rsync,
+// install, ln, dd, a patch, every file but the last of a sed -i, and a relative path after a cd;
+// the collision guard's copy (#654) already followed a cd and a copy into a folder, and its path,
+// sed and perl readings are carried over here as they were reviewed there. No build's copy (#616)
+// listed the copying commands, dd and inline scripts; curl and wget's output files, gawk's and
+// ruby's in place editing were missing from all three (#702), and a file curl or wget saves under
+// the address's own name from every reader (#726). The collision guard and no build moved onto it
+// in #712, bringing what each read that it did not: a file removed (rm, rmdir, unlink, a mv's
+// source, find -delete), stamped (touch), emptied (truncate, shred), made (mkdir) or changed in
+// mode (chmod, chown, chgrp), reported apart from the files content goes into as `changes`.
+//
+// Inline code is judged by the reader's per language judge (code.ts), which each command already
+// carries, and a shell fed its script is read as the commands it runs, so this keeps no list of
+// interpreters or write idioms of its own. A command substitution the shell runs, on the command line,
+// in an unquoted heredoc's body or in a shell's own script, and a process substitution, is read as
+// the command line it is (#965, #974, #975, commandWrites). A script run from a file (python3
+// build.py, bash x.sh, ./tool, make-settled.py) writes what no word names, which is not guessed at
+// (#654); since #1586 each argument it is handed is given apart, in `runs`, for a guard judging what
+// a script's arguments name (the design round guard, whose refusal says so in its rules.ts
+// scriptUnread; ask before saving, the collision guard and the overnight LESSONS.md check, #1592).
+// Since #1682 a module python runs with -m and a tool npx runs are given there the same way. Still
+// unread: a file a run writes that no argument names (a path in its own text), what is under a
+// folder it is handed (`npx codemod app/`, given as the folder alone), npx's -c command line, and a
+// tool run through another runner (pnpm dlx, yarn dlx, npm exec, bunx, uv run, uvx), none of which
+// ran on this Mac in the 14 days measured.
+
+const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?)$/
+// The redirects among them that send standard output, with `>& file` and `1>& file` (#1976).
+const STDOUT_REDIRECT = /^(1?>>?|1?>\||&>>?|1?>&)$/
+const UNNAMEABLE = /[$`*?[\]{}]/
+// A path part shaped like a web framework's route parameter (#1010): Next.js's [id], [...slug] and
+// [[...slug]], SvelteKit's [id=matcher], and a pages router file such as [id].tsx. It names that
+// folder or file: quoted the shell takes it as written, and unquoted bash leaves a pattern matching
+// nothing as written (measured 2026-10-09; zsh refuses the command, so nothing is written). It
+// differs only where a folder named by one of its letters holds the same file, which a route tree
+// does not. A range, a negation or a bracket beside other letters is a pattern, and stays unnamed.
+const ROUTE_PART = /^\[(?:\[\.\.\.[A-Za-z0-9_=]+\]|(?:\.\.\.)?[A-Za-z0-9_=]+)\](?:\.[A-Za-z0-9.+_]+)?$/
+const patternIn = (p: string) => UNNAMEABLE.test(p.split('/').map(part => (ROUTE_PART.test(part) ? part.replace(/[[\]]/g, '') : part)).join('/'))
+const HOME_VAR = /^\$(?:HOME|\{HOME\})(?=\/|$)/
+
+// A process substitution given as an operand (`tee >(cmd)`) is a pipe the shell names under /dev/fd,
+// never a file; what it runs is read apart (#975).
+const isPipe = (word: string) => /^[<>]\(/.test(word)
+
+// A variable the command set before a write is read as its value, as the shell reads it, so the
+// write names its file (#743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` was given as $F,
+// with no path, and ask before saving let it through). The word is still given as written. Only a
+// value the reader can be sure of: one holding a command's output or anything else it cannot name;
+// one a loop other than a for over plain words (below), read, mapfile, getopts or printf -v sets,
+// appended to or unset; one given a second,
+// different value (the reader cannot tell a ; from an && or ||, so which stands is unknown); and
+// every value once an eval or a sourced file may have changed it, is left as written. A value set
+// inside a subshell ends with it. An unquoted value is split into words where the shell running the
+// command splits it (#1834: bash, sh, dash and ksh do, zsh does not), and a quoted one is kept whole.
+// A for loop over plain words (#1953) gives its variable each of them: a word naming it is read once
+// for each, as that many words, a word holding a space read whole and as each piece (eachOf). A loop
+// over anything else (a pattern, an expansion, a ~ or a #), or a variable also set some other way, is
+// left as written. A word whose every $
+// is in single quotes or after a backslash (Command.unexpanded) is never read as a value.
+const SETS = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/
+const APPENDS = /^([A-Za-z_][A-Za-z0-9_]*)\+=/
+const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const VARIABLE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g
+const DECLARES = new Set(['export', 'declare', 'typeset', 'local', 'readonly'])
+const READS = new Set(['read', 'mapfile', 'readarray', 'getopts', 'unset'])
+const LOOPS = new Set(['for', 'select'])
+const RUNS_TEXT = new Set(['eval', 'source', '.'])
+type Vars = Map<string, string | null>
+// A loop word the reader follows: nothing the shell expands or matches against files. One holding a
+// space (an issue's title, quoted) is followed too, read whole and as each piece a shell splitting
+// the variable's value would make (eachOf).
+const PLAIN_WORD = /^[^*?[\]{}()~^#$`\\]+$/
+// The most words a loop, or several loops in one word, may give a word before it is left as written.
+const MAX_EACH = 1024
+
+/**
+ * A word as an absolute path, or undefined when it cannot be named: built from a variable other
+ * than HOME or a pattern (a route parameter part is no pattern, ROUTE_PART), a ~user, or relative to
+ * a folder that is not known.
+ */
+export const absolutePath = (word: string, dir: string | undefined, home: string): string | undefined => {
+  if (!word) return undefined
+  let p = word
+  const hv = HOME_VAR.exec(p)
+  if (hv) {
+    if (!home) return undefined
+    p = home + p.slice(hv[0].length)
+  }
+  if (patternIn(p)) return undefined
+  if (p === '~' || p.startsWith('~/')) {
+    if (!home) return undefined
+    p = home + p.slice(1)
+  } else if (p.startsWith('~')) return undefined
+  if (!p.startsWith('/')) {
+    if (!dir) return undefined
+    p = `${dir}/${p}`
+  }
+  const parts: string[] = []
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') parts.pop()
+    else parts.push(seg)
+  }
+  return `/${parts.join('/')}`
+}
+
+/**
+ * The folder a word whose name is a pattern lands in, as an absolute path (#1123): its folder part,
+ * or the folder the command is in for a bare name, named as a path is (a cd before it followed).
+ * Undefined where it cannot be named, and where the name may reach below that folder: a variable or
+ * a command's output in the name (its value may hold a slash), a ~ (another user's home), or a
+ * whole `**` (every folder below, with globstar). A slash inside a brace or bracket leaves a pattern
+ * in the folder part, which names no one folder.
+ */
+export const patternFolder = (word: string, dir: string | undefined, home: string): string | undefined => {
+  const cut = word.lastIndexOf('/')
+  const name = word.slice(cut + 1)
+  if (!/[*?[\]{}]/.test(name) || /[$`]/.test(name) || name === '**' || (cut < 0 && name.startsWith('~'))) return undefined
+  return cut < 0 ? dir : absolutePath(word.slice(0, cut) || '/', dir, home)
+}
+
+const baseOf = (p: string) => p.split('/').filter(Boolean).pop() ?? p
+
+// The operands of a command after its options, taking a value from the next word for the options
+// named in `valued` (an option written --name=value carries its own). After -- everything is an
+// operand.
+const operands = (args: string[], valued: ReadonlySet<string>): { ops: string[]; opts: Map<string, string | true> } => {
+  const ops: string[] = []
+  const opts = new Map<string, string | true>()
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '--') {
+      ops.push(...args.slice(i + 1))
+      break
+    }
+    if (a.startsWith('-') && a !== '-') {
+      const eq = a.indexOf('=')
+      if (a.startsWith('--') && eq > 0) opts.set(a.slice(0, eq), a.slice(eq + 1))
+      else if (valued.has(a)) opts.set(a, args[++i] ?? '')
+      else opts.set(a, true)
+    } else ops.push(a)
+  }
+  return { ops, opts }
+}
+
+// sed's files when it edits them in place: -i, -i<suffix>, --in-place[=suffix], with BSD's -i ''
+// or -i .bak taking the next word as the suffix. The script is the first operand unless -e or -f
+// gave it.
+type InPlace = { inPlace: boolean; files: string[] }
+const sedInPlace = (args: string[]): InPlace => {
+  let inPlace = false
+  let scripted = false
+  const ops: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '-e' || a === '-f' || a === '--expression' || a === '--file') {
+      scripted = true
+      i++
+    } else if (a.startsWith('--expression=') || a.startsWith('--file=')) scripted = true
+    else if (a === '-i') {
+      inPlace = true
+      const next = args[i + 1]
+      if (next !== undefined && (next === '' || next.startsWith('.'))) i++
+    } else if (a === '--in-place' || a.startsWith('--in-place=') || /^-[a-zA-Z]*i/.test(a)) inPlace = true
+    else if (a.startsWith('-') && a !== '-') continue
+    else ops.push(a)
+  }
+  return { inPlace, files: !inPlace ? [] : scripted ? ops : ops.slice(1) }
+}
+
+// perl's (and ruby's) files when -i edits them in place. In a cluster such as -pi.bak or -pie, what
+// follows the i is its suffix; a script letter (perl's e or E, ruby's e) takes the rest of the
+// cluster, or the next word, as the script; a value letter takes the rest of the cluster as its value.
+// A digits letter takes only the digits after it (perl's -0777 or -0x1F, -l015), so the letters
+// after those are options again: -0pi and -lpi edit in place.
+const PERL = { script: 'eE', valued: 'IMmxCdD', digits: '0l' }
+const RUBY = { script: 'e', valued: 'IrCEFxWTK', digits: '0' }
+const inPlaceCluster = (args: string[], letters: { script: string; valued: string; digits: string }): InPlace => {
+  let inPlace = false
+  let scripted = false
+  const ops: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '--') {
+      ops.push(...args.slice(i + 1))
+      break
+    }
+    if (!a.startsWith('-') || a === '-') {
+      ops.push(a)
+      continue
+    }
+    const cluster = a.slice(1)
+    for (let j = 0; j < cluster.length; j++) {
+      const l = cluster[j] as string
+      if (l === 'i') {
+        inPlace = true
+        break
+      }
+      if (letters.script.includes(l)) {
+        scripted = true
+        if (j === cluster.length - 1) i++
+        break
+      }
+      // The rest of the cluster is this letter's value (-Ilib, -MPOSIX), never more letters, so
+      // the i in -Ilib is not -i.
+      if (letters.valued.includes(l)) break
+      if (letters.digits.includes(l)) {
+        const value = /^(?:x[0-9a-fA-F]*|[0-7]*)/.exec(cluster.slice(j + 1))?.[0] ?? ''
+        j += value.length
+      }
+    }
+  }
+  return { inPlace, files: !inPlace ? [] : scripted ? ops : ops.slice(1) }
+}
+
+// awk's files when gawk edits them in place (-i inplace, -iinplace, --include=inplace, the
+// extension named with its .awk too): every operand after the program, which is the first operand
+// unless -f, -e or --source gave it, and never a var=value operand, which is an assignment (no
+// build's own reading, #714, carried over in #712).
+const INPLACE = /^inplace(?:\.awk)?$/
+const awkInPlace = (args: string[]): InPlace => {
+  let inPlace = false
+  let scripted = false
+  const ops: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    const attached = /^(?:-i|--include=)(.+)$/.exec(a)
+    if (attached) {
+      if (INPLACE.test(attached[1] as string)) inPlace = true
+    } else if (a === '-i' || a === '--include') {
+      if (INPLACE.test(args[i + 1] ?? '')) inPlace = true
+      i++
+    } else if (['-f', '-e', '-E', '--file', '--source', '--exec'].includes(a)) {
+      scripted = true
+      i++
+    } else if (['-v', '-F', '-l', '--assign', '--field-separator', '--load'].includes(a)) i++
+    else if (a.startsWith('-') && a !== '-') continue
+    else ops.push(a)
+  }
+  const files = (scripted ? ops : ops.slice(1)).filter(o => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(o))
+  return { inPlace, files: inPlace ? files : [] }
+}
+
+// What curl and wget save (#726): the files their options name, and a file saved under the
+// address's own name, which a download into lasting memory by its remote name used to slip past.
+// Each is read option by option in the order given: a short option alone (-o out), in a cluster
+// (-sSLO, -sSo out) or with its value attached (-oout, -qO-), a long one with its value next or
+// after = (--output out, --output=out); every other word is an address.
+// `into` is the folder an unnamed download lands in, where the words name one.
+type Download = { files: string[]; unnamed: { what: string; inputs: string[]; into?: string }[] }
+type Grammar = { short: string; long: ReadonlySet<string> }
+const options = (args: string[], g: Grammar, opt: (name: string, value: string | undefined) => void, address: (a: string) => void) => {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '--') {
+      args.slice(i + 1).forEach(address)
+      return
+    }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=')
+      const name = eq > 0 ? a.slice(0, eq) : a
+      opt(name, eq > 0 ? a.slice(eq + 1) : g.long.has(name) ? (args[++i] ?? '') : undefined)
+    } else if (a.startsWith('-') && a !== '-') {
+      for (let j = 1; j < a.length; j++) {
+        const l = a[j] as string
+        if (!g.short.includes(l)) {
+          opt(l, undefined)
+          continue
+        }
+        opt(l, j < a.length - 1 ? a.slice(j + 1) : (args[++i] ?? ''))
+        break
+      }
+    } else address(a)
+  }
+}
+
+// An address's path and query, its scheme, host and fragment taken off.
+const addressParts = (url: string): { path: string; query: string } => {
+  const whole = url.split('#')[0] as string
+  const q = whole.indexOf('?')
+  const rest = (q < 0 ? whole : whole.slice(0, q)).replace(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, '')
+  const slash = rest.indexOf('/')
+  return { path: slash < 0 ? '' : rest.slice(slash), query: q < 0 ? '' : whole.slice(q) }
+}
+const lastPart = (path: string) => path.slice(path.lastIndexOf('/') + 1)
+const under = (dir: string | undefined, file: string) => (dir && !/^[/~$]/.test(file) ? `${dir.replace(/\/+$/, '')}/${file}` : file)
+
+// curl's options that take a value (curl 8.7.1's --help all), so a value is never taken for an
+// address. Each -o or -O is for the next address in turn; one left over goes to standard output
+// unless --remote-name-all. A remote name is the address's last part, query and fragment off (as
+// curl 8.7 saves it, measured 2026-10-04); an address with none saves nothing.
+const CURL: Grammar = {
+  short: 'EKCbcdDFPHhmoUQreXYytzTuAwx',
+  long: new Set(['--cert', '--config', '--continue-at', '--cookie', '--cookie-jar', '--data', '--dump-header', '--form', '--ftp-port', '--header', '--help', '--max-time', '--output', '--proxy-user', '--quote', '--range', '--referer', '--request', '--speed-limit', '--speed-time', '--telnet-option', '--time-cond', '--upload-file', '--user', '--user-agent', '--write-out', '--proxy', '--preproxy', '--abstract-unix-socket', '--alt-svc', '--aws-sigv4', '--cacert', '--capath', '--cert-type', '--ciphers', '--connect-timeout', '--connect-to', '--create-file-mode', '--crlfile', '--curves', '--data-ascii', '--data-binary', '--data-raw', '--data-urlencode', '--delegation', '--dns-interface', '--dns-ipv4-addr', '--dns-ipv6-addr', '--dns-servers', '--doh-url', '--egd-file', '--engine', '--etag-compare', '--etag-save', '--expect100-timeout', '--form-string', '--ftp-account', '--ftp-alternative-to-user', '--ftp-method', '--ftp-ssl-ccc-mode', '--happy-eyeballs-timeout-ms', '--haproxy-clientip', '--hostpubmd5', '--hostpubsha256', '--hsts', '--interface', '--ipfs-gateway', '--json', '--keepalive-time', '--key', '--key-type', '--krb', '--libcurl', '--limit-rate', '--local-port', '--login-options', '--mail-auth', '--mail-from', '--mail-rcpt', '--max-filesize', '--max-redirs', '--netrc-file', '--noproxy', '--oauth2-bearer', '--output-dir', '--parallel-max', '--pass', '--pinnedpubkey', '--proto', '--proto-default', '--proto-redir', '--proxy-cacert', '--proxy-capath', '--proxy-cert', '--proxy-cert-type', '--proxy-ciphers', '--proxy-crlfile', '--proxy-header', '--proxy-key', '--proxy-key-type', '--proxy-pass', '--proxy-pinnedpubkey', '--proxy-service-name', '--proxy-tls13-ciphers', '--proxy-tlsauthtype', '--proxy-tlspassword', '--proxy-tlsuser', '--pubkey', '--random-file', '--rate', '--request-target', '--resolve', '--retry', '--retry-delay', '--retry-max-time', '--sasl-authzid', '--service-name', '--socks4', '--socks4a', '--socks5', '--socks5-gssapi-service', '--socks5-hostname', '--stderr', '--tftp-blksize', '--tls-max', '--tls13-ciphers', '--tlsauthtype', '--tlspassword', '--tlsuser', '--trace', '--trace-ascii', '--trace-config', '--unix-socket', '--url', '--url-query', '--variable']),
+}
+// The files curl writes beside its output, each named by its value ('-' is standard output).
+const CURL_FILES = new Set(['c', '--cookie-jar', 'D', '--dump-header', '--trace', '--trace-ascii', '--etag-save', '--stderr', '--libcurl'])
+const curlDownload = (args: string[]): Download => {
+  const outputs: (string | null)[] = []
+  const urls: string[] = []
+  const files: string[] = []
+  let all = false
+  let serverNames = false
+  let dir: string | undefined
+  options(
+    args,
+    CURL,
+    (name, value) => {
+      if (name === 'O' || name === '--remote-name') outputs.push(null)
+      else if (name === 'o' || name === '--output') outputs.push(value ?? '')
+      else if (name === '--remote-name-all') all = true
+      else if (name === 'J' || name === '--remote-header-name') serverNames = true
+      else if (name === '--output-dir') dir = value
+      else if (name === '--url' && value) urls.push(value)
+      else if (CURL_FILES.has(name) && value && value !== '-') files.push(value)
+    },
+    a => urls.push(a),
+  )
+  let remote = false
+  urls.forEach((url, n) => {
+    const out = n < outputs.length ? outputs[n] : all ? null : undefined
+    if (out === undefined) return
+    if (out !== null) {
+      if (out && out !== '-') files.push(under(dir, out))
+      return
+    }
+    remote = true
+    const name = lastPart(addressParts(url).path)
+    if (name) files.push(under(dir, name))
+  })
+  return { files, unnamed: serverNames && remote ? [{ what: 'a curl download the server names', inputs: [], ...(dir ? { into: dir } : {}) }] : [] }
+}
+
+// wget's options that take a value (GNU wget 1.21's --help). A plain wget saves each address under
+// its last part with its query (GNU wget keeps it), index.html for a folder, into the current
+// folder or -P's. -O puts everything in its one file. Recursive and mirrored downloads, names the
+// server gives and addresses read from a file are writes the words do not name. --spider only
+// checks each address and saves nothing (no build's own reading, carried over in #712).
+const WGET: Grammar = {
+  short: 'oaiBetOTwQPlARDIXU',
+  long: new Set(['--output-file', '--append-output', '--execute', '--config', '--input-file', '--base', '--bind-address', '--bind-dns-address', '--dns-servers', '--tries', '--output-document', '--backups', '--timeout', '--dns-timeout', '--connect-timeout', '--read-timeout', '--wait', '--waitretry', '--quota', '--limit-rate', '--prefer-family', '--user', '--password', '--local-encoding', '--remote-encoding', '--directory-prefix', '--cut-dirs', '--default-page', '--http-user', '--http-password', '--header', '--compression', '--max-redirect', '--proxy-user', '--proxy-password', '--referer', '--save-cookies', '--load-cookies', '--post-data', '--post-file', '--method', '--body-data', '--body-file', '--user-agent', '--secure-protocol', '--certificate', '--certificate-type', '--private-key', '--private-key-type', '--ca-certificate', '--ca-directory', '--crl-file', '--pinnedpubkey', '--random-file', '--egd-file', '--ciphers', '--hsts-file', '--warc-file', '--warc-header', '--warc-max-size', '--warc-tempdir', '--ftp-user', '--ftp-password', '--level', '--accept', '--reject', '--accept-regex', '--reject-regex', '--regex-type', '--domains', '--exclude-domains', '--follow-tags', '--ignore-tags', '--include-directories', '--exclude-directories', '--restrict-file-names', '--progress', '--report-speed', '--use-askpass']),
+}
+const WGET_FILES = new Set(['o', '--output-file', 'a', '--append-output', '--save-cookies'])
+const WGET_MANY = new Set(['r', '--recursive', 'm', '--mirror', 'p', '--page-requisites', 'x', '--force-directories'])
+const wgetDownload = (args: string[]): Download => {
+  const urls: string[] = []
+  const files: string[] = []
+  const lists: string[] = []
+  let document: string | undefined
+  let prefix: string | undefined
+  let many = false
+  let serverNames = false
+  let spider = false
+  // wget's -nd, -nH, -np, -nc and -nv are two letters each, never a cluster.
+  options(
+    args.filter(a => !/^-n[A-Za-z]+$/.test(a)),
+    WGET,
+    (name, value) => {
+      if (name === 'O' || name === '--output-document') document = value
+      else if (name === 'P' || name === '--directory-prefix') prefix = value
+      else if (name === 'i' || name === '--input-file') lists.push(value ?? '')
+      else if (name === '--content-disposition') serverNames = true
+      else if (name === '--spider') spider = true
+      else if (WGET_MANY.has(name)) many = true
+      else if (WGET_FILES.has(name) && value && value !== '-') files.push(value)
+    },
+    a => urls.push(a),
+  )
+  const unnamed: Download['unnamed'] = []
+  const into = prefix ? { into: prefix } : {}
+  if (spider) return { files, unnamed }
+  if (lists.length) unnamed.push({ what: 'a wget download of the addresses in a file', inputs: lists.filter(l => l && l !== '-'), ...into })
+  if (document !== undefined) {
+    if (document && document !== '-') files.push(document)
+  } else if (many) unnamed.push({ what: 'a wget download of many files', inputs: [], ...into })
+  else {
+    for (const url of urls) {
+      const { path, query } = addressParts(url)
+      files.push(under(prefix, `${lastPart(path) || 'index.html'}${query}`))
+    }
+    if (serverNames && urls.length) unnamed.push({ what: 'a wget download the server names', inputs: [], ...into })
+  }
+  return { files, unnamed }
+}
+
+// The options that take a value, per command whose destination is its last operand, so a value is
+// never taken for the destination (install -m 644, rsync --exclude .git, ditto --arch arm64).
+const VALUED: Record<string, ReadonlySet<string>> = {
+  cp: new Set(['-t', '-S', '--target-directory', '--suffix']),
+  mv: new Set(['-t', '-S', '--target-directory', '--suffix']),
+  ln: new Set(['-t', '-S', '--target-directory', '--suffix']),
+  install: new Set(['-t', '-m', '-o', '-g', '-S', '-B', '-f', '-M', '--target-directory', '--mode', '--owner', '--group', '--suffix']),
+  ditto: new Set(['--arch', '--bom']),
+  rsync: new Set(['-e', '-f', '-T', '-B', '--rsh', '--exclude', '--include', '--filter', '--files-from', '--exclude-from', '--include-from', '--chmod', '--log-file', '--rsync-path', '--port', '--temp-dir', '--backup-dir', '--suffix', '--compare-dest', '--link-dest', '--copy-dest', '--block-size', '--bwlimit', '--timeout', '--max-size', '--min-size', '--partial-dir']),
+}
+
+// A destination on another machine (host:path, user@host:path) is no file here.
+const isRemote = (w: string) => /^[^/]*:/.test(w) && !w.startsWith('/')
+
+// Input words: `<` and the file after it, `<file`, a heredoc's `<<EOF` (or `<<` and its delimiter
+// as the next word, #698), a here-string's `<<<` and its text, each with any descriptor number
+// before it. Taken out of a command's words, so its operands are what is left.
+const splitInputs = (words: string[]): { rest: string[]; files: string[] } => {
+  const rest: string[] = []
+  const files: string[] = []
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i] as string
+    if (/^\d*<<<$/.test(w)) i++
+    else if (/^\d*<<</.test(w)) continue
+    else if (/^\d*<</.test(w)) {
+      if (/^\d*<<-?$/.test(w)) i++
+    } else if (/^\d*<$/.test(w)) {
+      if (words[i + 1] !== undefined) files.push(words[++i] as string)
+    } else if (/^\d*</.test(w) && !w.startsWith('<(')) files.push(w.replace(/^\d*</, ''))
+    else rest.push(w)
+  }
+  return { rest, files }
+}
+
+// The commands that change files by their operands, so one xargs gives its operands to changes
+// files no word names (#730). An editor that edits in place only with its flag is told apart where
+// it is read.
+const OPERAND_WRITERS = new Set(['tee', 'cp', 'mv', 'ln', 'install', 'ditto', 'rsync', 'rm', 'unlink', 'rmdir', 'touch', 'mkdir', 'truncate', 'shred', 'chmod', 'chown', 'chgrp', 'patch'])
+// Each changer's options that take the next word as a value, so a value is never taken for a file.
+const CHANGERS: Record<string, { does: ModKitChange['does']; valued: ReadonlySet<string> }> = {
+  rm: { does: 'remove', valued: new Set() },
+  unlink: { does: 'remove', valued: new Set() },
+  rmdir: { does: 'remove', valued: new Set() },
+  touch: { does: 'touch', valued: new Set(['-t', '-r', '-d', '-A', '--reference', '--date']) },
+  mkdir: { does: 'folder', valued: new Set(['-m', '--mode']) },
+  truncate: { does: 'truncate', valued: new Set(['-s', '-r', '--size', '--reference']) },
+  shred: { does: 'truncate', valued: new Set(['-n', '-s', '--iterations', '--size', '--random-source']) },
+  chmod: { does: 'mode', valued: new Set() },
+  chown: { does: 'mode', valued: new Set() },
+  chgrp: { does: 'mode', valued: new Set() },
+}
+const FIND_FILE_ACTIONS = new Set(['-fprint', '-fprint0', '-fprintf', '-fls'])
+
+// A command run as a script file by its own name (#1586): one whose name ends in a script language's
+// extension (make-settled.py, /Users/dan/bin/gen.sh), or one named by a path from the folder it is in
+// (./tools/fix). A system program named by its whole path (/usr/bin/grep) is neither.
+const SCRIPT_NAME = /\.(?:py|sh|bash|zsh|js|mjs|cjs|ts|mts|cts|rb|pl)$/
+const runsDirectly = (w: string | undefined) => w !== undefined && (SCRIPT_NAME.test(w) || /^\.\.?\//.test(w))
+// An address (https://x.dev/page.html) is no file here.
+const isAddress = (w: string) => /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(w)
+// The options of a known tool, run through npx or as a python module, that take the next word as a
+// value it only reads (#1726), so that word is no file the run writes. Measured over this Mac's
+// 103,099 distinct Bash commands on 2026-10-25: tsc -p 60 times, http.server --bind 17, prettier
+// --stdin-filepath 4, vitest --config 3, pytest -n 3 and -p 2, ruff --config 1. Where the tool's own
+// help could be read here (python3.14's http.server and unittest, pytest 8), its other options of
+// that kind are added from it; for tsc, vitest, prettier, eslint and ruff, which are not installed on
+// this Mac, only the measured option and its other spelling. An option whose value the tool writes
+// (tsc --outDir, eslint -o, pytest --basetemp) is never listed, so its value is still handed on. A
+// script file's own options are not known, and on this Mac they carry the files it writes (--out,
+// --out-html, --out-tsv, --log, --results-dir), so none is skipped for a script.
+const TOOL_READS: ReadonlyMap<string, ReadonlySet<string>> = new Map(Object.entries({
+  tsc: new Set(['-p', '--project']),
+  vitest: new Set(['-c', '--config', '-r', '--root']),
+  prettier: new Set(['--stdin-filepath']),
+  eslint: new Set(['-c', '--config']),
+  ruff: new Set(['--config']),
+  'http.server': new Set(['-b', '--bind', '-d', '--directory', '-p', '--protocol', '--tls-cert', '--tls-key', '--tls-password-file']),
+  unittest: new Set(['-k', '-s', '--start-directory', '-p', '--pattern', '-t', '--top-level-directory', '--durations']),
+  pytest: new Set(['-n', '-p', '-k', '-m', '-c', '--config-file', '--rootdir', '--deselect', '--ignore', '--maxfail', '--confcutdir']),
+}))
+// A known tool that changes the files it is handed only when a flag tells it to (#1827), read from
+// each tool's own documentation. prettier rewrites them in place only with --write (-w, alone or in a
+// cluster of short flags); otherwise it prints them, or with --check (-c) or --list-different (-l)
+// names the ones that differ. eslint changes them only with --fix (--fix-dry-run fixes in memory and
+// prints), or writes a config with --init. Without such a flag a run hands on only the value of an
+// option it writes a file through (`outputs`): eslint's report (-o) and either tool's cache. In the
+// #1815 replay of 104,832 distinct Bash commands, prettier ran 102 times (61 --write, 34 --check) and
+// eslint 28, none with --fix. ruff is not listed: `fix = true` in its config makes `ruff check` fix
+// with no flag, so its flags alone cannot say it writes nothing; nor is black, run once.
+const TOOL_EDITS: ReadonlyMap<string, { edits: ReadonlySet<string>; outputs: ReadonlySet<string> }> = new Map(Object.entries({
+  prettier: { edits: new Set(['--write', '-w']), outputs: new Set(['--cache-location']) },
+  eslint: { edits: new Set(['--fix', '--init']), outputs: new Set(['-o', '--output-file', '--cache-location', '--cache-file']) },
+}))
+// A tool's name as npx is given it, without the version it asks for (prettier@3, @scope/pkg@1).
+const toolName = (name: string) => name.replace(/(?<=.)@[^/@]*$/, '')
+// Whether a word may become a flag the reader cannot see: past its command substitutions, which give
+// the files a tool works on (#1815), it holds a variable the reader could not read ($MODE, "$@", a
+// loop's $f), a backquoted command, or a space. A value the command set is already split into words
+// where the shell splits it (#1834); a space left is a quoted value, or one under a shell the reader
+// does not know, and is still read as one that may hold a flag.
+const withoutSubstitutions = (w: string) => {
+  let out = ''
+  for (let i = 0; i < w.length; i++) {
+    if (w[i] !== '$' || w[i + 1] !== '(') {
+      out += w[i]
+      continue
+    }
+    let depth = 0
+    for (i++; i < w.length; i++) {
+      if (w[i] === '(') depth++
+      else if (w[i] === ')' && --depth === 0) break
+    }
+  }
+  return out
+}
+const mayHoldFlag = (w: string) => /[$`\s]/.test(withoutSubstitutions(w))
+// The words a known tool's run hands on: none but its output options' values when it is in a mode
+// that changes no file it is handed (#1827), otherwise every word but the values it only reads.
+const toolArgs = (name: string, args: readonly string[]): string[] => {
+  const tool = toolName(name)
+  const modes = TOOL_EDITS.get(tool)
+  if (!modes) return scriptArgs(args, TOOL_READS.get(tool))
+  const short = [...modes.edits].filter(e => /^-[A-Za-z]$/.test(e)).map(e => e.slice(1))
+  // An edit flag, written alone, with a value (--write=true), or in a cluster of short flags (-uw).
+  const edits = (a: string) => modes.edits.has(a.split('=')[0] as string) || (/^-[A-Za-z]{2,}$/.test(a) && short.some(l => a.includes(l)))
+  if (args.some(a => edits(a) || mayHoldFlag(a))) return scriptArgs(args, TOOL_READS.get(tool))
+  const out: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    const eq = a.indexOf('=')
+    if (modes.outputs.has(a) && args[i + 1] !== undefined) out.push(args[++i] as string)
+    else if (eq > 0 && modes.outputs.has(a.slice(0, eq))) out.push(a.slice(eq + 1))
+  }
+  return scriptArgs(out)
+}
+// Each word a script is handed that may name a file (#1586): an option is none, and one written
+// --name=value gives its value; - is standard input; an address or another machine's path is none.
+// `reads` is a known tool's options whose value is the next word and is only read (#1726).
+const scriptArgs = (args: readonly string[], reads: ReadonlySet<string> = new Set()): string[] => {
+  const out: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (reads.has(a)) {
+      i++
+      continue
+    }
+    const value = /^--?[A-Za-z][\w-]*=(.*)$/.exec(a)?.[1]
+    const w = value ?? a
+    if (!w || w === '-' || (value === undefined && a.startsWith('-')) || isAddress(w) || isRemote(w)) continue
+    out.push(w)
+  }
+  return out
+}
+
+// The tool npx runs and where its own arguments start (#1682), past npx's options (npm 10's npm exec):
+// --package, --workspace and their short forms take a value. A command line given by -c or --call is
+// a shell's text, which is not read here, so it names no tool; nor does an npx naming none.
+const NPX_VALUED = new Set(['-p', '--package', '-w', '--workspace'])
+const npxTool = (args: readonly string[]): { name: string; args: number } | undefined => {
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '-c' || a === '--call' || a.startsWith('--call=')) return undefined
+    if (a === '--') return args[i + 1] === undefined ? undefined : { name: args[i + 1] as string, args: i + 2 }
+    if (NPX_VALUED.has(a)) i++
+    else if (!a.startsWith('-')) return { name: a, args: i + 1 }
+  }
+  return undefined
+}
+
+/**
+ * The files a Bash call changes, read from the reader's commands (`pipeline`, with the assignments it
+ * otherwise drops: `commandWrites`): the files it puts content into, each as written and as an
+ * absolute path where its words name one (home spelled out, a cd before it followed, a variable the
+ * command set read as its value), with a copy's sources and an in place edit marked; the other
+ * changes it makes to files (removed, stamped, emptied, made, a mode changed), a removal or mode
+ * change of a whole folder marked as its tree; and the writes whose files its words do not name (a
+ * patch, a program that writes or runs a process or cannot be read, a script on standard input, a
+ * command xargs gives its files), each with the files to read to find out, such as the patch.
+ */
+export const writes = (cmds: readonly Command[], cwd: string | undefined, home: string): ModKitWrites => readWrites(cmds, cwd, home).writes
+
+// The writes, and the folder each command runs in, by its place in `cmds` (#2000): where a cd before
+// it leaves the shell, followed as a relative path is, undefined where that cannot be followed.
+const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: string): { writes: ModKitWrites; folders: (string | undefined)[] } => {
+  const folders: (string | undefined)[] = []
+  const files: ModKitWrite[] = []
+  const changes: ModKitChange[] = []
+  const unnamed: ModKitWrites['unnamed'] = []
+  // What git itself changes (#1123), kept apart from files and changes, which the guards judge.
+  const byGit: NonNullable<ModKitWrites['byGit']> = []
+  // The script files a command runs, with what each is handed (#1586), kept apart as byGit is.
+  const runs: NonNullable<ModKitWrites['runs']> = []
+  // Where standard output is sent by a redirect (#1976), kept apart as byGit is.
+  const stdout: NonNullable<ModKitWrites['stdout']> = []
+  const byGitAdd = (word: string, at: string | undefined, does: 'write' | 'remove', tree: boolean, from: string | undefined) => {
+    // A pathspec read from the top of the checkout (`:/docs`) or with magic (`:(glob)x`) is no path
+    // here; a pattern git matches itself, across folders, names no one folder (#1123).
+    const path = word.startsWith(':') || patternIn(word) ? undefined : absolutePath(word, at, home)
+    // One file put back from two places is given once for each, so a reader judging what each puts
+    // back sees both (#1158).
+    if (!word || byGit.some(x => sameGitChange(x, { word, does, from, ...(path ? { path } : {}) }))) return
+    byGit.push({ word: asWritten.get(word) ?? word, ...(path ? { path } : {}), does, ...(tree && path ? { tree: true as const } : {}), ...(from === undefined ? {} : { from }) })
+  }
+  const seen = new Set<string>()
+  let dir: string | undefined = cwd
+  let vars: Vars = new Map()
+  // Each variable a for loop over plain words sets, with its words (#1953); a name here is in no
+  // vars entry.
+  let each = new Map<string, string[]>()
+  // Each word of the command being read that a variable's value replaced, as it was written. Matched
+  // by string, so a literal word equal to a variable's value in the same command is given as the
+  // variable: the side that makes a reader ask rather than pass, the path the same either way. A
+  // redirect's target, the commonest write, is read by its own place instead (#752).
+  const asWritten = new Map<string, string>()
+  // For a command a find -exec runs, the folders find starts from: a change at one of them is one
+  // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
+  let foundRoots: readonly string[] = []
+  // `shown`, where the caller knows it, is the word as the command spells it (#752).
+  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true }, shown?: string) => {
+    // Where a find -exec's {} stood, the write reaches every file under that folder (#760).
+    const tree = foundRoots.includes(word)
+    if (!word || isPipe(word) || isDevice(path ?? word)) return
+    const key = path ?? `word:${word}`
+    // A path written twice is kept once, a tree on either keeping the tree, as a change does.
+    if (seen.has(key)) {
+      if (tree) {
+        const had = files.find(f => (path ? f.path === path : !f.path && f.word === (shown ?? asWritten.get(word) ?? word)))
+        if (had) had.tree = true
+      }
+      return
+    }
+    seen.add(key)
+    const sources = extra?.sources
+    const folder = path ? undefined : patternFolder(word, dir, home)
+    files.push({
+      word: shown ?? asWritten.get(word) ?? word,
+      ...(path ? { path } : {}),
+      ...(folder ? { folder } : {}),
+      ...(sources && sources.length ? { sources } : {}),
+      ...(extra?.edits ? { edits: true as const } : {}),
+      ...(extra?.mayBeFolder ? { mayBeFolder: true as const } : {}),
+      ...(tree ? { tree: true as const } : {}),
+    })
+  }
+  const named = (w: string, edits?: true, shown?: string) => add(w, absolutePath(w, dir, home), edits ? { edits } : undefined, shown)
+  // A redirect target standard output goes into (#1976), named as `files` names it; a device or a
+  // process substitution is no file, and one named twice is given once.
+  const toStdout = (w: string, shown: string | undefined) => {
+    const path = absolutePath(w, dir, home)
+    if (!w || isPipe(w) || isDevice(path ?? w)) return
+    const word = shown ?? asWritten.get(w) ?? w
+    if (stdout.some(x => (path ? x.path === path : !x.path && x.word === word))) return
+    const folder = path ? undefined : patternFolder(w, dir, home)
+    stdout.push({ word, ...(path ? { path } : {}), ...(folder ? { folder } : {}) })
+  }
+  const changed = (word: string, does: ModKitChange['does'], tree?: boolean) => {
+    tree = tree || foundRoots.includes(word)
+    const path = absolutePath(word, dir, home)
+    if (!word || isPipe(word) || isDevice(path ?? word)) return
+    const written = asWritten.get(word) ?? word
+    // A path changed the same way twice is kept once, a tree on either keeping the tree.
+    const had = changes.find(x => x.does === does && (path ? x.path === path : !x.path && x.word === written))
+    if (had) {
+      if (tree) had.tree = true
+      return
+    }
+    const folder = path ? undefined : patternFolder(word, dir, home)
+    changes.push({ word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}) })
+  }
+  const abs = (p: string) => absolutePath(p, dir, home)
+  const absAll = (ps: string[]) => ps.map(abs).filter((p): p is string => !!p)
+  const expand = (w: string) => w.replace(VARIABLE, (m, braced?: string, bare?: string) => vars.get((braced ?? bare) as string) ?? m)
+  // A word as the shell hands it on (#1834): each variable read as its value, the value of one whose
+  // $ stood outside quotes (`unquoted`, the places Command.splits gives) split on spaces, tabs and new
+  // lines as bash splits it. The text around a split joins its first and last parts; a space at
+  // either end of the value ends the word there; a word left with nothing in it is no word. A value
+  // the reader cannot read is left as written, unsplit.
+  const fields = (w: string, unquoted: readonly number[] | undefined): string[] => {
+    if (!unquoted?.length) return [expand(w)]
+    const out: string[] = []
+    let word = ''
+    let begun = false
+    let last = 0
+    const text = (t: string) => {
+      word += t
+      if (t) begun = true
+    }
+    for (const m of w.matchAll(VARIABLE)) {
+      const at = m.index ?? 0
+      text(w.slice(last, at))
+      last = at + m[0].length
+      const value = vars.get((m[1] ?? m[2]) as string)
+      if (value === undefined || value === null || !unquoted.includes(at)) {
+        text(value ?? m[0])
+        continue
+      }
+      value.split(/[ \t\n]+/).forEach((part, k) => {
+        if (k > 0) {
+          if (begun) out.push(word)
+          word = ''
+          begun = false
+        }
+        text(part)
+      })
+    }
+    text(w.slice(last))
+    if (begun) out.push(word)
+    return out
+  }
+  const unknown = (name: string) => {
+    each.delete(name)
+    vars.set(name, null)
+  }
+  // A word read once for each word of every loop variable in it (#1953), or as it is past MAX_EACH.
+  // A value holding a space is read whole, as a quoted use hands it on, and as each piece a shell
+  // splitting it would make, with and without the text around it: more readings than the shell
+  // makes, never fewer. Such a variable named twice in one word leaves the word as written.
+  const eachOf = (w: string): string[] => {
+    let out = [w]
+    for (const m of w.matchAll(VARIABLE)) {
+      const values = each.get((m[1] ?? m[2]) as string)
+      if (!values) continue
+      const at = new RegExp(`${m[0].replace(/[$}{]/g, '\\$&')}${m[1] === undefined ? '(?![A-Za-z0-9_])' : ''}`, 'g')
+      const next: string[] = []
+      for (const o of out)
+        for (const v of values) {
+          next.push(o.replace(at, () => v))
+          if (!/\s/.test(v)) continue
+          const found = [...o.matchAll(at)]
+          if (found.length !== 1) return [w]
+          const head = o.slice(0, found[0]?.index ?? 0)
+          const tail = o.slice((found[0]?.index ?? 0) + m[0].length)
+          for (const piece of v.split(/\s+/).filter(Boolean)) next.push(head + piece + tail, piece, head + piece, piece + tail)
+        }
+      if (next.length > MAX_EACH) return [w]
+      out = [...new Set(next)]
+    }
+    return out
+  }
+  const assign = (word: string) => {
+    const m = SETS.exec(word)
+    if (!m) return
+    const name = m[1] as string
+    // A loop's variable given a value as well: which stands is unknown.
+    if (each.has(name)) return unknown(name)
+    // Home is spelled out where a value starts with it, as the shell expands ~ in an assignment.
+    let value = expand(m[2] as string)
+    if (home) value = value.replace(HOME_VAR, home).replace(/^~(?=\/|$)/, home)
+    const known = /[$`()]/.test(value) ? null : value
+    vars.set(name, vars.has(name) && vars.get(name) !== known ? null : known)
+  }
+  // The folder outside each subshell still open: the reader gives its parentheses as commands of
+  // their own (#700), and a cd inside one ends with it. A closing one with no opening leaves the
+  // folder as it is. The variables outside it are kept the same way.
+  const outside: (string | undefined)[] = []
+  const varsOutside: Vars[] = []
+  const eachOutside: Map<string, string[]>[] = []
+  for (const c of cmds) {
+    folders.push(dir)
+    const written = c.words
+    if (written.length === 1 && written[0] === '(') {
+      outside.push(dir)
+      varsOutside.push(new Map(vars))
+      eachOutside.push(new Map(each))
+      continue
+    }
+    if (written[0] === ')') {
+      if (outside.length) dir = outside.pop()
+      if (varsOutside.length) vars = varsOutside.pop() as Vars
+      if (eachOutside.length) each = eachOutside.pop() as Map<string, string[]>
+    }
+    if (written.length && written.every(w => SETS.test(w))) {
+      written.forEach(assign)
+      continue
+    }
+    asWritten.clear()
+    foundRoots = c.found ?? []
+    // Each word as the shell hands it on, variables read as their values, and the word of the
+    // command each came from: under a shell that splits an unquoted value (#1834), one word may
+    // become several or none. A redirect's target is kept whole, since bash refuses a split one
+    // ("ambiguous redirect") and writes nothing.
+    const raw: string[] = []
+    const from: number[] = []
+    // The words the shell hands on as written, every pattern character in them quoted (#1951), and
+    // every other word, by its text: one spelled both ways in the command is read as matched.
+    const quotedWords = new Set<string>()
+    const otherWords = new Set<string>()
+    // The words whose every $ is in single quotes or after a backslash (#1953), by their text, and
+    // every other word: one spelled both ways is read as expanded.
+    const textWords = new Set<string>()
+    const liveWords = new Set<string>()
+    const textOnly = (w: string) => textWords.has(w) && !liveWords.has(w)
+    written.forEach((w, n) => {
+      const prior = written[n - 1] ?? ''
+      const target = WRITE_REDIRECT.test(prior) || /^\d*>&$/.test(prior)
+      const asText = c.unexpanded?.[n] === true
+      for (const read of asText ? [w] : target ? [expand(w)] : fields(w, c.splits?.[n]))
+        for (const [k, part] of (asText ? [read] : eachOf(read)).entries()) {
+          // A redirect's target a loop gives several words is a write of each: its operator again.
+          if (target && k > 0) {
+            raw.push(prior)
+            from.push(n - 1)
+          }
+          raw.push(part)
+          from.push(n)
+          if (part !== w) asWritten.set(part, w)
+          ;(c.literal?.[n] === true && part === w ? quotedWords : otherWords).add(part)
+          ;(asText ? textWords : liveWords).add(part)
+        }
+    })
+    const quotedOnly = (w: string) => quotedWords.has(w) && !otherWords.has(w)
+    // Output redirects first, and taken out of the words, with descriptor copies (2>&1). A `>&`
+    // with nothing attached takes the next word: a number or - is a descriptor copied, anything
+    // else a file both outputs go to (the collision guard's reading, #654, kept in #712).
+    const words: string[] = []
+    for (let i = 0; i < raw.length; i++) {
+      const w = raw[i] as string
+      if (WRITE_REDIRECT.test(w)) {
+        const target = raw[++i]
+        if (target !== undefined) named(target, undefined, written[from[i] as number])
+        if (target !== undefined && STDOUT_REDIRECT.test(w)) toStdout(target, written[from[i] as number])
+      } else if (/^\d*>&$/.test(w)) {
+        const target = raw[++i]
+        if (target !== undefined && !/^(?:\d+|-)$/.test(target)) {
+          named(target, undefined, written[from[i] as number])
+          if (STDOUT_REDIRECT.test(w)) toStdout(target, written[from[i] as number])
+        }
+      } else if (/^\d*>&[0-9-]*$/.test(w)) continue
+      else words.push(w)
+    }
+    if (raw[0] === ')') continue
+    const { rest: args, files: inputs } = splitInputs(words)
+    const name = baseOf(args[0] ?? '')
+    const kind = kindOf(args[0])
+    const rest = args.slice(1)
+    if (DECLARES.has(name)) {
+      // export F=path, declare -x F=path. Any option beyond export, read only and global (an array,
+      // a name reference, a case change) gives a value the reader cannot read.
+      const plain = rest.every(a => !a.startsWith('-') || /^-[xrg]+$/.test(a))
+      for (const a of rest) {
+        const m = SETS.exec(a)
+        if (m && plain) assign(a)
+        else if (m) unknown(m[1] as string)
+      }
+      continue
+    }
+    const appended = APPENDS.exec(args[0] ?? '')
+    if (appended) {
+      unknown(appended[1] as string)
+      continue
+    }
+    if (READS.has(name)) {
+      for (const a of rest) if (NAME.test(a)) unknown(a)
+      continue
+    }
+    if (LOOPS.has(name)) {
+      const v = rest[0]
+      const words = rest.slice(2)
+      // `for v in a b c` over plain words, the variable set no other way (#1953): each word, joined
+      // to those of another such loop over it. Anything else leaves it unknown.
+      if (v !== undefined && name === 'for' && NAME.test(v) && rest[1] === 'in' && words.length && words.every(x => PLAIN_WORD.test(x)) && !vars.has(v)) {
+        const all = [...new Set([...(each.get(v) ?? []), ...words])]
+        if (all.length <= MAX_EACH) each.set(v, all)
+        else unknown(v)
+      } else if (v !== undefined) unknown(v)
+      continue
+    }
+    // Text run by eval or source may set any variable, a loop's included (lessons review of #1968).
+    if (RUNS_TEXT.has(name)) for (const k of [...vars.keys(), ...each.keys()]) unknown(k)
+    const v = name === 'printf' ? rest.indexOf('-v') : -1
+    if (v >= 0 && rest[v + 1] !== undefined) unknown(rest[v + 1] as string)
+    // Whether this command changes files given as operands, for one xargs runs.
+    let writer = OPERAND_WRITERS.has(name)
+    if (name === 'cd' || name === 'pushd') {
+      const target = rest.find(a => !a.startsWith('-') || a === '-')
+      dir = target === undefined ? home || undefined : target === '-' ? undefined : absolutePath(target, dir, home)
+      continue
+    }
+    // popd goes back to the folder pushd kept, which this does not keep (#2000).
+    if (name === 'popd') {
+      dir = undefined
+      continue
+    }
+    if (name === 'tee') for (const f of operands(rest, new Set()).ops) named(f)
+    else if (kind === 'sed') {
+      const e = sedInPlace(rest)
+      writer = e.inPlace
+      for (const f of e.files) named(f, true)
+    } else if ((kind === 'perl' || kind === 'ruby') && inPlaceCluster(rest, kind === 'perl' ? PERL : RUBY).inPlace) {
+      writer = true
+      for (const f of inPlaceCluster(rest, kind === 'perl' ? PERL : RUBY).files) named(f, true)
+    } else if (kind === 'awk') {
+      const e = awkInPlace(rest)
+      writer = e.inPlace
+      for (const f of e.files) named(f, true)
+    } else if (name === 'dd') {
+      for (const a of rest) if (a.startsWith('of=')) named(a.slice(3))
+    } else if (name === 'curl' || name === 'wget') {
+      const got = name === 'curl' ? curlDownload(rest) : wgetDownload(rest)
+      for (const f of got.files) named(f)
+      for (const u of got.unnamed) {
+        const into = u.into === undefined ? undefined : abs(u.into)
+        unnamed.push({ what: u.what, words: written, inputs: absAll(u.inputs), ...(into ? { into } : {}) })
+      }
+    } else if (VALUED[name]) {
+      const { ops, opts } = operands(rest, VALUED[name] as ReadonlySet<string>)
+      const intoOpt = opts.get('-t') ?? opts.get('--target-directory')
+      let into: string | undefined
+      let sources = ops
+      let copied = true
+      if (typeof intoOpt === 'string') into = intoOpt
+      else {
+        const dest = ops[ops.length - 1]
+        sources = ops.slice(0, -1)
+        if (dest === undefined || sources.length === 0 || isRemote(dest)) copied = false
+        // rsync copies a folder's contents for a source ending in /, so only the folder is known.
+        else if ((sources.length > 1 || dest.endsWith('/')) && !(name === 'rsync' && sources.some(s => s.endsWith('/')))) into = dest
+        // One source onto one name lands inside it when that is an existing folder, which only the
+        // disk can say (the collision guard's reading, #654), so the write says so.
+        else add(dest, abs(dest), { sources: absAll(sources), mayBeFolder: true })
+      }
+      if (copied && into !== undefined) {
+        const intoPath = abs(into)
+        // The word keeps the folder as written, so one reached through a variable still says so (#752).
+        const folder = (asWritten.get(into) ?? into).replace(/\/+$/, '')
+        for (const s of sources) add(`${into.replace(/\/+$/, '')}/${baseOf(s)}`, intoPath ? `${intoPath}/${baseOf(s)}` : undefined, { sources: absAll([s]) }, `${folder}/${baseOf(s)}`)
+      }
+      // mv takes each source away whole: a folder with everything under it, as rm -r does (the
+      // collision guard's reading, lessons review of #691).
+      if (name === 'mv' && copied) for (const s of sources) changed(s, 'remove', true)
+    } else if (CHANGERS[name]) {
+      const ch = CHANGERS[name] as { does: ModKitChange['does']; valued: ReadonlySet<string> }
+      const { ops, opts } = operands(rest, ch.valued)
+      const flags = [...opts.keys()]
+      // rm -r, -R or --recursive in any cluster, and chmod, chown or chgrp -R, reach a whole tree.
+      const recursive = (name === 'rm' && flags.some(k => k === '--recursive' || /^-[A-Za-z]*[rR]/.test(k))) || (ch.does === 'mode' && flags.some(k => k === '--recursive' || /^-[A-Za-z]*R/.test(k)))
+      // chmod, chown and chgrp take the mode or owner first, unless --reference names a file for it
+      // or chmod's mode was written as a flag (chmod -x run.sh).
+      const modeGiven = flags.some(k => k === '--reference') || (name === 'chmod' && flags.some(k => /^-[rwxXst]+$/.test(k)))
+      const targets = ch.does === 'mode' && !modeGiven ? ops.slice(1) : ops
+      for (const f of targets) changed(f, ch.does, recursive)
+      if (name === 'shred' && flags.some(k => k === '-u' || k === '--remove' || /^-[A-Za-z]*u/.test(k))) for (const f of targets) changed(f, 'remove')
+    } else if (name === 'find') {
+      // find -delete removes what it finds under each folder it starts from, and -fprint and its
+      // kin write a file (no build's reading, #714, carried over in #712). What -exec runs comes
+      // after it as a command of its own.
+      const firstExpr = rest.findIndex(a => a.startsWith('-') || a === '(' || a === '!')
+      const roots = firstExpr < 0 ? rest : rest.slice(0, firstExpr)
+      for (let i = 0; i < rest.length; i++) {
+        const a = rest[i] as string
+        if (a === '-delete') for (const r of roots.length ? roots : ['.']) changed(r, 'remove', true)
+        else if (FIND_FILE_ACTIONS.has(a) && rest[i + 1] !== undefined) named(rest[++i] as string)
+        else if (['-exec', '-execdir', '-ok', '-okdir'].includes(a)) {
+          const end = rest.findIndex((w, j) => j > i && (w === ';' || w === '+'))
+          i = end < 0 ? rest.length : end
+        }
+      }
+    } else if (name === 'patch') {
+      const { ops, opts } = operands(rest, new Set(['-i', '-p', '-d', '-o', '-r', '-B', '-D', '-F', '-V', '-z', '--input', '--directory', '--output']))
+      // patch [file to patch [patch file]]: the first operand is written, as named.
+      if (ops[0] !== undefined) named(ops[0])
+      const patches = [opts.get('-i'), opts.get('--input'), ops[1], ...inputs].filter((p): p is string => typeof p === 'string' && p !== '')
+      unnamed.push({ what: 'a patch', words: written, inputs: absAll(patches) })
+    } else {
+      const g = git(args)
+      if (g && (g.sub === 'apply' || g.sub === 'am')) {
+        // Checked or summarised, a patch writes nothing.
+        if (!g.args.some(a => ['--check', '--stat', '--numstat', '--summary'].includes(a))) {
+          const at = g.dir === undefined ? dir : absolutePath(g.dir, dir, home)
+          const patches = [...operands(g.args, new Set(['-p', '-C', '--directory', '--exclude', '--include'])).ops, ...inputs]
+          unnamed.push({ what: 'a patch', words: written, inputs: patches.map(p => absolutePath(p, at, home)).filter((p): p is string => !!p) })
+        }
+      } else if (g?.sub) for (const [word, does, tree, from] of gitOwn(g.sub, g.args)) byGitAdd(word, g.dir === undefined ? dir : absolutePath(g.dir, dir, home), does, tree, from)
+    }
+    // A script file it runs (#1586): an interpreter's script operand (never one on standard input, nor
+    // awk's or sed's program file, whose files are read above), or a script run by its own name. Every
+    // word after it is the script's own argument, each given as a file it may write.
+    // The script's word as the command reads it, variables read as their values.
+    const scriptFile = c.script && !c.script.stdin && !c.program ? expand(c.script.files[0] ?? '') : kind === undefined && runsDirectly(args[0]) ? args[0] : undefined
+    // Each word a run is handed, as a path where its words name one. A pattern whose every pattern
+    // character is quoted is marked `quoted` (#1951): the shell matched it against no file, so the
+    // run is handed its characters as written.
+    const handedOf = (words: readonly string[]) =>
+      words.map(w => {
+        const p = abs(w)
+        const folder = p ? undefined : patternFolder(w, dir, home)
+        return {
+          word: asWritten.get(w) ?? w,
+          ...(p ? { path: p } : {}),
+          ...(folder ? { folder } : {}),
+          ...(folder && quotedOnly(w) ? { quoted: true as const } : {}),
+          ...(textOnly(w) ? { unexpanded: true as const } : {}),
+        }
+      })
+    if (scriptFile) {
+      const at = kind === undefined ? 0 : args.indexOf(scriptFile, 1)
+      const handed = at < 0 ? [] : handedOf(scriptArgs(args.slice(at + 1)))
+      if (handed.length) {
+        const path = abs(scriptFile)
+        runs.push({ what: kind === undefined ? 'a script file run directly' : `a ${name} script file`, script: asWritten.get(scriptFile) ?? scriptFile, ...(path ? { path } : {}), args: handed })
+      }
+    }
+    // A module python runs with -m, or a tool npx runs (#1682): what either writes cannot be read
+    // before it runs, as a script file's cannot, so each is a run, the module or tool its `script`,
+    // with no file of its own.
+    const tool = kind === 'python' ? readProgram(args, undefined).module : name === 'npx' ? npxTool(args) : undefined
+    if (tool) {
+      const handed = handedOf(toolArgs(tool.name, args.slice(tool.args)))
+      if (handed.length) runs.push({ what: kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx', script: tool.name, tool: true, args: handed })
+    }
+    // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be
+    // read is a write the words do not name, and so is one that cannot be read at all (a script
+    // piped in from curl). A shell reaches here only when its script could not be read, since the
+    // reader gives one it could read as the commands it runs. A script file named as an operand is
+    // not guessed at (#654); one fed on standard input names the file to read.
+    const p = c.program
+    const onStdin = `a ${name} script on standard input`
+    if (c.script && !c.script.stdin) {
+      // A script file named as an operand, or a program file (awk -f), is not guessed at.
+    } else if (p && 'unreadable' in p) unnamed.push({ what: onStdin, words: written, inputs: [] })
+    else if (c.verdict) {
+      // Read as python reads it only where the shell cannot have changed it (#1165, #1171).
+      const asWritten = c.asWritten === true
+      // The files it writes, where its text names every one and each resolves from here (#830).
+      const named = asWritten && c.verdict.does === 'write files' && c.language && p && 'text' in p ? codeTargets(c.language, p.text) : undefined
+      const targets = named?.map(abs)
+      const known = targets?.every((t): t is string => t !== undefined) ? { targets } : {}
+      // Its text and the folder it runs in (#1151), so a guard reads the names in the program it runs,
+      // never another command's heredoc data, and places a bare one where the program is, never in
+      // the session's folder. The folder is left out where a cd before it cannot be followed.
+      const read = p && 'text' in p ? { program: p.text } : {}
+      // And, where its files are not all named, its code: what it holds only as data blanked (#1165),
+      // so a guard reads the names it can open, never those a block it puts in a file quotes. Only
+      // for a program the shell cannot have changed, as ask before saving reads one (#940).
+      const code = !('targets' in known) && asWritten && c.language && p && 'text' in p ? codeOnly(c.language, p.text) : undefined
+      unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [], ...known, ...read, ...(code === undefined ? {} : { code }), ...(dir ? { folder: dir } : {}) })
+    }
+    else if (c.script?.stdin) unnamed.push({ what: onStdin, words: written, inputs: absAll(c.script.files), script: true })
+    // A command given its operands by xargs changes files no word names (#730).
+    if (c.xargs && writer) unnamed.push({ what: `${name} given its files by xargs`, words: written, inputs: [] })
+  }
+  // A device a command reads (/dev/stdin, /dev/fd/0) is never an input (#1765): a guard reading one
+  // waits for ever, so the call never runs. Taken out here, where every input is gathered, rather than
+  // at each place one is named; the write stays, as one whose input cannot be known before it runs.
+  const readable = unnamed.map(u => (u.inputs.some(isDevice) ? { ...u, inputs: u.inputs.filter(p => !isDevice(p)) } : u))
+  return { writes: { files, changes, unnamed: readable, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}), ...(stdout.length ? { stdout } : {}) }, folders }
+}
+
+// The options of git mv, rm, checkout and restore that take the next word as their value.
+const GIT_VALUED = new Set(['-s', '--source', '--conflict', '--pathspec-from-file', '-b', '-B', '--orphan'])
+
+/**
+ * The files git itself changes for one of its subcommands (#1123), each as [word, what it does, the
+ * whole of it, where a checkout or restore puts it back from (#1158)]: git mv's destination written (and, onto one name that may be a folder, the source's
+ * own name inside it) and each source removed; git rm's paths removed (with -r, all under each),
+ * from the index alone too with --cached, since that also leaves the file changed in git status; a
+ * checkout of a path and a restore of the working tree writing what they name, all under each. A
+ * dry run, a branch switch or creation, a checkout of one name (git may take it for a branch) and a
+ * restore of the index alone name nothing.
+ */
+const gitOwn = (sub: string, args: readonly string[]): [string, 'write' | 'remove', boolean, string?][] => {
+  const { ops, opts } = operands([...args], GIT_VALUED)
+  const flags = [...opts.keys()]
+  // An option by any of its names, a short one also inside a cluster (-rf).
+  const has = (...names: string[]) => names.some(n => flags.includes(n) || (/^-[A-Za-z]$/.test(n) && flags.some(k => /^-[A-Za-z]{2,}$/.test(k) && k.includes(n.slice(1)))))
+  if (sub === 'mv') {
+    if (has('-n', '--dry-run') || ops.length < 2) return []
+    const dest = ops[ops.length - 1] as string
+    const sources = ops.slice(0, -1)
+    const into = sources.length > 1 || dest.endsWith('/')
+    // Onto one name that may be an existing folder, the name alone is given, never all under it,
+    // which may hold another session's files; the source's own name inside it is given whole, as a
+    // copy's is (#1123 lessons review, the reading #1108 settled for cp and mv).
+    const dests: [string, 'write', boolean][] = into
+      ? sources.map(s => [`${dest.replace(/\/+$/, '')}/${baseOf(s)}`, 'write', true])
+      : [[dest, 'write', false], [`${dest}/${baseOf(sources[0] as string)}`, 'write', true]]
+    return [...dests, ...sources.map((s): [string, 'remove', boolean] => [s, 'remove', true])]
+  }
+  if (sub === 'rm') {
+    if (has('-n', '--dry-run')) return []
+    const tree = has('-r')
+    return ops.map((p): [string, 'remove', boolean] => [p, 'remove', tree])
+  }
+  // Where a checkout or restore puts each file back from (#1158), spelled as `git cat-file blob
+  // <from>:<path>` reads it: one side of a conflict (':2' ours, ':3' theirs), else the ref named, else
+  // the index (''), or HEAD for a restore of the index and the working tree together.
+  const side = has('--ours') ? ':2' : has('--theirs') ? ':3' : undefined
+  if (sub === 'checkout') {
+    if (has('-b', '-B', '--orphan')) return []
+    const dd = args.indexOf('--')
+    const paths = dd >= 0 ? args.slice(dd + 1) : ops.slice(1)
+    const from = side ?? (dd >= 0 ? operands(args.slice(0, dd), GIT_VALUED).ops[0] : ops[0]) ?? ''
+    return paths.map((p): [string, 'write', boolean, string] => [p, 'write', true, from])
+  }
+  if (sub === 'restore') {
+    const staged = has('-S', '--staged')
+    if (staged && !has('-W', '--worktree')) return []
+    const named = opts.get('--source') ?? opts.get('-s')
+    const from = side ?? (typeof named === 'string' ? named : staged ? 'HEAD' : '')
+    return ops.map((p): [string, 'write', boolean, string] => [p, 'write', true, from])
+  }
+  return []
+}
+
+// Whether two of git's changes are one: the same file, the same change, put back from the same place.
+const sameGitChange = (a: { word: string; path?: string; does: string; from?: string }, b: { word: string; path?: string; does: string; from?: string }) =>
+  a.does === b.does && a.from === b.from && (b.path ? a.path === b.path : !a.path && a.word === b.word)
+
+// The words that change the folder a relative path is read against.
+const MOVES = new Set(['cd', 'pushd', 'popd'])
+
+// Each change in `from` that `into` lacks is added to it: a path once, keeping what either says of it
+// (a tree, an in place edit, a copy's sources and that it may land in a folder), so a substitution
+// that edits or copies onto a file the line also writes is not reported as a plain write (lessons
+// review of #972). A write its words do not name is kept once, since a heredoc never ended is read
+// both as a body and as commands.
+const merge = (into: ModKitWrites, from: ModKitWrites) => {
+  for (const f of from.files) {
+    const had = into.files.find(x => (f.path ? x.path === f.path : !x.path && x.word === f.word))
+    if (!had) {
+      into.files.push(f)
+      continue
+    }
+    if (f.tree) had.tree = true
+    if (f.edits) had.edits = true
+    if (f.mayBeFolder) had.mayBeFolder = true
+    if (f.sources?.length) had.sources = [...new Set([...(had.sources ?? []), ...f.sources])]
+  }
+  for (const c of from.changes) {
+    const had = into.changes.find(x => x.does === c.does && (c.path ? x.path === c.path : !x.path && x.word === c.word))
+    if (!had) into.changes.push(c)
+    else if (c.tree) had.tree = true
+  }
+  for (const u of from.unnamed) if (!into.unnamed.some(x => JSON.stringify(x) === JSON.stringify(u))) into.unnamed.push(u)
+  for (const b of from.byGit ?? []) {
+    const list = (into.byGit ??= [])
+    if (!list.some(x => sameGitChange(x, b))) list.push(b)
+  }
+  for (const r of from.runs ?? []) {
+    const list = (into.runs ??= [])
+    if (!list.some(x => JSON.stringify(x) === JSON.stringify(r))) list.push(r)
+  }
+  for (const o of from.stdout ?? []) {
+    const list = (into.stdout ??= [])
+    if (!list.some(x => (o.path ? x.path === o.path : !x.path && x.word === o.word))) list.push(o)
+  }
+}
+
+// A command line's changes with those of every substitution the shell runs in it (#965), each given
+// by the command reader in its place as the commands it runs (readLine, #974): in the line's text
+// outside the heredoc bodies, in each body whose delimiter is unquoted (one never ended included,
+// whose lines are read as commands too), and in a shell's own script, which the reader reads as the
+// commands that shell runs. A substitution's commands are read as a command line of their own, the
+// same way, so one inside it is read too, and a cd or a variable set inside it ends with it. Where
+// the line changes folder, a relative path a substitution names is left as written (it may run
+// before the cd or after); a variable the line sets is not followed into a substitution, so a path
+// through one is left as written too.
+// Each command is placed as `pipeline` places it (substitution, asWritten), so a program a
+// substitution runs is one the shell may have changed here too (#1171: the write reader never
+// marked one, so its `code` was given for it).
+const lineWrites = (line: Line, cwd: string | undefined, home: string, inSubstitution = false): ModKitWrites => {
+  const cmds = line.filter((c): c is Command => !('sub' in c)).map(c => placed(c, inSubstitution))
+  const out = writes(cmds, cwd, home)
+  const at = cmds.some(c => MOVES.has(baseOf(c.words[0] ?? ''))) ? undefined : cwd
+  for (const c of line) if ('sub' in c) merge(out, lineWrites(c.sub, at, home, true))
+  return out
+}
+
+// Each command of a line, in the order `pipeline` flattens it, with the folder it runs in: a
+// substitution's commands placed as lineWrites places them (in the line's folder, unknown where the
+// line changes folder, since it may run before the cd or after).
+const lineFolders = (line: Line, cwd: string | undefined, home: string, inSubstitution = false): { c: Command; folder: string | undefined }[] => {
+  const cmds = line.filter((c): c is Command => !('sub' in c)).map(c => placed(c, inSubstitution))
+  const { folders } = readWrites(cmds, cwd, home)
+  const at = cmds.some(c => MOVES.has(baseOf(c.words[0] ?? ''))) ? undefined : cwd
+  let n = 0
+  return line.flatMap(c => {
+    if ('sub' in c) return lineFolders(c.sub, at, home, true)
+    const k = n++
+    return [{ c: cmds[k] as Command, folder: folders[k] }]
+  })
+}
+
+/**
+ * The commands `pipeline` gives a Bash call, each with `folder`, the absolute folder it runs in
+ * (#2000): `cwd`, or where a cd or pushd before it leaves the shell, followed by the write reader's
+ * own reading of one (a relative or home folder, a variable the command set, a subshell's cd ending
+ * with it); null where that cannot be followed (a variable the command did not set, cd -, a popd).
+ * A reader asking about the folder a command acts on (is it live's question to GitHub about a merge)
+ * asks this, so a `cd <other checkout> && ...` is never asked about in the session's folder (L237).
+ * The folders are read with the assignments a reader otherwise drops, which `pipeline` does not give,
+ * so its commands are matched to these in order and handed on exactly as it gives them.
+ */
+export const pipelineIn = (command: string, cwd: string, home: string): (Command & { folder: string | null })[] => {
+  const read = lineFolders(readLine(command, { assignments: true }), cwd, home)
+  const same = (a: Command, b: Command) => a.words.length === b.words.length && a.words.every((w, i) => w === b.words[i])
+  let at = 0
+  return pipeline(command).map(c => {
+    while (at < read.length && !same(read[at]?.c as Command, c)) at++
+    const found = read[at++]
+    return { ...c, folder: found?.folder ?? null }
+  })
+}
+
+/**
+ * The shell Claude Code runs a Bash call in (#1834), from its environment: CLAUDE_CODE_SHELL where it
+ * names a bash or zsh, which Claude Code takes over everything else (its own message on one that does
+ * not: "is not a valid bash/zsh path, falling back to detection"), otherwise SHELL where it names one.
+ * Otherwise Claude Code looks for one itself, which is not repeated here: undefined, read as a shell
+ * that does not split words, as this reader always read every line before.
+ */
+export const callShell = (env: { CLAUDE_CODE_SHELL?: string | null; SHELL?: string | null }): string | undefined =>
+  [env.CLAUDE_CODE_SHELL, env.SHELL].find((s): s is string => typeof s === 'string' && /^(?:bash|zsh)$/.test(s.split('/').pop() ?? ''))
+/**
+ * What a Bash call changes, read from its text: `$.modkit.writes`, and what its tests read. `shell`
+ * is the shell the call runs in (callShell), which decides whether an unquoted value is split into
+ * words (#1834: bash splits it, zsh does not).
+ */
+export const commandWrites = (command: string, cwd: string, home: string, shell?: string): ModKitWrites =>
+  lineWrites(readLine(command, { assignments: true }, splitsWords(shell) ? { splits: true } : {}), cwd, home)

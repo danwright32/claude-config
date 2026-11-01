@@ -1232,6 +1232,12 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   issue is accounted for when a PR so credited, or one a note names, closed it. A credited PR says
   under which session and why in Done; only what nothing ties to a session that worked tonight is
   listed under Needs a look, a body naming a session that wrote no note saying which.
+- A goal naming no issue has no claim, so no queue release writes its done note, and its PRs may
+  carry no session link (#2011: on 2026-10-31 one such session merged 8 PRs closing 9 issues,
+  noted each as progress, text only, and the report listed all 17 as unaccounted). The overnight
+  rules ask it to note each PR it merges as `done` with `repo` and `pr`, by an example, and the
+  writer refuses a `done` note without an owner/name repo and a pr or issue. A test in
+  test-sleep-report.sh writes the rules' own example through the writer, so the two stay one contract.
 - Paid usage is the sum of each session's latest `usage.costUsd` (as /cost totals it), from
   heartbeats and the end note; "not measurable" only when no note carried one. The 5 hour, weekly
   and spend limits show their highest reading. Each `wait` note (#844: every rate limit wait) is a
