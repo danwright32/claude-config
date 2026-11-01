@@ -441,7 +441,8 @@ ran_free "$rc" "$T/mark11j" && check "#2034 a large folder run with the slot fre
 # The premise, re-measured on the real tree every run (L316): `payload/hooks`, the folder run the
 # issue is about, still selects at least the share the runner queues at. Counted as discovery counts,
 # every tracked test-*.sh.
-_share="$(sed -n 's/^FOLDER_RUN_SLOT_SHARE=\([0-9][0-9]*\).*/\1/p' "$RUNNER" | head -1)"
+_share="$(sed -n 's/^FOLDER_RUN_SLOT_SHARE=\([0-9][0-9]*\).*/\1/p' "$RUNNER")"
+_share="${_share%%$'\n'*}"
 _real="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -z "$_share" ]; then
   check "#2034 the runner states the share a folder run queues at" "no FOLDER_RUN_SLOT_SHARE= line in $RUNNER"
