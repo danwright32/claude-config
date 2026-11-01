@@ -1722,11 +1722,14 @@ const readMod = (f: ModFile): ModRead | null => {
     if (c === '>') return blank[p - 1] !== '='
     return isWord(p) && !NOT_CALLS.has(wordBack(p))
   }
-  // #2038: a callback handed to a method of what a call returns, where the function called is a
-  // parameter by its bare name (the engine's `on` in `on('tool.call', saveCall).catch(cb)`), takes
-  // its values from that function, as a callback handed to it does, never from the words handed to
-  // it: the event name beside a hook's reference is no message. A function of the mod's own, whose
-  // result its arguments make (`lines('Saved').forEach(cb)`), is still read through those arguments.
+  // #2038: a callback handed to a method of what the engine's `on` returns (`on('tool.call',
+  // saveCall).catch(cb)`) takes its values from the engine, as a callback handed to `on` itself does,
+  // never from the words handed to it: the event name beside a hook's reference is no message. `on`
+  // is the first parameter of the file's top level `register`, as every mod declares it
+  // (`export const register: Register = on => {`), and only that one (Dan, 2026-11-01): a callback on
+  // what any other function returns, handed in or the mod's own (`say('Saved').then(cb)`,
+  // `lines('Saved').forEach(cb)`), is still read through the words handed to it.
+  const engineOn = (g: Fn, k: number) => g.name === 'register' && fnAt(g.from, k) < 0
   for (const f of fns) {
     if (!Array.isArray(f.receiver)) continue
     const o = (f.receiver as Span)[0]
@@ -1739,7 +1742,7 @@ const readMod = (f: ModFile): ModRead | null => {
     for (const [g, k] of fns.map((g, k) => [g, k] as const).filter(([g]) => g !== f && g.from <= at && at < g.to).sort((a, b) => b[0].from - a[0].from)) {
       if (locals.some(l => l.owner === k && l.name === id)) break
       if (g.params.some(ps => ps.includes(id))) {
-        f.receiver = { at, name: id }
+        if (engineOn(g, k) && g.params.findIndex(ps => ps.includes(id)) === 0) f.receiver = { at, name: id }
         break
       }
     }

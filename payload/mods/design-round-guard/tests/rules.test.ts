@@ -2156,4 +2156,23 @@ test('#2038: a hook moved into a named const and registered with on(...).catch p
     '',
   ].join('\n')
   expect(holdOf([], 'register.ts', listed, edited(listed, 'Saved the note.', 'Stored the note.'))).toBe('worded')
+  // Only the engine's `on`, register's first parameter, is read so (Dan, 2026-11-01, narrowing
+  // #2043): a callback on what any other function handed in returns is still read through the words
+  // handed to it, so those words, said in a toast, are held.
+  const handed = [
+    "import type { EngineInterface, Register } from 'claude-code'",
+    'const tell = ($: EngineInterface, say: (w: string) => Promise<string>) => {',
+    "  say('Saved the note.').then(t => $.ui.toast(t))",
+    '}',
+    'export const register: Register = on => {',
+    "  on('session.start', async ($: EngineInterface) => {",
+    '    $.ui.toast(`Started.`)',
+    '  })',
+    '}',
+    '',
+  ].join('\n')
+  expect(holdOf([], 'register.ts', handed, edited(handed, 'Saved the note.', 'Stored the note.'))).toBe('worded')
+  const inRegister = edited(SAVE_AFTER, 'export const register: Register = on => {', 'export const register: Register = (on, tellLater: (w: string) => Promise<string>) => {')
+  const later = edited(inRegister, '  on(\'tool.call\'', "  tellLater('Saved for later.').then(t => $.ui.toast(t))\n  on('tool.call'")
+  expect(holdOf([], 'register.ts', later, edited(later, 'Saved for later.', 'Kept for later.'))).toBe('worded')
 })
