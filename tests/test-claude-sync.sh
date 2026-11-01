@@ -3726,6 +3726,60 @@ check "#1009 but not a .trash folder the payload holds" "[ ! -e '$TRHB/skills/.t
 check "#1009 and leaves this Mac's own .trash folder where it is" \
   "[ -f '$TRHB/skills/.trash/1791477119124-1742-63QYDV/deep-research/SKILL.md' ]"
 
+section "== the applied check reads the excludes as rsync does, at any depth or only at the top (#2004) =="
+# payload_path_applied used to parse skill_excludes itself and match each name only at the top of
+# skills/, while rsync drops an unanchored name (.trash, a plugin skill) at ANY depth. So a .trash
+# folder inside a real skill, which the apply never writes, read as config this Mac had not applied,
+# and status, the staging and the behind check all held it as unapplied (L263). It now reads the
+# names through skill_exclude_names, the shared reading. The control: `synced` is anchored to the
+# top of skills/, so a `synced` folder inside a real skill is ordinary config and is still judged.
+SEB="$WORK/sx2004-bare.git"; git init -q --bare -b main "$SEB"
+SED_="$WORK/sx2004-dev"; git clone -q "$SEB" "$SED_" 2>/dev/null
+mkdir -p "$SED_/payload"; printf '# rules\n' > "$SED_/payload/CLAUDE.md"
+mkskill "$SED_/payload/skills/real-skill/SKILL.md" 'a skill that travels'
+git -C "$SED_" add payload && git -C "$SED_" -c user.name=t -c user.email=t@e commit -q -m base 2>/dev/null && git -C "$SED_" push -q origin main 2>/dev/null
+SEC="$WORK/sx2004-clone"; git clone -q "$SEB" "$SEC" 2>/dev/null
+SEH="$WORK/sx2004-home"; mkdir -p "$SEH"; echo '{"hooks":{}}' > "$SEH/settings.json"
+CLAUDE_HOME="$SEH" SYNC_REPO="$SEC" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+mkdir -p "$SED_/payload/skills/real-skill/.trash" "$SED_/payload/skills/real-skill/synced" "$SED_/payload/skills/synced/acct"
+echo 'an older file set aside' > "$SED_/payload/skills/real-skill/.trash/old.md"
+echo 'ordinary config in a folder that happens to be called synced' > "$SED_/payload/skills/real-skill/synced/kept.md"
+echo 'a downloaded skill' > "$SED_/payload/skills/synced/acct/dl.md"
+git -C "$SED_" add payload && git -C "$SED_" -c user.name=t -c user.email=t@e commit -q -m 'nested excludes' 2>/dev/null && git -C "$SED_" push -q origin main 2>/dev/null
+# The clone moves to the new commit WITHOUT an apply, which is the state status reports on.
+git -C "$SEC" pull -q origin main 2>/dev/null
+check "#2004 fixture: the clone holds all three files and this Mac has none of them" \
+  "[ -f '$SEC/payload/skills/real-skill/.trash/old.md' ] && [ -f '$SEC/payload/skills/real-skill/synced/kept.md' ] && [ -f '$SEC/payload/skills/synced/acct/dl.md' ] && [ ! -e '$SEH/skills/real-skill/.trash' ] && [ ! -e '$SEH/skills/real-skill/synced' ]"
+out_se1="$(CLAUDE_HOME="$SEH" SYNC_REPO="$SEC" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2004 status before the apply: $out_se1"
+check "#2004 a folder named for a top only exclude, inside a real skill, is still judged and listed as not applied" \
+  "line_has \"\$out_se1\" 'skills/real-skill/synced/kept\.md' 'has not applied'"
+check "#2004 a .trash folder inside a real skill is not listed as config this Mac has not applied" \
+  "! line_has \"\$out_se1\" 'skills/real-skill/\.trash/old\.md' 'has not applied'"
+check "#2004 nor is the top level synced folder" \
+  "! line_has \"\$out_se1\" 'skills/synced/acct/dl\.md' 'has not applied'"
+# And the copy agrees with the check: the pull writes the nested synced file and not the nested .trash.
+CLAUDE_HOME="$SEH" SYNC_REPO="$SEC" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#2004 the pull writes the synced folder inside the real skill" "[ -f '$SEH/skills/real-skill/synced/kept.md' ]"
+check "#2004 and never the .trash folder inside it, as the check judged" "[ ! -e '$SEH/skills/real-skill/.trash' ]"
+# THE FAILURE PATH. The filter's empty answer means "left out", so a filter that FAILS (the list
+# unreadable, so the tool's stand in runs and exits) must answer "not applied", or a broken reader
+# would read every skills path as excluded and wave it through. Called directly: every run that
+# reaches skills/ stops first at require_unmanaged_skill_list, so the stand in is the last line.
+SE_FN_OK="$WORK/sx2004-fn-ok.sh"; SE_FN_BAD="$WORK/sx2004-fn-bad.sh"
+sed -n '/^payload_path_applied(){/,/^}/p' "$SCRIPT" > "$SE_FN_OK"
+sed -n '/^unmanaged_skill_list_unreadable(){/,/^}/p;/^  carried_skill_paths(){ /p;/^payload_path_applied(){/,/^}/p' "$SCRIPT" > "$SE_FN_BAD"
+se_rc_ok=0
+PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" bash -c 'set -eo pipefail; . "$1"; . "$2"; payload_path_applied skills/real-skill/.trash/old.md' _ \
+  "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$SE_FN_OK" >/dev/null 2>&1 || se_rc_ok=$?
+se_rc_bad=0
+se_err_bad="$(PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" UNMANAGED_SKILLS_LIB=/nowhere bash -c 'set -eo pipefail; . "$1"; payload_path_applied skills/real-skill/.trash/old.md' _ "$SE_FN_BAD" 2>&1)" || se_rc_bad=$?
+dbg "#2004 failure path: ok rc=$se_rc_ok, bad rc=$se_rc_bad, said: $se_err_bad"
+check "#2004 fixture: the tool's stand in for an unreadable list was extracted" "grep -q '^  carried_skill_paths(){ ' '$SE_FN_BAD'"
+check "#2004 with the shared list read, the nested .trash path is judged left out" "[ \"\$se_rc_ok\" -eq 0 ]"
+check "#2004 with the list unreadable, it answers not applied rather than left out, and says why" \
+  "[ \"\$se_rc_bad\" -eq 1 ] && line_has \"\$se_err_bad\" 'cannot read the list of skills' 'no skills path was judged'"
+
 section "== a backup copy of a Mac's own *.local.json is never sent, and a pull leaves it alone (#1089) =="
 # On 2026-10-12 a session backed up the tracker's token file as
 # skills/tracker/config.local.json.bak-2026-10-12, beside the original, and the next pull on the
