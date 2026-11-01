@@ -592,7 +592,9 @@ has "the closed issues are asked for with the PRs that closed them" "closedByPul
 U3="cccc3333-0000-4000-8000-000000000003"
 DRIVER="$DIR/../mods/scope-modes/hooks/driver.ts"
 # The rules are a single quoted string in the source, so their quotes are escaped there.
-example="$(sed "s/\\\\'/'/g" "$DRIVER" | grep -o "sleep_note '{\"kind\":\"done\"[^']*}'" | head -1 | sed "s/^sleep_note '//; s/'\$//")"
+src="$(sed "s/\\\\'/'/g" "$DRIVER")"; example=""
+done_re="sleep_note '(\\{\"kind\":\"done\"[^']*\\})'"
+[[ "$src" =~ $done_re ]] && example="${BASH_REMATCH[1]}"
 has "the overnight rules show the done note a goal naming no issue writes for a merge" '"kind":"done"' "$example"
 line="${example//owner\/name/o/n}"; line="${line//<its number>/80}"; line="${line//<what it did>/Merged the parser}"
 record g14 '["'"$U3"'"]' "$SLEEPDIR/ended/g14.json"
