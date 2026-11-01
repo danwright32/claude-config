@@ -255,7 +255,7 @@ def run(payload_bytes):
 
 def save(state_path, state):
     tmp = state_path + ".tmp"
-    with open(tmp, "w") as fh:
+    with open(tmp, "w", encoding="utf-8", errors="replace") as fh:
         json.dump(state, fh)
     os.replace(tmp, state_path)
 
@@ -263,7 +263,7 @@ def save(state_path, state):
 def decide(state_dir, key, path, is_main):
     state_path = os.path.join(state_dir, key + ".json")
     try:
-        with open(state_path) as fh:
+        with open(state_path, encoding="utf-8", errors="replace") as fh:
             state = json.load(fh)
         if not isinstance(state, dict) or state.get("v") != STATE_VERSION:
             state = fresh_state()
@@ -272,7 +272,7 @@ def decide(state_dir, key, path, is_main):
     try:
         size = os.path.getsize(path)
         fh = open(path, "rb")
-    except OSError as err:
+    except (OSError, ValueError) as err:   # ValueError: a path holding a lone surrogate
         if state.get("unreadable_told"):
             return
         state["unreadable_told"] = True
@@ -282,7 +282,7 @@ def decide(state_dir, key, path, is_main):
             return
         msg = ("The context check could not read this %s's transcript (%s: %s), so its size is not "
                "being watched (claude-config#1960)." % ("session" if is_main else "agent", path,
-                                                        err.strerror or err))
+                                                        getattr(err, "strerror", None) or err))
         emit(msg, msg if is_main else "")
         return
     with fh:
@@ -324,6 +324,7 @@ def decide(state_dir, key, path, is_main):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")
     try:
         run(sys.stdin.buffer.read())
     except Exception as err:  # a crash here must never reach the tool call as a failure

@@ -18,6 +18,17 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The one ceiling a wait on a condition gives up at (claude-config#1620), and the one settings lookup.
+. "$DIR/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+. "$DIR/lib/settings-file.sh" || {
+  echo "FAIL: $(basename "$0"): lib/settings-file.sh is missing, so the hook's registration cannot be read."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
 HOOK="$DIR/context-size-notice.sh"
 WORK="$(mktemp -d)"
 holder=""
@@ -211,6 +222,13 @@ check "5 and its next crossing is said" "220,000" "$(field "$(agent_fire r1 "$WO
 out="$(main_fire x1 "$WORK/proj/missing.jsonl")"
 check "6 a transcript that cannot be read is said, not taken as small" "could not read" "$(field "$out" system)"
 check_eq "6 once per session" "" "$(main_fire x1 "$WORK/proj/missing.jsonl")"
+# A lone surrogate escape (half an emoji) in the transcript path reaches python3 as a string it
+# cannot turn into a file name: said once as unreadable, never a crash or a silent pass (#1944 shape).
+out="$(printf '{"session_id":"x3","transcript_path":"/tmp/half\\ud83d.jsonl","hook_event_name":"PostToolUse"}' | bash "$HOOK" 2>/dev/null; echo "rc=$?")"
+check "6 a lone surrogate in the transcript path is said as unreadable" "could not read" "$out"
+check "6 and exits 0" "rc=0" "$out"
+out="$(printf '{"session_id":"x4\\ud83d","transcript_path":"%s","hook_event_name":"PostToolUse"}' "$M" | bash "$HOOK" 2>/dev/null; echo "rc=$?")"
+check_eq "6 a lone surrogate in the session id is not a name, so nothing is kept or said" "rc=0" "$out"
 out="$(printf 'not json' | bash "$HOOK" 2>/dev/null; echo "rc=$?")"
 check_eq "6 a payload that is not JSON exits 0 and says nothing" "rc=0" "$out"
 out="$(printf '{"session_id":"x2","hook_event_name":"PostToolUse"}' | bash "$HOOK" 2>/dev/null; echo "rc=$?")"
@@ -238,15 +256,14 @@ open(sys.argv[2], "w").close()
 time.sleep(60)
 ' "$CONTEXT_SIZE_STATE_DIR/k1.k1.lock" "$ready" &
 holder=$!
-n=0; while [ ! -e "$ready" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
+hang_wait '[ -e "$ready" ]' 0.05 || { fail=$((fail + 1)); echo "FAIL: 7 the lock holder never took the lock"; }
 check_eq "7 a run that finds another holding the state says nothing" "" "$(agent_fire k1 "$WORK/proj/k1.jsonl" k1 "$K")"
 kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; holder=""
 check "7 and the next run, the lock free, says it once" "260,000" "$(field "$(agent_fire k1 "$WORK/proj/k1.jsonl" k1 "$K")" additionalContext)"
 check_eq "7 once" "" "$(agent_fire k1 "$WORK/proj/k1.jsonl" k1 "$K")"
 
 # ---- 8. Registered for every tool call, after it runs ----
-SETTINGS="$DIR/../settings.hooks.json"
-[ -f "$SETTINGS" ] || SETTINGS="$DIR/../settings.json"
+SETTINGS="$(hook_settings_file "$DIR/..")"
 reg="$(python3 -c '
 import json, sys
 d = json.load(open(sys.argv[1]))

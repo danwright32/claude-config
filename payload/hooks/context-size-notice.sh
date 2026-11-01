@@ -24,10 +24,13 @@
 #
 # Cheap, because it runs after every tool call: one python3 that reads only the bytes appended to
 # the transcript since its last run, and says nothing on the ordinary call. Never blocks: exits 0.
+#
+# The payload goes straight to python3 on this script's own stdin, never through a shell variable or
+# jq, so nothing here needs lib/push-scope.sh's cleaning: python3 reads it as bytes, decodes with
+# errors="replace", and a lone surrogate escape only ever reaches a value it checks against a plain
+# name pattern before using it.
 
 set -uo pipefail
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
-payload="$(cat 2>/dev/null || true)"
-case "$payload" in *'"transcript_path"'*) ;; *) exit 0 ;; esac
-printf '%s' "$payload" | python3 "$HOOK_DIR/lib/context_size.py" 2>/dev/null
+python3 "$HOOK_DIR/lib/context_size.py" 2>/dev/null
 exit 0
