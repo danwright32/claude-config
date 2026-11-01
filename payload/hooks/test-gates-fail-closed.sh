@@ -273,7 +273,12 @@ skill_scripts(){ # skill_scripts <skills dir> -> each script there the stdin sca
   find "$1" -name fixtures -prune -o -type f \( -name '*.sh' -o -name '*.py' \) ! -name 'test-*' ! -name 'test_*' -print 2>/dev/null \
     | carried_skill_paths "$1" | sort
 }
-while IFS= read -r f; do files+=("$f"); done < <(skill_scripts "$DIR/../skills")
+# Read into a variable first, never through process substitution, whose child bash 3.2 never waits
+# for and whose exit can cut short what this suite prints next (L1035, #1989).
+skill_list="$(skill_scripts "$DIR/../skills")"
+while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<SKILL_LIST
+$skill_list
+SKILL_LIST
 [ "$(( ${#files[@]} - nhooks ))" -ge 20 ] && ok || bad "only $(( ${#files[@]} - nhooks )) scripts were found under $DIR/../skills, so the stdin scan is not reading the skills"
 hits="$(text_reads "${files[@]}" | sed "s#^$DIR/##")"
 if [ -z "$hits" ]; then ok; else bad "a python3 reader takes stdin in text mode, which raises on a byte jq reads as U+FFFD; read sys.stdin.buffer and decode with errors=\"replace\":
@@ -296,7 +301,10 @@ got="$(skill_scripts "$WORK/skills" | sed "s#^$WORK/skills/##" | tr '\n' ' ')"
 [ "$got" = "real-skill/scripts/reader.py real-skill/synced/reader.py " ] && ok \
   || bad "#2001 the stdin scan should read the real skill's scripts and nothing under skills/synced or any .trash, read: $got"
 skill_hits=()
-while IFS= read -r f; do skill_hits+=("$f"); done < <(skill_scripts "$WORK/skills")
+skill_list="$(skill_scripts "$WORK/skills")"
+while IFS= read -r f; do [ -n "$f" ] && skill_hits+=("$f"); done <<SKILL_LIST
+$skill_list
+SKILL_LIST
 [ "$(text_reads ${skill_hits[@]+"${skill_hits[@]}"} | wc -l | tr -d ' ')" = 2 ] && ok \
   || bad "#2001 the stdin scan should still report the text mode reader in each of the real skill's two scripts"
 

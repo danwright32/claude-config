@@ -1006,9 +1006,10 @@ narrow_start() {
     "$repo_label" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$since" "$top" > "$pending" 2>/dev/null \
     || { rm -f "$diff_file"; record could-not-run "Could not write $pending."; echo "The lessons review could not run: could not write its state."; return 0; }
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
-  run_reviewer "$AR_STATE_DIR" "$name" "$diff_file" "$mb" "$model" "$PRR_DEADLINE" "$started" "$since" \
-    </dev/null >/dev/null 2>&1 &
-  disown "$!" 2>/dev/null || true
+  # Started by a subshell that ends at once, so the reviewer is never this hook's child, and one that
+  # fails fast cannot interrupt the line below (L1035, #1989).
+  ( run_reviewer "$AR_STATE_DIR" "$name" "$diff_file" "$mb" "$model" "$PRR_DEADLINE" "$started" "$since" \
+    </dev/null >/dev/null 2>&1 & )
   echo "The lessons review of the changes since ${since:0:7} on $repo_label $branch (${since:0:7}..$short, $((size / 1024)) KB, diff plus the full text of $in of $((in + out)) files changed since) started in the background with $model, after $narrow_rounds earlier rounds of findings on this pull request, whose reviews read the branch up to ${since:0:7}; the $act waits for it (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
   return 0
 }
@@ -1103,10 +1104,9 @@ do_start() {
         || { rm -rf "$parts"; record could-not-run "Could not write $pending."; echo "The lessons review could not run: could not write its state."; return 0; }
       touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
       # Detached, as one reviewer is: the process that runs every group at once, waits for them,
-      # and writes the branch's review from their answers.
-      nohup bash "$PRR_LIB/pr-review.sh" _groups --dir "$top" --sha "$full_sha" --branch "$branch" \
-        </dev/null >/dev/null 2>&1 &
-      disown "$!" 2>/dev/null || true
+      # and writes the branch's review from their answers. Never this hook's child (#1989).
+      ( nohup bash "$PRR_LIB/pr-review.sh" _groups --dir "$top" --sha "$full_sha" --branch "$branch" \
+        </dev/null >/dev/null 2>&1 & )
       echo "The lessons review of the whole branch $repo_label $branch ($short_mb..$short, $(ar_size_text "$whole_size") of diff, over the $((PRR_MAX_BYTES / 1024)) KB one review can use) started in the background in $groups_n groups of files read at once ($groups_text), each by $model with the same deadline; the $act waits for every group (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
       narrow_said
       ar_left_out_note "$leftout"
@@ -1131,10 +1131,10 @@ do_start() {
     "$repo_label" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$top" > "$pending" 2>/dev/null \
     || { rm -f "$diff_file"; record could-not-run "Could not write $pending."; echo "The lessons review could not run: could not write its state."; return 0; }
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
-  # Detached: no standard streams held, not waited for, not in this shell's job table.
-  run_reviewer "$AR_STATE_DIR" "$name" "$diff_file" "$mb" "$model" "$PRR_DEADLINE" "$started" \
-    </dev/null >/dev/null 2>&1 &
-  disown "$!" 2>/dev/null || true
+  # Detached: no standard streams held, not waited for, and started by a subshell that ends at once,
+  # so never this hook's child (L1035, #1989).
+  ( run_reviewer "$AR_STATE_DIR" "$name" "$diff_file" "$mb" "$model" "$PRR_DEADLINE" "$started" \
+    </dev/null >/dev/null 2>&1 & )
   echo "The lessons review of the whole branch $repo_label $branch ($short_mb..$short, $((size / 1024)) KB, $note) started in the background with $model; the $act waits for it (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
   narrow_said
   ar_left_out_note "$leftout"
@@ -1160,6 +1160,9 @@ run_reviewer() {   # $1 = state dir, $2 = name, $3 = diff file, $4 = base, $5 = 
     --lessons-dir "${AI_REVIEW_LESSONS_DIR:-$PRR_LIB/../..}" \
     --diff-file "$3" --deadline "$6" --started "$7" \
     </dev/null >/dev/null 2>&1 &
+  # Safe as it is (#1989): every caller runs this detached with its stdout and stderr on /dev/null,
+  # and a write to /dev/null never blocks, so the reviewer's exit cannot interrupt one; it is reaped
+  # by the wait below.
   rpid=$!
   prr_input_owner "$3" "$rpid"
   local what="the lessons review of $repo_label $branch at ${full_sha:0:7}"
@@ -1334,6 +1337,8 @@ do_groups() {
   n="$(meta_of "$pending" groups)"; gbase="$(meta_of "$pending" base)"
   model="$(meta_of "$pending" model)"; dl="$(meta_of "$pending" deadline)"; st="$(meta_of "$pending" started)"
   whole_above_zero "$n" n || return 1
+  # Safe as they are (#1989): _groups runs detached with its stdout and stderr on /dev/null, so no
+  # group's exit can interrupt a write into a pipe, and the wait below reaps every one.
   for k in $(seq 1 "$n"); do
     run_reviewer "$parts" "$name-g$k" "$parts/$name-g$k.diff" "$gbase" "${model:-sonnet}" "${dl:-$PRR_DEADLINE}" "${st:-$(date +%s)}" &
   done
