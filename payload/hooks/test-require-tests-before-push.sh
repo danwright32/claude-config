@@ -899,7 +899,7 @@ in_call() {   # <file> <text> <label>
   if [ -f "$1" ] && grep -q "$2" "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2028 $3: the judge was not shown $2"; fi
 }
 not_in_stderr() {   # <ERE> <label>
-  if printf '%s' "$ERR" | grep -Eq "$1"; then fail=$((fail+1)); echo "FAIL: #2028 $2: stderr matched /$1/: [$ERR]"; else pass=$((pass+1)); fi
+  if grep -Eq "$1" <<< "$ERR"; then fail=$((fail+1)); echo "FAIL: #2028 $2: stderr matched /$1/: [$ERR]"; else pass=$((pass+1)); fi
 }
 
 # The issue's push: the branch's own tested change, beside a merged main past the budget, passes.
