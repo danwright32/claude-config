@@ -2291,8 +2291,11 @@ its two exact shapes because claude-sync reads them. It is the one shape for tha
 says so any other way (a line whose first word is `UNMEASURED`, `UNMEASURED-SECTIONS <n>`, a
 `SUITE-NOTE` or `note:` line carrying the word, or the agreed line indented) is FAILED, the line
 quoted and the agreed shape named, because every one of those spellings was once dropped and its
-suite read as a plain pass. `test-run-all-tests.sh` also reads every tracked `test-*.sh` and
-`*_tests.py` for such a print, so a branch that never runs on the machine at hand is caught too.
+suite read as a plain pass. `test-run-all-tests-real-tree.sh` also reads every `test-*.sh` and
+`*_tests.py` the repository holds, committed or not, for such a print, so a branch that never runs
+on the machine at hand is caught too. It is split from `test-run-all-tests.sh` so the gate before a
+push runs the checks that read this repository without the runner suite's fixture runs, which took
+about 500 seconds against that gate's 150 second budget (#1997).
 A part that was not measured is counted as nothing: the same scan fails a suite that also passes a
 check declaring it (`check "<the part> could not be measured here" ok` alone on its line, or with
 the word in the check's name), while a check that TESTS a report of unmeasured, after `&&` or in a

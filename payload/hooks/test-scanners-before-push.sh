@@ -821,6 +821,17 @@ if [ -n "$REAL" ] && [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
   grep -q '^SUITE tests/test-claude-sync.sh$' <<< "$_sel" \
     && check "and the four minute suite is never selected whole" "it would run whole: $_sel" \
     || check "and the four minute suite is never selected whole" ok
+  # The runner's own suite is the slowest whole suite there is: it starts the runner on dozens of
+  # fixture trees, and this gate recorded 510 seconds for it against a budget of 150, so every push
+  # was refused once and waited for it (claude-config#1997). Only a few of its checks read this
+  # repository's files, and those live in a scanner of their own, which IS selected, so they still
+  # run before every push while the fixture runs do not.
+  grep -q '^SUITE payload/hooks/test-run-all-tests\.sh$' <<< "$_sel" \
+    && check "#1997 and the runner's own suite is never selected whole" "it would run whole, about 500 seconds against the budget: $_sel" \
+    || check "#1997 and the runner's own suite is never selected whole" ok
+  grep -q '^SUITE payload/hooks/test-run-all-tests-real-tree\.sh$' <<< "$_sel" \
+    && check "#1997 and the runner suite's checks over this repository's files are selected" ok \
+    || check "#1997 and the runner suite's checks over this repository's files are selected" "got=$_sel"
 else
   # The INSTALLED copy of these hooks sits in ~/.claude, where there is no repository and never
   # will be, so there is no selection to read and that is not a fault. Said out loud rather than

@@ -27,6 +27,20 @@
 # `--list` prints the selection without running any of it, so what this gate covers can be read
 # without paying for it (L102).
 #
+# THAT PREMISE IS A NUMBER, and it held for every whole suite but one (claude-config#1997). The
+# durations this gate itself recorded for each run, read on 2026-10-31 at a load average of about
+# 80 on 12 cores: every whole suite it selected finished in 1 to 55 seconds, except
+# test-run-all-tests.sh at 510 (457 and 673 in two more runs that evening), against the budget of
+# 150 below, so every push here was refused once and waited for it. That suite starts the runner on
+# dozens of fixture trees; its only checks that read this repository were moved to
+# test-run-all-tests-real-tree.sh, 1.6 seconds at a load average of 239, so they still run here and
+# the fixture runs do not. Re-measure it rather than trusting these figures: each run's duration in
+# seconds is written to "$_sc_state_dir/runs/<checkout key>/<slot>-last", where the slot is the
+# first 20 hex digits of the sha256 of the suite's path and its section, each followed by a newline
+# (see _sc_slot), and a refusal for time names every scanner still running with its last duration.
+# A whole suite that takes a large share of the budget is the premise expiring: give its checks
+# over this repository a suite of their own, as #1997 did.
+#
 # It is repo-agnostic by construction: a repository with no payload/hooks/run-all-tests.sh is not
 # this one, and the hook does nothing at all there rather than running suites it knows nothing
 # about the cost of.
