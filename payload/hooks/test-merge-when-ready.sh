@@ -330,10 +330,17 @@ cat >> "$ST/closing-gate-payloads"; printf '\n' >> "$ST/closing-gate-payloads"
 [ -s "$ST/closing-gate-deny" ] && jq -nc --arg r "$(cat "$ST/closing-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
 exit 0
 EOS
+cat > "$STUBS/work-names-gate.sh" <<'EOS'
+#!/usr/bin/env bash
+cat >> "$ST/work-names-gate-payloads"; printf '\n' >> "$ST/work-names-gate-payloads"
+[ -s "$ST/work-names-gate-deny" ] && jq -nc --arg r "$(cat "$ST/work-names-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+exit 0
+EOS
 chmod +x "$STUBS"/*.sh
 export MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh"
 export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh"
 export MWR_VERIFY_GATE="$STUBS/verify-gate.sh" MWR_CLOSING_GATE="$STUBS/closing-gate.sh"
+export MWR_WORK_NAMES_GATE="$STUBS/work-names-gate.sh"
 
 # --- git with no network and no Mac's own settings ------------------------------------------------
 # A conflicted update is now merged locally when only README.md's mods table rows conflict
@@ -1122,6 +1129,27 @@ out="$(run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1550 a body edited during the wait stops the merge" "1" "$rc"
 check "#1550 in the gate's words" "body now says #4358 stays open" "$out"
 check_eq "#1550 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+
+# The work names gate (#1995) is asked at the same two moments, for the same reasons: a title, a
+# description and the commit messages do not depend on the head's checks, and can change while this
+# waits.
+fresh "$OLD" 0 "$PENDING"
+printf 'Refusing to merge PR #7: it names a work organisation. title:1: a work organisation name' > "$ST/work-names-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1995 a pull request the work names gate refuses stops the helper" "1" "$rc"
+check "#1995 in the gate's words, naming it" "check-work-names-merge.sh refused the merge of #7 before any wait" "$out"
+check_eq "#1995 before any wait" "0" "$(count sleeps '.')"
+check_eq "#1995 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1995 with the work names gate allowing it, the merge goes through" "0" "$rc"
+check "#1995 the work names gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/work-names-gate-payloads" 2>/dev/null)"
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"; printf 'title now names a work organisation' > \"\$ST/work-names-gate-deny\"" > "$ST/on-sleep"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1995 a title edited during the wait stops the merge" "1" "$rc"
+check "#1995 in the gate's words" "title now names a work organisation" "$out"
+check_eq "#1995 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
 
 # THE CLASS (L30, L96): the gates this helper asks must be every gate a typed merge meets. The list
 # here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that

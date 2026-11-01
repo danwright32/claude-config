@@ -204,10 +204,13 @@ derived_data_orphans() {
 # Added here. The orphans under ROOT that nothing suggests are in use: what --delete removes.
 derived_data_reclaimable() {
   local root="${1:-$(derived_data_root)}" dir
+  local loop_input; loop_input="$(derived_data_orphans "${root}")" || true
   while IFS= read -r dir; do
     [[ -n "${dir}" ]] || continue
     derived_data_in_use "${dir}" >/dev/null || printf '%s\n' "${dir}"
-  done < <(derived_data_orphans "${root}")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 0
 }
 
@@ -218,12 +221,15 @@ derived_data_reclaimable() {
 derived_data_reclaim() {
   local root="${1:-$(derived_data_root)}"
   local removed=0 dir
+  local loop_input; loop_input="$(derived_data_reclaimable "${root}")" || true
   while IFS= read -r dir; do
     [[ -n "${dir}" ]] || continue
     if derived_data_remove_if_reclaimable "${dir}" >/dev/null; then
       removed=$((removed + 1))
     fi
-  done < <(derived_data_reclaimable "${root}")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   printf '%s\n' "${removed}"
   return 0
 }

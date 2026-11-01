@@ -308,6 +308,15 @@ release_held() {
 
   # The one bound every hook shares. Missing, every question is refused, so every hold is kept.
   . "$HOOK_DIR/lib/bounded-run.sh" 2>/dev/null || bounded_run() { BOUNDED_OUT=""; BOUNDED_RC=127; }
+  # The holds and each hold's merges are read whole and fed to the loops from here documents, never
+  # through process substitution: this hook prints its answer into a pipe, and a child it never
+  # waits for can exit during that write, which bash 3.2 then drops (claude-config#1984, L1035). The
+  # `x` keeps the files' last byte, so a last line with no newline, which read never took, is left
+  # out here too rather than read as a hold.
+  local recs merges
+  recs="$(cat "${parts[@]}" 2>/dev/null; printf x)" || true
+  recs="${recs%x}"
+  case "$recs" in *$'\n') ;; *$'\n'*) recs="${recs%$'\n'*}"$'\n' ;; *) recs="" ;; esac
   while IFS= read -r rec <&5; do
     [ -n "$rec" ] || continue
     # The budget spent: kept without asking, and asked first at the next turn end.
@@ -318,7 +327,9 @@ release_held() {
     open=0; unknown=0; merged=""; closed=""
     # One line per merge, its fields split on 0x1f, never a tab: a tab is whitespace to read, so an
     # empty field between two would vanish and shift the pull request number into the repository.
-    while IFS=$'\x1f' read -r m_dir m_repo m_slug m_pr <&6; do
+    merges="$(printf '%s' "$rec" | jq -r '.merges[]? | [.dir // "", .repo // "", .slug // "", .pr // ""] | join("\u001f")' 2>/dev/null)" || true
+    # No merges is no pass at all, as it was before, never one pass over an empty line.
+    while [ -n "$merges" ] && IFS=$'\x1f' read -r m_dir m_repo m_slug m_pr <&6; do
       # Asked in the folder the merge ran in, or, when that folder is gone (a worktree removed after
       # its merge), anywhere with the repository named, as long as there is a number to ask about.
       if [ -d "$m_dir" ]; then
@@ -337,7 +348,9 @@ release_held() {
         OPEN) open=1 ;;
         *) unknown=1 ;;
       esac
-    done 6< <(printf '%s' "$rec" | jq -r '.merges[]? | [.dir // "", .repo // "", .slug // "", .pr // ""] | join("\u001f")' 2>/dev/null)
+    done 6<<MERGES
+$merges
+MERGES
     if [ "$open" = 1 ] || [ "$unknown" = 1 ]; then
       keep+="$rec"$'\n'
       continue
@@ -357,7 +370,9 @@ release_held() {
 $r"
     fi
     [ -n "$msg" ] && notes="${notes:+$notes }$msg"
-  done 5< <(cat "${parts[@]}" 2>/dev/null)
+  done 5<<HOLDS
+$recs
+HOLDS
 
   if [ -n "$unasked$keep" ]; then
     mkdir -p "$(held_dir)" 2>/dev/null

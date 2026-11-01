@@ -176,6 +176,7 @@ if [ "$from_worktree" -eq 1 ]; then
   fi
   pending_list="$(ps_pending_files "$cmd")"
   [ "${pending_list%%$'\n'*}" = "WIDENED" ] && pending_widened=1
+  loop_input="$(printf '%s\n' "$pending_list" | tail -n +2)" || true
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     # Only the source roots are compared, on both sides.
@@ -185,7 +186,9 @@ if [ "$from_worktree" -eq 1 ]; then
     else
       rm -f "$WORK/head/$f"
     fi
-  done < <(printf '%s\n' "$pending_list" | tail -n +2)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 else
   # shellcheck disable=SC2086
   if ! git archive HEAD $head_roots 2>/dev/null | tar -x -C "$WORK/head" 2>/dev/null; then

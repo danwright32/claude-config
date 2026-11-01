@@ -73,7 +73,9 @@ while IFS= read -r -d $'\x1e' seg; do
     is_create=1
     break
   fi
-done < <(printf '%s' "$segs")
+done <<LOOP_INPUT
+$segs
+LOOP_INPUT
 [ "$is_create" -eq 1 ] || exit 0
 
 # Cooldown: several creates in one turn get one combined evaluation.

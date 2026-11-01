@@ -153,15 +153,18 @@ sc_hold_covers(){   # $1 = the session asking, from the hook payload (may be emp
 # `claude-sync release --other` takes: what a refusal names when a hold is in force but is not this
 # session's. Nothing when there is none.
 sc_hold_others(){   # $1 = the session asking, as for sc_hold_covers
-  local a b o
+  local a b o loop_input
   [ -n "$SC_HOLD_READER" ] || return 0
   a="$(hold_record_session "${1:-}")"
   b="$(hold_record_session "${CLAUDE_CODE_SESSION_ID:-}")"
+  loop_input="$(hold_record_rows "$SYNC_HOLD_FILE" "$(date +%s)" | awk -F '\037' -v a="$a" -v b="$b" \
+    '$1 == "live" && $5 != "unknown" && $5 != a && $5 != b && !seen[$5]++ { print $5 }')" || true
   while IFS= read -r o; do
     [ -n "$o" ] || continue
     hold_record_short "$o"; echo
-  done < <(hold_record_rows "$SYNC_HOLD_FILE" "$(date +%s)" | awk -F '\037' -v a="$a" -v b="$b" \
-    '$1 == "live" && $5 != "unknown" && $5 != a && $5 != b && !seen[$5]++ { print $5 }')
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 }
 
 # What every refusal or warning says when a hold is in force but is not this session's, in one
@@ -173,10 +176,13 @@ sc_hold_others_sentence(){   # $1 = the session asking, as for sc_hold_covers
     printf 'No hold can count here: lib/hold-record.sh, which reads the hold record, is missing beside lib/sync-clone.sh at %s, so this stands even under a hold. Restore it with: git checkout -- payload/hooks/lib/hold-record.sh' "$SC_LIB_DIR"
     return 0
   fi
+  local loop_input; loop_input="$(sc_hold_others "${1:-}")" || true
   while IFS= read -r o; do
     [ -n "$o" ] || continue
     n=$((n + 1)); list="${list:+$list, }$o"
-  done < <(sc_hold_others "${1:-}")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   [ "$n" -gt 0 ] || return 0
   if [ "$n" -eq 1 ]; then list="session $list holds"; else list="sessions $list hold"; fi
   printf "A hold is in force, but it is not this session's: %s the watcher. Another session's hold does not protect this session's edits, which are sent the moment that hold is released, so this session needs its own hold." "$list"

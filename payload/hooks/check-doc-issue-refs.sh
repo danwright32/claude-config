@@ -199,6 +199,10 @@ scan_one() {  # $1 = path, $2 = committed | pending
 seen_paths=""
 # The source word and the path are split on the single space between them; the path keeps
 # any spaces of its own because it is the last field.
+loop_input="$(
+  printf '%s\n' "$committed_paths" | sed '/^$/d; s/^/committed /'
+  printf '%s\n' "$pending_paths" | sed '/^$/d; s/^/pending /'
+)" || true
 while IFS=' ' read -r src p; do
   [ -n "$p" ] || continue
   is_doc_path "$p" || continue
@@ -206,10 +210,9 @@ while IFS=' ' read -r src p; do
   seen_paths="${seen_paths}|$p|"
   doc_count=$((doc_count + 1))
   scan_one "$p" "$src" >> "$WORK/candidates"
-done < <(
-  printf '%s\n' "$committed_paths" | sed '/^$/d; s/^/committed /'
-  printf '%s\n' "$pending_paths" | sed '/^$/d; s/^/pending /'
-)
+done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 
 # Nothing this push carries is a doc: say nothing, cost nothing.
 [ "$doc_count" -gt 0 ] || exit 0
