@@ -337,7 +337,7 @@ check "every size measured in full keeps the plain total" "$(has "$OUT_TEXT" "Ap
 . "$DIR/../../hooks/lib/disk-clean-units.sh" || check "the units library is there to source" "could not source it"
 # One offerable item per line: key, bytes, size (bytes empty when no size was read).
 tally_of() { # <key> <rows>
-  printf '%s\n' "$2" | awk -F '\t' -v k="$1" "${DCU_AWK_TALLY:-}"'{ dcu_tally($1, $2, $3) } END { print dcu_tally_line(k) }'
+  awk -F '\t' -v k="$1" "${DCU_AWK_TALLY:-}"'{ dcu_tally($1, $2, $3) } END { print dcu_tally_line(k) }' <<< "$2"
 }
 rows="$(printf 'a\t2048\tmeasured\na\t1024\treported\na\t1024\t\nb\t1024\tmeasured\nb\t\tunread\nc\t\tunread\nc\t\tdenied\nd\t5120\tpartial\ne\t3072\tdenied')"
 check "a tally counts offerable items, unsized items, KiB and whether any size was partial (all read in full)" "$(eq "$(tally_of a "$rows")" "3 0 4 0")"
@@ -354,7 +354,7 @@ check "every size read in full: exact" "$(eq "$(kind 2 0 0)" exact)"
 check "nothing to total: exact (the caller says 0, or nothing found)" "$(eq "$(kind 0 0 0)" exact)"
 check "a tally it cannot read is unknown, never a figure" "$(eq "$(kind x 0 0)" unknown)"
 kind_in_awk() { # <key> <rows>
-  printf '%s\n' "$2" | awk -F '\t' -v k="$1" "${DCU_AWK_TALLY:-}"'{ dcu_tally($1, $2, $3) } END { print dcu_tally_kind(k) }'
+  awk -F '\t' -v k="$1" "${DCU_AWK_TALLY:-}"'{ dcu_tally($1, $2, $3) } END { print dcu_tally_kind(k) }' <<< "$2"
 }
 check "the awk reading of a tally is the same rule: unknown, lower, exact, exact for nothing" \
   "$(eq "$(kind_in_awk c "$rows") $(kind_in_awk b "$rows") $(kind_in_awk d "$rows") $(kind_in_awk a "$rows") $(kind_in_awk z "$rows")" "unknown lower lower exact exact")"

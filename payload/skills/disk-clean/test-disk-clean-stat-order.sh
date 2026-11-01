@@ -30,7 +30,14 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PAYLOAD="$(cd "$DIR/../.." && pwd)"
+# The folder holding skills/ and hooks/: payload/ in a checkout, ~/.claude once installed, and right
+# in both, since nothing here needs the repository itself.
+HOOKS="$(cd "$DIR/../../hooks" && pwd)" || {
+  echo "FAIL: $(basename "$0"): there is no hooks/ two folders above this skill, so the disk-clean files cannot be found."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+PAYLOAD="${HOOKS%/hooks}"
 
 pass=0
 fail=0

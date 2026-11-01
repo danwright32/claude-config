@@ -558,7 +558,7 @@ symbol_cache_note(){
 scan_note(){
   local record="${FREE_SPACE_SCAN_RECORD:-${HOME:-}/.claude/state/disk-clean/last-scan.json}"
   [ -f "$record" ] && [ -r "$record" ] || return 0
-  local here="." at age age_words tally n unsized kib bad partial taken unjudged icloud total kind cloud_note=""
+  local here="." at age age_words items tally n unsized kib bad partial taken unjudged icloud total kind cloud_note=""
   local stamp="" key="" kept_key="" kept="" _extra="" cache="$STATE_DIR/disk-clean-tally"
   case "${BASH_SOURCE[0]}" in */*) here="${BASH_SOURCE[0]%/*}" ;; esac
   . "$here/lib/disk-clean-units.sh" 2>/dev/null || return 0
@@ -578,8 +578,11 @@ scan_note(){
     at="$(dcr_header "$record" scanned_at 2>/dev/null)" || return 0
     # Fields of dcr_review_items: id, category, method, target, state, bytes, identity, size, flags,
     # detail. flags is a comma list, so icloud-only-part is matched as a whole entry, never inside icloud.
-    # The total is DCU_AWK_TALLY's, the one copy disk-clean's scan totals by (#1866).
-    tally="$(dcr_review_items "$record" 2>/dev/null | awk -F "$DCR_SEP" "$DCU_AWK_TALLY"'
+    # The total is DCU_AWK_TALLY's, the one copy disk-clean's scan totals by (#1866). The items are
+    # read first and handed over as a here-string, so a failed read adds nothing rather than a total
+    # of whatever came before the failure.
+    items="$(dcr_review_items "$record" 2>/dev/null)" || return 0
+    tally="$(awk -F "$DCR_SEP" "$DCU_AWK_TALLY"'
       $5 == "unreadable" { bad = 1 }
       $5 == "removed" || $5 == "trashed" || $5 == "truncated" || $5 == "gone" { taken++ }
       index($5, "unmeasured: ") == 1 { unjudged++ }
@@ -587,7 +590,7 @@ scan_note(){
         dcu_tally("", $6, $8)
         if ($6 != "") { nf = split($9, f, ","); for (i = 1; i <= nf; i++) if (f[i] == "icloud-only-part") { cloud++; break } }
       }
-      END { printf "%s %d %d %d %d\n", dcu_tally_line(""), bad, taken, unjudged, cloud }')" || return 0
+      END { printf "%s %d %d %d %d\n", dcu_tally_line(""), bad, taken, unjudged, cloud }' <<< "$items")" || return 0
     read -r n unsized kib partial bad taken unjudged icloud <<< "$tally"
     scan_tally_ok || return 0
     if [ -n "$key" ]; then
