@@ -1759,7 +1759,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 
 | Gate | What it costs on a push |
 | --- | --- |
-| `scanners-before-push.sh` (#518) | 2026-10-28: killed at its declared 180 second bound on three cold readings of three, so not a measurement, at load average 142 to 148. Earlier: 25.4 to 26.5 seconds on a branch push at load 12 to 18 on 2026-10-13 (the timing below), the gate every push waits on; 0.6 seconds on a repeat attempt over an unchanged tree, 2026-09-21. Since #1995 it first reads the messages of the commits the push adds, before any suite: 0.137 to 0.161 seconds over one commit, five readings on 2026-10-31 at load average 61, each including two python starts for the timing |
+| `scanners-before-push.sh` (#518) | 2026-10-28: killed at its declared 180 second bound on three cold readings of three, so not a measurement, at load average 142 to 148. Earlier: 25.4 to 26.5 seconds on a branch push at load 12 to 18 on 2026-10-13 (the timing below), the gate every push waits on; 0.6 seconds on a repeat attempt over an unchanged tree, 2026-09-21. Since #1995 it first reads the messages of the commits the push adds, before any suite: 0.137 to 0.161 seconds over one commit, five readings on 2026-10-31 at load average 61, each including two python starts for the timing. After #1997 took `test-run-all-tests.sh` (510 seconds as the gate recorded it) out of its selection: every scanner finished inside the 150 second budget at load average 281 on 2026-10-31, the slowest 89 seconds, one reading, its total taken up by waiting on the sync suite's lock that another run held |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 | `require-tests-before-push.sh` | not timed on 2026-10-28, since it can ask a model. Earlier: 0.3 seconds on each of two pushes on 2026-09-21, when the change carried a test and it asked no model; a sonnet call of up to 120 seconds when it has to ask |
@@ -2291,8 +2291,11 @@ its two exact shapes because claude-sync reads them. It is the one shape for tha
 says so any other way (a line whose first word is `UNMEASURED`, `UNMEASURED-SECTIONS <n>`, a
 `SUITE-NOTE` or `note:` line carrying the word, or the agreed line indented) is FAILED, the line
 quoted and the agreed shape named, because every one of those spellings was once dropped and its
-suite read as a plain pass. `test-run-all-tests.sh` also reads every tracked `test-*.sh` and
-`*_tests.py` for such a print, so a branch that never runs on the machine at hand is caught too.
+suite read as a plain pass. `test-run-all-tests-real-tree.sh` also reads every `test-*.sh` and
+`*_tests.py` the repository holds, committed or not, for such a print, so a branch that never runs
+on the machine at hand is caught too. It is split from `test-run-all-tests.sh` so the gate before a
+push runs the checks that read this repository without the runner suite's fixture runs, which took
+about 500 seconds against that gate's 150 second budget (#1997).
 A part that was not measured is counted as nothing: the same scan fails a suite that also passes a
 check declaring it (`check "<the part> could not be measured here" ok` alone on its line, or with
 the word in the check's name), while a check that TESTS a report of unmeasured, after `&&` or in a
