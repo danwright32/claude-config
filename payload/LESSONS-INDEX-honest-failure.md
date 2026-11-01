@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L838. An embed reports its own failures, timeouts included, to your system: one surfaced only to the host lands in analytics nobody of yours watches.
 - L837. An alert about one part of a subject clears when that part recovers; an unmeasurable part must not hold the whole subject's alert open.
 - L831. Size a runaway limit well above the busiest real use and alert when hit; one sized to the busiest day seen blocks the next busier real day.
 - L821. Report a raced deadline's timeout only if it won; a timer resolving on cancel runs its .then on the path that answered in time.
