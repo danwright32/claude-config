@@ -246,6 +246,51 @@ o32="$(lockfire "$R32" "git push")"; c32=$?
   && check "a scanner that waits for the lock and then FAILS is reported as failing, with its detail" ok \
   || check "a scanner that waits for the lock and then FAILS is reported as failing, with its detail" "exit=$c32 out=$o32"
 
+# A run that only REFUSED on the lock scanned nothing, so its seconds are not the scanner's time
+# (claude-config#2033). They were written over the scanner's last duration all the same, so on
+# 2026-11-01 a refusal for time quoted "its last run took 2s" for a scan that takes 12 to 18. sigma
+# above refused on every try, so nothing may be recorded for it, while alpha, which scanned, is.
+_slot_of(){ printf 'payload/hooks/test-%s.sh\n\n' "$1" | shasum -a 256 | awk '{ print substr($1, 1, 20) }'; }
+_sigma_last="$(ls "$LOCKSTATE"/runs/*/"$(_slot_of sigma)-last" 2>/dev/null)"
+_alpha_last="$(ls "$LOCKSTATE"/runs/*/"$(_slot_of alpha)-last" 2>/dev/null)"
+[ -z "$_sigma_last" ] \
+  && check "#2033 a run that only refused on the lock records no duration for its scanner" ok \
+  || check "#2033 a run that only refused on the lock records no duration for its scanner" "recorded $(cat "$_sigma_last" 2>/dev/null)s in $_sigma_last"
+[ -n "$_alpha_last" ] \
+  && check "#2033 and a run that scanned still records one" ok \
+  || check "#2033 and a run that scanned still records one" "nothing under $LOCKSTATE/runs"
+
+# THE BUDGET RUNNING OUT WHILE A SCANNER WAITS ITS TURN ON THE LOCK is a lock refusal, said as one
+# (claude-config#2033, L11). On 2026-11-01 seven pushes were refused as "did not finish in 150
+# seconds" over a run started again for the lock 1 or 2 seconds earlier, which read as a scanner too
+# slow for the budget and sent the fix after the budget. Here a refusal takes 3 seconds on every try
+# after the first, so the budget of 2 runs out while a retry is in flight, as it did under load.
+add_slow_locked_scanner(){   # $1 = repo  $2 = name: refuses at once, then after 3 seconds, for ever
+  cat > "$1/payload/hooks/test-$2.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+n="\$(cat "$TMPROOT/$2.tries" 2>/dev/null || echo 0)"; n=\$((n + 1)); echo "\$n" > "$TMPROOT/$2.tries"
+[ "\$n" -le 1 ] || sleep 3
+echo "test suite: another run is already going: a suite run, process 4242 on here, started 30s ago. Refusing rather than queueing behind it." >&2
+exit 5
+EOF
+  chmod +x "$1/payload/hooks/test-$2.sh"
+}
+R2033="$(mkrepo lockbudget)"; add_scanner "$R2033" alpha 0; add_slow_locked_scanner "$R2033" phi; commit_all "$R2033"
+o2033="$(SCANNERS_STATE_DIR="$TMPROOT/lockbudget-state" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 SCANNERS_BUDGET_SECONDS=2 fire "$R2033" "git push")"; c2033=$?
+[ "$c2033" -eq 2 ] \
+  && check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" ok \
+  || check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" "exit=$c2033 out=$o2033"
+grep -q 'another test run' <<< "$o2033" && grep -q 'phi' <<< "$o2033" \
+  && check "#2033 and says another test run held the lock, naming the scanner" ok \
+  || check "#2033 and says another test run held the lock, naming the scanner" "out=$o2033"
+grep -q 'did not finish in' <<< "$o2033" \
+  && check "#2033 and never calls it a scanner that did not finish in the budget" "out=$o2033" \
+  || check "#2033 and never calls it a scanner that did not finish in the budget" ok
+grep -q 'process 4242' <<< "$o2033" \
+  && check "#2033 and names the run holding the lock, from the refusal before the retry" ok \
+  || check "#2033 and names the run holding the lock, from the refusal before the retry" "out=$o2033"
+
 # --- a scanner that RAN but could not read what it judges measured nothing, which is a fault in
 #     this gate's run and not a finding about the push (claude-config#1146). On 2026-10-13 the
 #     secret scan, run here, could not copy the tree it scans (a file listed and gone before tar
