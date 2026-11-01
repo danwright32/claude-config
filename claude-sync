@@ -810,7 +810,7 @@ file_mtimes(){   # newline separated paths on stdin -> "<mtime><TAB><path>" per 
     fi
     # Rejected if ANY line is the wrong shape, never if merely some are: a half understood answer
     # would silently drop whatever it could not express, and those are leftovers nobody reclaims.
-    # `grep -v`, never `grep -qv`: the quiet form leaves on its first match and kills the
+    # `grep -v`, never its quiet form: the quiet form leaves on its first match and kills the
     # producer, and under pipefail the pipeline then reports that death rather than the answer
     # (L183). This one reads all of its input, so there is no early exit to be killed by.
     if [ -n "$out" ]; then
