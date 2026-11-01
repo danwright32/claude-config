@@ -544,8 +544,9 @@ else
   _sc_detach_why="the folder for runs left going, $_sc_state_dir/runs/$_sc_repo_key, could not be made"
 fi
 mkdir -p "$_sc_runs" 2>/dev/null
-# Six hours: far past any scanner here (the slowest, test-run-all-tests.sh, about 7 minutes under
-# load), so a run older than this is one nobody is coming back for. A setting, not a measurement.
+# Six hours: far past any scanner here (the slowest whole suite it ran, test-run-all-tests.sh at
+# about 7 minutes under load, has been out of its selection since #1997; see the premise at the
+# top), so a run older than this is one nobody is coming back for. A setting, not a measurement.
 _sc_run_stale="${SCANNERS_RUN_STALE_SECONDS:-21600}"
 # Zero however written is the default, never "stale at once" (lib/whole-number.sh, claude-config#1948).
 whole_above_zero "$_sc_run_stale" _sc_run_stale || _sc_run_stale=21600
