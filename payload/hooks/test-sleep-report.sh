@@ -263,6 +263,17 @@ check_eq "a PR that is not a number is refused at the writer" 1 "$rc"
 has "naming the field" "the note's pr must be a number" "$out"
 out="$(note '{"kind":"done","issue":3,"repo":["o","r"]}' 2>&1)"; rc=$?
 check_eq "a repo that is not text is refused at the writer" 1 "$rc"
+# #2011: a done note is what credits a merge or a close at wake, checked against GitHub by its repo
+# and number, so one naming no repository GitHub can be asked about, or neither a PR nor an issue,
+# is refused while the session can still write it whole, rather than shown unchecked in the morning.
+out="$(note '{"kind":"done","pr":12,"text":"merged"}' 2>&1)"; rc=$?
+check_eq "#2011 a done note naming no repo is refused" 1 "$rc"
+has "#2011 naming the fields it needs" "a done note must name repo as owner/name and the pr or issue it finished" "$out"
+out="$(note '{"kind":"done","repo":"o/r","text":"merged"}' 2>&1)"; rc=$?
+check_eq "#2011 a done note naming neither a PR nor an issue is refused" 1 "$rc"
+has "#2011 and says a step that finished neither is progress" "kind progress" "$out"
+out="$(note '{"kind":"done","repo":"just-a-name","pr":12,"text":"merged"}' 2>&1)"; rc=$?
+check_eq "#2011 a done note whose repo is not owner/name is refused" 1 "$rc"
 # #1771: a question about an issue is asked before bed in a dialog, so it carries the answers Dan
 # picks from. Fewer than two (none, one, blanks, or one answer twice) is refused at the writer.
 out="$(note '{"kind":"question","repo":"o/r","issue":12,"text":"Which copy?"}' 2>&1)"; rc=$?
@@ -572,6 +583,50 @@ calls="$(cat "$FAKE/calls")"
 has "the merged PRs are asked for with their branch, body and the issues they close" "headRefName,body,closingIssuesReferences" "$calls"
 has "the closed issues are asked for with the PRs that closed them" "closedByPullRequestsReferences" "$calls"
 
+# ---- a goal naming no issue: what its session merges is credited from the note the rules ask for (#2011) ----
+# On 2026-10-31 one session worked a goal naming no issue, merged 8 PRs closing 9 issues, and noted
+# each step as kind progress, text only, as the overnight rules then asked; the report credits a merge
+# only from a done note naming its repo and PR, so all 17 were listed as unaccounted. The done note
+# here is the overnight rules' own example (scope-modes' driver.ts), written through the writer as
+# a session would, so the rules and the report are held to one contract (L271).
+U3="cccc3333-0000-4000-8000-000000000003"
+DRIVER="$DIR/../mods/scope-modes/hooks/driver.ts"
+# The rules are a single quoted string in the source, so their quotes are escaped there.
+src="$(sed "s/\\\\'/'/g" "$DRIVER")"; example=""
+done_re="sleep_note '(\\{\"kind\":\"done\"[^']*\\})'"
+[[ "$src" =~ $done_re ]] && example="${BASH_REMATCH[1]}"
+has "the overnight rules show the done note a goal naming no issue writes for a merge" '"kind":"done"' "$example"
+line="${example//owner\/name/o/n}"; line="${line//<its number>/80}"; line="${line//<what it did>/Merged the parser}"
+record g15 '["'"$U3"'"]' "$SLEEPDIR/ended/g15.json"
+CLAUDE_CODE_SESSION_ID=$U3 NOW=1791442000000 py note --record "$SLEEPDIR/ended/g15.json" --line '{"kind":"heartbeat","repo":"o/n"}' >/dev/null 2>&1
+CLAUDE_CODE_SESSION_ID=$U3 NOW=1791443000000 py note --record "$SLEEPDIR/ended/g15.json" --line '{"kind":"progress","text":"Wrote the parser"}' >/dev/null 2>&1
+if [ -n "$example" ]; then
+  CLAUDE_CODE_SESSION_ID=$U3 NOW=1791444000000 py note --record "$SLEEPDIR/ended/g15.json" --line "$line" >/dev/null 2>&1; rc=$?
+  check_eq "the rules' done note is accepted by the writer" 0 "$rc"
+fi
+CLAUDE_CODE_SESSION_ID=$U3 NOW=1791457000000 py note --record "$SLEEPDIR/ended/g15.json" --line '{"kind":"stopped","text":"goal met"}' >/dev/null 2>&1
+echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"'"$U3"'","generation":"g15"}' >> "$SLEEPDIR/notes/g15.jsonl"
+{
+  printf '['
+  pr 80 "The parser" 20 "fix-parser" 'Nothing.' "[$(ref 90 o/n)]"; printf ,
+  pr 81 "Nobody noted" 21 "fix-other" 'Nothing.' "[$(ref 91 o/n)]"
+  printf ']'
+} > "$FAKE/gh-pr-o_n"
+{
+  printf '['
+  iss 90 "Parser issue" 22 "[$(ref 80 o/n)]"; printf ,
+  iss 91 "Other issue" 23 "[$(ref 81 o/n)]"
+  printf ']'
+} > "$FAKE/gh-issue-o_n"
+NOW=$WOKE py render --record "$SLEEPDIR/ended/g15.json" --final >/dev/null 2>&1
+r="$(report_of g15)"
+look="$(printf '%s\n' "$r" | sed -n '/^## Needs a look/,/^## /p')"
+has "#2011 the merge the session noted is done" "o/n PR #80 The parser, merged 3:20 AM ET" "$r"
+lacks "#2011 and is never listed as unaccounted" "o/n PR #80 merged with no session accounting for it" "$look"
+lacks "#2011 nor is the issue it closed" "o/n issue #90 closed with no session accounting for it" "$look"
+has "#2011 a merge no session noted is still listed" "o/n PR #81 merged with no session accounting for it." "$look"
+has "#2011 and so is the issue it closed" "o/n issue #91 closed with no session accounting for it (by PR #81)." "$look"
+
 # ---- a worker whose notes named nobody is heard from all the same (#1167) ----
 # The overnight session's own notes carry its id though the caller gave none, so the report counts
 # the worker as heard from rather than saying it never wrote a note.
@@ -746,11 +801,11 @@ has "naming the session" "aaaa1111" "$out"
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
 # read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
-check_eq "every report this suite wrote carries its stamp" 12 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "every report this suite wrote carries its stamp" 13 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
 leaked="$(find "$REAL_DOWNLOADS" -maxdepth 1 -type f -newer "$WORK/began" -size -1024k -exec grep -l -F -- "$STAMP" {} + 2>/dev/null)"
 check_eq "the real Downloads gained nothing this suite wrote" "" "$leaked"
 # Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
-check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
+check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g15.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
 echo
 echo "passed: $pass, failed: $fail"

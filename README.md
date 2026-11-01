@@ -3676,7 +3676,8 @@ review (#1283).
 issue. Sessions with a goal that are sitting idle at their prompt are told to start as sleep begins. A goal that names issues or a milestone is worked one of its issues at a time, each in a
 worktree of its own, as in the daytime: test first, a pull request, and a merge and deploy only
 where the list below allows. A goal that names no issue is worked as a task in a worktree of its
-own, each step it finishes listed in the report. When the goal is met, or nothing more toward it can
+own, each step it finishes listed in the report, and each pull request it merges noted by its
+number, so the report credits that merge and the issues it closes. When the goal is met, or nothing more toward it can
 be done tonight, the session stops with a note. It approves its own permission prompts, except for anything
 banned below. It writes for you only into the report: a question it needs you to answer, a proposed
 issue or lesson, or anything it noticed. An issue that takes two attempts or two hours of work is
