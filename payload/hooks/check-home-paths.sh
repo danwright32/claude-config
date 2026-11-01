@@ -118,6 +118,7 @@ skill_targets=()  # the top level entries of skills/ the sync carries
 for d in "${SYNCED_DIRS[@]}"; do
   [ -d "$ROOT/$d" ] || continue
   if [ "$d" != skills ]; then targets+=("$ROOT/$d"); continue; fi
+  loop_input="$(find "$ROOT/skills" -mindepth 1 -maxdepth 1 2>/dev/null | sort)" || true
   while IFS= read -r e; do
     [ -n "$e" ] || continue
     _base="${e##*/}"
@@ -126,11 +127,16 @@ for d in "${SYNCED_DIRS[@]}"; do
       [ "$_base" = "$_n" ] && { _skip=1; break; }
     done
     [ "$_skip" -eq 1 ] || skill_targets+=("$e")
-  done < <(find "$ROOT/skills" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 done
+loop_input="$(find "$ROOT" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort)" || true
 while IFS= read -r f; do
   [ -n "$f" ] && targets+=("$f")
-done < <(find "$ROOT" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort)
+done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 
 # The deeper exclusions, as grep options and as find pruning, so the lines scanned and the files
 # counted describe the same set.

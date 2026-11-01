@@ -210,7 +210,9 @@ _ls_push_dests(){   # $1 = command  $2 = repo | words
       if [ -n "$d" ]; then d="${d#*/}"; else d="$(_ls_cur_branch)"; fi
       [ -n "$d" ] && printf '%s\037%s\n' "$remote" "$d"
     fi
-  done < <(printf '%s' "$segs")
+  done <<LOOP_INPUT
+$segs
+LOOP_INPUT
 }
 if ! ps_has_override "$cmd" ALLOW_DIRECT_MAIN_PUSH; then
   _ls_hit=""; _ls_blind=""

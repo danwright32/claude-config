@@ -1401,6 +1401,27 @@ a Mac and published by the sync with no pull request in between (L280). It could
 the last tracked mention was gone, or every send would have been refused. A scan that cannot judge
 (no python3, an unreadable registry, a file listing that failed or found nothing) refuses the send.
 
+Text that is never a file (#1995). This repository squash merges with the commit messages as the
+body and the title as the subject, so a name in a message lands in main without passing any of the
+places above; on 2026-10-31 one reached a builder's commit and was caught only by reading it. The
+scanner gained `--texts0-from`, a NUL separated stream of label and text that `git log -z
+--format='commit %h%x00%B'` writes as it stands, so a message is judged by the same rule and reported
+in the same words as a file, by label and line. Two places ask it, each the one that already reads
+that text. `scanners-before-push.sh`, already the push gate for this repository's published content,
+reads the messages of the commits a push adds through `lib/work-names-messages.sh`: what is on
+neither the upstream nor the remote's default branch, so nothing already published is judged again.
+It asks first, because a tree pass is remembered by tree and a reworded message keeps the tree, so it
+must never ride on that memory. A push chained after its own commit is refused, since that message
+does not exist yet and judging only the commits already made would pass the one most likely to carry
+the name. `check-work-names-merge.sh` is a merge gate of its own rather than a part of
+`check-closing-merge.sh`, which already reads the body: that gate judges every repository and has an
+override for a body quoting the phrasing, and folding this in would have let one override skip both
+rules. It judges a repository whose pull request base holds `payload/hooks/lib/work-names.py`, read at
+the base so a pull request cannot remove what judges it, which keeps it off work repositories that
+name their own organisation. The merge gate has no override, and the push refusal offers none,
+though the push gate's own `SKIP_SCANNERS_CHECK=1` still skips everything it does; the merge gate
+reads the commit messages too, so a message pushed past the one is judged by the other.
+
 So does a copy of the tool with no scanner beside it (#1621). #1568 let that send go ahead with a
 notice, on the reasoning that only a copy run outside its checkout lacks the scanner and several
 suites run one on purpose. That made the guard fail open in exactly the state nothing else watches,

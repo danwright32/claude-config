@@ -87,6 +87,7 @@ load_window_note(){   # $1 = now
   local act="" last="" last_end=0 e
   case "$now" in ''|*[!0-9]*) return 0 ;; esac
   case "$recent" in ''|*[!0-9]*) recent=900 ;; esac
+  local loop_input; loop_input="$(load_window_list)" || true
   while IFS=$'\t' read -r id st dl en pid w s how lb; do
     case "$st$dl" in ''|*[!0-9]*) continue ;; esac
     if [ "$en" = "-" ] && [ "$now" -lt "$dl" ] && [ "$now" -ge "$st" ]; then act="$id"$'\t'"$st"$'\t'"$dl"$'\t'"$pid"$'\t'"$w"$'\t'"$s"$'\t'"$lb"; continue; fi
@@ -96,7 +97,9 @@ load_window_note(){   # $1 = now
     if [ $(( now - e )) -le "$recent" ] && [ "$e" -ge "$last_end" ]; then
       last_end="$e"; last="$st"$'\t'"$e"$'\t'"$en"$'\t'"$pid"$'\t'"$w"$'\t'"$s"$'\t'"$lb"
     fi
-  done < <(load_window_list)
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   if [ -n "$act" ]; then
     IFS=$'\t' read -r id st dl pid w s lb <<<"$act"
     printf 'A deliberate load window is running on this Mac (tools/load-window.sh, pid %s, %s busy and %s process launching workers, "%s"), from %s until %s at the latest, so a timing or GitHub read failure here may have measured that load: run it again after %s before treating it as broken.' \

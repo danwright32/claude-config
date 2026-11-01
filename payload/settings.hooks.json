@@ -133,6 +133,13 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-work-names-merge.sh",
+            "timeout": 30,
+            "onFailure": "block",
+            "statusMessage": "Checking the PR's title, description and commit messages name no work organisation"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-verification-run.sh",
             "timeout": 30,
             "onFailure": "block",

@@ -548,10 +548,13 @@ mt_is_pr_merge() {  # $1 = command
       i=$((i + 1))
     done
   else
+    local loop_input; loop_input="$(ps__crude_cut "$1")" || true
     while IFS= read -r seg; do
       ps_runs_gh "$seg" pr merge && return 0
       ps_runs_gh "$seg" api && api=1
-    done < <(ps__crude_cut "$1")
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   fi
   [ "$api" -eq 1 ] || return 1
   mt_reader_missing && return 0
@@ -572,9 +575,12 @@ mt_runs_merge() {  # $1 = command
   ps__read "$1" || :
   mt_is_pr_merge "$1" && return 0
   local seg
+  local loop_input; loop_input="$(mt_command_segments "$1")" || true
   while IFS= read -r seg; do
     mt_segment_runs_wrapper "$seg" && return 0
-  done < <(mt_command_segments "$1")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   return 1
 }
 
@@ -608,6 +614,7 @@ mt_pr_number() {  # $1 = command
   # resolves from the branch. The tempting fallback, taking the first run of digits
   # anywhere in the segment, reads `--timeout 900 42` as pull request 900, and a gate
   # that reads the wrong pull request's record is worse than one that reads none (L75).
+  local loop_input; loop_input="$(mt_command_segments "$1")" || true
   while IFS= read -r seg; do
     mt_segment_runs_wrapper "$seg" || continue
     prev=""
@@ -629,7 +636,9 @@ MTEOF
         *) printf '%s' "$tok"; return ;;
       esac
     done
-  done < <(mt_command_segments "$1")
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
 }
 
 # Resolve the directory the merge will actually run in.
@@ -1211,17 +1220,10 @@ mt_review_checkout() {  # $1 = the directory the merge runs in, $2 = the reposit
     fi
   fi
   [ -n "${AR_PR_OPENED:-}" ] || . "$_MT_LIB/ai-review-common.sh" 2>/dev/null
-  while IFS= read -r c; do
-    [ -n "$c" ] && [ -d "$c" ] || continue
-    case "$seen" in *$'\n'"$c"$'\n'*) continue ;; esac
-    seen="$seen$c"$'\n'
-    top="$(git -C "$c" rev-parse --show-toplevel 2>/dev/null)" || continue
-    [ "$(cd "$top" && mt_remote_slug | tr '[:upper:]' '[:lower:]')" = "$want" ] || continue
-    MT_REVIEW_DIR="$top"; MT_REVIEW_ELSEWHERE=1
-    return 0
-  done < <(
-    # The recorded folders, newest first: the pull request's own opening, then every opening, then
-    # every review. Column 4 is the folder in both ledgers, column 6 the opening's pull request URL.
+  # The recorded folders, newest first: the pull request's own opening, then every opening, then
+  # every review. Column 4 is the folder in both ledgers, column 6 the opening's pull request URL.
+  local loop_input
+  loop_input="$(
     for f in "${AR_PR_OPENED:-}" "${AR_PR_LEDGER:-}"; do
       [ -n "$f" ] && [ -f "$f" ] || continue
       awk -F '\t' -v u="$url" -v first="$([ "$f" = "${AR_PR_OPENED:-}" ] && echo 1)" '
@@ -1230,7 +1232,18 @@ mt_review_checkout() {  # $1 = the directory the merge runs in, $2 = the reposit
               for (i = NR; i > 0; i--) print d[i] }' "$f" 2>/dev/null
     done
     mt_checkout_candidates "$d"
-  )
+  )" || true
+  while IFS= read -r c; do
+    [ -n "$c" ] && [ -d "$c" ] || continue
+    case "$seen" in *$'\n'"$c"$'\n'*) continue ;; esac
+    seen="$seen$c"$'\n'
+    top="$(git -C "$c" rev-parse --show-toplevel 2>/dev/null)" || continue
+    [ "$(cd "$top" && mt_remote_slug | tr '[:upper:]' '[:lower:]')" = "$want" ] || continue
+    MT_REVIEW_DIR="$top"; MT_REVIEW_ELSEWHERE=1
+    return 0
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   local where="it runs in $d, which is not a checkout of $named"
   [ -n "$own" ] && where="it runs in $d, which is a checkout of $own, not of $named"
   MT_REVIEW_WHY="this merge names $named, but $where. The lessons review reads the pull request's branch from a checkout of its repository, and no checkout of $named is known on this Mac: none of the folders the lessons review has recorded working in, and none directly inside $d, is one. Run the same command from a checkout of $named (cd into it first, or clone it). Override, explained to Dan first: SKIP_PR_REVIEW=1 <the same command>."

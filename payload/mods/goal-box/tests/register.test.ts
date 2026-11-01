@@ -369,7 +369,7 @@ test('no other answer confirms a background merge: a failed call, another number
     ['an answer about another pull request', answer(4285), /#4285/],
     ['an answer whose number and link disagree', answer(4284, { url: `https://github.com/${WORK_REPO}/pull/4285` }), /pull\/4285/],
     ['an answer about another repository', answer(4284, { url: 'https://github.com/acme-hq/other/pull/4284' }), /acme-hq\/other/],
-    ['a pull request still open', answer(4284, { state: 'OPEN', mergedAt: null }), /OPEN/],
+    ['a pull request still open', answer(4284, { state: 'OPEN', mergedAt: null }), /GitHub says it is still open/],
     ['a merge with no time', answer(4284, { mergedAt: null }), /no time/],
     ['an answer that is not JSON', { exitCode: 0, stdout: 'MERGED' }, /could not be read/],
   ]
@@ -379,6 +379,30 @@ test('no other answer confirms a background merge: a failed call, another number
     expect({ what, unconfirmed: /the merge of acme-hq\/booking#4284 has not been confirmed yet/.test(deny), why: why.test(deny) }).toEqual({ what, unconfirmed: true, why: true })
   }
   w.view = q => answer(Number(q.pr))
+  expect((await box($, ASKED)).deny).toBeUndefined()
+})
+
+// #1991: is it live's turn end and the box ask GitHub through one check (mod-kit's prmerged.ts), so
+// they settle a background merge alike: one GitHub says was closed unmerged, or whose number is no
+// pull request in that repository, merged nothing, is let go at is it live's turn end, and owes no
+// card, so it holds the box no longer.
+test('a background merge GitHub says was closed, or names no pull request, holds nothing, as is it live lets it go', withLive, async ($, on) => {
+  const { w } = world(on, { owed: [waiting(4284)] })
+  await start($)
+  await says($, 'Finish milestone 77')
+  w.view = () => answer(4284, { state: 'CLOSED', mergedAt: null })
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  // A box is shown once per request, so the next answer is asked under a new one.
+  await says($, 'Finish milestone 78')
+  w.view = () => ({ exitCode: 1, stdout: '', stderr: 'GraphQL: Could not resolve to a PullRequest with the number of 4284. (repository.pullRequest)' })
+  expect((await box($, ASKED)).deny).toBeUndefined()
+})
+
+test('a background merge GitHub says merged before the helper run started still counts, settled by a card made since it merged (#1991)', withLive, async ($, on) => {
+  const earlier = (at: number) => answer(4284, { mergedAt: new Date(at).toISOString() })
+  world(on, { owed: [waiting(4284)], verdicts: { [`${WORK_REPO}#4284`]: { state: 'live', at: RAN - 3_000_000 } }, view: () => earlier(RAN - 3_600_000) })
+  await start($)
+  await says($, 'Finish milestone 77')
   expect((await box($, ASKED)).deny).toBeUndefined()
 })
 

@@ -96,8 +96,11 @@ project_rules_behind() {
   whole_above_zero "$ahead" ahead 2>/dev/null || ahead=0
 
   # 3. Which rule files origin changed since this checkout's commit.
-  local files=() changed
-  while IFS= read -r changed; do [ -n "$changed" ] && files+=("$changed"); done < <(_prb_rule_files "$primary")
+  local files=() changed loop_input
+  loop_input="$(_prb_rule_files "$primary")" || true
+  while IFS= read -r changed; do [ -n "$changed" ] && files+=("$changed"); done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   changed="$(git -C "$primary" --literal-pathspecs diff --name-only HEAD "$origin_ref" -- "${files[@]}" .claude/rules 2>/dev/null)" || return 0
   [ -n "$changed" ] || return 0
 

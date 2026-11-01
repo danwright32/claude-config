@@ -116,5 +116,7 @@ segs="$(ps__shell_segments "$cmd")"
 while IFS= read -r -d $'\x1e' seg; do
   case "$seg" in *watch*) ;; *) continue ;; esac
   too_fast "$seg" && exit 2
-done < <(printf '%s' "$segs")
+done <<LOOP_INPUT
+$segs
+LOOP_INPUT
 exit 0
