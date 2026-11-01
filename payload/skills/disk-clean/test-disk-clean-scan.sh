@@ -329,6 +329,49 @@ run_scan --only caches
 check "every size measured in full keeps the plain total" "$(has "$OUT_TEXT" "App caches: 1 offerable (12 KB), 0 not offerable, 0 unmeasured.")"
 
 # ================================================================================================
+# 6c. The "at least" rule has one copy, lib/disk-clean-units.sh's tally (#1866, L370)
+# ================================================================================================
+# The closing summary above, the low space warning's scan_note (check-free-space.sh), the review
+# page and the review checker all total offerable items through dcu_tally and take the wording from
+# its kind, so they cannot drift. Each one's own suite drives the cases through its surface.
+. "$DIR/../../hooks/lib/disk-clean-units.sh" || check "the units library is there to source" "could not source it"
+# One offerable item per line: key, bytes, size (bytes empty when no size was read).
+tally_of() { # <key> <rows>
+  awk -F '\t' -v k="$1" "${DCU_AWK_TALLY:-}"'{ dcu_tally($1, $2, $3) } END { print dcu_tally_line(k) }' <<< "$2"
+}
+rows="$(printf 'a\t2048\tmeasured\na\t1024\treported\na\t1024\t\nb\t1024\tmeasured\nb\t\tunread\nc\t\tunread\nc\t\tdenied\nd\t5120\tpartial\ne\t3072\tdenied')"
+check "a tally counts offerable items, unsized items, KiB and whether any size was partial (all read in full)" "$(eq "$(tally_of a "$rows")" "3 0 4 0")"
+check "an item with no size is counted as unsized and adds no KiB" "$(eq "$(tally_of b "$rows")" "2 1 1 0")"
+check "items with no size at all total 0 KiB with every one unsized" "$(eq "$(tally_of c "$rows")" "2 2 0 0")"
+check "a partial size is a lower bound" "$(eq "$(tally_of d "$rows")" "1 0 5 1")"
+check "a size with bytes but read neither measured nor reported is a lower bound too" "$(eq "$(tally_of e "$rows")" "1 0 3 1")"
+check "a key with no items tallies to nothing" "$(eq "$(tally_of z "$rows")" "0 0 0 0")"
+kind() { dcu_total_kind "$@" 2>/dev/null || echo "failed"; }
+check "every offerable item unsized: the total is unknown, never 0" "$(eq "$(kind 2 2 0)" unknown)"
+check "one item unsized among sized ones: at least" "$(eq "$(kind 2 1 0)" lower)"
+check "a partial size: at least" "$(eq "$(kind 2 0 1)" lower)"
+check "every size read in full: exact" "$(eq "$(kind 2 0 0)" exact)"
+check "nothing to total: exact (the caller says 0, or nothing found)" "$(eq "$(kind 0 0 0)" exact)"
+check "a tally it cannot read is unknown, never a figure" "$(eq "$(kind x 0 0)" unknown)"
+kind_in_awk() { # <key> <rows>
+  awk -F '\t' -v k="$1" "${DCU_AWK_TALLY:-}"'{ dcu_tally($1, $2, $3) } END { print dcu_tally_kind(k) }' <<< "$2"
+}
+check "the awk reading of a tally is the same rule: unknown, lower, exact, exact for nothing" \
+  "$(eq "$(kind_in_awk c "$rows") $(kind_in_awk b "$rows") $(kind_in_awk d "$rows") $(kind_in_awk a "$rows") $(kind_in_awk z "$rows")" "unknown lower lower exact exact")"
+# Every place disk-clean totals what can go calls the tally and reads its wording from it: the scan's
+# closing summary, the low space warning, the review page's kind totals, the review checker's
+# selection totals (the last two joined #1866 after carrying a narrower rule of their own).
+for f in "$SCAN" "$DIR/../../hooks/check-free-space.sh" "$DIR/review-page.sh" "$DIR/review-check.sh"; do
+  check "$(basename "$f") totals through dcu_tally and words it through the tally's kind" \
+    "$(grep -q 'dcu_tally(' "$f" && grep -qE 'dcu_tally_kind\(|dcu_total_kind ' "$f" && echo ok || echo "it does not call both")"
+done
+# No second copy of the rule anywhere disk-clean lives: the size tests that make a total a lower
+# bound (the shared one, and the narrower one the review page and checker kept) are written only in
+# the units library. Each pattern is split in two here so this file does not match itself.
+copies="$(grep -r -l --include='*.sh' -F -e '!= "report''ed"' -e '$8 == "part''ial"' "$DIR" "$DIR/../../hooks" | grep -v '/disk-clean-units\.sh$')"
+check "no disk-clean script but the units library carries the at least rule" "$([ -z "$copies" ] && echo ok || echo "copies in: $copies")"
+
+# ================================================================================================
 # 7. Thousands of items (L101): every one recorded, sized in one batch, in bounded time
 # ================================================================================================
 fresh
