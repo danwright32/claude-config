@@ -18,7 +18,7 @@ payload/hooks/test-lib-self-locate.sh
 payload/hooks/test-pipefail-shortcircuit.sh
 payload/hooks/test-push-changes.sh
 payload/hooks/test-repo-files.sh
-payload/hooks/test-run-all-tests.sh
+payload/hooks/test-run-all-tests-real-tree.sh
 payload/hooks/test-suite-result-line.sh
 payload/hooks/test-suite-scratch-isolation.sh
 payload/hooks/test-two-file-awk.sh
@@ -29,4 +29,5 @@ tests/test-claude-sync.sh
 tests/test-dev-update-registry.sh
 tests/test-moved-to-local.sh
 tests/test-payload-secret-scan.sh
+tests/test-stat-order.sh
 tests/test-work-names-tree.sh

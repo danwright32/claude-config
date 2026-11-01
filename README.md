@@ -144,9 +144,10 @@ Plugin-managed skills are excluded so plugin updates don't cause churn, and so i
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
 folder under `skills/`, where Claude Code sets aside a skill it removes or replaces (#1009). The
 lists live in `payload/hooks/lib/unmanaged-skills.sh` (`PLUGIN_SKILLS`, `PLATFORM_SKILL_DIRS` and
-`SKILL_TRASH_DIRS`), which `claude-sync` and `hooks/check-home-paths.sh` both read, so the check
-never judges a skill the sync does not send. A send never carries them and a pull never deletes a
-Mac's own copy. Edit that file to change them.
+`SKILL_TRASH_DIRS`), which `claude-sync` (its copy and its check of what a pull has applied, #2004),
+`hooks/check-home-paths.sh` and the skill scans in `hooks/test-gates-fail-closed.sh` and
+`hooks/test-python-bad-bytes.sh` all read (#2001), so no check judges a skill the sync does not send.
+A send never carries them and a pull never deletes a Mac's own copy. Edit that file to change them.
 
 A send never puts back a file the shared repo deleted when this Mac's copy is a leftover: the
 version the repo deleted, or an earlier version nothing on this Mac has written since the deletion
@@ -1759,7 +1760,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 
 | Gate | What it costs on a push |
 | --- | --- |
-| `scanners-before-push.sh` (#518) | 2026-10-28: killed at its declared 180 second bound on three cold readings of three, so not a measurement, at load average 142 to 148. Earlier: 25.4 to 26.5 seconds on a branch push at load 12 to 18 on 2026-10-13 (the timing below), the gate every push waits on; 0.6 seconds on a repeat attempt over an unchanged tree, 2026-09-21. Since #1995 it first reads the messages of the commits the push adds, before any suite: 0.137 to 0.161 seconds over one commit, five readings on 2026-10-31 at load average 61, each including two python starts for the timing |
+| `scanners-before-push.sh` (#518) | 2026-10-28: killed at its declared 180 second bound on three cold readings of three, so not a measurement, at load average 142 to 148. Earlier: 25.4 to 26.5 seconds on a branch push at load 12 to 18 on 2026-10-13 (the timing below), the gate every push waits on; 0.6 seconds on a repeat attempt over an unchanged tree, 2026-09-21. Since #1995 it first reads the messages of the commits the push adds, before any suite: 0.137 to 0.161 seconds over one commit, five readings on 2026-10-31 at load average 61, each including two python starts for the timing. After #1997 took `test-run-all-tests.sh` (510 seconds as the gate recorded it) out of its selection: every scanner finished inside the 150 second budget at load average 281 on 2026-10-31, the slowest 89 seconds, one reading, its total taken up by waiting on the sync suite's lock that another run held |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 | `require-tests-before-push.sh` | not timed on 2026-10-28, since it can ask a model. Earlier: 0.3 seconds on each of two pushes on 2026-09-21, when the change carried a test and it asked no model; a sonnet call of up to 120 seconds when it has to ask |
@@ -1932,6 +1933,25 @@ delivers it names that symbol, as a whole word, on more than one line. A finding
 a file the push does not carry, or any other kind stands as the judge gave it. A withdrawn finding
 is listed under its own heading beside a block, and recorded in the row's detail as `withdrawn:`
 beside a pass, so how often it fires is read from the record.
+
+The test judge is shown at most 60,000 bytes of diff in one call, test changes first. On 2026-10-31
+a push carrying 34,407 bytes of test changes beside a large code change was shown the first 30,000,
+the judge called a change untested whose test sat past the cut, and the push got through only one
+commit at a time (#1998). Now, when the first call was cut short of the tests and calls something
+untested, the rest of the test changes is split into parts of up to 60,000 bytes less the code the
+first call saw, and each part goes to a further call with that code and the changes still called
+untested, which answers which of them the part tests. A part that starts inside a file repeats up
+to 4 KB of the lines before it, so a test the split cuts through is whole in one part. A change is
+refused as untested only when every part has been read and none tests it, and the refusal says how
+many parts it was read in. At most three further calls are made, and none is started with fewer
+than 20 seconds left of the 110 the gate allows itself inside the 120 its registration declares;
+whatever was not read, and a further call that fails, is refused as could not judge, naming the
+test files no reading was shown in full. That path refused before, so it fails closed where the
+first call fails open. A push of the issue's shape cost two calls, sent 60,781 and 39,788 bytes,
+measured on 2026-11-01 with the suite's stub judge (these limits are settings, not measured); the first
+call is now told the rest is read separately and to judge only what it was shown, where it used to
+be told not to call untested anything whose test might be past the cut, which invited a pass over
+tests nobody read.
 
 Every push either gate reaches is recorded, overrides included (#1075), one line each in
 `~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
@@ -2291,8 +2311,11 @@ its two exact shapes because claude-sync reads them. It is the one shape for tha
 says so any other way (a line whose first word is `UNMEASURED`, `UNMEASURED-SECTIONS <n>`, a
 `SUITE-NOTE` or `note:` line carrying the word, or the agreed line indented) is FAILED, the line
 quoted and the agreed shape named, because every one of those spellings was once dropped and its
-suite read as a plain pass. `test-run-all-tests.sh` also reads every tracked `test-*.sh` and
-`*_tests.py` for such a print, so a branch that never runs on the machine at hand is caught too.
+suite read as a plain pass. `test-run-all-tests-real-tree.sh` also reads every `test-*.sh` and
+`*_tests.py` the repository holds, committed or not, for such a print, so a branch that never runs
+on the machine at hand is caught too. It is split from `test-run-all-tests.sh` so the gate before a
+push runs the checks that read this repository without the runner suite's fixture runs, which took
+about 500 seconds against that gate's 150 second budget (#1997).
 A part that was not measured is counted as nothing: the same scan fails a suite that also passes a
 check declaring it (`check "<the part> could not be measured here" ok` alone on its line, or with
 the word in the check's name), while a check that TESTS a report of unmeasured, after `&&` or in a
@@ -2644,6 +2667,14 @@ CI's environment step is the list the container is built from, and
 invokes an interpreter or tool from its checked set (python3, perl, node, jq, rsync, pgrep and a few
 more) that the step does not name (#624).
 
+`tests/test-stat-order.sh` fails when claude-sync or any shell file in the repository asks BSD
+stat's `-f` before GNU's `-c`. On the Linux runner `stat -f` means "file system status", so a BSD
+first read answers with a block about the filesystem instead of failing, and only CI could see it.
+The rule, which accepts GNU first on one line or BSD in the `else` of an `if stat -c` probe, lives in
+`hooks/lib/stat-order.sh`, whose fixtures are in `hooks/test-stat-order-rule.sh`. The disk cleaning skill's own files are left to that skill's guard, which
+names its one BSD only read on purpose; this suite checks a guard is there. The readers it fixed are
+also run under stand ins shaped like each stat, since a Mac never runs the GNU half (#2003).
+
 The older knob still exists for when you want everything up to a point rather than one section:
 
 ```bash
@@ -2935,7 +2966,9 @@ each category's status. A walk that could not read a folder records each one by 
 reason in `walk_unreadable` (Operation not permitted for a folder macOS protects, Permission denied
 for its own permissions), and the scan prints the first ten (#1903). It refuses (exit 75) while a `disk-remove.sh` run holds its lock. Its suites
 are `skills/disk-clean/test-disk-clean-scan.sh` and `test-disk-clean-categories.sh`, both through the
-disk-clean harness.
+disk-clean harness. `test-disk-clean-stat-order.sh` reads every disk-clean script and test, derived
+from where they live, and fails on a `stat` that asks BSD's `-f` before GNU's `-c`, which is right
+on the Mac and wrong on the Linux runner (#1874).
 
 ## Removing anything: disk-remove.sh
 

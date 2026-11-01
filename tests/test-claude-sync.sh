@@ -2622,8 +2622,7 @@ fi
 # (L70). That the two agree is a separate and much weaker claim, and it is checked once, on its own.
 _suite_mtime(){   # path -> unix timestamp, or nothing
   local m
-  m="$(stat -f %m "$1" 2>/dev/null || true)"
-  case "$m" in ''|*[!0-9]*) m="$(stat -c %Y "$1" 2>/dev/null || true)" ;; esac
+  m="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true)"
   case "$m" in ''|*[!0-9]*) return 0 ;; esac
   printf '%s\n' "$m"
 }
@@ -3726,6 +3725,60 @@ check "#1009 the pull brings the real skill" "[ -f '$TRHB/skills/real-skill/SKIL
 check "#1009 but not a .trash folder the payload holds" "[ ! -e '$TRHB/skills/.trash/stray' ]"
 check "#1009 and leaves this Mac's own .trash folder where it is" \
   "[ -f '$TRHB/skills/.trash/1791477119124-1742-63QYDV/deep-research/SKILL.md' ]"
+
+section "== the applied check reads the excludes as rsync does, at any depth or only at the top (#2004) =="
+# payload_path_applied used to parse skill_excludes itself and match each name only at the top of
+# skills/, while rsync drops an unanchored name (.trash, a plugin skill) at ANY depth. So a .trash
+# folder inside a real skill, which the apply never writes, read as config this Mac had not applied,
+# and status, the staging and the behind check all held it as unapplied (L263). It now reads the
+# names through skill_exclude_names, the shared reading. The control: `synced` is anchored to the
+# top of skills/, so a `synced` folder inside a real skill is ordinary config and is still judged.
+SEB="$WORK/sx2004-bare.git"; git init -q --bare -b main "$SEB"
+SED_="$WORK/sx2004-dev"; git clone -q "$SEB" "$SED_" 2>/dev/null
+mkdir -p "$SED_/payload"; printf '# rules\n' > "$SED_/payload/CLAUDE.md"
+mkskill "$SED_/payload/skills/real-skill/SKILL.md" 'a skill that travels'
+git -C "$SED_" add payload && git -C "$SED_" -c user.name=t -c user.email=t@e commit -q -m base 2>/dev/null && git -C "$SED_" push -q origin main 2>/dev/null
+SEC="$WORK/sx2004-clone"; git clone -q "$SEB" "$SEC" 2>/dev/null
+SEH="$WORK/sx2004-home"; mkdir -p "$SEH"; echo '{"hooks":{}}' > "$SEH/settings.json"
+CLAUDE_HOME="$SEH" SYNC_REPO="$SEC" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+mkdir -p "$SED_/payload/skills/real-skill/.trash" "$SED_/payload/skills/real-skill/synced" "$SED_/payload/skills/synced/acct"
+echo 'an older file set aside' > "$SED_/payload/skills/real-skill/.trash/old.md"
+echo 'ordinary config in a folder that happens to be called synced' > "$SED_/payload/skills/real-skill/synced/kept.md"
+echo 'a downloaded skill' > "$SED_/payload/skills/synced/acct/dl.md"
+git -C "$SED_" add payload && git -C "$SED_" -c user.name=t -c user.email=t@e commit -q -m 'nested excludes' 2>/dev/null && git -C "$SED_" push -q origin main 2>/dev/null
+# The clone moves to the new commit WITHOUT an apply, which is the state status reports on.
+git -C "$SEC" pull -q origin main 2>/dev/null
+check "#2004 fixture: the clone holds all three files and this Mac has none of them" \
+  "[ -f '$SEC/payload/skills/real-skill/.trash/old.md' ] && [ -f '$SEC/payload/skills/real-skill/synced/kept.md' ] && [ -f '$SEC/payload/skills/synced/acct/dl.md' ] && [ ! -e '$SEH/skills/real-skill/.trash' ] && [ ! -e '$SEH/skills/real-skill/synced' ]"
+out_se1="$(CLAUDE_HOME="$SEH" SYNC_REPO="$SEC" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2004 status before the apply: $out_se1"
+check "#2004 a folder named for a top only exclude, inside a real skill, is still judged and listed as not applied" \
+  "line_has \"\$out_se1\" 'skills/real-skill/synced/kept\.md' 'has not applied'"
+check "#2004 a .trash folder inside a real skill is not listed as config this Mac has not applied" \
+  "! line_has \"\$out_se1\" 'skills/real-skill/\.trash/old\.md' 'has not applied'"
+check "#2004 nor is the top level synced folder" \
+  "! line_has \"\$out_se1\" 'skills/synced/acct/dl\.md' 'has not applied'"
+# And the copy agrees with the check: the pull writes the nested synced file and not the nested .trash.
+CLAUDE_HOME="$SEH" SYNC_REPO="$SEC" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
+check "#2004 the pull writes the synced folder inside the real skill" "[ -f '$SEH/skills/real-skill/synced/kept.md' ]"
+check "#2004 and never the .trash folder inside it, as the check judged" "[ ! -e '$SEH/skills/real-skill/.trash' ]"
+# THE FAILURE PATH. The filter's empty answer means "left out", so a filter that FAILS (the list
+# unreadable, so the tool's stand in runs and exits) must answer "not applied", or a broken reader
+# would read every skills path as excluded and wave it through. Called directly: every run that
+# reaches skills/ stops first at require_unmanaged_skill_list, so the stand in is the last line.
+SE_FN_OK="$WORK/sx2004-fn-ok.sh"; SE_FN_BAD="$WORK/sx2004-fn-bad.sh"
+sed -n '/^payload_path_applied(){/,/^}/p' "$SCRIPT" > "$SE_FN_OK"
+sed -n '/^unmanaged_skill_list_unreadable(){/,/^}/p;/^  carried_skill_paths(){ /p;/^payload_path_applied(){/,/^}/p' "$SCRIPT" > "$SE_FN_BAD"
+se_rc_ok=0
+PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" bash -c 'set -eo pipefail; . "$1"; . "$2"; payload_path_applied skills/real-skill/.trash/old.md' _ \
+  "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$SE_FN_OK" >/dev/null 2>&1 || se_rc_ok=$?
+se_rc_bad=0
+se_err_bad="$(PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" UNMANAGED_SKILLS_LIB=/nowhere bash -c 'set -eo pipefail; . "$1"; payload_path_applied skills/real-skill/.trash/old.md' _ "$SE_FN_BAD" 2>&1)" || se_rc_bad=$?
+dbg "#2004 failure path: ok rc=$se_rc_ok, bad rc=$se_rc_bad, said: $se_err_bad"
+check "#2004 fixture: the tool's stand in for an unreadable list was extracted" "grep -q '^  carried_skill_paths(){ ' '$SE_FN_BAD'"
+check "#2004 with the shared list read, the nested .trash path is judged left out" "[ \"\$se_rc_ok\" -eq 0 ]"
+check "#2004 with the list unreadable, it answers not applied rather than left out, and says why" \
+  "[ \"\$se_rc_bad\" -eq 1 ] && line_has \"\$se_err_bad\" 'cannot read the list of skills' 'no skills path was judged'"
 
 section "== a backup copy of a Mac's own *.local.json is never sent, and a pull leaves it alone (#1089) =="
 # On 2026-10-12 a session backed up the tracker's token file as
@@ -9575,16 +9628,19 @@ _noTMPDIRtool="$(env -u TMPDIR -u SYNC_SCRATCH_ROOT SYNC_NO_GIT=1 SYNC_NO_NOTIFY
 check "#38 the tool runs with no TMPDIR set either"  "[ '$_noTMPDIRrc' -eq 0 ]"
 check "#38 and it names no unbound variable"         "! grep -q 'unbound variable' <<< \"\$_noTMPDIRtool\""
 
-# Derived, so the port cannot quietly rot: one new `stat -f` anywhere outside the helper breaks
-# every run on the runner, and the helper is the only place allowed to spell it that way. Comments
-# are stripped first, or the paragraph above explaining the problem counts as an instance of it
-# (L103). The helper bodies are excluded by name rather than by line number.
+# Derived, so the port cannot quietly rot: one new BSD only spelling anywhere outside the helper
+# breaks every run on the runner, and the helper is the only place allowed to spell it that way.
+# Comments are stripped first, or the paragraph above explaining the problem counts as an instance
+# of it (L103). The helper bodies are excluded by name rather than by line number.
+# stat is not among them: the order every shell file in the repository asks stat in, GNU's -c
+# before BSD's -f, is held by tests/test-stat-order.sh (#2003), and a second rule here that
+# excluded the helpers by their text disagreed with it about a GNU first read in any other format.
 # The patterns are BUILT from pieces, so this file never contains the literals it searches for. A
 # guard satisfied by its own assertion line reports the codebase as broken for ever and teaches
 # everyone to ignore it, which is the same trap #34's spawn-site check had to be written around.
 _bsdisms(){
-  local a b c d e x
-  a="stat"" -f"; b="date"" -r "; c="sed"" -i ''"; d="date"" -v"; e="mktemp"" -t"
+  local b c d e x
+  b="date"" -r "; c="sed"" -i ''"; d="date"" -v"; e="mktemp"" -t"
   # A BSD spelling that carries its GNU fallback on the SAME joined line is portable, so it is
   # excluded by that SHAPE rather than by naming the helper it happens to sit in: written as a
   # name, the next such helper is unguarded and nobody notices (L362).
@@ -9598,17 +9654,16 @@ _bsdisms(){
   # being read (L36).
   sed 's/#.*//' "$SCRIPT" "$SCRIPT_SELF" \
     | sed -e :a -e '/\\$/N; s/\\\n//; ta' \
-    | grep -nF -e "$a" -e "$b" -e "$c" -e "$d" -e "$e" \
-    | grep -vF "$a %m \"\$1\"" | grep -vF "$b\"\$1\"" \
-    | grep -vF "$a \"%m%t%N\"" \
+    | grep -nF -e "$b" -e "$c" -e "$d" -e "$e" \
+    | grep -vF "$b\"\$1\"" \
     | grep -vE '\|\| +touch -d' \
     | grep -vE "$x" || true
 }
 check "#38 no BSD-only spelling survives outside the helpers that own them" "[ -z \"\$(_bsdisms)\" ]"
-# And the helpers really are there to be excluded, or the check above passes by matching nothing
-# at all in a file that has been emptied or renamed. file_mtimes is the batch form of file_mtime
-# and holds the only other BSD spelling excluded above (claude-config#191); without this line that
-# exclusion could outlive the helper it was written for and quietly cover a spelling anywhere.
+# And the helpers really are there, or the checks above pass by matching nothing at all in a file
+# that has been emptied or renamed: the date exclusion could then outlive date_from_epoch and
+# quietly cover a spelling anywhere, and the mtime checks would read nothing. file_mtimes is the
+# batch form of file_mtime (claude-config#191).
 check "#38 the portable helpers exist" \
   "grep -q '^file_mtime(){' '$SCRIPT' && grep -q '^file_mtimes(){' '$SCRIPT' && grep -q '^date_from_epoch(){' '$SCRIPT' && grep -q '^_suite_mtime(){' '$SCRIPT_SELF'"
 
@@ -15883,8 +15938,8 @@ _bs_run(){   # claude-sync, with the scratch root and the counting stat in front
     SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 PATH="$_BSBIN:$PATH" bash "$SCRIPT" "$@" 2>&1
 }
 # Called with no flags on purpose: the shim records whatever it is asked, and every FLAGGED
-# spelling of stat is BSD-only or GNU-only, which the guard on portable spellings correctly refuses
-# to see written outside the two helpers that own them (#38).
+# spelling of stat is BSD-only or GNU-only, so a flagged call here would have to carry both halves,
+# GNU's first, to pass the stat order guard (tests/test-stat-order.sh, #2003).
 check "#191 the counting stat really is the one that gets run" \
   "rm -f '$_BSCOUNT'; PATH=\"$_BSBIN:\$PATH\" stat '$_BSROOT' >/dev/null 2>&1; [ -s '$_BSCOUNT' ]"
 

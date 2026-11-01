@@ -421,8 +421,7 @@ CHANGEDSETTINGS
 # the change is this run's doing as before.
 _file_mtime(){ # <path> -> a unix timestamp, or nothing
   local m
-  m="$(stat -f %m "$1" 2>/dev/null || true)"
-  case "$m" in ''|*[!0-9]*) m="$(stat -c %Y "$1" 2>/dev/null || true)" ;; esac
+  m="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true)"
   case "$m" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s' "$m"
 }
