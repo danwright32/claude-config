@@ -2228,10 +2228,13 @@ look identical otherwise.
 
 The report is sorted and waits for every suite, so as each one finishes the runner prints a line
 such as `run-all-tests progress: 37 of 239 suite(s) finished, 4m 12s in, test-x.sh exited 0`, and a
-run in the background is seen to be working rather than hung (#1979). It gives the exit status, not
-the verdict, which the report below decides. Nothing reads these lines: their prefix is shared with
-no line claude-sync, CI, the gates or the suites match, and `test-runner-progress.sh` holds each of
-those readers to that.
+run in the background is seen to be working rather than hung (#1979). Each flake recheck of a failed
+suite, which runs after the last suite and can take three times that suite's time, prints one as it
+starts and one as it ends or is stopped, such as
+`run-all-tests progress: flake recheck 1 ended, 16m 3s in, test-x.sh exited 1 after 41s` (#1988).
+Each gives the exit status, not the verdict, which the report below decides. Nothing reads these
+lines: their prefix is shared with no line claude-sync, CI, the gates or the suites match, and
+`test-runner-progress.sh` holds each of those readers to that.
 
 Four other outcomes are told apart rather than folded into pass or fail. A suite whose output says
 `command not found` fails, naming the line, whatever its own score says: a case calling a helper

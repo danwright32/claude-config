@@ -52,6 +52,27 @@ check() { # check <description> <result>   ("ok" passes, anything else is the fa
   fi
 }
 
+# A check that the report NAMES a suite matches the report's own line for it, never the bare name
+# (claude-config#1988). The launch order header names every suite before any of them has run, and
+# since #1979 so does each one's progress line, so `grep -q 'test-alpha.sh'` passed on a report that
+# left the suite out altogether.
+#
+# So each such check is made twice: on the real output, and on the same output with the name taken
+# out of every line but the header and the progress lines, which is a report leaving the suite out.
+# There it must fail (L1). The control beside it, that the name is still in that output, is what
+# shows the bare grep it replaced would have passed there.
+named_in_report(){   # named_in_report <description> <regex for the report line> <suite name> <runner output>
+  local _nr_esc _nr_without
+  grep -q -E -- "$2" <<< "$4" \
+    && check "$1" ok \
+    || check "$1" "no line matching $2: out=$4"
+  _nr_esc="$(printf '%s' "$3" | sed 's/[.]/\\./g')"
+  _nr_without="$(printf '%s\n' "$4" | sed -E "/^run-all-tests( progress)?: /!s/$_nr_esc//g")"
+  grep -q -F -- "$3" <<< "$_nr_without" && ! grep -q -E -- "$2" <<< "$_nr_without" \
+    && check "$1 (and that check fails on a report leaving $3 out, which the header alone still names)" ok \
+    || check "$1 (and that check fails on a report leaving $3 out, which the header alone still names)" "out=$_nr_without"
+}
+
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.runner-test.XXXXXXXX")" || TMPROOT=""
 case "${TMPROOT%/}" in
   ''|/|"${HOME%/}") echo "test-run-all-tests: refusing to run: throwaway directory came back as '$TMPROOT'." >&2; exit 2 ;;
@@ -132,9 +153,8 @@ out_two="$(bash "$RUNNER" "$A" "$B" 2>&1)"; code_two=$?
 [ "$code_two" -eq 0 ] \
   && check "two directories of passing suites pass" ok \
   || check "two directories of passing suites pass" "exit=$code_two out=$out_two"
-grep -q 'test-alpha.sh' <<< "$out_two" && grep -q 'test-beta.sh' <<< "$out_two" \
-  && check "and every suite in both is named in the report" ok \
-  || check "and every suite in both is named in the report" "out=$out_two"
+named_in_report "and every suite in both is named in the report (alpha)" '^ +ok +test-alpha\.sh ' test-alpha.sh "$out_two"
+named_in_report "and every suite in both is named in the report (beta)" '^ +ok +test-beta\.sh ' test-beta.sh "$out_two"
 
 # A failure in the SECOND directory has to fail the run. The first directory being green is what
 # the old single-directory reading amounted to, so this is the shape that used to pass.
@@ -143,9 +163,7 @@ out_bad="$(bash "$RUNNER" "$A" "$B" 2>&1)"; code_bad=$?
 [ "$code_bad" -ne 0 ] \
   && check "a failing suite outside the first directory fails the run" ok \
   || check "a failing suite outside the first directory fails the run" "exit=$code_bad out=$out_bad"
-grep -q 'test-gamma.sh' <<< "$out_bad" \
-  && check "and the failure names which suite it was" ok \
-  || check "and the failure names which suite it was" "out=$out_bad"
+named_in_report "and the failure names which suite it was" '^ +FAIL +test-gamma\.sh ' test-gamma.sh "$out_bad"
 rm -f "$B/test-gamma.sh"
 
 # ---------------------------------------------------------------------------
@@ -248,9 +266,7 @@ out_r3="$(bash "$RUNNER" "$R3" 2>&1)"; code_r3=$?
 grep -qi 'NO RESULT LINE' <<< "$out_r3" \
   && check "and the runner says out loud that it guessed" ok \
   || check "and the runner says out loud that it guessed" "out=$out_r3"
-grep -q 'test-oldstyle.sh' <<< "$out_r3" \
-  && check "and names which suite it guessed for" ok \
-  || check "and names which suite it guessed for" "out=$out_r3"
+named_in_report "and names which suite it guessed for" '^NO RESULT LINE from:.* test-oldstyle\.sh( |$)' test-oldstyle.sh "$out_r3"
 
 # ---------------------------------------------------------------------------
 # Running several suites at once (claude-config#125). The suites are independent and each writes a
@@ -341,8 +357,7 @@ out_pf="$(HOOK_TESTS_JOBS=4 bash "$RUNNER" "$PF" 2>&1)"; code_pf=$?
 [ "$code_pf" -ne 0 ] \
   && check "a suite that fails while another is still running fails the run" ok \
   || check "a suite that fails while another is still running fails the run" "exit=$code_pf out=$out_pf"
-grep -q 'test-quick.sh' <<< "$out_pf" \
-  && check "and is named" ok || check "and is named" "out=$out_pf"
+named_in_report "and is named" '^ +FAIL +test-quick\.sh ' test-quick.sh "$out_pf"
 
 # A SUITE THAT READS ITS STDIN must not eat the runner's list of what to launch next. The launch
 # loop read that list from a here-document, and under the Mac's bash 3.2 every suite started inside
@@ -529,12 +544,9 @@ out_disc="$(HOOK_TESTS_ROOT="$REPO" bash "$RUNNER" 2>&1)"; code_disc=$?
 [ "$code_disc" -eq 0 ] \
   && check "discovery over a repo passes when every suite passes" ok \
   || check "discovery over a repo passes when every suite passes" "exit=$code_disc out=$out_disc"
-grep -q 'test-faraway.sh' <<< "$out_disc" \
-  && check "a suite three directories away from the runner is run" ok \
-  || check "a suite three directories away from the runner is run" "out=$out_disc"
-grep -q 'test-middle.sh' <<< "$out_disc" && grep -q 'test-near.sh' <<< "$out_disc" \
-  && check "and so is every other one in the repo" ok \
-  || check "and so is every other one in the repo" "out=$out_disc"
+named_in_report "a suite three directories away from the runner is run" '^ +ok +test-faraway\.sh ' test-faraway.sh "$out_disc"
+named_in_report "and so is every other one in the repo (middle)" '^ +ok +test-middle\.sh ' test-middle.sh "$out_disc"
+named_in_report "and so is every other one in the repo (near)" '^ +ok +test-near\.sh ' test-near.sh "$out_disc"
 grep -q 'helper.sh' <<< "$out_disc" \
   && check "a script that is not a suite is not run" "it ran helper.sh" \
   || check "a script that is not a suite is not run" ok
@@ -1116,10 +1128,7 @@ out_nr_repo="$(HOOK_TESTS_ROOT="$WITHREPO" bash "$RUNNER" "$NR_DIR" 2>&1)"; code
 [ "$code_nr_repo" -ne 0 ] \
   && check "#155 the same claim where a repo IS present fails the run" ok \
   || check "#155 the same claim where a repo IS present fails the run" "exit=$code_nr_repo out=$out_nr_repo"
-case "$out_nr_repo" in
-  *test-needsrepo.sh*) check "#155 and it names the suite that claimed it" ok ;;
-  *) check "#155 and it names the suite that claimed it" "out=$out_nr_repo" ;;
-esac
+named_in_report "#155 and it names the suite that claimed it" '^ +FAIL +test-needsrepo\.sh +claimed it could not run' test-needsrepo.sh "$out_nr_repo"
 
 # ---- and before giving up on it, the CHECKOUT is tried (claude-config#237) ----
 # Every pull ended with "3 SUITE(S) COULD NOT RUN HERE" and told the operator to run them from the
@@ -2799,10 +2808,7 @@ case "$out_fl" in
   *) check "#245 a suite that passes on a second run is named FLAKY" "out=$out_fl" ;;
 esac
 [ "$code_fl" -ne 0 ]   && check "#245 and the run is still red, because a retry must not hide the price" ok   || check "#245 and the run is still red, because a retry must not hide the price" "exit=$code_fl"
-case "$out_fl" in
-  *"test-flaky.sh"*) check "#245 and the flake is named, not just counted" ok ;;
-  *) check "#245 and the flake is named, not just counted" "out=$out_fl" ;;
-esac
+named_in_report "#245 and the flake is named, not just counted" '^1 PASSED ON A SECOND RUN, .*: test-flaky\.sh$' test-flaky.sh "$out_fl"
 # The first, failing run's whole output is kept, and its FAIL line names where (#1788, L297). It
 # lived in the run's work folder, which is removed at the end, so a flake left nothing to read.
 fl_kept="$(printf '%s\n' "$out_fl" | sed -n "s/.*first run's whole output kept in \(.*\.log\).*/\1/p")"
