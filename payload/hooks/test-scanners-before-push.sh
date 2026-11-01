@@ -812,9 +812,29 @@ if [ -n "$REAL" ] && [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
   [ "$_real_n" -ge 21 ] && [ "$_real_sel" = "$_real_floor" ] \
     && check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" ok \
     || check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" "selected and not named: $(comm -23 <(printf '%s\n' "$_real_sel") <(printf '%s\n' "$_real_floor") | tr '\n' ' ')/ named and not selected: $(comm -13 <(printf '%s\n' "$_real_sel") <(printf '%s\n' "$_real_floor") | tr '\n' ' ')"
-  grep -q '^SECTION .*#145' <<< "$_sel" \
-    && check "and the section that scans comments for undated numbers is selected" ok \
-    || check "and the section that scans comments for undated numbers is selected" "got=$_sel"
+  # NO SCANNER WAITS ON ANOTHER SUITE RUN'S LOCK (claude-config#2033). Every refusal for time this
+  # gate gave on 2026-11-01 after #1997, seven of them at load averages of 21 to 95, named one run
+  # still going: the sync suite's section scanning comments for undated numbers, running for 1 or 2
+  # seconds. That suite takes a machine wide lock, which every full run holds for minutes, and
+  # builders run one just before they push, so the section refused on the lock and was started
+  # again every few seconds until the budget ran out. The scan now lives in a suite of its own that
+  # takes no lock, so it still runs before every push and nothing in the gate's path can be held up
+  # by another run. A suite takes that lock when its code makes the lock's directory. Its code is
+  # read into a variable and matched with case, never piped into grep -q, which leaves on its first
+  # hit and under pipefail reports the match as a failure (L183).
+  _lockers=""
+  while IFS= read -r _ln; do
+    _sf="$(awk '{ print $2 }' <<< "$_ln")"
+    [ -n "$_sf" ] || continue
+    _code="$(grep -v '^[[:space:]]*#' "$REAL/$_sf" 2>/dev/null)"
+    case "$_code" in *'mkdir "$SUITE_LOCK"'*) _lockers="$_lockers $_ln;" ;; esac
+  done <<< "$_sel"
+  [ -z "$_lockers" ] \
+    && check "#2033 no scanner the gate selects belongs to a suite that takes the machine wide suite lock" ok \
+    || check "#2033 no scanner the gate selects belongs to a suite that takes the machine wide suite lock" "these wait on any full run:$_lockers"
+  grep -q '^SUITE tests/test-undated-measurements\.sh$' <<< "$_sel" \
+    && check "#2033 and the scan for undated numbers in comments and documents is selected as a suite of its own" ok \
+    || check "#2033 and the scan for undated numbers in comments and documents is selected as a suite of its own" "got=$_sel"
   grep -q "^SUITE .*$(basename "$H")$" <<< "$_sel" \
     && check "and the suite that drives this gate is not one of its own subjects" "it selected itself: $_sel" \
     || check "and the suite that drives this gate is not one of its own subjects" ok

@@ -41,6 +41,20 @@
 # A whole suite that takes a large share of the budget is the premise expiring: give its checks
 # over this repository a suite of their own, as #1997 did.
 #
+# A SCANNER MUST NOT WAIT ON ANOTHER RUN'S LOCK EITHER (claude-config#2033). After #1997 this gate
+# still refused seven pushes for time on 2026-11-01, at load averages of 21 to 95, and every refusal
+# named one run still going: a section of tests/test-claude-sync.sh, running for 1 or 2 seconds.
+# That suite takes a machine wide lock, a full run holds it for minutes, and builders run one just
+# before they push, so the section refused on the lock and was started again every few seconds
+# (the wait further down) until the budget ran out. The other 23 scanners finished every time; the
+# budget was never what they lacked. Measured the same day with nothing else holding the lock: the
+# whole gate took 38 to 43 seconds at load averages of 15 to 35, and 41 seconds for its slowest
+# scanner with another builder's full run going at 44 to 51. That section was moved to
+# tests/test-undated-measurements.sh, which takes no lock, and test-scanners-before-push.sh fails if
+# any scanner selected here belongs to a suite that takes it. The wait below stays for any that does.
+# After the move, with that lock held throughout, the gate passed in 60 seconds at a load average
+# of 160 on 2026-11-01, its slowest scanner 51, so the budget below was left where it was.
+#
 # It is repo-agnostic by construction: a repository with no payload/hooks/run-all-tests.sh is not
 # this one, and the hook does nothing at all there rather than running suites it knows nothing
 # about the cost of.
