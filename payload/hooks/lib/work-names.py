@@ -30,11 +30,22 @@ request, not omissions.
 NOTHING PRINTED REPEATS A NAME FOUND. A hit is reported as path:line and which source matched. CI
 logs of a public repository are public, and a refusal message is read in transcripts.
 
+TEXT THAT IS NOT A FILE (claude-config#1995). This repository squash merges with the commit
+messages as the body, so a commit message reaches main without ever being a file, and a pull
+request's title and description are published beside it. --texts0-from reads them as a NUL
+separated stream of label, text, label, text (a final NUL ends the stream and is optional; an empty
+text is a text), which `git log -z --format='commit %h%x00%B'` writes as it stands. A hit is the
+label and the line, by the same rule and in the same words as a file's. scanners-before-push.sh asks
+it about the messages of the commits a push adds, and check-work-names-merge.sh about a pull
+request's title, description and commit messages before it merges.
+
 Usage:
   work-names.py [--root DIR] [--files0-from FILE|-] [PATH ...]
+  work-names.py --texts0-from FILE|-   labelled text, as above, in place of files
   work-names.py --uncovered-owners     registry owners the built in hashes do not cover
 Exit: 0 clean; 1 at least one name found (each listed); 2 could not judge (a listed file could not
-be read, the registry could not be read, or node is missing to read it).
+be read, a text stream held a label with no text, the registry could not be read, or node is missing
+to read it).
 
 Seams (tests): WORK_NAMES_EXTRA_HASHES, comma separated sha256 hex of more lower case logins.
 WORK_NAMES_REGISTRY_READER, the reader to ask (default: dev-update-registry.js beside this file).
@@ -51,6 +62,9 @@ BUILT_IN = {
     "1c166f0036586d4969300ad3475ac491b1f7f09459cb89882da389836bd820af",  # the agency organisation that holds the website
 }
 TOKEN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+# The one remedy, said the same for a file and for a message (claude-config#1995).
+REMEDY = ("Replace the organisation with an invented one in a fixture, or drop it from prose and "
+          "provenance (write name#123, never owner/name#123).")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -132,7 +146,12 @@ def scan_file(path, shown, matcher, hits):
         data = fh.read()
     if b"\0" in data[:8192]:
         return
-    text = data.decode("utf-8", errors="replace").lower()
+    scan_text(data.decode("utf-8", errors="replace"), shown, matcher, hits)
+
+
+def scan_text(text, shown, matcher, hits):
+    """One file's or one message's text: a hit is `shown:line: source`, never the text itself."""
+    text = text.lower()
     tokens = set(TOKEN.findall(text))
     if not any(matcher.kind(t) for t in tokens):
         return
@@ -149,6 +168,7 @@ def main(argv):
     files = []
     i = 0
     uncovered = False
+    texts = None
     while i < len(argv):
         a = argv[i]
         if a == "--root":
@@ -157,6 +177,11 @@ def main(argv):
             src = argv[i + 1]
             raw = sys.stdin.buffer.read() if src == "-" else open(src, "rb").read()
             files.extend(p.decode("utf-8", errors="surrogateescape") for p in raw.split(b"\0") if p)
+            i += 2; continue
+        if a == "--texts0-from":
+            src = argv[i + 1]
+            raw = sys.stdin.buffer.read() if src == "-" else open(src, "rb").read()
+            texts = read_texts(raw)
             i += 2; continue
         if a == "--uncovered-owners":
             uncovered = True; i += 1; continue
@@ -181,6 +206,12 @@ def main(argv):
     matcher = Matcher(BUILT_IN | extra_hashes(), owners)
     hits = []
     unreadable = []
+    if texts is not None:
+        if isinstance(texts, str):
+            die("the text stream could not be read: %s, so its messages could not be checked." % texts)
+        for label, text in texts:
+            scan_text(text, label, matcher, hits)
+        return report(hits, [], len(texts), "message", sentence)
     for f in files:
         path = os.path.join(root, f) if root and not os.path.isabs(f) else f
         if os.path.isdir(path):
@@ -189,18 +220,32 @@ def main(argv):
             scan_file(path, f, matcher, hits)
         except OSError as e:
             unreadable.append("%s (%s)" % (f, e.strerror or e))
+    return report(hits, unreadable, len(files), "file", sentence)
+
+
+def read_texts(raw):
+    """-> [(label, text)], or a str saying why the stream cannot be read."""
+    parts = raw.split(b"\0")
+    if raw.endswith(b"\0"):
+        parts.pop()
+    if len(parts) % 2:
+        return ("it ended on a label with no text (%d fields), which is a stream cut short or a NUL "
+                "inside a text" % len(parts))
+    dec = [p.decode("utf-8", errors="replace") for p in parts]
+    return list(zip(dec[0::2], dec[1::2]))
+
+
+def report(hits, unreadable, n, noun, sentence):
     for h in hits:
         print(h)
-    summary = "work-names: checked %d file%s for %s" % (len(files), "" if len(files) == 1 else "s", sentence)
+    summary = "work-names: checked %d %s%s for %s" % (n, noun, "" if n == 1 else "s", sentence)
     if unreadable:
         sys.stderr.write(summary + ". Could not read: " + "; ".join(unreadable)
                          + ". A listed file that cannot be read is not a clean one.\n")
         return 2
     if hits:
-        sys.stderr.write(summary + ". %d line%s name%s one. Replace the organisation with an invented "
-                         "one in a fixture, or drop it from prose and provenance (write name#123, "
-                         "never owner/name#123).\n" % (len(hits), "" if len(hits) == 1 else "s",
-                                                        "s" if len(hits) == 1 else ""))
+        sys.stderr.write(summary + ". %d line%s name%s one. %s\n" % (
+            len(hits), "" if len(hits) == 1 else "s", "s" if len(hits) == 1 else "", REMEDY))
         return 1
     sys.stderr.write(summary + ": none found.\n")
     return 0

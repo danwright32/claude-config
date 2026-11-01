@@ -1,8 +1,9 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
-import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, VIEW_FIELDS, askText, boxText, cardOf, decide, linkedIn, mergeFactsOf, mergeHolds, mergedIn, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
+import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askText, boxText, cardOf, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
+import { askPr } from './mod-kit/prmerged.ts'
 import { errorText } from './mod-kit/skew.ts'
 
 // The Goal accomplished box (claude-config#1563). Two ways a session's work ends, one box for both:
@@ -129,28 +130,24 @@ const agentHolds = async ($: EngineInterface): Promise<Holds> => {
 
 /**
  * A background merge, asked of GitHub by the box itself (#1818): is it live asks again only at a turn
- * end, as the active account and from the folder the helper ran in (which may since be gone), so its
- * record could still say waiting long after `gh pr view` said MERGED. Asked as each account, by the
- * repository is it live read where it read one, else in that folder; confirmed only when GitHub says
- * MERGED for that number and its link names that repository.
+ * end, so its record can still say waiting after `gh pr view` says MERGED. Asked through mod-kit's
+ * one check of whether a pull request merged (hooks/mod-kit/prmerged.ts, #1991), the one is it live's
+ * turn end asks through too: as each account, by the repository is it live read (else in the folder
+ * the helper ran in), confirmed only when GitHub says MERGED for that number with a link naming that
+ * repository.
  */
-const confirmMerge = async ($: EngineInterface, o: { pr: number; repo?: string; cwd?: string }): Promise<Confirmed[string]> => {
-  const cwd = o.repo ? undefined : o.cwd
-  const gh = (argv: string[], env?: Record<string, string>, stdin?: string) =>
-    $.process.run(argv, { timeoutMs: 20_000, ...(cwd ? { cwd } : {}), ...(env ? { env } : {}), ...(stdin !== undefined ? { stdin } : {}) })
-  try {
-    const r = await askAnyAccount(gh, ['pr', 'view', String(o.pr), ...(o.repo ? ['--repo', o.repo] : []), '--json', VIEW_FIELDS])
-    if (!('stdout' in r)) return { why: `GitHub could not be asked: ${ghLine(r.failures.find(f => !notFound(f)) ?? (r.failures[0] as GhRun))}` }
-    const p = mergedIn(r.stdout, o.pr)
-    if ('why' in p) return p
-    const repo = await $.modkit.linkRepo({ link: p.url })
-    if (!repo) return { why: `GitHub's link ${p.url} names no repository` }
-    if (o.repo && repo.toLowerCase() !== o.repo.toLowerCase()) return { why: `GitHub answered for ${repo}#${o.pr}` }
-    return { repo, at: p.at }
-  } catch (err) {
-    return { why: `GitHub could not be asked: ${errorText(err, MOD)}` }
-  }
-}
+const confirmMerge = ($: EngineInterface, o: { pr: number; repo?: string; cwd?: string }): Promise<Confirmed[string]> =>
+  askPr(
+    {
+      run: async (argv, init) => {
+        const r = await $.process.run(argv, { timeoutMs: 20_000, ...init })
+        return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr }
+      },
+      linkRepo: async link => $.modkit.linkRepo({ link }),
+      describe: err => errorText(err, MOD),
+    },
+    o,
+  )
 
 const mergeHoldsNow = async ($: EngineInterface): Promise<Holds> => {
   const facts = mergeFactsOf((await $.state.get(owedRef)).value as unknown, (await $.state.get(verdictsRef)).value as unknown)
