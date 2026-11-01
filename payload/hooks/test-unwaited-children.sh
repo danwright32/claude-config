@@ -11,11 +11,12 @@
 # a decision, a refusal's reason, a notice. lib/unwaited-children.py names the shapes; claude-sync
 # itself is held to the same scan by tests/test-claude-sync.sh.
 #
-# Two reaches (#1989). The hooks are held to all of it, background jobs included: a worker a hook
-# starts and never waits for is the hook's own child, and a fast failing one exits while the hook is
-# still printing. Every other shell file the repository ships, the skills, tools/ and every suite,
-# is held to the process substitution shapes. A suite writes into a pipe whenever it is run by hand
-# or by Claude, and a function in one whose output the suite captures is #1974's shape exactly.
+# Two reaches (#1989). The hooks, and the skills' and tools' own scripts (#2015), are held to all of
+# it, background jobs included: a worker one starts and never waits for is its own child, and a fast
+# failing one exits while it is still printing. Every other shell file the repository ships, every
+# suite included, is held to the process substitution shapes. A suite writes into a pipe whenever it
+# is run by hand or by Claude, and a function in one whose output the suite captures is #1974's
+# shape exactly.
 #
 # Fixture text is told from code by the shell's own grammar, never by a file's name: what sits in a
 # quoted string, a heredoc's body or a comment is data, so a suite quoting the shape for a scanner it
@@ -167,6 +168,27 @@ bare_got="$(printf '%s\n' "$bare" | awk -F': ' 'NF { split($1, p, ":"); printf "
   || check "#1989 a bare wait answers for every kept job and not for a disowned one" "exit $bare_rc, got '$bare_got' where '6:background ' was wanted:
 $bare"
 
+# An `&` inside arithmetic is a bitwise and, and a `<(` there is a comparison, never a job or a
+# process substitution (#2015): bug-bash's egress setup and disk-clean's scan-lib.sh read flags that
+# way, and were reported as background jobs. A real job right after arithmetic is still one.
+{
+  printf '#!/usr/bin/env bash\n'                                    # 1
+  printf '[ $(( 8#$mode & 8#022 )) -eq 0 ] || exit 1\n'             # 2  not
+  printf 'x="$(( 16#$f & 16#40000000 ))"\n'                         # 3  not: in a double quoted string
+  printf '(( a & b )) && echo yes\n'                                # 4  not: an arithmetic command
+  printf 'y=$(( (a & 1) + $(echo 2) ))\n'                           # 5  not: nested parentheses and a substitution
+  printf 'z=$(( a &\n  b ))\n'                                      # 6-7 not: across a line
+  printf '[ $(( a %sb) )) = 1 ]\n' "$_P"                           # 8  not: a comparison, not a substitution
+  printf 'sleep 1 &\n'                                              # 9  background
+  printf 'echo $(( 1 & 1 )) & echo done\n'                          # 10 background: the job after the arithmetic
+} > "$TMPROOT/probe-arith.sh"
+ar="$(printf 'probe-arith.sh\n' | python3 "$SCAN" --root "$TMPROOT" --background)"; ar_rc=$?
+ar_got="$(printf '%s\n' "$ar" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%s ", p[2], $2 }')"
+[ "$ar_rc" = 1 ] && [ "$ar_got" = "9:background 10:background " ] \
+  && check "#2015 an and inside arithmetic is no background job, and a job after arithmetic is one" ok \
+  || check "#2015 an and inside arithmetic is no background job, and a job after arithmetic is one" "exit $ar_rc, got '$ar_got' where '9:background 10:background ' was wanted:
+$ar"
+
 # Fixture text against code, in files named as suites are, both ways (#1989). A suite that writes the
 # shape into a fixture for the scanner it tests, through a heredoc, a quoted string or a check whose
 # subject is a substitution, has no site; the same suite with the shape written as code has exactly
@@ -251,6 +273,25 @@ $repo_found"
 $repo_found
   Read the output into a variable first and feed the loop from a here document, as above. A loop
   with no guard against an empty line gains one: a here document of an empty variable is one line."
+
+  # The skills and tools/ are held to background jobs too (#2015): bug-bash's self test prints what
+  # it proved into the pipe the skill reads, and load-window.sh and measure-section-time.sh print
+  # their verdicts while their workers run. Suites are not, as in the hooks above.
+  ST_SH="$(printf '%s\n' "$REPO_SH" | awk '/^tools\// || /^payload\/skills\//' | awk -F/ '$NF !~ /^test[-_]/')"
+  st_found="$(printf '%s\n' "$ST_SH" | python3 "$SCAN" --root "$ROOT" --background --count)"; st_rc=$?
+  st_judged="$(printf '%s\n' "$st_found" | sed -n 's/^judged \([0-9]*\) files.*/\1/p')"
+  [ "${st_judged:-0}" -gt 40 ] \
+    && check "#2015 the skills' and tools' own scripts were read" ok \
+    || check "#2015 the skills' and tools' own scripts were read" "judged '${st_judged:-none}' files under payload/skills and tools in $ROOT, so the check below measured nothing:
+$st_found"
+  [ "$st_rc" = 0 ] \
+    && check "#2015 no skill or tool starts a background job its shell never reaps" ok \
+    || check "#2015 no skill or tool starts a background job its shell never reaps" "exit $st_rc; bash 3.2 can drop what the script prints next when that job exits:
+$st_found
+  A worker nobody waits for is started by a subshell that ends at once, so it is never this script's child:
+    ( worker </dev/null >/dev/null 2>&1 & )
+  One that is waited for keeps its pid (pid=\$!), is reaped with wait \"\$pid\", and says beside it why
+  nothing is printed between its start and that wait."
 fi
 
 echo "passed: $pass, failed: $fail"
