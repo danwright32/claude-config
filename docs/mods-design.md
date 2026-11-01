@@ -3852,7 +3852,15 @@ file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.
   description (offered in full, not behind tool search) says when. What can be read is enforced, each
   refusal naming what holds it: a /goal still set or unreadable; an agent the session started
   (`spawnedBy` absent) still pending, running or waiting; is it live's `owed` merges and verdicts
-  `deploying` or `unconfirmed`; a pull request the session touched still open. The pull requests are
+  `deploying` or `unconfirmed`; a pull request the session touched still open. A merge the helper
+  makes in the background stays `waiting` in is it live's record until a turn end asks GitHub again,
+  as the active account and from the folder the helper ran in, so a refusal named merges `gh pr view`
+  had already shown MERGED (#1818). The box now asks GitHub about each one itself, `gh pr view <pr>
+  --json number,state,mergedAt,url` as each account, by the repository is it live read (else in that
+  folder), and counts only MERGED for that number with a link naming that repository (L179); any
+  other answer, or a call that failed, still holds the box and says why. A merge so confirmed, or one
+  is it live has not yet crossed off, is settled by a card made since it merged, read from the
+  verdicts, since is it live crosses a carded merge off only at a turn end. The pull requests are
   Claude Code's own `pr-link` transcript records (888 across 54 transcripts on 2026-10-24: 93 first
   seen at a create, 144 at a merge, 13 at a view, 638 while an agent worked), so one only viewed and
   left open holds the box too, the conservative side. GitHub is asked once per repository, as each
