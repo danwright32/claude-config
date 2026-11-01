@@ -50,7 +50,6 @@ finish() {
   exit $?
 }
 has() { grep -qF -- "$2" <<< "$1" && echo ok || echo "'$2' not in: $1"; }
-hasnt() { grep -qF -- "$2" <<< "$1" && echo "'$2' should not be in: $1" || echo ok; }
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/disk-clean-stat-order.XXXXXXXX")" || { check "a scratch directory" "mktemp failed"; finish; }
 trap 'rm -rf "$TMP"' EXIT

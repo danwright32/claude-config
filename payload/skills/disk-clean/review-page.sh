@@ -17,9 +17,10 @@
 # (~/.claude/state/disk-clean/last-scan.json, read through hooks/lib/disk-clean-record.sh):
 #   - each kind of thing as a heading row with what can go from it on the right (D1), and a tick box
 #     before its name that ticks every item of the kind that can be ticked, never a kept one, half
-#     filled when only some are, disabled when none can be (D11). A kind's total
-#     says "At least" when anything in it that can go was only partly measured or not at all, since
-#     then the figure is a lower bound (L11);
+#     filled when only some are, disabled when none can be (D11). A kind's total is the shared
+#     tally's (hooks/lib/disk-clean-units.sh, #1866): "Size unknown" when no size of what can go in
+#     it was read, never 0; "At least" when some was read but something was only partly measured or
+#     not at all, or the kind was cut short, since then the figure is a lower bound (L11);
 #   - kinds largest first by what can go, with Tools not used in 180 days and Large personal files
 #     always last, in that order, because those are Dan's own and cannot come back (D3). A kind the
 #     scan found nothing in is not drawn, as the design draws it; a kind it could not measure at all
