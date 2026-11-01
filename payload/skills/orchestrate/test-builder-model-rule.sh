@@ -130,7 +130,8 @@ check "the scan finds a document that sets a model" \
   "$([ "$seen" = "$fixture_dir/copy.md" ] && echo ok || echo "the scan returned '$seen'")"
 
 # ---- 5. the style rule: no em or en dash in the skill ----
-dashes="$(grep -n $'\xe2\x80\x94\|\xe2\x80\x93' "$HOME_FILE" 2>/dev/null)"
+# One -e per character, never a \| alternation, which basic regex grep honours on some systems only.
+dashes="$(grep -n -e $'\xe2\x80\x94' -e $'\xe2\x80\x93' "$HOME_FILE" 2>/dev/null)"
 check "the orchestrate skill holds no em or en dash" "$([ -z "$dashes" ] && echo ok || echo "$dashes")"
 
 echo ""
