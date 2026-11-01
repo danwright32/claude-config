@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every shell file in the repository asks GNU stat before BSD stat (claude-config#2003).
+# Every shell and script file in the repository asks GNU stat before BSD stat (claude-config#2003).
 #
 # GNU stat (the Ubuntu CI runner) reads -f as "report on the FILE SYSTEM": handed a BSD format it
 # prints a block about the filesystem instead of failing cleanly, so a read that asks BSD's -f first
@@ -10,13 +10,15 @@
 # was caught by nothing until a Linux run failed, and three such reads were sitting outside it
 # (run-all-tests.sh, test-claude-sync.sh and bug-bash/egress-setup.sh), with two more in
 # claude-sync. Fix the class (L30): this reads every shell file the repository holds, derived
-# through the shared lister, never listed (L96).
+# through the shared lister, never listed (L96). Every TypeScript and JavaScript file too (#2016):
+# job-watcher and scope-modes ran BSD stat from an argument list, which a shell only reading missed.
 #
 # The one part of the tree it leaves alone is the disk cleaning skill's own territory, which that
-# skill's suite guards by the same rule and where it names, with its reason, the one BSD only read
-# allowed on purpose (dcs_dataless). The territory is derived here exactly as that suite derives it,
-# so the two split the tree without a gap, and the split is checked to have a guard on the other
-# side (L129). Nothing in this suite allows a form by name.
+# skill's suite guards by the same shared rule (#2014) and where it names, with its reason, the one
+# BSD only read allowed on purpose (dcs_dataless). The territory is derived here exactly as that
+# suite derives it, so the two split the tree without a gap, and that suite is RUN here, on the real
+# tree and on a copy given a Mac first read, so a slip on either side fails this suite (L129, L582).
+# Nothing in this suite allows a form by name.
 #
 # The readers that were fixed are also RUN, under stand ins shaped like each stat, because a Mac
 # never runs the GNU half and the runner never runs the BSD half (L143). Each stand in is first
@@ -71,6 +73,14 @@ check "the copy of run-all-tests.sh really was swapped back to BSD first" "$(cmp
 check "the guard refuses run-all-tests.sh with its mtime read asked BSD first" \
   "$(has "$(stat_order_scan "$TMP/swapped/run-all-tests.sh")" "run-all-tests.sh:")"
 
+# The same on a mod (#2016): a copy of scope-modes' overnight check, which ran BSD stat from an
+# argument list, given that read back. The copy keeps its name, so it is read as the file is.
+WAKE="$ROOT/payload/mods/scope-modes/hooks/wakecheck.ts"
+mkdir -p "$TMP/mod"
+{ cat "$WAKE"; printf '%s\n' "const st = await run(['stat', '-""f', '%m', \`\${o.home}/.claude/LESSONS.md\`])"; } > "$TMP/mod/wakecheck.ts"
+check "the guard refuses scope-modes' wakecheck.ts with a BSD stat argument list put back" \
+  "$(has "$(stat_order_scan "$TMP/mod/wakecheck.ts")" "wakecheck.ts:$(($(wc -l < "$WAKE") + 1)): ")"
+
 # ================================================================================================
 # 2. The files it reads: every shell file in the repository, derived
 # ================================================================================================
@@ -83,20 +93,24 @@ territory() {
   } 2>/dev/null | sed "s|^$ROOT/||" | sort -u
 }
 TERR="$(territory)"
-listed="$(bash "$ROOT/payload/hooks/lib/repo-files.sh" "$ROOT" 'claude-sync' '*.sh')"; lrc=$?
-check "the shared lister names the repository's shell files" "$([ "$lrc" -eq 0 ] && [ -n "$listed" ] && echo ok || echo "exit $lrc")"
+# Script files too (#2016): a mod or a skill's helper runs stat from an argument list, which the
+# rule reads in those files as the shell line it runs.
+listed="$(bash "$ROOT/payload/hooks/lib/repo-files.sh" "$ROOT" 'claude-sync' '*.sh' '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs')"; lrc=$?
+check "the shared lister names the repository's shell and script files" "$([ "$lrc" -eq 0 ] && [ -n "$listed" ] && echo ok || echo "exit $lrc")"
 files=()
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   grep -qxF -- "$f" <<< "$TERR" && continue
   files+=("$ROOT/$f")
 done <<< "$listed"
-check "it reads the repository's shell files (${#files[@]})" "$([ "${#files[@]}" -ge 300 ] && echo ok || echo "too few to be the real tree")"
+check "it reads the repository's shell and script files (${#files[@]})" "$([ "${#files[@]}" -ge 600 ] && echo ok || echo "too few to be the real tree")"
 # Held in a variable and read from a here string, never piped into `grep -q`, which leaves on its
 # first match and fails the writer under pipefail (L183).
 FILELIST="$(printf '%s\n' "${files[@]+"${files[@]}"}")"
 for want in claude-sync payload/hooks/run-all-tests.sh tests/test-claude-sync.sh \
-  payload/skills/bug-bash/egress-setup.sh payload/hooks/lib/stat-order.sh tests/test-stat-order.sh; do
+  payload/skills/bug-bash/egress-setup.sh payload/hooks/lib/stat-order.sh tests/test-stat-order.sh \
+  payload/mods/job-watcher/hooks/register.ts payload/mods/scope-modes/hooks/wakecheck.ts \
+  payload/mods/scope-modes/tests/register.test.tsx payload/hooks/lib/changelog-entry.js; do
   check "it reads $want" "$(grep -qxF "$ROOT/$want" <<< "$FILELIST" && echo ok || echo "not in its files")"
 done
 for want in payload/skills/disk-clean/scan-lib.sh payload/hooks/lib/disk-remove.sh; do
@@ -107,12 +121,35 @@ done
 terr_guard="$(cd "$ROOT" && grep -l -E "check \"[^\"]*GNU's -c before BSD's -f" $(grep -E '(^|/)test-[^/]*\.sh$' <<< "$TERR") 2>/dev/null)"
 terr_guard="${terr_guard%%$'\n'*}"
 check "a suite in the disk cleaning territory guards its stat order (${terr_guard:-none})" "$([ -n "$terr_guard" ] && echo ok || echo "no suite there checks it, so those files are read by nothing")"
+# That guard is RUN, not only found by its check's name (L400, #2014): the two split the tree, so a
+# BSD first read placed in a disk cleaning script fails this suite too, and the union of the two is
+# asserted here (L582). Its output is kept and only its FAIL lines are shown, since its own
+# SUITE-RESULT line would be read by the runner as this suite's.
+terr_run() { # <root holding payload/> -> its output; exit as the guard's
+  bash "$1/$terr_guard" 2>&1
+}
+if [ -n "$terr_guard" ]; then
+  tout="$(terr_run "$ROOT")"; trc=$?
+  check "the disk cleaning skill's guard passes on the real tree" \
+    "$([ "$trc" -eq 0 ] && grep -q '^SUITE-RESULT passed=[1-9][0-9]* failed=0$' <<< "$tout" && echo ok || { echo "exit $trc:"; grep '^FAIL' <<< "$tout" | sed "s|$ROOT/||g"; })"
+  # Its control, on a copy of the territory with the two libraries it reads: whole, the copy passes,
+  # so a failure after one Mac first read is added is that read's and not the copy's.
+  for f in $TERR payload/hooks/lib/suite-deadline.sh payload/hooks/lib/recorded-pid.sh payload/hooks/lib/stat-order.sh; do
+    mkdir -p "$TMP/terr/$(dirname "$f")" && cp "$ROOT/$f" "$TMP/terr/$f"
+  done
+  tout="$(terr_run "$TMP/terr")"; trc=$?
+  check "the copied territory passes its guard whole" "$([ "$trc" -eq 0 ] && echo ok || { echo "exit $trc:"; grep '^FAIL' <<< "$tout"; })"
+  printf '%s\n' "m=\"\$($BSD %m \"\$1\" 2>/dev/null || stat -c %Y \"\$1\")\"" > "$TMP/terr/payload/skills/disk-clean/mac-first.sh"
+  tout="$(terr_run "$TMP/terr")"; trc=$?
+  check "and fails with a Mac first stat placed in a disk cleaning script, naming it" \
+    "$([ "$trc" -ne 0 ] && grep -q 'BSD first: .*/payload/skills/disk-clean/mac-first\.sh:1: ' <<< "$tout" && echo ok || echo "exit $trc, said: $(grep '^FAIL' <<< "$tout")")"
+fi
 
 # ================================================================================================
 # 3. The real files
 # ================================================================================================
 real="unscanned"; [ "${#files[@]}" -gt 0 ] && real="$(stat_order_scan "${files[@]}")"
-check "every stat in every shell file outside the disk cleaning skill asks GNU's -c before BSD's -f" \
+check "every stat in every shell and script file outside the disk cleaning skill asks GNU's -c before BSD's -f" \
   "$([ -z "$real" ] && echo ok || printf '%s\n' "$real" | sed "s|^$ROOT/||; s/^/BSD first: /")"
 
 # ================================================================================================
@@ -268,5 +305,16 @@ check "under the BSD stand in the old read answers, so the next check is about G
 old="$(run_reader "$GNUBIN" "$TMP/old-egress.sh" old_owner_mode "$TMP/owned" 2>/dev/null)"
 check "under the GNU stand in the old BSD first read answers wrongly, as it would on Linux" \
   "$([ "$old" != "$WANT_OWNED" ] && echo ok || echo "it answered correctly, so the stand in proves nothing")"
+
+# The mods' reads as they were before #2016, the argument list job-watcher ran for an output file's
+# size, under each stand in: the BSD one answers the size, the GNU one a file system block and a
+# failure, so on Linux every output read as unreadable. The mods now ask $.fs.stat and start no stat
+# process at all, which their own tests assert.
+WANT_SIZE="$(perl -e 'print ((lstat($ARGV[0]))[7])' "$TMP/files/plain")"
+check "under the BSD stand in job-watcher's old size read answers the size" \
+  "$(eq "$(PATH="$BSDBIN:$PATH" $BSD %z "$TMP/files/plain" 2>/dev/null)" "$WANT_SIZE")"
+old_size="$(PATH="$GNUBIN:$PATH" $BSD %z "$TMP/files/plain" 2>/dev/null)"; old_rc=$?
+check "under the GNU stand in it fails and prints no size, as it did on Linux" \
+  "$([ "$old_rc" -ne 0 ] && [ "$old_size" != "$WANT_SIZE" ] && echo ok || echo "exit $old_rc, said: $old_size")"
 
 finish

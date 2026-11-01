@@ -15,10 +15,10 @@ Number every item and say it back in one line, in Dan's words. Settle what you c
 
 Build the board, one row per item:
 
-| # | Item | Repo and area | Kind | Agent | Wave | Waits on |
-|---|---|---|---|---|---|---|
+| # | Item | Repo and area | Kind | Agent | Model | Wave | Waits on |
+|---|---|---|---|---|---|---|---|
 
-Kind is `check` (read only answer), `investigate` (cause and recommendation) or `build` (fix, pushed as a branch).
+Kind is `check` (read only answer), `investigate` (cause and recommendation) or `build` (fix, pushed as a branch). Model comes from "Which model a builder runs on" below.
 
 Matching items to agents:
 - Two items that edit the same files, component, workflow, job or table never run at the same time. If they are one fix, give both to ONE agent in one brief. Otherwise the later one waits until the earlier one's pull request has merged.
@@ -28,6 +28,15 @@ Matching items to agents:
 - Anything irreversible (dropping or deleting data, sending to people, re-running a job with side effects, spending money, changing production settings) is `investigate` only. The agent drafts the action; Dan decides it later with a picker that states the specific consequence.
 
 Show the board, then one picker: start as planned, or change something. Nothing is dispatched before he says yes.
+
+### Which model a builder runs on
+
+A builder agent's model is set by the kind of task (Dan, 2026-11-01, claude-config#1961). This section is the rule's one home: the global CLAUDE.md, and anything else that dispatches builders, points here instead of restating it.
+
+- Sonnet, with `model: "sonnet"` on the Agent call, for three kinds: a rename or move that changes no behaviour, filling in tests for code that already exists, and a fix for a review comment.
+- Opus, with `model: "opus"`, for everything else. Design, security and compliance work always runs on Opus, even when it is also one of the three kinds above.
+- A fork ignores `model`, so a Sonnet builder is never a fork.
+- To run one brief on the other model, suggest it to Dan with the reason: on the board, as that row's Model with the reason beside it, or before dispatching when there is no board.
 
 ## 3. Briefs
 
@@ -41,7 +50,7 @@ Every brief has exactly these parts, in this order, and nothing else:
 6. What done means for this item, and what must come back to Dan instead of being done.
 7. For a `build` item only: the `Claude-Session:` line for commits and the session link line for the PR body, copied from this session's attribution note.
 
-The rules every agent shares live in `agent-rules.md`, so a brief never restates them. Send a whole wave in one message, one `Agent` call per agent, all in the background.
+The rules every agent shares live in `agent-rules.md`, so a brief never restates them. Send a whole wave in one message, one `Agent` call per agent, all in the background, each carrying the `model` its board row shows.
 
 ## 4. While agents run
 

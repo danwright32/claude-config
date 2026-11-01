@@ -77,4 +77,46 @@ printf '%s\n' "z=\$($BSD %z \"\$1\")" > "$TMP/next.sh"
 check "a probe open at the end of one file does not carry into the next" \
   "$(has "$(stat_order_scan "$TMP/open.sh" "$TMP/next.sh")" "next.sh:1: ")"
 
+# ================================================================================================
+# A stat command line built in TypeScript or JavaScript (claude-config#2016)
+# ================================================================================================
+# A mod runs a process from an argument list, so BSD stat there is the words 'stat' and '-f' as two
+# quoted items, which the shell form never matched: job-watcher and scope-modes ran it unseen. The
+# same rule reads those lists, in any quote, and reads a `??` between two of them as the shell's
+# `||`. A comment line in either language is not code.
+Q="'"; BQ='`'
+printf '%s\n' \
+  "const a = await run(\$, [${Q}stat${Q}, ${Q}-f${Q}, ${Q}%z${Q}, p])" \
+  "const b = await \$.process.run([\"stat\", \"-f\", \"%m\", p])" \
+  "const c = await run([${BQ}stat${BQ},${BQ}-f${BQ}, ${BQ}%m${BQ}, p])" \
+  "const d = await run(['bash', '-c', ${BQ}$BSD %m \${p}${BQ}])" \
+  "const e = (await run([${Q}stat${Q}, ${Q}-f${Q}, ${Q}%z${Q}, p])) ?? (await run([${Q}stat${Q}, ${Q}-c${Q}, ${Q}%s${Q}, p]))" > "$TMP/bad.ts"
+printf '%s\n' \
+  "const s = await \$.fs.stat(p)" \
+  "// run([${Q}stat${Q}, ${Q}-f${Q}, ${Q}%z${Q}, p]) in a comment is not code" \
+  "  * [${Q}stat${Q}, ${Q}-f${Q}] inside a block comment is not code either" \
+  "const g = await run([${Q}stat${Q}, ${Q}-c${Q}, ${Q}%s${Q}, p])" \
+  "const h = (await run([${Q}stat${Q}, ${Q}-c${Q}, ${Q}%s${Q}, p])) ?? (await run([${Q}stat${Q}, ${Q}-f${Q}, ${Q}%z${Q}, p]))" \
+  "const i = [${Q}stat${Q}, ${Q}-L${Q}, p]" > "$TMP/good.ts"
+badts="$(stat_order_scan "$TMP/bad.ts")"
+check "a TypeScript argument list asking BSD stat in single quotes is refused" "$(has "$badts" "bad.ts:1: ")"
+check "in double quotes" "$(has "$badts" "bad.ts:2: ")"
+check "in backquotes with no space after the comma" "$(has "$badts" "bad.ts:3: ")"
+check "a shell line built in a template string is refused as the shell rule refuses it" "$(has "$badts" "bad.ts:4: ")"
+check "BSD first with GNU after a ?? is refused" "$(has "$badts" "bad.ts:5: ")"
+check "and nothing else in that file is refused" "$([ "$(grep -c . <<< "$badts")" = 5 ] && echo ok || echo "refused: $badts")"
+goodts="$(stat_order_scan "$TMP/good.ts")"
+check "\$.fs.stat, comments, GNU alone, GNU first with BSD after a ??, and other stat flags all pass in TypeScript" \
+  "$([ -z "$goodts" ] && echo ok || echo "refused: $goodts")"
+for ext in tsx js mjs cjs; do
+  cp "$TMP/bad.ts" "$TMP/bad.$ext"
+  check "a .$ext file is read as TypeScript is" "$(has "$(stat_order_scan "$TMP/bad.$ext")" "bad.$ext:1: ")"
+done
+# The argument list form is read in script files only: in a shell file the words are a quoted list
+# the shell never runs as stat, and a ?? there is no fallback.
+printf '%s\n' "words=(${Q}stat${Q} ${Q}-f${Q})" "z=\$($BSD %z \"\$1\" ?? stat -c %s \"\$1\")" > "$TMP/words.sh"
+words="$(stat_order_scan "$TMP/words.sh")"
+check "a shell file's quoted words are not read as a stat, and a ?? there excuses nothing" \
+  "$([ "$(grep -c . <<< "$words")" = 1 ] && grep -q "words.sh:2: " <<< "$words" && echo ok || echo "said: $words")"
+
 finish

@@ -48,7 +48,9 @@ report knows, and the fields each reads (every other field is kept, and shown no
   start      power                          written here at /sleep
   claim      repo, issue, attempts          a worker took an issue (phase 5; written by sleep-queue.sh)
   released   repo, issue, state, text?      a claim given back, free or unstarted (sleep-queue.sh)
-  done       repo, issue?, pr?, text        finished; checked against GitHub at wake
+  done       repo, issue?, pr?, text        finished; checked against GitHub at wake, so the
+                                            writer refuses one without an owner/name repo and
+                                            a pr or issue (#2011)
   parked     repo, issue, branch?, text     set aside with why (phase 8: 2 hours or 2 attempts)
   failed     repo, issue?, text             could not be done (a refusal, an error)
   question   repo, issue, text, options     something only Dan can answer, asked before bed in a
@@ -275,6 +277,13 @@ def append_note(record_path, record, line):
             raise Refused("the note's %s must be a number, got %s" % (k, json.dumps(v)))
     if note.get("repo") is not None and not isinstance(note["repo"], str):
         raise Refused("the note's repo must be owner/name text, got %s" % json.dumps(note["repo"]))
+    # A done note is what credits a merge or a close at wake, checked against GitHub by its repo and
+    # number (#2011: a night's 8 merges and 9 closes, noted as progress, were all called unaccounted).
+    # So one GitHub cannot be asked about is refused here, while the session can still write it whole;
+    # a line already on disk without them is still shown at wake, as unchecked.
+    if kind == "done" and not (isinstance(note.get("repo"), str) and REPO.match(note["repo"])
+                               and (note.get("pr") is not None or note.get("issue") is not None)):
+        raise Refused("a done note must name repo as owner/name and the pr or issue it finished, so it can be checked against GitHub; a step that finished neither is kind progress")
     # A question about an issue is asked before bed in a dialog (#1771): without answers to pick it
     # showed only "Skip this one" and "Go to sleep now". The one exempt is the before bed round's own
     # record of a question it left, which carries `why` and whatever choices the question had, since

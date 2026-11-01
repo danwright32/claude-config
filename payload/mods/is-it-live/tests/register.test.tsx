@@ -5,6 +5,7 @@ import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { pipelineIn } from './mod-kit/hooks/writes.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 
@@ -77,8 +78,11 @@ const modKit: { name: string; register: Register } = {
           return r.stdout === '' ? undefined : JSON.parse(r.stdout)
         },
         goal: async () => { throw new Error("mod-kit's goal is not stood in by these tests") },
-        pipeline: async (input: { command: string }) => {
-          const r = await built.process.run(['__modkit', 'pipeline', JSON.stringify(input)])
+        // #2000: given the folder the call starts in, each command with the folder it runs in; a
+        // mod-kit loaded before it could say (kit-pipeline-without-folders) gives the commands alone.
+        pipeline: async (input: { command: string; cwd?: string; home?: string }) => {
+          const asked = e.plugins.includes('kit-pipeline-without-folders') ? { command: input.command } : input
+          const r = await built.process.run(['__modkit', 'pipeline', JSON.stringify(asked)])
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return JSON.parse(r.stdout)
         },
@@ -169,6 +173,8 @@ type World = {
   stored?: Record<string, unknown>
   kitFails?: boolean
   prView?: (argv: string[], init: Asked) => Gh | undefined
+  /** #2000: when given, answers each `gh issue view` first, as prView does. */
+  issueView?: (argv: string[], init: Asked) => Gh | undefined
   bash: BashOut
   /** #1991: the folder the session's shell is in, and folders removed since, where every command fails. */
   cwd: string
@@ -210,8 +216,8 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (e.argv[0] === '__modkit') {
       if (w.kitFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit is not loaded', isStdoutTruncated: false, isStderrTruncated: false } } as never
       if (e.argv[1] === 'gh' || e.argv[1] === 'mergeHelper' || e.argv[1] === 'pipeline') {
-        const input = JSON.parse(e.argv[2] as string) as { words: string[]; command: string }
-        const read = e.argv[1] === 'gh' ? ghArgs(input.words) : e.argv[1] === 'mergeHelper' ? mergeHelperArgs(JSON.parse(e.argv[2] as string) as Command) : pipeline(input.command)
+        const input = JSON.parse(e.argv[2] as string) as { words: string[]; command: string; cwd?: string; home?: string }
+        const read = e.argv[1] === 'gh' ? ghArgs(input.words) : e.argv[1] === 'mergeHelper' ? mergeHelperArgs(JSON.parse(e.argv[2] as string) as Command) : input.cwd !== undefined ? pipelineIn(input.command, input.cwd, input.home ?? '') : pipeline(input.command)
         return { value: { exitCode: 0, stdout: read === undefined ? '' : JSON.stringify(read), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
       }
       if (e.argv[1] === 'linkRepo') {
@@ -227,7 +233,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const how: Asked = { ...(init?.cwd ? { cwd: init.cwd } : {}), ...(init?.env?.GH_TOKEN ? { token: init.env.GH_TOKEN } : {}) }
     asked.push({ argv: [...e.argv], ...how })
     const tokenOf = a.startsWith('gh auth token -u ') ? w.tokens[e.argv[4] as string] : undefined
-    const viewed = a.startsWith('gh pr view') && w.prView ? w.prView([...e.argv], how) : undefined
+    const viewed = a.startsWith('gh pr view') && w.prView ? w.prView([...e.argv], how) : a.startsWith('gh issue view') && w.issueView ? w.issueView([...e.argv], how) : undefined
     const g: Gh = how.cwd !== undefined && w.gone.includes(how.cwd)
       ? { exitCode: 1, stdout: '', stderr: `chdir: ${how.cwd}: no such file or directory` }
       : viewed
@@ -252,6 +258,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('session.repo', () => ({ value: { root: '/Users/dan/Apps/slate', remote: w.remote, isOwn: false } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
   on('session.cwd', () => ({ value: w.cwd }) as never)
+  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? '/Users/dan' : undefined }) as never)
   // Claude Code's own Bash tool and turn end, beneath the mod.
   on('tool.call', { tool: 'Bash' }, () => {
     const b = w.bash
@@ -1279,4 +1286,111 @@ test('a session with nobody at its prompt is never refused a turn end (#1244)', 
   await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: '/Users/dan/Apps/slate', surface: null, isInteractive: false } as never)
   await bash($, 'gh pr merge 412 --squash')
   expect((await turnEnd($)).block).toBeUndefined()
+})
+
+// #2000: the merge command's own question to GitHub, and the card tool's two, asked as the active gh
+// account alone, so a merge in a repository only another logged in account can see was recorded as
+// unproven and its card refused, and the turn end asked for a card that could never be made. And a
+// command that changed folder first was asked about in the session's folder, so it could pick up
+// another repository's pull request of the same number (L237).
+const ACME_OTHER = 'acme-hq/other'
+const BOOKING_DIR = '/Users/dan/Apps/booking'
+const OTHER_DIR = '/Users/dan/Apps/other'
+const TWO_ACCOUNTS = { logins: ['dan-personal', 'acme-dan'], tokens: { 'acme-dan': 'gho_test_not_a_token' } }
+// GitHub, answering a `gh pr view` naming no repository for the checkout of the folder it is run in.
+const githubIn = (prs: Record<string, Pr>, folders: Record<string, string>) => (argv: string[], how: Asked): Gh => {
+  const repo = how.cwd === undefined ? undefined : folders[how.cwd]
+  return github(prs)(argv.includes('--repo') || repo === undefined ? argv : [...argv, '--repo', repo])
+}
+const FOLDERS = { [BOOKING_DIR]: WORK, [OTHER_DIR]: ACME_OTHER }
+const withOldPipeline = { plugins: [modKit, owedReader, { name: 'kit-pipeline-without-folders', register: (() => undefined) as Register }] }
+
+test("a merge only another gh account can see is confirmed by the merge command's own question, asked as each account (#2000)", withKit, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${WORK}#4284`]: { state: 'MERGED', mergedAt: JUST } }
+  const w = world(on, { ...TWO_ACCOUNTS, prView: (argv, how) => (how.token ? github(prs)(argv) : unseen(WORK)) })
+  await start($)
+  expect(said(await bash($, `gh pr merge 4284 --repo ${WORK} --squash`))).toContain(`You merged ${WORK}#4284.`)
+  expect(views(w.asked.map(a => a.argv)).length).toBe(2)
+  // No account can see it: unproven, saying what the account that answered said.
+  w.w.prView = () => ({ exitCode: 1, stdout: '', stderr: 'HTTP 502: Bad Gateway\nretry later' })
+  expect(said(await bash($, `gh pr merge 4285 --repo ${WORK} --squash`))).toContain('GitHub did not confirm that #4285 merged just now (GitHub could not be asked: HTTP 502: Bad Gateway)')
+})
+
+test('the card tool confirms a merge, and reads who filed an issue, only another gh account can see, asked as each account (#2000)', withKit, async ($, on) => {
+  const merged = { exitCode: 0, stdout: JSON.stringify({ state: 'MERGED', title: 'Filter bookings by venue', url: `https://github.com/${WORK}/pull/4284` }) }
+  const w = world(on, {
+    ...TWO_ACCOUNTS,
+    accounts: { exitCode: 0, stdout: 'dan-personal\nacme-dan\n' },
+    prView: (argv, how) => (how.token ? merged : unseen(WORK)),
+    issueView: (argv, how) => (how.token ? { exitCode: 0, stdout: JSON.stringify({ author: { login: 'kris-k' } }) } : unseen(WORK)),
+  })
+  await start($)
+  const r = await card($, { ...CARD, repo: WORK, pr: 4284, requester: { name: 'Kris', via: 'issue', issue: 31 }, message: 'Hi Kris, the venue filter is live.' })
+  expect(r.deny).toBeUndefined()
+  expect(said(r)).not.toContain('was dropped')
+  expect(w.asked.filter(a => a.argv.slice(0, 3).join(' ') === 'gh issue view').map(a => a.token ?? 'active')).toEqual(['active', 'gho_test_not_a_token'])
+  // No account can see the issue: no card, saying what GitHub said.
+  w.w.issueView = () => unseen(WORK)
+  expect((await card($, { ...CARD, repo: WORK, pr: 4284, requester: { name: 'Kris', via: 'issue', issue: 32 }, message: 'Hi Kris.' })).deny).toContain(`could not read who filed issue #32 (GraphQL: Could not resolve to a Repository with the name '${WORK}'. (repository))`)
+  // No account can see the pull request: no card.
+  w.w.prView = () => unseen(WORK)
+  expect((await card($, { ...CARD, repo: WORK, pr: 4284 })).deny).toContain('could not confirm #4284 is merged')
+})
+
+test('the card tool takes GitHub saying the number is no pull request as the answer, asking no other account (#2000)', withKit, async ($, on) => {
+  const w = world(on, { ...TWO_ACCOUNTS, prView: () => ({ exitCode: 1, stdout: '', stderr: notAPr('4342') }) })
+  await start($)
+  expect((await card($, { ...CARD, repo: WORK, pr: 4342 })).deny).toContain('not a pull request')
+  expect(w.asked.filter(a => a.token !== undefined)).toEqual([])
+})
+
+test('a merge command that changes folder first is asked about in the folder it changed to, and its --repo wins over both (#2000)', withKit, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${WORK}#12`]: { state: 'MERGED', mergedAt: JUST }, [`${ACME_OTHER}#12`]: { state: 'MERGED', mergedAt: JUST } }
+  const w = world(on, { cwd: BOOKING_DIR, prView: githubIn(prs, FOLDERS) })
+  await start($)
+  const moved = said(await bash($, `cd ${OTHER_DIR} && gh pr merge 12 --squash`))
+  expect(moved).toContain(`You merged ${ACME_OTHER}#12.`)
+  expect(moved).not.toContain(WORK)
+  expect(said(await bash($, 'cd ../other && bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --squash'))).toContain(`You merged ${ACME_OTHER}#12.`)
+  expect(said(await bash($, `cd ${OTHER_DIR} && gh pr merge 12 --repo ${WORK} --squash`))).toContain(`You merged ${WORK}#12.`)
+  // A cd inside a subshell ends with it.
+  expect(said(await bash($, `(cd ${OTHER_DIR} && make); gh pr merge 12 --squash`))).toContain(`You merged ${WORK}#12.`)
+  expect(w.asked.filter(a => a.argv.slice(0, 3).join(' ') === 'gh pr view').map(a => a.cwd ?? 'by repository')).toEqual([OTHER_DIR, OTHER_DIR, 'by repository', BOOKING_DIR])
+})
+
+test('a background merge that changes folder first waits on the pull request in the folder it changed to (#2000)', withKitAndOwed, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${WORK}#12`]: { state: 'MERGED', mergedAt: JUST }, [`${ACME_OTHER}#12`]: { state: 'OPEN' } }
+  const w = world(on, { cwd: BOOKING_DIR, prView: githubIn(prs, FOLDERS) })
+  await start($)
+  w.w.bash = BACKGROUND
+  expect(said(await bash($, `cd ${OTHER_DIR} && bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --squash`, { run_in_background: true }))).toContain('When it reports #12 merged')
+  expect((await turnEnd($)).block).toBeUndefined()
+  prs[`${ACME_OTHER}#12`] = { state: 'MERGED', mergedAt: JUST + 60_000 }
+  const block = (await turnEnd($)).block ?? ''
+  expect(block).toContain(`${ACME_OTHER}#12`)
+  expect(block).not.toContain(WORK)
+})
+
+test('a merge whose folder or repository cannot be read from the command is never asked about in the session folder (#2000)', withKitAndOwed, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${WORK}#12`]: { state: 'MERGED', mergedAt: JUST } }
+  const w = world(on, { cwd: BOOKING_DIR, prView: githubIn(prs, FOLDERS) })
+  await start($)
+  expect(said(await bash($, 'cd "$WT" && gh pr merge 12 --squash'))).toContain('GitHub did not confirm that #12 merged just now (the folder it ran in could not be read from the command)')
+  // In the background too, whether the folder or the repository it names cannot be read: owed as
+  // unconfirmed, never left waiting on the session folder's pull request.
+  w.w.bash = BACKGROUND
+  await bash($, 'cd "$WT" && bash ~/.claude/hooks/lib/merge-when-ready.sh 13 --squash', { run_in_background: true })
+  await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 14 --repo "$R" --squash', { run_in_background: true })
+  expect((await owedNowOf($)).map(o => o.how)).toEqual(['unproven', 'unproven', 'unproven'])
+  expect(views(w.runs)).toEqual([])
+  expect((await turnEnd($)).block).toContain('#12 (its repository was not read from the command)')
+  expect(views(w.runs)).toEqual([])
+})
+
+test('a mod-kit that cannot say which folder a command runs in leaves a merge asked in the session folder only where the command changes no folder (#2000)', withOldPipeline, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${WORK}#12`]: { state: 'MERGED', mergedAt: JUST }, [`${ACME_OTHER}#12`]: { state: 'MERGED', mergedAt: JUST } }
+  world(on, { cwd: BOOKING_DIR, prView: githubIn(prs, FOLDERS) })
+  await start($)
+  expect(said(await bash($, 'gh pr merge 12 --squash'))).toContain(`You merged ${WORK}#12.`)
+  expect(said(await bash($, `cd ${OTHER_DIR} && gh pr merge 12 --squash`))).toContain('GitHub did not confirm that #12 merged just now (the folder it ran in could not be read from the command)')
 })
