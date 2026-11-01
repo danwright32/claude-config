@@ -16,6 +16,13 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER="$DIR/run-all-tests.sh"
 
+# The code under test is the runner and lib/full-run-slot.sh, which the runner sources. The runner
+# runs on without the library (failing open), so its absence is refused here by name.
+if [ ! -f "$DIR/lib/full-run-slot.sh" ] || [ ! -f "$DIR/lib/merge-turn.sh" ]; then
+  echo "FAIL: test-full-run-slot: lib/full-run-slot.sh or lib/merge-turn.sh is missing beside the runner, so the slot cannot be tested."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+fi
 if [ ! -f "$DIR/lib/suite-deadline.sh" ]; then
   echo "FAIL: test-full-run-slot: no helper at $DIR/lib/suite-deadline.sh, so this suite cannot bound its own wall clock. Refusing to run unbounded."
   printf 'SUITE-RESULT passed=0 failed=1\n'
@@ -45,10 +52,12 @@ T="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.full-run-slot.XXXXXXXX")" || T=
 case "${T%/}" in
   ''|/|"${HOME%/}") echo "test-full-run-slot: refusing to run: throwaway directory came back as '$T'." >&2; exit 2 ;;
 esac
-HOLDERS=""
+# Every stand in holder writes its pid into one folder, and cleanup reads it there: new_holder is
+# called inside $(...), so a list it kept in a variable would be lost on return.
+mkdir -p "$T/holders"
 cleanup(){
-  local p
-  for p in $HOLDERS; do kill "$p" 2>/dev/null; done
+  local f
+  for f in "$T"/holders/*; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
   rm -rf "$T"
 }
 trap cleanup EXIT
@@ -115,11 +124,9 @@ fx_run(){ # fx_run <output file> [env assignments...] [-- runner args...]
 # A process that holds the slot, standing in for another builder's full run. Started from a subshell
 # that exits at once, so it is not this shell's child: when it dies something else reaps it, and a
 # dead holder is gone rather than a zombie that still answers kill -0.
-new_holder(){ # new_holder <pid file>
-  ( sleep 900 > /dev/null 2>&1 < /dev/null & printf '%s\n' "$!" > "$1" )
-  local p; p="$(cat "$1")"
-  HOLDERS="$HOLDERS $p"
-  printf '%s' "$p"
+new_holder(){ # new_holder <name> -> its pid, also kept in $T/holders/<name> for cleanup
+  ( sleep 900 > /dev/null 2>&1 < /dev/null & printf '%s\n' "$!" > "$T/holders/$1" )
+  cat "$T/holders/$1"
 }
 # A ticket in the slot's queue for pid $1, through the queue's own writer, marked as holding the turn
 # since epoch $3 so "held for" has a known value.
@@ -136,7 +143,8 @@ tickets(){ # the live ticket files in the slot's queue, one per line
 }
 clear_slot(){ rm -rf "$SLOT"; }
 
-# An injected clock: each call prints the epoch in the file and moves it on by 30 seconds.
+# An injected clock: each call prints the epoch in the file and moves it on by 30 seconds, a step
+# this suite sets (not measured).
 CLOCK="$T/clock"; printf '1000000\n' > "$T/clock.now"
 cat > "$CLOCK" <<CLK
 #!/usr/bin/env bash
@@ -146,10 +154,10 @@ chmod +x "$CLOCK"
 
 # ---- 1. a whole run waits for a live holder, says for whom, and refuses at its bound -------------
 clear_slot
-HP="$(new_holder "$T/hp1")"
+HP="$(new_holder hp1)"
 hold_slot "$HP" "/work/trees/other-builder" 999700 || check "fixture: the holder's ticket was written" "turn_join failed"
 # And a second run already waiting behind it, so this run is third in line.
-HW="$(new_holder "$T/hw1")"
+HW="$(new_holder hw1)"
 hold_slot "$HW" "/work/trees/second-builder" 999800 || check "fixture: the second waiter's ticket was written" "turn_join failed"
 printf '1000000\n' > "$T/clock.now"; rm -f "$T/mark1"
 fx_run "$T/out1" HOOK_TESTS_SLOT_NOW="$CLOCK" HOOK_TESTS_SLOT_SLEEP=true HOOK_TESTS_SLOT_WAIT=150 HOOK_TESTS_SLOT_SAY_EVERY=60 SLOT_MARK="$T/mark1"; rc1=$?
@@ -169,7 +177,7 @@ has "#2012 the refusal names the way to a focused check that never waits" "never
 
 # ---- 2. a holder that died frees the slot (L409) -------------------------------------------------
 clear_slot
-HD="$(new_holder "$T/hp2")"
+HD="$(new_holder hp2)"
 hold_slot "$HD" "/work/trees/crashed" "$(date +%s)"
 kill -9 "$HD" 2>/dev/null
 hang_wait '! kill -0 "$HD" 2>/dev/null' || check "fixture: the dead holder really ended" "pid $HD still answers"
@@ -183,7 +191,7 @@ has "#2012 passing over a dead holder is said, with its pid" "pid $HD) is no lon
 
 # ---- 3. a holder that finishes hands the slot on, and the waiter says how long it waited ---------
 clear_slot
-HR="$(new_holder "$T/hp3")"
+HR="$(new_holder hp3)"
 hold_slot "$HR" "/work/trees/finishing" 999970
 cat > "$T/release-sleep" <<REL
 #!/usr/bin/env bash
@@ -231,7 +239,7 @@ grep -q OVERLAP "$T/race/log" 2>/dev/null && check "#2012 two whole runs never r
 
 # ---- 5. focused and nested runs never wait behind a full run -------------------------------------
 clear_slot
-HF="$(new_holder "$T/hp5")"
+HF="$(new_holder hp5)"
 hold_slot "$HF" "/work/trees/full-run" "$(date +%s)"
 # The control (L1): with this holder in place a WHOLE run really is held, so the runs below that go
 # ahead do so because they are focused, not because the holder was passed over. A wait of 0 refuses
@@ -269,7 +277,7 @@ lacks "#2012 a run beneath the holder does not wait on its own ancestor" "waitin
 
 # ---- 6. a holder past the hold bound is passed over (L523) ---------------------------------------
 clear_slot
-HS="$(new_holder "$T/hp6")"
+HS="$(new_holder hp6)"
 hold_slot "$HS" "/work/trees/stuck" 999000
 printf '1000000\n' > "$T/clock.now"; rm -f "$T/mark6"
 fx_run "$T/out6" HOOK_TESTS_SLOT_NOW="$CLOCK" HOOK_TESTS_SLOT_SLEEP=true HOOK_TESTS_SLOT_HOLD=600 SLOT_MARK="$T/mark6"; rc6=$?
@@ -280,7 +288,7 @@ has "#2012 passing over a holder past its bound is said, naming its worktree" "t
 
 # ---- 7. a waiting run stopped by a signal leaves the queue --------------------------------------
 clear_slot
-HK="$(new_holder "$T/hp7")"
+HK="$(new_holder hp7)"
 # Marked on the real clock, since this run reads the real clock: an injected epoch here reads as a
 # holder decades past its bound, and is passed over.
 hold_slot "$HK" "/work/trees/long" "$(date +%s)"
@@ -316,7 +324,8 @@ fx_run "$T/out9b" HOOK_TESTS_SLOT=maybe; rc9b=$?
   || check "#2012 HOOK_TESTS_SLOT other than 0 or 1 is refused" "exit=$rc9b out=$(cat "$T/out9b")"
 
 # ---- 10. the scanners gate starts its suites itself, never through the runner --------------------
-# So a push is never held behind somebody's full run in the slot, and its 150 second budget is spent
+# So a push is never held behind somebody's full run in the slot, and its time budget (150 seconds,
+# set in scanners-before-push.sh, not measured) is spent
 # only on its own scanners (and on the suite lock, which it already waits for and names).
 _sc_run_line="$(grep -E '^_SC_RUN=' "$DIR/scanners-before-push.sh")"
 if [ -z "$_sc_run_line" ]; then
