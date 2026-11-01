@@ -529,7 +529,9 @@ symbol_cache_note(){
 #
 # UNREAD IS NEVER 0 (L90). An offerable item with no bytes, or whose size is partial, denied or
 # unread rather than measured or reported, makes the total "at least" that much; offerable items
-# with no size read at all are counted as items, never as 0 GB.
+# with no size read at all are counted as items, never as 0 GB. That rule has one copy,
+# lib/disk-clean-units.sh's DCU_AWK_TALLY and dcu_total_kind, which disk-clean's scan totals by
+# too (#1866).
 #
 # PART IN iCLOUD IS SAID, NEVER SIZED. The scan never reads a folder iCloud keeps only in the cloud
 # (reading it makes iCloud download it), so an item with one beneath it is sized from what is stored
@@ -556,7 +558,7 @@ symbol_cache_note(){
 scan_note(){
   local record="${FREE_SPACE_SCAN_RECORD:-${HOME:-}/.claude/state/disk-clean/last-scan.json}"
   [ -f "$record" ] && [ -r "$record" ] || return 0
-  local here="." at age age_words tally n unsized kib bad partial taken unjudged icloud total cloud_note=""
+  local here="." at age age_words tally n unsized kib bad partial taken unjudged icloud total kind cloud_note=""
   local stamp="" key="" kept_key="" kept="" _extra="" cache="$STATE_DIR/disk-clean-tally"
   case "${BASH_SOURCE[0]}" in */*) here="${BASH_SOURCE[0]%/*}" ;; esac
   . "$here/lib/disk-clean-units.sh" 2>/dev/null || return 0
@@ -576,20 +578,17 @@ scan_note(){
     at="$(dcr_header "$record" scanned_at 2>/dev/null)" || return 0
     # Fields of dcr_review_items: id, category, method, target, state, bytes, identity, size, flags,
     # detail. flags is a comma list, so icloud-only-part is matched as a whole entry, never inside icloud.
-    tally="$(dcr_review_items "$record" 2>/dev/null | awk -F "$DCR_SEP" '
+    # The total is DCU_AWK_TALLY's, the one copy disk-clean's scan totals by (#1866).
+    tally="$(dcr_review_items "$record" 2>/dev/null | awk -F "$DCR_SEP" "$DCU_AWK_TALLY"'
       $5 == "unreadable" { bad = 1 }
       $5 == "removed" || $5 == "trashed" || $5 == "truncated" || $5 == "gone" { taken++ }
       index($5, "unmeasured: ") == 1 { unjudged++ }
       $5 == "offerable" {
-        n++
-        if ($6 == "") unsized++
-        else {
-          b += $6; if ($8 != "measured" && $8 != "reported" && $8 != "") partial = 1
-          nf = split($9, f, ","); for (i = 1; i <= nf; i++) if (f[i] == "icloud-only-part") { cloud++; break }
-        }
+        dcu_tally("", $6, $8)
+        if ($6 != "") { nf = split($9, f, ","); for (i = 1; i <= nf; i++) if (f[i] == "icloud-only-part") { cloud++; break } }
       }
-      END { printf "%d %d %.0f %d %d %d %d %d\n", n, unsized, b / 1024, bad, partial, taken, unjudged, cloud }')" || return 0
-    read -r n unsized kib bad partial taken unjudged icloud <<< "$tally"
+      END { printf "%s %d %d %d %d\n", dcu_tally_line(""), bad, taken, unjudged, cloud }')" || return 0
+    read -r n unsized kib partial bad taken unjudged icloud <<< "$tally"
     scan_tally_ok || return 0
     if [ -n "$key" ]; then
       { printf '%s\n' "$key"; printf '%s %s %s %s %s %s %s %s %s\n' "$at" "$n" "$unsized" "$kib" "$bad" "$partial" "$taken" "$unjudged" "$icloud"; } > "$cache.$$" 2>/dev/null \
@@ -603,6 +602,7 @@ scan_note(){
   if [ "$age" -ge 86400 ]; then age_words="$((age / 86400)) day(s) ago"
   elif [ "$age" -ge 3600 ]; then age_words="$((age / 3600)) hour(s) ago"
   else age_words="$((age / 60)) minute(s) ago"; fi
+  kind="$(dcu_total_kind "$n" "$unsized" "$partial")"
   # Nothing left to offer has two causes, said apart (L11): its offers were taken, or it made none.
   if [ "$n" -eq 0 ] && [ "$taken" -gt 0 ]; then
     echo "A disk-clean scan taken $age_words has nothing left to offer: everything it found to remove has been removed. To scan again, run /disk-clean."
@@ -610,12 +610,12 @@ scan_note(){
     echo "A disk-clean scan taken $age_words found nothing it could remove, and could not judge $unjudged item(s). To scan again, run /disk-clean."
   elif [ "$n" -eq 0 ]; then
     echo "A disk-clean scan taken $age_words found nothing it could remove. To scan again, run /disk-clean."
-  elif [ "$n" -eq "$unsized" ]; then
+  elif [ "$kind" = unknown ]; then
     echo "A disk-clean scan taken $age_words found $n item(s) that it could remove and has not removed yet, but could not read their size. To review them, run /disk-clean."
   else
     total="$(dcu_human "$kib")"
     [ "$icloud" -gt 0 ] && cloud_note=" Part of $icloud item(s) it found is kept only in iCloud: that part was not measured and is not in the total."
-    if [ "$unsized" -gt 0 ] || [ "${partial:-0}" = 1 ]; then
+    if [ "$kind" = lower ]; then
       echo "A disk-clean scan taken $age_words found at least $total that it could remove and has not removed yet (it could not read every size in full).$cloud_note To review it and choose what goes, run /disk-clean."
     else
       echo "A disk-clean scan taken $age_words found $total that it could remove and has not removed yet.$cloud_note To review it and choose what goes, run /disk-clean."

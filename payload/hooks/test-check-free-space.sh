@@ -795,6 +795,10 @@ fi
 chmod 600 "$SC_LOCKED"
 
 # Sizes that were not read in full are never counted as 0, and the total is said to be a floor.
+# The rule is lib/disk-clean-units.sh's tally (DCU_AWK_TALLY and dcu_total_kind), shared with the
+# disk-clean scan's closing summary; its cases, and that both callers use it and nothing else holds
+# a copy, are in skills/disk-clean/test-disk-clean-scan.sh section 6c (#1866). These drive it
+# through the warning.
 SC_PART="$SCANS/partial.json"
 scan_record "$SC_PART" "$((T0 - DAY))" \
   "p1|caches|trash|/x/c|$((10 * GB))|offerable|measured" \
