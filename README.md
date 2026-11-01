@@ -2916,7 +2916,9 @@ default 600; `DISK_CLEAN_WALK_SECONDS`, default 900), and one that runs out is r
 Sizes are du's allocated blocks, classified by du's exit code and stderr as measured, partial or
 permission denied, never 0 for unread. The result is `~/.claude/state/disk-clean/last-scan.json`,
 written through `hooks/lib/disk-clean-record.sh`, whose header also carries the probe, the walk and
-each category's status. It refuses (exit 75) while a `disk-remove.sh` run holds its lock. Its suites
+each category's status. A walk that could not read a folder records each one by name with find's
+reason in `walk_unreadable` (Operation not permitted for a folder macOS protects, Permission denied
+for its own permissions), and the scan prints the first ten (#1903). It refuses (exit 75) while a `disk-remove.sh` run holds its lock. Its suites
 are `skills/disk-clean/test-disk-clean-scan.sh` and `test-disk-clean-categories.sh`, both through the
 disk-clean harness.
 
