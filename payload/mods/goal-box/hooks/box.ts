@@ -1,5 +1,6 @@
 import type { ModKitCard, ModKitGoal, ModKitRun } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
+import type { PrAnswer } from './mod-kit/prmerged.ts'
 
 // The Goal accomplished box (claude-config#1563), apart from the session: what the tool takes, what
 // the box says, and whether it may be shown now. Pure, so every rule is tested without a session.
@@ -143,9 +144,6 @@ export const mergeFactsOf = (owed: unknown, verdicts: unknown): MergeFacts | { w
 const prName = (repo: string | undefined, pr: number) => (repo ? `${repo}#${pr}` : `#${pr}`)
 const fold = (repo: string) => repo.toLowerCase()
 
-/** What the box asks GitHub about a background merge: the fields mergedIn reads. */
-export const VIEW_FIELDS = 'number,state,mergedAt,url'
-
 /**
  * Which pull request a background merge GitHub is asked about is: its repository where is it live
  * read one from the command, else the folder the helper ran in (where gh resolves the same one). Two
@@ -154,29 +152,11 @@ export const VIEW_FIELDS = 'number,state,mergedAt,url'
 export const waitKey = (o: { pr: number; repo?: string; cwd?: string }) => `${o.repo ? fold(o.repo) : `folder:${o.cwd ?? ''}`}#${o.pr}`
 
 /**
- * What GitHub's answer to `gh pr view <pr> --json number,state,mergedAt,url` says (#1818): the merge's
- * link and time only when it says MERGED for that number, its link naming that number too; anything
- * else, why not. The link's repository is read on by mod-kit's one reader and checked by the caller,
- * so an answer about another number or another repository never confirms a merge (L179, L237).
+ * What GitHub said of each background merge, by waitKey, as mod-kit's one check of whether a pull
+ * request merged answers it (hooks/mod-kit/prmerged.ts, #1991), the check is it live's turn end makes
+ * too: merged in that repository at that time, open, closed, no pull request, or why not proven.
  */
-export const mergedIn = (stdout: string, pr: number): { url: string; at: number } | { why: string } => {
-  let v: { number?: unknown; state?: unknown; mergedAt?: unknown; url?: unknown }
-  try {
-    v = JSON.parse(stdout)
-  } catch {
-    return { why: "GitHub's answer could not be read" }
-  }
-  if (!v || typeof v !== 'object') return { why: "GitHub's answer could not be read" }
-  if (v.state !== 'MERGED') return { why: `GitHub answered state ${JSON.stringify(v.state)}` }
-  if (v.number !== pr) return { why: `GitHub answered for #${String(v.number)}` }
-  if (typeof v.url !== 'string' || /\/pull\/(\d+)\/?$/.exec(v.url)?.[1] !== String(pr)) return { why: `GitHub's link ${JSON.stringify(v.url)} is not #${pr}'s` }
-  const at = typeof v.mergedAt === 'string' ? Date.parse(v.mergedAt) : NaN
-  if (Number.isNaN(at)) return { why: 'GitHub gave no time for the merge' }
-  return { url: v.url, at }
-}
-
-/** What GitHub said of each background merge, by waitKey: merged in that repository at that time, or why it is not confirmed. */
-export type Confirmed = Record<string, { repo: string; at: number } | { why: string }>
+export type Confirmed = Record<string, PrAnswer>
 
 /**
  * Whether a card made since `since` is kept for the pull request this session: under its repository,
@@ -190,7 +170,8 @@ const carded = (verdicts: MergeFacts['verdicts'], repo: string | undefined, pr: 
 /**
  * The merges is it live says are not settled: a merge still owed its card, a background merge GitHub
  * has not confirmed (`confirmed`, asked by the box itself, #1818), a deploy not confirmed live. Each
- * said once.
+ * said once. A background merge GitHub says was closed, or whose number is no pull request there,
+ * merged nothing and is let go at is it live's own turn end, so it holds nothing here either (#1991).
  */
 export const mergeHolds = (f: MergeFacts, confirmed: Confirmed = {}): Holds => {
   const out: Holds = []
@@ -198,8 +179,13 @@ export const mergeHolds = (f: MergeFacts, confirmed: Confirmed = {}): Holds => {
   for (const o of f.owed) {
     if (o.how === 'waiting') {
       const c = confirmed[waitKey(o)]
-      if (!c || 'why' in c) out.push(`the merge of ${prName(o.repo, o.pr)} has not been confirmed yet${c ? ` (${c.why})` : ''}`)
-      else if (!carded(f.verdicts, c.repo, o.pr, Math.min(o.at, c.at))) out.push(owedCard(`${c.repo}#${o.pr}`))
+      if (c?.kind === 'closed' || c?.kind === 'not a pr') continue
+      if (c?.kind === 'merged') {
+        if (!carded(f.verdicts, c.repo, o.pr, Math.min(o.at, c.at))) out.push(owedCard(`${c.repo}#${o.pr}`))
+        continue
+      }
+      const why = c?.kind === 'open' ? 'GitHub says it is still open' : c?.kind === 'unproven' ? c.why : undefined
+      out.push(`the merge of ${prName(o.repo, o.pr)} has not been confirmed yet${why ? ` (${why})` : ''}`)
     } else if (!carded(f.verdicts, o.repo, o.pr, o.at)) out.push(owedCard(prName(o.repo, o.pr)))
   }
   for (const [key, v] of Object.entries(f.verdicts)) {
