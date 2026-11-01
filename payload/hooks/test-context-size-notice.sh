@@ -205,7 +205,9 @@ check_eq "4 a subagent is never nudged to start a fresh session" "" "$(agent_fir
 R="$WORK/proj/r1/subagents/agent-r1.jsonl"; mkdir -p "$WORK/proj/r1/subagents"; : > "$R"; : > "$WORK/proj/r1.jsonl"
 usage "$R" msg_1 250000
 check "5 the first read says it" "250,000" "$(field "$(agent_fire r1 "$WORK/proj/r1.jsonl" r1 "$R")" additionalContext)"
-off="$(python3 -c 'import json,sys,glob; print(json.load(open(glob.glob(sys.argv[1] + "/*r1*")[0]))["offset"])' "$CONTEXT_SIZE_STATE_DIR" 2>/dev/null)"
+# The state file by its own name: a bare *r1* also matches the .lock beside it, and Linux lists a
+# folder in no set order, so CI read the lock (2026-11-01, claude-config#2031).
+off="$(python3 -c 'import json,sys,glob; print(json.load(open(glob.glob(sys.argv[1] + "/r1.r1.json")[0]))["offset"])' "$CONTEXT_SIZE_STATE_DIR" 2>/dev/null)"
 check_eq "5 the state records how far it has read" "$(wc -c < "$R" | tr -d ' ')" "$off"
 # A half written line at the end is left for the next run, never parsed as broken.
 printf '{"type":"assistant","message":{"id":"msg_2","model":"m","usage":{"input_tokens":10,"cache_read_input_tokens":4' >> "$R"
