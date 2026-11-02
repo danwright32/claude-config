@@ -332,8 +332,7 @@ test('the card names the file, each issue with its priority, a missing label rea
   expect(c.reason).toContain('src/lib/slack.ts')
   expect(c.reason).toContain('#41 (p2, tech-debt)')
   expect(c.reason).toContain('#57 (p2, refactor)')
-  expect(c.note).toContain('rough')
-  expect(c.note).toContain('820')
+  expect(c.note).toMatch(/^Rough: grew 820 lines net in 90 days/)
   expect(holdCard(GROWTH_ONLY).reason).toContain('fastest growing')
 })
 

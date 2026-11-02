@@ -349,20 +349,149 @@ export const replay = (input: ReplayInput): { sessions: ReplaySession[]; summary
   }
 }
 
-// STUB (red run only)
-export const DECIDE_TOOL = ''
-export const ASK_SOURCE = ''
-export const ANSWER_MS = 0
-export const SWEEP_MS = 1
-export const ANSWERS: readonly string[] = []
-export type Held = { id: string; tool: string; repo: string; main: string; rel: string; agent: string | null; at: number; why: Judged['why']; shown: Match[]; issues: { state: 'read' | 'truncated' } | { state: 'unread'; why: string }; growth: (FileGrowth & { crosses: boolean }) | { unread: string } }
-export type Question = { state: 'pending'; at: number; issues: number[]; session: string; call: string; agent: string | null } | { state: 'answered'; answer: string; at: number; issues: number[] }
-export const reasonProblem = (_r: unknown): string | undefined => undefined
-export const decideProblem = (_i: Record<string, unknown>, _h: Held): string | undefined => undefined
-export const holdCard = (_h: Held) => ({ reason: '', safeWay: '', note: '' })
-export const holdRefusal = (_h: Held): string => ''
-export const restructureQuestion = (_h: Held) => ({ question: '', options: [] as { label: string; description: string }[] })
-export const sleepNotes = (_h: Held): ({ kind: 'question'; repo: string; issue?: number; text: string; options: string[] })[] => []
-export const answerStands = (_q: Question | undefined, _i: readonly number[], _n: number) => false
-export const questionKey = (_r: string, _p: string) => ''
-export const sweepKeys = (_e: readonly [string, unknown][], _n: number): string[] => []
+
+// ---- The hold (#1509): what a held edit shows, and what a decision must carry ----
+
+/** The tool a held session decides with (decision 7), registered as `decide` by this mod. */
+export const DECIDE_TOOL = 'mcp__area-check__decide'
+/** AskUserQuestion's metadata source for the restructure question, `area-check:<call id>`. */
+export const ASK_SOURCE = 'area-check'
+/** Dan's three answers to the restructure question, in the order he reads them. */
+export const ANSWERS = ['Restructure first', 'Proceed anyway', 'Fold in'] as const
+export type Answer = (typeof ANSWERS)[number]
+export const DECISIONS = ['proceed', 'fold', 'restructure'] as const
+export type Decision = (typeof DECISIONS)[number]
+const DAY_MS = 24 * 60 * 60_000
+/** How long Dan's answer about a file stands, for the same issues, before he is asked again. */
+export const ANSWER_MS = 7 * DAY_MS
+/** An issue list no edit has read for this long is dropped from the store (#1509 comment). */
+export const SWEEP_MS = 7 * DAY_MS
+/** A proceed reason's least length and words: enough to say what the change does to the file. */
+export const REASON_MIN = 24
+export const REASON_WORDS = 4
+
+/** One held edit, waiting on a decision under its call id, in the session's $.state. */
+export type Held = {
+  id: string
+  tool: string
+  repo: string
+  main: string
+  rel: string
+  agent: string | null
+  at: number
+  why: Judged['why']
+  shown: Match[]
+  issues: { state: 'read' | 'truncated' } | { state: 'unread'; why: string }
+  growth: (FileGrowth & { crosses: boolean }) | { unread: string }
+}
+
+/**
+ * The restructure question about one file in one repository, in $.store so every session reads it
+ * (L636, L330): waiting on Dan, with the held call it was asked for, or his answer and when.
+ */
+export type Question =
+  | { state: 'pending'; at: number; issues: number[]; session: string; call: string; agent: string | null }
+  | { state: 'answered'; answer: string; at: number; issues: number[] }
+
+export const questionKey = (repo: string, rel: string) => `question:${repo}\n${rel}`
+
+// A reason that is a stock word, a template's slot or a mark standing alone says nothing (L675).
+const PLACEHOLDER = /^(?:n\/?a|none|nothing|tbd|todo|fixme|reason|because|ok(?:ay)?|fine|yes|no|test|whatever|see above|not needed|no reason|small change|minor change|minor|trivial)$/i
+const SLOT = /<[^>]*>|\{\{|\[\s*(?:reason|why)[^\]]*\]/i
+
+/** Why a proceed reason is not one, or undefined when it says something. */
+export const reasonProblem = (reason: unknown): string | undefined => {
+  const ask = 'give "reason" as a sentence saying why this change does not add to the structural problem'
+  if (typeof reason !== 'string') return `No reason was given: ${ask}.`
+  const r = reason.trim()
+  if (!/^\p{L}+(?:[\s,.;:'’]|$)/u.test(r)) return `"${r}" does not start with a word, so it says nothing: ${ask}.`
+  if (PLACEHOLDER.test(r.replace(/[.!]+$/, '')) || SLOT.test(r)) return `"${r}" is a placeholder, not a reason: ${ask}.`
+  if (r.length < REASON_MIN || r.split(/\s+/).length < REASON_WORDS) return `"${r}" is too short to say what the change does to the file: ${ask}.`
+  return undefined
+}
+
+const issueList = (h: Held) => h.shown.map(m => `#${m.n}`).join(', ')
+
+/** Why a decision cannot be taken for this held edit, or undefined when it can. */
+export const decideProblem = (input: { decision?: unknown; reason?: unknown; issue?: unknown }, h: Held): string | undefined => {
+  const d = input.decision
+  if (typeof d !== 'string' || !(DECISIONS as readonly string[]).includes(d)) return `"${String(d)}" is not a decision: give "decision" as proceed, fold or restructure.`
+  if (d === 'proceed') return reasonProblem(input.reason)
+  if (d === 'fold') {
+    if (!h.shown.length) return `${h.rel} was held for its growth alone, so no issue was shown to fold in: proceed with a reason, or restructure.`
+    if (!h.shown.some(m => m.n === input.issue)) return `"${String(input.issue)}" is not an issue the hold showed: give "issue" as one of ${issueList(h)}, as a number.`
+  }
+  return undefined
+}
+
+const priorityOf = (m: Match) => m.priority ?? 'p2'
+const growthLine = (h: Held): string | undefined => {
+  const g = h.growth
+  if ('unread' in g) return `Its growth could not be read (${g.unread}).`
+  const size = g.size === null ? '' : `, about ${g.size} lines now`
+  const fixes = g.fixes ? `, ${g.fixes} commit titles saying fix` : ''
+  return `Rough: ${g.net >= 0 ? 'grew' : 'shrank'} ${Math.abs(g.net)} lines net in ${GROWTH_DAYS} days${size}${fixes}.`
+}
+
+/** The grey card's words (mod-kit draws it): the file, each issue shown with its priority, growth as rough. */
+export const holdCard = (h: Held): { reason: string; safeWay: string; note?: string } => {
+  const parts: string[] = []
+  if (h.shown.length) parts.push(`${h.rel} has open structural issues: ${h.shown.map(m => `#${m.n} (${priorityOf(m)}, ${m.structural.join(', ')})`).join('; ')}.`)
+  else if (h.why.includes('growth')) parts.push(`${h.rel} is among the fastest growing large files in ${h.repo}.`)
+  if (h.issues.state === 'unread') parts.push(`Its open issues could not be read (${h.issues.why}), so its growth alone decided.`)
+  const note = growthLine(h)
+  return { reason: parts.join(' '), safeWay: 'Claude decides whether this edit goes ahead, folds a structural fix in, or restructures first.', ...(note ? { note } : {}) }
+}
+
+/** What the held session reads: the facts, and how to decide under this call's id. */
+export const holdRefusal = (h: Held): string => {
+  const c = holdCard(h)
+  const facts = [c.reason, c.note].filter(Boolean).join(' ')
+  const call = (rest: string) => `${DECIDE_TOOL} with {"call": "${h.id}", ${rest}}`
+  const ways = [`${call('"decision": "proceed", "reason": "<why this change does not add to the problem>"')} when it does not`]
+  if (h.shown.length) ways.push(`${call('"decision": "fold", "issue": <one of ' + issueList(h) + '>')} to fold that structural fix into this work`)
+  ways.push(
+    h.agent === null
+      ? `${call('"decision": "restructure"')} to ask Dan whether to restructure first`
+      : `${call('"decision": "restructure"')} when it should be restructured first, which hands the question to the main session to ask Dan; then stop and report that to it`,
+  )
+  return `The area check held this ${h.tool} to ${h.rel}. ${facts} Before editing it, decide: call ${ways.join('; or ')}. Then send the ${h.tool} again, unchanged.`
+}
+
+/** The restructure question as Dan reads it in the dialog; Fold in only where an issue was shown. */
+export const restructureQuestion = (h: Held): { question: string; options: { label: Answer; description: string }[] } => {
+  const facts = holdCard(h).reason
+  const options: { label: Answer; description: string }[] = [
+    { label: 'Restructure first', description: 'The structural fix is done before this work, and the file is released for it.' },
+    { label: 'Proceed anyway', description: 'This work goes ahead on the file as it is.' },
+  ]
+  if (h.shown.length) options.push({ label: 'Fold in', description: `The structural fix for ${issueList(h)} is folded into this work.` })
+  return { question: `Restructure ${h.rel} before this work? ${facts}`, options }
+}
+
+/** Asleep (decision 7): one note per issue shown, which bedtime posts into its Open questions; for growth alone, one for the morning report. */
+export const sleepNotes = (h: Held): { kind: 'question'; repo: string; issue?: number; text: string; options: string[] }[] => {
+  const q = restructureQuestion(h)
+  const options = q.options.map(o => o.label)
+  if (!h.shown.length) return [{ kind: 'question', repo: h.repo, text: q.question, options }]
+  return h.shown.map(m => ({ kind: 'question', repo: h.repo, issue: m.n, text: q.question, options }))
+}
+
+const sameSet = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every(x => b.includes(x))
+
+/** Whether Dan's recorded answer about a file still decides it: within its week, for the same issues. */
+export const answerStands = (q: Question | undefined, issues: readonly number[], now: number): q is Extract<Question, { state: 'answered' }> =>
+  !!q && q.state === 'answered' && typeof q.at === 'number' && now - q.at < ANSWER_MS && Array.isArray(q.issues) && sameSet(q.issues, issues)
+
+/** The store keys to drop: issue lists unread for a week (or unreadable), and answers past their week. A pending question stays. */
+export const sweepKeys = (entries: readonly [string, unknown][], now: number): string[] => {
+  const at = (v: unknown) => (v && typeof v === 'object' && typeof (v as { at?: unknown }).at === 'number' ? (v as { at: number }).at : null)
+  return entries
+    .filter(([k, v]) => {
+      const t = at(v)
+      if (k.startsWith('issues:')) return t === null || now - t >= SWEEP_MS
+      if (k.startsWith('question:')) return (v as { state?: unknown } | null)?.state === 'answered' && (t === null || now - t >= ANSWER_MS)
+      return false
+    })
+    .map(([k]) => k)
+}
