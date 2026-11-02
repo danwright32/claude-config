@@ -1494,6 +1494,48 @@ test("with no next step in the PR, the issue's last comment says what is left; a
   expect(block).not.toMatch(/#1813/)
 })
 
+// claude-config#2065: gh answers each closingIssuesReferences entry's repository as {id, name, owner:
+// {id, login}} (measured 2026-11-02 from `gh pr view 2084 --repo danwright32/claude-config --json
+// closingIssuesReferences`). Reading only the number took an issue another repository's PR closes for
+// the same number here, and held winding down on an unrelated open issue.
+const closingRef = (slug: string, number: number) => {
+  const [login, name] = slug.split('/')
+  return {
+    id: 'I_kwDOTB20B88AAAABb6sNBQ',
+    number,
+    repository: { id: 'R_kgDOTB20Bw', name, owner: { id: 'MDQ6VXNlcjMyNDE4MTM1', login } },
+    url: `https://github.com/${slug}/issues/${number}`,
+  }
+}
+const crossPr = (refs: unknown[]) => ({ number: 12, state: 'MERGED', url: 'https://github.com/o/r/pull/12', closingIssuesReferences: refs, body: '' })
+const crossWorld = (refs: unknown[], issues: Record<number, string>) => ({ gh: { pr: crossPr(refs), issues }, branchHere: false, branchOnGitHub: false, verdict: { state: 'live', at: T0 } })
+
+test("an issue a merged PR closes in another repository is never read as this repository's issue of that number (#2065)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, crossWorld([closingRef('o/r', 616), closingRef('acme/site', 1765)], { 616: 'CLOSED', 1765: 'OPEN' }))
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.runs.some(r => r[0] === 'gh' && r[1] === 'issue' && r[3] === '1765')).toBe(false)
+  expect(w.runs.some(r => r[0] === 'gh' && r[1] === 'issue' && r[3] === '616')).toBe(true)
+})
+
+test("an issue a merged PR closes in its own repository, in gh's real shape, still holds winding down until closed (#2065)", withDeps, async ($, on) => {
+  const { clock } = world(on, crossWorld([closingRef('O/R', 616)], { 616: 'OPEN' }))
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: issue #616 is still open/)
+})
+
+test('a closing reference whose repository cannot be read is kept as the PR\'s own, so it holds rather than being dropped (#2065)', withDeps, async ($, on) => {
+  const { clock } = world(on, crossWorld([{ number: 616, repository: { id: 'R_kgDOTB20Bw' } }], { 616: 'OPEN' }))
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: issue #616 is still open/)
+})
+
 test('an issue a merged PR refers to that cannot be read is said, never read as closed (#1812)', withDeps, async ($, on) => {
   const { clock } = world(on, { ...refsWorld('Refs #1765'), issueViewFails: 'HTTP 502' })
   await start($ as never, clock)
