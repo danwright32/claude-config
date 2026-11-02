@@ -112,7 +112,7 @@ dirs="$out"; err="$out"
 # rc 1 (no repository named and none at the session directory) is a push git itself will refuse, and
 # a single repository is a push the gates do judge.
 if [ "$rc" -eq 0 ]; then
-  case "$dirs" in *$'\n'?*) ;; *) hooks_folder_check "$(printf '%s' "$dirs" | awk 'NF' | head -n 1)"; exit 0 ;; esac
+  case "$dirs" in *$'\n'?*) ;; *) hooks_folder_check "${dirs%%$'\n'*}"; exit 0 ;; esac
   printf 'PUSH REFUSED: this command pushes from more than one repository (%s), and every push gate (tests, style, scanners, docs and the rest) judges one repository per command, so the pushes after the first would go out with no gate having looked at them (claude-config#1062). Run each repository'"'"'s push as a command of its own.\n' \
     "$(printf '%s' "$dirs" | awk 'NF' | paste -sd ',' - | sed 's/,/, /g')" >&2
   exit 2
