@@ -454,8 +454,8 @@ def walk_line(w, line, n, background):
                     names = set(re.findall(r"\$\{?#?([A-Za-z_]\w*)", args))
                     rest = REDIR.sub('', re.sub(r"\d*<\s*\S+", '', args)).strip()
                     # A loop's variable waits for the list that loop walks (#2040).
-                    for n in list(names):
-                        names |= w.loop_lists.get(n, set())
+                    for var in list(names):
+                        names |= w.loop_lists.get(var, set())
                     w.waits.append((names, rest == '', n, w.func_id))
             elif boundary and word == 'for' and CMDPOS.search(line[:i]):
                 lm = FOR_IN.match(line, m.end())

@@ -184,6 +184,17 @@ far_got="$(printf '%s\n' "$far" | awk -F': ' 'NF { split($1, p, ":"); printf "%s
   && check "#2040 a bare wait answers only for jobs started before it in its own function or at the top level" ok \
   || check "#2040 a bare wait answers only for jobs started before it in its own function or at the top level" "exit $far_rc, got '$far_got' where '3:background 12:background ' was wanted:
 $far"
+# A bare wait on the same line as a named one keeps its own line number, so it is still read as
+# coming after the job (lessons review of #2040: the named wait's loop overwrote it).
+{
+  printf '#!/usr/bin/env bash\n'                                    # 1
+  printf 'sleep 1 &\nt=$!\n'                                        # 2-3 not: the bare wait below
+  printf 'wait "$u"; wait\n'                                        # 4
+} > "$TMPROOT/probe-bare-same-line.sh"
+sl="$(printf 'probe-bare-same-line.sh\n' | python3 "$SCAN" --root "$TMPROOT" --background 2>&1)"; sl_rc=$?
+[ "$sl_rc" = 0 ] && [ -z "$sl" ] \
+  && check "#2040 a bare wait after a named one on the same line still counts, and the scan does not fail on it" ok \
+  || check "#2040 a bare wait after a named one on the same line still counts, and the scan does not fail on it" "exit $sl_rc: $sl"
 
 # An `&` inside arithmetic is a bitwise and, and a `<(` there is a comparison, never a job or a
 # process substitution (#2015): bug-bash's egress setup and disk-clean's scan-lib.sh read flags that
