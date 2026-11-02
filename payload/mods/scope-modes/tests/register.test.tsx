@@ -208,6 +208,8 @@ const SCRATCH = '/private/tmp/claude-501/-Users-x-proj/s1/scratchpad'
 const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 
+// gh's closingIssuesReferences entry: the repository is {id, name, owner: {id, login}} (#2065).
+type ClosingRefFixture = { id?: string; number: number; url?: string; repository?: { id?: string; name?: string; owner?: { id?: string; login?: string } } }
 type Session = { sessionId: string; repoRoot?: string; extra?: Record<string, unknown>; transcriptPath?: string | null; transcriptUnread?: string }
 // The goal every session has set with /goal unless a test says otherwise (#1242).
 const DEFAULT_GOAL = 'Close #7'
@@ -219,7 +221,7 @@ type GhPr = {
   url?: string
   headRefName?: string
   headRefOid?: string
-  closingIssuesReferences: { number: number }[]
+  closingIssuesReferences: ClosingRefFixture[]
   closedAt?: string
   comments?: { body: string; createdAt: string }[]
   /** The PR's description (#1812: the issues it refers to, and its stated next step). */
@@ -1507,8 +1509,8 @@ const closingRef = (slug: string, number: number) => {
     url: `https://github.com/${slug}/issues/${number}`,
   }
 }
-const crossPr = (refs: unknown[]) => ({ number: 12, state: 'MERGED', url: 'https://github.com/o/r/pull/12', closingIssuesReferences: refs, body: '' })
-const crossWorld = (refs: unknown[], issues: Record<number, string>) => ({ gh: { pr: crossPr(refs), issues }, branchHere: false, branchOnGitHub: false, verdict: { state: 'live', at: T0 } })
+const crossPr = (refs: ClosingRefFixture[]) => ({ number: 12, state: 'MERGED', url: 'https://github.com/o/r/pull/12', closingIssuesReferences: refs, body: '' })
+const crossWorld = (refs: ClosingRefFixture[], issues: Record<number, string>) => ({ gh: { pr: crossPr(refs), issues }, branchHere: false, branchOnGitHub: false, verdict: { state: 'live', at: T0 } })
 
 test("an issue a merged PR closes in another repository is never read as this repository's issue of that number (#2065)", withDeps, async ($, on) => {
   const { w, clock } = world(on, crossWorld([closingRef('o/r', 616), closingRef('acme/site', 1765)], { 616: 'CLOSED', 1765: 'OPEN' }))
