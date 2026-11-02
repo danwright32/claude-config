@@ -71,9 +71,10 @@ if pr_review_names_record "$payload"; then
   fi
   named_parsed="$(ps_parse_payload "$payload" raw)" \
     || refuse "Refused: this command names a record the lessons review keeps of whose merge or push was shown its findings, and pr-review-gate.sh could not read the command's text to tell whether it writes that record (claude-config#1700, #1719). $PR_REVIEW_RECORD_ROUTE_AROUND"
-  # Cut at the LAST separator: the reader prints the command, 0x1f, then the folder, and a command
-  # holding a 0x1f of its own was cut at that one, so whatever followed it was never judged.
-  named_command="${named_parsed%$'\x1f'*}"
+  # Cut at the FIRST separator, as every caller does: the reader prints the command, 0x1f, then the
+  # folder, and writes any 0x1f inside the command as U+FFFD (#2056), so the first one ends the
+  # command and a folder holding the byte stays out of it (claude-config#2058).
+  named_command="${named_parsed%%$'\x1f'*}"
   if pr_review_names_record "$named_command"; then
     command -v python3 >/dev/null 2>&1 && [ -f "$HOOK_DIR/lib/review-record-writes.py" ] \
       || refuse "Refused: this command names a record the lessons review keeps of whose merge or push was shown its findings, and $(command -v python3 >/dev/null 2>&1 && echo "lib/review-record-writes.py is missing" || echo "python3 is not on PATH"), so pr-review-gate.sh cannot tell whether it writes that record (claude-config#1700, #1719, #2050). $PR_REVIEW_RECORD_ROUTE_AROUND"
@@ -116,10 +117,11 @@ fi
 payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" raw)" \
   || ps_unparsed_refuse "$payload" pr-review-gate.sh SKIP_PR_REVIEW "a merge of a pull request" '*merge*' '*Merge*' '*enqueuePullRequest*'
-# Cut at the LAST separator, as the record check above does: a command holding a 0x1f of its own was
-# cut at that one, so a merge written after it was never seen (lessons review of #2050).
-command="${parsed%$'\x1f'*}"
-cwd="${parsed##*$'\x1f'}"
+# Cut at the FIRST separator, as the record check above does: the reader writes a 0x1f inside the
+# command as U+FFFD (#2056), so the folder is everything after the first one, a byte of its own
+# included (claude-config#2058).
+command="${parsed%%$'\x1f'*}"
+cwd="${parsed#*$'\x1f'}"
 
 # A READ KEY TYPED IN FRONT OF THE MERGE HELPER (claude-config#1673). The helper merges inside itself
 # and takes its key from its environment, so it accepts one only when this gate saw it TYPED as a
