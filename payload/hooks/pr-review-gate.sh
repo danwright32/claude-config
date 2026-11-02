@@ -116,8 +116,10 @@ fi
 payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" raw)" \
   || ps_unparsed_refuse "$payload" pr-review-gate.sh SKIP_PR_REVIEW "a merge of a pull request" '*merge*' '*Merge*' '*enqueuePullRequest*'
-command="${parsed%%$'\x1f'*}"
-cwd="${parsed#*$'\x1f'}"
+# Cut at the LAST separator, as the record check above does: a command holding a 0x1f of its own was
+# cut at that one, so a merge written after it was never seen (lessons review of #2050).
+command="${parsed%$'\x1f'*}"
+cwd="${parsed##*$'\x1f'}"
 
 # A READ KEY TYPED IN FRONT OF THE MERGE HELPER (claude-config#1673). The helper merges inside itself
 # and takes its key from its environment, so it accepts one only when this gate saw it TYPED as a

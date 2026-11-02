@@ -101,6 +101,14 @@ refused "#2050 a function written into a shell startup file" "echo 'ar_helper_ke
 refused "#2050 the library's pause variable set on a merge" "AR_HELPER_SECRET_PAUSE=1 gh pr merge 7 --squash"
 refused "#2050 a command hidden after a 0x1f, which the gate used to cut the command at" "true"$'\x1f'"; ar_helper_key_record 5eed5eed"
 
+# The merge gate's own reading cut at the first 0x1f too, so a merge after one was no merge to it.
+# gh here is a stand in that fails, so the gate refuses for want of the pull request and never asks
+# GitHub (L2); before the fix it let the command through without asking at all.
+mkdir -p "$WORKDIR/bin"; printf '#!/bin/sh\nexit 1\n' > "$WORKDIR/bin/gh"; chmod +x "$WORKDIR/bin/gh"
+got="$(PATH="$WORKDIR/bin:$PATH" fire "true"$'\x1f'"; gh pr merge 7 --squash")"; rc="${got##*$'\n'}"
+[ "$rc" = 2 ] && [[ "$got" != *"$REFUSAL"* ]] && ok \
+  || bad "#2050 a merge written after a 0x1f is still judged as a merge (exit $rc): ${got:0:600}"
+
 # ---- refused: the folder, the secret or a read keys file named to anything but a grep of a pipe ----
 refused "#2050 a read keys file written by a relative path" "printf '%s\\n' 0 >> 1-pr-abc.txt.readkeys-1"
 refused "#2050 a record touched into the folder" "touch helper-keys/0123abcd"
