@@ -42,8 +42,8 @@ CREATE = ("issue", "create")
 BODY_FILE_COMMANDS = {CREATE, ("issue", "edit"), ("issue", "comment"),
                       ("pr", "create"), ("pr", "edit"), ("pr", "comment")}
 
-# The crude reading of gh, used where the shared reader cannot be: with no reader at all, and over the
-# text of a command nobody could tokenize (gated_in_text, claude-config#1485). Any command naming gh
+# The crude reading of gh, used over the text of a command nobody could read, a command read with no
+# reader at all included (gated_in_text, claude-config#1485 and #2059). Any command naming gh
 # runs it, and a gated subcommand and action anywhere after gh are the ones it runs: the reading that
 # sees more commands, never fewer, so a gate asks rather than misses. It stands down only on a word gh
 # would take as a different subcommand or action, one outside the gated pairs that no flag in front of
@@ -186,6 +186,8 @@ def _lexed(command):
     nobody's text. Raises Unreadable when the reader cannot read the command to its end.
     """
     _no_reader()
+    if (len(command) - len(command.rstrip("\\"))) % 2:
+        raise Unreadable("it ends in a backslash with nothing after it")
     # Only a newline ends a line: with none, the reader would take "; " for one (commands()).
     s = command if "\n" in command else command + "\n"
     parts = []
@@ -200,7 +202,7 @@ def _lexed(command):
             common += 1
         out.append(" ) " * (len(scope) - common) + " ( " * (len(p["scope"]) - common))
         scope = p["scope"]
-        at, end = p["start"], p["end"]
+        at, end = p["start"], min(p["end"], len(command))  # never the newline added above
         cuts = sorted([(a, b, ("word", dq)) for a, b, dq in p["inner"]]
                       + [(a, b, ("opener", None)) for a, b in p["openers"]])
         for a, b, (how, dq) in cuts:

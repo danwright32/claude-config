@@ -97,7 +97,7 @@ got="$(reading $'cat <<EOF\ndon`t\nEOF\necho after')"
 [[ $'\n'"$got"$'\n' == *$'\nrc=3\n'* ]] && check "#2053 a backquote left open in a body is the crude reading" ok \
   || check "#2053 a backquote left open in a body is the crude reading" "reading was [$(printf '%s' "$got" | tr '\n' '|')]"
 
-# ---- the skipped bodies a caller asks for (#2050), and the substitutions in one body ----
+# ---- the skipped bodies a caller asks for (#2050) ----
 asked="$(python3 -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
@@ -105,17 +105,10 @@ sw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sw)
 got = []
 sw.commands("cat <<E\"OF\"\na $(x)\nEOF\ncat <<EOF\nb $(y) `z`\nEOF", "", got)
-print(got)
-print(sw.body_substitutions("b $(y) `z` $(w $(v)) ${V:-$(u)} $(( $(t) + 1 ))"))
-try:
-    sw.body_substitutions("don`t")
-    print("read")
-except sw.Unreadable:
-    print("unreadable")' "$SW")"
-[ "$asked" = "[(True, 'cat ', 'a \$(x)'), (False, 'cat ', 'b \$(y) \`z\`')]
-['y', 'z', 'w \$(v)', 'u', 't']
-unreadable" ] && check "#2053 the skipped bodies carry their quoting, and a body's own substitutions are found" ok \
-  || check "#2053 the skipped bodies carry their quoting, and a body's own substitutions are found" "got [$asked]"
+print(got)' "$SW")"
+[ "$asked" = "[(True, 'cat ', 'a \$(x)'), (False, 'cat ', 'b \$(y) \`z\`')]" ] \
+  && check "#2053 the skipped bodies carry their quoting" ok \
+  || check "#2053 the skipped bodies carry their quoting" "got [$asked]"
 
 # ---- the #2050 consumers' shape: (quoted, before, body) triples, nothing for an unclosed body ----
 shape="$(python3 -I -c '

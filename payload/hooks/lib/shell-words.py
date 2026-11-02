@@ -268,7 +268,7 @@ def moved(cwd, old, target):
     return os.path.join(cwd, target), cwd
 
 
-def commands(s, cwd="", heredocs=None, spans=None, parts=None):
+def commands(s, cwd="", heredocs=None, parts=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
 
     heredocs, when a list, is given one (quoted, before, body) for each heredoc body the reading
@@ -293,9 +293,6 @@ def commands(s, cwd="", heredocs=None, spans=None, parts=None):
     cwd is the directory s starts in, "" for the session's: a string a wrapper runs (wrapped) starts
     where the wrapper runs (claude-config#1478).
 
-    spans, a list, reads s instead as the body of an unquoted heredoc, and collects the text inside
-    each substitution written directly in it (body_substitutions).
-
     parts, a list, is given one dict for each entry of the result, in the same order, saying where
     in s that command is and what is written directly in it (claude-config#2059): start and end, its
     text being s[start:end]; scope, the ids of the command frames enclosing it, outermost first and
@@ -316,10 +313,6 @@ def commands(s, cwd="", heredocs=None, spans=None, parts=None):
     # holds text the way a double quoted string does (its quotes are only text), from where its body
     # starts to "end", the start of its closing line, and then the reading goes on at "next".
     bodies = []
-    if spans is not None:
-        frames[0]["start"] = n
-        bodies.append({"k": "hd", "end": n + 1, "next": n})
-        frames.append(bodies[0])
 
     def cut(f, end, how):
         text = s[f["start"]:end]
@@ -354,17 +347,10 @@ def commands(s, cwd="", heredocs=None, spans=None, parts=None):
                  # in the text of the command holding it.
                  "open": start - (1 if kind == "tick" else 2),
                  "dq": any(f["k"] == '"' for f in frames[at + 1:])}
-        # Written directly in the body: no command frame between it and the body, though a ${ } or
-        # $(( )) may stand between them, as in ${V:-$(cmd)}.
-        if spans is not None and next(
-                f for f in reversed(frames) if f["k"] in COMMAND_FRAMES or f is bodies[0]) is bodies[0]:
-            frame["span"] = start
         frames.append(frame)
 
     def close_commands(end):
         f = frames.pop()
-        if "span" in f:
-            spans.append(s[f["span"]:end])
         cut(f, end, ")")
         if f["k"] in ("subst", "tick"):
             parent = next(g for g in reversed(frames) if g["k"] in COMMAND_FRAMES)
@@ -545,24 +531,10 @@ def commands(s, cwd="", heredocs=None, spans=None, parts=None):
         if c == ")" and k in ("sub", "subst"):
             close_commands(i)
         i += 1
-    if spans is not None and frames[-1] is bodies[0]:
-        frames.pop()
     if len(frames) > 1:
         raise Unreadable(next((f["at"] for f in frames if "at" in f), None))
     cut(frames[0], n, "end")
     return out
-
-
-def body_substitutions(body):
-    """The text inside each $( ) and backquote written directly in an unquoted heredoc body, in order.
-
-    For a reader with no reading of its own inside a heredoc body (gh_issue_scan.py's normalize), so
-    what the shell runs in the body is found by this one reading (claude-config#2053). Raises
-    Unreadable when one is still open at the end of the body.
-    """
-    spans = []
-    commands(body, "", spans=spans)
-    return spans
 
 
 def command_words(text):
