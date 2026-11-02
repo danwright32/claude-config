@@ -186,6 +186,28 @@ t="$WORK/promise-date.jsonl"; start "$t"
 L assistant-text "Nothing to do until the canary week ends; re-check on Nov 5 against the baseline." >> "$t"
 fires "a promise to re-check on a named date fires" "$t" "re-check on Nov 5"
 
+# Three wordings measured on 60 days of real transcripts (scratchpad calibration, #2079), each a
+# dated wait the first vocabulary missed. Paraphrased here, never copied.
+t="$WORK/promise-look-at-again.jsonl"; start "$t"
+L assistant-text "Look at the disk usage entry again tomorrow morning, after a day of builds." >> "$t"
+fires "looking at a named thing again tomorrow fires" "$t" "again tomorrow"
+
+t="$WORK/promise-stays-open.jsonl"; start "$t"
+L assistant-text "#42 stays open for next week's reading." >> "$t"
+fires "an issue left open for next week's reading fires" "$t" "stays open for next week"
+
+t="$WORK/promise-wait-on.jsonl"; start "$t"
+L assistant-text "The other four wait on next week's area data." >> "$t"
+fires "work waiting on next week's data fires" "$t" "wait on next week"
+
+t="$WORK/promise-rather-than-wait.jsonl"; start "$t"
+L assistant-text "Rather than wait for tomorrow's scheduled run, I started it by hand and it passed." >> "$t"
+silent "control: choosing not to wait for tomorrow's run stays silent" "$t"
+
+t="$WORK/promise-past-weekday.jsonl"; start "$t"
+L assistant-text "The alerts check that got the retry on Tuesday now uses the shared code." >> "$t"
+silent "control: a check noun beside a weekday, with nothing promised, stays silent" "$t"
+
 t="$WORK/tool-result-tomorrow.jsonl"; start "$t"
 { L tool b1 Bash '{"command":"cat notes.txt"}'
   L result b1 "TODO from Geoff: check again tomorrow, the repull is slow"

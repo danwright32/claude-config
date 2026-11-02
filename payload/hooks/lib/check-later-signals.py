@@ -293,7 +293,11 @@ def memory_signal(use, when):
 
 # ---- 3. a promise in the assistant's own words ----
 VERB = re.compile(
-    r"\b(?:re-?check|check(?: (?:it|this|that|them|in on it))? (?:again|back)|look(?: at (?:it|this|that))? again"
+    r"\b(?:re-?check|check(?: (?:it|this|that|them|in on it))? (?:again|back)|look(?: at [^.;!?]{0,40}?)? again"
+    # A dated wait said without a check verb (measured on real transcripts, #2079): an issue kept
+    # open for a later reading, or work waiting ON later data. "wait for" is left out, because it
+    # is what a sentence choosing NOT to wait says ("rather than wait for tomorrow's run").
+    r"|stays? open (?:for|until)|(?:is|are)? ?waiting on|waits? on"
     r"|re-?pull|re-?run|re-?read|revisit|circle back|come back to"
     r"|(?:I'll|I will|we'll|we will|I'm going to|I plan to|let's|I can) (?:check|look|verify|confirm|see|measure|watch|pull))\b",
     re.IGNORECASE)
