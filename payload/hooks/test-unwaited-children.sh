@@ -11,12 +11,12 @@
 # a decision, a refusal's reason, a notice. lib/unwaited-children.py names the shapes; claude-sync
 # itself is held to the same scan by tests/test-claude-sync.sh.
 #
-# Two reaches (#1989). The hooks, and the skills' and tools' own scripts (#2015), are held to all of
-# it, background jobs included: a worker one starts and never waits for is its own child, and a fast
-# failing one exits while it is still printing. Every other shell file the repository ships, every
-# suite included, is held to the process substitution shapes. A suite writes into a pipe whenever it
-# is run by hand or by Claude, and a function in one whose output the suite captures is #1974's
-# shape exactly.
+# Every shell file the repository ships is held to all of it, background jobs included: the hooks
+# (#1989), the skills' and tools' own scripts (#2015) and every suite (#2040). A worker one starts
+# and never waits for is its own child, and a fast failing one exits while it is still printing. A
+# suite writes into a pipe whenever it is run by hand, by Claude or by the runner, and a function in
+# one whose output the suite captures is #1974's shape exactly. The hooks are read from this folder
+# as well, so they are judged even where there is no checkout to list.
 #
 # Fixture text is told from code by the shell's own grammar, never by a file's name: what sits in a
 # quoted string, a heredoc's body or a comment is data, so a suite quoting the shape for a scanner it
@@ -191,6 +191,28 @@ ar_got="$(printf '%s\n' "$ar" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%
   || check "#2015 an and inside arithmetic is no background job, and a job after arithmetic is one" "exit $ar_rc, got '$ar_got' where '9:background 10:background ' was wanted:
 $ar"
 
+# A wait on a loop's variable waits for the list the loop walks (#2040): the claude-sync suite reaps
+# its shards one by one, `for p in $pids; do wait "$p"`, to keep each one's exit status. The variable
+# stands for the list the nearest loop before the wait gave it, so a later loop reusing the name for
+# another list does not answer for the first, and a list no wait loops over is still reported.
+{
+  printf '#!/usr/bin/env bash\n'                                    # 1
+  printf 'pids=""\n'                                                # 2
+  printf 'for i in 1 2; do\n  sleep 1 &\n  pids="$pids $!"\ndone\n' # 3-6 not: waited through the loop below
+  printf 'for p in $pids; do wait "$p"; done\n'                     # 7
+  printf 'sleep 2 &\nother="$!"\n'                                  # 8-9 background: no wait loops over it
+  printf 'for q in $unrelated; do wait "$q"; done\n'                # 10
+  printf 'sleep 3 &\nlate="$!"\n'                                   # 11-12 background: q names another list when waited for
+  printf 'for q in $late; do :; done\n'                             # 13
+  printf 'for q in $nothing; do\n  wait "$q"\ndone\n'               # 14-16
+} > "$TMPROOT/probe-loop.sh"
+lp="$(printf 'probe-loop.sh\n' | python3 "$SCAN" --root "$TMPROOT" --background)"; lp_rc=$?
+lp_got="$(printf '%s\n' "$lp" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%s ", p[2], $2 }')"
+[ "$lp_rc" = 1 ] && [ "$lp_got" = "8:background 11:background " ] \
+  && check "#2040 a wait on a loop variable answers for the list that loop walks, and for no other" ok \
+  || check "#2040 a wait on a loop variable answers for the list that loop walks, and for no other" "exit $lp_rc, got '$lp_got' where '8:background 11:background ' was wanted:
+$lp"
+
 # Fixture text against code, in files named as suites are, both ways (#1989). A suite that writes the
 # shape into a fixture for the scanner it tests, through a heredoc, a quoted string or a check whose
 # subject is a substitution, has no site; the same suite with the shape written as code has exactly
@@ -250,50 +272,38 @@ $found
   One that is waited for keeps its pid (pid=\$!) and is reaped with wait \"\$pid\"."
 
 # ---------------------------------------------------------------------------
-# Every other shell file the repository ships: the skills, tools/, tests/ and every suite (#1989).
-# Process substitution only; a background job there is not judged (see the scan's docstring).
+# Every other shell file the repository ships: the skills, tools/, tests/ and every suite (#1989),
+# background jobs included (#2015 for the skills and tools, #2040 for the suites). A suite writes
+# into a pipe whenever it is run by hand, by Claude or by the runner, so a job of its own that exits
+# mid line cuts its report short on bash 3.2 exactly as a hook's would. One pass over every file.
 # ---------------------------------------------------------------------------
 ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
   echo "SUITE-PART-UNMEASURED the skills, tools and suites, because $DIR/.. is not the payload of a claude-config checkout, so there is no list of the repository's shell files to read"
 else
   REPO_SH="$(bash "$DIR/lib/repo-files.sh" "$ROOT" 2>/dev/null | awk '/\.sh$/ || $0 == "claude-sync"' | sort)"
-  repo_suites="$(printf '%s\n' "$REPO_SH" | awk -F/ '$NF ~ /^test-/ { n++ } END { print n + 0 }')"
+  repo_suites="$(printf '%s\n' "$REPO_SH" | awk -F/ '$NF ~ /^test[-_]/ { n++ } END { print n + 0 }')"
   repo_outside="$(printf '%s\n' "$REPO_SH" | awk '/^(tools|tests)\// || /^payload\/skills\// { n++ } END { print n + 0 }')"
-  [ "$repo_suites" -gt 100 ] && [ "$repo_outside" -gt 100 ] \
+  [ "$repo_suites" -gt 200 ] && [ "$repo_outside" -gt 100 ] \
     && check "#1989 the repository's suites, skills and tools are in what is read" ok \
     || check "#1989 the repository's suites, skills and tools are in what is read" "$repo_suites suites and $repo_outside files under payload/skills, tools and tests were listed in $ROOT, so the check below read too little"
-  repo_found="$(printf '%s\n' "$REPO_SH" | python3 "$SCAN" --root "$ROOT" --count)"; repo_rc=$?
+  repo_found="$(printf '%s\n' "$REPO_SH" | python3 "$SCAN" --root "$ROOT" --background --count)"; repo_rc=$?
   repo_judged="$(printf '%s\n' "$repo_found" | sed -n 's/^judged \([0-9]*\) files.*/\1/p')"
   [ "${repo_judged:-0}" -gt 300 ] \
     && check "#1989 the repository's shell files were read" ok \
     || check "#1989 the repository's shell files were read" "judged '${repo_judged:-none}' files under $ROOT:
 $repo_found"
   [ "$repo_rc" = 0 ] \
-    && check "#1989 no skill, tool or suite reads through process substitution in its own shell" ok \
-    || check "#1989 no skill, tool or suite reads through process substitution in its own shell" "exit $repo_rc; bash 3.2 can drop what the script prints next when that child exits:
+    && check "#2040 no skill, tool or suite starts a child its shell never waits for, background jobs included" ok \
+    || check "#2040 no skill, tool or suite starts a child its shell never waits for, background jobs included" "exit $repo_rc; bash 3.2 can drop what the script prints next when that child exits:
 $repo_found
   Read the output into a variable first and feed the loop from a here document, as above. A loop
-  with no guard against an empty line gains one: a here document of an empty variable is one line."
-
-  # The skills and tools/ are held to background jobs too (#2015): bug-bash's self test prints what
-  # it proved into the pipe the skill reads, and load-window.sh and measure-section-time.sh print
-  # their verdicts while their workers run. Suites are not, as in the hooks above.
-  ST_SH="$(printf '%s\n' "$REPO_SH" | awk '/^tools\// || /^payload\/skills\//' | awk -F/ '$NF !~ /^test[-_]/')"
-  st_found="$(printf '%s\n' "$ST_SH" | python3 "$SCAN" --root "$ROOT" --background --count)"; st_rc=$?
-  st_judged="$(printf '%s\n' "$st_found" | sed -n 's/^judged \([0-9]*\) files.*/\1/p')"
-  [ "${st_judged:-0}" -gt 40 ] \
-    && check "#2015 the skills' and tools' own scripts were read" ok \
-    || check "#2015 the skills' and tools' own scripts were read" "judged '${st_judged:-none}' files under payload/skills and tools in $ROOT, so the check below measured nothing:
-$st_found"
-  [ "$st_rc" = 0 ] \
-    && check "#2015 no skill or tool starts a background job its shell never reaps" ok \
-    || check "#2015 no skill or tool starts a background job its shell never reaps" "exit $st_rc; bash 3.2 can drop what the script prints next when that job exits:
-$st_found
-  A worker nobody waits for is started by a subshell that ends at once, so it is never this script's child:
-    ( worker </dev/null >/dev/null 2>&1 & )
-  One that is waited for keeps its pid (pid=\$!), is reaped with wait \"\$pid\", and says beside it why
-  nothing is printed between its start and that wait."
+  with no guard against an empty line gains one: a here document of an empty variable is one line.
+  A stand in that lives for the whole run is started by a subshell that ends at once and writes
+  nowhere, and its pid recorded in a file, so it is never this script's child:
+    ( worker </dev/null >/dev/null 2>&1 & printf '%s\n' \"\$!\" > pid.file ) </dev/null >/dev/null 2>&1
+  One that is waited for keeps its pid (pid=\$!), is reaped with wait \"\$pid\" straight after it is
+  killed or has finished, and says beside it why nothing is printed between its start and that wait."
 fi
 
 echo "passed: $pass, failed: $fail"
