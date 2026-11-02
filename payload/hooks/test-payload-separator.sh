@@ -99,12 +99,14 @@ ascii_out="$(LC_ALL=C PYTHONUTF8=0 PYTHONCOERCECLOCALE=0 PATH="$WORK/py-only" ps
 # holds on every machine: each payload reader in the library is written in ASCII alone, the
 # replacement character spelled as an escape, so its program means the same under any locale.
 for reader in ps_clean_payload ps_payload_text ps_payload_unread ps_parse_payload; do
-  body="$(declare -f "$reader")"
-  if [ -z "$body" ]; then
+  # The body goes to a file for grep to read, so no grep stops reading a pipe early (claude-config#132).
+  declare -f "$reader" > "$WORK/reader-body" 2>/dev/null
+  nonascii="$(LC_ALL=C grep -n '[^[:print:][:space:]]' "$WORK/reader-body")"
+  if [ ! -s "$WORK/reader-body" ]; then
     check "#2055 $reader is written in ASCII alone, so its python3 program compiles under any locale" "$reader is not defined"
-  elif printf '%s' "$body" | LC_ALL=C grep -q '[^[:print:][:space:]]'; then
+  elif [ -n "$nonascii" ]; then
     check "#2055 $reader is written in ASCII alone, so its python3 program compiles under any locale" \
-      "holds a byte outside ASCII: $(printf '%s' "$body" | LC_ALL=C grep -n '[^[:print:][:space:]]' | head -3 | tr '\n' ' ')"
+      "holds a byte outside ASCII: ${nonascii//$'\n'/ }"
   else
     check "#2055 $reader is written in ASCII alone, so its python3 program compiles under any locale" ok
   fi
