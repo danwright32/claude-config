@@ -210,8 +210,14 @@ def moved(cwd, old, target):
     return os.path.join(cwd, target), cwd
 
 
-def commands(s, cwd=""):
+def commands(s, cwd="", heredocs=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
+
+    heredocs, when a list, is given one (quoted, before, body) for each heredoc body the reading
+    skipped (claude-config#2050): quoted says the shell expands nothing in it (<<'EOF', <<"EOF",
+    <<\\EOF), before is the text of the command that opened it up to the opener, and body is the text
+    between the opener's line and its closing line. A body that never closes is not skipped, so it is
+    read as commands and given to nobody here.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
@@ -229,7 +235,7 @@ def commands(s, cwd=""):
     n = len(s)
     line_break = "\n" if "\n" in s else "; "
     closing_line = re.escape(line_break) + "%s%s" + (r"(?=\n|$)" if line_break == "\n" else r"(?=;|$)")
-    out, pending = [], []
+    out, pending, opened = [], [], []
     frames = [{"k": "top", "start": 0, "cwd": cwd, "old": None}]
 
     def cut(f, end, how):
@@ -353,6 +359,8 @@ def commands(s, cwd=""):
             if m:
                 word = next(g for g in m.groups()[1:] if g is not None)
                 pending.append((word, m.group(1) == "-"))
+                quoted = m.group(4) is None or "\\" in m.group(0)
+                opened.append((quoted, s[f["start"]:i]))
                 i = m.end()
             else:
                 i += 2
@@ -361,13 +369,19 @@ def commands(s, cwd=""):
             # The bodies start on the next line: find the closing line of each in turn. One that never
             # closes is not skipped, so nothing after it is hidden.
             j = i
+            bodies = []
             for word, strip_tabs in pending:
                 m = re.compile(closing_line % ("\t*" if strip_tabs else "", re.escape(word))).search(s, j)
                 if not m:
                     j = None
                     break
+                body = s[j:m.start()]
+                bodies.append(body[len(line_break):] if body.startswith(line_break) else body)
                 j = m.end()
+            if j is not None and heredocs is not None:
+                heredocs.extend((q, before, body) for (q, before), body in zip(opened, bodies))
             pending.clear()
+            opened.clear()
             if j is not None:
                 cut(f, i, "\n")
                 f["start"] = i = j
