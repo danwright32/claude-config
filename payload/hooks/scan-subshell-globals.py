@@ -22,8 +22,15 @@ whole tree scans share, in one pass per file (L297): braces are counted only on 
 code, never inside a quoted string, a comment or a heredoc, and a function is found only where its
 definition is code. Before that, a `{` inside a python3 -c string left a function open to the end
 of the file, and every assignment after it was charged to that function (claude-config#2063). A
-brace in a bracket expression is not counted either, and a line that begins inside a quoted string
-is judged only on what follows the string's close (claude-config#2068).
+brace in a bracket expression is not counted either (claude-config#2068).
+
+What a function's body assigns is read through lib/shell-words.py commands(), the one reading of a
+command the gates share, over the body whole (claude-config#2076). Read a line at a time by shlex,
+an assignment followed by a comment, one with quotes nested in its `$( )`, the first line of one
+running over several lines, one mid line and one on the line defining the function were never
+judged. Only a command this shell runs is judged, so nothing in a pipeline, a subshell group, a
+substitution or the background is. A body the reader cannot read is listed on every run with its
+file, line and reason, and the count is said, zero too; it does not fail the scan on its own.
 
 Measured over this repo on 2026-09-11: 8 functions flagged, of which one was a real defect
 (tip_payload_dir's caller could never see TIP_PAYLOAD_DIR, so the scratch directory holding the
@@ -133,7 +140,7 @@ def functions_in(lines):
     out = []
     i = 0
     while i < len(read):
-        _, line, kind, bare, _, _ = read[i]
+        _, line, kind, bare, _ = read[i]
         m = FN_DEF.match(line) if kind == "code" else None
         if not m:
             i += 1
@@ -141,7 +148,7 @@ def functions_in(lines):
         depth = brace_depth(bare)
         j = i + 1
         while j < len(read) and depth > 0:
-            _, _, kind, bare, _, _ = read[j]
+            _, _, kind, bare, _ = read[j]
             if kind in ("code", "quoted"):
                 depth += brace_depth(bare)
             j += 1
@@ -150,9 +157,17 @@ def functions_in(lines):
     return out
 
 
+def unreadable_reason(e, body, at):
+    """What the reader could not close in a function body defined on line `at`, in words."""
+    if e.at is None:
+        return "a substitution, group or heredoc opened in it never closes"
+    return "the quote opened on line %d never closes" % (at + body.count("\n", 0, e.at))
+
+
 def function_globals(lines):
-    """-> [(name, first line, the names it sets without declaring them)], one for every function,
-    or None for the names of a function whose body shell-words cannot read.
+    """-> [(name, first line, the names it sets without declaring them, why it was unreadable)], one
+    for every function. A function whose body shell-words cannot read has None for its names and the
+    reader's reason beside it, so the caller can say so; every other has None for the reason.
 
     Every simple command of the body is read by shell-words commands() (claude-config#2076), the
     one reading of a command the gates share, which knows quotes, $( ) nesting, comments and
@@ -171,8 +186,8 @@ def function_globals(lines):
         parts = []
         try:
             cmds = commands(body, parts=parts)
-        except Unreadable:
-            out.append((name, at, None))
+        except Unreadable as e:
+            out.append((name, at, None, unreadable_reason(e, body, at)))
             continue
         declared, globals_set = set(), set()
         piped = False
@@ -193,7 +208,7 @@ def function_globals(lines):
             for nm in assigned_names(" ".join(words)):
                 if nm not in declared:
                     globals_set.add(nm)
-        out.append((name, at, globals_set))
+        out.append((name, at, globals_set, None))
     return out
 
 
@@ -206,10 +221,14 @@ def scan_file(path):
         # feeds is the whole verdict (L10, L11, L215). Reported and counted as a finding, so a
         # tree that has become unreadable fails rather than quietly shrinking what is scanned.
         print("  %s: could not be read (%s), so nothing in it was judged" % (path, e), file=sys.stderr)
-        return 0, [(0, "UNREADABLE", ["the file could not be read"])]
+        return 0, [(0, "UNREADABLE", ["the file could not be read"])], []
     considered = 0
     found = []
-    for name, at, globals_set in function_globals(lines):
+    unread = []
+    for name, at, globals_set, why in function_globals(lines):
+        if why is not None:
+            unread.append((at, name, why))
+            continue
         if not globals_set:
             continue
         considered += 1
@@ -223,7 +242,7 @@ def scan_file(path):
                     if re.search(r"\$\([^)]*\b" + word + r"\b", l) or re.search(r"`[^`]*\b" + word + r"\b", l)]
         if len(captured) == len(calls):
             found.append((at, name, sorted(globals_set)))
-    return considered, found
+    return considered, found, unread
 
 
 def main():
@@ -264,13 +283,15 @@ def main():
     considered = 0
     now = {}
     detail = {}
+    unread = []
     for f in files:
-        c, found = scan_file(f)
+        c, found, cannot = scan_file(f)
         considered += c
+        rel = os.path.relpath(f, keyed_from).replace(os.sep, "/")
         if found:
-            rel = os.path.relpath(f, keyed_from).replace(os.sep, "/")
             now[rel] = len(found)
             detail[rel] = found
+        unread.extend((rel, at, name, why) for at, name, why in cannot)
 
     try:
         base = ratchet.read_baseline(open(baseline_path, encoding="utf-8", errors="replace").read())
@@ -290,6 +311,14 @@ def main():
                 print("  %s  could not be read, so nothing in it was judged" % rel)
             else:
                 print("  %s:%d  %s sets %s" % (rel, at, name, ", ".join(names)))
+    # A body the command reader cannot read is listed on every run, never skipped in silence, and
+    # the count is said when it is zero too, so a run that judged everything says so (#2076). It
+    # does not fail the scan: the limit is the reader's, and the shell may read the code fine.
+    print("scan-subshell-globals: the command reader could not read %d function bod%s, so %s not judged%s"
+          % (len(unread), "y" if len(unread) == 1 else "ies", "it was" if len(unread) == 1 else "they were",
+             ":" if unread else "."))
+    for rel, at, name, why in unread:
+        print("  %s:%d  %s: %s" % (rel, at, name, why))
 
     base, outside = ratchet.within(base, root, keyed_from)
     if outside:

@@ -135,20 +135,32 @@ either(){
   second="$1"
   printf '%s' "$second"
 }
-piped(){
-  local third | cat
-  third="$1"
-  printf '%s' "$third"
-}
 valued(){
   local msg="one; two && three" out="$(date; date)" count=0 tail
   tail="$msg"; count=1
   printf '%s%s%s' "$tail" "$count" "$out"
 }
-x="$(semi 1 2)"; y="$(both 1)"; z="$(either 1)"; w="$(piped 1)"; v="$(valued)"
+x="$(semi 1 2)"; y="$(both 1)"; z="$(either 1)"; v="$(valued)"
 EOF
 run
-check "#1045 a declaration ends at ; && || and |, and a value holding them does not end it" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+check "#1045 a declaration ends at ; && and ||, and a value holding them does not end it" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
+# A declaration ends at `|` too, and there it declares nothing at all: every member of a pipeline
+# runs in a subshell of its own, so `local third | cat` makes third local to a shell that ends at
+# once, and the `third=` after it sets this shell's global (claude-config#2076). This fixture sat in
+# the clean one above until #2076 read pipelines as the shell runs them; what #1045 decided, that
+# `cat` is never read as a declared name, still holds, since nothing in the pipeline is declared.
+cat > "$FIX/a.sh" <<'EOF'
+piped(){
+  local third | cat
+  third="$1"
+  printf '%s' "$third"
+}
+w="$(piped 1)"
+EOF
+run
+check "#2076 a local in a pipeline declares nothing in this shell" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: it was taken as declared")"
+says "#2076 and the name it then sets is the finding" "$OUT" "piped sets third"
 
 # And what FOLLOWS the end is a command of its own, so an assignment there is judged as one: in
 # `local a; leak=1` the name leak is a global, and must not be counted as declared because it
@@ -439,6 +451,34 @@ check "#2076 a reader that fails to load is refused the same way" "$([ "$RC" -eq
 says "#2076 and says why" "$OUT" "broken on purpose"
 # Its tree sits under the fixture root the tests below scan, so it goes before they run.
 rm -rf "$NOREADER"
+
+# A body the reader cannot read is never skipped in silence (claude-config#2076). Before, such a
+# function came back with no names and was counted with the clean ones, so a tree the reader had
+# stopped understanding read as a tree with nothing wrong in it (L10, L11). Each is listed with its
+# file, line and what the reader could not close, and the count is said on every run, zero too. It
+# does not fail the scan on its own: the limit is the reader's, not the code's, and the shell may
+# well run it (a quote the shell closes further down than the function's own closing brace).
+cat > "$FIX/a.sh" <<'EOF'
+ok(){
+  local x=1
+  printf '%s' "$x"
+}
+open_subst(){
+  x=$(echo a
+}
+v="$(ok)"; w="$(open_subst)"; z="$(open_quote)"
+open_quote(){
+  y="abc
+}
+EOF
+run
+check "#2076 a body the reader cannot read does not fail the scan on its own" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and the count of them is said" "$OUT" "the command reader could not read 2 function bodies"
+says "#2076 and one left open by a substitution is named" "$OUT" "a.sh:5  open_subst: a substitution, group or heredoc opened in it never closes"
+says "#2076 and one left open by a quote is named, with the quote's line" "$OUT" "a.sh:9  open_quote: the quote opened on line 10 never closes"
+printf 'f(){\n  local x=1\n}\nv="$(f)"\n' > "$FIX/a.sh"
+run
+says "#2076 and a tree with none says so" "$OUT" "the command reader could not read 0 function bodies"
 
 echo "scan subshell globals: the baseline is a ratchet in both directions"
 
