@@ -561,8 +561,11 @@ def commands(s, cwd="", heredocs=None, parts=None):
             i += 1
             continue
         if c == "(" and in_pattern(f, i):
-            # A pattern written (y) opens no subshell; the ) closing it ends the pattern.
-            frames.append({"k": "paren", "pattern": True})
+            # A pattern written (y) opens no subshell, and the ) closing that leading ( ends the
+            # pattern. Any other ( in a pattern, an extglob's +( or @(, closes inside it, and the
+            # pattern ends at the ) after.
+            leading = not s[max(f["start"], f.get("pat", f["start"])):i].strip()
+            frames.append({"k": "paren", "pattern": leading})
             i += 1
             continue
         if c == ")" and in_pattern(f, i):
