@@ -30,6 +30,8 @@ suite_deadline_arm || exit $?
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="${CHECK_LATER_NUDGE:-$DIR/check-later-nudge.sh}"
 SKILL="$(cd "$DIR/.." && pwd)/skills/check-later/SKILL.md"
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
 
 command -v python3 >/dev/null 2>&1 || { echo "test-check-later-nudge: python3 is not on PATH, so nothing was verified."; printf 'SUITE-NOT-RUN %s\n' "needs python3"; exit 2; }
 
@@ -60,7 +62,7 @@ cat > "$MK" <<'PY'
 import json, sys, uuid
 kind, ts = sys.argv[1], sys.argv[2]
 args = sys.argv[3:]
-base = {"parentUuid": None, "isSidechain": False, "userType": "external", "cwd": "/Users/dan/Apps/Bidspoke",
+base = {"parentUuid": None, "isSidechain": False, "userType": "external", "cwd": "/fixture-home/Apps/Bidspoke",
         "sessionId": "fixture-session", "version": "2.1.0", "gitBranch": "main",
         "uuid": str(uuid.uuid4()), "timestamp": ts}
 if kind == "user":
@@ -80,7 +82,7 @@ print(json.dumps(base))
 PY
 TS="2026-11-02T18:00:00.000Z"   # 1:00 PM ET on Monday Nov 2 2026, the day after the clocks went back
 L() { python3 "$MK" "$1" "$TS" "${@:2}"; }
-MEM="/Users/dan/.claude/projects/-Users-dan-Apps-Bidspoke/memory/eqx-repull.md"
+MEM="/fixture-home/.claude/projects/-fixture-home-Apps-Bidspoke/memory/eqx-repull.md"
 
 # A transcript: an earlier turn, then this turn's user message and whatever the case adds.
 start() { # start <path>
@@ -98,12 +100,15 @@ run() { # run <transcript path> [extra payload json fields] -> the hook's stdout
 reason_of() { python3 -c 'import json,sys
 try: print(json.loads(sys.stdin.read()).get("reason",""))
 except Exception: print("")'; }
+# reason_has <grep flags> <text>: does the reason in $out hold <text>. The reason is read into a
+# variable first, so grep never leaves a producer behind it to die of SIGPIPE (L183).
+reason_has() { local r; r="$(printf '%s' "$out" | reason_of)"; grep "$1" -- "$2" <<< "$r"; }
 
 fires() { # fires <label> <transcript> <text the reason must hold>
   local out reason
   out="$(run "$2")"
   reason="$(printf '%s' "$out" | reason_of)"
-  if printf '%s' "$out" | grep -q '"decision": *"block"' && grep -qiF -- "$3" <<< "$reason"; then
+  if grep -q '"decision": *"block"' <<< "$out" && grep -qiF -- "$3" <<< "$reason"; then
     check "$1" ok
   else
     check "$1" "expected a block naming '$3', got: ${out:-nothing}"
@@ -173,7 +178,7 @@ t="$WORK/mem-past.jsonl"; start "$t"
 silent "control: a memory naming only past dates stays silent" "$t"
 
 t="$WORK/mem-not-memory.jsonl"; start "$t"
-{ L tool w1 Write '{"file_path":"/Users/dan/Apps/Bidspoke/docs/plan.md","content":"Ship on 2026-11-05."}'
+{ L tool w1 Write '{"file_path":"/fixture-home/Apps/Bidspoke/docs/plan.md","content":"Ship on 2026-11-05."}'
   L result w1 "File created successfully" ; } >> "$t"
 silent "control: a future date in a file that is not a memory stays silent" "$t"
 
@@ -260,7 +265,7 @@ fires "a row written to a DIFFERENT list does not count as the flow having run" 
 # ---- the list id has one home, the skill's "## The list" section (L83) ----
 # The detector reads the id from the same SKILL.md the reason points at, so a list that moves is
 # moved once. A copy of the skill naming another id proves it is read, not remembered.
-skill_id="$(grep -o 'list id `[A-Z0-9]*`' "$SKILL" | head -1 | tr -d '`' | sed 's/^list id //')"
+skill_id="$(grep -m 1 -o 'list id `[A-Z0-9]*`' "$SKILL" | tr -d '`' | sed 's/^list id //')"
 check "the skill declares its list id" "$([ -n "$skill_id" ] && echo ok || echo "no 'list id \`...\`' in $SKILL")"
 others="$(grep -oE 'F0[A-Z0-9]{8,}' "$SKILL" | sort -u | grep -vx "$skill_id")"
 check "every list id the skill names is the one it declares" \
@@ -275,7 +280,7 @@ t="$WORK/moved-old-row.jsonl"; start "$t"
 out="$(printf '{"transcript_path":"%s","stop_hook_active":false,"hook_event_name":"Stop"}' "$t" | \
   CHECK_LATER_SKILL="$moved" CLAUDE_PROJECT_DIR="$WORK/proj" bash "$HOOK" 2>/dev/null)"
 check "once the skill's list moves, a row on the old list no longer counts as written" \
-  "$(printf '%s' "$out" | reason_of | grep -qF 'Tue Nov 3' && echo ok || echo "got: ${out:-nothing}")"
+  "$(reason_has -qF 'Tue Nov 3' && echo ok || echo "got: ${out:-nothing}")"
 t="$WORK/moved-new-row.jsonl"; start "$t"
 { L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"recheck","recurring":false}'
   L result c1 "ok"
@@ -304,7 +309,7 @@ t="$WORK/no-id-no-write.jsonl"; start "$t"
 out="$(printf '{"transcript_path":"%s","stop_hook_active":false,"hook_event_name":"Stop"}' "$t" | \
   CHECK_LATER_SKILL="$noid" CLAUDE_PROJECT_DIR="$WORK/proj" bash "$HOOK" 2>/dev/null)"
 check "a skill naming no list id still points at the skill when the turn wrote no row" \
-  "$(printf '%s' "$out" | reason_of | grep -qF "Read $noid" && echo ok || echo "got: ${out:-nothing}")"
+  "$(reason_has -qF "Read $noid" && echo ok || echo "got: ${out:-nothing}")"
 t="$WORK/no-id-quiet.jsonl"; start "$t"
 L assistant-text "The log is clean." >> "$t"
 out="$(printf '{"transcript_path":"%s","stop_hook_active":false,"hook_event_name":"Stop"}' "$t" | \
@@ -315,26 +320,26 @@ check "a skill naming no list id stays silent on a turn that left nothing dated"
 # ---- an unreadable transcript is never "nothing to check" ----
 out="$(run "$WORK/does-not-exist.jsonl")"
 check "a transcript that does not exist fires, saying it could not be read" \
-  "$(printf '%s' "$out" | reason_of | grep -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
+  "$(reason_has -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
 
 t="$WORK/garbage.jsonl"; printf 'not json at all\n{{{\n' > "$t"
 out="$(run "$t")"
 check "a transcript with no readable line fires, saying it could not be read" \
-  "$(printf '%s' "$out" | reason_of | grep -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
+  "$(reason_has -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
 
 t="$WORK/locked.jsonl"; start "$t"; chmod 000 "$t"
 if [ -r "$t" ]; then
-  check "a transcript the hook may not open (UNMEASURED: running as a user who can read mode 000 files)" ok
+  printf 'SUITE-PART-UNMEASURED %s\n' "a transcript the hook may not open: this runs as a user who can read mode 000 files"
 else
   out="$(run "$t")"
   check "a transcript the hook may not open fires, saying it could not be read" \
-    "$(printf '%s' "$out" | reason_of | grep -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
+    "$(reason_has -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
 fi
 chmod 600 "$t"
 
 out="$(printf '{"stop_hook_active":false,"hook_event_name":"Stop"}' | CLAUDE_PROJECT_DIR="$WORK/proj" bash "$HOOK" 2>/dev/null)"
 check "a payload naming no transcript fires, saying it could not be read" \
-  "$(printf '%s' "$out" | reason_of | grep -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
+  "$(reason_has -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
 
 # ---- it stands down where every Stop hook does ----
 t="$WORK/cron-guard.jsonl"; cp "$WORK/cron-oneshot.jsonl" "$t"
@@ -368,8 +373,8 @@ for entry in d.get("Stop", []):
             print("ok" if h.get("timeout") else "no timeout")
             raise SystemExit
 print("not registered")
-' "$DIR/../settings.hooks.json" 2>&1)"
-check "settings.hooks.json registers it under Stop with a timeout" "$reg"
+' "$SETTINGS" 2>&1)"
+check "the settings file registers it under Stop with a timeout" "$reg"
 
 echo ""
 echo "passed: $pass, failed: $fail"
