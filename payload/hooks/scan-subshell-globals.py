@@ -48,7 +48,15 @@ from shell_code_lines import brace_depth, read_lines  # noqa: E402  the one read
 FN_DEF = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
 DECLARED = re.compile(r"^\s*(local|declare|typeset|export|readonly)\s+(.*)$")
 # The separator that ends the command a quoted line continues, so what follows is a command of its own.
-NEXT_COMMAND = re.compile(r"^\s*(;|&&|\|\|)?\s*")
+# Without one, what follows the close is more words of that same command (`two" ARG=1` hands
+# printf the word ARG=1), so nothing on the line is judged.
+NEXT_COMMAND = re.compile(r"^\s*(;|&&|\|\|)\s*")
+
+
+def next_command(own):
+    """The text of a quoted line from the command after the one its string belongs to, or ""."""
+    m = NEXT_COMMAND.match(own)
+    return own[m.end():] if m else ""
 ASSIGN_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
 
 
@@ -190,7 +198,7 @@ def functions_in(lines):
         while j < len(read) and depth > 0:
             _, line, kind, bare, _, own = read[j]
             if kind in ("code", "quoted"):
-                body.append(own if kind == "code" else NEXT_COMMAND.sub("", own))
+                body.append(own if kind == "code" else next_command(own))
                 depth += brace_depth(bare)
             j += 1
         out.append((m.group(1), i + 1, body))

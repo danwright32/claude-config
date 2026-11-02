@@ -326,6 +326,18 @@ run
 check "#2068 control: an assignment after a string closes is still judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
 says "#2068 control: and names both globals" "$OUT" "after sets CLOSED, SAID"
 
+# But a word after the close with no separator before it is still an argument to the command the
+# string belongs to, so `two" ARG=1` hands printf the word ARG=1 and assigns nothing.
+cat > "$FIX/a.sh" <<'OUTER'
+arg(){
+  printf '%s %s' "
+two" ARG=1
+}
+v="$(arg)"
+OUTER
+run
+check "#2068 a word after a string's close is an argument, not an assignment" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
 echo "scan subshell globals: the baseline is a ratchet in both directions"
 
 cat > "$FIX/a.sh" <<'EOF'
