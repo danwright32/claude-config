@@ -315,7 +315,10 @@ def commands(s, cwd="", heredocs=None, spans=None):
     def open_commands(kind, start):
         parent = next(f for f in reversed(frames) if f["k"] in COMMAND_FRAMES)
         frame = {"k": kind, "start": start, "cwd": parent["cwd"], "old": parent["old"]}
-        if spans is not None and frames[-1] is bodies[0]:
+        # Written directly in the body: no command frame between it and the body, though a ${ } or
+        # $(( )) may stand between them, as in ${V:-$(cmd)}.
+        if spans is not None and next(
+                f for f in reversed(frames) if f["k"] in COMMAND_FRAMES or f is bodies[0]) is bodies[0]:
             frame["span"] = start
         frames.append(frame)
 

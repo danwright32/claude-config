@@ -106,14 +106,14 @@ spec.loader.exec_module(sw)
 got = []
 sw.commands("cat <<E\"OF\"\na $(x)\nEOF\ncat <<EOF\nb $(y) `z`\nEOF", "", got)
 print(got)
-print(sw.body_substitutions("b $(y) `z` $(w $(v))"))
+print(sw.body_substitutions("b $(y) `z` $(w $(v)) ${V:-$(u)} $(( $(t) + 1 ))"))
 try:
     sw.body_substitutions("don`t")
     print("read")
 except sw.Unreadable:
     print("unreadable")' "$SW")"
 [ "$asked" = "[(True, 'cat ', 'a \$(x)'), (False, 'cat ', 'b \$(y) \`z\`')]
-['y', 'z', 'w \$(v)']
+['y', 'z', 'w \$(v)', 'u', 't']
 unreadable" ] && check "#2053 the skipped bodies carry their quoting, and a body's own substitutions are found" ok \
   || check "#2053 the skipped bodies carry their quoting, and a body's own substitutions are found" "got [$asked]"
 
