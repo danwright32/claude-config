@@ -260,6 +260,72 @@ case "$OUT" in
   *) check "#2063 control: and nothing outside a function is drawn into one" ok ;;
 esac
 
+echo "scan subshell globals: a brace in a bracket expression, and a line inside a string, are not code (claude-config#2068)"
+
+# The real case: mt_is_interpreter in lib/merge-target.sh matches `'$'[A-Za-z_{]*` in a case
+# pattern, and the `{` there is a character the pattern matches, not a brace group. Counted as one,
+# it left the function open to the end of the file (1890 lines), so every function below it was
+# never found, and a global one of them sets was never reported. The `[{]` in a [[ =~ ]] regex
+# (test-suite-scratch-isolation.sh) and a ${v//[{]/} replacement are the same shape.
+cat > "$FIX/a.sh" <<'OUTER'
+is_interp() {
+  local tok="$1"
+  case "$tok" in
+    '"$'*|'$'[A-Za-z_{]*) return 0 ;;
+  esac
+  [[ "$tok" =~ \$[{]?(PY)$ ]] && return 0
+  tok="${tok//[{]/}"
+  return 1
+}
+ANSWER=""
+real(){
+  ANSWER="x"
+}
+cap="$(real)"
+if is_interp "$1"; then :; fi
+OUTER
+run
+check "#2068 a brace in a bracket expression does not carry the function past its end" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: the next function was never found: $OUT")"
+says "#2068 and the next function's global is reported against it" "$OUT" "a.sh:11  real sets ANSWER"
+
+# The real case: the suite deadline watchdog in tests/test-claude-sync.sh runs a program through
+# `sh -c '...'`, whose lines read `ceiling="$2"; mark="$3"` and `start="$(date +%s)"`. Those are
+# assignments in ANOTHER shell, the one sh starts, and a Python program in a `python3 -c` string
+# (`stdout=subprocess.PIPE` in lib/project-rules-behind.sh) is not shell at all. A line that
+# begins inside a quoted string is judged on its code alone, which for these is nothing.
+cat > "$FIX/a.sh" <<'OUTER'
+watch(){
+  local out
+  out="$(sh -c '
+    ceiling="$2"; mark="$3"
+    start="$(date +%s)"
+  ' sh 1 2 3)"
+  python3 -c '
+import subprocess
+r = subprocess.run(["true"],
+    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+'
+  printf '%s' "$out"
+}
+v="$(watch)"
+OUTER
+run
+check "#2068 an assignment inside a quoted string is not this shell's global" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
+# The control: what follows a string's close on the same line is still this shell's code, so an
+# assignment there is judged, and an ordinary assignment on its own line still counts.
+cat > "$FIX/a.sh" <<'OUTER'
+after(){
+  printf '%s' "
+two lines"; CLOSED=1
+  SAID="$(date)"
+}
+v="$(after)"
+OUTER
+run
+check "#2068 control: an assignment after a string closes is still judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2068 control: and names both globals" "$OUT" "after sets CLOSED, SAID"
+
 echo "scan subshell globals: the baseline is a ratchet in both directions"
 
 cat > "$FIX/a.sh" <<'EOF'

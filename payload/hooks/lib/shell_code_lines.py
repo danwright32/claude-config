@@ -24,15 +24,22 @@ same walk, so hand-rolled-wait.py can tell a stand in's own commands from the su
 
 read_lines(text) is the walk both of those are built on, and yields every line rather than only the
 code ones: its kind (code, quoted, heredoc body or heredoc end) and its bare code characters, with
-quoted text, comments and escapes left out. scan-subshell-globals.py counts a function's braces on
-those bare characters, so a brace inside a string or a heredoc never ends a function (#2063).
+quoted text, comments and escapes left out, and its own text: the whole of a code line, and for a
+line that begins inside a quoted string only what follows that string's close (#2068).
+scan-subshell-globals.py counts a function's braces on the bare characters with brace_depth, so a
+brace inside a string, a heredoc or a bracket expression never ends a function (#2063, #2068), and
+judges assignments on the own text, so one inside a `sh -c` or `python3 -c` program is never read
+as this shell's (#2068).
 """
 import re
 
 OP = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_]\w*)\2")
+# A bracket expression in a pattern, a case label's `[A-Za-z_{]` or a regex's `[{]`: a `[` with no
+# space after it, closed by a `]` before any space. A test command's `[ ` and `[[ ` never match.
+BRACKET = re.compile(r"\[[^\]\s]+\]")
 
 
-def scan(line, frames, keep=None, parens=None):
+def scan(line, frames, keep=None, parens=None, own=None):
     """Follows the quoting of one line. `frames` is the stack of quoting contexts the line starts in
     (the outermost first; each a quote state: None, "'", "$'" or '"'), and is updated in place.
     Returns the heredoc operators the line opens as code: (strip_tabs, word, inside_substitution).
@@ -43,9 +50,14 @@ def scan(line, frames, keep=None, parens=None):
     an arithmetic group, so its `)` closes it rather than the `$(` around it. Without it the `)` of
     a `(set -f; ...)` inside a multi line `$( { ... } )` closed the substitution, and everything
     after was read as inside the double quotes around it (claude-config#2063). Kept across lines by
-    the caller that passes it; without one it is counted within the line alone."""
+    the caller that passes it; without one it is counted within the line alone.
+
+    Given a one item list as `own`, for a line that begins inside a quoted string, sets it to the
+    index just past that string's close, and leaves it None when the string runs on past the line
+    (claude-config#2068)."""
     if parens is None:
         parens = [0] * len(frames)
+    depth = len(frames) if own is not None and frames[-1] is not None else 0
     ops = []
     i, n = 0, len(line)
     while i < n:
@@ -84,6 +96,8 @@ def scan(line, frames, keep=None, parens=None):
         elif st == "'":
             if c == "'":
                 frames[-1] = None
+                if len(frames) == depth and own[0] is None:
+                    own[0] = i + 1
         else:
             if c == '\\':
                 i += 2
@@ -95,17 +109,25 @@ def scan(line, frames, keep=None, parens=None):
                 continue
             if (st == "$'" and c == "'") or (st == '"' and c == '"'):
                 frames[-1] = None
+                if len(frames) == depth and own[0] is None:
+                    own[0] = i + 1
         i += 1
     return ops
 
 
 def read_lines(text):
     """Every line of the file, in one walk, as (line_number, line, kind, bare, heredoc operators it
-    opens). kind is "heredoc" for a heredoc's body, "end" for the word closing one, "quoted" for a
-    line that begins inside a quoted string, and "code" for any other. bare is the line's code alone:
-    its quoted text, comment and escaped characters left out, and nothing at all of a heredoc's body
-    or end. So a brace in bare is the shell's own, never one in a string the file carries as data
-    (claude-config#2063, where one inside a python3 -c string ended a function at the end of the file)."""
+    opens, own). kind is "heredoc" for a heredoc's body, "end" for the word closing one, "quoted" for
+    a line that begins inside a quoted string, and "code" for any other. bare is the line's code
+    alone: its quoted text, comment and escaped characters left out, and nothing at all of a
+    heredoc's body or end. So a brace in bare is the shell's own, never one in a string the file
+    carries as data (claude-config#2063, where one inside a python3 -c string ended a function at the
+    end of the file).
+
+    own is the text on the line that is this shell's: the whole of a code line, and for a quoted one
+    only what follows the close of the string it began in, nothing while that string runs on. A line
+    of a `sh -c '...'` program reads `start="$(date)"`, which is an assignment in the shell sh starts,
+    never in this one (claude-config#2068)."""
     frames = [None]
     parens = [0]
     pending = []  # heredocs opened and not yet read: (strip_tabs, word)
@@ -114,21 +136,35 @@ def read_lines(text):
             strip, word = pending[0]
             if (line.lstrip('\t') if strip else line) == word:
                 pending.pop(0)
-                yield (i + 1, line, "end", "", [])
+                yield (i + 1, line, "end", "", [], "")
             else:
-                yield (i + 1, line, "heredoc", "", [])
+                yield (i + 1, line, "heredoc", "", [], "")
             continue
         starts_quoted = frames[-1] is not None
         keep = []
-        ops = scan(line, frames, keep, parens)
+        own = [None]
+        ops = scan(line, frames, keep, parens, own)
         pending.extend((s, w) for s, w, _ in ops)
-        yield (i + 1, line, "quoted" if starts_quoted else "code", "".join(keep), ops)
+        if not starts_quoted:
+            yield (i + 1, line, "code", "".join(keep), ops, line)
+        else:
+            yield (i + 1, line, "quoted", "".join(keep), ops, "" if own[0] is None else line[own[0]:])
+
+
+def brace_depth(bare):
+    """How far a line's bare code opens (positive) or closes (negative) the shell's brace groups.
+    A brace inside a bracket expression is a character a pattern matches, so it is not counted: the
+    `{` in mt_is_interpreter's case label `'$'[A-Za-z_{]*)` in lib/merge-target.sh left that
+    function open for the rest of the file, 1890 lines, and no function below it was ever found
+    (claude-config#2068). A parameter expansion's braces always pair, so they cancel."""
+    bare = BRACKET.sub("", bare)
+    return bare.count("{") - bare.count("}")
 
 
 def _walk(text):
     """Every code line as (line_number, line, heredoc operators it opens, whether it is a heredoc's
     body): the one walk code_lines and heredoc_body_lines both read."""
-    for n, line, kind, _, ops in read_lines(text):
+    for n, line, kind, _, ops, _ in read_lines(text):
         if kind in ("end", "quoted") or line.lstrip().startswith('#'):
             continue
         yield (n, line, ops, kind == "heredoc")
