@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Tests for lib/shell_code_lines.py, the one reader of which lines of a shell file are its code
-# (claude-config#1663), shared by hand-rolled-wait.py (#1679), hand-rolled-checkout.py (#1663) and
-# heredoc-in-substitution.py (#1690). Each of those suites proves its own scan; this proves the reader
-# they stand on, so a change to how quoting is followed is caught here by name rather than as three
-# scans drifting at once (L613).
+# (claude-config#1663), shared by hand-rolled-wait.py (#1679), hand-rolled-checkout.py (#1663),
+# heredoc-in-substitution.py (#1690) and scan-subshell-globals.py (#2063). Each of those suites
+# proves its own scan; this proves the reader they stand on, so a change to how quoting is followed
+# is caught here by name rather than as four scans drifting at once (L613).
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
@@ -72,6 +72,43 @@ from shell_code_lines import code_lines
 print(" ".join(str(n) for n, _ in code_lines(open(sys.argv[2]).read())))
 ' "$LIB" "$W/f.sh" 2>&1)"
 eq "#1663 an apostrophe in a heredoc body leaves the line after the heredoc as code" "1 3 6 7 8 9 10 12 13 14 16 17" "$after"
+
+# A plain `( ... )` inside a substitution closes itself, not the substitution (claude-config#2063).
+# The shape of claude-sync's send_hook_tests: a subshell on the middle line of a `"$( { ... } )"`
+# over three lines. Its `)` used to close the `$(`, so the third line read as inside the double
+# quotes, and the brace closing the group there was never seen.
+{
+  printf 'd="$( { printf one\n'
+  printf '        (set -f; cd /tmp && ls)\n'
+  printf '        printf two; } | cut -c1)"\n'
+  printf 'echo after\n'
+} > "$W/p.sh"
+plain="$(python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from shell_code_lines import code_lines
+print(" ".join(str(n) for n, _ in code_lines(open(sys.argv[2]).read())))
+' "$LIB" "$W/p.sh" 2>&1)"
+eq "#2063 a subshell inside a substitution over lines leaves the substitution's next line as code" "1 2 3 4 5" "$plain"
+
+# read_lines gives each line's code alone, so a brace in quoted text, a comment, an escape or a
+# heredoc's body is never counted as the shell's (claude-config#2063).
+{
+  printf 'f() { echo "{" '"'"'}'"'"' \\{  # a { comment\n'
+  printf '  cat %s%s\n' "$_H" 'EOF'
+  printf '{ body\n'
+  printf 'EOF\n'
+  printf '}\n'
+} > "$W/b.sh"
+bare="$(python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from shell_code_lines import read_lines
+for n, line, kind, bare, ops in read_lines(open(sys.argv[2]).read()):
+    print("%d %s %d %d" % (n, kind, bare.count("{"), bare.count("}")))
+' "$LIB" "$W/b.sh" 2>&1 | paste -sd'|' -)"
+eq "#2063 read_lines counts only the shell's own braces, line by line" \
+  "1 code 1 0|2 code 0 0|3 heredoc 0 0|4 end 0 0|5 code 0 1|6 code 0 0" "$bare"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
