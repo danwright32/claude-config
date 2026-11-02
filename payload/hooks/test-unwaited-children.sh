@@ -324,6 +324,17 @@ case "$nr" in *'shell-words.py'*) nr_named=1 ;; esac
 [ "$nr_rc" = 2 ] && [ "$nr_named" = 1 ] \
   && check "#2073 a scan without lib/shell-words.py refuses to run and names it" ok \
   || check "#2073 a scan without lib/shell-words.py refuses to run and names it" "exit $nr_rc, wanted 2 and the reader named: $nr"
+# Loading the reader writes no bytecode cache beside it: a shell-words .pyc in the hooks' lib/ is
+# what test-push-scope.sh refuses (#1017), and a copy of the scan run beside a copy of the reader
+# shows whether this scan leaves one.
+mkdir -p "$TMPROOT/pyc"
+cp "$SCAN" "$TMPROOT/pyc/unwaited-children.py"
+cp "$DIR/lib/shell-words.py" "$TMPROOT/pyc/shell-words.py"
+printf 'plain.sh\n' | python3 "$TMPROOT/pyc/unwaited-children.py" --root "$TMPROOT" >/dev/null 2>&1; pyc_rc=$?
+pyc_left="$(ls "$TMPROOT/pyc/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
+[ "$pyc_rc" = 0 ] && [ "$pyc_left" = 0 ] \
+  && check "#2073 loading lib/shell-words.py leaves no bytecode beside it" ok \
+  || check "#2073 loading lib/shell-words.py leaves no bytecode beside it" "exit $pyc_rc, $pyc_left shell-words bytecode file(s) left"
 
 # ---------------------------------------------------------------------------
 # The real hooks: none at all, background jobs included (#1989).

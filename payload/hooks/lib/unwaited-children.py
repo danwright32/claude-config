@@ -77,7 +77,9 @@ import sys
 # beside this file: its marker is the whole word after <<, quotes taken out, as bash compares it with
 # each body line (claude-config#2073). There is no reading here to fall back on, since one of its own
 # ended <<'E'OF at a line E and left every site after the body unread, so without the reader the
-# scan refuses to run (exit 2) rather than judge any file.
+# scan refuses to run (exit 2) rather than judge any file. Loading it writes no bytecode cache
+# beside it, which test-push-scope.sh refuses in the hooks' lib/ (#1017).
+sys.dont_write_bytecode = True
 try:
     _spec = importlib.util.spec_from_file_location(
         "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "shell-words.py"))
