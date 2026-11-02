@@ -79,6 +79,13 @@ if not (isinstance(t, str) and t and os.path.isfile(t)):
         t = os.path.join(parent[:-len(".jsonl")], "subagents", "agent-" + agent + ".jsonl")
 sys.stdout.write("\x1f".join([agent, t, str(d.get("cwd") or ""), str(d.get("transcript_path") or ""), msg]))
 ' 2>/dev/null)"; prc=$?
+# JSON that parses but is not shaped like a hand-back (the report as a list, the input as one string,
+# the payload inside a list) read above as an empty report and passed in silence. By the shared rule
+# it is unreadable, so it goes through saying the check did not run, as any payload this cannot read
+# does (#2057). Without the library there is no shared rule to ask, and the parse above decides alone.
+case "$prc" in
+  0|4) declare -F ps_payload_unread >/dev/null && ps_payload_unread "$payload" message && prc=3 ;;
+esac
 [ "$prc" -eq 4 ] && exit 0
 if [ "$prc" -ne 0 ]; then
   hook_allow_notice "HANDBACK CLAIMS CHECK DID NOT RUN: handback-claims-gate.sh could not read the hand-back's hook payload (python3 missing or the payload unreadable), so this report's claims about skipping checks were NOT compared with the agent's commands."

@@ -683,6 +683,30 @@ fresh
 utf8_run "$HOOK" "echo $BAD; ls -la"
 check_eq "#1885 control: a byte in front of a command deleting nothing still passes in silence" "0||" "$rc|$out|$calls"
 
+# 22. JSON that parses but is not shaped like a call (claude-config#2057): the tool input sent as one
+# JSON string, whose delete as its last word is followed by an escaped quote, and the command sent as
+# a list of its words. Neither can be read, so each is refused as a delete it cannot judge, saying it
+# could not be read as a call; the same shapes deleting nothing still pass.
+shaped_run(){ # shaped_run <payload>: sets out, rc and calls
+  out="$(printf '%s' "$1" | PATH="$STUB:$PATH" bash "$HOOK" 2>&1)"; rc=$?
+  calls="$(cat "$ST/gh-calls" 2>/dev/null)"
+}
+for c in "git push origin :feat/x" "git push origin -d feat/x"; do
+  fresh
+  shaped_run "$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":json.dumps({"command":sys.argv[1]}),"cwd":sys.argv[2]}))' "$c" "$REPO")"
+  check_eq "#2057 an input sent as one JSON string is refused: $c" "2" "$rc"
+  check "#2057 saying it could not be read as a call: $c" "as a call" "$out"
+  fresh
+  shaped_run "$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1].split()},"cwd":sys.argv[2]}))' "$c" "$REPO")"
+  check_eq "#2057 a command sent as a list of its words is refused: $c" "2" "$rc"
+done
+fresh
+shaped_run "$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":json.dumps({"command":"ls -la"}),"cwd":sys.argv[1]}))' "$REPO")"
+check_eq "#2057 control: an input sent as one string deleting nothing passes in silence" "0||" "$rc|$out|$calls"
+fresh
+shaped_run "$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":["ls","-la"]},"cwd":sys.argv[1]}))' "$REPO")"
+check_eq "#2057 control: a list of words deleting nothing passes in silence" "0||" "$rc|$out|$calls"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
