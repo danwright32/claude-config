@@ -348,3 +348,21 @@ export const replay = (input: ReplayInput): { sessions: ReplaySession[]; summary
     },
   }
 }
+
+// STUB (red run only)
+export const DECIDE_TOOL = ''
+export const ASK_SOURCE = ''
+export const ANSWER_MS = 0
+export const SWEEP_MS = 1
+export const ANSWERS: readonly string[] = []
+export type Held = { id: string; tool: string; repo: string; main: string; rel: string; agent: string | null; at: number; why: Judged['why']; shown: Match[]; issues: { state: 'read' | 'truncated' } | { state: 'unread'; why: string }; growth: (FileGrowth & { crosses: boolean }) | { unread: string } }
+export type Question = { state: 'pending'; at: number; issues: number[]; session: string; call: string; agent: string | null } | { state: 'answered'; answer: string; at: number; issues: number[] }
+export const reasonProblem = (_r: unknown): string | undefined => undefined
+export const decideProblem = (_i: Record<string, unknown>, _h: Held): string | undefined => undefined
+export const holdCard = (_h: Held) => ({ reason: '', safeWay: '', note: '' })
+export const holdRefusal = (_h: Held): string => ''
+export const restructureQuestion = (_h: Held) => ({ question: '', options: [] as { label: string; description: string }[] })
+export const sleepNotes = (_h: Held): ({ kind: 'question'; repo: string; issue?: number; text: string; options: string[] })[] => []
+export const answerStands = (_q: Question | undefined, _i: readonly number[], _n: number) => false
+export const questionKey = (_r: string, _p: string) => ''
+export const sweepKeys = (_e: readonly [string, unknown][], _n: number): string[] => []

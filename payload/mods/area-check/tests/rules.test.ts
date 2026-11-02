@@ -27,6 +27,21 @@ import {
   replay,
   type CachedIssue,
   type ReplayInput,
+  ANSWER_MS,
+  ANSWERS,
+  ASK_SOURCE,
+  DECIDE_TOOL,
+  SWEEP_MS,
+  answerStands,
+  decideProblem,
+  holdCard,
+  holdRefusal,
+  questionKey,
+  reasonProblem,
+  restructureQuestion,
+  sleepNotes,
+  sweepKeys,
+  type Held,
 } from '../hooks/rules.ts'
 
 // The area check (#1506, phase 1 #1508): the facts about a file at the moment a session first edits
@@ -271,4 +286,113 @@ test('the cache keeps each issue with its labels read and the paths the shared r
     { n: 3, structural: ['refactor'], priority: 'p0', refs: ['a.ts'] },
     { n: 4, structural: [], priority: null, refs: [] },
   ])
+})
+
+// ---- The hold (#1509): what a held edit shows, and what a decision must carry ----
+
+const HELD: Held = {
+  id: 'toolu_1', tool: 'Edit', repo: 'dan/app', main: '/w/app', rel: 'src/lib/slack.ts', agent: null, at: 0,
+  why: ['issues'],
+  shown: [{ n: 41, how: 'path', structural: ['tech-debt'], priority: 'p2' }, { n: 57, how: 'suffix', structural: ['refactor'], priority: null }],
+  issues: { state: 'read' },
+  growth: { net: 820, size: 2400, fixes: 3, rank: 2, crosses: true },
+}
+const GROWTH_ONLY: Held = { ...HELD, why: ['growth'], shown: [] }
+
+test('a proceed reason must start with a word, so a bracket, a quote or a dash standing alone never reads as a reason (L675)', () => {
+  for (const r of ['<why this change does not add to the problem>', '"', '-- adds nothing', '...', '  ', '(see above)', '123 lines only'])
+    expect(reasonProblem(r)).toBeDefined()
+})
+
+test('a proceed reason that is a placeholder or too short to say anything is refused, by name', () => {
+  for (const r of ['n/a', 'none', 'TBD', 'ok', 'fine', 'because', 'no reason', 'small change']) expect(reasonProblem(r)).toBeDefined()
+  expect(reasonProblem(undefined)).toContain('reason')
+  expect(reasonProblem(42)).toContain('reason')
+  expect(reasonProblem('Only renames one local variable inside formatDate')).toBeUndefined()
+})
+
+test('a decision is one of three, and proceed is refused without a real reason', () => {
+  expect(decideProblem({ decision: 'skip' }, HELD)).toContain('proceed')
+  expect(decideProblem({ decision: 'proceed', reason: 'ok' }, HELD)).toBeDefined()
+  expect(decideProblem({ decision: 'proceed', reason: 'Only renames one local variable inside formatDate' }, HELD)).toBeUndefined()
+  expect(decideProblem({ decision: 'restructure' }, HELD)).toBeUndefined()
+})
+
+test('fold names an issue the hold showed, never another, and a file held for growth alone has none to fold', () => {
+  expect(decideProblem({ decision: 'fold', issue: 41 }, HELD)).toBeUndefined()
+  expect(decideProblem({ decision: 'fold', issue: 57 }, HELD)).toBeUndefined()
+  expect(decideProblem({ decision: 'fold', issue: 99 }, HELD)).toContain('#41')
+  expect(decideProblem({ decision: 'fold' }, HELD)).toContain('#41')
+  expect(decideProblem({ decision: 'fold', issue: '41' }, HELD)).toContain('#41')
+  expect(decideProblem({ decision: 'fold', issue: 41 }, GROWTH_ONLY)).toContain('growth')
+})
+
+test('the card names the file, each issue with its priority, a missing label read as p2, and growth as rough', () => {
+  const c = holdCard(HELD)
+  expect(c.reason).toContain('src/lib/slack.ts')
+  expect(c.reason).toContain('#41 (p2, tech-debt)')
+  expect(c.reason).toContain('#57 (p2, refactor)')
+  expect(c.note).toContain('rough')
+  expect(c.note).toContain('820')
+  expect(holdCard(GROWTH_ONLY).reason).toContain('fastest growing')
+})
+
+test('the card says when the issues could not be read, with why, and that growth alone decided (decision 12)', () => {
+  const c = holdCard({ ...GROWTH_ONLY, issues: { state: 'unread', why: 'not read within 7 seconds' } })
+  expect(c.reason).toContain('not read within 7 seconds')
+  expect(c.reason).toContain('growth')
+})
+
+test("the refusal names the call to decide under and every way out; a subagent's restructure goes to the main session", () => {
+  const main = holdRefusal(HELD)
+  expect(main).toContain(DECIDE_TOOL)
+  expect(main).toContain('"call": "toolu_1"')
+  for (const w of ['proceed', 'fold', 'restructure', '#41', '#57']) expect(main).toContain(w)
+  const agent = holdRefusal({ ...HELD, agent: 'ag1' })
+  expect(agent).toContain('main session')
+  expect(holdRefusal(GROWTH_ONLY)).not.toContain('"fold"')
+})
+
+test("the restructure question is Dan's three answers, Fold in only where an issue was shown", () => {
+  const q = restructureQuestion(HELD)
+  expect(q.question).toContain('src/lib/slack.ts')
+  expect(q.options.map(o => o.label)).toEqual([...ANSWERS])
+  expect(restructureQuestion(GROWTH_ONLY).options.map(o => o.label)).toEqual(['Restructure first', 'Proceed anyway'])
+  expect(ASK_SOURCE).toBe('area-check')
+})
+
+test("asleep, one note per issue shown, with the repo, the issue and the question, as bedtime reads them", () => {
+  const notes = sleepNotes(HELD)
+  expect(notes.length).toBe(2)
+  expect(notes[0]).toMatchObject({ kind: 'question', repo: 'dan/app', issue: 41 })
+  expect(notes[1]).toMatchObject({ kind: 'question', repo: 'dan/app', issue: 57 })
+  expect(String(notes[0]?.text)).toContain('src/lib/slack.ts')
+  expect(notes[0]?.options).toEqual([...ANSWERS])
+  // Held for growth alone there is no issue to post into: one note for the morning report.
+  const g = sleepNotes(GROWTH_ONLY)
+  expect(g.length).toBe(1)
+  expect(g[0]?.issue).toBeUndefined()
+})
+
+test("Dan's answer stands for a week and for the same issues, so he is not asked again; new issues ask again", () => {
+  const q = { state: 'answered' as const, answer: 'Proceed anyway', at: 1_000, issues: [57, 41] }
+  expect(answerStands(q, [41, 57], 1_000 + ANSWER_MS - 1)).toBe(true)
+  expect(answerStands(q, [41, 57], 1_000 + ANSWER_MS)).toBe(false)
+  expect(answerStands(q, [41, 57, 60], 2_000)).toBe(false)
+  expect(answerStands({ state: 'pending', at: 1_000, issues: [41], session: 's', call: 'c', agent: null }, [41], 2_000)).toBe(false)
+  expect(answerStands(undefined, [41], 2_000)).toBe(false)
+  expect(questionKey('dan/app', 'src/a.ts')).toBe('question:dan/app\nsrc/a.ts')
+})
+
+test('the sweep drops issue lists unread for a week and answers past their week, and keeps a pending question', () => {
+  const now = 100 * SWEEP_MS
+  const keys = sweepKeys([
+    ['issues:dan/old', { at: now - SWEEP_MS }],
+    ['issues:dan/new', { at: now - SWEEP_MS + 1 }],
+    ['issues:dan/bad', 'not a record'],
+    ['question:dan/app\na.ts', { state: 'answered', at: now - ANSWER_MS, issues: [] }],
+    ['question:dan/app\nb.ts', { state: 'pending', at: 0, issues: [] }],
+    ['other', { at: 0 }],
+  ], now)
+  expect(keys.sort()).toEqual(['issues:dan/bad', 'issues:dan/old', 'question:dan/app\na.ts'])
 })
