@@ -141,6 +141,19 @@ ps_unparsed_refuse() {
 # Output is always the command, then a unit separator, then the working directory, whether or not
 # the caller wants the second half. One shape means every caller reads it the same way.
 #
+# THE FIRST SEPARATOR ALWAYS ENDS THE COMMAND (claude-config#2055). Every caller takes the command
+# as everything before the first unit separator, about 35 of them, so a command holding a 0x1f of
+# its own was cut at that byte and whatever followed it was never judged by any gate. So each 0x1f
+# inside the command is written as U+FFFD, the character this library already uses for what it
+# cannot carry (#1900, #1944), and no caller has to split any other way. U+FFFD is no word separator
+# to the shell or to lib/shell-words.py and no shell syntax, so the command keeps the words and the
+# shape the shell gives it: a space would have split a word in two, and dropping the byte would
+# have removed a word that stood alone, each changing what a gate reads from what runs. Nothing is
+# refused for holding the byte, because a refusal here would reach the many callers whose answer to
+# an unread payload is to let it through. The folder is left as it came: it is everything after the
+# first separator, so a folder holding the byte is carried whole. test-payload-separator.sh holds
+# the contract under each reader and the verdict through each family of gate.
+#
 # MODE decides what happens to a newline, which is the one thing the callers genuinely differ on:
 #   segmented  a newline becomes "; ", because it IS a command separator and the caller is about
 #              to ask what each segment starts with. Anything that asks "is this a push" needs it.
@@ -160,13 +173,15 @@ ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
   payload="$(ps_clean_payload "${1:-}")"
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$payload" | jq -j --arg sep "$sep" '
-      ((.tool_input.command // "") | if $sep == "" then . else gsub("\n"; $sep) end)
+      ((.tool_input.command // "") | if $sep == "" then . else gsub("\n"; $sep) end
+        | split("\u001f") | join("�"))
       + "\u001f" + (.cwd // "")
     ' 2>/dev/null && return 0
   fi
   printf '%s' "$payload" | PS_SEP="$sep" python3 -c '
 import os, sys, json
-sys.stdout.reconfigure(errors="replace")
+# UTF-8 whatever the locale, as jq writes, so the U+FFFD below is never written as a question mark.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sep = os.environ.get("PS_SEP", "; ")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
@@ -176,6 +191,7 @@ ti = d.get("tool_input") or {}
 cmd = ti.get("command") or ""
 if sep:
     cmd = cmd.replace("\n", sep)
+cmd = cmd.replace("\x1f", "�")
 sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 ' 2>/dev/null
 }
