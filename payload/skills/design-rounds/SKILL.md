@@ -26,7 +26,7 @@ says what is on the screen. Not later: once the screen exists in the real framew
 every round costs a rebuild rather than an edit, and the question quietly changes from
 what this should look like to what is cheap to change now.
 
-## The seven rules
+## The eight rules
 
 1. **Render, do not describe.** Build the options and show them. Ask afterwards.
 2. **One variable per round.** Everything else identical, produced by one builder, so
@@ -51,6 +51,14 @@ what this should look like to what is cheap to change now.
    rule, what the next round's one variable should be, and whether the design is done.
    He answers by selecting, so a question asked in a paragraph hands him the work back
    as typing.
+8. **Draw the loading state of every screen whose content loads.** It is a frame of its
+   own in the round and in the settled design, with a decision saying which kind it is
+   and why. A skeleton only where the layout is known before the data arrives, at the
+   real content's shape; where the data decides the layout (a balance for one person,
+   an offer for another), a neutral indicator, or a skeleton of only what every outcome
+   shares, because a skeleton of one outcome misleads everyone who gets the other. Past
+   a couple of seconds it shows the work is still alive, and a stall becomes an error
+   with a retry (the global CLAUDE.md, "Progress & Feedback"; Dan, 2026-11-01).
 
 ## Asking for the choice
 
@@ -703,3 +711,5 @@ or as a duplicate.
    the tab and the picker come to disagree about what an option is called.
 10. Ending a round without the "Is this design settled?" picker, or asking it in prose: the design
    is then settled in conversation only, and the guard holds every screen edit after it.
+11. Designing only the loaded screen, so the build invents its loading state, usually a
+   skeleton of one outcome on a screen whose data decides which outcome it shows.
