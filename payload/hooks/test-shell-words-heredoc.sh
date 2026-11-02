@@ -45,14 +45,15 @@ for rec in sys.stdin.read().split("\x1e"):
 has() {
   local got
   got="$(reading "$1")"
-  if printf '%s\n' "$got" | grep -qxF -- "$2" && printf '%s\n' "$got" | grep -qx 'rc=0'; then check "$3" ok
+  local lines=$'\n'"$got"$'\n'
+  if [[ "$lines" == *$'\n'"$2"$'\n'* && "$lines" == *$'\nrc=0\n'* ]]; then check "$3" ok
   else check "$3" "reading was [$(printf '%s' "$got" | tr '\n' '|')]"; fi
 }
 # lacks <command text> <a text that must not be among the commands> <description>
 lacks() {
   local got
   got="$(reading "$1")"
-  if printf '%s\n' "$got" | grep -qF -- "$2"; then check "$3" "reading was [$(printf '%s' "$got" | tr '\n' '|')]"
+  if [[ "$got" == *"$2"* ]]; then check "$3" "reading was [$(printf '%s' "$got" | tr '\n' '|')]"
   else check "$3" ok; fi
 }
 
@@ -93,7 +94,7 @@ lacks $'cat <<E"OF"\ngit push\nEOF' "git push" "#2053 control: a partly quoted m
 
 # ---- a substitution left open at the end of its body cannot be trusted ----
 got="$(reading $'cat <<EOF\ndon`t\nEOF\necho after')"
-printf '%s\n' "$got" | grep -qx 'rc=3' && check "#2053 a backquote left open in a body is the crude reading" ok \
+[[ $'\n'"$got"$'\n' == *$'\nrc=3\n'* ]] && check "#2053 a backquote left open in a body is the crude reading" ok \
   || check "#2053 a backquote left open in a body is the crude reading" "reading was [$(printf '%s' "$got" | tr '\n' '|')]"
 
 # ---- the skipped bodies a caller asks for (#2050), and the substitutions in one body ----
