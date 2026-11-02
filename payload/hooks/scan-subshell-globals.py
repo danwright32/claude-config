@@ -17,6 +17,12 @@ An env prefix (`VAR=value cmd`) is not an assignment to anything and is not coun
 commonest line shape in these suites and counting it reported 35 functions of which 27 were that.
 A line inside a heredoc is not shell at all and is skipped for the same reason.
 
+Where a function begins and ends is read through lib/shell_code_lines.py, the reader the other
+whole tree scans share, in one pass per file (L297): braces are counted only on the shell's own
+code, never inside a quoted string, a comment or a heredoc, and a function is found only where its
+definition is code. Before that, a `{` inside a python3 -c string left a function open to the end
+of the file, and every assignment after it was charged to that function (claude-config#2063).
+
 Measured over this repo on 2026-09-11: 8 functions flagged, of which one was a real defect
 (tip_payload_dir's caller could never see TIP_PAYLOAD_DIR, so the scratch directory holding the
 whole shared payload was never removed) and the rest were a missing `local` on a private variable,
@@ -35,11 +41,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/lib")
 import ratchet  # noqa: E402  the one rule a count based ratchet applies (claude-config#377)
+from shell_code_lines import read_lines  # noqa: E402  the one reader of shell quoting (#2063)
 
 FN_DEF = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
 DECLARED = re.compile(r"^\s*(local|declare|typeset|export|readonly)\s+(.*)$")
 ASSIGN_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
-HEREDOC = re.compile(r"<<-?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?")
 
 
 def assignments_on(line):
@@ -144,33 +150,34 @@ def split_declaration(rest):
 
 
 def functions_in(lines):
-    """-> [(name, first line, body lines)], skipping heredoc bodies, which are not shell."""
+    """-> [(name, first line, body lines)]: each function's bounds, found by counting its braces.
+
+    Only braces that are the shell's own are counted (claude-config#2063). One literal `{` inside the
+    Python of a `python3 -c` string in ps_payload_text made this read the function as running to the
+    end of lib/push-scope.sh and report 23 globals it never touches, and a `}` in a string ends one
+    early, so a global set below it is never seen. So the braces are counted in each line's code
+    alone, as the one shared reader of shell quoting gives it (lib/shell_code_lines.py): single,
+    double and $'...' quoted text, comments and escapes left out, and a heredoc's body, which is
+    another program's text, neither counted nor judged as this shell's lines, and never searched for
+    a function either. Read in one walk over the file (L297).
+    """
+    read = list(read_lines("\n".join(lines)))
     out = []
     i = 0
-    while i < len(lines):
-        m = FN_DEF.match(lines[i])
+    while i < len(read):
+        _, line, kind, bare, _ = read[i]
+        m = FN_DEF.match(line) if kind == "code" else None
         if not m:
             i += 1
             continue
-        depth = lines[i].count("{") - lines[i].count("}")
+        depth = bare.count("{") - bare.count("}")
         body = []
         j = i + 1
-        heredoc_end = None
-        while j < len(lines) and depth > 0:
-            line = lines[j]
-            if heredoc_end is not None:
-                if line.strip() == heredoc_end:
-                    heredoc_end = None
-                j += 1
-                continue
-            hm = HEREDOC.search(line)
-            if hm:
-                heredoc_end = hm.group(1)
-                depth += line.count("{") - line.count("}")
-                j += 1
-                continue
-            body.append(line)
-            depth += line.count("{") - line.count("}")
+        while j < len(read) and depth > 0:
+            _, line, kind, bare, _ = read[j]
+            if kind in ("code", "quoted"):
+                body.append(line)
+                depth += bare.count("{") - bare.count("}")
             j += 1
         out.append((m.group(1), i + 1, body))
         i = j
