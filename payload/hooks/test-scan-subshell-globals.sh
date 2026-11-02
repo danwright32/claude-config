@@ -452,6 +452,21 @@ says "#2076 and says why" "$OUT" "broken on purpose"
 # Its tree sits under the fixture root the tests below scan, so it goes before they run.
 rm -rf "$NOREADER"
 
+# Loading the reader leaves no bytecode beside it (claude-config#2076). Python caches what it loads
+# by path in lib/__pycache__ unless told not to, and test-push-scope.sh asserts lib/ holds no
+# shell-words bytecode (#1017), so one run of this scan failed that suite on every later run.
+# Measured in a copy of the hooks, never the real lib/, so a sibling run cannot race the count.
+PYC="$FIX/pyc"
+mkdir -p "$PYC/lib" "$PYC/tree"
+cp "$SCAN" "$PYC/scan-subshell-globals.py"
+cp "$DIR/lib/ratchet.py" "$DIR/lib/shell_code_lines.py" "$DIR/lib/shell-words.py" "$PYC/lib/"
+printf 'f(){\n  local x=1\n}\nv="$(f)"\n' > "$PYC/tree/a.sh"
+OUT="$(python3 "$PYC/scan-subshell-globals.py" --root "$PYC/tree" --baseline "$FIX/baseline.txt" 2>&1)"; RC=$?
+check "#2076 control: the copied scan ran and judged its tree" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+_pyc="$(ls "$PYC/lib/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
+check "#2076 the scan leaves no shell-words bytecode in lib/" "$([ "$_pyc" = 0 ] && echo ok || echo "$_pyc shell-words bytecode file(s) left in lib/__pycache__")"
+rm -rf "$PYC"
+
 # A body the reader cannot read is never skipped in silence (claude-config#2076). Before, such a
 # function came back with no names and was counted with the clean ones, so a tree the reader had
 # stopped understanding read as a tree with nothing wrong in it (L10, L11). Each is listed with its

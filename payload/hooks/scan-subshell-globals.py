@@ -48,6 +48,10 @@ import os
 import re
 import sys
 
+# No bytecode cache beside the hooks, as gh_issue_scan.py keeps none: a shell-words cache left in
+# lib/__pycache__ by one run of this scan failed test-push-scope.sh's #1017 check on every run after
+# it (claude-config#2076).
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/lib")
 import ratchet  # noqa: E402  the one rule a count based ratchet applies (claude-config#377)
 from shell_code_lines import brace_depth, read_lines  # noqa: E402  the one reader of shell quoting (#2063)
