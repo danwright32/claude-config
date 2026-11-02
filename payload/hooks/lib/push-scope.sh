@@ -160,8 +160,7 @@ def walk(v, depth):
     if isinstance(v, str):
         out.append(v)
         s = v.strip()
-        # chr(123) is an opening brace, spelled so that no shell scanner counts it as one.
-        if s[:1] in (chr(123), "["):
+        if s[:1] in ("{", "["):
             try:
                 walk(json.loads(s), depth + 1)
             except Exception:

@@ -194,6 +194,72 @@ OUTER
 run
 check "an assignment inside a heredoc is not this shell's" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
 
+echo "scan subshell globals: a brace inside quoted text is not where a function ends (claude-config#2063)"
+
+# The real case, in miniature. ps_payload_text in lib/push-scope.sh carries Python in a single
+# quoted `python3 -c` string, and one literal opening brace in it made this scan read the function
+# as running to the end of the file: it reported 23 globals the function never touches, every
+# assignment below it in the file. #2061 worked around it by spelling the brace chr(123).
+cat > "$FIX/a.sh" <<'OUTER'
+payload_text(){
+  local p="${1-}" more=""
+  more="$(printf '%s' "$p" | python3 -c '
+import json, sys
+s = sys.stdin.read().strip()
+if s[:1] in ("{", "["):
+    print(json.loads(s))
+' 2>/dev/null)" || more=""
+  printf '%s\n%s' "$p" "$more"
+}
+payload="$(payload_text "$1")"
+FOLLOWING=1
+OUTER
+run
+check "#2063 a brace in a quoted python3 -c string does not carry the function to the end of the file" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
+# And the same for a closing brace, in the other direction: read as structure it ENDS the function
+# early, so a global set below it is never seen. Double quotes, and a heredoc body, likewise.
+cat > "$FIX/a.sh" <<'OUTER'
+ANSWER=""
+early(){
+  echo "a closing } inside double quotes"
+  echo 'and one } inside single quotes'
+  cat <<EOF
+and one } in a heredoc body
+EOF
+  ANSWER="leaked"
+}
+x="$(early)"
+OUTER
+run
+check "#2063 a closing brace in quoted text or a heredoc body does not end the function early" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: the global below the brace was never seen")"
+says "#2063 and the global below it is named" "$OUT" "early sets ANSWER"
+
+# The control: real function bounds are still found. A function holding quoted braces ends at its
+# own closing brace, so the next function's global is reported against the next function and
+# nothing after either is drawn in; a brace group and a parameter expansion are still structure.
+cat > "$FIX/a.sh" <<'OUTER'
+quoted(){
+  local p="$1"
+  printf '%s' "{ $p" | python3 -c 'print("{")'
+}
+ANSWER=""
+real(){
+  if [ -n "${1:-}" ]; then { echo grouped; }; fi
+  ANSWER="x"
+}
+cap="$(real)"
+q="$(quoted)"
+AFTER=1
+OUTER
+run
+check "#2063 control: a real function's global is still reported" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2063 control: against the right function" "$OUT" "a.sh:6  real sets ANSWER"
+case "$OUT" in
+  *quoted*|*AFTER*|*", cap"*|*", q"*) check "#2063 control: and nothing outside a function is drawn into one" "$OUT" ;;
+  *) check "#2063 control: and nothing outside a function is drawn into one" ok ;;
+esac
+
 echo "scan subshell globals: the baseline is a ratchet in both directions"
 
 cat > "$FIX/a.sh" <<'EOF'

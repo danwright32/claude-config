@@ -66,6 +66,10 @@ refused "#1478 in bash -c" "bash -c 'gh pr checks 12 --watch'"
 refused "#1478 through eval" "eval gh run watch 123456"
 refused "#1478 through nohup in the background" "nohup gh pr checks 12 --watch &"
 refused "#1478 through timeout" "timeout 600 gh run watch 123456"
+# The shell runs the substitutions in the body of a heredoc whose end marker is unquoted
+# (claude-config#2053); a quoted marker keeps the body text.
+refused "#2053 in a substitution in an unquoted heredoc body" $'cat <<EOF\n$(gh pr checks 12 --watch)\nEOF'
+allowed "#2053 in a quoted heredoc body, which is text" $'cat <<\'EOF\'\n$(gh pr checks 12 --watch)\nEOF'
 judge "gh -R acme/widget pr checks 12 --watch"
 check "#1188 the command it suggests keeps the flag that was in front" "gh pr checks -R acme/widget 12 --watch --interval 60" "$out"
 

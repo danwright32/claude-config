@@ -59,6 +59,10 @@ refused "after a semicolon" "git status; rtk init"
 refused "after ||" "false || rtk init -g"
 refused "in a subshell" "(cd /tmp && rtk init -g)"
 refused "in a command substitution" 'echo "$(rtk init -g)"'
+# The shell runs the substitutions in the body of a heredoc whose end marker is unquoted
+# (claude-config#2053); a quoted marker keeps the body text.
+refused "in a substitution in an unquoted heredoc body (#2053)" $'cat <<EOF\n$(rtk init -g)\nEOF'
+allowed "in a quoted heredoc body, which is text (#2053)" $'cat <<\'EOF\'\n$(rtk init -g)\nEOF'
 refused "inside if" "if true; then rtk init -g; fi"
 refused "on the second line of the command" "$(printf 'echo start\nrtk init -g')"
 refused "by its path under the home folder" "~/.local/bin/rtk init -g"
