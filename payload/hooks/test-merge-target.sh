@@ -1439,10 +1439,14 @@ printf '2000000' > "$SIGNIN_CLOCK"
 
 # Assume it runs twice: twenty runs recording at once each leave one whole line.
 rm -rf "$MT_SIGNIN_LEDGER_DIR"
+# Each writer is this suite's own child, kept and reaped by name straight after the loop, and safe to
+# keep (L1035, #2040): nothing is printed between their start and that wait.
+signin_writers=""
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   ( MT_SIGNIN_RUN="p$i" mt_signin_record refused present ) &
+  signin_writers="$signin_writers $!"
 done
-wait
+wait $signin_writers
 eq "$(lines)" "20" "#1626 twenty runs at once leave twenty lines"
 eq "$(awk -F'\t' 'NF == 7 && $6 == "refused" && $7 == "present"' "$LEDGER" | cut -f4 | sort -u | wc -l | tr -d ' ')" "20" "#1626 each of them whole and its own"
 
@@ -1482,12 +1486,16 @@ WAITED="$SIGNIN_WORK/lock-waited"; rm -f "$WAITED" "$SIGNIN_WORK/racer.pid"
 # not a measurement).
 printf '#!/usr/bin/env bash\ntouch "%s"\nt0=$SECONDS\nwhile [ -d "%s" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.025; done\n' "$WAITED" "$LEDGER.lock" > "$SIGNIN_WORK/lock-sleep"; chmod +x "$SIGNIN_WORK/lock-sleep"
 signin_trim_pause() {
+  # This suite's own child (the seam runs in this shell), kept in SIGNIN_RACER and reaped by name as
+  # soon as the trimming run returns, and safe to keep (L1035, #2040): neither run prints anything
+  # before that wait.
   ( MT_SIGNIN_TRIM_PAUSE="" MT_SIGNIN_LOCK_SLEEP="$SIGNIN_WORK/lock-sleep" MT_SIGNIN_RUN=run-racer mt_signin_record refused present ) &
-  echo $! > "$SIGNIN_WORK/racer.pid"
+  SIGNIN_RACER=$!
+  echo "$SIGNIN_RACER" > "$SIGNIN_WORK/racer.pid"
   hang_wait '[ -f "$WAITED" ] || ! kill -0 "$(cat "$SIGNIN_WORK/racer.pid")" 2>/dev/null' 0.025
 }
 MT_SIGNIN_TRIM_PAUSE=signin_trim_pause MT_SIGNIN_RUN=run-trimmer mt_signin_record refused present
-[ -f "$SIGNIN_WORK/racer.pid" ] && wait "$(cat "$SIGNIN_WORK/racer.pid")" 2>/dev/null
+[ -n "${SIGNIN_RACER:-}" ] && wait "$SIGNIN_RACER" 2>/dev/null
 runs_left="$(cut -f4 "$LEDGER" | tr '\n' ' ')"
 case " $runs_left" in *" run-old "*) fail "#1670 the trim did not run, so the race was not exercised: $runs_left" ;; *) pass ;; esac
 case " $runs_left" in *" run-trimmer "*) pass ;; *) fail "#1670 the trimming run's own line was lost: $runs_left" ;; esac

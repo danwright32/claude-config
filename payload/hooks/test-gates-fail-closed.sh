@@ -550,10 +550,13 @@ done
 . "$DIR/lib/bounded-run.sh"
 # A watch daemon running from another clone, which is what payload-write-gate.sh protects against:
 # with none, a write under payload/ has nothing to revert it and is never refused, readable or not.
-bash -c 'exec -a "'"$WORK"'/src/claude-sync watch" sleep 600' &
-WATCH_PID=$!
+# Started by a subshell that ends at once and writes nowhere, its pid recorded, so it is never this
+# suite's child: one that ran out while a check was printing would cut the line short on bash 3.2
+# (L1035, #2040).
+( bash -c 'exec -a "'"$WORK"'/src/claude-sync watch" sleep 600' </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$WORK/watch.pid" ) </dev/null >/dev/null 2>&1
+WATCH_PID="$(cat "$WORK/watch.pid" 2>/dev/null)"
 trap 'kill "$WATCH_PID" 2>/dev/null; rm -rf "$WORK"' EXIT
-printf '%s\n' "$WATCH_PID" > "$WORK/watch.pid"
 for _ in $(seq 1 200); do
   case "$(ps -o command= -p "$WATCH_PID" 2>/dev/null || true)" in *claude-sync*watch*) break ;; esac
 done

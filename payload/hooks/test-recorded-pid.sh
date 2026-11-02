@@ -38,10 +38,13 @@ young_ago(){   # young_ago <pid> <seconds> -> the helper's exit code
 }
 
 now="$(date +%s)"
-# A process of this suite's own, so nothing here can reach anything else, ended by the trap.
+# A process of this suite's own, so nothing here can reach anything else, ended by the trap. Kept, and
+# safe to keep (L1035, #2040): it sleeps ten minutes against the seconds this suite takes, so it ends
+# only when the trap kills it, and the trap reaps it at once, after the last line has been printed.
 sleep 600 </dev/null >/dev/null 2>&1 &
 LIVE=$!
-trap 'kill -9 "$LIVE" 2>/dev/null' EXIT
+stop_live(){ kill -9 "$LIVE" 2>/dev/null; wait "$LIVE" 2>/dev/null; }
+trap stop_live EXIT
 # A pid that is certainly not running: one this suite started and has reaped.
 sleep 0 & DEAD=$!; wait "$DEAD" 2>/dev/null
 

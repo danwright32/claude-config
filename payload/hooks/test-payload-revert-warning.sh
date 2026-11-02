@@ -62,9 +62,12 @@ PIDF="$FIX/watch.pid"
 
 # A REAL process whose command line is the one the daemon has. `exec -a` puts the script path and
 # the subcommand into argv, so `ps -o command=` reads exactly what it reads for the live daemon,
-# and it is a single process, so killing the pid leaves nothing behind (L321).
-bash -c 'exec -a "'"$FIX"'/src/claude-sync watch" sleep 300' &
-WPID=$!
+# and it is a single process, so killing the pid leaves nothing behind (L321). Started by a subshell
+# that ends at once and writes nowhere, its pid recorded, so it is never this suite's child: one that
+# ran out while a check was printing would cut the line short on bash 3.2 (L1035, #2040).
+( bash -c 'exec -a "'"$FIX"'/src/claude-sync watch" sleep 300' </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$PIDF" ) </dev/null >/dev/null 2>&1
+WPID="$(cat "$PIDF" 2>/dev/null)"
 # Wait for the process to be readable rather than sleeping a fixed time, so the suite is not timing
 # the machine's load (L290).
 for _ in $(seq 1 200); do

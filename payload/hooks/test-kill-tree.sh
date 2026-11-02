@@ -85,6 +85,10 @@ mkfifo "$TMPROOT/hold" 2>/dev/null
   printf "trap '' CHLD\n"
   printf 'while :; do read -r _ < "$1/hold" 2>/dev/null && break; done\n'
 } > "$victim"
+# The root is this suite's own child, kept so the walk can be asked about it, and safe to keep
+# (L1035, #2040): it is blocked on the FIFO with SIGCHLD ignored, so it ends only when this suite
+# kills it below, and it is reaped on the same line, before another check is printed. A walk that
+# wrongly took it would end it while this suite waits on the walk, which prints nothing.
 bash "$victim" "$TMPROOT" &
 v_root=$!
 ALL_PIDS="$ALL_PIDS $v_root"
@@ -108,7 +112,7 @@ alive "$v_gc" \
 alive "$v_root" \
   && check "and the process it was asked about is left alive" ok \
   || check "and the process it was asked about is left alive" "pid $v_root was killed, but only its DESCENDANTS were asked for"
-kill -9 "$v_root" 2>/dev/null
+kill -9 "$v_root" 2>/dev/null; wait "$v_root" 2>/dev/null
 rm -f "$TMPROOT/hold"
 
 # ---------------------------------------------------------------------------
@@ -150,6 +154,9 @@ fi
 # rather than what held it then kills somebody's unrelated work (L157). Checked by asking it about
 # a process whose children are not the ones being watched: the bystander is nobody's child of that
 # parent, so it must survive.
+# Both are this suite's own children, kept so they can be named, and safe to keep (L1035, #2040):
+# they sleep far longer than this case takes, so they end only when killed below, and are reaped on
+# the same line, before the next check is printed.
 sleep 300 &
 bystander=$!
 ALL_PIDS="$ALL_PIDS $bystander"
@@ -162,7 +169,7 @@ window_wait 1 '! alive "$bystander"'; kt_spared=$?
 [ "$kt_spared" = 1 ] && alive "$bystander" \
   && check "a process that is not a child of the named one is left alone" ok \
   || check "a process that is not a child of the named one is left alone" "pid $bystander was killed"
-kill -9 "$bystander" "$other_parent" 2>/dev/null
+kill -9 "$bystander" "$other_parent" 2>/dev/null; wait "$bystander" "$other_parent" 2>/dev/null
 
 # ---------------------------------------------------------------------------
 # A process that is still running cannot replace what was just killed (#174).
@@ -177,6 +184,8 @@ respawn="$TMPROOT/respawn.sh"
   printf 'echo $$ > "$1/respawn.pid"\n'
   printf 'while :; do sleep 300 & echo $! >> "$1/spawned"; wait "$!" || true; done\n'
 } > "$respawn"
+# This suite's own child, kept so it can be stopped and walked, and safe to keep (L1035, #2040): it
+# loops until killed, and it is reaped straight after the kill below, before anything is printed.
 bash "$respawn" "$TMPROOT" &
 r_root=$!
 ALL_PIDS="$ALL_PIDS $r_root"
@@ -190,7 +199,7 @@ case "$r_first" in ''|*[!0-9]*) r_first="" ;; esac
 # cannot fork, then walk, then kill it.
 kill -STOP "$r_root" 2>/dev/null
 bash "$TREE" "$r_root" "" >/dev/null 2>&1
-kill -9 "$r_root" 2>/dev/null
+kill -9 "$r_root" 2>/dev/null; wait "$r_root" 2>/dev/null
 # Waited on the condition the passing case meets, every child it spawned gone (#1743), never a fixed
 # two seconds that a loaded Mac can outlast with a killed child not yet reaped (L290).
 r_none_alive(){ local p; while IFS= read -r p; do case "$p" in ''|*[!0-9]*) continue ;; esac; alive "$p" && return 1; done < "$TMPROOT/spawned"; return 0; }
@@ -223,6 +232,8 @@ spawn_count(){ local n; n="$(grep -c . "$1" 2>/dev/null || true)"; case "$n" in 
 for mode in running stopped; do
   list="$TMPROOT/spawn-$mode"
   : > "$list"
+  # This suite's own child, kept so it can be stopped, and safe to keep (L1035, #2040): it loops
+  # until killed, and it is reaped straight after the kill below, before either check is printed.
   bash "$pair" "$list" &
   p_root=$!
   ALL_PIDS="$ALL_PIDS $p_root"
@@ -242,7 +253,7 @@ for mode in running stopped; do
   fi
   after="$(spawn_count "$list")"
   kill -CONT "$p_root" 2>/dev/null
-  kill -9 "$p_root" 2>/dev/null
+  kill -9 "$p_root" 2>/dev/null; wait "$p_root" 2>/dev/null
   while IFS= read -r p; do kill -9 "$p" 2>/dev/null; done < "$list"
   if [ "$mode" = running ]; then
     [ "$after" -gt "$before" ] \
