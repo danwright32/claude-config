@@ -218,10 +218,16 @@ cmd_selftest() {
   # Undone however the test ends: the rule taken away, the listener stopped.
   trap selftest_cleanup EXIT
   # Its output goes nowhere, so a listener that outlived the test could not hold its caller's open.
-  node -e '
+  # Started by a subshell whose own output is /dev/null and which records its pid, so the listener is
+  # never this script's child: one that died mid test cannot cut short a line the skill is reading
+  # below, which bash 3.2 does when a child exits during a write (L1035, #2015).
+  ( node -e '
 const s = require("net").createServer(c => c.destroy())
-s.listen(0, "127.0.0.1", () => require("fs").writeFileSync(process.argv[1], String(s.address().port)))' "$SELFTEST_DIR/port" >/dev/null 2>&1 &
-  SELFTEST_LISTENER=$!
+s.listen(0, "127.0.0.1", () => require("fs").writeFileSync(process.argv[1], String(s.address().port)))' "$SELFTEST_DIR/port" </dev/null >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "$SELFTEST_DIR/listener.pid"
+  ) </dev/null >/dev/null 2>&1
+  SELFTEST_LISTENER="$(cat "$SELFTEST_DIR/listener.pid" 2>/dev/null)"
+  is_number "$SELFTEST_LISTENER" || fail "FAIL: the self test's listener on this machine did not start."
   for _ in $(seq 1 100); do [ -s "$SELFTEST_DIR/port" ] && break; sleep 0.05; done
   port="$(cat "$SELFTEST_DIR/port" 2>/dev/null)"
   is_number "$port" || fail "FAIL: the self test's listener on this machine did not start."

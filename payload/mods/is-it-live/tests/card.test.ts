@@ -5,12 +5,12 @@ import { buttonId, cardOf, cardText, liveList, messageRow, pinnable, reasonToRef
 // Is it live (claude-config#617): the card's state, words and the message row, settled with Dan on
 // 2026-10-04 (docs/mods-design.md, Is it live).
 const base = {
-  repo: 'danwright32/slate',
+  repo: 'acme-hq/scheduler',
   pr: 412,
   deploy: 'live' as const,
   checked: 'Loaded /bookings and saw the new filter.',
   changed: 'The bookings list now filters by venue. Old bookings keep their venue.',
-  see: { link: 'https://slate.example.com/bookings', clicks: ['Open Bookings', 'Pick a venue in the filter'] },
+  see: { link: 'https://scheduler.example.com/bookings', clicks: ['Open Bookings', 'Pick a venue in the filter'] },
 }
 
 test('the state comes from the deploy as Claude checked it, and live needs the check that proved it', () => {
@@ -33,7 +33,7 @@ test('the state leads the title', () => {
 test('what changed is two or three sentences, and a call missing a field is refused by name', () => {
   expect(reasonToRefuse({ ...base, changed: 'One sentence.' })).toContain('2 to 3 sentences')
   expect(reasonToRefuse({ ...base, changed: 'A. B. C. D.' })).toContain('2 to 3 sentences')
-  expect(reasonToRefuse({ ...base, repo: 'slate' })).toContain('owner/name')
+  expect(reasonToRefuse({ ...base, repo: 'scheduler' })).toContain('owner/name')
   expect(reasonToRefuse({ ...base, pr: 0 })).toContain('pull request number')
   expect(reasonToRefuse({ ...base, deploy: 'maybe' as never })).toContain('deploy')
   expect(reasonToRefuse({ ...base, see: { link: '', clicks: [] } })).toContain('link')
@@ -86,11 +86,11 @@ test('a card that is not live says the message for whoever asked waits, and neve
 })
 
 test('the card as text: title, what changed, how to see it, and why live could not be confirmed', () => {
-  expect(cardText({ ...base, state: 'live', title: 'Filter bookings by venue', url: 'https://github.com/danwright32/slate/pull/412' })).toBe(
+  expect(cardText({ ...base, state: 'live', title: 'Filter bookings by venue', url: 'https://github.com/acme-hq/scheduler/pull/412' })).toBe(
     [
       'Live: Filter bookings by venue',
       'The bookings list now filters by venue. Old bookings keep their venue.',
-      'See it: https://slate.example.com/bookings',
+      'See it: https://scheduler.example.com/bookings',
       '1. Open Bookings',
       '2. Pick a venue in the filter',
     ].join('\n'),
@@ -104,7 +104,7 @@ test('the boxed card: the state word leads the title in its colour, then what ch
   expect(live.title).toEqual([{ text: 'Live:', color: 'success', bold: true }, { text: ' Filter bookings by venue' }])
   expect(live.lines).toEqual([
     [{ text: 'The bookings list now filters by venue. Old bookings keep their venue.' }],
-    [{ text: 'See it: ' }, { text: 'https://slate.example.com/bookings' }],
+    [{ text: 'See it: ' }, { text: 'https://scheduler.example.com/bookings' }],
     [{ text: '1. Open Bookings' }],
     [{ text: '2. Pick a venue in the filter' }],
   ])
@@ -123,16 +123,16 @@ test('the text the model reads says what the boxed card says, line for line', ()
 })
 
 test('the message row: a violet heading naming who asked, the message, then Copy and Mark sent', () => {
-  const row = messageRow({ repo: 'danwright32/slate', pr: 412, requester: { name: 'Kris', via: 'named' }, message: 'The venue filter is live now.' })
+  const row = messageRow({ repo: 'acme-hq/scheduler', pr: 412, requester: { name: 'Kris', via: 'named' }, message: 'The venue filter is live now.' })
   expect(row.slot).toBe('message')
   expect(row.mod).toBe('is-it-live')
-  expect(row.id).toBe(buttonId('danwright32/slate', 412))
+  expect(row.id).toBe(buttonId('acme-hq/scheduler', 412))
   const [head, body, buttons] = row.lines as { text?: string; color?: string; button?: string; label?: string }[][]
   expect(head).toEqual([{ text: 'Message for Kris', color: 'magenta', bold: true }])
   expect(body?.[0]?.text).toBe('The venue filter is live now.')
   expect(buttons?.map(b => `${b.button}:${b.label}`)).toEqual([`copy-${row.id}:Copy`, `sent-${row.id}:Mark sent`])
   // A button id carries no character a key could not hold.
-  expect(buttonId('danwright32/slate.web', 7)).toBe('danwright32-slate-web-7')
+  expect(buttonId('acme-hq/scheduler.web', 7)).toBe('acme-hq-scheduler-web-7')
 })
 
 test("/live lists the project's recent cards, newest first, and every unsent message", () => {
