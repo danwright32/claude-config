@@ -404,8 +404,9 @@ export const reasonProblem = (reason: unknown): string | undefined => {
   const ask = 'give "reason" as a sentence saying why this change does not add to the structural problem'
   if (typeof reason !== 'string') return `No reason was given: ${ask}.`
   const r = reason.trim()
-  if (!/^\p{L}+(?:[\s,.;:'’]|$)/u.test(r)) return `"${r}" does not start with a word, so it says nothing: ${ask}.`
+  // A placeholder first, since one such as n/a does not start with a whole word either.
   if (PLACEHOLDER.test(r.replace(/[.!]+$/, '')) || SLOT.test(r)) return `"${r}" is a placeholder, not a reason: ${ask}.`
+  if (!/^\p{L}+(?:[\s,.;:'’]|$)/u.test(r)) return `"${r}" does not start with a word, so it says nothing: ${ask}.`
   if (r.length < REASON_MIN || r.split(/\s+/).length < REASON_WORDS) return `"${r}" is too short to say what the change does to the file: ${ask}.`
   return undefined
 }

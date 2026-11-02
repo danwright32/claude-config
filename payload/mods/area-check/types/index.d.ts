@@ -7,8 +7,11 @@ export type AreaCheckJudged = string[]
 /** How many times the area check's own work failed this session; the first is said in a dim line. */
 export type AreaCheckErrors = number
 
+/** The edits held this session, each waiting on a decision under its call id (#1509). */
+export type AreaCheckHeld = import('../hooks/rules.ts').Held[]
+
 declare module 'claude-code' {
   interface PluginState {
-    'area-check': { judged: AreaCheckJudged; errors: AreaCheckErrors }
+    'area-check': { judged: AreaCheckJudged; errors: AreaCheckErrors; held: AreaCheckHeld }
   }
 }
