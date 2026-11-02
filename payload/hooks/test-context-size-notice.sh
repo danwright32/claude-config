@@ -301,6 +301,63 @@ for item in "in Dan's words" "quoted with its date" "what was ruled out" "commit
   check "10 and so does the orchestrate skill: $item" "$item" "$skill_text"
 done
 
+# ---- 11. A subagent whose agent_id is empty or not a string is still a subagent, so it never
+# shares the main session's state or lock (claude-config#2035): it is kept by its own transcript,
+# or, with no transcript of its own, said once to be unmeasured (L11). State files are named
+# exactly, never globbed, since Linux lists a folder in no set order ----
+by_path(){ # by_path <session> <transcript>: the exact state file a subagent with no usable id keeps
+  python3 -c 'import hashlib, sys; print("%s/%s.bypath-%s.json" % (sys.argv[1], sys.argv[2], hashlib.sha256(sys.argv[3].encode("utf-8", "surrogatepass")).hexdigest()[:16]))' "$CONTEXT_SIZE_STATE_DIR" "$1" "$2"
+}
+Z="$WORK/proj/z1.jsonl"; : > "$Z"
+agent_call "$Z"
+usage "$Z" msg_1 310000
+check "11 the orchestrator is told its size first" "310,000" "$(field "$(main_fire z1 "$Z")" additionalContext)"
+ZS="$CONTEXT_SIZE_STATE_DIR/z1.main.json"
+main_before="$(cat "$ZS" 2>/dev/null)"
+check "11 and its state is kept under its own name" '"offset"' "$main_before"
+EA="$WORK/proj/z1/subagents/agent-empty.jsonl"; mkdir -p "$WORK/proj/z1/subagents"; : > "$EA"
+usage "$EA" msg_1 250000
+out="$(printf '{"session_id":"z1","transcript_path":"%s","agent_id":"","agent_transcript_path":"%s","hook_event_name":"PostToolUse","tool_name":"Read"}' "$Z" "$EA" | bash "$HOOK" 2>/dev/null)"
+check "11 a subagent with an empty agent_id is told its own size" "250,000" "$(field "$out" additionalContext)"
+check "11 as an agent, not as the session" "this agent's" "$(field "$out" additionalContext)"
+check_eq "11 and its notice is not put in front of Dan" "" "$(field "$out" system)"
+check_eq "11 the main session's state is untouched by it" "$main_before" "$(cat "$ZS" 2>/dev/null)"
+check_eq "11 it keeps its own state, named by its transcript" "yes" "$([ -f "$(by_path z1 "$EA")" ] && echo yes || echo no)"
+EB="$WORK/proj/z1/subagents/agent-number.jsonl"; : > "$EB"
+usage "$EB" msg_1 260000
+out="$(printf '{"session_id":"z1","transcript_path":"%s","agent_id":42,"agent_transcript_path":"%s","hook_event_name":"PostToolUse","tool_name":"Read"}' "$Z" "$EB" | bash "$HOOK" 2>/dev/null)"
+check "11 a subagent whose agent_id is a number is told its own size" "260,000" "$(field "$out" additionalContext)"
+check_eq "11 the main session's state is untouched by that one too" "$main_before" "$(cat "$ZS" 2>/dev/null)"
+check_eq "11 and it keeps a state of its own, apart from the empty id's" "yes" "$([ -f "$(by_path z1 "$EB")" ] && echo yes || echo no)"
+check_eq "11 each is said once per band" "" "$(printf '{"session_id":"z1","transcript_path":"%s","agent_id":"","agent_transcript_path":"%s","hook_event_name":"PostToolUse"}' "$Z" "$EA" | bash "$HOOK" 2>/dev/null)"
+out="$(printf '{"session_id":"z1","transcript_path":"%s","agent_id":"","hook_event_name":"PostToolUse","tool_name":"Read"}' "$Z" | bash "$HOOK" 2>/dev/null)"
+check "11 a subagent with no usable id and no transcript of its own is said to be unmeasured" "not being watched" "$(field "$out" additionalContext)"
+check "11 naming the issue" "claude-config#2035" "$(field "$out" additionalContext)"
+check_eq "11 to the agent only, not to Dan" "" "$(field "$out" system)"
+check_eq "11 once" "" "$(printf '{"session_id":"z1","transcript_path":"%s","agent_id":null,"hook_event_name":"PostToolUse"}' "$Z" | bash "$HOOK" 2>/dev/null)"
+check_eq "11 and it never read the main session's transcript as its own" "$main_before" "$(cat "$ZS" 2>/dev/null)"
+out="$(printf '{"session_id":"z2","transcript_path":"%s","agent_id":"","agent_transcript_path":"/tmp/half\\ud83d.jsonl","hook_event_name":"PostToolUse"}' "$Z" | bash "$HOOK" 2>/dev/null; echo "rc=$?")"
+check "11 a lone surrogate in such an agent's transcript path is said as unreadable" "could not read" "$out"
+check "11 and exits 0" "rc=0" "$out"
+check_eq "11 and the main session of that run keeps no state from it" "no" "$([ -f "$CONTEXT_SIZE_STATE_DIR/z2.main.json" ] && echo yes || echo no)"
+# A subagent with a good id whose own transcript cannot be found (no agent_transcript_path, and a
+# parent path not ending in .jsonl to find it beside) is said once per agent to be unmeasured.
+out="$(agent_fire y1 "$WORK/proj/y1-no-extension" v1)"
+check "11 a subagent whose own transcript cannot be found is said to be unmeasured" "not being watched" "$(field "$out" additionalContext)"
+check "11 saying why: its transcript could not be found" "could not find this agent's own transcript" "$(field "$out" additionalContext)"
+check "11 naming the issue there too" "claude-config#2035" "$(field "$out" additionalContext)"
+check_eq "11 to that agent only, not to Dan" "" "$(field "$out" system)"
+check_eq "11 once for that agent" "" "$(agent_fire y1 "$WORK/proj/y1-no-extension" v1)"
+check "11 and once for each other such agent" "not being watched" "$(field "$(agent_fire y1 "$WORK/proj/y1-no-extension" v2)" additionalContext)"
+# An empty session_id is no name either: every session-less payload would otherwise share one file.
+out="$(printf '{"session_id":"","transcript_path":"%s","hook_event_name":"PostToolUse"}' "$Z" | bash "$HOOK" 2>/dev/null; echo "rc=$?")"
+check_eq "11 an empty session_id says nothing and exits 0" "rc=0" "$out"
+check_eq "11 and keeps no nameless state" "no" "$([ -f "$CONTEXT_SIZE_STATE_DIR/.main.json" ] && echo yes || echo no)"
+usage "$Z" msg_2 410000
+check "11 the main session's own reading goes on unchanged: its next band is said" "410,000" "$(field "$(main_fire z1 "$Z")" additionalContext)"
+off="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["offset"])' "$ZS" 2>/dev/null)"
+check_eq "11 having read exactly its own transcript" "$(wc -c < "$Z" | tr -d ' ')" "$off"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
