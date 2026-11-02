@@ -95,22 +95,10 @@ ascii_out="$(LC_ALL=C PYTHONUTF8=0 PYTHONCOERCECLOCALE=0 PATH="$WORK/py-only" ps
 # The case above failed only on Linux, where it printed nothing at all: under the C locale with
 # UTF-8 mode and locale coercion off, python3 decodes its -c program as ASCII with surrogateescape,
 # so a U+FFFD written literally in the program became three lone surrogates and the program failed
-# to compile. The Mac always decodes it as UTF-8, so the case passes there either way. This check
-# holds on every machine: each payload reader in the library is written in ASCII alone, the
-# replacement character spelled as an escape, so its program means the same under any locale.
-for reader in ps_clean_payload ps_payload_text ps_payload_unread ps_parse_payload; do
-  # The body goes to a file for grep to read, so no grep stops reading a pipe early (claude-config#132).
-  declare -f "$reader" > "$WORK/reader-body" 2>/dev/null
-  nonascii="$(LC_ALL=C grep -n '[^[:print:][:space:]]' "$WORK/reader-body")"
-  if [ ! -s "$WORK/reader-body" ]; then
-    check "#2055 $reader is written in ASCII alone, so its python3 program compiles under any locale" "$reader is not defined"
-  elif [ -n "$nonascii" ]; then
-    check "#2055 $reader is written in ASCII alone, so its python3 program compiles under any locale" \
-      "holds a byte outside ASCII: ${nonascii//$'\n'/ }"
-  else
-    check "#2055 $reader is written in ASCII alone, so its python3 program compiles under any locale" ok
-  fi
-done
+# to compile. The Mac always decodes it as UTF-8, so the case passes there either way. That each
+# reader's program is written in ASCII alone, on every machine, is held by test-python-c-ascii.sh,
+# which scans every python3 -c program in the repository and checks that the program in each of
+# these four readers is among those it read (claude-config#2066).
 
 # ---------------------------------------------------------------------------
 # The verdict, through the real gates. Each runs from a folder of its own under a throwaway HOME, so

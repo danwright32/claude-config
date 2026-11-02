@@ -48,7 +48,7 @@ printf 'global rules\n' > "$CLAUDE_RULES_DIR/CLAUDE.md"
 
 # A string of n characters, the last m of them two byte ones, so a count of bytes and a count of
 # characters disagree and the test can tell which the notice gave.
-chars() { python3 -c 'import sys; n, m = int(sys.argv[1]), int(sys.argv[2]); sys.stdout.write("x" * (n - m) + "é" * m)' "$1" "$2"; }
+chars() { python3 -c 'import sys; n, m = int(sys.argv[1]), int(sys.argv[2]); sys.stdout.buffer.write(("x" * (n - m) + "\u00e9" * m).encode("utf-8"))' "$1" "$2"; }
 
 # world <name>: an origin, a seed clone that pushes to it, and the primary checkout, all current.
 # The primary's CLAUDE.md is 1,200 characters (1,300 bytes) and imports docs/rules.md.
