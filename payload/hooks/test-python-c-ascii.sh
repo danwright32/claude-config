@@ -11,7 +11,7 @@
 # A program read from a file or a heredoc on stdin is decoded as UTF-8 source on every machine, so
 # only -c is at risk.
 #
-# THE FIX is always the same: write the character as an escape (é, ’), so the program
+# THE FIX is always the same: write the character as an escape (\u00e9, \u2019), so the program
 # holds only ASCII and means the same under any locale. There is no skip list.
 #
 # THE SCAN reads every file the repository ships (lib/repo-files.sh), once each, as bytes (L297). For
@@ -190,6 +190,12 @@ for reader in ps_clean_payload ps_parse_payload ps_payload_text ps_payload_unrea
     *) check "#2056 the program in $reader is one the scan reads" "the scan read programs in push-scope.sh only inside: [$in_fn]" ;;
   esac
 done
+
+# The header says this file holds no byte outside ASCII, so it is held to that, not trusted to it.
+self_bad="$(LC_ALL=C grep -n '[^[:print:][:space:]]' "${PYTHON_C_ASCII_SELF:-$DIR/test-python-c-ascii.sh}" | cut -d: -f1 | tr '\n' ' ')"
+[ -z "$self_bad" ] \
+  && check "this suite's own file holds no byte outside ASCII, as its header says" ok \
+  || check "this suite's own file holds no byte outside ASCII, as its header says" "lines [$self_bad] hold one; write it as an escape"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
