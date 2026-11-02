@@ -37,8 +37,10 @@ WHAT IT REPORTS, one line per site, `<path>:<line>: <kind>: <text>`:
                    the fork cannot reach a pipe;
                  - the statement straight after it keeps its pid (`p=$!`, `lane[$i]=$!`,
                    `inflight="$inflight $!"`) and the file has a `wait` naming that variable, or a
-                   bare `wait`. A wait on a loop's variable, `for p in $pids; do wait "$p"`, names
-                   the list the nearest `for` before it walks (#2040);
+                   bare `wait` after it in the same function, or both at the top level (#2040: read
+                   file wide, one bare wait passed kept jobs thousands of lines away). A wait on a
+                   loop's variable, `for p in $pids; do wait "$p"`, names the list the nearest `for`
+                   before it walks (#2040);
                  - it is in a function that calls `wait` (#1984's rule).
                What the last two cannot see is ORDER: a kept child that exits, or is killed, while
                this shell prints something before its `wait` is the hazard all the same. So every
@@ -130,7 +132,7 @@ class Walk:
         self.func_waited = {}    # function id -> whether it calls wait anywhere
         self.bg = []             # background jobs: dicts read once the whole file has been walked
         self.silenced = set()    # ids of ( ) subshells whose stdout and stderr both go to /dev/null
-        self.waits = []          # (names it waits for, whether it is a bare wait)
+        self.waits = []          # (names it waits for, whether it is a bare wait, its line, its function id)
         self.loop_lists = {}     # a `for` loop's variable -> the names in the list it walks
         self.code_mask = set()   # line numbers that start in code and hold some
         self.code_lines = 0
@@ -231,16 +233,19 @@ def kept_name(w, lines, job):
 
 
 def judge_background(w, lines):
-    bare = any(b for _, b in w.waits)
     waited = set()
-    for names, _ in w.waits:
+    for names, _, _, _ in w.waits:
         waited.update(names)
+    # A bare wait answers only for a job started before it in the same function, or both at the top
+    # level (#2040): read file wide, one bare wait passed every kept job thousands of lines away.
+    bare_waits = [(ln, fn) for _, b, ln, fn in w.waits if b]
     for job in w.bg:
         # Started by a subshell that ends at once, or that can write to no pipe: never this shell's child,
         # or a child of a shell that cannot be writing into a pipe when it exits.
         if job['double'] or any(p in w.silenced for p in job['pars']):
             continue
         name = kept_name(w, lines, job)
+        bare = any(ln > job['line'] and fn == job['func'] for ln, fn in bare_waits)
         if name is not None and (bare or name in waited):
             continue
         if job['func'] is not None and w.func_waited.get(job['func']):
@@ -451,7 +456,7 @@ def walk_line(w, line, n, background):
                     # A loop's variable waits for the list that loop walks (#2040).
                     for n in list(names):
                         names |= w.loop_lists.get(n, set())
-                    w.waits.append((names, rest == ''))
+                    w.waits.append((names, rest == '', n, w.func_id))
             elif boundary and word == 'for' and CMDPOS.search(line[:i]):
                 lm = FOR_IN.match(line, m.end())
                 if lm:

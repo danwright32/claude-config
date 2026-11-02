@@ -168,6 +168,23 @@ bare_got="$(printf '%s\n' "$bare" | awk -F': ' 'NF { split($1, p, ":"); printf "
   || check "#1989 a bare wait answers for every kept job and not for a disowned one" "exit $bare_rc, got '$bare_got' where '6:background ' was wanted:
 $bare"
 
+# But only for a job started before it in the same function, or both at the top level (#2040): two
+# bare waits near line 12326 of tests/test-claude-sync.sh passed five kept jobs thousands of lines
+# away, three of them never reaped. A bare wait right after its jobs still counts (the control).
+{
+  printf '#!/usr/bin/env bash\n'                                    # 1
+  printf 'f(){\n  sleep 1 &\n  p=$!\n}\n'                           # 2-5 background: no bare wait in its function
+  printf 'sleep 2 &\nq=$!\nwait\n'                                  # 6-8 not: the bare wait right after it
+  printf 'g(){\n  wait\n}\n'                                        # 9-11
+  printf 'sleep 3 &\nr=$!\n'                                        # 12-13 background: the only bare wait after it is in g
+} > "$TMPROOT/probe-bare-far.sh"
+far="$(printf 'probe-bare-far.sh\n' | python3 "$SCAN" --root "$TMPROOT" --background)"; far_rc=$?
+far_got="$(printf '%s\n' "$far" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%s ", p[2], $2 }')"
+[ "$far_rc" = 1 ] && [ "$far_got" = "3:background 12:background " ] \
+  && check "#2040 a bare wait answers only for jobs started before it in its own function or at the top level" ok \
+  || check "#2040 a bare wait answers only for jobs started before it in its own function or at the top level" "exit $far_rc, got '$far_got' where '3:background 12:background ' was wanted:
+$far"
+
 # An `&` inside arithmetic is a bitwise and, and a `<(` there is a comparison, never a job or a
 # process substitution (#2015): bug-bash's egress setup and disk-clean's scan-lib.sh read flags that
 # way, and were reported as background jobs. A real job right after arithmetic is still one.
