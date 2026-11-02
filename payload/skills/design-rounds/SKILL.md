@@ -53,8 +53,8 @@ what this should look like to what is cheap to change now.
    as typing.
 8. **Draw the loading state of every screen whose content loads.** It is a frame of its
    own in the round and in the settled design, with a decision saying which kind it is
-   and why. A skeleton only where the layout is known before the data arrives, at the
-   real content's shape; where the data decides the layout (a balance for one person,
+   and why. Where the layout is known before the data arrives, a skeleton at the real
+   content's shape, never a line of loading text; where the data decides the layout (a balance for one person,
    an offer for another), a neutral indicator, or a skeleton of only what every outcome
    shares, because a skeleton of one outcome misleads everyone who gets the other. Past
    a couple of seconds it shows the work is still alive, and a stall becomes an error
