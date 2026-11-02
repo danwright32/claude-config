@@ -110,6 +110,8 @@ case "$OUT" in *"rc=1"*) ok ;; *) bad "lb_read should refuse a label list holdin
 case "$(cat "$WORK/lb.err" 2>/dev/null)" in *"not UTF-8"*) ok ;; *) bad "and say why, said: $(cat "$WORK/lb.err" 2>/dev/null)" ;; esac
 
 # The scan, written out for each run. It reads every Python program in a tree; see its docstring.
+# Its python3 -c programs come from lib/python_c_programs.py, which it finds through this.
+export PYTHON_C_PROGRAMS_LIB="$DIR/lib"
 cat > "$WORK/scan.py" <<'SCAN'
 """Find Python that raises on a byte that is not UTF-8, or on a lone surrogate, in every Python
 program under the trees named: each .py file, and each python3 heredoc or -c program in a .sh file.
@@ -132,50 +134,37 @@ MODULES_NOT_FILES = {"os", "tarfile", "gzip", "bz2", "lzma", "zipfile", "webbrow
                      "sqlite3", "urllib", "request", "wave", "aifc", "sunau", "Image", "pty", "socket"}
 HEREDOC = re.compile(r"""<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
 PYTHON = re.compile(r"""(^|[\s;&|("'`$])python3?(\s|$)""")
-DASH_C = re.compile(r"""\bpython3?\b((?:[ \t]+-[A-Za-z]+)*?)[ \t]+-c[ \t]+(['"])""")
-PY_VAR = re.compile(r"""^[ \t]*(?:export[ \t]+|local[ \t]+)?[A-Za-z_][A-Za-z0-9_]*_PY=(['"])""")
-# A single quoted shell string goes on past these, each standing for one quote in the program.
-SQ_IDIOMS = ("'\"'\"'", "'\\''")
-
-
-def _quoted(lines, i, rest, q):
-    """The text of a shell string opened on line i, whose remainder there is rest. Returns
-    (text, index of the line it closes on)."""
-    body, j, cur = [], i, ""
-    while True:
-        if q == "'":
-            k = rest.find("'")
-            while k >= 0 and rest.startswith(SQ_IDIOMS, k):
-                idiom = next(s for s in SQ_IDIOMS if rest.startswith(s, k))
-                cur += rest[:k] + "'"
-                rest = rest[k + len(idiom):]
-                k = rest.find("'")
-        else:
-            k = _dq_end(rest)
-        if k >= 0:
-            body.append(cur + rest[:k]); break
-        body.append(cur + rest); cur = ""; j += 1
-        if j >= len(lines):
-            break
-        rest = lines[j]
-    src = "\n".join(body)
-    if q == '"':
-        src = src.replace('\\"', '"').replace("\\$", "$").replace("\\`", "`").replace("\\\\", "\\")
-    return src, j
+PY_VAR = re.compile(rb"""^[ \t]*(?:export[ \t]+|local[ \t]+)?[A-Za-z_][A-Za-z0-9_]*_PY=(['"])""")
+# The python3 -c programs come from the one reader the ASCII scan uses too (lib/python_c_programs.py),
+# which takes every program on a line; this scan once took only the first (#2066).
+sys.path.insert(0, os.environ["PYTHON_C_PROGRAMS_LIB"])
+import python_c_programs
 
 
 def units(path):
-    """(first line number, source) for each Python program in the file: the whole of a .py file;
-    in a shell script, each heredoc handed to python3 or named PY..., each python3 -c program, and
-    each variable named ..._PY holding one."""
-    text = open(path, "rb").read().decode("utf-8", "replace")
+    """(first line number, source or None) for each Python program in the file: the whole of a .py
+    file; in a shell script, each heredoc handed to python3 or named PY..., each python3 -c program,
+    and each variable named ..._PY holding one. None is a shell string whose quote never closes."""
+    raw = open(path, "rb").read()
     if path.endswith(".py"):
-        return [(1, text)]
-    out, lines = [], text.split("\n")
+        return [(1, raw.decode("utf-8", "replace"))]
+    out, inside = [], set()
+    for line, start, end, prog in python_c_programs.programs(raw):
+        if prog is not None and prog.startswith(b"$"):
+            continue   # a program held in a variable, read where the variable is set
+        out.append((line, None if prog is None else prog.decode("utf-8", "replace")))
+        # The lines a program runs on past its first are its own, never a heredoc or a variable.
+        inside.update(range(line, raw.count(b"\n", 0, end) + 1))
+    blines = raw.split(b"\n")
+    offsets, k = [], 0
+    for bl in blines:
+        offsets.append(k)
+        k += len(bl) + 1
+    lines = [bl.decode("utf-8", "replace") for bl in blines]
     i = 0
     while i < len(lines):
         line = lines[i]
-        if line.lstrip().startswith("#"):
+        if i in inside or line.lstrip().startswith("#"):
             i += 1; continue
         m = HEREDOC.search(line)
         if m and (PYTHON.search(line[:m.start()]) or m.group(2).startswith("PY")):
@@ -185,29 +174,18 @@ def units(path):
             out.append((i + 2, "\n".join(body)))
             i = j + 1
             continue
-        m = DASH_C.search(line) or PY_VAR.search(line)
+        m = PY_VAR.search(blines[i])
         if m:
-            q = m.groups()[-1]
-            rest = line[m.end():]
-            if rest.startswith("$"):
-                i += 1; continue   # a program held in a variable, read where the variable is set
-            src, j = _quoted(lines, i, rest, q)
-            out.append((i + 1, src))
-            i = j + 1
+            src, end = python_c_programs.word(raw, offsets[i] + m.end() - 1)
+            if src is None:
+                out.append((i + 1, None))
+                break
+            if not src.startswith(b"$"):   # a variable naming a file or another variable
+                out.append((i + 1, src.decode("utf-8", "replace")))
+            i = raw.count(b"\n", 0, end) + 1
             continue
         i += 1
     return out
-
-
-def _dq_end(s):
-    k = 0
-    while k < len(s):
-        if s[k] == "\\":
-            k += 2; continue
-        if s[k] == '"':
-            return k
-        k += 1
-    return -1
 
 
 def kw(call, name):
@@ -331,6 +309,8 @@ def main(argv):
             print("UNPARSED %s:0: %s" % (path, e)); continue
         for first, src in us:
             n += 1
+            if src is None:
+                print("UNPARSED %s:%d: a shell quote that never closes" % (path, first)); continue
             try:
                 tree = ast.parse(src)
             except SyntaxError as e:
@@ -444,6 +424,7 @@ import subprocess
 r = subprocess.run(["git", "log"], capture_output=True, text=True)
 '
 z="$(python3 -c 'import sys; d = open(sys.argv[1]).read(); print(d.split("'"'"'")[0])' "$f")"
+a="$(python3 -c 'print(1)')"; b="$(python3 -c 'import sys; print(open(sys.argv[1]).read())' "$f")"
 PROBE
 python3 "$WORK/scan.py" "$WORK/probe/held.py" > "$WORK/probe.out"
 for rule in "open: with open" "open: b = open" "subprocess: c =" "subprocess: d =" "decode: e =" "stdin: f =" "stdout:" "encode: g ="; do
@@ -461,9 +442,18 @@ grep -q 'stdout:' "$WORK/probe.out" && ok || bad "the scan does not count a JSON
 python3 "$WORK/scan.py" "$WORK/probe/fixed.py" > "$WORK/probe.out"
 [ "$(grep -c -v '^UNITS ' "$WORK/probe.out")" = 0 ] && ok || bad "the scan fires on the forms it asks for: $(tr '\n' '|' < "$WORK/probe.out")"
 python3 "$WORK/scan.py" "$WORK/probe/held.sh" > "$WORK/probe.out"
-[ "$(sed -n 's/^UNITS //p' "$WORK/probe.out")" = 4 ] && ok || bad "the scan should find four programs in a shell script (a -c, a heredoc, a _PY variable, a -c quoting a quote), said: $(tr '\n' '|' < "$WORK/probe.out")"
-for rule in "held.sh:2: stdin" "held.sh:2: stdout" "held.sh:5: open" "held.sh:10: subprocess" "held.sh:12: open"; do
+[ "$(sed -n 's/^UNITS //p' "$WORK/probe.out")" = 6 ] && ok || bad "the scan should find six programs in a shell script (a -c, a heredoc, a _PY variable, a -c quoting a quote, and two -c on one line), said: $(tr '\n' '|' < "$WORK/probe.out")"
+# The second -c on line 13 is judged too: the scan once took only the first program on a line (#2066).
+for rule in "held.sh:2: stdin" "held.sh:2: stdout" "held.sh:5: open" "held.sh:10: subprocess" "held.sh:12: open" "held.sh:13: open"; do
   grep -q -F "$rule" "$WORK/probe.out" && ok || bad "the scan does not fire on '$rule' in a shell script; it said: $(tr '\n' '|' < "$WORK/probe.out")"
+done
+# A quote that never closes is a program the scan cannot vouch for, so it says so rather than judging
+# whatever runs to the end of the file, for a -c and for a _PY variable alike.
+printf "x=\"\$(python3 -c 'print(1)\n" > "$WORK/probe/open-c.sh"
+printf "OPEN_PY='\nprint(1)\n" > "$WORK/probe/open-var.sh"
+python3 "$WORK/scan.py" "$WORK/probe/open-c.sh" "$WORK/probe/open-var.sh" > "$WORK/probe.out"
+for want in "UNPARSED $WORK/probe/open-c.sh:1: a shell quote that never closes" "UNPARSED $WORK/probe/open-var.sh:1: a shell quote that never closes"; do
+  grep -q -F "$want" "$WORK/probe.out" && ok || bad "the scan should report [$want]; it said: $(tr '\n' '|' < "$WORK/probe.out")"
 done
 
 echo "passed: $pass, failed: $fail"
