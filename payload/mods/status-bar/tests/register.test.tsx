@@ -42,7 +42,13 @@ const modKit: { name: string; register: Register } = {
         branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
-        screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+        // #2025: the compact tool asks the guards beneath through the screen; a test refuses by naming
+        // the refusal under the key below, and otherwise nothing refuses.
+        screen: async () => {
+          // Not a key of mod-kit's own: a test answers it with a state.get hook beneath the plugins.
+          const why = ((await built.state.get({ plugin: 'mod-kit', key: 'screenRefuses' } as never)) as { value?: string }).value
+          return why ? { deny: why } : null
+        },
         // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
@@ -169,6 +175,20 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (text === undefined) return { deny: `ENOENT: no such file or directory, open '${e.path}'` } as never
     return { value: text } as never
   })
+  // When each file was last written, which the compact tool judges a handoff note by (#2025): a
+  // file not named here was written at T0.
+  const mtimes: Record<string, number> = {}
+  on('fs.stat', ($, e) => {
+    const text = files[e.path]
+    if (text === undefined) return { deny: `ENOENT: no such file or directory, stat '${e.path}'` } as never
+    return { value: { kind: 'file', size: text.length, mtimeMs: mtimes[e.path] ?? T0, isLink: false } } as never
+  })
+  // The tools the status bar offers the model (#2025), as Claude Code lists them.
+  const tools: { name: string; description: string }[] = []
+  on('tool.register', ($, e) => {
+    tools.push({ name: e.name, description: e.description })
+    return { value: { tool: `mcp__status-bar__${e.name}` } } as never
+  })
   on('process.run', ($, e) => {
     runs.push([...e.argv])
     const [cmd, ...rest] = e.argv
@@ -228,7 +248,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, files, toasts, logs, debug, compacts, runs, polls, clock }
+  return { w, files, mtimes, tools, toasts, logs, debug, compacts, runs, polls, clock }
 }
 
 const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, clock: { settle: () => Promise<void> }) => {
@@ -522,6 +542,110 @@ test('Compact pressed while Claude is working is queued, shown, and runs when th
   expect(compacts).toHaveLength(1)
   expect(toasts).toEqual([])
   await ui.unmount()
+})
+
+// #2025: a session past the context line (#1960) writes its handoff note, then queues the same
+// Compact the row queues, since a model cannot type /compact itself; in an unattended /goal run
+// nothing else would compact until Dan came back. Main session only, and only once the note is there.
+const NOTE = '/private/tmp/claude-501/-repo/s1/scratchpad/handoff.md'
+type Called = { deny?: string; text?: string; result?: unknown; isError?: boolean }
+const queueCompact = ($: unknown, input: Record<string, unknown> = {}) =>
+  ($ as { tool: { call: (i: never) => Promise<Called> } }).tool.call({ tool: 'mcp__status-bar__queue_compact', note: NOTE, ...input } as never)
+const refusal = (r: Called) => r.deny ?? (r.isError ? r.text : undefined)
+
+test('the compact tool is offered to the model, naming where the handoff note must be (#2025)', withKit, async ($, on) => {
+  const { clock, tools } = world(on)
+  await start($, clock)
+  const tool = tools.find(t => t.name === 'queue_compact')
+  expect(tool?.description).toContain('handoff.md')
+  expect(tool?.description).toContain('scratchpad')
+})
+
+test('with no handoff note the compact tool refuses, and nothing is queued or run (#2025)', withKit, async ($, on) => {
+  const { clock, compacts } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  await step($, clock)
+  const r = await queueCompact($)
+  expect(refusal(r)).toContain(`No handoff note at ${NOTE}`)
+  expect(await shown(ui as never)).not.toContain('Compact queued')
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+  await ui.unmount()
+})
+
+test('a subagent is refused even with the note written: it hands back instead (#2025)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes } = world(on)
+  await start($, clock)
+  await step($, clock)
+  files[NOTE] = 'Decisions so far.'
+  mtimes[NOTE] = T0
+  const r = await queueCompact($, { agentId: 'sub-1' })
+  expect(refusal(r)).toContain('hand back')
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+})
+
+test('with the note written, the compact tool queues the Compact, shown on the row, run when the reply ends (#2025)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, toasts } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  await step($, clock)
+  await clock.advance(MIN)
+  files[NOTE] = 'Decisions so far.'
+  mtimes[NOTE] = T0 + MIN
+  const r = await queueCompact($)
+  expect(refusal(r)).toBeUndefined()
+  expect(String(r.result)).toContain('Compact queued')
+  expect(await shown(ui as never)).toBe('context 80% Compact queued, runs when this reply ends ')
+  expect(compacts).toHaveLength(0)
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
+test("a guard's refusal through mod-kit's screen is the compact tool's answer, and nothing is queued (#2025)", withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes } = world(on)
+  on('state.get', ($, e, next) => ((e as { key?: string }).key === 'screenRefuses' ? ({ value: { value: 'a guard refused this call' } } as never) : next(e)))
+  await start($, clock)
+  await step($, clock)
+  files[NOTE] = 'Decisions so far.'
+  mtimes[NOTE] = T0
+  expect(refusal(await queueCompact($))).toBe('a guard refused this call')
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+})
+
+test('a note from before the last compaction, over an hour old, empty, or outside the scratchpad is refused (#2025)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes } = world(on)
+  await start($, clock)
+  files[NOTE] = 'Decisions from the last stretch.'
+  mtimes[NOTE] = T0
+  await clock.advance(MIN)
+  await $.session.compact(compactEvent('auto'))
+  await clock.settle()
+  const ran = compacts.length
+  await step($, clock)
+  expect(refusal(await queueCompact($))).toContain('before this conversation was last compacted')
+  await clock.advance(2 * HOUR)
+  mtimes[NOTE] = T0 + 30 * MIN
+  expect(refusal(await queueCompact($))).toContain('more than an hour ago')
+  files[NOTE] = ''
+  mtimes[NOTE] = T0 + 2 * HOUR
+  expect(refusal(await queueCompact($))).toContain('is empty')
+  files['/repo/handoff.md'] = 'Decisions.'
+  mtimes['/repo/handoff.md'] = T0 + 2 * HOUR
+  expect(refusal(await queueCompact($, { note: '/repo/handoff.md' }))).toContain('scratchpad')
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(ran)
 })
 
 // #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in
