@@ -305,9 +305,13 @@ def commands(s, cwd="", heredocs=None, parts=None):
     its own last (0 is s itself, and each subshell and substitution has an id of its own); inner, a
     (start, end, in_double_quotes) for each substitution written directly in it, start at its `$(`
     or opening backquote and end just past its closing one; and openers, a (start, end) for each
-    heredoc opener written directly in it, from its << to the end of its end marker word. So a
-    caller can read a command's text as one word for each substitution in it, whose own commands it
-    is given separately, and know which shell each command runs in.
+    heredoc opener written directly in it, from its << to the end of its end marker word; and how,
+    what ended it: ";" (a `;` or a line break), "&&", "||", "|" (a pipe, `|&` too), "&" (sent to
+    the background), "#" (a comment), ")" (its subshell or substitution closing), "\\n" (the line
+    a heredoc opens on) or "end". So a caller can read a command's text as one word for each
+    substitution in it, whose own commands it is given separately, and know which shell each command
+    runs in, a pipeline's members and a backgrounded command each running in one of their own
+    (claude-config#2076).
     """
     n = len(s)
     line_break = "\n" if "\n" in s else "; "
@@ -369,7 +373,8 @@ def commands(s, cwd="", heredocs=None, parts=None):
             start = f["start"]
             parts.append({"start": start, "end": end, "scope": tuple(chain) + (f["id"],),
                           "inner": [x for x in f["inner"] if start <= x[0] and x[1] <= end],
-                          "openers": [x for x in f["openers"] if start <= x[0] and x[1] <= end]})
+                          "openers": [x for x in f["openers"] if start <= x[0] and x[1] <= end],
+                          "how": how})
         target = cd_target(text)
         # A cd in a pipeline or sent to the background runs in a shell of its own.
         if target is not None and how not in ("|", "&"):
