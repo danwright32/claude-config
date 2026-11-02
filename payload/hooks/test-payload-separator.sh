@@ -92,6 +92,23 @@ ascii_out="$(LC_ALL=C PYTHONUTF8=0 PYTHONCOERCECLOCALE=0 PATH="$WORK/py-only" ps
 [ "${ascii_out%%"$US"*}" = "echo a${FFFD}b" ] \
   && check "#2055 (python3 alone, C locale) the byte is written as U+FFFD, never a question mark" ok \
   || check "#2055 (python3 alone, C locale) the byte is written as U+FFFD, never a question mark" "got [${ascii_out%%"$US"*}]"
+# The case above failed only on Linux, where it printed nothing at all: under the C locale with
+# UTF-8 mode and locale coercion off, python3 decodes its -c program as ASCII with surrogateescape,
+# so a U+FFFD written literally in the program became three lone surrogates and the program failed
+# to compile. The Mac always decodes it as UTF-8, so the case passes there either way. This check
+# holds on every machine: each payload reader in the library is written in ASCII alone, the
+# replacement character spelled as an escape, so its program means the same under any locale.
+for reader in ps_clean_payload ps_payload_text ps_payload_unread ps_parse_payload; do
+  body="$(declare -f "$reader")"
+  if [ -z "$body" ]; then
+    check "#2055 $reader is written in ASCII alone, so its python3 program compiles under any locale" "$reader is not defined"
+  elif printf '%s' "$body" | LC_ALL=C grep -q '[^[:print:][:space:]]'; then
+    check "#2055 $reader is written in ASCII alone, so its python3 program compiles under any locale" \
+      "holds a byte outside ASCII: $(printf '%s' "$body" | LC_ALL=C grep -n '[^[:print:][:space:]]' | head -3 | tr '\n' ' ')"
+  else
+    check "#2055 $reader is written in ASCII alone, so its python3 program compiles under any locale" ok
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # The verdict, through the real gates. Each runs from a folder of its own under a throwaway HOME, so

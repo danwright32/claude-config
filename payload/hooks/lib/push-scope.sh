@@ -273,13 +273,15 @@ ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$payload" | jq -j --arg sep "$sep" '
       ((.tool_input.command // "") | if $sep == "" then . else gsub("\n"; $sep) end
-        | split("\u001f") | join("�"))
+        | split("\u001f") | join("\ufffd"))
       + "\u001f" + (.cwd // "")
     ' 2>/dev/null && return 0
   fi
   printf '%s' "$payload" | PS_SEP="$sep" python3 -c '
 import os, sys, json
 # UTF-8 whatever the locale, as jq writes, so the U+FFFD below is never written as a question mark.
+# The program itself is ASCII alone, U+FFFD spelled as an escape: under the C locale on Linux,
+# python3 decodes a -c program as ASCII, and a literal one fails to compile (#2055).
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sep = os.environ.get("PS_SEP", "; ")
 try:
@@ -290,7 +292,7 @@ ti = d.get("tool_input") or {}
 cmd = ti.get("command") or ""
 if sep:
     cmd = cmd.replace("\n", sep)
-cmd = cmd.replace("\x1f", "�")
+cmd = cmd.replace("\x1f", "\ufffd")
 sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 ' 2>/dev/null
 }
