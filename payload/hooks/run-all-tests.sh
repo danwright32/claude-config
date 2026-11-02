@@ -24,7 +24,8 @@
 # Exit 0 = every suite passed. Exit 1 = at least one failed, or a directory it was
 # told to read held no suites, or nothing was found to run. Finding NO suites is a
 # failure, not a pass: an empty run is indistinguishable from a clean one
-# otherwise (LESSONS.md L98).
+# otherwise (LESSONS.md L98). Exit 75 = a whole run waited HOOK_TESTS_SLOT_WAIT for
+# this Mac's full suite slot and refused, running nothing (claude-config#2012).
 #
 # Environment:
 #   HOOK_TESTS_ROOT           read this repo instead of the one above this script
@@ -56,6 +57,14 @@
 #                             ~/.cache/claude-config/flaky-suite-output, newest 20; empty: none, #1788)
 #   HOOK_TESTS_LOCK_WAIT      seconds a suite may wait for a lock another run holds, handed to
 #                             each suite as SUITE_LOCK_WAIT (default 1200; always 0 under CI, #1297)
+#   HOOK_TESTS_SLOT           1 queues this run for the Mac's one full suite slot, 0 never; unset,
+#                             only a whole run (no directories, no HOOK_TESTS_ROOT, not inside
+#                             another run, not CI) queues (claude-config#2012, lib/full-run-slot.sh)
+#   HOOK_TESTS_SLOT_DIR       where that queue lives (default ${CLAUDE_HOME:-~/.claude}/state/full-run-slot)
+#   HOOK_TESTS_SLOT_WAIT      seconds a run waits for the slot before refusing (default 3600)
+#   HOOK_TESTS_SLOT_HOLD      seconds a live holder keeps it before a waiter passes it over (2700)
+#   HOOK_TESTS_SLOT_SAY_EVERY, HOOK_TESTS_SLOT_POLL   how often a wait says it is still waiting (60)
+#                             and looks (2); HOOK_TESTS_SLOT_NOW, HOOK_TESTS_SLOT_SLEEP, seams for tests
 #   CI                        "true" makes a suite refused its lock a FAIL rather than NOT RUN (#1083)
 #   LOAD_AVERAGE_CMD, LOAD_AVERAGE_CORES   the load average printed beside a failure, set for tests
 #                             (lib/load-average.sh)
@@ -123,6 +132,9 @@ if [ "${HOOK_TESTS_RUNNING:-0}" = "1" ] && [ "$#" -eq 0 ] \
   echo "run-all-tests: refusing to run the whole repo from inside a run of the whole repo, which recurses without end. Name the directories to read, or set HOOK_TESTS_ROOT." >&2
   exit 1
 fi
+# Read before it is set below: a run started inside another run never takes the Mac's full suite
+# slot (claude-config#2012), which its enclosing run already holds.
+_started_inside_a_run="${HOOK_TESTS_RUNNING:-0}"
 export HOOK_TESTS_RUNNING=1
 # No suite started from here may reach a real Claude Code through claude-sync (L2). `status` asks
 # the claude command which model settings.json runs (#828) and finds it on PATH when this seam is
@@ -755,6 +767,42 @@ if [ "${HOOK_TESTS_LIST_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
+# THIS MAC'S ONE FULL SUITE SLOT (claude-config#2012). The budget above is per run, so five builders'
+# full runs at once on 2026-11-01 meant five budgets on one Mac: load averages of 270 to 410 on 12
+# cores, and suites stopped at their own wall clocks by load alone. So a WHOLE run (no directories
+# named, the real repository, started from a fresh shell, not under CI) waits its turn in one queue,
+# saying whom it waits for, and refuses at a bound (lib/full-run-slot.sh, which reuses the merge
+# helper's turn rather than adding a lock). A run naming directories, a suite run on its own and
+# SECTION_ONLY never wait, so a focused check is never held behind a full run.
+# HOOK_TESTS_SLOT=1 takes the slot for any run and 0 for none, for one run; unset decides as above.
+case "${HOOK_TESTS_SLOT:-}" in
+  ''|0|1) ;;
+  *) echo "run-all-tests: HOOK_TESTS_SLOT='$HOOK_TESTS_SLOT' is neither 0 nor 1. Refusing rather than guessing whether this run queues for the Mac's full suite slot." >&2; exit 1 ;;
+esac
+_take_slot="${HOOK_TESTS_SLOT:-}"
+if [ -z "$_take_slot" ]; then
+  _take_slot=0
+  [ "$#" -eq 0 ] && [ -z "${HOOK_TESTS_ROOT:-}" ] && [ "$_started_inside_a_run" != "1" ] && [ "${CI:-}" != "true" ] && _take_slot=1
+fi
+if [ "$_take_slot" = 1 ]; then
+  if ! { . "$SELF_DIR/lib/merge-turn.sh" && . "$SELF_DIR/lib/full-run-slot.sh"; } 2>/dev/null; then
+    echo "run-all-tests: $SELF_DIR/lib/merge-turn.sh or lib/full-run-slot.sh is missing, so this whole run goes ahead without queueing for this Mac's full suite slot and may compete with other full runs (claude-config#2012)."
+  elif ! full_run_slot_settings; then
+    echo "run-all-tests: $FULL_RUN_SLOT_ERR. Refusing rather than guessing how long this run may wait for, or hold, this Mac's full suite slot." >&2
+    exit 1
+  else
+    # Given back on every way out. runner_cleanup, installed once suites are found, replaces these
+    # and gives it back too; doing it twice is safe.
+    trap 'full_run_slot_release' EXIT
+    trap 'full_run_slot_release; exit 130' INT
+    trap 'full_run_slot_release; exit 143' TERM
+    trap 'full_run_slot_release; exit 129' HUP
+    full_run_slot_take "${root:-$SELF_DIR}"
+    _slot_rc=$?
+    [ "$_slot_rc" -eq 0 ] || exit "$_slot_rc"
+  fi
+fi
+
 echo "run-all-tests: $(printf '%s' "$dirs" | grep -c .) directory(ies), $source_of_dirs"
 
 ran=0
@@ -944,6 +992,8 @@ if [ "$ran" -gt 0 ]; then
     # half of the same problem.
     runner_kill_tree "$$"
     [ -n "${WORK:-}" ] && rm -rf "$WORK"
+    # The Mac's full suite slot, once the suites it was held for are gone (claude-config#2012).
+    type full_run_slot_release > /dev/null 2>&1 && full_run_slot_release
     return 0
   }
   trap runner_cleanup EXIT

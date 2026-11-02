@@ -171,7 +171,7 @@ mv -f "$tmp" "$PLAN" || { rm -f "$tmp"; refuse 2 "could not move the plan into p
 # ---------- what it will remove, for the confirm step ----------
 echo "Plan written to $PLAN: $N_IDS item(s) from scan $LAST."
 cats="$(dcr_header "$REC" categories 2>/dev/null)" || cats=""
-awk -F "$S" -v cats="$cats" -v table="$DCR_TITLES" "$DCU_AWK_LIB$DCU_AWK_TALLY$DCR_AWK_TITLES$DCRV_AWK_WORDS"'
+awk -F "$S" -v cats="$cats" -v table="$DCR_TITLES" "$DCU_AWK_LIB$DCU_AWK_TALLY$DCU_AWK_WORDS$DCR_AWK_TITLES$DCRV_AWK_WORDS"'
   FILENAME == ARGV[1] { want[$0] = 1; next }
   !($1 in want) { next }
   {
@@ -189,13 +189,8 @@ awk -F "$S" -v cats="$cats" -v table="$DCR_TITLES" "$DCU_AWK_LIB$DCU_AWK_TALLY$D
     for (j = 1; j <= nc; j++) if (!(order[j] in put)) out[++done] = order[j]
     for (j = 1; j <= done; j++) {
       c = out[j]
-      kind = dcu_tally_kind(c); unread = dcu_tally_unsized(c)
-      words = count[c] (count[c] == 1 ? " item" : " items") ", "
-      if (kind == "unknown") words = words dcu_h("")
-      else {
-        words = words (kind == "lower" ? "at least " : "") dcu_h(dcu_tally_kib(c))
-        if (unread) words = words ", plus " unread " whose size was not read"
-      }
+      # Worded by the tally (#2013), as the bottom bar of the review page is, so both say the same.
+      words = count[c] (count[c] == 1 ? " item" : " items") ", " dcu_tally_words(c)
       print ""
       print dcr_t(c, table) ": " words
       for (k = 1; k <= count[c]; k++) {

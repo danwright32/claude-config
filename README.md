@@ -144,7 +144,8 @@ Plugin-managed skills are excluded so plugin updates don't cause churn, and so i
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
 folder under `skills/`, where Claude Code sets aside a skill it removes or replaces (#1009). The
 lists live in `payload/hooks/lib/unmanaged-skills.sh` (`PLUGIN_SKILLS`, `PLATFORM_SKILL_DIRS` and
-`SKILL_TRASH_DIRS`), which `claude-sync` (its copy and its check of what a pull has applied, #2004),
+`SKILL_TRASH_DIRS`), which `claude-sync` (its copy, its check of what a pull has applied, #2004,
+and its check of whether this Mac's skills folder holds anything to send, #2017),
 `hooks/check-home-paths.sh` and the skill scans in `hooks/test-gates-fail-closed.sh` and
 `hooks/test-python-bad-bytes.sh` all read (#2001), so no check judges a skill the sync does not send.
 A send never carries them and a pull never deletes a Mac's own copy. Edit that file to change them.
@@ -1953,6 +1954,18 @@ call is now told the rest is read separately and to judge only what it was shown
 be told not to call untested anything whose test might be past the cut, which invited a pass over
 tests nobody read.
 
+A branch that merges main and then pushes is judged on its own change, not on everything main
+gained since the branch was last pushed (#2028). On 2026-11-01 four Pivot pull requests were each
+refused for size alone after merging a busy main, and each needed a one time override. Both gates
+now compare the push against what merging the newest main commit it holds into its last pushed
+commit gives (`git merge-tree`, which touches neither the index nor the working tree), and leave
+main's commit subjects out of what the judge reads. What remains is the branch's own commits plus
+anything the merge commit holds that is in neither parent, so a conflict resolution, or an edit
+slipped into a merge, is still judged; a file that conflicted is always judged, however it was
+resolved. When no default branch is known (no `origin/HEAD`, `origin/main` or `origin/master`) or
+git cannot work out the merge (it needs 2.38 or later), the whole push is judged as before, never
+none of it, and a refusal says main's changes were in it and why.
+
 Every push either gate reaches is recorded, overrides included (#1075), one line each in
 `~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
 cleaning (the lessons review keeps its outcome ledger beside it for the same reason). Read it with:
@@ -2261,6 +2274,21 @@ those (`bash payload/hooks/run-all-tests.sh tests tools`). A directory it was to
 holds no suite is a failure, not a quiet pass, because reading nothing and reading everything green
 look identical otherwise.
 
+A whole run takes this Mac's one full suite slot first, so builders running the full suite at the
+same time queue rather than compete (#2012). On 2026-11-01 five full runs at once drove the load
+average to 270 to 410 on 12 cores, and suites stopped at their own wall clocks on load alone,
+because each run's budget below is per run, not per Mac. A run that has to wait says so at once,
+naming the holder's pid, its checkout and how long it has held the slot, then says `still waiting`
+with the time so far every minute. It refuses with exit 75 after `HOOK_TESTS_SLOT_WAIT` (an hour),
+running nothing. A holder whose process has gone is passed over at once. So is a live one past
+`HOOK_TESTS_SLOT_HOLD` (45 minutes), and either is said. The queue is `hooks/lib/merge-turn.sh`, the
+merge helper's own turn, in `~/.claude/state/full-run-slot` (`hooks/lib/full-run-slot.sh`). Only a
+whole run queues: a run naming directories, a suite run on its own, `SECTION_ONLY`, a run started
+inside another run, a run under CI and the scanners gate (which starts each scanner itself) never
+wait, so a focused check is never held behind a full run. `HOOK_TESTS_SLOT=0` skips the slot for one
+run. A slot folder that cannot be written does not stop the run: it goes ahead without queueing and
+says so.
+
 The report is sorted and waits for every suite, so as each one finishes the runner prints a line
 such as `run-all-tests progress: 37 of 239 suite(s) finished, 4m 12s in, test-x.sh exited 0`, and a
 run in the background is seen to be working rather than hung (#1979). Each flake recheck of a failed
@@ -2520,6 +2548,7 @@ is told its share, and the product is printed at the top of every run.
 | `HOOK_TESTS_TIMINGS` | `~/.cache/claude-config/suite-timings` | Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a duration measured on this machine is not configuration, and mirroring it would make the other Mac order its runs by numbers from hardware it does not have. |
 | `HOOK_TESTS_FLAKY_OUTPUT` | `~/.cache/claude-config/flaky-suite-output` | Where the first, failing run of a suite marked FLAKY is kept, its whole output in one file named by the time and the suite, and the FAIL line names that file. That output used to live only in the run's work folder, which is removed at the end, so a flake left nothing to diagnose from but the few lines printed (#1788, L297). Only a FLAKY suite writes here: a passing run writes nothing. Pruned after each write to the newest 20 copies, by the time in their names, and nothing else in the folder is touched (`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`). Set it to empty to keep nothing, and the FAIL line says so. |
 | `HOOK_TESTS_LOCK_WAIT` | `1200` locally, always `0` under CI | How many seconds a suite may wait for a lock another run holds, handed to every suite as `SUITE_LOCK_WAIT` whatever was inherited. Twenty minutes is about three runs of the sync suite on this Mac, so a run queued behind two or three overlapping ones still reports it rather than NOT RUN (#1297). A flake recheck is asked to wait for nothing, since its deadline is set by what the suite measured; one refused its lock that way never ran, so its FAIL line says `recheck could not run: the suite lock is held by` whoever holds it, never FLAKY and never a bare FAIL that reads as the failure seen twice, and the suite stays failed (#1312). A value that is not a whole number is refused. |
+| `HOOK_TESTS_SLOT` | unset: only a whole run queues | `1` queues any run for this Mac's one full suite slot and `0` none, for one run. Unset, a run queues only when it names no directories, sets no `HOOK_TESTS_ROOT`, was not started inside another run and is not under CI, and not when a run above it holds the slot. `HOOK_TESTS_SLOT_WAIT` (`3600`) is how long it waits before refusing with exit 75, `HOOK_TESTS_SLOT_HOLD` (`2700`) how long a live holder keeps the slot before a waiter passes it over, `HOOK_TESTS_SLOT_SAY_EVERY` (`60`) how often a wait says it is still waiting, `HOOK_TESTS_SLOT_POLL` (`2`) how often it looks, and `HOOK_TESTS_SLOT_DIR` where the queue lives. They are settings, not measurements: the wait is longer than one hold so the run first in line is never refused while the holder is inside its own, and claude-sync's check after a pull stops its own run at 1800 seconds, recording one stopped while it waited as not completed (#2012). Any of them unreadable is refused. |
 | `HOOK_TESTS_DEADLINE` | none locally; under GitHub Actions the running job's own `timeout-minutes` | The epoch second by which the run must have printed its report. No flake recheck runs past it less `HOOK_TESTS_DEADLINE_RESERVE` (default `120`, in seconds, set on 2026-10-29 from the job setup times measured beside it in the runner): one with no time left is not started and its FAIL line says `not rechecked`, and one cut short says `recheck stopped after`, naming the limit, never `recheck timed out`, which is a recheck that ran out its own allowance (#1901). That allowance, `HOOK_TESTS_FLAKE_RECHECK_MAX`, is whole seconds on the same clock, and the FAIL line names the seconds it really waited; it was a count of polls printed as seconds until #1901. Under GitHub Actions it is read from the workflow file and job the platform names (`GITHUB_WORKFLOW_REF`, `GITHUB_JOB`) through `hooks/lib/workflow-job-timeout.sh`, counted from `HOOK_TESTS_JOB_STARTED`, which the workflow's first step records, and the run says the limit it read or why it could not. Separately, a suite stopped at its own wall clock is named on a `run-all-tests: STOPPED` line the moment it is stopped, before the report and any recheck, so a job cancelled later still names it. A value that is not a whole number is refused. The deadline is read against the real clock, or against `HOOK_TESTS_NOW`, an epoch second set for tests so the time a case leaves before its deadline does not depend on how busy the Mac is (#1937); it is refused the same way. |
 | `HOOK_TESTS_SLOTS` | set BY the runner | Each suite's share of the budget, which is the budget divided by how many suites are running at once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its own processes it may start. Point the runner at one directory holding one suite and that suite is handed the whole budget, so running the long suite on its own is as fast as it ever was. |
 
@@ -3278,6 +3307,46 @@ tells you once and offers a picker to remove them (#1582). It removes nothing on
   processes whatever the rule count, about 80 ms when measured on 2026-10-23 (DESIGN.md has the
   measurements).
 - Tests: `hooks/test-local-allow-sweep.sh`, and the process counts in `hooks/test-per-prompt-hook-cost.sh`.
+
+## The context line and the long session nudge
+
+Every request rereads the whole conversation, so the cost of a session is set by how much each
+request carries, not by cache misses (claude-config#1960, #1940). `hooks/context-size-notice.sh`
+runs after every tool call, in the main session and in every subagent, and reads the size of each
+request from the transcript's usage fields (input plus cache read plus cache write), never what
+anybody wrote. Both rules were decided by Dan on 2026-11-01.
+
+- **The context line** (`CONTEXT_LINE_TOKENS`, 200,000). A builder (any subagent) or an orchestrator
+  (a main session that has dispatched an agent or set a /goal) whose last request carried more is
+  told to write down what it has decided and then restart or compact. A builder writes
+  `handoff.md` in its scratchpad folder and hands back, unless only the push and the report are
+  left, and the orchestrator gives the rest to a fresh agent that starts from the note. An
+  orchestrator puts each decision that belongs to an issue on that issue as a comment and the rest
+  in `handoff.md`, then tells Dan, who sees the notice too, so he can type /compact or start a
+  fresh session. It is said once per band of the line (200K, 400K, ...) and again after a
+  compaction brings the session back under it, never on every call.
+- **What must be written down before a restart**, so nothing decided lives only in the
+  transcript: the goal or list in Dan's words with every constraint he stated, quoted and dated;
+  every decision with its reason and what was ruled out; the state left behind (branches,
+  worktrees, commit shas, pull requests, agents and background jobs still running, with their
+  ids); each item's status and the next step of the one in progress; every question waiting on
+  Dan. The orchestrate skill's section 7 and its `agent-rules.md` carry the same list.
+- **The long session nudge** (`CONTEXT_COMPACTIONS_NUDGE`, 5). A main session compacted that many
+  times is told, with Dan, to start fresh (/handoff, then a new session), with what its next
+  request costs: at least what its last one carried, beside its average, its size before its last
+  compaction and what it started from. Said again at each further multiple.
+- **Measured defaults.** `hooks/lib/context_size.py` records both measurements, and
+  `python3 tools/cache-usage.py --days 31 --summary` re-measures them through the same defaults and
+  the same sum: its CONTEXT lines give the share of requests and tokens over the line, its
+  COMPACTIONS line the main sessions compacted at least the nudge count. On the personal MacBook in
+  October, requests over 200,000 read 88.5% of subagent tokens and 85.4% of main session tokens.
+- **Cost.** Each run reads only the bytes appended to the transcript since its last run, with the
+  offset kept in `~/.claude/state/context-size/` (one small file per session and agent, never
+  synced): about 40 ms a call, and 0.11 s the first time over a 21 MB transcript (measured
+  2026-11-01). Two calls finishing at once take an flock without waiting, and the one that finds it
+  held says nothing. A transcript it cannot read is said once; a state folder it cannot write says
+  nothing, since a notice it cannot record would repeat on every call.
+- Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`.
 
 ## Mods
 

@@ -27,7 +27,11 @@ Exits 1 with NO TRANSCRIPTS ROOT or NO REQUESTS IN WINDOW rather than report an 
 
 Output is tab separated: WINDOW, RULES, SESSION rows (main and subagent), UNMEASURED rows, SUMMARY
 per kind (main also split by `entrypoint`: `cli` is an interactive session, `sdk-cli` a headless
-`claude -p` run), STARTUP, MALFORMED, END. `--summary` leaves out the per transcript rows.
+`claude -p` run), CONTEXT per kind (requests over the context line, `--context-line`, and their
+share of requests and of tokens, claude-config#1960), COMPACTIONS (main sessions compacted at least
+`--compactions` times in the window and the share of main tokens they read, claude-config#1940),
+STARTUP, MALFORMED, END. Both defaults are read from payload/hooks/lib/context_size.py, the hook
+that enforces them. `--summary` leaves out the per transcript rows.
 """
 import argparse
 import datetime
@@ -39,6 +43,12 @@ import statistics
 import sys
 
 IMPORT = re.compile(r"^@(\S+)\s*$")
+
+# The context line and the long session nudge (claude-config#1960, #1940): their defaults and the
+# sum that measures a request's context come from the hook that enforces them, so this report
+# re-measures exactly what the hook judges (L83, L316).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "payload", "hooks", "lib"))
+import context_size  # noqa: E402
 
 
 def parse_ts(text):
@@ -98,6 +108,7 @@ def read_transcript(path, since, until, counters):
     any_usage = False
     active = False
     first = None
+    compactions = 0
     try:
         fh = open(path, encoding="utf-8", errors="replace")
     except OSError:
@@ -125,6 +136,8 @@ def read_transcript(path, since, until, counters):
                 agent_id = d["agentId"]
             if session_id is None and isinstance(d.get("sessionId"), str):
                 session_id = d["sessionId"]
+            if in_window and d.get("type") == "system" and d.get("subtype") == "compact_boundary":
+                compactions += 1
             if d.get("type") != "assistant":
                 continue
             msg = d.get("message") if isinstance(d.get("message"), dict) else {}
@@ -155,6 +168,7 @@ def read_transcript(path, since, until, counters):
         "is_side": is_side, "agent_id": agent_id, "session_id": session_id,
         "entrypoint": entrypoint, "requests": [requests[k] for k in order],
         "no_usage": no_usage, "any_usage": any_usage, "first": first,
+        "compactions": compactions,
     }
 
 
@@ -179,6 +193,8 @@ def main(argv):
     ap.add_argument("--days", type=float, default=7)
     ap.add_argument("--now", default=None)
     ap.add_argument("--summary", action="store_true")
+    ap.add_argument("--context-line", type=int, default=context_size.DEFAULT_LINE)
+    ap.add_argument("--compactions", type=int, default=context_size.DEFAULT_COMPACTIONS)
     a = ap.parse_args(argv)
 
     until = parse_ts(a.now) if a.now else datetime.datetime.now(datetime.timezone.utc)
@@ -207,8 +223,8 @@ def main(argv):
     paths += glob.glob(os.path.join(a.root, "*", "*", "subagents", "*.jsonl"))
     counters = {"malformed": 0, "unreadable": 0, "lines": 0, "untimed": 0}
     rows, unmeasured = [], []
-    kinds = {"main": {"usages": [], "transcripts": 0, "unmeasured": 0},
-             "subagent": {"usages": [], "transcripts": 0, "unmeasured": 0}}
+    kinds = {"main": {"usages": [], "transcripts": 0, "unmeasured": 0, "over": 0, "per": []},
+             "subagent": {"usages": [], "transcripts": 0, "unmeasured": 0, "over": 0, "per": []}}
     starts = []
     by_entry = {}
     since_epoch = since.timestamp()
@@ -249,6 +265,10 @@ def main(argv):
             continue
         kinds[kind]["transcripts"] += 1
         kinds[kind]["usages"].extend(usages)
+        contexts = [context_size.context_of(u) for u in usages]
+        if any(c > a.context_line for c in contexts):
+            kinds[kind]["over"] += 1
+        kinds[kind]["per"].append((t["compactions"], sum(contexts)))
         tt = totals(usages)
         first_ts, first_u = t["first"]
         first_write = num(first_u.get("cache_creation_input_tokens"))
@@ -288,6 +308,18 @@ def main(argv):
                            "\tcache_read=%d\tcache_write=%d\twrite_5m=%d\twrite_1h=%d\thit_rate=%s"
                            % (entry, n, et["requests"], et["input"], et["read"], et["write"],
                               et["w5"], et["w1"], rate(et["read"], et["all"])))
+    for kind in ("main", "subagent"):
+        k = kinds[kind]
+        contexts = [context_size.context_of(u) for u in k["usages"]]
+        over = [c for c in contexts if c > a.context_line]
+        out.append("CONTEXT\t%s\tline=%d\ttranscripts_over=%d\trequests_over=%d\tshare_of_requests=%s"
+                   "\tshare_of_tokens=%s" % (kind, a.context_line, k["over"], len(over),
+                                            rate(len(over), len(contexts)), rate(sum(over), sum(contexts))))
+    per = kinds["main"]["per"]
+    hit = [(c, tok) for c, tok in per if c >= a.compactions]
+    out.append("COMPACTIONS\tmain\tnudge_at=%d\ttranscripts=%d\tat_or_over=%d\tshare_of_tokens=%s\tmax=%d"
+               % (a.compactions, len(per), len(hit), rate(sum(tok for _, tok in hit), sum(tok for _, tok in per)),
+                  max([c for c, _ in per] or [0])))
     if starts:
         med = statistics.median(starts)
         ratio = ("%.1fx" % (med / rule_tokens)) if rule_tokens > 0 else "n/a"

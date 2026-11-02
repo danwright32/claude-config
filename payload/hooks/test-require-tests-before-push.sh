@@ -486,6 +486,70 @@ n_calls="$(calls_in "$JUDGE_LOG")"
 if [ "$n_calls" = 1 ]; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL: #1998 with no time left the gate made $n_calls calls, expected 1"; fi
 
+# --- claude-config#2021: the deadline setting's two untested edges ----------
+# REQUIRE_TESTS_DEADLINE_SECONDS (#2009) can only end the further readings SOONER: it is capped at
+# the hook's own 110, and it is read through lib/whole-number.sh, without which the 110 stands. The
+# hook times itself with bash's SECONDS, which bash takes from the environment, so a run handed
+# SECONDS=95 starts 95 seconds in: under a deadline of 110 that leaves 15, short of the 20 a further
+# reading needs, and under anything past 115 it leaves enough. Every number here is one the hook or
+# this test sets, not measured. That clock is what both edges are read through, with the judge
+# stubbed as above; no real model is called.
+#
+# The control first: a run started at 0 under a setting of 500 makes the further reading, so a
+# refusal below comes from the clock and the cap, not from the large value breaking the reading.
+JUDGE_LOG="$TMPROOT/judge-log-2021ctl"; mkdir -p "$JUDGE_LOG"
+printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
+W="$(mk_repo)"; seed_issue_push "$W"
+REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 0 "#2021 the control: a setting of 500 from a start at 0 still makes the further reading and allows"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 2 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 the control made $n_calls judge calls, expected 2"; fi
+
+# 1. A setting above 110 is held to 110: 95 seconds in, it leaves no time for a further reading
+# (a start this test sets, not measured).
+JUDGE_LOG="$TMPROOT/judge-log-2021cap"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; seed_issue_push "$W"
+SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 2 "#2021 a setting above 110 is held to 110, so 95 seconds in no further reading starts"
+want_stderr "ran out of time" "#2021 and the refusal says it ran out of time"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 1 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 a setting of 500 was not held to 110: 95 seconds in the gate made $n_calls judge calls, expected 1"; fi
+
+# 2. Without lib/whole-number.sh the setting cannot be read, and the default 110 stands. A copy of
+# the hook and its libraries with that one file taken away, so the real tree is never touched.
+NWN="$TMPROOT/no-whole-number"; mkdir -p "$NWN"
+cp "$HOOK" "$NWN/require-tests-before-push.sh"
+cp -R "$DIR/lib" "$NWN/lib"
+rm -f "$NWN/lib/whole-number.sh"
+REAL_HOOK="$HOOK"; HOOK="$NWN/require-tests-before-push.sh"
+if [ ! -e "$NWN/lib/whole-number.sh" ] && [ -f "$NWN/lib/push-changes.sh" ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 fixture: the copy without lib/whole-number.sh was not made as intended"; fi
+# A setting of 1, unread, so the default leaves time for the further reading from a start at 0.
+JUDGE_LOG="$TMPROOT/judge-log-2021nw1"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; seed_issue_push "$W"
+REQUIRE_TESTS_DEADLINE_SECONDS=1 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 0 "#2021 without lib/whole-number.sh the default deadline stands: a setting of 1 is not read, and the further reading runs"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 2 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh the gate made $n_calls judge calls, expected 2 under the default deadline"; fi
+case "$ERR" in *'command not found'*) fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh the hook printed a shell error: $ERR" ;; *) pass=$((pass+1)) ;; esac
+# And the default is 110, not the setting taken raw: 95 seconds in, a setting of 500 still leaves
+# no time for a further reading (a start this test sets, not measured).
+JUDGE_LOG="$TMPROOT/judge-log-2021nw2"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; seed_issue_push "$W"
+SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 2 "#2021 without lib/whole-number.sh the deadline is the default 110, so 95 seconds in no further reading starts"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 1 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh, 95 seconds in, the gate made $n_calls judge calls, expected 1"; fi
+HOOK="$REAL_HOOK"
+
 # --- claude-config#930, end to end: the push that was refused --------------
 # A push changing only a suite file inside an Xcode test target folder changes no source, so the
 # gate has nothing to judge and stays silent. Before #930 it was refused at the zero test floor.
@@ -765,6 +829,136 @@ W="$(mk_repo)"; seed_source_and_test "$W"
 printf 'not a directory\n' > "$TMPROOT/ledger-file"
 PUSH_GATE_LEDGER_DIR="$TMPROOT/ledger-file" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
 want_allowed_notice "an unwritable record does not block the push" "allowed this push \(pass\), but its record could not be written"
+
+# --- claude-config#2028: a branch that merges a busy main is judged on its own change ----------------
+# On 2026-11-01 four Pivot pull requests (#607, #644, #619, #621) each merged main into their branch
+# and were refused, because the gate judged every change main had gained since the branch was last
+# pushed: far past the 60,000 byte budget, and full of changes that passed the gate on their own
+# branches. Now the push is judged against what merging main into the last pushed tip gives, so only
+# the branch's own work is judged, and an edit made inside the merge itself (a conflict resolution,
+# or anything else in neither parent) still is.
+#
+# The setup: lib/shared.js on main, a feature branch changing it with a test and pushed, then main
+# gaining a large tested change (BIG_MAIN_MARKER, past the budget on its own) and merged in. $2:
+#   own       the branch then adds lib/own.js with tests/own.test.js
+#   untested  the branch then adds lib/own.js with no test
+#   conflict  main also changed the line the branch changed; resolved to a value in neither parent
+#   evil      a clean merge whose commit also adds lib/evil.js, in neither parent
+mk_merged_main() {   # $1 = repo  $2 = own | untested | conflict | evil
+  local w="$1" kind="$2"
+  (
+    cd "$w" || exit 1
+    main="$(git symbolic-ref --short HEAD)"
+    git remote set-head origin "$main"
+    mkdir -p lib tests
+    printf 'export function shared() { return 0; }\n' > lib/shared.js
+    git add lib/shared.js && git commit -qm "shared" && git push -q origin "$main"
+    git checkout -qb feature
+    printf 'export function shared() { return 1; }\n' > lib/shared.js
+    printf 'test("shared", () => { expect(shared()).toBe(1); });\n' > tests/shared.test.js
+    git add lib/shared.js tests/shared.test.js && git commit -qm "feature change" && git push -qu origin feature
+    git checkout -q "$main"
+    mkdir -p lib tests
+    python3 -c 'print("// BIG_MAIN_MARKER")
+for i in range(80 * 1024 // 48):
+    print("export const big%05d = () => %05d; // filler" % (i, i))' > lib/big.js
+    printf 'test("big", () => { expect(big00001()).toBe(1); });\n' > tests/big.test.js
+    git add lib/big.js tests/big.test.js
+    [ "$kind" = conflict ] && printf 'export function shared() { return 2; }\n' > lib/shared.js && git add lib/shared.js
+    git commit -qm "MAIN_COMMIT_SUBJECT a large change" && git push -q origin "$main"
+    git checkout -q feature
+    case "$kind" in
+      conflict)
+        git merge -q --no-edit "origin/$main"
+        printf 'export function shared() { return 4; }\n' > lib/shared.js
+        git add lib/shared.js && git commit -q --no-edit ;;
+      evil)
+        git merge -q --no-edit --no-commit "origin/$main"
+        printf 'export const evil = () => 9;\n' > lib/evil.js
+        git add lib/evil.js && git commit -q --no-edit ;;
+      *)
+        git merge -q --no-edit "origin/$main"
+        printf 'export function own() { return 5; }\n' > lib/own.js
+        git add lib/own.js
+        if [ "$kind" = own ]; then
+          printf 'test("own", () => { expect(own()).toBe(5); });\n' > tests/own.test.js
+          git add tests/own.test.js
+        fi
+        git commit -qm "own change" ;;
+    esac
+  ) >/dev/null 2>&1
+}
+# The stub refuses whatever shows it main's change, and passes anything else, so a pass means the
+# judge was shown the branch's change without main's.
+MERGE_RULES="$TMPROOT/judge-rules-2028"
+printf 'BIG_MAIN_MARKER\t%s\n' '{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"main big change\"]}"}' > "$MERGE_RULES"
+not_in_call() {   # <file> <text> <label>
+  if [ -f "$1" ] && ! grep -q "$2" "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2028 $3: the judge was shown $2 (or never called)"; fi
+}
+in_call() {   # <file> <text> <label>
+  if [ -f "$1" ] && grep -q "$2" "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2028 $3: the judge was not shown $2"; fi
+}
+not_in_stderr() {   # <ERE> <label>
+  if grep -Eq "$1" <<< "$ERR"; then fail=$((fail+1)); echo "FAIL: #2028 $2: stderr matched /$1/: [$ERR]"; else pass=$((pass+1)); fi
+}
+
+# The issue's push: the branch's own tested change, beside a merged main past the budget, passes.
+JUDGE_LOG="$TMPROOT/judge-log-2028a"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; mk_merged_main "$W" own
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+want_code 0 "#2028 a branch that merged a large main and carries its own tested change passes"
+in_call "$JUDGE_LOG/call.1" "lib/own.js" "the branch's own change is judged"
+in_call "$JUDGE_LOG/call.1" "tests/own.test.js" "the branch's own test is shown"
+not_in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "main's merged change is left out of the diff"
+not_in_call "$JUDGE_LOG/call.1" "MAIN_COMMIT_SUBJECT" "main's commit subjects are left out of the messages"
+if [ "$(calls_in "$JUDGE_LOG")" = 1 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2028 expected one judge call, got $(calls_in "$JUDGE_LOG")"; fi
+
+# The same with its own change untested is refused, naming that change and not main's.
+W="$(mk_repo)"; mk_merged_main "$W" untested
+STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+want_code 2 "#2028 a branch that merged main with its own untested change is refused"
+want_stderr "adds or modifies no tests" "#2028 the untested own change is refused by the floor"
+want_stderr "lib/own\.js" "#2028 the refusal names the branch's change"
+not_in_stderr "lib/big\.js" "the refusal does not name main's change"
+
+# A conflict resolution is a change in the merge result in neither parent: it is still judged.
+W="$(mk_repo)"; mk_merged_main "$W" conflict
+STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+want_code 2 "#2028 an untested conflict resolution is refused"
+want_stderr "adds or modifies no tests" "#2028 the conflict resolution is judged on its own"
+want_stderr "lib/shared\.js" "#2028 the refusal names the resolved file"
+not_in_stderr "lib/big\.js" "the conflict refusal does not name main's change"
+
+# So is an edit slipped into a clean merge's commit.
+W="$(mk_repo)"; mk_merged_main "$W" evil
+STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+want_code 2 "#2028 an untested edit made inside a merge commit is refused"
+want_stderr "lib/evil\.js" "#2028 the refusal names the edit made in the merge"
+not_in_stderr "lib/big\.js" "the merge edit refusal does not name main's change"
+
+# No default branch known: the gate cannot tell main's commits from the branch's, so it judges
+# everything, as before #2028, never nothing, and says main's changes could not be set apart.
+JUDGE_LOG="$TMPROOT/judge-log-2028e"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; mk_merged_main "$W" own
+( cd "$W" && git remote set-head origin -d; git update-ref -d refs/remotes/origin/main; git update-ref -d refs/remotes/origin/master ) >/dev/null 2>&1
+# The control: the upstream is still there, so this case reaches the merge question at all.
+if git -C "$W" rev-parse --verify --quiet '@{u}' >/dev/null && ! git -C "$W" rev-parse --verify --quiet refs/remotes/origin/master >/dev/null && ! git -C "$W" rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2028 the no default branch case lost its upstream or kept a default branch"; fi
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+want_code 2 "#2028 with no default branch known, the whole push is judged"
+in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "with no default branch known, main's change is judged too"
+want_stderr "could not set apart" "#2028 the refusal says the merged changes could not be set apart"
+
+# The merge cannot be worked out (git merge-tree fails): the same, everything is judged and said so.
+GIT_REAL="$(command -v git)"
+FAKE_GIT_DIR="$TMPROOT/fake-git-2028"; mkdir -p "$FAKE_GIT_DIR"
+printf '#!/usr/bin/env bash\n[ "${1:-}" = merge-tree ] && exit 128\nexec "%s" "$@"\n' "$GIT_REAL" > "$FAKE_GIT_DIR/git"; chmod +x "$FAKE_GIT_DIR/git"
+JUDGE_LOG="$TMPROOT/judge-log-2028f"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; mk_merged_main "$W" own
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push" "$FAKE_GIT_DIR:$PATH_STUB"
+want_code 2 "#2028 when the merge cannot be worked out, the whole push is judged"
+in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "when the merge cannot be worked out, main's change is judged too"
+want_stderr "could not set apart" "#2028 the refusal says why main's changes were judged"
 
 echo
 echo "passed: $pass, failed: $fail"

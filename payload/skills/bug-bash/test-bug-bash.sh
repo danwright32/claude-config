@@ -914,6 +914,26 @@ if [ -n "$st_port" ]; then
 else
   bad "the self test says which port its listener was on" "$out"
 fi
+# The self test's listener is never the self test's own child (#2015): on bash 3.2 a child that exits
+# while the shell is writing into a pipe cuts the line short (L1035), and this test's lines are what
+# the skill reads. A stand in node records the pid of the shell that started the listener; the rule
+# the self test loads names the self test's own pid as its owner, so the two must differ.
+REAL_NODE="$(command -v node)"
+mkdir -p "$TMP/nodewrap"
+cat > "$TMP/nodewrap/node" <<SH
+#!/bin/sh
+case "\$*" in *createServer*) echo "\$PPID" > "$TMP/listener.parent" ;; esac
+exec "$REAL_NODE" "\$@"
+SH
+chmod +x "$TMP/nodewrap/node"
+reset_fake; rm -f "$TMP/listener.parent"; echo 4242 > "$FAKE/knob-exempt-gid"; echo 4242 > "$FAKE/knob-pf-gid"
+PATH="$TMP/nodewrap:$PATH" fakeenv bash "$EGRESS" selftest > "$TMP/selftest-parent.out" 2>&1 & st=$!
+hang_wait '! kill -0 "$st" 2>/dev/null' 0.05
+if kill -0 "$st" 2>/dev/null; then kill "$st" 2>/dev/null; rc=hung; else wait "$st"; rc=$?; fi
+st_owner="$(awk '/ load [0-9]+ [0-9]+ / { for (i = 1; i < NF; i++) if ($i == "load") { print $(i + 1); exit } }' "$FAKE/sudo.calls" 2>/dev/null)"
+st_parent="$(cat "$TMP/listener.parent" 2>/dev/null)"
+[ "$rc" = 0 ] && [ -n "$st_owner" ] && [ -n "$st_parent" ] && [ "$st_parent" != "$st_owner" ] && ok \
+  || bad "the self test's listener is not the self test's own child (rc $rc, self test pid '$st_owner', listener started by '$st_parent')" "$(cat "$TMP/selftest-parent.out") $(cat "$FAKE/sudo.calls" 2>/dev/null)"
 
 # The one time setup: run as root only, and its sudoers grant is exactly the helper's verbs and the
 # _bugbash group, nothing more.
