@@ -157,7 +157,10 @@ def split(s):
 # and dropped when it closes, which is the shell's own rule: a cd inside ( ) or $( ) ends with it.
 RESERVED = {"!", "{", "if", "then", "else", "elif", "do", "while", "until", "time"}
 COMMAND_FRAMES = {"top", "sub", "subst", "tick"}
-HEREDOC_OPENER = re.compile(r"<<(-?)[ \t]*(?:'([^']*)'|\"([^\"]*)\"|\\?([A-Za-z0-9_]+))")
+# A heredoc's opener up to its end marker word: <<, or <<- which strips leading tabs, and blanks.
+HEREDOC_START = re.compile(r"<<(-?)[ \t]*")
+# What ends the end marker word, as the shell reads a word.
+HEREDOC_WORD_END = set(" \t\n;&|<>()")
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # What ends a command, as (how it ended, its width). Two characters are looked up before one, so
 # && is never read as a backgrounding & and || never as a pipe.
@@ -167,6 +170,53 @@ SEPARATORS = {"&&": ("&&", 2), "||": ("||", 2), "|&": ("|", 2), ";;": (";", 2),
 
 class Unreadable(Exception):
     """Something opened and never closed, so this reading cannot be trusted."""
+
+
+def heredoc_opener(s, i):
+    """The heredoc opened at s[i] ("<<"), as (marker, strip_tabs, quoted, end), or None.
+
+    The marker is the word after the opener with its quotes removed, as the shell compares it with
+    each body line; quoted says whether ANY part of it was quoted, by quotes or a backslash, whole
+    (`'EOF'`, `"EOF"`, `\\EOF`) or in part (`E"OF"`, `E\\OF`, `$'EOF'`), because then the shell
+    expands nothing in the body, and otherwise it expands it and runs every substitution in it
+    (claude-config#2053). Measured on this Mac's bash and zsh, 2026-11-01. None when there is no word,
+    or a quote in it never closes.
+    """
+    m = HEREDOC_START.match(s, i)
+    if not m or s.startswith("<<<", i):
+        return None
+    j, n = m.end(), len(s)
+    word, quoted = [], False
+    while j < n and s[j] not in HEREDOC_WORD_END:
+        c = s[j]
+        if c == "\\" and j + 1 < n:
+            word.append(s[j + 1])
+            quoted = True
+            j += 2
+        elif c == "'" or (c == "$" and s.startswith("$'", j)):
+            j += 2 if c == "$" else 1
+            k = s.find("'", j)
+            if k < 0:
+                return None
+            word.append(s[j:k])
+            quoted = True
+            j = k + 1
+        elif c == '"' or (c == "$" and s.startswith('$"', j)):
+            j += 2 if c == "$" else 1
+            k = j
+            while k < n and s[k] != '"':
+                k += 2 if s[k] == "\\" else 1
+            if k >= n:
+                return None
+            word.append(re.sub(r'\\([\\"$`])', r"\1", s[j:k]))
+            quoted = True
+            j = k + 1
+        else:
+            word.append(c)
+            j += 1
+    if j == m.end():
+        return None
+    return "".join(word), m.group(1) == "-", quoted, j
 
 
 def cd_target(text):
@@ -210,14 +260,23 @@ def moved(cwd, old, target):
     return os.path.join(cwd, target), cwd
 
 
-def commands(s, cwd=""):
+def commands(s, cwd="", heredocs=None, spans=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
+
+    heredocs, when a list, is given one (quoted, before, body) for each heredoc body the reading
+    skipped as text (claude-config#2050): quoted says the shell expands nothing in it (its end marker
+    is quoted in any form, heredoc_opener), before is the text of the command that opened it up to
+    the opener, and body is the text between the opener's line and its closing line. An unquoted
+    body is given too, though the substitutions in it are also read as commands (#2053). A body
+    that never closes is not skipped, so it is read as commands and given to nobody here.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
     A subshell group is not part of the command around it. Heredoc bodies and comments are nobody's
-    text. s may be the command as typed or with every newline flattened to "; " (how the push hooks
-    read it). Which one is decided by whether s holds a newline at all: with one, only a newline is
+    text, but the substitutions in the body of a heredoc whose end marker is unquoted are commands,
+    since the shell expands that body and runs them (claude-config#2053); a quoted marker, in any
+    form, keeps the whole body text (heredoc_opener). s may be the command as typed or with every
+    newline flattened to "; " (how the push hooks read it). Which one is decided by whether s holds a newline at all: with one, only a newline is
     a line break, so in `cat <<EOF; git push` the "; " is the separator it is and the push is read
     (lessons review of #1017); with none, "; " is the line break that starts a heredoc body and ends
     a comment, because the flattened text cannot tell a newline from a separator there (main read
@@ -225,12 +284,23 @@ def commands(s, cwd=""):
 
     cwd is the directory s starts in, "" for the session's: a string a wrapper runs (wrapped) starts
     where the wrapper runs (claude-config#1478).
+
+    spans, a list, reads s instead as the body of an unquoted heredoc, and collects the text inside
+    each substitution written directly in it (body_substitutions).
     """
     n = len(s)
     line_break = "\n" if "\n" in s else "; "
     closing_line = re.escape(line_break) + "%s%s" + (r"(?=\n|$)" if line_break == "\n" else r"(?=;|$)")
     out, pending = [], []
     frames = [{"k": "top", "start": 0, "cwd": cwd, "old": None}]
+    # The unquoted heredoc bodies being read, innermost last: each is also a frame, kind "hd", that
+    # holds text the way a double quoted string does (its quotes are only text), from where its body
+    # starts to "end", the start of its closing line, and then the reading goes on at "next".
+    bodies = []
+    if spans is not None:
+        frames[0]["start"] = n
+        bodies.append({"k": "hd", "end": n + 1, "next": n})
+        frames.append(bodies[0])
 
     def cut(f, end, how):
         text = s[f["start"]:end]
@@ -244,16 +314,30 @@ def commands(s, cwd=""):
 
     def open_commands(kind, start):
         parent = next(f for f in reversed(frames) if f["k"] in COMMAND_FRAMES)
-        frames.append({"k": kind, "start": start, "cwd": parent["cwd"], "old": parent["old"]})
+        frame = {"k": kind, "start": start, "cwd": parent["cwd"], "old": parent["old"]}
+        if spans is not None and frames[-1] is bodies[0]:
+            frame["span"] = start
+        frames.append(frame)
 
     def close_commands(end):
         f = frames.pop()
+        if "span" in f:
+            spans.append(s[f["span"]:end])
         cut(f, end, ")")
         if f["k"] == "sub":
             frames[-1]["start"] = end + 1
 
     i = 0
     while i < n:
+        if bodies and i >= bodies[-1]["end"]:
+            # A body ends at its closing line whatever is open in it, as the shell finds the line
+            # before it expands anything; a substitution or quote still open there runs nothing in
+            # the shell, and is a reading this cannot trust.
+            if frames[-1] is not bodies[-1]:
+                raise Unreadable()
+            frames.pop()
+            i = bodies.pop()["next"]
+            continue
         c = s[i]
         nx = s[i + 1] if i + 1 < n else ""
         f = frames[-1]
@@ -303,7 +387,7 @@ def commands(s, cwd=""):
                 frames.pop()
                 i += 1
                 continue
-        if k != '"':
+        if k not in ('"', "hd"):
             if c == "'":
                 frames.append({"k": "'"})
                 i += 1
@@ -349,28 +433,41 @@ def commands(s, cwd=""):
             i += 3
             continue
         if s.startswith("<<", i):
-            m = HEREDOC_OPENER.match(s, i)
-            if m:
-                word = next(g for g in m.groups()[1:] if g is not None)
-                pending.append((word, m.group(1) == "-"))
-                i = m.end()
+            opener = heredoc_opener(s, i)
+            if opener:
+                before = s[f["start"]:i]
+                word, strip_tabs, quoted, i = opener
+                pending.append((word, strip_tabs, quoted, before))
             else:
                 i += 2
             continue
         if pending and s.startswith(line_break, i):
             # The bodies start on the next line: find the closing line of each in turn. One that never
             # closes is not skipped, so nothing after it is hidden.
-            j = i
-            for word, strip_tabs in pending:
+            j, unquoted, skipped = i, [], []
+            for word, strip_tabs, quoted, before in pending:
                 m = re.compile(closing_line % ("\t*" if strip_tabs else "", re.escape(word))).search(s, j)
                 if not m:
                     j = None
                     break
+                if not quoted:
+                    unquoted.append((j, m.start()))
+                body = s[j:m.start()]
+                skipped.append((quoted, before, body[len(line_break):] if body.startswith(line_break) else body))
                 j = m.end()
+            if j is not None and heredocs is not None:
+                heredocs.extend(skipped)
             pending.clear()
             if j is not None:
                 cut(f, i, "\n")
                 f["start"] = i = j
+                # Each unquoted body is read for its substitutions, the first first, and the reading
+                # goes on after the last closing line.
+                for start, end in reversed(unquoted):
+                    body = {"k": "hd", "end": end, "next": i}
+                    frames.append(body)
+                    bodies.append(body)
+                    i = start
                 continue
         two = s[i:i + 2]
         separator = SEPARATORS.get(two) or SEPARATORS.get(c)
@@ -402,10 +499,24 @@ def commands(s, cwd=""):
         if c == ")" and k in ("sub", "subst"):
             close_commands(i)
         i += 1
+    if spans is not None and frames[-1] is bodies[0]:
+        frames.pop()
     if len(frames) > 1:
         raise Unreadable()
     cut(frames[0], n, "end")
     return out
+
+
+def body_substitutions(body):
+    """The text inside each $( ) and backquote written directly in an unquoted heredoc body, in order.
+
+    For a reader with no reading of its own inside a heredoc body (gh_issue_scan.py's normalize), so
+    what the shell runs in the body is found by this one reading (claude-config#2053). Raises
+    Unreadable when one is still open at the end of the body.
+    """
+    spans = []
+    commands(body, "", spans=spans)
+    return spans
 
 
 def command_words(text):

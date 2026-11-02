@@ -114,6 +114,20 @@ check "#1723 and the command that moves it onto the merged one's base" "gh pr ed
 check "#1723 the stacked pull requests are listed by the branch they are based on" "pr list --repo acme/widget --base 2337-http-service --state open" "$calls"
 check "#1723 and the refusal offers the one command override" "SKIP_STACKED_CHECK=1" "$out"
 
+# 1a. The same delete in a substitution in the body of a heredoc whose end marker is unquoted, which
+#     the shell runs (claude-config#2053); a quoted marker keeps the body text and asks nothing.
+fresh
+echo '[{"number":2763}]' > "$ST/stacked"
+echo '[{"number":2760,"baseRefName":"main"}]' > "$ST/merged"
+judge $'cat <<EOF\n$(gh api -X DELETE repos/acme/widget/git/refs/heads/2337-http-service)\nEOF'
+check_eq "#2053 the delete in an unquoted heredoc body's substitution is refused" "2" "$rc"
+check "#2053 and its refusal names the stacked pull request" "#2763" "$out"
+fresh
+echo '[{"number":2763}]' > "$ST/stacked"
+echo '[{"number":2760,"baseRefName":"main"}]' > "$ST/merged"
+judge $'cat <<\'EOF\'\n$(gh api -X DELETE repos/acme/widget/git/refs/heads/2337-http-service)\nEOF'
+check_eq "#2053 control: the same in a quoted heredoc body is text, and passes" "0" "$rc"
+
 # 2. Nothing stacked: the delete runs, and nothing is said.
 fresh
 echo '[]' > "$ST/stacked"

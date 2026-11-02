@@ -114,6 +114,10 @@ agent_refused "push --forc, a prefix git reads as --force" 'git push --forc orig
 agent_refused "push --mirror" 'git push --mirror backup'
 agent_refused "push with a + on the far side of a refspec" 'git push origin HEAD:+feature'
 agent_refused "push --force after a --no-force" 'git push --no-force --force origin feature'
+# The shell runs the substitutions in the body of a heredoc whose end marker is unquoted, so one
+# there is read and judged; a quoted marker keeps the body text (claude-config#2053).
+agent_refused "#2053 push --force in a substitution in an unquoted heredoc body" $'cat <<EOF\n$(git push --force origin feature)\nEOF'
+agent_allowed "#2053 control: the same in a quoted heredoc body is text" $'cat <<\'EOF\'\n$(git push --force origin feature)\nEOF'
 
 # ---------------------------------------------------------------------------------------------
 echo "a subagent's plain commit and push go through, and so does a mention of the flags"

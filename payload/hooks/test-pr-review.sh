@@ -1150,6 +1150,17 @@ check_eq "#1607 a checkout of it inside the merge's folder is held for its revie
 check "#1607 read from that checkout" "read from $XCLONE_TOP" "$out"
 wait_final "$HEAD_SHA" || bad "#1607 the review started from the child checkout finished"
 
+# The shell runs the substitutions in the body of a heredoc whose end marker is unquoted, so a merge
+# there is held for its review like any other (claude-config#2053); a quoted marker keeps the body
+# text, which merges nothing.
+reset_state
+printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync"}\n' "$HEAD_SHA" > "$FAKE_LOG/pr-view.json"
+out="$(fire_gate $'cat <<\'EOF\'\n$(gh pr merge 7 --squash)\nEOF')"; rc=$?
+check_eq "#2053 control: a merge in a quoted heredoc body is text, and passes" "0" "$rc"
+out="$(fire_gate $'cat <<EOF\n$(gh pr merge 7 --squash)\nEOF')"; rc=$?
+check_eq "#2053 a merge in an unquoted heredoc body's substitution is held for its review" "2" "$rc"
+wait_final "$HEAD_SHA" || bad "#2053 the review the heredoc merge started finished"
+
 # ===========================================================================================
 # 5. The nudge does not show a whole branch review (claude-config#1090, Dan 2026-10-12). It reached
 #    whichever session prompted next, which was rarely the one merging, and walking these reviews

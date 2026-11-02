@@ -229,6 +229,20 @@ runbash "sed -i '' 's/a/b/' $FIX/dev/payload/LESSONS.md" "$FIX/dev"
 refused "an in place sed on a payload file is refused"
 runbash "cp /tmp/x $FIX/dev/payload/LESSONS.md" "$FIX/dev"
 refused "a copy over a payload file is refused"
+# The shell runs the substitutions in the body of a heredoc whose end marker is unquoted, so a copy
+# there is a write (claude-config#2053); a quoted marker keeps the body text.
+runbash "cat <<EOF
+\$(cp /tmp/x $FIX/dev/payload/LESSONS.md)
+EOF" "$FIX/dev"
+refused "#2053 a copy over a payload file in an unquoted heredoc body's substitution is refused"
+runbash "cat <<'EOF'
+\$(cp /tmp/x $FIX/dev/payload/LESSONS.md)
+EOF" "$FIX/dev"
+allowed "#2053 control: the same in a quoted heredoc body is text, and allowed"
+runbash "echo \"\$(cp /tmp/x $FIX/dev/payload/LESSONS.md)\"" "$FIX/dev"
+refused "#2053 a copy over a payload file in a plain substitution is refused"
+runbash "echo \"\$(cat $FIX/dev/payload/LESSONS.md)\"" "$FIX/dev"
+allowed "#2053 control: a read of a payload file in a substitution is allowed"
 
 # Reading is the overwhelming majority of what a session does in a checkout, and a gate that fired
 # on those would be turned off within the hour (L36, L104).

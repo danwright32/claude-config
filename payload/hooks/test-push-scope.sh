@@ -314,6 +314,16 @@ e2e_nl="$(e2e_verdict "$(printf 'git add -A && git commit -q -m x\n%s origin HEA
 [ "$e2e_nl" = "2" ] \
   && check "#97 and refuses the same change with the push on its own line" ok \
   || check "#97 and refuses the same change with the push on its own line" "exit=$e2e_nl"
+# The shell runs the substitutions in the body of a heredoc whose end marker is unquoted, so a push
+# there is judged (claude-config#2053); a quoted marker keeps the body text, which pushes nothing.
+e2e_hd="$(e2e_verdict $'git add -A && git commit -q -m x\ncat <<EOF\n$('"$_p"$' origin HEAD)\nEOF')"
+[ "$e2e_hd" = "2" ] \
+  && check "#2053 the gate refuses the same change pushed in an unquoted heredoc body's substitution" ok \
+  || check "#2053 the gate refuses the same change pushed in an unquoted heredoc body's substitution" "exit=$e2e_hd"
+e2e_hdq="$(e2e_verdict $'cat <<\'EOF\'\n$('"$_p"$' origin HEAD)\nEOF')"
+[ "$e2e_hdq" = "0" ] \
+  && check "#2053 control: the same in a quoted heredoc body is text, and passes" ok \
+  || check "#2053 control: the same in a quoted heredoc body is text, and passes" "exit=$e2e_hdq"
 
 # --- ps_base_ref (claude-config#339): the ref a push is judged AGAINST. Three push gates need the
 #     same answer and it used to be written out inside one of them, so a second gate would have
