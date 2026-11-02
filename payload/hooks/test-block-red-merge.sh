@@ -858,6 +858,16 @@ if denied "$out"; then fail "an issue comment about merging was refused as a mer
 # merge here must be denied.
 out=$(run_hook "$dir" "$MERGE_CMD 7 --squash")
 if denied "$out"; then pass; else fail "a red pull request merged, so the cases above prove nothing: $out"; fi
+# But a merge in a SUBSTITUTION in the body of a heredoc whose end marker is unquoted is run by the
+# shell, so it is a merge and is judged (claude-config#2053); the quoted note above is the control.
+out=$(run_hook "$dir" "cat > docs/merge-notes.md <<EOF
+merged: \$($MERGE_CMD 7 --squash)
+EOF")
+if denied "$out"; then pass; else fail "#2053 a red merge in an unquoted heredoc body's substitution was not judged: $out"; fi
+out=$(run_hook "$dir" "cat > docs/merge-notes.md <<'EOF'
+merged: \$($MERGE_CMD 7 --squash)
+EOF")
+if denied "$out"; then fail "#2053 a merge in a quoted heredoc body, which is text, was refused: $out"; else pass; fi
 rm -rf "$dir"
 
 # And the wrapper stays OUT of this gate's question. Where a repo carries its own commit

@@ -387,10 +387,12 @@ segments = re.split(r"&&|\|\||;|\||\n", shell_text)
 # The commands a shell runs from its -c string, eval from its words and env -S from its string
 # (claude-config#1478), read by lib/shell-words.py as commands of their own, each after a cd to the
 # directory it runs in, so a cd inside one moves only what follows it there. Only added to the cut
-# above, which still reads everything it always read.
+# above, which still reads everything it always read. So are the commands inside a substitution,
+# which the cut above never reads as commands of their own, those in the body of a heredoc whose end
+# marker is unquoted among them, since the shell runs them too (claude-config#2053).
 try:
     for d, text, _, _, depth in _sw.every_command(cmd):
-        if depth > 0:
+        if depth > 0 or "$(" in cmd or "`" in cmd:
             where = d if d.startswith("/") else (os.path.join(cwd, d) if d else cwd)
             segments += ["cd \"%s\"" % where] + re.split(r"&&|\|\||;|\||\n", text)
 except Exception:

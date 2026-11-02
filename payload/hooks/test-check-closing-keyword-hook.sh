@@ -53,6 +53,10 @@ ALLOW=0
 run "a PR body that negates a close"  $BLOCK 'gh pr create --title x --body "It does not close #897, which stays open."'
 run "a commit message that negates"   $BLOCK 'git commit -m "this does not fix #12"'
 run "a PR edit that negates"          $BLOCK 'gh pr edit 12 --body "does not resolve #5"'
+# The shell runs the substitutions in the body of a heredoc whose end marker is unquoted, so a commit
+# there is judged (claude-config#2053); a quoted marker keeps the body text, which commits nothing.
+run "#2053 a commit in an unquoted heredoc body's substitution" $BLOCK $'cat <<EOF\n$(git commit -m "this does not fix #12")\nEOF'
+run "#2053 control: the same in a quoted heredoc body is text" $ALLOW $'cat <<\'EOF\'\n$(git commit -m "this does not fix #12")\nEOF'
 
 # --- gh takes the subcommand's flags in front of it (#1188): the same creation and edit ---
 run "#1188 -R in front of pr create"           $BLOCK 'gh -R o/x pr create --title x --body "It does not close #897."'
