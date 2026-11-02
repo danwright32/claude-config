@@ -95,7 +95,9 @@ except Exception:
         if not m:
             return None
         word = next(g for g in (m.group(2), m.group(3), m.group(5)) if g is not None)
-        return word, m.group(1) == "-", m.group(5) is None or bool(m.group(4)) or any(q in word for q in "'\"\\"), m.end()
+        quoted = m.group(5) is None or bool(m.group(4)) or any(q in word for q in "'\"\\")
+        # Quote removal, so a partly quoted marker (E"OF") still ends at its own closing line.
+        return re.sub(r"[\"'\\]", "", word), m.group(1) == "-", quoted, m.end()
 
     def body_substitutions(body):
         raise ValueError("no reader")  # so the whole body is read as commands, which sees more

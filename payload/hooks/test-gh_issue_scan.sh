@@ -322,6 +322,8 @@ for d in "$DIR" "$FB" "$FB_BROKEN"; do
     || check "#2053 $name: a create in an unquoted heredoc body's substitution is seen" "got $(count_in "$d" $'cat <<EOF\nfiled $('"$HD_C"$')\nEOF')"
   [ "$(count_in "$d" $'cat <<\'EOF\'\nfiled $('"$HD_C"$')\nEOF')" = 0 ] && check "#2053 $name: control, a quoted body is text" ok \
     || check "#2053 $name: control, a quoted body is text" "got $(count_in "$d" $'cat <<\'EOF\'\nfiled $('"$HD_C"$')\nEOF')"
+  [ "$(count_in "$d" $'cat <<E"OF"\nb\nEOF\n'"$HD_C")" = 1 ] && check "#2053 $name: a create after a partly quoted marker's body is seen" ok \
+    || check "#2053 $name: a create after a partly quoted marker's body is seen" "got $(count_in "$d" $'cat <<E"OF"\nb\nEOF\n'"$HD_C")"
 done
 [ "$(count_in "$DIR" $'cat <<EOF\ndon`t\n'"$HD_C"$'\nEOF')" = 1 ] && check "#2053 a body the reader cannot read is read whole, so the create in it is seen" ok \
   || check "#2053 a body the reader cannot read is read whole, so the create in it is seen" "got $(count_in "$DIR" $'cat <<EOF\ndon`t\n'"$HD_C"$'\nEOF')"
