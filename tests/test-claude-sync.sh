@@ -1936,7 +1936,7 @@ shard_coverage_verdict(){   # $1 = shards expected; coverage lines on stdin
 # for one of them to name the wrong key and read a neighbouring number instead.
 _fv_get(){   # _fv_get <line> <key> -> the value, or nothing if it is not a whole number
   case "$1" in *" $2="*) ;; *) return 0 ;; esac
-  _fg="${1#*" $2="}"; _fg="${_fg%% *}"
+  local _fg="${1#*" $2="}"; _fg="${_fg%% *}"
   case "$_fg" in ''|*[!0-9]*) return 0 ;; esac
   printf '%s' "$_fg"
 }
@@ -15367,7 +15367,7 @@ HTHB="$WORK/hooktests-homeB"; mkdir -p "$HTHB"
 echo '{"hooks":{}}' > "$HTHB/settings.json"
 out_ht="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "first pull with a passing stub runner: $out_ht"
-ht_ran(){ n="$(grep -c . "$HTHB/hooks/ht-ran.txt" 2>/dev/null || true)"; case "$n" in ''|*[!0-9]*) n=0 ;; esac; printf '%s' "$n"; }
+ht_ran(){ local n; n="$(grep -c . "$HTHB/hooks/ht-ran.txt" 2>/dev/null || true)"; case "$n" in ''|*[!0-9]*) n=0 ;; esac; printf '%s' "$n"; }
 check "#178 the hook suite the pull installed is the one it runs" "[ \"\$(ht_ran)\" = '1' ]"
 check "#178 and the closing line carries its verdict" \
   "line_has \"\$out_ht\" 'Pulled shared config' 'hook suite passed here'"
