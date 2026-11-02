@@ -125,7 +125,8 @@ fx_run(){ # fx_run <output file> [env assignments...] [-- runner args...]
 # that exits at once, so it is not this shell's child: when it dies something else reaps it, and a
 # dead holder is gone rather than a zombie that still answers kill -0.
 new_holder(){ # new_holder <name> -> its pid, also kept in $T/holders/<name> for cleanup
-  ( sleep 900 > /dev/null 2>&1 < /dev/null & printf '%s\n' "$!" > "$T/holders/$1" )
+  # The subshell writes nowhere either, so nothing it does after the fork can reach a pipe (#2040).
+  ( sleep 900 > /dev/null 2>&1 < /dev/null & printf '%s\n' "$!" > "$T/holders/$1" ) </dev/null >/dev/null 2>&1
   cat "$T/holders/$1"
 }
 # A ticket in the slot's queue for pid $1, through the queue's own writer, marked as holding the turn
@@ -250,9 +251,9 @@ fx_run "$T/out5ctl" HOOK_TESTS_SLOT_WAIT=0; rc5ctl=$?
 rm -f "$T/mark5a"
 fx_run "$T/out5a" HOOK_TESTS_SLOT_POLL=0.1 HOOK_TESTS_SLOT_WAIT=5 SLOT_MARK="$T/mark5a" -- "$FX/payload/hooks"; rc5a=$?
 o5a="$(cat "$T/out5a")"
-{ [ "$rc5a" -eq 0 ] && [ -f "$T/mark5a" ]; } && check "#2012 a run naming directories runs at once while a full run holds the slot" ok \
-  || check "#2012 a run naming directories runs at once while a full run holds the slot" "exit=$rc5a out=$o5a"
-lacks "#2012 a run naming directories does not wait" "waiting for this Mac's full suite slot" "$o5a"
+{ [ "$rc5a" -eq 0 ] && [ -f "$T/mark5a" ]; } && check "#2012 a run naming a folder of one suite runs at once while a full run holds the slot" ok \
+  || check "#2012 a run naming a folder of one suite runs at once while a full run holds the slot" "exit=$rc5a out=$o5a"
+lacks "#2012 a run naming a folder of one suite does not wait" "waiting for this Mac's full suite slot" "$o5a"
 rm -f "$T/mark5b"
 fx_run "$T/out5b" HOOK_TESTS_SLOT_POLL=0.1 HOOK_TESTS_SLOT_WAIT=5 CI=true SLOT_MARK="$T/mark5b"; rc5b=$?
 o5b="$(cat "$T/out5b")"
@@ -332,6 +333,127 @@ if [ -z "$_sc_run_line" ]; then
   check "#2012 the scanners gate's suite command was found" "no _SC_RUN= line in scanners-before-push.sh"
 else
   lacks "#2012 the scanners gate runs each scanner directly, so the full run slot never holds a push" "run-all-tests" "$_sc_run_line"
+fi
+
+# ---- 11. a folder run selecting half the tree's suites or more queues; a small one never does -----
+# claude-config#2034. `run-all-tests.sh payload/hooks` selected 159 of the tree's 250 suites on
+# 2026-11-01, yet skipped the slot because it named a folder, so a builder treating it as its full run
+# still competed with every other. Each fixture here is a repository of its own, so its share is
+# known: FX2 holds 9 suites (6 in payload/hooks, 1 in tests, 2 in tools), FX3 holds 3 (1 in
+# payload/hooks, 2 in tools).
+make_fx(){ # make_fx <repository> <suite path inside it>...
+  local fx="$1" s
+  shift
+  mkdir -p "$fx/payload/hooks"
+  cp "$RUNNER" "$fx/payload/hooks/run-all-tests.sh"
+  cp -R "$DIR/lib" "$fx/payload/hooks/lib"
+  for s in "$@"; do
+    mkdir -p "$fx/${s%/*}"
+    printf '%s\n' '#!/usr/bin/env bash' '[ -n "${SLOT_MARK:-}" ] && : > "$SLOT_MARK"' 'echo "SUITE-RESULT passed=1 failed=0"' > "$fx/$s"
+    chmod +x "$fx/$s"
+  done
+  git -C "$fx" init -q 2>/dev/null
+  git -C "$fx" add -A >/dev/null 2>&1
+  git -C "$fx" -c user.email=t@t -c user.name=t commit -q -m fixture >/dev/null 2>&1
+}
+FX2="$T/fx2"
+make_fx "$FX2" payload/hooks/test-h1.sh payload/hooks/test-h2.sh payload/hooks/test-h3.sh \
+  payload/hooks/test-h4.sh payload/hooks/test-h5.sh payload/hooks/test-h6.sh \
+  tests/test-t1.sh tools/test-o1.sh tools/test-o2.sh
+FX3="$T/fx3"
+make_fx "$FX3" payload/hooks/test-a.sh tools/test-b.sh tools/test-c.sh
+# Six suites outside any of these repositories, as a suite's own fixture folder is.
+mkdir -p "$T/outside"
+for _n in 1 2 3 4 5 6; do
+  printf '%s\n' '#!/usr/bin/env bash' '[ -n "${SLOT_MARK:-}" ] && : > "$SLOT_MARK"' 'echo "SUITE-RESULT passed=1 failed=0"' > "$T/outside/test-x$_n.sh"
+done
+fx2_run(){ FXR="$FX2/payload/hooks/run-all-tests.sh" fx_run "$@"; }
+fx3_run(){ FXR="$FX3/payload/hooks/run-all-tests.sh" fx_run "$@"; }
+# held <exit> <mark file>: a run that queued behind the holder refuses at once (wait 0) with 75 and
+# runs nothing.
+held(){ [ "$1" -eq 75 ] && [ ! -f "$2" ]; }
+ran_free(){ [ "$1" -eq 0 ] && [ -f "$2" ]; }
+
+clear_slot
+HB="$(new_holder hp11)"
+hold_slot "$HB" "/work/trees/full-run" "$(date +%s)"
+
+rm -f "$T/mark11a"
+fx2_run "$T/out11a" HOOK_TESTS_SLOT_WAIT=0 SLOT_MARK="$T/mark11a" -- "$FX2/payload/hooks"; rc=$?
+o11a="$(cat "$T/out11a")"
+held "$rc" "$T/mark11a" && check "#2034 a folder run selecting most of the tree's suites (6 of 9) queues behind a full run" ok \
+  || check "#2034 a folder run selecting most of the tree's suites (6 of 9) queues behind a full run" "exit=$rc out=$o11a"
+has "#2034 a queued folder run says why it queued, with its share" "selects 6 of the 9 suites" "$o11a"
+
+rm -f "$T/mark11b"
+( cd "$FX2" && fx2_run "$T/out11b" HOOK_TESTS_SLOT_WAIT=0 SLOT_MARK="$T/mark11b" -- payload/hooks ); rc=$?
+held "$rc" "$T/mark11b" && check "#2034 the same folder named by a relative path queues too" ok \
+  || check "#2034 the same folder named by a relative path queues too" "exit=$rc out=$(cat "$T/out11b")"
+
+rm -f "$T/mark11c"
+fx2_run "$T/out11c" HOOK_TESTS_SLOT_WAIT=0 SLOT_MARK="$T/mark11c" -- "$FX2/tools"; rc=$?
+o11c="$(cat "$T/out11c")"
+ran_free "$rc" "$T/mark11c" && check "#2034 a folder run of two suites never waits behind a full run" ok \
+  || check "#2034 a folder run of two suites never waits behind a full run" "exit=$rc out=$o11c"
+lacks "#2034 a small folder run does not say it is waiting" "waiting for this Mac's full suite slot" "$o11c"
+
+rm -f "$T/mark11d"
+fx2_run "$T/out11d" HOOK_TESTS_SLOT_WAIT=0 SLOT_MARK="$T/mark11d" -- "$FX2/tests" "$FX2/tools"; rc=$?
+ran_free "$rc" "$T/mark11d" && check "#2034 a run of three suites, a third of the tree, never waits" ok \
+  || check "#2034 a run of three suites, a third of the tree, never waits" "exit=$rc out=$(cat "$T/out11d")"
+
+rm -f "$T/mark11e"
+fx3_run "$T/out11e" HOOK_TESTS_SLOT_WAIT=0 SLOT_MARK="$T/mark11e" -- "$FX3/tools"; rc=$?
+ran_free "$rc" "$T/mark11e" && check "#2034 two suites never wait even when they are most of a small tree (2 of 3)" ok \
+  || check "#2034 two suites never wait even when they are most of a small tree (2 of 3)" "exit=$rc out=$(cat "$T/out11e")"
+
+rm -f "$T/mark11f"
+fx2_run "$T/out11f" HOOK_TESTS_SLOT_WAIT=0 SLOT_MARK="$T/mark11f" -- "$T/outside"; rc=$?
+ran_free "$rc" "$T/mark11f" && check "#2034 suites outside the repository count for nothing: six of them never wait" ok \
+  || check "#2034 suites outside the repository count for nothing: six of them never wait" "exit=$rc out=$(cat "$T/out11f")"
+
+rm -f "$T/mark11g"
+fx2_run "$T/out11g" HOOK_TESTS_SLOT_WAIT=0 CI=true SLOT_MARK="$T/mark11g" -- "$FX2/payload/hooks"; rc=$?
+ran_free "$rc" "$T/mark11g" && check "#2034 a large folder run under CI does not wait" ok \
+  || check "#2034 a large folder run under CI does not wait" "exit=$rc out=$(cat "$T/out11g")"
+rm -f "$T/mark11h"
+fx2_run "$T/out11h" HOOK_TESTS_SLOT_WAIT=0 HOOK_TESTS_SLOT=0 SLOT_MARK="$T/mark11h" -- "$FX2/payload/hooks"; rc=$?
+ran_free "$rc" "$T/mark11h" && check "#2034 HOOK_TESTS_SLOT=0 lets a large folder run skip the slot" ok \
+  || check "#2034 HOOK_TESTS_SLOT=0 lets a large folder run skip the slot" "exit=$rc out=$(cat "$T/out11h")"
+
+# Beneath the holder: a large folder run started inside the run that holds the slot.
+clear_slot
+hold_slot "$$" "/work/trees/this-suite" "$(date +%s)"
+rm -f "$T/mark11i"
+fx2_run "$T/out11i" HOOK_TESTS_SLOT_WAIT=0 SLOT_MARK="$T/mark11i" -- "$FX2/payload/hooks"; rc=$?
+o11i="$(cat "$T/out11i")"
+ran_free "$rc" "$T/mark11i" && check "#2034 a large folder run beneath the slot's holder runs at once" ok \
+  || check "#2034 a large folder run beneath the slot's holder runs at once" "exit=$rc out=$o11i"
+lacks "#2034 a large folder run beneath the holder does not wait on its own ancestor" "waiting for this Mac's full suite slot" "$o11i"
+
+# With nobody holding it, the large folder run takes the slot, runs, and gives it back.
+clear_slot
+rm -f "$T/mark11j"
+fx2_run "$T/out11j" HOOK_TESTS_SLOT_POLL=0.1 HOOK_TESTS_SLOT_WAIT=5 SLOT_MARK="$T/mark11j" -- "$FX2/payload/hooks"; rc=$?
+ran_free "$rc" "$T/mark11j" && check "#2034 a large folder run with the slot free takes it and runs" ok \
+  || check "#2034 a large folder run with the slot free takes it and runs" "exit=$rc out=$(cat "$T/out11j")"
+[ -z "$(tickets)" ] && check "#2034 a large folder run gives the slot back" ok || check "#2034 a large folder run gives the slot back" "tickets: $(tickets | tr '\n' ' ')"
+
+# The premise, re-measured on the real tree every run (L316): `payload/hooks`, the folder run the
+# issue is about, still selects at least the share the runner queues at. Counted as discovery counts,
+# every tracked test-*.sh.
+_share="$(sed -n 's/^FOLDER_RUN_SLOT_SHARE=\([0-9][0-9]*\).*/\1/p' "$RUNNER")"
+_share="${_share%%$'\n'*}"
+_real="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$_share" ]; then
+  check "#2034 the runner states the share a folder run queues at" "no FOLDER_RUN_SLOT_SHARE= line in $RUNNER"
+elif [ -z "$_real" ]; then
+  echo "SUITE-PART-UNMEASURED #2034 premise: $DIR is not inside a repository, so the real tree's share for payload/hooks cannot be counted here"
+else
+  _all="$(git -C "$_real" ls-files | grep -c -E '(^|/)test-[^/]*\.sh$')"
+  _hooks="$(git -C "$_real" ls-files | grep -c -E '^payload/hooks/test-[^/]*\.sh$')"
+  [ $(( _hooks * 100 )) -ge $(( _all * _share )) ] && check "#2034 payload/hooks still holds at least ${_share}% of the real tree's suites, so a run of it queues" ok \
+    || check "#2034 payload/hooks still holds at least ${_share}% of the real tree's suites, so a run of it queues" "$_hooks of $_all; re-measure the threshold in run-all-tests.sh"
 fi
 
 echo "passed: $pass, failed: $fail"
