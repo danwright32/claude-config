@@ -162,14 +162,14 @@ HEREDOC_START = re.compile(r"<<(-?)[ \t]*")
 # What ends the end marker word, as the shell reads a word.
 HEREDOC_WORD_END = set(" \t\n;&|<>()")
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-# What ends a command, as (how it ended, its width). Two characters are looked up before one, so
-# && is never read as a backgrounding & and || never as a pipe.
 # A case command's head up to its `in`, past any reserved words before it, and an esac ending one
 # (claude-config#2074): a pattern after the `in`, or after a `;;` or `;&`, ends at a `)` that closes
 # no subshell, and its `|` joins two patterns rather than piping.
 _PREFIX = r"\s*(?:(?:" + "|".join(re.escape(w) for w in sorted(RESERVED)) + r")\s+)*"
 CASE_HEAD = re.compile(_PREFIX + r"case\s+\S.*?\s+in(?=[\s(]|$)", re.S)
 CASE_END = re.compile(_PREFIX + r"esac(?=[\s;&|()<>]|$)")
+# What ends a command, as (how it ended, its width). Two characters are looked up before one, so
+# && is never read as a backgrounding & and || never as a pipe.
 SEPARATORS = {"&&": ("&&", 2), "||": ("||", 2), "|&": ("|", 2), ";;": (";", 2),
               "|": ("|", 1), ";": (";", 1), "\n": (";", 1)}
 
