@@ -247,6 +247,34 @@ OUT="$( ps_unparsed_refuse '{"gh pr Merge"' demo-gate.sh - "a merge" '*merge*' '
   && check "#1922 any one of the words is enough, and a gate with no override offers none" ok \
   || check "#1922 any one of the words is enough, and a gate with no override offers none" "rc=$RC out=[$OUT]"
 
+# JSON that parses but is not shaped like a call (claude-config#2057). ps_payload_unread gives one
+# answer whichever reader it has: unreadable for a payload that is not an object, an input that is
+# not an object, or the judged field there and not text; readable for text, an absent field, or no
+# input at all. ps_payload_text joins a list of words into the command they make, and decodes an
+# input sent as one JSON string, so the refusal finds a push in either.
+for u in '[{"tool_input":{"command":"ls"}}]|0' '{"tool_input":"{\"command\": \"ls\"}"}|0' \
+         '{"tool_input":{"command":["ls","-la"]}}|0' '{"tool_input":{"command":{"a":1}}}|0' \
+         '{"tool_input":{"command":"ls"}}|1' '{"tool_input":{}}|1' '{"tool_name":"Bash"}|1' \
+         '{"tool_input":{"message":["a"]}}|1' 'not json|0'; do
+  for up in "$SCOPE_TOOLS/jq-only" "$SCOPE_TOOLS/py-only"; do
+    PATH="$up" ps_payload_unread "${u%|*}" command; urc=$?
+    [ "$urc" = "${u##*|}" ] && check "#2057 ps_payload_unread on ${u%|*} with ${up##*/}" ok \
+      || check "#2057 ps_payload_unread on ${u%|*} with ${up##*/}" "got $urc, want ${u##*|}"
+  done
+done
+PATH="$SCOPE_TOOLS/py-only" ps_payload_unread '{"tool_input":{"message":["a"]}}' message
+[ "$?" -eq 0 ] && check "#2057 ps_payload_unread judges the field it is given" ok || check "#2057 ps_payload_unread judges the field it is given" "message as a list read as text"
+for tp in "$SCOPE_TOOLS/jq-only" "$SCOPE_TOOLS/py-only"; do
+  unparsed_text="$(PATH="$tp" ps_payload_text '{"tool_input":{"command":["git","push","origin","x"]}}')"
+  case "$unparsed_text" in *"git push origin x"*) check "#2057 a list of words reads as the command they make with ${tp##*/}" ok ;; *) check "#2057 a list of words reads as the command they make with ${tp##*/}" "got [$unparsed_text]" ;; esac
+  unparsed_text="$(PATH="$tp" ps_payload_text '{"tool_input":"{\"command\": \"git push origin x\"}"}')"
+  case "$unparsed_text" in *$'\n'"git push origin x"*) check "#2057 an input sent as one JSON string is decoded with ${tp##*/}" ok ;; *) check "#2057 an input sent as one JSON string is decoded with ${tp##*/}" "got [$unparsed_text]" ;; esac
+done
+OUT="$( ps_unparsed_refuse '{"tool_input":{"command":["git","push","origin","x"]}}' demo-gate.sh - "a push" '*git push*' 2>&1 )"; RC=$?
+[ "$RC" -eq 2 ] && check "#2057 a push sent as a list of words is refused by the shared refusal" ok || check "#2057 a push sent as a list of words is refused by the shared refusal" "rc=$RC out=[$OUT]"
+OUT="$( ps_unparsed_refuse '' demo-gate.sh - "a push" '*git push*' 2>&1 )"; RC=$?
+[ "$RC" -eq 0 ] && check "#2057 an empty payload names nothing and passes (#1922)" ok || check "#2057 an empty payload names nothing and passes (#1922)" "rc=$RC out=[$OUT]"
+
 # A big payload carrying many escaped backslashes and many lone escapes is read quickly by either
 # half: the cleaning runs only when the text could hold one, and then once over the whole text.
 big="$(python3 -c 'import json; print(json.dumps({"tool_input": {"command": "echo x", "content": "a\\\\b \ud800 " * 20000}}))')"

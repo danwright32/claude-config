@@ -533,9 +533,20 @@ tool, inp, extra, mark, cwd, how = sys.argv[1:7]
 d = {"hook_event_name": "PreToolUse", "session_id": "s", "cwd": cwd, "transcript_path": cwd + "/t.jsonl",
      "tool_name": tool, "tool_input": json.loads(inp)}
 d.update(json.loads(extra))
-text = json.dumps(d).replace("@@", mark)
+# Three shapes that parse as JSON and still cannot be read as a call (claude-config#2057): the field
+# the gate judges (the first one in the tool's input) as a list of its words, the whole input as one
+# JSON string, and the whole payload inside a list. Each holds the judged call's every word.
+ti = d["tool_input"]
+key = next(iter(ti))
+if how == "listfield":
+    ti[key] = str(ti[key]).split()
+elif how == "tistring":
+    d["tool_input"] = json.dumps(ti)
+text = json.dumps([d] if how == "toplist" else d).replace("@@", mark)
 if how == "cut":
     text = text[:-1]
+elif how == "empty":
+    text = ""
 sys.stdout.write(text)
 PY
 }
@@ -591,7 +602,11 @@ while IFS=$'\t' read -r g tool inp extra unread; do
   judged_payload "$tool" "$inp" "$extra" 'Q' "$R/plain/repo" whole > "$R/plain.json"
   judged_payload "$tool" "$inp" "$extra" '' "$R/cut/repo" cut > "$R/cut.json"
   judged_payload Bash '{"command": "ls -la"}' '{}' '' "$R/other/repo" cut > "$R/other.json"
-  ( for c in esc plain cut other; do run_judged "$R/$c" "$g" "$R/$c.json"; done ) &
+  for c in listfield tistring toplist empty; do
+    mkdir -p "$R/$c"; judged_payload "$tool" "$inp" "$extra" 'Q' "$R/$c/repo" "$c" > "$R/$c.json"
+  done
+  mkdir -p "$R/olist"; judged_payload Bash '{"command": "ls -la"}' '{}' '' "$R/olist/repo" listfield > "$R/olist.json"
+  ( for c in esc plain cut other listfield tistring toplist empty olist; do run_judged "$R/$c" "$g" "$R/$c.json"; done ) &
   pids+=("$!")
   if [ "${#pids[@]}" -ge 6 ]; then wait "${pids[@]}"; pids=(); fi
 done < "$WORK/judged"
@@ -616,7 +631,50 @@ while IFS=$'\t' read -r g tool inp extra unread; do
   esac
   otherd="$(cat "$R/other/decision" 2>/dev/null)"
   case "$otherd" in "exit 0, decision none"*) ok ;; *) bad "$g refused an unrelated call it could not parse ($otherd): $(head -c 200 "$R/other/said" 2>/dev/null)" ;; esac
+  # JSON that parses into a shape no gate can read as a call (claude-config#2057): a gate that
+  # refuses what it cannot parse refuses each, and one that lets it through by recorded decision
+  # refuses or says so, and none lets it through in silence. The gate decides from every word the
+  # payload holds, so a list of words reads as the command they make.
+  for c in listfield tistring toplist; do
+    cd_="$(cat "$R/$c/decision" 2>/dev/null)"; cs="$(cat "$R/$c/said" 2>/dev/null)"
+    case "$unread" in
+      refuse)
+        case "$cd_" in "exit 2,"*|*"decision deny"*) ok ;; *) bad "#2057 $g let a call whose payload parses as JSON it cannot read ($c) through, though every word of what it judges is in it ($cd_): ${cs:0:200}" ;; esac ;;
+      notice*)
+        case "$cd_" in "exit 2,"*|*"decision deny"*|"exit 0, decision none, said something") ok ;; *) bad "#2057 $g let a call whose payload parses as JSON it cannot read ($c) through without saying so ($cd_): ${cs:0:200}" ;; esac ;;
+    esac
+  done
+  # An empty payload names nothing, so by #1922's recorded decision it passes as any call naming
+  # nothing does: refusing it would refuse every call and be a gate nobody keeps (L36).
+  ed="$(cat "$R/empty/decision" 2>/dev/null)"
+  case "$ed" in "exit 0, decision none"*) ok ;; *) bad "#2057 $g refused an empty payload, which names nothing it judges ($ed): $(head -c 200 "$R/empty/said" 2>/dev/null)" ;; esac
+  od="$(cat "$R/olist/decision" 2>/dev/null)"
+  case "$od" in "exit 0, decision none"*) ok ;; *) bad "#2057 $g refused an unrelated call whose command came as a list of words ($od): $(head -c 200 "$R/olist/said" 2>/dev/null)" ;; esac
 done < "$WORK/judged"
+
+# Every PreToolUse hook registered without onFailure block is advisory by design, and each is named
+# here with the reason, so a hook registered later is neither judged above nor exempt by being
+# unlisted (L96, L129). Each runs on every unreadable shape and never refuses.
+declare_advisory_pre(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
+{
+  declare_advisory_pre rtk-rewrite.sh      '{"command": "gh api repos/o/r"}' "rewrites a command to its rtk form and never refuses; a payload it cannot read is left as it came"
+  declare_advisory_pre lessons-advisory.sh '{"command": "git push origin feature"}' "hands Claude the lessons a push matches and never refuses (its header: WHY ADVISORY AND NOT A GATE)"
+} > "$WORK/advisory-pre"
+while IFS= read -r g; do
+  grep -q -x -F "$g" "$WORK/blocking" && continue
+  if ! awk -F '\t' -v g="$g" '$1 == g { f = 1 } END { exit !f }' "$WORK/advisory-pre"; then
+    bad "#2057 $g is a registered PreToolUse hook that is neither registered to block nor named as advisory by design in this suite, so nothing says what it does with a payload it cannot read"
+    continue
+  fi
+  if grep -q -E 'exit 2|"deny"' "$DIR/$g"; then bad "#2057 $g is named advisory by design and holds a refusal"; else ok; fi
+  inp="$(awk -F '\t' -v g="$g" '$1 == g { print $2 }' "$WORK/advisory-pre")"
+  for c in listfield tistring toplist empty cut; do
+    k=$((k + 1)); R="$WORK/a$k"; mkdir -p "$R"
+    judged_payload Bash "$inp" '{}' 'Q' "$R/repo" "$c" > "$R/in.json"
+    run_judged "$R" "$g" "$R/in.json"
+    case "$(cat "$R/decision")" in "exit 0, decision none"*) ok ;; *) bad "#2057 advisory $g refused or failed on an unreadable payload ($c): $(cat "$R/decision")" ;; esac
+  done
+done < "$WORK/pre"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
