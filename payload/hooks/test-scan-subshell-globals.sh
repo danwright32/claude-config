@@ -264,7 +264,7 @@ echo "scan subshell globals: a brace in a bracket expression, and a line inside 
 
 # The real case: mt_is_interpreter in lib/merge-target.sh matches `'$'[A-Za-z_{]*` in a case
 # pattern, and the `{` there is a character the pattern matches, not a brace group. Counted as one,
-# it left the function open to the end of the file (1890 lines), so every function below it was
+# it left the function open to the end of the file (1890 lines, measured 2026-11-02), so every function below it was
 # never found, and a global one of them sets was never reported. The `[{]` in a [[ =~ ]] regex
 # (test-suite-scratch-isolation.sh) and a ${v//[{]/} replacement are the same shape.
 cat > "$FIX/a.sh" <<'OUTER'
