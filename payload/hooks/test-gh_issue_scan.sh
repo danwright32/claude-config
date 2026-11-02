@@ -325,6 +325,8 @@ for d in "$DIR" "$FB" "$FB_BROKEN"; do
 done
 [ "$(count_in "$DIR" $'cat <<EOF\ndon`t\n'"$HD_C"$'\nEOF')" = 1 ] && check "#2053 a body the reader cannot read is read whole, so the create in it is seen" ok \
   || check "#2053 a body the reader cannot read is read whole, so the create in it is seen" "got $(count_in "$DIR" $'cat <<EOF\ndon`t\n'"$HD_C"$'\nEOF')"
+[ "$(count_in "$DIR" $'cat <<EOF\n${X:-$('"$HD_C"$')}\nEOF')" = 1 ] && check "#2053 a create in a substitution inside \${ } in an unquoted body is seen" ok \
+  || check "#2053 a create in a substitution inside \${ } in an unquoted body is seen" "got $(count_in "$DIR" $'cat <<EOF\n${X:-$('"$HD_C"$')}\nEOF')"
 [ "$(count_in "$DIR" $'cat <<EOF\nno substitution, just '"$HD_C"$'\nEOF')" = 0 ] && check "#2053 control: an unquoted body with no substitution is text" ok \
   || check "#2053 control: an unquoted body with no substitution is text" "seen as a create"
 
