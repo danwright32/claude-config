@@ -427,7 +427,7 @@ print(json.dumps({"type": "assistant", "sessionId": sid, "timestamp": "2026-10-2
 print(json.dumps({"type": "user", "sessionId": sid, "timestamp": "2026-10-22T20:00:01.000Z",
     "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": "x"}]},
     "toolUseResult": {"worktreePath": path, "worktreeBranch": "worktree-own",
-                      "message": "%s worktree at “%s” on branch worktree-own." % (verb, path)}}))
+                      "message": "%s worktree at \u201c%s\u201d on branch worktree-own." % (verb, path)}}))
 ' "$1" "$2" "$3" "$4" "${5:-$SESS1523}" >> "$MAIN_TR"
 }
 run_main(){ # run_main <command> <repo to run in> [session id in the payload] [agent id]
