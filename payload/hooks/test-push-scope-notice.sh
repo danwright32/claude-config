@@ -132,6 +132,84 @@ allowed "two pushes into the same repository are let through, saying nothing" "c
 allowed "a command that is not a push is let through, saying nothing" "cd $W/no-such-dir && git status"
 allowed "a push quoted inside an argument is let through, saying nothing" "gh issue create --body \"cd $W/no-such-dir && git push\""
 
+echo "push scope notice: a push whose repository's hooks folder is missing is refused (claude-config#2070)"
+
+# A core.hooksPath naming a folder that does not exist makes git skip every local hook and say
+# nothing: the push below exits 0 with no pre-push run. Bidspoke sets it to .husky/_, which only
+# `pnpm install` creates, so a worktree that never ran the install pushed a live migration on
+# 2026-11-02 with no SQL suite, test gate or style gate (Bidspoke PR #3199).
+agent_run() { # agent_run <command> [cwd]: the same payload as run, carrying a subagent's id
+  python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2],"agent_id":"a1b2c3d4"}))' \
+    "$1" "${2:-$W/session}" | bash "$HOOK" 2>"$W/err"
+}
+refused_for_hooks() { # refused_for_hooks <description> <command> [cwd]
+  local out rc
+  out="$(run "$2" "${3:-$W/session}")"; rc=$?
+  if [ "$rc" -eq 2 ]; then check "$1" ok; else check "$1" "exit $rc, stderr [$(head -c 300 "$W/err")]"; fi
+}
+# git names the top level by its real path, symlinks resolved (/var is /private/var on a Mac).
+WR="$(cd "$W" && pwd -P)"
+git init -q "$W/hooked" 2>/dev/null
+git -C "$W/hooked" commit -q --allow-empty -m one 2>/dev/null
+git -C "$W/hooked" config core.hooksPath .husky/_
+: > "$W/hooked/pnpm-lock.yaml"
+refused_for_hooks "a push whose relative hooksPath names a missing folder is refused" "cd $W/hooked && git push"
+err="$(cat "$W/err")"
+says "and says the repository's own hooks would not run" "$err" "hooks folder"
+says "and names the folder git would look in" "$err" "$WR/hooked/.husky/_"
+says "and names the install that creates it, read from the lockfile" "$err" "pnpm install"
+says "and names the checkout to run it in" "$err" "in $WR/hooked,"
+says "and gives the one command override" "$err" "SKIP_HOOKS_PATH_CHECK=1"
+case "$err" in *"spell it absolutely"*|*"more than one repository"*) check "and gives only this cause's remedy" "it gave another's: ${err:0:200}" ;;
+  *) check "and gives only this cause's remedy" ok ;; esac
+refused_for_hooks "a git -C push into that repository is refused too" "git -C $W/hooked push"
+refused_for_hooks "a push from a subdirectory of it is refused too" "git push" "$W/hooked"
+mkdir -p "$W/hooked/sub"
+refused_for_hooks "and from below its top level" "git push" "$W/hooked/sub"
+
+# The Bidspoke shape: the folder is untracked, made by an install in the main checkout, so the main
+# checkout pushes with its hooks and a linked worktree made from it has none.
+mkdir -p "$W/hooked/.husky/_"
+allowed "the same push once the folder exists is let through, saying nothing" "cd $W/hooked && git push"
+git -C "$W/hooked" worktree add -q "$W/hooked-wt" 2>/dev/null
+refused_for_hooks "a linked worktree that never ran the install is refused" "cd $W/hooked-wt && git push"
+says "and names the worktree's own folder, not the main checkout's" "$(cat "$W/err")" "$WR/hooked-wt/.husky/_"
+allowed "while the main checkout's push is let through" "cd $W/hooked && git push"
+
+git init -q "$W/abs" 2>/dev/null
+git -C "$W/abs" config core.hooksPath "$W/abs-hooks-gone"
+refused_for_hooks "an absolute hooksPath naming a missing folder is refused" "cd $W/abs && git push"
+says "and with no lockfile names the step generally, not a made up command" "$(cat "$W/err")" "the repository's install"
+ln -s "$W/nowhere" "$W/abs-hooks-gone"
+refused_for_hooks "a hooksPath that is a dangling symlink is refused" "cd $W/abs && git push"
+rm -f "$W/abs-hooks-gone"
+git -C "$W/abs" config core.hooksPath /dev/null
+allowed "a hooksPath naming something that exists but is no folder (hooks switched off on purpose) is let through" "cd $W/abs && git push"
+
+git -C "$W/abs" config core.hooksPath "$W/abs-hooks-gone"
+allowed "the main session's SKIP_HOOKS_PATH_CHECK=1 lets that one push through, saying nothing" "cd $W/abs && SKIP_HOOKS_PATH_CHECK=1 git push"
+out="$(agent_run "cd $W/abs && SKIP_HOOKS_PATH_CHECK=1 git push")"; rc=$?
+[ "$rc" -eq 2 ] && check "an agent's SKIP_HOOKS_PATH_CHECK=1 is refused, as every agent skip of the hooks is (#1666)" ok \
+  || check "an agent's SKIP_HOOKS_PATH_CHECK=1 is refused, as every agent skip of the hooks is (#1666)" "exit $rc"
+says "and says the override is not an agent's to use" "$(cat "$W/err")" "not available to an agent"
+out="$(agent_run "cd $W/abs && git push")"; rc=$?
+[ "$rc" -eq 2 ] && check "an agent's push is refused the same way" ok || check "an agent's push is refused the same way" "exit $rc"
+
+# Failure path: a hooksPath this hook cannot read is not a hooksPath that is unset. A git that fails
+# the read (exit 128, as a damaged config gives) must refuse, never let the push out unread (L42).
+mkdir -p "$W/bin"
+REAL_GIT="$(command -v git)"
+cat > "$W/bin/git" <<STUB
+#!/usr/bin/env bash
+case " \$* " in *" config --get core.hooksPath "*) echo "fatal: bad config line 1" >&2; exit 128 ;; esac
+exec "$REAL_GIT" "\$@"
+STUB
+chmod +x "$W/bin/git"
+out="$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' \
+  "cd $W/target && git push" "$W/session" | PATH="$W/bin:$PATH" bash "$HOOK" 2>"$W/err")"; rc=$?
+[ "$rc" -eq 2 ] && check "a hooksPath read that fails refuses the push" ok || check "a hooksPath read that fails refuses the push" "exit $rc, stderr [$(head -c 300 "$W/err")]"
+says "and says it could not read it, not that the folder is missing" "$(cat "$W/err")" "could not read"
+
 echo "push scope notice: it is actually run"
 
 python3 - "$SETTINGS" <<'PY' && check "settings register it on PreToolUse Bash" ok || check "settings register it on PreToolUse Bash" "not registered"
