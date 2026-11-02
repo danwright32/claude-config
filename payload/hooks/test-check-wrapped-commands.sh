@@ -76,6 +76,10 @@ refused "find -execdir, whose directory cannot be told" "find . -name x -execdir
 refused "find -exec that never ends" "find . -exec git push" "find -exec"
 refused "watch of a variable" "watch -n 5 \"\$CMD\" # git" "watch"
 refused "parallel reading its commands from its input" "parallel -j 4 < jobs.txt && git push" "parallel"
+# The shell runs the substitutions in the body of a heredoc whose end marker is unquoted, so a wrapper
+# there is read like any other (claude-config#2053); a quoted marker keeps the body text.
+refused "#2053 a wrapper in a substitution in an unquoted heredoc body" $'cat <<EOF\n$(bash -c "$CMD")\nEOF\ngit status' "bash -c"
+allowed "#2053 the same in a quoted heredoc body, which is text" $'cat <<\'EOF\'\n$(bash -c "$CMD")\nEOF\ngit status'
 
 judge "CMD='git push --force'; bash -c \"\$CMD\""
 check "#1478 the refusal says why it cannot be read" "variable or a substitution" "$out"
