@@ -268,6 +268,42 @@ rl_got="$(printf '%s\n' "$rl" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%
   || check "#1989 the same suite with the shape written as code has exactly that site" "exit $rl_rc, got '$rl_got' where '8:redirect ' was wanted:
 $rl"
 
+# #2073: a heredoc's end marker is the whole word after <<, quotes taken out, as bash reads it and as
+# lib/shell-words.py's heredoc_opener reads it. Read by a regex of its own, <<'E'OF and <<E"OF" ended
+# at a line E and <<END-OF at a line END, so the body ran on past bash's end and every site after it
+# went unread; and a line that is only part of the marker ended the body early, reading text as code.
+mk_marker() { # <file> <opener> <closing line> <line inside the body>
+  {
+    printf 'cat %s\n' "$2"
+    printf '%s\n' "$4"
+    printf '%s\n' "$3"
+    printf 'while read -r l; do echo "$l"; done < %sfind .)\n' "$_P"
+  } > "$TMPROOT/$1"
+}
+for shape in "q:${_H}'E'OF:EOF:E" "d:${_H}E\"OF\":EOF:E" "h:${_H}END-OF:END-OF:END" "b:${_H}E\\OF:EOF:E"; do
+  IFS=: read -r tag opener close part <<SHAPE
+$shape
+SHAPE
+  mk_marker "marker-$tag.sh" "$opener" "$close" "x"
+  got="$(printf 'marker-%s.sh\n' "$tag" | python3 "$SCAN" --root "$TMPROOT")"; got_rc=$?
+  got_at="$(printf '%s\n' "$got" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%s ", p[2], $2 }')"
+  [ "$got_rc" = 1 ] && [ "$got_at" = "4:redirect " ] \
+    && check "#2073 the site after a $opener body that ends at $close is read" ok \
+    || check "#2073 the site after a $opener body that ends at $close is read" "exit $got_rc, got '$got_at' where '4:redirect ' was wanted: $got"
+  # The control: a body line that is only part of the marker is text, so the body runs on to the
+  # real closing line and the site inside it is not code.
+  {
+    printf 'cat %s\n' "$opener"
+    printf '%s\n' "$part"
+    printf 'while read -r l; do echo "$l"; done < %sfind .)\n' "$_P"
+    printf '%s\n' "$close"
+  } > "$TMPROOT/part-$tag.sh"
+  got="$(printf 'part-%s.sh\n' "$tag" | python3 "$SCAN" --root "$TMPROOT")"; got_rc=$?
+  [ "$got_rc" = 0 ] && [ -z "$got" ] \
+    && check "#2073 a line $part inside a $opener body is text, not its end" ok \
+    || check "#2073 a line $part inside a $opener body is text, not its end" "exit $got_rc: $got"
+done
+
 # A file that cannot be read is reported, never passed as clean (L98).
 missing="$(printf 'no-such-file.sh\n' | python3 "$SCAN" --root "$TMPROOT")"; missing_rc=$?
 missing_named=0
@@ -275,6 +311,30 @@ case "$missing" in *'could not be read'*) missing_named=1 ;; esac
 [ "$missing_rc" = 1 ] && [ "$missing_named" = 1 ] \
   && check "#1984 a file the scan cannot read fails it" ok \
   || check "#1984 a file the scan cannot read fails it" "exit $missing_rc: $missing"
+
+# #2073: heredocs are read by lib/shell-words.py, loaded beside the scanner. Without it there is no
+# reading of a heredoc to fall back on, so the scan refuses to run and names the missing reader,
+# rather than judging every file with a reading of its own that could pass what bash runs.
+mkdir -p "$TMPROOT/noreader"
+cp "$SCAN" "$TMPROOT/noreader/unwaited-children.py"
+printf 'echo hi\n' > "$TMPROOT/plain.sh"
+nr="$(printf 'plain.sh\n' | python3 "$TMPROOT/noreader/unwaited-children.py" --root "$TMPROOT" 2>&1)"; nr_rc=$?
+nr_named=0
+case "$nr" in *'shell-words.py'*) nr_named=1 ;; esac
+[ "$nr_rc" = 2 ] && [ "$nr_named" = 1 ] \
+  && check "#2073 a scan without lib/shell-words.py refuses to run and names it" ok \
+  || check "#2073 a scan without lib/shell-words.py refuses to run and names it" "exit $nr_rc, wanted 2 and the reader named: $nr"
+# Loading the reader writes no bytecode cache beside it: a shell-words .pyc in the hooks' lib/ is
+# what test-push-scope.sh refuses (#1017), and a copy of the scan run beside a copy of the reader
+# shows whether this scan leaves one.
+mkdir -p "$TMPROOT/pyc"
+cp "$SCAN" "$TMPROOT/pyc/unwaited-children.py"
+cp "$DIR/lib/shell-words.py" "$TMPROOT/pyc/shell-words.py"
+printf 'plain.sh\n' | python3 "$TMPROOT/pyc/unwaited-children.py" --root "$TMPROOT" >/dev/null 2>&1; pyc_rc=$?
+pyc_left="$(ls "$TMPROOT/pyc/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
+[ "$pyc_rc" = 0 ] && [ "$pyc_left" = 0 ] \
+  && check "#2073 loading lib/shell-words.py leaves no bytecode beside it" ok \
+  || check "#2073 loading lib/shell-words.py leaves no bytecode beside it" "exit $pyc_rc, $pyc_left shell-words bytecode file(s) left"
 
 # ---------------------------------------------------------------------------
 # The real hooks: none at all, background jobs included (#1989).
