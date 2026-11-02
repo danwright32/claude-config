@@ -621,7 +621,7 @@ writes_is "#2059 a write after a <<END-OF body is seen" "a.md:w:shown b.md:w:hid
 EOF_BODY="$(printf 'cat > b.md <<E"OF"\n$X has no section\nEOF\ngh issue create --title T --milestone Ungrouped --label priority-p2 --label bug --body-file b.md')"
 [[ "$(gate_from "$DIR" "$EOF_BODY")" == *'"deny"'*"Open questions"* ]] \
   && check "#2059 the gate refuses an incomplete body file written from a <<E\"OF\" heredoc" ok \
-  || check "#2059 the gate refuses an incomplete body file written from a <<E\"OF\" heredoc" "got [$(gate_from "$DIR" "$EOF_BODY" | head -c 200)]"
+  || check "#2059 the gate refuses an incomplete body file written from a <<E\"OF\" heredoc" "got [$(eof_out="$(gate_from "$DIR" "$EOF_BODY")"; printf '%s' "${eof_out:0:200}")]"
 [[ "$(gate_from "$DIR" 'echo "$(gh issue create --title T)"')" == *'"deny"'* ]] \
   && check "#2059 the gate refuses an incomplete create a substitution runs" ok \
   || check "#2059 the gate refuses an incomplete create a substitution runs" "it passed"

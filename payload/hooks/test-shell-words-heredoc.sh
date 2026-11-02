@@ -111,7 +111,8 @@ print(got)' "$SW")"
   || check "#2053 the skipped bodies carry their quoting" "got [$asked]"
 
 # ---- the #2050 consumers' shape: (quoted, before, body) triples, nothing for an unclosed body ----
-shape="$(python3 -I -c '
+# -B: a bytecode cache left in lib/ fails test-push-scope.sh's #1017 check for every suite after it.
+shape="$(python3 -I -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
 sw = importlib.util.module_from_spec(spec); spec.loader.exec_module(sw)
