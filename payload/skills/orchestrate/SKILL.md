@@ -60,6 +60,7 @@ The rules every agent shares live in `agent-rules.md`, so a brief never restates
 - Dan adds items mid run: add them to the board and run the matching rules again. When a running agent already owns that area, send the new item to it with `SendMessage` instead of starting another agent: it fixes both on its branch only if they are one fault, and otherwise finishes its own item, reports on the new one, and builds it once its own pull request has merged.
 - An agent's question that only Dan can answer becomes one picker while the others keep running.
 - Never report or predict a result an agent has not handed back.
+- An agent that hands back at the context line has not failed: start a fresh agent on the same item with the same brief plus one line, `Read <its scratchpad folder>/handoff.md first: it holds what the last agent on this item decided and left.` Its report is at most 300 words; read the files it names only when the report leaves a question open.
 
 ## 5. When an agent reports
 
@@ -77,6 +78,18 @@ When nothing is running or queued:
 - Each decision left for Dan as its own picker, one at a time.
 - Stop anything this session started in the background, and say so.
 - Then `/next-issue`.
+
+## 7. The context line
+
+`hooks/context-size-notice.sh` tells this session once it has dispatched an agent or set a /goal and its last request carries more than 200,000 tokens (claude-config#1960). Every request past that rereads the whole conversation, so stop and write down what has been decided before going on, whichever step you are at. Nothing decided may live only in the transcript:
+
+1. The list or goal being worked, in Dan's words, and every constraint he has stated, quoted with its date.
+2. Every decision made in this conversation, with its reason and what was ruled out.
+3. The state left behind: branches, worktrees, commit shas, pull requests open, merged or live, and agents and background jobs still running, with their ids.
+4. The board: each item's state, and the exact next step of each item in progress.
+5. Every question waiting on Dan.
+
+A decision that belongs to an issue goes on that issue as a comment, where the next session and the issue's next reader will find it. The rest goes in `handoff.md` in the scratchpad folder, with the board. Then tell Dan in one line that the session is at the context line and where the note is, so he can type /compact or start a fresh session from the note. Agents already running carry on either way.
 
 ## Common mistakes
 

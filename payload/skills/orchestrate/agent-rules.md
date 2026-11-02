@@ -9,6 +9,11 @@ You are one of several agents, each working one item while the orchestrator sess
 - Never touch anything your brief names as another agent's.
 - Write working files only under the scratchpad folder your brief names.
 
+## Reading code
+
+- Find the place first with `grep -n` or `rg -n`, then read only those lines and about 30 around them, at most 150 lines in one read. Never read a whole large file to look around. Everything you read is read again on every later request you make.
+- When a notice says you are past the context line, do what it says: write `handoff.md` in your scratchpad folder, then hand back unless only the push and the report are left. The orchestrator gives the rest to a fresh agent that starts from your note.
+
 ## Building
 
 - Build in your own worktree, never in the main checkout, and never switch its branch:
@@ -31,11 +36,11 @@ Delete or drop data, apply migrations to a shared database, send anything to peo
 
 ## Your report
 
-Hand back one report, in this order:
+Hand back one report of at most 300 words, in this order. Detail goes in files in your scratchpad folder, named in the report, for the orchestrator to read only when it needs them: the full test output in `tests.txt`, the evidence in `evidence.md`.
 
 1. Outcome in one sentence.
-2. Cause, with evidence (counts, times in ET, the change responsible). Say plainly what you could not access.
+2. Cause, with the evidence that settles it (counts, times in ET, the change responsible). Say plainly what you could not access.
 3. What you changed: branch, commit sha and the path to `pr-body.md`, or "no change".
-4. Tests: the output of the new test failing before the fix, and the final counts run against the counts that exist.
+4. Tests: the new test's failing line before the fix, and the final counts run against the counts that exist.
 5. What you could not verify.
 6. Anything that needs Dan's decision, with the options and what each one does.
