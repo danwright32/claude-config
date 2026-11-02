@@ -22,8 +22,15 @@ whole tree scans share, in one pass per file (L297): braces are counted only on 
 code, never inside a quoted string, a comment or a heredoc, and a function is found only where its
 definition is code. Before that, a `{` inside a python3 -c string left a function open to the end
 of the file, and every assignment after it was charged to that function (claude-config#2063). A
-brace in a bracket expression is not counted either, and a line that begins inside a quoted string
-is judged only on what follows the string's close (claude-config#2068).
+brace in a bracket expression is not counted either (claude-config#2068).
+
+What a function's body assigns is read through lib/shell-words.py commands(), the one reading of a
+command the gates share, over the body whole (claude-config#2076). Read a line at a time by shlex,
+an assignment followed by a comment, one with quotes nested in its `$( )`, the first line of one
+running over several lines, one mid line and one on the line defining the function were never
+judged. Only a command this shell runs is judged, so nothing in a pipeline, a subshell group, a
+substitution or the background is. A body the reader cannot read is listed on every run with its
+file, line and reason, and the count is said, zero too; it does not fail the scan on its own.
 
 Measured over this repo on 2026-09-11: 8 functions flagged, of which one was a real defect
 (tip_payload_dir's caller could never see TIP_PAYLOAD_DIR, so the scratch directory holding the
@@ -36,173 +43,176 @@ longer real has to come down, or a number nobody has to tighten becomes a perman
 (L182).
 """
 import argparse
+import importlib.util
 import os
 import re
-import shlex
 import sys
 
+# No bytecode cache beside the hooks, as gh_issue_scan.py keeps none: a shell-words cache left in
+# lib/__pycache__ by one run of this scan failed test-push-scope.sh's #1017 check on every run after
+# it (claude-config#2076).
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/lib")
 import ratchet  # noqa: E402  the one rule a count based ratchet applies (claude-config#377)
 from shell_code_lines import brace_depth, read_lines  # noqa: E402  the one reader of shell quoting (#2063)
 
+# The one reading of a command, lib/shell-words.py, loaded by its path beside this file as
+# gh_issue_scan.py loads it (claude-config#2076). READER_ERROR is None once it loads, else what went
+# wrong, and then main refuses: this keeps no reading of its own to fall back on, since one that
+# misread an assignment would report a tree it never judged as clean.
+READER_ERROR = None
+try:
+    _spec = importlib.util.spec_from_file_location(
+        "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "shell-words.py"))
+    _sw = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_sw)
+    commands, split_assignments, Unreadable = _sw.commands, _sw.split, _sw.Unreadable
+    RESERVED, command_words = _sw.RESERVED, _sw.command_words
+except Exception as e:  # noqa: BLE001  missing, or failing to load: either way there is no reader
+    READER_ERROR = "%s: %s" % (type(e).__name__, e)
+
 FN_DEF = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
-DECLARED = re.compile(r"^\s*(local|declare|typeset|export|readonly)\s+(.*)$")
-# The separator that ends the command a quoted line continues, so what follows is a command of its own.
-# Without one, what follows the close is more words of that same command (`two" ARG=1` hands
-# printf the word ARG=1), so nothing on the line is judged.
-NEXT_COMMAND = re.compile(r"^\s*(;|&&|\|\|)\s*")
+DECLARES = {"local", "declare", "typeset", "export", "readonly"}
+# An assignment word's name, as the shell allows it: `n=`, `n+=`, `arr[i]=`, `arr[i]+=`. The value
+# after it is read by shell-words split(), which knows quotes and $( ) nesting but takes only `n=`.
+ASSIGN_WORD = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^]]*\])?\+?=")
 
 
-def next_command(own):
-    """The text of a quoted line from the command after the one its string belongs to, or ""."""
-    m = NEXT_COMMAND.match(own)
-    return own[m.end():] if m else ""
-ASSIGN_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
+def assigned_names(text):
+    """Names one simple command assigns as SHELL VARIABLES, or [] when a command follows them.
 
-
-def assignments_on(line):
-    """Names this line assigns as SHELL VARIABLES.
-
-    A line of nothing but assignments assigns them. A line where a command follows assigns
-    nothing: `CLAUDE_HOME=x bash prog` sets a variable in the child's environment and leaves this
-    shell untouched, and treating it as an assignment is what made the first measurement of this
-    scan four times too large.
+    A command of nothing but assignments assigns them. One where a command follows assigns nothing:
+    `CLAUDE_HOME=x bash prog` sets a variable in the child's environment and leaves this shell
+    untouched, and treating it as an assignment is what made the first measurement of this scan four
+    times too large. Each value is read by shell-words split(), so a value holding a comment's `#`,
+    quotes nested in a `$( )`, spaces in a `$(( ))` or a line break is one value, as the shell reads
+    it (claude-config#2076); `+=` and a subscript are read here, since split() takes `n=` alone.
     """
-    s = line.strip()
-    if not s or s.startswith("#"):
-        return []
-    try:
-        toks = shlex.split(s, posix=True)
-    except ValueError:
-        return []
-    names = []
-    for t in toks:
-        if ASSIGN_TOKEN.match(t):
-            names.append(t.split("=", 1)[0].split("[")[0].rstrip("+"))
-        else:
-            return []
-    return names
-
-
-def split_declaration(rest):
-    """-> (names a declaration declares, the text of the next command on its line or "").
-
-    A declaration ends where its COMMAND does (claude-config#1045): at the first `;`, `&&`, `||`,
-    `|` or `&` that is outside quotes, backticks and $( ). Splitting the whole line on spaces made
-    `local a b skip; shift` declare `skip;` and `shift`, so a later `skip=` read as a global, and
-    the same split made `local a; leak=1` declare `leak`. What follows `;`, `&&` or `||` is handed
-    back to be judged as the command it is; what follows `|` or `&` runs in a subshell and sets
-    nothing here. Each word is cut at `=` and at `[`, so `n=0` and `arr[1]=x` declare `n` and
-    `arr`, and option words like `-a` declare nothing.
-    """
-    stack = ["top"]
-    i, end, after = 0, len(rest), ""
-    while i < len(rest):
-        c = rest[i]
-        ctx = stack[-1]
-        if c == "\\":
-            i += 2
-            continue
-        if ctx == "dq":
-            if c == '"':
-                stack.pop()
-            elif rest.startswith("$(", i):
-                stack.append("cmd")
-                i += 1
-            elif c == "`":
-                j = rest.find("`", i + 1)
-                i = len(rest) if j < 0 else j
-            i += 1
-            continue
-        if c == "'":
-            j = rest.find("'", i + 1)
-            i = len(rest) if j < 0 else j + 1
-            continue
-        if c == "`":
-            j = rest.find("`", i + 1)
-            i = len(rest) if j < 0 else j + 1
-            continue
-        if c == '"':
-            stack.append("dq")
-        elif c == "(":
-            stack.append("cmd")
-        elif c == ")" and ctx == "cmd":
-            stack.pop()
-        elif ctx == "top" and c == "#" and (i == 0 or rest[i - 1] in " \t"):
-            end = i
-            break
-        elif ctx == "top" and c in ";&|":
-            end = i
-            two = rest[i:i + 2]
-            if c == ";":
-                after = rest[i + 1:]
-            elif two in ("&&", "||"):
-                after = rest[i + 2:]
-            break
-        i += 1
-    decl = rest[:end]
-    # The words inside `( )` are VALUES, an array's members or a substitution's command, never
-    # names: shlex does not know parentheses, so `list=(two LEAKED)` would declare LEAKED (lessons
-    # review of #1103). Innermost groups first, until none is left.
+    names, s = [], text.lstrip()
     while True:
-        bare = re.sub(r"\([^()]*\)", "", decl)
-        if bare == decl:
+        m = ASSIGN_WORD.match(s)
+        if not m:
             break
-        decl = bare
-    try:
-        words = shlex.split(decl, posix=True)
-    except ValueError:
-        words = decl.split()
+        one, s = split_assignments(m.group(1) + "=" + s[m.end():])
+        names.extend(a.split("=", 1)[0] for a in one)
+    return names if names and not s.strip() else []
+
+
+def declared_names(rest):
+    """Names a declaration's words declare: `local a b=1 -r c` declares a, b and c.
+
+    Each word is cut at `=` and at `[`, so `n=0` and `arr[1]=x` declare `n` and `arr`, and option
+    words like `-a` declare nothing. The words inside `( )` are VALUES, an array's members or a
+    substitution's command, never names, so `list=(two LEAKED)` declares list alone (lessons review
+    of #1103). Innermost groups first, until none is left.
+    """
+    while True:
+        bare = re.sub(r"\([^()]*\)", "", rest)
+        if bare == rest:
+            break
+        rest = bare
     names = []
-    for w in words:
+    for w in command_words(rest):
         m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", w)
         if m and not w.startswith("-"):
             names.append(m.group(0))
-    return names, after
+    return names
 
 
 def functions_in(lines):
-    """-> [(name, first line, body lines)]: each function's bounds, found by counting its braces.
+    """-> [(name, first line, body)]: each function's bounds, found by counting its braces, and the
+    text of its body, from just past the `{` that opens it to the end of the line that closes it.
 
     Only braces that are the shell's own are counted (claude-config#2063). One literal `{` inside the
     Python of a `python3 -c` string in ps_payload_text made this read the function as running to the
     end of lib/push-scope.sh and report 23 globals it never touches, and a `}` in a string ends one
     early, so a global set below it is never seen. So the braces are counted in each line's code
     alone, as the one shared reader of shell quoting gives it (lib/shell_code_lines.py): single,
-    double and $'...' quoted text, comments and escapes left out, and a heredoc's body, which is
-    another program's text, neither counted nor judged as this shell's lines, and never searched for
-    a function either. Read in one walk over the file (L297).
+    double and $'...' quoted text, comments and escapes left out, and a heredoc's body neither
+    counted nor searched for a function. Read in one walk over the file (L297).
 
     Nor is a brace in a bracket expression (claude-config#2068): the `{` in mt_is_interpreter's case
     label `'$'[A-Za-z_{]*)` in lib/merge-target.sh left it open for the 1890 lines to the end of the
     file, so no function below it was ever found or judged.
 
-    Each body line is the text judged for assignments, and that is the line's own text, never its
-    raw text (claude-config#2068). A line of a `sh -c '...'` or `python3 -c '...'` program reads
-    `start="$(date)"` or `stdout=subprocess.PIPE`, and judged raw it was this function's global. A
-    line that begins inside a string is judged on what follows the string's close, from its next
-    command on, so `two"; CLOSED=1` is judged as `CLOSED=1`.
+    The body is the text as written, quotes, comments and heredocs included, since function_globals
+    reads it as the shell does, whole (claude-config#2076). It begins on the defining line, so
+    `remember(){ ... || keep="${keep:+$keep` is read from its first command, where a body read from
+    the next line began inside that string and judged none of it.
     """
     read = list(read_lines("\n".join(lines)))
     out = []
     i = 0
     while i < len(read):
-        _, line, kind, bare, _, _ = read[i]
+        _, line, kind, bare, _ = read[i]
         m = FN_DEF.match(line) if kind == "code" else None
         if not m:
             i += 1
             continue
         depth = brace_depth(bare)
-        body = []
         j = i + 1
         while j < len(read) and depth > 0:
-            _, line, kind, bare, _, own = read[j]
+            _, _, kind, bare, _ = read[j]
             if kind in ("code", "quoted"):
-                body.append(own if kind == "code" else next_command(own))
                 depth += brace_depth(bare)
             j += 1
-        out.append((m.group(1), i + 1, body))
+        out.append((m.group(1), i + 1, "\n".join([line[m.end():]] + lines[i + 1:j]) + "\n"))
         i = j
+    return out
+
+
+def unreadable_reason(e, body, at):
+    """What the reader could not close in a function body defined on line `at`, in words."""
+    if e.at is None:
+        return "a substitution, group or heredoc opened in it never closes"
+    return "the quote opened on line %d never closes" % (at + body.count("\n", 0, e.at))
+
+
+def function_globals(lines):
+    """-> [(name, first line, the names it sets without declaring them, why it was unreadable)], one
+    for every function. A function whose body shell-words cannot read has None for its names and the
+    reader's reason beside it, so the caller can say so; every other has None for the reason.
+
+    Every simple command of the body is read by shell-words commands() (claude-config#2076), the
+    one reading of a command the gates share, which knows quotes, $( ) nesting, comments and
+    heredocs. Read a line at a time by shlex, an assignment followed by a comment, one holding
+    quotes nested in a `$( )`, the first line of one running over several lines, and any not at the
+    start of its line (after `&&`, after `then`) were never judged at all.
+
+    Only a command this shell runs is judged: one inside a `$( )`, a backquote or a `( )` group runs
+    in a subshell, and so does every member of a pipeline and a command sent to the background, so
+    what they set is gone when they end. A reserved word opening a compound command (`then`, `do`,
+    `{`) is looked past, as command_words looks past it. A line of a heredoc, or of a `sh -c '...'`
+    or `python3 -c '...'` program, is inside one command's text and is never a command here.
+    """
+    out = []
+    for name, at, body in functions_in(lines):
+        parts = []
+        try:
+            cmds = commands(body, parts=parts)
+        except Unreadable as e:
+            out.append((name, at, None, unreadable_reason(e, body, at)))
+            continue
+        declared, globals_set = set(), set()
+        piped = False
+        for (_, text), p in zip(cmds, parts):
+            if len(p["scope"]) != 1:
+                continue
+            in_pipeline, piped = piped or p["how"] == "|", p["how"] == "|"
+            if in_pipeline or p["how"] == "&":
+                continue
+            words = text.split(None, 1)
+            while words and words[0] in RESERVED:
+                words = words[1].split(None, 1) if len(words) > 1 else []
+            if not words:
+                continue
+            if words[0] in DECLARES:
+                declared.update(declared_names(words[1] if len(words) > 1 else ""))
+                continue
+            for nm in assigned_names(" ".join(words)):
+                if nm not in declared:
+                    globals_set.add(nm)
+        out.append((name, at, globals_set, None))
     return out
 
 
@@ -215,23 +225,14 @@ def scan_file(path):
         # feeds is the whole verdict (L10, L11, L215). Reported and counted as a finding, so a
         # tree that has become unreadable fails rather than quietly shrinking what is scanned.
         print("  %s: could not be read (%s), so nothing in it was judged" % (path, e), file=sys.stderr)
-        return 0, [(0, "UNREADABLE", ["the file could not be read"])]
+        return 0, [(0, "UNREADABLE", ["the file could not be read"])], []
     considered = 0
     found = []
-    for name, at, body in functions_in(lines):
-        declared = set()
-        globals_set = set()
-        for b in body:
-            # A line may hold several commands, `local a; local b; leak=1`, so each declaration
-            # is read to its own end and whatever follows is judged as the command it is.
-            dm = DECLARED.match(b)
-            while dm:
-                names, b = split_declaration(dm.group(2))
-                declared.update(names)
-                dm = DECLARED.match(b)
-            for nm in assignments_on(b):
-                if nm not in declared:
-                    globals_set.add(nm)
+    unread = []
+    for name, at, globals_set, why in function_globals(lines):
+        if why is not None:
+            unread.append((at, name, why))
+            continue
         if not globals_set:
             continue
         considered += 1
@@ -245,7 +246,7 @@ def scan_file(path):
                     if re.search(r"\$\([^)]*\b" + word + r"\b", l) or re.search(r"`[^`]*\b" + word + r"\b", l)]
         if len(captured) == len(calls):
             found.append((at, name, sorted(globals_set)))
-    return considered, found
+    return considered, found, unread
 
 
 def main():
@@ -253,6 +254,10 @@ def main():
     ap.add_argument("--root", default=".")
     ap.add_argument("--baseline", default=None)
     args = ap.parse_args()
+    if READER_ERROR is not None:
+        print("scan-subshell-globals: the command reader lib/shell-words.py could not be loaded (%s), "
+              "so no assignment could be read and nothing was judged." % READER_ERROR, file=sys.stderr)
+        return 2
     root = os.path.abspath(args.root)
     baseline_path = args.baseline or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "subshell-globals.txt")
@@ -282,13 +287,15 @@ def main():
     considered = 0
     now = {}
     detail = {}
+    unread = []
     for f in files:
-        c, found = scan_file(f)
+        c, found, cannot = scan_file(f)
         considered += c
+        rel = os.path.relpath(f, keyed_from).replace(os.sep, "/")
         if found:
-            rel = os.path.relpath(f, keyed_from).replace(os.sep, "/")
             now[rel] = len(found)
             detail[rel] = found
+        unread.extend((rel, at, name, why) for at, name, why in cannot)
 
     try:
         base = ratchet.read_baseline(open(baseline_path, encoding="utf-8", errors="replace").read())
@@ -308,6 +315,14 @@ def main():
                 print("  %s  could not be read, so nothing in it was judged" % rel)
             else:
                 print("  %s:%d  %s sets %s" % (rel, at, name, ", ".join(names)))
+    # A body the command reader cannot read is listed on every run, never skipped in silence, and
+    # the count is said when it is zero too, so a run that judged everything says so (#2076). It
+    # does not fail the scan: the limit is the reader's, and the shell may read the code fine.
+    print("scan-subshell-globals: the command reader could not read %d function bod%s, so %s not judged%s"
+          % (len(unread), "y" if len(unread) == 1 else "ies", "it was" if len(unread) == 1 else "they were",
+             ":" if unread else "."))
+    for rel, at, name, why in unread:
+        print("  %s:%d  %s: %s" % (rel, at, name, why))
 
     base, outside = ratchet.within(base, root, keyed_from)
     if outside:
