@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+# Tests for check-later-nudge.sh, the Stop hook that starts the /check-later flow when a turn leaves
+# work waiting on a later day (claude-config#2079), and for lib/check-later-signals.py, the detector
+# it runs.
+#
+# The three signals, each with a transcript shaped like a real one (the line keys, the timestamp and
+# the tool_use shape were read from real transcripts on 2026-11-02; CronCreate's input is the shape
+# tools/typescript/claude-code-types declares, since no real CronCreate call was on this Mac):
+#   1. a one shot CronCreate this turn that fires on a later day
+#   2. a Write or Edit to a project memory file naming a date after today
+#   3. the assistant's own text this turn promising to check again on a later day
+# and the controls that must stay silent: a recurring cron, a one shot later today, a memory naming
+# only a past date, "tomorrow" inside a tool result or a quotation, a promise in an EARLIER turn,
+# and a turn that already ran the flow (Dan typed /check-later, or a row was written to the list).
+#
+# An unreadable transcript must never read as "nothing to check" (L98): it fires, saying so.
+#
+# Every fixture carries its own timestamp and the suite pins TZ, so no case depends on today's date
+# or this Mac's zone (L713).
+set -uo pipefail
+
+# Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+suite_deadline_arm || exit $?
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK="${CHECK_LATER_NUDGE:-$DIR/check-later-nudge.sh}"
+SKILL="$(cd "$DIR/.." && pwd)/skills/check-later/SKILL.md"
+
+command -v python3 >/dev/null 2>&1 || { echo "test-check-later-nudge: python3 is not on PATH, so nothing was verified."; printf 'SUITE-NOT-RUN %s\n' "needs python3"; exit 2; }
+
+WORK="$(mktemp -d)"
+case "${WORK%/}" in
+  ''|/|"${HOME%/}")
+    echo "FAIL: $(basename "$0"): refusing to run: the throwaway directory came back as '$WORK'."
+    printf 'SUITE-RESULT passed=0 failed=1\n'
+    exit 1 ;;
+esac
+trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
+export TMPDIR="$WORK/tmp"
+export CLAUDE_SLEEP_RECORD="$WORK/no-sleep-record.json"
+export STOP_HOOK_NOTICE_DIR="$WORK/notice"
+export TZ="America/New_York"
+unset CLAUDE_DETACHED_RUN
+mkdir -p "$TMPDIR" "$STOP_HOOK_NOTICE_DIR"
+
+pass=0
+fail=0
+check() { # check <description> <result>   ("ok" passes, anything else is the failure text)
+  if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi
+}
+
+# ---- fixture lines, shaped like a real transcript's ----
+MK="$WORK/mkline.py"
+cat > "$MK" <<'PY'
+import json, sys, uuid
+kind, ts = sys.argv[1], sys.argv[2]
+args = sys.argv[3:]
+base = {"parentUuid": None, "isSidechain": False, "userType": "external", "cwd": "/Users/dan/Apps/Bidspoke",
+        "sessionId": "fixture-session", "version": "2.1.0", "gitBranch": "main",
+        "uuid": str(uuid.uuid4()), "timestamp": ts}
+if kind == "user":
+    base.update(type="user", message={"role": "user", "content": args[0]})
+elif kind == "assistant-text":
+    base.update(type="assistant", message={"role": "assistant", "type": "message", "model": "claude",
+                "content": [{"type": "text", "text": args[0]}]})
+elif kind == "tool":
+    base.update(type="assistant", message={"role": "assistant", "type": "message", "model": "claude",
+                "content": [{"type": "tool_use", "id": args[0], "name": args[1], "input": json.loads(args[2])}]})
+elif kind == "result":
+    base.update(type="user", message={"role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": args[0], "content": args[1]}]})
+else:
+    raise SystemExit("unknown kind " + kind)
+print(json.dumps(base))
+PY
+TS="2026-11-02T18:00:00.000Z"   # 1:00 PM ET on Monday Nov 2 2026, the day after the clocks went back
+L() { python3 "$MK" "$1" "$TS" "${@:2}"; }
+MEM="/Users/dan/.claude/projects/-Users-dan-Apps-Bidspoke/memory/eqx-repull.md"
+
+# A transcript: an earlier turn, then this turn's user message and whatever the case adds.
+start() { # start <path>
+  {
+    L user "look at the dashboard"
+    L assistant-text "It looks fine."
+    L user "now check the EQX repull"
+  } > "$1"
+}
+
+run() { # run <transcript path> [extra payload json fields] -> the hook's stdout
+  printf '{"transcript_path":"%s","stop_hook_active":false,"hook_event_name":"Stop"%s}' "$1" "${2:-}" | \
+    CLAUDE_PROJECT_DIR="$WORK/proj" bash "$HOOK" 2>/dev/null
+}
+reason_of() { python3 -c 'import json,sys
+try: print(json.loads(sys.stdin.read()).get("reason",""))
+except Exception: print("")'; }
+
+fires() { # fires <label> <transcript> <text the reason must hold>
+  local out reason
+  out="$(run "$2")"
+  reason="$(printf '%s' "$out" | reason_of)"
+  if printf '%s' "$out" | grep -q '"decision": *"block"' && grep -qiF -- "$3" <<< "$reason"; then
+    check "$1" ok
+  else
+    check "$1" "expected a block naming '$3', got: ${out:-nothing}"
+  fi
+}
+silent() { # silent <label> <transcript>
+  local out
+  out="$(run "$2")"
+  check "$1" "$([ -z "$out" ] && echo ok || echo "expected silence, got: $out")"
+}
+
+check "the hook is there to run" "$([ -f "$HOOK" ] && echo ok || echo "no $HOOK")"
+
+# ---- 1. a one shot CronCreate ----
+t="$WORK/cron-oneshot.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"Check the EQX repull for #2220","recurring":false}'
+  L result c1 "Scheduled one shot job abc123"
+  L assistant-text "Scheduled a one shot check." ; } >> "$t"
+fires "a one shot cron for a later day fires" "$t" "Tue Nov 3"
+fires "and names the time it was set for" "$t" "9:00 AM"
+
+t="$WORK/cron-durable.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"30 10 5 11 *","prompt":"recheck","recurring":false,"durable":true}'
+  L result c1 "ok" ; } >> "$t"
+fires "a durable one shot cron for a later day fires too" "$t" "Thu Nov 5"
+
+t="$WORK/cron-tomorrow-wildcard.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"0 9 * * *","prompt":"recheck","recurring":false}'
+  L result c1 "ok" ; } >> "$t"
+fires "a one shot whose next run is tomorrow morning fires" "$t" "Tue Nov 3"
+
+t="$WORK/cron-recurring.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"poll","recurring":true}'
+  L result c1 "ok"
+  L assistant-text "Polling each morning." ; } >> "$t"
+silent "control: a recurring cron stays silent" "$t"
+
+t="$WORK/cron-default.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"*/5 * * * *","prompt":"poll CI"}'
+  L result c1 "ok" ; } >> "$t"
+silent "control: a cron with recurring left out (it defaults to recurring) stays silent" "$t"
+
+t="$WORK/cron-today.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"30 15 2 11 *","prompt":"check CI","recurring":false}'
+  L result c1 "ok" ; } >> "$t"
+silent "control: a one shot later today stays silent" "$t"
+
+t="$WORK/cron-odd.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"0 9 L * ?","prompt":"recheck","recurring":false}'
+  L result c1 "ok" ; } >> "$t"
+fires "a one shot whose schedule cannot be read fires rather than being dropped" "$t" "one shot"
+
+# ---- 2. a project memory naming a future date ----
+t="$WORK/mem-future.jsonl"; start "$t"
+{ L tool w1 Write "{\"file_path\":\"$MEM\",\"content\":\"---\\nname: eqx repull\\n---\\nRepull EQX for lead 4411 on 2026-11-05 and compare tradelines.\\n\"}"
+  L result w1 "File created successfully" ; } >> "$t"
+fires "a memory naming a future ISO date fires" "$t" "Thu Nov 5"
+
+t="$WORK/mem-monthname.jsonl"; start "$t"
+{ L tool e1 Edit "{\"file_path\":\"$MEM\",\"old_string\":\"x\",\"new_string\":\"The repull check is due Nov 3, once the bureau refreshes.\"}"
+  L result e1 "The file has been updated" ; } >> "$t"
+fires "a memory edit naming a month and day ahead fires" "$t" "Tue Nov 3"
+
+t="$WORK/mem-past.jsonl"; start "$t"
+{ L tool w1 Write "{\"file_path\":\"$MEM\",\"content\":\"Learned on 2026-10-27 (Oct 27): the repull needs the full SSN.\\n\"}"
+  L result w1 "File created successfully" ; } >> "$t"
+silent "control: a memory naming only past dates stays silent" "$t"
+
+t="$WORK/mem-not-memory.jsonl"; start "$t"
+{ L tool w1 Write '{"file_path":"/Users/dan/Apps/Bidspoke/docs/plan.md","content":"Ship on 2026-11-05."}'
+  L result w1 "File created successfully" ; } >> "$t"
+silent "control: a future date in a file that is not a memory stays silent" "$t"
+
+# ---- 3. a promise in the assistant's own words ----
+t="$WORK/promise-tomorrow.jsonl"; start "$t"
+L assistant-text "The repull has not landed yet. I'll check again tomorrow once the bureau file refreshes." >> "$t"
+fires "a promise to check again tomorrow fires" "$t" "check again tomorrow"
+
+t="$WORK/promise-date.jsonl"; start "$t"
+L assistant-text "Nothing to do until the canary week ends; re-check on Nov 5 against the baseline." >> "$t"
+fires "a promise to re-check on a named date fires" "$t" "re-check on Nov 5"
+
+t="$WORK/tool-result-tomorrow.jsonl"; start "$t"
+{ L tool b1 Bash '{"command":"cat notes.txt"}'
+  L result b1 "TODO from Geoff: check again tomorrow, the repull is slow"
+  L assistant-text "The notes file is read." ; } >> "$t"
+silent "control: 'check again tomorrow' in a tool result stays silent" "$t"
+
+t="$WORK/quoted-tomorrow.jsonl"; start "$t"
+L assistant-text 'Geoff wrote "we will check again tomorrow" in the thread, and the deploy log says `recheck tomorrow`.' >> "$t"
+silent "control: the words inside a quotation or code span stay silent" "$t"
+
+t="$WORK/earlier-turn.jsonl"
+{ L user "look at the dashboard"
+  L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"recheck","recurring":false}'
+  L result c1 "ok"
+  L assistant-text "I'll check again tomorrow."
+  L user "thanks, what does the log say"
+  L tool r1 Read '{"file_path":"/x/log.txt"}'
+  L result r1 "all good"
+  L assistant-text "The log is clean." ; } > "$t"
+silent "control: a promise and a cron in an EARLIER turn stay silent" "$t"
+
+t="$WORK/past-date-promise.jsonl"; start "$t"
+L assistant-text "We said we would re-check on Oct 30, and that check passed." >> "$t"
+silent "control: a re-check on a date already past stays silent" "$t"
+
+# ---- the flow already ran this turn, so the item is on the list ----
+t="$WORK/already-listed.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"recheck","recurring":false}'
+  L result c1 "ok"
+  L tool s1 mcp__claude_ai_Slack__slack_add_list_record '{"list_id":"F0CB5JMEM2P","cells":[{"column_id":"name","text":"Check the EQX repull (#2220)"}]}'
+  L result s1 '{"ok":true,"record_id":"Rec0001"}'
+  L assistant-text "Added the row; I'll check again tomorrow." ; } >> "$t"
+silent "control: a turn that already wrote the row to the list stays silent" "$t"
+
+t="$WORK/typed-check-later.jsonl"
+{ L user "look at the dashboard"
+  L assistant-text "It looks fine."
+  L user "<command-message>check-later</command-message>
+<command-name>/check-later</command-name>"
+  L assistant-text "I'll re-check on Nov 5; the row is drafted below." ; } > "$t"
+silent "control: a turn where Dan typed /check-later stays silent" "$t"
+
+t="$WORK/other-list.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"recheck","recurring":false}'
+  L result c1 "ok"
+  L tool s1 mcp__claude_ai_Slack__slack_add_list_record '{"list_id":"F0SOMEOTHER","cells":[]}'
+  L result s1 '{"ok":true}' ; } >> "$t"
+fires "a row written to a DIFFERENT list does not count as the flow having run" "$t" "Tue Nov 3"
+
+# ---- an unreadable transcript is never "nothing to check" ----
+out="$(run "$WORK/does-not-exist.jsonl")"
+check "a transcript that does not exist fires, saying it could not be read" \
+  "$(printf '%s' "$out" | reason_of | grep -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
+
+t="$WORK/garbage.jsonl"; printf 'not json at all\n{{{\n' > "$t"
+out="$(run "$t")"
+check "a transcript with no readable line fires, saying it could not be read" \
+  "$(printf '%s' "$out" | reason_of | grep -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
+
+t="$WORK/locked.jsonl"; start "$t"; chmod 000 "$t"
+if [ -r "$t" ]; then
+  check "a transcript the hook may not open (UNMEASURED: running as a user who can read mode 000 files)" ok
+else
+  out="$(run "$t")"
+  check "a transcript the hook may not open fires, saying it could not be read" \
+    "$(printf '%s' "$out" | reason_of | grep -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
+fi
+chmod 600 "$t"
+
+out="$(printf '{"stop_hook_active":false,"hook_event_name":"Stop"}' | CLAUDE_PROJECT_DIR="$WORK/proj" bash "$HOOK" 2>/dev/null)"
+check "a payload naming no transcript fires, saying it could not be read" \
+  "$(printf '%s' "$out" | reason_of | grep -qi 'could not read' && echo ok || echo "got: ${out:-nothing}")"
+
+# ---- it stands down where every Stop hook does ----
+t="$WORK/cron-guard.jsonl"; cp "$WORK/cron-oneshot.jsonl" "$t"
+out="$(printf '{"transcript_path":"%s","stop_hook_active":true}' "$t" | bash "$HOOK" 2>/dev/null)"
+check "it stays silent on a Stop hook's own continuation" "$([ -z "$out" ] && echo ok || echo "got: $out")"
+out="$(printf '{"transcript_path":"%s","stop_hook_active":false}' "$t" | CLAUDE_DETACHED_RUN=1 bash "$HOOK" 2>/dev/null)"
+check "it stays silent in a detached headless run" "$([ -z "$out" ] && echo ok || echo "got: $out")"
+: > "$t.skip-stop-hooks"
+out="$(run "$t")"
+check "it stays silent when the conversation's Stop hooks are switched off" "$([ -z "$out" ] && echo ok || echo "got: $out")"
+
+# ---- what Dan sees ----
+out="$(run "$WORK/cron-oneshot.jsonl")"
+reason="$(printf '%s' "$out" | reason_of)"
+check "the reason points at the check-later skill by its real path" \
+  "$(grep -qF "$SKILL" <<< "$reason" && [ -f "$SKILL" ] && echo ok || echo "reason: $reason")"
+check "the reason asks for this before the reflection and the issue review" \
+  "$(grep -qi 'before any reflection or issue review' <<< "$reason" && echo ok || echo "reason: $reason")"
+check "the reason stays short, since Dan reads it (under 400 characters)" \
+  "$([ "${#reason}" -lt 400 ] && echo ok || echo "${#reason} characters")"
+check "the reason holds no long dash" \
+  "$(printf '%s' "$reason" | perl -CSD -ne '$f = 1 if /[\x{2013}\x{2014}]/; END { exit($f ? 1 : 0) }' && echo ok || echo "found one")"
+
+# ---- it is registered as a Stop hook, with a timeout like its siblings ----
+reg="$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]
+for entry in d.get("Stop", []):
+    for h in entry.get("hooks", []):
+        if h.get("command", "").endswith("/hooks/check-later-nudge.sh"):
+            print("ok" if h.get("timeout") else "no timeout")
+            raise SystemExit
+print("not registered")
+' "$DIR/../settings.hooks.json" 2>&1)"
+check "settings.hooks.json registers it under Stop with a timeout" "$reg"
+
+echo ""
+echo "passed: $pass, failed: $fail"
+echo "SUITE-RESULT passed=$pass failed=$fail"
+[ "$fail" -eq 0 ]
