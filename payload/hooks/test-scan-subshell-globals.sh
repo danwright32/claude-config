@@ -338,6 +338,108 @@ OUTER
 run
 check "#2068 a word after a string's close is an argument, not an assignment" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
 
+echo "scan subshell globals: assignments read as the shell reads its commands (#2076)"
+
+# Each shape below was never judged while assignments were read by shlex, a line at a time. The
+# lines are the real ones, with the function's `local` taken away so the name is a global.
+#
+# A comment after the assignment: shlex yields `#` as a word, which is no assignment, so the whole
+# line was dropped. From mt_merge_invocation_bounds in lib/merge-target.sh.
+cat > "$FIX/a.sh" <<'OUTER'
+bounds(){
+  c="${cmd:$i:1}"   # empty at i == n, so the end of the command closes the last invocation
+}
+v="$(bounds)"
+OUTER
+run
+check "#2076 an assignment followed by a comment is judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names it" "$OUT" "bounds sets c"
+
+# Quotes nested inside a `$( )` inside double quotes: shlex reads the inner quotes as closing the
+# outer ones and splits the value into words. From leave_out_proven in lib/pr-review.sh.
+cat > "$FIX/a.sh" <<'OUTER'
+leave_out(){
+  rows="$(printf '%s' "$rows" | sort -t "$(printf '\t')" -k1,1n)"
+}
+v="$(leave_out)"
+OUTER
+run
+check "#2076 an assignment with quotes nested inside its substitution is judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names it" "$OUT" "leave_out sets rows"
+
+# The first line of a multi line assignment: an unclosed quote, which shlex refuses. And the awk
+# program's own `b = ""` lines are still never this shell's. From carry_review in lib/pr-review.sh.
+cat > "$FIX/a.sh" <<'OUTER'
+carry(){
+  rows="$(awk -v br="$branch" '
+    FNR == 1 { b = ""; s = ""; st = ""; bs = "" }
+    /^branch=/ { b = substr($0, 8) } /^sha=/ { s = substr($0, 5) }
+    /^status=/ { st = substr($0, 8) } /^base=/ { bs = substr($0, 6) }
+    /^$/ { if (b == br && st == "ok" && bs != "") printf "%s\t%s\t%s\n", s, bs, FILENAME; nextfile }' "${files[@]}" 2>/dev/null)"
+}
+v="$(carry)"
+OUTER
+run
+check "#2076 the first line of a multi line assignment is judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names it alone" "$OUT" "carry sets rows"$'\n'
+
+# Mid line: after `&&`, and after `then` with a command after it. shlex read the whole line, and a
+# first word that was no assignment dropped all of it. From mt_merge_invocation_bounds.
+cat > "$FIX/a.sh" <<'OUTER'
+bounds(){
+  if [ "$c" = "\\" ] && [ "$quote" = '"' ]; then i=$((i + 2)); continue; fi
+  [ "$c" = "$quote" ] && quote=""
+}
+v="$(bounds)"
+OUTER
+run
+check "#2076 an assignment mid line is judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names both" "$OUT" "bounds sets i, quote"
+
+# Mid line on the line that defines the function, its body running on to the next: the body was
+# read from the line after, which begins inside the string, so nothing of it was judged. From
+# remember in sync-stuck-notice.sh.
+cat > "$FIX/a.sh" <<'OUTER'
+remember(){ in_list "$keep" "$1" || keep="${keep:+$keep
+}$1"; }
+v="$(remember x)"
+OUTER
+run
+check "#2076 an assignment on the line defining the function is judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names it" "$OUT" "remember sets keep"
+
+# The controls: what runs in a subshell, a `( )` group or a `$( )`, sets nothing in this shell, and
+# a word after a value is still an env prefix on the command it precedes.
+cat > "$FIX/a.sh" <<'OUTER'
+sub(){
+  local out
+  out="$(inner=1; printf '%s' "$inner")"
+  ( cd /tmp && grouped=1 )
+  PREFIX=1 env | wc -l
+  printf '%s' "$out"
+}
+v="$(sub)"
+OUTER
+run
+check "#2076 control: an assignment in a subshell or a substitution, or an env prefix, is not a global" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
+# The reader is lib/shell-words.py, loaded by its path, and the scan keeps no reading of its own to
+# fall back on. Without it nothing can be judged, which is said, and never reported as a clean tree.
+NOREADER="$FIX/noreader"
+mkdir -p "$NOREADER/lib" "$NOREADER/tree"
+cp "$SCAN" "$NOREADER/scan-subshell-globals.py"
+cp "$DIR/lib/ratchet.py" "$DIR/lib/shell_code_lines.py" "$NOREADER/lib/"
+printf 'f(){\n  x=1\n}\nv="$(f)"\n' > "$NOREADER/tree/a.sh"
+OUT="$(python3 "$NOREADER/scan-subshell-globals.py" --root "$NOREADER/tree" --baseline "$FIX/baseline.txt" 2>&1)"; RC=$?
+check "#2076 without the shared reader the scan refuses" "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names the reader it could not load" "$OUT" "lib/shell-words.py could not be loaded"
+printf 'raise RuntimeError("broken on purpose")\n' > "$NOREADER/lib/shell-words.py"
+OUT="$(python3 "$NOREADER/scan-subshell-globals.py" --root "$NOREADER/tree" --baseline "$FIX/baseline.txt" 2>&1)"; RC=$?
+check "#2076 a reader that fails to load is refused the same way" "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and says why" "$OUT" "broken on purpose"
+# Its tree sits under the fixture root the tests below scan, so it goes before they run.
+rm -rf "$NOREADER"
+
 echo "scan subshell globals: the baseline is a ratchet in both directions"
 
 cat > "$FIX/a.sh" <<'EOF'
