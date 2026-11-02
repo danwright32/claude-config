@@ -1,12 +1,12 @@
 // The area check (claude-config#1506; phase 1, observe only, #1508): the facts about a file at the
 // moment a session first edits it. Pure, so each rule is tested on its own, and so the replay of a
 // real repository's history (tools/area-check-replay.ts) judges with exactly these rules (L107).
-// Phase 1 only observes: these facts decide what is LOGGED, would_hold or quiet, never what is
-// refused. The hold is turned on from a week of that log in #1509.
+// Phase 1 observed: these facts decided what was LOGGED, would_hold or quiet. #1509 set the bar
+// below from that week's log on both Macs, and the hold refuses by it.
 import { isTestPath } from './mod-kit/testfile.ts'
 
 /** Bumped whenever a rule here changes what a file's facts are, so a cached ranking is never reused across it (L573). */
-export const RULE_VERSION = 1
+export const RULE_VERSION = 2
 /** Claude Code's budget for a hook, measured at 10 s (docs/mods-design.md, standing rule 4). */
 export const BUDGET_MS = 10_000
 /** One deadline for the whole read of a file's facts, under 75% of the budget (L743). */
@@ -19,12 +19,35 @@ export const UNREAD_TTL_MS = 10 * 60_000
 export const ISSUE_LIMIT = 1000
 /** The growth window, in days. */
 export const GROWTH_DAYS = 90
-/** The growth bar (decision 6), provisional until #1509 calibrates it from the week's log. */
+/**
+ * The bar (decisions 4 and 6), set on 2026-11-02 from the week of phase 1 logs on both Macs (#1509;
+ * the numbers, and where each threshold lands in what the week judged, are in docs/mods-design.md
+ * under the area check, L172). Growth: files of at least SIZE_MIN lines that grew by at least
+ * GROWTH_MIN net lines in 90 days, the TOP_N fastest of them, source and tests ranked together
+ * (decision 6 asks for about the 10 fastest growing large files per repository). Issues: those
+ * naming files in the same folder count only when the folder has at most FOLDER_MAX, down from the
+ * provisional 5, since folder matches were 612 of the 982 issue holds on the work MacBook; and only
+ * an issue at one of HOLD_PRIORITIES holds, since p3 and p4 issues were 59% of the issues shown
+ * on the work MacBook and 91% on the personal one.
+ */
 export const SIZE_MIN = 1500
 export const GROWTH_MIN = 300
 export const TOP_N = 10
-/** Issues naming files in the same folder count when the folder has at most this many (decision 4). */
-export const FOLDER_MAX = 5
+export const FOLDER_MAX = 2
+export const HOLD_PRIORITIES: readonly string[] = ['p0', 'p1', 'p2']
+/** A repository's bar, with the day it was set, so a record can say which bar judged it. */
+export type Bar = { set: string; sizeMin: number; growthMin: number; topN: number; folderMax: number; holdPriorities: readonly string[] }
+export const DEFAULT_BAR: Bar = { set: '2026-11-02', sizeMin: SIZE_MIN, growthMin: GROWTH_MIN, topN: TOP_N, folderMax: FOLDER_MAX, holdPriorities: HOLD_PRIORITIES }
+/**
+ * A bar of its own for a repository the week measured as needing one, keyed by the repository's name
+ * alone, lower case, since a work repository's owner does not belong in this public one. None today:
+ * the four repositories the week judged most (three on the work MacBook, this one on the personal)
+ * each held at most 3 files a session by the default growth bar, so none needed a different one.
+ */
+export const BARS: Readonly<Record<string, Bar>> = {}
+/** The bar a repository (owner/name) is judged by: its own, else the default. */
+export const barFor = (repo: string, bars: Readonly<Record<string, Bar>> = BARS): Bar =>
+  bars[(repo.split('/').pop() ?? repo).toLowerCase()] ?? DEFAULT_BAR
 
 /**
  * The structural label spellings, matched whole (L1023), measured 2026-10-22 across the 12 repo-digest
@@ -127,10 +150,10 @@ const indexOf = (tracked: readonly string[]): Map<string, string[]> => {
  * suffix on path segment boundaries when only one tracked file ends so; by a bare basename when only
  * one tracked file has it. The paths are the shared reader's, which reads each whole, so lib/foo.ts
  * never stands for lib/foo.tsx or otherlib/foo.ts (L1023). Then issues naming files in the same folder,
- * when that folder has at most FOLDER_MAX issues naming its files. Every issue is matched, labelled or
+ * when that folder has at most `folderMax` issues naming its files. Every issue is matched, labelled or
  * not; `structural` tells them apart.
  */
-export const issuesNaming = (rel: string, issues: readonly CachedIssue[], tracked: readonly string[]): Match[] => {
+export const issuesNaming = (rel: string, issues: readonly CachedIssue[], tracked: readonly string[], folderMax: number = FOLDER_MAX): Match[] => {
   const ix = indexOf(tracked)
   const resolved = new Map<string, string | null>()
   const resolve = (ref: string): string | null => {
@@ -155,7 +178,7 @@ export const issuesNaming = (rel: string, issues: readonly CachedIssue[], tracke
       return p !== null && dirOf(p) === dir
     })) folder.push(i)
   }
-  if (folder.length > FOLDER_MAX) return exact
+  if (folder.length > folderMax) return exact
   const named = new Set(exact.map(m => m.n))
   return [...exact, ...folder.filter(i => !named.has(i.n)).map(i => fact(i, 'folder'))]
 }
@@ -219,9 +242,9 @@ export type Ranked = { top: string[]; facts: Record<string, FileGrowth> }
  * lines in the window, ranked by growth; the first TOP_N cross it. Every file's facts are kept, its
  * rank null when it is not eligible, so the log carries the rough growth line for any file.
  */
-export const rank = (growth: Readonly<Record<string, Growth>>, sizes: Readonly<Record<string, number>>): Ranked => {
+export const rank = (growth: Readonly<Record<string, Growth>>, sizes: Readonly<Record<string, number>>, bar: Bar = DEFAULT_BAR): Ranked => {
   const eligible = Object.keys(growth)
-    .filter(p => (sizes[p] ?? 0) >= SIZE_MIN && (growth[p]?.net ?? 0) >= GROWTH_MIN)
+    .filter(p => (sizes[p] ?? 0) >= bar.sizeMin && (growth[p]?.net ?? 0) >= bar.growthMin)
     .sort((a, b) => (growth[b]?.net ?? 0) - (growth[a]?.net ?? 0) || (a < b ? -1 : 1))
   const facts: Record<string, FileGrowth> = {}
   for (const [p, g] of Object.entries(growth)) facts[p] = { net: g.net, size: sizes[p] ?? null, fixes: g.fixes, rank: null }
@@ -229,12 +252,12 @@ export const rank = (growth: Readonly<Record<string, Growth>>, sizes: Readonly<R
     const f = facts[p]
     if (f) f.rank = i + 1
   })
-  return { top: eligible.slice(0, TOP_N), facts }
+  return { top: eligible.slice(0, bar.topN), facts }
 }
 
 /** The files whose size the bar needs: those that grew enough to be eligible. */
-export const sizeCandidates = (growth: Readonly<Record<string, Growth>>): string[] =>
-  Object.keys(growth).filter(p => (growth[p]?.net ?? 0) >= GROWTH_MIN).sort()
+export const sizeCandidates = (growth: Readonly<Record<string, Growth>>, bar: Bar = DEFAULT_BAR): string[] =>
+  Object.keys(growth).filter(p => (growth[p]?.net ?? 0) >= bar.growthMin).sort()
 
 /** `git grep -c '' <rev> -- <paths>`: each file's line count, by its path. */
 export const parseLineCounts = (text: string, rev: string): Record<string, number> => {
@@ -258,12 +281,17 @@ export const rankingKey = (repo: string, sha: string, ms: number): string => `${
 export type Judged = { decision: 'would_hold' | 'quiet'; why: ('issues' | 'growth')[]; shown: number[]; excluded: number[] }
 
 /**
- * What phase 1 logs: would_hold when a structural issue names the file, the issues the session works
- * on (its branch's, its goal's) left out (decision 5), or when the file crosses the growth bar.
+ * would_hold when a structural issue at one of the bar's priorities names the file, the issues the
+ * session works on (its branch's, its goal's) left out (decision 5), or when the file crosses the
+ * growth bar. An issue with no priority label counts as p2, the scale's default, so a missing label
+ * never lets a file through.
  */
-export const judge = (f: { matches: readonly Match[]; own: readonly number[]; crosses: boolean }): Judged => {
+export const judge = (f: { matches: readonly Match[]; own: readonly number[]; crosses: boolean; bar?: Bar }): Judged => {
+  const bar = f.bar ?? DEFAULT_BAR
   const excluded = f.matches.filter(m => f.own.includes(m.n)).map(m => m.n)
-  const shown = f.matches.filter(m => m.structural.length > 0 && !f.own.includes(m.n)).map(m => m.n)
+  const shown = f.matches
+    .filter(m => m.structural.length > 0 && !f.own.includes(m.n) && bar.holdPriorities.includes(m.priority ?? 'p2'))
+    .map(m => m.n)
   const why: Judged['why'] = []
   if (shown.length) why.push('issues')
   if (f.crosses) why.push('growth')

@@ -199,7 +199,7 @@ test('a session start writes a loaded record outside ~/.claude, so a week with n
   await w.clock.settle()
   const loaded = w.records().filter(r => r.kind === 'loaded')
   expect(loaded.length).toBe(1)
-  expect(loaded[0]).toMatchObject({ v: 1, kind: 'loaded', session: 's1', rule: 1 })
+  expect(loaded[0]).toMatchObject({ v: 1, kind: 'loaded', session: 's1', rule: 2 })
 })
 
 test("a session start warms the session's repository, so its first edit within the hour reads no list of its own", KIT, async ($, on) => {

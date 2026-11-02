@@ -3795,6 +3795,39 @@ observing half, so it has no surface of its own: no card, no question, nothing d
   replayed to 77% of judged sessions holding at least once and 179 of 602 holding four or more times,
   which is what the week's log is for.
 
+### The bar, set 2026-11-02 from the week (#1509)
+
+The week ran 2026-10-23 to 11-02 on both Macs, with `loaded` records every day on each. Work
+MacBook: 2,923 judged edits by 539 actors (a session, or one subagent of it, judged for itself),
+93% of them by subagents; 1,038 would have held (36%), 351 actors held at least once and 95 held
+four times or more, the most 17. Personal MacBook: 1,063 judged by 191 actors, 246 would have held,
+100 actors held, 15 four times or more, the most 16. Issue reads failed 7 times of 3,986, never
+from a wrong account; 20 reads passed the 7 second deadline (p99 5.5 s work, 7.0 s personal).
+
+Where the holds came from, and what was changed:
+
+- **Folder matches** were 612 of the 982 issue holds on the work MacBook (136 of 203 personal).
+  The folder fallback is kept (decision 4) but counts only when the folder has at most 2 issues,
+  not 5: four or more holds then falls from 89 actors to 31 on issue holds alone.
+- **Priority**: p3 and p4 issues were 59% of the issues shown on the work MacBook and 91% on the
+  personal. Only an issue at p0 to p2 holds; one with no priority counts as p2. p0 to p1 only was
+  measured too (14 of 41 main sessions held) and rejected, since it drops the p2 default where most
+  filed debt sits.
+- **Growth** is unchanged: 1,500 lines, 300 net in 90 days, the 10 fastest, source and tests ranked
+  together. It held 87 of 539 actors on the work MacBook and 38 of 191 on the personal, none more
+  than 3 times, and the distinct files crossing it in the week were 5, 3 and 5 in the three busiest
+  work repositories and 4 here, under decision 6's about 10. The 1,500 line floor sits at about the
+  90th percentile of judged files that grew 300 lines; 300 net is near the median of all judged
+  files, so the floor and the top 10 decide, not the growth minimum. Ranking source and tests
+  separately could not be measured from the log (its upper bound quadrupled the personal holds), so
+  it was not adopted.
+
+With both changes, the week would have held 204 of 539 actors on the work MacBook (38%), 8 of them
+four times or more, at most 7, and 15 of 41 main sessions, none four or more; on the personal
+MacBook 45 of 191 actors (24%), none four or more, at most 3, and 2 of 9 main sessions. A bar of
+its own per repository (`BARS`, keyed by name) is empty: no repository measured as needing one.
+`RULE_VERSION` is 2 and each `judged` record carries the bar's date.
+
 ## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
 
 The one GitHub polling policy (`hooks/lib/gh-poll.sh`, #1482) keys each session's looks a minute

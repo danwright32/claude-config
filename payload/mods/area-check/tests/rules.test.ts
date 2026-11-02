@@ -3,6 +3,10 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   DEADLINE_MS,
   BUDGET_MS,
+  BARS,
+  DEFAULT_BAR,
+  barFor,
+  type Bar,
   FOLDER_MAX,
   GROWTH_MIN,
   ISSUE_LIMIT,
@@ -181,7 +185,7 @@ test('a quiet repo with tiny growth holds nothing by the bar (decision 6)', () =
 })
 
 test('the ranking is keyed on the repository, origin head sha, the day and the rule version (L573)', () => {
-  expect(rankingKey('o/r', 'abc', Date.UTC(2026, 9, 22, 23, 0))).toBe('o/r abc 2026-10-22 v1')
+  expect(rankingKey('o/r', 'abc', Date.UTC(2026, 9, 22, 23, 0))).toBe('o/r abc 2026-10-22 v2')
   expect(rankingKey('o/r', 'abc', Date.UTC(2026, 9, 23, 1, 0))).not.toBe(rankingKey('o/r', 'abc', Date.UTC(2026, 9, 22, 23, 0)))
 })
 
@@ -195,6 +199,43 @@ test('judged: an unlabelled issue alone is quiet, the growth bar alone would hol
   const m = [{ n: 40, how: 'path' as const, structural: [], priority: null }]
   expect(judge({ matches: m, own: [], crosses: false })).toEqual({ decision: 'quiet', why: [], shown: [], excluded: [] })
   expect(judge({ matches: [], own: [], crosses: true })).toEqual({ decision: 'would_hold', why: ['growth'], shown: [], excluded: [] })
+})
+
+// The bar (#1509), set from the week's log on both Macs, 2026-10-23 to 11-02: the numbers and where
+// each threshold lands are in docs/mods-design.md under the area check.
+test('the bar is dated, and a repository without a bar of its own takes the default one', () => {
+  expect(DEFAULT_BAR).toEqual({ set: '2026-11-02', sizeMin: 1500, growthMin: 300, topN: 10, folderMax: 2, holdPriorities: ['p0', 'p1', 'p2'] })
+  expect(barFor('someone/anything')).toBe(DEFAULT_BAR)
+  expect(BARS).toEqual({})
+})
+
+test('a bar of its own is found by repository name whatever the owner or case, and ranks by its own numbers', () => {
+  const own: Bar = { ...DEFAULT_BAR, set: '2026-11-03', sizeMin: 100, growthMin: 10, topN: 1 }
+  expect(barFor('Owner/Quiet', { quiet: own })).toBe(own)
+  expect(barFor('other/quiet', { quiet: own })).toBe(own)
+  const growth = { 'a.ts': { net: 50, fixes: 0 }, 'b.ts': { net: 40, fixes: 0 } }
+  expect(rank(growth, { 'a.ts': 200, 'b.ts': 200 }, own).top).toEqual(['a.ts'])
+  expect(rank(growth, { 'a.ts': 200, 'b.ts': 200 }).top).toEqual([])
+  expect(sizeCandidates(growth, own)).toEqual(['a.ts', 'b.ts'])
+  expect(sizeCandidates(growth)).toEqual([])
+})
+
+test('judged: only a p0 to p2 structural issue holds; a p3 or p4 one alone is quiet; one with no priority counts as p2', () => {
+  const at = (n: number, priority: string | null) => ({ n, how: 'path' as const, structural: ['tech-debt'], priority })
+  expect(judge({ matches: [at(1, 'p3'), at(2, 'p4')], own: [], crosses: false })).toEqual({ decision: 'quiet', why: [], shown: [], excluded: [] })
+  expect(judge({ matches: [at(1, 'p3'), at(2, 'p1')], own: [], crosses: false })).toEqual({ decision: 'would_hold', why: ['issues'], shown: [2], excluded: [] })
+  expect(judge({ matches: [at(3, null)], own: [], crosses: false })).toEqual({ decision: 'would_hold', why: ['issues'], shown: [3], excluded: [] })
+  expect(judge({ matches: [at(1, 'p3')], own: [], crosses: true })).toEqual({ decision: 'would_hold', why: ['growth'], shown: [], excluded: [] })
+  const lenient: Bar = { ...DEFAULT_BAR, holdPriorities: ['p0', 'p1', 'p2', 'p3'] }
+  expect(judge({ matches: [at(1, 'p3')], own: [], crosses: false, bar: lenient }).shown).toEqual([1])
+})
+
+test('the folder fallback counts only when the folder has at most 2 issues naming its files', () => {
+  expect(FOLDER_MAX).toBe(2)
+  const tracked = ['src/pay/a.ts', 'src/pay/b.ts', 'src/pay/c.ts', 'src/pay/d.ts']
+  const three = [issue(10, ['src/pay/b.ts']), issue(11, ['src/pay/c.ts']), issue(12, ['src/pay/d.ts'])]
+  expect(issuesNaming('src/pay/a.ts', three, tracked)).toEqual([])
+  expect(issuesNaming('src/pay/a.ts', three, tracked, 5).map(m => m.n)).toEqual([10, 11, 12])
 })
 
 test('the replay counts holds per session, a commit standing in for a session and its own issues left out', () => {

@@ -8,6 +8,7 @@ import {
   ISSUE_LIMIT,
   ISSUES_TTL_MS,
   RULE_VERSION,
+  barFor,
   UNREAD_TTL_MS,
   editedPath,
   fileKind,
@@ -231,9 +232,10 @@ const ranking = async ($: EngineInterface, d: Deadline, root: string, defaultBra
         gitIn($, own, root, ['ls-tree', '-r', '--name-only', rev]),
       ])
       const growth = parseNumstat(log)
-      const cands = sizeCandidates(growth)
+      const bar = barFor(repo)
+      const cands = sizeCandidates(growth, bar)
       const sizes = cands.length ? parseLineCounts(await gitIn($, own, root, ['grep', '-c', '', rev, '--', ...cands], [0, 1]), rev) : {}
-      return { key, sha: head, ranked: rank(growth, sizes), tracked: tree.split('\n').filter(Boolean) }
+      return { key, sha: head, ranked: rank(growth, sizes, bar), tracked: tree.split('\n').filter(Boolean) }
     }
     const r = await shared($, d, rankings, key, make, () => false, true)
     while (rankings.size > RANKINGS_KEPT) rankings.delete(rankings.keys().next().value as string)
@@ -311,10 +313,11 @@ const look = async ($: EngineInterface, path: string, agent: string | null, refu
       : Promise.resolve(null),
   ])
   const tracked = 'tracked' in ranked ? ranked.tracked : []
-  const matches = issues.state === 'unread' ? [] : issuesNaming(rel, issues.issues, tracked)
+  const bar = barFor(repo)
+  const matches = issues.state === 'unread' ? [] : issuesNaming(rel, issues.issues, tracked, bar.folderMax)
   const own = [...new Set([...b.issues, ...goal.issues])]
   const crosses = 'ranked' in ranked && ranked.ranked.top.includes(rel)
-  const j = judge({ matches, own, crosses })
+  const j = judge({ matches, own, crosses, bar })
   const growth = 'ranked' in ranked
     ? { ...(ranked.ranked.facts[rel] ?? { net: 0, size: null, fixes: 0, rank: null }), crosses }
     : { unread: ranked.unread }
@@ -343,6 +346,7 @@ const look = async ($: EngineInterface, path: string, agent: string | null, refu
       : { state: issues.state, count: issues.count, ageMs: started - issues.at },
     growth,
     rule: RULE_VERSION,
+    bar: bar.set,
     ms: (await $.clock.now()) - started,
   })
 }
