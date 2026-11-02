@@ -67,8 +67,10 @@ payload="$(cat)"
 # Every Bash call passes through here, and nearly none can delete a branch: answer those at once,
 # before anything is loaded. What can: a DELETE method, a --delete or --delete-branch, a short flag
 # cluster holding d (git push -d, gh pr merge -sd), or a refspec that is a bare :branch, or any
-# GraphQL call, whose deleteRef can sit in a query file the command only names (#1758).
-fast_re='(^|[[:space:]"'"'"'])(-[A-Za-z]*d|\+?:[A-Za-z0-9_./-]+)([[:space:]"'"'"']|$)'
+# GraphQL call, whose deleteRef can sit in a query file the command only names (#1758). A backslash
+# closes a word too: in a tool input sent as one JSON string the command's last word is followed by
+# an escaped quote, and a bare :branch there passed unread (claude-config#2057).
+fast_re='(^|[[:space:]"'"'"'])(-[A-Za-z]*d|\+?:[A-Za-z0-9_./-]+)([[:space:]"'"'"'\\]|$)'
 # The method is matched in any case (gh api -X delete deletes just the same), and so is --delete.
 shopt -s nocasematch
 case "$payload" in
@@ -80,9 +82,14 @@ shopt -u nocasematch
 # The crude reading used only when the real one cannot run: does the payload LOOK like a delete?
 # The system grep stops matching at a byte that is not UTF-8 under a UTF-8 locale, as =~ does, so it
 # is asked in the C locale as well, after the session's (claude-config#1885).
+# With the library loaded it looks in every word the payload holds (ps_payload_text), so JSON that
+# parses but is not shaped like a call, a command sent as a list of its words, is judged by the
+# command those words make rather than passed for spelling them apart (claude-config#2057).
 looks_like_delete() {
   local re='DELETE.*refs/heads|deleteRef[[:space:]]*\(|updateRefs[[:space:]]*\(|push.*(--delete|[[:space:]]-[A-Za-z]*d[[:space:]]|[[:space:]]\+?:[A-Za-z0-9_./-])|merge.*(--delete-branch|[[:space:]]-[A-Za-z]*d([[:space:]]|$))'
-  grep -Eiq "$re" <<< "$payload" || LC_ALL=C grep -Eiq "$re" <<< "$payload"
+  local text="$payload"
+  declare -F ps_payload_text >/dev/null && text="$(ps_payload_text "$payload")"
+  grep -Eiq "$re" <<< "$text" || LC_ALL=C grep -Eiq "$re" <<< "$text"
 }
 cannot_read() {   # $1 = what is missing or failed, as a clause
   looks_like_delete || exit 0
@@ -100,7 +107,7 @@ command -v python3 >/dev/null 2>&1 || cannot_read "python3 is not on PATH, and t
 # Taken raw above so the commonest call leaves before anything loads, and cleaned before anything
 # parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
 payload="$(ps_clean_payload "$payload")"
-parsed="$(ps_parse_payload "$payload" segmented)" || cannot_read "the hook payload could not be read (neither jq nor python3 could parse it as JSON)"
+parsed="$(ps_parse_payload "$payload" segmented)" || cannot_read "the hook payload could not be read as a call (not JSON jq or python3 could parse, or JSON without the command as text where it belongs)"
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0

@@ -179,8 +179,14 @@ check_eq "outside a session no by is stamped" "None" "$(by_of_last)"
 check_eq "and the note is written all the same" "no session id" "$(notes_of g5 | tail -1 | python3 -c 'import json,sys; print(json.load(sys.stdin).get("text"))')"
 
 # Twenty writers at once: every line lands whole (append mode, one write per note).
-for i in $(seq 1 20); do note "{\"kind\":\"finding\",\"by\":\"w$i\",\"text\":\"finding $i\"}" >/dev/null 2>&1 & done
-wait
+# Each writer is this suite's own child, kept and reaped by name straight after the loop, and safe to
+# keep (L1035, #2040): nothing is printed between their start and that wait.
+writers=""
+for i in $(seq 1 20); do
+  note "{\"kind\":\"finding\",\"by\":\"w$i\",\"text\":\"finding $i\"}" >/dev/null 2>&1 &
+  writers="$writers $!"
+done
+wait $writers
 check_eq "twenty notes at once all land" 29 "$(notes_of g5 | wc -l | tr -d ' ')"
 check_eq "and every line is whole JSON" 29 "$(notes_of g5 | python3 -c 'import json,sys; print(sum(1 for l in sys.stdin if json.loads(l)))')"
 r="$(report_of g5)"

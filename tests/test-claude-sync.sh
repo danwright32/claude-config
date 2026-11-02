@@ -1354,7 +1354,15 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
   # normal run's watchdog exits within a couple of seconds of the run finishing instead of
   # lingering. A watchdog outliving its run holds a process id the system may reuse, and would
   # then kill whatever inherited it.
-  (
+  #
+  # Never this run's child (#2040): started by a subshell that writes nowhere and ends at once, its
+  # pid recorded in a file. As a child its exit would interrupt whatever this run was printing at
+  # that moment, which bash 3.2 does not resume (L1035), and disowning it never stopped that signal.
+  # It still writes to this run's own output and error, handed to it on descriptors 8 and 9.
+  # Named as suite work, which the scratch reaper already sweeps (#36).
+  _wd_pidf="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX" 2>/dev/null)" \
+    || _wd_pidf="$SUITE_SCRATCH_HOME/claude-sync-suite-work.watchdog.$$"
+  ( (
     # Named with a TAG when one is given, so a run can find the watchdogs belonging to the runs IT
     # started rather than every watchdog on the machine (claude-config#159). The default run is
     # four shards and each has one of its own, so a global count moves for reasons that have
@@ -1440,15 +1448,18 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
       "$5" "$1" "" 2>/dev/null
       kill -9 "$1" 2>/dev/null
       rm -f "$3"    # the victim was killed outright and cannot clean up after itself
-    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK" "$SUITE_STALL_TIMEOUT" "$SUITE_KILL_TREE" "$SUITE_POLL_INTERVAL"
+    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK" "$SUITE_STALL_TIMEOUT" "$SUITE_KILL_TREE" "$SUITE_POLL_INTERVAL" >&8 2>&9 8>&- 9>&-
   ) &
-  SUITE_WATCHDOG_PID=$!
-  # Taken out of the job table, or bash announces the kill at cleanup by printing the whole
-  # watchdog source, which CONTAINS the words it prints on a real timeout. A healthy run then
-  # ends with a timeout message in its own output and anything reading for one is fooled. Caught
-  # by the check that a healthy run is not killed by its own deadline, which is the half of this
-  # that only exists because a guard has to be seen NOT firing too.
-  disown "$SUITE_WATCHDOG_PID" 2>/dev/null || true
+    printf '%s\n' "$!" > "$_wd_pidf"
+  ) 8>&1 9>&2 >/dev/null 2>&1
+  SUITE_WATCHDOG_PID="$(cat "$_wd_pidf" 2>/dev/null)"
+  rm -f "$_wd_pidf"
+  # Never in this run's job table, so bash has no job to announce when cleanup kills it. As a job
+  # it was disowned for that reason: bash announced the kill by printing the whole watchdog source,
+  # which CONTAINS the words it prints on a real timeout, so a healthy run ended with a timeout
+  # message in its own output and anything reading for one was fooled. Caught by the check that a
+  # healthy run is not killed by its own deadline, which is the half of this that only exists
+  # because a guard has to be seen NOT firing too.
 else
   SUITE_WATCHDOG_PID=""
 fi
@@ -9086,10 +9097,16 @@ rm -rf "$_or_lock"
 _or_reg="$WORK/orphan-registry"
 # One process that still NAMES this suite, which is what a surviving shard looks like, and one that
 # does not. Both are real processes of this test's own, so nothing here can reach anything else.
-bash -c 'exec -a "bash '"$SCRIPT_SELF"' --orphan-fixture" sleep 600' &
-_or_stray=$!
-sleep 600 &
-_or_bystander=$!
+# Neither is this run's child (#2040): each is started by a subshell that writes nowhere and ends at
+# once, its pid recorded, so the takeover killing one, or the other's ten minutes running out later
+# in this long run, cannot cut short a line being printed, which bash 3.2 does when a child exits
+# during a write (L1035). Both are killed by pid once their checks are done.
+( bash -c 'exec -a "bash '"$SCRIPT_SELF"' --orphan-fixture" sleep 600' </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$WORK/orphan-stray.pid" ) </dev/null >/dev/null 2>&1
+_or_stray="$(cat "$WORK/orphan-stray.pid" 2>/dev/null)"
+( sleep 600 </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$WORK/orphan-bystander.pid" ) </dev/null >/dev/null 2>&1
+_or_bystander="$(cat "$WORK/orphan-bystander.pid" 2>/dev/null)"
 # Given a moment to become what they claim to be: `exec -a` replaces the process, and reading its
 # command line before that has happened would test the shell that is about to be replaced.
 hang_wait 'case "$(ps -o command= -p "$_or_stray" 2>/dev/null || true)" in *orphan-fixture*) true ;; *) false ;; esac' 0.2
@@ -9121,6 +9138,10 @@ check "#166 and a number that is no longer this suite is left alone" \
 # The registry is consumed, or the next run over the same lock reports clearing the same processes
 # again and the count stops meaning anything.
 check "#166 the dead run's registry is not left behind" "[ ! -f '$_or_reg' ]"
+# Not this run's children, so its cleanup's walk of its own tree does not reach them: the bystander
+# is still running by design, and the stray only if the takeover failed to clear it.
+kill -9 "$_or_bystander" 2>/dev/null || true
+kill -0 "$_or_stray" 2>/dev/null && kill -9 "$_or_stray" 2>/dev/null
 
 # A leftover it could NOT clear has to be said, not dropped (claude-config#174). The clearing pauses
 # a process before killing it and wakes it again if the kill does not take, which is right, but the
@@ -9134,8 +9155,10 @@ check "#166 the dead run's registry is not left behind" "[ ! -f '$_or_reg' ]"
 _or2_lock="$_lockdir/orphans-unkillable"
 rm -rf "$_or2_lock"
 _or2_reg="$WORK/orphan-registry-2"
-bash -c 'exec -a "bash '"$SCRIPT_SELF"' --orphan-fixture-2" sleep 600' &
-_or2_stray=$!
+# Not this run's child, as above (#2040), and killed by pid at the end of this case.
+( bash -c 'exec -a "bash '"$SCRIPT_SELF"' --orphan-fixture-2" sleep 600' </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$WORK/orphan-stray-2.pid" ) </dev/null >/dev/null 2>&1
+_or2_stray="$(cat "$WORK/orphan-stray-2.pid" 2>/dev/null)"
 hang_wait 'case "$(ps -o command= -p "$_or2_stray" 2>/dev/null || true)" in *orphan-fixture-2*) true ;; *) false ;; esac' 0.2
 printf '%s
 ' "$_or2_stray" > "$_or2_reg"
@@ -12321,10 +12344,14 @@ printf -- '- **L760. a.** body\n- **L761. b.** body\n' > "$RVH/LESSONS.md"; cp "
 _rv1148(){ SYNC_HOSTNAME=MacWork SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RVH" SYNC_REPO="$RVR" bash "$SCRIPT" "$@" 2>&1; }
 # The incident, driven: five sessions ask at once. Each must get a number nobody else got.
 rm -f "$RVF"
+# Each ask is this suite's own child, kept and reaped by name straight after the loop, and safe to
+# keep (L1035, #2040): nothing is printed between their start and that wait.
+_rv_asks=""
 for _rv_i in 1 2 3 4 5; do
   ( _rv1148 next-lesson > "$WORK/rv1148-ask-$_rv_i.out" ) &
+  _rv_asks="$_rv_asks $!"
 done
-wait
+wait $_rv_asks
 rv_nums="$(cat "$WORK"/rv1148-ask-*.out | grep -E '^L[0-9]+$' | sort)"
 dbg "five concurrent asks: $(printf '%s' "$rv_nums" | tr '\n' ' ')"
 check "#1148 five sessions asking at once are each given a number" "[ \"\$(printf '%s\n' \"\$rv_nums\" | grep -c .)\" -eq 5 ]"
@@ -12404,10 +12431,13 @@ rm -f "$RVF.lock"
 # And end to end: a dead holder's lock in place while five sessions ask at once.
 printf '%s\n' "$rv_dead_pid" > "$RVF.lock"
 rm -f "$WORK"/rv1148-stale-*.out
+# Kept and reaped by name as above, with nothing printed between (L1035, #2040).
+_rv_asks=""
 for _rv_i in 1 2 3 4 5; do
   ( _rv1148 next-lesson > "$WORK/rv1148-stale-$_rv_i.out" ) &
+  _rv_asks="$_rv_asks $!"
 done
-wait
+wait $_rv_asks
 rv_stale_nums="$(cat "$WORK"/rv1148-stale-*.out | grep -E '^L[0-9]+$' | sort)"
 check "#1148 five asks racing to take over a dead holder's lock still get five numbers" \
   "[ \"\$(printf '%s\n' \"\$rv_stale_nums\" | sort -u | grep -c .)\" -eq 5 ]"

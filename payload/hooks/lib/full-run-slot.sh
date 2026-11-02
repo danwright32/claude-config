@@ -33,7 +33,9 @@
 #
 # WHAT STAYS OUTSIDE. Only a WHOLE run takes the slot: one naming no directories, of the real
 # repository (no HOOK_TESTS_ROOT), started from a fresh shell (not inside another run) and not
-# under CI, where one job owns the runner. A run naming directories, a single suite run directly,
+# under CI, where one job owns the runner. A run naming directories counts as whole when they hold
+# half the tree's suites or more, and never when they hold fewer than 3 (claude-config#2034, the
+# measured threshold is in the runner). A smaller folder run, a single suite run directly,
 # SECTION_ONLY, and the scanners gate (which starts each scanner itself) never wait. And a run
 # whose ancestor holds a ticket is a fixture run inside that run, so it takes no place: queued
 # behind its own parent it could only ever wait until it refused. The runner decides whether a run
@@ -160,7 +162,7 @@ full_run_slot_take(){   # $1 = what this run is about (its checkout)
       return 75
     fi
     if [ "$TURN_HEAD_TICKET" != "$last_head" ]; then
-      echo "run-all-tests: waiting for this Mac's full suite slot: $msg. Whole runs take turns so parallel builders do not compete for the Mac (claude-config#2012); a run naming directories, a single suite and SECTION_ONLY never wait. Waiting up to $(turn_dur "$wait"), then this run refuses."
+      echo "run-all-tests: waiting for this Mac's full suite slot: $msg. Whole runs take turns so parallel builders do not compete for the Mac (claude-config#2012); a run naming directories that hold under half the suites or only one or two, a single suite and SECTION_ONLY never wait. Waiting up to $(turn_dur "$wait"), then this run refuses."
       last_head="$TURN_HEAD_TICKET"; last_say="$elapsed"
     elif [ $(( elapsed - last_say )) -ge "$say" ]; then
       echo "run-all-tests: still waiting for this Mac's full suite slot, $(turn_dur "$elapsed") so far: $msg."

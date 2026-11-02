@@ -881,10 +881,14 @@ out="$(fire_gate "PR_REVIEW_READ=$(key_in "$out") gh pr merge 7 --squash")"; rc=
 check_eq "and the replaced review is read the same way, by its key" "0" "$rc"
 # Eight issuers at once each get a whole key that reads the review, none lost to another's write.
 fk="$WORKDIR/concurrent-review.txt"; printf 'status=ok\nfinished=42\n\n' > "$fk"; rm -f "$fk".readkey*
+# Each issuer is this suite's own child, kept and reaped by name straight after the loop, and safe to
+# keep (L1035, #2040): nothing is printed between their start and that wait.
+issuers=""
 for i in 1 2 3 4 5 6 7 8; do
   bash -c '. "$1" && ar_readkeys_issue "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
+  issuers="$issuers $!"
 done
-wait
+wait $issuers
 all_valid=1
 for i in 1 2 3 4 5 6 7 8; do
   k="$(cat "$WORKDIR/key.$i")"

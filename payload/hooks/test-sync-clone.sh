@@ -72,8 +72,12 @@ DESC="with no pid file there is no watcher"
 no sc_watcher_cmd
 # A REAL process with a real command line: a stub would only confirm this suite's own assumption
 # about what ps returns (L52).
-bash -c 'exec -a "'"$FIX"'/clone/claude-sync watch" sleep 120' &
-WPID=$!
+# Started by a subshell that ends at once and writes nowhere, its pid recorded, so it is never this
+# suite's child: one that ran out while a check was printing would cut the line short on bash 3.2
+# (L1035, #2040).
+( bash -c 'exec -a "'"$FIX"'/clone/claude-sync watch" sleep 120' </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$FIX/watcher.pid" ) </dev/null >/dev/null 2>&1
+WPID="$(cat "$FIX/watcher.pid" 2>/dev/null)"
 for _ in $(seq 1 200); do
   case "$(ps -o command= -p "$WPID" 2>/dev/null || true)" in *claude-sync*watch*) break ;; esac
 done

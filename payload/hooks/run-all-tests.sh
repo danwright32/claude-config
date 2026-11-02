@@ -59,7 +59,9 @@
 #                             each suite as SUITE_LOCK_WAIT (default 1200; always 0 under CI, #1297)
 #   HOOK_TESTS_SLOT           1 queues this run for the Mac's one full suite slot, 0 never; unset,
 #                             only a whole run (no directories, no HOOK_TESTS_ROOT, not inside
-#                             another run, not CI) queues (claude-config#2012, lib/full-run-slot.sh)
+#                             another run, not CI) queues (claude-config#2012, lib/full-run-slot.sh),
+#                             and a folder run holding half the tree's suites or more, never fewer
+#                             than 3, on the same terms (claude-config#2034)
 #   HOOK_TESTS_SLOT_DIR       where that queue lives (default ${CLAUDE_HOME:-~/.claude}/state/full-run-slot)
 #   HOOK_TESTS_SLOT_WAIT      seconds a run waits for the slot before refusing (default 3600)
 #   HOOK_TESTS_SLOT_HOLD      seconds a live holder keeps it before a waiter passes it over (2700)
@@ -722,6 +724,35 @@ $1
 "
 }
 
+# Every directory of repository $1 holding a tracked test-*.sh, one per line, in the order git lists
+# them, possibly repeated. The ONE reading of which directories make up the whole tree, for a bare
+# run's discovery and for the share a folder run selects of it (claude-config#2034), so the two
+# cannot disagree about what the whole tree is (L263).
+repo_suite_dirs(){   # repo_suite_dirs <repository root>
+  local f sub
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "${f##*/}" in test-*.sh) ;; *) continue ;; esac
+    sub="${f%/*}"
+    if [ "$sub" = "$f" ]; then printf '%s\n' "$1"; else printf '%s\n' "$1/$sub"; fi
+  done <<EOF
+$(git -C "$1" ls-files 2>/dev/null || true)
+EOF
+}
+
+# The suites a run of directory $1 starts, one per line: the ONE reading, for the run itself and for
+# counting the whole tree's suites against it (claude-config#2034). The runner's own test suite is a
+# suite like any other and is run as one; it never invokes this script bare, and the guard at the top
+# is what makes that true rather than a convention anybody has to remember.
+suites_in_dir(){   # suites_in_dir <directory>
+  local suite
+  for suite in "$1"/test-*.sh; do
+    [ -e "$suite" ] || continue
+    [ "$suite" = "$SELF" ] && continue
+    printf '%s\n' "$suite"
+  done
+}
+
 if [ "$#" -gt 0 ]; then
   for d in "$@"; do add_dir "$d"; done
   source_of_dirs="named on the command line"
@@ -732,13 +763,9 @@ else
   # needs it too.
   if [ -n "$root" ] && [ -d "$root" ]; then
     while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      base="${f##*/}"
-      case "$base" in test-*.sh) ;; *) continue ;; esac
-      sub="${f%/*}"
-      if [ "$sub" = "$f" ]; then add_dir "$root"; else add_dir "$root/$sub"; fi
+      [ -n "$f" ] && add_dir "$f"
     done <<EOF
-$(git -C "$root" ls-files 2>/dev/null || true)
+$(repo_suite_dirs "$root")
 EOF
     # A repo that was READ and held no suite is a failure, and specifically NOT a
     # reason to fall back to this script's own directory. That fallback is for the
@@ -767,41 +794,54 @@ if [ "${HOOK_TESTS_LIST_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
-# THIS MAC'S ONE FULL SUITE SLOT (claude-config#2012). The budget above is per run, so five builders'
-# full runs at once on 2026-11-01 meant five budgets on one Mac: load averages of 270 to 410 on 12
-# cores, and suites stopped at their own wall clocks by load alone. So a WHOLE run (no directories
-# named, the real repository, started from a fresh shell, not under CI) waits its turn in one queue,
-# saying whom it waits for, and refuses at a bound (lib/full-run-slot.sh, which reuses the merge
-# helper's turn rather than adding a lock). A run naming directories, a suite run on its own and
-# SECTION_ONLY never wait, so a focused check is never held behind a full run.
-# HOOK_TESTS_SLOT=1 takes the slot for any run and 0 for none, for one run; unset decides as above.
-case "${HOOK_TESTS_SLOT:-}" in
-  ''|0|1) ;;
-  *) echo "run-all-tests: HOOK_TESTS_SLOT='$HOOK_TESTS_SLOT' is neither 0 nor 1. Refusing rather than guessing whether this run queues for the Mac's full suite slot." >&2; exit 1 ;;
-esac
-_take_slot="${HOOK_TESTS_SLOT:-}"
-if [ -z "$_take_slot" ]; then
-  _take_slot=0
-  [ "$#" -eq 0 ] && [ -z "${HOOK_TESTS_ROOT:-}" ] && [ "$_started_inside_a_run" != "1" ] && [ "${CI:-}" != "true" ] && _take_slot=1
+# What a FOLDER run selects of the whole tree, for the full suite slot below (claude-config#2034).
+# The tree is this repository, or with no repository above the runner (an installed copy), the one
+# holding the first folder named. Folders are compared by their real path, so one named twice in two
+# spellings counts once, and a folder outside the tree (a suite's own fixture) counts for nothing.
+FOLDER_RUN_SLOT_SHARE=50   # percent of the tree's suites at which a folder run queues like a whole run
+FOLDER_RUN_SLOT_FLOOR=3    # and never below this many suites, so a run of one or two never waits
+_folder_run_tree=""
+_folder_run_tree_phys=""
+_folder_run_in_tree=0
+_folder_run_seen="
+"
+if [ "$#" -gt 0 ]; then
+  _folder_run_tree="$root"
+  [ -n "$_folder_run_tree" ] || _folder_run_tree="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -z "$_folder_run_tree" ] || _folder_run_tree_phys="$(cd "$_folder_run_tree" 2>/dev/null && pwd -P)"
 fi
-if [ "$_take_slot" = 1 ]; then
-  if ! { . "$SELF_DIR/lib/merge-turn.sh" && . "$SELF_DIR/lib/full-run-slot.sh"; } 2>/dev/null; then
-    echo "run-all-tests: $SELF_DIR/lib/merge-turn.sh or lib/full-run-slot.sh is missing, so this whole run goes ahead without queueing for this Mac's full suite slot and may compete with other full runs (claude-config#2012)."
-  elif ! full_run_slot_settings; then
-    echo "run-all-tests: $FULL_RUN_SLOT_ERR. Refusing rather than guessing how long this run may wait for, or hold, this Mac's full suite slot." >&2
-    exit 1
-  else
-    # Given back on every way out. runner_cleanup, installed once suites are found, replaces these
-    # and gives it back too; doing it twice is safe.
-    trap 'full_run_slot_release' EXIT
-    trap 'full_run_slot_release; exit 130' INT
-    trap 'full_run_slot_release; exit 143' TERM
-    trap 'full_run_slot_release; exit 129' HUP
-    full_run_slot_take "${root:-$SELF_DIR}"
-    _slot_rc=$?
-    [ "$_slot_rc" -eq 0 ] || exit "$_slot_rc"
-  fi
-fi
+folder_run_count_in_tree(){   # folder_run_count_in_tree <a named directory> <suites it holds>
+  local p
+  [ -n "$_folder_run_tree_phys" ] || return 0
+  p="$(cd "$1" 2>/dev/null && pwd -P)" || return 0
+  case "$p/" in "$_folder_run_tree_phys"/*) ;; *) return 0 ;; esac
+  case "$_folder_run_seen" in *"
+$p
+"*) return 0 ;; esac
+  _folder_run_seen="$_folder_run_seen$p
+"
+  _folder_run_in_tree=$(( _folder_run_in_tree + $2 ))
+}
+folder_run_tree_total(){   # -> how many suites a whole run of the tree would start
+  local d s n=0 seen="
+"
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    case "$seen" in *"
+$d
+"*) continue ;; esac
+    seen="$seen$d
+"
+    while IFS= read -r s; do
+      [ -n "$s" ] && n=$((n + 1))
+    done <<SUITES
+$(suites_in_dir "$d")
+SUITES
+  done <<EOF
+$(repo_suite_dirs "$_folder_run_tree")
+EOF
+  printf '%s' "$n"
+}
 
 echo "run-all-tests: $(printf '%s' "$dirs" | grep -c .) directory(ies), $source_of_dirs"
 
@@ -826,24 +866,86 @@ while IFS= read -r d; do
     continue
   fi
   here=0
-  for suite in "$d"/test-*.sh; do
-    [ -e "$suite" ] || continue
-    # The runner's own test suite is a suite like any other and is run as one. It
-    # never invokes this script bare, and the guard at the top is what makes that
-    # true rather than a convention anybody has to remember.
-    [ "$suite" = "$SELF" ] && continue
+  while IFS= read -r suite; do
+    [ -n "$suite" ] || continue
     here=$((here + 1))
     suites+=("$suite")
-  done
+  done <<SUITES
+$(suites_in_dir "$d")
+SUITES
   if [ "$here" -eq 0 ]; then
     empty_dirs="$empty_dirs  $d
 "
+  elif [ "$#" -gt 0 ]; then
+    folder_run_count_in_tree "$d" "$here"
   fi
 done <<EOF
 $dirs
 EOF
 
 ran="${#suites[@]}"
+
+# THIS MAC'S ONE FULL SUITE SLOT (claude-config#2012). The budget above is per run, so five builders'
+# full runs at once on 2026-11-01 meant five budgets on one Mac: load averages of 270 to 410 on 12
+# cores, and suites stopped at their own wall clocks by load alone. So a WHOLE run (no directories
+# named, the real repository, started from a fresh shell, not under CI) waits its turn in one queue,
+# saying whom it waits for, and refuses at a bound (lib/full-run-slot.sh, which reuses the merge
+# helper's turn rather than adding a lock).
+#
+# A FOLDER RUN THAT IS MOST OF THE TREE queues the same way (claude-config#2034): one whose
+# directories hold at least FOLDER_RUN_SLOT_SHARE percent of the whole tree's suites, and at least
+# FOLDER_RUN_SLOT_FLOOR of them. `run-all-tests.sh payload/hooks` skipped the slot for naming a
+# folder, so a builder treating it as its full run still competed with every other. Counted on
+# 2026-11-01 (every tracked test-*.sh, by folder): 250 suites, payload/hooks 159 (64%), tests 34
+# (14%), tools 20 (8%), and no other folder more than 6 (2%). Every folder but payload/hooks together
+# is 91 (36%), so half sits in the empty gap between 36% and 64%, not in the dense middle (L172):
+# today every run including payload/hooks queues and no run without it does. test-full-run-slot.sh
+# re-counts payload/hooks' share on every run and fails if it falls below the line (L316). The floor
+# keeps a run of one or two suites free in any tree, so a focused check never waits. Only suites
+# inside this repository count, so a suite running the runner on its own fixture folder never
+# queues, and the folders are compared by their real path, so payload/hooks and its full path are
+# one folder counted once.
+#
+# A suite run on its own and SECTION_ONLY never wait, so a focused check is never held behind a full
+# run. HOOK_TESTS_SLOT=1 takes the slot for any run and 0 for none, for one run; unset decides as
+# above.
+case "${HOOK_TESTS_SLOT:-}" in
+  ''|0|1) ;;
+  *) echo "run-all-tests: HOOK_TESTS_SLOT='$HOOK_TESTS_SLOT' is neither 0 nor 1. Refusing rather than guessing whether this run queues for the Mac's full suite slot." >&2; exit 1 ;;
+esac
+_take_slot="${HOOK_TESTS_SLOT:-}"
+if [ -z "$_take_slot" ]; then
+  _take_slot=0
+  if [ -z "${HOOK_TESTS_ROOT:-}" ] && [ "$_started_inside_a_run" != "1" ] && [ "${CI:-}" != "true" ]; then
+    if [ "$#" -eq 0 ]; then
+      _take_slot=1
+    elif [ "$_folder_run_in_tree" -ge "$FOLDER_RUN_SLOT_FLOOR" ]; then
+      _tree_total="$(folder_run_tree_total)"
+      if [ "$_tree_total" -gt 0 ] && [ $(( _folder_run_in_tree * 100 )) -ge $(( _tree_total * FOLDER_RUN_SLOT_SHARE )) ]; then
+        _take_slot=1
+        echo "run-all-tests: this run selects $_folder_run_in_tree of the $_tree_total suites in $_folder_run_tree ($(( _folder_run_in_tree * 100 / _tree_total ))%), at least the ${FOLDER_RUN_SLOT_SHARE}% that makes a folder run a full run, so it takes this Mac's full suite slot like one (claude-config#2034)."
+      fi
+    fi
+  fi
+fi
+if [ "$_take_slot" = 1 ]; then
+  if ! { . "$SELF_DIR/lib/merge-turn.sh" && . "$SELF_DIR/lib/full-run-slot.sh"; } 2>/dev/null; then
+    echo "run-all-tests: $SELF_DIR/lib/merge-turn.sh or lib/full-run-slot.sh is missing, so this whole run goes ahead without queueing for this Mac's full suite slot and may compete with other full runs (claude-config#2012)."
+  elif ! full_run_slot_settings; then
+    echo "run-all-tests: $FULL_RUN_SLOT_ERR. Refusing rather than guessing how long this run may wait for, or hold, this Mac's full suite slot." >&2
+    exit 1
+  else
+    # Given back on every way out. runner_cleanup, installed once suites are found, replaces these
+    # and gives it back too; doing it twice is safe.
+    trap 'full_run_slot_release' EXIT
+    trap 'full_run_slot_release; exit 130' INT
+    trap 'full_run_slot_release; exit 143' TERM
+    trap 'full_run_slot_release; exit 129' HUP
+    full_run_slot_take "${_folder_run_tree:-${root:-$SELF_DIR}}"
+    _slot_rc=$?
+    [ "$_slot_rc" -eq 0 ] || exit "$_slot_rc"
+  fi
+fi
 if [ "$ran" -gt 0 ]; then
   # The share each suite may take. Worked out HERE, because it depends on how many suites there
   # actually are: naming one directory holding one suite gives that suite the whole machine, which
