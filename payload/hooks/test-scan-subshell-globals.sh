@@ -303,8 +303,8 @@ says "#2068 and the next function's global is reported against it" "$OUT" "a.sh:
 # The real case: the suite deadline watchdog in tests/test-claude-sync.sh runs a program through
 # `sh -c '...'`, whose lines read `ceiling="$2"; mark="$3"` and `start="$(date +%s)"`. Those are
 # assignments in ANOTHER shell, the one sh starts, and a Python program in a `python3 -c` string
-# (`stdout=subprocess.PIPE` in lib/project-rules-behind.sh) is not shell at all. A line that
-# begins inside a quoted string is judged on its code alone, which for these is nothing.
+# (`stdout=subprocess.PIPE` in lib/project-rules-behind.sh) is not shell at all. The body is read
+# whole by shell-words (#2076), so the program is one quoted word of one command, never a command.
 cat > "$FIX/a.sh" <<'OUTER'
 watch(){
   local out
