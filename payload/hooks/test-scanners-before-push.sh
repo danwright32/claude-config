@@ -1093,8 +1093,12 @@ _yleader="$(cat "$_ydir/pid" 2>/dev/null)"
 held_gone upsilon
 hang_wait "! kill -0 ${_yleader:-0} 2>/dev/null"
 # A stranger in a process group of its own, as a recycled id that is a group leader would be.
-perl -e 'setpgrp(0, 0); exec "sleep", "30"' </dev/null >/dev/null 2>&1 &
-_stranger=$!
+# Started by a subshell that ends at once and writes nowhere, its pid recorded, so it is never this
+# suite's child: its thirty seconds running out while a check was printing would cut the line short
+# on bash 3.2 (L1035, #2040). It is nobody's here, which is what a stranger is.
+( perl -e 'setpgrp(0, 0); exec "sleep", "30"' </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$TMPROOT/stranger.pid" ) </dev/null >/dev/null 2>&1
+_stranger="$(cat "$TMPROOT/stranger.pid" 2>/dev/null)"
 printf '%s' "$_stranger" > "$_ydir/pid"
 rm -f "$_ydir/rc"
 printf '%s\n' "$(( $(date +%s) - 3600 ))" > "$_ydir/started"
