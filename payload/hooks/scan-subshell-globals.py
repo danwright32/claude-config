@@ -21,7 +21,9 @@ Where a function begins and ends is read through lib/shell_code_lines.py, the re
 whole tree scans share, in one pass per file (L297): braces are counted only on the shell's own
 code, never inside a quoted string, a comment or a heredoc, and a function is found only where its
 definition is code. Before that, a `{` inside a python3 -c string left a function open to the end
-of the file, and every assignment after it was charged to that function (claude-config#2063).
+of the file, and every assignment after it was charged to that function (claude-config#2063). A
+brace in a bracket expression is not counted either, and a line that begins inside a quoted string
+is judged only on what follows the string's close (claude-config#2068).
 
 Measured over this repo on 2026-09-11: 8 functions flagged, of which one was a real defect
 (tip_payload_dir's caller could never see TIP_PAYLOAD_DIR, so the scratch directory holding the
@@ -41,10 +43,20 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/lib")
 import ratchet  # noqa: E402  the one rule a count based ratchet applies (claude-config#377)
-from shell_code_lines import read_lines  # noqa: E402  the one reader of shell quoting (#2063)
+from shell_code_lines import brace_depth, read_lines  # noqa: E402  the one reader of shell quoting (#2063)
 
 FN_DEF = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
 DECLARED = re.compile(r"^\s*(local|declare|typeset|export|readonly)\s+(.*)$")
+# The separator that ends the command a quoted line continues, so what follows is a command of its own.
+# Without one, what follows the close is more words of that same command (`two" ARG=1` hands
+# printf the word ARG=1), so nothing on the line is judged.
+NEXT_COMMAND = re.compile(r"^\s*(;|&&|\|\|)\s*")
+
+
+def next_command(own):
+    """The text of a quoted line from the command after the one its string belongs to, or ""."""
+    m = NEXT_COMMAND.match(own)
+    return own[m.end():] if m else ""
 ASSIGN_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
 
 
@@ -160,24 +172,34 @@ def functions_in(lines):
     double and $'...' quoted text, comments and escapes left out, and a heredoc's body, which is
     another program's text, neither counted nor judged as this shell's lines, and never searched for
     a function either. Read in one walk over the file (L297).
+
+    Nor is a brace in a bracket expression (claude-config#2068): the `{` in mt_is_interpreter's case
+    label `'$'[A-Za-z_{]*)` in lib/merge-target.sh left it open for the 1890 lines to the end of the
+    file, so no function below it was ever found or judged.
+
+    Each body line is the text judged for assignments, and that is the line's own text, never its
+    raw text (claude-config#2068). A line of a `sh -c '...'` or `python3 -c '...'` program reads
+    `start="$(date)"` or `stdout=subprocess.PIPE`, and judged raw it was this function's global. A
+    line that begins inside a string is judged on what follows the string's close, from its next
+    command on, so `two"; CLOSED=1` is judged as `CLOSED=1`.
     """
     read = list(read_lines("\n".join(lines)))
     out = []
     i = 0
     while i < len(read):
-        _, line, kind, bare, _ = read[i]
+        _, line, kind, bare, _, _ = read[i]
         m = FN_DEF.match(line) if kind == "code" else None
         if not m:
             i += 1
             continue
-        depth = bare.count("{") - bare.count("}")
+        depth = brace_depth(bare)
         body = []
         j = i + 1
         while j < len(read) and depth > 0:
-            _, line, kind, bare, _ = read[j]
+            _, line, kind, bare, _, own = read[j]
             if kind in ("code", "quoted"):
-                body.append(line)
-                depth += bare.count("{") - bare.count("}")
+                body.append(own if kind == "code" else next_command(own))
+                depth += brace_depth(bare)
             j += 1
         out.append((m.group(1), i + 1, body))
         i = j
