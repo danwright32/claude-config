@@ -311,6 +311,31 @@ out="$(bash_payload "gh pr comment 5 --body \"Agreed. $LINK\"" | bash "$TMP_DIR/
 if [[ "$out" == *'"deny"'* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a gh comment must still be judged when the Slack list is missing (got: ${out:-<no output>})"; fi
 
+# The gate installed without the command reader lib/shell-words.py (claude-config#2059): the scanner
+# keeps no reading of its own, so the gate cannot tell what a comment's body holds and refuses every
+# gh command that posts one, naming the reader, rather than crashing or passing it unjudged.
+mkdir -p "$TMP_DIR/noreader"
+cp "$HOOK" "$DIR/session_link_comment_gate.py" "$DIR/gh_issue_scan.py" "$TMP_DIR/noreader/"
+mkdir -p "$TMP_DIR/noreader/lib"
+cp "$DIR/lib/slack-write-tools.txt" "$TMP_DIR/noreader/lib/"
+noreader() { bash_payload "$1" | bash "$TMP_DIR/noreader/no-session-link-in-comments.sh" 2>/dev/null; }
+for c in "gh pr comment 5 --body \"Agreed. $LINK\"" "gh issue comment 22 --body-file with-link.md" \
+    "gh issue comment 22 --body-file clean.md" "gh pr review 5 --approve --body-file with-link.md" \
+    "gh issue close 22 --comment \"Done. $LINK\"" \
+    "gh api repos/o/r/issues/22/comments -f body=@with-link.md"; do
+  out="$(noreader "$c")"
+  if [[ "$out" == *'"deny"'* && "$out" == *"lib/shell-words.py"* ]]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL: #2059 with no reader a posting command is refused, naming the reader: $c (got: ${out:-<no output>})"; fi
+done
+for c in "echo hi" "gh issue list" "gh pr view 5"; do
+  out="$(noreader "$c")"
+  if [[ "$out" != *'"deny"'* ]]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL: #2059 with no reader a command that posts nothing passes: $c (got: $out)"; fi
+done
+out="$(noreader "ALLOW_SESSION_LINK_IN_COMMENT=1 gh issue comment 22 --body-file with-link.md")"
+if [[ "$out" != *'"deny"'* ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: #2059 with no reader the override still passes a comment (got: $out)"; fi
+
 # --- Wired: the installed settings route Bash and every Slack send tool to the hook ---
 # The matcher is read the way Claude Code reads it, measured 2026-10-29 with a headless session
 # logging which matchers fired (claude-config#1905): a matcher holding any character beyond letters,

@@ -563,10 +563,15 @@ def unreadable_reason(command, error):
         overrides += [r["override"] for r in judged if r["override"] not in overrides]
     if not named or all(_has_override(command, o) for o in overrides):
         return None
-    return ("The issue field gate could not read this command, so it cannot judge the %s in it: %s. Close that "
-            "quote, or reword so the line holds no lone quote, then re-run; if the command is right as written, "
-            "say so and put %s in front of it, which waives every rule the gate could not judge, for that one "
-            "command only." % (" or the ".join(named), error, " ".join(overrides)))
+    if isinstance(error, scan.ReaderMissing):
+        # Nothing in the command is wrong, so the remedy is the reader, not a quote (claude-config#2059).
+        remedy = ("Put lib/shell-words.py back beside the gate (claude-sync pull restores it), then re-run")
+    else:
+        remedy = "Close that quote, or reword so the line holds no lone quote, then re-run"
+    return ("The issue field gate could not read this command, so it cannot judge the %s in it: %s. %s; if the "
+            "command is right as written, say so and put %s in front of it, which waives every rule the gate "
+            "could not judge, for that one command only."
+            % (" or the ".join(named), error, remedy, " ".join(overrides)))
 
 
 def main():
