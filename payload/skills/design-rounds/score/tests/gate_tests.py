@@ -333,10 +333,17 @@ for cmd in ["gh issue close https://github.com/acme/widgets/issues/9",
             "nohup gh issue close 9",
             "timeout 30 gh issue close 9",
             "xargs gh issue close 9",
-            "rtk proxy gh issue close 9"]:
+            "rtk proxy gh issue close 9",
+            # The shell runs the substitutions in the body of a heredoc whose end marker is unquoted
+            # (claude-config#2053).
+            "cat <<EOF\n$(gh issue close 9)\nEOF"]:
     routes(comments=[comment(NOT_MATCHED)])
     rc, reason, out = gate(cmd)
     check("%r is judged" % cmd, "below 100%" in reason, out)
+# A quoted end marker keeps the body text, so nothing in it closes anything (claude-config#2053).
+routes(comments=[comment(NOT_MATCHED)])
+rc, reason, out = gate("cat <<'EOF'\n$(gh issue close 9)\nEOF")
+check("#2053 a close in a quoted heredoc body is text, not judged", not reason, out)
 routes()
 rc, reason, out = gate("gh issue close 2>&1")
 check("a close naming no issue beside a redirection is refused as naming none", "names no issue" in reason, out)

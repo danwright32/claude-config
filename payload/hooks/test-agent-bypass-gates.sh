@@ -136,6 +136,12 @@ run_hook "$NV_GATE" "$(bash_payload 'HUSKY=0 git push origin x' a1b2c3d4)"
 refused "an agent's HUSKY=0 push is refused"
 run_hook "$NV_GATE" "$(bash_payload 'git -c core.hooksPath=/dev/null commit -m x' a1b2c3d4)"
 refused "an agent's core.hooksPath commit is refused"
+# The shell runs the substitutions in the body of a heredoc whose end marker is unquoted
+# (claude-config#2053); a quoted marker keeps the body text.
+run_hook "$NV_GATE" "$(bash_payload $'cat <<EOF\n$(git push --no-verify origin x)\nEOF' a1b2c3d4)"
+refused "#2053 an agent's --no-verify push in an unquoted heredoc body's substitution is refused"
+run_hook "$NV_GATE" "$(bash_payload $'cat <<\'EOF\'\n$(git push --no-verify origin x)\nEOF' a1b2c3d4)"
+allowed "#2053 control: the same in a quoted heredoc body is text, and goes through"
 
 # No approval lets an agent skip the hooks (claude-config#1666; Dan, 2026-10-24: "Remove it"). #1587
 # had the main session approve one agent for two hours, by a file in ~/.claude-no-verify-approvals/;

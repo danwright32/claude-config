@@ -234,6 +234,26 @@ allows "heredoc mentioning a create, then an unrelated command" 'cat > notes.md 
 gh issue create --title "T"
 EOF
 git status'
+# The shell runs the substitutions in the body of a heredoc whose end marker is unquoted, so a create
+# there is judged (claude-config#2053); a quoted marker keeps the body text, which files nothing.
+denies "#2053 a create in an unquoted heredoc body's substitution" "cat > notes.md <<EOF
+filed: \$(gh issue create --title \"T\" $P $C)
+EOF"
+allows "#2053 control: the same in a quoted heredoc body is text" "cat > notes.md <<'EOF'
+filed: \$(gh issue create --title \"T\" $P $C)
+EOF"
+allows "#2053 control: a complete create in an unquoted heredoc body's substitution passes" "cat > notes.md <<EOF
+filed: \$(gh issue create --title \"T\" $ALL)
+EOF"
+# The rest of the opener's line is the command it is, and a partly quoted marker ends its body at
+# its own closing line, not at the end of the command (claude-config#2053).
+denies "#2053 a create on the rest of a heredoc opener's line" "cat <<EOF | gh issue create --title \"T\" $P $C --body-file -
+b
+EOF"
+denies "#2053 a create after a partly quoted heredoc marker's body" "cat > notes.md <<E\"OF\"
+b
+EOF
+gh issue create --title \"T\" $P $C"
 
 # ============================ failure paths ============================
 for payload in 'not json at all' '{}' '{"tool_input":{}}'; do

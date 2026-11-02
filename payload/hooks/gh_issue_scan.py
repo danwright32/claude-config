@@ -81,11 +81,41 @@ try:
     # A command run from a string by a shell, eval or env -S (claude-config#1478): (wrapper, string,
     # why), or None. Its string is scanned as a command line of its own.
     wrapped_words, MAX_DEPTH = _sw.wrapped_words, _sw.MAX_DEPTH
+    # A heredoc's end marker, and what the shell runs in an unquoted body (claude-config#2053).
+    heredoc_opener, body_substitutions = _sw.heredoc_opener, _sw.body_substitutions
 except Exception:
     def wrapped_words(words):
         return None  # with no reader, the crude reading finds a create wherever gh stands
     MAX_DEPTH = 0
     gh_command = crude_gh_command
+
+    def heredoc_opener(s, i):
+        """(marker, strip_tabs, quoted, end) with no reader: a marker quoted whole, or a bare word."""
+        m = re.compile(r"<<(-?)[ \t]*(?:'([^']*)'|\"([^\"]*)\"|(\\?)([^ \t\n;&|<>()]+))").match(s, i)
+        if not m:
+            return None
+        word = next(g for g in (m.group(2), m.group(3), m.group(5)) if g is not None)
+        quoted = m.group(5) is None or bool(m.group(4)) or any(q in word for q in "'\"\\")
+        # Quote removal, so a partly quoted marker (E"OF") still ends at its own closing line.
+        return re.sub(r"[\"'\\]", "", word), m.group(1) == "-", quoted, m.end()
+
+    def body_substitutions(body):
+        raise ValueError("no reader")  # so the whole body is read as commands, which sees more
+
+
+def _body_commands(body):
+    """What the shell runs in an unquoted heredoc body, as normalized commands each ending in ' ; '.
+
+    The text inside each substitution written in it, read by the shared reader (claude-config#2053);
+    a body that cannot be read that way is read whole as commands, which can only see more.
+    """
+    if "$(" not in body and "`" not in body:
+        return ""
+    try:
+        texts = body_substitutions(body)
+    except Exception:  # noqa: BLE001  Unreadable, or no reader: the reading that sees more
+        texts = [body]
+    return "".join(_normalize(t)[0] + " ; " for t in texts)
 
 OPERATORS = {"&&", "||", ";", "|", "&", "(", ")", "{", "}", "\n"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -108,7 +138,11 @@ def normalize(cmd):
 
     A plain newline starts a new command, so it becomes ';'. A backslash before a
     newline continues one command, so it becomes a space. A heredoc body is data,
-    not commands, so it is dropped whole. Text inside quotes is copied untouched.
+    not commands, so it is dropped, except for the substitutions in the body of a
+    heredoc whose end marker is unquoted, which the shell runs and so are read as
+    commands of their own; the rest of the opener's line is read as the command it is,
+    and the marker is read by the shared reader, a partly quoted one included
+    (claude-config#2053). Text inside quotes is copied untouched.
 
     Without this the gate saw only the first line of a multi-line command: a
     newline is plain whitespace to shlex, so a create on line 3 was invisible.
@@ -128,6 +162,7 @@ def _normalize(cmd):
     i, n = 0, len(cmd)
     quote = None
     opened = None
+    pending = []  # (delimiter, quoted) of each heredoc opened on the line being read
     while i < n:
         c = cmd[i]
 
@@ -168,46 +203,32 @@ def _normalize(cmd):
         if c == "\n":
             out.append(" ; ")
             i += 1
+            # The bodies of the heredocs opened on the line just ended start here, each up to the
+            # line that closes it. The rest of the opener's line was read above as the command it is.
+            for delim, quoted in pending:
+                start = i
+                while i < n:
+                    e = cmd.find("\n", i)
+                    line = cmd[i:(e if e != -1 else n)]
+                    end, i = i, ((e + 1) if e != -1 else n)
+                    if line.strip() == delim:
+                        break
+                else:
+                    end = n
+                if not quoted:
+                    out.append(_body_commands(cmd[start:end]))
+            pending = []
             continue
 
         if cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
-            j = i + 2
-            if j < n and cmd[j] == "-":
-                j += 1
-            while j < n and cmd[j] in " \t":
-                j += 1
-            q = None
-            if j < n and cmd[j] in ("'", '"'):
-                q = cmd[j]
-                j += 1
-            start = j
-            while j < n and (cmd[j] != q if q else cmd[j] not in " \t\n;&|)"):
-                j += 1
-            delim = cmd[start:j]
-            if q and j < n:
-                j += 1
-            if not delim:
+            opener = heredoc_opener(cmd, i)
+            if not opener:
                 out.append(c)
                 i += 1
                 continue
-            # Skip the body, up to and including the line that closes it.
-            k = cmd.find("\n", j)
-            if k == -1:
-                i = n
-            else:
-                k += 1
-                while k < n:
-                    e = cmd.find("\n", k)
-                    line = cmd[k : (e if e != -1 else n)]
-                    if line.strip() == delim:
-                        k = (e + 1) if e != -1 else n
-                        break
-                    if e == -1:
-                        k = n
-                        break
-                    k = e + 1
-                i = k
-            out.append(" ; ")
+            delim, _, quoted, i = opener
+            pending.append((delim, quoted))
+            out.append(" ")
             continue
 
         out.append(c)
