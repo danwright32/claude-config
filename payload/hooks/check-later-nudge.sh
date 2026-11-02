@@ -46,7 +46,10 @@ fi
 stop_active=$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)
 [ "$stop_active" = "true" ] && exit 0
 
-SKILL="$(cd "$SELF_DIR/.." && pwd)/skills/check-later/SKILL.md"
+# The skill is also where the Slack list id lives (its "## The list" section): the detector reads the
+# id from this same file, so the reason's pointer and the row check can never name two lists (L83).
+# CHECK_LATER_SKILL points both at another copy, as the skill's own suite does.
+SKILL="${CHECK_LATER_SKILL:-$(cd "$SELF_DIR/.." && pwd)/skills/check-later/SKILL.md}"
 FIRST="Do this first, before any reflection or issue review."
 
 # The loud payload, for every way the turn could not be judged. One line of plain words, built by
@@ -75,15 +78,23 @@ if [ -f "$_SPN" ]; then
 fi
 
 err="$(mktemp "${TMPDIR:-/tmp}/check-later-nudge.XXXXXX" 2>/dev/null)" || err="/dev/null"
-spotted="$(python3 "$SELF_DIR/lib/check-later-signals.py" "$transcript" 2>"$err")"
+spotted="$(python3 "$SELF_DIR/lib/check-later-signals.py" "$transcript" "$SKILL" 2>"$err")"
 rc=$?
 why="$( [ "$err" != /dev/null ] && sed -n '1s/^check-later-signals: //p' "$err")"
 [ "$err" != /dev/null ] && rm -f "$err"
-[ "$rc" -eq 0 ] || cannot_read "${why:-its reader exited $rc}"
+[ "$rc" -eq 0 ] || [ "$rc" -eq 4 ] || cannot_read "${why:-its reader exited $rc}"
 [ -n "$spotted" ] || exit 0
 
 # One sentence listing what was spotted, so Dan sees why the stop was refused.
 list="$(printf '%s\n' "$spotted" | awk 'NF { n++; if (n <= 3) s = s (n > 1 ? "; " : "") $0 } END { if (n > 3) s = s "; and " (n - 3) " more"; print s }')"
+
+# Exit 4: the turn left something, but the skill names no list id ($why), so whether its row is
+# already written cannot be told. Said as that, never as an unreadable transcript (L11).
+if [ "$rc" -eq 4 ]; then
+  jq -cn --arg r "CHECK LATER. This turn left $list, but the check-later skill names no list id ($why), so it could not tell whether a row is already written. Tell Dan the skill is missing its list id; if the file is there, read it and follow it. $FIRST" \
+    '{decision: "block", reason: $r}'
+  exit 0
+fi
 
 payload="$(python3 "$SELF_DIR/lib/review-reason.py" \
   --instruction "$SKILL" --label "CHECK LATER" \

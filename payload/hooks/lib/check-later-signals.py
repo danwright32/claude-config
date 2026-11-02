@@ -24,7 +24,7 @@ THE THREE SIGNALS, and only these (decided for #2079):
      or a quoted block is removed first, so a quoted "tomorrow" is not a promise.
 
 SILENT when the flow already ran this turn: Dan typed /check-later, or a row was written to the
-list (F0CB5JMEM2P). Matching an item against rows already on the list is the skill's own step 5,
+list the skill names. Matching an item against rows already on the list is the skill's own step 5,
 which this does not repeat (L655).
 
 "Today" is the local date of the transcript line that carries the signal, so a fixture carries its
@@ -34,6 +34,12 @@ OUTPUT: one plain line per signal on stdout, for Dan to read in the Stop hook's 
 nothing and exit 0 when the turn left nothing dated. Exit 3, with the cause on stderr, when the
 transcript cannot be read or holds no readable line: an unreadable turn is never reported as a turn
 with nothing to check (L98).
+
+The list id has one home, the check-later skill's "## The list" section (`list id `<id>``), and is
+read from the SKILL.md given as the second argument, the same file the hook's reason points at, so a
+list that moves is moved in one place (L83). It is read only once a signal is found. Exit 4, with the
+signals still on stdout and the cause on stderr, when that file names no list id: the turn left
+something, but whether its row is already written cannot be told.
 """
 import importlib.util
 import json
@@ -43,7 +49,7 @@ import sys
 from datetime import date, datetime, timedelta
 
 HOOKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LIST_ID = "F0CB5JMEM2P"
+LIST_ID_RE = re.compile(r"list id `([A-Z0-9]+)`")
 
 
 def _turn_reader():
@@ -55,6 +61,21 @@ def _turn_reader():
 
 class Unreadable(Exception):
     pass
+
+
+class NoListId(Exception):
+    pass
+
+
+def list_id(skill):
+    try:
+        with open(skill, encoding="utf-8", errors="replace") as f:
+            m = LIST_ID_RE.search(f.read())
+    except OSError as e:
+        raise NoListId("could not open %s (%s)" % (skill, e.strerror or e))
+    if not m:
+        raise NoListId("%s names no list id" % skill)
+    return m.group(1)
 
 
 def read_turn(path):
@@ -316,24 +337,25 @@ def promise_signal(text, when):
     return None
 
 
-def already_ran(turn, opener):
+def already_ran(turn, opener, skill):
     if opener is not None:
         content = (opener.get("message") or {}).get("content")
         text = content if isinstance(content, str) else json.dumps(content)
         if "<command-name>/check-later</command-name>" in text or text.lstrip().startswith("/check-later"):
             return True
+    wanted = None
     for obj in turn:
         for use in tool_uses(obj):
             name = use.get("name") or ""
-            if name.endswith(("slack_add_list_record", "slack_update_list_record")) \
-                    and LIST_ID in json.dumps(use.get("input") or {}):
+            if not name.endswith(("slack_add_list_record", "slack_update_list_record")):
+                continue
+            wanted = wanted or list_id(skill)
+            if wanted in json.dumps(use.get("input") or {}):
                 return True
     return False
 
 
 def signals(turn, opener):
-    if already_ran(turn, opener):
-        return []
     out = []
     for obj in turn:
         when = local_time(obj)
@@ -349,16 +371,30 @@ def signals(turn, opener):
     return out
 
 
+def left_for_later(turn, opener, skill):
+    out = signals(turn, opener)
+    if out and already_ran(turn, opener, skill):
+        return []
+    return out
+
+
 def main():
-    if len(sys.argv) != 2 or not sys.argv[1]:
-        print("check-later-signals: no transcript path was given", file=sys.stderr)
+    if len(sys.argv) != 3 or not sys.argv[1] or not sys.argv[2]:
+        print("check-later-signals: usage is check-later-signals.py <transcript> <check-later SKILL.md>", file=sys.stderr)
         return 3
     try:
         turn, opener = read_turn(sys.argv[1])
     except Unreadable as e:
         print("check-later-signals: %s" % e, file=sys.stderr)
         return 3
-    for line in signals(turn, opener):
+    try:
+        found = left_for_later(turn, opener, sys.argv[2])
+    except NoListId as e:
+        for line in signals(turn, opener):
+            print(line)
+        print("check-later-signals: %s" % e, file=sys.stderr)
+        return 4
+    for line in found:
         print(line)
     return 0
 

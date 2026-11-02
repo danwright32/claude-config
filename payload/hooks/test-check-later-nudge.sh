@@ -235,6 +235,61 @@ t="$WORK/other-list.jsonl"; start "$t"
   L result s1 '{"ok":true}' ; } >> "$t"
 fires "a row written to a DIFFERENT list does not count as the flow having run" "$t" "Tue Nov 3"
 
+# ---- the list id has one home, the skill's "## The list" section (L83) ----
+# The detector reads the id from the same SKILL.md the reason points at, so a list that moves is
+# moved once. A copy of the skill naming another id proves it is read, not remembered.
+skill_id="$(grep -o 'list id `[A-Z0-9]*`' "$SKILL" | head -1 | tr -d '`' | sed 's/^list id //')"
+check "the skill declares its list id" "$([ -n "$skill_id" ] && echo ok || echo "no 'list id \`...\`' in $SKILL")"
+others="$(grep -oE 'F0[A-Z0-9]{8,}' "$SKILL" | sort -u | grep -vx "$skill_id")"
+check "every list id the skill names is the one it declares" \
+  "$([ -z "$others" ] && echo ok || echo "the skill also names: $others")"
+
+moved="$WORK/moved-skill.md"; sed "s/$skill_id/F0MOVEDLIST1/g" "$SKILL" > "$moved"
+t="$WORK/moved-old-row.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"recheck","recurring":false}'
+  L result c1 "ok"
+  L tool s1 mcp__claude_ai_Slack__slack_add_list_record "{\"list_id\":\"$skill_id\",\"cells\":[]}"
+  L result s1 '{"ok":true}' ; } >> "$t"
+out="$(printf '{"transcript_path":"%s","stop_hook_active":false,"hook_event_name":"Stop"}' "$t" | \
+  CHECK_LATER_SKILL="$moved" CLAUDE_PROJECT_DIR="$WORK/proj" bash "$HOOK" 2>/dev/null)"
+check "once the skill's list moves, a row on the old list no longer counts as written" \
+  "$(printf '%s' "$out" | reason_of | grep -qF 'Tue Nov 3' && echo ok || echo "got: ${out:-nothing}")"
+t="$WORK/moved-new-row.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"recheck","recurring":false}'
+  L result c1 "ok"
+  L tool s1 mcp__claude_ai_Slack__slack_add_list_record '{"list_id":"F0MOVEDLIST1","cells":[]}'
+  L result s1 '{"ok":true}' ; } >> "$t"
+out="$(printf '{"transcript_path":"%s","stop_hook_active":false,"hook_event_name":"Stop"}' "$t" | \
+  CHECK_LATER_SKILL="$moved" CLAUDE_PROJECT_DIR="$WORK/proj" bash "$HOOK" 2>/dev/null)"
+check "once the skill's list moves, a row on the new list counts as written" \
+  "$([ -z "$out" ] && echo ok || echo "expected silence, got: $out")"
+
+noid="$WORK/no-id-skill.md"; grep -v 'list id `' "$SKILL" > "$noid"
+t="$WORK/no-id.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"recheck","recurring":false}'
+  L result c1 "ok"
+  L tool s1 mcp__claude_ai_Slack__slack_add_list_record "{\"list_id\":\"$skill_id\",\"cells\":[]}"
+  L result s1 '{"ok":true}' ; } >> "$t"
+out="$(printf '{"transcript_path":"%s","stop_hook_active":false,"hook_event_name":"Stop"}' "$t" | \
+  CHECK_LATER_SKILL="$noid" CLAUDE_PROJECT_DIR="$WORK/proj" bash "$HOOK" 2>/dev/null)"
+reason="$(printf '%s' "$out" | reason_of)"
+check "a skill naming no list id fires, saying so rather than calling the transcript unreadable" \
+  "$(grep -qi 'no list id' <<< "$reason" && ! grep -qi 'transcript' <<< "$reason" && grep -qF 'Tue Nov 3' <<< "$reason" && echo ok || echo "got: ${out:-nothing}")"
+# With no list write in the turn, no row was written whatever the id is, so the id is never needed.
+t="$WORK/no-id-no-write.jsonl"; start "$t"
+{ L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"recheck","recurring":false}'
+  L result c1 "ok" ; } >> "$t"
+out="$(printf '{"transcript_path":"%s","stop_hook_active":false,"hook_event_name":"Stop"}' "$t" | \
+  CHECK_LATER_SKILL="$noid" CLAUDE_PROJECT_DIR="$WORK/proj" bash "$HOOK" 2>/dev/null)"
+check "a skill naming no list id still points at the skill when the turn wrote no row" \
+  "$(printf '%s' "$out" | reason_of | grep -qF "Read $noid" && echo ok || echo "got: ${out:-nothing}")"
+t="$WORK/no-id-quiet.jsonl"; start "$t"
+L assistant-text "The log is clean." >> "$t"
+out="$(printf '{"transcript_path":"%s","stop_hook_active":false,"hook_event_name":"Stop"}' "$t" | \
+  CHECK_LATER_SKILL="$noid" CLAUDE_PROJECT_DIR="$WORK/proj" bash "$HOOK" 2>/dev/null)"
+check "a skill naming no list id stays silent on a turn that left nothing dated" \
+  "$([ -z "$out" ] && echo ok || echo "expected silence, got: $out")"
+
 # ---- an unreadable transcript is never "nothing to check" ----
 out="$(run "$WORK/does-not-exist.jsonl")"
 check "a transcript that does not exist fires, saying it could not be read" \
