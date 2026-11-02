@@ -109,6 +109,37 @@ got="$(PATH="$WORKDIR/bin:$PATH" fire "true"$'\x1f'"; gh pr merge 7 --squash")";
 [ "$rc" = 2 ] && [[ "$got" != *"$REFUSAL"* ]] && ok \
   || bad "#2050 a merge written after a 0x1f is still judged as a merge (exit $rc): ${got:0:600}"
 
+# A working folder holding a 0x1f is read whole (claude-config#2058). The reader writes every 0x1f
+# inside the command as U+FFFD (#2056), so the first separator it prints is the one ending the
+# command and the folder is everything after it. Cut at the LAST separator instead, the folder lost
+# everything before its own byte and the command gained it. gh here records the folder it was run
+# in and fails, so the gate refuses for want of the pull request and never asks GitHub (L2).
+fire_in(){ # fire_in <cwd> <command>: as fire, with the payload's cwd set
+  local out rc
+  out="$(python3 -c 'import json,sys; print(json.dumps({"session_id":"s1","cwd":sys.argv[1],"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]}}))' "$1" "$2" \
+    | bash "$GATE" 2>&1)"; rc=$?
+  printf '%s\n%s' "$out" "$rc"
+}
+US_DIR="$WORKDIR/work"$'\x1f'"tree"; mkdir -p "$US_DIR" "$WORKDIR/ghcwd"
+printf '#!/bin/sh\npwd -P > "%s/ghcwd/where"\nexit 1\n' "$WORKDIR" > "$WORKDIR/ghcwd/gh"; chmod +x "$WORKDIR/ghcwd/gh"
+got="$(PATH="$WORKDIR/ghcwd:$PATH" fire_in "$US_DIR" "gh pr merge 7 --squash")"; rc="${got##*$'\n'}"
+where="$(cat "$WORKDIR/ghcwd/where" 2>/dev/null)"
+[ "$rc" = 2 ] && [ "$where" = "$(cd "$US_DIR" && pwd -P)" ] && ok \
+  || bad "#2058 a merge run in a folder holding a 0x1f is read in that whole folder (exit $rc, gh ran in '${where:-nowhere}'): ${got:0:600}"
+# The control: the same merge in a folder with no byte reaches gh in that folder, so the case above
+# fails only for the folder it was handed.
+rm -f "$WORKDIR/ghcwd/where"; mkdir -p "$WORKDIR/plain"
+got="$(PATH="$WORKDIR/ghcwd:$PATH" fire_in "$WORKDIR/plain" "gh pr merge 7 --squash")"; rc="${got##*$'\n'}"
+where="$(cat "$WORKDIR/ghcwd/where" 2>/dev/null)"
+[ "$rc" = 2 ] && [ "$where" = "$(cd "$WORKDIR/plain" && pwd -P)" ] && ok \
+  || bad "#2058 control: a merge run in a plain folder is read in it (exit $rc, gh ran in '${where:-nowhere}'): ${got:0:600}"
+# The record check reads the command alone: a harmless command run in a folder whose name holds a
+# record's name and a 0x1f is no command touching the record.
+REC_DIR="$WORKDIR/helper-keys"$'\x1f'"tree"; mkdir -p "$REC_DIR"
+got="$(fire_in "$REC_DIR" "ls")"; rc="${got##*$'\n'}"; out="${got%$'\n'*}"
+[ "$rc" = 0 ] && [[ "$out" != *"Refused"* ]] && ok \
+  || bad "#2058 a harmless command in a folder holding a record's name and a 0x1f is let through (exit $rc): ${out:0:600}"
+
 # ---- refused: the folder, the secret or a read keys file named to anything but a grep of a pipe ----
 refused "#2050 a read keys file written by a relative path" "printf '%s\\n' 0 >> 1-pr-abc.txt.readkeys-1"
 refused "#2050 a record touched into the folder" "touch helper-keys/0123abcd"
