@@ -54,8 +54,10 @@ declare module 'claude-code' {
   interface PluginState {
     /**
      * In $.state so a reload of the mod keeps them: the modes on, when the prompt cache goes cold, the
-     * session's account, whether a main turn is running, and a Compact queued for its end (#1278, #1703).
+     * session's account, whether a main turn is running, a Compact queued for its end (#1278, #1703),
+     * and when this conversation was last compacted or cleared, in ms since the epoch, which a
+     * handoff note must be newer than for the compact tool to queue a Compact (#2025).
      */
-    'status-bar': { modes: StatusBarMode[]; cacheExpiresAt: number | null; account: StatusBarAccount | null; turnRunning: StatusBarFlag; compactQueued: StatusBarFlag }
+    'status-bar': { modes: StatusBarMode[]; cacheExpiresAt: number | null; account: StatusBarAccount | null; turnRunning: StatusBarFlag; compactQueued: StatusBarFlag; compactedAt: number | null }
   }
 }
