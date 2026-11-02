@@ -25,8 +25,9 @@ WHAT IT REPORTS, one line per site, `<path>:<line>: <kind>: <text>`:
 
   background   (with --background only) a command put in the background with `&` that this shell
                never reaps: that child exits whenever it likes. claude-sync and the hooks are held
-               to this (#1989); the skills, tools and suites are not judged on it. A job passes when
-               any of these holds:
+               to this (#1989), and so are the skills' and tools' own scripts (#2015); the suites are
+               not judged on it. An `&` inside arithmetic, `$(( a & b ))` or `(( a & b ))`, is a
+               bitwise and, never a job. A job passes when any of these holds:
                  - it is the last thing a `( ... )` subshell does, `( worker & )`: the subshell ends
                    at once, so the worker is the subshell's child, then launchd's, never this
                    shell's (measured by test-unwaited-children.sh). The remedy for a worker nobody
@@ -40,13 +41,14 @@ WHAT IT REPORTS, one line per site, `<path>:<line>: <kind>: <text>`:
                  - it is in a function that calls `wait` (#1984's rule).
                What the last two cannot see is ORDER: a kept child that exits, or is killed, while
                this shell prints something before its `wait` is the hazard all the same. So every
-               such job in the hooks carries, beside it, why nothing is written between its start
-               and its reaping, and a kill is followed by the wait at once (pr-merge-quiz.sh,
-               run-all-tests.sh). A disowned job is not waited for by a bare `wait`, and `disown`
+               such job in the hooks, skills and tools carries, beside it, why nothing is written
+               between its start and its reaping, and a kill is followed by the wait at once
+               (pr-merge-quiz.sh, run-all-tests.sh, tools/load-window.sh,
+               tools/measure-section-time.sh). A disowned job is not waited for by a bare `wait`, and `disown`
                never stops the SIGCHLD, so a disowned job passes only as a subshell's.
 
 Enough of the shell is followed to know which text is code: single, double and $'...' quotes, a
-comment, a backslash, a heredoc's body, and a stack of `$(`, `<(`, `>(`, `(` and `${` so a
+comment, a backslash, a heredoc's body, and a stack of `$((`, `$(`, `<(`, `>(`, `(` and `${` so a
 substitution is known to be open across lines. lib/shell_code_lines.py is the shared reader for
 which LINES are code, but it keeps no stack of parentheses (a `)` closing a process substitution
 reads there as closing the command substitution around it), and this question is about exactly
@@ -110,7 +112,8 @@ def silenced(rest):
 
 class Walk:
     def __init__(self):
-        self.stack = []          # frames: 'cs' $( , 'ps' <( >( , 'par' ( , 'brace' ${ , 'dq' " , 'case'
+        self.stack = []          # frames: 'cs' $( , 'ps' <( >( , 'par' ( , 'brace' ${ , 'dq' " , 'case',
+                                 # 'arith' $(( or ((, 'apar' a ( inside arithmetic
         self.ids = []            # an id per frame in stack, so a subshell's `)` can be matched to its `&`s
         self.next_id = 0
         self.quote = None        # None, "'" or "$'" while inside a single quoted string
@@ -191,7 +194,7 @@ def judge(text, background=False):
             w.code_mask.add(n)
         walk_line(w, line, n, background)
         # A newline ends a statement at the current depth unless it continues.
-        if w.quote is None and (not w.stack or w.stack[-1] not in ('dq', 'brace')):
+        if w.quote is None and (not w.stack or w.stack[-1] not in ('dq', 'brace', 'arith', 'apar')):
             stripped = re.sub(r"\s+#.*$", "", line).rstrip()
             if not (stripped.endswith('\\') or stripped.endswith('|') or stripped.endswith('&&')
                     or stripped.endswith('||')):
@@ -266,6 +269,10 @@ def walk_line(w, line, n, background):
                 continue
             if c == '"':
                 w.pop()
+            elif line.startswith('$((', i):
+                w.push('arith')
+                i += 3
+                continue
             elif line.startswith('$(', i):
                 w.push('cs')
                 i += 2
@@ -275,6 +282,37 @@ def walk_line(w, line, n, background):
                 i += 2
                 continue
             i += 1
+            continue
+        # Arithmetic, `$(( ))` or `(( ))`: an `&` there is a bitwise and and a `<` a comparison, so
+        # nothing in it is a job or a process substitution (#2015). Only a substitution, a `${` or a
+        # double quote opens anything inside it; its own parentheses are counted until its `))`.
+        if top in ('arith', 'apar'):
+            if c == '\\':
+                i += 2
+                continue
+            if c == '"':
+                w.push('dq')
+                i += 1
+            elif line.startswith('$((', i):
+                w.push('arith')
+                i += 3
+            elif line.startswith('$(', i):
+                w.push('cs')
+                i += 2
+            elif line.startswith('${', i):
+                w.push('brace')
+                i += 2
+            elif c == '(':
+                w.push('apar')
+                i += 1
+            elif c == ')' and top == 'apar':
+                w.pop()
+                i += 1
+            elif line.startswith('))', i):
+                w.pop()
+                i += 2
+            else:
+                i += 1
             continue
         # Code (or the inside of ${ }).
         if c == '\\':
@@ -291,6 +329,10 @@ def walk_line(w, line, n, background):
         if top == 'brace':
             if c == '}':
                 w.pop()
+            elif line.startswith('$((', i):
+                w.push('arith')
+                i += 3
+                continue
             elif line.startswith('$(', i):
                 w.push('cs')
                 i += 2
@@ -315,6 +357,15 @@ def walk_line(w, line, n, background):
                 continue
         if line.startswith('<<<', i):
             i += 3
+            continue
+        if line.startswith('$((', i):
+            w.push('arith')
+            i += 3
+            continue
+        # WAITPOS, not CMDPOS: an arithmetic command is a test too, `if (( a & 1 ))`, `while (( n ))`.
+        if line.startswith('((', i) and WAITPOS.search(line[:i]):
+            w.push('arith')
+            i += 2
             continue
         if line.startswith('$(', i):
             w.push('cs')

@@ -243,6 +243,67 @@ check "a kind holding an item with no size read beside a read one totals at leas
 check "a kind with no size read at all has an unknown total" "$(has "$(heading trash)" '<span class="group-total">Size unknown</span>')"
 check "never at least 0 KB" "$(hasnt "$HTML" "At least 0 KB")"
 
+# The bottom bar's running total (#2013) is worked out by the page's own script as boxes are ticked,
+# where the shared tally cannot reach, so it is run in node over the rendered rows and checked
+# against the shared tally (dcu_tally and dcu_tally_words, lib/disk-clean-units.sh) on the same
+# selections: size unknown when nothing ticked had its size read, never "at least 0 KB" (L90). The
+# rows carry each kind of size: whole, none, read in part (partial, or bytes from a denied read), and
+# a byte count that is not a whole KiB, which the tally rounds to KiB before wording.
+fresh
+printf '%s\n' "caches-1${S}caches${S}delete${S}$H/Library/Caches/a${S}4194304${S}offerable${S}1:1${S}measured${S}${S}" \
+  "caches-2${S}caches${S}delete${S}$H/Library/Caches/b${S}${S}offerable${S}1:2${S}denied${S}${S}" \
+  "caches-3${S}caches${S}delete${S}$H/Library/Caches/c${S}1536${S}offerable${S}1:3${S}denied${S}${S}" \
+  "caches-4${S}caches${S}delete${S}$H/Library/Caches/d${S}1500${S}offerable${S}1:4${S}reported${S}${S}" \
+  "trash-1${S}trash${S}delete${S}$H/.Trash/e${S}${S}offerable${S}1:5${S}unread${S}${S}" \
+  "trash-2${S}trash${S}delete${S}$H/.Trash/f${S}1048576${S}offerable${S}1:6${S}partial${S}${S}" \
+  "caches-5${S}caches${S}delete${S}$H/Library/Caches/g${S}2560${S}offerable${S}1:7${S}measured${S}${S}" \
+  "caches-6${S}caches${S}delete${S}$H/Library/Caches/h${S}3584${S}offerable${S}1:8${S}measured${S}${S}" > "$H/items.txt"
+write_record "$H/items.txt" "trash caches"
+render --out "$OUT"
+selections="caches-2
+caches-2 trash-1
+caches-1 caches-2
+caches-3
+caches-4
+caches-1
+trash-2
+caches-5
+caches-6
+caches-1 caches-2 caches-3 caches-4 trash-1 trash-2
+"
+. "$DIR/../../hooks/lib/disk-clean-units.sh" || check "the units library is there to source" "could not source it"
+tally_words="$(while IFS= read -r s; do
+  awk -F "$S" -v want=" $s " "${DCU_AWK_LIB:-}${DCU_AWK_TALLY:-}${DCU_AWK_WORDS:-}"'
+    index(want, " " $1 " ") { n++; dcu_tally("s", $5, $8) }
+    END { print (n ? n " selected, " dcu_tally_words("s") : "Nothing selected") }' "$H/items.txt" 2>&1
+done <<< "$selections")"
+check "the shared tally says size unknown for only unread items" "$(eq "$(sed -n 2p <<< "$tally_words")" "2 selected, size unknown")"
+if command -v node >/dev/null 2>&1; then
+  js_sel="$(awk '/function human\(bytes\)/ { p = 1 } p { print } p && /function selection\(\)/ { s = 1 } s && /^  }$/ { exit }' <<< "$HTML")"
+  check "the page carries its running total's rules" "$(grep -q 'function selection()' <<< "$js_sel" && echo ok || echo "no selection() in the page")"
+  page_words="$(node -e "$js_sel"'
+    var fs = require("fs"), html = fs.readFileSync(process.argv[1], "utf8"), boxes = [];
+    (html.match(/<input class="tick" [^>]*>/g) || []).forEach(function (tag) {
+      var a = {}; tag.replace(/(data-[a-z]+)="([^"]*)"/g, function (m, k, v) { a[k] = v; });
+      boxes.push({ checked: false, disabled: / disabled/.test(tag), getAttribute: function (k) { return k in a ? a[k] : null; } });
+    });
+    var ticks = boxes;
+    fs.readFileSync(0, "utf8").split("\n").forEach(function (line) {
+      var want = " " + line + " ";
+      boxes.forEach(function (b) { b.checked = want.indexOf(" " + b.getAttribute("data-id") + " ") >= 0; });
+      console.log(selection().words);
+    });' "$PAGE" <<< "$selections" 2>&1)"
+  page_words="$(sed '$d' <<< "$page_words")"
+  check "the page's running total says size unknown for only unread items" "$(eq "$(sed -n 2p <<< "$page_words")" "2 selected, size unknown")"
+  check "and at least, with the unread one counted, beside a size that was read" "$(eq "$(sed -n 3p <<< "$page_words")" "2 selected, at least 4 MB, plus 1 whose size was not read")"
+  check "an exact half KiB rounds to even, as the tally's printf does: 2.5 KiB is 2 KB, 3.5 KiB is 4 KB" \
+    "$(eq "$(sed -n 8p <<< "$page_words") | $(sed -n 9p <<< "$page_words")" "1 selected, 2 KB | 1 selected, 4 KB")"
+  check "the page's running total says what the shared tally says on every selection" \
+    "$([ "$page_words" = "$tally_words" ] && echo ok || echo "they differ: $(diff <(printf '%s\n' "$tally_words") <(printf '%s\n' "$page_words") | grep '^[<>]' | tr '\n' ' ')")"
+else
+  echo "SUITE-PART-UNMEASURED the page's running total against the shared tally: node is not on PATH"
+fi
+
 # The heading box's rules (D11), run in node from the page's own script: what CI's runner and
 # both Macs have. Without node this part is reported as unmeasured, never as a pass (L411).
 if command -v node >/dev/null 2>&1; then

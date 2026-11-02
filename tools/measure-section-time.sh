@@ -243,9 +243,10 @@ BUDGET=$(( _to * _pct / 100 ))
 # is killed by the pids this tool created, never by matching a name across the machine (L444).
 LOAD_PIDS=""
 stop_load(){
-  local p
-  for p in $LOAD_PIDS; do kill "$p" 2>/dev/null; done
-  for p in $LOAD_PIDS; do wait "$p" 2>/dev/null; done
+  [ -n "$LOAD_PIDS" ] || return 0
+  # Split on purpose: one pid per word. Killed, then reaped at once, with nothing printed between.
+  kill $LOAD_PIDS 2>/dev/null
+  wait $LOAD_PIDS 2>/dev/null
   LOAD_PIDS=""
 }
 trap 'stop_load; self_copy_clean; exit 130' INT TERM
@@ -258,6 +259,9 @@ start_load(){
     # $0 is set to a name this tool can recognise, so a leftover is identifiable by a person
     # reading ps. The KILL above still goes by pid, because a name match over the whole machine
     # claims work this tool never started.
+    # Kept as this tool's child, and safe to be one while it prints its readings (L1035, #2015): the
+    # loop never ends by itself, so it exits only when stop_load kills it, and stop_load waits for
+    # every one of them straight after the kill, before anything else is printed.
     bash -c 'while :; do :; done' "measure-section-time-load" &
     LOAD_PIDS="$LOAD_PIDS $!"
     i=$(( i + 1 ))
