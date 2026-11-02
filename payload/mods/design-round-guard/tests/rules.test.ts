@@ -2074,3 +2074,105 @@ test('#1911: the guard keeps one reading of a .ts hook change, modHookTsHold, wi
   expect(Object.keys(allRules).includes('modHookTsShows')).toBe(false)
   expect(typeof allRules.modHookTsHold).toBe('function')
 })
+
+// #2038: moving a hook that toasts into a named top level const and registering it as
+// `on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(...)` (mods/ask-before-saving, #2026) was
+// held as a wording change naming "tool.call". The hook's `next`, which a toast's words come from,
+// was followed to its call in the catch, `saveCall($, e, next)`, and the catch's own `next` from there
+// to the words handed to `on`, as though the callback took its values from them; it takes them from
+// the engine through `on`, as a callback handed to `on` itself does. Cut down from
+// mods/ask-before-saving's register.ts before and after PR #2041.
+const SAVE_HEAD = [
+  "import type { EngineInterface, Register } from 'claude-code'",
+  "const TOOL_NAMES = ['Write', 'Edit']",
+  'const cannotCheck = (err: unknown) => `Could not check this call: ${String(err)}`',
+  'const againOrHeld = async <R>(run: () => R | Promise<R>, held: () => R): Promise<R> => {',
+  '  try {',
+  '    return await run()',
+  '  } catch {',
+  '    return held()',
+  '  }',
+  '}',
+]
+const SAVE_BEFORE = [
+  ...SAVE_HEAD,
+  'export const register: Register = on => {',
+  "  on('tool.call', { tool: TOOL_NAMES }, async ($: EngineInterface, e: { input: { file_path?: string } }, next: (e: object) => unknown) => {",
+  "    if (e.input.file_path?.endsWith('.md')) {",
+  '      $.ui.toast(`Not saved to ${e.input.file_path}: it reads as a lasting memory`, { timeoutMs: 10_000 })',
+  "      return { deny: 'Not saved: ask Dan first.' }",
+  '    }',
+  '    const r = await next(e)',
+  '    if (r.denied) $.ui.toast(`Held beneath: ${r.reason}`)',
+  '    return r',
+  '  }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))',
+  '}',
+  '',
+].join('\n')
+const SAVE_AFTER = [
+  ...SAVE_HEAD,
+  'const saveCall = async ($: EngineInterface, e: { input: { file_path?: string } }, next: (e: object) => unknown) => {',
+  "  if (e.input.file_path?.endsWith('.md')) {",
+  '    $.ui.toast(`Not saved to ${e.input.file_path}: it reads as a lasting memory`, { timeoutMs: 10_000 })',
+  "    return { deny: 'Not saved: ask Dan first.' }",
+  '  }',
+  '  const r = await next(e)',
+  '  if (r.denied) $.ui.toast(`Held beneath: ${r.reason}`)',
+  '  return r',
+  '}',
+  'export const register: Register = on => {',
+  "  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) =>",
+  '    next.called ? next(e) : againOrHeld(() => saveCall($, e, next), () => ({ deny: cannotCheck(next.error) })),',
+  '  )',
+  '}',
+  '',
+].join('\n')
+test('#2038: a hook moved into a named const and registered with on(...).catch passes, its event name no message words; a real wording change there is still held', () => {
+  const edited = (text: string, from: string, to: string) => {
+    const after = text.replace(from, to)
+    if (after === text) throw new Error(`no ${from}`)
+    return after
+  }
+  // The logic only move, as #2026 made it, and the event name and filter beside the reference changed after it.
+  expect(modHookTsHold([], 'register.ts', SAVE_BEFORE, SAVE_AFTER)).toBe(undefined)
+  expect(holdOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, "on('tool.call'", "on('tool.check'"))).toBe('passes')
+  expect(holdOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, '{ tool: TOOL_NAMES }, saveCall', "{ tool: 'Write' }, saveCall"))).toBe('passes')
+  // Controls: the toast's words, the refusal's words, and the words the catch's refusal is made from
+  // are each still held, in the moved hook and in the catch beside it.
+  const toast = modHookTsHold([], 'register.ts', SAVE_BEFORE, edited(SAVE_AFTER, 'it reads as a lasting memory', 'it looks like a lasting memory'))
+  expect(toast && 'worded' in toast ? toast.worded : '').toContain('it looks like a lasting memory')
+  expect(holdOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, "'Not saved: ask Dan first.'", "'Not saved: ask Dan.'"))).toBe('worded')
+  expect(holdOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, 'Could not check this call', 'Could not judge this call'))).toBe('worded')
+  // A callback on what a function of the mod returns still takes its values from the words handed
+  // to that function, so those words, said in a toast, are held as before.
+  const listed = [
+    "import type { EngineInterface, Register } from 'claude-code'",
+    'const lines = (...xs: string[]) => xs.map(x => x.trim())',
+    'export const register: Register = on => {',
+    "  on('session.start', async ($: EngineInterface) => {",
+    "    lines('Saved the note.', 'Kept the job.').forEach(l => $.ui.toast(l))",
+    '  })',
+    '}',
+    '',
+  ].join('\n')
+  expect(holdOf([], 'register.ts', listed, edited(listed, 'Saved the note.', 'Stored the note.'))).toBe('worded')
+  // Only the engine's `on`, register's first parameter, is read so (Dan, 2026-11-01, narrowing
+  // #2043): a callback on what any other function handed in returns is still read through the words
+  // handed to it, so those words, said in a toast, are held.
+  const handed = [
+    "import type { EngineInterface, Register } from 'claude-code'",
+    'const tell = ($: EngineInterface, say: (w: string) => Promise<string>) => {',
+    "  say('Saved the note.').then(t => $.ui.toast(t))",
+    '}',
+    'export const register: Register = on => {',
+    "  on('session.start', async ($: EngineInterface) => {",
+    '    $.ui.toast(`Started.`)',
+    '  })',
+    '}',
+    '',
+  ].join('\n')
+  expect(holdOf([], 'register.ts', handed, edited(handed, 'Saved the note.', 'Stored the note.'))).toBe('worded')
+  const inRegister = edited(SAVE_AFTER, 'export const register: Register = on => {', 'export const register: Register = (on, tellLater: (w: string) => Promise<string>) => {')
+  const later = edited(inRegister, '  on(\'tool.call\'', "  tellLater('Saved for later.').then(t => $.ui.toast(t))\n  on('tool.call'")
+  expect(holdOf([], 'register.ts', later, edited(later, 'Saved for later.', 'Kept for later.'))).toBe('worded')
+})
