@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L841. A failed cache write after a successful read is logged, never fails the read: a cold cache's callers all write one key and its rate limit refuses them.
 - L840. A step consuming another step's output must run on that step's OUTCOME this run, not a copied gate, or a gate change leaves it reading stale output.
 - L1035. A captured bash function on macOS must not read through <(...) or leave a child running: bash 3.2 drops output when its exit interrupts a write.
 - L835. A deploy refuses to upload a commit older than the live one: a rerun of an old run uploads last and rolls the site back while every step passes.

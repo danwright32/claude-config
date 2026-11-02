@@ -8928,6 +8928,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L841. When a read succeeds and its result is then written to a cache, a failed cache write must be logged and must never fail the read, because callers sharing a cold cache all write the same key at once and a rate limit on that key then turns good data into an outage.**
+  (bidspoke#3186, 2026-11-02)
+  SHORT: A failed cache write after a successful read is logged, never fails the read: a cold cache's callers all write one key and its rate limit refuses them.
+
 - **L840. A pipeline step that consumes another step's output must be conditioned on that step's OUTCOME in the same run, never on a copy of its gate, because when the producer's gate later changes the consumer keeps running and reads whatever the producer last left behind.**
   (project-enrollment-tracker#1997, 2026-11-02)
   SHORT: A step consuming another step's output must run on that step's OUTCOME this run, not a copied gate, or a gate change leaves it reading stale output.
