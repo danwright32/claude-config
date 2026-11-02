@@ -117,6 +117,19 @@ except sw.Unreadable:
 unreadable" ] && check "#2053 the skipped bodies carry their quoting, and a body's own substitutions are found" ok \
   || check "#2053 the skipped bodies carry their quoting, and a body's own substitutions are found" "got [$asked]"
 
+# ---- the #2050 consumers' shape: (quoted, before, body) triples, nothing for an unclosed body ----
+shape="$(python3 -I -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec); spec.loader.exec_module(sw)
+closed = []
+sw.commands("cat <<'"'"'EOF'"'"'\nbody\nEOF", "", closed)
+open_ = []
+sw.commands("cat <<EOF\nnever closes", "", open_)
+print(closed, [len(t) for t in closed], open_)' "$SW")"
+[ "$shape" = "[(True, 'cat ', 'body')] [3] []" ] && check "#2050 the heredocs option gives one triple per closed body and none for an unclosed one" ok \
+  || check "#2050 the heredocs option gives one triple per closed body and none for an unclosed one" "got [$shape]"
+
 # ---- through the push recogniser every push gate asks ----
 P='git push origin main'
 if ps_is_git_push $'cat <<EOF\nnote $('"$P"$')\nEOF'; then check "#2053 a push in an unquoted body substitution is a push" ok
