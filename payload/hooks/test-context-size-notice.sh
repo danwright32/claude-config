@@ -336,6 +336,15 @@ out="$(printf '{"session_id":"z2","transcript_path":"%s","agent_id":"","agent_tr
 check "11 a lone surrogate in such an agent's transcript path is said as unreadable" "could not read" "$out"
 check "11 and exits 0" "rc=0" "$out"
 check_eq "11 and the main session of that run keeps no state from it" "no" "$([ -f "$CONTEXT_SIZE_STATE_DIR/z2.main.json" ] && echo yes || echo no)"
+# A subagent with a good id whose own transcript cannot be found (no agent_transcript_path, and a
+# parent path not ending in .jsonl to find it beside) is said once per agent to be unmeasured.
+out="$(agent_fire y1 "$WORK/proj/y1-no-extension" v1)"
+check "11 a subagent whose own transcript cannot be found is said to be unmeasured" "not being watched" "$(field "$out" additionalContext)"
+check "11 saying why: its transcript could not be found" "could not find this agent's own transcript" "$(field "$out" additionalContext)"
+check "11 naming the issue there too" "claude-config#2035" "$(field "$out" additionalContext)"
+check_eq "11 to that agent only, not to Dan" "" "$(field "$out" system)"
+check_eq "11 once for that agent" "" "$(agent_fire y1 "$WORK/proj/y1-no-extension" v1)"
+check "11 and once for each other such agent" "not being watched" "$(field "$(agent_fire y1 "$WORK/proj/y1-no-extension" v2)" additionalContext)"
 # An empty session_id is no name either: every session-less payload would otherwise share one file.
 out="$(printf '{"session_id":"","transcript_path":"%s","hook_event_name":"PostToolUse"}' "$Z" | bash "$HOOK" 2>/dev/null; echo "rc=$?")"
 check_eq "11 an empty session_id says nothing and exits 0" "rc=0" "$out"

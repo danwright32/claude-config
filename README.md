@@ -3337,7 +3337,8 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
 - **A subagent with no usable id** (its `agent_id` empty, not a string, or not a safe name) is still
   a subagent, so its state is named after a hash of its own transcript path, never the main
   session's file, whose band it would otherwise overwrite. One with no transcript of its own either
-  is told once that its size is not being watched (claude-config#2035).
+  is told once that its size is not being watched, and so is a subagent with a good id whose own
+  transcript cannot be found, once per agent (claude-config#2035).
 - Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`.
 
 ## Mods

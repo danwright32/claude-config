@@ -246,11 +246,20 @@ def state_key(session, agent, path, is_main):
     return "%s.bypath-%s" % (session, digest)
 
 
-def tell_unidentified(state_dir, session):
-    """Say once per session that a subagent with no usable id and no transcript is not measured."""
+UNIDENTIFIED = ("The context check could not tell which agent this is (its agent_id is missing or "
+                "not a usable name, and no transcript of its own was given), so this agent's size is "
+                "not being watched (claude-config#2035).")
+UNLOCATED = ("The context check could not find this agent's own transcript (no agent_transcript_path "
+             "was given, and the session's transcript path does not end in .jsonl, so the agent's "
+             "file cannot be found beside it), so this agent's size is not being watched "
+             "(claude-config#2035).")
+
+
+def tell_unmeasured(state_dir, marker, msg):
+    """Say msg once, to the agent only, recording that it was said as the file <marker>.unmeasured."""
     try:
         os.makedirs(state_dir, exist_ok=True)
-        os.close(os.open(os.path.join(state_dir, session + ".unidentified"),
+        os.close(os.open(os.path.join(state_dir, marker + ".unmeasured"),
                          os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
     except FileExistsError:
         return
@@ -258,9 +267,6 @@ def tell_unidentified(state_dir, session):
         # Nothing said: what cannot be recorded as told would be said on every call.
         sys.stderr.write("context-size-notice: state folder %s not writable (%s)\n" % (state_dir, err))
         return
-    msg = ("The context check could not tell which agent this is (its agent_id is missing or not a "
-           "usable name, and no transcript of its own was given), so this agent's size is not being "
-           "watched (claude-config#2035).")
     emit(msg, "")
 
 
@@ -279,10 +285,12 @@ def run(payload_bytes):
     state_dir = os.environ.get("CONTEXT_SIZE_STATE_DIR") or os.path.join(home, "state", "context-size")
     key = state_key(session, agent, path, is_main)
     if not key:
-        if not is_main:
-            tell_unidentified(state_dir, session)
+        # A subagent with no usable id and no transcript: once per session, as it cannot be told apart.
+        tell_unmeasured(state_dir, "%s.unidentified" % session, UNIDENTIFIED)
         return
     if not path:
+        if not is_main:
+            tell_unmeasured(state_dir, key, UNLOCATED)
         return
     try:
         os.makedirs(state_dir, exist_ok=True)
