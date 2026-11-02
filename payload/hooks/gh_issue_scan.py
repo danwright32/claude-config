@@ -42,8 +42,8 @@ CREATE = ("issue", "create")
 BODY_FILE_COMMANDS = {CREATE, ("issue", "edit"), ("issue", "comment"),
                       ("pr", "create"), ("pr", "edit"), ("pr", "comment")}
 
-# The crude reading of gh, used where the shared reader cannot be: with no reader at all, and over the
-# text of a command nobody could tokenize (gated_in_text, claude-config#1485). Any command naming gh
+# The crude reading of gh, used over the text of a command nobody could read, a command read with no
+# reader at all included (gated_in_text, claude-config#1485 and #2059). Any command naming gh
 # runs it, and a gated subcommand and action anywhere after gh are the ones it runs: the reading that
 # sees more commands, never fewer, so a gate asks rather than misses. It stands down only on a word gh
 # would take as a different subcommand or action, one outside the gated pairs that no flag in front of
@@ -72,6 +72,27 @@ def crude_gh_command(words):
     return None
 
 
+class Unreadable(Exception):
+    """The command could not be read, so no gate may judge it.
+
+    Its message says why, and where when a quote never closes (claude-config#1485): which quote, its
+    line and column in the command, and that line's text.
+    """
+
+
+class ReaderMissing(Unreadable):
+    """The command reader lib/shell-words.py could not be loaded, so no command can be read.
+
+    The scanner keeps no reading of its own to fall back on (claude-config#2059): one could misread
+    what the shared reader reads, so a command the gates refuse would pass whenever the reader was
+    gone. Every command is unreadable instead, and each gate does what it does with a command it
+    cannot read, which for the issue field gate is to refuse any whose text names what it judges.
+    """
+
+
+# The one reading of a command, lib/shell-words.py, loaded by its path beside this file. READER_ERROR
+# is None once it loads, else what went wrong, and then every reading here raises ReaderMissing.
+READER_ERROR = None
 try:
     _spec = importlib.util.spec_from_file_location(
         "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "shell-words.py"))
@@ -81,41 +102,21 @@ try:
     # A command run from a string by a shell, eval or env -S (claude-config#1478): (wrapper, string,
     # why), or None. Its string is scanned as a command line of its own.
     wrapped_words, MAX_DEPTH = _sw.wrapped_words, _sw.MAX_DEPTH
-    # A heredoc's end marker, and what the shell runs in an unquoted body (claude-config#2053).
-    heredoc_opener, body_substitutions = _sw.heredoc_opener, _sw.body_substitutions
-except Exception:
-    def wrapped_words(words):
-        return None  # with no reader, the crude reading finds a create wherever gh stands
-    MAX_DEPTH = 0
-    gh_command = crude_gh_command
-
-    def heredoc_opener(s, i):
-        """(marker, strip_tabs, quoted, end) with no reader: a marker quoted whole, or a bare word."""
-        m = re.compile(r"<<(-?)[ \t]*(?:'([^']*)'|\"([^\"]*)\"|(\\?)([^ \t\n;&|<>()]+))").match(s, i)
-        if not m:
-            return None
-        word = next(g for g in (m.group(2), m.group(3), m.group(5)) if g is not None)
-        quoted = m.group(5) is None or bool(m.group(4)) or any(q in word for q in "'\"\\")
-        # Quote removal, so a partly quoted marker (E"OF") still ends at its own closing line.
-        return re.sub(r"[\"'\\]", "", word), m.group(1) == "-", quoted, m.end()
-
-    def body_substitutions(body):
-        raise ValueError("no reader")  # so the whole body is read as commands, which sees more
+except Exception as e:  # noqa: BLE001  missing, or failing to load: either way there is no reader
+    READER_ERROR = "%s: %s" % (type(e).__name__, e)
 
 
-def _body_commands(body):
-    """What the shell runs in an unquoted heredoc body, as normalized commands each ending in ' ; '.
+def _no_reader():
+    """Raise ReaderMissing when there is no reader to read a command with."""
+    if READER_ERROR is not None:
+        raise ReaderMissing("the command reader lib/shell-words.py could not be loaded (%s)" % READER_ERROR)
 
-    The text inside each substitution written in it, read by the shared reader (claude-config#2053);
-    a body that cannot be read that way is read whole as commands, which can only see more.
-    """
-    if "$(" not in body and "`" not in body:
-        return ""
-    try:
-        texts = body_substitutions(body)
-    except Exception:  # noqa: BLE001  Unreadable, or no reader: the reading that sees more
-        texts = [body]
-    return "".join(_normalize(t)[0] + " ; " for t in texts)
+
+if READER_ERROR is not None:
+    def gh_command(words):
+        _no_reader()  # a caller asking which gh command some words run is told there is no reader
+
+
 
 OPERATORS = {"&&", "||", ";", "|", "&", "(", ")", "{", "}", "\n"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -133,216 +134,87 @@ ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 NON_FILING_FLAGS = {"--help", "-h", "--web", "-w"}
 
 
-def normalize(cmd):
-    """Make command boundaries visible to the lexer, quote awarely.
-
-    A plain newline starts a new command, so it becomes ';'. A backslash before a
-    newline continues one command, so it becomes a space. A heredoc body is data,
-    not commands, so it is dropped, except for the substitutions in the body of a
-    heredoc whose end marker is unquoted, which the shell runs and so are read as
-    commands of their own; the rest of the opener's line is read as the command it is,
-    and the marker is read by the shared reader, a partly quoted one included
-    (claude-config#2053). Text inside quotes is copied untouched.
-
-    Without this the gate saw only the first line of a multi-line command: a
-    newline is plain whitespace to shlex, so a create on line 3 was invisible.
-
-    A command substitution inside double quotes is part of the quoted word, its own quotes, heredoc
-    bodies and comments included, as bash reads it (claude-config#1485): `--body "$(cat <<'EOF'`
-    with an apostrophe or a double quote in the body was read as quotes never closed, so the gate
-    passed it unjudged. It is copied with its backslashes and double quotes escaped, which the lexer
-    reads back as the text written.
-    """
-    return _normalize(cmd)[0]
-
-
-def _normalize(cmd):
-    """normalize, and where in cmd the quote that never closes was opened (None when every one does)."""
-    out = []
-    i, n = 0, len(cmd)
-    quote = None
-    opened = None
-    pending = []  # (delimiter, quoted) of each heredoc opened on the line being read
-    while i < n:
-        c = cmd[i]
-
-        if quote:
-            if quote == '"' and cmd.startswith("$(", i):
-                end = _substitution_end(cmd, i)
-                if end is not None:
-                    out.append(cmd[i:end].replace("\\", "\\\\").replace('"', '\\"'))
-                    i = end
-                    continue
-            if c == "\\" and quote == '"' and i + 1 < n:
-                out.append(c)
-                out.append(cmd[i + 1])
-                i += 2
-                continue
-            out.append(c)
-            if c == quote:
-                quote = None
-            i += 1
-            continue
-
-        if c == "\\" and i + 1 < n:
-            if cmd[i + 1] == "\n":
-                out.append(" ")  # line continuation: one logical command
-            else:
-                out.append(c)
-                out.append(cmd[i + 1])
-            i += 2
-            continue
-
-        if c in ("'", '"'):
-            quote = c
-            opened = i
-            out.append(c)
-            i += 1
-            continue
-
-        if c == "\n":
-            out.append(" ; ")
-            i += 1
-            # The bodies of the heredocs opened on the line just ended start here, each up to the
-            # line that closes it. The rest of the opener's line was read above as the command it is.
-            for delim, quoted in pending:
-                start = i
-                while i < n:
-                    e = cmd.find("\n", i)
-                    line = cmd[i:(e if e != -1 else n)]
-                    end, i = i, ((e + 1) if e != -1 else n)
-                    if line.strip() == delim:
-                        break
-                else:
-                    end = n
-                if not quoted:
-                    out.append(_body_commands(cmd[start:end]))
-            pending = []
-            continue
-
-        if cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
-            opener = heredoc_opener(cmd, i)
-            if not opener:
-                out.append(c)
-                i += 1
-                continue
-            delim, _, quoted, i = opener
-            pending.append((delim, quoted))
-            out.append(" ")
-            continue
-
-        out.append(c)
-        i += 1
-    return "".join(out), (opened if quote else None)
-
-
-SUBSTITUTION_HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([^']*)'|\"([^\"]*)\"|\\?([A-Za-z0-9_]+))")
-
-
-def _double_quote_end(cmd, i):
-    """The index after the double quote closing the one at i, a $(...) inside it read whole, or None."""
-    j, n = i + 1, len(cmd)
-    while j < n:
-        if cmd[j] == "\\":
-            j += 2
-        elif cmd[j] == '"':
-            return j + 1
-        elif cmd.startswith("$(", j):
-            j = _substitution_end(cmd, j)
-            if j is None:
-                return None
-        else:
-            j += 1
-    return None
-
-
-def _substitution_end(cmd, i):
-    """The index after the parenthesis closing the $( at i, read as bash reads one, or None.
-
-    Its quotes, heredoc bodies and comments are its own, so a quote or a parenthesis inside any of
-    them closes nothing outside it (claude-config#1485). None when it never closes, which leaves the
-    command to the lexer, and so unreadable.
-    """
-    n = len(cmd)
-    j, depth, pending, word_start = i + 2, 1, [], True
-    while j < n:
-        c = cmd[j]
-        if c == "\\":
-            j, word_start = j + 2, False
-        elif c == "'":
-            k = cmd.find("'", j + 1)
-            if k == -1:
-                return None
-            j, word_start = k + 1, False
-        elif c == '"':
-            j = _double_quote_end(cmd, j)
-            if j is None:
-                return None
-            word_start = False
-        elif c == "#" and word_start:
-            k = cmd.find("\n", j)
-            j = n if k == -1 else k
-        elif c == "\n":
-            j += 1
-            # Each heredoc opened on the line just ended has its body here, up to its delimiter line.
-            for delim, strip_tabs in pending:
-                while True:
-                    if j >= n:
-                        return None
-                    e = cmd.find("\n", j)
-                    line = cmd[j:(e if e != -1 else n)]
-                    j = (e + 1) if e != -1 else n
-                    if (line.lstrip("\t") if strip_tabs else line).strip() == delim:
-                        break
-            pending, word_start = [], True
-        elif cmd.startswith("<<<", j):
-            j, word_start = j + 3, True
-        elif cmd.startswith("<<", j):
-            m = SUBSTITUTION_HEREDOC.match(cmd, j)
-            if not m:
-                j += 2
-                continue
-            pending.append((next(g for g in m.groups()[1:] if g is not None), m.group(1) == "-"))
-            j, word_start = m.end(), False
-        else:
-            if c == "(":
-                depth += 1
-            elif c == ")":
-                depth -= 1
-                if depth == 0:
-                    return j + 1
-            word_start = c in " \t;&|()"
-            j += 1
-    return None
-
-
 def _is_operator(tok):
     return tok in OPERATORS or set(tok) <= set("&|;()")
 
 
-class Unreadable(Exception):
-    """The command could not be tokenized, so no gate may judge it.
+def _unreadable(command, at):
+    """The Unreadable for a command the reader could not read to its end.
 
-    Its message says why, and where when a quote never closes (claude-config#1485): which quote, its
-    line and column in the command, and that line's text.
+    at is where the quote that never closes was opened, saying which quote and where (claude-config#1485),
+    or None when what is left open is something else.
     """
-
-
-def _unreadable(command, error):
-    """The Unreadable for a command the lexer refused with `error`, saying which quote and where."""
-    opened = _normalize(command)[1]
-    if opened is None:
-        if "escaped" in str(error):
-            return Unreadable("it ends in a backslash with nothing after it")
-        return Unreadable("it holds a quote the gate could not match to the one closing it")
-    line = command.count("\n", 0, opened) + 1
-    start = command.rfind("\n", 0, opened) + 1
-    end = command.find("\n", opened)
+    if at is None:
+        return Unreadable("something in it opens and never closes (a substitution, or a quote inside one)")
+    line = command.count("\n", 0, at) + 1
+    start = command.rfind("\n", 0, at) + 1
+    end = command.find("\n", at)
     whole = command[start:(end if end != -1 else len(command))]
-    col = opened - start
+    col = at - start
     text = whole.strip() if len(whole.strip()) <= 60 else "..." + whole[max(0, col - 30):col + 30].strip() + "..."
     return Unreadable("the %s at line %d, column %d never closes (that line reads: %s)"
-                      % (command[opened], line, col + 1, text))
+                      % (command[at], line, col + 1, text))
+
+
+def _raw(piece):
+    """Text of a command between the parts given to the lexer as words: a line continuation is a space."""
+    out, i, n = [], 0, len(piece)
+    while i < n:
+        if piece[i] == "\\" and i + 1 < n:
+            out.append(" " if piece[i + 1] == "\n" else piece[i:i + 2])
+            i += 2
+            continue
+        out.append(piece[i])
+        i += 1
+    return "".join(out)
+
+
+def _word(text, in_double_quotes):
+    """A substitution's text, written so the lexer reads it back as the text written, as one word."""
+    if in_double_quotes:
+        return text.replace("\\", "\\\\").replace('"', '\\"')
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+
+def _lexed(command):
+    """The command as the shared reader reads it, written for the lexer (claude-config#2059).
+
+    Each simple command lib/shell-words.py finds, the commands inside a substitution included, ends
+    in " ; ", and each subshell or substitution is wrapped in " ( " and " ) ", so the walk keeps what
+    a cd or an assignment in it does inside it. In a command's text each substitution is one word,
+    since its commands are given on their own, and each heredoc opener is a space, since its body is
+    nobody's text. Raises Unreadable when the reader cannot read the command to its end.
+    """
+    _no_reader()
+    if (len(command) - len(command.rstrip("\\"))) % 2:
+        raise Unreadable("it ends in a backslash with nothing after it")
+    # Only a newline ends a line: with none, the reader would take "; " for one (commands()).
+    s = command if "\n" in command else command + "\n"
+    parts = []
+    try:
+        _sw.commands(s, "", parts=parts)
+    except _sw.Unreadable as e:
+        raise _unreadable(command, getattr(e, "at", None))
+    out, scope = [], (0,)
+    for p in parts:
+        common = 0
+        while common < min(len(scope), len(p["scope"])) and scope[common] == p["scope"][common]:
+            common += 1
+        out.append(" ) " * (len(scope) - common) + " ( " * (len(p["scope"]) - common))
+        scope = p["scope"]
+        at, end = p["start"], min(p["end"], len(command))  # never the newline added above
+        cuts = sorted([(a, b, ("word", dq)) for a, b, dq in p["inner"]]
+                      + [(a, b, ("opener", None)) for a, b in p["openers"]])
+        for a, b, (how, dq) in cuts:
+            if a < at:
+                continue  # inside a cut already made
+            out.append(_raw(s[at:a]))
+            out.append(_word(s[a:b], dq) if how == "word" else " ")
+            at = b
+        out.append(_raw(s[at:end]))
+        out.append(" ; ")
+    out.append(" ) " * (len(scope) - 1))
+    return "".join(out)
 
 
 # ---- where each create runs: what the command sets before it (claude-config#1416) ----
@@ -577,8 +449,7 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
     if not command or not command.strip():
         return []
 
-    written = command
-    command = normalize(command)
+    command = _lexed(command)
 
     try:
         # punctuation_chars is a lexer option, not a split() argument: it makes the
@@ -590,7 +461,11 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
         lexer.commenters = ""
         tokens = list(lexer)
     except ValueError as e:
-        raise _unreadable(written, e)
+        # The reader read it to its end, so what the lexer refuses is a backslash ending it, or a
+        # quote the two read differently.
+        if "escaped" in str(e):
+            raise Unreadable("it ends in a backslash with nothing after it")
+        raise Unreadable("it holds a quote the gate could not match to the one closing it")
 
     creates = []
     i = 0
@@ -672,7 +547,6 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
 # file was missing, so the gate failed open) or judged the wrong text. What the command writes is
 # readable from the command whenever it comes from text the command shows: a heredoc whose body
 # expands nothing, a here-string, or echo and printf of plain words.
-HEREDOC_OPENER = re.compile(r"<<(-?)[ \t]*(?:'([^']*)'|\"([^\"]*)\"|\\?([A-Za-z0-9_]+))")
 HEREDOC_MARK = "\x1fheredoc%d\x1f"
 HEREDOC_TOKEN = re.compile(r"^\x1fheredoc(\d+)\x1f$")
 # Commands whose output is only what the command text shows them: echo and printf print their own
@@ -719,15 +593,14 @@ def _cut_heredocs(command):
             i += 3
             continue
         if command.startswith("<<", i):
-            m = HEREDOC_OPENER.match(command, i)
-            if m:
-                word = next(g for g in m.groups()[1:] if g is not None)
-                # 'EOF', "EOF" and \EOF all stop the body expanding; a bare EOF does not.
-                quoted = m.group(4) is None or command[m.start(4) - 1] == "\\"
-                pending.append((word, m.group(1) == "-", quoted))
+            # The end marker as the shared reader reads it, a partly quoted one included: any quote
+            # in it stops the body expanding, a bare EOF does not (claude-config#2059).
+            opener = _sw.heredoc_opener(command, i)
+            if opener:
+                word, strip_tabs, quoted, i = opener
+                pending.append((word, strip_tabs, quoted))
                 out.append(" " + HEREDOC_MARK % openers + " ")
                 openers += 1
-                i = m.end()
                 continue
         if c == "\n":
             # A line ending in a pipe or && carries the command on to the next line.
@@ -761,6 +634,7 @@ def _stages(command):
     in order among the pipelines, so a reader can tell where a cd inside one ends.
     Raises Unreadable when the command cannot be tokenized.
     """
+    _no_reader()
     text, bodies = _cut_heredocs(command)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)

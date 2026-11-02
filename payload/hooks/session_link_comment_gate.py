@@ -70,6 +70,15 @@ REASON = (
     "people (Dan, 2026-10-27).\n"
     "Remove the Claude-Session line (or the bare claude.ai/code/session link) from the body and re-run."
 )
+# A command whose text plainly posts a comment, a review or a reply, read from the text alone.
+POSTS = re.compile(r"\bgh\b[^\n]*\b(?:comment|review|comments|replies)\b")
+# What judge_bash answers when the command reader cannot load, so no comment's body can be judged.
+READER_MISSING = "reader missing"
+READER_MISSING_REASON = (
+    "The session link gate cannot read this command: %s. So it cannot tell whether the comment, "
+    "review or reply it posts carries the Claude session link, and refuses it.\n"
+    "Put lib/shell-words.py back beside the gate (claude-sync pull restores it), then re-run."
+)
 BASH_OVERRIDE = ("\nIf Dan has asked for the link in this one comment, say so and re-run with "
                  + OVERRIDE + " <the same command>, good for that one command only.")
 
@@ -164,10 +173,15 @@ def judge_bash(command, cwd):
                 return "review" if kind == ("pr", "review") else "comment"
         if _api_writes_with_link(command, cwd):
             return "comment or reply"
+    except scan.ReaderMissing:
+        # No reader, so no command can be read and a body file cannot be found (claude-config#2059):
+        # refuse every gh command that plainly posts a comment, a review or a reply.
+        if OVERRIDE not in command and POSTS.search(command):
+            return READER_MISSING
     except scan.Unreadable:
         # A command nobody could tokenize: refuse when its text carries the link and plainly posts a
         # comment.
-        if OVERRIDE not in command and LINK.search(command) and re.search(r"\bgh\b[^\n]*\b(?:comment|review|comments|replies)\b", command):
+        if OVERRIDE not in command and LINK.search(command) and POSTS.search(command):
             return "comment"
     return None
 
@@ -187,7 +201,9 @@ def main():
     else:
         written = slack_write(tool)
         what = written if written and LINK.search(json.dumps(tool_input)) else None
-    if what:
+    if what == READER_MISSING:
+        json.dump(scan.deny_payload(READER_MISSING_REASON % scan.READER_ERROR + BASH_OVERRIDE), sys.stdout)
+    elif what:
         reason = REASON % what + (BASH_OVERRIDE if tool == "Bash" else "")
         json.dump(scan.deny_payload(reason), sys.stdout)
     return 0
