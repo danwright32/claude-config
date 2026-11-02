@@ -302,6 +302,32 @@ PY
 [ "$(reader_of "$FB_BROKEN")" = "fallback" ] && check "#1449 with lib/shell-words.py failing to load it uses its fallback" ok \
   || check "#1449 with lib/shell-words.py failing to load it uses its fallback" "got $(reader_of "$FB_BROKEN")"
 
+# A create in a substitution in the body of a heredoc whose end marker is unquoted is run by the
+# shell, so it is a create (claude-config#2053), read by the shared reader; a body it cannot read
+# (a backquote left open) and a scanner with no reader both read the whole body as commands, which
+# sees more, never fewer. A quoted marker keeps the body text in every copy.
+count_in() { # count_in <dir> <command> -> how many creates that copy of the scanner finds
+  python3 - "$1/gh_issue_scan.py" "$2" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("scan_under_test", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+print(len(m.scan_creates(sys.argv[2])))
+PY
+}
+HD_C='gh issue create -t x'
+for d in "$DIR" "$FB" "$FB_BROKEN"; do
+  name="${d#"$FB_TMP"/}"
+  [ "$(count_in "$d" $'cat <<EOF\nfiled $('"$HD_C"$')\nEOF')" = 1 ] && check "#2053 $name: a create in an unquoted heredoc body's substitution is seen" ok \
+    || check "#2053 $name: a create in an unquoted heredoc body's substitution is seen" "got $(count_in "$d" $'cat <<EOF\nfiled $('"$HD_C"$')\nEOF')"
+  [ "$(count_in "$d" $'cat <<\'EOF\'\nfiled $('"$HD_C"$')\nEOF')" = 0 ] && check "#2053 $name: control, a quoted body is text" ok \
+    || check "#2053 $name: control, a quoted body is text" "got $(count_in "$d" $'cat <<\'EOF\'\nfiled $('"$HD_C"$')\nEOF')"
+done
+[ "$(count_in "$DIR" $'cat <<EOF\ndon`t\n'"$HD_C"$'\nEOF')" = 1 ] && check "#2053 a body the reader cannot read is read whole, so the create in it is seen" ok \
+  || check "#2053 a body the reader cannot read is read whole, so the create in it is seen" "got $(count_in "$DIR" $'cat <<EOF\ndon`t\n'"$HD_C"$'\nEOF')"
+[ "$(count_in "$DIR" $'cat <<EOF\nno substitution, just '"$HD_C"$'\nEOF')" = 0 ] && check "#2053 control: an unquoted body with no substitution is text" ok \
+  || check "#2053 control: an unquoted body with no substitution is text" "seen as a create"
+
 # The command shapes the shared reader is tested on above, and the shapes that put a flag of the
 # subcommand in front of its action, where a reader of only the words after the action misses it.
 FB_SHAPES=(
