@@ -233,6 +233,12 @@ bf "#1436 popd goes back to before the pushd" "/start/b.md" 'pushd x && popd && 
 bf "#1436 the stack is a stack" "/a/b.md" 'pushd /a && pushd /b && popd && gh issue create --body-file b.md'
 bf "#1436 a pushd inside a subshell ends with it" "NO:it is relative, and the gate cannot tell which directory the command is in" '(pushd /a); popd && gh issue create --body-file b.md'
 bf "#1436 cd after a cd the gate cannot follow leaves cd - unknown" "NO:it is relative, and the gate cannot tell which directory the command is in" 'cd "$(pwd)/x" && cd /a && cd - && gh issue create --body-file b.md'
+# A case pattern's closing paren inside a subshell is not the subshell's end (claude-config#2074):
+# a cd after it, still inside the subshell, ends with the subshell, and a cd before it lasts.
+bf "#2074 a cd after a case pattern's paren inside a subshell ends with the subshell" "/start/b.md" '(case y in y) cd /w;; esac; cd /x); gh issue create --body-file b.md'
+bf "#2074 a cd after a case pattern written (y) inside a subshell ends with the subshell" "/start/b.md" '(case y in (y) cd /w;; esac; cd /x); gh issue create --body-file b.md'
+bf "#2074 a cd before the subshell still applies after it" "/a/b.md" 'cd /a; (case y in y) cd /w;; esac); gh issue create --body-file b.md'
+bf "#2074 control: a cd in a case branch outside any subshell lasts" "/w/b.md" 'case y in y) cd /w;; esac; gh issue create --body-file b.md'
 bf "#1436 the unset variable's reason says why the environment cannot help" "NO:\$D is not set in this command, nor in the environment every Bash call starts from (a variable set in an earlier Bash call, or in a shell profile without export, is gone by this one); if it is set where the command runs, re-run with SKIP_BODY_FILE_CHECK=1" 'gh issue create --body-file "$D/b.md"'
 
 # Which gh commands post a body from a file (claude-config#1435): each one found, with its kind.

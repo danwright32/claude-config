@@ -164,6 +164,12 @@ HEREDOC_WORD_END = set(" \t\n;&|<>()")
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # What ends a command, as (how it ended, its width). Two characters are looked up before one, so
 # && is never read as a backgrounding & and || never as a pipe.
+# A case command's head up to its `in`, past any reserved words before it, and an esac ending one
+# (claude-config#2074): a pattern after the `in`, or after a `;;` or `;&`, ends at a `)` that closes
+# no subshell, and its `|` joins two patterns rather than piping.
+_PREFIX = r"\s*(?:(?:" + "|".join(re.escape(w) for w in sorted(RESERVED)) + r")\s+)*"
+CASE_HEAD = re.compile(_PREFIX + r"case\s+\S.*?\s+in(?=[\s(]|$)", re.S)
+CASE_END = re.compile(_PREFIX + r"esac(?=[\s;&|()<>]|$)")
 SEPARATORS = {"&&": ("&&", 2), "||": ("||", 2), "|&": ("|", 2), ";;": (";", 2),
               "|": ("|", 1), ";": (";", 1), "\n": (";", 1)}
 
@@ -314,7 +320,39 @@ def commands(s, cwd="", heredocs=None, parts=None):
     # starts to "end", the start of its closing line, and then the reading goes on at "next".
     bodies = []
 
+    def note_case(f, end):
+        """Read the command so far, from f's start to end, for a case head or an esac (#2074).
+
+        f["cases"] holds the case commands open in f, innermost last, each "pattern" while a pattern
+        is being read and "body" after it; f["pat"] is where the pattern being read starts. A
+        command is noted once, when it first shows either, so a later call on it changes nothing.
+        """
+        if f.get("noted") == f["start"]:
+            return
+        text = s[f["start"]:end]
+        head = CASE_HEAD.match(text)
+        if head:
+            f.setdefault("cases", []).append("pattern")
+            f["pat"] = f["start"] + head.end()
+            f["noted"] = f["start"]
+        elif CASE_END.match(text):
+            if f.get("cases"):
+                f["cases"].pop()
+            f["noted"] = f["start"]
+
+    def in_pattern(f, at):
+        """Whether `at` is inside a case pattern in f, the command before it noted first."""
+        note_case(f, at)
+        return bool(f.get("cases")) and f["cases"][-1] == "pattern"
+
+    def end_pattern(f, at):
+        """A pattern ends at `at`: the case head before it is a command, and its branch starts after."""
+        cut(f, max(f["start"], f.get("pat", f["start"])), "case")
+        f["cases"][-1] = "body"
+        f["start"] = at + 1
+
     def cut(f, end, how):
+        note_case(f, end)
         text = s[f["start"]:end]
         if not text.strip():
             return
@@ -415,7 +453,8 @@ def commands(s, cwd="", heredocs=None, parts=None):
                 i += 1
                 continue
             if c == ")":
-                frames.pop()
+                if frames.pop().get("pattern"):
+                    end_pattern(frames[-1], i)
                 i += 1
                 continue
         if k not in ('"', "hd"):
@@ -502,10 +541,15 @@ def commands(s, cwd="", heredocs=None, parts=None):
                     i = start
                 continue
         two = s[i:i + 2]
+        if c == "|" and nx != "|" and in_pattern(f, i):
+            i += 1  # a | between two case patterns is part of the pattern, never a pipe
+            continue
         separator = SEPARATORS.get(two) or SEPARATORS.get(c)
         if separator:
             how, width = separator
             cut(f, i, how)
+            if two in (";;", ";&") and f.get("cases") and f["cases"][-1] == "body":
+                f["cases"][-1] = "pattern"  # the branch ends, and the next pattern begins
             i += width
             f["start"] = i
             continue
@@ -514,6 +558,15 @@ def commands(s, cwd="", heredocs=None, parts=None):
             if nx != ">" and not (i and s[i - 1] in "<>"):
                 cut(f, i, "&")
                 f["start"] = i + 1
+            i += 1
+            continue
+        if c == "(" and in_pattern(f, i):
+            # A pattern written (y) opens no subshell; the ) closing it ends the pattern.
+            frames.append({"k": "paren", "pattern": True})
+            i += 1
+            continue
+        if c == ")" and in_pattern(f, i):
+            end_pattern(f, i)
             i += 1
             continue
         if c == "(":
