@@ -67,8 +67,13 @@ ti = d.get("tool_input") or {}
 cmd = ti.get("command") if isinstance(ti, dict) else ""
 sys.stdout.write(str(d.get("agent_id") or "") + "\x1f" + (cmd if isinstance(cmd, str) else ""))
 ' 2>/dev/null)"; prc=$?
+# JSON that parses but is not shaped like a call (the command as a list of its words, the input as
+# one string, the payload inside a list) read above as an empty command or a call from nobody, and
+# passed in silence. It is judged by every word it holds instead, by the shared rule (#2057): a push
+# with -f sent as a list reads as one only once its words are joined.
+case "$prc" in 0|4) ps_payload_unread "$payload" command && prc=3 ;; esac
 [ "$prc" -eq 4 ] && exit 0
-[ "$prc" -eq 0 ] || refuse_unread "$payload" "the gate could not read the hook payload"
+[ "$prc" -eq 0 ] || refuse_unread "$(ps_payload_text "$payload")" "the gate could not read the hook payload as a call"
 agent="${parsed%%$'\x1f'*}"
 cmd="${parsed#*$'\x1f'}"
 [ -n "$agent" ] || agent="(no id given)"
