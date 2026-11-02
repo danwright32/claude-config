@@ -28,8 +28,8 @@
 # rc, watcher marker and hold file) are named through their seams, under the same throwaway folder,
 # so an inherited seam cannot point a fixture run at the real ones either; the register names no
 # clone, so no sync apply can ever excuse a change a fixture run sees. The one thing a run WRITES
-# there is the full suite slot's queue, under state/full-run-slot, and only for a whole run
-# (claude-config#2012), so a fixture's whole run queues in this folder, never behind this Mac's real
+# there is the full suite slot's queue, under state/full-run-slot, and only for a whole run or a
+# folder run holding most of the tree (claude-config#2012, #2034), so a fixture's whole run queues in this folder, never behind this Mac's real
 # runs.
 #
 # What this gives up, deliberately: a FIXTURE suite that writes the real ~/.claude is no longer

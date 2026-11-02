@@ -43,12 +43,14 @@ question here, not "is now": a goal that ended still leaves the transcript it ma
 the goal reader in mod-kit/hooks/goal.ts and does not answer its question (L342).
 
 State: CONTEXT_SIZE_STATE_DIR (default $CLAUDE_HOME/state/context-size, never synced), one
-<session>.<agent or main>.json and a .lock beside it per transcript. Two tool calls finishing at
-once run this twice, so the read, decide and write happen under an flock taken without waiting: a
-run that finds it held says nothing and leaves the work to the next call. Never blocks the tool:
+<session>.<agent or main>.json and a .lock beside it per transcript (a subagent whose agent_id is
+unusable is <session>.bypath-<hash of its own transcript path>, see state_key). Two tool calls
+finishing at once run this twice, so the read, decide and write happen under an flock taken
+without waiting: a run that finds it held says nothing and leaves the work to the next call. Never blocks the tool:
 the hook exits 0 on every path.
 """
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -59,6 +61,11 @@ DEFAULT_COMPACTIONS = 5
 STATE_VERSION = 1
 CHUNK = 8 << 20
 NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def is_name(value):
+    """A session or agent id fit to name a state file: a non empty string of safe characters."""
+    return isinstance(value, str) and bool(NAME.match(value))
 
 
 def setting(name, default):
@@ -168,8 +175,12 @@ def line_notice(state, line, is_main):
         ctx = head + (
             "Before going on, write down what you have decided: put each decision that belongs to "
             "an issue on that issue as a comment, and the rest in handoff.md in your scratchpad "
-            "folder, covering %s. Then tell Dan in one line that the session is at the context line "
-            "and where the note is, so he can type /compact or start a fresh session from the note. "
+            "folder, covering %s. Then call mcp__status-bar__queue_compact with the absolute path of "
+            "handoff.md, which queues a compact that runs when this turn ends (claude-config#2025; "
+            "a /goal run is one turn until its goal is met or stopped, so there it waits until then), "
+            "and tell Dan in one line that the session is at the context line and where the note is, "
+            "so he can cancel the compact, type /compact himself if the tool was not there or refused, "
+            "or start a fresh session from the note. "
             "Agents you dispatched keep running either way." % WRITE_DOWN)
         system = ("This session is past the context line: its last request carried %s tokens "
                   "(the line is %s). It has been asked to write down what it has decided, then "
@@ -208,17 +219,59 @@ def emit(ctx, system):
 
 
 def transcript_of(d):
-    """(path, is_main, agent): the agent's OWN transcript in a subagent, never its parent's."""
+    """(path, is_main, agent): the agent's OWN transcript in a subagent, never its parent's.
+
+    agent is "" for the main session and for a subagent whose agent_id is empty, not a string or
+    not a safe name: the payload still carries an agent_id, so it is a subagent all the same."""
     parent = d.get("transcript_path") if isinstance(d.get("transcript_path"), str) else ""
     if "agent_id" not in d:
         return parent, True, ""
-    agent = d.get("agent_id") if isinstance(d.get("agent_id"), str) else ""
+    agent = d.get("agent_id") if is_name(d.get("agent_id")) else ""
     own = d.get("agent_transcript_path")
     if isinstance(own, str) and own:
         return own, False, agent
-    if parent.endswith(".jsonl") and NAME.match(agent or "-bad-"):
+    if parent.endswith(".jsonl") and agent:
         return os.path.join(parent[:-len(".jsonl")], "subagents", "agent-%s.jsonl" % agent), False, agent
     return "", False, agent
+
+
+def state_key(session, agent, path, is_main):
+    """The state and lock name for one transcript, or "" when a subagent cannot be told apart.
+
+    A subagent with no usable id is keyed by a hash of its own transcript path, never as the main
+    session, whose band and offset it would otherwise overwrite (claude-config#2035)."""
+    if is_main:
+        return "%s.main" % session
+    if agent:
+        return "%s.%s" % (session, agent)
+    if not path:
+        return ""
+    digest = hashlib.sha256(path.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    return "%s.bypath-%s" % (session, digest)
+
+
+UNIDENTIFIED = ("The context check could not tell which agent this is (its agent_id is missing or "
+                "not a usable name, and no transcript of its own was given), so this agent's size is "
+                "not being watched (claude-config#2035).")
+UNLOCATED = ("The context check could not find this agent's own transcript (no agent_transcript_path "
+             "was given, and the session's transcript path does not end in .jsonl, so the agent's "
+             "file cannot be found beside it), so this agent's size is not being watched "
+             "(claude-config#2035).")
+
+
+def tell_unmeasured(state_dir, marker, msg):
+    """Say msg once, to the agent only, recording that it was said as the file <marker>.unmeasured."""
+    try:
+        os.makedirs(state_dir, exist_ok=True)
+        os.close(os.open(os.path.join(state_dir, marker + ".unmeasured"),
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except FileExistsError:
+        return
+    except OSError as err:
+        # Nothing said: what cannot be recorded as told would be said on every call.
+        sys.stderr.write("context-size-notice: state folder %s not writable (%s)\n" % (state_dir, err))
+        return
+    emit(msg, "")
 
 
 def run(payload_bytes):
@@ -230,11 +283,19 @@ def run(payload_bytes):
         return
     session = d.get("session_id") if isinstance(d.get("session_id"), str) else ""
     path, is_main, agent = transcript_of(d)
-    if not path or not NAME.match(session or "-bad-") or (agent and not NAME.match(agent)):
+    if not is_name(session):
         return
     home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~/.claude")
     state_dir = os.environ.get("CONTEXT_SIZE_STATE_DIR") or os.path.join(home, "state", "context-size")
-    key = "%s.%s" % (session, agent or "main")
+    key = state_key(session, agent, path, is_main)
+    if not key:
+        # A subagent with no usable id and no transcript: once per session, as it cannot be told apart.
+        tell_unmeasured(state_dir, "%s.unidentified" % session, UNIDENTIFIED)
+        return
+    if not path:
+        if not is_main:
+            tell_unmeasured(state_dir, key, UNLOCATED)
+        return
     try:
         os.makedirs(state_dir, exist_ok=True)
         lock_fd = os.open(os.path.join(state_dir, key + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)

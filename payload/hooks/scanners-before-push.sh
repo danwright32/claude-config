@@ -41,6 +41,20 @@
 # A whole suite that takes a large share of the budget is the premise expiring: give its checks
 # over this repository a suite of their own, as #1997 did.
 #
+# A SCANNER MUST NOT WAIT ON ANOTHER RUN'S LOCK EITHER (claude-config#2033). After #1997 this gate
+# still refused seven pushes for time on 2026-11-01, at load averages of 21 to 95, and every refusal
+# named one run still going: a section of tests/test-claude-sync.sh, running for 1 or 2 seconds.
+# That suite takes a machine wide lock, a full run holds it for minutes, and builders run one just
+# before they push, so the section refused on the lock and was started again every few seconds
+# (the wait further down) until the budget ran out. The other 23 scanners finished every time; the
+# budget was never what they lacked. Measured the same day with nothing else holding the lock: the
+# whole gate took 38 to 43 seconds at load averages of 15 to 35, and 41 seconds for its slowest
+# scanner with another builder's full run going at 44 to 51. That section was moved to
+# tests/test-undated-measurements.sh, which takes no lock, and test-scanners-before-push.sh fails if
+# any scanner selected here belongs to a suite that takes it. The wait below stays for any that does.
+# After the move, with that lock held throughout, the gate passed in 60 seconds at a load average
+# of 160 on 2026-11-01, its slowest scanner 51, so the budget below was left where it was.
+#
 # It is repo-agnostic by construction: a repository with no payload/hooks/run-all-tests.sh is not
 # this one, and the hook does nothing at all there rather than running suites it knows nothing
 # about the cost of.
@@ -555,9 +569,13 @@ _sc_sleep="${SCANNERS_SLEEP:-sleep}"
 
 # The run's own script: it runs the suite with its output in the run's folder, then records how long
 # it took and, last, its exit code, written whole by a rename so a reader never sees half of one.
+# A run that only refused on the suite lock (exit 5 with the suite's refusal line, the test
+# _sc_lock_refused makes below) scanned nothing, so its seconds are not recorded as the scanner's
+# time (claude-config#2033): written over the last real duration, they made a refusal for time
+# quote "its last run took 2s" on 2026-11-01 for a scan that takes 12 to 18.
 # The run's folder is its first argument, so the folder shows in the process listing, which is how a
 # recorded process id is told from a recycled one before anything is sent to it (L1011).
-_SC_RUN='rd=$1; s=$2; sec=$3; slots=$4; last=$5; t0=$(date +%s); if [ -n "$sec" ]; then HOOK_TESTS_SLOTS="$slots" SECTION_ONLY="$sec" bash "$s" > "$rd/out" 2>&1 < /dev/null; else HOOK_TESTS_SLOTS="$slots" bash "$s" > "$rd/out" 2>&1 < /dev/null; fi; rc=$?; printf "%s" $(( $(date +%s) - t0 )) > "$last.$$" && mv -f "$last.$$" "$last"; printf "%s" "$rc" > "$rd/rc.$$" && mv -f "$rd/rc.$$" "$rd/rc"'
+_SC_RUN='rd=$1; s=$2; sec=$3; slots=$4; last=$5; t0=$(date +%s); if [ -n "$sec" ]; then HOOK_TESTS_SLOTS="$slots" SECTION_ONLY="$sec" bash "$s" > "$rd/out" 2>&1 < /dev/null; else HOOK_TESTS_SLOTS="$slots" bash "$s" > "$rd/out" 2>&1 < /dev/null; fi; rc=$?; if [ "$rc" = 5 ] && grep -q "^test suite: another run is already going" "$rd/out" 2>/dev/null; then :; else printf "%s" $(( $(date +%s) - t0 )) > "$last.$$" && mv -f "$last.$$" "$last"; fi; printf "%s" "$rc" > "$rd/rc.$$" && mv -f "$rd/rc.$$" "$rd/rc"'
 # Starts it in a session of its own and records its process id BEFORE returning, so a push that
 # looks at this run a moment later always finds the id. The fork's child is never a process group
 # leader, so setsid cannot refuse it. perl's setsid rather than the setsid command, which macOS does
@@ -708,8 +726,13 @@ _sc_claim(){   # $1 = run index   $2 = the runs in flight at once
   return 0
 }
 # Starts an index again after it refused on the suite lock, under its slot's lock like any start.
+# The refusal's line naming who holds the lock is kept first, because the start clears the run's
+# folder, and a retry still in flight when the budget runs out is reported with it as waiting on
+# the lock, never as a scanner too slow for the budget (claude-config#2033).
 _sc_relaunch(){   # $1 = run index   $2 = the runs in flight at once
   local lock
+  grep -m1 '^test suite: another run is already going' "$(_sc_rd "$1")/out" > "$_sc_work/$1.lockline" 2>/dev/null \
+    || : > "$_sc_work/$1.lockline"
   if [ -z "$_sc_detach" ]; then _sc_launch "$1" "$2"; return 0; fi
   lock="$_sc_runs/$(_sc_slot "$1")-pidlock"
   _sc_lock "$lock" || { : > "$_sc_work/$1.busy"; return 0; }
@@ -868,13 +891,39 @@ LOCKED
   _sc_wait_bounded 2>/dev/null
   _sc_locked="$(_sc_locked_list)"
 done
-if [ -n "$_sc_locked" ]; then
+# A RETRY STILL IN FLIGHT WHEN THE BUDGET RAN OUT is a scanner waiting its turn on the lock, and is
+# said as one (claude-config#2033, L11). It was reported with the scanners that did not finish in
+# the budget, "running for 1s", so on 2026-11-01 seven refusals at load averages of 21 to 95 read as
+# a scanner too slow for the budget, and the fix was first aimed at the budget. Whether that last
+# try would have got the lock is not known, and the refusal says so rather than guessing.
+#
+# Both lists are made again here in ONE pass, each run judged once: a retry can write its exit code
+# in the instant after the watchdog stops the wait, so a list made inside the loop and a look made
+# after it could each miss it, and a refusal would then reach the read back below as a failure. A
+# run with no exit code yet is judged by whether it is a retry; one with an exit code by whether it
+# refused on the lock.
+_sc_locked=""
+_sc_lock_inflight=""
+_sc_i=1
+while [ "$_sc_i" -le "$_sc_n" ]; do
+  if [ ! -f "$(_sc_rd "$_sc_i")/rc" ]; then
+    [ -n "$_sc_out_of_time" ] && [ -f "$_sc_work/$_sc_i.lockline" ] && _sc_lock_inflight="$_sc_lock_inflight$_sc_i"$'\n'
+  elif _sc_lock_refused "$_sc_i"; then
+    _sc_locked="$_sc_locked$_sc_i"$'\n'
+  fi
+  _sc_i=$(( _sc_i + 1 ))
+done
+if [ -n "$_sc_locked" ] || [ -n "$_sc_lock_inflight" ]; then
   {
     echo "PUSH BLOCKED: a whole tree scanner could not run, because another test run is going."
     echo ""
     echo "These never ran, so they neither passed nor failed: each refused to start while another"
-    echo "suite run held its lock, and the lock was still held after waiting for it (up to ${_sc_lock_wait}s,"
-    echo "inside this gate's own budget of ${_sc_budget}s):"
+    if [ -n "$_sc_out_of_time" ]; then
+      echo "suite run held its lock, and was tried again until this gate's own budget of ${_sc_budget}s ran out:"
+    else
+      echo "suite run held its lock, and the lock was still held after waiting for it (up to ${_sc_lock_wait}s,"
+      echo "inside this gate's own budget of ${_sc_budget}s):"
+    fi
     while IFS= read -r _sc_i; do
       [ -n "$_sc_i" ] || continue
       printf '    %s\n' "$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
@@ -882,6 +931,17 @@ if [ -n "$_sc_locked" ]; then
     done <<LOCKED
 $_sc_locked
 LOCKED
+    while IFS= read -r _sc_i; do
+      [ -n "$_sc_i" ] || continue
+      printf '    %s\n' "$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
+      sed 's/^/      /' "$_sc_work/$_sc_i.lockline" 2>/dev/null
+      _sc_for="$(_sc_run_age "$(_sc_rd "$_sc_i")")"
+      case "$_sc_for" in ''|*[!0-9]*) _sc_for="" ;; *) _sc_for=" ${_sc_for}s ago" ;; esac
+      echo "      Its latest try started${_sc_for}, after that refusal, and had not finished when the budget ran out,"
+      echo "      so whether it got the lock this time is not known."
+    done <<INFLIGHT
+$_sc_lock_inflight
+INFLIGHT
     echo ""
     echo "Retry the push when that run finishes. The line above names the process holding the lock"
     echo "and, when it is an orphan of a run that was killed, the command that ends it."
