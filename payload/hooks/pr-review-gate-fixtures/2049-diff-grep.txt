@@ -1,0 +1,1 @@
+gh pr diff 2049 --repo danwright32/claude-config --name-only; gh pr diff 2049 --repo danwright32/claude-config | grep -n -i "read.keys\|readkeys\|read_keys\|pr-review" | head -20

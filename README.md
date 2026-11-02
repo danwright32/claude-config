@@ -921,12 +921,23 @@ read at all, and so does one copied beside another review that finished in the s
 carried to a later head has its acknowledgement signed again for the carried file. Lines and
 acknowledgements written before #1719, and acknowledgements written before #1739, are in an old form
 and stop counting, so a key shown just before the install is asked for again. And the gate refuses, before it runs and with
-no override, any Bash command whose text names the folder, the secret, a read keys file, or the
-functions that write or reach them (`helper-key`, `helper-secret` or `readkeys`, with a hyphen or an
-underscore, any case), as the design round guard refuses a write to its own record;
+no override, any Bash command that names the folder, the secret, a read keys file, or the functions
+that write or reach them (`helper-key`, `helper-secret` or `readkeys`, with a hyphen or an
+underscore, any case) in a way that can WRITE them, as the design round guard refuses a write to its
+own record. Naming alone is not writing (claude-config#2050): `lib/review-record-writes.py` reads
+the command with the shared shell reader and still refuses a function called (as a command, through
+`bash -c`, eval, a sourced library, a substitution or xargs), a variable set to one, the folder, the
+secret or a read keys file named to anything but a grep of a pipe, anything naming the records' home
+folder, a heredoc that can run what it holds, and a name beside a shell startup file or the installed
+hooks unless every command only reads. It lets through a function's name handed to a program that
+only reads or prints it (`grep -n ar_readkeys_issue file`, echo, cat; not git, rg or sort, whose
+options can run a command), a grep of a pipe for any of
+the names, and a quoted heredoc fed to cat, tee or python that starts no process (an edit script).
 `test-pr-review.sh` reads every function of `lib/ai-review-common.sh` that reaches the secret or a
-read keys file and fails on one the gate does not refuse by name. To read that code, use the Read or
-Grep tool. What is left, since the gate and the session are one user: a command that hides the name
+read keys file and fails on one the gate does not refuse when called, and
+`test-pr-review-gate-records.sh` holds the two real commands refused on 2026-11-01 and every write
+shape. To read or edit that code, use the Read, Grep or Edit tool or a grep of a pipe; a builder that
+goes round a refusal another way says so in its hand back. What is left, since the gate and the session are one user: a command that hides the name
 from the gate (a glob such as `*.secret`, an escape, a name built from pieces, a script file written
 first and then run) can still read the secret, compute a MAC and write a record, a line or an
 acknowledgement, and a session can pipe a made-up hook payload into `pr-review-gate.sh` itself.
