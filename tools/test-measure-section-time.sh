@@ -249,6 +249,13 @@ grep -q '2' <<< "$o9" \
 pgrep -f 'measure-section-time-load' >/dev/null 2>&1 \
   && check "the load it started is gone when it ends" "load processes survived" \
   || check "the load it started is gone when it ends" ok
+# --- and each load process, a child of this tool while it prints its readings, is reaped by a wait
+#     naming the list it is kept in, straight after its kill, so the unwaited children scan sees it
+#     waited for (L1035, #2015): a wait on a loop variable it cannot tie to the job reads as none.
+uw="$(printf 'measure-section-time.sh\n' | python3 "$DIR/../payload/hooks/lib/unwaited-children.py" --root "$DIR" --background --count 2>&1)"; uw_rc=$?
+[ "$uw_rc" -eq 0 ] && grep -q '^judged 1 files' <<< "$uw" \
+  && check "the load processes are reaped where the unwaited children scan can see it" ok \
+  || check "the load processes are reaped where the unwaited children scan can see it" "exit=$uw_rc out=$uw"
 
 # --- an ambient reader that cannot answer has measured NOTHING, and nothing is not a quiet
 #     machine. This is the direction that matters: a reader returning an empty collection when its

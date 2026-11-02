@@ -6239,6 +6239,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Redaction keyed on a field's NAME misses a secret under any other name; redact by the value's source, and test with an unlisted name.
 
 ## UX completeness
+- **L839. Anything a customer or outside party can see is copy, including a link's path and query
+  values, a file name, a calendar event title and an email subject, so name it in their vocabulary
+  or make it opaque, never with an internal term. A marker added for our own routing lands in texts
+  and screenshots the moment it ships, where it reads as something we told the customer.**
+  (slate#4480, 2026-11-01)
+  SHORT: Anything outsiders see, link paths and query values included, is copy: use their words or an opaque code, never an internal term.
+
 - **L803. A search box over people's or places' names must fold accents on both the query and the
   stored text, because a matcher that only lowercases never finds Siobhán from 'siobhan' and the
   miss looks exactly like the person not existing.** (slate#4124, 2026-10-22)

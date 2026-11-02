@@ -32,6 +32,7 @@ cat > "$P/-proj-a/sess1.jsonl" <<'EOF'
 {"type":"assistant", this line is not json
 {"type":"assistant","isSidechain":false,"sessionId":"sess1","timestamp":"2026-10-20T10:00:03Z","message":{"id":"msg_S","model":"<synthetic>","usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":0}}}
 {"type":"assistant","isSidechain":false,"sessionId":"sess1","timestamp":"2026-10-20T10:00:04Z","message":{"id":"msg_N","model":"m"}}
+{"type":"system","subtype":"compact_boundary","isSidechain":false,"sessionId":"sess1","timestamp":"2026-10-20T10:00:30Z","compactMetadata":{"trigger":"auto","preTokens":1010,"postTokens":10}}
 {"type":"assistant","isSidechain":false,"sessionId":"sess1","entrypoint":"cli","timestamp":"2026-10-20T10:01:00Z","message":{"id":"msg_B","model":"m","usage":{"input_tokens":5,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":200},"output_tokens":3}}}
 EOF
 
@@ -91,6 +92,19 @@ check "the rules total is stated with its estimate method" $'RULES\ttotal\tfiles
 check "the startup median is set against the rules" $'median_vs_rules=28.6x' "$out"
 check "malformed lines are counted" $'MALFORMED\tlines=1' "$out"
 check "the report ends" "END" "$out"
+
+# The context line and the long session nudge (claude-config#1960, #1940) are re-measured here, at
+# the defaults the hook uses, read from hooks/lib/context_size.py rather than written twice (L83).
+check "the context line defaults to the hook's" $'CONTEXT\tmain\tline=200000\ttranscripts_over=0\trequests_over=0' "$out"
+check "the compaction nudge defaults to the hook's" $'COMPACTIONS\tmain\tnudge_at=5\ttranscripts=1\tat_or_over=0' "$out"
+out="$(run --context-line 1100 --compactions 1)"
+# Requests: main A 1,010 and B 1,205; subagents 2,503, 2,602 and 4,001.
+check "requests over the line and their share of requests and tokens, main" \
+  $'CONTEXT\tmain\tline=1100\ttranscripts_over=1\trequests_over=1\tshare_of_requests=50.0%\tshare_of_tokens=54.4%' "$out"
+check "and subagents" \
+  $'CONTEXT\tsubagent\tline=1100\ttranscripts_over=2\trequests_over=3\tshare_of_requests=100.0%\tshare_of_tokens=100.0%' "$out"
+check "main sessions compacted at least the nudge count, and the tokens they read" \
+  $'COMPACTIONS\tmain\tnudge_at=1\ttranscripts=1\tat_or_over=1\tshare_of_tokens=100.0%\tmax=1' "$out"
 
 out="$(run --summary)"
 absent "summary mode prints no per transcript rows" $'SESSION\t' "$out"

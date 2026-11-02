@@ -275,7 +275,7 @@ workers=$(( 10#$workers )); spawners=$(( 10#$spawners ))
 [ -n "$label" ] || label="${cmd[*]:-load only}"
 
 # --- every way out stops everything, records the end and gives up the turn -----------------------
-wpid=""; cpid=""; window_id=""; how=""; finished=""
+wpid=""; cpid=""; window_id=""; how=""; finished=""; early=""
 # Whether anything in the group still RUNS: a killed process not yet reaped (state Z) runs nothing.
 group_left(){
   local p
@@ -291,18 +291,21 @@ stop_group(){   # $1 = group leader's pid: the group, then what it left, then co
   bash "$KILL_TREE" "$g" 2>/dev/null
   # A second for TERM, then KILL, then a ceiling only something unkillable reaches: on a Mac at load
   # 300 a killed process can take more than a moment to go, and that is not a process left running.
-  # Each wait is on the group being empty, and the leader, this run's own child, is reaped after.
-  for i in 1 2 3 4 5 6 7 8 9 10; do group_left "$g" || { wait "$g" 2>/dev/null; return 0; }; sleep 0.1; done
+  # Each wait is on the group being empty; the leader, this run's own child, is reaped by finish.
+  for i in 1 2 3 4 5 6 7 8 9 10; do group_left "$g" || return 0; sleep 0.1; done
   kill -KILL -- "-$g" 2>/dev/null
-  for i in $(seq 1 300); do group_left "$g" || { wait "$g" 2>/dev/null; return 0; }; sleep 0.1; done
+  for i in $(seq 1 300); do group_left "$g" || return 0; sleep 0.1; done
   return 1
 }
 finish(){
   local rc=$? left=""
   [ -z "$finished" ] || return 0
   finished=1
-  stop_group "$wpid" || left="${left} the busy workers (process group $wpid)"
-  stop_group "$cpid" || left="${left} the command (process group $cpid)"
+  # Both leaders are reaped here, by name, before this run prints another word: a child of this
+  # shell that exits while it is writing into a pipe cuts the line short on bash 3.2 (L1035, #2015).
+  if stop_group "$wpid"; then [ -z "$wpid" ] || wait "$wpid" 2>/dev/null; else left="${left} the busy workers (process group $wpid)"; fi
+  if stop_group "$cpid"; then [ -z "$cpid" ] || wait "$cpid" 2>/dev/null; else left="${left} the command (process group $cpid)"; fi
+  [ -z "$early" ] || say "$early"
   if [ -n "$window_id" ]; then
     load_window_finish "$window_id" "$(now)" "${how:-ended (exit $rc)}" \
       || say "Could not record this window's end in $(load_window_record); readers will take its deadline as its end."
@@ -368,6 +371,10 @@ say "Window started at $(load_window_et "$start"), until $(load_window_et "$dead
 set -m
 # The workers' group: each loop ends itself at the limit (bash's SECONDS, no fork), and a watchdog
 # in the same group kills the whole group then, which holds even if this run is killed outright.
+# The workers' leader and the command below are this run's own children, kept so finish can stop and
+# reap them, and safe to keep (L1035, #2015): nothing this shell prints comes between their start and
+# that reaping. The loop below writes nothing itself (what it captures is written by subshells), and
+# its one line, on yielding, is held in $early until finish has reaped both.
 bash -c '
   lim=$1; n=$2; m=$3
   (sleep "$lim"; kill -KILL 0) &
@@ -398,7 +405,7 @@ while :; do
   busy="$(busy_now)"
   if [ -n "$busy" ]; then
     how="yielded after $(( t - start ))s to $(printf '%s\n' "$busy" | describe_busy)"
-    say "Stopping early: ${how#yielded after * to } started, and a deliberate load window must not overlap it."
+    early="Stopping early: ${how#yielded after * to } started, and a deliberate load window must not overlap it."
     exit 75
   fi
   looks=$((looks + 1))

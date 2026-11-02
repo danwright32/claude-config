@@ -34,6 +34,13 @@
 #                          the review page's kind totals and the review checker's selection
 #                          totals, which read different layouts of the same record, so each
 #                          passes its own fields
+#                          dcu_part(<bytes>, <size>) is 1 when one item's bytes are a lower bound,
+#                          the predicate the tally counts by and the review page marks each row
+#                          by, so the page's own running total adds rows up the same way (#2013)
+#   DCU_AWK_WORDS          dcu_tally_words(<key>): the words a total is said in ("size unknown",
+#                          "at least 4 MB, plus 1 whose size was not read", "4 MB"), printed by the
+#                          review checker; the review page's bottom bar says the same words, and its
+#                          suite runs the page's script against this function (#2013)
 #   dcu_total_kind <items> <unsized> <partial>
 #                          dcu_kind for a caller holding the numbers in the shell (scan_note keeps
 #                          them between prompts): one awk, so the rule is never written twice
@@ -56,10 +63,11 @@ function dcu_h(k,    b, n) {
 # or empty in a record from before sizes were recorded: partial, denied, unread) makes the total a
 # lower bound. <bytes> is in bytes, as the record carries it.
 DCU_AWK_TALLY='
+function dcu_part(bytes, size) { return (bytes != "" && size != "measured" && size != "reported" && size != "") ? 1 : 0 }
 function dcu_tally(key, bytes, size) {
   dcu_tn[key]++
   if (bytes == "") dcu_tu[key]++
-  else { dcu_tb[key] += bytes; if (size != "measured" && size != "reported" && size != "") dcu_tp[key] = 1 }
+  else { dcu_tb[key] += bytes; if (dcu_part(bytes, size)) dcu_tp[key] = 1 }
 }
 function dcu_kind(n, u, p) {
   if (n !~ /^[0-9]+$/ || u !~ /^[0-9]+$/ || p !~ /^[0-9]+$/) return "unknown"
@@ -72,6 +80,21 @@ function dcu_tally_unsized(key) { return dcu_tu[key] + 0 }
 function dcu_tally_kind(key) { return dcu_kind((dcu_tn[key] + 0) "", (dcu_tu[key] + 0) "", (dcu_tp[key] + 0) "") }
 function dcu_tally_line(key) {
   return sprintf("%d %d %s %d", dcu_tn[key], dcu_tu[key], dcu_tally_kib(key), dcu_tp[key])
+}
+'
+# The words a tally's total is said in, after a count: "size unknown" when no item's size was read,
+# "at least <size>, plus <n> whose size was not read" when some were not, "at least <size>" when one
+# was read only in part, and the size alone otherwise. A separate string because it calls dcu_h, so
+# it needs DCU_AWK_LIB and DCU_AWK_TALLY before it, and a caller of the tally alone (the scan's
+# summary, the low space warning) would otherwise carry a call to a function it never defined.
+DCU_AWK_WORDS='
+function dcu_tally_words(key,    kind, unread, w) {
+  kind = dcu_tally_kind(key)
+  if (kind == "unknown") return dcu_h("")
+  w = (kind == "lower" ? "at least " : "") dcu_h(dcu_tally_kib(key))
+  unread = dcu_tally_unsized(key)
+  if (unread) w = w ", plus " unread " whose size was not read"
+  return w
 }
 '
 dcu_total_kind() { # <items> <unsized> <partial> -> unknown | lower | exact

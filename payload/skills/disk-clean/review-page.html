@@ -162,17 +162,32 @@ h2 { font-size: 15px; margin: 0; }
     return (n < 1 && bytes > 0 ? 1 : n) + " KB";
   }
 
+  // The selection's total in the words of dcu_tally_words in hooks/lib/disk-clean-units.sh, which
+  // the review checker prints, so the bar and the terminal say the same (#2013): size unknown when no
+  // ticked item's size was read, never 0 KB; at least, with the unread ones counted, when some were
+  // not; at least when one was read only in part (each row's data-partial is the tally's dcu_part).
+  // The bytes are rounded to KiB first, half to even, as the tally's printf does, then worded. The
+  // suite runs this against the tally on the same selections.
+  function totalWords(unsized, n, bytes, partial) {
+    if (n > 0 && unsized === n) return "size unknown";
+    var kib = Math.floor(bytes / 1024), rest = bytes - kib * 1024;
+    if (rest > 512 || (rest === 512 && kib % 2 === 1)) kib++;
+    var w = (unsized > 0 || partial ? "at least " : "") + human(kib * 1024);
+    if (unsized > 0) w += ", plus " + unsized + " whose size was not read";
+    return w;
+  }
+
   function selection() {
-    var ids = [], bytes = 0, lower = false;
+    var ids = [], bytes = 0, unsized = 0, partial = false;
     for (var i = 0; i < ticks.length; i++) {
       var t = ticks[i];
       if (!t.checked || t.disabled) continue;
       ids.push(t.getAttribute("data-id"));
       var b = t.getAttribute("data-bytes");
-      if (b === "") lower = true; else bytes += Number(b);
-      if (t.getAttribute("data-partial") === "1") lower = true;
+      if (b === "") unsized++; else bytes += Number(b);
+      if (t.getAttribute("data-partial") === "1") partial = true;
     }
-    return { ids: ids, words: ids.length ? ids.length + " selected, " + (lower ? "at least " : "") + human(bytes) : "Nothing selected" };
+    return { ids: ids, words: ids.length ? ids.length + " selected, " + totalWords(unsized, ids.length, bytes, partial) : "Nothing selected" };
   }
 
   function payloadText(sel) {

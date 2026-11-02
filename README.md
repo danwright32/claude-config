@@ -1761,7 +1761,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 
 | Gate | What it costs on a push |
 | --- | --- |
-| `scanners-before-push.sh` (#518) | 2026-10-28: killed at its declared 180 second bound on three cold readings of three, so not a measurement, at load average 142 to 148. Earlier: 25.4 to 26.5 seconds on a branch push at load 12 to 18 on 2026-10-13 (the timing below), the gate every push waits on; 0.6 seconds on a repeat attempt over an unchanged tree, 2026-09-21. Since #1995 it first reads the messages of the commits the push adds, before any suite: 0.137 to 0.161 seconds over one commit, five readings on 2026-10-31 at load average 61, each including two python starts for the timing. After #1997 took `test-run-all-tests.sh` (510 seconds as the gate recorded it) out of its selection: every scanner finished inside the 150 second budget at load average 281 on 2026-10-31, the slowest 89 seconds, one reading, its total taken up by waiting on the sync suite's lock that another run held |
+| `scanners-before-push.sh` (#518) | 2026-10-28: killed at its declared 180 second bound on three cold readings of three, so not a measurement, at load average 142 to 148. Earlier: 25.4 to 26.5 seconds on a branch push at load 12 to 18 on 2026-10-13 (the timing below), the gate every push waits on; 0.6 seconds on a repeat attempt over an unchanged tree, 2026-09-21. Since #1995 it first reads the messages of the commits the push adds, before any suite: 0.137 to 0.161 seconds over one commit, five readings on 2026-10-31 at load average 61, each including two python starts for the timing. After #1997 took `test-run-all-tests.sh` (510 seconds as the gate recorded it) out of its selection: every scanner finished inside the 150 second budget at load average 281 on 2026-10-31, the slowest 89 seconds, one reading, its total taken up by waiting on the sync suite's lock that another run held. That wait was the whole of every refusal for time on 2026-11-01: seven of them at load average 21 to 95 each named only the sync suite's section, running 1 or 2 seconds after another full run's lock turned it away, so #2033 moved that scan to `tests/test-undated-measurements.sh`, which takes no lock (3 seconds alone). With the lock free the whole gate took 38 to 43 seconds, three readings at load average 15 to 35 on 2026-11-01, the slowest scanner `test-suite-scratch-isolation.sh` at 35 to 41 seconds, and 41 again during another builder's full run at 44 to 51. After the move, with the lock held for the whole run, it passed in 60 seconds at load average 160, the slowest scanner 51 seconds and the moved scan 7, so the 150 second budget stays |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 | `require-tests-before-push.sh` | not timed on 2026-10-28, since it can ask a model. Earlier: 0.3 seconds on each of two pushes on 2026-09-21, when the change carried a test and it asked no model; a sonnet call of up to 120 seconds when it has to ask |
@@ -1953,6 +1953,18 @@ measured on 2026-11-01 with the suite's stub judge (these limits are settings, n
 call is now told the rest is read separately and to judge only what it was shown, where it used to
 be told not to call untested anything whose test might be past the cut, which invited a pass over
 tests nobody read.
+
+A branch that merges main and then pushes is judged on its own change, not on everything main
+gained since the branch was last pushed (#2028). On 2026-11-01 four Pivot pull requests were each
+refused for size alone after merging a busy main, and each needed a one time override. Both gates
+now compare the push against what merging the newest main commit it holds into its last pushed
+commit gives (`git merge-tree`, which touches neither the index nor the working tree), and leave
+main's commit subjects out of what the judge reads. What remains is the branch's own commits plus
+anything the merge commit holds that is in neither parent, so a conflict resolution, or an edit
+slipped into a merge, is still judged; a file that conflicted is always judged, however it was
+resolved. When no default branch is known (no `origin/HEAD`, `origin/main` or `origin/master`) or
+git cannot work out the merge (it needs 2.38 or later), the whole push is judged as before, never
+none of it, and a refusal says main's changes were in it and why.
 
 Every push either gate reaches is recorded, overrides included (#1075), one line each in
 `~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
@@ -3300,6 +3312,46 @@ tells you once and offers a picker to remove them (#1582). It removes nothing on
   processes whatever the rule count, about 80 ms when measured on 2026-10-23 (DESIGN.md has the
   measurements).
 - Tests: `hooks/test-local-allow-sweep.sh`, and the process counts in `hooks/test-per-prompt-hook-cost.sh`.
+
+## The context line and the long session nudge
+
+Every request rereads the whole conversation, so the cost of a session is set by how much each
+request carries, not by cache misses (claude-config#1960, #1940). `hooks/context-size-notice.sh`
+runs after every tool call, in the main session and in every subagent, and reads the size of each
+request from the transcript's usage fields (input plus cache read plus cache write), never what
+anybody wrote. Both rules were decided by Dan on 2026-11-01.
+
+- **The context line** (`CONTEXT_LINE_TOKENS`, 200,000). A builder (any subagent) or an orchestrator
+  (a main session that has dispatched an agent or set a /goal) whose last request carried more is
+  told to write down what it has decided and then restart or compact. A builder writes
+  `handoff.md` in its scratchpad folder and hands back, unless only the push and the report are
+  left, and the orchestrator gives the rest to a fresh agent that starts from the note. An
+  orchestrator puts each decision that belongs to an issue on that issue as a comment and the rest
+  in `handoff.md`, then tells Dan, who sees the notice too, so he can type /compact or start a
+  fresh session. It is said once per band of the line (200K, 400K, ...) and again after a
+  compaction brings the session back under it, never on every call.
+- **What must be written down before a restart**, so nothing decided lives only in the
+  transcript: the goal or list in Dan's words with every constraint he stated, quoted and dated;
+  every decision with its reason and what was ruled out; the state left behind (branches,
+  worktrees, commit shas, pull requests, agents and background jobs still running, with their
+  ids); each item's status and the next step of the one in progress; every question waiting on
+  Dan. The orchestrate skill's section 7 and its `agent-rules.md` carry the same list.
+- **The long session nudge** (`CONTEXT_COMPACTIONS_NUDGE`, 5). A main session compacted that many
+  times is told, with Dan, to start fresh (/handoff, then a new session), with what its next
+  request costs: at least what its last one carried, beside its average, its size before its last
+  compaction and what it started from. Said again at each further multiple.
+- **Measured defaults.** `hooks/lib/context_size.py` records both measurements, and
+  `python3 tools/cache-usage.py --days 31 --summary` re-measures them through the same defaults and
+  the same sum: its CONTEXT lines give the share of requests and tokens over the line, its
+  COMPACTIONS line the main sessions compacted at least the nudge count. On the personal MacBook in
+  October, requests over 200,000 read 88.5% of subagent tokens and 85.4% of main session tokens.
+- **Cost.** Each run reads only the bytes appended to the transcript since its last run, with the
+  offset kept in `~/.claude/state/context-size/` (one small file per session and agent, never
+  synced): about 40 ms a call, and 0.11 s the first time over a 21 MB transcript (measured
+  2026-11-01). Two calls finishing at once take an flock without waiting, and the one that finds it
+  held says nothing. A transcript it cannot read is said once; a state folder it cannot write says
+  nothing, since a notice it cannot record would repeat on every call.
+- Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`.
 
 ## Mods
 

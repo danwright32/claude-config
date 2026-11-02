@@ -34,8 +34,18 @@ const modKit: { name: string; register: Register } = {
   register: on => {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
+      // #2026: the first N reads of what a command writes fail as a hook does when Claude Code's
+      // hooks worker stalls, in the engine's own words of 2026-11-01, N named by a plugin in the
+      // fold, kit-stalls-<N> (see withStalls). A failure thrown by a stand-in for one of the
+      // engine's own nouns never reaches the hook as written (the engine skips that stand-in and
+      // says it has no implementation), so the stall is thrown here.
+      let stalls = Number(e.plugins.map(p => /^kit-stalls-(\d+)$/.exec(p)?.[1]).find(n => n !== undefined) ?? 0)
       const modkit = {
         writes: async (input: { command: string; cwd: string; home: string }) => {
+          if (stalls > 0) {
+            stalls--
+            throw new Error('no answer to a heartbeat within 5000ms: the hooks worker is wedged')
+          }
           const r = await built.process.run(['__modkit', 'writes', JSON.stringify(input)])
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return JSON.parse(r.stdout)
@@ -149,6 +159,8 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
 const withKit = { plugins: [secDefault, modKit, guard] }
 // #1299: the same, with a mod-kit loaded before it had isDans.
 const withOldKit = { plugins: [secDefault, modKit, guard, { name: 'kit-lacks-is-dans', register: (() => undefined) as Register }] }
+// #2026: the same, with the first n reads of what a command writes failing as a stalled hooks worker fails a hook.
+const withStalls = (n: number) => ({ plugins: [secDefault, modKit, guard, { name: `kit-stalls-${n}`, register: (() => undefined) as Register }] })
 const notesOf = (w: { notes: string[] }) => w.notes.join('\n')
 // A note the session refused, as the toast carrying it shows Dan.
 const unsaidOf = (w: { toasts: string[] }) =>
@@ -1465,6 +1477,64 @@ test('a save the mod cannot judge is refused, never let through: a failing hook 
   const r = await call($, { tool: 'Write', file_path: '/anywhere/CLAUDE.md', content: '- rule\n' })
   expect(w.ran).toEqual([])
   expect(refusalOf(r)).toContain('could not check')
+})
+
+// #2026: a subagent's read only python run was refused as a possible save when the hooks worker
+// stalled under load, and passed when sent again. A stall is judged once more, so a call that writes
+// no lasting memory runs and one that does is held exactly as it would have been, in a subagent's
+// loop (the tool.call hook) and in the main session's (the tool.check hook) alike.
+// The stall is raised by the reader of what a shell command writes, so each save here is one.
+const READ_ONLY = 'python3 tools/cache-usage.py --days 7'
+const SAVE = "echo '- Ask before merging.' >> CLAUDE.md"
+test("a stalled hooks worker never refuses a subagent's call that writes no lasting memory (#2026)", withStalls(1), async ($, on) => {
+  const w = world($, on, { agents: ['agent-a1'] })
+  const r = await call($, { tool: 'Bash', command: READ_ONLY, agentId: 'agent-a1' })
+  expect(refusalOf(r)).toBe('')
+  expect(w.ran.map(x => x.input.command)).toEqual([READ_ONLY])
+  quietOnMain(w)
+})
+
+test("a stalled hooks worker still refuses a subagent's write to lasting memory, as the main session's alone (#2026)", withStalls(1), async ($, on) => {
+  const w = world($, on, { agents: ['agent-a1'] })
+  const r = await call($, { tool: 'Bash', command: SAVE, agentId: 'agent-a1' })
+  expect(refusalOf(r)).toContain('only the main session may do, after asking Dan; a subagent never asks him')
+  expect(w.ran).toEqual([])
+})
+
+test("a stalled hooks worker never refuses the main session's call that writes no lasting memory (#2026)", withStalls(1), async ($, on) => {
+  const w = world($, on, {})
+  const r = await call($, { tool: 'Bash', command: READ_ONLY })
+  expect(refusalOf(r)).toBe('')
+  expect(w.ran.map(x => x.input.command)).toEqual([READ_ONLY])
+})
+
+test("a stalled hooks worker still holds the main session's save, and Claude is told to ask Dan as usual (#2026)", withStalls(1), async ($, on) => {
+  const w = world($, on, {})
+  const r = await call($, { tool: 'Bash', command: SAVE })
+  expect(refusalOf(r)).toContain(ASKS)
+  expect(refusalOf(r)).toContain('~/Apps/slate/CLAUDE.md')
+  expect(w.ran).toEqual([])
+})
+
+// A stall the second look cannot get past either holds the call, in both loops, naming the stall in
+// the engine's words; each call was checked twice (two stalls each), so once the stall passes the
+// same call runs. A real save behind the same stall is held, never let through.
+const WEDGED = 'could not check whether this writes lasting memory (no answer to a heartbeat within 5000ms: the hooks worker is wedged)'
+test('a call a stalled hooks worker leaves unjudged twice is held, naming the stall, and runs once it passes (#2026)', withStalls(4), async ($, on) => {
+  const w = world($, on, { agents: ['agent-a1'] })
+  for (const agentId of ['agent-a1', undefined]) expect(refusalOf(await call($, { tool: 'Bash', command: READ_ONLY, ...(agentId ? { agentId } : {}) }))).toContain(WEDGED)
+  expect(w.ran).toEqual([])
+  expect(refusalOf(await call($, { tool: 'Bash', command: READ_ONLY }))).toBe('')
+  expect(w.ran.map(x => x.input.command)).toEqual([READ_ONLY])
+})
+
+test('a save a stalled hooks worker leaves unjudged twice is held, never let through (#2026)', withStalls(4), async ($, on) => {
+  const w = world($, on, { agents: ['agent-a1'] })
+  for (const agentId of ['agent-a1', undefined]) expect(refusalOf(await call($, { tool: 'Bash', command: SAVE, ...(agentId ? { agentId } : {}) }))).toContain(WEDGED)
+  expect(w.ran).toEqual([])
+  // Once the stall passes, the save is asked about as usual: two stalls each were spent above.
+  expect(refusalOf(await call($, { tool: 'Bash', command: SAVE }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
 })
 
 test('a question that is not about a save is left to Claude Code untouched', withKit, async ($, on) => {
