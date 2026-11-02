@@ -89,7 +89,7 @@ When nothing is running or queued:
 4. The board: each item's state, and the exact next step of each item in progress.
 5. Every question waiting on Dan.
 
-A decision that belongs to an issue goes on that issue as a comment, where the next session and the issue's next reader will find it. The rest goes in `handoff.md` in the scratchpad folder, with the board. Then tell Dan in one line that the session is at the context line and where the note is, so he can type /compact or start a fresh session from the note. Agents already running carry on either way.
+A decision that belongs to an issue goes on that issue as a comment, where the next session and the issue's next reader will find it. The rest goes in `handoff.md` at the root of the scratchpad folder, with the board. Then call `mcp__status-bar__queue_compact` with that file's absolute path (claude-config#2025). It refuses until the note is there, written since the last compaction and within the hour, and otherwise queues a compact that runs when this turn ends, shown on the status bar with Cancel. A /goal run is one turn until its goal is met or stopped, so there the compact waits until then. Tell Dan in one line that the session is at the context line and where the note is, so he can cancel the compact, type /compact himself if the tool was not there or refused, or start a fresh session from the note. Agents already running carry on either way.
 
 ## Common mistakes
 

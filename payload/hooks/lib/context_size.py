@@ -175,8 +175,12 @@ def line_notice(state, line, is_main):
         ctx = head + (
             "Before going on, write down what you have decided: put each decision that belongs to "
             "an issue on that issue as a comment, and the rest in handoff.md in your scratchpad "
-            "folder, covering %s. Then tell Dan in one line that the session is at the context line "
-            "and where the note is, so he can type /compact or start a fresh session from the note. "
+            "folder, covering %s. Then call mcp__status-bar__queue_compact with the absolute path of "
+            "handoff.md, which queues a compact that runs when this turn ends (claude-config#2025; "
+            "a /goal run is one turn until its goal is met or stopped, so there it waits until then), "
+            "and tell Dan in one line that the session is at the context line and where the note is, "
+            "so he can cancel the compact, type /compact himself if the tool was not there or refused, "
+            "or start a fresh session from the note. "
             "Agents you dispatched keep running either way." % WRITE_DOWN)
         system = ("This session is past the context line: its last request carried %s tokens "
                   "(the line is %s). It has been asked to write down what it has decided, then "
