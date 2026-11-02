@@ -187,7 +187,7 @@ want_style_code() {
   else fail=$((fail+1)); echo "FAIL: $2: expected exit $1, got $STYLE_CODE"; fi
 }
 
-BAD="$(python3 -c 'print("const label = \"Loading — please wait\";")')"
+BAD="$(python3 -c 'import sys; sys.stdout.buffer.write(("const label = \"Loading " + chr(0x2014) + " please wait\";").encode("utf-8"))')"
 W="$(mk_style_repo "$BAD")"
 run_style_hook "$W" "git push"
 want_style_code 2 "canary: a forbidden character blocks a plain push"
