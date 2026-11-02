@@ -18,9 +18,8 @@
 # each python3 -c it reads the next shell word the way the shell would join it: single quoted runs,
 # double quoted runs, a backslash escape, and the \"...\" a program takes when it sits inside an outer
 # double quoted string, until an unquoted space or operator. Any byte above 0x7f in that word is a
-# finding. test-python-bad-bytes.sh has its own reader of -c programs, which decodes each file and
-# takes one program per line in the hooks' .sh files; this one reads raw bytes, takes every program on
-# a line, and reads every file, tests, tools and claude-sync included.
+# finding. The reader is lib/python_c_programs.py, which test-python-bad-bytes.sh uses too, so the two
+# scans agree on what a program is; this one reads every file, tests, tools and claude-sync included.
 #
 # A finding never names the character, so this file holds no byte outside ASCII: the fixtures below
 # make theirs with printf octal escapes.
@@ -66,51 +65,13 @@ trap 'rm -rf "$TMPROOT"' EXIT
 #   UNCLOSED <path>:<line>   for a program whose quote never closes, which it cannot vouch for
 # and last, always, READ files=<n> programs=<n>.
 cat > "$TMPROOT/scan.py" <<'PY'
-import os, re, sys
+import os, sys
 
 root, listing = sys.argv[1], sys.argv[2]
 starts = "--starts" in sys.argv[3:]
-# python3 (or python), any flags, then -c (alone or ending a cluster such as -Ic), then a space.
-START = re.compile(rb"(?<![A-Za-z0-9_./-])python3?(?:[ \t]+-[A-Za-z]+)*?[ \t]+-[A-Za-z]*c[ \t]+")
-ENDS = b" \t\n;|&()<>"
-
-
-def word(b, i):
-    """The shell word starting at i, as the bytes between its quotes, or None when a quote never
-    closes. Returns (bytes or None, the index just past it)."""
-    out, n = bytearray(), len(b)
-    while i < n:
-        c = b[i:i + 1]
-        if c == b"'":
-            j = b.find(b"'", i + 1)
-            if j < 0:
-                return None, i
-            out += b[i + 1:j]
-            i = j + 1
-        elif b.startswith(b'\\"', i):
-            j = b.find(b'\\"', i + 2)
-            if j < 0:
-                return None, i
-            out += b[i + 2:j]
-            i = j + 2
-        elif c == b'"':
-            j = i + 1
-            while j < n and b[j:j + 1] != b'"':
-                j += 2 if b[j:j + 1] == b"\\" else 1
-            if j >= n:
-                return None, i
-            out += b[i + 1:j]
-            i = j + 1
-        elif c == b"\\":
-            out += b[i + 1:i + 2]
-            i += 2
-        elif c in ENDS:
-            break
-        else:
-            out += c
-            i += 1
-    return bytes(out), i
-
+# The one reader of python3 -c programs, shared with test-python-bad-bytes.sh.
+sys.path.insert(0, os.environ["PYTHON_C_PROGRAMS_LIB"])
+from python_c_programs import programs as read_programs
 
 files = programs = 0
 with open(listing, "rb") as f:
@@ -125,9 +86,7 @@ for rel in paths:
     files += 1
     if b"python" not in b or b"\0" in b:
         continue
-    for m in START.finditer(b):
-        line = b.count(b"\n", 0, m.start()) + 1
-        prog, end = word(b, m.end())
+    for line, start, end, prog in read_programs(b):
         if prog is None:
             print("UNCLOSED %s:%d" % (shown, line))
             continue
@@ -136,7 +95,7 @@ for rel in paths:
             print("START %s:%d" % (shown, line))
         # The first byte above 0x7f is found in the file itself, between the program's start and its
         # end, so the line named is the one to edit.
-        for k in range(m.end(), end):
+        for k in range(start, end):
             if b[k] > 0x7f:
                 print("HIT %s:%d: the python3 -c program starting on line %d holds a byte outside ASCII"
                       " (0x%02x); write the character as an escape" % (shown, b.count(b"\n", 0, k) + 1, line, b[k]))
@@ -144,7 +103,7 @@ for rel in paths:
 print("READ files=%d programs=%d" % (files, programs))
 PY
 
-scan() { python3 -I -B "$TMPROOT/scan.py" "$@" 2>&1; }
+scan() { PYTHON_C_PROGRAMS_LIB="$DIR/lib" python3 -I -B "$TMPROOT/scan.py" "$@" 2>&1; }
 
 # ---------------------------------------------------------------------------
 # The scan has to see a program holding the byte in every shape one takes, and pass the byte where it
@@ -173,10 +132,10 @@ hit_lines="$(printf '%s\n' "$probe" | sed -n 's/^HIT probe\/probe.sh:\([0-9]*\):
   && check "the scan finds the byte in each shape a program takes, and not in an argument, prose, an escape, a heredoc or another program" ok \
   || check "the scan finds the byte in each shape a program takes, and not in an argument, prose, an escape, a heredoc or another program" "it found lines [$hit_lines], wanted [2 5 7 8 9 10 ]: $probe"
 case "$probe" in
-  *"READ files=1 programs=10"*) check "the scan reads every program in the probe, the clean ones too" ok ;;
+  *"READ files=1 programs=9"*) check "the scan reads every program in the probe, the clean ones too" ok ;;
   *) check "the scan reads every program in the probe, the clean ones too" "it said: $probe" ;;
 esac
-# Ten: the prose on line 12 is read as a program named "program", which holds no such byte.
+# Nine: the prose on line 12 is a shell comment, which the reader does not take as a program.
 # A quote that never closes is a program it cannot vouch for, said as such, never passed.
 printf "python3 -c 'print(1)\n" > "$TMPROOT/probe/open.sh"
 printf 'probe/open.sh\n' > "$TMPROOT/open.list"
@@ -212,11 +171,11 @@ hits="$(printf '%s\n' "$tree" | grep -E '^(HIT|UNCLOSED) ')"
   && check "no python3 -c program in the repository holds a byte outside ASCII" ok \
   || check "no python3 -c program in the repository holds a byte outside ASCII" "these do, and fail to compile on Linux under the C locale:
 $hits"
-# A scan that read a handful of programs is reading the wrong tree (L98). 658 were read on 2026-11-02.
+# A scan that read a handful of programs is reading the wrong tree (L98). 681 were read on 2026-11-02.
 nprog="$(printf '%s\n' "$tree" | sed -n 's/^READ files=[0-9]* programs=\([0-9]*\)$/\1/p')"
 [ "${nprog:-0}" -ge 400 ] \
   && check "the scan read the repository's programs" ok \
-  || check "the scan read the repository's programs" "it read ${nprog:-no} python3 -c programs in $ROOT, where 658 were read on 2026-11-02"
+  || check "the scan read the repository's programs" "it read ${nprog:-no} python3 -c programs in $ROOT, where 681 were read on 2026-11-02"
 
 # The four payload readers in lib/push-scope.sh, which #2056 fixed, are among the programs read, so
 # this scan is the check on them (it replaced the one in test-payload-separator.sh). Each program's
