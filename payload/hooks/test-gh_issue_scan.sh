@@ -263,12 +263,14 @@ wa "#1436 a write through a substitution lands nowhere the gate can tell" "NO" '
 wa "#1436 tee writes land the same way" "/start/x/t.md" 'cd x; echo y | tee t.md'
 
 # ---------------------------------------------------------------------------
-# The fallback gh reader (claude-config#1449). gh_issue_scan.py carries a crude reader of gh of its
-# own, used only when lib/shell-words.py cannot be loaded, and the body file gate leans on it in
-# exactly that case, which nothing else runs. A copy of the scanner and the gate with no
-# lib/shell-words.py beside them runs it; the real file is never touched. Every shape below is read
-# by both copies and the two readings compared, then the gate is run from both copies and its
-# answers compared.
+# With no reader (claude-config#1449, #2059). The scanner finds every command with lib/shell-words.py
+# and keeps no reading of its own, so when that file is missing or fails to load it reads nothing:
+# every command is unreadable, saying the reader could not be loaded, and the gate refuses any command
+# naming a command it judges, as it refuses any command it cannot read. It fails closed, a decision of
+# #2059: the crude reader it carried before could misread what the shared one reads, so a command the
+# gate refuses could pass whenever the reader was gone. A copy of the scanner and the gate with no
+# lib/shell-words.py beside them, and one with a shell-words.py that fails to load, run it; the real
+# file is never touched.
 # ---------------------------------------------------------------------------
 FB_TMP="$(mktemp -d)"
 trap 'rm -rf "$FB_TMP"' EXIT
@@ -276,64 +278,66 @@ FB="$FB_TMP/hooks"
 mkdir -p "$FB/lib"
 cp "$DIR/gh_issue_scan.py" "$DIR/issue_field_gate.py" "$DIR/require-issue-fields.sh" "$FB/"
 cp "$DIR/lib/claude-session-line.sh" "$FB/lib/"
-# A shell-words.py that is there but fails to load is the other way onto the fallback.
 FB_BROKEN="$FB_TMP/broken"
 mkdir -p "$FB_BROKEN/lib"
-cp "$DIR/gh_issue_scan.py" "$FB_BROKEN/"
+cp "$DIR/gh_issue_scan.py" "$DIR/issue_field_gate.py" "$DIR/require-issue-fields.sh" "$FB_BROKEN/"
+cp "$DIR/lib/claude-session-line.sh" "$FB_BROKEN/lib/"
 printf 'raise RuntimeError("broken on purpose")\n' > "$FB_BROKEN/lib/shell-words.py"
 
-# The control: the copy really is on the fallback and the real one really is not, or every
-# comparison below compares the shared reader with itself and passes (L1).
-reader_of() { # reader_of <dir> -> shared or fallback
+# The control: each copy really has no reader and the real one really has it, or every check below
+# asks the shared reader and passes (L1).
+reader_of() { # reader_of <dir> -> shared or missing
   python3 - "$1/gh_issue_scan.py" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("scan_under_test", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
-# Asked of gh_command itself: the scanner names the half loaded module _sw before loading it fails,
-# so whether _sw exists says nothing (seen 2026-10-21, when this control first read "shared" for both).
-print("fallback" if m.gh_command.__module__ == m.__name__ else "shared")
+print("missing" if m.READER_ERROR else "shared")
 PY
 }
-[ "$(reader_of "$DIR")" = "shared" ] && check "#1449 the real scanner reads gh with lib/shell-words.py" ok \
-  || check "#1449 the real scanner reads gh with lib/shell-words.py" "got $(reader_of "$DIR")"
-[ "$(reader_of "$FB")" = "fallback" ] && check "#1449 with lib/shell-words.py missing it uses its fallback" ok \
-  || check "#1449 with lib/shell-words.py missing it uses its fallback" "got $(reader_of "$FB")"
-[ "$(reader_of "$FB_BROKEN")" = "fallback" ] && check "#1449 with lib/shell-words.py failing to load it uses its fallback" ok \
-  || check "#1449 with lib/shell-words.py failing to load it uses its fallback" "got $(reader_of "$FB_BROKEN")"
+[ "$(reader_of "$DIR")" = "shared" ] && check "#1449 the real scanner reads commands with lib/shell-words.py" ok \
+  || check "#1449 the real scanner reads commands with lib/shell-words.py" "got $(reader_of "$DIR")"
+[ "$(reader_of "$FB")" = "missing" ] && check "#1449 with lib/shell-words.py missing it has no reader" ok \
+  || check "#1449 with lib/shell-words.py missing it has no reader" "got $(reader_of "$FB")"
+[ "$(reader_of "$FB_BROKEN")" = "missing" ] && check "#1449 with lib/shell-words.py failing to load it has no reader" ok \
+  || check "#1449 with lib/shell-words.py failing to load it has no reader" "got $(reader_of "$FB_BROKEN")"
 
 # A create in a substitution in the body of a heredoc whose end marker is unquoted is run by the
-# shell, so it is a create (claude-config#2053), read by the shared reader; a body it cannot read
-# (a backquote left open) and a scanner with no reader both read the whole body as commands, which
-# sees more, never fewer. A quoted marker keeps the body text in every copy.
+# shell, so it is a create (claude-config#2053). A quoted marker keeps the body text.
 count_in() { # count_in <dir> <command> -> how many creates that copy of the scanner finds
   python3 - "$1/gh_issue_scan.py" "$2" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("scan_under_test", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
-print(len(m.scan_creates(sys.argv[2])))
+try:
+    print(len(m.scan_creates(sys.argv[2])))
+except m.Unreadable as e:
+    print("UNREADABLE:%s" % e)
 PY
 }
 HD_C='gh issue create -t x'
-for d in "$DIR" "$FB" "$FB_BROKEN"; do
-  name="${d#"$FB_TMP"/}"
-  [ "$(count_in "$d" $'cat <<EOF\nfiled $('"$HD_C"$')\nEOF')" = 1 ] && check "#2053 $name: a create in an unquoted heredoc body's substitution is seen" ok \
-    || check "#2053 $name: a create in an unquoted heredoc body's substitution is seen" "got $(count_in "$d" $'cat <<EOF\nfiled $('"$HD_C"$')\nEOF')"
-  [ "$(count_in "$d" $'cat <<\'EOF\'\nfiled $('"$HD_C"$')\nEOF')" = 0 ] && check "#2053 $name: control, a quoted body is text" ok \
-    || check "#2053 $name: control, a quoted body is text" "got $(count_in "$d" $'cat <<\'EOF\'\nfiled $('"$HD_C"$')\nEOF')"
-  [ "$(count_in "$d" $'cat <<E"OF"\nb\nEOF\n'"$HD_C")" = 1 ] && check "#2053 $name: a create after a partly quoted marker's body is seen" ok \
-    || check "#2053 $name: a create after a partly quoted marker's body is seen" "got $(count_in "$d" $'cat <<E"OF"\nb\nEOF\n'"$HD_C")"
-done
-[ "$(count_in "$DIR" $'cat <<EOF\ndon`t\n'"$HD_C"$'\nEOF')" = 1 ] && check "#2053 a body the reader cannot read is read whole, so the create in it is seen" ok \
-  || check "#2053 a body the reader cannot read is read whole, so the create in it is seen" "got $(count_in "$DIR" $'cat <<EOF\ndon`t\n'"$HD_C"$'\nEOF')"
+[ "$(count_in "$DIR" $'cat <<EOF\nfiled $('"$HD_C"$')\nEOF')" = 1 ] && check "#2053 a create in an unquoted heredoc body's substitution is seen" ok \
+  || check "#2053 a create in an unquoted heredoc body's substitution is seen" "got $(count_in "$DIR" $'cat <<EOF\nfiled $('"$HD_C"$')\nEOF')"
+[ "$(count_in "$DIR" $'cat <<\'EOF\'\nfiled $('"$HD_C"$')\nEOF')" = 0 ] && check "#2053 control, a quoted body is text" ok \
+  || check "#2053 control, a quoted body is text" "got $(count_in "$DIR" $'cat <<\'EOF\'\nfiled $('"$HD_C"$')\nEOF')"
+[ "$(count_in "$DIR" $'cat <<E"OF"\nb\nEOF\n'"$HD_C")" = 1 ] && check "#2053 a create after a partly quoted marker's body is seen" ok \
+  || check "#2053 a create after a partly quoted marker's body is seen" "got $(count_in "$DIR" $'cat <<E"OF"\nb\nEOF\n'"$HD_C")"
+# A backquote left open in an unquoted body is a substitution bash refuses to run (measured on bash
+# 3.2, 2026-11-02: it prints the error and runs nothing in the body), so the command is unreadable,
+# and the gate refuses it because its text names the create.
+case "$(count_in "$DIR" $'cat <<EOF\ndon`t\n'"$HD_C"$'\nEOF')" in
+  UNREADABLE*) check "#2053 a body the reader cannot read is unreadable, never zero creates" ok ;;
+  *) check "#2053 a body the reader cannot read is unreadable, never zero creates" "got $(count_in "$DIR" $'cat <<EOF\ndon`t\n'"$HD_C"$'\nEOF')" ;;
+esac
 [ "$(count_in "$DIR" $'cat <<EOF\n${X:-$('"$HD_C"$')}\nEOF')" = 1 ] && check "#2053 a create in a substitution inside \${ } in an unquoted body is seen" ok \
   || check "#2053 a create in a substitution inside \${ } in an unquoted body is seen" "got $(count_in "$DIR" $'cat <<EOF\n${X:-$('"$HD_C"$')}\nEOF')"
 [ "$(count_in "$DIR" $'cat <<EOF\nno substitution, just '"$HD_C"$'\nEOF')" = 0 ] && check "#2053 control: an unquoted body with no substitution is text" ok \
   || check "#2053 control: an unquoted body with no substitution is text" "seen as a create"
 
+
 # The command shapes the shared reader is tested on above, and the shapes that put a flag of the
-# subcommand in front of its action, where a reader of only the words after the action misses it.
+# subcommand in front of its action.
 FB_SHAPES=(
   'gh issue create --title x --label bug'
   'echo hi && gh issue create -t x'
@@ -388,66 +392,51 @@ FB_SHAPES=(
   'gh issue view 5 -t comment'
   'gh release create v1 -t pr -n comment'
 )
-# Where the fallback reads MORE than the shared reader, which is its stated design: it does not know
-# which of gh's flags take a value, nor what runs a command, so it takes a gh it cannot place as one
-# that runs, and the gate asks rather than misses. Each is checked to read more, never less, and the
-# gate to refuse there, never to pass.
+# Shapes a crude reading would take for a create that runs.
 FB_OVER_READ=(
   'gh --title issue create -t x'
   'echo gh issue create -t x'
 )
 
-fb_compare() { # fb_compare <shape>... -> one line per shape: SAME, MORE, or DIFF with both readings
-  python3 - "$DIR/gh_issue_scan.py" "$FB/gh_issue_scan.py" "$@" <<'PY'
+# With no reader every shape above is unreadable, naming the reader, whatever it holds; the empty
+# command alone is nothing to read.
+no_reader() { # no_reader <dir> <shape>... -> one line per shape: MISSING, NONE, or what it read
+  python3 - "$1/gh_issue_scan.py" "${@:2}" <<'PY'
 import importlib.util, sys
-
-def load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
-    return m
-
-shared, fallback = load("scan_shared", sys.argv[1]), load("scan_fallback", sys.argv[2])
-
-def reading(m, cmd):
+spec = importlib.util.spec_from_file_location("scan_no_reader", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+for cmd in sys.argv[2:]:
     try:
         found = m.scan_gh_in_context(cmd, "/start", {"HOME": "/h"}, m.BODY_FILE_COMMANDS)
     except m.Unreadable as e:
-        return "UNREADABLE:%s" % e
-    return [(kind, args, envs, sorted(vars(place).items())) for kind, args, envs, place in found]
-
-for cmd in sys.argv[3:]:
-    a, b = reading(shared, cmd), reading(fallback, cmd)
-    if a == b:
-        print("SAME")
-    elif isinstance(a, list) and isinstance(b, list) and all(x in b for x in a) and len(b) > len(a):
-        print("MORE")
-    else:
-        print("DIFF shared=%r fallback=%r" % (a, b))
+        print("MISSING" if "lib/shell-words.py could not be loaded" in str(e) else "OTHER:%s" % e)
+        continue
+    print("NONE" if not cmd.strip() and found == [] else "READ:%r" % (found,))
+try:
+    m.file_writes("cat > b.md <<'EOF'\nx\nEOF")
+    print("WRITES READ")
+except m.Unreadable as e:
+    print("WRITES MISSING" if "lib/shell-words.py could not be loaded" in str(e) else "WRITES OTHER:%s" % e)
 PY
 }
-# Each answer list is read into a variable first, never through process substitution, whose child
-# bash 3.2 never waits for and whose exit can cut short what this suite prints next (L1035, #1989).
-# No answer is an empty line, so an empty list stays an empty array.
-fb_lines=()
-fb_out="$(fb_compare "${FB_SHAPES[@]}")"
-while IFS= read -r line; do [ -n "$line" ] && fb_lines+=("$line"); done <<FB_OUT
-$fb_out
-FB_OUT
-[ "${#fb_lines[@]}" -eq "${#FB_SHAPES[@]}" ] && check "#1449 every shape was read by both copies" ok \
-  || check "#1449 every shape was read by both copies" "${#fb_lines[@]} answers for ${#FB_SHAPES[@]} shapes"
-for k in "${!FB_SHAPES[@]}"; do
-  [ "${fb_lines[$k]:-}" = "SAME" ] && check "#1449 the fallback reads it as the shared reader does: ${FB_SHAPES[$k]}" ok \
-    || check "#1449 the fallback reads it as the shared reader does: ${FB_SHAPES[$k]}" "${fb_lines[$k]:-no answer}"
-done
-fb_lines=()
-fb_out="$(fb_compare "${FB_OVER_READ[@]}")"
-while IFS= read -r line; do [ -n "$line" ] && fb_lines+=("$line"); done <<FB_OUT
-$fb_out
-FB_OUT
-for k in "${!FB_OVER_READ[@]}"; do
-  [ "${fb_lines[$k]:-}" = "MORE" ] && check "#1449 the fallback reads more here, never less: ${FB_OVER_READ[$k]}" ok \
-    || check "#1449 the fallback reads more here, never less: ${FB_OVER_READ[$k]}" "${fb_lines[$k]:-no answer}"
+for d in "$FB" "$FB_BROKEN"; do
+  name="${d#"$FB_TMP"/}"
+  nr_lines=()
+  nr_out="$(no_reader "$d" "${FB_SHAPES[@]}" "${FB_OVER_READ[@]}")"
+  while IFS= read -r line; do [ -n "$line" ] && nr_lines+=("$line"); done <<NR_OUT
+$nr_out
+NR_OUT
+  all=("${FB_SHAPES[@]}" "${FB_OVER_READ[@]}")
+  [ "${#nr_lines[@]}" -eq "$(( ${#all[@]} + 1 ))" ] && check "#2059 $name: every shape was asked" ok \
+    || check "#2059 $name: every shape was asked" "${#nr_lines[@]} answers for ${#all[@]} shapes and the write"
+  for k in "${!all[@]}"; do
+    want=MISSING; [ -z "${all[$k]}" ] && want=NONE
+    [ "${nr_lines[$k]:-}" = "$want" ] && check "#2059 $name: with no reader it reads nothing: ${all[$k]}" ok \
+      || check "#2059 $name: with no reader it reads nothing: ${all[$k]}" "${nr_lines[$k]:-no answer}"
+  done
+  [ "${nr_lines[${#all[@]}]:-}" = "WRITES MISSING" ] && check "#2059 $name: with no reader the writes are unreadable too" ok \
+    || check "#2059 $name: with no reader the writes are unreadable too" "${nr_lines[${#all[@]}]:-no answer}"
 done
 
 # The gate's answer from each copy: the whole output, so a refusal for a different reason is caught
@@ -482,21 +471,32 @@ None"'
   "gh issue create --title t --body-file $FB_TMP/never-written.md $FB_ALL"
   "gh pr create -t issue -b edit --body-file $FB_EMPTY"
 )
-for c in "${FB_GATE_SHAPES[@]}"; do
-  shared="$(gate_from "$DIR" "$c")"; fallback="$(gate_from "$FB" "$c")"
-  [ "$shared" = "$fallback" ] && check "#1449 the gate answers the same on the fallback: $c" ok \
-    || check "#1449 the gate answers the same on the fallback: $c" "shared [${shared:0:160}] fallback [${fallback:0:160}]"
+# Every shape the gate refuses with its reader, it refuses without one; and without one it refuses
+# every shape naming a create that files or a body file, the two things it judges, saying the reader
+# could not be loaded. It passes what names neither, so it is not refusing everything.
+FB_PASSES=('gh -R o/x issue create --help' "gh pr merge 5 --squash --body-file $FB_EMPTY" 'gh issue list' 'echo hi')
+for d in "$FB" "$FB_BROKEN"; do
+  name="${d#"$FB_TMP"/}"
+  for c in "${FB_GATE_SHAPES[@]}" "${FB_OVER_READ[@]}"; do
+    case " ${FB_PASSES[*]} " in *" $c "*) continue ;; esac
+    out="$(gate_from "$d" "$c")"
+    [[ "$out" == *'"deny"'* && "$out" == *'lib/shell-words.py could not be loaded'* ]] \
+      && check "#2059 $name: with no reader the gate refuses, naming the reader: $c" ok \
+      || check "#2059 $name: with no reader the gate refuses, naming the reader: $c" "got [${out:0:200}]"
+  done
+  for c in "${FB_PASSES[@]}"; do
+    out="$(gate_from "$d" "$c")"
+    [[ "$out" != *'"deny"'* ]] && check "#2059 $name: with no reader the gate passes what names nothing it judges: $c" ok \
+      || check "#2059 $name: with no reader the gate passes what names nothing it judges: $c" "got [${out:0:200}]"
+  done
 done
-# The positive control on the gate: the comparison above is only worth something if these shapes
-# include refusals as well as passes.
-[[ "$(gate_from "$FB" "gh issue --body-file $FB_EMPTY edit 5")" == *'"deny"'* ]] \
-  && check "#1449 the gate on the fallback refuses an empty body file written in front of the action" ok \
-  || check "#1449 the gate on the fallback refuses an empty body file written in front of the action" "it passed"
-for c in "${FB_OVER_READ[@]}"; do
-  [[ "$(gate_from "$FB" "$c")" == *'"deny"'* && "$(gate_from "$DIR" "$c")" != *'"deny"'* ]] \
-    && check "#1449 where the fallback reads more, the gate on it refuses: $c" ok \
-    || check "#1449 where the fallback reads more, the gate on it refuses: $c" "shared and fallback did not split refuse and pass"
-done
+# The control: the shapes include ones the gate refuses with its reader, and ones it passes.
+[[ "$(gate_from "$DIR" "gh issue --body-file $FB_EMPTY edit 5")" == *'"deny"'* ]] \
+  && check "#1449 control: the gate refuses an empty body file written in front of the action" ok \
+  || check "#1449 control: the gate refuses an empty body file written in front of the action" "it passed"
+[[ "$(gate_from "$DIR" "gh pr create --title t --body-file $FB_PLAIN")" != *'"deny"'* ]] \
+  && check "#1449 control: the gate passes a body file with a description" ok \
+  || check "#1449 control: the gate passes a body file with a description" "it refused"
 
 # ---------------------------------------------------------------------------
 # A create another program runs (claude-config#1478): a shell's -c string, eval, env -S and the
@@ -557,20 +557,74 @@ HEREDOC_BODY="$(printf 'gh issue create --title T -m M --body "$(cat <<'"'"'EOF'
 PRINTF_BODY="gh pr create -t T --body \"\$(printf 'a test'\"'\"'s temp dir, \"%s\"' \"x\")\" && gh issue create -t U -m N"
 [ "$(ask milestones "$PRINTF_BODY")" = "N" ] && check "#1485 a printf body in \"\$(...)\" with '\"'\"' is read, and the create after it found" ok \
   || check "#1485 a printf body in \"\$(...)\" with '\"'\"' is read, and the create after it found" "got $(ask milestones "$PRINTF_BODY")"
-# What the shell itself cannot read stays unreadable, and says which quote and where (L11).
-case "$(ask count "$(printf 'echo a\n# don'"'"'t\ngh issue create -t x')")" in
-  *"line 2, column 6"*) check "#1485 an unreadable command names the quote's line and column" ok ;;
-  *) check "#1485 an unreadable command names the quote's line and column" "got $(ask count "$(printf 'echo a\n# don'"'"'t\ngh issue create -t x')")" ;;
+# What the shell itself cannot read stays unreadable, and says which quote and where (L11). The
+# quote is a real one: a # after a blank starts a comment, where a lone quote is only text, so the
+# fixture this replaces (`# don't` on line 2) was a command bash reads (claude-config#2059).
+case "$(ask count "$(printf 'echo a\necho don'"'"'t\ngh issue create -t x')")" in
+  *"line 2, column 9"*) check "#1485 an unreadable command names the quote's line and column" ok ;;
+  *) check "#1485 an unreadable command names the quote's line and column" "got $(ask count "$(printf 'echo a\necho don'"'"'t\ngh issue create -t x')")" ;;
 esac
+[ "$(ask count "$(printf 'echo a\n# don'"'"'t\ngh issue create -t x')")" = "1" ] \
+  && check "#2059 a quote inside a comment is text, so the create after it is found" ok \
+  || check "#2059 a quote inside a comment is text, so the create after it is found" "got $(ask count "$(printf 'echo a\n# don'"'"'t\ngh issue create -t x')")"
 case "$(ask count 'gh issue create --body "$(cat <<EOF')" in
   UNREADABLE*) check "#1485 a substitution never closed is still unreadable" ok ;;
   *) check "#1485 a substitution never closed is still unreadable" "got $(ask count 'gh issue create --body "$(cat <<EOF')" ;;
 esac
-# The gate on the fallback reader answers an unreadable command as it does on the shared one.
-UNREAD_CREATE="$(printf '# don'"'"'t\ngh issue create --title T')"
-shared="$(gate_from "$DIR" "$UNREAD_CREATE")"; fallback="$(gate_from "$FB" "$UNREAD_CREATE")"
-[[ "$shared" == *'"deny"'* && "$shared" = "$fallback" ]] && check "#1485 the gate refuses an unreadable create on both readers alike" ok \
-  || check "#1485 the gate refuses an unreadable create on both readers alike" "shared [${shared:0:160}] fallback [${fallback:0:160}]"
+case "$(ask count 'gh issue create -t x \')" in
+  UNREADABLE*"backslash"*) check "#1485 a command ending in a lone backslash is unreadable, and says so" ok ;;
+  *) check "#1485 a command ending in a lone backslash is unreadable, and says so" "got $(ask count 'gh issue create -t x \')" ;;
+esac
+# The gate refuses an unreadable create, with its reader and without one, each saying why.
+UNREAD_CREATE="$(printf 'echo don'"'"'t\ngh issue create --title T')"
+shared="$(gate_from "$DIR" "$UNREAD_CREATE")"; missing="$(gate_from "$FB" "$UNREAD_CREATE")"
+[[ "$shared" == *'"deny"'* && "$shared" == *"line 1, column 9"* ]] && check "#1485 the gate refuses an unreadable create, naming the quote" ok \
+  || check "#1485 the gate refuses an unreadable create, naming the quote" "got [${shared:0:200}]"
+[[ "$missing" == *'"deny"'* && "$missing" == *"lib/shell-words.py could not be loaded"* && "$missing" != *"Close that quote"* ]] \
+  && check "#2059 with no reader the gate refuses it, naming the reader, not a quote" ok \
+  || check "#2059 with no reader the gate refuses it, naming the reader, not a quote" "got [${missing:0:200}]"
+
+# ---------------------------------------------------------------------------
+# One reading of the command (claude-config#2059). The scanner finds its commands with the shared
+# reader, lib/shell-words.py's commands(), so it sees a create that a substitution runs, in double
+# quotes or backquotes, and reads every heredoc end marker as the shell does, a partly quoted or
+# hyphenated one included. Its own readings missed the first (measured 2026-11-01) and misread the
+# second: `<<'E'OF` and `<<E"OF"` were read as the marker E and `<<END-OF` as END.
+# ---------------------------------------------------------------------------
+for c in 'echo "$(gh issue create -t x -m M)"' 'echo `gh issue create -t x -m M`' 'echo "`gh issue create -t x -m M`"' \
+         'X="$(gh issue create -t x -m M)"; echo "$X"' 'echo "made $(echo a; gh issue create -t x -m M)"'; do
+  [ "$(ask milestones "$c")" = "M" ] && check "#2059 a create a substitution runs is found, with its own flags: $c" ok \
+    || check "#2059 a create a substitution runs is found, with its own flags: $c" "got $(ask milestones "$c")"
+done
+[ "$(ask count 'echo "gh issue create -t x" `echo gh issue create`')" = "0" ] \
+  && check "#2059 control: a create only quoted or echoed is not one" ok \
+  || check "#2059 control: a create only quoted or echoed is not one" "got $(ask count 'echo "gh issue create -t x" `echo gh issue create`')"
+[ "$(ask bodyfile '(cd /x; echo "$(cd /y)"); gh issue create --body-file b.md')" = "/start/b.md" ] \
+  && check "#2059 a cd in a subshell or a substitution stays there" ok \
+  || check "#2059 a cd in a subshell or a substitution stays there" "got $(ask bodyfile '(cd /x; echo "$(cd /y)"); gh issue create --body-file b.md')"
+[ "$(ask count 'f() { gh issue create -t x; }; case y in y) gh issue create -t z;; esac')" = "2" ] \
+  && check "#2059 a create in a function body and in a case branch is found" ok \
+  || check "#2059 a create in a function body and in a case branch is found" "got $(ask count 'f() { gh issue create -t x; }; case y in y) gh issue create -t z;; esac')"
+# Each misread marker, inside a body in "$( )": the body's text is the body, never the create's flags.
+for m in "'E'OF:EOF" 'E"OF":EOF' 'END-OF:END-OF'; do
+  c="$(printf 'gh issue create -t T --body "$(cat <<%s\nx" -m M "y\n%s\n)"' "${m%%:*}" "${m#*:}")"
+  [ "$(ask milestones "$c")" = "" ] && check "#2059 a body in \"\$( )\" ending at the marker ${m%%:*} gives the create no flags" ok \
+    || check "#2059 a body in \"\$( )\" ending at the marker ${m%%:*} gives the create no flags" "got $(ask milestones "$c")"
+done
+# And on a file the command writes: the body ends at its real closing line, so the write after it is
+# seen, and the body is shown when the marker is quoted in any part.
+writes_is "#2059 a write after a <<'E'OF body is seen" "a.md:w:shown b.md:w:hidden" "$(printf "cat > a.md <<'E'OF\n\$X\nEOF\necho \$Y > b.md")"
+writes_is "#2059 a write after a <<E\"OF\" body is seen, and the body is shown" "a.md:w:shown b.md:w:hidden" "$(printf 'cat > a.md <<E"OF"\n$X\nEOF\necho $Y > b.md')"
+writes_is "#2059 a write after a <<END-OF body is seen" "a.md:w:shown b.md:w:hidden" "$(printf 'cat > a.md <<END-OF\nx\nEND-OF\necho $Y > b.md')"
+# The gate: a body file written from a <<E"OF" heredoc is text the command shows, so an incomplete one
+# is refused, where reading it as hidden passed it unjudged.
+EOF_BODY="$(printf 'cat > b.md <<E"OF"\n$X has no section\nEOF\ngh issue create --title T --milestone Ungrouped --label priority-p2 --label bug --body-file b.md')"
+[[ "$(gate_from "$DIR" "$EOF_BODY")" == *'"deny"'*"Open questions"* ]] \
+  && check "#2059 the gate refuses an incomplete body file written from a <<E\"OF\" heredoc" ok \
+  || check "#2059 the gate refuses an incomplete body file written from a <<E\"OF\" heredoc" "got [$(gate_from "$DIR" "$EOF_BODY" | head -c 200)]"
+[[ "$(gate_from "$DIR" 'echo "$(gh issue create --title T)"')" == *'"deny"'* ]] \
+  && check "#2059 the gate refuses an incomplete create a substitution runs" ok \
+  || check "#2059 the gate refuses an incomplete create a substitution runs" "it passed"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

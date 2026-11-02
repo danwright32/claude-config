@@ -169,7 +169,15 @@ SEPARATORS = {"&&": ("&&", 2), "||": ("||", 2), "|&": ("|", 2), ";;": (";", 2),
 
 
 class Unreadable(Exception):
-    """Something opened and never closed, so this reading cannot be trusted."""
+    """Something opened and never closed, so this reading cannot be trusted.
+
+    at is where in the command the outermost quote still open at the end was opened, None when what
+    is open is not a quote (a substitution, a group), so a caller can say which quote and where.
+    """
+
+    def __init__(self, at=None):
+        super().__init__()
+        self.at = at
 
 
 def heredoc_opener(s, i):
@@ -260,7 +268,7 @@ def moved(cwd, old, target):
     return os.path.join(cwd, target), cwd
 
 
-def commands(s, cwd="", heredocs=None, spans=None):
+def commands(s, cwd="", heredocs=None, spans=None, parts=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
 
     heredocs, when a list, is given one (quoted, before, body) for each heredoc body the reading
@@ -287,12 +295,23 @@ def commands(s, cwd="", heredocs=None, spans=None):
 
     spans, a list, reads s instead as the body of an unquoted heredoc, and collects the text inside
     each substitution written directly in it (body_substitutions).
+
+    parts, a list, is given one dict for each entry of the result, in the same order, saying where
+    in s that command is and what is written directly in it (claude-config#2059): start and end, its
+    text being s[start:end]; scope, the ids of the command frames enclosing it, outermost first and
+    its own last (0 is s itself, and each subshell and substitution has an id of its own); inner, a
+    (start, end, in_double_quotes) for each substitution written directly in it, start at its `$(`
+    or opening backquote and end just past its closing one; and openers, a (start, end) for each
+    heredoc opener written directly in it, from its << to the end of its end marker word. So a
+    caller can read a command's text as one word for each substitution in it, whose own commands it
+    is given separately, and know which shell each command runs in.
     """
     n = len(s)
     line_break = "\n" if "\n" in s else "; "
     closing_line = re.escape(line_break) + "%s%s" + (r"(?=\n|$)" if line_break == "\n" else r"(?=;|$)")
     out, pending = [], []
-    frames = [{"k": "top", "start": 0, "cwd": cwd, "old": None}]
+    frames = [{"k": "top", "start": 0, "cwd": cwd, "old": None, "id": 0, "inner": [], "openers": []}]
+    ids = [0]
     # The unquoted heredoc bodies being read, innermost last: each is also a frame, kind "hd", that
     # holds text the way a double quoted string does (its quotes are only text), from where its body
     # starts to "end", the start of its closing line, and then the reading goes on at "next".
@@ -307,14 +326,34 @@ def commands(s, cwd="", heredocs=None, spans=None):
         if not text.strip():
             return
         out.append((f["cwd"], text))
+        if parts is not None:
+            # The shells it runs in: every command frame open around it, or, once its own has closed
+            # (close_commands), every one still open and then its own.
+            chain = []
+            for g in frames:
+                if g is f:
+                    break
+                if g["k"] in COMMAND_FRAMES:
+                    chain.append(g["id"])
+            start = f["start"]
+            parts.append({"start": start, "end": end, "scope": tuple(chain) + (f["id"],),
+                          "inner": [x for x in f["inner"] if start <= x[0] and x[1] <= end],
+                          "openers": [x for x in f["openers"] if start <= x[0] and x[1] <= end]})
         target = cd_target(text)
         # A cd in a pipeline or sent to the background runs in a shell of its own.
         if target is not None and how not in ("|", "&"):
             f["cwd"], f["old"] = moved(f["cwd"], f["old"], target)
 
     def open_commands(kind, start):
-        parent = next(f for f in reversed(frames) if f["k"] in COMMAND_FRAMES)
-        frame = {"k": kind, "start": start, "cwd": parent["cwd"], "old": parent["old"]}
+        at = next(j for j in range(len(frames) - 1, -1, -1) if frames[j]["k"] in COMMAND_FRAMES)
+        parent = frames[at]
+        ids[0] += 1
+        frame = {"k": kind, "start": start, "cwd": parent["cwd"], "old": parent["old"], "id": ids[0],
+                 "inner": [], "openers": [],
+                 # Where it opened, at its $( or backquote, and whether that is inside double quotes
+                 # in the text of the command holding it.
+                 "open": start - (1 if kind == "tick" else 2),
+                 "dq": any(f["k"] == '"' for f in frames[at + 1:])}
         # Written directly in the body: no command frame between it and the body, though a ${ } or
         # $(( )) may stand between them, as in ${V:-$(cmd)}.
         if spans is not None and next(
@@ -327,6 +366,9 @@ def commands(s, cwd="", heredocs=None, spans=None):
         if "span" in f:
             spans.append(s[f["span"]:end])
         cut(f, end, ")")
+        if f["k"] in ("subst", "tick"):
+            parent = next(g for g in reversed(frames) if g["k"] in COMMAND_FRAMES)
+            parent["inner"].append((f["open"], end + 1, f["dq"]))
         if f["k"] == "sub":
             frames[-1]["start"] = end + 1
 
@@ -392,15 +434,15 @@ def commands(s, cwd="", heredocs=None, spans=None):
                 continue
         if k not in ('"', "hd"):
             if c == "'":
-                frames.append({"k": "'"})
+                frames.append({"k": "'", "at": i})
                 i += 1
                 continue
             if c == "$" and nx == "'":
-                frames.append({"k": "ansi"})
+                frames.append({"k": "ansi", "at": i})
                 i += 2
                 continue
             if c == '"':
-                frames.append({"k": '"'})
+                frames.append({"k": '"', "at": i})
                 i += 1
                 continue
         if s.startswith("$((", i):
@@ -439,6 +481,7 @@ def commands(s, cwd="", heredocs=None, spans=None):
             opener = heredoc_opener(s, i)
             if opener:
                 before = s[f["start"]:i]
+                f["openers"].append((i, opener[3]))
                 word, strip_tabs, quoted, i = opener
                 pending.append((word, strip_tabs, quoted, before))
             else:
@@ -505,7 +548,7 @@ def commands(s, cwd="", heredocs=None, spans=None):
     if spans is not None and frames[-1] is bodies[0]:
         frames.pop()
     if len(frames) > 1:
-        raise Unreadable()
+        raise Unreadable(next((f["at"] for f in frames if "at" in f), None))
     cut(frames[0], n, "end")
     return out
 
