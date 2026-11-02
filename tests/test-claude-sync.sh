@@ -1359,8 +1359,9 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
   # pid recorded in a file. As a child its exit would interrupt whatever this run was printing at
   # that moment, which bash 3.2 does not resume (L1035), and disowning it never stopped that signal.
   # It still writes to this run's own output and error, handed to it on descriptors 8 and 9.
-  _wd_pidf="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-wd.XXXXXXXX" 2>/dev/null)" \
-    || _wd_pidf="$SUITE_SCRATCH_HOME/claude-sync-suite-wd.$$"
+  # Named as suite work, which the scratch reaper already sweeps (#36).
+  _wd_pidf="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX" 2>/dev/null)" \
+    || _wd_pidf="$SUITE_SCRATCH_HOME/claude-sync-suite-work.watchdog.$$"
   ( (
     # Named with a TAG when one is given, so a run can find the watchdogs belonging to the runs IT
     # started rather than every watchdog on the machine (claude-config#159). The default run is
