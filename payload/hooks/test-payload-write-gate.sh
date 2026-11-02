@@ -56,8 +56,12 @@ HOLD="$FIX/hold"
 PIDF="$FIX/watch.pid"
 NOPIDF="$FIX/nosuchpidfile"
 
-bash -c 'exec -a "'"$FIX"'/src/claude-sync watch" sleep 300' &
-WPID=$!
+# Started by a subshell that ends at once and writes nowhere, its pid recorded, so it is never this
+# suite's child: one that ran out while a check was printing would cut the line short on bash 3.2
+# (L1035, #2040).
+( bash -c 'exec -a "'"$FIX"'/src/claude-sync watch" sleep 300' </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$PIDF" ) </dev/null >/dev/null 2>&1
+WPID="$(cat "$PIDF" 2>/dev/null)"
 # Waited on the CONDITION rather than for a fixed time, so this is not timing the machine (L290).
 for _ in $(seq 1 200); do
   case "$(ps -o command= -p "$WPID" 2>/dev/null || true)" in *claude-sync*watch*) break ;; esac

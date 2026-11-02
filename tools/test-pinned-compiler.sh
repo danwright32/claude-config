@@ -147,9 +147,13 @@ R4="$T/repo4"; mkrepo "$R4"
 git -C "$R4" worktree add -q "$T/wt4a" -b a
 git -C "$R4" worktree add -q "$T/wt4b" -b b
 : > "$NPM_LOG"
+# Both installs are this suite's own children, kept and reaped by name at once, and safe to keep
+# (L1035, #2040): nothing is printed between their start and that wait. The same below.
 (FAKE_NPM_BARRIER="$T/barrier4" FAKE_NPM_LOG="$NPM_LOG" PINNED_TS_NPM="$NPM" bash "$LIB" "$T/wt4a/tools/typescript" > "$T/c4a.out" 2>&1; echo $? > "$T/c4a.code") &
+inst_a=$!
 (FAKE_NPM_BARRIER="$T/barrier4" FAKE_NPM_LOG="$NPM_LOG" PINNED_TS_NPM="$NPM" bash "$LIB" "$T/wt4b/tools/typescript" > "$T/c4b.out" 2>&1; echo $? > "$T/c4b.code") &
-wait
+inst_b=$!
+wait "$inst_a" "$inst_b"
 [ "$(cat "$T/c4a.code")" = 0 ] && [ "$(cat "$T/c4b.code")" = 0 ] \
   && "$T/wt4a/tools/typescript/node_modules/.bin/tsc" | grep -q '^fake tsc' && "$T/wt4b/tools/typescript/node_modules/.bin/tsc" | grep -q '^fake tsc' \
   && check "two installs at once into one clone both end with a compiler that runs" ok \
@@ -161,8 +165,10 @@ left="$(ls -A "$R4/.git/pinned-typescript")"
 R4S="$T/repo4s"; mkrepo "$R4S"
 : > "$NPM_LOG"
 (FAKE_NPM_BARRIER="$T/barrier4s" FAKE_NPM_LOG="$NPM_LOG" PINNED_TS_NPM="$NPM" bash "$LIB" "$R4S/tools/typescript" > "$T/c4c.out" 2>&1; echo $? > "$T/c4c.code") &
+inst_c=$!
 (FAKE_NPM_BARRIER="$T/barrier4s" FAKE_NPM_LOG="$NPM_LOG" PINNED_TS_NPM="$NPM" bash "$LIB" "$R4S/tools/typescript" > "$T/c4d.out" 2>&1; echo $? > "$T/c4d.code") &
-wait
+inst_d=$!
+wait "$inst_c" "$inst_d"
 [ "$(cat "$T/c4c.code")" = 0 ] && [ "$(cat "$T/c4d.code")" = 0 ] && "$R4S/tools/typescript/node_modules/.bin/tsc" | grep -q '^fake tsc' \
   && [ -z "$(git -C "$R4S" status --porcelain)" ] \
   && check "two installs at once into the same checkout both succeed and leave it clean" ok \

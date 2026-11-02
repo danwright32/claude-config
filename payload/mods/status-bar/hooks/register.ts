@@ -114,6 +114,57 @@ const setCompactQueued = async ($: EngineInterface, value: boolean) => {
     $.ui.log(`status-bar: could not record that a Compact is ${value ? 'queued' : 'no longer queued'}: ${msg(err)}`, { to: 'debug' })
   }
 }
+// #2025: the tool a session calls once it has written its handoff note at the context line (#1960,
+// hooks/lib/context_size.py, whose notice names it). It queues the same Compact the row's button
+// queues while a turn runs, run when the turn ends. A model cannot type /compact itself. NOT YET
+// enough for an unattended /goal run: measured on this Mac's transcripts (2026-11-01), a goal judged
+// unmet goes on inside the same turn, with no turn end between one judgement and the next, so the
+// queued Compact waits until the goal is met or stopped ($.session.compact rejects while a turn
+// runs). Refused until
+// the note is there, so a session never compacts away decisions it has not written down, and
+// refused to a subagent, which hands back instead.
+const COMPACT_TOOL = 'queue_compact'
+// The note #1960's notice asks for: handoff.md at the root of the session's scratchpad folder.
+const NOTE_TAIL = '/scratchpad/handoff.md'
+// A note older than this, or than the last compaction, belongs to an earlier stretch of the
+// conversation, and the session at the line has decided more since.
+const NOTE_FRESH_MS = HOUR
+const compactedRef = { plugin: 'status-bar', key: 'compactedAt' } as const
+const COMPACT_TOOL_SPEC = {
+  name: COMPACT_TOOL,
+  description:
+    'Queues a Compact of this conversation that runs when this turn ends, the same as pressing Compact on the status bar (a /goal run is one turn until the goal is met or stopped). ' +
+    'Call it at the context line, only after writing handoff.md at the root of your scratchpad folder with everything you have decided, and pass that file\'s absolute path as note. ' +
+    'Refused until that note is there, not empty, and written since this conversation was last compacted and within the last hour. ' +
+    'Main session only: a subagent writes the note and hands back instead.',
+  inputSchema: {
+    type: 'object',
+    properties: { note: { type: 'string', description: `The absolute path of the handoff note, <your scratchpad folder>${NOTE_TAIL}.` } },
+    required: ['note'],
+  },
+} as const
+
+// Why the compact tool will not queue a Compact for this call, or undefined when it will.
+const compactRefusal = async ($: EngineInterface, e: { agentId?: string; note?: unknown }): Promise<string | undefined> => {
+  if (e.agentId !== undefined) return 'A subagent never compacts: write handoff.md in your scratchpad folder, then hand back, saying you stopped at the context line, so the main session gives the rest to a fresh agent.'
+  if (!interactive) return 'This session has no screen, so a queued Compact would never run here.'
+  const note = typeof e.note === 'string' ? e.note.trim() : ''
+  if (!note.startsWith('/') || !note.endsWith(NOTE_TAIL)) return `The handoff note is handoff.md at the root of your scratchpad folder: pass its absolute path, ending ${NOTE_TAIL}${note ? `, not ${note}` : ''}.`
+  let st: { kind: string; size: number; mtimeMs: number }
+  try {
+    st = await $.fs.stat(note)
+  } catch (err) {
+    if (/ENOENT/.test(msg(err))) return `No handoff note at ${note}: write it there first, covering everything you have decided, then call this again.`
+    return `The handoff note at ${note} could not be read (${msg(err)}), so no Compact was queued.`
+  }
+  if (st.kind !== 'file') return `${note} is not a file: write the handoff note there, then call this again.`
+  if (st.size === 0) return `The handoff note at ${note} is empty: write what you have decided in it first, then call this again.`
+  const compactedAt = (await $.state.get(compactedRef)).value
+  if (typeof compactedAt === 'number' && st.mtimeMs < compactedAt) return `The handoff note at ${note} was written before this conversation was last compacted: write it again with what you have decided since, then call this again.`
+  if (st.mtimeMs < (await $.clock.now()) - NOTE_FRESH_MS) return `The handoff note at ${note} was written more than an hour ago: write it again with what you have decided, then call this again.`
+  return undefined
+}
+
 // The session has ended (not a /clear, after which it carries on): nothing writes its facts again.
 let ended = false
 let chain: Promise<unknown> = Promise.resolve()
@@ -461,9 +512,20 @@ const cacheReplaced = async ($: EngineInterface) => {
   await cacheMoved($)
 }
 
+// When this conversation was replaced, by a compaction or a /clear, which a handoff note must be
+// newer than (#2025). A write that fails is logged: the note is then judged by its age alone.
+const markReplaced = async ($: EngineInterface) => {
+  try {
+    await $.state.set(compactedRef, await $.clock.now())
+  } catch (err) {
+    $.ui.log(`status-bar: could not record when this conversation was compacted: ${msg(err)}`, { to: 'debug' })
+  }
+}
+
 // A compaction of this conversation that ran: the context reading belonged to the conversation it
 // replaced, so it goes with the cache clock, and the band is redrawn without it (#1421).
 const conversationCompacted = async ($: EngineInterface) => {
+  await markReplaced($)
   context = undefined
   contextTokens = undefined
   usageStale = true
@@ -501,6 +563,8 @@ export const register: Register = on => {
     if (!e.isInteractive) return next(e)
     interactive = true
     ended = false
+    // Offered only where a queued Compact can run: a session with a screen, whose turns end here.
+    await $.tool.register(COMPACT_TOOL_SPEC).catch(err => $.ui.log(`status-bar: the compact tool could not be offered: ${msg(err)}`))
     // Taken up from $.state, so a reload in the middle of a turn keeps it running and keeps a Compact
     // queued for its end (#1703); a new process has neither. One that cannot be read is neither, as
     // before this was kept, and is logged.
@@ -639,6 +703,25 @@ export const register: Register = on => {
     return { value: { isAnswered: true } }
   })
 
+  // The compact tool (#2025): with the note written, queued exactly as a press during a turn is, and
+  // run by turn.complete above; shown on the row with Cancel, so Dan sees it and can stop it.
+  on('tool.call', { tool: `mcp__status-bar__${COMPACT_TOOL}` }, async ($, e) => {
+    // Answered here and never passed down, so the guards beneath are asked through mod-kit's screen.
+    const screened = await $.modkit.screen(e)
+    if (screened) return screened
+    const input = e as unknown as { agentId?: string; note?: unknown }
+    const why = await compactRefusal($, input)
+    if (why) return { deny: why }
+    await setCompactQueued($, true)
+    await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
+    return {
+      result:
+        'Compact queued: it runs when this turn ends, the same as pressing Compact on the status bar, and Dan can cancel it there. ' +
+        `End this reply now; the conversation after it starts from the summary, and ${String(input.note).trim()} holds what you decided. ` +
+        'In a /goal run the turn goes on until the goal is met or stopped, so the Compact waits until then.',
+    }
+  })
+
   on('session.end', async ($, e, next) => {
     // A login landing after this would write the facts file of a session that has ended. A /clear
     // ends only the conversation, and the session's account is still the one a /login is landing.
@@ -655,6 +738,7 @@ export const register: Register = on => {
       toastedFor = null
       await setTurnRunning($, false)
       await setCompactQueued($, false)
+      await markReplaced($)
       context = undefined
       contextTokens = undefined
       usageStale = true

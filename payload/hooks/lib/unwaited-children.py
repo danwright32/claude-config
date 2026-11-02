@@ -25,8 +25,8 @@ WHAT IT REPORTS, one line per site, `<path>:<line>: <kind>: <text>`:
 
   background   (with --background only) a command put in the background with `&` that this shell
                never reaps: that child exits whenever it likes. claude-sync and the hooks are held
-               to this (#1989), and so are the skills' and tools' own scripts (#2015); the suites are
-               not judged on it. An `&` inside arithmetic, `$(( a & b ))` or `(( a & b ))`, is a
+               to this (#1989), and so are the skills' and tools' own scripts (#2015) and every
+               suite (#2040), which writes into a pipe whenever it is run. An `&` inside arithmetic, `$(( a & b ))` or `(( a & b ))`, is a
                bitwise and, never a job. A job passes when any of these holds:
                  - it is the last thing a `( ... )` subshell does, `( worker & )`: the subshell ends
                    at once, so the worker is the subshell's child, then launchd's, never this
@@ -37,14 +37,17 @@ WHAT IT REPORTS, one line per site, `<path>:<line>: <kind>: <text>`:
                    the fork cannot reach a pipe;
                  - the statement straight after it keeps its pid (`p=$!`, `lane[$i]=$!`,
                    `inflight="$inflight $!"`) and the file has a `wait` naming that variable, or a
-                   bare `wait`;
+                   bare `wait` after it in the same function, or both at the top level (#2040: read
+                   file wide, one bare wait passed kept jobs thousands of lines away). A wait on a
+                   loop's variable, `for p in $pids; do wait "$p"`, names the list the nearest `for`
+                   before it walks (#2040);
                  - it is in a function that calls `wait` (#1984's rule).
                What the last two cannot see is ORDER: a kept child that exits, or is killed, while
                this shell prints something before its `wait` is the hazard all the same. So every
-               such job in the hooks, skills and tools carries, beside it, why nothing is written
-               between its start and its reaping, and a kill is followed by the wait at once
-               (pr-merge-quiz.sh, run-all-tests.sh, tools/load-window.sh,
-               tools/measure-section-time.sh). A disowned job is not waited for by a bare `wait`, and `disown`
+               such job in the hooks, skills, tools and suites carries, beside it, why nothing is
+               written between its start and its reaping, and a kill is followed by the wait at
+               once (pr-merge-quiz.sh, run-all-tests.sh, tools/load-window.sh,
+               tools/measure-section-time.sh, and the suites #2040 converted). A disowned job is not waited for by a bare `wait`, and `disown`
                never stops the SIGCHLD, so a disowned job passes only as a subshell's.
 
 Enough of the shell is followed to know which text is code: single, double and $'...' quotes, a
@@ -79,6 +82,8 @@ WAITPOS = re.compile(r"(^|[;&|({!]|\bthen|\bdo|\belse|\bif|\belif|\bwhile|\bunti
 # The statement straight after a background job keeping its pid: `p=$!`, `local p=$!`,
 # `lane[$i]=$!`, `inflight="$inflight $!"`.
 KEEPS = re.compile(r"^(?:local\s+|declare\s+)?([A-Za-z_]\w*)(?:\[[^\]]*\])?\+?=(\"[^\"]*\"|\S*)")
+# `for NAME in LIST` up to the `;`, `do` or end of line that ends the list (#2040).
+FOR_IN = re.compile(r"\s+([A-Za-z_]\w*)\s+in\s+(.*?)\s*(?:;|\bdo\b|$)")
 REDIR = re.compile(r"(\d*)(&>>|&>|>>|>&|>)\s*(\S+)")
 # Where a statement ends, for reading what follows a `)` or a `wait`.
 STMT_END = re.compile(r";|\|\||&&|\||(?<![<>])&(?!>)|\)")
@@ -127,7 +132,8 @@ class Walk:
         self.func_waited = {}    # function id -> whether it calls wait anywhere
         self.bg = []             # background jobs: dicts read once the whole file has been walked
         self.silenced = set()    # ids of ( ) subshells whose stdout and stderr both go to /dev/null
-        self.waits = []          # (names it waits for, whether it is a bare wait)
+        self.waits = []          # (names it waits for, whether it is a bare wait, its line, its function id)
+        self.loop_lists = {}     # a `for` loop's variable -> the names in the list it walks
         self.code_mask = set()   # line numbers that start in code and hold some
         self.code_lines = 0
 
@@ -227,16 +233,19 @@ def kept_name(w, lines, job):
 
 
 def judge_background(w, lines):
-    bare = any(b for _, b in w.waits)
     waited = set()
-    for names, _ in w.waits:
+    for names, _, _, _ in w.waits:
         waited.update(names)
+    # A bare wait answers only for a job started before it in the same function, or both at the top
+    # level (#2040): read file wide, one bare wait passed every kept job thousands of lines away.
+    bare_waits = [(ln, fn) for _, b, ln, fn in w.waits if b]
     for job in w.bg:
         # Started by a subshell that ends at once, or that can write to no pipe: never this shell's child,
         # or a child of a shell that cannot be writing into a pipe when it exits.
         if job['double'] or any(p in w.silenced for p in job['pars']):
             continue
         name = kept_name(w, lines, job)
+        bare = any(ln > job['line'] and fn == job['func'] for ln, fn in bare_waits)
         if name is not None and (bare or name in waited):
             continue
         if job['func'] is not None and w.func_waited.get(job['func']):
@@ -444,7 +453,16 @@ def walk_line(w, line, n, background):
                     args = stmt_rest(line[m.end():])
                     names = set(re.findall(r"\$\{?#?([A-Za-z_]\w*)", args))
                     rest = REDIR.sub('', re.sub(r"\d*<\s*\S+", '', args)).strip()
-                    w.waits.append((names, rest == ''))
+                    # A loop's variable waits for the list that loop walks (#2040).
+                    for var in list(names):
+                        names |= w.loop_lists.get(var, set())
+                    w.waits.append((names, rest == '', n, w.func_id))
+            elif boundary and word == 'for' and CMDPOS.search(line[:i]):
+                lm = FOR_IN.match(line, m.end())
+                if lm:
+                    # The nearest loop before a wait is the one its variable stands for, so a later
+                    # loop reusing the name for another list replaces it rather than adding to it.
+                    w.loop_lists[lm.group(1)] = set(re.findall(r"\$\{?([A-Za-z_]\w*)", lm.group(2)))
             i = m.end()
             continue
         i += 1

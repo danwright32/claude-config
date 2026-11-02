@@ -419,13 +419,20 @@ ALL_PIDS="$ALL_PIDS $bl_child"
 # instant this case is about rather than a look that happened to read it whole.
 if hang_wait "awk -F'\t' -v p='$bl_child' '\$1 == p && \$2 == \"\" { f = 1 } END { exit !f }' '$TMPROOT/blank.wd.seen' 2>/dev/null"; then
   kill -TERM "$bl_pid" 2>/dev/null
-  wait_gone "$bl_pid" || true
+  # Reaped here, before either check below is printed (L1035, #2040): the stand in suite is this
+  # suite's own child, and one that exited while a line was being written would cut it short.
+  wait_gone "$bl_pid" || kill -KILL "$bl_pid" 2>/dev/null
+  wait "$bl_pid" 2>/dev/null
   if [ -n "$bl_child" ] && wait_gone "$bl_child"; then
     check "#1909 a child seen with no command line, moments before the suite was stopped, is gone too" ok
   else
     check "#1909 a child seen with no command line, moments before the suite was stopped, is gone too" "child pid '${bl_child:-never started}' is still running"
   fi
 else
+  # Stopped and reaped before the failure is printed, rather than left to end at its own deadline
+  # partway through a later line (L1035, #2040).
+  kill -0 "$bl_pid" 2>/dev/null && kill -KILL "$bl_pid" 2>/dev/null
+  wait "$bl_pid" 2>/dev/null
   check "#1909 a child seen with no command line, moments before the suite was stopped, is gone too" "the watchdog never saw the child with no command line: $(cat "$TMPROOT/blank.wd.seen" 2>/dev/null)"
 fi
 

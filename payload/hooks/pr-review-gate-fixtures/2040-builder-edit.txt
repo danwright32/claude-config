@@ -1,0 +1,73 @@
+python3 - <<'EOF'
+import re
+# merge-target
+p='payload/hooks/test-merge-target.sh'
+s=open(p).read()
+a="""for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  ( MT_SIGNIN_RUN="p$i" mt_signin_record refused present ) &
+done
+wait
+"""
+b="""# Each writer is this suite's own child, kept and reaped by name straight after the loop, and safe to
+# keep (L1035, #2040): nothing is printed between their start and that wait.
+signin_writers=""
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  ( MT_SIGNIN_RUN="p$i" mt_signin_record refused present ) &
+  signin_writers="$signin_writers $!"
+done
+wait $signin_writers
+"""
+assert s.count(a)==1; s=s.replace(a,b)
+a="""  ( MT_SIGNIN_TRIM_PAUSE="" MT_SIGNIN_LOCK_SLEEP="$SIGNIN_WORK/lock-sleep" MT_SIGNIN_RUN=run-racer mt_signin_record refused present ) &
+  echo $! > "$SIGNIN_WORK/racer.pid"
+"""
+b="""  # This suite's own child, kept in SIGNIN_RACER and reaped by name as soon as the trimming run
+  # returns, and safe to keep (L1035, #2040): neither run prints anything before that wait.
+  ( MT_SIGNIN_TRIM_PAUSE="" MT_SIGNIN_LOCK_SLEEP="$SIGNIN_WORK/lock-sleep" MT_SIGNIN_RUN=run-racer mt_signin_record refused present ) &
+  SIGNIN_RACER=$!
+  echo "$SIGNIN_RACER" > "$SIGNIN_WORK/racer.pid"
+"""
+assert s.count(a)==1; s=s.replace(a,b)
+a="""[ -f "$SIGNIN_WORK/racer.pid" ] && wait "$(cat "$SIGNIN_WORK/racer.pid")" 2>/dev/null
+"""
+b="""[ -n "${SIGNIN_RACER:-}" ] && wait "$SIGNIN_RACER" 2>/dev/null
+"""
+assert s.count(a)==1; s=s.replace(a,b)
+open(p,'w').write(s)
+
+p='payload/hooks/test-pr-review.sh'
+s=open(p).read()
+a="""for i in 1 2 3 4 5 6 7 8; do
+  bash -c '. "$1" && ar_readkeys_issue "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
+done
+wait
+"""
+b="""# Each issuer is this suite's own child, kept and reaped by name straight after the loop, and safe to
+# keep (L1035, #2040): nothing is printed between their start and that wait.
+issuers=""
+for i in 1 2 3 4 5 6 7 8; do
+  bash -c '. "$1" && ar_readkeys_issue "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk" > "$WORKDIR/key.$i" &
+  issuers="$issuers $!"
+done
+wait $issuers
+"""
+assert s.count(a)==1; s=s.replace(a,b)
+open(p,'w').write(s)
+
+p='payload/hooks/test-sleep-report.sh'
+s=open(p).read()
+a="""for i in $(seq 1 20); do note "{\\"kind\\":\\"finding\\",\\"by\\":\\"w$i\\",\\"text\\":\\"finding $i\\"}" >/dev/null 2>&1 & done
+wait
+"""
+b="""# Each writer is this suite's own child, kept and reaped by name straight after the loop, and safe to
+# keep (L1035, #2040): nothing is printed between their start and that wait.
+writers=""
+for i in $(seq 1 20); do
+  note "{\\"kind\\":\\"finding\\",\\"by\\":\\"w$i\\",\\"text\\":\\"finding $i\\"}" >/dev/null 2>&1 &
+  writers="$writers $!"
+done
+wait $writers
+"""
+assert s.count(a)==1, 'sleep'; s=s.replace(a,b)
+open(p,'w').write(s)
+EOF

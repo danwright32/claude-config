@@ -113,10 +113,16 @@ ps_read_payload() {   # stdin = the hook payload
 # (L36, L54). The gate's override is read from the raw text the same way, so the refusal is never a
 # dead end (L109). One helper and one sentence for every gate, rather than a wording per hook (L613).
 #
+# The words are looked for in ps_payload_text, not the raw text alone (claude-config#2057): JSON that
+# parses into a shape no reader here takes as a call (a command as a list of its words, the input as
+# one JSON string) holds every word of the command and spells none of them the way a glob looks for,
+# so `"git", "commit"` passed a gate looking for git commit.
+#
 #   ps_unparsed_refuse <payload> <gate file name> <override variable, or -> <what it judges> <glob>...
 #     exits: 0 when the call passes, 2 after saying why on stderr. It never returns.
 ps_unparsed_refuse() {
-  local payload="$1" gate="$2" override="$3" judged="$4" w named=""
+  local payload gate="$2" override="$3" judged="$4" w named=""
+  payload="$(ps_payload_text "$1")"
   shift 4
   if [ "$override" != "-" ]; then
     case "$payload" in *"$override=1"*) exit 0 ;; esac
@@ -126,10 +132,103 @@ ps_unparsed_refuse() {
     case "$payload" in $w) named=1; break ;; esac
   done
   [ -n "$named" ] || exit 0
-  printf 'BLOCKED: %s could not parse its hook payload as JSON (neither jq nor python3 read it), and the payload names %s, so whether this command is %s could not be checked. A payload this gate cannot read is not a command with nothing to check (claude-config#1922).%s\n' \
+  printf 'BLOCKED: %s could not read its hook payload as a call (not JSON either jq or python3 reads, or JSON without the command as text where it belongs), and the payload names %s, so whether this command is %s could not be checked. A payload this gate cannot read is not a command with nothing to check (claude-config#1922, #2057).%s\n' \
     "$gate" "${w//\*/}" "$judged" \
     "$([ "$override" != "-" ] && printf ' For this one command: %s=1 <the same command>.' "$override")" >&2
   exit 2
+}
+
+# EVERY WORD A PAYLOAD HOLDS, for judging one no reader here could take as a call (claude-config#2057).
+# Prints the payload as it came, then, when it parses as JSON, each text value in it on a line of its
+# own, each list's text values joined by spaces (a command sent as a list of its words reads as the
+# command they make), and the same again inside any text value that is itself JSON (an input sent as
+# one string). A gate's degraded judgement looks for its words here, so a payload is never let
+# through for spelling them differently from the way the gate looks. It can only add text to look
+# in, never take any away: with neither reader, or text that is not JSON, it prints the payload alone.
+#
+#   ps_payload_text <payload>   prints the text, always returns 0
+ps_payload_text() {
+  local p="${1-}" more=""
+  if command -v python3 >/dev/null 2>&1; then
+    more="$(printf '%s' "$p" | python3 -c '
+import json, sys
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+out = []
+def walk(v, depth):
+    if depth > 50:
+        return
+    if isinstance(v, str):
+        out.append(v)
+        s = v.strip()
+        # chr(123) is an opening brace, spelled so that no shell scanner counts it as one.
+        if s[:1] in (chr(123), "["):
+            try:
+                walk(json.loads(s), depth + 1)
+            except Exception:
+                pass
+    elif isinstance(v, list):
+        words = [x for x in v if isinstance(x, str)]
+        if words:
+            out.append(" ".join(words))
+        for x in v:
+            walk(x, depth + 1)
+    elif isinstance(v, dict):
+        for x in v.values():
+            walk(x, depth + 1)
+try:
+    walk(json.loads(sys.stdin.buffer.read().decode("utf-8", "replace")), 0)
+except Exception:
+    pass
+sys.stdout.write("\n".join(out))' 2>/dev/null)" || more=""
+  elif command -v jq >/dev/null 2>&1; then
+    more="$(printf '%s' "$p" | jq -r '
+      def words: .. | (strings), (arrays | [.[] | strings] | select(length > 0) | join(" "));
+      words, (.. | strings | (fromjson? // empty) | words)' 2>/dev/null)" || more=""
+  fi
+  printf '%s' "$p"
+  [ -z "$more" ] || printf '\n%s' "$more"
+  return 0
+}
+
+# WHETHER A PAYLOAD CAN BE READ AS A CALL, for a gate with a reader of its own (claude-config#2057).
+# Three gates read the payload with their own python3 and took a field that was not text as an
+# empty one, and a payload that was not an object as one from nobody, so a list of the command's
+# words, or the input sent as one string, was let through in silence as a call with nothing to judge.
+# The one rule for them all: a payload is unreadable when it is not a JSON object, when its tool
+# input is there and not an object, or when the field the gate judges is there and not text. A field
+# that is absent or null is readable, and empty: nothing runs from it.
+#
+#   ps_payload_unread <payload> [field, default command]
+#     returns 0 when the payload cannot be read as a call, 1 when it can
+ps_payload_unread() {
+  local p="${1-}" f="${2:-command}" rc
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$p" | jq -e --arg f "$f" '
+      type == "object" and ((.tool_input == null) or ((.tool_input | type) == "object"
+        and ((.tool_input[$f] == null) or ((.tool_input[$f] | type) == "string"))))' >/dev/null 2>&1
+    rc=$?
+    [ "$rc" -eq 0 ] && return 1
+    [ "$rc" -eq 1 ] && return 0
+  fi
+  printf '%s' "$p" | PS_FIELD="$f" python3 -c '
+import json, os, sys
+f = os.environ["PS_FIELD"]
+try:
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+except Exception:
+    sys.exit(0)
+if not isinstance(d, dict):
+    sys.exit(0)
+ti = d.get("tool_input")
+if ti is None:
+    sys.exit(1)
+if not isinstance(ti, dict):
+    sys.exit(0)
+v = ti.get(f)
+sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
+  rc=$?
+  [ "$rc" -eq 1 ] && return 1
+  return 0
 }
 
 # ---- reading the hook payload, once (claude-config#102) ----

@@ -125,7 +125,8 @@ fx_run(){ # fx_run <output file> [env assignments...] [-- runner args...]
 # that exits at once, so it is not this shell's child: when it dies something else reaps it, and a
 # dead holder is gone rather than a zombie that still answers kill -0.
 new_holder(){ # new_holder <name> -> its pid, also kept in $T/holders/<name> for cleanup
-  ( sleep 900 > /dev/null 2>&1 < /dev/null & printf '%s\n' "$!" > "$T/holders/$1" )
+  # The subshell writes nowhere either, so nothing it does after the fork can reach a pipe (#2040).
+  ( sleep 900 > /dev/null 2>&1 < /dev/null & printf '%s\n' "$!" > "$T/holders/$1" ) </dev/null >/dev/null 2>&1
   cat "$T/holders/$1"
 }
 # A ticket in the slot's queue for pid $1, through the queue's own writer, marked as holding the turn

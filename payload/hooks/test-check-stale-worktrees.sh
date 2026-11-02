@@ -107,8 +107,13 @@ for d in landed contained newer open dirty busy gone detached; do age "agent-$d"
 # The dirty one's PR merged too, so this pins the ORDER of the rules: uncommitted work has to win,
 # or the one worktree somebody is standing in is the one removed.
 printf 'work in progress\n' >"$WT/agent-dirty/wip.txt"
-(cd "$WT/agent-busy" && exec sleep 120) &
-BUSY=$!
+# Started by a subshell that ends at once and writes nowhere, its pid recorded in a file, so the
+# sleep is never this suite's child: one that ran out while a check below was printing would cut the
+# line short on bash 3.2 (L1035, #2040). It still runs inside the folder, which is all that is asked.
+( cd "$WT/agent-busy" || exit 1
+  sleep 120 </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$TMP/busy.pid" ) </dev/null >/dev/null 2>&1
+BUSY="$(cat "$TMP/busy.pid" 2>/dev/null)"
 trap 'kill "$BUSY" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 # Whether anything running can be seen inside a folder depends on lsof or /proc, which this suite

@@ -32,9 +32,22 @@ GUARD="$DIR/target-guard.sh"
 REPORT="$DIR/report.py"
 TMP="$(mktemp -d)"
 SERVER_PID=""
-# Every other process the suite starts in the background, stopped with it.
+# Every other process the suite starts in the background, stopped with it. None is this suite's
+# child: each is started by stand_in below, so one that ends while a line is being printed (a proxy a
+# check stops, a server that dies) cannot cut that line short, which bash 3.2 does when a child exits
+# during a write (L1035, #2040). Not children, so they are killed by pid and never waited for.
 BG_PIDS=""
-cleanup() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null; for p in $BG_PIDS; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; rm -rf "$TMP"; }
+cleanup() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null; [ -z "$BG_PIDS" ] || kill $BG_PIDS 2>/dev/null; rm -rf "$TMP"; }
+# stand_in <pid file> <output file> <command...>: runs the command in the background with its output
+# in <output file>, from a subshell that ends at once and writes nowhere, so the command is never
+# this suite's child; prints its pid, which is also kept in <pid file>. An environment for it is
+# given through env.
+stand_in() {
+  local pidf="$1" outf="$2"
+  shift 2
+  ( "$@" </dev/null >"$outf" 2>&1 & printf '%s\n' "$!" > "$pidf" ) </dev/null >/dev/null 2>&1
+  cat "$pidf" 2>/dev/null
+}
 trap cleanup EXIT
 
 pass=0
@@ -146,9 +159,9 @@ PY
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost \
   -keyout "$TMP/site.key" -out "$TMP/site.crt" >/dev/null 2>&1
 cat "$TMP/site.key" "$TMP/site.crt" > "$TMP/site.pem"
-python3 "$TMP/recorder.py" "$TMP/plain.log" "$TMP/plain.port" & BG_PIDS="$BG_PIDS $!"
-python3 "$TMP/recorder.py" "$TMP/tls.log" "$TMP/tls.port" "$TMP/site.pem" & BG_PIDS="$BG_PIDS $!"
-python3 "$TMP/impostor.py" "$TMP/impostor.port" & BG_PIDS="$BG_PIDS $!"
+BG_PIDS="$BG_PIDS $(stand_in "$TMP/plain.pid" "$TMP/plain.server.out" python3 "$TMP/recorder.py" "$TMP/plain.log" "$TMP/plain.port")"
+BG_PIDS="$BG_PIDS $(stand_in "$TMP/tls.pid" "$TMP/tls.server.out" python3 "$TMP/recorder.py" "$TMP/tls.log" "$TMP/tls.port" "$TMP/site.pem")"
+BG_PIDS="$BG_PIDS $(stand_in "$TMP/impostor.pid" "$TMP/impostor.server.out" python3 "$TMP/impostor.py" "$TMP/impostor.port")"
 # The proxy verifies the real site's certificate as usual; here the fixture's is made trusted the
 # way Node itself offers, so no switch in the proxy turns verification off.
 # A stale proxy.json from an earlier run in the same directory, which the proxy must not leave
@@ -160,7 +173,7 @@ wait "$DEAD_PID"
 kill -0 "$DEAD_PID" 2>/dev/null && bad "the stand in for an exited process is really gone (pid $DEAD_PID was reused)"
 printf '{"proxy":"http://127.0.0.1:1","pid":%s}\n' "$DEAD_PID" > "$TMP/proxy/proxy.json"
 # The upstream deadline is shortened so a stalled site is seen to time out within the suite.
-NODE_EXTRA_CA_CERTS="$TMP/site.crt" node "$PROXY_JS" --state "$TMP/proxy" --upstream-timeout-ms 1000 >"$TMP/proxy.out" 2>&1 & PROXY_PID=$!
+PROXY_PID="$(stand_in "$TMP/proxy.pid" "$TMP/proxy.out" env NODE_EXTRA_CA_CERTS="$TMP/site.crt" node "$PROXY_JS" --state "$TMP/proxy" --upstream-timeout-ms 1000)"
 BG_PIDS="$BG_PIDS $PROXY_PID"
 hang_wait '[ -s "$TMP/plain.port" ] && [ -s "$TMP/tls.port" ] && [ -s "$TMP/impostor.port" ] && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" 2>/dev/null' 0.05
 PROXY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy"])' "$TMP/proxy/proxy.json" 2>/dev/null)"
@@ -646,7 +659,7 @@ reset_fake
 
 # A proxy started for a deployment: --egress, so it takes the rule away when it stops.
 mkdir -p "$TMP/proxy-e"
-PATH="$FAKE/bin:$PATH" node "$PROXY_JS" --state "$TMP/proxy-e" --egress >"$TMP/proxy-e.out" 2>&1 & EPROXY_PID=$!
+EPROXY_PID="$(stand_in "$TMP/proxy-e.pid" "$TMP/proxy-e.out" env PATH="$FAKE/bin:$PATH" node "$PROXY_JS" --state "$TMP/proxy-e" --egress)"
 BG_PIDS="$BG_PIDS $EPROXY_PID"
 hang_wait 'grep -q "\"pid\":$EPROXY_PID" "$TMP/proxy-e/proxy.json" 2>/dev/null || ! kill -0 "$EPROXY_PID" 2>/dev/null' 0.05
 EPROXY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy"])' "$TMP/proxy-e/proxy.json" 2>/dev/null)"
@@ -811,7 +824,7 @@ else
   [ "$rc" = 0 ] && nothing_loaded && grep -q "Removed a rule left by pid $kp" <<< "$out" && grep -q 'No bug bash egress rule is loaded' <<< "$out" && ok \
     || bad "a SIGKILLed proxy's rule is swept by the next call, which says so (rc $rc)" "$out"
   # A pid that is alive but no longer the proxy (reused by something else) counts as gone too.
-  sleep 30 & other=$!
+  other="$(stand_in "$TMP/other.pid" /dev/null sleep 30)"
   BG_PIDS="$BG_PIDS $other"
   reset_fake
   fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$other" >/dev/null 2>&1
@@ -819,7 +832,7 @@ else
   nothing_loaded && ok || bad "a rule whose owner pid now runs something other than the proxy is swept" "$out"
   kill "$other" 2>/dev/null
   # A program that merely names the proxy's file (an editor, a pager) is not the proxy either.
-  bash -c 'sleep 30; :' read-only-proxy.js & namer=$!
+  namer="$(stand_in "$TMP/namer.pid" /dev/null bash -c 'sleep 30; :' read-only-proxy.js)"
   BG_PIDS="$BG_PIDS $namer"
   reset_fake
   fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$namer" >/dev/null 2>&1
