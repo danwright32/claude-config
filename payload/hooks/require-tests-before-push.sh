@@ -192,6 +192,17 @@ widened_note() {
   echo ""
 }
 
+# When the push merges commits in and the gate could not set apart what the merge brought from what
+# the branch did (lib/push-changes.sh, claude-config#2028), the whole range was judged, and a
+# refusal has to say part of it may be somebody else's already judged work.
+merge_note() {
+  [ -n "${PC_MERGE_UNSPLIT:-}" ] || return 0
+  echo "Note: this push merges commits in, and the gate could not set apart what the"
+  echo "merge brought from what this branch changed, so it judged both:"
+  echo "$PC_MERGE_UNSPLIT."
+  echo ""
+}
+
 # ---------------------------------------------------------------------------
 # 4. Classify: did the push change source? did it touch any test?
 # is_test / is_source now live in lib/source-class.sh, sourced above, so this gate and
@@ -359,7 +370,7 @@ PUSH BLOCKED: this push changes source code but adds or modifies no tests.
 Source files in this push:
 ${source_list}
 Add a test for each distinct change, then push again.
-$(widened_note)
+$(widened_note; merge_note)
 OVERRIDE: if a test genuinely does not apply (docs / config / copy only,
 or a refactor already covered by existing tests), or the gate missed a
 test that IS in this push (false positive), re-run with:
@@ -750,7 +761,7 @@ These test files were not shown in full to any reading that answered:
 A test in one of them reads to the reviewer exactly like no test, so this is not a
 finding that tests are missing. Push fewer commits at a time (one commit, or split the
 branch) so each push's tests fit, then push again.
-$(widened_note)
+$(widened_note; merge_note)
 OVERRIDE: if you have checked that each change named above IS tested, re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>
 BEFORE overriding you MUST explain to the user, in plain non-technical
@@ -767,7 +778,7 @@ Distinct changes still needing a test:
 $missing_shown
 
 ${parts_note}Add a test for each, then push again.
-$(widened_note)
+$(widened_note; merge_note)
 OVERRIDE: if the gate is wrong (the change is genuinely test-exempt,
 or an existing test already covers it), re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>

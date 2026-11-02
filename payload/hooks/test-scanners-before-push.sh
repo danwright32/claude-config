@@ -246,6 +246,51 @@ o32="$(lockfire "$R32" "git push")"; c32=$?
   && check "a scanner that waits for the lock and then FAILS is reported as failing, with its detail" ok \
   || check "a scanner that waits for the lock and then FAILS is reported as failing, with its detail" "exit=$c32 out=$o32"
 
+# A run that only REFUSED on the lock scanned nothing, so its seconds are not the scanner's time
+# (claude-config#2033). They were written over the scanner's last duration all the same, so on
+# 2026-11-01 a refusal for time quoted "its last run took 2s" for a scan that takes 12 to 18. sigma
+# above refused on every try, so nothing may be recorded for it, while alpha, which scanned, is.
+_slot_of(){ printf 'payload/hooks/test-%s.sh\n\n' "$1" | shasum -a 256 | awk '{ print substr($1, 1, 20) }'; }
+_sigma_last="$(ls "$LOCKSTATE"/runs/*/"$(_slot_of sigma)-last" 2>/dev/null)"
+_alpha_last="$(ls "$LOCKSTATE"/runs/*/"$(_slot_of alpha)-last" 2>/dev/null)"
+[ -z "$_sigma_last" ] \
+  && check "#2033 a run that only refused on the lock records no duration for its scanner" ok \
+  || check "#2033 a run that only refused on the lock records no duration for its scanner" "recorded $(cat "$_sigma_last" 2>/dev/null)s in $_sigma_last"
+[ -n "$_alpha_last" ] \
+  && check "#2033 and a run that scanned still records one" ok \
+  || check "#2033 and a run that scanned still records one" "nothing under $LOCKSTATE/runs"
+
+# THE BUDGET RUNNING OUT WHILE A SCANNER WAITS ITS TURN ON THE LOCK is a lock refusal, said as one
+# (claude-config#2033, L11). On 2026-11-01 seven pushes were refused as "did not finish in 150
+# seconds" over a run started again for the lock 1 or 2 seconds earlier, which read as a scanner too
+# slow for the budget and sent the fix after the budget. Here a refusal takes 3 seconds on every try
+# after the first, so the budget of 2 runs out while a retry is in flight, as it did under load.
+add_slow_locked_scanner(){   # $1 = repo  $2 = name: refuses at once, then after 3 seconds, for ever
+  cat > "$1/payload/hooks/test-$2.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+n="\$(cat "$TMPROOT/$2.tries" 2>/dev/null || echo 0)"; n=\$((n + 1)); echo "\$n" > "$TMPROOT/$2.tries"
+[ "\$n" -le 1 ] || sleep 3
+echo "test suite: another run is already going: a suite run, process 4242 on here, started 30s ago. Refusing rather than queueing behind it." >&2
+exit 5
+EOF
+  chmod +x "$1/payload/hooks/test-$2.sh"
+}
+R2033="$(mkrepo lockbudget)"; add_scanner "$R2033" alpha 0; add_slow_locked_scanner "$R2033" phi; commit_all "$R2033"
+o2033="$(SCANNERS_STATE_DIR="$TMPROOT/lockbudget-state" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 SCANNERS_BUDGET_SECONDS=2 fire "$R2033" "git push")"; c2033=$?
+[ "$c2033" -eq 2 ] \
+  && check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" ok \
+  || check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" "exit=$c2033 out=$o2033"
+grep -q 'another test run' <<< "$o2033" && grep -q 'phi' <<< "$o2033" \
+  && check "#2033 and says another test run held the lock, naming the scanner" ok \
+  || check "#2033 and says another test run held the lock, naming the scanner" "out=$o2033"
+grep -q 'did not finish in' <<< "$o2033" \
+  && check "#2033 and never calls it a scanner that did not finish in the budget" "out=$o2033" \
+  || check "#2033 and never calls it a scanner that did not finish in the budget" ok
+grep -q 'process 4242' <<< "$o2033" \
+  && check "#2033 and names the run holding the lock, from the refusal before the retry" ok \
+  || check "#2033 and names the run holding the lock, from the refusal before the retry" "out=$o2033"
+
 # --- a scanner that RAN but could not read what it judges measured nothing, which is a fault in
 #     this gate's run and not a finding about the push (claude-config#1146). On 2026-10-13 the
 #     secret scan, run here, could not copy the tree it scans (a file listed and gone before tar
@@ -812,9 +857,29 @@ if [ -n "$REAL" ] && [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
   [ "$_real_n" -ge 21 ] && [ "$_real_sel" = "$_real_floor" ] \
     && check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" ok \
     || check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" "selected and not named: $(comm -23 <(printf '%s\n' "$_real_sel") <(printf '%s\n' "$_real_floor") | tr '\n' ' ')/ named and not selected: $(comm -13 <(printf '%s\n' "$_real_sel") <(printf '%s\n' "$_real_floor") | tr '\n' ' ')"
-  grep -q '^SECTION .*#145' <<< "$_sel" \
-    && check "and the section that scans comments for undated numbers is selected" ok \
-    || check "and the section that scans comments for undated numbers is selected" "got=$_sel"
+  # NO SCANNER WAITS ON ANOTHER SUITE RUN'S LOCK (claude-config#2033). Every refusal for time this
+  # gate gave on 2026-11-01 after #1997, seven of them at load averages of 21 to 95, named one run
+  # still going: the sync suite's section scanning comments for undated numbers, running for 1 or 2
+  # seconds. That suite takes a machine wide lock, which every full run holds for minutes, and
+  # builders run one just before they push, so the section refused on the lock and was started
+  # again every few seconds until the budget ran out. The scan now lives in a suite of its own that
+  # takes no lock, so it still runs before every push and nothing in the gate's path can be held up
+  # by another run. A suite takes that lock when its code makes the lock's directory. Its code is
+  # read into a variable and matched with case, never piped into grep -q, which leaves on its first
+  # hit and under pipefail reports the match as a failure (L183).
+  _lockers=""
+  while IFS= read -r _ln; do
+    _sf="$(awk '{ print $2 }' <<< "$_ln")"
+    [ -n "$_sf" ] || continue
+    _code="$(grep -v '^[[:space:]]*#' "$REAL/$_sf" 2>/dev/null)"
+    case "$_code" in *'mkdir "$SUITE_LOCK"'*) _lockers="$_lockers $_ln;" ;; esac
+  done <<< "$_sel"
+  [ -z "$_lockers" ] \
+    && check "#2033 no scanner the gate selects belongs to a suite that takes the machine wide suite lock" ok \
+    || check "#2033 no scanner the gate selects belongs to a suite that takes the machine wide suite lock" "these wait on any full run:$_lockers"
+  grep -q '^SUITE tests/test-undated-measurements\.sh$' <<< "$_sel" \
+    && check "#2033 and the scan for undated numbers in comments and documents is selected as a suite of its own" ok \
+    || check "#2033 and the scan for undated numbers in comments and documents is selected as a suite of its own" "got=$_sel"
   grep -q "^SUITE .*$(basename "$H")$" <<< "$_sel" \
     && check "and the suite that drives this gate is not one of its own subjects" "it selected itself: $_sel" \
     || check "and the suite that drives this gate is not one of its own subjects" ok
