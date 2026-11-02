@@ -3828,6 +3828,51 @@ MacBook 45 of 191 actors (24%), none four or more, at most 3, and 2 of 9 main se
 its own per repository (`BARS`, keyed by name) is empty: no repository measured as needing one.
 `RULE_VERSION` is 2 and each `judged` record carries the bar's date.
 
+### The hold, built 2026-11-02 (#1509)
+
+Phase 2 turns the observing half into the hold, so two phase 1 points above no longer hold: the
+judging now runs on the edit's path, before it runs, and there is a surface. What is judged, the
+facts and the bar are unchanged.
+
+- **Where an edit is judged.** The main session's edit at `tool.check`, beneath every mod's
+  `tool.call` hook and after the settings hooks, so an edit they refuse is refused in their words
+  and never held, judged or claimed. A subagent's edit at `tool.call`, where its loop is known, held
+  for itself (decision 8); its call id goes in a set so `tool.check` does not judge it again, the
+  shape the design round guard uses. A query asked with no call id runs nothing and is passed, and
+  so is a subagent edit with no call id, which names nothing a decision could be taken under.
+- **What a hold shows.** mod-kit's grey card (`$.modkit.blocked`, guard `Area check`): the file,
+  each issue shown with its priority and labels, or that it is among the fastest growing large
+  files, and growth as one `Rough:` line. The refusal Claude reads (`holdRefusal`) carries the same
+  facts and the three ways to decide under the held call's id.
+- **The decision.** The mod registers `decide` (`mcp__area-check__decide`) at every session start,
+  a headless one included, since subagents decide with it too. It takes only a call that is held,
+  and only from the session or subagent it was held for, so no file can be cleared ahead of its
+  edit. `proceed` needs a reason that says something (`reasonProblem` refuses a placeholder, a
+  template slot, a fragment), `fold` one of the issues the hold showed; either claims the file for
+  that actor, logs a `decided` record and tells Claude to send the edit again, unchanged.
+- **Restructure asks Dan.** `restructure` stores a pending question in `$.store` under the
+  repository and file, so every session reads it (L636). In the main session, awake and at home,
+  Claude is told to ask with AskUserQuestion under the source `area-check:<call id>`; the hook
+  rewrites the question to `restructureQuestion`'s words and options: "Restructure first",
+  "Proceed anyway", and "Fold in" only where an issue was shown. Restructure first and Proceed
+  anyway release the file and stand for a week for the same issues (`answerStands`), so the file
+  is not asked about again; Fold in tells Claude to call `decide` with `fold`. A dialog that closed
+  while he was away, or an answer he typed instead of choosing, records nothing. Asleep, each issue
+  becomes one of bedtime's open questions (`sleepNotes`); away, scope modes' hold draws its card.
+  A subagent is told to stop and report, and the main session names every question waiting on Dan
+  for its session when he next types, through `prompt.submit`.
+- **Claiming.** A held edit is never claimed, so sending it again before deciding is held again;
+  the held entries live in the session's `$.state` under their call ids. A quiet edit is claimed
+  only when both its issues and its growth were read; one with a read that failed passes
+  unclaimed, so the next edit tries again (decision 12).
+- **The record.** `judged` records are version 2 with decision `held` or `quiet`, and one decided
+  by a standing answer carries `applied`; `decided` records name the call, the decision, its reason
+  or issue, and `by: "dan"` when it came from the dialog. `loaded` and `unjudged` stay version 1.
+  Session start sweeps issue lists no edit has read for a week and answers past their week.
+- **When the mod fails.** The edit goes ahead, the error goes to `errors.jsonl`, and the first each
+  session is one dim line saying the edit went ahead unchecked. A log write that fails says so in a
+  line of its own, since what was decided still stands (L11).
+
 ## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
 
 The one GitHub polling policy (`hooks/lib/gh-poll.sh`, #1482) keys each session's looks a minute
