@@ -517,7 +517,7 @@ earlier_reviews() {
   [ -n "$full_sha" ] || return 0
   # The short commit names no pull request, so without a branch only a caller's --pr can.
   [ "$branch_known" = 1 ] || [ -n "$pr_arg" ] || return 0
-  local rows d fin s rf line sect oldest="" out="" seen=$'\n' kept=0 left=0
+  local rows d fin s rf line sect _ oldest="" out="" seen=$'\n' kept=0 left=0
   rows="$(earlier_rows)"
   local re='^([^ :]+):([0-9]+): '
   local -a sects=() heads=()
