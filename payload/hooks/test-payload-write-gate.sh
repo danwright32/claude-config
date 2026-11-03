@@ -378,6 +378,16 @@ cd $FIX/elsewhere
 EOF
 cp /tmp/x payload/LESSONS.md" "$FIX/dev"
 refused "#2080 a cd in a heredoc body does not hide a relative write after it"
+# The same from a checkout whose path holds a space: the directory each command runs in is taken
+# whole, never cut at its first space, or the write after the heredoc resolves somewhere else.
+mkdir -p "$FIX/sp ace/dev/payload"
+: > "$FIX/sp ace/dev/claude-sync"
+: > "$FIX/sp ace/dev/payload/LESSONS.md"
+runbash "cat <<'EOF' > /dev/null
+cd $FIX/elsewhere
+EOF
+cp /tmp/x payload/LESSONS.md" "$FIX/sp ace/dev"
+refused "#2080 and nor does one from a checkout whose path holds a space"
 runbash "cat LESSONS.md 2>/dev/null" "$FIX/dev/payload"
 allowed "a read run from inside payload, stderr thrown away, is allowed"
 runbash "cd payload && grep -n needle LESSONS.md 2>/dev/null | head" "$FIX/dev"
@@ -444,6 +454,14 @@ PY
 HOOK_SAVED="$HOOK"; HOOK="$FIX/brokenreader/payload-write-gate.sh"
 runbash "bash -c 'cp /tmp/x $FIX/dev/payload/LESSONS.md'" "$FIX/dev"
 refused "#1478 with the wrapped reading failing, a payload path in a wrapper is still refused"
+# Every heredoc body line is read as shell, so a cd in one moves the relative write after it; only
+# the reading of where each command runs puts it back. With that reading failing, every payload path
+# the command holds is taken for a write instead (claude-config#2080, L42).
+runbash "cat <<'EOF' > /dev/null
+cd $FIX/elsewhere
+EOF
+cp /tmp/x payload/LESSONS.md" "$FIX/dev"
+refused "#2080 with the reading of where commands run failing, a cd in a heredoc body still hides no write"
 runbash "cat $FIX/dev/payload/LESSONS.md" "$FIX/dev"
 allowed "#1478 control: and a read naming no wrapper is still a read"
 HOOK="$HOOK_SAVED"

@@ -373,6 +373,7 @@ shell_text = cmd
 WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate",
            "ln", "ditto", "unlink", "rmdir")
 base = cwd
+CD_TO = object()  # marks a segment that is a directory the commands after it run in
 segments = re.split(r"&&|\|\||;|\||\n", shell_text)
 # The commands a shell runs from its -c string, eval from its words and env -S from its string
 # (claude-config#1478), read by lib/shell-words.py as commands of their own, each after a cd to the
@@ -386,14 +387,21 @@ try:
     for d, text, _, _, depth in _sw.every_command(cmd):
         if depth > 0 or "$(" in cmd or "`" in cmd or "<<" in cmd:
             where = d if d.startswith("/") else (os.path.join(cwd, d) if d else cwd)
-            segments += ["cd \"%s\"" % where] + re.split(r"&&|\|\||;|\||\n", text)
+            # The directory itself, never a `cd` segment: those are cut into words at each space,
+            # so a checkout whose path holds one resolved against its first word (#2080).
+            segments += [(CD_TO, os.path.normpath(where))] + re.split(r"&&|\|\||;|\||\n", text)
 except Exception:
     # With no reading of the wrapped commands, a command naming a wrapper has every payload path it
-    # holds taken for a write: the reading that sees more writes, never fewer (L42).
-    if re.search(r"(^|[^A-Za-z0-9_.-])(bash|sh|zsh|dash|ksh|eval|env|find|watch|script|parallel)([^A-Za-z0-9_.-]|$)", cmd):
+    # holds taken for a write: the reading that sees more writes, never fewer (L42). So does one
+    # with a heredoc, whose body lines the cut above reads as shell: a cd in a body moves the writes
+    # after it there, and only this reading put them back where the shell runs them (#2080).
+    if "<<" in cmd or re.search(r"(^|[^A-Za-z0-9_.-])(bash|sh|zsh|dash|ksh|eval|env|find|watch|script|parallel)([^A-Za-z0-9_.-]|$)", cmd):
         for m in re.finditer(r"[^\s\"\x27;&|<>()]*payload/[^\s\"\x27;&|<>()]*", cmd):
             add(m.group(0), cwd)
 for seg in segments:
+    if isinstance(seg, tuple) and seg[0] is CD_TO:
+        base = seg[1]
+        continue
     # A redirect TARGET: the word after > or >> (or 2>, &>, a fd form), attached or separated.
     for m in re.finditer(r"(?:^|[^0-9<>&|])(?:[0-9]*|&)>>?\s*([^\s;&|<>]+)", seg):
         add(m.group(1), base)
