@@ -845,6 +845,8 @@ test('a call with no note names the parameter and what it was given; a wrong pat
   const none = refusal(await queueCompact($, { note: undefined, path: NOTE }))
   expect(none).toContain('as note')
   expect(none).toContain('this call passed path, and no note')
+  // A blank note is no note, never reported as one passed.
+  expect(refusal(await queueCompact($, { note: '  ' }))).not.toContain('passed note')
   files['/repo/handoff.md'] = 'Decisions.'
   mtimes['/repo/handoff.md'] = clock.now()
   expect(refusal(await queueCompact($, { note: undefined, handoff: '/repo/handoff.md' }))).toContain('not /repo/handoff.md')

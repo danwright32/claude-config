@@ -172,7 +172,8 @@ const notePath = (e: Record<string, unknown>): { note: string } | { deny: string
   if (given.length > 1) return { deny: `Pass the handoff note's path once, as note: this call gave both ${given.join(' and ')}.` }
   const note = given[0]
   if (note === undefined) {
-    const others = Object.keys(e).filter(k => !CALL_KEYS.has(k) && e[k] !== undefined)
+    // A blank note or handoff is no path, so it is not reported as one passed.
+    const others = Object.keys(e).filter(k => !CALL_KEYS.has(k) && !(NOTE_KEYS as readonly string[]).includes(k) && e[k] !== undefined)
     return { deny: `Pass the absolute path of handoff.md at the root of your scratchpad folder as note, ending ${NOTE_TAIL}${others.length ? `: this call passed ${others.join(', ')}, and no note` : ''}.` }
   }
   if (!note.startsWith('/') || !note.endsWith(NOTE_TAIL)) return { deny: `The handoff note is handoff.md at the root of your scratchpad folder: pass its absolute path as note, ending ${NOTE_TAIL}, not ${note}.` }
