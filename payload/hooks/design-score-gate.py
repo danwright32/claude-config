@@ -71,14 +71,15 @@ import design_score  # noqa: E402
 import score_github as sg  # noqa: E402
 
 
-def _load_shell_words():
-    spec = importlib.util.spec_from_file_location("shell_words", os.path.join(HOOKS, "lib", "shell-words.py"))
+def _load_lib(name, filename):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(HOOKS, "lib", filename))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-sw = _load_shell_words()
+sw = _load_lib("shell_words", "shell-words.py")
+repo_slug = _load_lib("repo_slug", "repo_slug.py")
 
 ISSUE_URL = re.compile(r"^https?://github\.com/([^/\s]+/[^/\s]+)/issues/(\d+)")
 ISSUE_EP = re.compile(r"^/?repos/([^/\s]+)/([^/\s]+)/issues/(\d+)/?$")
@@ -407,25 +408,18 @@ class Gate:
 def closing_repo(ref, prepo):
     """The owner/name of the repository a closingIssuesReferences entry's issue is in.
 
-    gh answers each entry's repository as {id, name, owner: {id, login}} and carries no
-    nameWithOwner there (claude-config#2065, measured 2026-11-02), so the slug is built from
-    owner.login and name; nameWithOwner is read first in case gh ever adds it. An entry naming no
-    repository at all is the pull request's own. One whose repository is present but unreadable is
-    refused rather than guessed at: guessing the pull request's repository judges whatever issue
-    has that number there, which is how an unmatched build closed before."""
+    The slug comes from lib/repo_slug.py, the one place it is built (claude-config#2065, #2096). An
+    entry naming no repository at all is the pull request's own. One whose repository is present but
+    unreadable is refused rather than guessed at: guessing the pull request's repository judges
+    whatever issue has that number there, which is how an unmatched build closed before."""
     rp = ref.get("repository")
     if rp is None:
         return prepo
-    if isinstance(rp, dict):
-        slug = rp.get("nameWithOwner")
-        if isinstance(slug, str) and "/" in slug:
-            return slug
-        owner = rp.get("owner") if isinstance(rp.get("owner"), dict) else {}
-        login, name = owner.get("login"), rp.get("name")
-        if isinstance(login, str) and login and isinstance(name, str) and name:
-            return "%s/%s" % (login, name)
-    raise sg.GitHubError("gh pr view named a closing issue (#%s) without a repository this gate can read"
-                         % ref.get("number"))
+    try:
+        return repo_slug.slug(rp)
+    except repo_slug.RepoSlugError as err:
+        raise sg.GitHubError("gh pr view named a closing issue (#%s) without a repository this gate can read (%s)"
+                             % (ref.get("number"), err))
 
 
 HOW = ("Bring it to 100%: run the platform adapter, then `python3 ~/.claude/skills/design-rounds/score/design_score.py "
