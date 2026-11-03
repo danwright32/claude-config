@@ -361,47 +361,48 @@ def add(tok, base):
     if p:
         targets.append(p)
 
-# Heredoc BODIES are data, not shell: a python comparison like `a > b` in one is no redirect. They
-# are taken out of the shell reading; the inline script reading below reads the whole command.
-shell = []
-lines = cmd.split("\n")
-i = 0
-while i < len(lines):
-    line = lines[i]
-    shell.append(line)
-    # Only a heredoc opener: the <<< of a here-string names no delimiter and opens no body.
-    delims = re.findall(r"(?<!<)<<(?!<)-?\s*[\"\x27]?([A-Za-z_][A-Za-z0-9_]*)[\"\x27]?", line)
-    i += 1
-    for delim in delims:
-        while i < len(lines) and lines[i].strip() != delim:
-            i += 1
-        i += 1
-shell_text = "\n".join(shell)
+# Every line is read as shell, a heredoc body line included (Dan, 2026-11-02, "Also read heredoc
+# text", claude-config#2080). A body is data the shell never runs, so a `a > b` in one can be refused
+# as a redirect; that was chosen over a reading of where a body ends that could ever hide a command
+# after it, as the pattern this gate kept did with <<'E'OF, <<END-OF and a << inside a quoted string.
+# Where a body really ends is read by lib/shell-words.py, below, for the commands the shell runs.
+shell_text = cmd
 
 # Commands whose arguments ARE what they write. Scanned per segment, in order, so a read in one
 # segment is not blamed on a write in the next, and a `cd` moves where the rest resolve.
 WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate",
            "ln", "ditto", "unlink", "rmdir")
 base = cwd
+CD_TO = object()  # marks a segment that is a directory the commands after it run in
 segments = re.split(r"&&|\|\||;|\||\n", shell_text)
 # The commands a shell runs from its -c string, eval from its words and env -S from its string
 # (claude-config#1478), read by lib/shell-words.py as commands of their own, each after a cd to the
-# directory it runs in, so a cd inside one moves only what follows it there. Only added to the cut
-# above, which still reads everything it always read. So are the commands inside a substitution,
-# which the cut above never reads as commands of their own, those in the body of a heredoc whose end
-# marker is unquoted among them, since the shell runs them too (claude-config#2053).
+# directory it runs in, so a cd inside one moves only what follows it there. Only added to the
+# segments of the whole command above, which still read every line of it, heredoc bodies included.
+# So are the commands inside a substitution, which those segments never read as commands of their
+# own, those in the body of a heredoc whose end marker is unquoted among them, since the shell runs
+# them too (claude-config#2053). And with a heredoc, every command it runs, each in the directory it
+# runs in: the segments above read a cd in a body as moving the commands after it, which the shell
+# never does (claude-config#2080).
 try:
     for d, text, _, _, depth in _sw.every_command(cmd):
-        if depth > 0 or "$(" in cmd or "`" in cmd:
+        if depth > 0 or "$(" in cmd or "`" in cmd or "<<" in cmd:
             where = d if d.startswith("/") else (os.path.join(cwd, d) if d else cwd)
-            segments += ["cd \"%s\"" % where] + re.split(r"&&|\|\||;|\||\n", text)
+            # The directory itself, never a `cd` segment: those are cut into words at each space,
+            # so a checkout whose path holds one resolved against its first word (#2080).
+            segments += [(CD_TO, os.path.normpath(where))] + re.split(r"&&|\|\||;|\||\n", text)
 except Exception:
     # With no reading of the wrapped commands, a command naming a wrapper has every payload path it
-    # holds taken for a write: the reading that sees more writes, never fewer (L42).
-    if re.search(r"(^|[^A-Za-z0-9_.-])(bash|sh|zsh|dash|ksh|eval|env|find|watch|script|parallel)([^A-Za-z0-9_.-]|$)", cmd):
+    # holds taken for a write: the reading that sees more writes, never fewer (L42). So does one
+    # with a heredoc, whose body lines the cut above reads as shell: a cd in a body moves the writes
+    # after it there, and only this reading put them back where the shell runs them (#2080).
+    if "<<" in cmd or re.search(r"(^|[^A-Za-z0-9_.-])(bash|sh|zsh|dash|ksh|eval|env|find|watch|script|parallel)([^A-Za-z0-9_.-]|$)", cmd):
         for m in re.finditer(r"[^\s\"\x27;&|<>()]*payload/[^\s\"\x27;&|<>()]*", cmd):
             add(m.group(0), cwd)
 for seg in segments:
+    if isinstance(seg, tuple) and seg[0] is CD_TO:
+        base = seg[1]
+        continue
     # A redirect TARGET: the word after > or >> (or 2>, &>, a fd form), attached or separated.
     for m in re.finditer(r"(?:^|[^0-9<>&|])(?:[0-9]*|&)>>?\s*([^\s;&|<>]+)", seg):
         add(m.group(1), base)

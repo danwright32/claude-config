@@ -132,13 +132,17 @@ import ast, os, re, sys
 
 MODULES_NOT_FILES = {"os", "tarfile", "gzip", "bz2", "lzma", "zipfile", "webbrowser", "shelve", "dbm",
                      "sqlite3", "urllib", "request", "wave", "aifc", "sunau", "Image", "pty", "socket"}
-HEREDOC = re.compile(r"""<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
 PYTHON = re.compile(r"""(^|[\s;&|("'`$])python3?(\s|$)""")
 PY_VAR = re.compile(rb"""^[ \t]*(?:export[ \t]+|local[ \t]+)?[A-Za-z_][A-Za-z0-9_]*_PY=(['"])""")
 # The python3 -c programs come from the one reader the ASCII scan uses too (lib/python_c_programs.py),
-# which takes every program on a line; this scan once took only the first (#2066).
+# which takes every program on a line; this scan once took only the first (#2066). Where a heredoc's
+# body begins and ends comes from lib/shell_code_lines.py, which reads the end marker through
+# lib/shell-words.py as bash does (#2080): read with a pattern of its own, <<'P'Y ended at P and
+# <<END-OF at END, and only the first heredoc on a line was read.
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.environ["PYTHON_C_PROGRAMS_LIB"])
 import python_c_programs
+import shell_code_lines
 
 
 def units(path):
@@ -155,37 +159,62 @@ def units(path):
         out.append((line, None if prog is None else prog.decode("utf-8", "replace")))
         # The lines a program runs on past its first are its own, never a heredoc or a variable.
         inside.update(range(line, raw.count(b"\n", 0, end) + 1))
+    shell_units(raw, 0, inside, out)
+    return out
+
+
+def shell_units(raw, base, inside, out):
+    """Add the programs in shell text raw, whose first line is line base + 1 of its file, to out.
+    A heredoc handed to python3 or named PY... is a program; any other heredoc is read again as
+    shell, since a stand in a script writes can run python3 itself. False once a shell quote never
+    closes, after which nothing more in the file is read."""
+    # surrogateescape, so a line taken from the text encodes back to exactly the bytes it came from.
+    text = raw.decode("utf-8", "surrogateescape")
     blines = raw.split(b"\n")
     offsets, k = [], 0
     for bl in blines:
         offsets.append(k)
         k += len(bl) + 1
-    lines = [bl.decode("utf-8", "replace") for bl in blines]
+    walked = list(shell_code_lines.read_lines(text))
     i = 0
-    while i < len(lines):
-        line = lines[i]
-        if i in inside or line.lstrip().startswith("#"):
-            i += 1; continue
-        m = HEREDOC.search(line)
-        if m and (PYTHON.search(line[:m.start()]) or m.group(2).startswith("PY")):
-            delim, body, j = m.group(2), [], i + 1
-            while j < len(lines) and lines[j].strip() != delim:
-                body.append(lines[j]); j += 1
-            out.append((i + 2, "\n".join(body)))
-            i = j + 1
-            continue
-        m = PY_VAR.search(blines[i])
-        if m:
-            src, end = python_c_programs.word(raw, offsets[i] + m.end() - 1)
-            if src is None:
-                out.append((i + 1, None))
-                break
-            if not src.startswith(b"$"):   # a variable naming a file or another variable
-                out.append((i + 1, src.decode("utf-8", "replace")))
-            i = raw.count(b"\n", 0, end) + 1
-            continue
+    while i < len(walked):
+        n, line, kind, _, ops = walked[i]
         i += 1
-    return out
+        if base + n - 1 in inside or kind in ("heredoc", "end") or line.lstrip().startswith("#"):
+            continue
+        python_op = False
+        at = shell_code_lines.heredoc_openers(line)
+        for strip, marker, _ in ops:
+            pos = next((o for o in at if o[1] == marker), None)
+            if pos is not None:
+                at = at[at.index(pos) + 1:]
+            python = bool(PYTHON.search(line[:pos[0]] if pos is not None else line)) or marker.startswith("PY")
+            python_op = python_op or python
+            first, body = i + 1, []
+            while i < len(walked) and walked[i][2] == "heredoc":
+                body.append(walked[i][1]); i += 1
+            if i < len(walked) and walked[i][2] == "end":
+                i += 1
+            sub = "\n".join(body).encode("utf-8", "surrogateescape")
+            if python:
+                out.append((base + first, sub.decode("utf-8", "replace")))
+            elif body and not shell_units(sub, base + first - 1, inside, out):
+                return False
+        if python_op:
+            continue
+        m = PY_VAR.search(blines[n - 1])
+        if m:
+            src, end = python_c_programs.word(raw, offsets[n - 1] + m.end() - 1)
+            if src is None:
+                out.append((base + n, None))
+                return False
+            if not src.startswith(b"$"):   # a variable naming a file or another variable
+                out.append((base + n, src.decode("utf-8", "replace")))
+            if not ops:
+                last = raw.count(b"\n", 0, end) + 1   # the line after the word, 0 based
+                while i < len(walked) and walked[i][0] - 1 < last:
+                    i += 1
+    return True
 
 
 def kw(call, name):
@@ -293,6 +322,10 @@ def walk(args):
 
 
 def main(argv):
+    if shell_code_lines.READER_ERROR is not None:
+        print("scan.py: lib/shell-words.py could not be loaded (%s), so where a heredoc ends cannot be read"
+              % shell_code_lines.READER_ERROR, file=sys.stderr)
+        return 2
     if argv and argv[0] == "--list":
         for path in walk(argv[1:]):
             print(path)
@@ -327,13 +360,15 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    sys.exit(main(sys.argv[1:]))
 SCAN
 
 # ---------------------------------------------------------------------------
 echo "every Python program in the hooks and the skills says how it handles text it cannot decode or encode"
 
 python3 "$WORK/scan.py" "$DIR" > "$WORK/hooks.scan" 2>&1
+rc=$?
+[ "$rc" = 0 ] && ok || bad "the scan of $DIR exited $rc: $(grep -v -E '^(UNITS|UNPARSED) |^/' "$WORK/hooks.scan" | awk 'NR <= 5' | tr '\n' '|')"
 units="$(sed -n 's/^UNITS //p' "$WORK/hooks.scan")"
 [ "${units:-0}" -ge 100 ] && ok || bad "the scan read only ${units:-no} Python programs in $DIR, so it is reading the wrong tree or cannot find them"
 unparsed="$(grep '^UNPARSED' "$WORK/hooks.scan")"
@@ -361,6 +396,8 @@ LISTED
   python3 "$WORK/scan.py" ${progs[@]+"${progs[@]}"}
 }
 skill_scan "$DIR/../skills" > "$WORK/skills.scan" 2>&1
+rc=$?
+[ "$rc" = 0 ] && ok || bad "the scan of payload/skills exited $rc: $(grep -v -E '^(UNITS|UNPARSED) |^/' "$WORK/skills.scan" | awk 'NR <= 5' | tr '\n' '|')"
 sunits="$(sed -n 's/^UNITS //p' "$WORK/skills.scan")"
 [ "${sunits:-0}" -ge 30 ] && ok || bad "the scan read only ${sunits:-no} Python programs under payload/skills"
 shits="$(grep -v -E '^UNITS ' "$WORK/skills.scan" | sed "s#^$DIR/../##")"
@@ -455,6 +492,31 @@ python3 "$WORK/scan.py" "$WORK/probe/open-c.sh" "$WORK/probe/open-var.sh" > "$WO
 for want in "UNPARSED $WORK/probe/open-c.sh:1: a shell quote that never closes" "UNPARSED $WORK/probe/open-var.sh:1: a shell quote that never closes"; do
   grep -q -F "$want" "$WORK/probe.out" && ok || bad "the scan should report [$want]; it said: $(tr '\n' '|' < "$WORK/probe.out")"
 done
+
+# Where a heredoc's body ends is read as bash reads it, by lib/shell-words.py through
+# lib/shell_code_lines.py (claude-config#2080). Read with a pattern of its own, <<'P'Y ended at P and
+# <<END-OF at END, so the body never closed and ran on into the shell after it, reported unparsed;
+# and only the first heredoc on a line was read, so a python3 heredoc after another went unjudged.
+mkdir -p "$WORK/marker"
+printf '%s\n' '#!/bin/bash' "python3 - \"\$f\" <<'P'Y" 'import sys' 'print(open(sys.argv[1]).read())' 'PY' 'echo done' > "$WORK/marker/split.sh"
+printf '%s\n' '#!/bin/bash' 'python3 - "$f" <<END-OF' 'import sys' 'print(open(sys.argv[1]).read())' 'END-OF' "python3 - <<'PY'" 'print(1)' 'PY' 'echo done' > "$WORK/marker/hyphen.sh"
+printf '%s\n' '#!/bin/bash' "cat <<A; python3 - \"\$f\" <<'PY'" 'text' 'A' 'import sys' 'print(open(sys.argv[1]).read())' 'PY' > "$WORK/marker/two.sh"
+# A heredoc that is not Python is still read for the programs it holds: a stand in a script writes
+# can run python3 itself, and a variable named _PY inside one is a program too.
+printf '%s\n' '#!/bin/bash' "cat > \"\$WORK/x.sh\" <<'SH'" "python3 - \"\$f\" <<'PY'" 'import sys' 'print(open(sys.argv[1]).read())' 'PY' "X_PY='" 'import subprocess' 'r = subprocess.run(["ls"], capture_output=True, text=True)' "'" 'SH' > "$WORK/marker/nested.sh"
+python3 "$WORK/scan.py" "$WORK/marker/split.sh" "$WORK/marker/hyphen.sh" "$WORK/marker/two.sh" "$WORK/marker/nested.sh" > "$WORK/marker.out" 2>&1
+for want in "split.sh:4: open" "hyphen.sh:4: open" "two.sh:6: open" "nested.sh:5: open" "nested.sh:9: subprocess" "UNITS 6"; do
+  grep -q -F "$want" "$WORK/marker.out" && ok || bad "#2080 the scan should report [$want], reading each heredoc's end as bash does; it said: $(tr '\n' '|' < "$WORK/marker.out")"
+done
+grep -q '^UNPARSED' "$WORK/marker.out" && bad "#2080 the scan read a heredoc past its end: $(grep '^UNPARSED' "$WORK/marker.out" | tr '\n' '|')" || ok
+# With lib/shell-words.py missing there is no reading of where a heredoc ends, so the scan refuses by
+# name rather than guessing; and the tree scans above fail on its exit, not only on what it printed.
+mkdir -p "$WORK/nolib"
+cp "$DIR/lib/python_c_programs.py" "$DIR/lib/shell_code_lines.py" "$WORK/nolib/"
+PYTHON_C_PROGRAMS_LIB="$WORK/nolib" python3 "$WORK/scan.py" "$WORK/marker/split.sh" > "$WORK/nolib.out" 2>&1
+rc=$?
+[ "$rc" = 2 ] && ok || bad "#2080 with shell-words.py missing the scan should exit 2, exited $rc: $(tr '\n' '|' < "$WORK/nolib.out")"
+grep -q 'shell-words.py' "$WORK/nolib.out" && ok || bad "#2080 and name shell-words.py, said: $(tr '\n' '|' < "$WORK/nolib.out")"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

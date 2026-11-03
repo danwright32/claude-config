@@ -30,9 +30,36 @@ never ends a function (#2063, #2068). It reads the assignments in a body through
 instead, which reads the body whole (#2076), so the text of each line that is this shell's own,
 which #2068 added for it, has no reader and is gone (L613).
 """
+import importlib.util
+import os
 import re
+import sys
 
-OP = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_]\w*)\2")
+# The end marker of a heredoc is read by lib/shell-words.py (heredoc_opener), the one reading of it,
+# which takes the whole word with its quotes removed as bash does: <<'E'OF and <<E"OF" end at EOF,
+# <<END-OF at END-OF (claude-config#2080). Loaded by its path beside this file, with no bytecode left
+# in lib/ (#2076). READER_ERROR is None once it loads; otherwise scan() refuses, naming it, since
+# this keeps no reading of its own to fall back on and one that misread a marker would read every
+# line after a heredoc as its body. Importing still works, so a scan can say which reader is missing.
+READER_ERROR = None
+try:
+    _dont_write = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        _spec = importlib.util.spec_from_file_location(
+            "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "shell-words.py"))
+        _sw = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_sw)
+        heredoc_opener, heredoc_openers = _sw.heredoc_opener, _sw.heredoc_openers
+    finally:
+        sys.dont_write_bytecode = _dont_write
+except Exception as e:  # noqa: BLE001  missing, or failing to load: either way there is no reader
+    READER_ERROR = "%s: %s" % (type(e).__name__, e)
+
+
+class ReaderMissing(RuntimeError):
+    """lib/shell-words.py could not be loaded, so no heredoc's end marker can be read."""
+
 # A bracket expression in a pattern, a case label's `[A-Za-z_{]` or a regex's `[{]`: a `[` with no
 # space after it, closed by a `]` before any space. A test command's `[ ` and `[[ ` never match.
 BRACKET = re.compile(r"\[[^\]\s]+\]")
@@ -50,6 +77,9 @@ def scan(line, frames, keep=None, parens=None):
     a `(set -f; ...)` inside a multi line `$( { ... } )` closed the substitution, and everything
     after was read as inside the double quotes around it (claude-config#2063). Kept across lines by
     the caller that passes it; without one it is counted within the line alone."""
+    if READER_ERROR is not None:
+        raise ReaderMissing("lib/shell-words.py could not be loaded (%s), so no heredoc's end marker "
+                            "can be read" % READER_ERROR)
     if parens is None:
         parens = [0] * len(frames)
     ops = []
@@ -64,10 +94,12 @@ def scan(line, frames, keep=None, parens=None):
                 i += 2
                 continue
             if c == '<' and line.startswith('<<', i) and not line.startswith('<<<', i) and (i == 0 or line[i - 1] != '<'):
-                m = OP.match(line, i)
-                if m:
-                    ops.append((m.group(1) == '-', m.group(3), len(frames) > 1))
-                    i = m.end()
+                # marker_start, since this walk follows no arithmetic: `$((1<<2))` opens nothing.
+                op = heredoc_opener(line, i, marker_start=True)
+                if op:
+                    marker, strip, _, end = op
+                    ops.append((strip, marker, len(frames) > 1))
+                    i = end
                     continue
             if c == '$' and line.startswith('$(', i) and not line.startswith('$((', i):
                 frames.append(None)
