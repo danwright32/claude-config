@@ -85,8 +85,8 @@ def _left():
     return BUDGET - (time.monotonic() - STARTED)
 
 
-def _gh(args, cwd=None, token=None, extra_env=None):
-    """-> (ok, stdout, stderr). token None runs gh as the command would, with the inherited account."""
+def _gh(argv, cwd=None, token=None, extra_env=None):
+    """argv is the whole gh command, gh first. -> (ok, stdout, stderr). token None runs gh as the command would, with the inherited account."""
     left = _left()
     if left <= 1:
         raise CannotTell("GitHub did not answer within this gate's %d second budget" % BUDGET)
@@ -95,7 +95,7 @@ def _gh(args, cwd=None, token=None, extra_env=None):
     if token is not None:
         env["GH_TOKEN"] = token
     try:
-        p = subprocess.run(["gh"] + args, cwd=cwd if cwd and os.path.isdir(cwd) else None, env=env,
+        p = subprocess.run(argv, cwd=cwd if cwd and os.path.isdir(cwd) else None, env=env,
                            capture_output=True, text=True, errors="replace", timeout=min(15, left))
     except FileNotFoundError:
         raise CannotTell("gh is not on PATH")
@@ -111,7 +111,7 @@ def _tokens():
     """None (the inherited account) first, then each signed in account's token, active first; lazily."""
     yield None
     if not _TOKENS:
-        ok, out, _ = _gh(["auth", "status", "--json", "hosts"])
+        ok, out, _ = _gh(["gh", "auth", "status", "--json", "hosts"])
         accounts = []
         try:
             hosts = json.loads(out).get("hosts", {}).get("github.com", []) if ok else []
@@ -120,7 +120,7 @@ def _tokens():
         except (ValueError, AttributeError):
             accounts = []
         for login in accounts:
-            ok, tok, _ = _gh(["auth", "token", "--hostname", "github.com", "-u", login])
+            ok, tok, _ = _gh(["gh", "auth", "token", "--hostname", "github.com", "-u", login])
             if ok and tok.strip():
                 _TOKENS.append(tok.strip())
         _TOKENS.append("")  # marks the list as built, even when empty
@@ -137,11 +137,11 @@ def visibility(slug, cwd, gh_repo):
     key = (slug, cwd if not slug else None, gh_repo)
     if key in _VIS:
         return _VIS[key]
-    args = ["repo", "view"] + ([slug] if slug else []) + ["--json", "nameWithOwner,visibility"]
+    argv = ["gh", "repo", "view"] + ([slug] if slug else []) + ["--json", "nameWithOwner,visibility"]
     extra = {"GH_REPO": gh_repo} if gh_repo and not slug else None
     last = ""
     for tok in _tokens():
-        ok, out, err = _gh(args, cwd, tok, extra)
+        ok, out, err = _gh(argv, cwd, tok, extra)
         if ok:
             try:
                 got = json.loads(out)
@@ -164,7 +164,7 @@ def names():
         return _NAMES[0]
     raw, last = None, ""
     for tok in _tokens():
-        ok, out, err = _gh(["api", "-H", "Accept: application/vnd.github.raw",
+        ok, out, err = _gh(["gh", "api", "-H", "Accept: application/vnd.github.raw",
                             "repos/%s/contents/%s" % (DIGEST_REPO, DIGEST_LIST)], None, tok)
         if ok:
             raw = out
