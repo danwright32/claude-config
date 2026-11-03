@@ -25,7 +25,9 @@ product named in prose): without the organisation it locates nothing, it is the 
 of lessons are written in, and `name#N` is what lesson-fanout.sh parses to skip the repository a
 lesson came from. The same login without its hyphen is a different GitHub account, and the
 company's public web domain, so it is not one either. These are decisions recorded on #1568's pull
-request, not omissions.
+request, not omissions. The one exception is public pull request and issue text: the publish gate
+(work_names_publish_gate.py, claude-config#2105) gives this Matcher the repository names as well,
+for that text only.
 
 NOTHING PRINTED REPEATS A NAME FOUND. A hit is reported as path:line and which source matched. CI
 logs of a public repository are public, and a refusal message is read in transcripts.
