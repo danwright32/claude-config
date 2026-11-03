@@ -100,6 +100,10 @@ import tempfile
 import time
 from datetime import datetime, timezone
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import repo_slug  # noqa: E402
+
 try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover: python older than 3.9
@@ -636,14 +640,21 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
 
 def refs(items, repo):
     """Each reference GitHub gave (an issue a PR closes, a PR that closed an issue) as (owner/name
-    lowercased, number); one naming no repository is in `repo`. Anything else is left out."""
+    lowercased, number); one naming no repository is in `repo`. Anything else is left out, a
+    repository that is present but cannot give a whole slug included: guessing it to be `repo` ties
+    the reference to whatever has that number here (claude-config#2096). Left out, it ties nothing,
+    so what it would have accounted for is listed for a look instead of being wrongly accounted."""
     out = []
     for r in items if isinstance(items, list) else []:
         if not isinstance(r, dict) or isinstance(r.get("number"), bool) or not isinstance(r.get("number"), int):
             continue
-        rp = r.get("repository") if isinstance(r.get("repository"), dict) else {}
-        owner = rp.get("owner") if isinstance(rp.get("owner"), dict) else {}
-        name = "%s/%s" % (owner["login"], rp["name"]) if isinstance(owner.get("login"), str) and isinstance(rp.get("name"), str) else repo
+        if r.get("repository") is None:
+            name = repo
+        else:
+            try:
+                name = repo_slug.slug(r["repository"])
+            except repo_slug.RepoSlugError:
+                continue
         out.append((name.lower(), r["number"]))
     return out
 
