@@ -5168,11 +5168,18 @@ whose issues or growth could not be read passes without settling the file, so th
 tries again. When the mod itself fails the edit goes ahead, the error goes to `errors.jsonl` beside
 the log, and the first each session is one dim line saying the edit went ahead unchecked. `node
 tools/area-check-replay.ts <checkout> --repo <owner/name>` replays a repository's last 30 days
-through the same rules.
+through the same rules. Every pull request then carries an area check line for each file decided on
+its branch, `Area check: <file>: <decision>, <reason>` (a fold line also names `Refs #N`): `gh pr
+create`, `gh pr edit` given a description, and `gh pr merge` (by itself, `--auto` or through the
+merge helper) are refused while the description lacks one, with the lines to paste. Decisions are
+matched by repository, branch and merge base, read from this Mac's log only, and only from its
+newest 1 MiB of decision lines; a rebase moves the merge base, so decisions taken before it are no
+longer asked for. A log that cannot be read refuses the command; a fact the command does not depend
+on that cannot be read (no checkout, GitHub not answering for a merge) lets it through.
 
 </td><td>
 
-#1506, #1508, #1509
+#1506, #1508, #1509, #1510
 
 </td></tr>
 <tr><td>

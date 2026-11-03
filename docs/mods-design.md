@@ -3876,6 +3876,48 @@ facts and the bar are unchanged.
   session is one dim line saying the edit went ahead unchecked. A log write that fails says so in a
   line of its own, since what was decided still stands (L11).
 
+### The pull request line, built 2026-11-03 (#1510)
+
+Phase 5.2 makes every decision visible where the change is reviewed: each file decided on a branch
+carries one line in the pull request made from it, `Area check: <file>: <decision>, <reason>` (a
+fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing answer of Dan's reads
+`Dan chose Proceed anyway` or `Dan chose Restructure first`). The rules and the words are in
+`hooks/prline.ts`, which is pure; `hooks/register.ts` reads the facts.
+
+- **Which commands.** A `tool.call` hook on Bash, for the main session and subagents alike, reads
+  each command through mod-kit's readers. `gh pr create`, `gh pr edit` given a description, and
+  `gh pr merge` are refused while the description lacks a line for a decided file, with every line
+  to paste. A merge counts whether it is run by itself, with `--auto`, or through the merge helper;
+  `--disable-auto` is not a merge and passes. A merge reads the description from GitHub.
+- **The record it matches.** `decided` records are now version 3, carrying the branch and merge
+  base the edit was held on; version 2 is left as it was (L1010), and its records, which carry no
+  branch, are left out rather than counted malformed. Decisions are matched by repository, branch
+  and merge base, so a branch name used again later starts clean. Where a merge base could not be
+  read, the branch alone decides, and the refusal says so.
+- **The rebase gap.** A rebase moves the merge base, so decisions taken before it stop matching and
+  are no longer asked for. This is known and accepted: the alternative, matching by branch alone,
+  would ask a reused branch name for another change's decisions.
+- **The bounded read.** The log grows about 1 MB in ten days and the engine refuses a whole file
+  read over 4 MiB, so it is never read whole. `/bin/sh` runs `grep -a -F` for the two decision
+  marks piped to `tail -c`, under `set -o pipefail`, and keeps only the newest `LOG_READ_BYTES`
+  (1 MiB) of decision lines. It reads one byte more than the bound: with exactly the bound, a read
+  beginning at a line start looks the same as one beginning mid line, so dropping the first line
+  would lose a whole decision. With the extra byte, everything up to and including the first
+  newline lies outside the bound, so `keptOf` drops a cut line whole and keeps one the bound begins
+  exactly at. Decisions older than the newest 1 MiB of decision lines are not checked; decision
+  lines are only part of the log, so that is thousands of decisions. Output the engine cut short
+  refuses as an unreadable log.
+- **A description given through a substitution.** mod-kit's reader drops the text of a
+  substitution from the word (`--body "$(cat <<'EOF' ...)"` reads as its opening only), so a body
+  holding `$(` or a backtick is looked for in the whole command, the one place its text is still
+  whole. The gap: a line found elsewhere in the command, such as the title, passes too.
+- **When a fact cannot be read.** A log that cannot be read refuses the command, never reads as no
+  decisions (L10). A fact the command does not depend on (no checkout, no GitHub repository, GitHub
+  not answering for a merge) lets it through, and the check's own failure lets the command through
+  with one dim line kept in the error file. Only this Mac's log is read, so a file decided on the
+  other Mac is not asked for; every refusal that lists lines to paste says so, and the unreadable
+  log refusal says it reads this Mac's log only.
+
 ## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
 
 The one GitHub polling policy (`hooks/lib/gh-poll.sh`, #1482) keys each session's looks a minute
