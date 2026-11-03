@@ -948,7 +948,27 @@ export const register: Register = on => {
 
 // What Compact does, pressed or typed (#939). True once the compaction has run; false when it was
 // skipped or failed, which it has already said in a toast.
+// #2100: while it runs, the Compact holds back mod-kit's reload of this mod, which would drop the
+// wait for its end; at most ten minutes, past which mod-kit lets the reload go and says so. A hold
+// that cannot be taken is no reason not to compact, so it is said in the debug log and the Compact
+// runs as before (#2113 already carries the prompt to carry on across a reload).
+const COMPACT_HOLD = { mod: MOD, id: 'compact' } as const
 const compactNow = async ($: EngineInterface): Promise<boolean> => {
+  let held = false
+  try {
+    await $.modkit.hold({ ...COMPACT_HOLD, what: 'the Compact it started', ms: 10 * 60_000 })
+    held = true
+  } catch (err) {
+    $.ui.log(`status-bar: could not hold back a reload while the Compact runs, so one now would drop the wait for its end (${msg(err)})`, { to: 'debug' })
+  }
+  try {
+    return await compactHeld($)
+  } finally {
+    if (held)
+      await $.modkit.release(COMPACT_HOLD).catch(err => $.ui.log(`status-bar: could not let go of the hold on a reload taken for the Compact; it lapses by itself within 10 minutes (${msg(err)})`, { to: 'debug' }))
+  }
+}
+const compactHeld = async ($: EngineInterface): Promise<boolean> => {
   let r: { skip?: string } | undefined
   try {
     r = (await $.session.compact()) as { skip?: string }

@@ -72,6 +72,8 @@ const modKit: { name: string; register: Register } = {
           await built.ui.toast(said.toast)
           return said.text
         },
+        hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
+        release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
       }
       // #1299: a mod-kit loaded before it had a member, named by a plugin in the fold,
       // kit-lacks-<member in kebab case>, since this plugin runs apart from the test's module; the

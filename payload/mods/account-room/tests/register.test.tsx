@@ -52,6 +52,8 @@ const modKit: { name: string; register: Register } = {
         clickable: async () => (await built.env.get("NO_CLICKS")) !== "1",
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+        hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
+        release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         // #1205: the bottom of a login mod-kit raises; the room's own hook takes it in above this.
         login: async () => undefined,
@@ -147,6 +149,8 @@ const modKitToday: { name: string; register: Register } = {
         clickable: async () => true,
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+        hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
+        release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         // #1205: the bottom of a login mod-kit raises; the room's own hook takes it in above this.
         login: async () => undefined,

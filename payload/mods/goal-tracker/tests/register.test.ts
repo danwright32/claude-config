@@ -24,6 +24,8 @@ const deps: { name: string; register: Register } = {
             return JSON.parse(r.stdout) as boolean
           },
           typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+          hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
+          release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
           login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
           account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
