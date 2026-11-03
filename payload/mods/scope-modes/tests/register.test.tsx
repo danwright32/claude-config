@@ -2607,65 +2607,115 @@ test('no build and away together both show, scope first', withDeps, async ($, on
   expect(lastModes(w)).toEqual(['NO BUILD', 'AWAY'])
 })
 
-test('a switch reaches every other open session on this Mac, and says which could not be told', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { open: [{ sessionId: 's2' }, { sessionId: 's3' }], sends: [true, { refused: 'the session is not running' }, { refused: 'the session is not running' }] })
+// #2099: in auto mode the message telling another session got no verdict in every real telling
+// found in this Mac's transcripts (four sessions, Oct 9 to 20), so the other sessions stayed where
+// they were. Dan's decision (2026-11-03): a switch is kept in one record every session reads at its
+// next prompt or minute, so no message between sessions is needed, and only what Dan types writes it.
+const PLACE = '/Users/x/.claude/state/scope-modes/place.json'
+const placeRecord = (place: 'away' | 'home', at: number, by = 's2') => `${JSON.stringify({ v: 1, place, at, by, cwd: '/other', how: `/${place}` })}\n`
+test('/away records the switch for every session on this Mac, with who, when and from where, and sends no message', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [{ sessionId: 's2' }, { sessionId: 's3' }] })
   await start($ as never, clock)
   const r = await command($ as never, 'away')
-  expect(w.sent).toEqual([
-    { to: 's2', text: AWAY_TEXT },
-    { to: 's3', text: AWAY_TEXT },
-    { to: 's3', text: AWAY_TEXT },
-  ])
-  expect(r.text).toBe(
-    'Away is on in this session and 1 other. 1 other session is not on away, because the message telling it could not be sent (the session is not running). To switch one, type /away in it: any session whose band does not show AWAY.',
-  )
-})
-
-// #2099: in auto mode a switch sent from a command or a hook got no verdict, in every real
-// telling found in this Mac's transcripts (four sessions, Oct 9 to 20), so the other sessions
-// stayed where they were. Said with its cause and what Dan does about it, in /sleep's words.
-// The reason is the one those transcripts carry, as mod-kit hands it on.
-const SWITCH_NO_VERDICT = 'The server-side auto mode classifier gave no verdict for SendMessage: the request that produced this action did not ask for one'
-test('a switch auto mode gave no verdict on says so, and how to switch that session by hand', withDeps, async ($, on) => {
-  const { clock } = world(on, { open: [{ sessionId: 's2' }, { sessionId: 's3' }], sends: [{ refused: SWITCH_NO_VERDICT }, { refused: SWITCH_NO_VERDICT }, true] })
-  await start($ as never, clock)
-  const r = await command($ as never, 'home')
-  expect(r.text).toBe(
-    `Home is on in this session and 1 other. 1 other session is not on home, because auto mode's safety check gave no verdict on the message telling it (${SWITCH_NO_VERDICT}). To switch one, type /home in it: any session whose band still shows AWAY.`,
-  )
+  expect(JSON.parse(w.files[PLACE] as string)).toEqual({ v: 1, place: 'away', at: expect.any(Number), by: 's1', cwd: '/repo', how: '/away' })
+  // Written whole beside its place and moved over it, so a reader never sees half of it.
+  expect(w.fileOps.some(op => op[0] === 'mv' && op[op.length - 1] === PLACE)).toBe(true)
+  expect(w.sent).toEqual([])
+  expect(r.text).toBe('Away is on in this session; the 2 other open sessions switch to away within a minute.')
   // Claude's acknowledgement opens with the same sentence.
-  expect(JSON.stringify(r)).toContain('1 other session is not on home, because auto mode')
+  expect(JSON.stringify(r)).toContain('the 2 other open sessions switch to away within a minute')
+  await command($ as never, 'home')
+  expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'home', how: '/home' })
 })
 
-test('several not switched are counted once, each cause said once', withDeps, async ($, on) => {
-  const blocked = 'Auto mode classifier blocked action: messaging another session'
-  const { clock } = world(on, {
-    open: [{ sessionId: 's2' }, { sessionId: 's3' }, { sessionId: 's4' }],
-    sends: [{ refused: SWITCH_NO_VERDICT }, { refused: SWITCH_NO_VERDICT }, { refused: blocked }, { refused: blocked }, { refused: SWITCH_NO_VERDICT }, { refused: SWITCH_NO_VERDICT }],
-  })
-  await start($ as never, clock)
-  const r = await command($ as never, 'away')
-  expect(r.text).toBe(
-    `Away is on in this session. 3 other sessions are not on away, because auto mode's safety check gave no verdict on the message telling it (${SWITCH_NO_VERDICT}); auto mode's safety check refused the message telling it (${blocked}). To switch one, type /away in it: any session whose band does not show AWAY.`,
-  )
-})
-
-test('a registry that cannot be read is said, never read as no other session (L215)', withDeps, async ($, on) => {
-  const { clock } = world(on, { unreadable: ['*'] })
-  await start($ as never, clock)
-  expect((await command($ as never, 'away')).text).toMatch(/^Away is on in this session\. The other sessions could not be told: the session registry could not be read/)
-})
-
-test('the switch arriving from another session is applied and taken, never shown to the model', withDeps, async ($, on) => {
+test('a switch typed in another session reaches this one at its next prompt, and home after it', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
-  const r = (await $.session.receive({ origin: { kind: 'peer', plugin: 'scope-modes' }, text: AWAY_TEXT } as never)) as { consumed?: string }
-  expect(r.consumed).toBeTruthy()
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  const note = (await say($ as never, 'how is it going')).context?.join('\n') ?? ''
   expect(lastModes(w)).toEqual(['AWAY'])
-  // It does not pass the switch on again.
-  expect(w.sent).toEqual([])
-  const fromModel = (await $.session.receive({ origin: { kind: 'peer' }, text: AWAY_TEXT } as never)) as { consumed?: string; text?: string }
-  expect(fromModel.consumed).toBeUndefined()
+  expect(note).toMatch(/Dan is away from the Mac/)
+  w.files[PLACE] = placeRecord('home', T0 + 6)
+  const back = (await say($ as never, 'and now')).context?.join('\n') ?? ''
+  expect(lastModes(w)).toEqual([])
+  expect(back).toMatch(/Dan is back at the Mac/)
+  // Read, never written back: this session did not switch anything itself.
+  expect(w.fsWrites.filter(p => p.includes('/state/scope-modes/'))).toEqual([])
+})
+
+test('the minute takes a switch too, so the band follows without a prompt', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  await clock.advance(MIN)
+  expect(lastModes(w)).toEqual(['AWAY'])
+})
+
+test('a switch made before this session started, or one it already took, is not taken again', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [PLACE]: placeRecord('away', T0 - 1) } })
+  await start($ as never, clock)
+  await say($ as never, 'how is it going')
+  expect(w.modes).toEqual([])
+  // Its own /home after another session's /away: the newer one, its own, holds.
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  await say($ as never, 'one')
+  await clock.advance(10)
+  await command($ as never, 'home')
+  await say($ as never, 'two')
+  expect(lastModes(w)).toEqual([])
+})
+
+test('a switch that cannot be recorded says why, and how to switch the other sessions by hand', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [{ sessionId: 's2' }], mvFails: 'Read-only file system' })
+  await start($ as never, clock)
+  const r = await command($ as never, 'away')
+  expect(lastModes(w)).toEqual(['AWAY'])
+  expect(r.text).toMatch(
+    /^Away is on in this session only: the other sessions stay where they are, because the switch could not be recorded for them \(mv: rename .+: Read-only file system\)\. To switch one, type \/away in it: any session whose band does not show AWAY\.$/,
+  )
+})
+
+test('a record that cannot be read is said once, never read as a switch (L215)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [PLACE]: placeRecord('away', T0 + 5) }, unreadableFiles: [PLACE] })
+  await start($ as never, clock)
+  await say($ as never, 'one')
+  await say($ as never, 'two')
+  expect(w.modes).toEqual([])
+  expect(w.toasts.filter(t => t.includes('away or home'))).toEqual([
+    `Scope modes could not read the away or home switch typed in another session (EACCES: permission denied, open '${PLACE}'), so a switch typed there may not reach this one. Later failures go to the debug log.`,
+  ])
+})
+
+test('a registry that cannot be read is never read as no other session (L215)', withDeps, async ($, on) => {
+  const { clock } = world(on, { unreadable: ['*'] })
+  await start($ as never, clock)
+  expect((await command($ as never, 'away')).text).toBe('Away is on in this session; every other open session on this Mac switches to away within a minute.')
+})
+
+// Who can switch a session stays Dan alone (2026-11-03): nothing another session, a plugin or Claude
+// sends writes the record, so none of them can switch a session.
+test('nothing another session or Claude sends writes the record or switches this session', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  // The old message, from another session's scope modes or from Claude, is not a switch.
+  await $.session.receive({ origin: { kind: 'peer', plugin: 'scope-modes' }, text: AWAY_TEXT } as never)
+  await $.session.receive({ origin: { kind: 'peer' }, text: AWAY_TEXT } as never)
+  // Words that would switch, from anywhere but Dan's own typing.
+  for (const kind of ['peer', 'task-notification', 'unclassified']) await say($ as never, "I'm stepping away", kind)
+  await say($ as never, "I'm stepping away", { kind: 'plugin', name: 'handoff', asUser: true })
+  expect(PLACE in w.files).toBe(false)
+  expect(w.modes).toEqual([])
+  // A /away a plugin runs switches only the session it runs in.
+  const r = await command($ as never, 'away', 'plugin')
+  expect(r.text).toBe('Away is on in this session only: Dan did not type this switch, so it reaches no other session.')
+  expect(PLACE in w.files).toBe(false)
+})
+
+test('a switch Dan types in words is recorded for every session as /away is', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await say($ as never, "I'm stepping away")
+  expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'away', by: 's1', how: 'typed' })
 })
 
 test('a message from the phone while home gets the one line at the end of the reply; not while away, not from the Mac', withDeps, async ($, on) => {
