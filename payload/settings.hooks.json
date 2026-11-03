@@ -465,6 +465,12 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/turn-end-sound.sh"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-later-nudge.sh",
+            "timeout": 15,
+            "statusMessage": "Looking for checks left waiting on a later day"
           }
         ]
       },
@@ -485,16 +491,6 @@
             "command": "__CLAUDE_HOME__/hooks/session-reflection.sh",
             "timeout": 15,
             "statusMessage": "Reflecting on uncertainties"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/check-later-nudge.sh",
-            "timeout": 15,
-            "statusMessage": "Looking for checks left waiting on a later day"
           }
         ]
       },

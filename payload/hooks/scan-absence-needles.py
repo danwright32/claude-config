@@ -29,6 +29,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/lib")
 import ratchet  # noqa: E402  the one rule a count based ratchet applies (claude-config#377)
+import shell_code_lines  # noqa: E402  the one reader of where a heredoc's body is (#2080)
+from shell_code_lines import read_lines  # noqa: E402
 
 NEEDLE = re.compile(r"!\s*grep\s+-[A-Za-z]*q[A-Za-z]*\s+(?:-[A-Za-z-]+\s+)*(['\"])(.+?)\1")
 # The characters that make a needle a pattern rather than a string. Splitting on them leaves the
@@ -44,9 +46,6 @@ def fragments(needle):
     return [p for p in re.split(META, plain) if len(p) >= MIN_FRAGMENT]
 
 
-HEREDOC = re.compile(r"<<-?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?")
-
-
 def scan_file(path):
     """-> (assertions judged, findings) for one file.
 
@@ -54,9 +53,15 @@ def scan_file(path):
     scan has to write example assertions somewhere, and reading them as its own is the shape where
     a script matches itself because it has to name the thing it looks for (L245). The needle in a
     fixture is judged when the fixture is scanned as a file of its own, which is the right place.
+
+    Which lines are a heredoc's body is lib/shell_code_lines.py's answer, with the end marker read
+    by lib/shell-words.py as bash reads it (claude-config#2080). A pattern of its own ended <<'E'OF
+    at E, so every assertion after it went unjudged, and it opened a heredoc at a << inside a quoted
+    fixture string, `printf 'cat <<EOF\\nhi\\nEOF'`, whose end no line is, with the same result.
     """
     try:
-        lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
+        text = open(path, encoding="utf-8", errors="replace").read()
+        lines = text.split("\n")
     except OSError as e:
         # A file this cannot OPEN is not a file with nothing in it. Returning "nothing judged, no
         # findings" makes an unreadable file indistinguishable from a clean one, and the count it
@@ -66,20 +71,16 @@ def scan_file(path):
         return 0, [(0, "UNREADABLE")]
     judged = 0
     found = []
-    heredoc_end = None
-    for n, line in enumerate(lines, 1):
-        if heredoc_end is not None:
-            if line.strip() == heredoc_end:
-                heredoc_end = None
+    for n, line, kind, _, opened in read_lines(text):
+        if kind in ("heredoc", "end"):
             continue
         # A COMMENT quoting an assertion is prose about one, not one. A file explaining what this
         # scan looks for has to write the shape down, and reading that as an assertion is the same
         # self match a heredoc body is (L245).
         if line.lstrip().startswith("#"):
             continue
-        hm = HEREDOC.search(line)
-        if hm:
-            heredoc_end = hm.group(1)
+        # The line that opens a heredoc writes a fixture, and is not judged, as before.
+        if opened:
             continue
         for m in NEEDLE.finditer(line):
             needle = m.group(2)
@@ -124,6 +125,14 @@ def main():
             if nm.startswith("test-") and nm.endswith(".sh"):
                 files.append(os.path.join(base, nm))
     files.sort()
+
+    # With no reader of where a heredoc ends, no file can be judged, and a run that judged nothing
+    # would agree with any baseline (L98, claude-config#2080).
+    if shell_code_lines.READER_ERROR is not None:
+        print("scan-absence-needles: lib/shell-words.py could not be loaded (%s), so no heredoc could "
+              "be told from the file's own assertions and nothing was judged."
+              % shell_code_lines.READER_ERROR, file=sys.stderr)
+        return 2
 
     # A walk that found nothing passes every comparison below at once and reads exactly like a
     # tree where no assertion is suspect (L98).

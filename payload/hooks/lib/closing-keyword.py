@@ -50,9 +50,14 @@ check-closing-keyword.sh (a pull request or commit being written) and check-clos
 body GitHub holds, at merge, claude-config#1550).
 """
 import json
+import os
 import re
 import io
 import sys
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import repo_slug  # noqa: E402
 
 KEYWORD = r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
 # An issue reference in any form GitHub itself honours: the full URL, owner/repo#12, or #12.
@@ -174,8 +179,9 @@ def main(argv):
         try:
             view = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
             refs = view["closingIssuesReferences"]
-            closing = {(("%s/%s" % (r["repository"]["owner"]["login"], r["repository"]["name"])).lower(),
-                        int(r["number"])) for r in refs}
+            # A reference whose repository cannot give a whole slug stops the check (RepoSlugError
+            # is a ValueError) rather than reading as a pull request that closes nothing.
+            closing = {(repo_slug.slug(r["repository"]).lower(), int(r["number"])) for r in refs}
         except (ValueError, KeyError, TypeError) as exc:
             sys.stderr.write("closing-keyword.py: the pull request could not be read: %s\n" % exc)
             return 3
