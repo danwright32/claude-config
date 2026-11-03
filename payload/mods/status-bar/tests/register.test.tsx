@@ -1,5 +1,6 @@
 import { expect, mock } from 'claude-code/testing'
 import { never, test } from './mod-kit/tests/hang-ceiling.ts'
+import { isDans } from './mod-kit/hooks/origin.ts'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type {} from '../types/index.d.ts'
@@ -52,7 +53,13 @@ const modKit: { name: string; register: Register } = {
         // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
-        isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
+        // #2082: whether a prompt is Dan's own, asked of the world, which reads it with a byte for byte
+        // copy of mod-kit's reader under tests/mod-kit (a plugin here runs in its own environment).
+        isDans: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout) as boolean
+        },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         // #1205: the bottom of a login mod-kit raises; the status bar's own hook takes it in above this.
@@ -209,6 +216,12 @@ const world = (on: On, init: Partial<World> = {}) => {
       if (rest[1] === 'next') return r(0, `${w.poll.next(rest[2] as string, rest[3] as string)}\n`)
       if (rest[1] === 'failed') return answer(w.poll.failed)
       if (rest[1] === 'answered') return r(0, 'ok\n')
+    }
+    if (cmd === '__modkit' && rest[0] === 'isDans') {
+      const origin = (JSON.parse(rest[1] as string) as { origin?: { kind?: string } }).origin
+      // A mod-kit that cannot answer, as one mid reload might.
+      if (origin?.kind === 'kit-unanswered') return r(1, '', 'mod-kit is not loaded')
+      return r(0, JSON.stringify(isDans(origin)))
     }
     if (cmd === 'mkdir') return w.mkdirFails ? r(1, '', w.mkdirFails) : r(0)
     if (cmd === 'mv') {
@@ -913,14 +926,76 @@ test('a compaction the session queued that is never heard to finish is said afte
   expect(toasts).toHaveLength(1)
 })
 
-test('once a compaction has ended, a turn Dan starts before the prompt is sent takes its place (#2082)', withKit, async ($, on) => {
+// A prompt entering the session from where prompt.submit's origin says it came: Dan's Enter at the
+// terminal ('composer'), his phone or the web ('bridge'), a subagent's hand-back ('task-notification').
+const submitFrom = ($: unknown, kind: string, text: string, extra: Record<string, unknown> = {}) =>
+  ($ as { prompt: { submit: (e: never) => Promise<unknown> } }).prompt.submit({ text, origin: { kind }, wait: false, ...extra } as never)
+const carryOns = (prompts: { text: string }[]) => prompts.filter(p => p.text.includes(CARRY_ON))
+
+test('a prompt Dan types once the session has started its Compact takes the place of the prompt to carry on (#2082)', withKit, async ($, on) => {
   const { clock, files, mtimes, prompts, toasts, w } = world(on)
   await reloadDuringCompact($, clock, w, files, mtimes)
   await compactEnds($)
+  await submitFrom($, 'composer', 'Leave the PR for now.')
   await step($, clock)
+  await turn($)
   await clock.advance(20 * MIN)
-  expect(prompts).toEqual([])
+  expect(carryOns(prompts)).toEqual([])
   expect(toasts).toEqual([])
+})
+
+test('a prompt Dan sends from his phone, or types while the compaction still runs, takes its place too; a slash command does not (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  // A command such as /context starts no turn of the work, so the prompt is still sent.
+  await submitFrom($, 'composer', '/context', { command: { name: 'context', args: '' } })
+  await compactEnds($)
+  await clock.advance(10 * SEC)
+  expect(carryOns(prompts)).toHaveLength(1)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await submitFrom($, 'bridge', 'Stop there.')
+  await compactEnds($)
+  await clock.advance(20 * MIN)
+  expect(carryOns(prompts)).toHaveLength(1)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await submitFrom($, 'composer', 'Wait for me.')
+  await clock.advance(MIN)
+  await compactEnds($)
+  await clock.advance(20 * MIN)
+  expect(carryOns(prompts)).toHaveLength(1)
+  expect(toasts).toEqual([])
+})
+
+// Live, 2026-11-02 at 9:40 PM ET: after a self queued Compact, a subagent's hand-back turn and a Stop
+// hook's review turn both ran before the prompt to carry on. A turn neither of them Dan's must not
+// drop it, or after a reload it is lost with no prompt and no toast.
+test("a subagent's hand-back and a Stop hook's review turn before the prompt is sent do not take its place (#2082)", withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await compactEnds($)
+  await clock.advance(2 * SEC)
+  // The hand-back: a background task's notice, then the turn it starts.
+  await submitFrom($, 'task-notification', '<task-notification>agent a1 finished</task-notification>')
+  await step($, clock)
+  await turn($)
+  // The Stop hook's review: the turn carries on with no prompt of its own.
+  await step($, clock)
+  await turn($)
+  await clock.advance(10 * SEC)
+  expect(carryOns(prompts)).toHaveLength(1)
+  await clock.advance(20 * MIN)
+  expect(carryOns(prompts)).toHaveLength(1)
+  expect(toasts).toEqual([])
+})
+
+test("a prompt mod-kit cannot say is Dan's leaves the prompt to carry on in place, and says why in the debug log (#2082)", withKit, async ($, on) => {
+  const { clock, debug, files, mtimes, prompts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await compactEnds($)
+  await submitFrom($, 'kit-unanswered', 'Who sent this?')
+  await clock.advance(10 * SEC)
+  expect(carryOns(prompts)).toHaveLength(1)
+  expect(debug.some(l => l.startsWith("status-bar: could not tell whether a prompt was Dan's own: ") && l.includes('mod-kit is not loaded'))).toBe(true)
 })
 
 test("a compaction's end sends nothing for the button's Compact, an automatic one in the middle of a turn, or a subagent's (#2082)", withKit, async ($, on) => {

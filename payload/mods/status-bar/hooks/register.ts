@@ -684,7 +684,7 @@ export const register: Register = on => {
     }
     // #2082: a note whose Compact ran before this copy started. Its compaction already heard to end
     // (by the copy before, or this one in the moment before this ran) is sent now; one still in
-    // flight waits for the settings hooks at its end, and is given up at the same ten minutes after
+    // flight waits for the rows Claude Code keeps at its end, and is given up at the same ten minutes after
     // it started as the copy before would have.
     if (armed(followUp)) {
       if (followUp.compacted) {
@@ -725,14 +725,6 @@ export const register: Register = on => {
       // Also what takes this conversation's quiet background commands off the band while Claude
       // works (#1583): cacheMoved below draws the band again from it.
       await setTurnRunning($, true)
-      // #2082: a main request after the session's Compact was heard to end, before the prompt to
-      // carry on went: Dan's own turn takes its place, so the note is dropped rather than sent after
-      // it. Only once the end was heard, so a request during the compaction itself never drops it.
-      if (armed(followUp) && followUp.compacted) {
-        await claimFollowUp($, f => armed(f) && f.compacted).catch(err =>
-          $.ui.log(`status-bar: could not drop the prompt to carry on after a turn took its place: ${msg(err)}`, { to: 'debug' }),
-        )
-      }
       try {
         await $.state.set(cacheRef, (await $.clock.now()) + CACHE_MS)
         $.clock.after(0, () => void cacheMoved($))
@@ -741,6 +733,27 @@ export const register: Register = on => {
       }
     }
     return yield* next(e)
+  })
+
+  // #2082: a prompt Dan sends himself once the session's Compact has started, at the terminal or
+  // from his phone or the web, takes the place of the prompt to carry on, so the note is dropped
+  // rather than sent after his turn. Judged by where the engine says the prompt came from, never by
+  // a turn starting: a subagent's hand-back, a Stop hook's review and another mod's prompt all run
+  // turns on the main conversation too, and live (2026-11-02, 9:40 PM ET) two of them ran before the
+  // prompt to carry on, so dropping it on any turn lost it with no prompt and no toast. A slash
+  // command (/context) starts no turn of the work, and leaves it. Whose a prompt is, is mod-kit's
+  // one answer (#1135); one it cannot give is logged and drops nothing.
+  on('prompt.submit', async ($, e, next) => {
+    if (interactive && e.command === undefined && armed(followUp)) {
+      const own = await $.modkit.isDans({ origin: e.origin }).catch(err => {
+        $.ui.log(`status-bar: could not tell whether a prompt was Dan's own: ${msg(err)}`, { to: 'debug' })
+        return false
+      })
+      if (own) await claimFollowUp($, armed).catch(err =>
+        $.ui.log(`status-bar: could not drop the prompt to carry on after Dan's own prompt took its place: ${msg(err)}`, { to: 'debug' }),
+      )
+    }
+    return next(e)
   })
 
   // A /login in this session changes the account this session runs on (#1200), and mod-kit raises
