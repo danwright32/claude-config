@@ -2620,7 +2620,8 @@ const reasonsOnly = (was: MessageReading, now: MessageReading): boolean => {
   if (now.reached.some(([g, [a, b]]) => WHOLE_RECORD.test(g.blank.slice(a, b)))) return false
   const queue = [...keys]
   for (let k = queue.pop(); k !== undefined; k = queue.pop()) {
-    const at = new RegExp(`(?<![\\w$])${k}(?![\\w$])`, 'g')
+    // A key is word characters and `$`, which a pattern would read as an end anchor and match nothing.
+    const at = new RegExp(`(?<![\\w$])${k.replace(/\$/g, '\\$')}(?![\\w$])`, 'g')
     for (const [g, [a, b]] of now.reached)
       for (const m of g.blank.slice(a, b).matchAll(at)) {
         const i = a + (m.index as number)

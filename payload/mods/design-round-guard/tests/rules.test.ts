@@ -2227,3 +2227,12 @@ test('#2161: a new reason handed through a call, under a message key or beside a
   // A new word said in a toast beside the new reasons.
   expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, "export const tell = ($: EngineInterface) => $.ui.toast('Saved the note.')"))).toBe('worded')
 })
+
+test('#2161: a reason key spelled with a dollar sign is read like any other, so a toast reading it is still held', () => {
+  const dollared = HELD_2141_AFTER.split('unresolved').join('un$resolved')
+  if (dollared === HELD_2141_AFTER) throw new Error('the fixture has no unresolved key to respell')
+  // Nothing reads it: passes, as the plain key does.
+  expect(modHookTsHold([], 'commands.ts', HELD_2141_BEFORE, dollared)).toBeUndefined()
+  // A toast reads it: held, never missed because the key was read as a pattern.
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(dollared, 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(printed(line).un$resolved)'))).toBe('worded')
+})
