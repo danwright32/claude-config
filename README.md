@@ -4641,7 +4641,11 @@ modes it switched); one asking to end the mode that is on in words that do not s
 down is done for today", never the name in passing or in a question) gets a note telling Claude to
 say it is still on and that `/build` turns it off (#805). **Away** (`/away`, "I'm stepping away", or
 "away" from the phone) and **home** (`/home`, "I'm back at my computer") switch every open session
-on this Mac, told through the session registry and `$.session.send`. Away, Claude is told to publish
+on this Mac: the switch is recorded in `~/.claude/state/scope-modes/place.json`, which every
+session reads at its next prompt and once a minute, with no message between sessions (#2099). A
+switch is recorded when Dan types it, and when sleep ends (`/wake` or the noon limit) to put every
+session back; a `/away` or `/home` a plugin or Claude runs switches its own session alone. A
+session takes only switches made after it started. Away, Claude is told to publish
 private claude.ai pages, and what needs Dan at the Mac is held: AppleScript or JavaScript for
 Automation that shows a dialog, or that it cannot read (a script file included, one `cat` pipes in
 too), typing or clicking (an AppleScript keystroke or click, cliclick, Peekaboo) into anything but a
@@ -5174,11 +5178,18 @@ whose issues or growth could not be read passes without settling the file, so th
 tries again. When the mod itself fails the edit goes ahead, the error goes to `errors.jsonl` beside
 the log, and the first each session is one dim line saying the edit went ahead unchecked. `node
 tools/area-check-replay.ts <checkout> --repo <owner/name>` replays a repository's last 30 days
-through the same rules.
+through the same rules. Every pull request then carries an area check line for each file decided on
+its branch, `Area check: <file>: <decision>, <reason>` (a fold line also names `Refs #N`): `gh pr
+create`, `gh pr edit` given a description, and `gh pr merge` (by itself, `--auto` or through the
+merge helper) are refused while the description lacks one, with the lines to paste. Decisions are
+matched by repository, branch and merge base, read from this Mac's log only, and only from its
+newest 1 MiB of decision lines; a rebase moves the merge base, so decisions taken before it are no
+longer asked for. A log that cannot be read refuses the command; a fact the command does not depend
+on that cannot be read (no checkout, GitHub not answering for a merge) lets it through.
 
 </td><td>
 
-#1506, #1508, #1509
+#1506, #1508, #1509, #1510
 
 </td></tr>
 <tr><td>
