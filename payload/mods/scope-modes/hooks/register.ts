@@ -40,6 +40,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
+import { listedHosts, tabsAfter, type Browser, type BrowserTabs } from './browser.ts'
 import { wakeCheck } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
@@ -1224,9 +1225,56 @@ const lookOf = ($: EngineInterface): Look => ({
   },
 })
 
+// The Chrome tabs this session created (#2064), with the host each one's page was last seen on, so
+// sleep mode lets a session check its own work in its own tab on a test host (browser.ts). Kept in
+// $.state, which survives a hot reload, and recorded awake too, so a tab made before bed is still
+// the session's own. Each Chrome call is remembered by its tool_use_id until its result row arrives.
+const CHROME = 'mcp__claude-in-chrome__'
+const chromeCalls = new Map<string, { tool: string; input: Record<string, unknown> }>()
+const resultTexts = (content: unknown): string[] =>
+  typeof content === 'string'
+    ? [content]
+    : Array.isArray(content)
+      ? content.flatMap(c => (c && typeof c === 'object' && (c as { type?: unknown }).type === 'text' ? [String((c as { text?: unknown }).text ?? '')] : []))
+      : []
+// Written by version, so two results landing at once both count (assume it runs twice).
+const recordTabs = async ($: EngineInterface, tool: string, input: Record<string, unknown>, texts: string[]) => {
+  for (let i = 0; i < 5; i++) {
+    const held = await $.state.get({ plugin: 'scope-modes', key: 'browserTabs' })
+    const next = tabsAfter(held.value ?? {}, tool, input, texts)
+    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserTabs' }, next, { ifVersion: held.version })).isSet) return
+  }
+  throw new Error('the record of Chrome tabs kept changing underneath five writes in a row')
+}
+// The project's hosted test hosts, from CLAUDE.md as the default branch holds it, never the working
+// copy: a session must not add a host by editing the file overnight. Unreadable is none (fail closed).
+const committedTestHosts = async ($: EngineInterface): Promise<string[]> => {
+  const root = await $.session
+    .repo()
+    .then(r => r?.root ?? null)
+    .catch(() => null)
+  if (!root) return []
+  for (const ref of ['origin/HEAD', 'origin/main']) {
+    const r = await run($, ['git', '-C', root, 'show', `${ref}:CLAUDE.md`]).catch(() => null)
+    if (r && r.exitCode === 0) return listedHosts(r.stdout)
+  }
+  return []
+}
+// A record that cannot be read is no tabs, which refuses every call needing one (fail closed).
+const browserOf = async ($: EngineInterface): Promise<Browser> => {
+  let tabs: BrowserTabs = {}
+  try {
+    tabs = (await $.state.get({ plugin: 'scope-modes', key: 'browserTabs' })).value ?? {}
+  } catch {
+    tabs = {}
+  }
+  return { tabs, listed: await committedTestHosts($) }
+}
+
 // Why a call is on Dan's overnight list (#834), from the call as a tool call or a permission
 // request carries it, or undefined when it is not.
 const overnightWhy = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string | undefined> => {
+  if (tool.startsWith(CHROME)) return overnightRefusal({ tool, input, raw: '', commands: [], writes: NO_WRITES, cwd: '', home: '', read: text => readCommands($, text), browser: await browserOf($) }, lookOf($))
   const raw = tool === 'Bash' ? String(input.command ?? '') : ''
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME')) ?? ''
