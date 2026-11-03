@@ -3075,6 +3075,8 @@ test('a worker that cannot be told to start is said, and noted for the morning (
   expect(w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'finding').map(n => n.text)).toEqual([
     'the session in o/other ("Fix the parser") was not started at bedtime, because its start message could not be sent (no such session), so it may have done no work tonight',
   ])
+  // A send that failed is not the check's, so Claude is not asked to send it either (#2062).
+  expect(ctxOf(r)).not.toMatch(/SendMessage/)
 })
 
 // #2062: on 2026-11-02 the start message got no verdict from auto mode's check, and Dan read that
@@ -3092,6 +3094,21 @@ test('a worker whose start message got no verdict is said first, in the reply Da
   // And Claude is told to say it in its acknowledgement, word for word.
   expect(ctxOf(r)).toContain(`Sleep mode is on. ${said}`)
   // Tried as mod-kit tries every refused send, once more and no further.
+  expect(w.sent.length).toBe(2)
+  // And Claude is asked to send the same message itself in its reply, where the check judges it.
+  expect(ctxOf(r)).toContain('the session in o/other ("Fix the parser") (session id s2)')
+  expect(ctxOf(r)).toContain(`with SendMessage, exactly this message: "${SLEEP_START}"`)
+})
+
+test('a worker whose start message was refused is said, and never sent again or handed to Claude (#2062)', withDeps, async ($, on) => {
+  const REFUSED = 'Auto mode classifier blocked action: messaging another session'
+  const { w, clock } = world(on, withOther({ sends: [{ refused: REFUSED }, { refused: REFUSED }] }))
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toContain(`because auto mode's safety check refused its start message (${REFUSED}).`)
+  expect(ctxOf(r)).toContain("auto mode's safety check refused its start message")
+  // A refusal is a verdict: nothing asks Claude to send it, and nothing here sends it again.
+  expect(ctxOf(r)).not.toMatch(/SendMessage/)
   expect(w.sent.length).toBe(2)
 })
 

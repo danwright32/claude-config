@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
-  LIMITS, activeMs, blockTold, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, startFailKind, unstartedSaid,
+  LIMITS, activeMs, blockTold, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, SLEEP_START, sendItselfAsk, startFailKind, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type StopInput,
 } from '../hooks/driver.ts'
 
@@ -504,5 +504,24 @@ describe('a worker that was not told to start (#2062)', () => {
     ).toBe(
       `Not started, so they may do no work tonight unless you start them: A, because auto mode's safety check refused its start message (Auto mode classifier blocked action: no); B, because its start message could not be sent (no such session). To start one, type "start the night's work" in that session before you sleep.`,
     )
+  })
+  // A send from inside /sleep belongs to no request of Claude's, so the check has nothing to give
+  // its verdict with. Claude sending the same message in its reply is judged as usual, so only a no
+  // verdict is handed to it: a refusal is a verdict, never asked again, and a failed send is not
+  // the check's at all.
+  test('only a start that got no verdict is handed to Claude to send itself, judged as usual', () => {
+    expect(sendItselfAsk([])).toBe('')
+    expect(sendItselfAsk([{ who: 'A', id: 's2', why: 'Auto mode classifier blocked action: no' }])).toBe('')
+    expect(sendItselfAsk([{ who: 'B', id: 's3', why: 'no such session' }])).toBe('')
+    const ask = sendItselfAsk([
+      { who: 'A', id: 's2', why: 'Auto mode classifier blocked action: no' },
+      { who: 'the session in o/pivot ("Close #12")', id: 's4', why: NO_VERDICT },
+    ])
+    expect(ask).toContain('the session in o/pivot ("Close #12") (session id s4)')
+    expect(ask).not.toContain('s2')
+    expect(ask).toContain(`with SendMessage, exactly this message: "${SLEEP_START}"`)
+    expect(ask).toContain('If it is refused, never send it again')
+    expect(ask).toContain('Never deliver it any other way')
+    expect(ask).toContain('type "start the night\'s work" in it before he sleeps')
   })
 })

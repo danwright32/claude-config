@@ -483,6 +483,29 @@ export const unstartedSaid = (list: readonly Unstarted[]): string => {
   return `Not started, so ${one ? 'it' : 'they'} may do no work tonight unless you start ${one ? 'it' : 'them'}: ${each}. ${how}`
 }
 
+/**
+ * What Claude is asked to do for the workers whose start message got no verdict (#2062): send the
+ * same message itself, with SendMessage, in its reply to /sleep. A send from inside the command
+ * belongs to no request of Claude's, which is where Claude Code says a verdict comes from, so the
+ * check had nothing to judge it with; Claude's own send is judged by that same check as any other,
+ * so nothing goes round it. Only a no verdict is handed on: a refusal is the check's verdict and is
+ * never asked again, and a send that failed some other way was never the check's. Arriving from a
+ * model, the message reaches that session's Claude as a message rather than through this mod, and
+ * starts a turn the driver keeps working from its first Stop. Empty when there is none to ask.
+ */
+export const sendItselfAsk = (list: readonly (Unstarted & { id: string })[]): string => {
+  const ask = list.filter(u => startFailKind(u.why) === 'no-verdict')
+  if (!ask.length) return ''
+  const each = ask.map(u => `${u.who} (session id ${u.id})`).join('; ')
+  return (
+    `Auto mode's safety check gave no verdict on the start message /sleep sent to ${each}, because a message sent from inside a command belongs to no request of yours. ` +
+    `After your acknowledgement, send it yourself in this reply: find ${ask.length === 1 ? 'that session' : 'each of those sessions'} with ListAgents and send it, with SendMessage, exactly this message: "${SLEEP_START}". ` +
+    `Auto mode's check judges your send as it judges any other. If it is refused, never send it again; if it gets no verdict, do only what Claude Code's own message says, once. ` +
+    'Never deliver it any other way (a file, a shell command, another tool). ' +
+    `Then tell Dan in one line which sessions were started after all, and that any still not started needs him to type "start the night's work" in it before he sleeps.`
+  )
+}
+
 /** The turn a worker told to start begins with: the overnight rules, its goal among them. */
 export const startPrompt = (self: string, root: string, goal: string) =>
   `Sleep mode is on and Dan is asleep: start the night's work now. ${overnightRules(self, root, goal)}`
