@@ -163,7 +163,7 @@ says "and gives the one command override" "$err" "SKIP_HOOKS_PATH_CHECK=1"
 case "$err" in *"spell it absolutely"*|*"more than one repository"*) check "and gives only this cause's remedy" "it gave another's: ${err:0:200}" ;;
   *) check "and gives only this cause's remedy" ok ;; esac
 refused_for_hooks "a git -C push into that repository is refused too" "git -C $W/hooked push"
-refused_for_hooks "a push from a subdirectory of it is refused too" "git push" "$W/hooked"
+refused_for_hooks "a plain push with the session in that repository is refused too" "git push" "$W/hooked"
 mkdir -p "$W/hooked/sub"
 refused_for_hooks "and from below its top level" "git push" "$W/hooked/sub"
 
