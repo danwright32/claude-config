@@ -468,7 +468,7 @@ test('a tool result the guard cannot scrub is withheld rather than kept as it wa
   })
   const w = { stored: () => stored }
   await start($)
-  // A block the scrub cannot read makes the scrub itself throw, and a second try throws the same way.
+  // A block the scrub cannot read makes the scrub itself throw; withholding block by block then turns it into a withheld text without throwing, so no second try runs.
   await appendRow($, {
     door: 'tool-result',
     origin: { kind: 'tool', tool: 'Bash' },
