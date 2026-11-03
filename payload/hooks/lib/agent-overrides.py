@@ -869,8 +869,8 @@ def _looks_like_git_config(target):
 
 def _hooks_entries(text):
     """The entries of a config file's text that move where git reads the hooks from, in order, as git
-    reads the file on its own (its includes are files of their own). Text git cannot read is
-    ["unreadable"] when it names the hooks location or an include at all."""
+    reads the file on its own (its includes are files of their own), or None when git cannot read
+    the text. Raises ValueError when git cannot run at all, so the gate judges the edit unread."""
     import tempfile
     fd, tmp = tempfile.mkstemp(prefix="agent-overrides-config.")
     try:
@@ -882,8 +882,10 @@ def _hooks_entries(text):
             os.unlink(tmp)
         except OSError:
             pass
-    if p is None or p.returncode != 0:
-        return ["unreadable"] if re.search(r"hookspath|include", text, re.I) else []
+    if p is None:
+        raise ValueError("git could not run to read the config file's text")
+    if p.returncode != 0:
+        return None
     out = []
     for entry in p.stdout.decode("utf-8", "replace").split("\0"):
         key, _, value = entry.partition("\n")
@@ -939,7 +941,17 @@ def config_edit(payload):
             if not isinstance(e, dict) or not isinstance(e.get("old_string"), str) or not isinstance(e.get("new_string"), str):
                 raise ValueError("a MultiEdit edit carries no old_string and new_string to read")
             new = _apply_edit(new, e["old_string"], e["new_string"], bool(e.get("replace_all")))
-    if old == new or _hooks_entries(old) == _hooks_entries(new):
+    if old == new:
+        return None
+    before, after = _hooks_entries(old), _hooks_entries(new)
+    if before is None or after is None:
+        # Two texts git cannot read are not two equal readings: the gate cannot tell what either
+        # sets, so an edit of one is refused rather than compared (the lessons review at 8f5e458).
+        return ("%s of %s is an edit of a git config file whose text git cannot read, %s the edit, so "
+                "the gate cannot tell whether it changes where git reads the hooks from "
+                "(claude-config#2140).\n%s" % (tool, ti["file_path"], "before" if before is None else "after",
+                                               HOOKS_LOCATION_ADVICE))
+    if before == after:
         return None
     return ("%s of %s changes where git reads the hooks from, its hooks location or a config include "
             "(claude-config#2140).\n%s" % (tool, ti["file_path"], HOOKS_LOCATION_ADVICE))

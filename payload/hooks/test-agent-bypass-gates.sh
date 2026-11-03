@@ -437,6 +437,16 @@ allowed "#2140 control: the same naming an ordinary file goes through"
 # A Write with no content to read is one the reader refuses to judge, so it is unread too.
 HOME="$EH" run_hook "$NV_GATE" "{\"tool_name\":\"Write\",\"agent_id\":\"a1b2c3d4\",\"cwd\":\"$ER\",\"tool_input\":{\"file_path\":\"$ER/.git/config\"}}"
 refused "#2140 an agent's Write of .git/config with no content to read is refused"
+# A config git cannot read, before the edit and after it, is not two equal readings: an edit adding
+# the hooks location to one that already holds a line git refuses is refused (the lessons review at
+# 8f5e458), and so is an edit that leaves it unreadable, since the gate cannot tell what it sets.
+ER3="$WORK/edit-repo3"
+HOME="$EH" git init -q "$ER3"
+# It already names an include, so the old reading of an unreadable text, a marker given whenever the
+# text names one, came out the same before and after.
+printf '[include]\n\tpath = /tmp/other.inc\n[broken\n' >> "$ER3/.git/config"
+ed_refused "Edit of an unreadable .git/config adding the hooks location" \
+  "$(edit_payload Edit "$ER3" a1b2c3d4 file_path "$ER3/.git/config" old_string "[broken" new_string $'[core]\n\thooksPath = /dev/null\n[broken')"
 [ "$(cat "$ER/.git/config")" = "$cfg" ] && check "#2140 the gate wrote nothing into the config it judged" ok \
   || check "#2140 the gate wrote nothing into the config it judged" "it changed"
 
