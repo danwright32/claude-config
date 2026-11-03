@@ -1721,7 +1721,17 @@ Three gates close the three parts of that, all reading commands through one libr
   spelling (set, `--add`, `--replace-all`, `--unset`, the `core` section removed or renamed, or
   `--edit`), and matches the key in any case; reading it is not refused. An agent never writes the
   setting itself, even to a folder of tracked hooks: it runs the repository's own hook install
-  script, which this gate does not read into. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
+  script, which this gate does not read into. Since claude-config#2140 the other routes to the same
+  setting are refused too: config handed to git through the environment (`GIT_CONFIG_COUNT` with a
+  numbered key that moves the hooks, `GIT_CONFIG_PARAMETERS`, and `GIT_CONFIG_GLOBAL`,
+  `GIT_CONFIG_SYSTEM` or `GIT_CONFIG` naming a whole file), git's `--config-env`, a config include
+  (`include.path`, `includeIf.*.path`) set with `-c` or `git config`, and a key the shell spells so the
+  gate cannot read it. The gate is also registered for Edit, Write and MultiEdit, and refuses an
+  agent's edit of a git config file (the repository's or a worktree's, the global one, or any file
+  an include names, existing or not) that changes the hooks location or an include as git reads
+  them; any other edit of those files goes through. The advice about the install script is chosen
+  from the reader's reasons (`agent-overrides.py hooks-location-advice`), never from the command's
+  text. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
   was removed on Dan's decision of 2026-10-24 (claude-config#1666), since an agent could write the
   same file with the Write tool.
   It also refuses an agent's git command that reads a file from standard input's DEVICE PATH
@@ -5168,11 +5178,18 @@ whose issues or growth could not be read passes without settling the file, so th
 tries again. When the mod itself fails the edit goes ahead, the error goes to `errors.jsonl` beside
 the log, and the first each session is one dim line saying the edit went ahead unchecked. `node
 tools/area-check-replay.ts <checkout> --repo <owner/name>` replays a repository's last 30 days
-through the same rules.
+through the same rules. Every pull request then carries an area check line for each file decided on
+its branch, `Area check: <file>: <decision>, <reason>` (a fold line also names `Refs #N`): `gh pr
+create`, `gh pr edit` given a description, and `gh pr merge` (by itself, `--auto` or through the
+merge helper) are refused while the description lacks one, with the lines to paste. Decisions are
+matched by repository, branch and merge base, read from this Mac's log only, and only from its
+newest 1 MiB of decision lines; a rebase moves the merge base, so decisions taken before it are no
+longer asked for. A log that cannot be read refuses the command; a fact the command does not depend
+on that cannot be read (no checkout, GitHub not answering for a merge) lets it through.
 
 </td><td>
 
-#1506, #1508, #1509
+#1506, #1508, #1509, #1510
 
 </td></tr>
 <tr><td>

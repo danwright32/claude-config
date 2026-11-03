@@ -24,6 +24,9 @@ export type AreaCheckHeld = {
   shown: { n: number; how: 'path' | 'suffix' | 'basename' | 'folder'; structural: string[]; priority: string | null }[]
   issues: { state: 'read' | 'truncated' } | { state: 'unread'; why: string }
   growth: { net: number; size: number | null; fixes: number; rank: number | null; crosses: boolean } | { unread: string }
+  /** The branch and merge base the edit was held on (#1510); absent in entries held before them. */
+  branch?: string | null
+  mergeBase?: string | null
 }[]
 
 declare module 'claude-code' {
