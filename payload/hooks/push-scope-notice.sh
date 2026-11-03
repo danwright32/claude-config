@@ -37,6 +37,13 @@
 # Measured on the personal MacBook on 2026-11-02: 5 repositories set core.hooksPath, across 8 working
 # trees, and the folder was present in all 8, so no push there would have been refused by this.
 # Bidspoke is on the work MacBook and was not measured.
+#
+# Since claude-config#2135, for an AGENT's push only, a location that exists but holds no hook git
+# would run (/dev/null, an empty folder, a folder of samples) refuses too: an agent can set it
+# itself, and the no-verify gate refuses only the config writes it can read. The main session's push
+# is unchanged. Measured on the personal MacBook on 2026-11-03: the 5 repositories that set the key
+# each point at a folder holding an executable pre-push, and none sets /dev/null (global and system
+# unset), so no agent push there is refused by this.
 set -uo pipefail
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
@@ -60,6 +67,10 @@ cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 ps_is_git_push "$cmd" || exit 0
 
+# Every hook git runs, by the file name it looks for (githooks(5)), so a folder holding none of them
+# runs nothing (claude-config#2135).
+GIT_HOOK_NAMES="applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg commit-msg post-commit pre-rebase post-checkout post-merge pre-push pre-receive update proc-receive post-receive post-update reference-transaction push-to-checkout pre-auto-gc post-rewrite sendemail-validate fsmonitor-watchman p4-changelist p4-prepare-changelist p4-post-changelist p4-pre-submit post-index-change"
+
 # The repository's OWN hooks, the third thing that judges a push (claude-config#2070). Returns when
 # they can run; refuses otherwise. git resolves core.hooksPath itself (rev-parse --git-path hooks
 # answers relative to the directory it is asked in, expands a tilde, and reads a linked worktree
@@ -81,9 +92,23 @@ hooks_folder_check() {   # $1 = the one repository directory the push runs in
     exit 2
   fi
   case "$where" in /*) ;; *) where="$top/$where" ;; esac
-  # Anything at the path is left to git: a file such as /dev/null is hooks switched off on purpose.
-  # Only NOTHING there, a dangling symlink included, is the silent skip this refuses.
-  [ -e "$where" ] && return 0
+  # For the main session, anything at the path is left to git: a file such as /dev/null is hooks
+  # switched off on purpose, a person's own choice. For an AGENT it is not (claude-config#2135): an
+  # agent may have set it itself, through a config write the no-verify gate refuses or an edit of the
+  # config file no Bash gate sees, so a location holding no hook git would run refuses an agent's
+  # push. A hook git runs is an executable file named after one.
+  if [ -e "$where" ]; then
+    case "$payload" in *'"agent_id"'*) ;; *) return 0 ;; esac
+    if [ -d "$where" ]; then
+      local h
+      for h in $GIT_HOOK_NAMES; do
+        [ -f "$where/$h" ] && [ -x "$where/$h" ] && return 0
+      done
+    fi
+    printf 'PUSH REFUSED: this repository'"'"'s git hooks are read from %s (core.hooksPath %s), which holds no hook git would run, so this push would run none of the repository'"'"'s own hooks (pre-push and the checks it starts). An agent may not push with the hooks switched off, and may not change where git reads them from (claude-config#2135). If the repository has a hook install script, run it in %s and push again; otherwise hand back and say so, and the main session pushes.\n' \
+      "$where" "$hp" "$top" >&2
+    exit 2
+  fi
   if [ -f "$top/pnpm-lock.yaml" ]; then fix="pnpm install"
   elif [ -f "$top/yarn.lock" ]; then fix="yarn install"
   elif [ -f "$top/bun.lockb" ] || [ -f "$top/bun.lock" ]; then fix="bun install"

@@ -345,18 +345,53 @@ except Exception:
 cwd = os.environ.get("GATE_CWD") or os.getcwd()
 targets = []
 
-def resolve(tok, base):
+# A directory only the shell can work out (a cd to a variable, or to an OLDPWD this cannot know) is
+# kept as its words behind this mark, never taken for the directory it was moved from: that let a
+# write after `cd "$P"` be judged where the session was and let through (claude-config#2128).
+UNKNOWN = "\x00"
+SHELL_VALUE = re.compile(r"\$[A-Za-z_{(0-9@*#?$!-]|`")
+HOME = os.environ.get("HOME", "")
+
+def place(tok, base):
+    """Where tok names, read from base as the shell reads it: (path, True), or (its words, False)
+    when only the shell can work it out. HOME is the same for this hook and the command, and PWD is
+    the directory the command runs in, so both are expanded; any other value is not guessed at."""
     tok = tok.strip().strip("\"\x27")
     if not tok:
-        return None
+        return None, True
     if tok.startswith("~"):
         tok = os.path.expanduser(tok)
-    if tok.startswith("$") or "$(" in tok or "`" in tok:
-        # A value only the shell knows. Counted only when its words name payload, as before.
-        return tok if re.search(r"(^|/)payload/", tok) else None
+    if HOME:
+        tok = re.sub(r"\$(?:HOME|\{HOME\})(?![A-Za-z0-9_])", lambda m: HOME, tok)
+    known = not base.startswith(UNKNOWN)
+    if known:
+        tok = re.sub(r"\$(?:PWD|\{PWD\})(?![A-Za-z0-9_])", lambda m: base, tok)
+    elif not tok.startswith("/"):
+        return base[len(UNKNOWN):].rstrip("/") + "/" + tok, False
+    if SHELL_VALUE.search(tok):
+        return tok, False
     if not tok.startswith("/"):
         tok = os.path.join(base, tok)
-    return os.path.normpath(tok)
+    return os.path.normpath(tok), True
+
+def resolve(tok, base):
+    p, known = place(tok, base)
+    if not p:
+        return None
+    if known:
+        return p
+    # A value only the shell knows. Counted only when its words name payload, as before, and then
+    # judged as the payload write it may be, marked with a leading ? (claude-config#2128).
+    return "?" + p if re.search(r"(^|/)payload(/|$)", p) else None
+
+def move(dest, base):
+    """Where a cd to dest leaves the commands after it: a path, or the words behind UNKNOWN."""
+    if dest == "-":
+        return UNKNOWN + "-"
+    p, known = place(dest, base)
+    if not p:
+        return base
+    return p if known else UNKNOWN + p.lstrip(UNKNOWN)
 
 def add(tok, base):
     p = resolve(tok, base)
@@ -389,18 +424,37 @@ segments = re.split(r"&&|\|\||;|\||\n", shell_text)
 try:
     for d, text, _, _, depth in _sw.every_command(cmd):
         if depth > 0 or "$(" in cmd or "`" in cmd or "<<" in cmd:
-            where = d if d.startswith("/") else (os.path.join(cwd, d) if d else cwd)
             # The directory itself, never a `cd` segment: those are cut into words at each space,
-            # so a checkout whose path holds one resolved against its first word (#2080).
-            segments += [(CD_TO, os.path.normpath(where))] + re.split(r"&&|\|\||;|\||\n", text)
+            # so a checkout whose path holds one resolved against its first word (#2080). One the
+            # reading could not work out is kept as its words, never as where the session is (#2128).
+            segments += [(CD_TO, move(d, cwd) if d else cwd)] + re.split(r"&&|\|\||;|\||\n", text)
 except Exception:
     # With no reading of the wrapped commands, a command naming a wrapper has every payload path it
     # holds taken for a write: the reading that sees more writes, never fewer (L42). So does one
     # with a heredoc, whose body lines the cut above reads as shell: a cd in a body moves the writes
     # after it there, and only this reading put them back where the shell runs them (#2080).
+    # Each path is judged where the session is AND wherever any cd in the command could have left
+    # it, since which of those it runs in cannot be read here (claude-config#2128).
     if "<<" in cmd or re.search(r"(^|[^A-Za-z0-9_.-])(bash|sh|zsh|dash|ksh|eval|env|find|watch|script|parallel)([^A-Za-z0-9_.-]|$)", cmd):
+        bases, last = [cwd], cwd
+        for m in re.finditer(r"(?:^|[\s;&|(])(?:cd|pushd)\s+([^\s;&|<>()]+)", cmd):
+            last = move(m.group(1), last)
+            bases += [move(m.group(1), cwd), last]
         for m in re.finditer(r"[^\s\"\x27;&|<>()]*payload/[^\s\"\x27;&|<>()]*", cmd):
-            add(m.group(0), cwd)
+            for b in bases:
+                add(m.group(0), b)
+# An inline script that can write, and names a payload path. Most of this repo own payload edits
+# are made this way, and the path is routinely held in a variable before it is opened, so the test
+# is the script holding a payload path AND any writing call at all, not the two on one line.
+WRITE_CALLS = (r"open\([^)]*,\s*[\"\x27][^\"\x27]*[wax+]", r"\.write_(text|bytes)\(",
+               r"shutil\.(copy|copy2|copyfile|copytree|move|rmtree)\(",
+               r"os\.(replace|rename|remove|unlink|makedirs|mkdir|rmdir)\(", r"\.unlink\(",
+               r"\.rename\(", r"\.touch\(", r"writeFileSync|appendFileSync|File\.write")
+WRITE_SCRIPT = any(re.search(p, cmd) for p in WRITE_CALLS)
+SCRIPT_PATH = r"[\"\x27]([^\"\x27\s]*payload/[^\"\x27\s]*)[\"\x27]"
+# The original single line form, kept: a literal opened for writing in place.
+OPENED_PATH = r"open\(\s*([\"\x27][^\"\x27]+[\"\x27])\s*,\s*[\"\x27][wa]"
+placed = set()
 for seg in segments:
     if isinstance(seg, tuple) and seg[0] is CD_TO:
         base = seg[1]
@@ -408,6 +462,14 @@ for seg in segments:
     # A redirect TARGET: the word after > or >> (or 2>, &>, a fd form), attached or separated.
     for m in re.finditer(r"(?:^|[^0-9<>&|])(?:[0-9]*|&)>>?\s*([^\s;&|<>]+)", seg):
         add(m.group(1), base)
+    # A script opens a relative path from where it runs, which is where a cd earlier in the command
+    # left it, not the session directory (claude-config#2128).
+    for m in (re.finditer(SCRIPT_PATH, seg) if WRITE_SCRIPT else ()):
+        add(m.group(1), base)
+        placed.add(m.group(1))
+    for m in re.finditer(OPENED_PATH, seg):
+        add(m.group(1), base)
+        placed.add(m.group(1))
     words = seg.split()
     if not words:
         continue
@@ -432,9 +494,7 @@ for seg in segments:
         i = 0
         while i < len(front):
             if front[i] == "-C" and i + 1 < len(front):
-                nb = resolve(front[i + 1], gbase)
-                if nb and not nb.startswith("$"):
-                    gbase = nb
+                gbase = move(front[i + 1], gbase)
             i += 2 if front[i] in GIT_VALUED else 1
         if sub in GIT_WRITERS:
             # checkout and restore name a branch or commit before `--`, and only the paths after
@@ -461,10 +521,8 @@ for seg in segments:
                     add(w, gbase)
         continue
     if head in ("cd", "pushd"):
-        dest = next((w for w in args if not w.startswith("-")), "~")
-        nb = resolve(dest, base)
-        if nb and not nb.startswith("$"):
-            base = nb
+        dest = next((w for w in args if w == "-" or not w.startswith("-")), "~")
+        base = move(dest, base)
         continue
     # A flag is never a path, so none is resolved against where the command runs.
     if head == "sed" and any(w == "-i" or w.startswith("-i") for w in args):
@@ -484,19 +542,15 @@ for seg in segments:
             if not w.startswith("-"):
                 add(w, base)
 
-# An inline script that can write, and names a payload path. Most of this repo own payload edits
-# are made this way, and the path is routinely held in a variable before it is opened, so the test
-# is the script holding a payload path AND any writing call at all, not the two on one line.
-WRITE_CALLS = (r"open\([^)]*,\s*[\"\x27][^\"\x27]*[wax+]", r"\.write_(text|bytes)\(",
-               r"shutil\.(copy|copy2|copyfile|copytree|move|rmtree)\(",
-               r"os\.(replace|rename|remove|unlink|makedirs|mkdir|rmdir)\(", r"\.unlink\(",
-               r"\.rename\(", r"\.touch\(", r"writeFileSync|appendFileSync|File\.write")
-if any(re.search(p, cmd) for p in WRITE_CALLS):
-    for m in re.finditer(r"[\"\x27]([^\"\x27\s]*payload/[^\"\x27\s]*)[\"\x27]", cmd):
+# Read over the whole command too, for a script path the cut into segments split (a quoted path
+# holding a ; or |): one no segment placed is judged where the session is, as it always was,
+# rather than not at all (L42).
+for m in (re.finditer(SCRIPT_PATH, cmd) if WRITE_SCRIPT else ()):
+    if m.group(1) not in placed:
         add(m.group(1), cwd)
-# The original single line form, kept: a literal opened for writing in place.
-for m in re.finditer(r"open\(\s*([\"\x27][^\"\x27]+[\"\x27])\s*,\s*[\"\x27][wa]", cmd):
-    add(m.group(1), cwd)
+for m in re.finditer(OPENED_PATH, cmd):
+    if m.group(1) not in placed:
+        add(m.group(1), cwd)
 
 seen = []
 for t in targets:
@@ -512,17 +566,32 @@ esac
 # command can name paths in two checkouts.
 refuse_root=""
 refuse_path=""
+refuse_unplaced=""
 while IFS= read -r t; do
   [ -n "$t" ] || continue
   case "$t" in
-    /*) d="$(dirname "$t")" ;;
-    *)  d="$(dirname "$cwd/$t")" ;;
+    # A path only the shell can work out, whose words name payload/ (claude-config#2128). Which
+    # checkout it lands in cannot be read, so it is judged as the payload write it may be: refused
+    # while a watcher could revert it, unless this session holds the watcher off. Never let through
+    # for want of a place to judge it, which is what every such path was before.
+    "?"*)
+      [ -n "$(sc_watcher_cmd || true)" ] || continue
+      sc_hold_covers "$sid" && continue
+      refuse_unplaced="${t#?}"; break ;;
+    /*) ;;
+    *)  t="$cwd/$t" ;;
   esac
+  # Judged from the nearest directory that exists: one a command is about to make (mkdir -p, a copy
+  # into a new folder) cannot be entered, and was skipped unjudged when this read only the target's
+  # own directory (claude-config#2128).
+  d="$(dirname "$t")"
+  while [ ! -d "$d" ] && [ "$d" != "/" ] && [ "$d" != "." ]; do d="$(dirname "$d")"; done
   root="$(sc_clone_root_of "$d")" || continue
   [ -n "$root" ] || continue
   # Only payload/ is mirrored. An edit to claude-sync itself, or to tests/, is this checkout's own
-  # work and the daemon never touches it.
-  case "$(cd "$d" 2>/dev/null && pwd -P)/" in "$root/payload/"*) ;; *) continue ;; esac
+  # work and the daemon never touches it. The part of the path below that directory is kept, so a
+  # target that IS payload/, or a folder in it not made yet, is still read as under payload/.
+  case "$(cd "$d" 2>/dev/null && pwd -P)${t#"$d"}/" in "$root/payload/"*) ;; *) continue ;; esac
   wcmd="$(sc_watcher_cmd || true)"
   [ -n "$wcmd" ] || continue                       # no watcher: nothing can revert anything
   sc_is_this_clone "$root" "$wcmd" && continue     # the watcher runs from HERE: this is its source
@@ -575,6 +644,24 @@ DIRS
   done | LC_ALL=C sort > "$STATE_DIR/$state_key.list"
   return 0
 }
+
+if [ -n "$refuse_unplaced" ]; then
+  others_note "the third way below"
+  cat >&2 <<MSG
+claude-sync: REFUSED a write to $refuse_unplaced, a path only the shell can work out.
+
+Its words name payload/, but they hold a value this gate cannot read (a variable, a command's output, or a cd to one of those), so which checkout it lands in is unknown, and a watch daemon is live on this Mac running from another clone. That daemon mirrors ~/.claude up over payload/ and pushes, so an edit made to a development checkout's payload/ is overwritten by it, silently. A path that cannot be placed is judged as the payload write it may be, never let through (claude-config#2128).
+
+${OTHERS_NOTE}Three ways on:
+
+  1. Write the path out in full, so it can be judged where it really lands.
+  2. Edit ~/.claude directly. That is the copy the daemon mirrors FROM, so nothing can revert it.
+  3. Take a hold first, then edit here:
+
+     claude-sync hold 120 "why you are editing the checkout"
+MSG
+  exit 2
+fi
 
 if [ -z "$refuse_root" ]; then
   note_payload_before

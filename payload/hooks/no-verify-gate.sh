@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # no-verify-gate.sh
-# Claude Code PreToolUse(Bash) hook: refuse an AGENT's git command that skips the repository's own
+# Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|NotebookEdit) hook: refuse an AGENT's git command that skips the repository's own
 # git hooks (claude-config#1587). Nothing lets one through (claude-config#1666). Also refuses an
 # agent's git command reading a file from /dev/stdin, which hangs on a prompt (claude-config#1765).
 #
@@ -14,7 +14,20 @@
 # WHAT A SKIP IS is lib/agent-overrides.py's one reading (`skips`): --no-verify on any git
 # subcommand, commit's -n, a core.hooksPath set with -c, and HUSKY=0 and the other hook managers'
 # switches, behind rtk, env, an if or a `bash -c` string alike, and inside a rebase's --exec. Words
-# that only mention one (a commit message, an echo, a grep) are not one.
+# that only mention one (a commit message, an echo, a grep) are not one. Since claude-config#2135 it
+# is also a git config that CHANGES core.hooksPath, in any scope and either spelling (set, unset,
+# --add, --replace-all, the core section removed or renamed, or --edit): -c moves the hooks for one
+# command, a config write moves them for every later one. Reading the key is not a change. An agent
+# never writes the setting itself, even to a folder of tracked hooks; it runs the repository's own
+# hook install script, which this gate does not read into, so the install keeps working.
+#
+# Since claude-config#2140 the other routes to the same setting count too: config given to git through
+# the environment (GIT_CONFIG_COUNT with its numbered keys, GIT_CONFIG_PARAMETERS, and GIT_CONFIG_GLOBAL,
+# GIT_CONFIG_SYSTEM or GIT_CONFIG naming a whole file), git's --config-env, a config include added or
+# changed with -c or git config, and a key the shell spells so the gate cannot read it. And because no
+# Bash gate sees the file tools, this gate is also registered for Edit, Write and MultiEdit, and
+# refuses an agent's edit of a git config file (the repository's or a worktree's, the global one, or
+# any file an include names) that changes the hooks location or an include, as git reads them.
 #
 # WHO IS ASKED is read from agent_id, which only a subagent's payload carries (measured on Claude
 # Code 2.1.274, see playwright-subagent-gate.sh). The main session is not judged: Dan sees what it
@@ -54,16 +67,29 @@ payload="$(cat 2>/dev/null || true)"
 # Only a subagent's payload is judged, and most commands name no git at all, so both leave before
 # anything starts.
 case "$payload" in *'"agent_id"'*) ;; *) exit 0 ;; esac
-case "$payload" in *git*) ;; *) exit 0 ;; esac
+# A file edit is read whatever it names: a file a config include names need not mention git
+# (claude-config#2140).
+case "$payload" in *git*|*'"file_path"'*) ;; *) exit 0 ;; esac
 
 refuse() { printf '%s\n' "$1" >&2; exit 2; }
+
+# core.hooksPath as git reads it, in any case (claude-config#2135): a glob, used unquoted in a case
+# pattern so its brackets match.
+HOOKS_KEY_ANY_CASE='[hH][oO][oO][kK][sS][pP][aA][tT][hH]'
+# A config include (include.path, includeIf), in any case, the same way (claude-config#2140).
+INCLUDE_ANY_CASE='[iI][nN][cC][lL][uU][dD][eE]'
 
 # EVERY path that cannot read the command judges the same words the reading path acts on: a skip's
 # words and standard input's device path (#1765). Three lessons review rounds on #1587 each found a degraded path judging fewer things than the
 # normal one, so they share this one list (L370).
 refuse_unread() {   # $1 = the text to look in, $2 = why it could not be read
+  # git reads the key in any case, so it is matched in any case (claude-config#2135), as are the
+  # other ways a git config can change it unread: a section's removal or rename, and an edit.
+  # Since claude-config#2140 also config given through the environment or --config-env, a config
+  # include in any case, and a git config file's own path, for the file edit route.
   case "$1" in
-    *no-verify*|*hooksPath*|*hookspath*|*HooksPath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*)
+    *no-verify*|*$HOOKS_KEY_ANY_CASE*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*|*-section*|*config*edit*|*config*-e*|\
+    *GIT_CONFIG*|*config-env*|*$INCLUDE_ANY_CASE*|*.git/config*|*config.worktree*|*.gitconfig*)
       refuse "REFUSED (no-verify-gate.sh): this agent's command names a way to skip the repository's git hooks, and $2, so the gate cannot tell what it does. Run the command without it." ;;
     */dev/stdin*|*/dev/fd/0*)
       refuse "REFUSED (no-verify-gate.sh): this agent's command names standard input's device path, and $2, so the gate cannot tell whether git reads it. Write the message to a file and pass -F <file>, or use -F - (claude-config#1765)." ;;
@@ -91,7 +117,9 @@ if not isinstance(d, dict) or "agent_id" not in d:
     sys.exit(4)
 ti = d.get("tool_input") or {}
 cmd = ti.get("command") if isinstance(ti, dict) else ""
-sys.stdout.write(str(d.get("agent_id") or "") + "\x1f" + (cmd if isinstance(cmd, str) else ""))
+tool = d.get("tool_name")
+sys.stdout.write(str(d.get("agent_id") or "") + "\x1f" + (tool if isinstance(tool, str) else "") + "\x1f"
+                 + (cmd if isinstance(cmd, str) else ""))
 ' 2>/dev/null)"; prc=$?
 # JSON that parses but is not shaped like a call (the command as a list of its words, the input as
 # one string, the payload inside a list) read above as an empty command or a call from nobody, and
@@ -100,8 +128,29 @@ case "$prc" in 0|4) ps_payload_unread "$payload" command && prc=3 ;; esac
 [ "$prc" -eq 4 ] && exit 0
 [ "$prc" -eq 0 ] || refuse_unread "$(ps_payload_text "$payload")" "the gate could not read the hook payload as a call"
 agent="${parsed%%$'\x1f'*}"
-cmd="${parsed#*$'\x1f'}"
+rest="${parsed#*$'\x1f'}"
+tool="${rest%%$'\x1f'*}"
+cmd="${rest#*$'\x1f'}"
 [ -n "$agent" ] || agent="(no id given)"
+
+# AN EDIT, WRITE OR MULTIEDIT OF A GIT CONFIG FILE (claude-config#2140). No Bash gate reads the file
+# tools, so an agent writing the hooks location or an include into a git config file with Write moved
+# the hooks with nothing refusing it. lib/agent-overrides.py config-edit finds the files git reads
+# config from (the repository's, a worktree's, the global ones and every file an include names) and
+# compares the hooks location and the includes as git reads them, before the edit and after it.
+case "$tool" in
+  Edit|Write|MultiEdit)
+    ps_payload_unread "$payload" file_path && refuse_unread "$(ps_payload_text "$payload")" "the gate could not read the hook payload as a file edit"
+    edit="$(printf '%s' "$payload" | python3 "$HOOK_DIR/lib/agent-overrides.py" config-edit 2>&1)"; erc=$?
+    # 10 is the reader's "moves nothing"; 1 is what Python exits on a crash, so it is unread (#1869).
+    case "$erc" in
+      10) exit 0 ;;
+      0) refuse "REFUSED (no-verify-gate.sh): agent $agent: $edit
+Hand back to the main session saying which hooks setting the work needs, rather than writing it." ;;
+      *) refuse_unread "$(ps_payload_text "$payload")" "lib/agent-overrides.py could not read the edit (exit $erc: ${edit##*$'\n'})" ;;
+    esac ;;
+  NotebookEdit) exit 0 ;;
+esac
 
 # Standard input by its device path first: it hangs the agent rather than skipping a check, and the
 # reading is the same one (claude-config#1765). The words come from the library's
@@ -119,8 +168,11 @@ case "$cmd" in
     esac ;;
 esac
 
+# A git config is read whatever it names, since a section's removal or an edit changes the key
+# without naming it (claude-config#2135). So is config through the environment, any -c (whose key the
+# shell may spell so no word names it), and a config include (claude-config#2140).
 case "$cmd" in
-  *commit*|*no-verify*|*hooksPath*|*hookspath*|*HooksPath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*) ;;
+  *commit*|*no-verify*|*$HOOKS_KEY_ANY_CASE*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*|*config*|*CONFIG*|*-c*|*$INCLUDE_ANY_CASE*) ;;
   *) exit 0 ;;
 esac
 
@@ -132,6 +184,16 @@ case "$rc" in
   *) refuse_unread "$cmd" "lib/agent-overrides.py could not read it (exit $rc: ${found##*$'\n'})" ;;
 esac
 
+# A persistent change of where git reads the hooks from has its own remedy: the repository's own
+# install script sets the hooks up, and an agent never writes the setting itself (claude-config#2135).
+# The advice is chosen by the reader from its reasons, never by searching the found text, which holds
+# the command and so whatever its message says (claude-config#2140). Any answer but 0 is no advice:
+# the refusal below stands either way.
+install=""
+advice="$(printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/agent-overrides.py" hooks-location-advice 2>/dev/null)" \
+  && install="
+$advice"
+
 refuse "REFUSED (no-verify-gate.sh): agent $agent ran a git command that skips the repository's own git hooks:
-  ${found//$'\n'/$'\n'  }
+  ${found//$'\n'/$'\n'  }$install
 Those hooks are the only check that runs before the commit exists, and an agent skipping them is what claude-config#1587 records. No agent may skip them (claude-config#1666). Run it without the skip and wait for the hooks in the foreground, however slow they are. If they cannot pass, stop and hand back to the main session saying why. Whatever happens, never report a skip as not having happened."

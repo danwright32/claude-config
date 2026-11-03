@@ -89,6 +89,127 @@ skips_says "an echo of the words is not a skip" 'echo "git commit --no-verify"' 
 skips_says "a plain commit is not a skip" 'git commit -m "x"' 10
 skips_says "a grep for the flag is not a skip" 'grep -rn -- "--no-verify" payload' 10
 
+# A persistent write of core.hooksPath moves where git reads the hooks from for every later command,
+# which -c does for one (claude-config#2135). Every scope and both spellings of git config, the
+# options before the name and the subcommands since git 2.46. Reading it is not a change.
+skips_says "#2135 git config sets core.hooksPath" 'git config core.hooksPath /dev/null' 0
+skips_says "#2135 --unset" 'git config --unset core.hooksPath' 0
+skips_says "#2135 --unset-all" 'git config --unset-all core.hooksPath' 0
+skips_says "#2135 --replace-all" 'git config --replace-all core.hooksPath /tmp/empty' 0
+skips_says "#2135 --add" 'git config --add core.hooksPath /tmp/empty' 0
+skips_says "#2135 --global" 'git config --global core.hooksPath /dev/null' 0
+skips_says "#2135 --system" 'git config --system core.hooksPath /dev/null' 0
+skips_says "#2135 --local" 'git config --local core.hooksPath /dev/null' 0
+skips_says "#2135 --worktree" 'git config --worktree core.hooksPath /dev/null' 0
+skips_says "#2135 --file with the next word" 'git config --file .git/config core.hooksPath /dev/null' 0
+skips_says "#2135 --file=" 'git config --file=.git/config core.hooksPath /dev/null' 0
+skips_says "#2135 -f" 'git config -f .git/config core.hooksPath /dev/null' 0
+skips_says "#2135 -f glued" 'git config -f.git/config core.hooksPath /dev/null' 0
+skips_says "#2135 --type before the name" 'git config --type path core.hooksPath /tmp/empty' 0
+# Every short option git config takes a value with (git 2.51: -f and -t, in every mode), so its value
+# is never read as the key, nor its letters as more options (-tbool holds the l of --list).
+skips_says "#2135 -t with the next word" 'git config -t path core.hooksPath /tmp/empty' 0
+skips_says "#2135 -t glued to a type holding l" 'git config -tbool core.hooksPath true' 0
+skips_says "#2135 -t last in a cluster" 'git config -zt path core.hooksPath /tmp/empty' 0
+skips_says "#2135 -t with the next word in git config set" 'git config set -t path core.hooksPath /tmp/empty' 0
+skips_says "#2135 -t reading it by name is not a change" 'git config -t path core.hooksPath' 10
+# git takes any unique prefix of a long option, so an abbreviated option is read as git reads it.
+skips_says "#2135 --type abbreviated" 'git config --ty path core.hooksPath /tmp/empty' 0
+skips_says "#2135 --file abbreviated" 'git config --fil .git/config core.hooksPath /dev/null' 0
+skips_says "#2135 --unset-all abbreviated" 'git config --unset-a core.hooksPath' 0
+skips_says "#2135 --remove-section abbreviated" 'git config --remove core' 0
+skips_says "#2135 --rename-section abbreviated" 'git config --rena stash core' 0
+skips_says "#2135 --edit abbreviated" 'git config --ed' 0
+skips_says "#2135 --get abbreviated is not a change" 'git config --get-a core.hooksPath' 10
+skips_says "#2135 --type abbreviated reading it by name is not a change" 'git config --ty path core.hooksPath' 10
+skips_says "#2135 the key in any case" 'git config CORE.HOOKSPATH /dev/null' 0
+skips_says "#2135 git config set" 'git config set core.hooksPath /dev/null' 0
+skips_says "#2135 git config set --global" 'git config set --global core.hooksPath /dev/null' 0
+skips_says "#2135 git config unset" 'git config unset core.hooksPath' 0
+skips_says "#2135 git config unset --all --worktree" 'git config unset --all --worktree core.hooksPath' 0
+skips_says "#2135 --remove-section core takes core.hooksPath with it" 'git config --remove-section core' 0
+skips_says "#2135 git config remove-section core" 'git config remove-section core' 0
+skips_says "#2135 --rename-section into core can bring one in" 'git config --rename-section stash core' 0
+skips_says "#2135 git config rename-section out of core" 'git config rename-section core old' 0
+skips_says "#2135 --edit is a change no gate can read" 'git config --edit' 0
+skips_says "#2135 git config edit --global" 'git config edit --global' 0
+skips_says "#2135 behind git -C" 'git -C /tmp/repo config core.hooksPath /dev/null' 0
+skips_says "#2135 behind rtk" 'rtk git config --global core.hooksPath /dev/null' 0
+skips_says "#2135 inside bash -c" "bash -c 'git config core.hooksPath /dev/null'" 0
+skips_says "#2135 after a cd" 'cd /tmp/repo && git config core.hooksPath /tmp/empty' 0
+skips_says "#2135 reading it with --get is not a change" 'git config --get core.hooksPath' 10
+skips_says "#2135 reading it by name alone is not a change" 'git config core.hooksPath' 10
+skips_says "#2135 reading it with --global by name is not a change" 'git config --global core.hooksPath' 10
+skips_says "#2135 git config get is not a change" 'git config get core.hooksPath' 10
+skips_says "#2135 --list is not a change" 'git config --list --show-origin' 10
+skips_says "#2135 another key is not a change" 'git config user.email x@y.z' 10
+skips_says "#2135 another section removed is not a change" 'git config --remove-section alias' 10
+skips_says "#2135 the key as another key's value is not a change" 'git config alias.hp "config core.hooksPath"' 10
+skips_says "#2135 a repository's own hook install script is not a change" 'bash scripts/install-git-hooks.sh' 10
+skips_says "#2135 an echo of the command is not a change" 'echo "git config core.hooksPath /dev/null"' 10
+
+# The routes #2135 left (claude-config#2140). Config given through the environment on the command
+# line: git reads GIT_CONFIG_COUNT with its numbered keys and values, its own internal
+# GIT_CONFIG_PARAMETERS, and GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM and GIT_CONFIG name whole files
+# that can set the hooks location, which the gate cannot read ahead of git.
+skips_says "#2140 GIT_CONFIG_COUNT with the key" 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x' 0
+skips_says "#2140 GIT_CONFIG_COUNT with the key in capitals" 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=CORE.HOOKSPATH GIT_CONFIG_VALUE_0=/dev/null git push origin x' 0
+skips_says "#2140 GIT_CONFIG_COUNT behind env" 'env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x' 0
+skips_says "#2140 GIT_CONFIG_COUNT exported first" 'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null; git commit -m x' 0
+skips_says "#2140 GIT_CONFIG_COUNT with an include" 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=include.path GIT_CONFIG_VALUE_0=/tmp/h.inc git commit -m x' 0
+skips_says "#2140 GIT_CONFIG_COUNT with a key spelled through a shell escape" "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=\$'core.hooks\\x50ath' GIT_CONFIG_VALUE_0=/dev/null git commit -m x" 0
+skips_says "#2140 GIT_CONFIG_PARAMETERS" "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='/dev/null'\" git commit -m x" 0
+skips_says "#2140 GIT_CONFIG_GLOBAL names a whole file" 'GIT_CONFIG_GLOBAL=/tmp/g git commit -m x' 0
+skips_says "#2140 GIT_CONFIG_SYSTEM names a whole file" 'GIT_CONFIG_SYSTEM=/tmp/g git push origin x' 0
+skips_says "#2140 GIT_CONFIG names a whole file" 'GIT_CONFIG=/tmp/g git commit -m x' 0
+skips_says "#2140 GIT_CONFIG exported first" 'export GIT_CONFIG=/tmp/g; git commit -m x' 0
+skips_says "#2140 GIT_CONFIG_GLOBAL behind env" 'env GIT_CONFIG_GLOBAL=/tmp/g git commit -m x' 0
+skips_says "#2140 another key through GIT_CONFIG_COUNT is not a change" 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=x git commit -m y' 10
+skips_says "#2140 an echo of the environment form is not a change" 'echo "GIT_CONFIG_GLOBAL=/tmp/g git commit"' 10
+# git's own option that reads a config value from the environment, in both its spellings.
+skips_says "#2140 --config-env=" 'git --config-env=core.hooksPath=EMPTY commit -m x' 0
+skips_says "#2140 --config-env with the next word" 'git --config-env core.hooksPath=EMPTY commit -m x' 0
+skips_says "#2140 --config-env in any case" 'git --config-env=Core.HooksPath=EMPTY push origin x' 0
+skips_says "#2140 --config-env with an include" 'git --config-env=include.path=INC commit -m x' 0
+skips_says "#2140 --config-env of another key is not a change" 'git --config-env=user.name=ME commit -m x' 10
+# A config include reads another file, which can set the hooks location then or later, so adding or
+# changing one is a change of where git reads the hooks from, on the command line or persistently.
+skips_says "#2140 -c include.path" 'git -c include.path=/tmp/h.inc commit -m x' 0
+skips_says "#2140 -c includeIf" 'git -c includeIf.gitdir:/tmp/.path=/tmp/h.inc commit -m x' 0
+skips_says "#2140 -c with a key spelled through a shell escape" "git -c \$'core.hooks\\x50ath=/dev/null' commit -m x" 0
+skips_says "#2140 -c of another key with a value from a variable is not a change" 'git -c user.name="$NAME" commit -m x' 10
+skips_says "#2140 git config include.path" 'git config include.path /tmp/hooks.inc' 0
+skips_says "#2140 git config --global include.path" 'git config --global include.path ~/hooks.inc' 0
+skips_says "#2140 git config --add include.path" 'git config --add include.path /tmp/h.inc' 0
+skips_says "#2140 git config includeIf" 'git config includeIf.gitdir:~/work/.path /tmp/h.inc' 0
+skips_says "#2140 git config set includeIf in mixed case" 'git config set IncludeIf.onbranch:main.path /tmp/h.inc' 0
+skips_says "#2140 git config --unset include.path" 'git config --unset include.path' 0
+skips_says "#2140 git config --remove-section include" 'git config --remove-section include' 0
+skips_says "#2140 git config --rename-section into include" 'git config --rename-section alias include' 0
+skips_says "#2140 git config --remove-section includeIf" 'git config --remove-section includeIf.gitdir:/tmp/' 0
+skips_says "#2140 git config with a key spelled through a shell escape" "git config \$'core.hooks\\x50ath' /dev/null" 0
+skips_says "#2140 reading include.path is not a change" 'git config --get include.path' 10
+skips_says "#2140 listing with includes is not a change" 'git config --list --includes' 10
+skips_says "#2140 another key with a value from a variable is not a change" 'git config user.name "$NAME"' 10
+
+# The install script advice comes from the reader's reasons (hooks-location-advice), never from the
+# command's text: a persistent change gets it, a one command route or a message naming it does not.
+advice_says() { # advice_says <label> <command> <expected exit>
+  local out rc
+  out="$(printf '%s' "$2" | python3 "$LIB" hooks-location-advice 2>&1)"; rc=$?
+  if [ "$rc" != "$3" ]; then check "$1" "exit $rc, wanted $3: $out"; return; fi
+  case "$3:$out" in
+    0:*"install script"*|10:) check "$1" ok ;;
+    *) check "$1" "exit $rc printed: $out" ;;
+  esac
+}
+advice_says "#2140 advice for a persistent hooks location change" 'git config --global core.hooksPath /dev/null' 0
+advice_says "#2140 advice for a persistent include change" 'git config include.path /tmp/h.inc' 0
+advice_says "#2140 advice for a persistent change inside bash -c" "bash -c 'git config --unset include.path'" 0
+advice_says "#2140 no advice for a one command -c include" 'git -c include.path=/tmp/h.inc commit -m x' 10
+advice_says "#2140 no advice for a message naming the issue and the script" 'git commit --no-verify -m "see claude-config#2135 and the install script"' 10
+advice_says "#2140 no advice for a read" 'git config --get include.path' 10
+
 # ---------------------------------------------------------------------------------------------
 echo "no-verify-gate.sh: an agent's skip of the git hooks is refused, with no approval that lets it through"
 
@@ -136,6 +257,87 @@ run_hook "$NV_GATE" "$(bash_payload 'HUSKY=0 git push origin x' a1b2c3d4)"
 refused "an agent's HUSKY=0 push is refused"
 run_hook "$NV_GATE" "$(bash_payload 'git -c core.hooksPath=/dev/null commit -m x' a1b2c3d4)"
 refused "an agent's core.hooksPath commit is refused"
+# The words before the reading run were matched in three spellings of the key, and git reads it in
+# any case, so a push naming it another way never reached the reading (claude-config#2135).
+run_hook "$NV_GATE" "$(bash_payload 'git -c CORE.HOOKSPATH=/dev/null push origin x' a1b2c3d4)"
+refused "#2135 an agent's -c of the key in capitals on a push is refused"
+
+# A persistent write of the hooks location, in any scope, is refused the same way (claude-config#2135),
+# naming the issue and the install script as the way to set the hooks up.
+# The refusal quotes the refused command, so a search of the whole refusal passes on whatever the
+# command says (the lessons review of #2139). in_reason searches the refusal with every copy of the
+# command taken out, which leaves the reason and the advice the gate chose.
+in_reason() { # in_reason <command> <text>: exit 0 when the refusal says <text> outside the command
+  local rest="$ERR$OUT"
+  rest="${rest//"$1"/}"
+  case "$rest" in *"$2"*) return 0 ;; esac
+  return 1
+}
+reason_says() { # reason_says <label> <command> <text>
+  if in_reason "$2" "$3"; then check "$1" ok; else check "$1" "the reason did not say '$3': ${ERR:0:400}"; fi
+}
+nv_config() { # nv_config <label> <command> [issue]: an agent's command, refused naming the issue
+  run_hook "$NV_GATE" "$(bash_payload "$2" a1b2c3d4)"
+  refused "${3:-#2135} an agent's $1 is refused"
+  reason_says "${3:-#2135} and the refusal of $1 names the issue" "$2" "claude-config${3:-#2135}"
+}
+nv_config "git config core.hooksPath" 'git config core.hooksPath /dev/null'
+nv_config "--unset" 'git config --unset core.hooksPath'
+nv_config "--replace-all" 'git config --replace-all core.hooksPath /tmp/empty'
+nv_config "--global" 'git config --global core.hooksPath /dev/null'
+nv_config "--system" 'git config --system core.hooksPath /dev/null'
+nv_config "--local" 'git config --local core.hooksPath /dev/null'
+nv_config "--worktree" 'git config --worktree core.hooksPath /dev/null'
+nv_config "--file" 'git config --file .git/config core.hooksPath /dev/null'
+nv_config "git config set" 'git config set core.hooksPath /tmp/empty'
+nv_config "git config unset" 'git config unset core.hooksPath'
+nv_config "key in capitals" 'git config CORE.HOOKSPATH /dev/null'
+nv_config "-t with the next word" 'git config -t path core.hooksPath /tmp/empty'
+nv_config "--type abbreviated" 'git config --ty path core.hooksPath /tmp/empty'
+nv_config "--remove-section core" 'git config --remove-section core'
+nv_config "--edit" 'git config --edit'
+reason_says "#2135 the refusal names the install script as the way to set up the hooks" 'git config --edit' "install script"
+# The advice is chosen from the reason, never from the command: a commit whose message names the
+# issue is refused for its --no-verify alone, and gets no advice about the hooks location
+# (the lessons review of #2139).
+nv_cmd='git commit --no-verify -m "see claude-config#2135 and the install script"'
+run_hook "$NV_GATE" "$(bash_payload "$nv_cmd" a1b2c3d4)"
+refused "#2140 an agent's --no-verify commit whose message names #2135 is refused"
+if in_reason "$nv_cmd" "claude-config#2135"; then
+  check "#2140 a --no-verify refusal gets no hooks location advice from its message" "it did: ${ERR:0:500}"
+else
+  check "#2140 a --no-verify refusal gets no hooks location advice from its message" ok
+fi
+# The routes #2135 left (claude-config#2140): each refused, naming the issue in its reason.
+nv_config "GIT_CONFIG_COUNT with the key" 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x' "#2140"
+nv_config "GIT_CONFIG_PARAMETERS" "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='/dev/null'\" git commit -m x" "#2140"
+nv_config "GIT_CONFIG_GLOBAL" 'GIT_CONFIG_GLOBAL=/tmp/g git push origin x' "#2140"
+nv_config "GIT_CONFIG_SYSTEM" 'GIT_CONFIG_SYSTEM=/tmp/g git commit -m x' "#2140"
+nv_config "GIT_CONFIG" 'GIT_CONFIG=/tmp/g git commit -m x' "#2140"
+nv_config "--config-env" 'git --config-env=core.hooksPath=EMPTY commit -m x' "#2140"
+nv_config "-c include.path" 'git -c include.path=/tmp/h.inc push origin x' "#2140"
+nv_config "-c with a key spelled through a shell escape" "git -c \$'core.hooks\\x50ath=/dev/null' push origin x" "#2140"
+nv_config "git config include.path" 'git config include.path /tmp/hooks.inc' "#2140"
+reason_says "#2140 a persistent include change gets the install script advice" 'git config include.path /tmp/hooks.inc' "install script"
+nv_config "git config includeIf" 'git config --global includeIf.gitdir:~/w/.path /tmp/h.inc' "#2140"
+run_hook "$NV_GATE" "$(bash_payload 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x')"
+allowed "#2140 the main session's environment config goes through"
+run_hook "$NV_GATE" "$(bash_payload 'git config --get-regexp ^include' a1b2c3d4)"
+allowed "#2140 an agent reading the includes goes through"
+run_hook "$NV_GATE" "$(bash_payload 'git -c user.name=Someone commit -m x' a1b2c3d4)"
+allowed "#2140 an agent's -c of another key goes through"
+run_hook "$NV_GATE" "$(bash_payload 'git config --global core.hooksPath /dev/null')"
+allowed "#2135 the main session's own git config of the key goes through"
+run_hook "$NV_GATE" "$(bash_payload 'git config --get core.hooksPath' a1b2c3d4)"
+allowed "#2135 an agent reading the key goes through"
+run_hook "$NV_GATE" "$(bash_payload 'git config user.name Someone' a1b2c3d4)"
+allowed "#2135 an agent setting another key goes through"
+run_hook "$NV_GATE" "$(bash_payload 'bash scripts/install-git-hooks.sh' a1b2c3d4)"
+allowed "#2135 an agent running a repository's hook install script goes through"
+run_hook "$NV_GATE" "$(bash_payload 'sh ./scripts/configure-hooks.sh' a1b2c3d4)"
+allowed "#2135 an agent running an install script whose name holds config goes through"
+run_hook "$NV_GATE" "$(bash_payload 'pnpm install' a1b2c3d4)"
+allowed "#2135 an agent running the package install that sets up the hooks goes through"
 # The shell runs the substitutions in the body of a heredoc whose end marker is unquoted
 # (claude-config#2053); a quoted marker keeps the body text.
 run_hook "$NV_GATE" "$(bash_payload $'cat <<EOF\n$(git push --no-verify origin x)\nEOF' a1b2c3d4)"
@@ -158,6 +360,113 @@ if [ -e "$DIR/lib/no-verify-approval.sh" ]; then
 else
   check "the approval script is gone" ok
 fi
+
+# ---------------------------------------------------------------------------------------------
+echo "no-verify-gate.sh: an agent's Edit, Write or MultiEdit of a git config file that moves the hooks is refused (claude-config#2140)"
+
+# No shell command gate reads the file tools, so a git config file written with Write or Edit moved
+# the hooks with nothing refusing it. The files are the repository's own config (and a worktree's),
+# the global one, and every file a config include names, existing or not. The gate compares the
+# hooks location and the includes as git reads them, before and after the edit.
+edit_payload() { # edit_payload <tool> <cwd> <agent or empty> <field> <value> ...: edits is JSON
+  python3 -c '
+import json, sys
+tool, cwd, agent = sys.argv[1:4]
+rest = sys.argv[4:]
+ti = {k: (json.loads(v) if k == "edits" else v) for k, v in zip(rest[::2], rest[1::2])}
+d = {"session_id": "s-2140", "transcript_path": "/tmp/s-2140.jsonl", "cwd": cwd,
+     "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": ti, "tool_use_id": "toolu_02"}
+if agent:
+    d["agent_id"] = agent
+    d["agent_type"] = "general-purpose"
+print(json.dumps(d))
+' "$@"
+}
+EH="$WORK/edit-home"
+ER="$WORK/edit-repo"
+ER2="$WORK/edit-repo2"
+mkdir -p "$EH" "$WORK/inc"
+HOME="$EH" git init -q "$ER"
+HOME="$EH" git -C "$ER" config user.name Tester
+HOME="$EH" git -C "$ER" config user.email t@example.com
+HOME="$EH" git -C "$ER" config include.path "$WORK/inc/hooks.inc"
+HOME="$EH" git -C "$ER" config --add include.path ../../rel.inc
+HOME="$EH" git -C "$ER" -c commit.gpgsign=false commit -q --allow-empty -m init
+HOME="$EH" git -C "$ER" worktree add -q --detach "$WORK/edit-wt"
+HOME="$EH" git init -q "$ER2"
+HOME="$EH" git -C "$ER2" config core.hooksPath .githooks
+cfg="$(cat "$ER/.git/config")"
+hooked=$'\n[core]\n\thooksPath = /dev/null\n'
+
+ed_refused() { # ed_refused <label> <payload>: refused, naming the issue and the install script
+  HOME="$EH" run_hook "$NV_GATE" "$2"
+  refused "#2140 an agent's $1 is refused"
+  says "#2140 and the refusal of $1 names the issue" "claude-config#2140"
+  says "#2140 and the refusal of $1 names the install script" "install script"
+}
+ed_allowed() { HOME="$EH" run_hook "$NV_GATE" "$2"; allowed "#2140 $1 goes through"; }
+
+ed_refused "Write of .git/config setting the hooks location" \
+  "$(edit_payload Write "$ER" a1b2c3d4 file_path "$ER/.git/config" content "$cfg$hooked")"
+ed_refused "Edit of .git/config setting the hooks location" \
+  "$(edit_payload Edit "$ER" a1b2c3d4 file_path "$ER/.git/config" old_string "[user]" new_string $'[core]\n\thooksPath = /dev/null\n[user]')"
+ed_refused "Edit of .git/config with the key in capitals" \
+  "$(edit_payload Edit "$ER" a1b2c3d4 file_path "$ER/.git/config" old_string "[user]" new_string $'[CORE]\n\tHOOKSPATH = /dev/null\n[user]')"
+ed_refused "Edit of .git/config removing the hooks location" \
+  "$(edit_payload Edit "$ER2" a1b2c3d4 file_path "$ER2/.git/config" old_string $'\thooksPath = .githooks\n' new_string "")"
+ed_refused "Edit of .git/config changing the hooks location" \
+  "$(edit_payload Edit "$ER2" a1b2c3d4 file_path "$ER2/.git/config" old_string ".githooks" new_string "/tmp/empty")"
+ed_refused "Edit of .git/config moving the key into another section" \
+  "$(edit_payload Edit "$ER2" a1b2c3d4 file_path "$ER2/.git/config" old_string $'\thooksPath' new_string $'[alias]\n\thooksPath')"
+ed_refused "MultiEdit of .git/config setting the hooks location" \
+  "$(edit_payload MultiEdit "$ER" a1b2c3d4 file_path "$ER/.git/config" edits '[{"old_string": "[user]", "new_string": "[core]\n\thooksPath = /dev/null\n[user]"}]')"
+ed_refused "Write of .git/config adding an include" \
+  "$(edit_payload Write "$ER" a1b2c3d4 file_path "$ER/.git/config" content "$cfg"$'\n[include]\n\tpath = /tmp/other.inc\n')"
+ed_refused "Write of a worktree's config.worktree setting the hooks location" \
+  "$(edit_payload Write "$WORK/edit-wt" a1b2c3d4 file_path "$ER/.git/worktrees/edit-wt/config.worktree" content "$hooked")"
+ed_refused "Edit of the common dir's config from a worktree" \
+  "$(edit_payload Edit "$WORK/edit-wt" a1b2c3d4 file_path "$ER/.git/config" old_string "[user]" new_string $'[core]\n\thooksPath = /dev/null\n[user]')"
+ed_refused "Write of a file an include names, before it exists" \
+  "$(edit_payload Write "$ER" a1b2c3d4 file_path "$WORK/inc/hooks.inc" content "$hooked")"
+ed_refused "Write of a file a relative include names" \
+  "$(edit_payload Write "$ER" a1b2c3d4 file_path "$WORK/rel.inc" content "$hooked")"
+ed_refused "Write of the global config setting the hooks location" \
+  "$(edit_payload Write "$ER" a1b2c3d4 file_path "$EH/.gitconfig" content "$hooked")"
+ed_allowed "an agent's Edit of .git/config changing another key" \
+  "$(edit_payload Edit "$ER" a1b2c3d4 file_path "$ER/.git/config" old_string "name = Tester" new_string "name = Someone")"
+ed_allowed "an agent's Edit of .git/config adding a comment beside the hooks location" \
+  "$(edit_payload Edit "$ER2" a1b2c3d4 file_path "$ER2/.git/config" old_string "[core]" new_string $'# the hooks\n[core]')"
+ed_allowed "an agent's Edit of .git/config whose old text is not there" \
+  "$(edit_payload Edit "$ER" a1b2c3d4 file_path "$ER/.git/config" old_string "[nothere]" new_string $'[core]\n\thooksPath = /dev/null')"
+ed_allowed "an agent's Write of an ordinary file holding the same text" \
+  "$(edit_payload Write "$ER" a1b2c3d4 file_path "$ER/notes.md" content "$hooked")"
+ed_allowed "an agent's Write of a file no include names" \
+  "$(edit_payload Write "$ER" a1b2c3d4 file_path "$WORK/inc/other.inc" content "$hooked")"
+ed_allowed "the main session's Write of .git/config setting the hooks location" \
+  "$(edit_payload Write "$ER" "" file_path "$ER/.git/config" content "$cfg$hooked")"
+ed_allowed "an agent's NotebookEdit" \
+  "$(edit_payload NotebookEdit "$ER" a1b2c3d4 notebook_path "$ER/n.ipynb" new_source "x")"
+# An edit the gate cannot read is judged by the words it holds: a file_path that is not text, naming
+# a git config file, is refused, and the same naming an ordinary file goes through (#2057's rule).
+HOME="$EH" run_hook "$NV_GATE" "{\"tool_name\":\"Write\",\"agent_id\":\"a1b2c3d4\",\"cwd\":\"$ER\",\"tool_input\":{\"file_path\":[\"$ER/.git/config\"],\"content\":\"x\"}}"
+refused "#2140 an agent's Write whose file_path is not text, naming .git/config, is refused"
+HOME="$EH" run_hook "$NV_GATE" "{\"tool_name\":\"Write\",\"agent_id\":\"a1b2c3d4\",\"cwd\":\"/tmp\",\"tool_input\":{\"file_path\":[\"/tmp/notes.md\"],\"content\":\"x\"}}"
+allowed "#2140 control: the same naming an ordinary file goes through"
+# A Write with no content to read is one the reader refuses to judge, so it is unread too.
+HOME="$EH" run_hook "$NV_GATE" "{\"tool_name\":\"Write\",\"agent_id\":\"a1b2c3d4\",\"cwd\":\"$ER\",\"tool_input\":{\"file_path\":\"$ER/.git/config\"}}"
+refused "#2140 an agent's Write of .git/config with no content to read is refused"
+# A config git cannot read, before the edit and after it, is not two equal readings: an edit adding
+# the hooks location to one that already holds a line git refuses is refused (the lessons review at
+# 8f5e458), and so is an edit that leaves it unreadable, since the gate cannot tell what it sets.
+ER3="$WORK/edit-repo3"
+HOME="$EH" git init -q "$ER3"
+# It already names an include, so the old reading of an unreadable text, a marker given whenever the
+# text names one, came out the same before and after.
+printf '[include]\n\tpath = /tmp/other.inc\n[broken\n' >> "$ER3/.git/config"
+ed_refused "Edit of an unreadable .git/config adding the hooks location" \
+  "$(edit_payload Edit "$ER3" a1b2c3d4 file_path "$ER3/.git/config" old_string "[broken" new_string $'[core]\n\thooksPath = /dev/null\n[broken')"
+[ "$(cat "$ER/.git/config")" = "$cfg" ] && check "#2140 the gate wrote nothing into the config it judged" ok \
+  || check "#2140 the gate wrote nothing into the config it judged" "it changed"
 
 # ---------------------------------------------------------------------------------------------
 echo "monitor-action-gate.sh: a Monitor never carries a merge, a push or a commit"
@@ -528,6 +837,15 @@ refused "a reader that crashes still refuses an agent's commit --no-verify"
 says "saying the skip could not be read" "could not read it"
 run_crashpy "$NV_GATE" "$(bash_payload 'HUSKY=0 git push origin x' a1b2c3d4)"
 refused "a reader that crashes still refuses an agent's HUSKY=0 push"
+# A persistent write of the hooks location reads the same way unread (claude-config#2135).
+run_crashpy "$NV_GATE" "$(bash_payload 'git config CORE.HOOKSPATH /dev/null' a1b2c3d4)"
+refused "#2135 a reader that crashes still refuses an agent's git config of the key in capitals"
+run_crashpy "$NV_GATE" "$(bash_payload 'git config --remove-section core' a1b2c3d4)"
+refused "#2135 a reader that crashes still refuses an agent's removal of the core section"
+run_crashpy "$NV_GATE" "$(bash_payload 'git config --edit' a1b2c3d4)"
+refused "#2135 a reader that crashes still refuses an agent's git config --edit"
+run_crashpy "$NV_GATE" "$(bash_payload 'git config user.name Someone' a1b2c3d4)"
+allowed "#2135 with the reader crashing, an agent's git config of another key still goes through"
 # The control: the stub crashes only the reader, so an agent command it reads but that names nothing
 # it judges still passes, and so does one that never reaches it.
 run_crashpy "$NV_GATE" "$(bash_payload 'git commit -m wip' a1b2c3d4)"
@@ -579,6 +897,8 @@ run_nopy "$NV_GATE" "$(bash_payload 'git commit -m wip' a1b2c3d4)"
 allowed "and lets a command naming no skip through"
 run_nopy "$NV_GATE" "$(bash_payload 'git commit -F /dev/stdin' a1b2c3d4)"
 refused "no-verify-gate.sh refuses an agent's /dev/stdin commit it cannot read"
+run_nopy "$NV_GATE" "$(bash_payload 'git config unset core.HooksPATH' a1b2c3d4)"
+refused "#2135 no-verify-gate.sh refuses an agent's git config of the key it cannot read"
 run_hook "$NV_GATE" '{"agent_id":"a1b2c3d4","tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m wip"'
 refused "an agent payload that cannot be parsed and names a skip is refused"
 run_nopy "$MON_GATE" "$(bash_payload 'until gh pr merge 7; do sleep 60; done' '' Monitor)"
@@ -595,6 +915,7 @@ reg() { # reg <matcher> <hook basename>
   jq -e --arg m "$1" --arg h "$2" '[.hooks.PreToolUse[] | select(.matcher == $m) | .hooks[].command | select(endswith("/hooks/" + $h))] | length == 1' "$SETTINGS" >/dev/null 2>&1
 }
 reg Bash no-verify-gate.sh && check "no-verify-gate.sh runs before every Bash call" ok || check "no-verify-gate.sh runs before every Bash call" "not registered under Bash"
+reg "Edit|Write|MultiEdit|NotebookEdit" no-verify-gate.sh && check "#2140 no-verify-gate.sh runs before every file edit" ok || check "#2140 no-verify-gate.sh runs before every file edit" "not registered under Edit|Write|MultiEdit|NotebookEdit"
 reg Monitor monitor-action-gate.sh && check "monitor-action-gate.sh runs before every Monitor" ok || check "monitor-action-gate.sh runs before every Monitor" "not registered under Monitor"
 reg SubagentHandback handback-claims-gate.sh && check "handback-claims-gate.sh runs before every hand-back" ok || check "handback-claims-gate.sh runs before every hand-back" "not registered under SubagentHandback"
 
