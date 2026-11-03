@@ -10171,13 +10171,20 @@ check "#36 the derivation found mktemp calls to check" \
 # scratch, so a derivation over paths reported it as a name the reaper had forgotten.
 _scr_names="$(_scr_code | grep -E '\bmktemp\b' | grep -oE '/claude-sync-[a-z-]+\.' | sed 's|^/||' | sort -u)"
 _scr_unswept=""
+# The reaper's list, read once, so a failure can print exactly what every name was matched against.
+_scr_sweeps="$(grep -oE '^SYNC_SCRATCH_NAMES=.*' "$SCRIPT" | awk 'NR <= 1')"
 while IFS= read -r _nm; do
   [ -n "$_nm" ] || continue
-  case " $(grep -oE '^SYNC_SCRATCH_NAMES=.*' "$SCRIPT" | awk 'NR <= 1') " in *"$_nm"*) ;; *) _scr_unswept="$_scr_unswept[$_nm]" ;; esac
+  case " $_scr_sweeps " in *"$_nm"*) ;; *) _scr_unswept="$_scr_unswept[$_nm]" ;; esac
 done <<EOF
 $_scr_names
 EOF
 check "#36 every name it creates is one the reaper sweeps" "[ -z \"\$_scr_unswept\" ]"
+# When it does not, the names and the list are the diagnosis, so they are printed (L177). This
+# check failed once under load on 2026-11-01 (claude-config#2091) and passed on the rerun, and the
+# kept output held only the FAIL line, so what it had read could not be recovered.
+[ -z "$_scr_unswept" ] || printf '    names not swept: %s\n    the reaper list read from %s: [%s]\n' \
+  "$_scr_unswept" "$SCRIPT" "$_scr_sweeps"
 check "#36 the name derivation found names to check" \
   "[ \"\$(printf '%s' \"\$_scr_names\" | grep -c .)\" -ge 3 ]"
 
@@ -16415,18 +16422,30 @@ function skipval(t,   i, ch, dq, sq, depth, n) {
   return substr(t, i)
 }
 function lower(x){ return tolower(x) }
-BEGIN { sec = 0; hd = ""; nsec = 0; nread = 0; afterhead = 0; SQ = sprintf("%c", 39) }
+# Which lines open a heredoc, and the word ending each, are read by lib/shell-words.py
+# (heredoc-markers), the one reading of a marker, which takes the whole word as bash does
+# (claude-config#2080): MARKERS holds <line>TAB<word>, one per heredoc, in the order they open.
+BEGIN {
+  sec = 0; pend = ""; nsec = 0; nread = 0; afterhead = 0; SQ = sprintf("%c", 39)
+  while ((r = (getline rec < MARKERS)) > 0) {
+    t = index(rec, "\t"); mn = substr(rec, 1, t - 1) + 0; mw = substr(rec, t + 1)
+    opens[mn] = (mn in opens) ? opens[mn] "\n" mw : mw
+  }
+  if (r < 0) { print "needs scan: cannot read the heredoc markers in " MARKERS > "/dev/stderr"; exit 2 }
+  close(MARKERS)
+}
 {
   line = $0
 
   # ---- heredoc bodies belong to whatever the heredoc is fed to, not to this file ----
-  if (hd != "") { if (trim(line) == hd) hd = ""; next }
-  if (line !~ /<<</ && match(line, /<<-?['"]?[A-Za-z_]/)) {
-    m = substr(line, RSTART)
-    sub(/^<<-?/, "", m)
-    gsub(/['"]/, "", m)
-    if (match(m, /^[A-Za-z_][A-Za-z0-9_]*/)) hd = substr(m, 1, RLENGTH)
+  # Each body ends at the first line that is its word once trimmed, so a <<- body and one whose
+  # word carries spaces end where bash ends them or sooner, never later.
+  if (pend != "") {
+    e = index(pend, "\n"); mw = e ? substr(pend, 1, e - 1) : pend
+    if (trim(line) == mw) pend = e ? substr(pend, e + 1) : ""
+    next
   }
+  if (FNR in opens) pend = opens[FNR]
 
   # ---- section boundaries, and the `# needs:` lines directly beneath a heading ----
   if (line ~ /^section "/) {
@@ -16549,8 +16568,19 @@ END {
 }
 NEEDSCAN
 
+_NS_SW="$(dirname "$SCRIPT")/payload/hooks/lib/shell-words.py"
+# The markers of the heredocs a file opens, from lib/shell-words.py. With that reader failing the
+# scan prints nothing at all, so the check below that it read every section fails rather than a
+# scan with no heredocs read reporting on bodies as this file's own code.
+_ns_markers(){   # $1 = a suite file -> the path of its markers file
+  local _nsm_out
+  _nsm_out="$WORK/heredoc-markers.$(basename "$1")"
+  python3 -B "$_NS_SW" heredoc-markers < "$1" > "$_nsm_out" || return 1
+  printf '%s\n' "$_nsm_out"
+}
 _ns_run(){   # $1 = a suite file to scan; prints the summary line, then one line per finding
-  awk -v PRELUDE_END="$SUITE_PRELUDE_END" -f "$_NSAWK" "$1"
+  _nsr_m="$(_ns_markers "$1")" || return 1
+  awk -v PRELUDE_END="$SUITE_PRELUDE_END" -v MARKERS="$_nsr_m" -f "$_NSAWK" "$1"
 }
 _NSOUT="$WORK/needs-scan.out"
 _ns_run "$SCRIPT_SELF" > "$_NSOUT"
@@ -16639,17 +16669,31 @@ _NSXAWK="$WORK/export-scan.awk"
 # and the comment explaining WHY did it a second time (L245). Inside a heredoc body, both skip it.
 cat > "$_NSXAWK" <<'EXPORTSCAN'
 function trim(x){ sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-{
-  if (hd != "") { if (trim($0) == hd) hd = ""; next }
-  if ($0 !~ /<<</ && match($0, /<<-?['"]?[A-Za-z_]/)) {
-    m = substr($0, RSTART); sub(/^<<-?/, "", m); gsub(/['"]/, "", m)
-    if (match(m, /^[A-Za-z_][A-Za-z0-9_]*/)) hd = substr(m, 1, RLENGTH)
+# The heredocs each line opens, read by lib/shell-words.py as the needs scan above reads them.
+BEGIN {
+  while ((r = (getline rec < MARKERS)) > 0) {
+    t = index(rec, "\t"); mn = substr(rec, 1, t - 1) + 0; mw = substr(rec, t + 1)
+    opens[mn] = (mn in opens) ? opens[mn] "\n" mw : mw
   }
+  if (r < 0) { print "export scan: cannot read the heredoc markers in " MARKERS > "/dev/stderr"; exit 2 }
+  close(MARKERS)
+}
+{
+  if (pend != "") {
+    e = index(pend, "\n"); mw = e ? substr(pend, 1, e - 1) : pend
+    if (trim($0) == mw) pend = e ? substr(pend, e + 1) : ""
+    next
+  }
+  if (FNR in opens) pend = opens[FNR]
   if ($0 ~ /^section "/) { nsec++; if (index(tolower($0), tolower(PRE)) > 0) pre = nsec }
   if ($0 ~ /^[[:space:]]*export /) { if (nsec > 0 && pre > 0 && nsec > pre) printf "%d: %s\n", FNR, $0 }
 }
 EXPORTSCAN
-_ns_export_scan(){ awk -v PRE="$SUITE_PRELUDE_END" -f "$_NSXAWK" "$1"; }
+_ns_export_scan(){
+  local _nsx_m
+  _nsx_m="$(_ns_markers "$1")" || { echo "export scan: lib/shell-words.py could not read the heredocs in $1"; return 1; }
+  awk -v PRE="$SUITE_PRELUDE_END" -v MARKERS="$_nsx_m" -f "$_NSXAWK" "$1" || echo "export scan: the scan of $1 failed"
+}
 _ns_exports="$(_ns_export_scan "$SCRIPT_SELF")"
 check "#341 no section after the prelude exports anything to the ones after it" \
   "[ -z \"\$_ns_exports\" ] || { printf '%s\n' \"\$_ns_exports\" | awk 'NR <= 5' >&2; false; }"
@@ -16667,6 +16711,13 @@ awk '/^suite_profile$/ && !ins {
        print "cat > /dev/null <" "<ZZHEREDOC"
        print "export ZZZ_INSIDE_A_HEREDOC=1"
        print "ZZHEREDOC"
+       # A marker holding a hyphen ends at the whole word, as bash ends it (claude-config#2080).
+       # Read with a pattern of its own, this ended at a line ZZ that never comes, and the export
+       # after it was hidden for the rest of the file.
+       print "cat > /dev/null <" "<ZZ-END"
+       print "export ZZZ_INSIDE_A_HYPHEN_HEREDOC=1"
+       print "ZZ-END"
+       print "export ZZZ_AFTER_A_HYPHEN_HEREDOC=1"
        ins = 1 } { print }' "$SCRIPT_SELF" > "$_NSX"
 _ns_x="$(_ns_export_scan "$_NSX")"
 check "#341 an export planted after the prelude is caught" \
@@ -16678,6 +16729,10 @@ check "#341 and the prelude's own exports are not reported" \
 # was not there.
 check "#341 and an export inside a heredoc is not a leak" \
   "case \"\$_ns_x\" in *ZZZ_INSIDE_A_HEREDOC*) false ;; *) true ;; esac"
+check "#2080 an export after a heredoc whose marker holds a hyphen is still caught" \
+  "case \"\$_ns_x\" in *ZZZ_AFTER_A_HYPHEN_HEREDOC*) true ;; *) false ;; esac"
+check "#2080 and one inside that heredoc is not a leak" \
+  "case \"\$_ns_x\" in *ZZZ_INSIDE_A_HYPHEN_HEREDOC*) false ;; *) true ;; esac"
 
 section "== every heading this file writes is one its own reader can see (#138) =="
 # The collector recognises exactly one shape: a `section` call at column zero whose title is a
@@ -23813,6 +23868,15 @@ check "#1535 and what that means for sessions here" \
   "line_has \"\$out_ml1\" 'mods behind the shared repo' 'Every session started on this Mac'"
 check "#1535 a file installed with this Mac's home path in it is matched to the version the repo held" \
   "line_has \"\$out_ml1\" 'mods behind the shared repo' 'path-mod'"
+# When it is not, what status said, the installed bytes and the history it was matched against are
+# the diagnosis, so they are printed (L177). This check failed once under load on 2026-11-02
+# (claude-config#2091) while the two above it passed, and the kept output held only the FAIL line.
+if ! line_has "$out_ml1" 'mods behind the shared repo' 'path-mod'; then
+  printf '%s\n' "$out_ml1" | sed 's/^/    status said: /'
+  sed 's/^/    installed paths.ts: /' "$MLH/mods/path-mod/hooks/paths.ts" 2>&1
+  git -C "$MLR" log --format='C %ct' --raw --no-abbrev origin/main -- payload/mods/path-mod/hooks/paths.ts 2>&1 \
+    | sed 's/^/    repo history: /'
+fi
 check "#1535 a mod this Mac wrote and has not sent is not called a lag" \
   "! line_has \"\$out_ml1\" 'mods behind the shared repo' 'own-mod'"
 # The causes it can read, each in its own words. Here neither launch agent is installed.
