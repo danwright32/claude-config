@@ -37,6 +37,10 @@ hook that slow is killed and the command goes unscreened.
       the directory its `git -C` options name, several composed as git composes them, or nothing
       when it is not git or names no -C, past reserved words, assignments, rtk, env and sudo; see
       git_dir().
+  shell-words.py heredoc-markers   stdin: a whole file
+      each heredoc it opens, read a line at a time as heredoc_openers reads one, printed as
+      "<line number>" TAB "<end marker>", one per line, so a scan written in awk reads markers as
+      this file does (claude-config#2080); see heredoc_openers().
   shell-words.py bare       stdin: one command
       the command with the contents of every $( ) and backquote substitution taken out, so a caller
       can ask what it runs itself rather than inside them (claude-config#1062); see bare().

@@ -368,7 +368,7 @@ echo "every Python program in the hooks and the skills says how it handles text 
 
 python3 "$WORK/scan.py" "$DIR" > "$WORK/hooks.scan" 2>&1
 rc=$?
-[ "$rc" = 0 ] && ok || bad "the scan of $DIR exited $rc: $(grep -v -E '^(UNITS|UNPARSED) |^/' "$WORK/hooks.scan" | head -5 | tr '\n' '|')"
+[ "$rc" = 0 ] && ok || bad "the scan of $DIR exited $rc: $(grep -v -E '^(UNITS|UNPARSED) |^/' "$WORK/hooks.scan" | awk 'NR <= 5' | tr '\n' '|')"
 units="$(sed -n 's/^UNITS //p' "$WORK/hooks.scan")"
 [ "${units:-0}" -ge 100 ] && ok || bad "the scan read only ${units:-no} Python programs in $DIR, so it is reading the wrong tree or cannot find them"
 unparsed="$(grep '^UNPARSED' "$WORK/hooks.scan")"
@@ -397,7 +397,7 @@ LISTED
 }
 skill_scan "$DIR/../skills" > "$WORK/skills.scan" 2>&1
 rc=$?
-[ "$rc" = 0 ] && ok || bad "the scan of payload/skills exited $rc: $(grep -v -E '^(UNITS|UNPARSED) |^/' "$WORK/skills.scan" | head -5 | tr '\n' '|')"
+[ "$rc" = 0 ] && ok || bad "the scan of payload/skills exited $rc: $(grep -v -E '^(UNITS|UNPARSED) |^/' "$WORK/skills.scan" | awk 'NR <= 5' | tr '\n' '|')"
 sunits="$(sed -n 's/^UNITS //p' "$WORK/skills.scan")"
 [ "${sunits:-0}" -ge 30 ] && ok || bad "the scan read only ${sunits:-no} Python programs under payload/skills"
 shits="$(grep -v -E '^UNITS ' "$WORK/skills.scan" | sed "s#^$DIR/../##")"

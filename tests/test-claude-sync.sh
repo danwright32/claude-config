@@ -16566,6 +16566,7 @@ _NS_SW="$(dirname "$SCRIPT")/payload/hooks/lib/shell-words.py"
 # scan prints nothing at all, so the check below that it read every section fails rather than a
 # scan with no heredocs read reporting on bodies as this file's own code.
 _ns_markers(){   # $1 = a suite file -> the path of its markers file
+  local _nsm_out
   _nsm_out="$WORK/heredoc-markers.$(basename "$1")"
   python3 -B "$_NS_SW" heredoc-markers < "$1" > "$_nsm_out" || return 1
   printf '%s\n' "$_nsm_out"
@@ -16682,6 +16683,7 @@ BEGIN {
 }
 EXPORTSCAN
 _ns_export_scan(){
+  local _nsx_m
   _nsx_m="$(_ns_markers "$1")" || { echo "export scan: lib/shell-words.py could not read the heredocs in $1"; return 1; }
   awk -v PRE="$SUITE_PRELUDE_END" -v MARKERS="$_nsx_m" -f "$_NSXAWK" "$1" || echo "export scan: the scan of $1 failed"
 }
