@@ -193,6 +193,25 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('setsid gh -R o/r pr merge 5')).toBe(unresolved)
     expect(await bash('nohupish /opt/homebrew/bin/gh pr merge 5')).toBe(unresolved)
   })
+  test('a gh that is a search pattern followed by the searching tool\'s own flags runs nothing (#2127)', async () => {
+    // The exact command refused on 2026-11-02: gh is grep's pattern, and the -e after it is grep's.
+    expect(await bash('grep -n -e "gh" -e "pipeline" -e "commands" payload/mods/mod-kit/types/*.d.ts')).toBeUndefined()
+    expect(await bash('grep -n -e gh -e pipeline src/a.ts && rg -n gh --glob "*.ts" src')).toBeUndefined()
+    // Flags before a gh subcommand still reach it, by whichever flag takes a value (gh -R o/r pr).
+    // Every case is read before any is compared, so a failure names each case that changed.
+    const flagged = ['setsid gh -R o/r issue comment 5 --body x', 'setsid gh --repo o/r pr merge 5', 'frobwrap gh -e x pr merge 5', 'setsid gh -R o/r api repos/o/r/issues/5/comments -f body=x']
+    expect(await Promise.all(flagged.map(async c => ({ c, r: await bash(c) })))).toEqual(flagged.map(c => ({ c, r: unresolved })))
+    // A real gh call the reader reads is judged wherever it sits in the line.
+    const placed = [
+      'grep -n -e gh README.md | gh issue create --title x --body y',
+      'grep -n -e gh README.md && gh issue create --title x --body y',
+      'grep -n -e gh README.md; gh issue create --title x --body y',
+      'echo $(gh issue create --title x --body y)',
+      'grep -n -e gh README.md && env gh issue create --title x --body y',
+      'grep -n -e gh README.md && /opt/homebrew/bin/gh issue create --title x --body y',
+    ]
+    expect(await Promise.all(placed.map(async c => ({ c, r: await bash(c) })))).toEqual(placed.map(c => ({ c, r: 'run gh issue create' })))
+  })
   test('code the reader cannot read, or that runs gh, git or a database itself, is refused (#834 review of 46f07ff)', async () => {
     expect(await bash(`python3 -c "import subprocess; subprocess.run(['gh', 'pr', 'close', '5'])"`)).toBe('run code that runs gh, git or a database client, which cannot be judged')
     expect(await bash(`node -e "eval(process.argv[1])" x`)).toMatch(/^run code (this reader cannot read|that runs)/)
