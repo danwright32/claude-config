@@ -235,9 +235,11 @@ export const register: Register = on => {
   }).catch(($, e, next) => next.called ? next(e) : neverThrows(
     // A hook that fails is skipped and the row is kept as it came, secrets and all, so a scrub that
     // throws withholds the row's text instead (#1298, L42). Once next was called the scrubbed row
-    // was kept, and that stands, replayed outside neverThrows (#2039). Before next, should
-    // withholding block by block fail, the row goes on as one withheld text, and should that fail,
-    // it is refused, so that catch never throws.
+    // was kept, and that stands, replayed outside neverThrows (#2039). Before next, the row goes on
+    // withheld block by block, each tool result keeping its id. That reads only plain data (the
+    // engine refuses any other row before a hook sees it), so it can fail only in next, and a
+    // second next is answered with that first outcome: the one withheld text below, which has no
+    // ids, never reaches the transcript. It and the refusal are there so the catch never throws.
     () => (e.door !== 'tool-result' && e.door !== 'tool-message') ? next(e) : next({ ...e, message: { ...e.message, content: withheld(e.message?.content) as typeof e.message.content } }),
     () => next({ ...e, message: { ...e.message, content: [{ type: 'text', text: WITHHELD }] as typeof e.message.content } }),
     { deny: WITHHELD },

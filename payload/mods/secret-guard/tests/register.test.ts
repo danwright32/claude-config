@@ -480,6 +480,49 @@ test('a tool result the guard cannot scrub is withheld rather than kept as it wa
   expect(w.stored()).toContain('t4')
 })
 
+// Each tool_result in a withheld row keeps its own block and its id, so no call in the transcript is
+// left with no answer (a request carrying a tool_use with no tool_result for it is refused). The
+// catch's second try, one withheld text, has no ids, and these two pins say why it never reaches
+// the transcript. First: withholding block by block reads only plain data, and the engine refuses a
+// row that is not plain data before any hook sees it, so that first try cannot throw on a row.
+test('a row that is not plain data is refused before the guard sees it, so withholding cannot throw on it (#2039)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  const block: Record<string, unknown> = { type: 'tool_result', tool_use_id: 'a1' }
+  Object.defineProperty(block, 'content', { enumerable: true, get: () => { throw new Error('unreadable') } })
+  const settled = await $.session
+    .append({ door: 'tool-result', origin: { kind: 'tool', tool: 'Bash' }, uuid: 'u5', message: { type: 'user', role: 'user', content: [block] } } as never)
+    .then(() => 'answered', (err: unknown) => String(err))
+  expect(settled).toContain('not plain data')
+})
+
+// Second: the first try fails only in next, and the test world's store beneath always fails (it
+// has no implementation), so this row takes exactly that path. The second try's next is answered
+// with the first outcome, so the store is asked once, and what it keeps is one withheld result per
+// call id.
+test('a withheld row whose store fails keeps one withheld result per call id, never one text (#2039)', withKit, async ($, on) => {
+  const seen: unknown[] = []
+  world(on)
+  on('session.append', ($, e, next) => {
+    seen.push(JSON.parse(JSON.stringify(e.message.content)))
+    return next(e)
+  })
+  await start($)
+  // The null block makes the scrub itself throw, so the row reaches the catch before next.
+  await appendRow($, {
+    door: 'tool-result',
+    origin: { kind: 'tool', tool: 'Bash' },
+    uuid: 'u6',
+    message: { type: 'user', role: 'user', content: [null, { type: 'tool_result', tool_use_id: 'a1', content: `out: ${KNOWN}` }, { type: 'tool_result', tool_use_id: 'a2', content: [{ type: 'text', text: KNOWN }] }] },
+  })
+  const WITHHELD = '[Output withheld: the secret guard could not check it for secrets.]'
+  expect(seen).toEqual([[
+    { type: 'text', text: WITHHELD },
+    { type: 'tool_result', tool_use_id: 'a1', content: WITHHELD },
+    { type: 'tool_result', tool_use_id: 'a2', content: WITHHELD },
+  ]])
+})
+
 // #2039: once next was called the call has already run beneath the guard, so the catch replays what
 // the call settled to, outside neverThrows. Here the tool beneath fails (the test world has nothing
 // below it, so the replay rejects with the engine's own "no implementation"). That failure reaches
