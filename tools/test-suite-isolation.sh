@@ -49,7 +49,12 @@ for v in $VARS; do unsets+=(-u "$v"); done
 NV="$(printf '%s\n' "$VARS" | wc -l | tr -d ' ')"
 # Read from the library rather than typed here; at least the seven the runner exported before
 # #2156 and the claude binary, so a list emptied by mistake cannot pass every case below.
-if [ "$NV" -ge 8 ] && printf '%s\n' "$VARS" | grep -qx WRAPPED_REFUSAL_LEDGER_DIR; then ok
+case "
+$VARS
+" in *"
+WRAPPED_REFUSAL_LEDGER_DIR
+"*) has_wrapped=1 ;; *) has_wrapped=0 ;; esac
+if [ "$NV" -ge 8 ] && [ "$has_wrapped" = 1 ]; then ok
 else bad "the library lists the seams and the claude binary (got $NV: $VARS)"; fi
 
 # ---- 1. arming isolates a suite started on its own ----
@@ -144,10 +149,13 @@ says "naming the wrapped command record" "~/.claude/state/wrapped-commands/refus
 says "and the spool beside ~/.claude" "~/.claude-issue-spool/" "$out"
 
 # From inside a run that already exported every seam (as the runner does), the check still measures
-# the suite on its own: the inherited seams are cleared, so the unarmed suite is still caught.
-out="$(env "${full[@]}" HOOK_TESTS_RUNNING=1 HOME="$W/realhome" bash "$CHECK" "$W/test-unarmed.sh" 2>&1)"; rc=$?
+# the suite on its own: the inherited seams are cleared, so the unarmed suite is still caught. The
+# runner's run id is cleared too: inherited, it made the spool refuse its real folder, so the
+# spool write went unseen whenever this suite ran inside a full run.
+out="$(env "${full[@]}" HOOK_TESTS_RUNNING=1 CLAUDE_SUITE_RUN_ID=inherited HOME="$W/realhome" bash "$CHECK" "$W/test-unarmed.sh" 2>&1)"; rc=$?
 eq "inherited seams do not hide a suite's writes from the check" 1 "$rc"
 says "it still names the record" "refusals.tsv" "$out"
+says "and an inherited run id does not hide the spool write" "~/.claude-issue-spool/" "$out"
 for v in $VARS; do
   [ "$v" = SYNC_CLAUDE_BIN ] && continue
   [ -e "$W/set-$v" ] && bad "the check let a suite write into an inherited seam ($v)"

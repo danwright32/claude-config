@@ -38,7 +38,11 @@ for _g in "$real_home/.gitconfig" "${XDG_CONFIG_HOME:-$real_home/.config}/git/co
   [ -f "$_g" ] && { git_global="$_g"; break; }
 done
 
-unsets=(-u CLAUDE_HOME -u HOOK_TESTS_RUNNING)
+# What the runner hands a suite besides the seams is cleared as well, so a check run from inside a
+# full run sees what a suite started in a shell does: CLAUDE_SUITE_RUN_ID alone makes the spool
+# refuse its real folder, which would hide a suite that writes there.
+unsets=(-u CLAUDE_HOME -u HOOK_TESTS_RUNNING -u CLAUDE_SUITE_RUN_ID -u HOOK_TESTS_DEADLINE
+  -u HOOK_TESTS_LIVE_BRACKETED -u HOOK_TESTS_SLOTS -u SUITE_WALL_STARTED -u SUITE_LOCK_WAIT)
 for _v in $(suite_isolation_vars); do unsets+=(-u "$_v"); done
 
 worst=0

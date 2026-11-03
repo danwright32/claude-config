@@ -66,7 +66,7 @@ suite_isolation_complete(){
 # own deadline does, so a value the runner or the suite itself chose wins. Refuses (2) a folder that
 # is empty, the root or HOME, so no seam can ever be pointed at the real records by a bad argument.
 suite_isolate(){
-  local dir="${1:-}" mode="${2:-}" var rel
+  local dir="${1:-}" mode="${2:-}" var rel seams
   case "${dir%/}" in
     ''|/|"${HOME%/}") echo "suite-isolation: refusing to point the seams at '$dir'." >&2; return 2 ;;
   esac
@@ -74,11 +74,14 @@ suite_isolate(){
     every|unset) ;;
     *) echo "suite-isolation: mode '$mode' is neither every nor unset." >&2; return 2 ;;
   esac
+  # Read into a variable first, never through a process substitution: bash 3.2 can drop what the
+  # caller prints next when a child its shell never waits for exits (#1984, #2040).
+  seams="$(suite_isolation_seams)"
   while read -r var rel; do
     [ "$mode" = unset ] && [ -n "${!var:-}" ] && continue
     printf -v "$var" '%s' "${dir%/}/$rel"
     export "${var?}"
-  done < <(suite_isolation_seams)
+  done <<< "$seams"
   if [ "$mode" = every ] || [ -z "${SYNC_CLAUDE_BIN:-}" ]; then
     suite_isolation_no_claude
   fi
