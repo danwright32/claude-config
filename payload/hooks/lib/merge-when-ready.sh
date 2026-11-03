@@ -1182,12 +1182,12 @@ turn_moved(){
   line_note "$t"
 }
 
-# A CONFLICT CONFINED TO README.md's MODS TABLE ROWS IS MERGED HERE (claude-config#1867). Each mod's
-# description is one long line of that table, so two pull requests touching one mod conflict on it,
-# and its issue number list conflicts every time: on 2026-10-28 #1819, #1835 (twice), #1850 and #1852
-# each stopped here on GitHub's refusal to update, and each cost about an hour by hand. Reshaping the
-# README would not have helped, since two pull requests adding an issue number to one mod still meet
-# on one line. So when GitHub refuses an update, base is merged into the head this run judged, in a
+# A CONFLICT CONFINED TO README.md's MODS TABLE ROWS IS MERGED HERE (claude-config#1867). Two pull
+# requests touching one mod meet in its row of that table, and its issue number list meets every time
+# both add a number: on 2026-10-28 #1819, #1835 (twice), #1850 and #1852 each stopped here on GitHub's
+# refusal to update, and each cost about an hour by hand. Wrapping the rows onto short lines (#2108,
+# an HTML table of wrapped cells) lets edits to different lines of one description merge cleanly, but
+# two pull requests adding an issue number to one mod still meet in its Issue cell. So when GitHub refuses an update, base is merged into the head this run judged, in a
 # throwaway clone this run owns (never the session's checkout, whose objects it only borrows, read
 # only), and the merge is pushed only when README.md is the ONE file in conflict and
 # lib/readme-rows-merge.py resolves every hunk of it as rows of the mods table (exit 0), having
