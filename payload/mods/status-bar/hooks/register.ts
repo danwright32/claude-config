@@ -155,17 +155,42 @@ const COMPACT_TOOL_SPEC = {
     'Main session only: a subagent writes the note and hands back instead.',
   inputSchema: {
     type: 'object',
-    properties: { note: { type: 'string', description: `The absolute path of the handoff note, <your scratchpad folder>${NOTE_TAIL}.` } },
+    properties: { note: { type: 'string', description: `The absolute path of handoff.md at the root of your scratchpad folder, ending ${NOTE_TAIL}.` } },
     required: ['note'],
   },
 } as const
 
-// Why the compact tool will not queue a Compact for this call, or undefined when it will.
-const compactRefusal = async ($: EngineInterface, e: { agentId?: string; note?: unknown }): Promise<string | undefined> => {
-  if (e.agentId !== undefined) return 'A subagent never compacts: write handoff.md in your scratchpad folder, then hand back, saying you stopped at the context line, so the main session gives the rest to a fresh agent.'
-  if (!interactive) return 'This session has no screen, so a queued Compact would never run here.'
-  const note = typeof e.note === 'string' ? e.note.trim() : ''
-  if (!note.startsWith('/') || !note.endsWith(NOTE_TAIL)) return `The handoff note is handoff.md at the root of your scratchpad folder: pass its absolute path, ending ${NOTE_TAIL}${note ? `, not ${note}` : ''}.`
+// #2071: the names the note's path is taken under. note is the one the schema declares; handoff is
+// the word this tool's own text uses for the note, and a session was measured passing the path
+// under it (a claude-config transcript, 2026-11-02), then reading a refusal that named no parameter
+// as a fault in the path. Either name's path is judged exactly as note's always was.
+const NOTE_KEYS = ['note', 'handoff'] as const
+// Fields Claude Code puts on a tool call beside the model's own arguments.
+const CALL_KEYS = new Set(['tool', 'tool_use_id', 'agentId', 'consent'])
+const notePath = (e: Record<string, unknown>): { note: string } | { deny: string } => {
+  const given = [...new Set(NOTE_KEYS.map(k => e[k]).filter((v): v is string => typeof v === 'string' && v.trim() !== '').map(v => v.trim()))]
+  if (given.length > 1) return { deny: `Pass the handoff note's path once, as note: this call gave both ${given.join(' and ')}.` }
+  const note = given[0]
+  if (note === undefined) {
+    const others = Object.keys(e).filter(k => !CALL_KEYS.has(k) && e[k] !== undefined)
+    return { deny: `Pass the absolute path of handoff.md at the root of your scratchpad folder as note, ending ${NOTE_TAIL}${others.length ? `: this call passed ${others.join(', ')}, and no note` : ''}.` }
+  }
+  if (!note.startsWith('/') || !note.endsWith(NOTE_TAIL)) return { deny: `The handoff note is handoff.md at the root of your scratchpad folder: pass its absolute path as note, ending ${NOTE_TAIL}, not ${note}.` }
+  return { note }
+}
+
+// Why the compact tool will not queue a Compact for this call, or the note's path when it will.
+const compactRefusal = async ($: EngineInterface, e: Record<string, unknown>): Promise<{ note: string } | { deny: string }> => {
+  if (e.agentId !== undefined) return { deny: 'A subagent never compacts: write handoff.md in your scratchpad folder, then hand back, saying you stopped at the context line, so the main session gives the rest to a fresh agent.' }
+  if (!interactive) return { deny: 'This session has no screen, so a queued Compact would never run here.' }
+  const path = notePath(e)
+  if ('deny' in path) return path
+  const why = await noteRefusal($, path.note)
+  return why === undefined ? path : { deny: why }
+}
+
+// Why the note at this path will not do: missing, unreadable, empty, or older than what has been decided.
+const noteRefusal = async ($: EngineInterface, note: string): Promise<string | undefined> => {
   let st: { kind: string; size: number; mtimeMs: number }
   try {
     st = await $.fs.stat(note)
@@ -738,16 +763,16 @@ export const register: Register = on => {
     // Answered here and never passed down, so the guards beneath are asked through mod-kit's screen.
     const screened = await $.modkit.screen(e)
     if (screened) return screened
-    const input = e as unknown as { agentId?: string; note?: unknown }
-    const why = await compactRefusal($, input)
-    if (why) return { deny: why }
+    const why = await compactRefusal($, e as unknown as Record<string, unknown>)
+    if ('deny' in why) return why
+    const { note } = why
     await setCompactQueued($, true)
-    await setFollowUp($, String(input.note).trim())
+    await setFollowUp($, note)
     await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
     return {
       result:
         'Compact queued: it runs when this turn ends, the same as pressing Compact on the status bar, and Dan can cancel it there. ' +
-        `End this reply now; the conversation after it starts from the summary, and ${String(input.note).trim()} holds what you decided. ` +
+        `End this reply now; the conversation after it starts from the summary, and ${note} holds what you decided. ` +
         'In a /goal run the turn goes on until the goal is met or stopped, so the Compact waits until then.',
     }
   })
