@@ -74,6 +74,7 @@ import {
   notLookWhy,
 } from '../hooks/rules.ts'
 import * as allRules from '../hooks/rules.ts'
+import { HELD_2141_AFTER, HELD_2141_BEFORE } from './held-2141-fixture.ts'
 
 // The design round guard's rules (claude-config#978), each on its own: which files change how a
 // screen looks, what an issue or branch is keyed by, and what Claude and Dan read.
@@ -2175,4 +2176,54 @@ test('#2038: a hook moved into a named const and registered with on(...).catch p
   const inRegister = edited(SAVE_AFTER, 'export const register: Register = on => {', 'export const register: Register = (on, tellLater: (w: string) => Promise<string>) => {')
   const later = edited(inRegister, '  on(\'tool.call\'', "  tellLater('Saved for later.').then(t => $.ui.toast(t))\n  on('tool.call'")
   expect(holdOf([], 'register.ts', later, edited(later, 'Saved for later.', 'Kept for later.'))).toBe('worded')
+})
+
+// #2161 (Dan, 2026-11-03, approving the narrowing): mod-kit's #2141 edit was held for its words,
+// though every new one is a reason its shell reader gives (`{ unresolved: '...' }`) that nothing
+// draws or says: a `text` key beside them is a message's key, so the reading followed each value
+// whole and swept the reasons in. A new word passes where only such a key holds it and no message
+// reads that key; one a drawing call or message can reach stays held.
+const plus = (text: string, ...lines: string[]) => `${text}${lines.join('\n')}\n`
+// Replaces `from` once, and fails where it is not there, so no case passes on an edit never made.
+const swapIn = (text: string, from: string, to: string) => {
+  if (!text.includes(from)) throw new Error(`not in the fixture: ${from}`)
+  return text.replace(from, () => to)
+}
+
+test('#2161: new words only a refusal reason holds, which nothing reads, pass', () => {
+  expect(modHookTsHold([], 'commands.ts', HELD_2141_BEFORE, HELD_2141_AFTER)).toBeUndefined()
+  // Read beside another of the mod's files that never reads the reason.
+  const other = { name: 'other.ts', text: "import { HELD } from './commands.ts'\nexport const x = 1\n" }
+  expect(holdOf([other], 'commands.ts', HELD_2141_BEFORE, HELD_2141_AFTER)).toBe('passes')
+})
+
+test('#2161: a near copy whose new reason reaches a drawing call or a message is still held', () => {
+  // Handed to a band row.
+  const row = "export const row = ($: EngineInterface, why: string) => $.modkit.bandRow([{ text: why }])"
+  expect(holdOf([], 'commands.ts', plus(HELD_2141_BEFORE, row), plus(HELD_2141_AFTER, row, 'export const shownWhy = ($: EngineInterface, line: Line) => row($, printed(line).unresolved)'))).toBe('look')
+  // Said in a toast, or put under a message's key.
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(printed(line).unresolved)'))).toBe('worded')
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const shown = (line: Line) => ({ text: printed(line).unresolved })'))).toBe('worded')
+  // Said in a toast from another of the mod's files.
+  const teller = { name: 'tell.ts', text: "import type { EngineInterface } from 'claude-code'\nimport { printed } from './commands.ts'\nexport const tell = ($: EngineInterface, line: Line) => $.ui.toast(printed(line).unresolved)\n" }
+  expect(holdOf([teller], 'commands.ts', HELD_2141_BEFORE, swapIn(HELD_2141_AFTER, 'const printed =', 'export const printed ='))).toBe('worded')
+  // Copied under another key a toast then reads.
+  expect(
+    holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'const shown = (line: Line) => ({ why: printed(line).unresolved })', 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(shown(line).why)')),
+  ).toBe('worded')
+  // The whole reason handed to a message.
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(JSON.stringify(printed(line)))'))).toBe('worded')
+})
+
+test('#2161: a new reason handed through a call, under a message key or beside a word gone is still held', () => {
+  // Handed to a function inside the reason's value.
+  const shouted = plus(swapIn(HELD_2141_AFTER, "{ unresolved: 'a here string with no text' }", "{ unresolved: shout('a here string with no text') }"), 'const shout = (w: string) => w.trim()')
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, shouted)).toBe('worded')
+  // Under a key a person reads: a refusal's deny stays held as #1864 recorded.
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, swapIn(HELD_2141_AFTER, "{ unresolved: 'a here string with no text' }", "{ deny: 'a here string with no text' }"))).toBe('worded')
+  // A toast's words taken away beside the new reasons.
+  const toast = "export const tell = ($: EngineInterface) => $.ui.toast('Saved the note.')"
+  expect(holdOf([], 'commands.ts', plus(HELD_2141_BEFORE, toast), HELD_2141_AFTER)).toBe('worded')
+  // A new word said in a toast beside the new reasons.
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, "export const tell = ($: EngineInterface) => $.ui.toast('Saved the note.')"))).toBe('worded')
 })

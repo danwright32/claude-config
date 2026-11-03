@@ -1341,6 +1341,12 @@ type ModRead = {
   // What function k returns: its expression body, or each of its own `return`s' values.
   returns: (k: number) => Span[]
   cutCode: (s: Span) => string
+  // #2161: what each string, template text and JSX text holds, where it is; the file as written, and
+  // with strings and comments blanked; and the innermost bracket open around an offset.
+  strings: Span[]
+  text: string
+  blank: string
+  inner: (at: number) => number | undefined
 }
 
 // One mod hook file as drawsChange reads it, or null for one its reader cannot follow.
@@ -2201,7 +2207,15 @@ const readMod = (f: ModFile): ModRead | null => {
   // Every string, template text and JSX text inside a span that a person reads (#1841): every mod
   // hook file's messages are read so since #1864, a .tsx or .jsx one's too.
   const stringsIn = ([a, b]: Span): string[] => spans.strings.filter(([x, y]) => a <= x && y <= b && heard([x, y])).map(([x, y]) => text.slice(x, y))
-  return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode }
+  const inner = (at: number): number | undefined => {
+    let o: number | undefined
+    for (const [a, c] of pairs) {
+      if (a >= at) break
+      if (c > at) o = a
+    }
+    return o
+  }
+  return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode, strings: spans.strings, text, blank, inner }
 }
 
 /**
@@ -2231,8 +2245,10 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
 // line builder, and each top level declaration drawn) and the values followed into them, apart, with
 // the file as read (no `r` for a file not among `files`). Null where any of the mod's files cannot be
 // read. With `seeds` 'messages' the same reading starts from where a message a person reads is handed
-// its words (#1823) rather than from what is drawn.
-const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'messages' = 'units'): { r?: ModRead; parts: Span[]; followed: Span[] } | null => {
+// its words (#1823) rather than from what is drawn. `reached` is every place read so in each of the
+// mod's files, with the file as read: the seeds, the top level declarations reached and the values
+// followed (#2161, which asks what a message reads beside what it says).
+const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'messages' = 'units'): { r?: ModRead; parts: Span[]; followed: Span[]; reached: [ModRead, Span][] } | null => {
   const read = new Map<string, ModRead>()
   for (const f of files) {
     const r = readMod(f)
@@ -2401,15 +2417,21 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
     const r = read.get(file) as ModRead
     for (const s of r.statements) if (s.name === x && !s.isType) for (const y of r.refs([s.from, s.to])) reach(file, y)
   }
+  const reached: [ModRead, Span][] = []
+  for (const g of read.values()) {
+    for (const u of g[seeds]) reached.push([g, u])
+    for (const s of g.statements) if (s.name !== undefined && drawn.has(`${g.name}\n${s.name}`)) reached.push([g, [s.from, s.to]])
+    for (const s of extra.get(g.name)?.values() ?? []) reached.push([g, s])
+  }
   const r = read.get(name)
-  if (!r) return { parts: [], followed: [] }
+  if (!r) return { parts: [], followed: [], reached }
   const parts = new Map(r[seeds].map(u => [`${u[0]}:${u[1]}`, u]))
   for (const s of r.statements) if (s.name !== undefined && drawn.has(`${name}\n${s.name}`)) parts.set(`${s.from}:${s.to}`, [s.from, s.to])
   const followed = new Map(extra.get(name) ?? [])
   for (const key of parts.keys()) followed.delete(key)
   // A followed value given the same way twice (two returns of `undefined`) is one value (#1576),
   // which drawnParts reads as one.
-  return { r, parts: [...parts.values()], followed: [...followed.values()] }
+  return { r, parts: [...parts.values()], followed: [...followed.values()], reached }
 }
 
 // The names each import in `text` binds, as the file and the name it takes them from; type only
@@ -2518,35 +2540,125 @@ export const messageWordingSame = (files: readonly ModFile[], name: string, befo
  */
 export const messageWordings = (files: readonly ModFile[], name: string, before: string, after: string): { said: string[]; says: string[] } | null => {
   const others = files.filter(f => f.name !== name)
-  const wording = (text: string): string[] | null => {
-    const d = drawnOf([...others, { name, text }], name, 'messages')
-    if (!d?.r) return null
-    const r = d.r
-    // Everything a call is handed of each top level function that sends a message, itself or through
-    // another such function (the goal tracker's waitingOnYou, through notifySoon's promise, to
-    // notify's terminal-notifier, which the values followed do not reach).
-    const fnsAt = r.statements.filter(s => s.name !== undefined && !s.isType)
-    const sends = new Set<string>()
-    for (let grew = true; grew; ) {
-      grew = false
-      for (const s of fnsAt) {
-        if (sends.has(s.name as string)) continue
-        const inS = (p: number) => s.from <= p && p < s.to
-        if (r.messages.some(([a]) => inS(a)) || [...sends].some(x => (r.calls.get(x) ?? []).some(inS))) {
-          sends.add(s.name as string)
-          grew = true
-        }
+  const said = messageReading(others, name, before)
+  const says = messageReading(others, name, after)
+  return said && says ? { said: said.words, says: says.words } : null
+}
+
+// One text of the mod hook file `name` as messageWordings reads it, beside the mod's other hook files
+// `others`: the file as read, the words of every message a person reads from it, each once and
+// sorted, and every place in the mod's files that reading reached (#2161). Null where any of the
+// texts cannot be read.
+type MessageReading = { r: ModRead; words: string[]; reached: [ModRead, Span][] }
+const messageReading = (others: readonly ModFile[], name: string, text: string): MessageReading | null => {
+  const d = drawnOf([...others, { name, text }], name, 'messages')
+  if (!d?.r) return null
+  const r = d.r
+  // Everything a call is handed of each top level function that sends a message, itself or through
+  // another such function (the goal tracker's waitingOnYou, through notifySoon's promise, to
+  // notify's terminal-notifier, which the values followed do not reach).
+  const fnsAt = r.statements.filter(s => s.name !== undefined && !s.isType)
+  const sends = new Set<string>()
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const s of fnsAt) {
+      if (sends.has(s.name as string)) continue
+      const inS = (p: number) => s.from <= p && p < s.to
+      if (r.messages.some(([a]) => inS(a)) || [...sends].some(x => (r.calls.get(x) ?? []).some(inS))) {
+        sends.add(s.name as string)
+        grew = true
       }
     }
-    const spans: Span[] = [...d.parts, ...d.followed]
-    for (const x of sends) for (const p of r.calls.get(x) ?? []) spans.push(...(r.args(p) ?? []))
-    // Each wording once: the same words moved into a helper, or said from one more place, say
-    // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
-    return [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort()
   }
-  const said = wording(before)
-  const says = wording(after)
-  return said && says ? { said, says } : null
+  const spans: Span[] = [...d.parts, ...d.followed]
+  const handed: Span[] = []
+  for (const x of sends) for (const p of r.calls.get(x) ?? []) handed.push(...(r.args(p) ?? []))
+  spans.push(...handed)
+  // Each wording once: the same words moved into a helper, or said from one more place, say
+  // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
+  return { r, words: [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort(), reached: [...d.reached, ...handed.map(s => [r, s] as [ModRead, Span])] }
+}
+
+// #2161: a whole record handed to a message, or its values taken without naming its keys, which the
+// key reading below cannot follow.
+const WHOLE_RECORD = /\bJSON\s*\.\s*stringify\b|\bObject\s*\.\s*(?:values|entries)\b/
+// #2161: a member read (`d.unresolved`) that is the whole value of a field, the field's key captured.
+const COPIED_INTO = /[{,]\s*([A-Za-z_$][\w$]*)\s*:\s*[A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*\s*\??\.\s*$/
+
+/**
+ * Whether the words a change to the mod hook file `name` brings into its messages are only the
+ * reasons a refusal or reader gives, which nothing a person reads is handed (#2161; Dan, 2026-11-03,
+ * approving this narrowing: mod-kit's #2141 shell reader was held for its `{ unresolved: '...' }`
+ * reasons, swept in because a `text` key beside them is a message's key and its value was followed
+ * whole). `was` and `now` are the file before and after, as messageReading reads them. True only
+ * where no word is taken away, so a changed wording stays held; where every copy of each new word in
+ * `now` is a string that is, itself, the value of a field of an object literal (a ternary's branch or
+ * a template's part of it), outside any call in that value, any message and anything drawn, whose key
+ * a person never reads (not WORD_KEY, so `deny`, `reason` and `text` stay held as #1864 recorded);
+ * and where nothing the message reading reaches, in any of the mod's files, reads such a key, but to
+ * define it or copy it whole into another such key, which is then read the same way. drawsChange has
+ * already found nothing new drawn. Not followed, so held: a record handed whole to a message
+ * (JSON.stringify, Object.values or Object.entries anywhere reached). Not seen: a key read by a
+ * computed name (`made[k]`).
+ */
+const reasonsOnly = (was: MessageReading, now: MessageReading): boolean => {
+  if (was.words.some(x => !now.words.includes(x))) return false
+  const added = new Set(now.words.filter(x => !was.words.includes(x)))
+  if (!added.size) return false
+  const r = now.r
+  const keys = new Set<string>()
+  const found = new Set<string>()
+  for (const s of r.strings) {
+    const word = r.text.slice(s[0], s[1])
+    if (!added.has(word)) continue
+    const k = reasonKey(r, s)
+    if (k === undefined) return false
+    keys.add(k)
+    found.add(word)
+  }
+  if (found.size !== added.size) return false
+  if (now.reached.some(([g, [a, b]]) => WHOLE_RECORD.test(g.blank.slice(a, b)))) return false
+  const queue = [...keys]
+  for (let k = queue.pop(); k !== undefined; k = queue.pop()) {
+    const at = new RegExp(`(?<![\\w$])${k}(?![\\w$])`, 'g')
+    for (const [g, [a, b]] of now.reached)
+      for (const m of g.blank.slice(a, b).matchAll(at)) {
+        const i = a + (m.index as number)
+        const lead = g.blank.slice(Math.max(0, i - 200), i)
+        const rest = g.blank.slice(i + k.length, i + k.length + 200)
+        if (/[{,]\s*$/.test(lead) && /^\s*:/.test(rest)) continue
+        const into = COPIED_INTO.exec(lead)
+        if (!into || !/^\s*[,}]/.test(rest) || WORD_KEY.test(into[1] as string)) return false
+        if (!keys.has(into[1] as string)) {
+          keys.add(into[1] as string)
+          queue.push(into[1] as string)
+        }
+      }
+  }
+  return true
+}
+
+// The key of the object literal field whose value is the string at `s`, itself (#2161), or undefined
+// where it is anything else: inside a call, an array or a tagged template in that value, in a
+// function's body, a message or anything drawn, or under a key a person reads (WORD_KEY).
+const reasonKey = (r: ModRead, [x, y]: Span): string | undefined => {
+  const o = r.inner(x)
+  if (o === undefined || r.blank[o] !== '{' || r.fns.some(f => f.body === o)) return undefined
+  if ([...r.messages, ...r.units].some(([a, b]) => a <= x && y <= b)) return undefined
+  const q = x - 1
+  if (r.blank[q] === '`' && /[\w$)\]]/.test(r.blank.slice(0, q).trimEnd().slice(-1))) return undefined
+  // The field the string is in: from the last comma at the object's own depth.
+  let sep = o
+  let depth = 0
+  for (let i = o + 1; i < x; i++) {
+    const c = r.blank[i] as string
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth--
+    else if (c === ',' && depth === 0) sep = i
+  }
+  const m = /^\s*([A-Za-z_$][\w$]*)\s*:/.exec(r.blank.slice(sep + 1, x))
+  const k = m?.[1]
+  return k === undefined || WORD_KEY.test(k) ? undefined : k
 }
 
 // The longest the words a hold names may run (#1859): one short phrase the refusal can carry.
@@ -2602,14 +2714,19 @@ export type Worded = { file: string; words: string }
  * reads, pass; and only the words a person reads count (Dan, 2026-10-28: "Narrow it first"), so a
  * regular expression, a value compared, a command's words or a separator a message is computed from
  * passes. A file any of them cannot be read in is held. The one reading of such a change: the yes or
- * no wrapper that stood beside it, which only tests called, is gone (#1911).
+ * no wrapper that stood beside it, which only tests called, is gone (#1911). New words a message
+ * reading reaches only as the reasons a refusal or reader gives, in fields no person reads, pass too
+ * (reasonsOnly, #2161; Dan, 2026-11-03); a record handed whole to a message stays held.
  */
 export const modHookTsHold = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): HookHold | undefined => {
   if (drawsChange(files, name, before, after)) return { look: true }
-  const w = messageWordings(files, name, before ?? '', after ?? '')
-  if (!w) return { look: true }
-  if (w.said.length === w.says.length && w.said.every((x, i) => x === w.says[i])) return undefined
-  return { worded: heldWords(w.said, w.says) }
+  const others = files.filter(f => f.name !== name)
+  const was = messageReading(others, name, before ?? '')
+  const now = messageReading(others, name, after ?? '')
+  if (!was || !now) return { look: true }
+  if (was.words.length === now.words.length && was.words.every((x, i) => x === now.words[i])) return undefined
+  if (reasonsOnly(was, now)) return undefined
+  return { worded: heldWords(was.words, now.words) }
 }
 
 /** A call written out whole, in a fixed order: its tool, every key of its input, its folder and session. */
