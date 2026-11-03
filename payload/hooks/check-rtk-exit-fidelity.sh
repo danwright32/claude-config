@@ -50,7 +50,9 @@
 #   tree    rewritten, not installed on either Mac, so a probe would only ever report a skip.
 set -uo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
+HERE="$(cd "${HERE:-/}" && pwd)"
 RTK_BIN="${RTK_FIDELITY_RTK:-$(command -v rtk 2>/dev/null)}"
 HOOK="${RTK_FIDELITY_HOOK:-$HERE/rtk-rewrite.sh}"
 
