@@ -57,19 +57,19 @@ run_cases() { printf '%s\n' "$@" | python3 "$TMPROOT/cases.py" "$HELPER" 2>&1; }
 nth() { sed -n "${2}p" <<< "$1"; }
 
 out="$(run_cases \
-  '{"id":"R_kgDOTB20Bw","name":"slate","owner":{"id":"MDQ6","login":"acme"}}' \
+  '{"id":"R_kgDOTB20Bw","name":"widgets","owner":{"id":"MDQ6","login":"acme"}}' \
   '{"nameWithOwner":"acme/site","name":"ignored","owner":{"login":"ignored"}}' \
-  '{"nameWithOwner":"noslash","name":"slate","owner":{"login":"acme"}}' \
-  '{"id":"R_kgDOTB20Bw","name":"slate"}' \
-  '{"name":"slate","owner":{"id":"MDQ6"}}' \
+  '{"nameWithOwner":"noslash","name":"widgets","owner":{"login":"acme"}}' \
+  '{"id":"R_kgDOTB20Bw","name":"widgets"}' \
+  '{"name":"widgets","owner":{"id":"MDQ6"}}' \
   '{"owner":{"login":"acme"}}' \
-  '{"name":"slate","owner":{"login":""}}' \
+  '{"name":"widgets","owner":{"login":""}}' \
   'null' \
   '{"name":"a/b","owner":{"login":"acme"}}' \
-  '{"name":"slate","owner":"acme"}' \
-  '{"nameWithOwner":"acme/","name":"slate","owner":{"login":"acme"}}')"
+  '{"name":"widgets","owner":"acme"}' \
+  '{"nameWithOwner":"acme/","name":"widgets","owner":{"login":"acme"}}')"
 check_eq "#2065 gh's real closingIssuesReferences shape, owner.login and name with no nameWithOwner, gives the slug" \
-  "acme/slate" "$(nth "$out" 1)"
+  "acme/widgets" "$(nth "$out" 1)"
 check_eq "nameWithOwner, where gh sends it, is the slug" "acme/site" "$(nth "$out" 2)"
 case "$(nth "$out" 3)" in "refused: "*nameWithOwner*) r=refused ;; *) r="$(nth "$out" 3)" ;; esac
 check_eq "a nameWithOwner that is not owner/name is refused, never passed on or guessed around" "refused" "$r"
@@ -80,7 +80,7 @@ check_eq "an owner with no login is refused, naming owner.login" "refused" "$r"
 case "$(nth "$out" 6)" in "refused: "*name*) r=refused ;; *) r="$(nth "$out" 6)" ;; esac
 check_eq "a repository with no name is refused, naming name" "refused" "$r"
 case "$(nth "$out" 7)" in "refused: "*) r=refused ;; *) r="$(nth "$out" 7)" ;; esac
-check_eq "an empty login is refused, never joined into '/slate'" "refused" "$r"
+check_eq "an empty login is refused, never joined into '/widgets'" "refused" "$r"
 case "$(nth "$out" 8)" in "refused: "*) r=refused ;; *) r="$(nth "$out" 8)" ;; esac
 check_eq "no repository object at all is refused" "refused" "$r"
 case "$(nth "$out" 9)" in "refused: "*) r=refused ;; *) r="$(nth "$out" 9)" ;; esac
@@ -96,10 +96,10 @@ check_eq "the refusal is a ValueError, so every caller's existing ValueError han
 # closing-keyword.py pr: a closing reference whose repository cannot be read stops the check (exit
 # 3) rather than reading as a pull request that closes nothing.
 CK="$DIR/lib/closing-keyword.py"
-printf '{"body":"Closes acme/slate#4","closingIssuesReferences":[{"number":4,"repository":{"id":"R_x","name":"slate"}}]}' \
+printf '{"body":"Closes acme/widgets#4","closingIssuesReferences":[{"number":4,"repository":{"id":"R_x","name":"widgets"}}]}' \
   | python3 "$CK" pr acme/site >/dev/null 2>&1; rc=$?
 check_eq "closing-keyword: a closing reference with no owner stops the check" "3" "$rc"
-out="$(printf '{"body":"Closes acme/slate#4","closingIssuesReferences":[{"number":4,"repository":{"id":"R_x","name":"Slate","owner":{"id":"U","login":"Acme"}}}]}' \
+out="$(printf '{"body":"Closes acme/widgets#4","closingIssuesReferences":[{"number":4,"repository":{"id":"R_x","name":"Widgets","owner":{"id":"U","login":"Acme"}}}]}' \
   | python3 "$CK" pr acme/site 2>&1)"; rc=$?
 check_eq "closing-keyword: a cross repository close in gh's real shape is matched, so nothing is reported" "0 " "$rc $out"
 
@@ -112,15 +112,15 @@ spec = importlib.util.spec_from_file_location("sleep_report", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 items = [
-    {"number": 1, "repository": {"name": "Slate", "owner": {"login": "Acme"}}},
+    {"number": 1, "repository": {"name": "Widgets", "owner": {"login": "Acme"}}},
     {"number": 2},
-    {"number": 3, "repository": {"id": "R_x", "name": "slate"}},
+    {"number": 3, "repository": {"id": "R_x", "name": "widgets"}},
 ]
 print(json.dumps(mod.refs(items, "acme/Site")))
 PY
 out="$(python3 "$TMPROOT/refs.py" "$DIR/lib/sleep-report.py" 2>&1)"
 check_eq "sleep-report: own repository for none, the slug for a readable one, and an unreadable one left out" \
-  '[["acme/slate", 1], ["acme/site", 2]]' "$out"
+  '[["acme/widgets", 1], ["acme/site", 2]]' "$out"
 
 # ---- the scan, on a planted hand written join ----
 mkdir -p "$TMPROOT/scan/payload/hooks/lib"

@@ -11,7 +11,7 @@ hand-rolled-slug.py fails the suite on the next hook that writes its own (L613).
 slug(repository) returns "owner/name" in the case GitHub gave it (a caller that compares slugs
 lowercases them itself). nameWithOwner is used when it is present; otherwise owner.login and name.
 Anything that cannot give a whole slug raises RepoSlugError, which names the field it could not
-read: never a half slug such as "/slate", and never a guess. What an ABSENT repository means (often
+read: never a half slug such as "/widgets", and never a guess. What an ABSENT repository means (often
 "the pull request's own") is the caller's decision, so the caller checks for that before asking.
 """
 
