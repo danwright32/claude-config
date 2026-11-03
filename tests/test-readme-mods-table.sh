@@ -10,8 +10,9 @@
 #      file and the merge helper agree on one shape, and every row has three cells.
 #   2. No line of the table, from <table> to </table>, is longer than 200 characters, and the check
 #      that says so is seen to fire on a fixture holding one long line.
-#   3. Every row is exactly what render_row writes for its cells, so a row hand edited into another
-#      shape (an unwrapped cell, a missing blank line) is caught here, not in a later merge.
+#   3. Every cell's lines are ones the resolver could write: within 100 characters where they can
+#      be broken, none after the first able to start a markdown block, none ending in a backslash.
+#      Not a fresh wrap, since a cell merged line by line keeps the lines each side wrote.
 #   4. A markdown pipe table is refused by the reader, so a row pasted in the old shape fails.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -92,20 +93,36 @@ fixture = ["<table>", "<thead>", rr.HEADER, "</thead>", "<tbody>", "x" * (LIMIT 
 report(long_lines(fixture, table_span(fixture)) == [(6, LIMIT + 1)],
        "the line limit check fires on a table line one character over")
 
-# 3. Every row is exactly what render_row writes for its cells.
+# 3. Every cell's lines are ones the resolver could have written. Not a fresh wrap of the cell: a
+# cell the resolver merged line by line keeps the lines each side wrote. What matters is that each
+# line is within WIDTH where it can be broken, that no line after a cell's first could start a
+# block of its own (a list, a heading, a fence), and that none ends in a backslash (a hard break).
+def bad_lines(cell_lines):
+    out = []
+    for n, line in enumerate(cell_lines):
+        if len(line) > rr.WIDTH and len(rr.wrap(line)) > 1:
+            out.append("a line of %d characters that could be broken" % len(line))
+        if n > 0 and not rr.line_may_start(line):
+            out.append("a line starting %r, which could begin a block" % line[:12])
+        if line.endswith("\\"):
+            out.append("a line ending in a backslash")
+    return out
+
+
 if rows is not None:
-    drift = []
-    for key, cells, cell_lines, row_lines in rows:
-        if rr.render_row(cells) != row_lines:
-            drift.append(key)
-    report(not drift, "every row is written as render_row writes it%s" % ((": not " + ", ".join(drift)) if drift else ""))
-    # and the check sees a row whose description was left on one long line
+    drift = ["%s (%s)" % (r[0], b[0]) for r in rows for b in [sum((bad_lines(cl) for cl in r[2]), [])] if b]
+    report(not drift, "every cell's lines are within %d where breakable and start no block%s" % (
+        rr.WIDTH, (": not " + ", ".join(drift)) if drift else ""))
+    # and the check sees a description left on one long line, and a line that would start a list
     key, cells, cell_lines, row_lines = max(rows, key=lambda r: len(r[1][1]))
-    joined = row_lines[:]
-    d0 = joined.index(cell_lines[1][0])
-    joined[d0:d0 + len(cell_lines[1])] = [cells[1]]
-    report(len(cell_lines[1]) > 1 and rr.render_row(cells) != joined,
-           "the render check fires on a row whose description is one unwrapped line")
+    report(len(cell_lines[1]) > 1 and bad_lines([cells[1]]) and bad_lines(["text", "- a list item"]),
+           "the line check fires on an unwrapped description and on a line starting a list")
+    # but passes a cell laid out as a line merge leaves it: a line split short of the full width
+    first = cell_lines[1][0]
+    cut = rr.wrap(first, width=len(first) // 2)
+    merged = cut + cell_lines[1][1:]
+    report(len(cut) > 1 and merged != rr.wrap(cells[1]) and not bad_lines(merged),
+           "the line check passes a description split short, as a line merge leaves it")
 
 # 4. A markdown pipe table is refused.
 pipe = ["| Mod | What it does | Issue |", "| --- | --- | --- |", "| `a` | does a | #1 |"]
@@ -125,8 +142,8 @@ if [ "$code" -ne 0 ]; then
   echo "FAIL: the checks crashed (they exited $code)"
   fail=$((fail + 1))
 fi
-if [ "$pass" -lt 10 ]; then
-  echo "FAIL: only $pass checks passed of the 10 this suite runs, so some never ran"
+if [ "$pass" -lt 11 ]; then
+  echo "FAIL: only $pass checks passed of the 11 this suite runs, so some never ran"
   fail=$((fail + 1))
 fi
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
