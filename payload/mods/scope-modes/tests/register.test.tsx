@@ -2675,6 +2675,18 @@ test('a switch that cannot be recorded says why, and how to switch the other ses
   )
 })
 
+test('a switch that could not be recorded still holds here over an older one from another session (lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { mvFails: 'Read-only file system' })
+  await start($ as never, clock)
+  // Another session's /home, recorded before Dan's /away here, which could not be recorded.
+  w.files[PLACE] = placeRecord('home', T0 + 5)
+  await clock.advance(10)
+  await command($ as never, 'away')
+  await say($ as never, 'one')
+  await clock.advance(MIN)
+  expect(lastModes(w)).toEqual(['AWAY'])
+})
+
 test('a record that cannot be read is said once, never read as a switch (L215)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [PLACE]: placeRecord('away', T0 + 5) }, unreadableFiles: [PLACE] })
   await start($ as never, clock)

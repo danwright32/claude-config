@@ -4458,6 +4458,10 @@ const othersOpen = async ($: EngineInterface): Promise<number | null> => {
 // each reads it at its next prompt or minute, so no message between sessions is needed. Only Dan's
 // own switches reach here; this session holds it as seen, so it never takes its own again.
 const writePlace = async ($: EngineInterface, place: ScopeModesPlace, how: PlaceHow): Promise<Exclude<PlaceOutcome, { notDans: true }>> => {
+  // Seen before it is recorded, so a switch that could not be recorded still holds here over any
+  // older one another session recorded (lessons review).
+  const at = await $.clock.now()
+  await $.state.set(placeSeenRef, at)
   let home: string | undefined
   try {
     home = await $.env.get('HOME')
@@ -4465,10 +4469,8 @@ const writePlace = async ($: EngineInterface, place: ScopeModesPlace, how: Place
     return { recorded: false, why: `HOME could not be read: ${msg(err)}` }
   }
   if (!home) return { recorded: false, why: 'HOME is not set' }
-  const at = await $.clock.now()
   const failed = await writeWhole($, placeFile(home), placeText({ v: 1, place, at, by: await $.session.id(), cwd: await $.session.cwd(), how }))
   if (failed) return { recorded: false, why: failed }
-  await $.state.set(placeSeenRef, at)
   return { recorded: true, others: await othersOpen($) }
 }
 
