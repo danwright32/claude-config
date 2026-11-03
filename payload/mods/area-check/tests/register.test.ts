@@ -19,6 +19,11 @@ const WRITES: Record<string, unknown> = {
   'echo x > "$OUT/log.txt"': { files: [{ word: '$OUT/log.txt' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/log.txt' }] },
   'rm src/big.ts': { files: [], changes: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'remove' }], unnamed: [] },
   "perl -pi -e 's/a/b/' /tmp/x/*.ts": { files: [{ word: '/tmp/x/*.ts', folder: '/tmp/x', edits: true }], changes: [], unnamed: [] },
+  // Two commands whose 32 bit hash is the same (#2142 lessons review), and a write reaching a whole folder.
+  'echo hi > "$OUT/a132789.ts"': { files: [{ word: '$OUT/a132789.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/a132789.ts' }] },
+  'echo hi > "$OUT/a729192.ts"': { files: [{ word: '$OUT/a729192.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/a729192.ts' }] },
+  "find src -name '*.ts' -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'src', path: '/w/app/src', edits: true, tree: true }], changes: [], unnamed: [] },
+  "find docs -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'docs', path: '/w/app/docs', edits: true, tree: true }], changes: [], unnamed: [] },
 }
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
@@ -781,6 +786,50 @@ test('a write that cannot be read passes only where nothing could hold it: no ch
   w.ctl.numstat = ''
   expect((await bash($ as never, w, BUILT, {}, 'b2')).result).toBe('done')
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: '$OUT/big.ts', decision: 'passed' })
+})
+
+test('a decided command lets through only that command, never another sharing its 32 bit hash', KIT, async ($, on) => {
+  const w = world($, on)
+  const a = 'echo hi > "$OUT/a132789.ts"'
+  const b = 'echo hi > "$OUT/a729192.ts"'
+  expect(refusal(await bash($ as never, w, a))).toContain('cannot be read')
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, a, {}, 'b2')).result).toBe('done')
+  expect(refusal(await bash($ as never, w, b, {}, 'b3'))).toContain('$OUT/a729192.ts')
+})
+
+// #2142 lessons review: a write reaching a whole folder (find -exec over it, git putting a folder
+// back) reaches every file under it, so each one the area check could hold there is judged.
+const FIND = "find src -name '*.ts' -exec sed -i '' 's/a/b/' {} +"
+
+test('a shell write reaching a whole folder is held for each file under it that could be held, and goes ahead once each is decided', KIT, async ($, on) => {
+  const w = world($, on)
+  // The fast growing file under the folder, then the file a structural issue names, each on its own.
+  expect(refusal(await bash($ as never, w, FIND))).toContain('The area check held this Bash command, which writes src/big.ts.')
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  const why = refusal(await bash($ as never, w, FIND, {}, 'b2'))
+  expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
+  expect(why).toContain('#41 (p2, tech-debt)')
+  await decide($ as never, { call: 'b2', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, FIND, {}, 'b3')).result).toBe('done')
+  expect(w.judged().map(j => j.path)).toEqual(['src/big.ts', 'src/lib/slack.ts'])
+})
+
+test('a write reaching a folder nothing could hold under runs, judging no file', KIT, async ($, on) => {
+  const w = world($, on)
+  expect((await bash($ as never, w, "find docs -exec sed -i '' 's/a/b/' {} +")).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+})
+
+test('a write reaching a folder whose files cannot be listed is held as unread, saying why', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.slowLogOnce = true
+  const p = $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: FIND } as never)
+  await w.clock.advance(DEADLINE_MS + 1000)
+  const why = refusal((await p) as R)
+  expect(why).toContain('src reaches every file under it')
+  expect(why).toContain('cannot be listed')
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src', decision: 'held' })
 })
 
 test("a subagent's shell write is held for itself, where its loop is known", KIT, async ($, on) => {

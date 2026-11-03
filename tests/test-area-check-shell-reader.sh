@@ -6,7 +6,8 @@
 # the reader's measured answers, and this suite holds those answers to the real reader, so a change to
 # it that the area check misreads turns red here (L48, L58).
 #   - A file a command names is judged as that file: sed -i, truncate, git checkout --, an inline
-#     python3 script's own target, a heredoc redirect.
+#     python3 script's own target, a heredoc redirect. A write reaching a whole folder (a find -exec
+#     over it) keeps `tree`, which the area check reads to judge every file there it could hold.
 #   - A write whose file cannot be named is unread, with why: a name built from a variable, a pattern
 #     (with the folder it is matched in), git reaching a whole folder, an inline node script handed a
 #     file it writes by position.
@@ -37,7 +38,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-shell-reader.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=16
+EXPECTED=17
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -67,6 +68,7 @@ is('truncate names the file it empties', 'truncate -s 0 src/big.ts', [{ word: 's
 is('git checkout -- names the file it puts back, judged as that file', 'git checkout -- src/big.ts', [{ word: 'src/big.ts', path: '/w/app/src/big.ts', tree: true }])
 is("an inline python3 script's own target is judged", `python3 -c "open('/w/app/src/lib/slack.ts', 'w').write('x')"`, [{ word: '/w/app/src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
 is('a heredoc redirect names its file', "cat > src/big.ts <<'EOF'\nx\nEOF", [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }])
+is('a find -exec edit over a folder is a write reaching every file under it, so each held one there is judged', "find src -name '*.ts' -exec sed -i '' 's/a/b/' {} +", [{ word: 'src', path: '/w/app/src', tree: true }])
 unread('a name built from a variable is unread', 'echo hi > "$OUT/big.ts"', '$OUT/big.ts', 'built as the command runs', undefined)
 unread('a pattern is unread, with the folder it is matched in', "perl -pi -e 's/a/b/' src/*.ts", 'src/*.ts', 'a pattern', '/w/app/src')
 unread('git reaching a whole folder is unread', 'git restore .', '.', 'reaches a whole folder', undefined)

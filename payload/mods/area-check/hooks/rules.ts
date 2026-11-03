@@ -77,7 +77,8 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
 
 /**
  * A file a Bash command writes (#2142), read from mod-kit's one reader of a command ($.modkit.writes):
- * a path, judged as that file's first edit would be (`tree` where git may reach past it), or a write
+ * a path, judged as that file's first edit would be (`tree` where the write may reach every file
+ * under it, so each one there that could be held is judged too, `heldUnder` choosing them), or a write
  * whose file cannot be named, with why, which is held unless nothing in the repository could hold it.
  * `folder` is where such a write lands when the reader knows it, so its checkout is the one judged.
  */
@@ -111,7 +112,7 @@ export const shellTargets = (w: ModKitWrites): ShellTarget[] => {
     add(folder ? { word, unread: `${word} is a pattern, matched only as it runs`, folder } : { word, unread: why })
   }
   for (const f of w.files) named(f.word, f.path, f.folder, `${f.word} is built as the command runs`, f.tree)
-  for (const c of w.changes) if (c.does === 'truncate') named(c.word, c.path, c.folder, `${c.word} is built as the command runs`)
+  for (const c of w.changes) if (c.does === 'truncate') named(c.word, c.path, c.folder, `${c.word} is built as the command runs`, c.tree)
   for (const g of w.byGit ?? []) {
     if (g.does !== 'write') continue
     // A path with no extension git may fill is a folder: everything under it can be put back.
@@ -143,11 +144,14 @@ export const couldHold = (f: { issues: readonly CachedIssue[]; own: readonly num
   return f.top.length > 0 || f.issues.some(i => i.structural.length > 0 && i.refs.length > 0 && !f.own.includes(i.n) && bar.holdPriorities.includes(i.priority ?? 'p2'))
 }
 
-/** A command's own key, so its unchanged resend after a decision runs and any other command is judged. */
-export const shellKey = (command: string): string => {
-  let h = 0x811c9dc5
-  for (let i = 0; i < command.length; i++) h = Math.imul(h ^ command.charCodeAt(i), 0x01000193) >>> 0
-  return `shell:${h.toString(16).padStart(8, '0')}`
+/**
+ * A command's own key, so its unchanged resend after a decision runs and any other command is judged:
+ * a full SHA-256 of its whole text, since a short hash lets another command sharing it pass unjudged
+ * (#2142 lessons review: two commands differing in one number shared the 32 bit one first used).
+ */
+export const shellKey = async (command: string): Promise<string> => {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(command)))
+  return `shell:${Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')}`
 }
 
 const GENERATED_PARTS = new Set(['node_modules', 'dist', 'build', 'out', '.next', 'vendor', '__generated__', 'generated', 'Generated'])
@@ -258,6 +262,28 @@ export const issuesNaming = (rel: string, issues: readonly CachedIssue[], tracke
   if (folder.length > folderMax) return exact
   const named = new Set(exact.map(m => m.n))
   return [...exact, ...folder.filter(i => !named.has(i.n)).map(i => fact(i, 'folder'))]
+}
+
+/**
+ * The files under a folder a write reaching all of it could add lines to that the area check could
+ * hold (#2142 lessons review): each tracked source or test file below `folder` ('' for the whole
+ * checkout) that is growing fast, that a structural issue names as `issuesNaming` resolves a name,
+ * or that sits in a folder a structural issue names a file in. Each is then judged as its first edit
+ * would be, so this only chooses which files are asked about, and errs toward asking.
+ */
+export const heldUnder = (folder: string, f: { tracked: readonly string[]; top: readonly string[]; issues: readonly CachedIssue[] }): string[] => {
+  const prefix = folder.replace(/\/+$/, '')
+  const ix = indexOf(f.tracked)
+  const named = new Set<string>()
+  for (const i of f.issues) {
+    if (!i.structural.length) continue
+    for (const r of i.refs) {
+      const cands = (ix.get(baseOf(r)) ?? []).filter(p => p === r || p.endsWith('/' + r))
+      if (cands.length === 1) named.add(cands[0] as string)
+    }
+  }
+  const dirs = new Set([...named].map(dirOf))
+  return f.tracked.filter(p => (prefix === '' || p.startsWith(`${prefix}/`)) && fileKind(p) !== null && (f.top.includes(p) || named.has(p) || dirs.has(dirOf(p))))
 }
 
 /** The issues a session's /goal names, as #N (decision 5). */

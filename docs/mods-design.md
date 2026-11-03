@@ -3850,10 +3850,15 @@ facts and the bar are unchanged.
   script's own targets. The area check calls the shared reader itself, so no write reading lives in
   the mod. Each existing named file goes through the same judgement as an edit, the first held one
   refusing the command, and a decision claims the file, so a later Edit to it is not judged again. A
+  named path the reader marks `tree`, a write that may reach everything under it (a `find -exec` over
+  a folder, git putting a path back), is also judged by each tracked file under it the area check
+  could hold (`heldUnder`: fast growing, named by a structural issue, or in a folder one names), each
+  as its first edit; when the tracked files cannot be listed it is held as unread, saying so. A
   target whose file cannot be named (a name built as the command runs, a pattern, a program writing
   files its words do not name, git reaching a whole folder) is held as unread: the card and refusal
   say it cannot be read, only `proceed` is taken (fold and restructure need a file to name), and the
-  claim is keyed on the command (`shellKey`), so its unchanged resend runs and any other command is
+  claim is keyed on the command (`shellKey`, a full SHA-256 of its whole text, since a short hash
+  let another command sharing it through), so its unchanged resend runs and any other command is
   judged. It passes where its folder is in no checkout, or where `couldHold` is false (no fast
   growing file and no structural issue at a held priority naming a file the session does not work
   on), since nothing there could hold it. Removals, `touch`, `mkdir`, mode changes and a folder

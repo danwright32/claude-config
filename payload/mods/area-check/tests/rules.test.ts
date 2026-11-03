@@ -43,6 +43,7 @@ import {
   sweepKeys,
   type Held,
   couldHold,
+  heldUnder,
   shellKey,
   shellTargets,
 } from '../hooks/rules.ts'
@@ -451,10 +452,45 @@ test('a repository could hold a file only when something there would: a fast gro
   expect(couldHold({ issues: [issue(1, 'p3'), issue(2, 'p1', []), issue(3, 'p1'), issue(4, 'p0', ['refactor'], [])], own: [3], top: [] })).toBe(false)
 })
 
-test("an unchanged resend is one key, and another command another, so a decided command is not held again", () => {
-  expect(shellKey('python3 gen.py')).toBe(shellKey('python3 gen.py'))
-  expect(shellKey('python3 gen.py')).not.toBe(shellKey('python3 gen.py x'))
-  expect(shellKey('python3 gen.py').startsWith('shell:')).toBe(true)
+test("an unchanged resend is one key, and another command another, so a decided command is not held again", async () => {
+  expect(await shellKey('python3 gen.py')).toBe(await shellKey('python3 gen.py'))
+  expect(await shellKey('python3 gen.py')).not.toBe(await shellKey('python3 gen.py x'))
+  expect((await shellKey('python3 gen.py')).startsWith('shell:')).toBe(true)
+})
+
+// The key the area check first used, a 32 bit FNV-1a hash of the command (#2142 lessons review).
+const fnv32 = (s: string) => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0
+  return h
+}
+// Two commands of one shape found to share that hash, by a search over the number in the name.
+const TWIN_A = 'echo hi > "$OUT/a132789.ts"'
+const TWIN_B = 'echo hi > "$OUT/a729192.ts"'
+
+test('two different commands never share a key, even two a 32 bit hash of the command could not tell apart', async () => {
+  expect(fnv32(TWIN_A)).toBe(fnv32(TWIN_B))
+  expect(await shellKey(TWIN_A)).not.toBe(await shellKey(TWIN_B))
+  // Keyed on the whole command: a full SHA-256 of its text, 64 hex digits.
+  expect(await shellKey(TWIN_A)).toMatch(/^shell:[0-9a-f]{64}$/)
+})
+
+test('a tree write is judged by every tracked file under its folder that the area check could hold, and by nothing outside it', () => {
+  const tracked = ['src/big.ts', 'src/lib/slack.ts', 'src/lib/util.ts', 'src/pay/stripe.ts', 'src/lib/notes.md', 'docs/x.md', 'lib/other.ts']
+  const issues = [
+    { n: 41, structural: ['tech-debt'], priority: 'p2', refs: ['lib/slack.ts'] },
+    // An issue that is no structural one holds nothing, so it names no file here.
+    { n: 7, structural: [], priority: 'p1', refs: ['src/pay/stripe.ts'] },
+  ]
+  // The file the issue names, the source file in its folder (the folder match), the fast growing file.
+  expect(heldUnder('src', { tracked, top: ['src/big.ts'], issues })).toEqual(['src/big.ts', 'src/lib/slack.ts', 'src/lib/util.ts'])
+  expect(heldUnder('src/lib', { tracked, top: ['src/big.ts'], issues })).toEqual(['src/lib/slack.ts', 'src/lib/util.ts'])
+  // The whole checkout, and a folder whose name only begins like another's.
+  expect(heldUnder('', { tracked, top: [], issues })).toEqual(['src/lib/slack.ts', 'src/lib/util.ts'])
+  expect(heldUnder('src/li', { tracked, top: [], issues })).toEqual([])
+  // A folder nothing could hold under, and a file (no tracked file sits below a file).
+  expect(heldUnder('src/pay', { tracked, top: ['src/big.ts'], issues })).toEqual([])
+  expect(heldUnder('src/lib/slack.ts', { tracked, top: [], issues })).toEqual([])
 })
 
 const SHELL: Held = { ...HELD, tool: 'Bash' }

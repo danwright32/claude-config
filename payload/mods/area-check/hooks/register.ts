@@ -31,6 +31,7 @@ import {
   heldCall,
   holdCard,
   holdRefusal,
+  heldUnder,
   shellKey,
   shellTargets,
   questionKey,
@@ -511,7 +512,7 @@ const gate = async ($: EngineInterface, tool: string, id: string, path: string, 
 const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarget, { unread: string }>, command: string, agent: string | null): Promise<Verdict> => {
   const started = await $.clock.now()
   const d: Deadline = { at: started + DEADLINE_MS }
-  const key = `${shellKey(command)}\n${agent ?? ''}`
+  const key = `${await shellKey(command)}\n${agent ?? ''}`
   if (await isClaimed($, key)) return PASS
   const where = t.folder ?? (await $.session.cwd())
   const b = await $.modkit.branch({ path: where })
@@ -550,6 +551,25 @@ const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarge
   return { held: h }
 }
 
+// A write reaching a whole folder (#2142 lessons review) reaches every file under it: the files there
+// the area check could hold, from the same tracked list and issues an edit is judged by, or why they
+// cannot be listed. A folder in no checkout, or in one not on GitHub, holds nothing to judge.
+const underTree = async ($: EngineInterface, path: string): Promise<{ paths: string[] } | { unread: string }> => {
+  const d: Deadline = { at: (await $.clock.now()) + DEADLINE_MS }
+  const b = await $.modkit.branch({ path })
+  if (!b || 'unreadable' in b) return { paths: [] }
+  const remote = await runIn($, d, ['git', '-C', b.root, 'remote', 'get-url', 'origin'])
+    .then(r => (r.exitCode === 0 ? r.stdout.trim() || null : null))
+    .catch(() => null)
+  const repo = (await $.modkit.repo({ root: b.main, remote })).github
+  if (!repo) return { paths: [] }
+  const [issues, ranked] = await Promise.all([issuesFor($, repo, d), ranking($, d, b.root, b.defaultBranch, repo)])
+  if (!('tracked' in ranked)) return { unread: `the files under it cannot be listed (${ranked.unread})` }
+  const rel = path === b.root ? '' : relTo(path, b.root)
+  const held = heldUnder(rel, { tracked: ranked.tracked, top: ranked.ranked.top, issues: issues.state === 'unread' ? [] : issues.issues })
+  return { paths: held.map(r => `${b.root}/${r}`) }
+}
+
 // A command's verdict: the first file it writes that is held refuses it. The reader failing lets the
 // command through, said; a target whose judging fails is passed, said, and the rest are still judged.
 const gateShell = async ($: EngineInterface, id: string, command: string, agent: string | null): Promise<{ deny: string } | typeof PASS> => {
@@ -562,11 +582,26 @@ const gateShell = async ($: EngineInterface, id: string, command: string, agent:
     await failed($, cwd, err, 'command')
     return PASS
   }
-  for (const t of targets) {
+  for (let t of targets) {
     if ('path' in t) {
       const v = await gate($, 'Bash', id, t.path, agent)
       if ('deny' in v) return v
-      continue
+      if (!t.tree) continue
+      let under: Awaited<ReturnType<typeof underTree>>
+      try {
+        under = await underTree($, t.path)
+      } catch (err) {
+        await failed($, t.path, err)
+        continue
+      }
+      if ('paths' in under) {
+        for (const p of under.paths) {
+          const w = await gate($, 'Bash', id, p, agent)
+          if ('deny' in w) return w
+        }
+        continue
+      }
+      t = { word: t.word, unread: `${t.word} reaches every file under it, and ${under.unread}`, folder: t.path }
     }
     try {
       const v = await judgeUnread($, id, t, command, agent)
