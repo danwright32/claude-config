@@ -15,6 +15,11 @@ the commands cannot come to disagree about what a skip is (L263, L370).
         exit 0 printing the refusal when an Edit, Write or MultiEdit changes where git reads the
         hooks from in a git config file, 10 when it does not, 2 when the payload cannot be read
         (claude-config#2140).
+    agent-overrides.py config-commands       stdin: one hook payload (JSON)
+        exit 0 printing the refusal when a Bash call has a command that is not git and names a git
+        config file (a read included, since what a shell command does to a file it names cannot be
+        read before it runs), or when git cannot list a folder's config; 10 when none does, 2 when
+        the payload cannot be read (claude-config#2160).
 
     EXIT CODES. No mode answers "nothing found" with 1, which is what Python exits on an uncaught
     exception: a crash must never read as clean (claude-config#1856, #1869, L1033). Each answers it
