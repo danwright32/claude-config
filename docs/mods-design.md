@@ -3790,8 +3790,11 @@ observing half, so it has no surface of its own: no card, no question, nothing d
   nothing was held.
 - **The replay.** `node tools/area-check-replay.ts <checkout> --repo <owner/name>` runs a
   repository's last 30 days through `rules.ts` itself, each commit standing in for a session, and
-  reports holds per session; `tests/replay-fixture.ts` is this repository's own month, measured that
-  way, and the mod's replay test holds the rules to it. On 2026-10-22 a busy work repository's month
+  reports holds per session; `tests/replay-fixture/` is this repository's own month, measured that
+  way, and the mod's replay test holds the rules to it. `--fixture` writes it as parts of one record
+  per line, each at most 100 KB, put back together by its `index.ts` (#2097): it was once one module
+  whose two long lines made a month measured again a 350 KB diff nobody could read, past what one
+  lessons review can hold. On 2026-10-22 a busy work repository's month
   replayed to 77% of judged sessions holding at least once and 179 of 602 holding four or more times,
   which is what the week's log is for.
 

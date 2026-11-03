@@ -58,8 +58,47 @@ case "$out" in *"Open issues read today: 2, 1 with a structural label."*) check 
 out="$(PATH="$W/bin:$PATH" node "$TOOL" "$W/app" --repo dan/app 2>&1)"
 case "$out" in *"slack.ts"*) check "without --names no file is named" "$out" ;; *) check "without --names no file is named" ok ;; esac
 
-PATH="$W/bin:$PATH" node "$TOOL" "$W/app" --repo dan/app --fixture "$W/fx.ts" >/dev/null 2>&1
-grep -q '^export const MEASURED' "$W/fx.ts" 2>/dev/null && grep -q '"withHold":1' "$W/fx.ts" && check "--fixture writes the measured input with its summary" ok || check "--fixture writes the measured input with its summary" "$(head -c 300 "$W/fx.ts" 2>&1)"
+# --fixture writes a folder of modules, one record per line, that index.ts puts back together
+# (#2097): a regenerated month then reads as changed rows, and no one file's diff outgrows a review.
+RULES="$DIR/../payload/mods/area-check/hooks/rules.ts"
+# Replays the fixture folder in $1 as the mod's replay test does, printing its summary and the replay's.
+fixture_replays(){
+  node --input-type=module -e "
+    const { replay } = await import('$RULES')
+    const { MEASURED, PATHS } = await import('$1/index.ts')
+    const input = { ...MEASURED.input, sessions: MEASURED.input.sessions.map(s => ({ ...s, files: s.files.map(i => PATHS[i]) })) }
+    console.log(JSON.stringify(MEASURED.summary) === JSON.stringify(replay(input).summary) ? 'same ' + JSON.stringify(MEASURED.summary) : 'DIFFERENT')
+  " 2>&1
+}
+mkdir -p "$W/fx"; printf 'export const ROWS = []\n' > "$W/fx/sessions-9.ts"
+out="$(PATH="$W/bin:$PATH" node "$TOOL" "$W/app" --repo dan/app --fixture "$W/fx" 2>&1)"; code=$?
+r="$(fixture_replays "$W/fx")"
+case "$code $r" in "0 same "*'"withHold":1'*) check "--fixture writes a folder whose index replays to the summary it was measured with" ok ;; *) check "--fixture writes a folder whose index replays to the summary it was measured with" "exit $code: $out / $r" ;; esac
+[ ! -e "$W/fx/sessions-9.ts" ] && check "a fixture written again replaces the whole folder, so no part from an earlier month is left behind" ok || check "a fixture written again replaces the whole folder, so no part from an earlier month is left behind" "$(ls "$W/fx")"
+n="$(grep -c '"day":' "$W/fx/sessions-1.ts" 2>/dev/null)"
+[ "${n:-0}" -eq 4 ] && check "each session is a line of its own" ok || check "each session is a line of its own" "${n:-none} session lines in $(ls "$W/fx" 2>&1)"
+
+out="$(PATH="$W/bin:$PATH" AREA_CHECK_FIXTURE_PART_BYTES=300 node "$TOOL" "$W/app" --repo dan/app --fixture "$W/fx2" 2>&1)"; code=$?
+r="$(fixture_replays "$W/fx2")"
+[ "$code" -eq 0 ] && [ -f "$W/fx2/sessions-2.ts" ] && case "$r" in "same "*) true ;; *) false ;; esac \
+  && check "rows past a part's size go on into the next part, and the parts replay the same" ok \
+  || check "rows past a part's size go on into the next part, and the parts replay the same" "exit $code: $out / $r / $(ls "$W/fx2" 2>&1)"
+
+printf 'x\n' > "$W/notadir"
+out="$(PATH="$W/bin:$PATH" node "$TOOL" "$W/app" --repo dan/app --fixture "$W/notadir/fx" 2>&1)"; code=$?
+[ "$code" -eq 3 ] && case "$out" in *"could not write the fixture"*) true ;; *) false ;; esac \
+  && check "a fixture that cannot be written exits 3, saying so" ok || check "a fixture that cannot be written exits 3, saying so" "exit $code: $out"
+
+# The committed month itself is in that form: every part within the part size the writer uses, and no
+# line long enough to be a whole table, which is what put #1509's branch past the review's limit.
+REAL="$DIR/../payload/mods/area-check/tests/replay-fixture"
+part="$(node --input-type=module -e "const m = await import('$DIR/area-check-fixture.ts'); console.log(m.PART_BYTES)" 2>&1)"
+big="$(find "$REAL" -name '*.ts' -size +"${part:-0}"c 2>/dev/null)"
+long="$(awk 'length($0) > 4096 { print FILENAME ":" FNR }' "$REAL"/*.ts 2>/dev/null | head -3)"
+case "$part" in ''|*[!0-9]*) check "the committed fixture is parts of at most PART_BYTES with no line over 4096 bytes" "PART_BYTES unread: $part" ;;
+  *) [ -f "$REAL/index.ts" ] && [ -z "$big" ] && [ -z "$long" ] \
+       && check "the committed fixture is parts of at most PART_BYTES with no line over 4096 bytes" ok \
+       || check "the committed fixture is parts of at most PART_BYTES with no line over 4096 bytes" "index: $(ls "$REAL/index.ts" 2>&1) big: $big long: $long" ;; esac
 
 out="$(PATH="$W/bin:$PATH" GH_FAILS=1 node "$TOOL" "$W/app" --repo dan/app 2>&1)"; code=$?
 [ "$code" -eq 3 ] && case "$out" in *"error connecting to api.github.com"*) true ;; *) false ;; esac && check "issues that cannot be read exit 3, saying why" ok || check "issues that cannot be read exit 3, saying why" "exit $code: $out"
