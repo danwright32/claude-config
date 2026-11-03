@@ -190,7 +190,7 @@ populate(){ # populate <name> <N> -> 0, or 1 with REASON set when the hook reads
       printf 'fallback the list is empty\n' > "$F/home/.claude/.lessons-core-state"
       mkdir -p "$F/home/.claude/state/lessons-core-notice"
       i=0; while [ "$i" -lt "$n" ]; do printf 'x\n' > "$F/home/.claude/state/lessons-core-notice/other$i"; i=$((i + 1)); done ;;
-    session-reflection.sh|feature-issue-review.sh)
+    session-reflection.sh|feature-issue-review.sh|check-later-nudge.sh)
       # The session's transcript, which only grows: N earlier turns, then a last turn that worked,
       # so the hook takes its full path. The bytes turn-worked.py reads of it, which no process
       # count can see, are measured in test-turn-worked.sh against a 2000 turn history.
