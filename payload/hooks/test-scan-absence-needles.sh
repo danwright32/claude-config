@@ -114,6 +114,30 @@ run
 check "a baseline claiming more than the file has is refused" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC")"
 says "and says the number is stale" "$OUT" "stale"
 
+echo "scan absence needles: a heredoc ends where bash ends it"
+
+# The end marker is the whole word with its quotes taken out (claude-config#2080): <<'E'OF and
+# <<E"OF" end at EOF, <<END-OF at END-OF. A pattern of its own ended them at E, E and END, which no
+# line is, so every assertion after the first such heredoc went unjudged and the scan passed a file
+# it had never read. A heredoc opener written inside a quoted string opens nothing.
+for _m in "'E'OF:EOF" 'E"OF":EOF' 'END-OF:END-OF' "\"x <<EOF\\\\nhi\\\\nEOF\":"; do
+  _open="${_m%:*}"; _end="${_m##*:}"
+  {
+    if [ -n "$_end" ]; then
+      printf 'cat > f %s%s\n' '<''<' "$_open"
+      printf '%s\n' "check \"fixture\" \"! grep -q 'inside the body only' <<< \\\"\$o\\\"\"" "$_end"
+    else
+      printf 'printf %s > f\n' "$_open"
+    fi
+    printf '%s\n' "check \"after\" \"! grep -q 'a needle written once after the body' <<< \\\"\$o\\\"\""
+  } > "$FIX/test-drifted.sh"
+  printf '# none\n' > "$FIX/baseline.txt"
+  run
+  check "#2080 the assertion after a heredoc opened with $_open is judged" "$([ "$RC" -eq 1 ] && echo ok || echo "exit $RC: $OUT")"
+  says "#2080 and named, after $_open" "$OUT" "a needle written once after the body"
+  silentabout "#2080 while the body of $_open is fixture text" "$OUT" "inside the body only"
+done
+
 # A run that scanned NOTHING passes every comparison at once and reads exactly like a clean tree
 # (L98), so it refuses instead.
 # A file this cannot OPEN is not a file with nothing in it. Returning "nothing judged, no
@@ -134,6 +158,18 @@ check "a run that found no suites refuses rather than passing" "$([ "$RC" -eq 2 
 # And a missing baseline is not an empty one: with nothing to compare against, nothing was verified.
 OUT="$(python3 "$SCAN" --root "$FIX" --baseline "$FIX/no-such-baseline.txt" 2>&1)"; RC=$?
 check "a missing baseline refuses rather than treating every finding as new" "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC")"
+# Where a heredoc ends is lib/shell-words.py's answer, read through lib/shell_code_lines.py, and the
+# scan keeps no reading of its own to fall back on (claude-config#2080). Without it nothing was
+# judged, which is said, and never reported as a tree agreeing with its baseline.
+NOREADER="$FIX/noreader"; mkdir -p "$NOREADER/lib" "$NOREADER/tree"
+cp "$SCAN" "$NOREADER/"
+cp "$DIR/lib/ratchet.py" "$DIR/lib/shell_code_lines.py" "$NOREADER/lib/"
+printf 'echo hi\n' > "$NOREADER/tree/test-x.sh"
+printf '# none\n' > "$NOREADER/baseline.txt"
+OUT="$(python3 "$NOREADER/scan-absence-needles.py" --root "$NOREADER/tree" --baseline "$NOREADER/baseline.txt" 2>&1)"; RC=$?
+check "#2080 without the shared reader the scan refuses" "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2080 and names the reader it could not load" "$OUT" "lib/shell-words.py could not be loaded"
+rm -rf "$NOREADER"
 
 echo "scan absence needles: and the real tree it ships to guard"
 

@@ -130,6 +130,52 @@ print(" ".join(str(brace_depth(r[3])) for r in read_lines(open(sys.argv[2]).read
 ' "$LIB" "$W/k.sh" 2>&1)"
 eq "#2068 a brace in a bracket expression is not counted, every other brace is" "1 0 0 0 0 -1 0" "$braces"
 
+# The end marker is the whole word after the opener with its quotes taken out, as bash reads it and
+# lib/shell-words.py gives it (claude-config#2080). A pattern of its own read 'E'OF and E"OF" as E,
+# and END-OF as END, so every line after the first body was read as that body. Arithmetic opens no
+# heredoc, and each heredoc's next line is the file's code again.
+{
+  printf 'cat %s%s\n' "$_H" "'E'OF"
+  printf 'x\nEOF\necho a\n'
+  printf 'cat %s%s\n' "$_H" 'E"OF"'
+  printf 'x\nEOF\necho b\n'
+  printf 'cat %s%s\n' "$_H" 'END-OF'
+  printf 'x\nEND-OF\necho c\n'
+  printf 'echo $((1%s2))\n' "$_H"
+  printf 'echo d\n'
+} > "$W/m.sh"
+kinds="$(python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from shell_code_lines import read_lines
+print(" ".join(r[2] for r in read_lines(open(sys.argv[2]).read())))
+' "$LIB" "$W/m.sh" 2>&1)"
+eq "#2080 a quoted in part or hyphenated end marker is read whole, and arithmetic opens nothing" \
+  "code heredoc end code code heredoc end code code heredoc end code code code code" "$kinds"
+
+# Without lib/shell-words.py beside it there is no reading of a marker, and the reader says so the
+# first time it is asked, rather than reading every heredoc as never closing. Importing it still
+# works, so a scan that checks its own readers first can say which one is missing.
+mkdir -p "$W/nolib"
+cp "$LIB/shell_code_lines.py" "$W/nolib/"
+noreader="$(python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from shell_code_lines import read_lines
+print("imported")
+try:
+    list(read_lines("cat <<EOF\nEOF\n"))
+    print("read with no reader")
+except Exception as e:
+    print("refused: %s" % e)
+' "$W/nolib" 2>&1 | paste -sd'|' -)"
+case "$noreader" in
+  "imported|refused: "*"lib/shell-words.py could not be loaded"*) eq "#2080 without shell-words.py the reader refuses, loudly" ok ok ;;
+  *) eq "#2080 without shell-words.py the reader refuses, loudly" "imported|refused: ...lib/shell-words.py could not be loaded..." "$noreader" ;;
+esac
+_pyc="$(ls "$LIB/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
+eq "#2080 loading the reader leaves no shell-words bytecode in lib/" 0 "$_pyc"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
