@@ -389,11 +389,33 @@ describe('outward tools: every write under claude.ai, Chrome and PostHog, and da
     expect(await tool('mcp__claude_ai_Google_Calendar__create_event', {})).toBe('use mcp__claude_ai_Google_Calendar__create_event')
     expect(await tool('mcp__claude_ai_SFDC_USE__updateSobjectRecord', {})).toBe('use mcp__claude_ai_SFDC_USE__updateSobjectRecord')
     expect(await tool('mcp__claude_ai_SFDC_-_Read_Only__soqlQuery', {})).toBeUndefined()
-    expect(await tool('mcp__claude-in-chrome__navigate', { url: 'https://x' })).toBe('use mcp__claude-in-chrome__navigate')
-    expect(await tool('mcp__claude-in-chrome__read_page', {})).toBeUndefined()
     expect(await tool('mcp__posthog__exec', { command: 'x' })).toBe('use mcp__posthog__exec')
     // A name that says neither is refused: only a name that reads is let through.
     expect(await tool('mcp__claude_ai_Google_Calendar__suggest_time', {})).toBe('use mcp__claude_ai_Google_Calendar__suggest_time')
+  })
+  // #2064: Chrome is judged by the tab a call acts in and the host its page is on (browser.ts), so a
+  // session can check its own work on a test host; anything else in Chrome is still refused,
+  // reading Dan's own tabs included, which went ahead before because the tool's name says it reads.
+  test('Chrome: an own tab on a test host goes ahead, anything else is refused', async () => {
+    const chrome = (name: string, input: Record<string, unknown>, browser?: { tabs: Record<string, { host: string | null }>; listed: string[] }) =>
+      overnightRefusal({ tool: `mcp__claude-in-chrome__${name}`, input, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME, read, ...(browser ? { browser } : {}) }, look)
+    const own = { tabs: { 7: { host: 'localhost' } }, listed: [] }
+    expect(await chrome('tabs_create_mcp', {}, own)).toBeUndefined()
+    expect(await chrome('navigate', { tabId: 7, url: 'http://localhost:3000' }, own)).toBeUndefined()
+    expect(await chrome('read_page', { tabId: 7 }, own)).toBeUndefined()
+    expect(await chrome('computer', { tabId: 7, action: 'left_click', coordinate: [1, 2] }, own)).toBeUndefined()
+    expect(await chrome('navigate', { tabId: 7, url: 'https://bank.example.com' }, own)).toMatch(/^open bank\.example\.com in the browser, which is not a test host/)
+    expect(await chrome('read_page', { tabId: 3 }, own)).toMatch(/^use mcp__claude-in-chrome__read_page on tab 3, which this session did not create/)
+    // No record of tabs handed over refuses everything that needs one, as an empty record does.
+    expect(await chrome('read_page', { tabId: 7 })).toMatch(/did not create/)
+    expect(await chrome('navigate', { url: 'https://x' })).toMatch(/^use mcp__claude-in-chrome__navigate without naming a tab/)
+    expect(await chrome('switch_browser', {}, own)).toMatch(/^use mcp__claude-in-chrome__switch_browser/)
+    expect(await chrome('shortcuts_execute', { tabId: 7 }, own)).toMatch(/^use mcp__claude-in-chrome__shortcuts_execute/)
+  })
+  test('headless browser automation is not on the list, by tool or by command (#2064)', async () => {
+    expect(await tool('mcp__playwright__browser_navigate', { url: 'https://bank.example.com' })).toBeUndefined()
+    expect(await tool('mcp__playwright__browser_snapshot', {})).toBeUndefined()
+    expect(await bash('npx playwright test e2e/login.spec.ts')).toBeUndefined()
   })
   test('Supabase and psql by the SQL they run', async () => {
     expect(await tool('mcp__claude_ai_Supabase__execute_sql', { query: 'select 1' })).toBeUndefined()
