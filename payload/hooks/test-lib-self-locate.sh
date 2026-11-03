@@ -247,7 +247,8 @@ for hook in "$DIR"/*.sh; do
     bounded_run 20 env -i HOME="$TMPROOT/home" TMPDIR="$TMPROOT/tmp" HOOK_TESTS_LIST_ONLY=1 PS4='+ ' "$BASH" -c \
       'cd "$1" && PATH="$4" exec "$BASH" -x "$2" < "$3"' _ "$DECOY" "$hook" "$input" "$CAT_ONLY"
     if [[ "$BOUNDED_OUT" == *"DECOY LOADED"* ]]; then
-      verdict="it loaded a decoy from the folder it was run from: $(printf '%s\n' "$BOUNDED_OUT" | grep 'DECOY LOADED' | head -1)"; break
+      decoy_line="${BOUNDED_OUT#*DECOY LOADED}"
+      verdict="it loaded a decoy from the folder it was run from: DECOY LOADED${decoy_line%%$'\n'*}"; break
     fi
     if [[ "$BOUNDED_OUT" == *"${_D}: command not found"* ]]; then
       verdict="it ran ${_D} to find its own folder, and with none on PATH took another"; break
