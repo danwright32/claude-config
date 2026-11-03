@@ -18,7 +18,10 @@
 
 set -uo pipefail
 
-HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lessons-advisory.sh"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) _HD="${BASH_SOURCE[0]%/*}" ;; *) _HD=. ;; esac
+_HD="$(cd "${_HD:-/}" && pwd)"
+HOOK="$_HD/lessons-advisory.sh"
 [ -x "$HOOK" ] || { echo "measure: cannot find lessons-advisory.sh next to this script" >&2; exit 1; }
 
 N=20

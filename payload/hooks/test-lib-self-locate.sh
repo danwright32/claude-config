@@ -15,6 +15,12 @@
 # by parameter expansion on BASH_SOURCE, with only builtins after it, and this scan fails on the
 # next one written the old way, in any `lib/` folder in the tree. A one way door, not a count: every
 # site was converted. Comment lines are skipped, or the prose explaining the rule would break it.
+#
+# The same holds for a hook (claude-config#2130, after #2120): a hook runs under whatever PATH the
+# platform gives it, so every hook found its own folder the old way until 79 sites in 67 hooks were
+# converted. The scan therefore covers every non test shell file in a `hooks/` folder as well, and a
+# runtime section runs each hook that names BASH_SOURCE from a decoy folder, with no dirname on
+# PATH, and fails on one that loads the decoy's library or runs dirname.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -236,7 +242,9 @@ for hook in "$DIR"/*.sh; do
   # longer path, to a line that finds it wrongly: any wrong one fails it, and one right one is needed.
   verdict="no input reached the line where it finds its own folder"
   for input in "$INPUTS"/*; do
-    bounded_run 20 env -i HOME="$TMPROOT/home" TMPDIR="$TMPROOT/tmp" PS4='+ ' "$BASH" -c \
+    # HOOK_TESTS_LIST_ONLY makes the test runner list its directories and stop, instead of running
+    # every suite in the repo from the decoy folder; no other hook reads it.
+    bounded_run 20 env -i HOME="$TMPROOT/home" TMPDIR="$TMPROOT/tmp" HOOK_TESTS_LIST_ONLY=1 PS4='+ ' "$BASH" -c \
       'cd "$1" && PATH="$4" exec "$BASH" -x "$2" < "$3"' _ "$DECOY" "$hook" "$input" "$CAT_ONLY"
     if [[ "$BOUNDED_OUT" == *"DECOY LOADED"* ]]; then
       verdict="it loaded a decoy from the folder it was run from: $(printf '%s\n' "$BOUNDED_OUT" | grep 'DECOY LOADED' | head -1)"; break
@@ -244,7 +252,7 @@ for hook in "$DIR"/*.sh; do
     if [[ "$BOUNDED_OUT" == *"${_D}: command not found"* ]]; then
       verdict="it ran ${_D} to find its own folder, and with none on PATH took another"; break
     fi
-    printf '%s\n' "$BOUNDED_OUT" | grep -E -q "$own_re" && verdict=ok
+    grep -E -q "$own_re" <<< "$BOUNDED_OUT" && verdict=ok
   done
   check "#2130 $name, run from another folder with nothing on PATH, finds its own lib/" "$verdict"
 done

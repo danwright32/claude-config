@@ -115,7 +115,10 @@ snooze_in_force() {  # $1 = session id
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 # Nor does a Mac in sleep mode (claude-config#841): Dan is asleep, so the quiz stands down rather
 # than holding an overnight session on a question nobody can answer. Unreadable counts as awake.
-if . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/sleep.sh" 2>/dev/null && sleep_active; then
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) _HD="${BASH_SOURCE[0]%/*}" ;; *) _HD=. ;; esac
+_HD="$(cd "${_HD:-/}" && pwd)"
+if . "$_HD/lib/sleep.sh" 2>/dev/null && sleep_active; then
   exit 0
 fi
 
@@ -263,7 +266,7 @@ RELEASE_ASK_SECONDS="${QUIZ_RELEASE_ASK_SECONDS:-10}"
 # The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, the
 # shell names the missing function and each default is used.
 # shellcheck source=lib/whole-number.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/whole-number.sh" 2>/dev/null
+. "$_HD/lib/whole-number.sh" 2>/dev/null
 whole_above_zero "$RELEASE_ASK_SECONDS" RELEASE_ASK_SECONDS || RELEASE_ASK_SECONDS=10
 RELEASE_BUDGET_SECONDS="${QUIZ_RELEASE_BUDGET_SECONDS:-40}"
 whole_above_zero "$RELEASE_BUDGET_SECONDS" RELEASE_BUDGET_SECONDS || RELEASE_BUDGET_SECONDS=40
