@@ -117,8 +117,15 @@ PORT="$(cat "$WORK/model.port")"
 
 # The Bash call a step asks for: the id it carries and a look taken through gh-poll.sh, at one fixed
 # moment the code sets (epoch second 1000000, not a measurement) so no look ages out of the minute
-# between steps, and under a cap no step can reach, so every look is taken and counted.
-step() { echo "PROBE-RUN: printf '%s\t%s\t%s\n' $1 \"\$CLAUDE_CODE_SESSION_ID\" \"\$(bash ~/.claude/hooks/lib/gh-poll.sh take 1000000)\" >> $BASH_LOG # PROBE-TAG=$1"; }
+# between steps, and under a cap no step can reach, so every look is taken and counted. The work is
+# in a script file the Bash call runs, which inherits the call's environment and so its id: Claude
+# Code 2.1.317 refused this step typed inline under bash 3.2, the shell these sessions use ("this
+# shell (bash 3.2.57) is too old to run it reliably"), ran nothing, and named a script file as the
+# way round; 2.1.316 ran it (claude-config#2138). The reader below names such a refusal.
+cat > "$WORK/step.sh" <<'EOF'
+printf '%s\t%s\t%s\n' "$1" "$CLAUDE_CODE_SESSION_ID" "$(bash ~/.claude/hooks/lib/gh-poll.sh take 1000000)" >> "$2"
+EOF
+step() { echo "PROBE-RUN: bash $WORK/step.sh $1 $BASH_LOG # PROBE-TAG=$1"; }
 
 # One headless session: OUT INHERITED [claude args...] -- MESSAGE...  INHERITED is the
 # CLAUDE_CODE_SESSION_ID its environment starts with, or empty for none.
@@ -153,9 +160,34 @@ stop_model
 # ---- what the steps left ----
 # The reader writes to a file, never through a command substitution, whose parse of a heredoc
 # holding a quote bash 3.2 gets wrong.
-python3 - "$BASH_LOG" "$MOD_LOG" "$POLL_STATE" "$SID" "$STRANGER" > "$WORK/verdict" <<'PY'
-import os, re, sys
-bash_log, mod_log, state, sid, stranger = sys.argv[1:]
+python3 - "$BASH_LOG" "$MOD_LOG" "$POLL_STATE" "$SID" "$STRANGER" "$WORK"/s*.jsonl > "$WORK/verdict" <<'PY'
+import json, os, re, sys
+bash_log, mod_log, state, sid, stranger = sys.argv[1:6]
+# What Claude Code said when it refused to run a step's command (claude-config#2138: 2.1.317
+# refuses some commands under bash 3.2 and runs nothing, so the step leaves a mod row and no Bash
+# row). Read from the sessions' own transcripts, so a missing Bash row names its cause.
+refused = {}
+tag_of = {}
+for path in sys.argv[6:]:
+    for line in open(path, errors='replace'):
+        try:
+            msg = json.loads(line).get('message')
+        except ValueError:
+            continue
+        content = msg.get('content') if isinstance(msg, dict) else None
+        for part in content if isinstance(content, list) else []:
+            if not isinstance(part, dict):
+                continue
+            if part.get('type') == 'tool_use':
+                tag = re.search(r'PROBE-TAG=(\w+)', json.dumps(part.get('input')))
+                if tag:
+                    tag_of[part.get('id')] = tag.group(1)
+            elif part.get('type') == 'tool_result' and part.get('tool_use_id') in tag_of:
+                text = part.get('content')
+                text = text if isinstance(text, str) else json.dumps(text)
+                said = re.search(r'Claude Code did not run this command: .*?\.(?=\s|$)', text)
+                if said:
+                    refused.setdefault(tag_of[part['tool_use_id']], said.group(0))
 TAGS = ['main', 'agent', 'compacted', 'cleared', 'resumed', 'forked', 'inherited']
 UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 def rows(path, width):
@@ -173,7 +205,8 @@ ids = {}
 for t in TAGS:
     bb, mm = b.get(t, []), m.get(t, [])
     if len(bb) != 1 or len(mm) != 1:
-        check(f'{t}: one Bash call and one mod record', f'{len(bb)} Bash rows and {len(mm)} mod rows')
+        why = f'; the engine refused the step: "{refused[t]}"' if t in refused else ''
+        check(f'{t}: one Bash call and one mod record', f'{len(bb)} Bash rows and {len(mm)} mod rows{why}')
         continue
     _, bid, btake = bb[0]
     _, mid, agent, own, look = mm[0]
