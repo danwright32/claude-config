@@ -368,6 +368,35 @@ describe('heredocs name the descriptor they feed (#760)', () => {
     expect(quoted('psql db <<-SQL\n\tSELECT 1;\n\tSQL')).toEqual([false])
     expect(quoted("cat <<A 3<<'B'\na\nA\nb\nB")).toEqual([false, true])
   })
+  // #2073: the end marker is the whole word after <<, quotes taken out, as bash reads it (and as
+  // lib/shell-words.py's heredoc_opener does since #2060). Read as the quoted part or the leading
+  // letters alone, <<'E'OF and <<E"OF" ended at a line E and <<END-OF at a line END, so the body ran
+  // on past the line bash ends it at and hid every command after it.
+  test('a marker quoted in part, or holding a hyphen, is the whole word', () => {
+    expect(commands("cat <<'E'OF\nx\nEOF\ngit push\nE")).toEqual([['cat', '<<EOF'], ['git', 'push'], ['E']])
+    expect(commands('cat <<E"OF"\nx\nEOF\ngit push\nE')).toEqual([['cat', '<<EOF'], ['git', 'push'], ['E']])
+    expect(commands('cat <<END-OF\nx\nEND-OF\ngit push\nEND')).toEqual([['cat', '<<END-OF'], ['git', 'push'], ['END']])
+    expect(commands('cat <<E\\OF\nx\nEOF\ngit push\nE')).toEqual([['cat', '<<EOF'], ['git', 'push'], ['E']])
+    // How the word itself is spelled after <<$'EOF' is the word reader's; the body ends at EOF.
+    expect(commands("cat <<$'EOF'\nx\nEOF\ngit push").slice(1)).toEqual([['git', 'push']])
+  })
+  test('a line that is only part of such a marker stays in the body', () => {
+    expect(commands("cat <<'E'OF\nE\ngit push\nEOF")).toEqual([['cat', '<<EOF']])
+    expect(commands('cat <<E"OF"\nE\ngit push\nEOF')).toEqual([['cat', '<<EOF']])
+    expect(commands('cat <<END-OF\nEND\ngit push\nEND-OF')).toEqual([['cat', '<<END-OF']])
+  })
+  test('any quoted part of the marker makes the body text, and its body is kept', () => {
+    const docs = (cmd: string) => pipeline(cmd)[0]?.heredocs
+    expect(docs("cat <<'E'OF\n$1\nEOF")).toEqual([{ word: 1, body: '$1', quoted: true }])
+    expect(docs('cat <<E"OF"\n$1\nEOF')).toEqual([{ word: 1, body: '$1', quoted: true }])
+    expect(docs('cat <<E\\OF\n$1\nEOF')).toEqual([{ word: 1, body: '$1', quoted: true }])
+    expect(docs('cat <<END-OF\n$1\nEND-OF')).toEqual([{ word: 1, body: '$1', quoted: false }])
+    expect(docs('cat <<-E"OF"\n\t$1\n\tEOF')).toEqual([{ word: 1, body: '$1', quoted: true }])
+  })
+  test('a shift in arithmetic, or a << in a pattern, opens no heredoc, so a real one after it is still read', () => {
+    expect(commands("x=$((1<<2))\ncat > f <<'EOF'\nit's text\nEOF\ngit push")).toEqual([['cat', '>', 'f', '<<EOF'], ['git', 'push']])
+    expect(commands("grep -E '1<<[ ]' f\ncat <<'EOF'\nit's text\nEOF\ngit push")).toEqual([['grep', '-E', '1<<[ ]', 'f'], ['cat', '<<EOF'], ['git', 'push']])
+  })
 })
 
 // #974: the shell runs the commands inside a $(...) or backticks before the command they sit in, and

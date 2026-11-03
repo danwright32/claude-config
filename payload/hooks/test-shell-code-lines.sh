@@ -104,7 +104,7 @@ bare="$(python3 -I -B -c '
 import sys
 sys.path.insert(0, sys.argv[1])
 from shell_code_lines import read_lines
-for n, line, kind, bare, ops, _ in read_lines(open(sys.argv[2]).read()):
+for n, line, kind, bare, ops in read_lines(open(sys.argv[2]).read()):
     print("%d %s %d %d" % (n, kind, bare.count("{"), bare.count("}")))
 ' "$LIB" "$W/b.sh" 2>&1 | paste -sd'|' -)"
 eq "#2063 read_lines counts only the shell's own braces, line by line" \
@@ -129,25 +129,6 @@ from shell_code_lines import read_lines, brace_depth
 print(" ".join(str(brace_depth(r[3])) for r in read_lines(open(sys.argv[2]).read())))
 ' "$LIB" "$W/k.sh" 2>&1)"
 eq "#2068 a brace in a bracket expression is not counted, every other brace is" "1 0 0 0 0 -1 0" "$braces"
-
-# A line that begins inside a quoted string is not this shell's text until that string closes, so
-# its own text is only what follows the close, and nothing when the string runs on past it. A code
-# line's own text is the whole line (claude-config#2068).
-{
-  printf '%s\n' "out=\"\$(sh -c '"
-  printf '%s\n' '  start="$(date +%s)"'
-  printf '%s\n' "' sh)\"; AFTER=1"
-  printf '%s\n' 'msg="one'
-  printf '%s\n' 'two"; CLOSED=1'
-} > "$W/o.sh"
-own="$(python3 -I -B -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-from shell_code_lines import read_lines
-print("|".join("%s:%s" % (r[2], r[5]) for r in read_lines(open(sys.argv[2]).read())))
-' "$LIB" "$W/o.sh" 2>&1)"
-eq "#2068 a quoted line's own text is what follows its string's close" \
-  "code:out=\"\$(sh -c '|quoted:|quoted: sh)\"; AFTER=1|code:msg=\"one|quoted:; CLOSED=1|code:" "$own"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

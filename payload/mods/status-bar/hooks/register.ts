@@ -114,6 +114,22 @@ const setCompactQueued = async ($: EngineInterface, value: boolean) => {
     $.ui.log(`status-bar: could not record that a Compact is ${value ? 'queued' : 'no longer queued'}: ${msg(err)}`, { to: 'debug' })
   }
 }
+// #2082: the handoff note of a Compact the session queued itself, so that once it has run the session
+// is told to read the note and carry on; null for one Dan pressed, or none queued. Set by the compact
+// tool and cleared with the queued Compact, and kept in $.state for a reload as the queueing is.
+let followUpNote: string | null = null
+const followUpRef = { plugin: 'status-bar', key: 'compactFollowUp' } as const
+let keptFollowUp: string | null | undefined
+const setFollowUp = async ($: EngineInterface, note: string | null) => {
+  followUpNote = note
+  if (keptFollowUp === note) return
+  try {
+    await $.state.set(followUpRef, note)
+    keptFollowUp = note
+  } catch (err) {
+    $.ui.log(`status-bar: could not record whether the session is to carry on after its Compact: ${msg(err)}`, { to: 'debug' })
+  }
+}
 // #2025: the tool a session calls once it has written its handoff note at the context line (#1960,
 // hooks/lib/context_size.py, whose notice names it). It queues the same Compact the row's button
 // queues while a turn runs, run when the turn ends. A model cannot type /compact itself. NOT YET
@@ -570,12 +586,16 @@ export const register: Register = on => {
     // before this was kept, and is logged.
     keptTurn = undefined
     keptQueued = undefined
+    keptFollowUp = undefined
     try {
       turnRunning = keptTurn = (await $.state.get(turnRef)).value === true
       compactQueued = keptQueued = (await $.state.get(queuedRef)).value === true
+      const kept = (await $.state.get(followUpRef)).value
+      followUpNote = keptFollowUp = typeof kept === 'string' ? kept : null
     } catch (err) {
       turnRunning = false
       compactQueued = false
+      followUpNote = null
       $.ui.log(`status-bar: could not read whether a turn is running or a Compact queued: ${msg(err)}`, { to: 'debug' })
     }
     startCwd = e.cwd
@@ -643,9 +663,17 @@ export const register: Register = on => {
       await setTurnRunning($, false)
       // A Compact queued during the turn runs now, from this later event, as Claude Code asks (#1278).
       if (compactQueued) {
+        // Both taken and cleared before anything is awaited, so a second raise of this event finds
+        // nothing queued: one Compact, and at most one prompt to carry on after it (#2082).
+        const note = followUpNote
         await setCompactQueued($, false)
+        await setFollowUp($, null)
         $.clock.after(0, () => {
-          void compactNow($).catch(err => $.ui.toast(`Compact did not run: ${msg(err)}`))
+          void (async () => {
+            // One the session queued itself is followed by a prompt to read its note and carry on,
+            // once it has run; a skipped or failed one has already said so, and sends none.
+            if ((await compactNow($)) && note !== null) await carryOn($, note)
+          })().catch(err => $.ui.toast(`Compact did not run: ${msg(err)}`))
         })
       }
       // The turn's end makes no request, so the cache clock stays where its last request put it;
@@ -684,6 +712,7 @@ export const register: Register = on => {
   on('modkit.press', ($, e, next) => {
     if (e.element === 'status-bar:compact-cancel') {
       void setCompactQueued($, false)
+      void setFollowUp($, null)
       void publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
       return { value: { isAnswered: true } }
     }
@@ -713,6 +742,7 @@ export const register: Register = on => {
     const why = await compactRefusal($, input)
     if (why) return { deny: why }
     await setCompactQueued($, true)
+    await setFollowUp($, String(input.note).trim())
     await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
     return {
       result:
@@ -738,6 +768,7 @@ export const register: Register = on => {
       toastedFor = null
       await setTurnRunning($, false)
       await setCompactQueued($, false)
+      await setFollowUp($, null)
       await markReplaced($)
       context = undefined
       contextTokens = undefined
@@ -749,20 +780,42 @@ export const register: Register = on => {
   })
 }
 
-// What Compact does, pressed or typed (#939).
-const compactNow = async ($: EngineInterface) => {
+// What Compact does, pressed or typed (#939). True once the compaction has run; false when it was
+// skipped or failed, which it has already said in a toast.
+const compactNow = async ($: EngineInterface): Promise<boolean> => {
   let r: { skip?: string } | undefined
   try {
     r = (await $.session.compact()) as { skip?: string }
   } catch (err) {
     $.ui.toast(`Compact did not run: ${msg(err)}`)
-    return
+    return false
   }
   if (r && typeof r.skip === 'string') {
     $.ui.toast(`Compact did not run: ${r.skip}`)
-    return
+    return false
   }
   // Reset here as well: this mod's own call does not pass through its own session.compact hook
   // (the engine skips the calling plugin, measured in the tests), and resetting twice changes nothing.
   await conversationCompacted($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
+  return true
+}
+
+// #2082: the prompt that starts the session again after a Compact it queued itself, naming the note
+// it wrote. $.prompt.submit is this session's own prompt, a turn of its own once the session is idle;
+// $.session.send would go to another agent or session.
+const carryOnText = (note: string) =>
+  `This conversation was just compacted, as you queued with ${COMPACT_TOOL} at the context line. ` +
+  `Read your handoff note at ${note} and carry on with the next steps it lists.`
+const carryOn = async ($: EngineInterface, note: string) => {
+  let why: string | undefined
+  try {
+    const r = await $.prompt.submit({ text: carryOnText(note) })
+    if (r.drop !== undefined) why = r.drop
+  } catch (err) {
+    why = msg(err)
+  }
+  if (why === undefined) return
+  // Never silent: with no prompt the session stops here, so Dan is told how to start it again.
+  const reason = why.trim().replace(/\.+$/, '')
+  $.ui.toast(`Compacted, but the session could not be told to carry on${reason ? ` (${reason})` : ''}: type "carry on" to start it again.`)
 }
