@@ -2614,7 +2614,38 @@ test('a switch reaches every other open session on this Mac, and says which coul
     { to: 's3', text: AWAY_TEXT },
     { to: 's3', text: AWAY_TEXT },
   ])
-  expect(r.text).toBe('Away is on in this session and 1 other. 1 could not be told: the session is not running.')
+  expect(r.text).toBe(
+    'Away is on in this session and 1 other. 1 other session is not on away, because the message telling it could not be sent (the session is not running). To switch one, type /away in it: any session whose band does not show AWAY.',
+  )
+})
+
+// #2099: in auto mode a switch sent from a command or a hook got no verdict, in every real
+// telling found in this Mac's transcripts (four sessions, Oct 9 to 20), so the other sessions
+// stayed where they were. Said with its cause and what Dan does about it, in /sleep's words.
+// The reason is the one those transcripts carry, as mod-kit hands it on.
+const SWITCH_NO_VERDICT = 'The server-side auto mode classifier gave no verdict for SendMessage: the request that produced this action did not ask for one'
+test('a switch auto mode gave no verdict on says so, and how to switch that session by hand', withDeps, async ($, on) => {
+  const { clock } = world(on, { open: [{ sessionId: 's2' }, { sessionId: 's3' }], sends: [{ refused: SWITCH_NO_VERDICT }, { refused: SWITCH_NO_VERDICT }, true] })
+  await start($ as never, clock)
+  const r = await command($ as never, 'home')
+  expect(r.text).toBe(
+    `Home is on in this session and 1 other. 1 other session is not on home, because auto mode's safety check gave no verdict on the message telling it (${SWITCH_NO_VERDICT}). To switch one, type /home in it: any session whose band still shows AWAY.`,
+  )
+  // Claude's acknowledgement opens with the same sentence.
+  expect(JSON.stringify(r)).toContain('1 other session is not on home, because auto mode')
+})
+
+test('several not switched are counted once, each cause said once', withDeps, async ($, on) => {
+  const blocked = 'Auto mode classifier blocked action: messaging another session'
+  const { clock } = world(on, {
+    open: [{ sessionId: 's2' }, { sessionId: 's3' }, { sessionId: 's4' }],
+    sends: [{ refused: SWITCH_NO_VERDICT }, { refused: SWITCH_NO_VERDICT }, { refused: blocked }, { refused: blocked }, { refused: SWITCH_NO_VERDICT }, { refused: SWITCH_NO_VERDICT }],
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'away')
+  expect(r.text).toBe(
+    `Away is on in this session. 3 other sessions are not on away, because auto mode's safety check gave no verdict on the message telling it (${SWITCH_NO_VERDICT}); auto mode's safety check refused the message telling it (${blocked}). To switch one, type /away in it: any session whose band does not show AWAY.`,
+  )
 })
 
 test('a registry that cannot be read is said, never read as no other session (L215)', withDeps, async ($, on) => {

@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
-  LIMITS, activeMs, blockTold, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, SLEEP_START, sendItselfAsk, startFailKind, unstartedSaid,
+  LIMITS, activeMs, blockTold, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, SLEEP_START, sendFailBecause, sendItselfAsk, startFailBecause, startFailKind, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type StopInput,
 } from '../hooks/driver.ts'
 
@@ -489,6 +489,14 @@ describe('a worker that was not told to start (#2062)', () => {
   })
   test('nothing is said when every worker was told', () => {
     expect(unstartedSaid([])).toBe('')
+  })
+  // #2099: the same three causes, said about whichever message it was, so /away and /home name
+  // them with the words /sleep uses rather than a second copy of the reading.
+  test('a cause is said about any message, in the words a start message gets', () => {
+    expect(sendFailBecause(NO_VERDICT, 'the message telling it')).toBe(`auto mode's safety check gave no verdict on the message telling it (${NO_VERDICT})`)
+    expect(sendFailBecause('SendMessage blocked by auto mode', 'the message telling it')).toBe("auto mode's safety check refused the message telling it (SendMessage blocked by auto mode)")
+    expect(sendFailBecause('the session is not running', 'the message telling it')).toBe('the message telling it could not be sent (the session is not running)')
+    expect(startFailBecause(NO_VERDICT)).toBe(sendFailBecause(NO_VERDICT, 'its start message'))
   })
   test('one worker is named with what happened and how Dan starts it before he sleeps', () => {
     expect(unstartedSaid([{ who: 'the session in o/pivot ("Close #12")', why: NO_VERDICT }])).toBe(
