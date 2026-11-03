@@ -14,7 +14,12 @@
 # WHAT A SKIP IS is lib/agent-overrides.py's one reading (`skips`): --no-verify on any git
 # subcommand, commit's -n, a core.hooksPath set with -c, and HUSKY=0 and the other hook managers'
 # switches, behind rtk, env, an if or a `bash -c` string alike, and inside a rebase's --exec. Words
-# that only mention one (a commit message, an echo, a grep) are not one.
+# that only mention one (a commit message, an echo, a grep) are not one. Since claude-config#2135 it
+# is also a git config that CHANGES core.hooksPath, in any scope and either spelling (set, unset,
+# --add, --replace-all, the core section removed or renamed, or --edit): -c moves the hooks for one
+# command, a config write moves them for every later one. Reading the key is not a change. An agent
+# never writes the setting itself, even to a folder of tracked hooks; it runs the repository's own
+# hook install script, which this gate does not read into, so the install keeps working.
 #
 # WHO IS ASKED is read from agent_id, which only a subagent's payload carries (measured on Claude
 # Code 2.1.274, see playwright-subagent-gate.sh). The main session is not judged: Dan sees what it
@@ -56,12 +61,18 @@ case "$payload" in *git*) ;; *) exit 0 ;; esac
 
 refuse() { printf '%s\n' "$1" >&2; exit 2; }
 
+# core.hooksPath as git reads it, in any case (claude-config#2135): a glob, used unquoted in a case
+# pattern so its brackets match.
+HOOKS_KEY_ANY_CASE='[hH][oO][oO][kK][sS][pP][aA][tT][hH]'
+
 # EVERY path that cannot read the command judges the same words the reading path acts on: a skip's
 # words and standard input's device path (#1765). Three lessons review rounds on #1587 each found a degraded path judging fewer things than the
 # normal one, so they share this one list (L370).
 refuse_unread() {   # $1 = the text to look in, $2 = why it could not be read
+  # git reads the key in any case, so it is matched in any case (claude-config#2135), as are the
+  # other ways a git config can change it unread: a section's removal or rename, and an edit.
   case "$1" in
-    *no-verify*|*hooksPath*|*hookspath*|*HooksPath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*)
+    *no-verify*|*$HOOKS_KEY_ANY_CASE*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*|*-section*|*config*edit*|*config*-e*)
       refuse "REFUSED (no-verify-gate.sh): this agent's command names a way to skip the repository's git hooks, and $2, so the gate cannot tell what it does. Run the command without it." ;;
     */dev/stdin*|*/dev/fd/0*)
       refuse "REFUSED (no-verify-gate.sh): this agent's command names standard input's device path, and $2, so the gate cannot tell whether git reads it. Write the message to a file and pass -F <file>, or use -F - (claude-config#1765)." ;;
@@ -117,8 +128,10 @@ case "$cmd" in
     esac ;;
 esac
 
+# A git config is read whatever it names, since a section's removal or an edit changes the key
+# without naming it (claude-config#2135).
 case "$cmd" in
-  *commit*|*no-verify*|*hooksPath*|*hookspath*|*HooksPath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*) ;;
+  *commit*|*no-verify*|*$HOOKS_KEY_ANY_CASE*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*|*config*) ;;
   *) exit 0 ;;
 esac
 
@@ -130,6 +143,14 @@ case "$rc" in
   *) refuse_unread "$cmd" "lib/agent-overrides.py could not read it (exit $rc: ${found##*$'\n'})" ;;
 esac
 
+# A persistent change of where git reads the hooks from has its own remedy: the repository's own
+# install script sets the hooks up, and an agent never writes the setting itself (claude-config#2135).
+install=""
+case "$found" in
+  *claude-config#2135*) install="
+No agent may change where git reads the hooks from, in any config scope (claude-config#2135). To set up a repository's hooks, run its own hook install script (or the package install that runs it) instead of writing core.hooksPath." ;;
+esac
+
 refuse "REFUSED (no-verify-gate.sh): agent $agent ran a git command that skips the repository's own git hooks:
-  ${found//$'\n'/$'\n'  }
+  ${found//$'\n'/$'\n'  }$install
 Those hooks are the only check that runs before the commit exists, and an agent skipping them is what claude-config#1587 records. No agent may skip them (claude-config#1666). Run it without the skip and wait for the hooks in the foreground, however slow they are. If they cannot pass, stop and hand back to the main session saying why. Whatever happens, never report a skip as not having happened."
