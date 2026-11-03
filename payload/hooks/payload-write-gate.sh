@@ -377,12 +377,13 @@ CD_TO = object()  # marks a segment that is a directory the commands after it ru
 segments = re.split(r"&&|\|\||;|\||\n", shell_text)
 # The commands a shell runs from its -c string, eval from its words and env -S from its string
 # (claude-config#1478), read by lib/shell-words.py as commands of their own, each after a cd to the
-# directory it runs in, so a cd inside one moves only what follows it there. Only added to the cut
-# above, which still reads everything it always read. So are the commands inside a substitution,
-# which the cut above never reads as commands of their own, those in the body of a heredoc whose end
-# marker is unquoted among them, since the shell runs them too (claude-config#2053). And with a
-# heredoc, every command it runs, each in the directory it runs in: the cut above reads a cd in a
-# body as moving the commands after it, which the shell never does (claude-config#2080).
+# directory it runs in, so a cd inside one moves only what follows it there. Only added to the
+# segments of the whole command above, which still read every line of it, heredoc bodies included.
+# So are the commands inside a substitution, which those segments never read as commands of their
+# own, those in the body of a heredoc whose end marker is unquoted among them, since the shell runs
+# them too (claude-config#2053). And with a heredoc, every command it runs, each in the directory it
+# runs in: the segments above read a cd in a body as moving the commands after it, which the shell
+# never does (claude-config#2080).
 try:
     for d, text, _, _, depth in _sw.every_command(cmd):
         if depth > 0 or "$(" in cmd or "`" in cmd or "<<" in cmd:
