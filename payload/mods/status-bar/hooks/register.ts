@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import type { StatusBar, StatusBarAccount, StatusBarFacts, StatusBarMode } from '../types/index.d.ts'
+import type { StatusBar, StatusBarAccount, StatusBarFacts, StatusBarFollowUp, StatusBarMode } from '../types/index.d.ts'
 import { CACHE_WARN_MS, checksOf, compactLines, lookParts, unpushedOf } from './facts.ts'
 import type { Job, PrReading, QuietAgent, RollupEntry, UnpushedReading } from './facts.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
@@ -116,18 +116,88 @@ const setCompactQueued = async ($: EngineInterface, value: boolean) => {
 }
 // #2082: the handoff note of a Compact the session queued itself, so that once it has run the session
 // is told to read the note and carry on; null for one Dan pressed, or none queued. Set by the compact
-// tool and cleared with the queued Compact, and kept in $.state for a reload as the queueing is.
-let followUpNote: string | null = null
+// tool, and kept in $.state, which outlives a reload of this mod, until the prompt is sent or its
+// failure said: a reload in the middle of the compaction cancels every wait of the copy that started
+// it (the engine's types: "a hot reload of the plugin cancels its pending waits with the old
+// environment"), so whichever copy runs once the compaction has ended sends it. `ranAt` is when the
+// turn's end started its Compact (null while still queued), and `compacted` whether a compaction of
+// this conversation was heard to end since. A plain string, as the copy before this kept it, is a
+// note still queued.
 const followUpRef = { plugin: 'status-bar', key: 'compactFollowUp' } as const
-let keptFollowUp: string | null | undefined
-const setFollowUp = async ($: EngineInterface, note: string | null) => {
-  followUpNote = note
-  if (keptFollowUp === note) return
+let followUp: StatusBarFollowUp | null = null
+const followUpOf = (v: unknown): StatusBarFollowUp | null => {
+  if (typeof v === 'string') return { note: v, ranAt: null, compacted: false }
+  if (v === null || typeof v !== 'object') return null
+  const f = v as Partial<StatusBarFollowUp>
+  if (typeof f.note !== 'string') return null
+  return { note: f.note, ranAt: typeof f.ranAt === 'number' ? f.ranAt : null, compacted: f.compacted === true }
+}
+const armed = (f: StatusBarFollowUp | null): f is StatusBarFollowUp & { ranAt: number } => f !== null && f.ranAt !== null
+const SEND_AFTER_MS = 10_000
+const GIVE_UP_MS = 10 * MIN
+const GAVE_UP =
+  'The Compact the session queued did not say it finished within 10 minutes, so the session was not told to carry on: type "carry on" to start it again.'
+const setFollowUp = async ($: EngineInterface, value: StatusBarFollowUp | null): Promise<boolean> => {
+  followUp = value
   try {
-    await $.state.set(followUpRef, note)
-    keptFollowUp = note
+    await $.state.set(followUpRef, value)
+    return true
   } catch (err) {
     $.ui.log(`status-bar: could not record whether the session is to carry on after its Compact: ${msg(err)}`, { to: 'debug' })
+    return false
+  }
+}
+const claimFollowUp = async ($: EngineInterface, ready: (f: StatusBarFollowUp) => boolean): Promise<StatusBarFollowUp | null> => {
+  const held = await $.state.get(followUpRef)
+  const f = followUpOf(held.value)
+  if (f === null || !ready(f)) return null
+  const r = await $.state.set(followUpRef, null, { ifVersion: held.version })
+  if (!r.isSet) return null
+  followUp = null
+  return f
+}
+const markCompacted = async ($: EngineInterface): Promise<boolean> => {
+  const held = await $.state.get(followUpRef)
+  const f = followUpOf(held.value)
+  if (!armed(f) || f.compacted) return false
+  const next: StatusBarFollowUp = { ...f, compacted: true }
+  const r = await $.state.set(followUpRef, next, { ifVersion: held.version })
+  if (r.isSet) followUp = next
+  return r.isSet
+}
+const sendFollowUp = async ($: EngineInterface, ready: (f: StatusBarFollowUp) => boolean) => {
+  let f: StatusBarFollowUp | null
+  try {
+    f = await claimFollowUp($, ready)
+  } catch (err) {
+    $.ui.toast(`Compacted, but the session could not be told to carry on (${msg(err).trim().replace(/\.+$/, '')}): type "carry on" to start it again.`)
+    return
+  }
+  if (f !== null) await carryOn($, f.note)
+}
+const giveUp = async ($: EngineInterface, ranAt: number) => {
+  let f: StatusBarFollowUp | null
+  try {
+    f = await claimFollowUp($, g => g.ranAt === ranAt)
+  } catch (err) {
+    $.ui.log(`status-bar: could not read whether the session's Compact finished: ${msg(err)}`, { to: 'debug' })
+    $.ui.toast(GAVE_UP)
+    return
+  }
+  if (f === null) return
+  if (f.compacted) await carryOn($, f.note)
+  else $.ui.toast(GAVE_UP)
+}
+const giveUpLater = ($: EngineInterface, ranAt: number, now: number) => {
+  $.clock.after(Math.max(0, ranAt + GIVE_UP_MS - now), () => {
+    void giveUp($, ranAt).catch(err => $.ui.log(`status-bar: ${msg(err)}`, { to: 'debug' }))
+  })
+}
+const compactionEnded = async ($: EngineInterface) => {
+  if (await markCompacted($)) {
+    $.clock.after(SEND_AFTER_MS, () => {
+      void sendFollowUp($, f => armed(f) && f.compacted).catch(err => $.ui.log(`status-bar: ${msg(err)}`, { to: 'debug' }))
+    })
   }
 }
 // #2025: the tool a session calls once it has written its handoff note at the context line (#1960,
@@ -155,17 +225,43 @@ const COMPACT_TOOL_SPEC = {
     'Main session only: a subagent writes the note and hands back instead.',
   inputSchema: {
     type: 'object',
-    properties: { note: { type: 'string', description: `The absolute path of the handoff note, <your scratchpad folder>${NOTE_TAIL}.` } },
+    properties: { note: { type: 'string', description: `The absolute path of handoff.md at the root of your scratchpad folder, ending ${NOTE_TAIL}.` } },
     required: ['note'],
   },
 } as const
 
-// Why the compact tool will not queue a Compact for this call, or undefined when it will.
-const compactRefusal = async ($: EngineInterface, e: { agentId?: string; note?: unknown }): Promise<string | undefined> => {
-  if (e.agentId !== undefined) return 'A subagent never compacts: write handoff.md in your scratchpad folder, then hand back, saying you stopped at the context line, so the main session gives the rest to a fresh agent.'
-  if (!interactive) return 'This session has no screen, so a queued Compact would never run here.'
-  const note = typeof e.note === 'string' ? e.note.trim() : ''
-  if (!note.startsWith('/') || !note.endsWith(NOTE_TAIL)) return `The handoff note is handoff.md at the root of your scratchpad folder: pass its absolute path, ending ${NOTE_TAIL}${note ? `, not ${note}` : ''}.`
+// #2071: the names the note's path is taken under. note is the one the schema declares; handoff is
+// the word this tool's own text uses for the note, and a session was measured passing the path
+// under it (a claude-config transcript, 2026-11-02), then reading a refusal that named no parameter
+// as a fault in the path. Either name's path is judged exactly as note's always was.
+const NOTE_KEYS = ['note', 'handoff'] as const
+// Fields Claude Code puts on a tool call beside the model's own arguments.
+const CALL_KEYS = new Set(['tool', 'tool_use_id', 'agentId', 'consent'])
+const notePath = (e: Record<string, unknown>): { note: string } | { deny: string } => {
+  const given = [...new Set(NOTE_KEYS.map(k => e[k]).filter((v): v is string => typeof v === 'string' && v.trim() !== '').map(v => v.trim()))]
+  if (given.length > 1) return { deny: `Pass the handoff note's path once, as note: this call gave both ${given.join(' and ')}.` }
+  const note = given[0]
+  if (note === undefined) {
+    // A blank note or handoff is no path, so it is not reported as one passed.
+    const others = Object.keys(e).filter(k => !CALL_KEYS.has(k) && !(NOTE_KEYS as readonly string[]).includes(k) && e[k] !== undefined)
+    return { deny: `Pass the absolute path of handoff.md at the root of your scratchpad folder as note, ending ${NOTE_TAIL}${others.length ? `: this call passed ${others.join(', ')}, and no note` : ''}.` }
+  }
+  if (!note.startsWith('/') || !note.endsWith(NOTE_TAIL)) return { deny: `The handoff note is handoff.md at the root of your scratchpad folder: pass its absolute path as note, ending ${NOTE_TAIL}, not ${note}.` }
+  return { note }
+}
+
+// Why the compact tool will not queue a Compact for this call, or the note's path when it will.
+const compactRefusal = async ($: EngineInterface, e: Record<string, unknown>): Promise<{ note: string } | { deny: string }> => {
+  if (e.agentId !== undefined) return { deny: 'A subagent never compacts: write handoff.md in your scratchpad folder, then hand back, saying you stopped at the context line, so the main session gives the rest to a fresh agent.' }
+  if (!interactive) return { deny: 'This session has no screen, so a queued Compact would never run here.' }
+  const path = notePath(e)
+  if ('deny' in path) return path
+  const why = await noteRefusal($, path.note)
+  return why === undefined ? path : { deny: why }
+}
+
+// Why the note at this path will not do: missing, unreadable, empty, or older than what has been decided.
+const noteRefusal = async ($: EngineInterface, note: string): Promise<string | undefined> => {
   let st: { kind: string; size: number; mtimeMs: number }
   try {
     st = await $.fs.stat(note)
@@ -548,6 +644,22 @@ const conversationCompacted = async ($: EngineInterface) => {
   await cacheReplaced($)
 }
 
+// #2082: the rows Claude Code keeps at the end of every compaction of this conversation (its boundary
+// notice and its summary, by session.append's compaction door), raised by the engine rather than by
+// this mod, so whichever copy of it is running then hears them, including one loaded while its own
+// Compact was in flight. Not the PostCompact or compact SessionStart settings hooks, which carry the
+// same moment: Claude Code's security default sends every classic event past the tier mods load in
+// (#875), so they would reach this mod only while the managed settings file is in place. A subagent's
+// rows carry its id and are left alone. A note armed by a turn's end is marked compacted, and its
+// prompt sent 10 seconds on unless the copy that started the Compact has sent it by then. The cache
+// clock is reset too, which the copy a reload replaced could no longer do; a compaction keeps more
+// than one row, and resetting twice changes nothing.
+const compactionHeard = async ($: EngineInterface, agentId: string | undefined) => {
+  if (!interactive || agentId !== undefined) return
+  await conversationCompacted($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
+  await compactionEnded($).catch(err => $.ui.log(`status-bar: could not record that the session's Compact finished: ${msg(err)}`, { to: 'debug' }))
+}
+
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -586,17 +698,28 @@ export const register: Register = on => {
     // before this was kept, and is logged.
     keptTurn = undefined
     keptQueued = undefined
-    keptFollowUp = undefined
     try {
       turnRunning = keptTurn = (await $.state.get(turnRef)).value === true
       compactQueued = keptQueued = (await $.state.get(queuedRef)).value === true
-      const kept = (await $.state.get(followUpRef)).value
-      followUpNote = keptFollowUp = typeof kept === 'string' ? kept : null
+      followUp = followUpOf((await $.state.get(followUpRef)).value)
     } catch (err) {
       turnRunning = false
       compactQueued = false
-      followUpNote = null
+      followUp = null
       $.ui.log(`status-bar: could not read whether a turn is running or a Compact queued: ${msg(err)}`, { to: 'debug' })
+    }
+    // #2082: a note whose Compact ran before this copy started. Its compaction already heard to end
+    // (by the copy before, or this one in the moment before this ran) is sent now; one still in
+    // flight waits for the rows Claude Code keeps at its end, and is given up at the same ten minutes after
+    // it started as the copy before would have.
+    if (armed(followUp)) {
+      if (followUp.compacted) {
+        $.clock.after(0, () => {
+          void sendFollowUp($, f => armed(f) && f.compacted).catch(err => $.ui.log(`status-bar: ${msg(err)}`, { to: 'debug' }))
+        })
+      } else {
+        giveUpLater($, followUp.ranAt, await $.clock.now())
+      }
     }
     startCwd = e.cwd
     home = await $.env.get('HOME')
@@ -638,6 +761,27 @@ export const register: Register = on => {
     return yield* next(e)
   })
 
+  // #2082: a prompt Dan sends himself once the session's Compact has started, at the terminal or
+  // from his phone or the web, takes the place of the prompt to carry on, so the note is dropped
+  // rather than sent after his turn. Judged by where the engine says the prompt came from, never by
+  // a turn starting: a subagent's hand-back, a Stop hook's review and another mod's prompt all run
+  // turns on the main conversation too, and live (2026-11-02, 9:40 PM ET) two of them ran before the
+  // prompt to carry on, so dropping it on any turn lost it with no prompt and no toast. A slash
+  // command (/context) starts no turn of the work, and leaves it. Whose a prompt is, is mod-kit's
+  // one answer (#1135); one it cannot give is logged and drops nothing.
+  on('prompt.submit', async ($, e, next) => {
+    if (interactive && e.command === undefined && armed(followUp)) {
+      const own = await $.modkit.isDans({ origin: e.origin }).catch(err => {
+        $.ui.log(`status-bar: could not tell whether a prompt was Dan's own: ${msg(err)}`, { to: 'debug' })
+        return false
+      })
+      if (own) await claimFollowUp($, armed).catch(err =>
+        $.ui.log(`status-bar: could not drop the prompt to carry on after Dan's own prompt took its place: ${msg(err)}`, { to: 'debug' }),
+      )
+    }
+    return next(e)
+  })
+
   // A /login in this session changes the account this session runs on (#1200), and mod-kit raises
   // it with the account the login file names, once the command is done and again if the file changes
   // within the half minute after it (#1205); a login made elsewhere it raises at the next prompt or
@@ -663,16 +807,30 @@ export const register: Register = on => {
       await setTurnRunning($, false)
       // A Compact queued during the turn runs now, from this later event, as Claude Code asks (#1278).
       if (compactQueued) {
-        // Both taken and cleared before anything is awaited, so a second raise of this event finds
-        // nothing queued: one Compact, and at most one prompt to carry on after it (#2082).
-        const note = followUpNote
+        // Taken before anything is awaited, so a second raise of this event finds nothing queued: one
+        // Compact, and at most one prompt to carry on after it (#2082).
+        const queued = followUp !== null && followUp.ranAt === null ? followUp : null
         await setCompactQueued($, false)
-        await setFollowUp($, null)
+        // #2082: the note is kept, armed with when this Compact started, until its prompt is sent or
+        // its failure said, so a copy of this mod loaded during the compaction can still send it.
+        const ranAt = await $.clock.now()
+        const kept = queued === null ? false : await setFollowUp($, { note: queued.note, ranAt, compacted: false })
+        // Unkept, it is sent by this copy alone, as before #2082 reopened, and this copy holds no note.
+        if (queued !== null && !kept) followUp = null
+        if (queued !== null && kept) giveUpLater($, ranAt, ranAt)
         $.clock.after(0, () => {
           void (async () => {
+            const ran = await compactNow($)
+            if (queued === null) return
             // One the session queued itself is followed by a prompt to read its note and carry on,
             // once it has run; a skipped or failed one has already said so, and sends none.
-            if ((await compactNow($)) && note !== null) await carryOn($, note)
+            if (!kept) {
+              if (ran) await carryOn($, queued.note)
+            } else if (ran) {
+              await sendFollowUp($, f => f.ranAt === ranAt)
+            } else {
+              await claimFollowUp($, f => f.ranAt === ranAt)
+            }
           })().catch(err => $.ui.toast(`Compact did not run: ${msg(err)}`))
         })
       }
@@ -695,6 +853,14 @@ export const register: Register = on => {
     if (interactive && e.agentId === undefined && e.trigger !== 'precompute' && !skipped) {
       await conversationCompacted($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
     }
+    return r
+  })
+
+  // #2082: the rows a compaction of this conversation keeps at its end (compactionHeard above), taken
+  // once each is stored.
+  on('session.append', { door: 'compaction' }, async ($, e, next) => {
+    const r = await next(e)
+    await compactionHeard($, e.agentId)
     return r
   })
 
@@ -738,16 +904,16 @@ export const register: Register = on => {
     // Answered here and never passed down, so the guards beneath are asked through mod-kit's screen.
     const screened = await $.modkit.screen(e)
     if (screened) return screened
-    const input = e as unknown as { agentId?: string; note?: unknown }
-    const why = await compactRefusal($, input)
-    if (why) return { deny: why }
+    const why = await compactRefusal($, e as unknown as Record<string, unknown>)
+    if ('deny' in why) return why
+    const { note } = why
     await setCompactQueued($, true)
-    await setFollowUp($, String(input.note).trim())
+    await setFollowUp($, { note, ranAt: null, compacted: false })
     await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
     return {
       result:
         'Compact queued: it runs when this turn ends, the same as pressing Compact on the status bar, and Dan can cancel it there. ' +
-        `End this reply now; the conversation after it starts from the summary, and ${String(input.note).trim()} holds what you decided. ` +
+        `End this reply now; the conversation after it starts from the summary, and ${note} holds what you decided. ` +
         'In a /goal run the turn goes on until the goal is met or stopped, so the Compact waits until then.',
     }
   })
@@ -782,7 +948,27 @@ export const register: Register = on => {
 
 // What Compact does, pressed or typed (#939). True once the compaction has run; false when it was
 // skipped or failed, which it has already said in a toast.
+// #2100: while it runs, the Compact holds back mod-kit's reload of this mod, which would drop the
+// wait for its end; at most ten minutes, past which mod-kit lets the reload go and says so. A hold
+// that cannot be taken is no reason not to compact, so it is said in the debug log and the Compact
+// runs as before (#2113 already carries the prompt to carry on across a reload).
+const COMPACT_HOLD = { mod: MOD, id: 'compact' } as const
 const compactNow = async ($: EngineInterface): Promise<boolean> => {
+  let held = false
+  try {
+    await $.modkit.hold({ ...COMPACT_HOLD, what: 'the Compact it started', ms: 10 * 60_000 })
+    held = true
+  } catch (err) {
+    $.ui.log(`status-bar: could not hold back a reload while the Compact runs, so one now would drop the wait for its end (${msg(err)})`, { to: 'debug' })
+  }
+  try {
+    return await compactHeld($)
+  } finally {
+    if (held)
+      await $.modkit.release(COMPACT_HOLD).catch(err => $.ui.log(`status-bar: could not let go of the hold on a reload taken for the Compact; it lapses by itself within 10 minutes (${msg(err)})`, { to: 'debug' }))
+  }
+}
+const compactHeld = async ($: EngineInterface): Promise<boolean> => {
   let r: { skip?: string } | undefined
   try {
     r = (await $.session.compact()) as { skip?: string }

@@ -809,12 +809,25 @@ else check "#1017 a cd before a command that is not the action asked about is re
 got="$(ps_repo_dir "git status" "$S" 2>/dev/null)"; rc=$?
 [ "$rc" -eq 0 ] && [ "$got" = "$S" ] && check "#1017 a line naming no directory is still the session's" ok \
   || check "#1017 a line naming no directory is still the session's" "rc=$rc got [$got]"
-# The add reader loads shell-words.py's list without leaving a bytecode cache in the hooks' lib/.
-PYC_BEFORE="$(ls "$DIR/lib/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
-ps_add_scope "if true; then git add -A; fi && git commit -m x" >/dev/null
-PYC_AFTER="$(ls "$DIR/lib/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
-[ "$PYC_AFTER" = "$PYC_BEFORE" ] && [ "$PYC_AFTER" = 0 ] && check "#1017 reading an add leaves no shell-words bytecode in lib/" ok \
-  || check "#1017 reading an add leaves no shell-words bytecode in lib/" "before $PYC_BEFORE after $PYC_AFTER"
+# The add reader loads shell-words.py's list without leaving a bytecode cache beside it (#1017).
+# Measured in a copy of the two files whose __pycache__ does not exist yet, never in the hooks' own
+# lib/ (#2103, L411): any other importer of shell-words.py can leave a .pyc there, which this test
+# cannot clear, and it decides the reading either way. A current one is read by python in place of
+# writing, so a reader that lost its -B wrote nothing and passed; any one at all failed a reader
+# that wrote nothing. In the copy, every file after the call is one the reader wrote.
+# PYTHONDONTWRITEBYTECODE and PYTHONPYCACHEPREFIX are cleared for the call, so what is measured is
+# the reader's own -B and not this shell's environment (L322). The answer is checked too: a reader
+# that never loaded shell-words.py writes no bytecode either, and would pass unmeasured (L98).
+PYC_LIB="$RD/pyc-lib"; mkdir -p "$PYC_LIB"
+cp "$LIB" "$PYC_LIB/push-scope.sh"; cp "$DIR/lib/shell-words.py" "$PYC_LIB/shell-words.py"
+pyc_got="$(env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX bash -c '. "$1"; shift; "$@"' _ \
+  "$PYC_LIB/push-scope.sh" ps_add_scope "bash -c 'git add a.txt b.txt && git commit -m x' && git push" | tr '\n' ' ')"
+pyc_left="$(ls -A "$PYC_LIB/__pycache__" 2>/dev/null | tr '\n' ' ')"
+if [ "$pyc_got" != "PATHS a.txt b.txt " ]; then
+  check "#1017 reading an add leaves no shell-words bytecode beside it" "the copy's reader answered [$pyc_got], not the paths shell-words.py reads, so whether it writes bytecode was not measured"
+elif [ -n "$pyc_left" ]; then
+  check "#1017 reading an add leaves no shell-words bytecode beside it" "it wrote [$pyc_left]"
+else check "#1017 reading an add leaves no shell-words bytecode beside it" ok; fi
 
 # The reader's edges, each one a way a plausible scanner gets the directory wrong.
 want_repo "cd $T &>/dev/null && git push" "$T" \

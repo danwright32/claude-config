@@ -2,7 +2,8 @@
 # Tests for the check-later skill's instructions.
 #
 # The skill writes rows to a Slack list by column KEY, so a key that drifts from the list's schema
-# writes nothing or the wrong column; it must only ever run when Dan types it; and the list's
+# writes nothing or the wrong column; the Skill tool must not start it on its own (Dan types it, or the end of turn hook sends a
+# session to it); and the list's
 # Reminder Saved box is Dan's own record that he set the reminder, so the skill must never tick it.
 # Nothing here reaches Slack. CHECK_LATER_SKILL points the suite at another copy, which is how a
 # broken copy is shown to fail.

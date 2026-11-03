@@ -1,5 +1,6 @@
 import { expect, mock } from 'claude-code/testing'
-import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { never, test } from './mod-kit/tests/hang-ceiling.ts'
+import { isDans } from './mod-kit/hooks/origin.ts'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type {} from '../types/index.d.ts'
@@ -52,8 +53,24 @@ const modKit: { name: string; register: Register } = {
         // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
-        isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
+        // #2082: whether a prompt is Dan's own, asked of the world, which reads it with a byte for byte
+        // copy of mod-kit's reader under tests/mod-kit (a plugin here runs in its own environment).
+        isDans: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout) as boolean
+        },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+        // #2100: the hold a Compact takes on the status bar's reload, and its letting go, asked of the
+        // world, which keeps them in order beside the compaction and can refuse one as mod-kit would.
+        hold: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'hold', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
+        release: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'release', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         // #1205: the bottom of a login mod-kit raises; the status bar's own hook takes it in above this.
         login: async () => undefined,
@@ -135,6 +152,9 @@ type World = {
   // A disk that will not take the facts file, or its folder: the reason, or empty when it will.
   writeFails: string
   mkdirFails: string
+  // #2100: why mod-kit refuses a hold or a letting go, or empty when it takes them.
+  holdFails: string
+  releaseFails: string
 }
 const world = (on: On, init: Partial<World> = {}) => {
   const w: World = {
@@ -151,8 +171,12 @@ const world = (on: On, init: Partial<World> = {}) => {
     submit: text => ({ text }),
     writeFails: '',
     mkdirFails: '',
+    holdFails: '',
+    releaseFails: '',
     ...init,
   }
+  // #2100: each hold taken, each letting go and each compaction, in the order they happened.
+  const order: string[] = []
   // A Mac with no claude.ai login unless a test logs it in (#815).
   const files: Record<string, string> = { '/Users/x/.claude.json': '{}' }
   const toasts: string[] = []
@@ -190,9 +214,9 @@ const world = (on: On, init: Partial<World> = {}) => {
     return { value: { kind: 'file', size: text.length, mtimeMs: mtimes[e.path] ?? T0, isLink: false } } as never
   })
   // The tools the status bar offers the model (#2025), as Claude Code lists them.
-  const tools: { name: string; description: string }[] = []
+  const tools: { name: string; description: string; inputSchema: unknown }[] = []
   on('tool.register', ($, e) => {
-    tools.push({ name: e.name, description: e.description })
+    tools.push({ name: e.name, description: e.description, inputSchema: e.inputSchema })
     return { value: { tool: `mcp__status-bar__${e.name}` } } as never
   })
   on('process.run', ($, e) => {
@@ -209,6 +233,18 @@ const world = (on: On, init: Partial<World> = {}) => {
       if (rest[1] === 'next') return r(0, `${w.poll.next(rest[2] as string, rest[3] as string)}\n`)
       if (rest[1] === 'failed') return answer(w.poll.failed)
       if (rest[1] === 'answered') return r(0, 'ok\n')
+    }
+    if (cmd === '__modkit' && rest[0] === 'isDans') {
+      const origin = (JSON.parse(rest[1] as string) as { origin?: { kind?: string } }).origin
+      // A mod-kit that cannot answer, as one mid reload might.
+      if (origin?.kind === 'kit-unanswered') return r(1, '', 'mod-kit is not loaded')
+      return r(0, JSON.stringify(isDans(origin)))
+    }
+    if (cmd === '__modkit' && (rest[0] === 'hold' || rest[0] === 'release')) {
+      const fails = rest[0] === 'hold' ? w.holdFails : w.releaseFails
+      if (fails) return r(1, '', fails)
+      order.push(`${rest[0]} ${rest[1]}`)
+      return r(0)
     }
     if (cmd === 'mkdir') return w.mkdirFails ? r(1, '', w.mkdirFails) : r(0)
     if (cmd === 'mv') {
@@ -238,9 +274,12 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('session.measure', ($, e) => ({ changed: e.changed }) as never)
   on('session.compact', () => {
     compacts.push(1)
+    order.push('compact')
     return w.compact() as never
   })
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  // The rows a compaction keeps at its end (#2082), which a test raises itself.
+  on('session.append', ($, e, next) => next(e))
   on('prompt.submit', ($, e) => {
     prompts.push({ text: e.text, afterCompacts: compacts.length })
     return w.submit(e.text) as never
@@ -258,7 +297,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, files, mtimes, tools, toasts, logs, debug, compacts, prompts, runs, polls, clock }
+  return { w, files, mtimes, tools, toasts, logs, debug, compacts, prompts, runs, polls, clock, order }
 }
 
 const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, clock: { settle: () => Promise<void> }) => {
@@ -522,6 +561,61 @@ test('a Compact that does not run says why in a toast, rather than nothing', wit
   await ui.unmount()
 })
 
+// #2100: a reload of the status bar while its Compact runs would drop the wait for its end, so the
+// Compact holds mod-kit's reload of it back for as long as it runs, and lets go once it is over,
+// whether it ran, was skipped or threw.
+const HELD = `hold ${JSON.stringify({ mod: 'status-bar', id: 'compact', what: 'the Compact it started', ms: 10 * 60_000 })}`
+const LET_GO = `release ${JSON.stringify({ mod: 'status-bar', id: 'compact' })}`
+test('a Compact holds back a reload of the status bar while it runs, and lets go once it is over, run, skipped or thrown (#2100)', withKit, async ($, on) => {
+  const { clock, order, w } = world(on)
+  await start($, clock)
+  await measure($, 90)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(order).toEqual([HELD, 'compact', LET_GO])
+  w.compact = () => ({ skip: 'Not enough messages to compact.' })
+  await measure($, 90)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  w.compact = () => {
+    throw new Error('compaction failed')
+  }
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(order).toEqual([HELD, 'compact', LET_GO, HELD, 'compact', LET_GO, HELD, 'compact', LET_GO])
+  await ui.unmount()
+})
+
+test('a hold or a letting go mod-kit refuses is said in the debug log, and the Compact still runs as before (#2100)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, debug, order, w } = world(on, { holdFails: 'mod-kit is not loaded' })
+  await start($, clock)
+  await measure($, 90)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual([])
+  expect(debug.filter(d => d.includes('mod-kit is not loaded'))).toEqual([
+    'status-bar: could not hold back a reload while the Compact runs, so one now would drop the wait for its end (mod-kit is not loaded)',
+  ])
+  w.holdFails = ''
+  w.releaseFails = 'mod-kit is not loaded'
+  await measure($, 90)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(2)
+  expect(toasts).toEqual([])
+  // A hold never taken is not let go of; the one taken at the second press could not be.
+  expect(order).toEqual(['compact', HELD, 'compact'])
+  expect(debug.filter(d => d.includes('let go'))).toEqual([
+    'status-bar: could not let go of the hold on a reload taken for the Compact; it lapses by itself within 10 minutes (mod-kit is not loaded)',
+  ])
+  await ui.unmount()
+})
+
 // #1278, Dan 2026-10-16: "the compact mod can't be clicked unless the session is totally stopped. it
 // errors if claude is saying something." Claude Code refuses a compaction while a turn runs (its
 // types: $.session.compact "rejects while a turn runs"), so a press then is queued, shown on the
@@ -779,6 +873,238 @@ test('a prompt to carry on that the session refuses, or that fails, is said in a
   expect(toasts[1]).toMatch(/^Compacted, but the session could not be told to carry on \(\S/)
 })
 
+// #2082 reopened, 2026-11-02 at 7:40 PM ET: the session queued a Compact, and mod-kit's reload at
+// the reply's end touched this mod, which Claude Code reloaded 31 s into the 45 s compaction. A
+// reload cancels every wait of the copy it replaces (its types: "a hot reload of the plugin cancels
+// its pending waits with the old environment"), so the copy that started the Compact never heard it
+// finish: no prompt to carry on, and no toast. Modelled here as a Compact that never answers the copy
+// that started it, a second session.start over the same $.state, then the rows Claude Code keeps at
+// every compaction's end (its boundary notice and its summary, by the compaction door of
+// session.append), which reach whichever copy is running then. Not the PostCompact or compact
+// SessionStart settings hooks: Claude Code's security default sends every classic event past the
+// tier mods load in (#875, tools/check-mods.sh), so they reach a mod only while the managed settings
+// file is in place.
+const appendRow = async ($: unknown, row: Record<string, unknown>) => {
+  try {
+    await ($ as { session: { append: (e: never) => Promise<unknown> } }).session.append(row as never)
+  } catch (err) {
+    if (!/no implementation for session.append/.test(String(err))) throw err
+  }
+}
+let rowCount = 0
+const boundaryKept = ($: unknown, extra: Record<string, unknown> = {}) =>
+  appendRow($, {
+    door: 'compaction',
+    origin: { kind: 'engine' },
+    uuid: `boundary-${++rowCount}`,
+    message: { type: 'system', name: 'compact_boundary', content: [{ type: 'text', text: 'Conversation compacted' }] },
+    ...extra,
+  })
+const summaryKept = ($: unknown, extra: Record<string, unknown> = {}) =>
+  appendRow($, {
+    door: 'compaction',
+    origin: { kind: 'engine' },
+    uuid: `summary-${++rowCount}`,
+    message: { type: 'user', role: 'user', isMeta: true, content: [{ type: 'text', text: 'summary' }] },
+    ...extra,
+  })
+const compactEnds = async ($: unknown, extra: Record<string, unknown> = {}) => {
+  await boundaryKept($, extra)
+  await summaryKept($, extra)
+}
+const reloadDuringCompact = async ($: unknown, clock: TestClock, w: World, files: Record<string, string>, mtimes: Record<string, number>) => {
+  await start($ as never, clock)
+  await queueWithNote($, clock, files, mtimes)
+  w.compact = () => never()
+  await turn($ as never)
+  await clock.settle()
+  await start($ as never, clock)
+}
+
+test('a reload in the middle of the compaction the session queued still sends one prompt to carry on, once it has finished (#2082)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  expect(compacts).toHaveLength(1)
+  // A reload with no compaction finished sends nothing, however long it waits for one.
+  await clock.advance(MIN)
+  expect(prompts).toEqual([])
+  // Nor does a subagent's compaction ending meanwhile, which compacts only its own conversation.
+  await compactEnds($, { agentId: 'a1' })
+  await clock.advance(MIN)
+  expect(prompts).toEqual([])
+  expect(cacheIn(files)).not.toBeNull()
+  await compactEnds($)
+  await clock.advance(10 * SEC)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(CARRY_ON)
+  expect(toasts).toEqual([])
+  // The copy running when it ended also resets the cache clock, which the copy it replaced cannot.
+  expect(cacheIn(files)).toBeNull()
+  // Neither a row the compaction keeps after it nor a later reload sends it again.
+  await summaryKept($)
+  await start($, clock)
+  await clock.advance(20 * MIN)
+  expect(prompts).toHaveLength(1)
+  expect(toasts).toEqual([])
+})
+
+test('the prompt to carry on is sent exactly once across two reloads around the end of the compaction (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await compactEnds($)
+  // A second reload before the first copy sent it: the copy running now sends it, and only once.
+  await start($, clock)
+  await clock.settle()
+  expect(prompts).toHaveLength(1)
+  await summaryKept($)
+  await compactEnds($)
+  await clock.advance(20 * MIN)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(CARRY_ON)
+  expect(toasts).toEqual([])
+})
+
+test("either row a compaction keeps at its end is enough on its own (#2082)", withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await summaryKept($)
+  await clock.advance(10 * SEC)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(CARRY_ON)
+})
+
+test("a compaction's boundary row alone is enough too (#2082)", withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await boundaryKept($)
+  await clock.advance(10 * SEC)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(CARRY_ON)
+})
+
+test('a prompt to carry on that the session refuses after a reload is still said in a toast (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  w.submit = () => ({ drop: 'held by a guard' })
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await compactEnds($)
+  await clock.advance(10 * SEC)
+  expect(prompts).toHaveLength(1)
+  expect(toasts).toEqual(['Compacted, but the session could not be told to carry on (held by a guard): type "carry on" to start it again.'])
+})
+
+test('a compaction the session queued that is never heard to finish is said after ten minutes, and sends nothing after (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await clock.advance(9 * MIN)
+  expect(toasts).toEqual([])
+  await clock.advance(MIN)
+  expect(toasts).toEqual(['The Compact the session queued did not say it finished within 10 minutes, so the session was not told to carry on: type "carry on" to start it again.'])
+  await compactEnds($)
+  await clock.advance(MIN)
+  expect(prompts).toEqual([])
+  expect(toasts).toHaveLength(1)
+})
+
+// A prompt entering the session from where prompt.submit's origin says it came: Dan's Enter at the
+// terminal ('composer'), his phone or the web ('bridge'), a subagent's hand-back ('task-notification').
+const submitFrom = ($: unknown, kind: string, text: string, extra: Record<string, unknown> = {}) =>
+  ($ as { prompt: { submit: (e: never) => Promise<unknown> } }).prompt.submit({ text, origin: { kind }, wait: false, ...extra } as never)
+const carryOns = (prompts: { text: string }[]) => prompts.filter(p => p.text.includes(CARRY_ON))
+
+test('a prompt Dan types once the session has started its Compact takes the place of the prompt to carry on (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await compactEnds($)
+  await submitFrom($, 'composer', 'Leave the PR for now.')
+  await step($, clock)
+  await turn($)
+  await clock.advance(20 * MIN)
+  expect(carryOns(prompts)).toEqual([])
+  expect(toasts).toEqual([])
+})
+
+test('a prompt Dan sends from his phone, or types while the compaction still runs, takes its place too; a slash command does not (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  // A command such as /context starts no turn of the work, so the prompt is still sent.
+  await submitFrom($, 'composer', '/context', { command: { name: 'context', args: '' } })
+  await compactEnds($)
+  await clock.advance(10 * SEC)
+  expect(carryOns(prompts)).toHaveLength(1)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await submitFrom($, 'bridge', 'Stop there.')
+  await compactEnds($)
+  await clock.advance(20 * MIN)
+  expect(carryOns(prompts)).toHaveLength(1)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await submitFrom($, 'composer', 'Wait for me.')
+  await clock.advance(MIN)
+  await compactEnds($)
+  await clock.advance(20 * MIN)
+  expect(carryOns(prompts)).toHaveLength(1)
+  expect(toasts).toEqual([])
+})
+
+// Live, 2026-11-02 at 9:40 PM ET: after a self queued Compact, a subagent's hand-back turn and a Stop
+// hook's review turn both ran before the prompt to carry on. A turn neither of them Dan's must not
+// drop it, or after a reload it is lost with no prompt and no toast.
+test("a subagent's hand-back and a Stop hook's review turn before the prompt is sent do not take its place (#2082)", withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await compactEnds($)
+  await clock.advance(2 * SEC)
+  // The hand-back: a background task's notice, then the turn it starts.
+  await submitFrom($, 'task-notification', '<task-notification>agent a1 finished</task-notification>')
+  await step($, clock)
+  await turn($)
+  // The Stop hook's review: the turn carries on with no prompt of its own.
+  await step($, clock)
+  await turn($)
+  await clock.advance(10 * SEC)
+  expect(carryOns(prompts)).toHaveLength(1)
+  await clock.advance(20 * MIN)
+  expect(carryOns(prompts)).toHaveLength(1)
+  expect(toasts).toEqual([])
+})
+
+test("a prompt mod-kit cannot say is Dan's leaves the prompt to carry on in place, and says why in the debug log (#2082)", withKit, async ($, on) => {
+  const { clock, debug, files, mtimes, prompts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await compactEnds($)
+  await submitFrom($, 'kit-unanswered', 'Who sent this?')
+  await clock.advance(10 * SEC)
+  expect(carryOns(prompts)).toHaveLength(1)
+  expect(debug.some(l => l.startsWith("status-bar: could not tell whether a prompt was Dan's own: ") && l.includes('mod-kit is not loaded'))).toBe(true)
+})
+
+test("a compaction's end sends nothing for the button's Compact, an automatic one in the middle of a turn, or a subagent's (#2082)", withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  await compactEnds($)
+  await clock.advance(MIN)
+  expect(prompts).toEqual([])
+  // Queued but its turn still running: an automatic compaction then is not the one queued.
+  await queueWithNote($, clock, files, mtimes)
+  await compactEnds($)
+  await compactEnds($, { agentId: 'a1' })
+  await clock.advance(MIN)
+  expect(prompts).toEqual([])
+  // The queued one still runs at the turn's end, and is followed by its one prompt.
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(2)
+  expect(prompts).toHaveLength(1)
+  await compactEnds($)
+  await clock.advance(MIN)
+  expect(prompts).toHaveLength(1)
+  await ui.unmount()
+})
+
 test('a note from before the last compaction, over an hour old, empty, or outside the scratchpad is refused (#2025)', withKit, async ($, on) => {
   const { clock, compacts, files, mtimes } = world(on)
   await start($, clock)
@@ -802,6 +1128,93 @@ test('a note from before the last compaction, over an hour old, empty, or outsid
   await turn($)
   await clock.settle()
   expect(compacts).toHaveLength(ran)
+})
+
+// #2071: measured in a claude-config session's transcript (2026-11-02), a session called the tool with
+// its note's path under handoff, the word the tool's own text uses for it, and was refused with a
+// sentence that named no parameter, so it read the refusal as a fault in the path and the Compact
+// was never queued. The path is judged exactly as before, under either name.
+test('the note passed as handoff is taken and queued, and the carry on prompt names it (#2071)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(SEC)
+  files[NOTE] = 'Next: push the branch.'
+  mtimes[NOTE] = clock.now()
+  const r = await queueCompact($, { note: undefined, handoff: NOTE })
+  expect(refusal(r)).toBeUndefined()
+  expect(String(r.result)).toContain(`${NOTE} holds what you decided`)
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(`Read your handoff note at ${NOTE}`)
+})
+
+test('a note passed as handoff is the one a reload in the middle of the compaction still names (#2071, #2082)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts, w } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(SEC)
+  files[NOTE] = 'Next: push the branch.'
+  mtimes[NOTE] = clock.now()
+  // Passed padded, under handoff: the record a reload reads back holds the path as checked.
+  expect(refusal(await queueCompact($, { note: undefined, handoff: ` ${NOTE} ` }))).toBeUndefined()
+  w.compact = () => never()
+  await turn($)
+  await clock.settle()
+  await start($, clock)
+  expect(compacts).toHaveLength(1)
+  await compactEnds($)
+  await clock.advance(10 * SEC)
+  expect(prompts).toHaveLength(1)
+  // Trimmed as checked: a padded path would leave a doubled space either side of it.
+  expect(prompts[0]?.text).toContain(`Read your handoff note at ${NOTE} and carry on`)
+})
+
+test('the scratchpad path is taken with or without /private in front (#2071)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(SEC)
+  const bare = NOTE.replace(/^\/private/, '')
+  files[bare] = 'Next: push the branch.'
+  mtimes[bare] = clock.now()
+  expect(refusal(await queueCompact($, { note: bare }))).toBeUndefined()
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+})
+
+test('a call with no note names the parameter and what it was given; a wrong path under handoff is still refused (#2071)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes } = world(on)
+  await start($, clock)
+  await step($, clock)
+  const none = refusal(await queueCompact($, { note: undefined, path: NOTE }))
+  expect(none).toContain('as note')
+  expect(none).toContain('this call passed path, and no note')
+  // A blank note is no note, never reported as one passed.
+  expect(refusal(await queueCompact($, { note: '  ' }))).not.toContain('passed note')
+  files['/repo/handoff.md'] = 'Decisions.'
+  mtimes['/repo/handoff.md'] = clock.now()
+  expect(refusal(await queueCompact($, { note: undefined, handoff: '/repo/handoff.md' }))).toContain('not /repo/handoff.md')
+  expect(refusal(await queueCompact($, { note: undefined, handoff: 'scratchpad/handoff.md' }))).toContain('not scratchpad/handoff.md')
+  // Two different paths in one call: neither is guessed at.
+  files[NOTE] = 'Decisions.'
+  mtimes[NOTE] = clock.now()
+  expect(refusal(await queueCompact($, { handoff: '/repo/handoff.md' }))).toContain('once')
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+})
+
+test('the parameter description names the note path without doubling the scratchpad folder (#2071)', withKit, async ($, on) => {
+  const { clock, tools } = world(on)
+  await start($, clock)
+  const tool = tools.find(t => t.name === 'queue_compact')
+  expect(tool).toBeDefined()
+  const note = (tool?.inputSchema as { properties: { note: { description: string } } }).properties.note
+  expect(note.description).toContain('/scratchpad/handoff.md')
+  expect(note.description).not.toContain('scratchpad folder>/scratchpad')
 })
 
 // #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in
