@@ -52,11 +52,11 @@ BODY_FILE_COMMANDS = {CREATE, ("issue", "edit"), ("issue", "comment"),
 # file rule, and refused `gh issue -m M create`).
 def crude_gh_command(words):
     names = [w.split("/")[-1] for w in words]
-    if "gh" not in names:  # gh-reader: the crude reading, when there is no other
+    if "gh" not in names:  # gh-reader: the crude text reading gated_in_text uses
         return None
     subs = {s for s, _ in BODY_FILE_COMMANDS}
     front, sub, prev = [], None, ""
-    for k in range(names.index("gh") + 1, len(words)):  # gh-reader: the crude reading, when there is no other
+    for k in range(names.index("gh") + 1, len(words)):  # gh-reader: the crude text reading gated_in_text uses
         w = words[k]
         if (sub, w) in BODY_FILE_COMMANDS:
             return (sub, w, front, list(words[k + 1:]))

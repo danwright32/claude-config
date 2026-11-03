@@ -130,6 +130,8 @@ type World = {
   tokens: number | undefined
   window: number
   compact: () => unknown
+  // The session taking a prompt a mod submits (#2082): the prompt that entered, a { drop }, or a throw.
+  submit: (text: string) => unknown
   // A disk that will not take the facts file, or its folder: the reason, or empty when it will.
   writeFails: string
   mkdirFails: string
@@ -146,6 +148,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     tokens: undefined,
     window: 200_000,
     compact: () => ({ messages: [{ role: 'assistant', text: 'summary', toolUses: [] }] }),
+    submit: text => ({ text }),
     writeFails: '',
     mkdirFails: '',
     ...init,
@@ -156,6 +159,9 @@ const world = (on: On, init: Partial<World> = {}) => {
   const logs: string[] = []
   const debug: string[] = []
   const compacts: number[] = []
+  // Each prompt the mod submitted to this session (#2082), and where the session then stood: how
+  // many compactions had run by then.
+  const prompts: { text: string; afterCompacts: number }[] = []
   const runs: string[][] = []
   const polls: { argv: string[]; env?: Record<string, string> }[] = []
   mock.env(on, { HOME: '/Users/x' })
@@ -235,6 +241,10 @@ const world = (on: On, init: Partial<World> = {}) => {
     return w.compact() as never
   })
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  on('prompt.submit', ($, e) => {
+    prompts.push({ text: e.text, afterCompacts: compacts.length })
+    return w.submit(e.text) as never
+  })
   on('ui.toast', ($, e) => {
     toasts.push(String((e as { text?: string }).text))
     return { value: undefined } as never
@@ -248,7 +258,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, files, mtimes, tools, toasts, logs, debug, compacts, runs, polls, clock }
+  return { w, files, mtimes, tools, toasts, logs, debug, compacts, prompts, runs, polls, clock }
 }
 
 const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, clock: { settle: () => Promise<void> }) => {
@@ -621,6 +631,152 @@ test("a guard's refusal through mod-kit's screen is the compact tool's answer, a
   await turn($)
   await clock.settle()
   expect(compacts).toHaveLength(0)
+})
+
+// #2082, Slate 2026-11-02: a compact the session queued ran at the reply's end, and then nothing
+// happened until Dan typed ("the compact hook seems to stop all of your progress"). So once that
+// compact has run, the session is sent one prompt to read its handoff note and carry on; the
+// button's Compact is Dan's, pressed with him there, and sends none.
+type TestClock = { now: () => number; advance: (ms: number) => Promise<void>; settle: () => Promise<void> }
+const queueWithNote = async ($: unknown, clock: TestClock, files: Record<string, string>, mtimes: Record<string, number>) => {
+  await step($, clock)
+  await clock.advance(SEC)
+  files[NOTE] = 'Next: push the branch, open the PR.'
+  mtimes[NOTE] = clock.now()
+  const r = await queueCompact($)
+  expect(refusal(r)).toBeUndefined()
+}
+const CARRY_ON = `Read your handoff note at ${NOTE}`
+
+test('a compact the session queued that runs is followed by one prompt to read the handoff note and carry on (#2082)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts, toasts } = world(on)
+  await start($, clock)
+  await queueWithNote($, clock, files, mtimes)
+  expect(prompts).toEqual([])
+  // The turn's end raised twice over, as a reload or a second listener could: one compact, one prompt.
+  await Promise.all([turn($), turn($)])
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(CARRY_ON)
+  expect(prompts[0]?.text).toContain('next steps')
+  // Sent once the compaction had run, so it lands in the conversation that carries on from the summary.
+  expect(prompts[0]?.afterCompacts).toBe(1)
+  expect(toasts).toEqual([])
+  // The reply that prompt starts ends too, with nothing queued: no second compact, no second prompt.
+  await step($, clock)
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(prompts).toHaveLength(1)
+})
+
+test('a compact the session queued that is skipped or throws sends no prompt, and says why in a toast as before (#2082)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts, toasts, w } = world(on)
+  await start($, clock)
+  w.compact = () => ({ skip: 'Not enough messages to compact.' })
+  await queueWithNote($, clock, files, mtimes)
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual(['Compact did not run: Not enough messages to compact.'])
+  busy(w)
+  await queueWithNote($, clock, files, mtimes)
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(2)
+  expect(toasts).toHaveLength(2)
+  expect(toasts[1]).toMatch(/^Compact did not run: \S/)
+  expect(prompts).toEqual([])
+})
+
+test("the button's Compact, run at once or queued for the reply's end, sends no prompt (#2082)", withKit, async ($, on) => {
+  const { clock, compacts, prompts, w } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  // A compaction takes the context reading with it (#1421), so the row comes back with the next one.
+  await measure($, 80)
+  await step($, clock)
+  const idle = w.compact
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  w.compact = idle
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(2)
+  expect(prompts).toEqual([])
+  await ui.unmount()
+})
+
+test('a compact the session queued that Dan cancelled, or a /clear dropped, sends no prompt, nor does his next press (#2082)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await queueWithNote($, clock, files, mtimes)
+  await press({ key: 'status-bar:compact-cancel' })
+  await clock.settle()
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+  // A press afterwards is Dan's own Compact, not the one the session queued.
+  await step($, clock)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  await queueWithNote($, clock, files, mtimes)
+  await $.session.end({ sessionId: 's1', reason: 'clear' } as never)
+  await clock.settle()
+  await measure($, 80)
+  await step($, clock)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(2)
+  expect(prompts).toEqual([])
+  await ui.unmount()
+})
+
+test('the prompt to carry on is kept across a reload of the mod in the middle of the turn (#2082, as #1703)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts } = world(on)
+  await start($, clock)
+  await queueWithNote($, clock, files, mtimes)
+  await start($, clock)
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(CARRY_ON)
+})
+
+test('a prompt to carry on that the session refuses, or that fails, is said in a toast, so Dan knows the work has stopped (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await start($, clock)
+  w.submit = () => ({ drop: 'held by a guard' })
+  await queueWithNote($, clock, files, mtimes)
+  await turn($)
+  await clock.settle()
+  expect(prompts).toHaveLength(1)
+  expect(toasts).toEqual(['Compacted, but the session could not be told to carry on (held by a guard): type "carry on" to start it again.'])
+  w.submit = () => {
+    throw new Error('the session has ended')
+  }
+  await queueWithNote($, clock, files, mtimes)
+  await turn($)
+  await clock.settle()
+  expect(prompts).toHaveLength(2)
+  expect(toasts).toHaveLength(2)
+  expect(toasts[1]).toMatch(/^Compacted, but the session could not be told to carry on \(\S/)
 })
 
 test('a note from before the last compaction, over an hour old, empty, or outside the scratchpad is refused (#2025)', withKit, async ($, on) => {

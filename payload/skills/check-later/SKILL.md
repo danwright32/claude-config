@@ -1,7 +1,7 @@
 ---
 name: check-later
 disable-model-invocation: true
-description: Use when Dan types /check-later in a session that has left work waiting on a later date (a canary week, an N day gate, data still accumulating, "we'll check this in a week"), to put that work on his Slack list "Dan Projects To Do List" as a row a fresh session can run, and to hand him a card for setting its reminder.
+description: Use when Dan types /check-later, or the end of turn hook's CHECK LATER pointer sends you here, in a session that has left work waiting on a later date (a canary week, an N day gate, data still accumulating, "we'll check this in a week"), to put that work on his Slack list "Dan Projects To Do List" as a row a fresh session can run, and to hand him a card for setting its reminder.
 trigger: /check-later
 ---
 
@@ -10,6 +10,22 @@ trigger: /check-later
 Turns each thing this session left waiting on a date into a row on Dan's Slack list, with a one line
 prompt a brand new Claude Code session can run cold on the start date, then pins a card telling Dan
 to set the reminder. Dan types nothing after the command: everything comes from this session.
+
+## Started by the end of turn hook
+
+`check-later-nudge.sh` ends a turn that left a check waiting on a later day (a one shot reminder,
+a project memory naming a coming date, or a promise to check again on a later day) with a CHECK
+LATER pointer to this file, so Dan no longer has to remember to type the command. Do this before
+any SESSION REFLECTION or ISSUE REVIEW in the same stop, so these questions come first. Then:
+
+- An item step 5 matches is already on the list: leave it out, with no question and no line about
+  it.
+- An item step 1 finds is not waiting on a date gets one line saying so, and no row.
+- Everything else runs as when Dan types it: step 6 still shows each draft row as its own question,
+  and nothing is written before Dan picks.
+
+The hook only points here; it never writes a row, and it stands down on a turn where Dan already
+ran /check-later or a row was already written.
 
 ## The list
 

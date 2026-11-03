@@ -133,6 +133,32 @@ else check "#2053 a push in an unquoted body backquote is a push" "not seen"; fi
 if ps_is_git_push $'cat <<\'EOF\'\nnote $('"$P"$')\nEOF'; then check "#2053 control: a push in a quoted body is not a push" "seen as a push"
 else check "#2053 control: a push in a quoted body is not a push" ok; fi
 
+# ---- a case pattern's ) closes no subshell (#2074) ----
+# Each command's directory, as the push gates are given it: a cd inside the subshell ends with it,
+# wherever the case pattern's ) falls, and the commands of a branch are commands of their own. The
+# branches are read one after another, as the reader reads every compound command, so a cd in one
+# carries into the next; what this holds is where the subshell ends.
+case_dirs="$(python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec); spec.loader.exec_module(sw)
+for c in sys.argv[2:]:
+    print("|".join(d + ":" + t.strip() for d, t in sw.commands(c, "/s")))' "$SW" \
+  '(case y in y) cd /w;; esac; cd /x); git push' \
+  'cd /a; (case y in (y) cd /w;; z|v) cd /q;& *) cd /r;;& esac); git push' \
+  'x=$(case a in a) cd /w;; esac); git push' \
+  'case y in y) cd /w;; esac; git push')"
+want='/s:case y in|/s:cd /w|/w:esac|/w:cd /x|/s:git push
+/s:cd /a|/a:case y in|/a:cd /w|/w:cd /q|/q:cd /r|/r:esac|/a:git push
+/s:case a in|/s:cd /w|/w:esac|/s:x=$(case a in a) cd /w;; esac)|/s:git push
+/s:case y in|/s:cd /w|/w:esac|/w:git push'
+[ "$case_dirs" = "$want" ] && check "#2074 a cd after a case pattern's ) stays in its subshell or substitution" ok \
+  || check "#2074 a cd after a case pattern's ) stays in its subshell or substitution" "got [$case_dirs]"
+if ps_is_git_push 'case y in a|b) git push origin main;; esac'; then check "#2074 a push in a branch after a|b) is a push" ok
+else check "#2074 a push in a branch after a|b) is a push" "not seen"; fi
+if ps_is_git_push 'case y in a) echo git push;; esac'; then check "#2074 control: a push only echoed in a branch is not a push" "seen as a push"
+else check "#2074 control: a push only echoed in a branch is not a push" ok; fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
