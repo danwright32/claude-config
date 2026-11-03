@@ -960,6 +960,78 @@ run().then(function (doc) { var pre = document.createElement("pre"); pre.id = "P
     check("naming the stylesheet it could not read, rather than leaving it out silently",
           "NOT inlined" in captured and "linked.css" in captured, captured[:400])
 
+    # A theme the page's boot script stamped on <html> is not kept in the captured chrome
+    # (claude-config#2045). The chrome was pinned to whatever theme the capture ran in, while the build
+    # follows the signed in person's stored theme, so the score's picture differed on every pixel for a
+    # reason outside the slot. The page is served over HTTP here, as a product's is, so the capture can
+    # read the markup the server sent and tell a stamped theme from a served one.
+    import functools
+    import http.server
+    import threading
+
+    class _Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+    theme_server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Quiet, directory=T))
+    threading.Thread(target=theme_server.serve_forever, daemon=True).start()
+    theme_base = "http://127.0.0.1:%d/" % theme_server.server_address[1]
+
+    def capture_of(name, html_tag, boot):
+        """The capture of a page whose <html> is html_tag and whose head runs boot, as Playwright's
+        browser_evaluate would take it once the page's own scripts have run."""
+        write(name, """<!doctype html>%s<head><meta charset="utf-8"><script>%s</script>
+<style>header { background: rgb(20, 33, 61); }</style></head>
+<body><header>Larkspur</header><main id="main">x</main>
+<script>
+var run = (%s);
+run().then(function (doc) { var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = doc; document.body.append(pre); });
+</script></body></html>""" % (html_tag, boot, snippet))
+        url = theme_base + name if not name.startswith("file-") else "file://" + os.path.join(T, name)
+        proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
+                               "--dump-dom", url], capture_output=True, text=True,
+                              env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
+        m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
+        doc = html_unescape(m.group(1)) if m else ""
+        # The element's own tag, past the first comment, which names <html> in its text.
+        tag = re.search(r"<html\b[^>]*>", re.sub(r"<!--.*?-->", "", doc, flags=re.S))
+        note = re.search(r"<!--(.*?)-->", doc, re.S)
+        return doc, (tag.group(0) if tag else ""), (note.group(1) if note else ""), proc
+
+    STAMP = ('document.documentElement.setAttribute("data-theme", "light");'
+             'document.documentElement.classList.add("dark");'
+             'document.documentElement.style.colorScheme = "dark";')
+    doc, tag, note, proc = capture_of("theme-stamped.html", '<html lang="en" class="app">', STAMP)
+    check("a theme the page's script stamped on <html> is taken out of the captured chrome",
+          doc.startswith("<!doctype html>") and "data-theme" not in tag and "dark" not in tag
+          and "color-scheme" not in tag and 'class="app"' in tag and 'lang="en"' in tag,
+          tag or doc[:400] or proc.stdout[-600:] + proc.stderr[-300:])
+    check("and the capture's first comment names the theme it took out",
+          'data-theme="light"' in note and "dark" in note and "taken out" in note, note)
+
+    doc, tag, note, proc = capture_of("theme-overridden.html", '<html lang="en" data-theme="light">',
+                                      'document.documentElement.setAttribute("data-theme", "dark");')
+    check("a theme the server sent and the script changed is put back as the server sent it",
+          'data-theme="light"' in tag and "dark" not in tag, tag or proc.stdout[-600:] + proc.stderr[-300:])
+
+    doc, tag, note, proc = capture_of("theme-served.html", '<html lang="en" data-theme="light" class="app">', "")
+    check("a theme in the markup the server sent is kept, since the built page is served the same way",
+          'data-theme="light"' in tag and 'class="app"' in tag, tag or proc.stdout[-600:] + proc.stderr[-300:])
+    check("and the capture's first comment says the chrome is pinned to it, naming it",
+          "pinned" in note and 'data-theme="light"' in note and "served" in note, note)
+
+    doc, tag, note, proc = capture_of("file-theme-unknown.html", '<html lang="en">',
+                                      'document.documentElement.setAttribute("data-theme", "light");')
+    check("where the served markup cannot be read, the theme on <html> is kept",
+          'data-theme="light"' in tag, tag or proc.stdout[-600:] + proc.stderr[-300:])
+    check("and the first comment says a theme is pinned, names it, and why it could not tell where it came from",
+          "pinned" in note and 'data-theme="light"' in note and "could not" in note, note)
+
+    doc, tag, note, proc = capture_of("plain-page.html", '<html lang="en">', "")
+    check("a page with no theme on <html> says nothing about a theme",
+          "theme" not in note and "pinned" not in note and 'lang="en"' in tag, note + " | " + tag)
+    theme_server.shutdown()
+
 # --- a settled frame follows its page's height, as a round's option does (claude-config#1816) --------
 # A settled frame was sized once, as it loaded, from its page root's scroll height, which never reads less
 # than the frame it sits in, so a short page kept the 400px it started at; a root of h-full height (Slate's)
