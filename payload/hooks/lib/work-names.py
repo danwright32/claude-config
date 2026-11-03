@@ -25,7 +25,9 @@ product named in prose): without the organisation it locates nothing, it is the 
 of lessons are written in, and `name#N` is what lesson-fanout.sh parses to skip the repository a
 lesson came from. The same login without its hyphen is a different GitHub account, and the
 company's public web domain, so it is not one either. These are decisions recorded on #1568's pull
-request, not omissions.
+request, not omissions. The one exception is public pull request and issue text: the publish gate
+(work_names_publish_gate.py, claude-config#2105) gives this Matcher the repository names as well,
+for that text only.
 
 NOTHING PRINTED REPEATS A NAME FOUND. A hit is reported as path:line and which source matched. CI
 logs of a public repository are public, and a refusal message is read in transcripts.
@@ -77,35 +79,49 @@ def extra_hashes():
     return {h.strip().lower() for h in raw.split(",") if h.strip()}
 
 
-def read_registry():
-    """-> (owners, sentence) or raises SystemExit(2) with the reason said."""
+def registry_entries(timeout=60):
+    """-> (state, file, why, ["owner/name", ...]) from this Mac's dev update registry, never exiting.
+
+    state is ok, missing or unreadable, as dev-update-registry.js says it; unreadable also covers a
+    reader that could not be run or did not answer in JSON, why saying which. The scan below and the
+    publish gate (work_names_publish_gate.py, claude-config#2105) both read the registry through it;
+    the gate passes what is left of its own time budget as timeout.
+    """
     reader = os.environ.get("WORK_NAMES_REGISTRY_READER") or os.path.join(HERE, "dev-update-registry.js")
     try:
-        p = subprocess.run(["node", reader, "repos"], capture_output=True, text=True, timeout=60, errors="replace")
+        p = subprocess.run(["node", reader, "repos"], capture_output=True, text=True, timeout=timeout, errors="replace")
     except FileNotFoundError:
-        die("node is not on PATH, so this Mac's dev update registry could not be read, and its "
-            "owners could not be checked.")
+        return ("unreadable", None, "node is not on PATH, so this Mac's dev update registry could not be "
+                "read", [])
     except subprocess.TimeoutExpired:
-        die("reading the dev update registry took over 60 seconds, so its owners could not be checked.")
+        return ("unreadable", None, "reading the dev update registry took over %d seconds" % timeout, [])
     try:
         got = json.loads(p.stdout)
-    except ValueError:
-        die("the dev update registry reader (%s) answered with something that is not JSON: %s"
-            % (reader, (p.stdout + p.stderr).strip()[:300]))
-    state = got.get("state")
+        state = got.get("state")
+    except (ValueError, AttributeError):
+        return ("unreadable", None, "the dev update registry reader (%s) answered with something that is "
+                "not JSON: %s" % (reader, (p.stdout + p.stderr).strip()[:300]), [])
+    repos = [r for r in (got.get("repos") or []) if isinstance(r, str)]
+    return (state if state in ("ok", "missing") else "unreadable", got.get("file"), got.get("why", ""), repos)
+
+
+def read_registry():
+    """-> (owners, sentence) or raises SystemExit(2) with the reason said."""
+    state, where, why, repos = registry_entries()
     if state == "missing":
         return set(), ("there is no dev update registry on this Mac (%s), so only the two built in "
-                       "work organisation names were checked" % got.get("file"))
+                       "work organisation names were checked" % where)
     if state != "ok":
-        die("the dev update registry could not be read, so its owners could not be checked: %s"
-            % got.get("why", ""))
+        if where is None:
+            die(why + ", and its owners could not be checked.")
+        die("the dev update registry could not be read, so its owners could not be checked: %s" % why)
     owners = set()
-    for full in got.get("repos") or []:
+    for full in repos:
         owner = full.split("/", 1)[0].strip().lower()
         if owner:
             owners.add(owner)
     return owners, ("the two built in work organisation names and %d owner%s from %s"
-                    % (len(owners), "" if len(owners) == 1 else "s", got.get("file")))
+                    % (len(owners), "" if len(owners) == 1 else "s", where))
 
 
 def die(msg):
@@ -114,13 +130,23 @@ def die(msg):
 
 
 class Matcher:
-    def __init__(self, hashes, owners):
+    """names: further lower case names matched by the same rule, beside the owners. The tree scan and
+    the send scan never pass any; the publish gate passes the work repository names (claude-config#2105,
+    which departs from #1568 for public pull request and issue text only, see DESIGN.md)."""
+
+    def __init__(self, hashes, owners, names=frozenset()):
         self.hashes = hashes
         self.owners = owners
+        self.names = names
         self.cache = {}
 
     def kind(self, token):
         """None, or which source a token's runs match: every contiguous run of its hyphen parts."""
+        found = self.match(token)
+        return found[0] if found else None
+
+    def match(self, token):
+        """None, or (source, run): the first contiguous run of the token's hyphen parts that matches."""
         if token in self.cache:
             return self.cache[token]
         found = None
@@ -130,10 +156,13 @@ class Matcher:
             for j in range(i + 1, n + 1):
                 run = "-".join(parts[i:j])
                 if sha(run) in self.hashes:
-                    found = "a work organisation name"
+                    found = ("a work organisation name", run)
                     break
                 if run in self.owners:
-                    found = "a name from this Mac's dev update registry"
+                    found = ("a name from this Mac's dev update registry", run)
+                    break
+                if run in self.names:
+                    found = ("a work repository or owner name", run)
                     break
             if found:
                 break
