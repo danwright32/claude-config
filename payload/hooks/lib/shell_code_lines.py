@@ -50,7 +50,7 @@ try:
             "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "shell-words.py"))
         _sw = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_sw)
-        heredoc_opener = _sw.heredoc_opener
+        heredoc_opener, heredoc_openers = _sw.heredoc_opener, _sw.heredoc_openers
     finally:
         sys.dont_write_bytecode = _dont_write
 except Exception as e:  # noqa: BLE001  missing, or failing to load: either way there is no reader
