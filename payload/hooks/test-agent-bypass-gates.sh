@@ -106,6 +106,22 @@ skips_says "#2135 --file=" 'git config --file=.git/config core.hooksPath /dev/nu
 skips_says "#2135 -f" 'git config -f .git/config core.hooksPath /dev/null' 0
 skips_says "#2135 -f glued" 'git config -f.git/config core.hooksPath /dev/null' 0
 skips_says "#2135 --type before the name" 'git config --type path core.hooksPath /tmp/empty' 0
+# Every short option git config takes a value with (git 2.51: -f and -t, in every mode), so its value
+# is never read as the key, nor its letters as more options (-tbool holds the l of --list).
+skips_says "#2135 -t with the next word" 'git config -t path core.hooksPath /tmp/empty' 0
+skips_says "#2135 -t glued to a type holding l" 'git config -tbool core.hooksPath true' 0
+skips_says "#2135 -t last in a cluster" 'git config -zt path core.hooksPath /tmp/empty' 0
+skips_says "#2135 -t with the next word in git config set" 'git config set -t path core.hooksPath /tmp/empty' 0
+skips_says "#2135 -t reading it by name is not a change" 'git config -t path core.hooksPath' 10
+# git takes any unique prefix of a long option, so an abbreviated option is read as git reads it.
+skips_says "#2135 --type abbreviated" 'git config --ty path core.hooksPath /tmp/empty' 0
+skips_says "#2135 --file abbreviated" 'git config --fil .git/config core.hooksPath /dev/null' 0
+skips_says "#2135 --unset-all abbreviated" 'git config --unset-a core.hooksPath' 0
+skips_says "#2135 --remove-section abbreviated" 'git config --remove core' 0
+skips_says "#2135 --rename-section abbreviated" 'git config --rena stash core' 0
+skips_says "#2135 --edit abbreviated" 'git config --ed' 0
+skips_says "#2135 --get abbreviated is not a change" 'git config --get-a core.hooksPath' 10
+skips_says "#2135 --type abbreviated reading it by name is not a change" 'git config --ty path core.hooksPath' 10
 skips_says "#2135 the key in any case" 'git config CORE.HOOKSPATH /dev/null' 0
 skips_says "#2135 git config set" 'git config set core.hooksPath /dev/null' 0
 skips_says "#2135 git config set --global" 'git config set --global core.hooksPath /dev/null' 0
@@ -202,6 +218,8 @@ nv_config "--file" 'git config --file .git/config core.hooksPath /dev/null'
 nv_config "git config set" 'git config set core.hooksPath /tmp/empty'
 nv_config "git config unset" 'git config unset core.hooksPath'
 nv_config "key in capitals" 'git config CORE.HOOKSPATH /dev/null'
+nv_config "-t with the next word" 'git config -t path core.hooksPath /tmp/empty'
+nv_config "--type abbreviated" 'git config --ty path core.hooksPath /tmp/empty'
 nv_config "--remove-section core" 'git config --remove-section core'
 nv_config "--edit" 'git config --edit'
 says "#2135 the refusal names the install script as the way to set up the hooks" "install script"

@@ -184,8 +184,26 @@ CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "-l", "-
 CONFIG_WRITES = {"--add", "--replace-all", "--unset", "--unset-all"}
 CONFIG_SECTIONS = {"--rename-section", "--remove-section"}
 CONFIG_SUBCOMMANDS = {"list", "get", "set", "unset", "rename-section", "remove-section", "edit"}
+# The short options whose value is the rest of the word or the next one: -f and -t, in every mode of
+# git 2.51 (git config -h, and each subcommand's -h). The other short ones, -l, -e and -z, take none.
+CONFIG_SHORT_VALUED = set("ft")
+# Every long option of every mode, because git takes any unique prefix of one (--ty is --type, --unset-a
+# is --unset-all), so a word is read as the option it abbreviates before it is judged.
+CONFIG_LONG = CONFIG_VALUED | CONFIG_READS | CONFIG_WRITES | CONFIG_SECTIONS | {
+    "--edit", "--global", "--system", "--local", "--worktree", "--null", "--name-only", "--show-origin",
+    "--show-scope", "--show-names", "--bool", "--int", "--bool-or-int", "--bool-or-str", "--path",
+    "--expiry-date", "--includes", "--fixed-value", "--all", "--regexp", "--append"}
 HOOKS_KEY = "core.hookspath"
 HOOKS_SECTION = "core"
+
+
+def _config_long(name):
+    """The long option git reads `name` as: itself, or the one option it is a unique prefix of. An
+    ambiguous prefix is one git refuses, so it stays as written and changes nothing."""
+    if name in CONFIG_LONG:
+        return name
+    found = [o for o in CONFIG_LONG if o.startswith(name)]
+    return found[0] if len(found) == 1 else name
 
 
 def _config_hooks_change(after):
@@ -198,14 +216,14 @@ def _config_hooks_change(after):
             positionals.extend(after[i + 1:])
             break
         if w.startswith("--"):
-            name = w.split("=", 1)[0]
+            name = _config_long(w.split("=", 1)[0])
             if name in CONFIG_VALUED and "=" not in w:
                 i += 1
             elif name in CONFIG_READS | CONFIG_WRITES | CONFIG_SECTIONS or name == "--edit":
                 action = action or name
         elif w.startswith("-") and len(w) > 1:
             for k, ch in enumerate(w[1:]):
-                if ch == "f":
+                if ch in CONFIG_SHORT_VALUED:
                     if k == len(w) - 2:
                         i += 1
                     break
