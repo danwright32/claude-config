@@ -139,6 +139,15 @@ base commit holds `payload/hooks/lib/work-names.py` (every other merge leaves af
 every route and from `merge-when-ready.sh`; a list of 100 commits or more, one page of what gh reads and so possibly cut short, is refused. The merge gate has no override, and the push refusal
 offers none (the gate's own `SKIP_SCANNERS_CHECK=1` still skips the whole gate, as it always has),
 so a message pushed past it is still judged at the merge. The remedy is always to reword.
+Both gates also refuse a message naming a work repository (#2111): they pass the scanner
+`--work-repos`, valid only with `--texts0-from`, which reads the same live list the publish gate
+below reads, through the one shared reader in `lib/work-names.py`, and never writes it to disk. A
+name is refused in plain prose too, not only as `owner/name` or `name#N`, and a false hit on an
+ordinary word is fixed by rewording the message, never by an exemption. A list it cannot read, or a
+read that runs past its budget (`WORK_NAMES_REPOS_BUDGET_SECONDS`, 30 by default; the merge gate
+gives it what is left of its own and refuses with under three seconds left, a setting rather than a
+measurement), refuses the push or the
+merge. The file scan is unchanged and still leaves repository names out.
 
 Pull request and issue text goes further (#2105). `check-work-names-publish.sh` judges every
 `gh pr create`, `pr edit`, `pr comment`, `pr review`, `issue create`, `issue edit` and
@@ -151,7 +160,8 @@ command and never written to disk: the repo digest's repository list (the one
 `lib/lesson-fanout.sh` reads), this Mac's dev update registry, and the two built in hashes. Matching
 repository names departs from #1568, which leaves them out of the file scan on purpose, for public
 text only (Dan, 2026-11-02, after a repository name leaked into a public pull request description);
-the file scan and the send scan are unchanged. Whatever it cannot tell is refused: the visibility or
+the file scan and the send scan are unchanged, and the commit message checks above read the same
+list through the same reader (#2111). Whatever it cannot tell is refused: the visibility or
 the list unreadable, a body file it cannot read, a command it cannot parse, the 35 second budget
 spent. There is no override; the remedy is to rewrite the text.
 

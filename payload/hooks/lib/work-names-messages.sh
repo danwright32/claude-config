@@ -4,11 +4,13 @@
 # (claude-config#1995). Sourced, never executed, after lib/push-scope.sh, whose readers it uses.
 #
 # This repository is public and squash merges with the commit messages as the body, so a message
-# naming a work organisation lands in main without ever being a file the whole tree scan reads. On
-# 2026-10-31 one did reach a commit (a fixture quoting a work organisation and repository) and was
-# caught only by reading it by hand before the push. The scanner is lib/work-names.py, the one rule
-# for files and text alike (L370); this file only decides WHICH messages a push adds and hands them
-# to it, through its --texts0-from stream.
+# naming a work organisation or a work repository lands in main without ever being a file the whole
+# tree scan reads. On 2026-10-31 one did reach a commit (a fixture quoting a work organisation and
+# repository) and was caught only by reading it by hand before the push. The scanner is
+# lib/work-names.py, the one rule for files and text alike (L370); this file only decides WHICH
+# messages a push adds and hands them to it, through its --texts0-from stream, with --work-repos
+# (claude-config#2111) so the scanner also reads the work repository list live, the same reader the
+# publish gate uses, and cannot judge (status 2) when that list is unreadable.
 #
 #   wnm_push_messages <command>   run in the repository; sets WNM_OUT, WNM_JUDGED, WNM_BASE
 #
@@ -20,8 +22,9 @@
 # theirs. HEAD is what is judged, as every other push gate here judges it.
 #
 # Returns 0 when every message added is clean or there is none to judge (HEAD has no commit), 1 when
-# at least one names an organisation, 2 when the messages could not be judged (git could not list
-# them, or the scanner could not run or could not judge them), and 3 when the command commits before
+# at least one names a work organisation or repository, 2 when the messages could not be judged (git
+# could not list them, or the scanner could not run, could not read the work repository list, or
+# could not judge them), and 3 when the command commits before
 # it pushes: that commit's message is not in git yet, so it cannot be read before the push, and
 # reading only the commits already made would pass the one most likely to carry the name.
 #   WNM_OUT     what the scanner printed, hits and its summary with the remedy, or why it could not

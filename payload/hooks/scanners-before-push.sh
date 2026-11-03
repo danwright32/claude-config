@@ -82,8 +82,9 @@
 # is 20 to 26 seconds (claude-config#523, and the table in README.md).
 #
 # Before any suite it also judges the MESSAGES of the commits the push adds for a work organisation
-# name (claude-config#1995), and that one fails CLOSED: messages it could not judge, a commit the
-# command has not written yet, or its library missing each refuse the push. See where it is asked.
+# name (claude-config#1995) or a work repository name (claude-config#2111), and that one fails
+# CLOSED: messages it could not judge, a commit the command has not written yet, the work repository
+# list unreadable, or its library missing each refuse the push. See where it is asked.
 #
 # Override: SKIP_SCANNERS_CHECK=1 git push ...   Explain why to the user first, never silently.
 
@@ -163,15 +164,17 @@ cd "$repo_dir" 2>/dev/null || exit 0
 # Not this repository, so there is nothing here this hook knows how to run.
 [ -f payload/hooks/run-all-tests.sh ] || exit 0
 
-# THE MESSAGES of the commits this push adds name no work organisation (claude-config#1995). This
-# repository is public and squash merges with the commit messages as the body, so a message naming
-# one lands in main without ever being a file the scanners below read; on 2026-10-31 one reached a
-# commit and was caught only by reading it by hand. Asked first, because it costs a second and needs
-# no suite, and a refusal here should not wait behind them. The rule is lib/work-names.py's, the one
-# the whole tree suite runs over the files; lib/work-names-messages.sh decides only which commits a
+# THE MESSAGES of the commits this push adds name no work organisation (claude-config#1995) and no
+# work repository (claude-config#2111). This repository is public and squash merges with the commit
+# messages as the body, so a message naming one lands in main without ever being a file the scanners
+# below read; on 2026-10-31 one reached a commit and was caught only by reading it by hand. Asked
+# first, because it needs no suite, and a refusal here should not wait behind them. The rule is
+# lib/work-names.py's, the one the whole tree suite runs over the files, with --work-repos added for
+# messages: it also matches the repository names the publish gate reads live (claude-config#2105),
+# which the file scan leaves out on purpose. lib/work-names-messages.sh decides only which commits a
 # push adds (never one already on the upstream or the remote's default branch) and hands it their
-# messages. Messages it could not judge, or a commit this command has not written yet, are said and
-# refused, never passed as clean (L98). The refusal carries no override line: it is a privacy rule,
+# messages. Messages it could not judge, a commit this command has not written yet, or a repository
+# list it could not read, are said and refused, never passed as clean (L98). The refusal carries no override line: it is a privacy rule,
 # and its remedy, rewording a commit nobody has pushed, is always open. SKIP_SCANNERS_CHECK above
 # still skips this with the rest of the gate, and check-work-names-merge.sh, which has no override,
 # reads the same messages again before the pull request merges.

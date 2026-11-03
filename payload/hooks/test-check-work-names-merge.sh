@@ -67,6 +67,10 @@ case "$*" in
     case "${FAKE_SCOPE:-present}" in
       absent) printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1 ;;
       fails) printf 'gh: Bad Gateway (HTTP 502)\n' >&2; exit 1 ;;
+      # A scope read that answers only after 15 seconds, so the hook's own clock has moved past what
+      # its budget leaves for the work repository list (claude-config#2111). A wait this test sets,
+      # not measured.
+      slow) sleep 15; printf '{"name":"work-names.py"}\n' ;;
       *) printf '{"name":"work-names.py"}\n' ;;
     esac ;;
   *"api graphql"*) printf '%s\n' "${FAKE_NODE_JSON:-}" ;;
@@ -155,6 +159,16 @@ pr_json "Add the reader" "Adds the reader." "clean" > "$WORK/pr.json"
 run_hook "$MERGE 7 --squash" FAKE_LIST="$WORK/no-such-list.json"
 expect_deny "a work repository list that cannot be read refuses the merge" "work repository list"
 expect_deny "as the scanner giving no verdict" "gave no verdict"
+# Under 3 seconds of the budget left for the list is refused before the scanner starts, since a hook
+# killed at its timeout gives no verdict at all. A read budget of 5 leaves 17 seconds for the list,
+# and the slow scope read spends 15 of them, so the read is never asked for. The 5 is slack for the
+# hook to reach its scope read on a loaded machine, which would otherwise refuse it for its earlier
+# reads instead. The wait is real time only because the hook's clock is the shell's own SECONDS.
+# Every number here is one this test or the hook sets, not measured.
+run_hook "$MERGE 7 --squash" FAKE_SCOPE=slow WN_MERGE_READ_BUDGET_SECONDS=5
+expect_deny "under 3 seconds left for the work repository list refuses the merge" "had no time left to be read"
+if grep -q 'contents/payload/hooks/lib/work-names.py' "$WORK/gh.log"; then pass; else fail "the slow case never reached the scope read: $(cat "$WORK/gh.log")"; fi
+if grep -q 'contents/repos.json' "$WORK/gh.log"; then fail "the list was read with no budget left for it: $(cat "$WORK/gh.log")"; else pass; fi
 run_hook "$MERGE 7 --squash"
 expect_allow "(control) clean text with the list read merges"
 
