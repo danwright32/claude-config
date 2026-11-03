@@ -5,6 +5,7 @@ import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askText, boxText, cardOf, decide,
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
 import { errorText } from './mod-kit/skew.ts'
+import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 
 // The Goal accomplished box (claude-config#1563). Two ways a session's work ends, one box for both:
 //
@@ -265,7 +266,18 @@ export const register: Register = on => {
     if (!(await markAsked($, goal.met.id))) return r
     let failed: string | undefined
     try {
-      const sent = await $.prompt.submit({ text: askText(goal.met.condition) })
+      // #2132: the prompt waits until the session is idle, and mod-kit's reload of goal-box in that
+      // time would drop it, so the reload is held back until it is sent, for at most mod-kit's hour.
+      const held = {
+        mod: MOD,
+        id: 'ask',
+        what: 'the prompt asking for the Goal accomplished box',
+        ms: HOLD_MAX_MS,
+        hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
+        release: (input: { mod: string; id: string }) => $.modkit.release(input),
+        log: (line: string) => $.ui.log(line, { to: 'debug' }),
+      }
+      const sent = await whileHeld(held, () => $.prompt.submit({ text: askText(goal.met.condition) }))
       if (sent.drop !== undefined) failed = sent.drop || 'the prompt was dropped'
     } catch (err) {
       failed = msg(err)
