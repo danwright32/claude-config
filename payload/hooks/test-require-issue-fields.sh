@@ -304,13 +304,27 @@ says "#1485 an incomplete one is refused with the ordinary message" "missing a m
 
 # If the gate itself cannot run it must still let the command through, while making
 # the gap visible: a gate that fails silently is indistinguishable from one that passed.
-broken_out="$(printf '{"tool_input":{"command":"gh issue create --title T"}}' \
-  | PATH="$TMP_EMPTY_PATH" bash "$HOOK" 2>"$TMP_ERR")"
+# Broken by a copy with no lib/ beside it and no python3 on PATH, run from that same folder, so
+# which lib/ the gate could find never depends on where the suite was started (claude-config#2081).
+BROKEN="$TMP_DIR/broken"; mkdir -p "$BROKEN"
+cp "$HOOK" "$DIR/issue_field_gate.py" "$BROKEN/"
+broken_out="$(cd "$BROKEN" && printf '{"tool_input":{"command":"gh issue create --title T"}}' \
+  | PATH="$TMP_EMPTY_PATH" bash "$BROKEN/$(basename "$HOOK")" 2>"$TMP_ERR")"
 broken_err="$(cat "$TMP_ERR")"
 if [[ "$broken_out" != *'"deny"'* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a broken gate should not block the command"; fi
 if [[ "$broken_err" == *"ISSUE FIELD GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a broken gate should announce itself, got: ${broken_err:-<silence>}"; fi
+
+# With nothing on PATH (so no dirname), the gate in place still finds the lib/ beside it, whatever
+# folder it is run from, and so still refuses what that library refuses (claude-config#2081). Run
+# from a folder holding no lib/, where a gate that fell back to the working directory says its
+# library is missing and lets the command through.
+own_out="$(cd "$TMP_DIR" && printf '{"tool_input":{"command":"gh issue create --title T"}}' \
+  | PATH="$TMP_EMPTY_PATH" bash "$HOOK" 2>&1)"
+if [[ "$own_out" != *"is missing beside this hook"* && "$own_out" == *"BLOCKED: require-issue-fields.sh"* ]]; then
+  pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: #2081 with no dirname the gate must find its own lib/ and refuse, got: ${own_out:-<silence>}"; fi
 
 # The gate and the scanner are separate files, so either can go missing on its own.
 MOVED="$TMP_DIR/moved"; mkdir -p "$MOVED"
