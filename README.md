@@ -2865,9 +2865,11 @@ the installed hooks or the scratch the suites build their fixtures in (claude-co
 when one has been running longer than `SYNC_SUITE_MAX_AGE` (default `3600`, the longest any suite
 may run) and then names every such process in one `kill -9` line, or when more than
 `SYNC_SUITE_MAX_ROOTS` (default `8`) were started independently, since a whole run of the runner
-counts as one. Nobody runs status while a pile is slowing them down, so `hooks/suite-pile-notice.sh`
-says the same thing on a prompt (claude-config#466): both call `hooks/lib/suite-pile.sh`, so they
-cannot disagree, and the notice names the same `kill -9` line (or sends you to status when it is
+counts as one. A run of the runner is judged by its newest suite, not its own age: a full run that
+has gone past the hour under load but is still finishing suites is never named, and one is named only
+when no suite under it is younger than the limit (claude-config#2106). Nobody runs status while a
+pile is slowing them down, so `hooks/suite-pile-notice.sh` says the same thing on a prompt
+(claude-config#466): both call `hooks/lib/suite-pile.sh`, so they cannot disagree, and the notice names the same `kill -9` line (or sends you to status when it is
 longer than fifty pids). It is said once per stretch in each session, and a stretch ends only after
 `SYNC_SUITE_PILE_REARM` (default `600`) seconds of no pile, so suites flickering across the breadth
 limit are one notice. It reads the process table and nothing else. Anything it cannot read (the

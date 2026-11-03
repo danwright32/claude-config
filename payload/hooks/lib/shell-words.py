@@ -37,6 +37,10 @@ hook that slow is killed and the command goes unscreened.
       the directory its `git -C` options name, several composed as git composes them, or nothing
       when it is not git or names no -C, past reserved words, assignments, rtk, env and sudo; see
       git_dir().
+  shell-words.py heredoc-markers   stdin: a whole file
+      each heredoc it opens, read a line at a time as heredoc_openers reads one, printed as
+      "<line number>" TAB "<end marker>", one per line, so a scan written in awk reads markers as
+      this file does (claude-config#2080); see heredoc_openers().
   shell-words.py bare       stdin: one command
       the command with the contents of every $( ) and backquote substitution taken out, so a caller
       can ask what it runs itself rather than inside them (claude-config#1062); see bare().
@@ -161,6 +165,10 @@ COMMAND_FRAMES = {"top", "sub", "subst", "tick"}
 HEREDOC_START = re.compile(r"<<(-?)[ \t]*")
 # What ends the end marker word, as the shell reads a word.
 HEREDOC_WORD_END = set(" \t\n;&|<>()")
+# How an end marker word starts for a reader that follows no arithmetic: a letter or underscore,
+# either one after a backslash, or a quote, $' and $" included. The limit mod-kit's hooks/commands.ts
+# keeps for the same reason (claude-config#2073), so `$((1<<2))` opens no heredoc there or here.
+MARKER_START = re.compile(r"""\\?[A-Za-z_]|\$?['"]""")
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # A case command's head up to its `in`, past any reserved words before it, and an esac ending one
 # (claude-config#2074): a pattern after the `in`, or after a `;;` or `;&`, ends at a `)` that closes
@@ -186,7 +194,7 @@ class Unreadable(Exception):
         self.at = at
 
 
-def heredoc_opener(s, i):
+def heredoc_opener(s, i, marker_start=False):
     """The heredoc opened at s[i] ("<<"), as (marker, strip_tabs, quoted, end), or None.
 
     The marker is the word after the opener with its quotes removed, as the shell compares it with
@@ -195,9 +203,14 @@ def heredoc_opener(s, i):
     expands nothing in the body, and otherwise it expands it and runs every substitution in it
     (claude-config#2053). Measured on this Mac's bash and zsh, 2026-11-01. None when there is no word,
     or a quote in it never closes.
+
+    With marker_start, also None when the word does not start as a marker is written (MARKER_START),
+    for a reader that follows neither arithmetic nor, in some, quotes (claude-config#2080).
     """
     m = HEREDOC_START.match(s, i)
     if not m or s.startswith("<<<", i):
+        return None
+    if marker_start and not MARKER_START.match(s, m.end()):
         return None
     j, n = m.end(), len(s)
     word, quoted = [], False
@@ -231,6 +244,33 @@ def heredoc_opener(s, i):
     if j == m.end():
         return None
     return "".join(word), m.group(1) == "-", quoted, j
+
+
+def heredoc_openers(line):
+    """Each heredoc a line opens, read on its own without following its quotes, as (start, marker,
+    strip_tabs, quoted, end), start at its << and the rest as heredoc_opener gives them.
+
+    For the whole tree scans that read a file a line at a time and need only where a heredoc's body
+    begins and what ends it (claude-config#2080). Such a scan cannot tell a << in a string or in
+    arithmetic from one opening a heredoc, so a word is taken only where it starts as a marker is
+    written (marker_start): `$((1<<2))` and `grep -c '1<<2'` open nothing, and neither does the
+    << of a here string. The cost is a heredoc whose marker starts with a digit, which bash accepts
+    and no file here uses.
+    """
+    out, i = [], 0
+    while True:
+        i = line.find("<<", i)
+        if i < 0:
+            return out
+        if line.startswith("<<<", i):
+            i += 3
+            continue
+        op = heredoc_opener(line, i, marker_start=True)
+        if op is None:
+            i += 2
+            continue
+        out.append((i,) + op)
+        i = op[3]
 
 
 def cd_target(text):
@@ -308,8 +348,9 @@ def commands(s, cwd="", heredocs=None, parts=None):
     heredoc opener written directly in it, from its << to the end of its end marker word; and how,
     what ended it: ";" (a `;` or a line break), "&&", "||", "|" (a pipe, `|&` too), "&" (sent to
     the background), "#" (a comment), ")" (its subshell or substitution closing), "\\n" (the line
-    a heredoc opens on) or "end". So a caller can read a command's text as one word for each
-    substitution in it, whose own commands it is given separately, and know which shell each command
+    a heredoc opens on), "case" (the text before a case pattern, its head, ended where the pattern starts) or "end".
+    So a caller can read a command's text as one word for each substitution in it, whose own
+    commands it is given separately, and know which shell each command
     runs in, a pipeline's members and a backgrounded command each running in one of their own
     (claude-config#2076).
     """
@@ -1633,13 +1674,20 @@ def main(argv):
             records, rc = crude_commands(data), 3
         sys.stdout.write("".join(d + "\x1f" + t + "\x1e" for d, t in records))
         return rc
+    elif mode == "heredoc-markers":
+        # Each heredoc the text opens, read a line at a time as heredoc_openers reads one, printed as
+        # <line number>TAB<marker>, so a scan written in awk reads markers as this file does
+        # (claude-config#2080).
+        for n, line in enumerate(data.split("\n"), 1):
+            for op in heredoc_openers(line):
+                sys.stdout.write("%d\t%s\n" % (n, op[1]))
     elif mode == "split":
         if data.endswith("\n"):
             data = data[:-1]
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool < text, or data-blanked '<path>[ <subcommand>]'... < text\n")
+        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool|heredoc-markers < text, or data-blanked '<path>[ <subcommand>]'... < text\n")
         return 64
     return 0
 

@@ -33,7 +33,11 @@ may_post() {
 }
 may_post "$payload" || exit 0
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The folder is cut from the path in bash itself, never by dirname: with dirname missing from PATH,
+# `cd ""` stayed in the working directory, so the gate loaded whatever lib/ sat there, or none
+# (claude-config#2081). A bare name (run from its own folder) is ".", and a file at / is "/".
+case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
+HERE="$(cd "${HERE:-/}" && pwd)"
 # shellcheck source=lib/hook-notice.sh
 . "$HERE/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2

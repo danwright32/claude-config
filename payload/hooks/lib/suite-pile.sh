@@ -15,9 +15,12 @@
 # checkout or worktree (whose path holds `claude-config`), the installed hooks, or the named scratch
 # the suites build their fixtures in. It is a pile on either of two shapes, each derived in
 # DESIGN.md: any one of them older than SYNC_SUITE_MAX_AGE, and more of them started independently
-# than SYNC_SUITE_MAX_ROOTS. What to kill is named by pid, and with -9: a TERM is not enough, which
-# was measured on 2026-09-18, since a suite with an EXIT trap blocked on a child holds a TERM until
-# the child ends, which for a pile is never.
+# than SYNC_SUITE_MAX_ROOTS. A run of the runner is judged by its newest suite rather than its own
+# age (claude-config#2106): a full run can take more than an hour under load while finishing a suite
+# every few seconds, so a runner (and a wrapper whose command names it) counts as past the limit
+# only when no suite below it is younger than the limit. What to kill is named by pid, and with -9:
+# a TERM is not enough, which was measured on 2026-09-18, since a suite with an EXIT trap blocked on
+# a child holds a TERM until the child ends, which for a pile is never.
 #
 # Sourced, never executed. It reads nothing itself except through suite_pile_table, so a caller
 # (and every test) decides what process table is judged (L2).
@@ -63,15 +66,27 @@ suite_pile_scan(){   # $1 = max age in seconds  $2 = max independent starts
       if (cmd ~ /(\/test-[A-Za-z0-9_.-]+\.sh|\/run-all-tests\.sh)( |$)/ \
           && (cmd ~ /claude-config/ || cmd ~ /\/\.claude\/hooks\// || cmd ~ /\/claude-sync-work\./)) {
         suite[p] = 1; age[p] = et; keep[p] = cmd
+        if (cmd ~ /\/run-all-tests\.sh( |$)/) runner[p] = 1
       }
     }
     END {
+      # A runner is still progressing when any suite below it, through any processes between, is
+      # younger than the age limit. Walked up from each young suite, with a step cap so a table with
+      # a parent loop in it cannot hang the scan.
+      for (p in suite) {
+        if (secs(age[p]) >= maxage) continue
+        a = parent[p]; steps = 0
+        while (a != "" && (a in parent) && steps < 1000) {
+          if (a in runner) fresh[a] = 1
+          a = parent[a]; steps++
+        }
+      }
       n = 0; roots = 0; old = 0; oldest = -1; kill = ""
       for (p in suite) {
         n++
         if (!(parent[p] in suite)) { roots++; root[p] = 1 }
         s = secs(age[p])
-        if (s >= maxage) { old++; kill = kill " " p; if (s > oldest) { oldest = s; oldest_et = age[p] } }
+        if (s >= maxage && !(p in fresh)) { old++; kill = kill " " p; if (s > oldest) { oldest = s; oldest_et = age[p] } }
       }
       if (n == 0 || (old == 0 && roots <= maxroots)) exit
       printf "SUMMARY %d %d %d %s\n", n, roots, old, (old > 0 ? oldest_et : "-")

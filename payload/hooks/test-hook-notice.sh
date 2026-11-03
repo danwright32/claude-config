@@ -29,6 +29,8 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$DIR/lib/hook-notice.sh"
+# The lib/ the notice scanner reads here documents through (lib/shell_code_lines.py, #2080).
+HN_SHELL_LIB="$DIR/lib"; export HN_SHELL_LIB
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -265,13 +267,26 @@ prompt_hook "no python3" "python3 is not on PATH" "$WITHSESSION" stale-worktree-
 cat > "$WORK/scan.py" <<'PY'
 import json, os, re, sys
 mode = sys.argv[1]
+# Where a here document's body ends is lib/shell_code_lines.py's answer, its end marker read by
+# lib/shell-words.py as bash reads it (claude-config#2080). HN_SHELL_LIB names that lib/, since this
+# file is written into a throwaway directory.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.environ.get("HN_SHELL_LIB", ""))
+try:
+    import shell_code_lines
+    _missing = shell_code_lines.READER_ERROR
+except Exception as e:  # noqa: BLE001  missing, or failing to load: either way there is no reader
+    _missing = "lib/shell_code_lines.py: %s: %s" % (type(e).__name__, e)
+if _missing is not None:
+    sys.stderr.write("hook notice scan: lib/shell-words.py could not be loaded (%s), so no here "
+                     "document could be read and nothing was scanned\n" % _missing)
+    sys.exit(2)
 FLAGS = json.loads(os.environ.get("HN_FLAGS") or "{}")
 STDERR = re.compile(r'(^|[^0-9&<])1?>&2(?![0-9])')
 PLAIN = re.compile(r'''^\s*(echo\s+(-[a-zA-Z]+\s+)*["'][A-Za-z(]|printf\s+["'][A-Za-z(])''')
 EXIT0 = re.compile(r'^\s*exit(\s+0)?\s*(;;|;|\)|\}|$)')
 THEN_EXIT0 = re.compile(r'^[^#]*?(;|&&)\s*exit(\s+0)?\s*(;;|;|\}|\)|$)')
 THEN_REFUSE = re.compile(r'^[^#]*?(;|&&)\s*exit\s+[1-9]')
-HEREDOC = re.compile(r'(?<!<)<<(?!<)-?\s*[\'"]?([A-Za-z_][A-Za-z0-9_]*)[\'"]?')
 FUNC = re.compile(r'^(\s*)(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{(.*)$')
 ARGBRANCH = re.compile(r'''^(\s*)if\s+\[\[?\s+"?\$\{?1(?::-)?\}?"?\s+==?\s+["']?(--[A-Za-z0-9-]+)["']?\s+\]\]?\s*;\s*then\s*$''')
 EXIT_ANY = re.compile(r'(^|[;&|{(\s])exit(\s|;|$)')
@@ -281,19 +296,17 @@ def indent(line):
     return len(line) - len(line.lstrip())
 
 def logical(lines):
-    # (line number, text, starts a here document) per line, a here document's body folded away.
-    out, i = [], 0
-    while i < len(lines):
-        line = lines[i]
-        s = line.strip()
-        m = HEREDOC.search(line) if s and not s.startswith("#") else None
-        out.append((i + 1, line, bool(m)))
-        i += 1
-        if m:
-            while i < len(lines) and lines[i].strip() != m.group(1):
-                i += 1
-            i += 1
-    return out
+    # (line number, text, starts a here document) per line, a here document's body and end folded
+    # away, as the one shared reading of shell quoting gives them.
+    return [(n, line, bool(ops)) for n, line, kind, _, ops in shell_code_lines.read_lines("\n".join(lines))
+            if kind not in ("heredoc", "end")]
+
+def without_openers(line):
+    # The line with each here document opener and its end marker word cut out, so what is left
+    # redirecting is the command's own, even when the marker is quoted ('a>b').
+    for start, _, _, _, end in reversed(shell_code_lines.heredoc_openers(line)):
+        line = line[:start] + line[end:]
+    return line
 
 def code(e):
     s = e[1].strip()
@@ -312,7 +325,7 @@ def direct(e):
         if re.search(r'[>|]', tail):
             return -1
         return line.rfind('"') + 1 if '"' in line else len(line)
-    if e[2] and re.match(r'^\s*cat\s+<<', line) and not re.search(r'[>|]', HEREDOC.sub('', line)):
+    if e[2] and re.match(r'^\s*cat\s+<<', line) and not re.search(r'[>|]', without_openers(line)):
         return len(line)
     return -1
 
@@ -463,6 +476,39 @@ SH
 for f in next-line same-line group heredoc in-case function-return function-one-line function-nested; do
   [ -n "$(scan "$WORK/$f.sh")" ] && ok || bad "#1906 #1924 canary: the scan did not find the $f shape of a stderr notice followed by exit 0"
 done
+# A here document ends where bash ends it, at the whole word with its quotes taken out
+# (claude-config#2080): a pattern of its own ended <<'E'OF at E and <<END-OF at END, so the rest of
+# the file was folded into the body and the notice after it never read. A << inside a quoted string
+# opens nothing, so the lines after it are read too.
+cat > "$WORK/heredoc-quoted-part.sh" <<'SH'
+cat <<'E'OF > "$f"
+fixture
+EOF
+echo "the check did not run" >&2
+exit 0
+SH
+cat > "$WORK/heredoc-hyphen.sh" <<'SH'
+cat <<END-OF > "$f"
+fixture
+END-OF
+echo "the check did not run" >&2
+exit 0
+SH
+cat > "$WORK/heredoc-in-string.sh" <<'SH'
+printf '%s\n' "a <<EOF in a string"
+echo "the check did not run" >&2
+exit 0
+SH
+for f in heredoc-quoted-part heredoc-hyphen heredoc-in-string; do
+  [ -n "$(scan "$WORK/$f.sh")" ] && ok || bad "#2080 canary: the scan did not read the notice after the $f shape of a here document"
+done
+# The reading of where a here document ends is lib/shell-words.py's, through
+# lib/shell_code_lines.py, and the scan keeps none of its own: without it, it refuses by name.
+mkdir -p "$WORK/nolib"
+cp "$DIR/lib/shell_code_lines.py" "$WORK/nolib/"
+noreader="$(HN_SHELL_LIB="$WORK/nolib" python3 "$WORK/scan.py" stderr "$WORK/next-line.sh" 2>&1)"; rc=$?
+[ "$rc" -eq 2 ] && ok || bad "#2080 without lib/shell-words.py the scan did not refuse (exit $rc): $noreader"
+case "$noreader" in *"lib/shell-words.py could not be loaded"*) ok ;; *) bad "#2080 without lib/shell-words.py the scan did not say which reader it could not load: $noreader" ;; esac
 # A function that refuses on its own, and one whose call is silenced, are not notices.
 cat > "$WORK/function-clean.sh" <<'SH'
 die(){ echo "PUSH BLOCKED: $1" >&2; exit 2; }
@@ -603,14 +649,16 @@ PY
   done
   case "$HN_FLAGS" in *'"pr-merge-quiz.sh": ["--release-held"]'*) ok ;; *) bad "#1924 the flags pr-merge-quiz.sh is registered with were not read: ${HN_FLAGS:0:300}" ;; esac
   case " ${plain_hooks[*]} " in *"/rule-files-changed.sh "*) bad "#1924 rule-files-changed.sh, on UserPromptSubmit and SessionStart only, was read by the plain stdout scan, where its stdout is context by design" ;; *) ok ;; esac
-  found="$(scan "${hooks[@]}")"
-  if [ -z "$found" ]; then ok
+  found="$(scan "${hooks[@]}" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then bad "#2080 the stderr notice scan did not run over the hooks (exit $rc): $found"
+  elif [ -z "$found" ]; then ok
   else
     bad "#1906 these hooks write a notice to stderr and then exit 0, where Claude Code shows it to nobody. Send it with hook_allow_notice from lib/hook-notice.sh instead:"
     printf '%s\n' "$found" | sed "s|$DIR/|  |"
   fi
-  found="$(scan_plain "${plain_hooks[@]}")"
-  if [ -z "$found" ]; then ok
+  found="$(scan_plain "${plain_hooks[@]}" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then bad "#2080 the plain stdout scan did not run over the hooks (exit $rc): $found"
+  elif [ -z "$found" ]; then ok
   else
     bad "#1906 #1924 these hooks print words plain on stdout and then exit 0, on an event where that stdout goes to the debug log. Send them with hook_allow_notice from lib/hook-notice.sh instead:"
     printf '%s\n' "$found" | sed "s|$DIR/|  |"
