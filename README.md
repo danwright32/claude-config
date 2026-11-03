@@ -1026,7 +1026,12 @@ cannot, as it cannot skip the repository's hooks any other way (`no-verify-gate.
 Something at the path that is not a folder, such as `/dev/null`, is hooks switched off on purpose
 and is left alone, and a setting that cannot be read refuses the push. On 2026-11-02 the personal
 MacBook had 5 repositories setting `core.hooksPath` across 8 working trees, every folder present,
-so no push there would have been refused.
+so no push there would have been refused. That leaving alone is the main session's only
+(claude-config#2135): for an AGENT's push, a location that exists but holds no hook git would run
+(`/dev/null`, an empty folder, a folder of samples) refuses too, since an agent may have set it
+itself. A hook git runs is an executable file named after one. On 2026-11-03 each of those 5
+repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
+refused.
 
 Every merge gate judges a merge however it is made (claude-config#1181): `gh pr merge`, a repo's own
 merge tool, the GitHub API's merge endpoint (`gh api -X PUT repos/<owner>/<name>/pulls/<n>/merge`,
@@ -1711,8 +1716,12 @@ Three gates close the three parts of that, all reading commands through one libr
 - `no-verify-gate.sh` (PreToolUse, Bash) refuses an AGENT's git command that skips the repository's
   own git hooks: `--no-verify` on any git subcommand, commit's `-n`, `-c core.hooksPath=...`, and
   `HUSKY=0` and the other hook managers' switches, behind rtk, env, an if or a `bash -c` string, and
-  inside a rebase's `--exec`. Words that only mention one are not one. The main session is not
-  judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
+  inside a rebase's `--exec`. Words that only mention one are not one. Since claude-config#2135 it
+  also refuses an agent's `git config` that changes `core.hooksPath` in any scope and either
+  spelling (set, `--add`, `--replace-all`, `--unset`, the `core` section removed or renamed, or
+  `--edit`), and matches the key in any case; reading it is not refused. An agent never writes the
+  setting itself, even to a folder of tracked hooks: it runs the repository's own hook install
+  script, which this gate does not read into. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
   was removed on Dan's decision of 2026-10-24 (claude-config#1666), since an agent could write the
   same file with the Write tool.
   It also refuses an agent's git command that reads a file from standard input's DEVICE PATH
