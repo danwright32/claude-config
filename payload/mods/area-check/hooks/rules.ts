@@ -1,8 +1,9 @@
-// The area check (claude-config#1506; phase 1, observe only, #1508): the facts about a file at the
+// The area check (claude-config#1506; facts #1508, hold #1509): the facts about a file at the
 // moment a session first edits it. Pure, so each rule is tested on its own, and so the replay of a
 // real repository's history (tools/area-check-replay.ts) judges with exactly these rules (L107).
-// Phase 1 observed: these facts decided what was LOGGED, would_hold or quiet. #1509 set the bar
-// below from that week's log on both Macs, and the hold refuses by it.
+// The facts decide a verdict, `would_hold` or `quiet` (Judged.decision). Phase 1 only logged it; #1509
+// set the bar below from that week's log on both Macs, and a `would_hold` verdict is now a HELD edit
+// (the Held record below) that is refused until the session decides.
 import { isTestPath } from './mod-kit/testfile.ts'
 
 /** Bumped whenever a rule here changes what a file's facts are, so a cached ranking is never reused across it (L573). */

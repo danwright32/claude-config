@@ -11,7 +11,7 @@ export const ROWS: CachedIssue[] = [
 {"n":2076,"structural":["tech-debt"],"priority":"p2","refs":["payload/hooks/scan-subshell-globals.py","lib/shell-words.py"]},
 {"n":2074,"structural":[],"priority":"p2","refs":["payload/hooks/gh_issue_scan.py","lib/shell-words.py"]},
 {"n":2073,"structural":["tech-debt"],"priority":"p2","refs":["payload/hooks/lib/shell-words.py","payload/mods/mod-kit/hooks/commands.ts","tests/test-mods.sh","payload/hooks/lib/unwaited-children.py"]},
-{"n":2071,"structural":[],"priority":"p2","refs":["private/tmp/claude-501/-Users-danhankins-wright-Apps-Pivot/924aab74-777d-4373-bbbb-416a68280b16/scratchpad/handoff.md","handoff.md","scratchpad/handoff.md"]},
+{"n":2071,"structural":[],"priority":"p2","refs":["private/tmp/claude-501/project/session/scratchpad/handoff.md","handoff.md","scratchpad/handoff.md"]},
 {"n":2065,"structural":[],"priority":"p2","refs":["design-score-gate.py"]},
 {"n":2064,"structural":[],"priority":"p2","refs":["CLAUDE.md"]},
 {"n":2045,"structural":[],"priority":"p2","refs":["capture-chrome.js","skills/design-rounds/capture-chrome.js","src/lib/theme/boot.ts"]},

@@ -94,7 +94,7 @@ out="$(PATH="$W/bin:$PATH" node "$TOOL" "$W/app" --repo dan/app --fixture "$W/no
 REAL="$DIR/../payload/mods/area-check/tests/replay-fixture"
 part="$(node --input-type=module -e "const m = await import('$DIR/area-check-fixture.ts'); console.log(m.PART_BYTES)" 2>&1)"
 big="$(find "$REAL" -name '*.ts' -size +"${part:-0}"c 2>/dev/null)"
-long="$(awk 'length($0) > 4096 { print FILENAME ":" FNR }' "$REAL"/*.ts 2>/dev/null | head -3)"
+long="$(awk 'length($0) > 4096 { print FILENAME ":" FNR }' "$REAL"/*.ts 2>/dev/null)"
 case "$part" in ''|*[!0-9]*) check "the committed fixture is parts of at most PART_BYTES with no line over 4096 bytes" "PART_BYTES unread: $part" ;;
   *) [ -f "$REAL/index.ts" ] && [ -z "$big" ] && [ -z "$long" ] \
        && check "the committed fixture is parts of at most PART_BYTES with no line over 4096 bytes" ok \
@@ -107,8 +107,22 @@ out="$(node "$TOOL" "$W/app" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a replay with no --repo exits 2" ok || check "a replay with no --repo exits 2" "exit $code: $out"
 out="$(node "$TOOL" "$W/app" --repo dan/app --days 1.5 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a window that is not a whole number of days exits 2" ok || check "a window that is not a whole number of days exits 2" "exit $code: $out"
+out="$(PATH="$W/bin:$PATH" AREA_CHECK_FIXTURE_PART_BYTES=abc node "$TOOL" "$W/app" --repo dan/app --fixture "$W/fx3" 2>&1)"; code=$?
+[ "$code" -eq 2 ] && [ ! -e "$W/fx3" ] && check "a part size that is not a whole number exits 2 and writes nothing (L50)" ok || check "a part size that is not a whole number exits 2 and writes nothing (L50)" "exit $code: $out"
 out="$(PATH="$W/bin:$PATH" node "$TOOL" "$W/app" --repo dan/app --days 1 2>&1)"; code=$?
 case "$out" in *"Replay of dan/app, 1 days"*) check "the window given is the window replayed" ok ;; *) check "the window given is the window replayed" "exit $code: $out" ;; esac
+
+# The repository is public: no part of the committed fixture names a home directory or holds a session id,
+# and the writer redacts what an issue body names, so a month measured again is redacted too (#2097).
+hits="$(grep -lE '/Users/|/home/[a-z]|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|-Users-' "$REAL"/*.ts 2>/dev/null)"
+[ -z "$hits" ] && check "no part of the committed fixture holds a home directory path or a session id" ok || check "no part of the committed fixture holds a home directory path or a session id" "parts: $(basename -a $hits)"
+red="$(node --input-type=module -e "
+const m = await import('$DIR/area-check-fixture.ts')
+const u = ['', 'Users', 'someone', 'x.ts'].join('/')
+const enc = ['private/tmp/claude-501', '-Users-someone-proj', '123e4567-e89b-12d3-a456-426614174000', 'scratchpad/f.ts'].join('/')
+const out = [m.redactRef(u), m.redactRef(enc), m.redactRef('src/lib/a.ts'), m.redactRef('a.ts')]
+console.log(out.join(' '))" 2>&1)"
+case "$red" in "/Users/user/x.ts private/tmp/claude-501/project/session/scratchpad/f.ts src/lib/a.ts a.ts") check "the writer redacts personal segments of a ref and leaves repository paths alone" ok ;; *) check "the writer redacts personal segments of a ref and leaves repository paths alone" "$red" ;; esac
 
 echo
 echo "passed: $pass, failed: $fail"

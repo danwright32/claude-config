@@ -44,9 +44,9 @@ import {
   type Held,
 } from '../hooks/rules.ts'
 
-// The area check (#1506, phase 1 #1508): the facts about a file at the moment a session first edits
-// it, computed purely here so each rule is tested on its own. Phase 1 only observes: these facts
-// decide what is LOGGED (would_hold or quiet), never what is refused.
+// The area check (#1506, facts #1508, hold #1509): the facts about a file at the moment a session
+// first edits it, computed purely here so each rule is tested on its own. These facts decide a verdict
+// (would_hold or quiet); a would_hold verdict is a held edit, refused until the session decides.
 
 const issue = (n: number, refs: string[], labels: Partial<CachedIssue> = {}): CachedIssue => ({ n, refs, structural: ['tech-debt'], priority: 'p2', ...labels })
 

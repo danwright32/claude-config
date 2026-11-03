@@ -24,6 +24,27 @@ import type { ReplayInput, ReplaySummary } from '../payload/mods/area-check/hook
 
 export const PART_BYTES = 100 * 1024
 
+// This repository is public, and an issue body can name a scratch path on somebody's machine: a home
+// directory with the user's name, an encoded project folder, a session id. The replay only matches a
+// ref against repository relative paths, which such a path can never equal, so only its shape matters
+// and every personal segment is replaced by a placeholder without changing a count.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const redactRef = (ref: string): string => {
+  const segs = ref.split('/')
+  return segs
+    .map((seg, i) => {
+      if (UUID.test(seg)) return 'session'
+      if (/^-?Users-/.test(seg) || /^-?home-/.test(seg)) return 'project'
+      if ((segs[i - 1] === 'Users' || segs[i - 1] === 'home') && (i === 1 || (i === 2 && segs[0] === ''))) return 'user'
+      return seg
+    })
+    .join('/')
+}
+export const redactFixture = (fx: Fixture): Fixture => ({
+  ...fx,
+  input: { ...fx.input, issues: fx.input.issues.map(i => ({ ...i, refs: i.refs.map(redactRef) })) },
+})
+
 export type PackedSession = { id: string; day: string; own: number[]; files: number[] }
 export type PackedInput = Omit<ReplayInput, 'sessions'> & { sessions: PackedSession[] }
 export type Fixture = {
@@ -136,7 +157,8 @@ const decoded = (paths: unknown, measured: { repo: unknown; head: unknown; rule:
  * Writes the fixture folder at dir, replacing any folder there only once the new one has been read
  * back and decodes to exactly what was measured. Throws, with nothing replaced, when it cannot.
  */
-export const writeFixture = async (dir: string, fx: Fixture, partBytes: number = PART_BYTES): Promise<void> => {
+export const writeFixture = async (dir: string, measured: Fixture, partBytes: number = PART_BYTES): Promise<void> => {
+  const fx = redactFixture(measured)
   const tmp = join(dirname(dir), `.${basename(dir)}.writing-${process.pid}`)
   rmSync(tmp, { recursive: true, force: true })
   mkdirSync(tmp)
