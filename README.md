@@ -4735,8 +4735,15 @@ beneath; a classifier refusal is noted as `failed` and never retried; and in eve
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, LESSONS.md (a script file handed it as its argument
-included, #1592), write tools under claude.ai, Chrome and PostHog, Supabase and psql writes, a
-branch switch in a primary checkout, force pushes, branch deletes, and `claude-sync` send, sync,
+included, #1592), write tools under claude.ai and PostHog, any Chrome call outside a tab the session
+created (recorded from its tabs_create_mcp result) or on a page off a test host (localhost,
+127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
+project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
+staging or qa before its last label), the page readers included, every action in a browser_batch
+after a click until a navigate re-reads the tab's host, and every Chrome tool reaching past those
+tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
+`hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
+pushes, branch deletes, and `claude-sync` send, sync,
 apply-only and install, and a pull from anywhere but the live sync clone `~/claude-config-sync` or
 with its environment changed; since #1106 that clone's pull is claude-config's deploy step, so it
 runs overnight exactly when the night lets claude-config deploy (`mayDeploy`) and waits for the
@@ -4803,7 +4810,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812
+#1765, #1812, #2064
 
 </td></tr>
 <tr><td>
