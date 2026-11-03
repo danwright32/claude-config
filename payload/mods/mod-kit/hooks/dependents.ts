@@ -47,3 +47,30 @@ export const reloadedUnder = (deps: readonly string[], newest: number, reloaded:
     const since = reloaded.get(p)
     return since !== undefined && newest > since
   })
+
+// #2100: a mod's hold on its reload while it waits on work a reload would drop. The longest a hold
+// may last: a compaction measured at 45 s on 2026-11-02 and the status bar's own give up at ten
+// minutes both fit well inside it, and a copy cancelled before it let go holds nothing back past it.
+export const HOLD_MAX_MS = 60 * 60_000
+export type Hold = { mod: string; id: string; what: string; until: number }
+
+// Why a hold is refused, or undefined when it may be taken.
+export const holdRefusal = (input: { mod?: unknown; id?: unknown; what?: unknown; ms?: unknown }): string | undefined => {
+  for (const part of ['mod', 'id', 'what'] as const) {
+    const v = input[part]
+    if (typeof v !== 'string' || !v.trim()) return `a hold needs a ${part}, and was given ${JSON.stringify(v ?? null)}`
+  }
+  const ms = input.ms
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0 || ms > HOLD_MAX_MS) return `a hold lasts more than 0 ms and at most ${HOLD_MAX_MS} ms, and was given ${JSON.stringify(ms ?? null)}`
+  return undefined
+}
+
+// The holds kept, with this one taken or renewed in place of any under the same mod and id.
+export const withHold = (holds: readonly Hold[], hold: Hold): Hold[] => [...holds.filter(h => !(h.mod === hold.mod && h.id === hold.id)), hold]
+export const withoutHold = (holds: readonly Hold[], mod: string, id: string): Hold[] => holds.filter(h => !(h.mod === mod && h.id === id))
+
+// A mod's holds at `now`: those still holding its reload back, and those past their time.
+export const holdsOf = (holds: readonly Hold[], mod: string, now: number) => ({
+  live: holds.filter(h => h.mod === mod && h.until > now),
+  expired: holds.filter(h => h.mod === mod && h.until <= now),
+})

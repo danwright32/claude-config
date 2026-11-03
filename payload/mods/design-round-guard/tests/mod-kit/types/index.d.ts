@@ -313,7 +313,24 @@ export type ModKit = {
    * says it itself (tools/check-mod-shared-parts.sh). A part missing throws, naming it.
    */
   typedAnswer: (input: { guard: string; typed: string; still: string; again: string }) => Promise<string>
+  /**
+   * Holds back mod-kit's reload of this mod while it waits on work a reload would drop (#2100): a
+   * Compact it started, a prompt it sent, a question it asked. mod-kit makes a mod load again when a
+   * mod it depends on reloads, and a reload cancels every wait of the copy it replaces, with nothing
+   * said. A held mod is asked to load again at the first pass after it lets go. `what` names the wait
+   * as Dan would ("the Compact it started"); `ms` is the longest it may hold, at most an hour, and
+   * the same `mod` and `id` again renews it. A hold past its time holds nothing back, and the reload
+   * it no longer holds says that `what` may have been dropped, so a copy cancelled before it let go
+   * is never silent. Claude Code's own reload of a mod whose files changed is not held by this.
+   * Rejects a hold with no mod, id or `what`, or an `ms` outside that range.
+   */
+  hold: (input: { mod: string; id: string; what: string; ms: number }) => Promise<void>
+  /** Lets go of this mod's hold with that id, taken by `hold`; letting go of one not held is fine. */
+  release: (input: { mod: string; id: string }) => Promise<void>
 }
+
+/** A mod's hold on its reload, as `$.modkit.hold` keeps it: until when, in ms since the epoch. */
+export type ModKitHold = { mod: string; id: string; what: string; until: number }
 
 /** A repository as `$.modkit.repo` reads it: its GitHub owner/name and its name, each null when there is none. */
 export type ModKitRepo = { github: string | null; name: string | null }
@@ -576,7 +593,9 @@ declare module 'claude-code' {
      * this Mac (#1190), so a redraw never says it twice whatever the store does. `login`: the login
      * this session is known to be on (account and org ids, '' for none, null for a file that could
      * not be read), noted at its start and moved by every modkit.login once it has been raised (#1235).
+     * `holds`: each mod's hold on its reload while it waits on work (#2100), kept here so a reload of
+     * mod-kit or of the holding mod keeps it.
      */
-    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> }; buttonsOff: boolean; login: string | null }
+    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> }; buttonsOff: boolean; login: string | null; holds: ModKitHold[] }
   }
 }

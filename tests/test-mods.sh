@@ -1187,7 +1187,10 @@ printf '%s\n' "$out" | grep -q 'form-next-line-card keeps its own card at /hooks
   && check "and names the line the value stands on" ok || check "and names the line the value stands on" "$out"
 mkmodsrc "$M9" own-reader "const words = command.split(/&&|\|\||;/).map(s => s.trim())"
 mkmodsrc "$M9" own-quotes "for (const c of cmd) { if (c === '\"' || c === \"'\") quote = c }"
-mkmodsrc "$M9" own-heredoc "const m = /(?<!<)<<(?!<)-?\s*(\w+)/.exec(line)"
+# The two brackets are written apart, so this planted reader is not itself a line holding a hand
+# written marker reader for payload/hooks/test-hand-rolled-heredoc-marker.sh (claude-config#2080).
+_H='<''<'
+mkmodsrc "$M9" own-heredoc "const m = /(?<!<)$_H(?!<)-?\s*(\w+)/.exec(line)"
 mkmodsrc "$M9" own-card "on('ui.render', { component: 'ToolResult' }, (\$, e, next) => next(e))"
 mkmodsrc "$M9" own-git "const GLOBAL = new Set(['-C', '-c', '--git-dir', '--work-tree'])"
 mkmodsrc "$M9" own-band "on('ui.render', { component: 'AbovePrompt' }, (\$, e, next) => next(e))"

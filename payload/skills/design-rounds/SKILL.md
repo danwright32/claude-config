@@ -316,7 +316,10 @@ So capture the chrome before round one, in the main session (a subagent never dr
 open the product's page at the width the round is drawn at, signed in as the person the screen is
 for, and run `capture-chrome.js` (beside this skill) with Playwright's `browser_evaluate`. It answers
 with the page as one self contained document, every stylesheet, font and image inlined and every
-script taken out, and names anything it could not inline in its first comment. Save it beside the
+script taken out, and names anything it could not inline in its first comment. A theme the page's
+own script stamped on `<html>` (a `data-theme`, a `dark` or `light` class) is taken out with the
+scripts, so the chrome follows the same theme rule as the built page; one in the markup the server
+sent is kept, and the first comment names the theme either way (claude-config#2045). Save it beside the
 round as `chrome.html`. A native app's chrome is a screenshot of its real window, `chrome.png`. Name
 it in the spec, with where it came from and where the round draws:
 
