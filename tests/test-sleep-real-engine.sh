@@ -101,6 +101,23 @@ DRV_SAID="$(python3 "$DIR/sleep-real-engine-session.py" "$DRV_TMP/out2.jsonl" 30
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["results"] == 1 and d["texts"] == ["last"] else 1)' "$DRV_SAID" 2>/dev/null \
   && check "the session driver counts a last result line with no newline after it" ok \
   || check "the session driver counts a last result line with no newline after it" "said: ${DRV_SAID:-nothing}; stderr: $(head -c 300 "$DRV_TMP/err")"
+# The helper that installs the scratch home's hook helpers, which also needs only python3 (#2138):
+# naming sleep-report.py alone installs the repo_slug it imports, and a helper importing a module
+# nobody has stops the install with that module named.
+LIBS_SAID="$(python3 "$DIR/install-hook-libs.py" "$ROOT/payload/hooks/lib" "$DRV_TMP/lib" sleep-report.py 2>&1)" \
+  && [ -f "$DRV_TMP/lib/repo_slug.py" ] \
+  && check "the hook helper install brings the modules a named helper imports" ok \
+  || check "the hook helper install brings the modules a named helper imports" "exit or files wrong: ${LIBS_SAID:-nothing said}; installed: $(ls "$DRV_TMP/lib" 2>/dev/null | tr '\n' ' ')"
+mkdir -p "$DRV_TMP/src"
+printf 'import no_such_hook_module_2138\n' > "$DRV_TMP/src/needs-missing.py"
+if LIBS_SAID="$(python3 "$DIR/install-hook-libs.py" "$DRV_TMP/src" "$DRV_TMP/lib2" needs-missing.py 2>&1)"; then
+  check "the hook helper install refuses a helper that imports a module nobody has" "it exited 0 and said: ${LIBS_SAID:-nothing}"
+else
+  case "$LIBS_SAID" in
+    *"needs-missing.py imports no_such_hook_module_2138"*) check "the hook helper install refuses a helper that imports a module nobody has" ok ;;
+    *) check "the hook helper install refuses a helper that imports a module nobody has" "it refused without naming the module: $LIBS_SAID" ;;
+  esac
+fi
 rm -rf "$DRV_TMP"
 
 if [ "${SLEEP_REAL_ENGINE:-}" = 0 ]; then
@@ -180,7 +197,11 @@ done
 # shaped like Dan's: held repositories, an owner that waits, and repositories allowed to deploy.
 printf '%s\n' '{"v":1,"waitOwners":["Studio-Partner"],"mergeOnly":[{"repo":"Acme-Corp/storefront","mergeDeploys":true}],"mayDeploy":["danwright32/claude-config","Acme-Corp/enrollment-board"]}' \
   > "$HOME/.claude/mods/sleep-repos.local.json"
-for f in sleep.sh sleep-report.py sleep-queue.sh sleep-queue.py session_registry.py branch-issues.mjs; do cp "$ROOT/payload/hooks/lib/$f" "$HOME/.claude/hooks/lib/$f"; done
+if ! LIBS_SAID="$(python3 "$DIR/install-hook-libs.py" "$ROOT/payload/hooks/lib" "$HOME/.claude/hooks/lib" \
+    sleep.sh sleep-report.py sleep-queue.sh sleep-queue.py session_registry.py branch-issues.mjs 2>&1)"; then
+  check "the scratch home's hook helpers find every module they import" "$(printf '%s' "$LIBS_SAID" | tr '\n' ' ')"
+  finish
+fi
 
 # Stand-ins for what lies outside the engine.
 cat > "$WORK/bin/gh" <<EOF

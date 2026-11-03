@@ -1026,7 +1026,12 @@ cannot, as it cannot skip the repository's hooks any other way (`no-verify-gate.
 Something at the path that is not a folder, such as `/dev/null`, is hooks switched off on purpose
 and is left alone, and a setting that cannot be read refuses the push. On 2026-11-02 the personal
 MacBook had 5 repositories setting `core.hooksPath` across 8 working trees, every folder present,
-so no push there would have been refused.
+so no push there would have been refused. That leaving alone is the main session's only
+(claude-config#2135): for an AGENT's push, a location that exists but holds no hook git would run
+(`/dev/null`, an empty folder, a folder of samples) refuses too, since an agent may have set it
+itself. A hook git runs is an executable file named after one. On 2026-11-03 each of those 5
+repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
+refused.
 
 Every merge gate judges a merge however it is made (claude-config#1181): `gh pr merge`, a repo's own
 merge tool, the GitHub API's merge endpoint (`gh api -X PUT repos/<owner>/<name>/pulls/<n>/merge`,
@@ -1711,8 +1716,12 @@ Three gates close the three parts of that, all reading commands through one libr
 - `no-verify-gate.sh` (PreToolUse, Bash) refuses an AGENT's git command that skips the repository's
   own git hooks: `--no-verify` on any git subcommand, commit's `-n`, `-c core.hooksPath=...`, and
   `HUSKY=0` and the other hook managers' switches, behind rtk, env, an if or a `bash -c` string, and
-  inside a rebase's `--exec`. Words that only mention one are not one. The main session is not
-  judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
+  inside a rebase's `--exec`. Words that only mention one are not one. Since claude-config#2135 it
+  also refuses an agent's `git config` that changes `core.hooksPath` in any scope and either
+  spelling (set, `--add`, `--replace-all`, `--unset`, the `core` section removed or renamed, or
+  `--edit`), and matches the key in any case; reading it is not refused. An agent never writes the
+  setting itself, even to a folder of tracked hooks: it runs the repository's own hook install
+  script, which this gate does not read into. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
   was removed on Dan's decision of 2026-10-24 (claude-config#1666), since an agent could write the
   same file with the Write tool.
   It also refuses an agent's git command that reads a file from standard input's DEVICE PATH
@@ -4622,7 +4631,11 @@ modes it switched); one asking to end the mode that is on in words that do not s
 down is done for today", never the name in passing or in a question) gets a note telling Claude to
 say it is still on and that `/build` turns it off (#805). **Away** (`/away`, "I'm stepping away", or
 "away" from the phone) and **home** (`/home`, "I'm back at my computer") switch every open session
-on this Mac, told through the session registry and `$.session.send`. Away, Claude is told to publish
+on this Mac: the switch is recorded in `~/.claude/state/scope-modes/place.json`, which every
+session reads at its next prompt and once a minute, with no message between sessions (#2099). A
+switch is recorded when Dan types it, and when sleep ends (`/wake` or the noon limit) to put every
+session back; a `/away` or `/home` a plugin or Claude runs switches its own session alone. A
+session takes only switches made after it started. Away, Claude is told to publish
 private claude.ai pages, and what needs Dan at the Mac is held: AppleScript or JavaScript for
 Automation that shows a dialog, or that it cannot read (a script file included, one `cat` pipes in
 too), typing or clicking (an AppleScript keystroke or click, cliclick, Peekaboo) into anything but a
@@ -4735,8 +4748,15 @@ beneath; a classifier refusal is noted as `failed` and never retried; and in eve
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, LESSONS.md (a script file handed it as its argument
-included, #1592), write tools under claude.ai, Chrome and PostHog, Supabase and psql writes, a
-branch switch in a primary checkout, force pushes, branch deletes, and `claude-sync` send, sync,
+included, #1592), write tools under claude.ai and PostHog, any Chrome call outside a tab the session
+created (recorded from its tabs_create_mcp result) or on a page off a test host (localhost,
+127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
+project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
+staging or qa before its last label), the page readers included, every action in a browser_batch
+after a click until a navigate re-reads the tab's host, and every Chrome tool reaching past those
+tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
+`hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
+pushes, branch deletes, and `claude-sync` send, sync,
 apply-only and install, and a pull from anywhere but the live sync clone `~/claude-config-sync` or
 with its environment changed; since #1106 that clone's pull is claude-config's deploy step, so it
 runs overnight exactly when the night lets claude-config deploy (`mayDeploy`) and waits for the
@@ -4803,7 +4823,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812
+#1765, #1812, #2064
 
 </td></tr>
 <tr><td>
@@ -5148,11 +5168,18 @@ whose issues or growth could not be read passes without settling the file, so th
 tries again. When the mod itself fails the edit goes ahead, the error goes to `errors.jsonl` beside
 the log, and the first each session is one dim line saying the edit went ahead unchecked. `node
 tools/area-check-replay.ts <checkout> --repo <owner/name>` replays a repository's last 30 days
-through the same rules.
+through the same rules. Every pull request then carries an area check line for each file decided on
+its branch, `Area check: <file>: <decision>, <reason>` (a fold line also names `Refs #N`): `gh pr
+create`, `gh pr edit` given a description, and `gh pr merge` (by itself, `--auto` or through the
+merge helper) are refused while the description lacks one, with the lines to paste. Decisions are
+matched by repository, branch and merge base, read from this Mac's log only, and only from its
+newest 1 MiB of decision lines; a rebase moves the merge base, so decisions taken before it are no
+longer asked for. A log that cannot be read refuses the command; a fact the command does not depend
+on that cannot be read (no checkout, GitHub not answering for a merge) lets it through.
 
 </td><td>
 
-#1506, #1508, #1509
+#1506, #1508, #1509, #1510
 
 </td></tr>
 <tr><td>

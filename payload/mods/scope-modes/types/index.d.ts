@@ -115,6 +115,11 @@ declare module 'claude-code' {
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
       /**
+       * When the newest away or home switch this session holds was made, in ms (#2099): its start, or
+       * the switch record's time once it took or wrote one. A record no newer is not taken again.
+       */
+      placeSeen: number
+      /**
        * What this session would have handed Dan while asleep (#1284): each call held, delivered when
        * sleep mode ends, its row and the call as made. Cleared once the session is asked to deliver them.
        * One with `why` is a merge, deploy or push the night's lists refused (#1285), put to Dan as a picker.
@@ -138,6 +143,8 @@ declare module 'claude-code' {
       askedUp: string | null
       /** The repositories first met after sleep began that this session noted, as "generation:owner/name": once a night (#843), across a reload (#1703). */
       firstMet: string[]
+      /** The Chrome tabs this session created, by tab id, with the host each one's page was last seen on (#2064). */
+      browserTabs: Record<string, { host: string | null }>
       /** The nights whose reminder to end sleep mode this session pinned on its card (#1283), by generation, across a reload (#1703). */
       pinnedHere: string[]
       /** The nights whose reminder this session took off its card (#1283), by generation, across a reload (#1703). */
