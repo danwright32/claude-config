@@ -148,6 +148,7 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate block-red-merge.sh          "gh pr merge 5 --squash"         ALLOW_RED_MERGE
   declare_gate check-closing-merge.sh      "gh pr merge 5 --squash"         SKIP_CLOSING_CHECK
   declare_gate check-work-names-merge.sh   "gh pr merge 5 --squash"         -
+  declare_gate check-work-names-publish.sh "gh pr create --title T --body B" -
   declare_gate require-changelog-tag.sh    "gh pr merge 5 --squash"         ALLOW_UNTAGGED_MERGE
   declare_gate require-verification-run.sh "gh pr merge 5 --squash"         ALLOW_UNVERIFIED_MERGE
   declare_gate design-score-gate.sh        "gh pr merge 5 --squash"         -
@@ -196,9 +197,17 @@ done
 # Each run is fed from a file rather than a pipe from python3, which a gate leaving early would
 # kill, and in a folder named by a number: a folder named after the gate or the library would put
 # push, merge or payload into the payload's cwd and so into every command's raw text.
+# Under a HOME of the gate copy's own, as run_judged below does, so whatever a gate records by
+# default under ~/.claude (the record of wrapped command refusals among them) lands in the
+# throwaway. Without it, a direct run of this suite, where run-all-tests.sh has exported no throwaway
+# record, wrote two "eval, reader-lib-missing" refusals into the Mac's real one every time (#2126).
+# The record's own override is cleared so the refusal lands under that HOME however the suite is run.
 run_gate(){ # run_gate <gate copy> <command> <cwd> -> OUT and RC
+  local home
+  home="$(dirname "$1")/home"
+  mkdir -p "$home"
   payload_for "$2" "$3" > "$WORK/in.json"
-  OUT="$( cd "$3" && bash "$1" < "$WORK/in.json" 2>&1 )"; RC=$?
+  OUT="$( cd "$3" && env -u WRAPPED_REFUSAL_LEDGER_DIR HOME="$home" bash "$1" < "$WORK/in.json" 2>&1 )"; RC=$?
 }
 n=0
 for g in "${GATES[@]}"; do
@@ -222,6 +231,12 @@ for g in "${GATES[@]}"; do
     rm -f "$T/lib/$lib"
     run_gate "$T/$g" "$judged" "$T/repo"
     if [ "$RC" -eq "$want" ]; then ok; else bad "$g with lib/$lib missing: '$judged' should exit $want, exited $RC, said: ${OUT:0:200}"; fi
+    # The refusal it records lands in this run's own HOME, never in the Mac's real record of wrapped
+    # command refusals, which a direct run of this suite used to fill with these fixtures (#2126).
+    if [ "$g" = check-wrapped-commands.sh ]; then
+      if grep -q -F 'reader-lib-missing' "$T/home/.claude/state/wrapped-commands/refusals.tsv" 2>/dev/null; then ok
+      else bad "$g with lib/$lib missing: its refusal should be recorded under the run's own HOME ($T/home), so a direct run of this suite never writes the real record (#2126); nothing was recorded there"; fi
+    fi
     # Named by the file, or for the gates that allow by the library's own name. A
     # library missing beneath another is reported as the one the gate sourced, which is what failed
     # to load from where the gate stands.
@@ -497,6 +512,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged require-changelog-tag.sh     Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged check-closing-merge.sh       Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged check-work-names-merge.sh    Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
+  judged check-work-names-publish.sh  Bash "$(bash_call 'gh pr create --title T --body B')" '{}' refuse
   judged require-verification-run.sh  Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged require-issue-fields.sh      Bash "$(bash_call "gh issue create --title 'x' --body 'y'")" '{}' refuse
   judged linux-sections-before-push.sh Bash "$(bash_call 'git push origin feature')" '{}' refuse

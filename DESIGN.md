@@ -1436,6 +1436,27 @@ same to the sync log, so an unscanned send leaves a record. The change watcher i
 because the watcher sends on every change for as long as it runs, and an override in its
 environment would be a standing exemption rather than one run.
 
+Public pull request and issue text names no work repository either (#2105). On 2026-11-02 a pull
+request description here named a work repository three times, copied from the issue it closed; both
+were scrubbed by hand, and Dan's answer to how to stop it recurring was "Scrub and file a gate". The
+leak was a repository name, which the record above leaves out of the file scan on purpose, so
+`check-work-names-publish.sh` departs from #1568 for public text only: it refuses a title, body,
+comment, review or body file naming a work organisation or a work repository, before a gh command
+or a gh api write posts it to a repository GitHub reports as public. The file scan and the send scan
+keep #1568's rule unchanged, because their reasons still hold there: lessons are written in product
+names, `name#N` provenance is parsed by `lesson-fanout.sh`, and an English word that is also a
+repository name would need an exemption list. A pull request or issue body has none of those
+readers, and the reason to keep a name out of it is the one that leaked. The names are read live on
+every judged command, from the repo digest's repository list, this Mac's dev update registry and the
+two hashes, and never written to disk, so the list does not become a published file. Unlike the file
+scan the refusal shows the name it matched: it goes only to the session, which already holds the
+command text the name is in, and a refusal that hid the word would leave the text unfixable.
+Whatever the gate cannot tell is refused (the visibility or the list unreadable, an unreadable body
+file, an unparsable payload, its budget spent), and it has no override. The rule for whether a gh api
+call writes moved into `gh_issue_scan.py` so the session link gate and this one read a write the same
+way. Measured against this repository's own history on 2026-11-02, the rule would have refused 82 of
+856 pull requests, 136 of 1250 issues and 23 of 1079 comments, which is the gate doing its job.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on

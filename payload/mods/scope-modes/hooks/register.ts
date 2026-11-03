@@ -40,6 +40,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
+import { listedHosts, tabsAfter, type Browser, type BrowserTabs } from './browser.ts'
 import { wakeCheck } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
@@ -102,6 +103,7 @@ import { alreadyPut, ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, typ
 import { reportBase, reportTitle } from './reportname.ts'
 import { scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF } from './modes.ts'
+import { isNewer, placeFile, placeSaid, placeText, readPlace, type PlaceHow, type PlaceOutcome } from './place.ts'
 import { PAGE_TOOL } from './mod-kit/deliver.ts'
 import {
   branchChoiceFor,
@@ -158,8 +160,6 @@ const RUN_MS = 20_000
 // in the script), so it gets longer than an ordinary run.
 const REPORT_FINAL_MS = 90_000
 const BOOT_MS = 5_000
-const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
-const HOME_TEXT = 'Dan switched every session on this Mac to home.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 const SCOPE_NAME: Record<ScopeModesScope, string> = { 'NO BUILD': 'No build', 'WINDING DOWN': 'Winding down' }
 
@@ -169,6 +169,7 @@ const heldRef = { plugin: 'scope-modes', key: 'held' } as const
 const heldSeqRef = { plugin: 'scope-modes', key: 'heldSeq' } as const
 const targetRef = { plugin: 'scope-modes', key: 'target' } as const
 const justHomeRef = { plugin: 'scope-modes', key: 'justHome' } as const
+const placeSeenRef = { plugin: 'scope-modes', key: 'placeSeen' } as const
 const openedRef = { plugin: 'scope-modes', key: 'opened' } as const
 const leftOpenRef = { plugin: 'scope-modes', key: 'leftOpen' } as const
 const branchesRef = { plugin: 'scope-modes', key: 'branches' } as const
@@ -1224,9 +1225,71 @@ const lookOf = ($: EngineInterface): Look => ({
   },
 })
 
+// The Chrome tabs this session created (#2064), with the host each one's page was last seen on, so
+// sleep mode lets a session check its own work in its own tab on a test host (browser.ts). Kept in
+// $.state, which survives a hot reload, and recorded awake too, so a tab made before bed is still
+// the session's own. Each Chrome call is remembered by its tool_use_id until its result row arrives.
+const CHROME = 'mcp__claude-in-chrome__'
+const chromeCalls = new Map<string, { tool: string; input: Record<string, unknown>; at: number }>()
+// How long a Chrome call still waiting on its result counts as possibly moving its tab: calls sent
+// at once are judged within moments of each other, and a call refused elsewhere, whose result row
+// may never reach this mod, must not hold its tab for ever.
+const PENDING_MS = 60_000
+const resultTexts = (content: unknown): string[] =>
+  typeof content === 'string'
+    ? [content]
+    : Array.isArray(content)
+      ? content.flatMap(c => (c && typeof c === 'object' && (c as { type?: unknown }).type === 'text' ? [String((c as { text?: unknown }).text ?? '')] : []))
+      : []
+// Written by version, so two results landing at once both count (assume it runs twice).
+const recordTabs = async ($: EngineInterface, tool: string, input: Record<string, unknown>, texts: string[]) => {
+  for (let i = 0; i < 5; i++) {
+    const held = await $.state.get({ plugin: 'scope-modes', key: 'browserTabs' })
+    const next = tabsAfter(held.value ?? {}, tool, input, texts)
+    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserTabs' }, next, { ifVersion: held.version })).isSet) return
+  }
+  throw new Error('the record of Chrome tabs kept changing underneath five writes in a row')
+}
+// The project's hosted test hosts, from CLAUDE.md as the default branch holds it, never the working
+// copy: a session must not add a host by editing the file overnight. The default branch is the one
+// origin/HEAD names, through mod-kit's one reader; when it names none, or anything cannot be read,
+// no host is listed, with no guess at main (fail closed, Dan, 2026-11-03).
+const committedTestHosts = async ($: EngineInterface): Promise<string[]> => {
+  const root = await $.session
+    .repo()
+    .then(r => r?.root ?? null)
+    .catch(() => null)
+  if (!root) return []
+  const b = await $.modkit.branch({ path: root }).catch(() => null)
+  if (!b || 'unreadable' in b || !b.defaultBranch) return []
+  const r = await run($, ['git', '-C', root, 'show', `origin/${b.defaultBranch}:CLAUDE.md`]).catch(() => null)
+  return r && r.exitCode === 0 ? listedHosts(r.stdout) : []
+}
+// A record that cannot be read is no tabs, which refuses every call needing one (fail closed). A
+// call judged at tool.call (self, its tool_use_id) is also judged as though every other Chrome call
+// still waiting on its result had moved its tab, so two calls sent at once (a click and a page read)
+// cannot both be judged against where the tab was before either ran.
+const browserOf = async ($: EngineInterface, self?: string): Promise<Browser> => {
+  let tabs: BrowserTabs = {}
+  try {
+    tabs = (await $.state.get({ plugin: 'scope-modes', key: 'browserTabs' })).value ?? {}
+  } catch {
+    tabs = {}
+  }
+  if (self !== undefined) {
+    const now = await $.clock.now()
+    for (const [id, c] of chromeCalls) if (id !== self && now - c.at < PENDING_MS) tabs = tabsAfter(tabs, c.tool, c.input, [])
+  }
+  return { tabs, listed: await committedTestHosts($) }
+}
+
 // Why a call is on Dan's overnight list (#834), from the call as a tool call or a permission
 // request carries it, or undefined when it is not.
 const overnightWhy = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string | undefined> => {
+  if (tool.startsWith(CHROME)) {
+    const self = typeof input.tool_use_id === 'string' && input.tool_use_id ? input.tool_use_id : undefined
+    return overnightRefusal({ tool, input, raw: '', commands: [], writes: NO_WRITES, cwd: '', home: '', read: text => readCommands($, text), browser: await browserOf($, self) }, lookOf($))
+  }
   const raw = tool === 'Bash' ? String(input.command ?? '') : ''
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME')) ?? ''
@@ -1243,12 +1306,13 @@ const overnightWhy = async ($: EngineInterface, tool: string, input: Record<stri
 const overnightDeny = (what: string, kept = false) =>
   `Refused: sleep mode is on and Dan bans this while he sleeps, so this did not ${what}.${kept ? ' This session keeps it and asks Dan about it when sleep mode ends, so there is no need to note it or keep it anywhere else.' : ''} Do not look for another way to do it; it waits for the morning. Carry on with work that does not need it, or skip this issue.`
 
-// Puts every session back where Dan was before sleep (#840: wake restores placeBefore).
-const restorePlace = async ($: EngineInterface, record: SleepRecord | null): Promise<string | null> => {
+// Puts every session back where Dan was before sleep (#840: wake restores placeBefore). Waking, and
+// the limit ending the /sleep Dan himself started, record it for the others (#2099).
+const restorePlace = async ($: EngineInterface, record: SleepRecord | null, how: 'wake' | 'sleep limit' = 'wake'): Promise<string | null> => {
   const place = record?.placeBefore
   if (place !== 'home' && place !== 'away') return null
   await setPlace($, place)
-  return placeSentence(place, await tellOthers($, place))
+  return placeSaid(place, await writePlace($, place, how))
 }
 
 // A record past its noon or from another boot no longer holds (L523). The first session to see it
@@ -1284,7 +1348,7 @@ const endIfOver = async ($: EngineInterface, reading: SleepReading) => {
   }
   const now = await $.clock.now()
   // Every session is put back first: the overnight check reads GitHub, which may be slow (#834 review).
-  await restorePlace($, record)
+  await restorePlace($, record, 'sleep limit')
   await showModes($)
   await showHeld($)
   // The overnight check's notes go in before the report is finished, so they are at its top (#834).
@@ -4439,32 +4503,69 @@ const ownNumbers = (t: TargetRead, opened: readonly ScopeModesOpened[]): number[
   ...opened.flatMap(o => [o.number, ...(o.closes ?? [])]),
 ]
 
-type Told = { told: number; failed: string[]; unknown?: string }
-const tellOthers = async ($: EngineInterface, place: ScopeModesPlace): Promise<Told> => {
-  let list
+// How many other sessions are open, only to say how many follow a switch (#2099); null when the
+// registry cannot say, never read as none (L215). A wrong shaped answer is null too, never thrown:
+// at wake that would lose the reply after the record had moved (#837 lessons review).
+const othersOpen = async ($: EngineInterface): Promise<number | null> => {
   try {
-    list = await $.sessions.list()
+    const list = await $.sessions.list()
+    if (list.unreadable.length) return null
+    return list.open.filter(o => o.sessionId !== list.selfId).length
   } catch (err) {
-    return { told: 0, failed: [], unknown: `the session registry could not be read (${msg(err)})` }
+    $.ui.log(`scope-modes: the session registry could not be read to count the other sessions (${msg(err)})`, { to: 'debug' })
+    return null
   }
-  const out: Told = { told: 0, failed: [] }
-  // A registry answer of the wrong shape is said as the others not told, never thrown past the
-  // caller: at wake that would lose the reply after the record had moved (#837 lessons review).
+}
+
+// A switch Dan made, recorded for every session on this Mac (#2099, Dan's decision of 2026-11-03):
+// each reads it at its next prompt or minute, so no message between sessions is needed. Only Dan's
+// own switches reach here; this session holds it as seen, so it never takes its own again.
+const writePlace = async ($: EngineInterface, place: ScopeModesPlace, how: PlaceHow): Promise<Exclude<PlaceOutcome, { notDans: true }>> => {
+  // Seen before it is recorded, so a switch that could not be recorded still holds here over any
+  // older one another session recorded (lessons review).
+  const at = await $.clock.now()
+  await $.state.set(placeSeenRef, at)
+  let home: string | undefined
   try {
-    // A record that cannot be read may be a live session: said, never read as no session (L215).
-    if (list.unreadable.length) out.unknown = `the session registry could not read ${list.unreadable.join(', ')}`
-    for (const o of list.open) {
-      if (o.sessionId === list.selfId) continue
-      // mod-kit tries a refused send once more (its hooks/send.ts), so a refusal here is the second.
-      const sent = await $.session.send({ to: { sessionId: o.sessionId }, text: place === 'away' ? AWAY_TEXT : HOME_TEXT })
-      if (!sent.isDelivered) out.failed.push(sent.reason)
-      else out.told++
-    }
+    home = await $.env.get('HOME')
   } catch (err) {
-    // Added to what was already said, never over it: an unreadable record may be a live session (L215).
-    out.unknown = [out.unknown, `the session registry's answer could not be read (${msg(err)})`].filter(Boolean).join('; ')
+    return { recorded: false, why: `HOME could not be read: ${msg(err)}` }
   }
-  return out
+  if (!home) return { recorded: false, why: 'HOME is not set' }
+  const failed = await writeWhole($, placeFile(home), placeText({ v: 1, place, at, by: await $.session.id(), cwd: await $.session.cwd(), how }))
+  if (failed) return { recorded: false, why: failed }
+  return { recorded: true, others: await othersOpen($) }
+}
+
+// A switch made in another session since this one last took one, applied here; read, never written
+// back. A record that cannot be read is said once a session, then logged, and never read as a switch.
+let placeUnreadSaid = false
+const takeSharedPlace = async ($: EngineInterface): Promise<void> => {
+  let text: string
+  try {
+    const home = await $.env.get('HOME')
+    if (!home) return
+    const path = placeFile(home)
+    if (!(await $.fs.exists(path))) return
+    text = await $.fs.read(path)
+  } catch (err) {
+    placeUnread($, msg(err))
+    return
+  }
+  const r = readPlace(text)
+  if ('why' in r) {
+    placeUnread($, r.why)
+    return
+  }
+  if (!isNewer(r.record, (await $.state.get(placeSeenRef)).value ?? 0)) return
+  await $.state.set(placeSeenRef, r.record.at)
+  if ((await placeOf($)) !== r.record.place) await setPlace($, r.record.place)
+}
+const placeUnread = ($: EngineInterface, why: string) => {
+  const said = `Scope modes could not read the away or home switch typed in another session (${why}), so a switch typed there may not reach this one.`
+  if (placeUnreadSaid) $.ui.log(`scope-modes: ${said}`, { to: 'debug' })
+  else $.ui.toast(`${said} Later failures go to the debug log.`)
+  placeUnreadSaid = true
 }
 
 const setPlace = async ($: EngineInterface, place: ScopeModesPlace) => {
@@ -4474,12 +4575,12 @@ const setPlace = async ($: EngineInterface, place: ScopeModesPlace) => {
   await showHeld($)
 }
 
-const placeSentence = (place: ScopeModesPlace, t: Told) => {
-  const name = place === 'away' ? 'Away' : 'Home'
-  let s = `${name} is on in this session${t.told ? ` and ${t.told} other${t.told === 1 ? '' : 's'}` : ''}.`
-  if (t.failed.length) s += ` ${t.failed.length} could not be told: ${[...new Set(t.failed)].join('; ')}.`
-  if (t.unknown) s += ` The other sessions could not be told: ${t.unknown}.`
-  return s
+// /away and /home (#2099). Only one Dan types is recorded for the other sessions: one a plugin or
+// Claude runs switches this session alone, so nothing but Dan can switch a session.
+const switchPlace = async ($: EngineInterface, place: ScopeModesPlace, origin: { readonly kind?: string } | undefined) => {
+  await setPlace($, place)
+  const said = placeSaid(place, (await dansWords($, origin)) ? await writePlace($, place, `/${place}`) : { notDans: true })
+  return { text: said, context: [ackOn(place, { first: said })] }
 }
 
 /** Ask before saving's noun (#1483), as its contract has it; it may not be loaded at all. */
@@ -4587,6 +4688,8 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
   if (asleep) {
     const what = await overnightWhy($, tool, input)
     if (what) {
+      // A refused Chrome call never runs, so it moves no tab (#2064).
+      chromeCalls.delete(toolUseId)
       // Kept for this session's morning, where Dan is asked whether to do it now (#1665): on
       // 2026-10-24 the refused branch deletes, pull request close and check rerun reached nobody.
       const kept = await keepBanned($, tool, input, raw, what)
@@ -4736,6 +4839,9 @@ export const register: Register = on => {
     takenOffHere.clear()
     firstMetHere.clear()
     askedUpHere = undefined
+    placeUnreadSaid = false
+    // A switch made before this session started is not taken (#2099): it starts at home, as before.
+    if ((await $.state.get(placeSeenRef)).value === undefined) await $.state.set(placeSeenRef, await $.clock.now())
     // A transcript heard before this start was another session's or another load's (#1636).
     heard = null
     startCwd = e.cwd
@@ -4799,6 +4905,12 @@ export const register: Register = on => {
           if (c && c.left.length === 0) await finish($, c)
         } catch (err) {
           $.ui.log(`scope-modes: the wind down check failed: ${msg(err)}`, { to: 'debug' })
+        }
+        // An away or home switch typed in another session, so the band follows without a prompt (#2099).
+        try {
+          await takeSharedPlace($)
+        } catch (err) {
+          $.ui.log(`scope-modes: the away or home switch check failed: ${msg(err)}`, { to: 'debug' })
         }
         // Sleep's record read each minute too: the first session to find it over ends it, and the
         // band follows it on and off whichever session started or ended it (#840).
@@ -4916,16 +5028,8 @@ export const register: Register = on => {
       })
     return woke.off ? { text: woke.said, context: [ackOn('wake')] } : { text: woke.said }
   })
-  on('command.run', { command: 'away' }, async $ => {
-    await setPlace($, 'away')
-    const said = placeSentence('away', await tellOthers($, 'away'))
-    return { text: said, context: [ackOn('away', { first: said })] }
-  })
-  on('command.run', { command: 'home' }, async $ => {
-    await setPlace($, 'home')
-    const said = placeSentence('home', await tellOthers($, 'home'))
-    return { text: said, context: [ackOn('home', { first: said })] }
-  })
+  on('command.run', { command: 'away' }, async ($, e) => switchPlace($, 'away', e.origin))
+  on('command.run', { command: 'home' }, async ($, e) => switchPlace($, 'home', e.origin))
 
   // Dan's own words switch modes; every prompt carries what is on, so Claude never guesses. A
   // message typed while a turn runs fires here too, at Enter, with that turn's id, as the engine's
@@ -4940,6 +5044,12 @@ export const register: Register = on => {
       await announce($)
     }
     const notes: string[] = []
+    // A switch typed in another session since, taken before this message's own switches, which are newer (#2099).
+    try {
+      await takeSharedPlace($)
+    } catch (err) {
+      $.ui.log(`scope-modes: the away or home switch check failed: ${msg(err)}`, { to: 'debug' })
+    }
     // Only Dan's own words switch a mode, as mod-kit's one reader says (#1135): what he types, at the
     // Mac or from his phone. Nothing else may (a peer session, a plugin, a handoff's opening prompt, a
     // notification), so a message from elsewhere saying "go ahead and build" cannot lift no build.
@@ -4990,9 +5100,9 @@ export const register: Register = on => {
           if (woke?.off) acks.push(ackOnSaid('wake'))
         } else {
           await setPlace($, t.place)
-          const told = await tellOthers($, t.place)
-          notes.push(`Dan's message switched every session to ${t.place}.`)
-          acks.push(ackOnSaid(t.place, { first: placeSentence(t.place, told) }))
+          const outcome = await writePlace($, t.place, 'typed')
+          notes.push(`Dan's message switched ${outcome.recorded ? 'every session' : 'this session'} to ${t.place}.`)
+          acks.push(ackOnSaid(t.place, { first: placeSaid(t.place, outcome) }))
         }
       }
       // Every note so far is a switch the message made; the still on note below switches nothing.
@@ -5089,15 +5199,10 @@ export const register: Register = on => {
     return r
   })
 
-  // The switch arriving from another session's scope modes: applied, and taken, so it never reaches
-  // the model as a message. The plugin field is the sender's claim; the worst a forged one can do
-  // is switch where this session delivers, which the band then shows.
+  // No message switches a session's place any more (#2099): a switch arrives through the record
+  // takeSharedPlace reads, which only Dan's own switches write.
   on('session.receive', async ($, e, next) => {
     const origin = e.origin as { plugin?: string }
-    if (origin.plugin === MOD && (e.text === AWAY_TEXT || e.text === HOME_TEXT)) {
-      await setPlace($, e.text === AWAY_TEXT ? 'away' : 'home')
-      return { consumed: `scope-modes: switched to ${e.text === AWAY_TEXT ? 'away' : 'home'} from another session` }
-    }
     // /sleep telling this session to start the night's work (#1242). Started only when the record
     // names it a worker with a goal, read here, so a forged start can do no more than /sleep would;
     // the turn is started once this delivery is done, as the driver starts one after a wait.
@@ -5114,10 +5219,25 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // A Chrome call's result row updates the record of the session's tabs (#2064). A subagent's rows
+  // count too: its tabs are the session's, in the same tab group.
+  on('session.append', { door: 'tool-result' }, async ($, e, next) => {
+    for (const b of e.message.content) {
+      const block = b as { type?: string; tool_use_id?: unknown; content?: unknown }
+      if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue
+      const made = chromeCalls.get(block.tool_use_id)
+      if (!made) continue
+      chromeCalls.delete(block.tool_use_id)
+      await recordTabs($, made.tool, made.input, resultTexts(block.content)).catch(err => $.ui.log(`scope-modes: the record of Chrome tabs could not be updated: ${msg(err)}`))
+    }
+    return next(e)
+  })
+
   on('tool.call', async ($, e, next) => {
     const input = e as unknown as Record<string, unknown>
     const tool = String(e.tool)
     const toolUseId = String(input.tool_use_id ?? '')
+    if (tool.startsWith(CHROME) && toolUseId) chromeCalls.set(toolUseId, { tool, input, at: await $.clock.now() })
 
     if (tool === 'mcp__scope-modes__switch_to_build') {
       // Answered here and never passed down, so the guards beneath (the secret guard) are asked
