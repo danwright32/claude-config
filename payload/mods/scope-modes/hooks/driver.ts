@@ -444,6 +444,68 @@ export const resumeDue = (d: DriverRecord, now: number) => !d.stopped && d.resum
  */
 export const SLEEP_START = 'Sleep mode is on: start the night\'s work toward your goal.'
 
+/**
+ * Why a start message was not delivered, as one of three things (#2062, L11): auto mode's check
+ * refused it, it gave no verdict on it (it could not judge it, which is not a judgement that it is
+ * unsafe), or the send failed for any other reason (a hook, a session gone, a throw). Read from the
+ * reason's words, as Claude Code 2.1.316 writes them: "Auto mode classifier gave no verdict for",
+ * "was not reviewed", "classifier unavailable", "transcript too long" for no verdict, and "Auto mode
+ * classifier blocked", "blocked by auto mode" for a refusal. Anything else claims neither.
+ */
+export const startFailKind = (reason: string): 'refused' | 'no-verdict' | 'error' => {
+  if (/no verdict|not reviewed|classifier unavailable|transcript (?:was )?too long|exceeded its context window/i.test(reason)) return 'no-verdict'
+  if (/classifier blocked|blocked by auto mode|classifier (?:denied|refused)/i.test(reason)) return 'refused'
+  return 'error'
+}
+
+/** What happened to one worker's start message, said in a clause, with the reason as given. */
+export const startFailBecause = (reason: string): string => {
+  const kind = startFailKind(reason)
+  if (kind === 'no-verdict') return `auto mode's safety check gave no verdict on its start message (${reason})`
+  if (kind === 'refused') return `auto mode's safety check refused its start message (${reason})`
+  return `its start message could not be sent (${reason})`
+}
+
+/** One worker /sleep could not tell to start: who, and the reason its send came back with. */
+export type Unstarted = { who: string; why: string }
+
+/**
+ * What Dan reads at /sleep about the workers that were not told to start (#2062): each named with
+ * what happened, and how he starts it himself before he goes to bed. An idle worker has no turn to
+ * end, so the driver never reaches it; a message typed in that session starts a turn, and the
+ * driver keeps it working from its first Stop. Empty when every worker was told.
+ */
+export const unstartedSaid = (list: readonly Unstarted[]): string => {
+  if (!list.length) return ''
+  const one = list.length === 1
+  const each = list.map(u => `${u.who}, because ${startFailBecause(u.why)}`).join('; ')
+  const how = `To start ${one ? 'it' : 'one'}, type "start the night's work" in that session before you sleep.`
+  return `Not started, so ${one ? 'it' : 'they'} may do no work tonight unless you start ${one ? 'it' : 'them'}: ${each}. ${how}`
+}
+
+/**
+ * What Claude is asked to do for the workers whose start message got no verdict (#2062): send the
+ * same message itself, with SendMessage, in its reply to /sleep. A send from inside the command
+ * belongs to no request of Claude's, which is where Claude Code says a verdict comes from, so the
+ * check had nothing to judge it with; Claude's own send is judged by that same check as any other,
+ * so nothing goes round it. Only a no verdict is handed on: a refusal is the check's verdict and is
+ * never asked again, and a send that failed some other way was never the check's. Arriving from a
+ * model, the message reaches that session's Claude as a message rather than through this mod, and
+ * starts a turn the driver keeps working from its first Stop. Empty when there is none to ask.
+ */
+export const sendItselfAsk = (list: readonly (Unstarted & { id: string })[]): string => {
+  const ask = list.filter(u => startFailKind(u.why) === 'no-verdict')
+  if (!ask.length) return ''
+  const each = ask.map(u => `${u.who} (session id ${u.id})`).join('; ')
+  return (
+    `Auto mode's safety check gave no verdict on the start message /sleep sent to ${each}, because a message sent from inside a command belongs to no request of yours. ` +
+    `After your acknowledgement, send it yourself in this reply: find ${ask.length === 1 ? 'that session' : 'each of those sessions'} with ListAgents and send it, with SendMessage, exactly this message: "${SLEEP_START}". ` +
+    `Auto mode's check judges your send as it judges any other. If it is refused, never send it again; if it gets no verdict, do only what Claude Code's own message says, once. ` +
+    'Never deliver it any other way (a file, a shell command, another tool). ' +
+    `Then tell Dan in one line which sessions were started after all, and that any still not started needs him to type "start the night's work" in it before he sleeps.`
+  )
+}
+
 /** The turn a worker told to start begins with: the overnight rules, its goal among them. */
 export const startPrompt = (self: string, root: string, goal: string) =>
   `Sleep mode is on and Dan is asleep: start the night's work now. ${overnightRules(self, root, goal)}`
