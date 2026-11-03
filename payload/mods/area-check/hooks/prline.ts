@@ -200,3 +200,25 @@ export const bodyUnreadableRefusal = (verb: string, file: string, why: string): 
 /** The log could not be read: named, with why and the way back, never read as no decisions. */
 export const logUnreadableRefusal = (verb: string, why: string): string =>
   `The area check refused this ${verb}: it could not read its log ${LOG_SHOWN} (${why}), so it cannot tell which files were decided on this branch. It reads this Mac's log only. If the log was deleted, a new session writes it again (and reads as no decisions); if it cannot be read, make it readable to you again. Then run the command again.`
+
+// ---- The bounded read of the log ----
+
+/**
+ * How many bytes of decision lines are read, from the newest back. The log grows about 1 MB in ten
+ * days and the engine refuses a whole file read over 4 MiB, so the log is grepped for its decision
+ * lines and only their newest LOG_READ_BYTES are kept; a decision older than that is not asked for.
+ */
+export const LOG_READ_BYTES = 1_048_576
+
+/**
+ * The whole decision lines among the newest `bytes` bytes, given the newest `bytes + 1` bytes the
+ * read returned. Output no longer than `bytes` is the whole of what grep found. Longer output began
+ * one byte before the bound, so everything up to and including its first newline lies outside it:
+ * a line the bound cut through is dropped whole (never read as malformed), and a line the bound
+ * begins exactly at keeps every byte, since the byte before it was that newline.
+ */
+export const keptOf = (stdout: string, bytes: number): string => {
+  if (new TextEncoder().encode(stdout).length <= bytes) return stdout
+  const nl = stdout.indexOf('\n')
+  return nl === -1 ? '' : stdout.slice(nl + 1)
+}

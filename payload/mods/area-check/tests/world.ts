@@ -119,6 +119,8 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     goal: string | null
     // The log as grep finds it (#1510): missing, unreadable, or its lines beside those the mod wrote.
     log?: 'missing' | 'unreadable'
+    // The engine cut the bounded read of the log short (process.run's isStdoutTruncated).
+    logTruncated?: boolean
     seeded: string[]
     // The merge base each ref has with origin/main; a ref absent here cannot be read.
     bases: Record<string, string>
@@ -142,9 +144,9 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   on('session.repo', () => ({ value: { root: APP, remote: 'git@github.com:dan/app.git' } }) as never)
   on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
   on('fs.read', ($, e) => {
-    if (ctl.unreadableFiles.includes(e.path)) throw new Error(`EACCES: permission denied, open '${e.path}'`)
+    if (ctl.unreadableFiles.includes(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` } as never
     const t = files[e.path]
-    if (t === undefined) throw new Error(`ENOENT: no such file or directory, open '${e.path}'`)
+    if (t === undefined) return { deny: `ENOENT: no such file or directory, open '${e.path}'` } as never
     return { value: t } as never
   })
   on('store.get', ($, e) => ({ value: store[e.key] }) as never)
@@ -230,6 +232,17 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     if (argv[0] === '__sessions') return answer(ok(JSON.stringify({ open: [{ sessionId: 's1', transcriptPath: '/t/s1.jsonl' }], closed: [], unreadable: [], selfId: 's1' })))
     ran.push(line)
     if (typeof timeoutMs === 'number') timeouts.push(timeoutMs)
+    // The bounded read of the log (#1510): grep for the two marks, then the last argv[7] bytes.
+    if (argv[0] === '/bin/sh' && String(argv[2]).includes('grep -a -F') && argv[6] === LOG) {
+      if (ctl.log === 'missing') return answer({ exitCode: 2, stdout: '', stderr: `grep: ${LOG}: No such file or directory` })
+      if (ctl.log === 'unreadable') return answer({ exitCode: 2, stdout: '', stderr: `grep: ${LOG}: Permission denied` })
+      const marks = [argv[4] as string, argv[5] as string]
+      const lines = [...(appended[LOG] ?? '').split('\n'), ...ctl.seeded].filter(l => l && marks.some(m => l.includes(m)))
+      if (!lines.length) return answer({ exitCode: 1, stdout: '', stderr: '' })
+      const out = (lines.join('\n') + '\n').slice(-Number(argv[7]))
+      if (ctl.logTruncated) return { value: { exitCode: 0, stdout: out.slice(0, 100), stderr: '', isStdoutTruncated: true, isStderrTruncated: false } } as never
+      return answer(ok(out))
+    }
     if (argv[0] === '/bin/sh') {
       if (ctl.logFails && argv[argv.length - 1] === LOG) return answer({ exitCode: 1, stdout: '', stderr: 'No space left on device' })
       const file = argv[argv.length - 1] as string
@@ -277,13 +290,6 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
       const out: Record<string, string[]> = {}
       for (const r of rows) out[String(r.number)] = [...r.body.matchAll(/[A-Za-z0-9_/.-]+\.ts\b/g)].map(m => m[0])
       return answer(ok(JSON.stringify(out)))
-    }
-    if (argv[0] === 'grep' && argv[argv.length - 1] === LOG) {
-      if (ctl.log === 'missing') return answer({ exitCode: 2, stdout: '', stderr: `grep: ${LOG}: No such file or directory` })
-      if (ctl.log === 'unreadable') return answer({ exitCode: 2, stdout: '', stderr: `grep: ${LOG}: Permission denied` })
-      const marks = argv.filter((_, i) => argv[i - 1] === '-e')
-      const lines = [...(appended[LOG] ?? '').split('\n'), ...ctl.seeded].filter(l => l && marks.some(m => l.includes(m)))
-      return answer(lines.length ? ok(lines.join('\n') + '\n') : { exitCode: 1, stdout: '', stderr: '' })
     }
     if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') return answer(ctl.prView(argv.slice(3)))
     throw new Error(`unexpected run: ${line}`)

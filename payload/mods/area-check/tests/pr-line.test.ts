@@ -292,7 +292,7 @@ test('the log is read from its end and bounded, so a long log keeps its newest d
   expect(why).toContain(B)
   expect(why).not.toContain('src/old.ts')
   expect(why).not.toContain('could not be read')
-  expect(w.ran.some(l => l.includes('| tail -c "$4"') && l.endsWith(` ${LOG} ${LOG_READ_BYTES}`))).toBe(true)
+  expect(w.ran.some(l => l.includes('| tail -c "$4"') && l.endsWith(` ${LOG} ${LOG_READ_BYTES + 1}`))).toBe(true)
 })
 
 test('a log read the engine cuts short is refused naming it, never read as the decisions it kept', KIT, async ($, on) => {
@@ -302,4 +302,37 @@ test('a log read the engine cuts short is refused naming it, never read as the d
   const why = refusal(await bash($ as never, w, `gh pr create --title T --body "${A}\n${B}"`))
   expect(why).toContain('~/.claude-area-check/log.jsonl')
   expect(why).toContain('more than could be read whole')
+})
+
+// The decision lines that follow `cut` in the log, padded so they hold exactly `bytes` bytes with
+// their newlines: A and B, after one decision on another branch whose reason fills the gap.
+const after = (bytes: number) => {
+  const ab = [decidedLine({ path: 'src/a.ts', decision: 'proceed', reason: 'it only renames one local variable inside a function' }), decidedLine({ path: 'src/b.ts', decision: 'fold', issue: 41 })]
+  const pad = (reason: string) => decidedLine({ path: 'src/x.ts', decision: 'proceed', reason, branch: '13-other' })
+  const fixed = [pad(''), ...ab].join('\n').length + 1
+  return [pad('p'.repeat(bytes - fixed)), ...ab]
+}
+
+const cut = decidedLine({ path: 'src/cut.ts', decision: 'proceed', reason: 'the decision the bound falls on' })
+const old = decidedLine({ path: 'src/old.ts', decision: 'proceed', reason: 'past the bound' })
+
+test('a decision line the bound cuts through is left out, never counted malformed', KIT, async ($, on) => {
+  const w = world($, on)
+  // The newest LOG_READ_BYTES bytes begin ten bytes before the end of `cut`.
+  w.ctl.seeded.push(old, cut, ...after(LOG_READ_BYTES - 10))
+  const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
+  expect(why).toContain(A)
+  expect(why).not.toContain('src/cut.ts')
+  expect(why).not.toContain('could not be read')
+})
+
+test('a decision line the bound begins exactly at is read whole, not dropped as cut', KIT, async ($, on) => {
+  const w = world($, on)
+  // The newest LOG_READ_BYTES bytes begin at the first byte of `cut`.
+  w.ctl.seeded.push(old, cut, ...after(LOG_READ_BYTES - cut.length - 1))
+  const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
+  expect(why).toContain('Area check: src/cut.ts: proceed, the decision the bound falls on')
+  expect(why).toContain(A)
+  expect(why).not.toContain('src/old.ts')
+  expect(why).not.toContain('could not be read')
 })
