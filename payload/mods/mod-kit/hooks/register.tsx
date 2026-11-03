@@ -4,7 +4,8 @@ import type { ModKit, ModKitBandButton, ModKitBandLine, ModKitBandPart, ModKitBa
 import { appleTerminalTrusted, BUTTONS_OFF_NOTICE, clicksReach, compose, drop, fallbackOf, holdsButton, isDivider, isSlot, mostRows, paneRefusal, put, refusal, settingWouldHelp, wraps } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
-import { dependsOn, judgeProviders, newestFile, reloadedUnder } from './dependents.ts'
+import { dependsOn, holdRefusal, holdsOf, judgeProviders, newestFile, reloadedUnder, withHold, withoutHold } from './dependents.ts'
+import type { Hold } from './dependents.ts'
 import { ghArgs, mergeHelperArgs } from './gh.ts'
 import { goalAt } from './goal.ts'
 import { sendTwice } from './send.ts'
@@ -60,6 +61,21 @@ const askAgain = { plugin: 'mod-kit', key: 'askAgain' } as const
 const stamped = { plugin: 'mod-kit', key: 'stamped' } as const
 // Where each provider other than mod-kit was last looked at, at a turn's start (#966).
 const swept = { plugin: 'mod-kit', key: 'swept' } as const
+// Each mod's hold on its reload while it waits on work a reload would drop (#2100).
+const holdsRef = { plugin: 'mod-kit', key: 'holds' } as const
+// Read, change and write the holds with ifVersion, again on a miss, so a hold taken while a pass
+// drops an expired one is never lost (assume it runs twice). The engine requires $ to be spelled in
+// place, so each caller hands its own read and write.
+type HoldsRead = () => Promise<{ value?: Hold[]; version: number }>
+type HoldsWrite = (value: Hold[], ifVersion: number) => Promise<{ isSet: boolean }>
+const changeHolds = async (read: HoldsRead, write: HoldsWrite, fn: (held: Hold[]) => Hold[]) => {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const held = await read()
+    const r = await write(fn(held.value ?? []), held.version)
+    if (r.isSet) return
+  }
+  throw new Error('the holds changed under every one of 10 attempts to update them')
+}
 
 // #960, measured 2026-10-08 with throwaway mods in a session of its own. When one delivery changes
 // mod-kit and a mod that starts using something mod-kit only now provides (the steps card hooking
@@ -144,15 +160,33 @@ const askDependents = async ($: EngineInterface, pass: Pass, reloaded: ReadonlyM
     failed.push(name)
     if (opts.sayAgain || !pass.retry.has(name)) $.ui.log(text)
   }
+  // #2100: a mod waiting on work a reload would drop holds its touch back, and is asked again at
+  // the next pass, with nothing said, since holding is not a failure. A hold past its time holds
+  // nothing back: the copy that took it may have been cancelled before it let go, so the touch goes
+  // ahead and says which wait may have been dropped, once, as the expired hold is let go then.
+  const held: string[] = []
+  const holds = (await $.state.get(holdsRef)).value ?? []
+  const now = await $.clock.now()
+  const lapsed: Hold[] = []
   for (const u of pass.unread) fail(u.name, u.text)
   for (const mod of pass.mods) {
     let under: string[] = []
     try {
       if (mod.deps.some(p => reloaded.has(p))) under = reloadedUnder(mod.deps, await mod.newest(), reloaded)
       if (!under.length && !pass.retry.has(mod.name)) continue
+      const { live, expired } = holdsOf(holds, mod.name, now)
+      if (live.length) {
+        held.push(mod.name)
+        $.ui.log(`${mod.name} did not load again yet, as it is waiting on ${live.map(h => h.what).join(' and ')}; it is asked again once it lets go.`, { to: 'debug' })
+        continue
+      }
       const r = await $.process.run(['touch', '-c', mod.manifestPath])
       if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `touch exited ${r.exitCode}`)
       touched.push(mod.name)
+      for (const h of expired) {
+        lapsed.push(h)
+        $.ui.log(`${mod.name} loaded again after ${opts.who(under)} reloaded, while it was still holding that back to wait on ${h.what}, past the time it asked for. A reload drops what a mod is waiting on, so if ${h.what} never finished, do it again.`)
+      }
       try {
         pass.stamps[mod.name] = (await $.fs.stat(mod.manifestPath)).mtimeMs
       } catch {
@@ -163,7 +197,9 @@ const askDependents = async ($: EngineInterface, pass: Pass, reloaded: ReadonlyM
     }
   }
   if (touched.length) $.ui.log(`These mods load again, as a mod they depend on reloaded: ${touched.join(', ')}`, { to: 'debug' })
-  await $.state.set(askAgain, failed)
+  if (lapsed.length)
+    await changeHolds(() => $.state.get(holdsRef), (v, ifVersion) => $.state.set(holdsRef, v, { ifVersion }), kept => kept.filter(h => !lapsed.some(l => l.mod === h.mod && l.id === h.id && l.until === h.until)))
+  await $.state.set(askAgain, [...failed, ...held])
   await $.state.set(stamped, pass.stamps)
 }
 
@@ -365,6 +401,17 @@ export const register: Register = (on, options) => {
         if (missing) throw new Error(missing)
         await built.ui.toast(typedToast(input.guard))
         return typedAnswerText(input)
+      },
+      // #2100: a mod holding back its reload while it waits on work a reload would drop, read by the
+      // dependents pass below. Kept in this mod's $.state, which a reload of either mod keeps.
+      hold: async input => {
+        const why = holdRefusal(input)
+        if (why) throw new Error(why)
+        const until = (await built.clock.now()) + input.ms
+        await changeHolds(() => built.state.get(holdsRef), (v, ifVersion) => built.state.set(holdsRef, v, { ifVersion }), held => withHold(held, { mod: input.mod, id: input.id, what: input.what.trim(), until }))
+      },
+      release: async ({ mod, id }) => {
+        await changeHolds(() => built.state.get(holdsRef), (v, ifVersion) => built.state.set(holdsRef, v, { ifVersion }), held => withoutHold(held, mod, id))
       },
     }
     return { ...built, modkit }

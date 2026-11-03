@@ -134,6 +134,32 @@ while [ "$i" -le $(( MAXROOTS + 1 )) ]; do
 done
 printf '  710     1 1-02:03:04 bash %s/test-run-all-tests.sh\n' "$WT" > "$WORK/days"
 : > "$WORK/empty"
+# A whole run older than the age limit that is still finishing suites (claude-config#2106). The
+# shape named on 2026-11-02: a session's zsh wrapper, the runner under it, and the per suite
+# subshell the runner forks (which ps shows with the runner's own command) holding a fresh suite.
+# The runner is judged by its newest suite, so none of it is a pile.
+ZSH_WRAP="/bin/zsh -c source /x/.claude/shell-snapshots/snap.sh && eval 'bash $WT/run-all-tests.sh 2>&1 | tail -40'"
+{
+  printf '  500     1 %s %s\n' "$OLD" "$ZSH_WRAP"
+  printf '  501   500 %s /bin/bash %s/run-all-tests.sh\n' "$OLD" "$WT"
+  printf '  502   501 %s /bin/bash %s/run-all-tests.sh\n' "$YOUNG" "$WT"
+  printf '  503   502 %s bash %s/test-one.sh\n' "$YOUNG" "$WT"
+} > "$WORK/progressing"
+# The same run with one suite of its own past the limit beside it: that suite is still named, and
+# the progressing run around the fresh one is not.
+{
+  cat "$WORK/progressing"
+  printf '  510     1 %s bash %s/test-stuck.sh\n' "$OLD" "$WT"
+} > "$WORK/mixed"
+# A run older than the limit with no suite of its own younger than it is still named, wrapper and
+# all: a young process under it that is not a suite, and a young suite that is not its own, are not
+# progress of that run.
+{
+  printf '  520     1 %s %s\n' "$OLD" "$ZSH_WRAP"
+  printf '  521   520 %s /bin/bash %s/run-all-tests.sh\n' "$OLD" "$WT"
+  printf '  522   521 %s sleep 0.2\n' "$YOUNG"
+  printf '  523     1 %s bash %s/test-elsewhere.sh\n' "$YOUNG" "$WT"
+} > "$WORK/stalled"
 
 NOW=1800000000
 prompt() { # prompt <session> <table file> [now]  -> runs the hook as a UserPromptSubmit would
@@ -196,6 +222,21 @@ rm -rf "$LW"
 echo "suite pile notice: an age written in days is read as days"
 out="$(prompt d1 "$WORK/days")"
 says "a suite a day old is said" "$out" "1-02:03:04"
+
+echo "suite pile notice: a run of the runner is judged by its newest suite, not its own age (claude-config#2106)"
+out="$(prompt r1 "$WORK/progressing")"
+silent "a run past the age limit that is still finishing suites is not a pile" "$out"
+never_says "and none of it is named for killing" "$out" "kill -9"
+out="$(prompt r2 "$WORK/mixed")"
+says "a lone suite past the limit beside that run is still said" "$out" "1 of them older than ${MAXAGE}s"
+kills="$(printf '%s\n' "$out" | grep -oE 'kill -9( [0-9]+)+' | tr ' ' '\n' | grep -xE '[0-9]+' | sort | tr '\n' ' ')"
+if [ "$kills" = "510 " ]; then check "naming only that suite, never the progressing run or its wrapper" ok
+else check "naming only that suite, never the progressing run or its wrapper" "named: '$kills'"; fi
+out="$(prompt r3 "$WORK/stalled")"
+says "a run past the limit with no young suite of its own is still said" "$out" "2 of them older than ${MAXAGE}s"
+kills="$(printf '%s\n' "$out" | grep -oE 'kill -9( [0-9]+)+' | tr ' ' '\n' | grep -xE '[0-9]+' | sort | tr '\n' ' ')"
+if [ "$kills" = "520 521 " ]; then check "naming the runner and its wrapper, never the young suite beside them" ok
+else check "naming the runner and its wrapper, never the young suite beside them" "named: '$kills'"; fi
 
 echo "suite pile notice: a kill line too long for a notice is left to status, never cut short"
 # Fifty one old suites under one root. A partial kill line would read as the whole of it.
@@ -302,7 +343,7 @@ echo "suite pile notice: status and the notice agree on every fixture"
 status_of() { SYNC_PS_FIXTURE="$1" CLAUDE_HOME="$WORK/home/.claude" SYNC_REPO="$WORK/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$REPO/claude-sync" status 2>&1; }
 pids_of() { printf '%s\n' "$1" | grep -oE 'kill -9( [0-9]+)+' | tr ' ' '\n' | grep -xE '[0-9]+' | sort | tr '\n' ' '; }
 n=0
-for f in healthy old wide edge days empty; do
+for f in healthy old wide edge days empty progressing mixed stalled; do
   st="$(status_of "$WORK/$f")"
   no="$(prompt "agree-$f" "$WORK/$f")"
   case "$st" in *"test suites left running"*) st_says=1 ;; *) st_says=0 ;; esac
@@ -314,8 +355,8 @@ for f in healthy old wide edge days empty; do
   [ "$st_says" = 1 ] && n=$(( n + 1 ))
 done
 # Both halves seen, or agreement could be two silences (L159).
-[ "$n" -eq 3 ] && check "three of the fixtures are piles to status, so agreement was tested both ways" ok \
-  || check "three of the fixtures are piles to status, so agreement was tested both ways" "$n were"
+[ "$n" -eq 5 ] && check "five of the fixtures are piles to status, so agreement was tested both ways" ok \
+  || check "five of the fixtures are piles to status, so agreement was tested both ways" "$n were"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
