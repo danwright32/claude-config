@@ -4510,6 +4510,14 @@ const setPlace = async ($: EngineInterface, place: ScopeModesPlace) => {
   await showHeld($)
 }
 
+// /away and /home (#2099). Only one Dan types is recorded for the other sessions: one a plugin or
+// Claude runs switches this session alone, so nothing but Dan can switch a session.
+const switchPlace = async ($: EngineInterface, place: ScopeModesPlace, origin: { readonly kind?: string } | undefined) => {
+  await setPlace($, place)
+  const said = placeSaid(place, (await dansWords($, origin)) ? await writePlace($, place, `/${place}`) : { notDans: true })
+  return { text: said, context: [ackOn(place, { first: said })] }
+}
+
 /** Ask before saving's noun (#1483), as its contract has it; it may not be loaded at all. */
 type AskBeforeSavingNoun = { isApproved: (call: { tool: string; input: Record<string, unknown> }) => Promise<{ isApproved: boolean }> }
 
@@ -4953,13 +4961,6 @@ export const register: Register = on => {
       })
     return woke.off ? { text: woke.said, context: [ackOn('wake')] } : { text: woke.said }
   })
-  // Only a /away or /home Dan types is recorded for the other sessions (#2099): one a plugin or
-  // Claude runs switches this session alone, so nothing but Dan can switch a session.
-  const switchPlace = async ($: EngineInterface, place: ScopeModesPlace, origin: { readonly kind?: string } | undefined) => {
-    await setPlace($, place)
-    const said = placeSaid(place, (await dansWords($, origin)) ? await writePlace($, place, `/${place}`) : { notDans: true })
-    return { text: said, context: [ackOn(place, { first: said })] }
-  }
   on('command.run', { command: 'away' }, async ($, e) => switchPlace($, 'away', e.origin))
   on('command.run', { command: 'home' }, async ($, e) => switchPlace($, 'home', e.origin))
 

@@ -4606,7 +4606,10 @@ modes it switched); one asking to end the mode that is on in words that do not s
 down is done for today", never the name in passing or in a question) gets a note telling Claude to
 say it is still on and that `/build` turns it off (#805). **Away** (`/away`, "I'm stepping away", or
 "away" from the phone) and **home** (`/home`, "I'm back at my computer") switch every open session
-on this Mac, told through the session registry and `$.session.send`. Away, Claude is told to publish
+on this Mac: the switch is recorded in `~/.claude/state/scope-modes/place.json`, which every
+session reads at its next prompt and once a minute, with no message between sessions (#2099). Only
+a switch Dan types is recorded; one a plugin or Claude runs switches its own session alone. A
+session takes only switches made after it started. Away, Claude is told to publish
 private claude.ai pages, and what needs Dan at the Mac is held: AppleScript or JavaScript for
 Automation that shows a dialog, or that it cannot read (a script file included, one `cat` pipes in
 too), typing or clicking (an AppleScript keystroke or click, cliclick, Peekaboo) into anything but a

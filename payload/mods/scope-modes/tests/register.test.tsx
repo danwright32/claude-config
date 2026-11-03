@@ -2681,8 +2681,9 @@ test('a record that cannot be read is said once, never read as a switch (L215)',
   await say($ as never, 'one')
   await say($ as never, 'two')
   expect(w.modes).toEqual([])
+  // The engine names the call it denied ahead of the reason, as it does for every denied read.
   expect(w.toasts.filter(t => t.includes('away or home'))).toEqual([
-    `Scope modes could not read the away or home switch typed in another session (EACCES: permission denied, open '${PLACE}'), so a switch typed there may not reach this one. Later failures go to the debug log.`,
+    `Scope modes could not read the away or home switch typed in another session (scope-modes: $.fs.read: EACCES: permission denied, open '${PLACE}'), so a switch typed there may not reach this one. Later failures go to the debug log.`,
   ])
 })
 
@@ -3529,16 +3530,20 @@ test('a session registry that answers garbled never loses the wake reply: the ot
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
   expect(r.text).toMatch(/^Sleep mode is off\..*Whether other sessions are open could not be read \(.+\); any that are put to you within a minute whatever they have from the night\.$/s)
-  // Telling the others the place met the same answer, and says so rather than throwing.
-  expect(r.text).toMatch(/The other sessions could not be told: the session registry's answer could not be read \(.+?\)\. The night's report/)
+  // The place is recorded for the others all the same, since the record does not need the registry (#2099).
+  expect(r.text).toMatch(/Home is on in this session; every other open session on this Mac switches to home within a minute\. The night's report/)
+  expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'home', how: 'wake' })
   expect(w.files[CURRENT]).toBeUndefined()
 })
 
 test('a registry answer that names a record it could not read and then breaks keeps both said (#837)', withDeps, async ($, on) => {
-  const { clock } = world(on, { registryAnswer: JSON.stringify({ open: 7, closed: [], unreadable: ['s7.json'], selfId: 's1' }), files: { [CURRENT]: asleepRecord({ workers: [] }) } })
+  const { w, clock } = world(on, { registryAnswer: JSON.stringify({ open: 7, closed: [], unreadable: ['s7.json'], selfId: 's1' }), files: { [CURRENT]: asleepRecord({ workers: [] }) } })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toMatch(/The other sessions could not be told: the session registry could not read s7\.json; the session registry's answer could not be read \(.+?\)\./)
+  // How many others follow cannot be counted, so none is claimed, and the place is still recorded (#2099).
+  expect(r.text).toMatch(/Home is on in this session; every other open session on this Mac switches to home within a minute\./)
+  expect(r.text).toMatch(/Whether other sessions are open could not be read \(.+\)/)
+  expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'home', how: 'wake' })
 })
 
 test('notes that cannot be read are said in the morning turn, pointing at the report (#837)', withDeps, async ($, on) => {
@@ -4623,8 +4628,9 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   expect(w.appended[0]?.file).toBe(moved)
   expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'limit', reason: 'it was past noon ET', at: tick, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } })
   expect(w.reports.filter(x => x.op === 'render')).toEqual([{ op: 'render', record: moved, final: true }])
-  // Every session put back where it was before sleep.
-  expect(w.sent).toEqual([{ to: 's2', text: 'Dan switched every session on this Mac to home.' }])
+  // Every session put back where it was before sleep, through the record, with no message (#2099).
+  expect(JSON.parse(w.files[PLACE] as string)).toEqual({ v: 1, place: 'home', at: tick, by: 's1', cwd: '/repo', how: 'sleep limit' })
+  expect(w.sent).toEqual([])
   // Only /wake or "I'm up" opens the report and asks for the morning (#837): nobody may be at the Mac at noon.
   expect(w.opened).toEqual([])
   expect(w.prompts).toEqual([])
