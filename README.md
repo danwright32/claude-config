@@ -1636,8 +1636,11 @@ whether 7 of the first 10 misses ran past the end of the line they partly matche
 also records the length of every quote it placed by part of a line as `part_quote_lengths=`, and
 the report gives both sets of lengths in bands around the 20 character floor (under 10, 10 to 19,
 20 to 29, and up), with an older cut quote counted on its own. `--misses` lists every quote that
-matched no line, one per line. The floor was set without measuring it; set it from those lengths
-once a week of reviews has recorded them.
+matched no line, one per line. Read on the personal MacBook over the 959 reviews started from
+2026-10-25 to 2026-11-03, 8 of 672 findings were placed by part of a line, every recorded length 60
+characters or more, and the 5 misses were all longer than 60, none holding a line break. Nothing fell
+near the floor, so it decided no finding and stays at 20 (#1701). That is 8 cases from one Mac, too
+few to settle it: the work MacBook's records were not read, so run the report there too.
 
 #### Scoring the review itself
 
