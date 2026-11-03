@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # no-verify-gate.sh
-# Claude Code PreToolUse(Bash) hook: refuse an AGENT's git command that skips the repository's own
+# Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|NotebookEdit) hook: refuse an AGENT's git command that skips the repository's own
 # git hooks (claude-config#1587). Nothing lets one through (claude-config#1666). Also refuses an
 # agent's git command reading a file from /dev/stdin, which hangs on a prompt (claude-config#1765).
 #
