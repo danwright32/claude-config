@@ -509,7 +509,9 @@ const writeRefusal = async (target: string | null | undefined, dir: string | nul
 
 // ---- MCP tools ----
 
-const LISTED = ['mcp__claude_ai_', 'mcp__claude-in-chrome__', 'mcp__posthog__']
+// Chrome is judged by browser.ts before this list is read (#2064), so the list holds only the tools
+// judged by their names.
+const LISTED = ['mcp__claude_ai_', 'mcp__posthog__']
 const READS = new Set(['get', 'list', 'search', 'read', 'fetch', 'find', 'lookup', 'query', 'view', 'describe'])
 const WRITES = new Set(['create', 'update', 'delete', 'remove', 'send', 'post', 'add', 'set', 'edit', 'write', 'upload', 'apply', 'deploy', 'merge', 'reset', 'rebase', 'restore', 'pause', 'save', 'schedule', 'respond', 'complete', 'propose', 'start', 'execute', 'exec', 'run', 'insert', 'publish', 'batch', 'move', 'cancel', 'clear', 'submit', 'upsert', 'patch', 'put', 'invite', 'archive', 'enable', 'disable', 'authenticate', 'navigate', 'click', 'type', 'press', 'fill', 'select', 'drag', 'drop', 'close', 'install', 'register', 'assign', 'share', 'approve', 'reject'])
 // A listed server's tool reads only when its own name says it reads and nothing in it says it writes.

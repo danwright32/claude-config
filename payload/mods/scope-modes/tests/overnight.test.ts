@@ -382,7 +382,7 @@ describe('LESSONS.md, written by any route in command position (L673)', () => {
   })
 })
 
-describe('outward tools: every write under claude.ai, Chrome and PostHog, and database writes', () => {
+describe('outward tools: every write under claude.ai and PostHog, Chrome by its tab and host, and database writes', () => {
   test('a write is refused, a read goes ahead', async () => {
     expect(await tool('mcp__claude_ai_Slack__slack_send_message', { text: 'x' })).toBe('use mcp__claude_ai_Slack__slack_send_message')
     expect(await tool('mcp__claude_ai_Slack__slack_read_channel', {})).toBeUndefined()
