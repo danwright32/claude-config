@@ -140,6 +140,21 @@ every route and from `merge-when-ready.sh`; a list of 100 commits or more, one p
 offers none (the gate's own `SKIP_SCANNERS_CHECK=1` still skips the whole gate, as it always has),
 so a message pushed past it is still judged at the merge. The remedy is always to reword.
 
+Pull request and issue text goes further (#2105). `check-work-names-publish.sh` judges every
+`gh pr create`, `pr edit`, `pr comment`, `pr review`, `issue create`, `issue edit` and
+`issue comment`, and every `gh api` write to a repository's issues, pulls or comments endpoints, in
+any repository GitHub reports as public; a private one passes without the list being read, and so
+does a public repository a work owner holds. It reads the whole command, a heredoc body included,
+and every body file it names, and refuses text naming a work organisation OR a work repository,
+showing the name it matched so the text can be rewritten. The names are read live on each judged
+command and never written to disk: the repo digest's repository list (the one
+`lib/lesson-fanout.sh` reads), this Mac's dev update registry, and the two built in hashes. Matching
+repository names departs from #1568, which leaves them out of the file scan on purpose, for public
+text only (Dan, 2026-11-02, after a repository name leaked into a public pull request description);
+the file scan and the send scan are unchanged. Whatever it cannot tell is refused: the visibility or
+the list unreadable, a body file it cannot read, a command it cannot parse, the 35 second budget
+spent. There is no override; the remedy is to rewrite the text.
+
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
 folder under `skills/`, where Claude Code sets aside a skill it removes or replaces (#1009). The
@@ -1776,7 +1791,7 @@ A fourth gate reads the same library for a different thing an agent does to its 
 
 ### What a push actually waits on
 
-Thirty-four PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-five PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1833,6 +1848,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 | `stacked-branch-delete-gate.sh` (#1723) | 2026-10-28: 0.010 to 0.018 seconds. Earlier: 0.035 to 0.058 seconds on a plain `git push`, five readings on 2026-10-26 (load average 15 to 31), since a command holding no `delete` or `graphql` in any case (#1758 added the second), no short flag cluster with d and no bare `:branch` is answered before anything loads; 0.14 to 0.17 seconds on `git push -u origin feat/1723-stacked-delete`, whose branch name holds the word and so starts the shared reader to find no delete; 0.46 to 0.51 seconds on an API delete of a branch nothing is based on, five readings through the real gh against claude-config, one list of the pull requests based on it |
 | `check-closing-merge.sh` (#1550) | 2026-10-28: 0.009 to 0.016 seconds. Earlier: 0.007 to 0.008 seconds on a push naming no merge, five readings on 2026-10-24 (load average 8 to 9), since it leaves before loading anything; 0.051 to 0.053 seconds on a push whose branch name holds the word (`feat/1550-closing-merge-gate`), which loads the shared reader to find no merge. On a merge, 0.51 to 0.69 seconds, five readings through the real gh against claude-config #1639: one read of the pull request's body and closing issues, run beside `block-red-merge.sh`, which reads the same pull request |
 | `check-work-names-merge.sh` (#1995) | 2026-10-31: 0.029 to 0.044 seconds on a plain `git push`, five readings at load average 62 to 64, timed from outside and so including a python start of about 0.02 seconds; it leaves before loading anything on a command naming no merge. On a merge, two GitHub reads: the pull request's title, description and commits, and the scanner at its base commit |
+| `check-work-names-publish.sh` (#2105) | 2026-11-02: 0.009 to 0.010 seconds on a plain `git push`, five readings at load average 27 to 33, timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109 seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo digest list and the registry, then the match |
 | `design-score-gate.sh` (#1364) | 2026-10-28: 0.009 to 0.015 seconds. Earlier: 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `check-rtk-init.sh` (#1468) | 2026-10-28: 0.009 to 0.014 seconds. Earlier: 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
 | `pr-review-gate.sh` (#560) | 2026-10-28: 0.010 to 0.013 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it acts on a merge, not a push |

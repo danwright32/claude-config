@@ -60,6 +60,7 @@ REFUSING=(
   require-changelog-tag.sh
   check-closing-merge.sh
   check-work-names-merge.sh
+  check-work-names-publish.sh
   require-verification-run.sh
   require-issue-fields.sh
   linux-sections-before-push.sh

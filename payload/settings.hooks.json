@@ -211,6 +211,13 @@
             "timeout": 30,
             "onFailure": "block",
             "statusMessage": "Checking the PR's title, description and commit messages name no work organisation"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-work-names-publish.sh",
+            "timeout": 45,
+            "onFailure": "block",
+            "statusMessage": "Checking public PR and issue text names no work organisation or repository"
           }
         ]
       },
