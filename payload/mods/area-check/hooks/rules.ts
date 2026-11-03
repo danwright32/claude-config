@@ -384,6 +384,9 @@ export type Held = {
   shown: Match[]
   issues: { state: 'read' | 'truncated' } | { state: 'unread'; why: string }
   growth: (FileGrowth & { crosses: boolean }) | { unread: string }
+  // The branch and merge base the edit was held on (#1510), kept in its decision; absent in entries held before them.
+  branch?: string | null
+  mergeBase?: string | null
 }
 
 /**

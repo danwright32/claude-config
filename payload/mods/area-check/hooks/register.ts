@@ -318,7 +318,7 @@ const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? pat
 
 // Its own failure: counted, kept in the error file, said once a session. Every step is caught on its
 // own, so a failure here can never reach the call (L561, L95). `kept` says what it means for the edit.
-const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' = 'unchecked') => {
+const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'command' = 'unchecked') => {
   const error = msg(err)
   let n = 1
   try {
@@ -463,6 +463,8 @@ const judgeEdit = async ($: EngineInterface, tool: string, id: string, path: str
     shown: matches.filter(m => j.shown.includes(m.n)),
     issues: issues.state === 'unread' ? { state: 'unread', why: issues.why } : { state: issues.state },
     growth,
+    branch: b.branch,
+    mergeBase,
   }
   await updateHeld($, list => [...list.filter(x => x.id !== id), h].slice(-HELD_MAX))
   await record({ decision: 'held' })
@@ -520,13 +522,16 @@ const again = (h: Held) =>
 const release = async ($: EngineInterface, h: Held, decided: { decision: Decision; reason?: string; issue?: number; by?: 'dan' }) => {
   await claim($, keyOf(h.main, h.rel, h.agent))
   await updateHeld($, list => list.filter(x => x.id !== h.id))
+  // Version 3 (#1510): the branch and merge base, which the pull request line is matched by (L1010).
   await logged($, `${h.main}/${h.rel}`, {
-    v: 2,
+    v: 3,
     kind: 'decided',
     at: new Date(await $.clock.now()).toISOString(),
     session: await $.session.id(),
     agent: h.agent,
     repo: h.repo,
+    branch: h.branch ?? null,
+    mergeBase: h.mergeBase ?? null,
     path: h.rel,
     call: h.id,
     ...decided,
