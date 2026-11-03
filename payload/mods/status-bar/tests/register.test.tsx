@@ -61,6 +61,16 @@ const modKit: { name: string; register: Register } = {
           return JSON.parse(r.stdout) as boolean
         },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+        // #2100: the hold a Compact takes on the status bar's reload, and its letting go, asked of the
+        // world, which keeps them in order beside the compaction and can refuse one as mod-kit would.
+        hold: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'hold', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
+        release: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'release', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         // #1205: the bottom of a login mod-kit raises; the status bar's own hook takes it in above this.
         login: async () => undefined,
@@ -142,6 +152,9 @@ type World = {
   // A disk that will not take the facts file, or its folder: the reason, or empty when it will.
   writeFails: string
   mkdirFails: string
+  // #2100: why mod-kit refuses a hold or a letting go, or empty when it takes them.
+  holdFails: string
+  releaseFails: string
 }
 const world = (on: On, init: Partial<World> = {}) => {
   const w: World = {
@@ -158,8 +171,12 @@ const world = (on: On, init: Partial<World> = {}) => {
     submit: text => ({ text }),
     writeFails: '',
     mkdirFails: '',
+    holdFails: '',
+    releaseFails: '',
     ...init,
   }
+  // #2100: each hold taken, each letting go and each compaction, in the order they happened.
+  const order: string[] = []
   // A Mac with no claude.ai login unless a test logs it in (#815).
   const files: Record<string, string> = { '/Users/x/.claude.json': '{}' }
   const toasts: string[] = []
@@ -223,6 +240,12 @@ const world = (on: On, init: Partial<World> = {}) => {
       if (origin?.kind === 'kit-unanswered') return r(1, '', 'mod-kit is not loaded')
       return r(0, JSON.stringify(isDans(origin)))
     }
+    if (cmd === '__modkit' && (rest[0] === 'hold' || rest[0] === 'release')) {
+      const fails = rest[0] === 'hold' ? w.holdFails : w.releaseFails
+      if (fails) return r(1, '', fails)
+      order.push(`${rest[0]} ${rest[1]}`)
+      return r(0)
+    }
     if (cmd === 'mkdir') return w.mkdirFails ? r(1, '', w.mkdirFails) : r(0)
     if (cmd === 'mv') {
       const [a, b] = rest.filter(x => !x.startsWith('-'))
@@ -251,6 +274,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('session.measure', ($, e) => ({ changed: e.changed }) as never)
   on('session.compact', () => {
     compacts.push(1)
+    order.push('compact')
     return w.compact() as never
   })
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
@@ -273,7 +297,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, files, mtimes, tools, toasts, logs, debug, compacts, prompts, runs, polls, clock }
+  return { w, files, mtimes, tools, toasts, logs, debug, compacts, prompts, runs, polls, clock, order }
 }
 
 const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, clock: { settle: () => Promise<void> }) => {
@@ -534,6 +558,61 @@ test('a Compact that does not run says why in a toast, rather than nothing', wit
   // A compaction that throws is still said, with whatever reason reached the mod.
   expect(toasts).toHaveLength(2)
   expect(toasts[1]).toMatch(/^Compact did not run: \S/)
+  await ui.unmount()
+})
+
+// #2100: a reload of the status bar while its Compact runs would drop the wait for its end, so the
+// Compact holds mod-kit's reload of it back for as long as it runs, and lets go once it is over,
+// whether it ran, was skipped or threw.
+const HELD = `hold ${JSON.stringify({ mod: 'status-bar', id: 'compact', what: 'the Compact it started', ms: 10 * 60_000 })}`
+const LET_GO = `release ${JSON.stringify({ mod: 'status-bar', id: 'compact' })}`
+test('a Compact holds back a reload of the status bar while it runs, and lets go once it is over, run, skipped or thrown (#2100)', withKit, async ($, on) => {
+  const { clock, order, w } = world(on)
+  await start($, clock)
+  await measure($, 90)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(order).toEqual([HELD, 'compact', LET_GO])
+  w.compact = () => ({ skip: 'Not enough messages to compact.' })
+  await measure($, 90)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  w.compact = () => {
+    throw new Error('compaction failed')
+  }
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(order).toEqual([HELD, 'compact', LET_GO, HELD, 'compact', LET_GO, HELD, 'compact', LET_GO])
+  await ui.unmount()
+})
+
+test('a hold or a letting go mod-kit refuses is said in the debug log, and the Compact still runs as before (#2100)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, debug, order, w } = world(on, { holdFails: 'mod-kit is not loaded' })
+  await start($, clock)
+  await measure($, 90)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual([])
+  expect(debug.filter(d => d.includes('mod-kit is not loaded'))).toEqual([
+    'status-bar: could not hold back a reload while the Compact runs, so one now would drop the wait for its end (mod-kit is not loaded)',
+  ])
+  w.holdFails = ''
+  w.releaseFails = 'mod-kit is not loaded'
+  await measure($, 90)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(2)
+  expect(toasts).toEqual([])
+  // A hold never taken is not let go of; the one taken at the second press could not be.
+  expect(order).toEqual(['compact', HELD, 'compact'])
+  expect(debug.filter(d => d.includes('let go'))).toEqual([
+    'status-bar: could not let go of the hold on a reload taken for the Compact; it lapses by itself within 10 minutes (mod-kit is not loaded)',
+  ])
   await ui.unmount()
 })
 
