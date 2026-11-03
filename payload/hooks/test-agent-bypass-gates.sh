@@ -326,6 +326,33 @@ run_hook "$NV_GATE" "$(bash_payload 'git config --get-regexp ^include' a1b2c3d4)
 allowed "#2140 an agent reading the includes goes through"
 run_hook "$NV_GATE" "$(bash_payload 'git -c user.name=Someone commit -m x' a1b2c3d4)"
 allowed "#2140 an agent's -c of another key goes through"
+# The routes #2140 left (claude-config#2160): git pointed at another git directory, whose hooks and
+# config it then reads, and git's environment settings or a hook manager's switch in front of a
+# command that is not git, such as a script whose own git commands inherit them. A script is refused
+# outright, since its git commands cannot be read before it runs. Two of these name no git in lower
+# case at all, so they also prove the gate's first filter lets them in.
+nv_config "--git-dir= on a commit" 'git --git-dir=/tmp/f/.git --work-tree=. commit -m x' "#2160"
+nv_config "--git-dir with the next word" 'git --git-dir /tmp/f/.git push origin x' "#2160"
+nv_config "GIT_DIR in front of git" 'GIT_DIR=/tmp/f/.git git commit -m x' "#2160"
+nv_config "GIT_COMMON_DIR in front of git" 'GIT_COMMON_DIR=/tmp/f/.git git commit -m x' "#2160"
+nv_config "GIT_DIR exported first" 'export GIT_DIR=/tmp/f/.git; git commit -m x' "#2160"
+nv_config "HUSKY=0 in front of a script" 'HUSKY=0 ./scripts/release.sh' "#2160"
+nv_config "LEFTHOOK=0 behind env" 'env LEFTHOOK=0 npm run release' "#2160"
+nv_config "HUSKY=0 exported before a script" 'export HUSKY=0; ./scripts/release.sh' "#2160"
+nv_config "a hook switch inside bash -c" "bash -c 'SKIP_SIMPLE_GIT_HOOKS=1 make release'" "#2160"
+nv_config "GIT_CONFIG_GLOBAL in front of a script" 'GIT_CONFIG_GLOBAL=/tmp/g ./scripts/release.sh' "#2160"
+nv_config "GIT_CONFIG_COUNT in front of a script" 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null make release' "#2160"
+nv_config "GIT_DIR in front of a script" 'GIT_DIR=/tmp/elsewhere ./scripts/release.sh' "#2160"
+run_hook "$NV_GATE" "$(bash_payload 'HUSKY=0 ./scripts/release.sh')"
+allowed "#2160 the main session's hook switch in front of a script goes through"
+run_hook "$NV_GATE" "$(bash_payload 'NODE_ENV=test ./scripts/release.sh' a1b2c3d4)"
+allowed "#2160 an agent's other setting in front of a script goes through"
+run_hook "$NV_GATE" "$(bash_payload 'HUSKY=1 ./scripts/release.sh' a1b2c3d4)"
+allowed "#2160 an agent's hook manager left on in front of a script goes through"
+run_hook "$NV_GATE" "$(bash_payload 'git --work-tree=. status' a1b2c3d4)"
+allowed "#2160 an agent's git with only a work tree named goes through"
+run_hook "$NV_GATE" "$(bash_payload 'echo "GIT_DIR=/tmp/f/.git is not set here"' a1b2c3d4)"
+allowed "#2160 an agent's echo naming the setting goes through"
 run_hook "$NV_GATE" "$(bash_payload 'git config --global core.hooksPath /dev/null')"
 allowed "#2135 the main session's own git config of the key goes through"
 run_hook "$NV_GATE" "$(bash_payload 'git config --get core.hooksPath' a1b2c3d4)"
@@ -467,6 +494,50 @@ ed_refused "Edit of an unreadable .git/config adding the hooks location" \
   "$(edit_payload Edit "$ER3" a1b2c3d4 file_path "$ER3/.git/config" old_string "[broken" new_string $'[core]\n\thooksPath = /dev/null\n[broken')"
 [ "$(cat "$ER/.git/config")" = "$cfg" ] && check "#2140 the gate wrote nothing into the config it judged" ok \
   || check "#2140 the gate wrote nothing into the config it judged" "it changed"
+
+# ---------------------------------------------------------------------------------------------
+echo "no-verify-gate.sh: an agent's shell command naming a git config file is refused (claude-config#2160)"
+
+# The route #2140 left: a shell command writing a git config file itself rather than through git
+# config, the repository's, a worktree's, the global one, or one an include names. What a shell
+# command does to a file it names cannot be read before it runs (a redirect, cp, sed -i, a script),
+# so an agent's command naming one is refused outright, a read included; git's own read forms read it.
+sh_refused() { # sh_refused <label> <cwd> <command>
+  HOME="$EH" run_hook "$NV_GATE" "$(edit_payload Bash "$2" a1b2c3d4 command "$3")"
+  refused "#2160 an agent's $1 is refused"
+  reason_says "#2160 and the refusal of $1 names the issue" "$3" "claude-config#2160"
+}
+sh_allowed() { # sh_allowed <label> <cwd> <command> [agent, empty for the main session]
+  HOME="$EH" run_hook "$NV_GATE" "$(edit_payload Bash "$2" "${4-a1b2c3d4}" command "$3")"
+  allowed "#2160 $1 goes through"
+}
+sh_refused "append to .git/config" "$ER" "printf '[core]\n\thooksPath = /dev/null\n' >> .git/config"
+sh_refused "redirect glued to .git/config" "$ER" 'printf x>.git/config'
+sh_refused "tee into the global config" "$ER" 'printf x | tee -a ~/.gitconfig'
+sh_refused "copy over .git/config by its full path" "$WORK" "cp /tmp/evil $ER/.git/config"
+sh_refused "sed -i of .git/config" "$ER" "sed -i '' s/a/b/ .git/config"
+sh_refused "write to config after a cd into .git" "$ER" 'cd .git && printf x >> config'
+sh_refused "write to a worktree's config.worktree" "$WORK/edit-wt" "printf x >> $ER/.git/worktrees/edit-wt/config.worktree"
+sh_refused "write to a file an include names" "$ER" "printf x >> $WORK/inc/hooks.inc"
+sh_refused "write to a file a relative include names" "$ER" "printf x >> $WORK/rel.inc"
+sh_refused "script handed .git/config" "$ER" "python3 -c 'import sys' .git/config"
+sh_refused "read of .git/config" "$ER" 'cat .git/config'
+sh_refused "write inside bash -c" "$ER" "bash -c 'printf x >> .git/config'"
+sh_allowed "an agent's write of an ordinary file" "$ER" 'printf x >> notes.md'
+sh_allowed "an agent's write of a file no include names" "$ER" "printf x >> $WORK/inc/other.inc"
+sh_allowed "an agent's git config read" "$ER" 'git config --get include.path'
+sh_allowed "an agent's message naming the path" "$ER" 'echo "never edit .git/config by hand"'
+sh_allowed "the main session's write of .git/config" "$ER" 'printf x >> .git/config' ""
+
+# The lessons review of #2162: when git cannot list a folder's config, the files its includes name
+# are unknown, and the reader skipped them and said nothing, so an edit of one passed as an edit of an
+# ordinary file. ER3's config holds a line git refuses. Each route now refuses there instead.
+HOME="$EH" run_hook "$NV_GATE" "$(edit_payload Write "$ER3" a1b2c3d4 file_path "$ER3/notes.md" content x)"
+refused "#2160 an agent's Write where git cannot list the config is refused"
+says "#2160 and the refusal of a Write where git cannot list the config names the issue" "claude-config#2160"
+sh_refused "write where git cannot list the config" "$ER3" 'printf x >> notes.md'
+HOME="$EH" run_hook "$NV_GATE" "$(edit_payload Write "$ER" a1b2c3d4 file_path "$ER/notes.md" content x)"
+allowed "#2160 control: the same Write where git lists the config goes through"
 
 # ---------------------------------------------------------------------------------------------
 echo "monitor-action-gate.sh: a Monitor never carries a merge, a push or a commit"
@@ -837,6 +908,19 @@ refused "a reader that crashes still refuses an agent's commit --no-verify"
 says "saying the skip could not be read" "could not read it"
 run_crashpy "$NV_GATE" "$(bash_payload 'HUSKY=0 git push origin x' a1b2c3d4)"
 refused "a reader that crashes still refuses an agent's HUSKY=0 push"
+# The routes #2140 left read the same way unread (claude-config#2160).
+run_crashpy "$NV_GATE" "$(bash_payload 'HUSKY=0 ./scripts/release.sh' a1b2c3d4)"
+refused "#2160 a reader that crashes still refuses an agent's HUSKY=0 in front of a script"
+run_crashpy "$NV_GATE" "$(bash_payload 'GIT_DIR=/tmp/elsewhere ./scripts/release.sh' a1b2c3d4)"
+refused "#2160 a reader that crashes still refuses an agent's GIT_DIR in front of a script"
+run_crashpy "$NV_GATE" "$(bash_payload 'git --git-dir=/tmp/f/.git commit -m x' a1b2c3d4)"
+refused "#2160 a reader that crashes still refuses an agent's --git-dir commit"
+run_crashpy "$NV_GATE" "$(bash_payload 'printf x >> .git/config' a1b2c3d4)"
+refused "#2160 a reader that crashes still refuses an agent's write of .git/config"
+run_crashpy "$NV_GATE" "$(bash_payload 'printf x | tee -a ~/.config/git/config' a1b2c3d4)"
+refused "#2160 a reader that crashes still refuses an agent's write of the XDG git config"
+run_crashpy "$NV_GATE" "$(bash_payload 'printf x >> notes.md' a1b2c3d4)"
+allowed "#2160 with the reader crashing, an agent's write of an ordinary file still goes through"
 # A persistent write of the hooks location reads the same way unread (claude-config#2135).
 run_crashpy "$NV_GATE" "$(bash_payload 'git config CORE.HOOKSPATH /dev/null' a1b2c3d4)"
 refused "#2135 a reader that crashes still refuses an agent's git config of the key in capitals"
