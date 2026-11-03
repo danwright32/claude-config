@@ -203,7 +203,7 @@ transcript() {   # a turn that did real work, so the end of turn hooks take thei
   printf '%s\n' '{"type":"user","message":{"role":"user","content":"do the thing"}}' \
     '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","id":"t1","input":{}}]}}' \
     '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}' \
-    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}' > "$1"
+    "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"${RUN_LAST_TEXT:-done}\"}]}}" > "$1"
 }
 run_route() {   # run_route <script> <event> [arguments...] -> stdout of the hook, run in the current world
   local t="$WORK/t.$RANDOM.jsonl"; transcript "$t"
@@ -217,7 +217,12 @@ run_route() {   # run_route <script> <event> [arguments...] -> stdout of the hoo
 # control has something to say. Anything a route needs on PATH goes in "$H/bin", the world's own.
 seed_route() {   # seed_route <script> <arguments>
   RUN_SESSION=""
+  RUN_LAST_TEXT=""
   case "$1 $2" in
+    "check-later-nudge.sh ")
+      # A turn that promises to look again on a later day (#2079), the thing it speaks about.
+      RUN_LAST_TEXT="I'll check again tomorrow."
+      ;;
     "pr-merge-quiz.sh --release-held")
       # A merge held while it ran in the background (#1768), which GitHub now says merged.
       RUN_SESSION="sleep-silence-held-1"

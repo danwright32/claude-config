@@ -449,9 +449,19 @@ for why, state in [("closed as completed", dict(MATCH_ISSUE, state="closed", sta
 PR_HEAD = "3" * 40
 
 
+def closing_ref(slug, number):
+    """One closingIssuesReferences entry in the shape gh really answers with (claude-config#2065),
+    measured from `gh pr view 2084 --repo danwright32/claude-config --json closingIssuesReferences`
+    on 2026-11-02: the repository is {id, name, owner: {id, login}}, and carries no nameWithOwner."""
+    owner, name = slug.split("/")
+    return {"id": "I_kwDOTB20B88AAAABb6sNBQ", "number": number,
+            "repository": {"id": "R_kgDOTB20Bw", "name": name, "owner": {"id": "MDQ6VXNlcjMyNDE4MTM1", "login": owner}},
+            "url": "https://github.com/%s/issues/%d" % (slug, number)}
+
+
 def pr_routes(score_commit, tree):
     view = {"number": 12, "url": "https://github.com/%s/pull/12" % REPO, "headRefOid": PR_HEAD,
-            "closingIssuesReferences": [{"number": 9, "repository": {"nameWithOwner": REPO}}]}
+            "closingIssuesReferences": [closing_ref(REPO, 9)]}
     routes(comments=[comment(variant(commit=score_commit))], trees={HEAD: TREE, PR_HEAD: tree, score_commit: tree},
            extra=[{"args": ["pr", "view", "12"], "out": view},
                   {"args": ["api", "-H", "Accept: application/vnd.github.raw",
@@ -471,6 +481,54 @@ with open(os.path.join(FAKE, "routes.json"), "w") as fh:
     json.dump(r, fh)
 rc, reason, out = gate("gh pr merge 12 --squash")
 check("merging it with no score at its head is refused", "no score posted on it was measured" in reason, out)
+
+# 7b. A pull request in one repository closing a Match issue in ANOTHER (claude-config#2065): the
+# issue is looked up in the repository GitHub names for it, judged at that repository's default
+# branch head, and never in the pull request's own repository.
+SITE = "acme/site"
+
+
+def cross_routes(comments=None, site_issue9=None, issue9_rc=0):
+    view = {"number": 12, "url": "https://github.com/%s/pull/12" % SITE, "headRefOid": PR_HEAD,
+            "closingIssuesReferences": [closing_ref(REPO, 9)]}
+    extra = [{"args": ["pr", "view", "12"], "out": view}]
+    if site_issue9 is not None:
+        extra.append({"args": ["api", "repos/%s/issues/9" % SITE], "out": site_issue9})
+    if issue9_rc:
+        extra.append({"args": ["api", "repos/%s/issues/9" % REPO], "rc": issue9_rc, "err": "gh: Not Found (HTTP 404)"})
+    routes(comments=comments, extra=extra)
+
+
+cross_routes()
+rc, reason, out = gate("gh pr merge 12 --repo %s --squash" % SITE)
+check("merging a pull request that closes another repository's Match issue at 100% is let through", not reason, out)
+check("and the issue is read in its own repository, never the pull request's",
+      any(c["args"][:2] == ["api", "repos/%s/issues/9" % REPO] for c in calls())
+      and not any(c["args"][:2] == ["api", "repos/%s/issues/9" % SITE] for c in calls()), calls())
+# The worse half of the defect: the pull request's own repository has an unrelated #9, so judging
+# there finds no Match issue and lets an unmatched build close.
+cross_routes(comments=[comment(NOT_MATCHED)], site_issue9=dict(PLAIN_ISSUE, number=9))
+rc, reason, out = gate("gh pr merge 12 --repo %s --squash" % SITE)
+check("closing another repository's Match issue below 100% is refused, even when the pull request's "
+      "repository has an unrelated issue of that number", "below 100%" in reason and "%s#9" % REPO in reason, out)
+# Failure path: the issue cannot be read. The merge is still refused, and the message names the
+# repository the issue is really in.
+cross_routes(issue9_rc=1)
+rc, reason, out = gate("gh pr merge 12 --repo %s --squash" % SITE)
+check("an unreadable cross repository Match issue refuses the merge", bool(reason), out)
+check("naming the issue's own repository, not the pull request's",
+      "repos/%s/issues/9" % REPO in reason and "repos/%s/issues/9" % SITE not in reason, reason)
+# A reference whose repository is there but cannot be read is refused, never guessed to be the pull
+# request's own (where an unrelated #9 would be judged instead).
+cross_routes(site_issue9=dict(PLAIN_ISSUE, number=9))
+with open(os.path.join(FAKE, "routes.json")) as fh:
+    r = json.load(fh)
+r[0]["out"]["closingIssuesReferences"] = [{"number": 9, "repository": {"id": "R_kgDOTB20Bw"}}]
+with open(os.path.join(FAKE, "routes.json"), "w") as fh:
+    json.dump(r, fh)
+rc, reason, out = gate("gh pr merge 12 --repo %s --squash" % SITE)
+check("a closing reference naming an unreadable repository refuses the merge",
+      "without a repository this gate can read" in reason, out)
 
 # 8. The account that can see the repository is used, never switched to.
 routes()
