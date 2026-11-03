@@ -844,7 +844,7 @@ test('a call with no note names the parameter and what it was given; a wrong pat
   await step($, clock)
   const none = refusal(await queueCompact($, { note: undefined, path: NOTE }))
   expect(none).toContain('as note')
-  expect(none).toContain('path')
+  expect(none).toContain('this call passed path, and no note')
   files['/repo/handoff.md'] = 'Decisions.'
   mtimes['/repo/handoff.md'] = clock.now()
   expect(refusal(await queueCompact($, { note: undefined, handoff: '/repo/handoff.md' }))).toContain('not /repo/handoff.md')
@@ -858,10 +858,11 @@ test('a call with no note names the parameter and what it was given; a wrong pat
   expect(compacts).toHaveLength(0)
 })
 
-test('the parameter description names the note path once, never scratchpad twice (#2071)', withKit, async ($, on) => {
+test('the parameter description names the note path without doubling the scratchpad folder (#2071)', withKit, async ($, on) => {
   const { clock, tools } = world(on)
   await start($, clock)
   const tool = tools.find(t => t.name === 'queue_compact')
+  expect(tool).toBeDefined()
   const note = (tool?.inputSchema as { properties: { note: { description: string } } }).properties.note
   expect(note.description).toContain('/scratchpad/handoff.md')
   expect(note.description).not.toContain('scratchpad folder>/scratchpad')
