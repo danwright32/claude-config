@@ -29,8 +29,11 @@ command the gates share, over the body whole (claude-config#2076). Read a line a
 an assignment followed by a comment, one with quotes nested in its `$( )`, the first line of one
 running over several lines, one mid line and one on the line defining the function were never
 judged. Only a command this shell runs is judged, so nothing in a pipeline, a subshell group, a
-substitution or the background is. A body the reader cannot read is listed on every run with its
-file, line and reason, and the count is said, zero too; it does not fail the scan on its own.
+substitution or the background is, and nothing inside a case, loop, if or brace group that is
+itself piped or backgrounded (claude-config#2083). A command in a case arm is read as any other,
+since shell-words reads each arm as a command (#2084). A body the reader cannot read is listed on
+every run with its file, line and reason, and the count is said, zero too; it does not fail the
+scan on its own.
 
 Measured over this repo on 2026-09-11: 8 functions flagged, of which one was a real defect
 (tip_payload_dir's caller could never see TIP_PAYLOAD_DIR, so the scratch directory holding the
@@ -73,6 +76,12 @@ except Exception as e:  # noqa: BLE001  missing, or failing to load: either way 
 
 FN_DEF = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
 DECLARES = {"local", "declare", "typeset", "export", "readonly"}
+# The words opening a compound command, each with the word that closes it (claude-config#2083). A
+# compound in a pipeline or sent to the background runs in a subshell, the whole of it, though only
+# its first command comes after the `|` and only its last carries the `| cat` or `&`.
+OPENS = {"if": "fi", "case": "esac", "while": "done", "until": "done", "for": "done",
+         "select": "done", "{": "}"}
+CLOSES = set(OPENS.values())
 # An assignment word's name, as the shell allows it: `n=`, `n+=`, `arr[i]=`, `arr[i]+=`. The value
 # after it is read by shell-words split(), which knows quotes and $( ) nesting but takes only `n=`.
 ASSIGN_WORD = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^]]*\])?\+?=")
@@ -182,7 +191,12 @@ def function_globals(lines):
     Only a command this shell runs is judged: one inside a `$( )`, a backquote or a `( )` group runs
     in a subshell, and so does every member of a pipeline and a command sent to the background, so
     what they set is gone when they end. A reserved word opening a compound command (`then`, `do`,
-    `{`) is looked past, as command_words looks past it. A line of a heredoc, or of a `sh -c '...'`
+    `{`) is looked past, as command_words looks past it. A whole compound (a case, a loop, an if or
+    a brace group) in a pipeline or the background runs in a subshell too, though only its first
+    command follows the `|` and only its closing word carries the `| cat` or `&`, so what its
+    commands declare and set is held until it closes and kept only if it ran here (#2083). A
+    closing word that is not the innermost open compound's own, the `}` of a function defined in a
+    loop, closes nothing. A line of a heredoc, or of a `sh -c '...'`
     or `python3 -c '...'` program, is inside one command's text and is never a command here.
     """
     out = []
@@ -193,26 +207,45 @@ def function_globals(lines):
         except Unreadable as e:
             out.append((name, at, None, unreadable_reason(e, body, at)))
             continue
-        declared, globals_set = set(), set()
+        # One entry for this shell and one for each compound command open around the command being
+        # read, innermost last (claude-config#2083). What a compound's commands declare and set is
+        # kept in its own entry until it closes, and kept only if the compound ran in this shell.
+        frames = [{"closer": None, "piped": False, "declared": set(), "globals": set()}]
         piped = False
         for (_, text), p in zip(cmds, parts):
             if len(p["scope"]) != 1:
                 continue
+            after_pipe = piped
             in_pipeline, piped = piped or p["how"] == "|", p["how"] == "|"
-            if in_pipeline or p["how"] == "&":
-                continue
             words = text.split(None, 1)
-            while words and words[0] in RESERVED:
+            while words and (words[0] in RESERVED or words[0] in OPENS or words[0] in CLOSES):
+                w = words[0]
+                if w in OPENS:
+                    frames.append({"closer": OPENS[w], "piped": after_pipe,
+                                   "declared": set(), "globals": set()})
+                elif w in CLOSES and len(frames) > 1 and frames[-1]["closer"] == w:
+                    f = frames.pop()
+                    if not (f["piped"] or p["how"] in ("|", "&")):
+                        frames[-1]["declared"] |= f["declared"]
+                        frames[-1]["globals"] |= f["globals"]
+                after_pipe = False
                 words = words[1].split(None, 1) if len(words) > 1 else []
-            if not words:
+            if in_pipeline or p["how"] == "&" or not words:
                 continue
             if words[0] in DECLARES:
-                declared.update(declared_names(words[1] if len(words) > 1 else ""))
+                frames[-1]["declared"].update(declared_names(words[1] if len(words) > 1 else ""))
                 continue
             for nm in assigned_names(" ".join(words)):
-                if nm not in declared:
-                    globals_set.add(nm)
-        out.append((name, at, globals_set, None))
+                if not any(nm in f["declared"] for f in frames):
+                    frames[-1]["globals"].add(nm)
+        # A compound the reading never saw close is kept unless it ran in a pipeline: the shell
+        # read the body, so the reader's limit must not hide what it sets.
+        while len(frames) > 1:
+            f = frames.pop()
+            if not f["piped"]:
+                frames[-1]["declared"] |= f["declared"]
+                frames[-1]["globals"] |= f["globals"]
+        out.append((name, at, frames[0]["globals"], None))
     return out
 
 

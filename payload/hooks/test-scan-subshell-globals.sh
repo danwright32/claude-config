@@ -495,6 +495,133 @@ printf 'f(){\n  local x=1\n}\nv="$(f)"\n' > "$FIX/a.sh"
 run
 says "#2076 and a tree with none says so" "$OUT" "the command reader could not read 0 function bodies"
 
+echo "scan subshell globals: assignments inside case arms, and compounds run in a subshell (#2083)"
+
+# The real case: why_category in check-wrapped-commands.sh answers into REASON from its case arms
+# alone. Its one caller runs it plainly, so it is right; read through a substitution, the answer
+# would be gone on return. Before shell-words read a case arm as a command (claude-config#2084), an
+# arm on the line of its pattern was nobody's command, so a function like this was never judged.
+cat > "$FIX/a.sh" <<'EOF'
+why_category() {   # $1 = the reason; sets REASON
+  case "$1" in
+    "its command is a variable"*) REASON=variable ;;
+    "it holds a quote that never closes"*) REASON=quote ;;
+    *) REASON=other ;;
+  esac
+}
+r="$(why_category "its command is a variable")"
+EOF
+run
+check "#2083 a global set only in case arms, read in a subshell, is reported" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: the arms were never judged")"
+says "#2083 and the name the arms set is the finding" "$OUT" "why_category sets REASON"
+sed -i.bak 's/^r="\$(why_category "its command is a variable")"$/why_category "its command is a variable"/' "$FIX/a.sh"
+rm -f "$FIX/a.sh.bak"
+run
+check "#2083 control: the same function called plainly, as the real one is, is not condemned" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
+# Every way an arm is written: on its pattern's line, with `;;` tight against it or against esac,
+# on the lines below, after a leading `(`, ended by `;&` or `;;&`, a case nested in an arm, and the
+# command after esac.
+cat > "$FIX/a.sh" <<'EOF'
+arms(){
+  case "$1" in a) a1=1;; b) a2=2;;esac
+  case "$1" in
+    (c) a3=3 ;;
+    d|e) a4=4 ;&
+    f) a5=5 ;;&
+    g)
+      a6=6
+      ;;
+    h) case "$2" in i) a7=7 ;; esac; a8=8 ;;
+    *) a9=9
+  esac && a10=10
+}
+v="$(arms a)"
+EOF
+run
+says "#2083 an assignment in every form of case arm is judged" "$OUT" "arms sets a1, a10, a2, a3, a4, a5, a6, a7, a8, a9"
+
+# A declaration in an arm declares as one anywhere else does, and one before the case covers its arms.
+cat > "$FIX/a.sh" <<'EOF'
+declared(){
+  local d1
+  case "$1" in a) d1=1 ;; b) d2=2 ;; esac
+  case "$1" in a) local d3=1 ;; esac
+  d3=2
+}
+v="$(declared a)"
+EOF
+run
+says "#2083 a name declared before the case, or in an arm, is not a global" "$OUT" "declared sets d2"
+
+# A compound command that is a member of a pipeline, or sent to the background, runs in a subshell
+# of its own, the whole of it, so nothing assigned inside it is this shell's. Only the first command
+# of the compound came after the `|`, so the rest of a piped case or while were judged as this
+# shell's commands, and a compound piped onward (`esac | cat`, `done | sort`) was not seen as piped
+# at all.
+cat > "$FIX/a.sh" <<'EOF'
+pipe_case(){
+  echo a | case "$(cat)" in a) gone1=1 ;; b) gone2=2 ;; esac
+}
+case_pipe(){
+  case "$1" in a) gone3=1 ;; esac | cat
+}
+pipe_while(){
+  printf 'a\n' | while read -r l; do gone4=1; gone5=2; done
+}
+while_pipe(){
+  while read -r l; do gone6=1; done < /dev/null | sort
+}
+group_bg(){
+  { gone7=1; gone8=2; } &
+  wait
+}
+loop_bg(){
+  for w in a b; do if true; then gone9=1; fi; done &
+  wait
+}
+v="$(pipe_case)"; w="$(case_pipe a)"; x="$(pipe_while)"; y="$(while_pipe)"; z="$(group_bg)"; u="$(loop_bg)"
+EOF
+run
+check "#2083 nothing assigned inside a piped or backgrounded compound is this shell's" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
+# And the compound ends where it ends: what follows it is this shell's again, and is judged.
+cat > "$FIX/a.sh" <<'EOF'
+after_pipe(){
+  printf 'a\n' | while read -r l; do
+    case "$l" in a) gone1=1 ;; esac
+  done
+  kept1=1
+  case "$1" in a) gone2=1 ;; esac | cat
+  kept2=1
+}
+v="$(after_pipe a)"
+EOF
+run
+says "#2083 the command after a piped compound is judged again" "$OUT" "after_pipe sets kept1, kept2"
+
+# A closer that is not the open compound's own does not end it: the `}` of a function defined
+# inside a loop leaves the loop open, so the loop's own done still finds it.
+cat > "$FIX/a.sh" <<'EOF'
+nested_def(){
+  printf 'a\n' | while read -r l; do
+    inner(){ :; }
+    gone1=1
+  done
+  kept=1
+}
+plain_loop(){
+  while read -r l; do
+    inner2(){ :; }
+    set_here=1
+  done < /dev/null
+}
+v="$(nested_def)"; w="$(plain_loop)"
+EOF
+run
+says "#2083 a stray closer leaves the piped loop open" "$OUT" "nested_def sets kept"
+says "#2083 control: an unpiped loop's assignments are this shell's" "$OUT" "plain_loop sets set_here"
+
 echo "scan subshell globals: the baseline is a ratchet in both directions"
 
 cat > "$FIX/a.sh" <<'EOF'
