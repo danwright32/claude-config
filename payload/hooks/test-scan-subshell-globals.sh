@@ -135,20 +135,32 @@ either(){
   second="$1"
   printf '%s' "$second"
 }
-piped(){
-  local third | cat
-  third="$1"
-  printf '%s' "$third"
-}
 valued(){
   local msg="one; two && three" out="$(date; date)" count=0 tail
   tail="$msg"; count=1
   printf '%s%s%s' "$tail" "$count" "$out"
 }
-x="$(semi 1 2)"; y="$(both 1)"; z="$(either 1)"; w="$(piped 1)"; v="$(valued)"
+x="$(semi 1 2)"; y="$(both 1)"; z="$(either 1)"; v="$(valued)"
 EOF
 run
-check "#1045 a declaration ends at ; && || and |, and a value holding them does not end it" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+check "#1045 a declaration ends at ; && and ||, and a value holding them does not end it" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
+# A declaration ends at `|` too, and there it declares nothing at all: every member of a pipeline
+# runs in a subshell of its own, so `local third | cat` makes third local to a shell that ends at
+# once, and the `third=` after it sets this shell's global (claude-config#2076). This fixture sat in
+# the clean one above until #2076 read pipelines as the shell runs them; what #1045 decided, that
+# `cat` is never read as a declared name, still holds, since nothing in the pipeline is declared.
+cat > "$FIX/a.sh" <<'EOF'
+piped(){
+  local third | cat
+  third="$1"
+  printf '%s' "$third"
+}
+w="$(piped 1)"
+EOF
+run
+check "#2076 a local in a pipeline declares nothing in this shell" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: it was taken as declared")"
+says "#2076 and the name it then sets is the finding" "$OUT" "piped sets third"
 
 # And what FOLLOWS the end is a command of its own, so an assignment there is judged as one: in
 # `local a; leak=1` the name leak is a global, and must not be counted as declared because it
@@ -291,8 +303,8 @@ says "#2068 and the next function's global is reported against it" "$OUT" "a.sh:
 # The real case: the suite deadline watchdog in tests/test-claude-sync.sh runs a program through
 # `sh -c '...'`, whose lines read `ceiling="$2"; mark="$3"` and `start="$(date +%s)"`. Those are
 # assignments in ANOTHER shell, the one sh starts, and a Python program in a `python3 -c` string
-# (`stdout=subprocess.PIPE` in lib/project-rules-behind.sh) is not shell at all. A line that
-# begins inside a quoted string is judged on its code alone, which for these is nothing.
+# (`stdout=subprocess.PIPE` in lib/project-rules-behind.sh) is not shell at all. The body is read
+# whole by shell-words (#2076), so the program is one quoted word of one command, never a command.
 cat > "$FIX/a.sh" <<'OUTER'
 watch(){
   local out
@@ -337,6 +349,151 @@ v="$(arg)"
 OUTER
 run
 check "#2068 a word after a string's close is an argument, not an assignment" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
+echo "scan subshell globals: assignments read as the shell reads its commands (#2076)"
+
+# Each shape below was never judged while assignments were read by shlex, a line at a time. The
+# lines are the real ones, with the function's `local` taken away so the name is a global.
+#
+# A comment after the assignment: shlex yields `#` as a word, which is no assignment, so the whole
+# line was dropped. From mt_merge_invocation_bounds in lib/merge-target.sh.
+cat > "$FIX/a.sh" <<'OUTER'
+bounds(){
+  c="${cmd:$i:1}"   # empty at i == n, so the end of the command closes the last invocation
+}
+v="$(bounds)"
+OUTER
+run
+check "#2076 an assignment followed by a comment is judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names it" "$OUT" "bounds sets c"
+
+# Quotes nested inside a `$( )` inside double quotes: shlex reads the inner quotes as closing the
+# outer ones and splits the value into words. From leave_out_proven in lib/pr-review.sh.
+cat > "$FIX/a.sh" <<'OUTER'
+leave_out(){
+  rows="$(printf '%s' "$rows" | sort -t "$(printf '\t')" -k1,1n)"
+}
+v="$(leave_out)"
+OUTER
+run
+check "#2076 an assignment with quotes nested inside its substitution is judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names it" "$OUT" "leave_out sets rows"
+
+# The first line of a multi line assignment: an unclosed quote, which shlex refuses. And the awk
+# program's own `b = ""` lines are still never this shell's. From carry_review in lib/pr-review.sh.
+cat > "$FIX/a.sh" <<'OUTER'
+carry(){
+  rows="$(awk -v br="$branch" '
+    FNR == 1 { b = ""; s = ""; st = ""; bs = "" }
+    /^branch=/ { b = substr($0, 8) } /^sha=/ { s = substr($0, 5) }
+    /^status=/ { st = substr($0, 8) } /^base=/ { bs = substr($0, 6) }
+    /^$/ { if (b == br && st == "ok" && bs != "") printf "%s\t%s\t%s\n", s, bs, FILENAME; nextfile }' "${files[@]}" 2>/dev/null)"
+}
+v="$(carry)"
+OUTER
+run
+check "#2076 the first line of a multi line assignment is judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names it alone" "$OUT" "carry sets rows"$'\n'
+
+# Mid line: after `&&`, and after `then` with a command after it. shlex read the whole line, and a
+# first word that was no assignment dropped all of it. From mt_merge_invocation_bounds.
+cat > "$FIX/a.sh" <<'OUTER'
+bounds(){
+  if [ "$c" = "\\" ] && [ "$quote" = '"' ]; then i=$((i + 2)); continue; fi
+  [ "$c" = "$quote" ] && quote=""
+}
+v="$(bounds)"
+OUTER
+run
+check "#2076 an assignment mid line is judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names both" "$OUT" "bounds sets i, quote"
+
+# Mid line on the line that defines the function, its body running on to the next: the body was
+# read from the line after, which begins inside the string, so nothing of it was judged. From
+# remember in sync-stuck-notice.sh.
+cat > "$FIX/a.sh" <<'OUTER'
+remember(){ in_list "$keep" "$1" || keep="${keep:+$keep
+}$1"; }
+v="$(remember x)"
+OUTER
+run
+check "#2076 an assignment on the line defining the function is judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names it" "$OUT" "remember sets keep"
+
+# The controls: what runs in a subshell, a `( )` group or a `$( )`, sets nothing in this shell, and
+# a word after a value is still an env prefix on the command it precedes.
+cat > "$FIX/a.sh" <<'OUTER'
+sub(){
+  local out
+  out="$(inner=1; printf '%s' "$inner")"
+  ( cd /tmp && grouped=1 )
+  PREFIX=1 env | wc -l
+  printf '%s' "$out"
+}
+v="$(sub)"
+OUTER
+run
+check "#2076 control: an assignment in a subshell or a substitution, or an env prefix, is not a global" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+
+# The reader is lib/shell-words.py, loaded by its path, and the scan keeps no reading of its own to
+# fall back on. Without it nothing can be judged, which is said, and never reported as a clean tree.
+NOREADER="$FIX/noreader"
+mkdir -p "$NOREADER/lib" "$NOREADER/tree"
+cp "$SCAN" "$NOREADER/scan-subshell-globals.py"
+cp "$DIR/lib/ratchet.py" "$DIR/lib/shell_code_lines.py" "$NOREADER/lib/"
+printf 'f(){\n  x=1\n}\nv="$(f)"\n' > "$NOREADER/tree/a.sh"
+OUT="$(python3 "$NOREADER/scan-subshell-globals.py" --root "$NOREADER/tree" --baseline "$FIX/baseline.txt" 2>&1)"; RC=$?
+check "#2076 without the shared reader the scan refuses" "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and names the reader it could not load" "$OUT" "lib/shell-words.py could not be loaded"
+printf 'raise RuntimeError("broken on purpose")\n' > "$NOREADER/lib/shell-words.py"
+OUT="$(python3 "$NOREADER/scan-subshell-globals.py" --root "$NOREADER/tree" --baseline "$FIX/baseline.txt" 2>&1)"; RC=$?
+check "#2076 a reader that fails to load is refused the same way" "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and says why" "$OUT" "broken on purpose"
+# Its tree sits under the fixture root the tests below scan, so it goes before they run.
+rm -rf "$NOREADER"
+
+# Loading the reader leaves no bytecode beside it (claude-config#2076). Python caches what it loads
+# by path in lib/__pycache__ unless told not to, and test-push-scope.sh asserts lib/ holds no
+# shell-words bytecode (#1017), so one run of this scan failed that suite on every later run.
+# Measured in a copy of the hooks, never the real lib/, so a sibling run cannot race the count.
+PYC="$FIX/pyc"
+mkdir -p "$PYC/lib" "$PYC/tree"
+cp "$SCAN" "$PYC/scan-subshell-globals.py"
+cp "$DIR/lib/ratchet.py" "$DIR/lib/shell_code_lines.py" "$DIR/lib/shell-words.py" "$PYC/lib/"
+printf 'f(){\n  local x=1\n}\nv="$(f)"\n' > "$PYC/tree/a.sh"
+OUT="$(python3 "$PYC/scan-subshell-globals.py" --root "$PYC/tree" --baseline "$FIX/baseline.txt" 2>&1)"; RC=$?
+check "#2076 control: the copied scan ran and judged its tree" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+_pyc="$(ls "$PYC/lib/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
+check "#2076 the scan leaves no shell-words bytecode in lib/" "$([ "$_pyc" = 0 ] && echo ok || echo "$_pyc shell-words bytecode file(s) left in lib/__pycache__")"
+rm -rf "$PYC"
+
+# A body the reader cannot read is never skipped in silence (claude-config#2076). Before, such a
+# function came back with no names and was counted with the clean ones, so a tree the reader had
+# stopped understanding read as a tree with nothing wrong in it (L10, L11). Each is listed with its
+# file, line and what the reader could not close, and the count is said on every run, zero too. It
+# does not fail the scan on its own: the limit is the reader's, not the code's, and the shell may
+# well run it (a quote the shell closes further down than the function's own closing brace).
+cat > "$FIX/a.sh" <<'EOF'
+ok(){
+  local x=1
+  printf '%s' "$x"
+}
+open_subst(){
+  x=$(echo a
+}
+v="$(ok)"; w="$(open_subst)"; z="$(open_quote)"
+open_quote(){
+  y="abc
+}
+EOF
+run
+check "#2076 a body the reader cannot read does not fail the scan on its own" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "#2076 and the count of them is said" "$OUT" "the command reader could not read 2 function bodies"
+says "#2076 and one left open by a substitution is named" "$OUT" "a.sh:5  open_subst: a substitution, group or heredoc opened in it never closes"
+says "#2076 and one left open by a quote is named, with the quote's line" "$OUT" "a.sh:9  open_quote: the quote opened on line 10 never closes"
+printf 'f(){\n  local x=1\n}\nv="$(f)"\n' > "$FIX/a.sh"
+run
+says "#2076 and a tree with none says so" "$OUT" "the command reader could not read 0 function bodies"
 
 echo "scan subshell globals: the baseline is a ratchet in both directions"
 

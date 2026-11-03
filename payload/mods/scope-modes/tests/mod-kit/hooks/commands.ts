@@ -79,9 +79,57 @@ const runs = (words: string[], at: number, r: Runner): number | undefined => {
   return i < words.length ? i : undefined
 }
 
-// A heredoc's opening: exactly two <, so a here-string (<<<) is not taken for one, then its
-// delimiter, quoted, escaped or bare. A line can open several, read one after another.
-const OPENING = /(?<!<)<<(?!<)(-?)\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/g
+// A heredoc's opening: exactly two <, so a here-string (<<<) is not taken for one, then <<- or <<,
+// the blanks after it, and the start of its delimiter. A line can open several, read one after
+// another. This reader goes line by line and does not know whether a << sits in arithmetic or in
+// quotes, so it takes one as a heredoc only where the delimiter starts as a marker is written: a
+// letter or _, bare or after a backslash, or a quote. `$((1<<2))` and a pattern such as `<<[ ]` in
+// quoted text open none: read as heredocs, they would turn the lines after them into a body that
+// never ends, and an apostrophe in a real heredoc's body further on would then open a quote that
+// hides every command after it.
+const OPENING = /(?<!<)<<(?!<)(-?)[ \t]*(?=\\?[A-Za-z_]|\$?['"])/g
+// What ends the delimiter word, as the shell reads a word.
+const DELIMITER_END = new Set([' ', '\t', '\n', ';', '&', '|', '<', '>', '(', ')'])
+
+// The delimiter word starting at s[j], as the shell compares it with each body line: the whole
+// word with its quotes taken out, and whether ANY part of it was quoted, by quotes or a backslash,
+// whole (`'EOF'`, `"EOF"`, `\EOF`) or in part (`'E'OF`, `E"OF"`, `E\OF`, `$'EOF'`), which stops the
+// shell expanding the body. A hyphen is part of the word (`END-OF`). Undefined when there is no word
+// or a quote in it never closes. The same reading as lib/shell-words.py's heredoc_opener, which the
+// python gates use (#2060); this reader is TypeScript and cannot call it, so the two are held to the
+// same markers by their tests (#2073).
+const readDelimiter = (s: string, j: number): { end: string; quoted: boolean } | undefined => {
+  const start = j
+  const word: string[] = []
+  let quoted = false
+  while (j < s.length && !DELIMITER_END.has(s[j] as string)) {
+    const c = s[j] as string
+    if (c === '\\' && j + 1 < s.length) {
+      word.push(s[j + 1] as string)
+      quoted = true
+      j += 2
+    } else if (c === "'" || (c === '$' && s.startsWith("$'", j))) {
+      j += c === '$' ? 2 : 1
+      const k = s.indexOf("'", j)
+      if (k < 0) return undefined
+      word.push(s.slice(j, k))
+      quoted = true
+      j = k + 1
+    } else if (c === '"' || (c === '$' && s.startsWith('$"', j))) {
+      j += c === '$' ? 2 : 1
+      let k = j
+      while (k < s.length && s[k] !== '"') k += s[k] === '\\' ? 2 : 1
+      if (k >= s.length) return undefined
+      word.push(s.slice(j, k).replace(/\\([\\"$`])/g, '$1'))
+      quoted = true
+      j = k + 1
+    } else {
+      word.push(c)
+      j++
+    }
+  }
+  return j === start ? undefined : { end: word.join(''), quoted }
+}
 
 // `quoted` when any of its delimiter was quoted or escaped, which stops the shell expanding $ and
 // backticks in the body (#831).
@@ -119,8 +167,8 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
     }
     out.push(line)
     for (const m of line.matchAll(OPENING)) {
-      const quoted = m[2] !== undefined || m[3] !== undefined || m[0].includes('\\')
-      open.push({ end: (m[2] ?? m[3] ?? m[4]) as string, tabs: m[1] === '-', at: offset + (m.index ?? 0), quoted })
+      const d = readDelimiter(line, (m.index ?? 0) + m[0].length)
+      if (d) open.push({ end: d.end, tabs: m[1] === '-', at: offset + (m.index ?? 0), quoted: d.quoted })
     }
     offset += line.length + 1
   }

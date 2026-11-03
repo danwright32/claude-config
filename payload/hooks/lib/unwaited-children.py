@@ -67,12 +67,29 @@ anything. --count prints, last, how many files and code lines it judged, so a ca
 pass that read nothing (L98).
 """
 import argparse
+import importlib.util
 import io
 import os
 import re
 import sys
 
-HEREDOC = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_]\w*)\2")
+# A heredoc's opener is read by the one reading of a command, lib/shell-words.py, loaded by its path
+# beside this file: its marker is the whole word after <<, quotes taken out, as bash compares it with
+# each body line (claude-config#2073). There is no reading here to fall back on, since one of its own
+# ended <<'E'OF at a line E and left every site after the body unread, so without the reader the
+# scan refuses to run (exit 2) rather than judge any file. Loading it writes no bytecode cache
+# beside it, which test-push-scope.sh refuses in the hooks' lib/ (#1017).
+sys.dont_write_bytecode = True
+try:
+    _spec = importlib.util.spec_from_file_location(
+        "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "shell-words.py"))
+    _sw = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_sw)
+    heredoc_opener = _sw.heredoc_opener
+except Exception as e:  # noqa: BLE001  missing, or failing to load: either way there is no reader
+    sys.stderr.write("unwaited-children: cannot load lib/shell-words.py, which reads every heredoc "
+                     "this scan judges, so it judges nothing (%s: %s)\n" % (type(e).__name__, e))
+    sys.exit(2)
 FUNC = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{")
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Where a word is a command rather than an argument, so `case` there opens a case statement.
@@ -359,10 +376,10 @@ def walk_line(w, line, n, background):
             continue
         w.settle_pending(c)
         if line.startswith('<<', i) and not line.startswith('<<<', i) and (i == 0 or line[i - 1] != '<'):
-            m = HEREDOC.match(line, i)
-            if m:
-                w.heredocs.append((m.group(1) == '-', m.group(3)))
-                i = m.end()
+            op = heredoc_opener(line, i)
+            if op:
+                w.heredocs.append((op[1], op[0]))
+                i = op[3]
                 continue
         if line.startswith('<<<', i):
             i += 3
