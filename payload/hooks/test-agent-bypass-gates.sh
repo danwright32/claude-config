@@ -161,6 +161,9 @@ skips_says "#2140 GIT_CONFIG_COUNT with a key spelled through a shell escape" "G
 skips_says "#2140 GIT_CONFIG_PARAMETERS" "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='/dev/null'\" git commit -m x" 0
 skips_says "#2140 GIT_CONFIG_GLOBAL names a whole file" 'GIT_CONFIG_GLOBAL=/tmp/g git commit -m x' 0
 skips_says "#2140 GIT_CONFIG_SYSTEM names a whole file" 'GIT_CONFIG_SYSTEM=/tmp/g git push origin x' 0
+skips_says "#2140 GIT_CONFIG names a whole file" 'GIT_CONFIG=/tmp/g git commit -m x' 0
+skips_says "#2140 GIT_CONFIG exported first" 'export GIT_CONFIG=/tmp/g; git commit -m x' 0
+skips_says "#2140 GIT_CONFIG_GLOBAL behind env" 'env GIT_CONFIG_GLOBAL=/tmp/g git commit -m x' 0
 skips_says "#2140 another key through GIT_CONFIG_COUNT is not a change" 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=x git commit -m y' 10
 skips_says "#2140 an echo of the environment form is not a change" 'echo "GIT_CONFIG_GLOBAL=/tmp/g git commit"' 10
 # git's own option that reads a config value from the environment, in both its spellings.
@@ -291,6 +294,8 @@ fi
 nv_config "GIT_CONFIG_COUNT with the key" 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x' "#2140"
 nv_config "GIT_CONFIG_PARAMETERS" "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='/dev/null'\" git commit -m x" "#2140"
 nv_config "GIT_CONFIG_GLOBAL" 'GIT_CONFIG_GLOBAL=/tmp/g git push origin x' "#2140"
+nv_config "GIT_CONFIG_SYSTEM" 'GIT_CONFIG_SYSTEM=/tmp/g git commit -m x' "#2140"
+nv_config "GIT_CONFIG" 'GIT_CONFIG=/tmp/g git commit -m x' "#2140"
 nv_config "--config-env" 'git --config-env=core.hooksPath=EMPTY commit -m x' "#2140"
 nv_config "-c include.path" 'git -c include.path=/tmp/h.inc push origin x' "#2140"
 nv_config "-c with a key spelled through a shell escape" "git -c \$'core.hooks\\x50ath=/dev/null' push origin x" "#2140"
@@ -423,6 +428,15 @@ ed_allowed "the main session's Write of .git/config setting the hooks location" 
   "$(edit_payload Write "$ER" "" file_path "$ER/.git/config" content "$cfg$hooked")"
 ed_allowed "an agent's NotebookEdit" \
   "$(edit_payload NotebookEdit "$ER" a1b2c3d4 notebook_path "$ER/n.ipynb" new_source "x")"
+# An edit the gate cannot read is judged by the words it holds: a file_path that is not text, naming
+# a git config file, is refused, and the same naming an ordinary file goes through (#2057's rule).
+HOME="$EH" run_hook "$NV_GATE" "{\"tool_name\":\"Write\",\"agent_id\":\"a1b2c3d4\",\"cwd\":\"$ER\",\"tool_input\":{\"file_path\":[\"$ER/.git/config\"],\"content\":\"x\"}}"
+refused "#2140 an agent's Write whose file_path is not text, naming .git/config, is refused"
+HOME="$EH" run_hook "$NV_GATE" "{\"tool_name\":\"Write\",\"agent_id\":\"a1b2c3d4\",\"cwd\":\"/tmp\",\"tool_input\":{\"file_path\":[\"/tmp/notes.md\"],\"content\":\"x\"}}"
+allowed "#2140 control: the same naming an ordinary file goes through"
+# A Write with no content to read is one the reader refuses to judge, so it is unread too.
+HOME="$EH" run_hook "$NV_GATE" "{\"tool_name\":\"Write\",\"agent_id\":\"a1b2c3d4\",\"cwd\":\"$ER\",\"tool_input\":{\"file_path\":\"$ER/.git/config\"}}"
+refused "#2140 an agent's Write of .git/config with no content to read is refused"
 [ "$(cat "$ER/.git/config")" = "$cfg" ] && check "#2140 the gate wrote nothing into the config it judged" ok \
   || check "#2140 the gate wrote nothing into the config it judged" "it changed"
 
