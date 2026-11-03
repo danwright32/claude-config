@@ -34,7 +34,7 @@ export const redactRef = (ref: string): string => {
   return segs
     .map((seg, i) => {
       if (UUID.test(seg)) return 'session'
-      if (/^-?Users-/.test(seg) || /^-?home-/.test(seg)) return 'project'
+      if (/^-(Users|home)-/.test(seg)) return 'project'
       if ((segs[i - 1] === 'Users' || segs[i - 1] === 'home') && (i === 1 || (i === 2 && segs[0] === ''))) return 'user'
       return seg
     })

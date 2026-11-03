@@ -120,9 +120,9 @@ red="$(node --input-type=module -e "
 const m = await import('$DIR/area-check-fixture.ts')
 const u = ['', 'Users', 'someone', 'x.ts'].join('/')
 const enc = ['private/tmp/claude-501', '-Users-someone-proj', '123e4567-e89b-12d3-a456-426614174000', 'scratchpad/f.ts'].join('/')
-const out = [m.redactRef(u), m.redactRef(enc), m.redactRef('src/lib/a.ts'), m.redactRef('a.ts')]
+const out = [m.redactRef(u), m.redactRef(enc), m.redactRef('src/lib/a.ts'), m.redactRef('a.ts'), m.redactRef('src/home-page.ts'), m.redactRef('components/Users-table.tsx')]
 console.log(out.join(' '))" 2>&1)"
-case "$red" in "/Users/user/x.ts private/tmp/claude-501/project/session/scratchpad/f.ts src/lib/a.ts a.ts") check "the writer redacts personal segments of a ref and leaves repository paths alone" ok ;; *) check "the writer redacts personal segments of a ref and leaves repository paths alone" "$red" ;; esac
+case "$red" in "/Users/user/x.ts private/tmp/claude-501/project/session/scratchpad/f.ts src/lib/a.ts a.ts src/home-page.ts components/Users-table.tsx") check "the writer redacts personal segments of a ref and leaves repository paths alone" ok ;; *) check "the writer redacts personal segments of a ref and leaves repository paths alone" "$red" ;; esac
 
 echo
 echo "passed: $pass, failed: $fail"
