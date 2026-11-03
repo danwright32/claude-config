@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
-  LIMITS, activeMs, blockTold, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue,
+  LIMITS, activeMs, blockTold, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, SLEEP_START, sendItselfAsk, startFailKind, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type StopInput,
 } from '../hooks/driver.ts'
 
@@ -467,5 +467,61 @@ describe('mods out of step', () => {
     const old = readDriver(JSON.stringify(before1281), 'g1', 's1')
     expect(old.state === 'ok' && !old.record.rested && !old.record.restDue).toBe(true)
     for (const o of [{ rested: 'yes' }, { restDue: 1 }]) expect(readDriver(JSON.stringify({ ...after(), ...o }), 'g1', 's1').state).toBe('unreadable')
+  })
+})
+
+// #2062: a worker /sleep could not tell to start does no work until somebody starts it, so Dan
+// hears it as he turns sleep mode on, with which of three things happened (L11): auto mode's check
+// refused the message, it gave no verdict on it, or the send failed for another reason.
+describe('a worker that was not told to start (#2062)', () => {
+  // The reason Dan got on 2026-11-02, as mod-kit hands it on: the second refusal, tidied.
+  const NO_VERDICT = 'Auto mode classifier gave no verdict for SendMessage: the request that produced this action did not ask for one'
+  test('each reason is told apart: a refusal, no verdict, or another failure', () => {
+    expect(startFailKind(NO_VERDICT)).toBe('no-verdict')
+    expect(startFailKind('SendMessage was not reviewed: the auto mode classifier transcript exceeded its context window')).toBe('no-verdict')
+    expect(startFailKind('Auto mode classifier unavailable')).toBe('no-verdict')
+    expect(startFailKind('Auto mode classifier blocked action: messaging another session')).toBe('refused')
+    expect(startFailKind('SendMessage blocked by auto mode')).toBe('refused')
+    // A hook's refusal, a gone session, a throw: none of them is auto mode's check.
+    expect(startFailKind('no such session')).toBe('error')
+    expect(startFailKind('the session has ended')).toBe('error')
+    expect(startFailKind('no reason given')).toBe('error')
+  })
+  test('nothing is said when every worker was told', () => {
+    expect(unstartedSaid([])).toBe('')
+  })
+  test('one worker is named with what happened and how Dan starts it before he sleeps', () => {
+    expect(unstartedSaid([{ who: 'the session in o/pivot ("Close #12")', why: NO_VERDICT }])).toBe(
+      `Not started, so it may do no work tonight unless you start it: the session in o/pivot ("Close #12"), because auto mode's safety check gave no verdict on its start message (${NO_VERDICT}). To start it, type "start the night's work" in that session before you sleep.`,
+    )
+  })
+  test('several are each named with their own cause', () => {
+    expect(
+      unstartedSaid([
+        { who: 'A', why: 'Auto mode classifier blocked action: no' },
+        { who: 'B', why: 'no such session' },
+      ]),
+    ).toBe(
+      `Not started, so they may do no work tonight unless you start them: A, because auto mode's safety check refused its start message (Auto mode classifier blocked action: no); B, because its start message could not be sent (no such session). To start one, type "start the night's work" in that session before you sleep.`,
+    )
+  })
+  // A send from inside /sleep belongs to no request of Claude's, so the check has nothing to give
+  // its verdict with. Claude sending the same message in its reply is judged as usual, so only a no
+  // verdict is handed to it: a refusal is a verdict, never asked again, and a failed send is not
+  // the check's at all.
+  test('only a start that got no verdict is handed to Claude to send itself, judged as usual', () => {
+    expect(sendItselfAsk([])).toBe('')
+    expect(sendItselfAsk([{ who: 'A', id: 's2', why: 'Auto mode classifier blocked action: no' }])).toBe('')
+    expect(sendItselfAsk([{ who: 'B', id: 's3', why: 'no such session' }])).toBe('')
+    const ask = sendItselfAsk([
+      { who: 'A', id: 's2', why: 'Auto mode classifier blocked action: no' },
+      { who: 'the session in o/pivot ("Close #12")', id: 's4', why: NO_VERDICT },
+    ])
+    expect(ask).toContain('the session in o/pivot ("Close #12") (session id s4)')
+    expect(ask).not.toContain('s2')
+    expect(ask).toContain(`with SendMessage, exactly this message: "${SLEEP_START}"`)
+    expect(ask).toContain('If it is refused, never send it again')
+    expect(ask).toContain('Never deliver it any other way')
+    expect(ask).toContain('type "start the night\'s work" in it before he sleeps')
   })
 })
