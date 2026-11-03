@@ -2584,9 +2584,98 @@ const messageReading = (others: readonly ModFile[], name: string, text: string):
   return { r, words: [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort(), reached: [...d.reached, ...handed.map(s => [r, s] as [ModRead, Span]), ...heads] }
 }
 
-// #2161: a whole record handed to a message, or its values taken without naming its keys, which the
-// key reading below cannot follow.
-const WHOLE_RECORD = /\bJSON\s*\.\s*stringify\b|\bObject\s*\.\s*(?:values|entries)\b/
+// #2161: a whole record handed to a message, its keys or values taken without naming them, or a key
+// read by reflection, which the key reading below cannot follow, so each may read any reason key.
+const WHOLE_RECORD = /\bJSON\s*\.\s*stringify\b|\bObject\s*\.\s*(?:keys|values|entries|getOwnPropertyNames|getOwnPropertyDescriptors?|assign)\b|\bReflect\s*\.\s*[A-Za-z]/
+// #2161: a word before a `[` that makes it a list, never an access (`of [...parts]`, `return [a]`).
+const LIST_AFTER = /(?<![\w$.])(?:of|in|return|typeof|case|yield|await|void|delete|instanceof|new|else|do|throw|extends|keyof|readonly)\s*$/
+
+// #2161: whether `e`, code of `g` (strings blanked) read at `at`, is always a number, so an index by
+// it is never a record's key: a number, `.length`, a name numberIs finds, and arithmetic of them, a
+// ternary's two branches each one. Anything else may be a string, so is not.
+const numberExpr = (g: ModRead, e: string, at: number, seen: Set<string>): boolean => {
+  let x = e.trim().replace(/\s+as\s+number$/, '')
+  while (x.startsWith('(') && shutAt(x, 0) === x.length - 1) x = x.slice(1, -1).trim()
+  // A ternary at this depth: its condition may be anything, its branches must each be numbers.
+  let depth = 0
+  let ask = -1
+  for (let i = 0; i < x.length; i++) {
+    const c = x[i] as string
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth--
+    else if (depth === 0 && c === '?' && x[i + 1] !== '.' && x[i + 1] !== '?' && x[i - 1] !== '?') ask = ask < 0 ? i : ask
+    else if (depth === 0 && c === ':' && ask >= 0) return numberExpr(g, x.slice(ask + 1, i), at, seen) && numberExpr(g, x.slice(i + 1), at, seen)
+  }
+  const TOKEN = /\s+|\d[\d_]*(?:\.\d+)?(?:e[+-]?\d+)?|[A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*|\+\+|--|\*\*|[-+*/%()]/gy
+  let seenAll = 0
+  for (const m of x.matchAll(TOKEN)) {
+    if (m.index !== seenAll) return false
+    seenAll += m[0].length
+    const t = m[0]
+    if (!/^[A-Za-z_$]/.test(t)) continue
+    if (/\.\s*length$/.test(t)) continue
+    if (!/^[A-Za-z_$][\w$]*$/.test(t) || !numberIs(g, t, at, seen)) return false
+  }
+  return x.length > 0 && seenAll === x.length
+}
+
+// #2161: whether the name `v`, as code of `g` at `at` sees it, always holds a number: a parameter of
+// the innermost function binding it typed `: number`, or a local whose every declaration and later
+// assignment there (readMod's locals) is a number by numberExpr. A name bound nowhere is not.
+const numberIs = (g: ModRead, v: string, at: number, seen: Set<string>): boolean => {
+  if (seen.has(v)) return true
+  seen.add(v)
+  const name = v.replace(/\$/g, '\\$')
+  const around = g.fns.map((f, k) => [f, k] as const).filter(([f]) => f.from <= at && at < f.to).sort(([f], [h]) => h.from - f.from)
+  for (const [f, k] of around) {
+    if (f.params.some(ps => ps.includes(v)))
+      return new RegExp(`(?<![\\w$.])${name}\\s*\\??\\s*:\\s*number\\s*(?=[,)=])`).test(g.blank.slice(f.from, f.body))
+    const mine = g.locals.filter(l => l.owner === k && l.name === v)
+    if (!mine.length) continue
+    return mine.every(({ span: [a, b] }) => {
+      const t = g.blank.slice(a, b).trim()
+      const decl = new RegExp(`^(?:const|let|var)\\s+${name}\\s*(?::\\s*([^=]*?))?\\s*(=(?![=>]))?\\s*([^]*)$`).exec(t)
+      if (decl) return decl[1]?.trim() === 'number' || (!!decl[2] && numberExpr(g, decl[3] as string, at, seen))
+      const put = new RegExp(`^${name}\\s*([-+*/|&?]*)=\\s*([^]*)$`).exec(t)
+      if (!put) return false
+      return /^[-*/|&]$/.test(put[1] as string) || numberExpr(g, put[2] as string, at, seen)
+    })
+  }
+  return false
+}
+
+// #2161: the key each access by brackets in `g` from `a` to `b` reads: the key, for one quoted whole
+// (any quote, a template with no substitution in it); null for any other, which may read any key. An
+// index always a number (numberExpr), never a record's key, and a type's empty `[]` are left out.
+const bracketReads = (g: ModRead, [a, b]: Span): (string | null)[] => {
+  const out: (string | null)[] = []
+  for (let o = g.blank.indexOf('[', a); o !== -1 && o < b; o = g.blank.indexOf('[', o + 1)) {
+    const lead = g.blank.slice(Math.max(0, o - 40), o)
+    if (!/(?:[\w$)\]]|\?\.)\s*$/.test(lead) || LIST_AFTER.test(lead)) continue
+    const c = shutAt(g.blank, o)
+    if (c === undefined) {
+      out.push(null)
+      continue
+    }
+    const key = g.text.slice(o + 1, c).trim()
+    if (key === '' || /^(?:0[xob][\da-f_]+|\d[\d_]*(?:\.\d+)?(?:e[+-]?\d+)?)n?$/i.test(key) || numberExpr(g, g.blank.slice(o + 1, c), o, new Set())) continue
+    const q = /^(['"`])([^]*)\1$/.exec(key)
+    const plain = q && !/[\\'"`]/.test(q[2] as string) && !(q[1] === '`' && (q[2] as string).includes('${'))
+    out.push(plain ? (q[2] as string) : null)
+  }
+  return out
+}
+
+// #2161: whether `g` spreads something into an object (`{ ...made }`) or a call (`f(...made)`) at
+// `i`, which copies or hands on every key it has unnamed; never a list's or a parameter list's rest.
+const spreadsAt = (g: ModRead, i: number): boolean => {
+  const o = g.inner(i)
+  if (o === undefined) return false
+  if (g.blank[o] === '{') return !g.fns.some(f => f.body === o)
+  if (g.blank[o] !== '(') return false
+  const c = shutAt(g.blank, o)
+  return c === undefined || !/^(?:=>|:|\{)/.test(g.blank.slice(c + 1, c + 40).trimStart())
+}
 // #2161: a member read (`d.unresolved`) that is the whole value of a field, the field's key captured.
 const COPIED_INTO = /[{,]\s*([A-Za-z_$][\w$]*)\s*:\s*[A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*\s*\??\.\s*$/
 
@@ -2632,9 +2721,11 @@ const inPattern = (g: ModRead, i: number): boolean => {
  * and where nothing the message reading reaches, in any of the mod's files, reads such a key, but to
  * define it or copy it whole into another such key, which is then read the same way (a pattern
  * taking the record apart, `const { unresolved: why } = made` or a parameter's, reads it). drawsChange has
- * already found nothing new drawn. Not followed, so held: a record handed whole to a message
- * (JSON.stringify, Object.values or Object.entries anywhere reached). Not seen: a key read by a
- * computed name (`made[k]`).
+ * already found nothing new drawn. A key read by a quoted name (`made['unresolved']`, any quote) is
+ * read as the dot reads it, but never counted a copy. Not followed, so held: a record handed whole to
+ * a message or taken apart unnamed (JSON.stringify, Object.keys, values or entries, Reflect, in the
+ * file anywhere or anywhere reached), a key read by brackets holding anything but a quoted name or a
+ * number (`made[k]`; numberExpr), and a record spread into an object or a call, anywhere reached.
  */
 const reasonsOnly = (was: MessageReading, now: MessageReading): boolean => {
   if (was.words.some(x => !now.words.includes(x))) return false
@@ -2652,7 +2743,7 @@ const reasonsOnly = (was: MessageReading, now: MessageReading): boolean => {
     found.add(word)
   }
   if (found.size !== added.size) return false
-  if (now.reached.some(([g, [a, b]]) => WHOLE_RECORD.test(g.blank.slice(a, b)))) return false
+  if (WHOLE_RECORD.test(r.blank) || now.reached.some(([g, [a, b]]) => WHOLE_RECORD.test(g.blank.slice(a, b)))) return false
   const queue = [...keys]
   for (let k = queue.pop(); k !== undefined; k = queue.pop()) {
     // A key is word characters and `$`, which a pattern would read as an end anchor and match nothing.
@@ -2670,6 +2761,12 @@ const reasonsOnly = (was: MessageReading, now: MessageReading): boolean => {
           queue.push(into[1] as string)
         }
       }
+  }
+  // A key read by brackets: quoted, as the dot reads it; any other may be every reason key. A record
+  // spread into an object or a call hands every key on unnamed.
+  for (const [g, s] of now.reached) {
+    if (bracketReads(g, s).some(k => k === null || keys.has(k))) return false
+    for (let i = g.blank.indexOf('...', s[0]); i !== -1 && i < s[1]; i = g.blank.indexOf('...', i + 3)) if (spreadsAt(g, i)) return false
   }
   return true
 }

@@ -2244,3 +2244,54 @@ test('#2161: a pattern taking the reason apart under a new name reads its key, s
   // A parameter's: `({ unresolved: why }) =>`, its type named so only the pattern reads the key.
   expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'const say = ($: EngineInterface, { unresolved: why }: Printed) => $.ui.toast(why ?? \'\')', 'export const tell = ($: EngineInterface, line: Line) => say($, printed(line))'))).toBe('worded')
 })
+
+// Each way of reaching a reason record's key the dot does not spell, as a toast is handed it, from
+// the file itself and from another of the mod's files (`P` is the record, `k` a key nobody names).
+const READ_FORMS: [string, string][] = [
+  ['quoted', "P['unresolved']"],
+  ['double quoted', 'P["unresolved"]'],
+  ['template quoted', 'P[`unresolved`]'],
+  ['quoted through an optional chain', "P?.['unresolved']"],
+  ['computed', 'P[k as keyof Printed]'],
+  ['computed expression', "P[(k + '') as keyof Printed]"],
+  ['keys', "Object.keys(P).join(' ')"],
+  ['values', "Object.values(P).join(' ')"],
+  ['entries', 'Object.entries(P)'],
+  ['reflect', 'Reflect.get(P, k)'],
+  ['spread into an object', 'said({ ...P })'],
+  ['spread into a call', 'listed(...(P as unknown as string[]))'],
+]
+const TOLD = (expr: string) => [
+  'const said = (p: object) => p',
+  'const listed = (...ws: string[]) => ws',
+  `export const tell = ($: EngineInterface, line: Line, k: string) => $.ui.toast(String(${expr.replace('P', 'printed(line)')}))`,
+]
+const tellerOf = (expr: string) => ({
+  name: 'tell.ts',
+  text: ["import type { EngineInterface } from 'claude-code'", "import { printed } from './commands.ts'", ...TOLD(expr), ''].join('\n'),
+})
+
+// Dan, 2026-11-03: any value that can reach a toast stays held. A key read by a quoted name is read
+// as the dot reads it; one the scan cannot name (computed, the record's keys or values taken, a
+// reflective get, the record spread into another object or a call) may be any reason key, so each
+// such reach holds them all.
+test('#2161: a reason record reached by a quoted, computed, enumerated, reflected or spread read is still held', () => {
+  const exported = swapIn(HELD_2141_AFTER, 'const printed =', 'export const printed =')
+  const got = READ_FORMS.flatMap(([form, expr]) => [
+    [`${form}, in the file`, holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, ...TOLD(expr)))],
+    [`${form}, in another file`, holdOf([tellerOf(expr)], 'commands.ts', HELD_2141_BEFORE, exported)],
+  ])
+  expect(got).toEqual(got.map(([form]) => [form, 'worded']))
+  // Taken into a local first, and enumerated in a helper whose result a toast is handed.
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line, k: string) => {', '  const why = printed(line)[k as keyof Printed]', '  $.ui.toast(why)', '}'))).toBe('worded')
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'const all = (p: object) => Object.keys(p).map(k => Reflect.get(p, k))', "export const tell = ($: EngineInterface, line: Line) => $.ui.toast(all(printed(line)).join(' '))"))).toBe('worded')
+})
+
+// The near copies that read no reason key: an index by a number, or a key quoted by another name,
+// so #2141's own edit, which indexes its words by position, still passes.
+test('#2161: an index by a number or another quoted key is no read of a reason key', () => {
+  expect(modHookTsHold([], 'commands.ts', HELD_2141_BEFORE, HELD_2141_AFTER)).toBeUndefined()
+  const exported = swapIn(HELD_2141_AFTER, 'const printed =', 'export const printed =')
+  for (const expr of ['line[0]', "P['text']", 'P["text"]'])
+    expect([expr, holdOf([tellerOf(expr)], 'commands.ts', HELD_2141_BEFORE, exported)]).toEqual([expr, 'passes'])
+})
