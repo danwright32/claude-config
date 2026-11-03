@@ -187,15 +187,16 @@ export const register: Register = on => {
       await keepWritten($, path)
     }
     return next(e)
-  }).catch(($, e, next) => neverThrows(
+  }).catch(($, e, next) => next.called ? next(e) : neverThrows(
     // A hook that fails is skipped and the call runs unscreened, so a check that throws (an older
     // mod-kit with no commands reader, #1281) refuses (#1298, L42). Once next was called the call
-    // was judged and passed on, and what it settled to stands, replayed.
+    // was judged and passed on, and what it settled to stands, replayed OUTSIDE neverThrows: the
+    // call has already run beneath, so a refusal saying it did not run would be untrue and could
+    // make Claude run it twice, and the tool's own failure reaches Claude instead (#2039).
     // Said by the failure's kind only, never the error's own words, which can quote the very input
-    // the check could not read, secret and all (lessons review of #1298). Should the replay or even
-    // reading the kind fail, the refusal without a reason holds the call, so the catch never throws
-    // (#2039).
-    () => next.called ? next(e) : { deny: cannotCheck(next.error?.kind === 'timeout' ? 'it ran out of time' : 'it failed') },
+    // the check could not read, secret and all (lessons review of #1298). Should even reading the
+    // kind fail, the refusal without a reason holds the call, so a catch before next never throws.
+    () => ({ deny: cannotCheck(next.error?.kind === 'timeout' ? 'it ran out of time' : 'it failed') }),
     () => ({ deny: SCREEN_FAILED }),
     { deny: SCREEN_FAILED },
   ))
@@ -231,13 +232,13 @@ export const register: Register = on => {
     const kept = await next({ ...e, message: { ...e.message, content } })
     await $.ui.toast(`Hid ${count} secret${count === 1 ? '' : 's'} from a command's output.`)
     return kept
-  }).catch(($, e, next) => neverThrows(
+  }).catch(($, e, next) => next.called ? next(e) : neverThrows(
     // A hook that fails is skipped and the row is kept as it came, secrets and all, so a scrub that
     // throws withholds the row's text instead (#1298, L42). Once next was called the scrubbed row
-    // was kept, and that stands, replayed. Should the replay or withholding it block by block fail,
-    // the row goes on as one withheld text, and should that fail, it is refused, so the catch never
-    // throws (#2039).
-    () => next.called || (e.door !== 'tool-result' && e.door !== 'tool-message') ? next(e) : next({ ...e, message: { ...e.message, content: withheld(e.message?.content) as typeof e.message.content } }),
+    // was kept, and that stands, replayed outside neverThrows (#2039). Before next, should
+    // withholding block by block fail, the row goes on as one withheld text, and should that fail,
+    // it is refused, so that catch never throws.
+    () => (e.door !== 'tool-result' && e.door !== 'tool-message') ? next(e) : next({ ...e, message: { ...e.message, content: withheld(e.message?.content) as typeof e.message.content } }),
     () => next({ ...e, message: { ...e.message, content: [{ type: 'text', text: WITHHELD }] as typeof e.message.content } }),
     { deny: WITHHELD },
   ))

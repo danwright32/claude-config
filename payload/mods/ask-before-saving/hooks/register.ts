@@ -803,9 +803,10 @@ export const register: Register = on => {
   // A hook that failed after passing the call on had it judged beneath, by the tool.check hook and
   // every guard there, and maybe run: its result is replayed, never refused as a save it may already
   // be (`next` there runs nothing again). One that failed before is judged once more (#2026). The
-  // replay runs inside neverThrows too, so even one that throws ends in a refusal, never a throw out
-  // of the catch, which the engine would read as no hook at all (#2039).
-  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => neverThrows(() => next.called ? next(e) : saveCall($, e, next), () => ({ deny: cannotCheck(next.error) }), heldCall))
+  // replay runs OUTSIDE neverThrows: the call already ran beneath, so a refusal saying it did not run
+  // would be untrue and could make Claude run it twice, and the tool's own failure reaches Claude
+  // instead. Every catch before next stays inside neverThrows (#2039).
+  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => next.called ? next(e) : neverThrows(() => saveCall($, e, next), () => ({ deny: cannotCheck(next.error) }), heldCall))
 
   // At tool.check `next` only reads the verdict beneath and runs nothing, so a failed check is judged
   // once more whether or not it had read it (#2026).

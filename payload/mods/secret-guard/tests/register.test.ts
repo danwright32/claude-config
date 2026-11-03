@@ -480,11 +480,12 @@ test('a tool result the guard cannot scrub is withheld rather than kept as it wa
   expect(w.stored()).toContain('t4')
 })
 
-// #2039: once next was called the catch replays what the call settled to, and a replay can reject
-// too (here the tool beneath throws, and the test world has nothing below it, so the replay rejects
-// with the engine's own "no implementation"). The catch ends in an answer even then, never a
-// rejection out of it: the replay runs inside neverThrows.
-test('a call whose replay throws after it was passed on ends in an answer, never a rejection (#2039)', withKit, async ($, on) => {
+// #2039: once next was called the call has already run beneath the guard, so the catch replays what
+// the call settled to, outside neverThrows. Here the tool beneath fails (the test world has nothing
+// below it, so the replay rejects with the engine's own "no implementation"). That failure reaches
+// Claude as the tool's own, never as a refusal saying the call did not run, which would be untrue
+// and could make Claude run it twice.
+test('a call whose tool fails after it was passed on reaches Claude as the tool failing, not a refusal (#2039)', withKit, async ($, on) => {
   const w = world(on, {}, 'echo boom')
   await start($)
   const settled = await $.tool.call({ tool: 'Bash', command: 'echo boom', tool_use_id: 'r1' } as never).then(
@@ -492,6 +493,6 @@ test('a call whose replay throws after it was passed on ends in an answer, never
     (err: unknown) => ({ rejected: String(err) }),
   )
   expect(w.reached).toEqual(['Bash'])
-  expect(settled).not.toHaveProperty('rejected')
-  expect((settled as { answered: { deny?: string } }).answered.deny).toStartWith('Blocked: the secret guard could not check this for secrets')
+  expect(settled).not.toHaveProperty('answered')
+  expect((settled as { rejected: string }).rejected).toContain('no implementation')
 })
