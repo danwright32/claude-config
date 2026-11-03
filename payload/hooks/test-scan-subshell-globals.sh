@@ -620,7 +620,51 @@ v="$(nested_def)"; w="$(plain_loop)"
 EOF
 run
 says "#2083 a stray closer leaves the piped loop open" "$OUT" "nested_def sets kept"
-says "#2083 control: an unpiped loop's assignments are this shell's" "$OUT" "plain_loop sets set_here"
+says "#2083 control: an unpiped loop's assignments are this shell's" "$OUT" "plain_loop sets l, set_here"
+
+# A name is set by more than `name=`: a for or select loop sets its variable, read sets each name it
+# is given (REPLY when it is given none), and printf -v, mapfile, readarray and getopts set the name
+# they are given. None was ever judged, so a function answering through one was never reported.
+# An option's value (read -p "x", read -d '', mapfile -d ,) is not a name, a redirection ends the
+# words, and an env prefix (IFS= read) leaves the name read sets this shell's.
+cat > "$FIX/a.sh" <<'EOF'
+sets_by_builtin(){
+  read -r r1
+  IFS= read -r r2 r3 < /dev/null
+  read -ra r4 <<< "a b"
+  read -r -d '' -p "say x" r5
+  read -t 1 -n 1
+  printf -v r6 '%s' x
+  mapfile -t -d , r7 < /dev/null
+  readarray r8
+  getopts "ab" r9 x y
+  echo notset
+  for f1 in a b; do :; done
+  for ((i = 0; i < 1; i++)); do :; done
+  select f2 in a; do break; done
+}
+declared_builtin(){
+  local line arr
+  while IFS= read -r line; do :; done < /dev/null
+  read -ra arr <<< "x"
+  for line in a; do :; done
+}
+piped_builtin(){
+  printf 'a\n' | read -r gone1
+  printf 'a\n' | { read -r gone2; }
+}
+v="$(sets_by_builtin)"; w="$(declared_builtin)"; x="$(piped_builtin)"
+EOF
+run
+says "#2083 a name set by for, select, read, printf -v, mapfile, readarray or getopts is judged" "$OUT" "sets_by_builtin sets REPLY, f1, f2, r1, r2, r3, r4, r5, r6, r7, r8, r9"
+case "$OUT" in
+  *declared_builtin*) check "#2083 a name declared local is not a global when read or a loop sets it" "$OUT" ;;
+  *) check "#2083 a name declared local is not a global when read or a loop sets it" ok ;;
+esac
+case "$OUT" in
+  *piped_builtin*) check "#2083 a read in a pipeline sets nothing in this shell" "$OUT" ;;
+  *) check "#2083 a read in a pipeline sets nothing in this shell" ok ;;
+esac
 
 echo "scan subshell globals: the baseline is a ratchet in both directions"
 

@@ -107,6 +107,68 @@ def assigned_names(text):
     return names if names and not s.strip() else []
 
 
+# The builtins that set a name they are given, each with the options of theirs that take a value
+# (claude-config#2083). `read -a NAME` and `printf -v NAME` take the name as an option's value.
+SETTERS = {"read": "dinNptu", "mapfile": "dnOsuCc", "readarray": "dnOsuCc", "printf": "v",
+           "getopts": ""}
+# A word that redirects (`<`, `2>`, `&>`, `<<<`): the words a builtin is given end at the first.
+REDIRECT = re.compile(r"^(\d*[<>]|&>)")
+
+
+def builtin_names(text):
+    """Names one simple command sets through a builtin that assigns: read, mapfile, readarray,
+    printf -v and getopts (claude-config#2083). An env prefix (`IFS= read -r x`) is looked past, as
+    the name read sets is still this shell's. read given no name sets REPLY, mapfile MAPFILE.
+    """
+    words = command_words(text)
+    while words and ASSIGN_WORD.match(words[0]):
+        words = words[1:]
+    if not words or words[0] not in SETTERS:
+        return []
+    cmd = words[0]
+    # The option letters taking a value, and of those the ones whose value is the name set.
+    valued, naming = SETTERS[cmd] + ("a" if cmd == "read" else ""), {"read": "a", "printf": "v"}.get(cmd, "")
+    args = words[1:]
+    for i, w in enumerate(args):
+        if REDIRECT.match(w):
+            args = args[:i]
+            break
+    names, plain, i = [], [], 0
+    while i < len(args):
+        w = args[i]
+        i += 1
+        if plain or not w.startswith("-") or w == "-":
+            plain.append(w)
+            continue
+        if w == "--":
+            plain.extend(args[i:])
+            break
+        # Bundled letters (`-rd ''`, `-ra arr`): the first that takes a value takes the rest of the
+        # word, or the next word when the rest is empty.
+        for j, ch in enumerate(w[1:], 2):
+            if ch in valued:
+                value = w[j:]
+                if not value and i < len(args):
+                    value, i = args[i], i + 1
+                if ch in naming:
+                    names.append(value)
+                break
+    if cmd == "read":
+        names.extend(plain)
+        if not names:
+            names.append("REPLY")
+    elif cmd in ("mapfile", "readarray"):
+        names.append(plain[0] if plain else "MAPFILE")
+    elif cmd == "getopts":
+        names.extend(plain[1:2])
+    out = []
+    for nm in names:
+        m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", nm)
+        if m:
+            out.append(m.group(0))
+    return out
+
+
 def declared_names(rest):
     """Names a declaration's words declare: `local a b=1 -r c` declares a, b and c.
 
@@ -223,6 +285,11 @@ def function_globals(lines):
                 if w in OPENS:
                     frames.append({"closer": OPENS[w], "piped": after_pipe,
                                    "declared": set(), "globals": set()})
+                    # A for or select loop sets its variable in the shell the loop runs in.
+                    var = words[1].split(None, 1)[0] if w in ("for", "select") and len(words) > 1 else ""
+                    var = var[:-1] if var.endswith(";") else var
+                    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", var) and not any(var in f["declared"] for f in frames):
+                        frames[-1]["globals"].add(var)
                 elif w in CLOSES and len(frames) > 1 and frames[-1]["closer"] == w:
                     f = frames.pop()
                     if not (f["piped"] or p["how"] in ("|", "&")):
@@ -235,7 +302,8 @@ def function_globals(lines):
             if words[0] in DECLARES:
                 frames[-1]["declared"].update(declared_names(words[1] if len(words) > 1 else ""))
                 continue
-            for nm in assigned_names(" ".join(words)):
+            rest = " ".join(words)
+            for nm in assigned_names(rest) + builtin_names(rest):
                 if not any(nm in f["declared"] for f in frames):
                     frames[-1]["globals"].add(nm)
         # A compound the reading never saw close is kept unless it ran in a pipeline: the shell
