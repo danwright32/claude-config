@@ -998,6 +998,21 @@ reviews, starts one in every repository a command commits, pushes or opens a pul
 changelog gate refuses a command merging several pull requests only when one of them is in a
 repository its registry gates.
 
+`push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
+that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
+for the push and says nothing. Bidspoke sets it to `.husky/_`, which only `pnpm install` creates,
+so a worktree that never ran the install pushed a live migration (Bidspoke PR #3199) with no SQL
+suite, test gate or style gate. The folder is the one git resolves (`git rev-parse --git-path
+hooks` at the top level), so a linked worktree is judged by its own copy. The refusal names the
+folder and the install that creates it, read from the lockfile at the top level (`pnpm install`,
+`yarn install`, `bun install`, `npm install`, or the repository's install in general words when
+there is none). The main session can push past it once with `SKIP_HOOKS_PATH_CHECK=1`; an agent
+cannot, as it cannot skip the repository's hooks any other way (`no-verify-gate.sh`, #1666).
+Something at the path that is not a folder, such as `/dev/null`, is hooks switched off on purpose
+and is left alone, and a setting that cannot be read refuses the push. On 2026-11-02 the personal
+MacBook had 5 repositories setting `core.hooksPath` across 8 working trees, every folder present,
+so no push there would have been refused.
+
 Every merge gate judges a merge however it is made (claude-config#1181): `gh pr merge`, a repo's own
 merge tool, the GitHub API's merge endpoint (`gh api -X PUT repos/<owner>/<name>/pulls/<n>/merge`,
 any method but GET, any spelling), and a GraphQL mutation that merges a pull request
@@ -1794,7 +1809,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 | `check-closing-keyword.sh` | 2026-10-28: 0.054 to 0.087 seconds; it acts on a commit or pull request whose text negates a closing word, not a push |
 | `require-issue-fields.sh` | 2026-10-28: 0.062 to 0.084 seconds; it acts on `gh issue create` and on issue and pull request bodies, not a push |
 | `no-session-link-in-comments.sh` (#1825) | 2026-10-28: 0.063 to 0.083 seconds. Its quick exit looks for `gh` anywhere in the payload, and the working directory's path holds those letters on this Mac, so it starts its python reader on every push |
-| `push-scope-notice.sh` (#552) | 2026-10-28: 0.067 to 0.079 seconds. Earlier: 0.07 seconds, five readings on this Mac on 2026-10-12 |
+| `push-scope-notice.sh` (#552) | 2026-10-28: 0.067 to 0.079 seconds. Since #2070 added the hooks folder check, on 2026-11-02: 0.102 to 0.149 seconds on a plain push from a repository with no `core.hooksPath`, and 0.124 to 0.180 seconds from one with it set and present, ten readings of each by bash's timer around the gate alone at load average 28 to 41, against 0.080 to 0.106 seconds for the copy before it, five readings of each in the same minutes. Earlier: 0.07 seconds, five readings on this Mac on 2026-10-12 |
 | `amend-force-push-gate.sh` (#1856) | 2026-10-28: 0.027 to 0.069 seconds on the main session's push. Earlier: 0.021 to 0.026 seconds on the main session's `git push -u origin feat/x`, five readings on 2026-10-28 (load average 40 to 58), since a payload with no agent id leaves before anything loads; 0.105 to 0.126 seconds on a subagent's same push, which starts the shared reader to find no force; 0.105 to 0.148 seconds on a subagent's `git push --force`, refused |
 | `check-add-scope.sh` | 2026-10-28: 0.051 to 0.056 seconds; it acts on an unscoped `git add`, not a push |
 | `no-verify-gate.sh` (#1641) | 2026-10-28: 0.020 to 0.028 seconds on the main session's push, since a payload with no agent id leaves before anything loads; 0.037 to 0.053 seconds on a subagent's, five readings the same day at load average 15 to 17 by a timer around the gate alone, since the tool sends no agent id: one python start reads the payload and finds no skip |
