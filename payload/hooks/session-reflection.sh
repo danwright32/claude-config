@@ -79,7 +79,8 @@ worked=$(python3 "$SELF_DIR/turn-worked.py" "$transcript" 2>/dev/null)
 # read from the environment. This config is synced between two Macs whose paths
 # differ, so a pointer that resolves itself is correct on both with nothing to
 # configure. test-review-instructions.sh proves that by running a relocated copy of
-# the tree and requiring the reason to name the copy.
+# the tree and requiring the reason to name the copy. SELF_DIR, set near the top of this file,
+# is that location.
 
 # The transcript lets the helper send a short pointer once this session has already read the
 # instruction since its last compaction, rather than another full read (lib/review-reason.py).
