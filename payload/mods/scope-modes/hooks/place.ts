@@ -1,8 +1,10 @@
 // #2099: the away or home switch Dan types is kept in one record every session on this Mac reads at
 // its next prompt or minute (Dan, 2026-11-03), so no message between sessions is needed: in auto mode
 // every real message telling another session got no verdict, and those sessions stayed where they
-// were. Only what Dan types writes the record (register.ts decides that); a session never writes back
-// what it read. Only the record's shape and what a switch says live here.
+// were. A /away, /home or switch in words writes the record only when Dan typed it; ending sleep
+// (/wake, or the noon limit) writes it too, putting every session back where it was before sleep, as
+// ending sleep already does for the whole Mac (register.ts decides all of that). A session never
+// writes back what it read. Only the record's shape and what a switch says live here.
 
 import type { ScopeModesPlace } from '../types/index.d.ts'
 
