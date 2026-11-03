@@ -10171,13 +10171,20 @@ check "#36 the derivation found mktemp calls to check" \
 # scratch, so a derivation over paths reported it as a name the reaper had forgotten.
 _scr_names="$(_scr_code | grep -E '\bmktemp\b' | grep -oE '/claude-sync-[a-z-]+\.' | sed 's|^/||' | sort -u)"
 _scr_unswept=""
+# The reaper's list, read once, so a failure can print exactly what every name was matched against.
+_scr_sweeps="$(grep -oE '^SYNC_SCRATCH_NAMES=.*' "$SCRIPT" | awk 'NR <= 1')"
 while IFS= read -r _nm; do
   [ -n "$_nm" ] || continue
-  case " $(grep -oE '^SYNC_SCRATCH_NAMES=.*' "$SCRIPT" | awk 'NR <= 1') " in *"$_nm"*) ;; *) _scr_unswept="$_scr_unswept[$_nm]" ;; esac
+  case " $_scr_sweeps " in *"$_nm"*) ;; *) _scr_unswept="$_scr_unswept[$_nm]" ;; esac
 done <<EOF
 $_scr_names
 EOF
 check "#36 every name it creates is one the reaper sweeps" "[ -z \"\$_scr_unswept\" ]"
+# When it does not, the names and the list are the diagnosis, so they are printed (L177). This
+# check failed once under load on 2026-11-01 (claude-config#2091) and passed on the rerun, and the
+# kept output held only the FAIL line, so what it had read could not be recovered.
+[ -z "$_scr_unswept" ] || printf '    names not swept: %s\n    the reaper list read from %s: [%s]\n' \
+  "$_scr_unswept" "$SCRIPT" "$_scr_sweeps"
 check "#36 the name derivation found names to check" \
   "[ \"\$(printf '%s' \"\$_scr_names\" | grep -c .)\" -ge 3 ]"
 
@@ -23861,6 +23868,15 @@ check "#1535 and what that means for sessions here" \
   "line_has \"\$out_ml1\" 'mods behind the shared repo' 'Every session started on this Mac'"
 check "#1535 a file installed with this Mac's home path in it is matched to the version the repo held" \
   "line_has \"\$out_ml1\" 'mods behind the shared repo' 'path-mod'"
+# When it is not, what status said, the installed bytes and the history it was matched against are
+# the diagnosis, so they are printed (L177). This check failed once under load on 2026-11-02
+# (claude-config#2091) while the two above it passed, and the kept output held only the FAIL line.
+if ! line_has "$out_ml1" 'mods behind the shared repo' 'path-mod'; then
+  printf '%s\n' "$out_ml1" | sed 's/^/    status said: /'
+  sed 's/^/    installed paths.ts: /' "$MLH/mods/path-mod/hooks/paths.ts" 2>&1
+  git -C "$MLR" log --format='C %ct' --raw --no-abbrev origin/main -- payload/mods/path-mod/hooks/paths.ts 2>&1 \
+    | sed 's/^/    repo history: /'
+fi
 check "#1535 a mod this Mac wrote and has not sent is not called a lag" \
   "! line_has \"\$out_ml1\" 'mods behind the shared repo' 'own-mod'"
 # The causes it can read, each in its own words. Here neither launch agent is installed.
