@@ -12,6 +12,7 @@ payload/hooks/test-branch-issue-reader.sh
 payload/hooks/test-check-home-paths.sh
 payload/hooks/test-check-root-guard.sh
 payload/hooks/test-checkout-root.sh
+payload/hooks/test-hand-rolled-heredoc-marker.sh
 payload/hooks/test-hand-rolled-wait.sh
 payload/hooks/test-heredoc-in-substitution.sh
 payload/hooks/test-lib-self-locate.sh
@@ -19,6 +20,7 @@ payload/hooks/test-pipefail-shortcircuit.sh
 payload/hooks/test-push-changes.sh
 payload/hooks/test-python-c-ascii.sh
 payload/hooks/test-repo-files.sh
+payload/hooks/test-repo-slug.sh
 payload/hooks/test-run-all-tests-real-tree.sh
 payload/hooks/test-suite-result-line.sh
 payload/hooks/test-suite-scratch-isolation.sh

@@ -279,9 +279,23 @@ for pair in "slack_send_message:Slack message" "slack_create_canvas:Slack canvas
 done
 
 # --- A gate that cannot run says so on stderr and lets the command through ---
-err="$(bash_payload "gh pr comment 5 --body \"$LINK\"" | PATH="$TMP_DIR/bin" bash "$HOOK" 2>&1 >/dev/null)"
+# Broken by a copy with no lib/ beside it and no python3 on PATH, run from that same folder, so
+# which lib/ the gate could find never depends on where the suite was started (claude-config#2081).
+BROKEN="$TMP_DIR/broken"; mkdir -p "$BROKEN"
+cp "$HOOK" "$DIR/session_link_comment_gate.py" "$BROKEN/"
+BROKEN_HOOK="$BROKEN/$(basename "$HOOK")"
+err="$(cd "$BROKEN" && bash_payload "gh pr comment 5 --body \"$LINK\"" | PATH="$TMP_DIR/bin" bash "$BROKEN_HOOK" 2>&1 >/dev/null)"
 if [[ "$err" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a broken gate must say so on stderr (got: ${err:-<nothing>})"; fi
+
+# With nothing on PATH (so no dirname), the gate in place still finds the lib/ beside it, whatever
+# folder it is run from, and so still refuses what that library refuses (claude-config#2081). Run
+# from a folder holding no lib/, where a gate that fell back to the working directory says its
+# library is missing and lets the comment through.
+own_out="$(cd "$TMP_DIR" && bash_payload "gh pr comment 5 --body \"$LINK\"" | PATH="$TMP_DIR/bin" bash "$HOOK" 2>&1)"
+if [[ "$own_out" != *"is missing beside this hook"* && "$own_out" == *"BLOCKED: no-session-link-in-comments.sh"* ]]; then
+  pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: #2081 with no dirname the gate must find its own lib/ and refuse, got: ${own_out:-<silence>}"; fi
 
 err="$(printf 'gh not json' | bash "$HOOK" 2>&1 >/dev/null)"
 if [[ "$err" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); else
@@ -290,7 +304,7 @@ if [[ "$err" == *"SESSION LINK GATE DID NOT RUN"* ]]; then pass=$((pass + 1)); e
 # ...and says it where the person sees it, with exit 0 (claude-config#1906): Claude Code discards a
 # PreToolUse hook's stderr on exit 0, so the notice is the systemMessage on stdout.
 . "$DIR/lib/hook-notice.sh"
-out="$(bash_payload "gh pr comment 5 --body \"$LINK\"" | PATH="$TMP_DIR/bin" bash "$HOOK" 2>/dev/null)"; rc=$?
+out="$(cd "$BROKEN" && bash_payload "gh pr comment 5 --body \"$LINK\"" | PATH="$TMP_DIR/bin" bash "$BROKEN_HOOK" 2>/dev/null)"; rc=$?
 why="$(hook_notice_verdict "$out" 'SESSION LINK GATE DID NOT RUN')"
 if [ "$rc" -eq 0 ] && [ -z "$why" ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: #1906 a broken gate must exit 0 with its notice as a systemMessage (exit $rc): $why"; fi

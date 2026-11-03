@@ -2504,6 +2504,8 @@ check_eq "#1676 which is not believed once its run has gone" "busy" "$( ( eval "
 #
 #     Each fixture is a real bare repository standing in for acme/widget (the checkout's origin is
 #     pointed at it through insteadOf), with main and feat/x each holding one edit of README.md.
+#     The table is in the shape README.md has had since #2108: an HTML table whose every cell is a
+#     markdown paragraph on lines of its own, so an edit changes only the lines it touches.
 # =================================================================================================
 RR="$(cd "$WORKDIR" && pwd -P)/rr"; mkdir -p "$RR"
 RR_TMP="$RR/tmp"
@@ -2516,22 +2518,74 @@ Shared prose that both sides may edit.
 
 ## Mods
 
-| Mod | What it does | Issue |
-| --- | --- | --- |
-| `alpha` | Does the first thing. | #10 |
-| `beta` | Does the second thing. | #20 |
-| `gamma` | Does the third thing. | #30 |
+<table>
+<thead>
+<tr><th>Mod</th><th>What it does</th><th>Issue</th></tr>
+</thead>
+<tbody>
+<tr><td>
+
+`alpha`
+
+</td><td>
+
+Does the first thing.
+
+</td><td>
+
+#10
+
+</td></tr>
+<tr><td>
+
+`beta`
+
+</td><td>
+
+Does the second thing.
+
+</td><td>
+
+#20
+
+</td></tr>
+<tr><td>
+
+`gamma`
+
+</td><td>
+
+Does the third thing.
+
+</td><td>
+
+#30
+
+</td></tr>
+</tbody>
+</table>
 
 ## After
 
 More prose.
 EOF
 }
-# rr_sub <file> <old line> <new line>: replace the line equal to <old line>.
+# rr_sub <file> <old line> <new line>: replace the line equal to <old line> (awk -v reads a \n in
+# <new line> as a line break, so one line can become several).
 rr_sub(){ awk -v o="$2" -v n="$3" '{ if ($0 == o) print n; else print }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"; }
-A0='| `alpha` | Does the first thing. | #10 |'
-B0='| `beta` | Does the second thing. | #20 |'
-C0='| `gamma` | Does the third thing. | #30 |'
+# rr_cells <key>: the row of mod <key> in the README on standard input, its cells' lines joined by
+# spaces and its cells by " | ". Read with awk, not the resolver's own parser (L721).
+rr_cells(){ awk -v k="\`$1\`" '
+  $0 == "<tr><td>" { inrow = 1; n = 0; cell = ""; next }
+  inrow && ($0 == "</td><td>" || $0 == "</td></tr>") {
+    c[++n] = cell; cell = ""
+    if ($0 == "</td></tr>") { if (c[1] == k) { s = c[1]; for (i = 2; i <= n; i++) s = s " | " c[i]; print s }; inrow = 0 }
+    next
+  }
+  inrow && $0 != "" { cell = (cell == "" ? $0 : cell " " $0) }'; }
+A0='Does the first thing.'
+B0='Does the second thing.'
+C0='Does the third thing.'
 # rr_fixture <name> <main's edit> <the branch's edit> [<an edit to the base>]: each edit is run in
 # the work tree.
 rr_fixture(){
@@ -2562,10 +2616,10 @@ rr_run(){ (cd "$RS" && TMPDIR="$RR_TMP" GIT_CONFIG_GLOBAL="$RR_CONF" CLAUDE_CODE
 rr_tip(){ git -C "$RB" rev-parse feat/x; }
 rr_left(){ find "$RR_TMP" -mindepth 1 -maxdepth 1 -name 'mwr-readme*' | wc -l | tr -d ' '; }
 rr_session_same(){ [ "$(git -C "$RS" rev-parse HEAD)" = "$RR_SESSION" ] && [ -z "$(git -C "$RS" status --porcelain)" ] && echo same || echo changed; }
-rr_row(){ git -C "$RB" show "feat/x:README.md" | grep -F -- "| \`$1\` |"; }
+rr_row(){ git -C "$RB" show "feat/x:README.md" | rr_cells "$1"; }
 # The edits each case is built from.
-MAIN_ROWS="rr_sub README.md '$A0' '| \`alpha\` | Does the first thing. Main sentence. | #10 |'; rr_sub README.md '$C0' '| \`gamma\` | Does the third thing, from main. | #30 |'"
-BRANCH_ROWS="rr_sub README.md '$A0' '| \`alpha\` | Branch sentence. Does the first thing. | #10 |'; rr_sub README.md '$B0' '| \`beta\` | Does the second thing, from the branch. | #20 |'"
+MAIN_ROWS="rr_sub README.md '$A0' 'Does the first thing. Main sentence.'; rr_sub README.md '$C0' 'Does the third thing, from main.'"
+BRANCH_ROWS="rr_sub README.md '$A0' 'Branch sentence. Does the first thing.'; rr_sub README.md '$B0' 'Does the second thing, from the branch.'"
 
 # Both sides edited one mod's prose, and each edited a row the other left alone: resolved, pushed,
 # and then waited on and merged as after any update.
@@ -2575,9 +2629,10 @@ check_eq "#1867 a conflict confined to mods table rows is resolved and the pull 
 check "#1867 saying it merged the base into the branch here" "merged main into it here" "$out"
 check_eq "#1867 the branch holds a new head" "moved" "$([ "$(rr_tip)" != "$RR_HEAD" ] && echo moved || echo same)"
 check_eq "#1867 a merge of the head it judged and the base, so nothing was rewritten" "$RR_HEAD $RR_MAIN" "$(git -C "$RB" log -1 --format=%P feat/x)"
-check_eq "#1867 both sentences are in the row both sides edited" '| `alpha` | Branch sentence. Does the first thing. Main sentence. | #10 |' "$(rr_row alpha)"
-check_eq "#1867 a row only the branch changed takes the branch's change" '| `beta` | Does the second thing, from the branch. | #20 |' "$(rr_row beta)"
-check_eq "#1867 a row only main changed takes main's change" '| `gamma` | Does the third thing, from main. | #30 |' "$(rr_row gamma)"
+check_eq "#1867 both sentences are in the row both sides edited" '`alpha` | Branch sentence. Does the first thing. Main sentence. | #10' "$(rr_row alpha)"
+check_eq "#1867 a row only the branch changed takes the branch's change" '`beta` | Does the second thing, from the branch. | #20' "$(rr_row beta)"
+check_eq "#1867 a row only main changed takes main's change" '`gamma` | Does the third thing, from main. | #30' "$(rr_row gamma)"
+check_eq "#2108 the merged row is written back in the table's shape" "$(rr_readme | sed -n '/^<table>$/,/^<\/table>$/p' | wc -l | tr -d ' ')" "$(git -C "$RB" show feat/x:README.md | sed -n '/^<table>$/,/^<\/table>$/p' | wc -l | tr -d ' ')"
 check_eq "#1867 no conflict marker reaches the branch" "0" "$(git -C "$RB" show feat/x:README.md | grep -c -E '^(<{7}|>{7}|={7})')"
 rr_msg="$(git -C "$RB" log -1 --format=%B feat/x)"
 check "#1867 the merge commit says what it resolved" "README.md" "$rr_msg"
@@ -2587,19 +2642,23 @@ check_eq "#1867 the throwaway clone is removed" "0" "$(rr_left)"
 check_eq "#1867 the session's checkout is untouched" "same" "$(rr_session_same)"
 
 # Each side added a different issue number to one row: the union.
-rr_fixture union "rr_sub README.md '$A0' '| \`alpha\` | Does the first thing. | #10, #11 |'" "rr_sub README.md '$A0' '| \`alpha\` | Does the first thing. | #10, #12 |'"
+rr_fixture union "rr_sub README.md '#10' '#10, #11'" "rr_sub README.md '#10' '#10, #12'"
 out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1867 two issue numbers added to one row resolve" "0" "$rc"
-check_eq "#1867 into the union of the issue list" '| `alpha` | Does the first thing. | #10, #11, #12 |' "$(rr_row alpha)"
+check_eq "#1867 into the union of the issue list" '`alpha` | Does the first thing. | #10, #11, #12' "$(rr_row alpha)"
 
-# The shape real rows have (L48): a pipe inside a code span in the description, and an Issue cell
-# that is not a tidy list. On 2026-10-29 the mod-kit row split into 7 pieces on every pipe and its
-# Issue cell began "#607 to #609, #605". Both sides add prose and an issue number: both are kept.
-RA0='| `alpha` | Reads `a | b` first. | #5 to #7, #3, #10 |'
-rr_fixture real "rr_sub README.md '$RA0' '| \`alpha\` | Reads \`a | b\` first. Main adds. | #5 to #7, #3, #10, #11 |'" "rr_sub README.md '$RA0' '| \`alpha\` | Branch adds. Reads \`a | b\` first. | #5 to #7, #3, #10, #12 |'" "rr_sub README.md '$A0' '$RA0'"
+# The shape real rows have (L48): a description on several lines with a pipe inside a code span,
+# and an Issue cell that is not a tidy list ("#607 to #609, #605" began mod-kit's on 2026-10-29).
+# Main edits the first line of the description and the branch the last, which git merges by
+# itself, and both add an issue number, which it cannot: the row resolves, and the description
+# keeps the lines both sides wrote rather than being wrapped afresh.
+RD1='Reads the first line,'; RD2='then `a | b` in the middle,'; RD3='and the last line.'
+RBASE="rr_sub README.md '$A0' '$RD1\n$RD2\n$RD3'; rr_sub README.md '#10' '#5 to #7, #3, #10'"
+rr_fixture real "rr_sub README.md '$RD1' 'Main reads the first line,'; rr_sub README.md '#5 to #7, #3, #10' '#5 to #7, #3, #10, #11'" "rr_sub README.md '$RD3' 'and the last line, says the branch.'; rr_sub README.md '#5 to #7, #3, #10' '#5 to #7, #3, #10, #12'" "$RBASE"
 out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1867 a row of the real shape resolves" "0" "$rc"
-check_eq "#1867 keeping the code span's pipe, both sentences and both issue numbers" '| `alpha` | Branch adds. Reads `a | b` first. Main adds. | #5 to #7, #3, #10, #11, #12 |' "$(rr_row alpha)"
+check_eq "#1867 keeping the code span's pipe, both edits and both issue numbers" '`alpha` | Main reads the first line, then `a | b` in the middle, and the last line, says the branch. | #5 to #7, #3, #10, #11, #12' "$(rr_row alpha)"
+check_eq "#2108 the description keeps its three lines" "1 1 1" "$(git -C "$RB" show feat/x:README.md | grep -c -x -F 'Main reads the first line,') $(git -C "$RB" show feat/x:README.md | grep -c -x -F "$RD2") $(git -C "$RB" show feat/x:README.md | grep -c -x -F 'and the last line, says the branch.')"
 
 # A conflict in another file as well: stops as before, naming both, with nothing pushed.
 rr_fixture otherfile "$MAIN_ROWS; printf 'main\ntwo\n' > other.txt" "$BRANCH_ROWS; printf 'branch\ntwo\n' > other.txt"
@@ -2621,16 +2680,17 @@ check "#1867 saying it is not only mods table rows" "not only rows of its mods t
 check_eq "#1867 nothing was pushed for it" "$RR_HEAD" "$(rr_tip)"
 
 # Both sides changed the same words differently: the word merge still conflicts, so it stops.
-rr_fixture words "rr_sub README.md '$A0' '| \`alpha\` | Does the main thing. | #10 |'" "rr_sub README.md '$A0' '| \`alpha\` | Does the branch thing. | #10 |'"
+rr_fixture words "rr_sub README.md '$A0' 'Does the main thing.'" "rr_sub README.md '$A0' 'Does the branch thing.'"
 out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1867 a word merge that still conflicts stops" "1" "$rc"
 check "#1867 naming the row" "alpha" "$out"
 check_eq "#1867 nothing was pushed for a word conflict" "$RR_HEAD" "$(rr_tip)"
 
 # A row whose cell count one side changed: the structure check refuses it (L631).
-rr_fixture cells "rr_sub README.md '$A0' '| \`alpha\` | Does the first thing. | extra | #10 |'" "rr_sub README.md '$A0' '| \`alpha\` | Does the very first thing. | #10 |'"
+rr_fixture cells "rr_sub README.md '#10' 'extra\n\n</td><td>\n\n#10'" "rr_sub README.md '#10' '#10, #11'"
 out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1867 a row whose cells changed in number stops" "1" "$rc"
+check "#1867 saying its number of cells changed" "number of cells changed" "$out"
 check_eq "#1867 nothing was pushed for it either" "$RR_HEAD" "$(rr_tip)"
 
 # The resolver crashing (exit 1, as any uncaught error does) is read as unread, never as handled.
@@ -2642,7 +2702,7 @@ check_eq "#1867 nothing was pushed after a crash" "$RR_HEAD" "$(rr_tip)"
 check_eq "#1867 and the throwaway clone is removed after a crash" "0" "$(rr_left)"
 
 # GitHub refused, but the merge has no conflict here: GitHub's reason is something else, for a person.
-rr_fixture clean "rr_sub README.md '$C0' '| \`gamma\` | Does the third thing, from main. | #30 |'" "rr_sub README.md '$A0' '| \`alpha\` | Branch sentence. Does the first thing. | #10 |'"
+rr_fixture clean "rr_sub README.md '$C0' 'Does the third thing, from main.'" "rr_sub README.md '$A0' 'Branch sentence. Does the first thing.'"
 out="$(rr_run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1867 a refusal with no conflict here stops" "1" "$rc"
 check "#1867 saying the merge had no conflict here" "no conflict" "$out"
@@ -2684,7 +2744,7 @@ rr_merge_in(){ # rr_merge_in <fixture>: the fixture's branch as first pushed, wi
 }
 d="$(rr_merge_in union)"; python3 "$RR_LIB" "$d" >/dev/null 2>&1; rc=$?
 check_eq "#1867 the resolver exits 0 when it resolved" "0" "$rc"
-check_eq "#1867 and writes the resolved row" '| `alpha` | Does the first thing. | #10, #11, #12 |' "$(grep -F '| `alpha` |' "$d/README.md")"
+check_eq "#1867 and writes the resolved row" '`alpha` | Does the first thing. | #10, #11, #12' "$(rr_cells alpha < "$d/README.md")"
 d="$(rr_merge_in words)"; before="$(cat "$d/README.md")"; python3 "$RR_LIB" "$d" >/dev/null 2>&1; rc=$?
 check_eq "#1867 the resolver exits 10 for a case it does not handle" "10" "$rc"
 check_eq "#1867 and writes nothing then" "$before" "$(cat "$d/README.md")"

@@ -293,10 +293,14 @@ def count_findings(text):
 QUOTE_LINE = re.compile(r"^\s*quote:\s?(.*)$", re.IGNORECASE)
 # A quote shorter than this, once normalised, is never looked for inside lines: a name or a short
 # statement (`e.amount;`, `return total;`) is inside too many of them to say which one it meant.
-# The quotes that matched no whole line in this Mac's reviews from 2026-10-20 to 2026-10-24 were
-# all 59 characters or longer, so the floor leaves every one of them placeable. The floor itself was
-# not measured; lib/ai-review-placement.py reports the lengths of the quotes placed by part of a line
-# and of the ones that matched nothing, to set it from (claude-config#1701).
+# Measured on the personal MacBook over the 959 reviews started 2026-10-25 to 2026-11-03
+# (lib/ai-review-placement.py --since 2026-10-25, claude-config#1701): of 672 findings, 8 were
+# placed by part of a line, and the 7 whose lengths were recorded were 60 to 99 characters (3) or
+# 100 or more (4); the 4 misses with a kept length were 94 to 194 characters, and none held a line
+# break. No recorded quote was under 60 characters, so 20 sits in an empty stretch of the
+# distribution (L172) and decided no recorded finding either way, nor would any floor up to 59.
+# Kept at 20 for the short names it exists to refuse. The sample is thin and is this Mac's alone:
+# the work MacBook keeps its own review records, not read here, so re-read the report on both.
 PART_MIN = 20
 # The mark an unplaced finding carries, written in place_findings and read back here only (L41).
 # Greedy, because the mark is the last thing place_findings writes on the line and a kept quote can
