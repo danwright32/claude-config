@@ -1,5 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { LOG_READ_BYTES } from '../hooks/prline.ts'
 import { APP, KIT, LOG, REASON, SLACK, bash, decide, decidedLine, edit, refusal, said, world, type R } from './world.ts'
 
 // The area check line a pull request description carries (#1510): every file decided on the branch
@@ -15,7 +16,7 @@ const seedAB = (w: ReturnType<typeof world>) => {
     decidedLine({ path: 'src/b.ts', decision: 'fold', issue: 41 }),
   )
 }
-const greps = (w: ReturnType<typeof world>) => w.ran.filter(l => l.startsWith('grep ')).length
+const greps = (w: ReturnType<typeof world>) => w.ran.filter(l => l.startsWith('/bin/sh -c') && l.includes('grep -a -F')).length
 const ranBash = (w: ReturnType<typeof world>, command: string) => w.passed.includes(`Bash ${command}`)
 const judgedApplied = (path: string, applied: string, extra: object = {}) =>
   JSON.stringify({ v: 2, kind: 'judged', at: '2026-10-22T15:00:00.000Z', session: 's0', agent: null, repo: 'dan/app', path, branch: '12-feature', mergeBase: 'mb123', decision: 'held', applied, ...extra })
@@ -42,6 +43,9 @@ test('a description carrying every line passes, bulleted or with the file in bac
   const r = await bash($ as never, w, cmd)
   expect(refusal(r)).toBe('')
   expect(ranBash(w, cmd)).toBe(true)
+  // The control: the same description without its fold line is refused, so the pass above was a check.
+  const short = refusal(await bash($ as never, w, `gh pr create --title T --body "Summary\n\n- Area check: \`src/a.ts\`: proceed, it only renames one local variable inside a function\n"`, {}, 'b2'))
+  expect(short).toContain(B)
 })
 
 test('only the files missing a line are listed, each with its line', KIT, async ($, on) => {
@@ -154,10 +158,13 @@ test("Dan's standing answers, applied without asking, count as decisions", KIT, 
 test('gh pr edit without a body flag passes untouched, the log never read', KIT, async ($, on) => {
   const w = world($, on)
   seedAB(w)
+  w.ctl.prView = () => ({ exitCode: 0, stdout: JSON.stringify({ headRefName: '12-feature' }), stderr: '' })
   const cmd = 'gh pr edit 5 --add-label tech-debt'
   expect(refusal(await bash($ as never, w, cmd))).toBe('')
   expect(ranBash(w, cmd)).toBe(true)
   expect(greps(w)).toBe(0)
+  // The control: the same pull request given a description without the lines is refused.
+  expect(refusal(await bash($ as never, w, 'gh pr edit 5 --add-label tech-debt --body x', {}, 'b2'))).toContain(A)
 })
 
 test("gh pr edit by number reads the pull request's branch from GitHub", KIT, async ($, on) => {
@@ -201,6 +208,11 @@ test('decisions in another repository, on another branch, or on a reused branch 
   const cmd = 'gh pr create --title T --body x'
   expect(refusal(await bash($ as never, w, cmd))).toBe('')
   expect(ranBash(w, cmd)).toBe(true)
+  // The control: one decision on this repository, branch and merge base is asked for, and only it.
+  w.ctl.seeded.push(decidedLine({ path: 'src/e.ts', decision: 'proceed', reason: 'this branch at this merge base' }))
+  const why = refusal(await bash($ as never, w, cmd, {}, 'b2'))
+  expect(why).toContain('Area check: src/e.ts: proceed, this branch at this merge base')
+  expect(why).not.toContain('src/a.ts')
 })
 
 test('a merge base that cannot be read matches by branch alone, and the refusal says so', KIT, async ($, on) => {
@@ -232,6 +244,10 @@ test('nothing but gh pr create, edit and merge is refused, and none of them read
     expect(ranBash(w, cmd)).toBe(true)
   }
   expect(greps(w)).toBe(0)
+  // The controls: gh pr create is refused in the same world, and gh pr merge --auto is a merge, checked.
+  expect(refusal(await bash($ as never, w, 'gh pr create --title T --body x', {}, 'c1'))).toContain(A)
+  w.ctl.prView = () => ({ exitCode: 0, stdout: JSON.stringify({ body: 'Just a summary', headRefName: '12-feature' }), stderr: '' })
+  expect(refusal(await bash($ as never, w, 'gh pr merge 5 --auto --squash', {}, 'c2'))).toContain(B)
 })
 
 test('a pull request command outside a checkout passes without reading the log', KIT, async ($, on) => {
@@ -240,6 +256,8 @@ test('a pull request command outside a checkout passes without reading the log',
   const cmd = 'cd /tmp && gh pr create --title T --body x'
   expect(refusal(await bash($ as never, w, cmd))).toBe('')
   expect(greps(w)).toBe(0)
+  // The control: the same command in the checkout is refused.
+  expect(refusal(await bash($ as never, w, 'gh pr create --title T --body x', {}, 'b2'))).toContain(A)
 })
 
 test('with no decisions on the branch the command passes without reading the body', KIT, async ($, on) => {
@@ -261,4 +279,27 @@ test("the check's own failure lets the command through with one dim line, kept i
   expect(w.logs.some(l => l.includes('pull request'))).toBe(true)
   expect(w.records('/Users/dan/.claude-area-check/errors.jsonl').length).toBe(1)
   expect(said(r)).not.toContain('Area check:')
+})
+
+test('the log is read from its end and bounded, so a long log keeps its newest decisions, and the line the bound cuts is not malformed', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.seeded.push(decidedLine({ path: 'src/old.ts', decision: 'proceed', reason: 'the oldest decision, past the bound' }))
+  const filler = decidedLine({ path: 'src/x.ts', decision: 'proceed', reason: 'a decision on another branch', branch: '13-other' })
+  for (let i = 0; i <= LOG_READ_BYTES / filler.length; i++) w.ctl.seeded.push(filler)
+  seedAB(w)
+  const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
+  expect(why).toContain(A)
+  expect(why).toContain(B)
+  expect(why).not.toContain('src/old.ts')
+  expect(why).not.toContain('could not be read')
+  expect(w.ran.some(l => l.includes('| tail -c "$4"') && l.endsWith(` ${LOG} ${LOG_READ_BYTES}`))).toBe(true)
+})
+
+test('a log read the engine cuts short is refused naming it, never read as the decisions it kept', KIT, async ($, on) => {
+  const w = world($, on)
+  seedAB(w)
+  w.ctl.logTruncated = true
+  const why = refusal(await bash($ as never, w, `gh pr create --title T --body "${A}\n${B}"`))
+  expect(why).toContain('~/.claude-area-check/log.jsonl')
+  expect(why).toContain('more than could be read whole')
 })
