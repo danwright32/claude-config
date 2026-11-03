@@ -496,3 +496,103 @@ test('a call whose tool fails after it was passed on reaches Claude as the tool 
   expect(settled).not.toHaveProperty('answered')
   expect((settled as { rejected: string }).rejected).toContain('no implementation')
 })
+
+// #2039, measured on Claude Code 2.1.317 with the probe in the issue. The hooks beneath a hook run
+// once per next call from the hook BODY, so a body that calls next twice runs them twice. A catch
+// is different: a next(e) there, after the body already called next, is answered with the first
+// call's outcome and the hooks beneath are not run again (also when called twice, or after a
+// timeout). The secret guard replays in its catch and depends on that, so these tests pin both
+// halves. The test world is the engine itself (claude-code/testing), not a model of it.
+// One stand-in mod answers each, switched by a word in the call's command or the row's uuid (an
+// inline plugin cannot reach this file's variables). Its catch runs the whole chain again for
+// 'rerun', the deliberate break each pin was seen failing against.
+const standIn: { name: string; tier: 'prepend'; register: Register } = {
+  name: 'stand-in',
+  tier: 'prepend',
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      if (String((e as { command?: string }).command).includes('twice')) {
+        await next(e).catch(() => undefined)
+        return next(e)
+      }
+      await next(e).catch(() => undefined)
+      throw new Error('after next')
+    }).catch(async ($, e, next) => {
+      if (String((e as { command?: string }).command).includes('rerun')) return $.tool.call({ ...e, command: 'again' } as never) as never
+      return next(e)
+    })
+    on('session.append', async ($, e, next) => {
+      const content = [{ type: 'text', text: 'SCRUBBED' }] as typeof e.message.content
+      await next({ ...e, message: { ...e.message, content } }).catch(() => undefined)
+      throw new Error('after next')
+    }).catch(async ($, e, next) => {
+      if (String(e.uuid).includes('rerun')) return $.session.append({ ...e, uuid: 'again' } as never) as never
+      return next(e)
+    })
+  },
+}
+const withStandIn = { plugins: [kit, standIn] }
+const callOnce = async ($: { tool: { call: (e: never) => Promise<unknown> } }, command: string) =>
+  $.tool.call({ tool: 'Bash', command, tool_use_id: 'p1' } as never)
+
+test('a hook body that calls next a second time runs the hooks beneath again, so nobody writes one (#2039)', withStandIn, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await callOnce($, 'echo twice')
+  expect(w.reached).toEqual(['Bash', 'Bash'])
+})
+
+test('a catch that replays next after the body called it does not run the hooks beneath again (#2039)', withStandIn, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const r = (await callOnce($, 'echo replay')) as { text?: string }
+  expect(w.reached).toEqual(['Bash'])
+  expect(r.text).toBe('ran')
+})
+
+test('the replay pin fails against a replay that runs the chain again (#2039)', withStandIn, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await callOnce($, 'echo rerun')
+  expect(w.reached.length).toBeGreaterThan(1)
+})
+
+// The same on session.append, with the row: the store beneath is asked once and the replay returns
+// the scrubbed row the body passed on, never the raw one.
+const appended = async (uuid: string, $: { session: { append: (e: never) => Promise<unknown> } }, on: On) => {
+  const seen: string[] = []
+  world(on)
+  on('session.append', ($, e, next) => {
+    seen.push(JSON.stringify(e.message.content))
+    return next(e)
+  })
+  await start($ as never)
+  const settled = await $.session
+    .append({ door: 'tool-result', origin: { kind: 'tool', tool: 'Bash' }, uuid, message: { type: 'user', role: 'user', content: [{ type: 'text', text: 'RAW' }] } } as never)
+    .then(r => ({ answered: r }), (err: unknown) => ({ rejected: String(err) }))
+  return { seen, settled }
+}
+test('a replay of a scrubbed row runs the store once and carries the scrubbed row (#2039)', withStandIn, async ($, on) => {
+  const { seen, settled } = await appended('u7', $ as never, on)
+  expect(seen).toEqual(['[{"type":"text","text":"SCRUBBED"}]'])
+  expect(JSON.stringify(settled)).not.toContain('RAW')
+})
+test('the scrubbed row pin fails against a replay that runs the chain again (#2039)', withStandIn, async ($, on) => {
+  const { seen } = await appended('rerun', $ as never, on)
+  expect(seen.length).toBeGreaterThan(1)
+})
+
+// The real guard: the store beneath is asked once for a row carrying a secret, and what it was
+// asked is the scrubbed text.
+test('the guard passes a scrubbed row to the store once (#2039)', withKit, async ($, on) => {
+  const seen: string[] = []
+  world(on)
+  on('session.append', ($, e, next) => {
+    seen.push(JSON.stringify(e.message.content))
+    return next(e)
+  })
+  await start($)
+  await appendRow($, { door: 'tool-result', origin: { kind: 'tool', tool: 'Bash' }, uuid: 'u9', message: { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 't9', content: `out: ${KNOWN}` }] } })
+  expect(seen).toHaveLength(1)
+  expect(seen[0]).not.toContain(KNOWN)
+})
