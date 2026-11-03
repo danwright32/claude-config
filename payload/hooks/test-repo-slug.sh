@@ -54,7 +54,7 @@ for line in sys.stdin:
 print("is a ValueError" if issubclass(mod.RepoSlugError, ValueError) else "not a ValueError")
 PY
 run_cases() { printf '%s\n' "$@" | python3 "$TMPROOT/cases.py" "$HELPER" 2>&1; }
-nth() { printf '%s\n' "$1" | sed -n "${2}p"; }
+nth() { sed -n "${2}p" <<< "$1"; }
 
 out="$(run_cases \
   '{"id":"R_kgDOTB20Bw","name":"slate","owner":{"id":"MDQ6","login":"acme"}}' \
