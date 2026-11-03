@@ -192,6 +192,24 @@ skips_says "#2140 reading include.path is not a change" 'git config --get includ
 skips_says "#2140 listing with includes is not a change" 'git config --list --includes' 10
 skips_says "#2140 another key with a value from a variable is not a change" 'git config user.name "$NAME"' 10
 
+# The install script advice comes from the reader's reasons (hooks-location-advice), never from the
+# command's text: a persistent change gets it, a one command route or a message naming it does not.
+advice_says() { # advice_says <label> <command> <expected exit>
+  local out rc
+  out="$(printf '%s' "$2" | python3 "$LIB" hooks-location-advice 2>&1)"; rc=$?
+  if [ "$rc" != "$3" ]; then check "$1" "exit $rc, wanted $3: $out"; return; fi
+  case "$3:$out" in
+    0:*"install script"*|10:) check "$1" ok ;;
+    *) check "$1" "exit $rc printed: $out" ;;
+  esac
+}
+advice_says "#2140 advice for a persistent hooks location change" 'git config --global core.hooksPath /dev/null' 0
+advice_says "#2140 advice for a persistent include change" 'git config include.path /tmp/h.inc' 0
+advice_says "#2140 advice for a persistent change inside bash -c" "bash -c 'git config --unset include.path'" 0
+advice_says "#2140 no advice for a one command -c include" 'git -c include.path=/tmp/h.inc commit -m x' 10
+advice_says "#2140 no advice for a message naming the issue and the script" 'git commit --no-verify -m "see claude-config#2135 and the install script"' 10
+advice_says "#2140 no advice for a read" 'git config --get include.path' 10
+
 # ---------------------------------------------------------------------------------------------
 echo "no-verify-gate.sh: an agent's skip of the git hooks is refused, with no approval that lets it through"
 
