@@ -2576,7 +2576,12 @@ const messageReading = (others: readonly ModFile[], name: string, text: string):
   spans.push(...handed)
   // Each wording once: the same words moved into a helper, or said from one more place, say
   // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
-  return { r, words: [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort(), reached: [...d.reached, ...handed.map(s => [r, s] as [ModRead, Span])] }
+  // What the key reading reads (#2161): every place reached, what each sending function is handed,
+  // and the parameters of each function inside one, from its start to its body, so a parameter
+  // taking a record apart (`({ unresolved: why }) =>`) is read too.
+  const sent = fnsAt.filter(s => sends.has(s.name as string))
+  const heads = r.fns.filter(f => sent.some(s => s.from <= f.from && f.to <= s.to)).map(f => [r, [f.from, f.body]] as [ModRead, Span])
+  return { r, words: [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort(), reached: [...d.reached, ...handed.map(s => [r, s] as [ModRead, Span]), ...heads] }
 }
 
 // #2161: a whole record handed to a message, or its values taken without naming its keys, which the
@@ -2584,6 +2589,35 @@ const messageReading = (others: readonly ModFile[], name: string, text: string):
 const WHOLE_RECORD = /\bJSON\s*\.\s*stringify\b|\bObject\s*\.\s*(?:values|entries)\b/
 // #2161: a member read (`d.unresolved`) that is the whole value of a field, the field's key captured.
 const COPIED_INTO = /[{,]\s*([A-Za-z_$][\w$]*)\s*:\s*[A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*\s*\??\.\s*$/
+
+// The bracket closing the one opened at `o` in `blank`, whose strings and comments are blanked.
+const shutAt = (blank: string, o: number): number | undefined => {
+  let depth = 0
+  for (let i = o; i < blank.length; i++) {
+    const c = blank[i]
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if ((c === ')' || c === ']' || c === '}') && --depth === 0) return i
+  }
+  return undefined
+}
+
+// #2161: whether position `i` of `g` sits in a pattern taking a record apart, which reads each key it
+// names however it is spelled (`const { unresolved: why } = made`, one nested in another, or a
+// parameter's `({ unresolved: why }) =>`), never in an object literal defining one. A record or list
+// that an `=` follows is one, and so is one in a parameter list (an arrow, a return type or a body
+// after its parentheses, as readMod's picker reading tells them). A function's body ends the walk.
+const inPattern = (g: ModRead, i: number): boolean => {
+  for (let o = g.inner(i); o !== undefined; o = g.inner(o)) {
+    if (g.fns.some(f => f.body === o)) return false
+    const c = shutAt(g.blank, o)
+    if (c === undefined) return true
+    const after = g.blank.slice(c + 1, c + 40).trimStart()
+    if (g.blank[o] === '(') return /^(?:=>|:|\{)/.test(after)
+    if (g.blank[o] !== '{' && g.blank[o] !== '[') return false
+    if (/^=(?![=>])/.test(after)) return true
+  }
+  return false
+}
 
 /**
  * Whether the words a change to the mod hook file `name` brings into its messages are only the
@@ -2596,7 +2630,8 @@ const COPIED_INTO = /[{,]\s*([A-Za-z_$][\w$]*)\s*:\s*[A-Za-z_$][\w$]*(?:\s*\??\.
  * a template's part of it), outside any call in that value, any message and anything drawn, whose key
  * a person never reads (not WORD_KEY, so `deny`, `reason` and `text` stay held as #1864 recorded);
  * and where nothing the message reading reaches, in any of the mod's files, reads such a key, but to
- * define it or copy it whole into another such key, which is then read the same way. drawsChange has
+ * define it or copy it whole into another such key, which is then read the same way (a pattern
+ * taking the record apart, `const { unresolved: why } = made` or a parameter's, reads it). drawsChange has
  * already found nothing new drawn. Not followed, so held: a record handed whole to a message
  * (JSON.stringify, Object.values or Object.entries anywhere reached). Not seen: a key read by a
  * computed name (`made[k]`).
@@ -2627,7 +2662,7 @@ const reasonsOnly = (was: MessageReading, now: MessageReading): boolean => {
         const i = a + (m.index as number)
         const lead = g.blank.slice(Math.max(0, i - 200), i)
         const rest = g.blank.slice(i + k.length, i + k.length + 200)
-        if (/[{,]\s*$/.test(lead) && /^\s*:/.test(rest)) continue
+        if (/[{,]\s*$/.test(lead) && /^\s*:/.test(rest) && !inPattern(g, i)) continue
         const into = COPIED_INTO.exec(lead)
         if (!into || !/^\s*[,}]/.test(rest) || WORD_KEY.test(into[1] as string)) return false
         if (!keys.has(into[1] as string)) {

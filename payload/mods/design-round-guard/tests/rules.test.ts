@@ -2236,3 +2236,11 @@ test('#2161: a reason key spelled with a dollar sign is read like any other, so 
   // A toast reads it: held, never missed because the key was read as a pattern.
   expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(dollared, 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(printed(line).un$resolved)'))).toBe('worded')
 })
+
+test('#2161: a pattern taking the reason apart under a new name reads its key, so a toast saying it is still held', () => {
+  // Declared: `const { unresolved: why } = ...`, alone and nested in another pattern.
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line) => {', '  const { unresolved: why } = printed(line)', '  $.ui.toast(why)', '}'))).toBe('worded')
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line) => {', '  const { got: { unresolved: why } } = { got: printed(line) }', '  $.ui.toast(why)', '}'))).toBe('worded')
+  // A parameter's: `({ unresolved: why }) =>`, its type named so only the pattern reads the key.
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'const say = ($: EngineInterface, { unresolved: why }: Printed) => $.ui.toast(why ?? \'\')', 'export const tell = ($: EngineInterface, line: Line) => say($, printed(line))'))).toBe('worded')
+})
