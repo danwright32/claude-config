@@ -186,7 +186,7 @@ def names():
         raise CannotTell("the work repository list (%s in %s) lists no repositories, and an empty list "
                          "is never read as clean" % (DIGEST_LIST, DIGEST_REPO))
     pairs = [(r["owner"].strip().lower(), r["name"].strip().lower()) for r in repos]
-    state, where, why, reg = wn.registry_entries()
+    state, where, why, reg = wn.registry_entries(timeout=max(1, int(_left())))
     if state == "unreadable":
         raise CannotTell("this Mac's dev update registry could not be read (%s), so its names could not "
                          "be checked" % why)
@@ -262,7 +262,10 @@ def _read(word, cwd):
 
 
 def api_writes(command, cwd):
-    """Each gh api write to an issues, pulls or comments endpoint, as (slug or None, bodies)."""
+    """Each gh api write to an issues, pulls or comments endpoint, as (slug or None, files it sends).
+
+    The files are read by evaluate, inside the try that turns CannotTell into a reason, so a file
+    that cannot be read refuses with that reason rather than crashing the gate."""
     out = []
     pipelines, _ = scan._stages(command)
     for stages in pipelines:
@@ -287,8 +290,7 @@ def api_writes(command, cwd):
             slug = None if PLACEHOLDER.match(o) or PLACEHOLDER.match(r) else "%s/%s" % (o, r)
             files = [v.split("=@", 1)[1] for v in scan.flag_values(args, "--field", "-F") if "=@" in v]
             files += scan.flag_values(args, "--input")
-            bodies = [("the file %s" % p, _read(p, cwd)) for p in files if p != "-"]
-            out.append((slug, bodies))
+            out.append((slug, [p for p in files if p != "-"]))
     return out
 
 
@@ -321,8 +323,9 @@ def evaluate(command, cwd):
             why = "%s: %s." % (what, e)
         if why and why not in reasons:
             reasons.append(why)
-    for slug, bodies in apis:
+    for slug, files in apis:
         try:
+            bodies = [("the file %s" % p, _read(p, cwd)) for p in files]
             why = judge("gh api", slug, cwd, None, command, bodies)
         except CannotTell as e:
             why = "gh api: %s." % e

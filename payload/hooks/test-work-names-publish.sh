@@ -158,7 +158,8 @@ run 'gh pr view 5 --repo danwright-test/public-notes --json body'
 check "a gh command that posts nothing passes: $out" passed
 check "and asks GitHub nothing" [ ! -s "$CALLS" ]
 run 'ls -la /tmp && echo zephyr'
-check "a command that is not gh passes silently" [ "$rc" -eq 0 ] && [ -z "$out" ]
+check "a command that is not gh passes: $out" [ "$rc" -eq 0 ]
+check "and silently: $out" [ -z "$out" ]
 run 'gh issue create --repo Acme-Corp/site --title "zephyr" --body "acme-widgets" --milestone M'
 check "a public repository of a work owner may name its own work: $out" passed
 run 'gh pr create --repo danwright-test/public-notes --title "Tidy the reader" --body "nothing to see"'
@@ -199,6 +200,13 @@ check "an owner from this Mac's dev update registry: $out" refused
 printf '{not json' > "$HOMEDIR/.claude/skills/pennie-dev-update/repos.local.json"
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
 check "an unreadable registry is refused, never read as empty: $out" refused
+printf 'setTimeout(function () {}, 30000);\n' > "$WORK/hung-registry.js"
+started=$SECONDS
+WORK_NAMES_REGISTRY_READER="$WORK/hung-registry.js" WN_PUBLISH_BUDGET_SECONDS=3 \
+  run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
+took=$((SECONDS - started))
+check "a registry reader that hangs is refused with the gate's own reason: $out" [ "$decision" = deny ]
+check "within the gate's budget, not the reader's 60 seconds or the hook's 45 (took ${took}s)" [ "$took" -lt 15 ]
 rm -f "$HOMEDIR/.claude/skills/pennie-dev-update/repos.local.json"
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
 check "(control) no registry at all is allowed, and the list and the hashes still judge: $out" passed
@@ -219,6 +227,11 @@ check "a gh api write sending a file naming one: $out" refused
 check "and says which file: $out" has "$out" "body.md"
 run 'gh api repos/danwright-test/public-notes/issues/5/comments --input nowhere.json'
 check "a gh api write sending a file that cannot be read is refused: $out" refused
+check "with the gate's own reason, not a crash the wrapper caught: $out" [ "$decision" = deny ]
+check "and names the file it could not read: $out" has "$out" "nowhere.json"
+run 'gh api repos/danwright-test/public-notes/issues/5/comments -F body=@nowhere.md'
+check "a gh api field read from a file that cannot be read is refused with the gate's own reason: $out" [ "$decision" = deny ]
+check "and names that file: $out" has "$out" "nowhere.md"
 run 'gh api repos/danwright-test/private-notes/issues/5/comments -f body="zephyr"'
 check "(control) a gh api write to a private repository passes: $out" passed
 run 'gh api repos/danwright-test/public-notes/issues/5/comments'

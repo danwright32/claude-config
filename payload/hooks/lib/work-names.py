@@ -79,21 +79,22 @@ def extra_hashes():
     return {h.strip().lower() for h in raw.split(",") if h.strip()}
 
 
-def registry_entries():
+def registry_entries(timeout=60):
     """-> (state, file, why, ["owner/name", ...]) from this Mac's dev update registry, never exiting.
 
     state is ok, missing or unreadable, as dev-update-registry.js says it; unreadable also covers a
     reader that could not be run or did not answer in JSON, why saying which. The scan below and the
-    publish gate (work_names_publish_gate.py, claude-config#2105) both read the registry through it.
+    publish gate (work_names_publish_gate.py, claude-config#2105) both read the registry through it;
+    the gate passes what is left of its own time budget as timeout.
     """
     reader = os.environ.get("WORK_NAMES_REGISTRY_READER") or os.path.join(HERE, "dev-update-registry.js")
     try:
-        p = subprocess.run(["node", reader, "repos"], capture_output=True, text=True, timeout=60, errors="replace")
+        p = subprocess.run(["node", reader, "repos"], capture_output=True, text=True, timeout=timeout, errors="replace")
     except FileNotFoundError:
         return ("unreadable", None, "node is not on PATH, so this Mac's dev update registry could not be "
                 "read", [])
     except subprocess.TimeoutExpired:
-        return ("unreadable", None, "reading the dev update registry took over 60 seconds", [])
+        return ("unreadable", None, "reading the dev update registry took over %d seconds" % timeout, [])
     try:
         got = json.loads(p.stdout)
         state = got.get("state")
