@@ -43,7 +43,7 @@ const TEST_LABEL = /^(staging|dev|test|qa|sandbox|preview)(\d+|-[a-z0-9-]+)?$/
 export const listedHosts = (claudeMd: string): string[] => {
   const line = /^Sleep mode test hosts:(.*)$/m.exec(claudeMd)
   if (!line) return []
-  return line[1]
+  return (line[1] ?? '')
     .split(/[\s,]+/)
     .map(e => e.replace(/`/g, '').replace(/:\d+$/, '').toLowerCase())
     .filter(e => {
@@ -59,7 +59,7 @@ export const listedHosts = (claudeMd: string): string[] => {
 export const navigateHost = (url: string): string | null => {
   const u = url.trim()
   const scheme = /^([a-z][a-z0-9+.-]*):(?!\d)/i.exec(u)
-  if (scheme && !/^https?$/i.test(scheme[1])) return null
+  if (scheme && !/^https?$/i.test(scheme[1] ?? '')) return null
   try {
     return new URL(scheme ? u : `https://${u}`).hostname.toLowerCase() || null
   } catch {
@@ -174,7 +174,7 @@ export const tabsAfter = (tabs: BrowserTabs, tool: string, input: Record<string,
   const first = textBlocks[0] ?? ''
   if (name === 'tabs_create_mcp') {
     const made = CREATED.exec(first)
-    if (made) next[made[1]] = { host: null }
+    if (made?.[1]) next[made[1]] = { host: null }
   }
   if (name === 'tabs_close_mcp') {
     const tab = tabOf(input)
@@ -196,12 +196,12 @@ export const tabsAfter = (tabs: BrowserTabs, tool: string, input: Record<string,
   if (name === 'navigate') {
     const tab = tabOf(input)
     const went = NAVIGATED.exec(first)
-    if (tab && next[tab] && went) next[tab] = { host: navigateHost(went[1]) }
+    if (tab && next[tab] && went?.[1]) next[tab] = { host: navigateHost(went[1]) }
   }
   const all = textBlocks.join('\n')
   const at = all.lastIndexOf('Tab Context:')
   if (at >= 0) {
-    for (const m of all.slice(at).matchAll(TAB_LINE)) if (next[m[1]]) next[m[1]] = { host: navigateHost(m[2]) }
+    for (const [, id, url] of all.slice(at).matchAll(TAB_LINE)) if (id && url !== undefined && next[id]) next[id] = { host: navigateHost(url) }
   }
   return next
 }
