@@ -71,7 +71,7 @@ const GH_TOKEN = 'gho_' + 'Q'.repeat(36)
 // call that gets past the mod is answered here, and recorded, so a test can tell a refusal (the
 // call never arrived) from a pass.
 // files: more files on disk, by path, beside the project .env.
-const world = (on: On, files: Record<string, string> = {}) => {
+const world = (on: On, files: Record<string, string> = {}, failing?: string) => {
   const logs: string[] = []
   const reached: string[] = []
   const toasts: string[] = []
@@ -102,6 +102,7 @@ const world = (on: On, files: Record<string, string> = {}) => {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('tool.call', ($, e) => {
     reached.push(e.tool)
+    if (failing !== undefined && (e as { command?: string }).command === failing) throw new Error('the tool beneath failed')
     return { result: 'ran', text: 'ran' } as never
   })
   return { reached, toasts, cards, logs }
@@ -477,4 +478,20 @@ test('a tool result the guard cannot scrub is withheld rather than kept as it wa
   expect(w.stored()).not.toContain(KNOWN)
   expect(w.stored()).toContain('withheld: the secret guard could not check it for secrets')
   expect(w.stored()).toContain('t4')
+})
+
+// #2039: once next was called the catch replays what the call settled to, and a replay can reject
+// too (here the tool beneath throws, and the test world has nothing below it, so the replay rejects
+// with the engine's own "no implementation"). The catch ends in an answer even then, never a
+// rejection out of it: the replay runs inside neverThrows.
+test('a call whose replay throws after it was passed on ends in an answer, never a rejection (#2039)', withKit, async ($, on) => {
+  const w = world(on, {}, 'echo boom')
+  await start($)
+  const settled = await $.tool.call({ tool: 'Bash', command: 'echo boom', tool_use_id: 'r1' } as never).then(
+    r => ({ answered: r as { deny?: string; text?: string } }),
+    (err: unknown) => ({ rejected: String(err) }),
+  )
+  expect(w.reached).toEqual(['Bash'])
+  expect(settled).not.toHaveProperty('rejected')
+  expect((settled as { answered: { deny?: string } }).answered.deny).toStartWith('Blocked: the secret guard could not check this for secrets')
 })

@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
+import { neverThrows } from './mod-kit/hold.ts'
 import {
   DEADLINE_MS,
   GROWTH_DAYS,
@@ -71,6 +72,10 @@ class Late extends Error {}
 type Deadline = { at: number }
 
 const msg = (err: unknown) => errorText(err, MOD)
+// The decide tool's refusal when it failed, naming why; HELD is the same refusal built once here, for
+// when even naming the failure throws, so the catch never throws (#2039).
+const undecided = (why: string) => ({ deny: `The area check could not take the decision (${why}); the edit stays held. Try again.` })
+const HELD = undecided('unknown failure')
 const firstLine = (s: string) => s.trim().split('\n')[0] ?? ''
 
 const homeOf = async ($: EngineInterface) => (await $.env.get('HOME')) ?? ''
@@ -702,7 +707,7 @@ export const register: Register = on => {
     }
     await release($, h, { decision: 'proceed', reason: input.reason as string })
     return { result: `Recorded: this work goes ahead on ${h.rel}. ${again(h)}` }
-  }).catch(($, e, next) => ({ deny: `The area check could not take the decision (${msg(next.error)}); the edit stays held. Try again.` }))
+  }).catch(($, e, next) => neverThrows(() => undecided(msg(next.error)), () => HELD, HELD))
 
   // Dan's restructure question, asked in Claude Code's own dialog: the hook words the question and
   // its answers, and reads his choice from the dialog's own result, the one place it comes from him.
