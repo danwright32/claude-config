@@ -2574,13 +2574,13 @@ const messageReading = (others: readonly ModFile[], name: string, text: string):
   const handed: Span[] = []
   for (const x of sends) for (const p of r.calls.get(x) ?? []) handed.push(...(r.args(p) ?? []))
   spans.push(...handed)
-  // Each wording once: the same words moved into a helper, or said from one more place, say
-  // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
   // What the key reading reads (#2161): every place reached, what each sending function is handed,
   // and the parameters of each function inside one, from its start to its body, so a parameter
   // taking a record apart (`({ unresolved: why }) =>`) is read too.
   const sent = fnsAt.filter(s => sends.has(s.name as string))
   const heads = r.fns.filter(f => sent.some(s => s.from <= f.from && f.to <= s.to)).map(f => [r, [f.from, f.body]] as [ModRead, Span])
+  // Each wording once: the same words moved into a helper, or said from one more place, say
+  // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
   return { r, words: [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort(), reached: [...d.reached, ...handed.map(s => [r, s] as [ModRead, Span]), ...heads] }
 }
 
