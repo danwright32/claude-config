@@ -4,9 +4,22 @@ import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { ANSWER_MS, DEADLINE_MS, DECIDE_TOOL, ISSUE_LIMIT, ISSUES_TTL_MS, SWEEP_MS, UNREAD_TTL_MS, questionKey } from '../hooks/rules.ts'
-// mod-kit's own reader of what a shell command writes, where it lives, never a copy (#2142): a
-// change to it that breaks the area check's reading of its answer turns these tests red.
-import { commandWrites } from '../../mod-kit/hooks/writes.ts'
+
+// What mod-kit's reader of a shell command ($.modkit.writes) answered for each command these tests
+// send, measured from the real reader with cwd /w/app (#2142). The mod test runner refuses an import
+// from outside this mod's folder, so the real reader runs against rules.ts in the repository suite
+// tests/test-area-check-shell-reader.sh instead; a command not measured here fails the test.
+const WRITES: Record<string, unknown> = {
+  "sed -i '' 's/a/b/' src/lib/slack.ts": { files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], changes: [], unnamed: [] },
+  'echo hi > "$OUT/big.ts"': { files: [{ word: '$OUT/big.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/big.ts' }] },
+  'echo hi > "$OUT/other.ts"': { files: [{ word: '$OUT/other.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/other.ts' }] },
+  'npm test': { files: [], changes: [], unnamed: [] },
+  'grep -n x src/big.ts > /tmp/out.txt': { files: [{ word: '/tmp/out.txt', path: '/tmp/out.txt' }], changes: [], unnamed: [], stdout: [{ word: '/tmp/out.txt', path: '/tmp/out.txt' }] },
+  'echo x > src/new.ts': { files: [{ word: 'src/new.ts', path: '/w/app/src/new.ts' }], changes: [], unnamed: [], stdout: [{ word: 'src/new.ts', path: '/w/app/src/new.ts' }] },
+  'echo x > "$OUT/log.txt"': { files: [{ word: '$OUT/log.txt' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/log.txt' }] },
+  'rm src/big.ts': { files: [], changes: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'remove' }], unnamed: [] },
+  "perl -pi -e 's/a/b/' /tmp/x/*.ts": { files: [{ word: '/tmp/x/*.ts', folder: '/tmp/x', edits: true }], changes: [], unnamed: [] },
+}
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
 // test file is held when an open structural issue names the file or the file is growing fast (#1509),
@@ -195,7 +208,9 @@ const world = ($: unknown, on: On, init: Init = {}) => {
       if (argv[1] === 'goal') return answer(ok(JSON.stringify(ctl.goal ? { state: 'set', condition: ctl.goal } : { state: 'none' })))
       if (argv[1] === 'writes') {
         if (ctl.writesThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the command could not be read' })
-        return answer(ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home))))
+        const measured = input.cwd === APP ? WRITES[input.command] : undefined
+        if (measured === undefined) throw new Error(`no measured answer of the reader for ${JSON.stringify(input.command)} in ${input.cwd}`)
+        return answer(ok(JSON.stringify(measured)))
       }
     }
     if (argv[0] === '__scope') {
@@ -508,15 +523,15 @@ test('a quiet file is claimed: a second edit to it in the session is not judged 
   expect(w.passed.length).toBe(2)
 })
 
-test('a new file, a docs file, a file in no checkout and a shell write are not judged (decisions 2 and 3)', KIT, async ($, on) => {
+// A shell write was not judged here until #2142, which holds it: see the shell tests at the end.
+test('a new file, a docs file and a file in no checkout are not judged (decisions 2 and 3)', KIT, async ($, on) => {
   const w = world($, on)
   await $.tool.call({ tool: 'Write', tool_use_id: 'c1', file_path: `${APP}/src/new.ts`, content: 'x' } as never)
   await edit($ as never, w, `${APP}/docs/x.md`)
   await edit($ as never, w, '/elsewhere/a.ts')
-  await $.tool.call({ tool: 'Bash', tool_use_id: 'c2', command: `echo x >> ${APP}/src/lib/slack.ts` } as never)
   await w.clock.settle()
   expect(w.judged()).toEqual([])
-  expect(w.passed.length).toBe(4)
+  expect(w.passed.length).toBe(3)
 })
 
 test("an issue the session's branch names is left out, and was its only match, so the file is quiet (decision 5)", KIT, async ($, on) => {
@@ -697,8 +712,8 @@ test('the decide tool is offered at every session start, a headless one included
   expect(w.tools).toEqual(['decide'])
 })
 
-// #2142: a shell command writing a file is held as its first edit would be, the files it writes read
-// by mod-kit's real reader (imported above), so python, sed or a heredoc is no way round the check.
+// #2142: a shell command writing a file is held as its first edit would be, the files it writes as
+// mod-kit's reader answered them (WRITES, measured), so python, sed or a heredoc is no way round the check.
 const bash = async ($: T$, w: ReturnType<typeof world>, command: string, extra: object = {}, id = 'b1') => {
   const r = await $.tool.call({ tool: 'Bash', tool_use_id: id, command, ...extra } as never)
   await w.clock.settle()

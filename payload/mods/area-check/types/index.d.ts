@@ -24,6 +24,8 @@ export type AreaCheckHeld = {
   shown: { n: number; how: 'path' | 'suffix' | 'basename' | 'folder'; structural: string[]; priority: string | null }[]
   issues: { state: 'read' | 'truncated' } | { state: 'unread'; why: string }
   growth: { net: number; size: number | null; fixes: number; rank: number | null; crosses: boolean } | { unread: string }
+  /** A Bash command whose file cannot be named before it runs (#2142): `rel` holds its word, `key` the command's claim. */
+  unread?: { why: string; key: string }
 }[]
 
 declare module 'claude-code' {

@@ -4,6 +4,7 @@
 // The facts decide a verdict, `would_hold` or `quiet` (Judged.decision). Phase 1 only logged it; #1509
 // set the bar below from that week's log on both Macs, and a `would_hold` verdict is now a HELD edit
 // (the Held record below) that is refused until the session decides.
+import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { isTestPath } from './mod-kit/testfile.ts'
 
 /** Bumped whenever a rule here changes what a file's facts are, so a cached ranking is never reused across it (L573). */
@@ -64,7 +65,7 @@ export const STRUCTURAL_LABELS: readonly string[] = ['tech-debt', 'refactor', 't
  */
 export const SOURCE_EXTENSIONS: readonly string[] = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'sh', 'swift', 'rb', 'go', 'rs', 'java', 'kt', 'kts', 'vue', 'svelte', 'php', 'cs', 'cpp', 'c', 'h', 'm', 'css', 'scss']
 
-/** The edit tools, each by the input key carrying its file (decision 2); a shell write is never judged. */
+/** The edit tools, each by the input key carrying its file (decision 2); a shell write is read by shellTargets below (#2142). */
 const PATH_KEY: Readonly<Record<string, string>> = { Edit: 'file_path', Write: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path' }
 
 /** The absolute path an edit tool's call writes, or null for any other tool or a path that is not absolute. */
@@ -72,6 +73,81 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
   const key = PATH_KEY[tool]
   const p = key ? input[key] : undefined
   return typeof p === 'string' && p.startsWith('/') ? p : null
+}
+
+/**
+ * A file a Bash command writes (#2142), read from mod-kit's one reader of a command ($.modkit.writes):
+ * a path, judged as that file's first edit would be (`tree` where git may reach past it), or a write
+ * whose file cannot be named, with why, which is held unless nothing in the repository could hold it.
+ * `folder` is where such a write lands when the reader knows it, so its checkout is the one judged.
+ */
+export type ShellTarget = { word: string; path: string; tree?: true } | { word: string; unread: string; folder?: string }
+
+const literalExt = (word: string): string | undefined => /\.([A-Za-z0-9]+)$/.exec(word.slice(word.lastIndexOf('/') + 1))?.[1]?.toLowerCase()
+// A name whose extension is written out and is no source one is never judged, whatever its folder is.
+const mayBeSource = (word: string) => {
+  const ext = literalExt(word)
+  return ext === undefined || SOURCE_EXTENSIONS.includes(ext)
+}
+
+/**
+ * Every file a command writes that could add lines to a source or test file: a redirect, a copy or an
+ * in place edit (`files`), an emptying (`changes` truncate), git writing a path (`byGit` write), a
+ * script's arguments (`runs`), and a program's own targets (`unnamed`). A removal, a stamp, a new
+ * folder and a mode change add no lines, so they are not judged; nor is a folder handed to a script.
+ */
+export const shellTargets = (w: ModKitWrites): ShellTarget[] => {
+  const out: ShellTarget[] = []
+  const seen = new Set<string>()
+  const add = (t: ShellTarget) => {
+    const k = 'path' in t ? `p\n${t.path}` : `u\n${t.word}`
+    if (seen.has(k)) return
+    seen.add(k)
+    out.push(t)
+  }
+  const named = (word: string, path: string | undefined, folder: string | undefined, why: string, tree?: true) => {
+    if (path) return add({ word, path, ...(tree ? { tree } : {}) })
+    if (!mayBeSource(word)) return
+    add(folder ? { word, unread: `${word} is a pattern, matched only as it runs`, folder } : { word, unread: why })
+  }
+  for (const f of w.files) named(f.word, f.path, f.folder, `${f.word} is built as the command runs`, f.tree)
+  for (const c of w.changes) if (c.does === 'truncate') named(c.word, c.path, c.folder, `${c.word} is built as the command runs`)
+  for (const g of w.byGit ?? []) {
+    if (g.does !== 'write') continue
+    // A path with no extension git may fill is a folder: everything under it can be put back.
+    if (g.path && g.tree && literalExt(g.path) === undefined) add({ word: g.word, unread: `git writes ${g.word}, which reaches a whole folder` })
+    else named(g.word, g.path, undefined, `git matches ${g.word} across folders`, g.tree)
+  }
+  for (const r of w.runs ?? [])
+    for (const a of r.args) {
+      if (a.path) add({ word: a.word, path: a.path })
+      else if (a.folder) {
+        if (mayBeSource(a.word)) add({ word: a.word, unread: `${a.word} is a pattern handed to ${r.what}`, folder: a.folder })
+      } else if (mayBeSource(a.word) && !a.unexpanded) add({ word: a.word, unread: `${r.what} is handed ${a.word}, built as the command runs` })
+    }
+  for (const u of w.unnamed) {
+    const targets = (u.targets ?? []).filter(t => t.startsWith('/'))
+    if (targets.length && targets.length === (u.targets ?? []).length) for (const t of targets) add({ word: t, path: t })
+    else add({ word: u.words.join(' '), unread: `${u.what} writes files its words do not name`, ...(u.folder ? { folder: u.folder } : {}) })
+  }
+  return out
+}
+
+/**
+ * Whether anything in a repository could hold a file (#2142): a fast growing file, or an open
+ * structural issue at a held priority naming a file that the session does not work on. A write whose
+ * file cannot be named passes only where this is false, since no file there could be held.
+ */
+export const couldHold = (f: { issues: readonly CachedIssue[]; own: readonly number[]; top: readonly string[]; bar?: Bar }): boolean => {
+  const bar = f.bar ?? DEFAULT_BAR
+  return f.top.length > 0 || f.issues.some(i => i.structural.length > 0 && i.refs.length > 0 && !f.own.includes(i.n) && bar.holdPriorities.includes(i.priority ?? 'p2'))
+}
+
+/** A command's own key, so its unchanged resend after a decision runs and any other command is judged. */
+export const shellKey = (command: string): string => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < command.length; i++) h = Math.imul(h ^ command.charCodeAt(i), 0x01000193) >>> 0
+  return `shell:${h.toString(16).padStart(8, '0')}`
 }
 
 const GENERATED_PARTS = new Set(['node_modules', 'dist', 'build', 'out', '.next', 'vendor', '__generated__', 'generated', 'Generated'])
@@ -384,7 +460,12 @@ export type Held = {
   shown: Match[]
   issues: { state: 'read' | 'truncated' } | { state: 'unread'; why: string }
   growth: (FileGrowth & { crosses: boolean }) | { unread: string }
+  /** A Bash command whose file cannot be named (#2142): `rel` is its word, `key` the command's claim. */
+  unread?: { why: string; key: string }
 }
+
+/** The held call as a sentence names it: a Bash command writing the file, or the edit tool to it. */
+export const heldCall = (h: Held): string => (h.tool === 'Bash' ? `Bash command, which writes ${h.rel}` : `${h.tool} to ${h.rel}`)
 
 /**
  * The restructure question about one file in one repository, in $.store so every session reads it
@@ -419,6 +500,7 @@ export const decideProblem = (input: { decision?: unknown; reason?: unknown; iss
   const d = input.decision
   if (typeof d !== 'string' || !(DECISIONS as readonly string[]).includes(d)) return `"${String(d)}" is not a decision: give "decision" as proceed, fold or restructure.`
   if (d === 'proceed') return reasonProblem(input.reason)
+  if (h.unread) return 'This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.'
   if (d === 'fold') {
     if (!h.shown.length) return `${h.rel} was held for its growth alone, so no issue was shown to fold in: proceed with a reason, or restructure.`
     if (!h.shown.some(m => m.n === input.issue)) return `"${String(input.issue)}" is not an issue the hold showed: give "issue" as one of ${issueList(h)}, as a number.`
@@ -437,6 +519,12 @@ const growthLine = (h: Held): string | undefined => {
 
 /** The grey card's words (mod-kit draws it): the file, each issue shown with its priority, growth as rough. */
 export const holdCard = (h: Held): { reason: string; safeWay: string; note?: string } => {
+  if (h.unread) {
+    return {
+      reason: `This command writes a file whose name cannot be read before it runs (${h.unread.why}), and ${h.repo} has files the area check would hold.`,
+      safeWay: 'Claude proceeds with a reason, or makes the change with Edit or Write, which the area check can judge.',
+    }
+  }
   const parts: string[] = []
   if (h.shown.length) parts.push(`${h.rel} has open structural issues: ${h.shown.map(m => `#${m.n} (${priorityOf(m)}, ${m.structural.join(', ')})`).join('; ')}.`)
   else if (h.why.includes('growth')) parts.push(`${h.rel} is among the fastest growing large files in ${h.repo}.`)
@@ -451,12 +539,14 @@ export const holdRefusal = (h: Held): string => {
   const facts = [c.reason, c.note].filter(Boolean).join(' ')
   const call = (rest: string) => `${DECIDE_TOOL} with {"call": "${h.id}", ${rest}}`
   const ways = [`${call('"decision": "proceed", "reason": "<why this change does not add to the problem>"')} when it does not`]
+  if (h.unread) return `The area check held this ${heldCall(h)}. ${facts} Decide: call ${ways[0]}, or make the change with Edit or Write instead, which the area check can judge. Then send the Bash command again, unchanged.`
   if (h.shown.length) ways.push(`${call('"decision": "fold", "issue": <one of ' + issueList(h) + '>')} to fold that structural fix into this work`)
   ways.push(
     h.agent === null
       ? `${call('"decision": "restructure"')} to ask Dan whether to restructure first`
       : `${call('"decision": "restructure"')} when it should be restructured first, which hands the question to the main session to ask Dan; then stop and report that to it`,
   )
+  if (h.tool === 'Bash') return `The area check held this ${heldCall(h)}. ${facts} Decide: call ${ways.join('; or ')}. Then send the Bash command again, unchanged.`
   return `The area check held this ${h.tool} to ${h.rel}. ${facts} Before editing it, decide: call ${ways.join('; or ')}. Then send the ${h.tool} again, unchanged.`
 }
 
