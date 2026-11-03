@@ -2686,34 +2686,128 @@ test('no build and away together both show, scope first', withDeps, async ($, on
   expect(lastModes(w)).toEqual(['NO BUILD', 'AWAY'])
 })
 
-test('a switch reaches every other open session on this Mac, and says which could not be told', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { open: [{ sessionId: 's2' }, { sessionId: 's3' }], sends: [true, { refused: 'the session is not running' }, { refused: 'the session is not running' }] })
+// #2099: in auto mode the message telling another session got no verdict in every real telling
+// found in this Mac's transcripts (four sessions, Oct 9 to 20), so the other sessions stayed where
+// they were. Dan's decision (2026-11-03): a switch is kept in one record every session reads at its
+// next prompt or minute, so no message between sessions is needed, and only what Dan types writes it.
+const PLACE = '/Users/x/.claude/state/scope-modes/place.json'
+const placeRecord = (place: 'away' | 'home', at: number, by = 's2') => `${JSON.stringify({ v: 1, place, at, by, cwd: '/other', how: `/${place}` })}\n`
+test('/away records the switch for every session on this Mac, with who, when and from where, and sends no message', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [{ sessionId: 's2' }, { sessionId: 's3' }] })
   await start($ as never, clock)
   const r = await command($ as never, 'away')
-  expect(w.sent).toEqual([
-    { to: 's2', text: AWAY_TEXT },
-    { to: 's3', text: AWAY_TEXT },
-    { to: 's3', text: AWAY_TEXT },
-  ])
-  expect(r.text).toBe('Away is on in this session and 1 other. 1 could not be told: the session is not running.')
+  expect(JSON.parse(w.files[PLACE] as string)).toEqual({ v: 1, place: 'away', at: expect.any(Number), by: 's1', cwd: '/repo', how: '/away' })
+  // Written whole beside its place and moved over it, so a reader never sees half of it.
+  expect(w.fileOps.some(op => op[0] === 'mv' && op[op.length - 1] === PLACE)).toBe(true)
+  expect(w.sent).toEqual([])
+  expect(r.text).toBe('Away is on in this session; the 2 other open sessions switch to away within a minute.')
+  // Claude's acknowledgement opens with the same sentence.
+  expect(JSON.stringify(r)).toContain('the 2 other open sessions switch to away within a minute')
+  await command($ as never, 'home')
+  expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'home', how: '/home' })
 })
 
-test('a registry that cannot be read is said, never read as no other session (L215)', withDeps, async ($, on) => {
-  const { clock } = world(on, { unreadable: ['*'] })
-  await start($ as never, clock)
-  expect((await command($ as never, 'away')).text).toMatch(/^Away is on in this session\. The other sessions could not be told: the session registry could not be read/)
-})
-
-test('the switch arriving from another session is applied and taken, never shown to the model', withDeps, async ($, on) => {
+test('a switch typed in another session reaches this one at its next prompt, and home after it', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
-  const r = (await $.session.receive({ origin: { kind: 'peer', plugin: 'scope-modes' }, text: AWAY_TEXT } as never)) as { consumed?: string }
-  expect(r.consumed).toBeTruthy()
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  const note = (await say($ as never, 'how is it going')).context?.join('\n') ?? ''
   expect(lastModes(w)).toEqual(['AWAY'])
-  // It does not pass the switch on again.
-  expect(w.sent).toEqual([])
-  const fromModel = (await $.session.receive({ origin: { kind: 'peer' }, text: AWAY_TEXT } as never)) as { consumed?: string; text?: string }
-  expect(fromModel.consumed).toBeUndefined()
+  expect(note).toMatch(/Dan is away from the Mac/)
+  w.files[PLACE] = placeRecord('home', T0 + 6)
+  const back = (await say($ as never, 'and now')).context?.join('\n') ?? ''
+  expect(lastModes(w)).toEqual([])
+  expect(back).toMatch(/Dan is back at the Mac/)
+  // Read, never written back: this session did not switch anything itself.
+  expect(w.fsWrites.filter(p => p.includes('/state/scope-modes/'))).toEqual([])
+})
+
+test('the minute takes a switch too, so the band follows without a prompt', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  await clock.advance(MIN)
+  expect(lastModes(w)).toEqual(['AWAY'])
+})
+
+test('a switch made before this session started, or one it already took, is not taken again', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [PLACE]: placeRecord('away', T0 - 1) } })
+  await start($ as never, clock)
+  await say($ as never, 'how is it going')
+  expect(w.modes).toEqual([])
+  // Its own /home after another session's /away: the newer one, its own, holds.
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  await say($ as never, 'one')
+  await clock.advance(10)
+  await command($ as never, 'home')
+  await say($ as never, 'two')
+  expect(lastModes(w)).toEqual([])
+})
+
+test('a switch that cannot be recorded says why, and how to switch the other sessions by hand', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [{ sessionId: 's2' }], mvFails: 'Read-only file system' })
+  await start($ as never, clock)
+  const r = await command($ as never, 'away')
+  expect(lastModes(w)).toEqual(['AWAY'])
+  expect(r.text).toMatch(
+    /^Away is on in this session only: the other sessions stay where they are, because the switch could not be recorded for them \(mv: rename .+: Read-only file system\)\. To switch one, type \/away in it: any session whose band does not show AWAY\.$/,
+  )
+})
+
+test('a switch that could not be recorded still holds here over an older one from another session (lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { mvFails: 'Read-only file system' })
+  await start($ as never, clock)
+  // Another session's /home, recorded before Dan's /away here, which could not be recorded.
+  w.files[PLACE] = placeRecord('home', T0 + 5)
+  await clock.advance(10)
+  await command($ as never, 'away')
+  await say($ as never, 'one')
+  await clock.advance(MIN)
+  expect(lastModes(w)).toEqual(['AWAY'])
+})
+
+test('a record that cannot be read is said once, never read as a switch (L215)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [PLACE]: placeRecord('away', T0 + 5) }, unreadableFiles: [PLACE] })
+  await start($ as never, clock)
+  await say($ as never, 'one')
+  await say($ as never, 'two')
+  expect(w.modes).toEqual([])
+  // The engine names the call it denied ahead of the reason, as it does for every denied read.
+  expect(w.toasts.filter(t => t.includes('away or home'))).toEqual([
+    `Scope modes could not read the away or home switch typed in another session (scope-modes: $.fs.read: EACCES: permission denied, open '${PLACE}'), so a switch typed there may not reach this one. Later failures go to the debug log.`,
+  ])
+})
+
+test('a registry that cannot be read is never read as no other session (L215)', withDeps, async ($, on) => {
+  const { clock } = world(on, { unreadable: ['*'] })
+  await start($ as never, clock)
+  expect((await command($ as never, 'away')).text).toBe('Away is on in this session; every other open session on this Mac switches to away within a minute.')
+})
+
+// Who can switch a session stays Dan alone (2026-11-03): nothing another session, a plugin or Claude
+// sends writes the record, so none of them can switch a session.
+test('nothing another session or Claude sends writes the record or switches this session', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  // The old message, from another session's scope modes or from Claude, is not a switch.
+  await $.session.receive({ origin: { kind: 'peer', plugin: 'scope-modes' }, text: AWAY_TEXT } as never)
+  await $.session.receive({ origin: { kind: 'peer' }, text: AWAY_TEXT } as never)
+  // Words that would switch, from anywhere but Dan's own typing.
+  for (const kind of ['peer', 'task-notification', 'unclassified']) await say($ as never, "I'm stepping away", kind)
+  await say($ as never, "I'm stepping away", { kind: 'plugin', name: 'handoff', asUser: true })
+  expect(PLACE in w.files).toBe(false)
+  expect(w.modes).toEqual([])
+  // A /away a plugin runs switches only the session it runs in.
+  const r = await command($ as never, 'away', 'plugin')
+  expect(r.text).toBe('Away is on in this session only: Dan did not type this switch, so it reaches no other session.')
+  expect(PLACE in w.files).toBe(false)
+})
+
+test('a switch Dan types in words is recorded for every session as /away is', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await say($ as never, "I'm stepping away")
+  expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'away', by: 's1', how: 'typed' })
 })
 
 test('a message from the phone while home gets the one line at the end of the reply; not while away, not from the Mac', withDeps, async ($, on) => {
@@ -3381,7 +3475,7 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   await start($ as never, clock)
   await clock.settle()
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md. You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back. The other open session puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers. One session that worked overnight has closed since, so its night is only in the report.")
+  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session; the other open session switches to away within a minute. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md. You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back. The other open session puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers. One session that worked overnight has closed since, so its night is only in the report.")
   // The waking session notes its usage on the record it moved aside, then renders the report once more, checked against GitHub (#835).
   const moved = `${SLEEP}/ended/${T0}-woke-s1.json`
   expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([[moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }]])
@@ -3390,9 +3484,13 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   expect(w.files[CURRENT]).toBeUndefined()
   expect(Object.keys(w.files).filter(f => f.startsWith(SLEEP)).sort()).toEqual([`${SLEEP}/ended/${T0}-woke-s1.json`, `${SLEEP}/notes/g0.needs.json`])
   expect(lastModes(w)).toEqual(['AWAY'])
-  expect(w.sent).toEqual([{ to: 's2', text: AWAY_TEXT }])
+  // The other sessions follow the record waking wrote (#2099), never a message.
+  expect(JSON.parse(w.files[PLACE] as string)).toEqual({ v: 1, place: 'away', at: expect.any(Number), by: 's1', cwd: '/repo', how: 'wake' })
+  expect(w.sent).toEqual([])
+  const placeWrites = () => w.fileOps.filter(op => op[0] === 'mv' && op[op.length - 1] === PLACE).length
+  expect(placeWrites()).toBe(1)
   expect((await command($ as never, 'wake')).text).toBe('Sleep mode was not on.')
-  expect(w.sent.length).toBe(1)
+  expect(placeWrites()).toBe(1)
   // Away, nothing opens on the Mac (#837): the report waits in the held card for home.
   expect(w.opened).toEqual([])
   await command($ as never, 'home')
@@ -3406,8 +3504,8 @@ test('two /wake calls at once: only the one whose move succeeds acts', withDeps,
   const texts = [a.text, b.text].sort()
   expect(texts[0]).toMatch(/^Sleep mode is off\./)
   expect(texts[1]).toBe('Sleep mode was already woken by another session.')
-  // Every other session told once, never twice.
-  expect(w.sent.length).toBe(1)
+  // The switch recorded for the other sessions once, never twice (#2099).
+  expect(w.fileOps.filter(op => op[0] === 'mv' && op[op.length - 1] === PLACE).length).toBe(1)
   expect(Object.keys(w.files).filter(f => f.startsWith(`${SLEEP}/ended/`)).length).toBe(1)
 })
 
@@ -3434,13 +3532,13 @@ test('/wake opens the report in BBEdit on the front window, says focus moved, an
   const { w, clock } = world(on, { open: [interactive('s2'), { sessionId: 's3' }], files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2'] }), [PROPOSED_AT]: PROPOSED } })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe(`Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Home is on in this session and 2 others. The night's report is at ${REPORT}. Focus moved to BBEdit, where it is open. Each of the 2 other open sessions puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers.`)
+  expect(r.text).toBe(`Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Home is on in this session; the 2 other open sessions switch to home within a minute. The night's report is at ${REPORT}. Focus moved to BBEdit, where it is open. Each of the 2 other open sessions puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers.`)
   // Opened only after the final render, so BBEdit shows the finished report.
   expect(w.opened).toEqual([[BBEDIT_TOOL, '--front-window', REPORT]])
   expect(w.reports.map(x => x.op)).toEqual(['note', 'render'])
   // No session is sent a summary request any more (#1285): each puts its own morning at its minute.
   expect(w.sent.filter(x => x.text.startsWith('Dan is up'))).toEqual([])
-  expect(w.sent.filter(x => x.to === 's3').map(x => x.text)).toEqual(['Dan switched every session on this Mac to home.'])
+  expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'home', how: 'wake' })
   // The waking session's own turn: started once the command is done, with its summary and both pickers.
   expect(morningOf(w)).toEqual([])
   await clock.settle()
@@ -3523,16 +3621,20 @@ test('a session registry that answers garbled never loses the wake reply: the ot
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
   expect(r.text).toMatch(/^Sleep mode is off\..*Whether other sessions are open could not be read \(.+\); any that are put to you within a minute whatever they have from the night\.$/s)
-  // Telling the others the place met the same answer, and says so rather than throwing.
-  expect(r.text).toMatch(/The other sessions could not be told: the session registry's answer could not be read \(.+?\)\. The night's report/)
+  // The place is recorded for the others all the same, since the record does not need the registry (#2099).
+  expect(r.text).toMatch(/Home is on in this session; every other open session on this Mac switches to home within a minute\. The night's report/)
+  expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'home', how: 'wake' })
   expect(w.files[CURRENT]).toBeUndefined()
 })
 
 test('a registry answer that names a record it could not read and then breaks keeps both said (#837)', withDeps, async ($, on) => {
-  const { clock } = world(on, { registryAnswer: JSON.stringify({ open: 7, closed: [], unreadable: ['s7.json'], selfId: 's1' }), files: { [CURRENT]: asleepRecord({ workers: [] }) } })
+  const { w, clock } = world(on, { registryAnswer: JSON.stringify({ open: 7, closed: [], unreadable: ['s7.json'], selfId: 's1' }), files: { [CURRENT]: asleepRecord({ workers: [] }) } })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toMatch(/The other sessions could not be told: the session registry could not read s7\.json; the session registry's answer could not be read \(.+?\)\./)
+  // How many others follow cannot be counted, so none is claimed, and the place is still recorded (#2099).
+  expect(r.text).toMatch(/Home is on in this session; every other open session on this Mac switches to home within a minute\./)
+  expect(r.text).toMatch(/Whether other sessions are open could not be read \(.+\)/)
+  expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'home', how: 'wake' })
 })
 
 test('notes that cannot be read are said in the morning turn, pointing at the report (#837)', withDeps, async ($, on) => {
@@ -4617,8 +4719,9 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   expect(w.appended[0]?.file).toBe(moved)
   expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'limit', reason: 'it was past noon ET', at: tick, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } })
   expect(w.reports.filter(x => x.op === 'render')).toEqual([{ op: 'render', record: moved, final: true }])
-  // Every session put back where it was before sleep.
-  expect(w.sent).toEqual([{ to: 's2', text: 'Dan switched every session on this Mac to home.' }])
+  // Every session put back where it was before sleep, through the record, with no message (#2099).
+  expect(JSON.parse(w.files[PLACE] as string)).toEqual({ v: 1, place: 'home', at: tick, by: 's1', cwd: '/repo', how: 'sleep limit' })
+  expect(w.sent).toEqual([])
   // Only /wake or "I'm up" opens the report and asks for the morning (#837): nobody may be at the Mac at noon.
   expect(w.opened).toEqual([])
   expect(w.prompts).toEqual([])
