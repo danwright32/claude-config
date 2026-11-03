@@ -139,6 +139,18 @@ test('a malformed log line is skipped and named in a refusal, and said in a dim 
   expect(w.logs.some(l => l.includes('1 line of its log') && l.includes(LOG.replace('/Users/dan', '~')))).toBe(true)
 })
 
+test('a decision taken on a detached head (branch null) is left out, never counted malformed', KIT, async ($, on) => {
+  const w = world($, on)
+  seedAB(w)
+  w.ctl.seeded.push(JSON.stringify({ v: 3, kind: 'decided', repo: 'dan/app', branch: null, mergeBase: 'mb123', path: 'src/detached.ts', call: 'c8', decision: 'proceed', reason: 'taken on a detached head' }))
+  const why = refusal(await bash($ as never, w, `gh pr create --title T --body "${A}"`))
+  expect(why).toContain('area check line')
+  expect(why).not.toContain('line of the log')
+  expect(why).not.toContain('src/detached.ts')
+  expect(refusal(await bash($ as never, w, `gh pr create --title T --body "${A}\n${B}"`, {}, 'b2'))).toBe('')
+  expect(w.logs.some(l => l.includes('line of its log'))).toBe(false)
+})
+
 test('a fold line needs Refs or Closes with the folded issue', KIT, async ($, on) => {
   const w = world($, on)
   w.ctl.seeded.push(decidedLine({ path: 'src/b.ts', decision: 'fold', issue: 41 }))

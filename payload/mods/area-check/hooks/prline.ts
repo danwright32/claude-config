@@ -55,6 +55,8 @@ export const readDecisions = (out: string): { decisions: PrDecision[]; malformed
     }
     if (r.kind === 'decided') {
       if (typeof r.v !== 'number' || r.v < 3) continue
+      // A decision taken on a detached head has no branch, so no pull request is made from it.
+      if (r.branch === null) continue
       const mergeBase = baseOf(r.mergeBase)
       const decision = DECISIONS.find(d => d === r.decision)
       if (!text(r.repo) || !text(r.path) || !text(r.branch) || mergeBase === undefined || !decision) {
