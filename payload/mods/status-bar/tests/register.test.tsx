@@ -197,9 +197,9 @@ const world = (on: On, init: Partial<World> = {}) => {
     return { value: { kind: 'file', size: text.length, mtimeMs: mtimes[e.path] ?? T0, isLink: false } } as never
   })
   // The tools the status bar offers the model (#2025), as Claude Code lists them.
-  const tools: { name: string; description: string }[] = []
+  const tools: { name: string; description: string; inputSchema: unknown }[] = []
   on('tool.register', ($, e) => {
-    tools.push({ name: e.name, description: e.description })
+    tools.push({ name: e.name, description: e.description, inputSchema: e.inputSchema })
     return { value: { tool: `mcp__status-bar__${e.name}` } } as never
   })
   on('process.run', ($, e) => {
@@ -1049,6 +1049,72 @@ test('a note from before the last compaction, over an hour old, empty, or outsid
   await turn($)
   await clock.settle()
   expect(compacts).toHaveLength(ran)
+})
+
+// #2071: measured in a claude-config session's transcript (2026-11-02), a session called the tool with
+// its note's path under handoff, the word the tool's own text uses for it, and was refused with a
+// sentence that named no parameter, so it read the refusal as a fault in the path and the Compact
+// was never queued. The path is judged exactly as before, under either name.
+test('the note passed as handoff is taken and queued, and the carry on prompt names it (#2071)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(SEC)
+  files[NOTE] = 'Next: push the branch.'
+  mtimes[NOTE] = clock.now()
+  const r = await queueCompact($, { note: undefined, handoff: NOTE })
+  expect(refusal(r)).toBeUndefined()
+  expect(String(r.result)).toContain(`${NOTE} holds what you decided`)
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(`Read your handoff note at ${NOTE}`)
+})
+
+test('the scratchpad path is taken with or without /private in front (#2071)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(SEC)
+  const bare = NOTE.replace(/^\/private/, '')
+  files[bare] = 'Next: push the branch.'
+  mtimes[bare] = clock.now()
+  expect(refusal(await queueCompact($, { note: bare }))).toBeUndefined()
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+})
+
+test('a call with no note names the parameter and what it was given; a wrong path under handoff is still refused (#2071)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes } = world(on)
+  await start($, clock)
+  await step($, clock)
+  const none = refusal(await queueCompact($, { note: undefined, path: NOTE }))
+  expect(none).toContain('as note')
+  expect(none).toContain('this call passed path, and no note')
+  // A blank note is no note, never reported as one passed.
+  expect(refusal(await queueCompact($, { note: '  ' }))).not.toContain('passed note')
+  files['/repo/handoff.md'] = 'Decisions.'
+  mtimes['/repo/handoff.md'] = clock.now()
+  expect(refusal(await queueCompact($, { note: undefined, handoff: '/repo/handoff.md' }))).toContain('not /repo/handoff.md')
+  expect(refusal(await queueCompact($, { note: undefined, handoff: 'scratchpad/handoff.md' }))).toContain('not scratchpad/handoff.md')
+  // Two different paths in one call: neither is guessed at.
+  files[NOTE] = 'Decisions.'
+  mtimes[NOTE] = clock.now()
+  expect(refusal(await queueCompact($, { handoff: '/repo/handoff.md' }))).toContain('once')
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+})
+
+test('the parameter description names the note path without doubling the scratchpad folder (#2071)', withKit, async ($, on) => {
+  const { clock, tools } = world(on)
+  await start($, clock)
+  const tool = tools.find(t => t.name === 'queue_compact')
+  expect(tool).toBeDefined()
+  const note = (tool?.inputSchema as { properties: { note: { description: string } } }).properties.note
+  expect(note.description).toContain('/scratchpad/handoff.md')
+  expect(note.description).not.toContain('scratchpad folder>/scratchpad')
 })
 
 // #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in

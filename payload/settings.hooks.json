@@ -492,6 +492,16 @@
         "hooks": [
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-later-nudge.sh",
+            "timeout": 15,
+            "statusMessage": "Looking for checks left waiting on a later day"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/pr-merge-quiz.sh --release-held",
             "timeout": 60,
             "statusMessage": "Checking whether a merge running in the background has landed"

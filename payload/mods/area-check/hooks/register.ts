@@ -1,13 +1,14 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
-import { errorText } from './mod-kit/skew.ts'
+import { errorText, missingOf } from './mod-kit/skew.ts'
 import {
   DEADLINE_MS,
   GROWTH_DAYS,
   ISSUE_LIMIT,
   ISSUES_TTL_MS,
   RULE_VERSION,
+  barFor,
   UNREAD_TTL_MS,
   editedPath,
   fileKind,
@@ -21,30 +22,45 @@ import {
   rankingKey,
   sizeCandidates,
   toCached,
+  ASK_SOURCE,
+  DECIDE_TOOL,
+  DECISIONS,
+  answerStands,
+  decideProblem,
+  holdCard,
+  holdRefusal,
+  questionKey,
+  restructureQuestion,
+  sleepNotes,
+  sweepKeys,
   type CachedIssue,
+  type Decision,
+  type Held,
+  type Question,
   type Ranked,
 } from './rules.ts'
 
-// The area check (claude-config#1506), phase 1 (#1508): OBSERVE ONLY. Dan, 2026-10-22: sessions
-// build in fragile areas without noticing that the area already has open structural issues, or is
-// growing fast with nothing filed against it. Settled with him in /plan-lite the same day: ship it
-// observing for a week first, and turn the hold on from what that week measured (#1509, L56, L172,
-// L65). So this mod refuses nothing. For the first Edit, Write, MultiEdit or NotebookEdit a session
-// makes to each existing source or test file (decisions 2 and 3), it works out the facts the hold
-// would show (the open issues naming the file, its rough growth) and writes one record to a log
-// outside ~/.claude, would_hold or quiet. The edit itself goes on at once: the facts are worked out
-// off its path, under one deadline below 75% of a hook's 10 second budget (L743), so the week also
-// measures whether the hold could have answered in time.
+// The area check (claude-config#1506), phase 2 (#1509): the HOLD. Dan, 2026-10-22: sessions build
+// in fragile areas without noticing that the area already has open structural issues, or is growing
+// fast with nothing filed against it. Phase 1 (#1508) observed for a week; its log set the bar. Now the
+// first Edit, Write, MultiEdit or NotebookEdit a session makes to each existing source or test file
+// (decisions 2 and 3) is held when an open structural issue at p0 to p2 names the file (Dan's choice,
+// 2026-11-02) or the file crosses the growth bar, and the session decides with the decide tool:
+// proceed with a reason, fold a shown issue in, or restructure, which asks Dan (decision 7). The main
+// session is held at tool.check, beneath the settings hooks; a subagent at tool.call, for itself
+// (decision 8). The facts are read on the call's path under one deadline below 75% of a hook's 10
+// second budget (L743); a read past it is UNREAD, and only growth can then hold.
 //
 // The log, one JSON record a line, this Mac only (decision 10): ~/.claude-area-check/log.jsonl. A
 // `loaded` record per session start, so a week with none reads as the mod never loading rather than
 // as nothing firing (L90); then `judged` per file, or `unjudged` with why. Its own failures go to a
 // separate file, errors.jsonl, by a different write than the one that failed (L561), and the first
-// each session is one dim line; the edit is never affected.
+// each session is one dim line; a failure of the check lets the edit through, and says so.
 
 const MOD = 'area-check'
 const judgedRef = { plugin: 'area-check', key: 'judged' } as const
 const errorsRef = { plugin: 'area-check', key: 'errors' } as const
+const heldRef = { plugin: 'area-check', key: 'held' } as const
 const DIR = '.claude-area-check'
 const LOG = 'log.jsonl'
 const ERRORS = 'errors.jsonl'
@@ -231,9 +247,10 @@ const ranking = async ($: EngineInterface, d: Deadline, root: string, defaultBra
         gitIn($, own, root, ['ls-tree', '-r', '--name-only', rev]),
       ])
       const growth = parseNumstat(log)
-      const cands = sizeCandidates(growth)
+      const bar = barFor(repo)
+      const cands = sizeCandidates(growth, bar)
       const sizes = cands.length ? parseLineCounts(await gitIn($, own, root, ['grep', '-c', '', rev, '--', ...cands], [0, 1]), rev) : {}
-      return { key, sha: head, ranked: rank(growth, sizes), tracked: tree.split('\n').filter(Boolean) }
+      return { key, sha: head, ranked: rank(growth, sizes, bar), tracked: tree.split('\n').filter(Boolean) }
     }
     const r = await shared($, d, rankings, key, make, () => false, true)
     while (rankings.size > RANKINGS_KEPT) rankings.delete(rankings.keys().next().value as string)
@@ -263,6 +280,15 @@ const goalOf = async ($: EngineInterface, d: Deadline): Promise<GoalFacts> => {
 }
 
 // ---- Once per file per session (decision 2), a subagent judged for itself (decision 8) ----
+//
+// A file is claimed once the session (or a subagent, under its own id) is done with it: a quiet edit
+// whose issues AND growth were both read, or a held edit once it is decided. A held edit is never
+// claimed by being held, so sending it again before deciding is held again; a quiet edit with a read
+// that failed passes unclaimed, so the next edit tries again (decision 12).
+
+const keyOf = (main: string, rel: string, agent: string | null) => [main, rel, agent ?? ''].join('\n')
+
+const isClaimed = async ($: EngineInterface, key: string) => ((await $.state.get(judgedRef)).value ?? []).includes(key)
 
 const claim = async ($: EngineInterface, key: string): Promise<boolean> => {
   for (let i = 0; i < 5; i++) {
@@ -274,82 +300,25 @@ const claim = async ($: EngineInterface, key: string): Promise<boolean> => {
   return false
 }
 
-const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
+// ---- The held edits, each under its call id, in this session's $.state (#1509) ----
 
-const look = async ($: EngineInterface, path: string, agent: string | null, refusedBeneath: boolean) => {
-  const started = await $.clock.now()
-  const d: Deadline = { at: started + DEADLINE_MS }
-  const session = await $.session.id()
-  const at = new Date(started).toISOString()
-  const b = await $.modkit.branch({ path })
-  if (!b) return
-  if ('unreadable' in b) {
-    const rel = relTo(path, b.root)
-    if (!fileKind(rel) || !(await claim($, [b.main ?? b.root, rel, agent ?? ''].join('\n')))) return
-    await append($, LOG, { v: 1, kind: 'unjudged', at, session, agent, path: rel, why: b.unreadable })
-    return
+const HELD_MAX = 50
+
+const heldOf = async ($: EngineInterface, id: string): Promise<Held | undefined> => ((await $.state.get(heldRef)).value ?? []).find(h => h.id === id)
+
+const updateHeld = async ($: EngineInterface, change: (list: Held[]) => Held[]) => {
+  for (let i = 0; i < 5; i++) {
+    const s = await $.state.get(heldRef)
+    if ((await $.state.set(heldRef, change(s.value ?? []), { ifVersion: s.version })).isSet) return
   }
-  const rel = relTo(path, b.root)
-  const kind = fileKind(rel)
-  if (!kind) return
-  if (!(await claim($, [b.main, rel, agent ?? ''].join('\n')))) return
-  const remote = await runIn($, d, ['git', '-C', b.root, 'remote', 'get-url', 'origin'])
-    .then(r => (r.exitCode === 0 ? r.stdout.trim() || null : null))
-    .catch(() => null)
-  const repo = (await $.modkit.repo({ root: b.main, remote })).github
-  // Every checkout with a GitHub remote (decision 9); any other is said, never judged as quiet.
-  if (!repo) {
-    await append($, LOG, { v: 1, kind: 'unjudged', at, session, agent, path: rel, why: remote ? 'its origin is not on GitHub' : 'it has no origin remote' })
-    return
-  }
-  const [issues, ranked, goal, mergeBase] = await Promise.all([
-    issuesFor($, repo, d),
-    ranking($, d, b.root, b.defaultBranch, repo),
-    goalOf($, d),
-    b.defaultBranch
-      ? gitIn($, d, b.root, ['merge-base', 'HEAD', `origin/${b.defaultBranch}`]).then(s => s.trim() || null).catch(() => null)
-      : Promise.resolve(null),
-  ])
-  const tracked = 'tracked' in ranked ? ranked.tracked : []
-  const matches = issues.state === 'unread' ? [] : issuesNaming(rel, issues.issues, tracked)
-  const own = [...new Set([...b.issues, ...goal.issues])]
-  const crosses = 'ranked' in ranked && ranked.ranked.top.includes(rel)
-  const j = judge({ matches, own, crosses })
-  const growth = 'ranked' in ranked
-    ? { ...(ranked.ranked.facts[rel] ?? { net: 0, size: null, fixes: 0, rank: null }), crosses }
-    : { unread: ranked.unread }
-  await append($, LOG, {
-    v: 1,
-    kind: 'judged',
-    at,
-    session,
-    agent,
-    repo,
-    path: rel,
-    fileKind: kind,
-    refusedBeneath,
-    branch: b.branch,
-    mergeBase,
-    head: ranked.sha,
-    decision: j.decision,
-    why: j.why,
-    shown: j.shown,
-    excluded: j.excluded,
-    own,
-    goal: goal.state,
-    matches,
-    issues: issues.state === 'unread'
-      ? { state: 'unread', why: issues.why, ageMs: started - issues.at }
-      : { state: issues.state, count: issues.count, ageMs: started - issues.at },
-    growth,
-    rule: RULE_VERSION,
-    ms: (await $.clock.now()) - started,
-  })
+  throw new Error('the list of held edits could not be written: another write kept changing it')
 }
 
-// Its own failure: counted, kept in the error file, said once a session; the edit is never touched.
-// Every step is caught on its own, so a failure here can never reach the call (L561, L95).
-const failed = async ($: EngineInterface, path: string, err: unknown) => {
+const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
+
+// Its own failure: counted, kept in the error file, said once a session. Every step is caught on its
+// own, so a failure here can never reach the call (L561, L95). `kept` says what it means for the edit.
+const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' = 'unchecked') => {
   const error = msg(err)
   let n = 1
   try {
@@ -365,16 +334,283 @@ const failed = async ($: EngineInterface, path: string, err: unknown) => {
   }
   if (n !== 1) return
   try {
-    const cwd = await $.session.cwd()
-    $.ui.log(`The area check could not look at ${relTo(path, cwd)} (${error}). It only observes for now, so nothing was held; the error is kept in ~/${DIR}/${ERRORS}.`)
+    const rel = relTo(path, await $.session.cwd())
+    $.ui.log(
+      kept === 'unchecked'
+        ? `The area check could not look at ${rel} (${error}), so the edit went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
+        : `The area check could not write its log for ${rel} (${error}); what it decided stands, and the error is kept in ~/${DIR}/${ERRORS}.`,
+    )
   } catch {
     // Nothing more can be said.
   }
 }
 
-// Off the call's path: the edit goes on at once, and whatever this does is caught.
+// A log record whose write failing is an error of its own: whatever the record was about stands.
+const logged = async ($: EngineInterface, path: string, record: Record<string, unknown>) => {
+  try {
+    await append($, LOG, record)
+  } catch (err) {
+    await failed($, path, err, 'unlogged')
+  }
+}
+
+// Off the call's path: whatever this does is caught.
 const later = ($: EngineInterface, path: string, work: () => Promise<unknown>) =>
   $.clock.after(0, () => void work().catch(err => failed($, path, err)))
+
+// ---- Judging one edit ----
+
+const PASS = { pass: true } as const
+type Verdict = typeof PASS | { held: Held }
+// The two answers of Dan's that release the file; Fold in leaves it for the session to fold.
+const RELEASING: readonly string[] = ['Restructure first', 'Proceed anyway']
+
+const judgeEdit = async ($: EngineInterface, tool: string, id: string, path: string, agent: string | null): Promise<Verdict> => {
+  const started = await $.clock.now()
+  const d: Deadline = { at: started + DEADLINE_MS }
+  const session = await $.session.id()
+  const at = new Date(started).toISOString()
+  const b = await $.modkit.branch({ path })
+  if (!b) return PASS
+  if ('unreadable' in b) {
+    const rel = relTo(path, b.root)
+    if (fileKind(rel) && (await claim($, keyOf(b.main ?? b.root, rel, agent)))) await logged($, path, { v: 1, kind: 'unjudged', at, session, agent, path: rel, why: b.unreadable })
+    return PASS
+  }
+  const rel = relTo(path, b.root)
+  const kind = fileKind(rel)
+  if (!kind) return PASS
+  const key = keyOf(b.main, rel, agent)
+  if (await isClaimed($, key)) return PASS
+  const remote = await runIn($, d, ['git', '-C', b.root, 'remote', 'get-url', 'origin'])
+    .then(r => (r.exitCode === 0 ? r.stdout.trim() || null : null))
+    .catch(() => null)
+  const repo = (await $.modkit.repo({ root: b.main, remote })).github
+  // Every checkout with a GitHub remote (decision 9); any other is said, never judged as quiet.
+  if (!repo) {
+    if (await claim($, key)) await logged($, path, { v: 1, kind: 'unjudged', at, session, agent, path: rel, why: remote ? 'its origin is not on GitHub' : 'it has no origin remote' })
+    return PASS
+  }
+  const [issues, ranked, goal, mergeBase] = await Promise.all([
+    issuesFor($, repo, d),
+    ranking($, d, b.root, b.defaultBranch, repo),
+    goalOf($, d),
+    b.defaultBranch
+      ? gitIn($, d, b.root, ['merge-base', 'HEAD', `origin/${b.defaultBranch}`]).then(s => s.trim() || null).catch(() => null)
+      : Promise.resolve(null),
+  ])
+  const tracked = 'tracked' in ranked ? ranked.tracked : []
+  const bar = barFor(repo)
+  const matches = issues.state === 'unread' ? [] : issuesNaming(rel, issues.issues, tracked, bar.folderMax)
+  const own = [...new Set([...b.issues, ...goal.issues])]
+  const crosses = 'ranked' in ranked && ranked.ranked.top.includes(rel)
+  const j = judge({ matches, own, crosses, bar })
+  const growth: Held['growth'] = 'ranked' in ranked
+    ? { ...(ranked.ranked.facts[rel] ?? { net: 0, size: null, fixes: 0, rank: null }), crosses }
+    : { unread: ranked.unread }
+  const record = async (extra: Record<string, unknown>) =>
+    logged($, path, {
+      v: 2,
+      kind: 'judged',
+      at,
+      session,
+      agent,
+      repo,
+      path: rel,
+      fileKind: kind,
+      branch: b.branch,
+      mergeBase,
+      head: ranked.sha,
+      ...extra,
+      why: j.why,
+      shown: j.shown,
+      excluded: j.excluded,
+      own,
+      goal: goal.state,
+      matches,
+      issues: issues.state === 'unread'
+        ? { state: 'unread', why: issues.why, ageMs: started - issues.at }
+        : { state: issues.state, count: issues.count, ageMs: started - issues.at },
+      growth,
+      rule: RULE_VERSION,
+      bar: bar.set,
+      ms: (await $.clock.now()) - started,
+    })
+
+  if (j.decision === 'quiet') {
+    const read = issues.state !== 'unread' && 'ranked' in ranked
+    // Another edit claiming it meanwhile has logged it already.
+    if (read && !(await claim($, key))) return PASS
+    await record({ decision: 'quiet' })
+    return PASS
+  }
+  // Dan's answer about this file, for these issues, within its week (L330): applied, never asked again.
+  const q = (await $.store.get(questionKey(repo, rel))) as Question | undefined
+  if (answerStands(q, j.shown, started) && RELEASING.includes(q.answer)) {
+    await claim($, key)
+    await record({ decision: 'held', applied: q.answer })
+    return PASS
+  }
+  const h: Held = {
+    id,
+    tool,
+    repo,
+    main: b.main,
+    rel,
+    agent,
+    at: started,
+    why: j.why,
+    shown: matches.filter(m => j.shown.includes(m.n)),
+    issues: issues.state === 'unread' ? { state: 'unread', why: issues.why } : { state: issues.state },
+    growth,
+  }
+  await updateHeld($, list => [...list.filter(x => x.id !== id), h].slice(-HELD_MAX))
+  await record({ decision: 'held' })
+  return { held: h }
+}
+
+// The grey card under the call's id; a card that cannot be drawn leaves the refusal Claude reads.
+const card = async ($: EngineInterface, toolUseId: string, c: { reason: string; safeWay?: string; note?: string }, guard = GUARD) => {
+  try {
+    await $.modkit.blocked({ toolUseId, guard, ...c })
+  } catch (err) {
+    $.ui.log(`${MOD}: the card for ${toolUseId} could not be drawn (${msg(err)})`, { to: 'debug' })
+  }
+}
+
+// One edit's verdict as the call meets it: refused with the facts and how to decide, or let through.
+// Its own failure lets the edit through, said (fail loud about the check, never about the edit).
+const gate = async ($: EngineInterface, tool: string, id: string, path: string, agent: string | null): Promise<{ deny: string } | typeof PASS> => {
+  try {
+    if (!(await $.fs.exists(path))) return PASS
+    const v = await judgeEdit($, tool, id, path, agent)
+    if ('pass' in v) return PASS
+    await card($, id, holdCard(v.held))
+    return { deny: holdRefusal(v.held) }
+  } catch (err) {
+    await failed($, path, err)
+    return PASS
+  }
+}
+
+// ---- Deciding (decision 7) ----
+
+const GUARD = 'Area check'
+const HEADER = 'Area check'
+
+const DECIDE_DESCRIPTION =
+  'Decide a first edit the area check held, under the held call\'s id: "proceed" with a "reason" saying why the change does not add to the structural problem, "fold" with the "issue" (one of those shown) whose fix is folded into this work, or "restructure" to have Dan decide whether to restructure the file first. Then send the held edit again, unchanged.'
+const DECIDE_SCHEMA = {
+  type: 'object',
+  properties: {
+    call: { type: 'string', description: 'The held call\'s id, as the hold gave it.' },
+    decision: { type: 'string', enum: [...DECISIONS] },
+    reason: { type: 'string', description: 'For proceed: why this change does not add to the structural problem, as a sentence.' },
+    issue: { type: 'number', description: 'For fold: the issue number whose structural fix is folded in.' },
+  },
+  required: ['call', 'decision'],
+}
+
+const again = (h: Held) =>
+  h.agent === null
+    ? `Send the ${h.tool} to ${h.rel} again, unchanged.`
+    : `The held ${h.tool} to ${h.rel} was a subagent's: tell that agent, or a new one, to send it again, unchanged.`
+
+// A decision taken: the file claimed for whoever was held, the held entry gone, the decision logged.
+const release = async ($: EngineInterface, h: Held, decided: { decision: Decision; reason?: string; issue?: number; by?: 'dan' }) => {
+  await claim($, keyOf(h.main, h.rel, h.agent))
+  await updateHeld($, list => list.filter(x => x.id !== h.id))
+  await logged($, `${h.main}/${h.rel}`, {
+    v: 2,
+    kind: 'decided',
+    at: new Date(await $.clock.now()).toISOString(),
+    session: await $.session.id(),
+    agent: h.agent,
+    repo: h.repo,
+    path: h.rel,
+    call: h.id,
+    ...decided,
+  })
+}
+
+// A restructure question still waiting on Dan for this held call is settled by any decision.
+const settleQuestion = async ($: EngineInterface, h: Held) => {
+  const k = questionKey(h.repo, h.rel)
+  const q = (await $.store.get(k)) as Question | undefined
+  if (q?.state === 'pending' && q.call === h.id) await $.store.delete(k)
+}
+
+// Scope modes, called in place as the engine needs (skew.ts). Not loaded is home: awake, and away
+// from nothing; any other failure is the decision's own failure, said to Claude.
+type ScopeModes = {
+  isAsleep: () => Promise<boolean>
+  sleepNote: (note: { kind: string } & Record<string, unknown>) => Promise<{ isNoted: boolean }>
+  hold: (input: { label: string; prompt: string }) => Promise<{ isHeld: false; isAway?: true } | { isHeld: true; card: { guard: string; reason: string; safeWay: string }; deny: string }>
+}
+const scopeAbsent = (err: unknown) => missingOf(err)?.noun === 'scopeModes'
+const isAsleep = async ($: EngineInterface) => {
+  try {
+    return (await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.isAsleep()) === true
+  } catch (err) {
+    if (scopeAbsent(err)) return false
+    throw err
+  }
+}
+const sleepNote = async ($: EngineInterface, note: { kind: string } & Record<string, unknown>) =>
+  (await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.sleepNote(note)).isNoted === true
+const holdAway = async ($: EngineInterface, label: string, prompt: string) => {
+  try {
+    const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.hold({ label, prompt })
+    return r?.isHeld === true ? r : null
+  } catch (err) {
+    if (scopeAbsent(err)) return null
+    throw err
+  }
+}
+
+const asking = (h: Held) => `call AskUserQuestion with one question and metadata {"source": "${ASK_SOURCE}:${h.id}"}; the area check words the question and its answers`
+
+const restructure = async ($: EngineInterface, h: Held, decideId: string) => {
+  const k = questionKey(h.repo, h.rel)
+  const pending: Question = { state: 'pending', at: await $.clock.now(), issues: h.shown.map(m => m.n), session: await $.session.id(), call: h.id, agent: h.agent }
+  // A subagent never asks Dan (decision 8): the main session is told at its next prompt.
+  if (h.agent !== null) {
+    await $.store.set(k, pending)
+    return { result: `The question is handed to the main session, which asks Dan whether to restructure ${h.rel} first. Stop and report to the main session that ${h.rel} waits on his answer, and do not edit it meanwhile.` }
+  }
+  if (await isAsleep($)) {
+    let noted = true
+    for (const note of sleepNotes(h)) noted = (await sleepNote($, note)) && noted
+    if (noted) {
+      await $.store.set(k, pending)
+      return { result: `Dan is asleep, so the question whether to restructure ${h.rel} first is noted for his morning report, and the file stays held. Go on with work that does not edit it.` }
+    }
+  }
+  const away = await holdAway($, `whether to restructure ${h.rel} before this work`, `Ask Dan whether to restructure ${h.rel} first: call ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "restructure"} again.`)
+  if (away) {
+    await $.store.set(k, pending)
+    await card($, decideId, away.card, away.card.guard)
+    return { deny: away.deny }
+  }
+  await $.store.set(k, pending)
+  return { result: `Ask Dan now: ${asking(h)}. ${h.rel} stays held until he answers.` }
+}
+
+// The questions this session's subagents (or the session itself) left waiting on Dan, each still held.
+const waitingLines = async ($: EngineInterface): Promise<string[]> => {
+  const session = await $.session.id()
+  const lines: string[] = []
+  for (const k of await $.store.keys()) {
+    if (!k.startsWith('question:')) continue
+    const q = (await $.store.get(k)) as Question | undefined
+    if (q?.state !== 'pending' || q.session !== session) continue
+    const h = await heldOf($, q.call)
+    if (!h) continue
+    const whose = h.agent === null ? 'this session\'s' : `subagent ${h.agent}'s`
+    lines.push(`The area check holds ${whose} ${h.tool} to ${h.rel} in ${h.repo} until Dan decides whether to restructure it first: ${asking(h)}.`)
+  }
+  return lines
+}
 
 // The session's own repository, read before its first edit needs it (decision 12).
 const warm = async ($: EngineInterface) => {
@@ -388,33 +624,138 @@ const warm = async ($: EngineInterface) => {
   await Promise.all([issuesFor($, repo, d), ranking($, d, b.root, b.defaultBranch, repo)])
 }
 
+// The ids of subagent calls judged at tool.call and now running, so tool.check does not judge them again.
+const fromAgent = new Set<string>()
+
+type AskInput = { questions?: unknown; metadata?: { source?: unknown }; agentId?: string }
+type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; afkTimeoutMs?: unknown }
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
+    // Offered at every start, a headless one included: subagents decide with it too.
+    await $.tool.register({ name: 'decide', description: DECIDE_DESCRIPTION, inputSchema: DECIDE_SCHEMA, isDeferred: false })
     later($, e.cwd, async () => {
       await append($, LOG, { v: 1, kind: 'loaded', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), cwd: e.cwd, rule: RULE_VERSION })
+      // Issue lists no edit has read for a week, and answers past their week (#1509).
+      const now = await $.clock.now()
+      const entries: [string, unknown][] = []
+      for (const k of await $.store.keys()) entries.push([k, await $.store.get(k)])
+      for (const k of sweepKeys(entries, now)) await $.store.delete(k)
       await warm($)
     })
     return r
   })
 
-  // Every tool call: only an edit tool's, to a file already there, is looked at, after it has been
-  // let through. Nothing here can refuse or change the call.
+  // A subagent's edit, judged where its loop is known, before it runs: held for itself (decision 8).
+  // One it lets through is not judged again beneath.
   on('tool.call', async ($, e, next) => {
+    if (e.agentId === undefined) return next(e)
     const raw = e as unknown as Record<string, unknown>
     const path = editedPath(e.tool, raw)
-    if (!path) return next(e)
-    // Whether the file was there is asked before the call runs, since a Write makes it.
-    let existed = false
+    const id = typeof raw.tool_use_id === 'string' ? raw.tool_use_id : ''
+    // A call with no id names nothing a decision could be taken under, so it is passed untouched.
+    if (!path || !id) return next(e)
+    const v = await gate($, e.tool, id, path, e.agentId)
+    if ('deny' in v) return v
+    fromAgent.add(id)
     try {
-      existed = await $.fs.exists(path)
-    } catch (err) {
-      later($, path, () => Promise.reject(err))
+      return await next(e)
+    } finally {
+      fromAgent.delete(id)
     }
+  })
+
+  // The main session's edit, judged beneath every mod's tool.call hook, after the settings hooks: an
+  // edit one of them refuses is refused in its words, and never held, judged or claimed. A query
+  // asked with no call id ($.tool.check) runs nothing and is passed untouched.
+  on('tool.check', async ($, e, next) => {
+    const x = e as unknown as Record<string, unknown>
+    const id = typeof x.tool_use_id === 'string' ? x.tool_use_id : ''
+    if (!id || x.agentId !== undefined || fromAgent.has(id)) return next(e)
+    const path = editedPath(e.tool, (e.input ?? {}) as Record<string, unknown>)
+    if (!path) return next(e)
+    const decided = await next(e)
+    if (decided.decision === 'deny') return decided
+    const v = await gate($, e.tool, id, path, null)
+    return 'deny' in v ? { decision: 'deny', reason: v.deny } : decided
+  })
+
+  // The decision, under the held call's id, by the session or agent it was held for. Answered here
+  // and never passed down, so the guards beneath are asked through mod-kit's screen first (#707).
+  on('tool.call', { tool: DECIDE_TOOL }, async ($, e) => {
+    const refused = await $.modkit.screen(e)
+    if (refused) return refused
+    const { tool: _t, tool_use_id: decideId, agentId, consent: _c, ...input } = e as unknown as Record<string, unknown>
+    const agent = typeof agentId === 'string' ? agentId : null
+    const call = String(input.call ?? '')
+    const h = await heldOf($, call)
+    // Only a held call, and only its own: no file can be cleared ahead of its edit.
+    if (!h || h.agent !== agent) return { deny: `No edit of yours is held under ${call}: it was decided already, or never held. Send the edit, and if it is held you are told how to decide.` }
+    const problem = decideProblem(input, h)
+    if (problem !== undefined) return { deny: problem }
+    if (input.decision === 'restructure') return restructure($, h, String(decideId ?? ''))
+    await settleQuestion($, h)
+    if (input.decision === 'fold') {
+      await release($, h, { decision: 'fold', issue: input.issue as number })
+      return { result: `Recorded: the structural fix for #${String(input.issue)} is folded into this work. ${again(h)}` }
+    }
+    await release($, h, { decision: 'proceed', reason: input.reason as string })
+    return { result: `Recorded: this work goes ahead on ${h.rel}. ${again(h)}` }
+  }).catch(($, e, next) => ({ deny: `The area check could not take the decision (${msg(next.error)}); the edit stays held. Try again.` }))
+
+  // Dan's restructure question, asked in Claude Code's own dialog: the hook words the question and
+  // its answers, and reads his choice from the dialog's own result, the one place it comes from him.
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    const ask = e as unknown as AskInput
+    const source = ask.metadata?.source
+    if (typeof source !== 'string' || !source.startsWith(`${ASK_SOURCE}:`)) return next(e)
+    if (e.agentId !== undefined) return { deny: 'Only the main session asks Dan about restructuring. Stop and report to the main session that this waits on him.' }
+    const id = source.slice(ASK_SOURCE.length + 1)
+    const h = await heldOf($, id)
+    if (!h) return { deny: `No edit is held under ${id}: it was decided already, or the session ended. Send the edit again, and if it is held you are told how to decide.` }
+    const q = restructureQuestion(h)
+    const r = await next({ ...e, questions: [{ question: q.question, header: HEADER, options: q.options, multiSelect: false }] } as typeof e)
+    if (r.deny !== undefined || r.isError) return r
+    const say = (text: string) => ({ ...r, context: [...(r.context ?? []), text] })
+    const out = (r.result ?? {}) as AskResult
+    if (out.afkTimeoutMs !== undefined) return say(`Dan did not answer: the dialog closed by itself while he was away, so nothing is recorded and ${h.rel} stays held. Ask him again when he is back.`)
+    const shown = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : q.question
+    const chosen = out.answers?.[shown] ?? out.answers?.[q.question]
+    if (typeof chosen !== 'string' || !chosen.trim()) return say(`Dan gave no answer, so nothing is recorded and ${h.rel} stays held. Ask him again, or leave it.`)
+    if (!q.options.some(o => o.label === chosen)) {
+      const parts = { still: `${h.rel} stays held`, again: `ask him again: ${asking(h)}` }
+      try {
+        return say(await $.modkit.typedAnswer({ guard: GUARD, typed: chosen, ...parts }))
+      } catch (err) {
+        return say(`Dan typed "${chosen}" instead of choosing, so nothing is recorded, and ${parts.still}; mod-kit could not tell him so (${msg(err)}). Tell him that in one line, answer what he said, then ${parts.again}.`)
+      }
+    }
+    const k = questionKey(h.repo, h.rel)
+    if (chosen === 'Fold in') {
+      await $.store.delete(k)
+      const who = h.agent === null ? 'Call' : `Tell subagent ${h.agent} to call`
+      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${h.shown.map(m => `#${m.n}`).join(', ')}>} to record it, then send the ${h.tool} again.`)
+    }
+    await $.store.set(k, { state: 'answered', answer: chosen, at: await $.clock.now(), issues: h.shown.map(m => m.n) } satisfies Question)
+    if (chosen === 'Restructure first') {
+      await release($, h, { decision: 'restructure', by: 'dan' })
+      return say(`Dan chose Restructure first: do the structural fix on ${h.rel} before this work; the file is released for it. ${again(h)}`)
+    }
+    await release($, h, { decision: 'proceed', by: 'dan' })
+    return say(`Dan chose Proceed anyway: this work goes ahead on ${h.rel}. ${again(h)}`)
+  })
+
+  // The questions waiting on Dan, said beside each prompt of the main session until he answers.
+  on('prompt.submit', async ($, e, next) => {
     const r = await next(e)
-    // The attempt is what the hold would meet, so an edit a guard beneath refused is judged too, and
-    // the record says so.
-    if (existed) later($, path, () => look($, path, e.agentId ?? null, r.deny !== undefined))
-    return r
+    if (r.drop !== undefined) return r
+    try {
+      const lines = await waitingLines($)
+      return lines.length ? { ...r, context: [...(r.context ?? []), ...lines] } : r
+    } catch (err) {
+      $.ui.log(`${MOD}: the questions waiting on Dan could not be read (${msg(err)})`, { to: 'debug' })
+      return r
+    }
   })
 }

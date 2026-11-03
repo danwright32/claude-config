@@ -66,8 +66,8 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, REST_RESUME, RESUME, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, startPrompt, thenNext,
-  type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release,
+  LIMITS, REST_RESUME, RESUME, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
+  type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release, type Unstarted,
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
@@ -1429,7 +1429,9 @@ const startedWhere = async ($: EngineInterface, r: SleepRecord) => `it started a
 // is remembered here, without a call, and this session's next /sleep takes it over at once (with
 // the list of unanswered issues it may have written) rather than waiting for it to go stale.
 const abandonedClaims = new Map<string, string>()
-const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: false }, signal?: AbortSignal): Promise<string> => {
+// `began.unstarted` carries what is said about the workers that were not told to start (#2062), so
+// the command can put it in Claude's acknowledgement too.
+const startSleep = async ($: EngineInterface, began: { is: boolean; unstarted?: string; sendItself?: string } = { is: false }, signal?: AbortSignal): Promise<string> => {
   const held: { claim?: Marker; generation?: string } = {}
   let said: string
   try {
@@ -1442,7 +1444,7 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   if (!began.is && held.claim && held.generation) abandonedClaims.set(held.claim.nonce, held.generation)
   return interruptedSaid(began.is)
 }
-const prepareSleep = async ($: EngineInterface, began: { is: boolean }, held: { claim?: Marker; generation?: string }): Promise<string> => {
+const prepareSleep = async ($: EngineInterface, began: { is: boolean; unstarted?: string; sendItself?: string }, held: { claim?: Marker; generation?: string }): Promise<string> => {
   // This boot first: without it no record can be judged, and one that is sound must never be
   // called broken for it (L11), nor a new one written that could not be told from an old boot's.
   // The session is kept beside the start when it can be read; without it the record is judged by
@@ -1646,9 +1648,14 @@ const prepareSleep = async ($: EngineInterface, began: { is: boolean }, held: { 
     unnoted += ` The morning report may miss ${issueNoteFailed.length} of the ${issues.notes.length} notes about before bed questions: ${[...new Set(issueNoteFailed)].join('; ')}.`
   // Every other worker with a goal is told to start (#1242): one idle at its prompt has no turn to
   // end, so the driver would never reach it. Its own scope modes starts the turn, once the record it
-  // reads to know it is a worker is in place. One that cannot be told is said and noted.
+  // reads to know it is a worker is in place. One that cannot be told is said and noted. A refusal
+  // is not sent again from here: mod-kit has already tried it once more, and a send made by a
+  // command, outside any request of Claude's, gets the same answer from auto mode however often it
+  // is made (#2062, read from the reason Claude Code gives). So it is said first, while Dan can
+  // still start that session himself, rather than found in the morning, and a no verdict is handed
+  // to Claude to send in its reply, where the check can give one.
   const told: string[] = []
-  const untold: string[] = []
+  const untold: (Unstarted & { id: string })[] = []
   const unnotedStarts: string[] = []
   for (const id of Object.keys(goals.goals)) {
     if (id === self) continue
@@ -1665,20 +1672,25 @@ const prepareSleep = async ($: EngineInterface, began: { is: boolean }, held: { 
       told.push(who)
       continue
     }
-    untold.push(`${who} (${why})`)
+    untold.push({ who, why, id })
     try {
-      await sleepNote($, p.current, { kind: 'finding', at: now, by: self, text: `${who} could not be told to start at bedtime (${why}), so it may have done no work tonight` })
+      await sleepNote($, p.current, { kind: 'finding', at: now, by: self, text: `${who} was not started at bedtime, because ${startFailBecause(why)}, so it may have done no work tonight` })
     } catch (err) {
       unnotedStarts.push(msg(err))
     }
   }
-  let startSaid = told.length ? ` Told to start now: ${told.join('; ')}.` : ''
-  if (untold.length) startSaid += ` Could not be told to start, so it may do no work tonight: ${untold.join('; ')}.`
-  if (unnotedStarts.length) startSaid += ` The morning report may not say so: ${[...new Set(unnotedStarts)].join('; ')}.`
+  const startSaid = told.length ? ` Told to start now: ${told.join('; ')}.` : ''
+  let unstarted = unstartedSaid(untold)
+  if (unstarted && unnotedStarts.length) unstarted += ` The morning report may not say so: ${[...new Set(unnotedStarts)].join('; ')}.`
+  if (unstarted) began.unstarted = unstarted
+  // A start that got no verdict is handed to Claude to send in its reply, where the same check
+  // judges it (#2062); a refusal or a failed send is not.
+  const sendItself = sendItselfAsk(untold)
+  if (sendItself) began.sendItself = sendItself
   const awake = await holdAwake($, p.dir, record.until, now)
   const others = e.others ? ` and ${e.others} other${e.others === 1 ? '' : 's'}` : ''
   const enrolled = e.workers.includes(self) ? `this session${others}` : e.others ? `${e.others} other session${e.others === 1 ? '' : 's'}` : 'no session'
-  let s = `Sleep mode is on until ${endSaid(record.until, now)}. Enrolled to work overnight: ${enrolled}.`
+  let s = `Sleep mode is on until ${endSaid(record.until, now)}.${unstarted ? ` ${unstarted}` : ''} Enrolled to work overnight: ${enrolled}.`
   if (e.left) s += ` Not enrolled: ${e.left} session${e.left === 1 ? '' : 's'} that ${e.left === 1 ? 'is' : 'are'} not interactive or ${e.left === 1 ? 'has' : 'have'} not said.`
   if (e.unknown) s += ` Other sessions may be missing: ${e.unknown}.`
   s += goals.said + startSaid + closedSentence(repos) + issues.said + unnoted + tookOver
@@ -3408,13 +3420,14 @@ const isThere = async ($: EngineInterface, path: string): Promise<boolean> => {
   }
 }
 
+type ClosingRef = { number?: number; repository?: { name?: string; nameWithOwner?: string; owner?: { login?: string } } }
 type PrJson = {
   number?: number
   state?: string
   url?: string
   headRefName?: string
   headRefOid?: string
-  closingIssuesReferences?: { number?: number }[]
+  closingIssuesReferences?: ClosingRef[]
   closedAt?: string
   comments?: PrComment[]
   body?: string
@@ -3490,9 +3503,28 @@ type IssueSeen = 'OPEN' | 'CLOSED' | 'PR'
 type PrSeen = { pr: PrJson | null; issues: Map<number, IssueSeen>; last: Map<number, string>; worked: number[]; askedAt: number; wait: number }
 const prSeen = new Map<string, PrSeen>()
 const IDLE_MAX_MS = 10 * MIN
-const closesOf = (pr: PrJson | null) => (pr?.closingIssuesReferences ?? []).map(x => x.number).filter((n): n is number => typeof n === 'number')
+// The repository a closing reference's issue is in (#2065). gh answers it as {id, name, owner: {id,
+// login}} and carries no nameWithOwner there (measured 2026-11-02), which is read first in case gh
+// ever adds it. One naming no repository it can be read from is undefined, and kept as the PR's own.
+const closingRepo = (x: ClosingRef): string | undefined => {
+  const rp = x.repository
+  if (typeof rp?.nameWithOwner === 'string' && rp.nameWithOwner.includes('/')) return rp.nameWithOwner
+  const login = rp?.owner?.login
+  return typeof login === 'string' && login && typeof rp?.name === 'string' && rp.name ? `${login}/${rp.name}` : undefined
+}
+// The issues a PR closes in `home`, its own repository. An issue it closes in another repository is
+// not this repository's issue of that number (#2065), as a Refs line naming another repository is
+// not (#1812): reading only the number held winding down on an unrelated issue here.
+const closesOf = (pr: PrJson | null, home: string | undefined) =>
+  (pr?.closingIssuesReferences ?? [])
+    .filter(x => {
+      const named = closingRepo(x)
+      return !home || !named || named.toLowerCase() === home.toLowerCase()
+    })
+    .map(x => x.number)
+    .filter((n): n is number => typeof n === 'number')
 // The issues a PR worked (#1812): those it closes, then those its description refers to.
-const workedOf = (pr: PrJson | null, repo: string | undefined) => [...new Set([...closesOf(pr), ...issueRefs(typeof pr?.body === 'string' ? pr.body : '', repo)])]
+const workedOf = (pr: PrJson | null, home: string | undefined, repo: string | undefined) => [...new Set([...closesOf(pr, home), ...issueRefs(typeof pr?.body === 'string' ? pr.body : '', repo)])]
 const settledIssue = (s: IssueSeen | undefined) => s === 'CLOSED' || s === 'PR'
 // Nothing about it can change: merged, with every issue it worked closed. Only a PR read by its
 // number: a lookup by branch asks which PR a branch has, which a new PR on that name changes.
@@ -3718,8 +3750,11 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
       }
       issues = new Map(seen?.issues)
       last = new Map(seen?.last)
-      worked = workedOf(pr, slug)
-      const closing = closesOf(pr)
+      // The PR's own repository, from GitHub's link for it. A link that cannot be read is said by the
+      // reading below (#961), never here, so the repository it was read in stands in for it.
+      const home = (await repoOfLink($, pr?.url).catch(() => undefined)) ?? slug
+      worked = workedOf(pr, home, slug)
+      const closing = closesOf(pr, home)
       // Its issues decide nothing until it has merged (outstanding reads them only then).
       if (pr?.state === 'MERGED')
         for (const n of worked) {
@@ -3759,7 +3794,7 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     if (pr) {
       if (!r.branch && typeof pr.headRefName === 'string') r.branch = pr.headRefName
       const state = pr.state === 'MERGED' || pr.state === 'CLOSED' ? pr.state : 'OPEN'
-      const closes = closesOf(pr)
+      const closes = closesOf(pr, (await repoOfLink($, pr.url).catch(() => undefined)) ?? slug)
       const body = typeof pr.body === 'string' ? pr.body : ''
       // Each issue it worked (#1812), a pull request a Refs line named left out; an open one carries
       // what is left on it, from the PR's stated next step or the issue's last comment.
@@ -4844,12 +4879,15 @@ export const register: Register = on => {
   })
   // Sleep and waking are acknowledged as every other switch is (#1086), and only when they switched.
   on('command.run', { command: 'sleep' }, async ($, e, next) => {
-    const began = { is: false }
+    const began: { is: boolean; unstarted?: string; sendItself?: string } = { is: false }
     const text = await startSleep($, began, next.signal)
+    // A worker that was not started is said in the acknowledgement too, first (#2062), and one whose
+    // start got no verdict is handed to Claude to send itself, judged as usual.
+    const context = [ackOn('sleep', began.unstarted ? { first: `Sleep mode is on. ${began.unstarted}` } : {}), ...(began.sendItself ? [began.sendItself] : [])]
     // The morning reminder (#1107), only for a night this call began, and never once the command was
     // abandoned, since every call is then refused (#1677).
-    if (began.is && text === interruptedSaid(true)) return { text, context: [ackOn('sleep')] }
-    return began.is ? { text: `${text}${await pinMorning($)}`, context: [ackOn('sleep')] } : { text }
+    if (began.is && text === interruptedSaid(true)) return { text, context }
+    return began.is ? { text: `${text}${await pinMorning($)}`, context } : { text }
   })
   on('command.run', { command: 'wake' }, async ($, e) => {
     const woke = await wake($, e.origin.kind === 'bridge')
