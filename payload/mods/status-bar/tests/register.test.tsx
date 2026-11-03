@@ -1,5 +1,5 @@
 import { expect, mock } from 'claude-code/testing'
-import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type {} from '../types/index.d.ts'
@@ -241,6 +241,9 @@ const world = (on: On, init: Partial<World> = {}) => {
     return w.compact() as never
   })
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  // The settings hooks Claude Code runs at a compaction's end (#2082), which a test raises itself.
+  on('classic.PostCompact', () => ({}) as never)
+  on('classic.SessionStart', () => ({}) as never)
   on('prompt.submit', ($, e) => {
     prompts.push({ text: e.text, afterCompacts: compacts.length })
     return w.submit(e.text) as never
@@ -777,6 +780,133 @@ test('a prompt to carry on that the session refuses, or that fails, is said in a
   expect(prompts).toHaveLength(2)
   expect(toasts).toHaveLength(2)
   expect(toasts[1]).toMatch(/^Compacted, but the session could not be told to carry on \(\S/)
+})
+
+// #2082 reopened, 2026-11-02 at 7:40 PM ET: the session queued a Compact, and mod-kit's reload at
+// the reply's end touched this mod, which Claude Code reloaded 31 s into the 45 s compaction. A
+// reload cancels every wait of the copy it replaces (its types: "a hot reload of the plugin cancels
+// its pending waits with the old environment"), so the copy that started the Compact never heard it
+// finish: no prompt to carry on, and no toast. Modelled here as a Compact that never answers the copy
+// that started it, a second session.start over the same $.state, then the settings hooks Claude Code
+// runs at every compaction's end, which reach whichever copy is running then.
+const compactEnds = ($: unknown, extra: Record<string, unknown> = {}) =>
+  ($ as { classic: { PostCompact: (e: never) => Promise<unknown> } }).classic.PostCompact({ trigger: 'manual', compact_summary: 'summary', ...extra } as never)
+const startsAfterCompact = ($: unknown, extra: Record<string, unknown> = {}) =>
+  ($ as { classic: { SessionStart: (e: never) => Promise<unknown> } }).classic.SessionStart({ source: 'compact', ...extra } as never)
+const reloadDuringCompact = async ($: unknown, clock: TestClock, w: World, files: Record<string, string>, mtimes: Record<string, number>) => {
+  await start($ as never, clock)
+  await queueWithNote($, clock, files, mtimes)
+  w.compact = () => never()
+  await turn($ as never)
+  await clock.settle()
+  await start($ as never, clock)
+}
+
+test('a reload in the middle of the compaction the session queued still sends one prompt to carry on, once it has finished (#2082)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  expect(compacts).toHaveLength(1)
+  // A reload with no compaction finished sends nothing, however long it waits for one.
+  await clock.advance(MIN)
+  expect(prompts).toEqual([])
+  await compactEnds($)
+  await clock.advance(10 * SEC)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(CARRY_ON)
+  expect(toasts).toEqual([])
+  // Neither the settings hooks after it nor a later reload sends it again.
+  await startsAfterCompact($)
+  await start($, clock)
+  await clock.advance(20 * MIN)
+  expect(prompts).toHaveLength(1)
+  expect(toasts).toEqual([])
+})
+
+test('the prompt to carry on is sent exactly once across two reloads around the end of the compaction (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await compactEnds($)
+  // A second reload before the first copy sent it: the copy running now sends it, and only once.
+  await start($, clock)
+  await clock.settle()
+  expect(prompts).toHaveLength(1)
+  await startsAfterCompact($)
+  await compactEnds($)
+  await clock.advance(20 * MIN)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(CARRY_ON)
+  expect(toasts).toEqual([])
+})
+
+test("the settings hook for the session starting again after a compaction is enough on its own (#2082)", withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await startsAfterCompact($)
+  await clock.advance(10 * SEC)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(CARRY_ON)
+})
+
+test('a prompt to carry on that the session refuses after a reload is still said in a toast (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  w.submit = () => ({ drop: 'held by a guard' })
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await compactEnds($)
+  await clock.advance(10 * SEC)
+  expect(prompts).toHaveLength(1)
+  expect(toasts).toEqual(['Compacted, but the session could not be told to carry on (held by a guard): type "carry on" to start it again.'])
+})
+
+test('a compaction the session queued that is never heard to finish is said after ten minutes, and sends nothing after (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await clock.advance(9 * MIN)
+  expect(toasts).toEqual([])
+  await clock.advance(MIN)
+  expect(toasts).toEqual(['The Compact the session queued did not say it finished within 10 minutes, so the session was not told to carry on: type "carry on" to start it again.'])
+  await compactEnds($)
+  await clock.advance(MIN)
+  expect(prompts).toEqual([])
+  expect(toasts).toHaveLength(1)
+})
+
+test('once a compaction has ended, a turn Dan starts before the prompt is sent takes its place (#2082)', withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, toasts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await compactEnds($)
+  await step($, clock)
+  await clock.advance(20 * MIN)
+  expect(prompts).toEqual([])
+  expect(toasts).toEqual([])
+})
+
+test("a compaction's end sends nothing for the button's Compact, an automatic one in the middle of a turn, or a subagent's (#2082)", withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  await compactEnds($)
+  await clock.advance(MIN)
+  expect(prompts).toEqual([])
+  // Queued but its turn still running: an automatic compaction then is not the one queued.
+  await queueWithNote($, clock, files, mtimes)
+  await compactEnds($, { trigger: 'auto' })
+  await compactEnds($, { agent_id: 'a1' })
+  await startsAfterCompact($)
+  await clock.advance(MIN)
+  expect(prompts).toEqual([])
+  // The queued one still runs at the turn's end, and is followed by its one prompt.
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(2)
+  expect(prompts).toHaveLength(1)
+  await compactEnds($)
+  await clock.advance(MIN)
+  expect(prompts).toHaveLength(1)
+  await ui.unmount()
 })
 
 test('a note from before the last compaction, over an hour old, empty, or outside the scratchpad is refused (#2025)', withKit, async ($, on) => {
