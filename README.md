@@ -1637,8 +1637,11 @@ whether 7 of the first 10 misses ran past the end of the line they partly matche
 also records the length of every quote it placed by part of a line as `part_quote_lengths=`, and
 the report gives both sets of lengths in bands around the 20 character floor (under 10, 10 to 19,
 20 to 29, and up), with an older cut quote counted on its own. `--misses` lists every quote that
-matched no line, one per line. The floor was set without measuring it; set it from those lengths
-once a week of reviews has recorded them.
+matched no line, one per line. Read on the personal MacBook over the 959 reviews started from
+2026-10-25 to 2026-11-03, 8 of 672 findings were placed by part of a line, every recorded length 60
+characters or more, and the 5 misses were all longer than 60, none holding a line break. Nothing fell
+near the floor, so it decided no finding and stays at 20 (#1701). That is 8 cases from one Mac, too
+few to settle it: the work MacBook's records were not read, so run the report there too.
 
 #### Scoring the review itself
 
@@ -2866,9 +2869,11 @@ the installed hooks or the scratch the suites build their fixtures in (claude-co
 when one has been running longer than `SYNC_SUITE_MAX_AGE` (default `3600`, the longest any suite
 may run) and then names every such process in one `kill -9` line, or when more than
 `SYNC_SUITE_MAX_ROOTS` (default `8`) were started independently, since a whole run of the runner
-counts as one. Nobody runs status while a pile is slowing them down, so `hooks/suite-pile-notice.sh`
-says the same thing on a prompt (claude-config#466): both call `hooks/lib/suite-pile.sh`, so they
-cannot disagree, and the notice names the same `kill -9` line (or sends you to status when it is
+counts as one. A run of the runner is judged by its newest suite, not its own age: a full run that
+has gone past the hour under load but is still finishing suites is never named, and one is named only
+when no suite under it is younger than the limit (claude-config#2106). Nobody runs status while a
+pile is slowing them down, so `hooks/suite-pile-notice.sh` says the same thing on a prompt
+(claude-config#466): both call `hooks/lib/suite-pile.sh`, so they cannot disagree, and the notice names the same `kill -9` line (or sends you to status when it is
 longer than fifty pids). It is said once per stretch in each session, and a stretch ends only after
 `SYNC_SUITE_PILE_REARM` (default `600`) seconds of no pile, so suites flickering across the breadth
 limit are one notice. It reads the process table and nothing else. Anything it cannot read (the
@@ -3725,11 +3730,17 @@ fails a mod looping over `.inputs` by hand. That the real engine's `$.fs` report
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
 `tests/test-fs-kind-engine.sh` against a probe mod run headless, once per Claude Code version, the
 result kept on each Mac in `~/.claude-engine-checks/fs-kinds` (#1830).
+A mod holds back mod-kit's own reload of it while it waits on work a reload would drop, with
+`$.modkit.hold({ mod, id, what, ms })` (at most an hour; the same mod and id again renews it) and
+`$.modkit.release({ mod, id })` (#2100): a held mod is asked again at the next pass, and a hold past
+its time lets the reload go and says, in the transcript, which wait may have been dropped. Claude
+Code's own reload of a mod whose files changed cannot be held by any mod. The status bar holds its
+reload while its Compact runs.
 
 </td><td>
 
 #607 to #609, #605, #610, #663, #667, #688, #690, #698, #700, #703, #705, #707, #712, #726, #730,
-#743, #744, #939, #1012, #1190, #1252, #1306, #1484, #1682, #1765, #1814, #1830
+#743, #744, #939, #1012, #1190, #1252, #1306, #1484, #1682, #1765, #1814, #1830, #2100
 
 </td></tr>
 <tr><td>
