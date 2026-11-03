@@ -822,6 +822,21 @@ def gated_in_text(command, kinds=BODY_FILE_COMMANDS):
     return out
 
 
+# Whether a gh api call writes: a write method, or a field or input flag, which makes gh send a POST
+# (gh api's own default). Asked by the session link gate and the work names publish gate
+# (claude-config#2105), so the two read a write by one rule.
+API_WRITE_FLAGS = {"-f", "-F", "--field", "--raw-field", "--input"}
+API_WRITE_METHODS = {"POST", "PATCH", "PUT"}
+
+
+def api_writes(args):
+    """Whether one gh api call's arguments make it write."""
+    method = {v.upper() for v in flag_values(args, "--method", "-X")}
+    return bool(method & API_WRITE_METHODS) or any(
+        a in API_WRITE_FLAGS or any(a.startswith(f + "=") for f in API_WRITE_FLAGS if f.startswith("--"))
+        for a in args)
+
+
 def deny_payload(reason):
     """The PreToolUse response that blocks the tool call."""
     return {

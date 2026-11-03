@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Refuse a gh pr or issue create, edit, comment or review, or a gh api write to issues, pulls or
+# comments, whose text names a work organisation or repository, when the repository it posts to is
+# public (claude-config#2105).
+#
+# The rule, the names and the message live in work_names_publish_gate.py. This is only the wrapper:
+# skip every command that does not name gh, run the gate, and refuse when the gate itself fails,
+# since a privacy gate that did not run is not one that found nothing (L98).
+#
+# No override: the remedy is always open, rewrite the text.
+
+set -uo pipefail
+
+payload="$(cat)"
+
+# The test the session link gate uses (no-session-link-in-comments.sh, claude-config#1880): gh as a
+# word, read from the "command" key on, so a home folder's "wright" never runs the gate. Every
+# imprecision runs the gate rather than skipping it.
+GH_WORD='(^|[^A-Za-z0-9_]|\\[A-Za-z]|\\u[0-9A-Fa-f]{4})gh([^A-Za-z0-9_]|$)'
+may_post() {
+  local LC_ALL=C
+  local text="$1"
+  case "$1" in *'"command"'*) text="${1#*\"command\"}" ;; esac
+  [[ "$text" =~ $GH_WORD ]]
+}
+may_post "$payload" || exit 0
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "WORK NAME IN PUBLIC TEXT: python3 is not on PATH, so check-work-names-publish.sh could not tell whether this gh command posts a work organisation or repository name to a public repository. A gate that did not run is not one that found nothing." >&2
+  exit 2
+fi
+
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
+out="$(printf '%s' "$payload" | GATE_DIR="$HERE" python3 "$HERE/work_names_publish_gate.py" 2>"$err")"
+rc=$?
+
+if [ "$rc" -ne 0 ]; then
+  echo "WORK NAME IN PUBLIC TEXT: check-work-names-publish.sh failed (rc=$rc), so whether this gh command posts a work organisation or repository name to a public repository could not be checked. A gate that did not run is not one that found nothing. $(tr '\n' ' ' <"$err" 2>/dev/null | cut -c1-600)" >&2
+  exit 2
+fi
+
+printf '%s' "$out"
+exit 0
