@@ -3790,10 +3790,91 @@ observing half, so it has no surface of its own: no card, no question, nothing d
   nothing was held.
 - **The replay.** `node tools/area-check-replay.ts <checkout> --repo <owner/name>` runs a
   repository's last 30 days through `rules.ts` itself, each commit standing in for a session, and
-  reports holds per session; `tests/replay-fixture.ts` is this repository's own month, measured that
-  way, and the mod's replay test holds the rules to it. On 2026-10-22 a busy work repository's month
+  reports holds per session; `tests/replay-fixture/` is this repository's own month, measured that
+  way, and the mod's replay test holds the rules to it. `--fixture` writes it as parts of one record
+  per line, each at most 100 KB, put back together by its `index.ts` (#2097): it was once one module
+  whose two long lines made a month measured again a 350 KB diff nobody could read, past what one
+  lessons review can hold. On 2026-10-22 a busy work repository's month
   replayed to 77% of judged sessions holding at least once and 179 of 602 holding four or more times,
   which is what the week's log is for.
+
+### The bar, set 2026-11-02 from the week (#1509)
+
+The week ran 2026-10-23 to 11-02 on both Macs, with `loaded` records every day on each. Work
+MacBook: 2,923 judged edits by 539 actors (a session, or one subagent of it, judged for itself),
+93% of them by subagents; 1,038 would have held (36%), 351 actors held at least once and 95 held
+four times or more, the most 17. Personal MacBook: 1,063 judged by 191 actors, 246 would have held,
+100 actors held, 15 four times or more, the most 16. Issue reads failed 7 times of 3,986, never
+from a wrong account; 20 reads passed the 7 second deadline (p99 5.5 s work, 7.0 s personal).
+
+Where the holds came from, and what was changed:
+
+- **Folder matches** were 612 of the 982 issue holds on the work MacBook (136 of 203 personal).
+  The folder fallback is kept (decision 4) but counts only when the folder has at most 2 issues,
+  not 5: four or more holds then falls from 89 actors to 31 on issue holds alone.
+- **Priority**: p3 and p4 issues were 59% of the issues shown on the work MacBook and 91% on the
+  personal. Only an issue at p0 to p2 holds; one with no priority counts as p2. p0 to p1 only was
+  measured too (14 of 41 main sessions held) and rejected, since it drops the p2 default where most
+  filed debt sits.
+- **Growth** is unchanged: 1,500 lines, 300 net in 90 days, the 10 fastest, source and tests ranked
+  together. It held 87 of 539 actors on the work MacBook and 38 of 191 on the personal, none more
+  than 3 times, and the distinct files crossing it in the week were 5, 3 and 5 in the three busiest
+  work repositories and 4 here, under decision 6's about 10. The 1,500 line floor sits at about the
+  90th percentile of judged files that grew 300 lines; 300 net is near the median of all judged
+  files, so the floor and the top 10 decide, not the growth minimum. Ranking source and tests
+  separately could not be measured from the log (its upper bound quadrupled the personal holds), so
+  it was not adopted.
+
+With both changes, the week would have held 204 of 539 actors on the work MacBook (38%), 8 of them
+four times or more, at most 7, and 15 of 41 main sessions, none four or more; on the personal
+MacBook 45 of 191 actors (24%), none four or more, at most 3, and 2 of 9 main sessions. A bar of
+its own per repository (`BARS`, keyed by name) is empty: no repository measured as needing one.
+`RULE_VERSION` is 2 and each `judged` record carries the bar's date.
+
+### The hold, built 2026-11-02 (#1509)
+
+Phase 2 turns the observing half into the hold, so two phase 1 points above no longer hold: the
+judging now runs on the edit's path, before it runs, and there is a surface. What is judged, the
+facts and the bar are unchanged.
+
+- **Where an edit is judged.** The main session's edit at `tool.check`, beneath every mod's
+  `tool.call` hook and after the settings hooks, so an edit they refuse is refused in their words
+  and never held, judged or claimed. A subagent's edit at `tool.call`, where its loop is known, held
+  for itself (decision 8); its call id goes in a set so `tool.check` does not judge it again, the
+  shape the design round guard uses. A query asked with no call id runs nothing and is passed, and
+  so is a subagent edit with no call id, which names nothing a decision could be taken under.
+- **What a hold shows.** mod-kit's grey card (`$.modkit.blocked`, guard `Area check`): the file,
+  each issue shown with its priority and labels, or that it is among the fastest growing large
+  files, and growth as one `Rough:` line. The refusal Claude reads (`holdRefusal`) carries the same
+  facts and the three ways to decide under the held call's id.
+- **The decision.** The mod registers `decide` (`mcp__area-check__decide`) at every session start,
+  a headless one included, since subagents decide with it too. It takes only a call that is held,
+  and only from the session or subagent it was held for, so no file can be cleared ahead of its
+  edit. `proceed` needs a reason that says something (`reasonProblem` refuses a placeholder, a
+  template slot, a fragment), `fold` one of the issues the hold showed; either claims the file for
+  that actor, logs a `decided` record and tells Claude to send the edit again, unchanged.
+- **Restructure asks Dan.** `restructure` stores a pending question in `$.store` under the
+  repository and file, so every session reads it (L636). In the main session, awake and at home,
+  Claude is told to ask with AskUserQuestion under the source `area-check:<call id>`; the hook
+  rewrites the question to `restructureQuestion`'s words and options: "Restructure first",
+  "Proceed anyway", and "Fold in" only where an issue was shown. Restructure first and Proceed
+  anyway release the file and stand for a week for the same issues (`answerStands`), so the file
+  is not asked about again; Fold in tells Claude to call `decide` with `fold`. A dialog that closed
+  while he was away, or an answer he typed instead of choosing, records nothing. Asleep, each issue
+  becomes one of bedtime's open questions (`sleepNotes`); away, scope modes' hold draws its card.
+  A subagent is told to stop and report, and the main session names every question waiting on Dan
+  for its session when he next types, through `prompt.submit`.
+- **Claiming.** A held edit is never claimed, so sending it again before deciding is held again;
+  the held entries live in the session's `$.state` under their call ids. A quiet edit is claimed
+  only when both its issues and its growth were read; one with a read that failed passes
+  unclaimed, so the next edit tries again (decision 12).
+- **The record.** `judged` records are version 2 with decision `held` or `quiet`, and one decided
+  by a standing answer carries `applied`; `decided` records name the call, the decision, its reason
+  or issue, and `by: "dan"` when it came from the dialog. `loaded` and `unjudged` stay version 1.
+  Session start sweeps issue lists no edit has read for a week and answers past their week.
+- **When the mod fails.** The edit goes ahead, the error goes to `errors.jsonl`, and the first each
+  session is one dim line saying the edit went ahead unchecked. A log write that fails says so in a
+  line of its own, since what was decided still stands (L11).
 
 ## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
 

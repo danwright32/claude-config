@@ -4,7 +4,7 @@
 // the calibration on #1506, but judged by the mod's code itself rather than a script beside it (L107).
 //
 //   node tools/area-check-replay.ts <checkout> --repo <owner/name> [--account <gh account>]
-//        [--days 30] [--names] [--fixture <file.ts>]
+//        [--days 30] [--names] [--fixture <folder>]
 //
 // What a commit stands for: the files it modified or renamed (a new file is never judged, decision 2),
 // its own issues the #N its subject names (a squash title carries the issue and the pull request), and
@@ -14,12 +14,13 @@
 // Read only: nothing in the checkout is changed, nothing is fetched (the report names the origin head
 // it read, so a stale one shows). File names are printed only with --names, since a work repository's
 // paths do not belong in this public repository's pull requests (L155). --fixture writes the replay's
-// input, trimmed to what decides it, with the summary it gave, for the mod's own replay test.
+// input, trimmed to what decides it, with the summary it gave, for the mod's own replay test: a folder
+// of one record per line, through tools/area-check-fixture.ts, so a month measured again is a diff a
+// review can read (#2097).
 //
 // Exit codes, each distinct (L11): 0 replayed, 2 bad arguments, 3 a read failed (git, gh, the path
 // reader), each said on stderr.
 import { execFileSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -38,6 +39,7 @@ import {
   type Growth,
   type ReplayInput,
 } from '../payload/mods/area-check/hooks/rules.ts'
+import { PART_BYTES, writeFixture } from './area-check-fixture.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const EXTRACTOR = join(here, '..', 'payload', 'hooks', 'lib', 'match-open-issues.py')
@@ -64,7 +66,7 @@ const days = Number(flag('--days') ?? 30)
 const fixture = flag('--fixture')
 const checkout = args[0]
 if (!checkout || args.length !== 1 || !repo || !/^[\w.-]+\/[\w.-]+$/.test(repo) || !Number.isInteger(days) || days < 1)
-  fail(2, 'usage: node tools/area-check-replay.ts <checkout> --repo <owner/name> [--account <gh account>] [--days 30] [--names] [--fixture <file.ts>]')
+  fail(2, 'usage: node tools/area-check-replay.ts <checkout> --repo <owner/name> [--account <gh account>] [--days 30] [--names] [--fixture <folder>]')
 
 const run = (cmd: string, argv: string[], opts: { input?: string; env?: NodeJS.ProcessEnv; ok?: number[] } = {}): string => {
   try {
@@ -172,12 +174,12 @@ if (fixture) {
   const paths = [...new Set(sessions.flatMap(x => x.files))].sort()
   const at = new Map(paths.map((p, i) => [p, i]))
   const packed = { ...trimmed, sessions: sessions.map(x => ({ ...x, files: x.files.map(f => at.get(f) as number) })) }
-  writeFileSync(
-    fixture,
-    `// Measured by tools/area-check-replay.ts from ${repo} on ${new Date().toISOString().slice(0, 10)}: ${days} days to ${head.slice(0, 10)}, rules v${RULE_VERSION}.\n` +
-      `// Generated; measure again rather than edit (L48). Each session's files are places in PATHS.\n` +
-      `import type { ReplayInput, ReplaySummary } from '../hooks/rules.ts'\n\n` +
-      `export const PATHS: string[] = ${JSON.stringify(paths)}\n\n` +
-      `export const MEASURED: { repo: string; head: string; rule: number; input: Omit<ReplayInput, 'sessions'> & { sessions: { id: string; day: string; own: number[]; files: number[] }[] }; summary: ReplaySummary } = ${JSON.stringify({ repo, head, rule: RULE_VERSION, input: packed, summary: s })}\n`,
-  )
+  // AREA_CHECK_FIXTURE_PART_BYTES is a seam for the tool's own tests, which deal a tiny month into parts.
+  const partBytes = Number(process.env.AREA_CHECK_FIXTURE_PART_BYTES ?? PART_BYTES)
+  if (!Number.isInteger(partBytes) || partBytes < 1) fail(2, 'AREA_CHECK_FIXTURE_PART_BYTES must be a whole number of bytes')
+  try {
+    await writeFixture(fixture, { repo: repo as string, head, rule: RULE_VERSION, measuredOn: new Date().toISOString().slice(0, 10), days, paths, input: packed, summary: s }, partBytes)
+  } catch (err) {
+    fail(3, `could not write the fixture to ${fixture}: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
