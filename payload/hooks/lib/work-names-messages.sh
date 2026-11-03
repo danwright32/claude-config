@@ -71,7 +71,9 @@ wnm_push_messages() {   # $1 = the push command
     return 2
   fi
   if [ ! -s "$stream" ]; then rm -f "$stream"; return 0; fi
-  WNM_OUT="$(python3 "$scanner" --texts0-from "$stream" 2>&1)"; rc=$?
+  # --work-repos: the messages are checked against the work repository list too, read live through
+  # gh, and a list that cannot be read is no verdict (claude-config#2111).
+  WNM_OUT="$(python3 "$scanner" --texts0-from "$stream" --work-repos 2>&1)"; rc=$?
   rm -f "$stream"
   case "$rc" in
     0|1) return "$rc" ;;

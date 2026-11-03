@@ -146,6 +146,74 @@ texts 'commit 1a2b3c4\0Fix the reader\0commit 5d6e7f8'
 check "a label with no text is a stream that cannot be read, never a clean one (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
 check "and says so: $text_out" has "$text_out" "label with no text"
 
+# ---------------------------------------------------------------- 7. work repositories, in messages
+# A squash merge copies every commit message into main, so a message naming a work REPOSITORY is
+# published as surely as one naming its organisation (claude-config#2111). With --work-repos the text
+# scan also reads the work repository list, live through gh as the publish gate reads it (#2105), and
+# refuses when it cannot. The file scan never takes it (#1568 left repository names out of files).
+# gh is a fake answering only the list, from $FAKE_LIST; every name is invented.
+GHBIN="$WORK/ghbin"; mkdir -p "$GHBIN"
+cat > "$GHBIN/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *contents/repos.json*)
+    [ -n "${FAKE_GH_HANG:-}" ] && exec sleep 30
+    [ -f "$FAKE_LIST" ] || { echo "HTTP 404: Not Found" >&2; exit 1; }
+    cat "$FAKE_LIST"; exit 0 ;;
+  "auth status"*) printf '{"hosts":{"github.com":[]}}\n'; exit 0 ;;
+esac
+echo "fake gh: unexpected call: $*" >&2
+exit 1
+SH
+chmod +x "$GHBIN/gh"
+LIST="$WORK/list.json"
+printf '{"repos":[{"owner":"Globex-Corp","name":"halcyon"},{"owner":"Globex-Corp","name":"zephyr-app"},{"owner":"Globex-Corp","name":"globex.site"}]}\n' > "$LIST"
+repo_texts(){   # printf format and arguments making the stream -> output, rc in text_rc
+  text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
+    python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+}
+STREAM_REPO='commit 1a2b3c4\0Fix the reader\n\nrefs widget#3\n\0commit 5d6e7f8\0Quote the refusal\n\nfrom the Halcyon#12 checkout\n'
+repo_texts "$STREAM_REPO"
+check "a listed work repository in a commit message is found (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
+check "and named by its label and line: $text_out" has "$text_out" "commit 5d6e7f8:3: a work repository or owner name"
+check "and only that one: $text_out" lacks "$text_out" "commit 1a2b3c4:"
+check "the output never repeats the repository it found: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "halcyon"
+check "the remedy says how to write it instead: $text_out" has "$text_out" "a work repository"
+check "the summary says the list was read, by count only: $text_out" has "$text_out" "4 work repository and owner names"
+texts "$STREAM_REPO"
+check "(control) without --work-repos the same messages pass, so the hit came from the list (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+repo_texts 'commit 5d6e7f8\0Move it\n\nto globex-corp/thing\n'
+check "a listed owner is found: $text_out" has "$text_out" "commit 5d6e7f8:3: a work repository or owner name"
+repo_texts 'commit 5d6e7f8\0Move it\n\nthe zephyr-app-extra fork\n'
+check "a listed hyphenated name inside a longer one is found: $text_out" has "$text_out" "commit 5d6e7f8:3: a work repository or owner name"
+repo_texts 'commit 5d6e7f8\0Move it\n\nline two\nsee globex.site for it\n'
+check "a listed name that is not one plain token is found by its line: $text_out" has "$text_out" "commit 5d6e7f8:4: a work repository or owner name"
+check "and never repeated: $text_out" lacks "$text_out" "globex.site"
+repo_texts 'commit 5d6e7f8\0Move it\n\na halcyonic day, and prehalcyon too\n'
+check "(control) a listed name inside a longer word is no match (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+repo_texts 'commit 5d6e7f8\0Move it\n\nfrom %s/widget\n' "$FAKE_ORG"
+check "an organisation is still found with the list read: $text_out" has "$text_out" "commit 5d6e7f8:3: a work organisation name"
+# Cannot tell is refused, never passed (L98, L345).
+rm -f "$LIST"
+repo_texts "$STREAM_REPO"
+check "an unreadable list is refused, never read as clean (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
+check "and says what could not be read: $text_out" has "$text_out" "work repository list"
+printf '{"repos":[]}\n' > "$LIST"
+repo_texts 'commit 1a2b3c4\0clean\n'
+check "an empty list is refused (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
+printf '{"repos":[{"owner":"Globex-Corp"}]}\n' > "$LIST"
+repo_texts 'commit 1a2b3c4\0clean\n'
+check "a list of the wrong shape is refused (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
+printf '{"repos":[{"owner":"Globex-Corp","name":"halcyon"}]}\n' > "$LIST"
+t0=$SECONDS
+text_out="$( printf 'commit 1a2b3c4\0clean\n' | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" FAKE_GH_HANG=1 HOME="$EMPTY_HOME" \
+  WORK_NAMES_REPOS_BUDGET_SECONDS=3 python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+check "a list that does not answer inside the budget is refused (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
+check "and the scan stops at its budget, not at gh's own wait ($((SECONDS - t0)) seconds)" [ $((SECONDS - t0)) -lt 15 ]
+file_out="$( cd "$T" && PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" python3 "$SCAN" --root "$T" --work-repos clean.md 2>&1 )"; file_rc=$?
+check "the file scan never takes the list (exit $file_rc): $file_out" [ "$file_rc" -eq 2 ]
+check "and says it is for text only: $file_out" has "$file_out" "only with --texts0-from"
+
 # The two built in hashes cover every owner in the registry on a Mac that has one, so the check CI
 # runs (with no registry) is the same check for the organisations that matter. Only measurable where
 # a registry is, and said plainly where it is not, never failed for it (L411).

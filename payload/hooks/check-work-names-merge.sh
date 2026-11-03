@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Refuse a pull request merge whose title, description or commit messages name a work organisation,
-# in a repository that guards its files against them (claude-config#1995).
+# Refuse a pull request merge whose title, description or commit messages name a work organisation
+# or repository, in a repository that guards its files against them (claude-config#1995, #2111).
 #
 # This repository is public, and its whole tree is held free of the work GitHub organisations' names
 # by lib/work-names.py (#1568). It squash merges with the commit messages as the body and the title
@@ -15,7 +15,8 @@
 # THE RULE is lib/work-names.py's, the one the tree suite runs over the files, asked through its
 # --texts0-from stream (title, description, then each commit by its short sha), so a name is judged
 # the same in a file and in a message (L263, L370). What it prints never repeats the name, only the
-# label and the line.
+# label and the line. With --work-repos (#2111) it also matches the work repository list, read live
+# through gh by the same reader the publish gate uses; a list it cannot read is refused.
 #
 # SCOPE. A repository is judged only when the BASE commit of the pull request holds
 # payload/hooks/lib/work-names.py: the file check is the opt in, and wherever it guards the files, this
@@ -46,7 +47,7 @@ payload=$(cat)
 # words every merge route names (mt__might_merge in lib/merge-target.sh).
 case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
 
-WHAT="Cannot tell whether this merge publishes a work organisation name"
+WHAT="Cannot tell whether this merge publishes a work organisation or repository name"
 
 # shellcheck source=lib/merge-target.sh
 { . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null && declare -F mt_runs_merge >/dev/null; } || {
@@ -214,14 +215,19 @@ printf '%s' "$view" | jq -j '
        + (.messageHeadline // "") + "\n\n" + (.messageBody // "") + "\u0000"] | join(""))' > "$STREAM" 2>/dev/null \
   || deny "$WHAT: the pull request's title, description and commit messages could not be put together for the scanner."
 
-findings=$(python3 "$SCANNER" --texts0-from "$STREAM" 2>&1); scan_rc=$?
+# The scan also reads the work repository list through GitHub (--work-repos, claude-config#2111), so
+# it gets what is left before the hook's own timeout, less a margin for the refusal: a hook killed at
+# its timeout gives no verdict at all, and this one must refuse in its own words instead.
+repos_budget=$(( READ_DEADLINE + 12 - SECONDS ))
+[ "$repos_budget" -ge 3 ] || deny "$WHAT: $BUDGET_SPENT: the work repository list, which the messages are checked against, had no time left to be read."
+findings=$(WORK_NAMES_REPOS_BUDGET_SECONDS="$repos_budget" python3 "$SCANNER" --texts0-from "$STREAM" --work-repos 2>&1); scan_rc=$?
 case "$scan_rc" in
   0) exit 0 ;;
   1) ;;
   *) deny "$WHAT: lib/work-names.py gave no verdict (exit $scan_rc: $(printf '%s' "$findings" | tail -n 1 | cut -c1-300)). That is the scanner failing, not the text passing." ;;
 esac
 
-deny "Refusing to merge PR #${number}: it names a work organisation, and $api_slug guards against that, because the merge publishes the title, the description and every commit message (a squash merge copies each one into main):
+deny "Refusing to merge PR #${number}: it names a work organisation or repository, and $api_slug guards against that, because the merge publishes the title, the description and every commit message (a squash merge copies each one into main):
 
 $findings
 

@@ -180,7 +180,7 @@ case "$_wn_rc" in
   0) ;;
   1)
     {
-      echo "PUSH BLOCKED: a commit this push adds names a work organisation in its message. This"
+      echo "PUSH BLOCKED: a commit this push adds names a work organisation or repository in its message. This"
       echo "repository is public, and a squash merge copies every commit message into main."
       echo ""
       printf '%s\n' "$WNM_OUT"
@@ -195,10 +195,10 @@ case "$_wn_rc" in
     } >&2
     exit 2 ;;
   3)
-    echo "PUSH BLOCKED: $WNM_OUT for a work organisation name. Make the commit first, then push on its own, so its message is judged with the others this push adds." >&2
+    echo "PUSH BLOCKED: $WNM_OUT for a work organisation or repository name. Make the commit first, then push on its own, so its message is judged with the others this push adds." >&2
     exit 2 ;;
   *)
-    echo "PUSH BLOCKED: this gate could not judge the messages of the commits this push adds for a work organisation name: $WNM_OUT. Messages nobody could read are not clean ones." >&2
+    echo "PUSH BLOCKED: this gate could not judge the messages of the commits this push adds for a work organisation or repository name: $WNM_OUT. Messages nobody could read are not clean ones." >&2
     exit 2 ;;
 esac
 
