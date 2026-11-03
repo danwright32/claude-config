@@ -79,6 +79,8 @@ export const readDecisions = (out: string): { decisions: PrDecision[]; malformed
       const decision = typeof r.applied === 'string' ? APPLIED[r.applied] : undefined
       // A judged record on a detached head has no branch, so no pull request is made from it.
       if (r.branch === null) continue
+      // A judged record of an older version carries no branch field at all: not relevant to any branch, not damage.
+      if (r.branch === undefined) continue
       const mergeBase = baseOf(r.mergeBase)
       if (!decision || !text(r.repo) || !text(r.path) || !text(r.branch) || mergeBase === undefined) {
         malformed.push(line)

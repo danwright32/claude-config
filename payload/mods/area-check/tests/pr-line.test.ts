@@ -151,6 +151,22 @@ test('a decision taken on a detached head (branch null) is left out, never count
   expect(w.logs.some(l => l.includes('line of its log'))).toBe(false)
 })
 
+test('a judged record of an older version (applied, no branch field) is skipped, never counted malformed; an unparseable line still is', KIT, async ($, on) => {
+  const w = world($, on)
+  seedAB(w)
+  const older = JSON.parse(judgedApplied('src/older.ts', 'proceed'))
+  delete older.branch
+  w.ctl.seeded.push(JSON.stringify(older))
+  const why = refusal(await bash($ as never, w, `gh pr create --title T --body "${A}"`))
+  expect(why).toContain('area check line')
+  expect(why).not.toContain('line of the log')
+  expect(why).not.toContain('src/older.ts')
+  expect(refusal(await bash($ as never, w, `gh pr create --title T --body "${A}\n${B}"`, {}, 'b2'))).toBe('')
+  expect(w.logs.some(l => l.includes('line of its log'))).toBe(false)
+  w.ctl.seeded.push('{"v":2,"kind":"judged","applied":"pro')
+  expect(refusal(await bash($ as never, w, `gh pr create --title T --body "${A}"`, {}, 'b3'))).toContain('1 line of the log')
+})
+
 test('a fold line needs Refs or Closes with the folded issue', KIT, async ($, on) => {
   const w = world($, on)
   w.ctl.seeded.push(decidedLine({ path: 'src/b.ts', decision: 'fold', issue: 41 }))
