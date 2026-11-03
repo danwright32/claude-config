@@ -58,6 +58,8 @@ const kit: { name: string; register: Register } = {
         press: async () => { throw new Error("mod-kit's press is not stood in by these tests") },
         clickable: async () => { throw new Error("mod-kit's clickable is not stood in by these tests") },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+        hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
+        release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
       }
       return { ...built, modkit }
     })

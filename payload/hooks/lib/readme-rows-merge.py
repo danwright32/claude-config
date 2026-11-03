@@ -14,20 +14,45 @@ Exits (L1033, a crash exits 1, so 1 never means anything here):
     10  not a case this handles: nothing written, the reason is the last line printed
     2   could not read: a stage missing, git failing, or text that is not UTF-8
 
-WHY. Each mod's description is one long line keyed by "| `name` |", so two pull requests touching
-one mod conflict on that line, and the issue number list at its end conflicts every time. On
-2026-10-28 that stopped #1819, #1835 (twice), #1850 and #1852 in the merge helper, about an hour
-each. The rules here are the ones a scratch resolver applied to about ten such conflicts that day,
-each checked by hand afterwards and all correct.
+WHY. Two pull requests touching one mod meet in its row, and the issue number list at its end
+meets every time two of them add a number. On 2026-10-28 that stopped #1819, #1835 (twice), #1850
+and #1852 in the merge helper, about an hour each. The rules here are the ones a scratch resolver
+applied to about ten such conflicts that day, each checked by hand afterwards and all correct.
 
-THE RULES, for each conflicted hunk:
-  - both sides of the hunk are rows of the mods table (the table under the header
-    "| Mod | What it does | Issue |"), with the same keys in the same order, and the hunk lies inside
-    that table in the merged file; anything else is not handled;
+THE TABLE'S SHAPE (#2108). Until then each row was one markdown table line of up to 29 KB, so a
+two line README edit added about 136 KB to the lessons review's diff. It is now an HTML table whose
+every cell is a markdown paragraph on lines of its own, wrapped at WIDTH:
+
+    <tr><td>
+    (blank)
+    `name`
+    (blank)
+    </td><td>
+    (blank)
+    the description, on as many lines as it takes
+    (blank)
+    </td><td>
+    (blank)
+    #605, #611
+    (blank)
+    </td></tr>
+
+with the rows between "<tbody>" and "</tbody>" under the header row HEADER. The blank lines are
+what make GitHub read each cell as markdown (inside raw HTML it is read as text), and a cell holds
+one paragraph, so it has no blank line of its own. A pipe needs no escape anywhere in it, inside a
+code span or out, which the markdown table did need: three rows were cut short on GitHub by one.
+render_row writes this shape, and tests/test-readme-mods-table.sh holds README.md to it.
+
+HOW. Each version is read as rows of cells (a cell's lines joined by spaces), and git merge-file
+runs over the three with each row flattened to one line, so a conflict anywhere in a row is a
+conflict of that whole row, as it was when a row was a line. THE RULES, for each conflicted hunk:
+  - both sides of the hunk are rows of the mods table, with the same keys in the same order, and
+    the hunk lies inside that table in the merged file; anything else is not handled;
   - per row, compared with the base's row of the same key: the same on both sides is kept; changed
-    on one side only takes that side; changed on both is merged cell by cell (cells split on the
-    pipes outside code spans, see cells), each cell as for rows when it is the same on both sides
-    or changed on one side only, and otherwise word by word: git merge-file over the three versions
+    on one side only takes that side; changed on both is merged cell by cell, each cell as for rows
+    when it is the same on both sides or changed on one side only, and otherwise first by its
+    lines (git merge-file over the cell's lines, which keeps the lines both sides wrote when they
+    edited different ones), and failing that word by word: git merge-file over the three versions
     split into words, where a word conflict is resolved only when
       - it is in the Issue cell and each side of it is a run of issue numbers: the union of every
         number the three name, in number order (so a number one side removed in that same spot
@@ -36,13 +61,16 @@ THE RULES, for each conflicted hunk:
         other's: the longer is kept;
     a row whose cell count differs from the table's in any version, or a word conflict of any other
     shape, is not handled.
+A row the merge leaves equal to one side's is written as that side wrote it; any other row is
+written by render_row, with each cell that equals one side's kept as that side's lines.
 
-THE RESULT IS CHECKED before it is written (L631): no conflict marker line, the mods table holding
-exactly the union of both sides' keys once each, every row with the cell count it has on each side,
-and every resolved row with the table's.
+THE RESULT IS CHECKED before it is written (L631): no conflict marker line, the mods table read
+back from the written text holding exactly the union of both sides' keys once each, every row with
+the cells the merge produced, the cell count it has on each side, and every resolved row with the
+table's.
 
 CALIBRATED on the real conflicts of 2026-10-28 (17 row merges the scratch resolver recorded): this
-gives its result on every one it resolved and refuses the two it refused. Real Issue cells are not
+gave its result on every one it resolved and refused the two it refused. Real Issue cells are not
 tidy lists ("#607 to #609, #605, ..."), which is why the issue rule works on the conflicting run of
 numbers and not on the whole cell.
 """
@@ -54,9 +82,15 @@ import tempfile
 
 RESOLVED, NOT_HANDLED, UNREAD = 0, 10, 2
 
-HEADER = "| Mod | What it does | Issue |"
-KEY = re.compile(r"^\| `([^`]+)` \|")
+HEADER = "<tr><th>Mod</th><th>What it does</th><th>Issue</th></tr>"
+COLUMNS = ["Mod", "What it does", "Issue"]
+ROW_OPEN, CELL_NEXT, ROW_CLOSE = "<tr><td>", "</td><td>", "</td></tr>"
+KEY = re.compile(r"^`([^`]+)`$")
 ISSUE_RUN = re.compile(r"^(#\d+,?\s*)+$")
+# A cell's lines are wrapped at this width, the width of the README's prose.
+WIDTH = 100
+# A flattened row: ROW_MARK, then its cells joined by CELL_SEP. Neither character is in any README.
+ROW_MARK, CELL_SEP = "\x1e", "\x1f"
 # Markers far longer than git's seven, so no line of the README can be taken for one.
 MARK = 31
 OPEN, BASE_MARK, SEP, CLOSE = "<" * MARK, "|" * MARK, "=" * MARK, ">" * MARK
@@ -106,52 +140,116 @@ def merge_file(ours, base, theirs, diff3=False):
     return r.returncode, text(r.stdout, "git merge-file's output")
 
 
-def cells(row):
-    """A row's cells, split on every | that is neither escaped with a backslash nor inside a code
-    span. Joined with | they give the row back exactly.
+# ---- the table's shape ---------------------------------------------------------------------------
 
-    Code spans count because the real rows put pipes inside them: on 2026-10-29 the mod-kit row
-    held 7 pieces split on every |, design-round-guard 15 and scope-modes 6, and every one of the 22
-    rows held exactly the table's 5 once code spans were skipped."""
-    out, start, i, n = [], 0, 0, len(row)
-    while i < n:
-        c = row[i]
-        if c == "\\":
-            i += 2
-            continue
-        if c == "`":
-            j = i
-            while j < n and row[j] == "`":
-                j += 1
-            run = row[i:j]
-            close = re.compile(r"(?<!`)%s(?!`)" % re.escape(run)).search(row, j)
-            i = close.end() if close else j
-            continue
-        if c == "|":
-            out.append(row[start:i])
-            start = i + 1
-        i += 1
-    out.append(row[start:])
-    return out
+def line_may_start(rest):
+    """Whether a wrapped line may begin with rest. Inside a paragraph a line beginning with a list
+    marker, a heading, a quote, a fence, an HTML tag, or a run of = or - would start a block of its
+    own, or turn the paragraph above into a heading, so a break is made only before text that
+    cannot: a letter, a digit that is not a list number, an issue reference, a code span or an
+    opening bracket or quote."""
+    c = rest[0]
+    if c.isalpha() or c in "(\"'":
+        return True
+    if c.isdigit():
+        return not re.match(r"\d{1,9}[.)](\s|$)", rest)
+    if c == "#":
+        return bool(re.match(r"#\d", rest))
+    if c == "`":
+        return not rest.startswith("```")
+    return False
+
+
+def wrap(cell, width=WIDTH):
+    """A cell's text as lines of at most width where it can be broken, broken only at a single
+    space after which a line may start (line_may_start) and never after a backslash, which would
+    make the break a hard one. Joined with spaces the lines give the text back exactly."""
+    breaks = [i for i in range(1, len(cell) - 1)
+              if cell[i] == " " and cell[i - 1] not in " \\" and cell[i + 1] != " " and line_may_start(cell[i + 1:])]
+    lines, start = [], 0
+    while len(cell) - start > width:
+        fit = [b for b in breaks if start < b <= start + width]
+        later = [b for b in breaks if b > start]
+        b = fit[-1] if fit else (later[0] if later else None)
+        if b is None:
+            break
+        lines.append(cell[start:b])
+        start = b + 1
+    lines.append(cell[start:])
+    return lines
+
+
+def render_row(cells, keep=()):
+    """A row's lines in the table's shape. keep is a list of (cells, cell lines) from versions
+    already written: a cell equal to one of theirs keeps the lines it was written with."""
+    out = [ROW_OPEN]
+    for n, cell in enumerate(cells):
+        if cell.strip() == "" or "\n" in cell:
+            raise NotHandled("a row would be written with an empty cell")
+        lines = next((kl[n] for kc, kl in keep if n < len(kc) and n < len(kl) and kc[n] == cell and kl[n]), None) or wrap(cell)
+        out += ([""] if n == 0 else ["", CELL_NEXT, ""]) + lines
+    return out + ["", ROW_CLOSE]
 
 
 def mods_table(lines, what):
-    """The mods table's rows as an ordered list of (key, line), from a whole file's lines."""
+    """The mods table of a whole file's lines: (first, end, rows), where lines[first:end] are its
+    rows and each row is (key, cells, cell lines, row lines)."""
     at = [i for i, l in enumerate(lines) if l == HEADER]
     if len(at) != 1:
         raise NotHandled("%s has %d mods table headers, not one" % (what, len(at)))
-    rows, i = [], at[0] + 2
-    while i < len(lines) and lines[i].startswith("| "):
-        m = KEY.match(lines[i])
+    h = at[0]
+    if lines[h + 1:h + 3] != ["</thead>", "<tbody>"]:
+        raise NotHandled("%s's mods table header is not followed by </thead> and <tbody>" % what)
+    rows, i = [], h + 3
+    while i < len(lines) and lines[i] != "</tbody>":
+        start = i
+        if lines[i] != ROW_OPEN:
+            raise NotHandled("%s's mods table holds a line that is not a row: %s" % (what, lines[i][:80]))
+        cells, cell_lines = [], []
+        while True:
+            if lines[i + 1:i + 2] != [""]:
+                raise NotHandled("%s's mods table has a cell that does not open with a blank line, line %d" % (what, i + 2))
+            j = i + 2
+            while j < len(lines) and lines[j].strip() != "":
+                j += 1
+            body = [l.strip() for l in lines[i + 2:j]]
+            if not body:
+                raise NotHandled("%s's mods table has an empty cell, line %d" % (what, i + 3))
+            if lines[j + 1:j + 2] not in ([CELL_NEXT], [ROW_CLOSE]):
+                raise NotHandled("%s's mods table has a cell that does not close with a blank line and </td>, line %d" % (what, j + 2))
+            cells.append(" ".join(body))
+            cell_lines.append(body)
+            i = j + 1
+            if lines[i] == ROW_CLOSE:
+                break
+        m = KEY.match(cells[0])
         if not m:
-            raise NotHandled("%s has a mods table row with no key: %s" % (what, lines[i][:80]))
-        rows.append((m.group(1), lines[i]))
+            raise NotHandled("%s has a mods table row whose first cell is not a mod's name: %s" % (what, cells[0][:80]))
+        rows.append((m.group(1), cells, cell_lines, lines[start:i + 1]))
         i += 1
-    keys = [k for k, _ in rows]
+    if i >= len(lines):
+        raise NotHandled("%s's mods table has no </tbody>" % what)
+    keys = [r[0] for r in rows]
     if len(set(keys)) != len(keys):
         raise NotHandled("%s names a mod twice in its mods table" % what)
-    return rows
+    return h + 3, i, rows
 
+
+def flat(row_cells):
+    return ROW_MARK + CELL_SEP.join(row_cells)
+
+
+def flatten(whole, what):
+    """A version as (text with each row of the mods table on one line, rows by key)."""
+    if ROW_MARK in whole or CELL_SEP in whole:
+        raise NotHandled("%s holds a control character this uses to mark rows" % what)
+    lines = whole.split("\n")
+    first, end, rows = mods_table(lines, what)
+    flat_lines = lines[:first] + [flat(r[1]) for r in rows] + lines[end:]
+    return "\n".join(flat_lines), {r[0]: r for r in rows}
+
+
+# ---- the merge -----------------------------------------------------------------------------------
 
 def parse(merged):
     """Merged text as a list of ("line", text) and ("hunk", ours lines, theirs lines)."""
@@ -176,15 +274,15 @@ def check_hunks_in_table(segments):
     heads = [n for n, s in enumerate(segments) if s[0] == "line" and s[1] == HEADER]
     if any(s[0] == "hunk" and (HEADER in s[1] or HEADER in s[2]) for s in segments) or len(heads) != 1:
         raise NotHandled("README.md's conflict is not only rows of its mods table: the table's header is in conflict or not there once")
-    start = heads[0]
-    end = start + 2
+    start = heads[0] + 3
+    end = start
     while end < len(segments):
         s = segments[end]
-        if s[0] == "line" and not s[1].startswith("| "):
+        if s[0] == "line" and not s[1].startswith(ROW_MARK):
             break
         end += 1
     for n, s in enumerate(segments):
-        if s[0] == "hunk" and not (start + 2 <= n < end):
+        if s[0] == "hunk" and not (start <= n < end):
             raise NotHandled("README.md's conflict is not only rows of its mods table: a hunk lies outside it")
 
 
@@ -239,22 +337,35 @@ def word_merge(base, ours, theirs, where, issues=False):
     return "".join(res)
 
 
+def line_merge(base, ours, theirs):
+    """Merge one cell's lines; the merged lines when git merges them cleanly, else None."""
+    conflicts, merged = merge_file(*("\n".join(x) + "\n" for x in (ours, base, theirs)))
+    if conflicts:
+        return None
+    lines = merged.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines if lines and all(l.strip() for l in lines) else None
+
+
 def merge_row(key, base, ours, theirs, issue_col, report):
-    if ours == theirs:
+    """Each of base, ours and theirs is a row as mods_table reads it (base may be None). Returns
+    the merged cells, and the cell lines already written for any cell merged by its lines."""
+    if ours[1] == theirs[1]:
         report.append("%s: the same on both sides" % key)
-        return ours
+        return ours[1], []
     if base is None:
         raise NotHandled("%s: a row both sides added differently, which needs a person" % key)
-    if ours == base:
+    if ours[1] == base[1]:
         report.append("%s: took main's change (the branch left it alone)" % key)
-        return theirs
-    if theirs == base:
+        return theirs[1], []
+    if theirs[1] == base[1]:
         report.append("%s: took the branch's change (main left it alone)" % key)
-        return ours
-    cb, co, ct = cells(base), cells(ours), cells(theirs)
-    if not (len(cb) == len(co) == len(ct) == len(cells(HEADER))):
+        return ours[1], []
+    cb, co, ct = base[1], ours[1], theirs[1]
+    if not (len(cb) == len(co) == len(ct) == len(COLUMNS)):
         raise NotHandled("%s: its number of cells changed, which needs a person" % key)
-    out, how = [], []
+    out, how, written = [], [], [None] * len(COLUMNS)
     for i, (b, o, t) in enumerate(zip(cb, co, ct)):
         if o == t:
             out.append(o)
@@ -262,69 +373,99 @@ def merge_row(key, base, ours, theirs, issue_col, report):
             out.append(t)
         elif t == b:
             out.append(o)
-        elif i == issue_col:
-            out.append(word_merge(b, o, t, key, issues=True))
-            how.append("its issue numbers merged")
         else:
-            out.append(word_merge(b, o, t, key))
-            how.append("its words merged")
+            lines = line_merge(base[2][i], ours[2][i], theirs[2][i])
+            if lines is not None:
+                written[i] = lines
+                out.append(" ".join(lines))
+                how.append("its lines merged")
+            elif i == issue_col:
+                out.append(word_merge(b, o, t, key, issues=True))
+                how.append("its issue numbers merged")
+            else:
+                out.append(word_merge(b, o, t, key))
+                how.append("its words merged")
     report.append("%s: both sides changed it, %s" % (key, " and ".join(how) or "cell by cell"))
-    return "|".join(out)
+    return out, [(out, [w if w is not None else [] for w in written])] if any(written) else []
+
+
+def unflatten(flat_lines, ours_rows, theirs_rows, merged_keep):
+    """Flattened merged lines back in the table's shape: a row equal to one side's as that side
+    wrote it, any other through render_row."""
+    out = []
+    for line in flat_lines:
+        if not line.startswith(ROW_MARK):
+            out.append(line)
+            continue
+        cells = line[len(ROW_MARK):].split(CELL_SEP)
+        key = KEY.match(cells[0]).group(1) if KEY.match(cells[0]) else None
+        side = next((rows[key] for rows in (ours_rows, theirs_rows) if key in rows and rows[key][1] == cells), None)
+        if side is not None:
+            out += side[3]
+            continue
+        keep = [(r[1], r[2]) for rows in (ours_rows, theirs_rows) if key in rows for r in [rows[key]]]
+        out += render_row(cells, merged_keep.get(key, []) + keep)
+    return out
 
 
 def check_structure(result, ours_rows, theirs_rows, resolved):
-    """The written file's shape (L631), before anything is written."""
+    """The written file's shape (L631), before anything is written. resolved maps each resolved
+    key to the cells the merge produced."""
     lines = result.split("\n")
     marked = [l for l in lines if ANY_MARKER.match(l)]
     if marked:
         raise NotHandled("the result still holds a conflict marker line: %s" % marked[0][:80])
-    rows = mods_table(lines, "the result")
-    want = {k for k, _ in ours_rows} | {k for k, _ in theirs_rows}
-    got = [k for k, _ in rows]
+    _, _, rows = mods_table(lines, "the result")
+    want = set(ours_rows) | set(theirs_rows)
+    got = [r[0] for r in rows]
     if len(got) != len(want) or set(got) != want:
         raise NotHandled("the result's mods table holds %d rows where both sides together name %d mods" % (len(got), len(want)))
-    sides = (dict(ours_rows), dict(theirs_rows))
-    for k, line in rows:
-        n = len(cells(line))
-        for side in sides:
-            if k in side and len(cells(side[k])) != n:
-                raise NotHandled("%s: the result's row has %d cells where a side's has %d" % (k, n, len(cells(side[k]))))
-        if k in resolved and n != len(cells(HEADER)):
-            raise NotHandled("%s: the resolved row has %d cells where the table has %d" % (k, n, len(cells(HEADER))))
+    for k, cells, _, _ in rows:
+        for side in (ours_rows, theirs_rows):
+            if k in side and len(cells) != len(side[k][1]):
+                raise NotHandled("%s: the result's row has %d cells where a side's has %d" % (k, len(cells), len(side[k][1])))
+        if k in resolved:
+            if len(cells) != len(COLUMNS):
+                raise NotHandled("%s: the resolved row has %d cells where the table has %d" % (k, len(cells), len(COLUMNS)))
+            if cells != resolved[k]:
+                raise NotHandled("%s: the resolved row does not read back as the cells it was merged to" % k)
 
 
 def resolve(repo):
     base = text(git(repo, "show", ":1:README.md"), "the base README.md")
     ours = text(git(repo, "show", ":2:README.md"), "our README.md")
     theirs = text(git(repo, "show", ":3:README.md"), "their README.md")
-    base_rows = dict(mods_table(base.split("\n"), "the base README.md"))
-    ours_rows = mods_table(ours.split("\n"), "our README.md")
-    theirs_rows = mods_table(theirs.split("\n"), "their README.md")
-    issue_col = [c.strip() for c in cells(HEADER)].index("Issue")
-    conflicts, merged = merge_file(ours, base, theirs)
+    base_flat, base_rows = flatten(base, "the base README.md")
+    ours_flat, ours_rows = flatten(ours, "our README.md")
+    theirs_flat, theirs_rows = flatten(theirs, "their README.md")
+    issue_col = COLUMNS.index("Issue")
+    conflicts, merged = merge_file(ours_flat, base_flat, theirs_flat)
     if conflicts == 0:
         raise NotHandled("README.md merges cleanly here, so there is nothing for this to resolve")
     segments = parse(merged)
     check_hunks_in_table(segments)
-    ours_lines, theirs_lines = dict(ours_rows), dict(theirs_rows)
-    out, report, resolved = [], [], set()
+    out, report, resolved, merged_keep = [], [], {}, {}
     for s in segments:
         if s[0] == "line":
             out.append(s[1])
             continue
         o, t = s[1], s[2]
-        ok, tk = [KEY.match(l) for l in o], [KEY.match(l) for l in t]
-        if not o or not all(ok) or not all(tk):
+        if not o or not all(l.startswith(ROW_MARK) for l in o + t):
             raise NotHandled("README.md's conflict is not only rows of its mods table: a hunk holds other lines")
-        okeys, tkeys = [m.group(1) for m in ok], [m.group(1) for m in tk]
-        if okeys != tkeys:
-            raise NotHandled("a hunk of the mods table holds different rows on each side (%s against %s), which needs a person" % (", ".join(okeys), ", ".join(tkeys)))
-        for key, ol, tl in zip(okeys, o, t):
-            if ours_lines.get(key) != ol or theirs_lines.get(key) != tl:
+        ocells = [l[len(ROW_MARK):].split(CELL_SEP) for l in o]
+        tcells = [l[len(ROW_MARK):].split(CELL_SEP) for l in t]
+        okeys = [KEY.match(c[0]).group(1) if KEY.match(c[0]) else None for c in ocells]
+        tkeys = [KEY.match(c[0]).group(1) if KEY.match(c[0]) else None for c in tcells]
+        if okeys != tkeys or None in okeys:
+            raise NotHandled("a hunk of the mods table holds different rows on each side (%s against %s), which needs a person" % (", ".join(map(str, okeys)), ", ".join(map(str, tkeys))))
+        for key, oc, tc in zip(okeys, ocells, tcells):
+            if key not in ours_rows or key not in theirs_rows or ours_rows[key][1] != oc or theirs_rows[key][1] != tc:
                 raise NotHandled("%s: a conflicted line is not that mod's row in the mods table" % key)
-            out.append(merge_row(key, base_rows.get(key), ol, tl, issue_col, report))
-            resolved.add(key)
-    result = "\n".join(out)
+            cells, keep = merge_row(key, base_rows.get(key), ours_rows[key], theirs_rows[key], issue_col, report)
+            out.append(flat(cells))
+            resolved[key] = cells
+            merged_keep[key] = keep
+    result = "\n".join(unflatten(out, ours_rows, theirs_rows, merged_keep))
     check_structure(result, ours_rows, theirs_rows, resolved)
     with open(os.path.join(repo, "README.md"), "w", encoding="utf-8", newline="", errors="replace") as f:
         f.write(result)

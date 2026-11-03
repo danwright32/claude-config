@@ -47,6 +47,14 @@ export type StatusBarAccount = {
 /** A yes or no the status bar keeps for the session. */
 export type StatusBarFlag = boolean
 
+/**
+ * The handoff note of a Compact the session queued itself (#2082), kept until the prompt to read it
+ * and carry on is sent or given up. `ranAt` is when the Compact started, in ms since the epoch, null
+ * while it waits for the turn's end; `compacted` is whether Claude Code has said a compaction ended
+ * since. A plain string is how the copy of the mod before this kept a note still waiting.
+ */
+export type StatusBarFollowUp = { note: string; ranAt: number | null; compacted: boolean }
+
 declare module 'claude-code' {
   interface EngineInterface {
     statusbar: StatusBar
@@ -56,9 +64,9 @@ declare module 'claude-code' {
      * In $.state so a reload of the mod keeps them: the modes on, when the prompt cache goes cold, the
      * session's account, whether a main turn is running, a Compact queued for its end (#1278, #1703),
      * and when this conversation was last compacted or cleared, in ms since the epoch, which a
-     * handoff note must be newer than for the compact tool to queue a Compact (#2025), and the path of
-     * that note while the Compact the session queued waits, so it is told to read it and carry on (#2082).
+     * handoff note must be newer than for the compact tool to queue a Compact (#2025), and that note
+     * from the Compact the session queued until it is told to read it and carry on (#2082).
      */
-    'status-bar': { modes: StatusBarMode[]; cacheExpiresAt: number | null; account: StatusBarAccount | null; turnRunning: StatusBarFlag; compactQueued: StatusBarFlag; compactedAt: number | null; compactFollowUp: string | null }
+    'status-bar': { modes: StatusBarMode[]; cacheExpiresAt: number | null; account: StatusBarAccount | null; turnRunning: StatusBarFlag; compactQueued: StatusBarFlag; compactedAt: number | null; compactFollowUp: StatusBarFollowUp | string | null }
   }
 }

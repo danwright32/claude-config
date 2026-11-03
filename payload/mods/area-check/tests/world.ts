@@ -33,7 +33,7 @@ export const deps: { name: string; register: Register } = {
           writes: nope('writes'), pipeline: async (input: unknown) => ask('pipeline', input), workingTree: nope('workingTree'), ghRepo: nope('ghRepo'), linkRepo: nope('linkRepo'),
           mergeHelper: async (command: unknown) => ask('mergeHelper', command), bandRow: nope('bandRow'), clearBandRow: nope('clearBandRow'), pane: nope('pane'), clearPane: nope('clearPane'),
           press: async () => ({ isAnswered: false }), clickable: async () => true, isDans: nope('isDans'), typedAnswer: async (input: unknown) => ask('typedAnswer', input),
-          pythonText: nope('pythonText'), login: nope('login'), account: nope('account'),
+          pythonText: nope('pythonText'), login: nope('login'), account: nope('account'), hold: nope('hold'), release: nope('release'),
         },
         sessions: {
           list: async () => {

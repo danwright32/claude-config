@@ -1,6 +1,6 @@
 import { expect, mock } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import type { On } from 'claude-code'
+import type { On, Register } from 'claude-code'
 
 // #960, measured 2026-10-08 with throwaway mods in a session this suite never touches: when one
 // delivery changes mod-kit AND a mod that starts using something mod-kit only now provides (the
@@ -433,4 +433,76 @@ test('a provider whose folder cannot be read is said once, never touched, and ju
   await w.clock.advance(10 * MIN)
   await turn($, w.clock)
   expect(w.reached()).toEqual(['goal-tracker:.claude-plugin/plugin.json'])
+})
+
+// #2100: a touch reloads the mod, and a reload cancels every wait of the copy it replaces, so a
+// Compact, a sent prompt or a question the mod was waiting on is dropped with nothing said (#2082:
+// mod-kit's reload touched the status bar 31 s into the compaction it had started). A mod waiting on
+// such work holds its touch through $.modkit.hold; a held mod is asked again at the next pass once it
+// lets go, and a hold past its time no longer holds the touch back, which is then said, naming the
+// wait that may have been dropped. A stand in mod turns Bash commands into the calls.
+const holder: { name: string; register: Register } = {
+  name: 'holder',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      const [verb, mod = '', id = '', ms = '', ...what] = String((e as { command?: string }).command).split(' ')
+      try {
+        if (verb === 'hold') await $.modkit.hold({ mod, id, what: what.join(' '), ms: Number(ms) })
+        if (verb === 'release') await $.modkit.release({ mod, id })
+      } catch (err) {
+        return { deny: `refused: ${String((err as Error).message ?? err)}` }
+      }
+      return { deny: 'done' }
+    })
+  },
+}
+const withHolder = { plugins: [holder] }
+type Caller = { tool: { call: (e: never) => Promise<unknown> } }
+const run = async ($: unknown, command: string) => String(((await ($ as Caller).tool.call({ tool: 'Bash', command } as never)) as { deny?: string }).deny)
+
+test('a mod holding work it waits on is not reloaded by a reload of mod-kit, and is once it lets go, at the next turn (#2100)', withHolder, async ($, on) => {
+  const w = world(on, { mods: delivery() })
+  await start($)
+  expect(await run($, `hold manual-steps compact ${30 * MIN} the Compact it started`)).toBe('done')
+  await w.clock.advance(10 * MIN)
+  // The reload a delivery brings, in the middle of the wait: the steps card is not touched.
+  await start($)
+  expect(w.reached()).toEqual([])
+  // Holding is not a failure: only the debug line naming the wait, no failure and no dropped wait.
+  expect(w.logs.filter(l => l.includes('manual-steps') && !l.startsWith('These mods load again'))).toEqual(['manual-steps did not load again yet, as it is waiting on the Compact it started; it is asked again once it lets go.'])
+  // A turn while it still holds touches it no more than the reload did.
+  await w.clock.advance(MIN)
+  await turn($, w.clock)
+  expect(w.reached().filter(r => r.startsWith('manual-steps'))).toEqual([])
+  expect(await run($, 'release manual-steps compact')).toBe('done')
+  await w.clock.advance(MIN)
+  await turn($, w.clock)
+  expect(w.reached().filter(r => r.startsWith('manual-steps'))).toEqual(['manual-steps:.claude-plugin/plugin.json'])
+})
+
+test('a hold past its time holds nothing back, and the reload says which wait may have been dropped (#2100)', withHolder, async ($, on) => {
+  const w = world(on, { mods: delivery() })
+  await start($)
+  // A copy that took a hold and was cancelled before it let go: the hold is left behind.
+  expect(await run($, `hold manual-steps compact ${5 * MIN} the Compact it started`)).toBe('done')
+  await w.clock.advance(10 * MIN)
+  await start($)
+  expect(w.reached()).toEqual(['manual-steps:.claude-plugin/plugin.json'])
+  const said = w.logs.filter(l => l.includes('manual-steps') && l.includes('the Compact it started'))
+  expect(said.length).toBe(1)
+  // Said once: the expired hold is gone, so the next reload says nothing more of it.
+  await w.clock.advance(10 * MIN)
+  await start($)
+  expect(w.logs.filter(l => l.includes('the Compact it started')).length).toBe(1)
+})
+
+test('a hold with no mod, no id, nothing named or no time is refused, so it can never hold for good (#2100)', withHolder, async ($, on) => {
+  world(on, { mods: delivery() })
+  await start($)
+  expect(await run($, `hold manual-steps compact ${MIN}`)).toMatch(/^refused: /)
+  expect(await run($, `hold manual-steps compact 0 the Compact`)).toMatch(/^refused: /)
+  expect(await run($, `hold manual-steps compact ${2 * 60 * MIN} the Compact`)).toMatch(/^refused: /)
+  expect(await run($, `hold  compact ${MIN} the Compact`)).toMatch(/^refused: /)
+  // Letting go of a hold never taken is fine.
+  expect(await run($, 'release manual-steps compact')).toBe('done')
 })
