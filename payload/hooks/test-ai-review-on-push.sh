@@ -1331,6 +1331,14 @@ one("a phrase copied with the diff's leading + places once the marker is dropped
 one("a quote shorter than 20 characters is never placed by part of a line, and says so",
     "src/ledger.ts:3: the amount is unchecked." + S + "\nQuote: e.amount;",
     "src/ledger.ts:3: ", "too short to be placed by part of a line")
+# The floor's exact edge (claude-config#1701): 20 characters is looked for inside lines and 19 is
+# not. Both phrases are inside line 4 of docs/notes.md only, so the only difference is the length.
+one("a phrase of exactly 20 characters is placed by part of a line",
+    "docs/notes.md:1: the sync time is not stated." + S + "\nQuote: written once a night",
+    "docs/notes.md:4: ", None)
+one("a phrase of 19 characters is too short to be placed by part of a line",
+    "docs/notes.md:1: the sync time is not stated." + S + "\nQuote: ritten once a night",
+    "docs/notes.md:1: ", "too short to be placed by part of a line")
 one("a phrase in no line at all keeps its number and says part of a line was tried",
     "docs/notes.md:4: the answer is said to be shared." + S +
     "\nQuote: written into the local file so it is asked twice",
@@ -1486,7 +1494,7 @@ while IFS=$'\t' read -r verdict rest; do
     *) [ -n "$verdict" ] && bad "placement fixture printed something unexpected: $verdict $rest" ;;
   esac
 done <<< "$place_out"
-[ "$place_ran" -eq 45 ] && ok || bad "the placement fixtures ran $place_ran of 45 cases"
+[ "$place_ran" -eq 47 ] && ok || bad "the placement fixtures ran $place_ran of 47 cases"
 
 # End to end, through the hook and the detached runner: the stored review holds the placed line and
 # no Quote line, and an answer whose only finding is approximate is a review, not unparsed.
