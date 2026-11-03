@@ -1,12 +1,13 @@
-// The area check (claude-config#1506; phase 1, observe only, #1508): the facts about a file at the
+// The area check (claude-config#1506; facts #1508, hold #1509): the facts about a file at the
 // moment a session first edits it. Pure, so each rule is tested on its own, and so the replay of a
 // real repository's history (tools/area-check-replay.ts) judges with exactly these rules (L107).
-// Phase 1 only observes: these facts decide what is LOGGED, would_hold or quiet, never what is
-// refused. The hold is turned on from a week of that log in #1509.
+// The facts decide a verdict, `would_hold` or `quiet` (Judged.decision). Phase 1 only logged it; #1509
+// set the bar below from that week's log on both Macs, and a `would_hold` verdict is now a HELD edit
+// (the Held record below) that is refused until the session decides.
 import { isTestPath } from './mod-kit/testfile.ts'
 
 /** Bumped whenever a rule here changes what a file's facts are, so a cached ranking is never reused across it (L573). */
-export const RULE_VERSION = 1
+export const RULE_VERSION = 2
 /** Claude Code's budget for a hook, measured at 10 s (docs/mods-design.md, standing rule 4). */
 export const BUDGET_MS = 10_000
 /** One deadline for the whole read of a file's facts, under 75% of the budget (L743). */
@@ -19,12 +20,35 @@ export const UNREAD_TTL_MS = 10 * 60_000
 export const ISSUE_LIMIT = 1000
 /** The growth window, in days. */
 export const GROWTH_DAYS = 90
-/** The growth bar (decision 6), provisional until #1509 calibrates it from the week's log. */
+/**
+ * The bar (decisions 4 and 6), set on 2026-11-02 from the week of phase 1 logs on both Macs (#1509;
+ * the numbers, and where each threshold lands in what the week judged, are in docs/mods-design.md
+ * under the area check, L172). Growth: files of at least SIZE_MIN lines that grew by at least
+ * GROWTH_MIN net lines in 90 days, the TOP_N fastest of them, source and tests ranked together
+ * (decision 6 asks for about the 10 fastest growing large files per repository). Issues: those
+ * naming files in the same folder count only when the folder has at most FOLDER_MAX, down from the
+ * provisional 5, since folder matches were 612 of the 982 issue holds on the work MacBook; and only
+ * an issue at one of HOLD_PRIORITIES holds, since p3 and p4 issues were 59% of the issues shown
+ * on the work MacBook and 91% on the personal one.
+ */
 export const SIZE_MIN = 1500
 export const GROWTH_MIN = 300
 export const TOP_N = 10
-/** Issues naming files in the same folder count when the folder has at most this many (decision 4). */
-export const FOLDER_MAX = 5
+export const FOLDER_MAX = 2
+export const HOLD_PRIORITIES: readonly string[] = ['p0', 'p1', 'p2']
+/** A repository's bar, with the day it was set, so a record can say which bar judged it. */
+export type Bar = { set: string; sizeMin: number; growthMin: number; topN: number; folderMax: number; holdPriorities: readonly string[] }
+export const DEFAULT_BAR: Bar = { set: '2026-11-02', sizeMin: SIZE_MIN, growthMin: GROWTH_MIN, topN: TOP_N, folderMax: FOLDER_MAX, holdPriorities: HOLD_PRIORITIES }
+/**
+ * A bar of its own for a repository the week measured as needing one, keyed by the repository's name
+ * alone, lower case, since a work repository's owner does not belong in this public one. None today:
+ * the four repositories the week judged most (three on the work MacBook, this one on the personal)
+ * each held at most 3 files a session by the default growth bar, so none needed a different one.
+ */
+export const BARS: Readonly<Record<string, Bar>> = {}
+/** The bar a repository (owner/name) is judged by: its own, else the default. */
+export const barFor = (repo: string, bars: Readonly<Record<string, Bar>> = BARS): Bar =>
+  bars[(repo.split('/').pop() ?? repo).toLowerCase()] ?? DEFAULT_BAR
 
 /**
  * The structural label spellings, matched whole (L1023), measured 2026-10-22 across the 12 repo-digest
@@ -127,10 +151,10 @@ const indexOf = (tracked: readonly string[]): Map<string, string[]> => {
  * suffix on path segment boundaries when only one tracked file ends so; by a bare basename when only
  * one tracked file has it. The paths are the shared reader's, which reads each whole, so lib/foo.ts
  * never stands for lib/foo.tsx or otherlib/foo.ts (L1023). Then issues naming files in the same folder,
- * when that folder has at most FOLDER_MAX issues naming its files. Every issue is matched, labelled or
+ * when that folder has at most `folderMax` issues naming its files. Every issue is matched, labelled or
  * not; `structural` tells them apart.
  */
-export const issuesNaming = (rel: string, issues: readonly CachedIssue[], tracked: readonly string[]): Match[] => {
+export const issuesNaming = (rel: string, issues: readonly CachedIssue[], tracked: readonly string[], folderMax: number = FOLDER_MAX): Match[] => {
   const ix = indexOf(tracked)
   const resolved = new Map<string, string | null>()
   const resolve = (ref: string): string | null => {
@@ -155,7 +179,7 @@ export const issuesNaming = (rel: string, issues: readonly CachedIssue[], tracke
       return p !== null && dirOf(p) === dir
     })) folder.push(i)
   }
-  if (folder.length > FOLDER_MAX) return exact
+  if (folder.length > folderMax) return exact
   const named = new Set(exact.map(m => m.n))
   return [...exact, ...folder.filter(i => !named.has(i.n)).map(i => fact(i, 'folder'))]
 }
@@ -219,9 +243,9 @@ export type Ranked = { top: string[]; facts: Record<string, FileGrowth> }
  * lines in the window, ranked by growth; the first TOP_N cross it. Every file's facts are kept, its
  * rank null when it is not eligible, so the log carries the rough growth line for any file.
  */
-export const rank = (growth: Readonly<Record<string, Growth>>, sizes: Readonly<Record<string, number>>): Ranked => {
+export const rank = (growth: Readonly<Record<string, Growth>>, sizes: Readonly<Record<string, number>>, bar: Bar = DEFAULT_BAR): Ranked => {
   const eligible = Object.keys(growth)
-    .filter(p => (sizes[p] ?? 0) >= SIZE_MIN && (growth[p]?.net ?? 0) >= GROWTH_MIN)
+    .filter(p => (sizes[p] ?? 0) >= bar.sizeMin && (growth[p]?.net ?? 0) >= bar.growthMin)
     .sort((a, b) => (growth[b]?.net ?? 0) - (growth[a]?.net ?? 0) || (a < b ? -1 : 1))
   const facts: Record<string, FileGrowth> = {}
   for (const [p, g] of Object.entries(growth)) facts[p] = { net: g.net, size: sizes[p] ?? null, fixes: g.fixes, rank: null }
@@ -229,12 +253,12 @@ export const rank = (growth: Readonly<Record<string, Growth>>, sizes: Readonly<R
     const f = facts[p]
     if (f) f.rank = i + 1
   })
-  return { top: eligible.slice(0, TOP_N), facts }
+  return { top: eligible.slice(0, bar.topN), facts }
 }
 
 /** The files whose size the bar needs: those that grew enough to be eligible. */
-export const sizeCandidates = (growth: Readonly<Record<string, Growth>>): string[] =>
-  Object.keys(growth).filter(p => (growth[p]?.net ?? 0) >= GROWTH_MIN).sort()
+export const sizeCandidates = (growth: Readonly<Record<string, Growth>>, bar: Bar = DEFAULT_BAR): string[] =>
+  Object.keys(growth).filter(p => (growth[p]?.net ?? 0) >= bar.growthMin).sort()
 
 /** `git grep -c '' <rev> -- <paths>`: each file's line count, by its path. */
 export const parseLineCounts = (text: string, rev: string): Record<string, number> => {
@@ -258,12 +282,17 @@ export const rankingKey = (repo: string, sha: string, ms: number): string => `${
 export type Judged = { decision: 'would_hold' | 'quiet'; why: ('issues' | 'growth')[]; shown: number[]; excluded: number[] }
 
 /**
- * What phase 1 logs: would_hold when a structural issue names the file, the issues the session works
- * on (its branch's, its goal's) left out (decision 5), or when the file crosses the growth bar.
+ * would_hold when a structural issue at one of the bar's priorities names the file, the issues the
+ * session works on (its branch's, its goal's) left out (decision 5), or when the file crosses the
+ * growth bar. An issue with no priority label counts as p2, the scale's default, so a missing label
+ * never lets a file through.
  */
-export const judge = (f: { matches: readonly Match[]; own: readonly number[]; crosses: boolean }): Judged => {
+export const judge = (f: { matches: readonly Match[]; own: readonly number[]; crosses: boolean; bar?: Bar }): Judged => {
+  const bar = f.bar ?? DEFAULT_BAR
   const excluded = f.matches.filter(m => f.own.includes(m.n)).map(m => m.n)
-  const shown = f.matches.filter(m => m.structural.length > 0 && !f.own.includes(m.n)).map(m => m.n)
+  const shown = f.matches
+    .filter(m => m.structural.length > 0 && !f.own.includes(m.n) && bar.holdPriorities.includes(m.priority ?? 'p2'))
+    .map(m => m.n)
   const why: Judged['why'] = []
   if (shown.length) why.push('issues')
   if (f.crosses) why.push('growth')
@@ -319,4 +348,152 @@ export const replay = (input: ReplayInput): { sessions: ReplaySession[]; summary
       histogram,
     },
   }
+}
+
+
+// ---- The hold (#1509): what a held edit shows, and what a decision must carry ----
+
+/** The tool a held session decides with (decision 7), registered as `decide` by this mod. */
+export const DECIDE_TOOL = 'mcp__area-check__decide'
+/** AskUserQuestion's metadata source for the restructure question, `area-check:<call id>`. */
+export const ASK_SOURCE = 'area-check'
+/** Dan's three answers to the restructure question, in the order he reads them. */
+export const ANSWERS = ['Restructure first', 'Proceed anyway', 'Fold in'] as const
+export type Answer = (typeof ANSWERS)[number]
+export const DECISIONS = ['proceed', 'fold', 'restructure'] as const
+export type Decision = (typeof DECISIONS)[number]
+const DAY_MS = 24 * 60 * 60_000
+/** How long Dan's answer about a file stands, for the same issues, before he is asked again. */
+export const ANSWER_MS = 7 * DAY_MS
+/** An issue list no edit has read for this long is dropped from the store (#1509 comment). */
+export const SWEEP_MS = 7 * DAY_MS
+/** A proceed reason's least length and words: enough to say what the change does to the file. */
+export const REASON_MIN = 24
+export const REASON_WORDS = 4
+
+/** One held edit, waiting on a decision under its call id, in the session's $.state. */
+export type Held = {
+  id: string
+  tool: string
+  repo: string
+  main: string
+  rel: string
+  agent: string | null
+  at: number
+  why: Judged['why']
+  shown: Match[]
+  issues: { state: 'read' | 'truncated' } | { state: 'unread'; why: string }
+  growth: (FileGrowth & { crosses: boolean }) | { unread: string }
+}
+
+/**
+ * The restructure question about one file in one repository, in $.store so every session reads it
+ * (L636, L330): waiting on Dan, with the held call it was asked for, or his answer and when.
+ */
+export type Question =
+  | { state: 'pending'; at: number; issues: number[]; session: string; call: string; agent: string | null }
+  | { state: 'answered'; answer: string; at: number; issues: number[] }
+
+export const questionKey = (repo: string, rel: string) => `question:${repo}\n${rel}`
+
+// A reason that is a stock word, a template's slot or a mark standing alone says nothing (L675).
+const PLACEHOLDER = /^(?:n\/?a|none|nothing|tbd|todo|fixme|reason|because|ok(?:ay)?|fine|yes|no|test|whatever|see above|not needed|no reason|small change|minor change|minor|trivial)$/i
+const SLOT = /<[^>]*>|\{\{|\[\s*(?:reason|why)[^\]]*\]/i
+
+/** Why a proceed reason is not one, or undefined when it says something. */
+export const reasonProblem = (reason: unknown): string | undefined => {
+  const ask = 'give "reason" as a sentence saying why this change does not add to the structural problem'
+  if (typeof reason !== 'string') return `No reason was given: ${ask}.`
+  const r = reason.trim()
+  // A placeholder first, since one such as n/a does not start with a whole word either.
+  if (PLACEHOLDER.test(r.replace(/[.!]+$/, '')) || SLOT.test(r)) return `"${r}" is a placeholder, not a reason: ${ask}.`
+  if (!/^\p{L}+(?:[\s,.;:'’]|$)/u.test(r)) return `"${r}" does not start with a word, so it says nothing: ${ask}.`
+  if (r.length < REASON_MIN || r.split(/\s+/).length < REASON_WORDS) return `"${r}" is too short to say what the change does to the file: ${ask}.`
+  return undefined
+}
+
+const issueList = (h: Held) => h.shown.map(m => `#${m.n}`).join(', ')
+
+/** Why a decision cannot be taken for this held edit, or undefined when it can. */
+export const decideProblem = (input: { decision?: unknown; reason?: unknown; issue?: unknown }, h: Held): string | undefined => {
+  const d = input.decision
+  if (typeof d !== 'string' || !(DECISIONS as readonly string[]).includes(d)) return `"${String(d)}" is not a decision: give "decision" as proceed, fold or restructure.`
+  if (d === 'proceed') return reasonProblem(input.reason)
+  if (d === 'fold') {
+    if (!h.shown.length) return `${h.rel} was held for its growth alone, so no issue was shown to fold in: proceed with a reason, or restructure.`
+    if (!h.shown.some(m => m.n === input.issue)) return `"${String(input.issue)}" is not an issue the hold showed: give "issue" as one of ${issueList(h)}, as a number.`
+  }
+  return undefined
+}
+
+const priorityOf = (m: Match) => m.priority ?? 'p2'
+const growthLine = (h: Held): string | undefined => {
+  const g = h.growth
+  if ('unread' in g) return `Its growth could not be read (${g.unread}).`
+  const size = g.size === null ? '' : `, about ${g.size} lines now`
+  const fixes = g.fixes ? `, ${g.fixes} commit titles saying fix` : ''
+  return `Rough: ${g.net >= 0 ? 'grew' : 'shrank'} ${Math.abs(g.net)} lines net in ${GROWTH_DAYS} days${size}${fixes}.`
+}
+
+/** The grey card's words (mod-kit draws it): the file, each issue shown with its priority, growth as rough. */
+export const holdCard = (h: Held): { reason: string; safeWay: string; note?: string } => {
+  const parts: string[] = []
+  if (h.shown.length) parts.push(`${h.rel} has open structural issues: ${h.shown.map(m => `#${m.n} (${priorityOf(m)}, ${m.structural.join(', ')})`).join('; ')}.`)
+  else if (h.why.includes('growth')) parts.push(`${h.rel} is among the fastest growing large files in ${h.repo}.`)
+  if (h.issues.state === 'unread') parts.push(`Its open issues could not be read (${h.issues.why}), so its growth alone decided.`)
+  const note = growthLine(h)
+  return { reason: parts.join(' '), safeWay: 'Claude decides whether this edit goes ahead, folds a structural fix in, or restructures first.', ...(note ? { note } : {}) }
+}
+
+/** What the held session reads: the facts, and how to decide under this call's id. */
+export const holdRefusal = (h: Held): string => {
+  const c = holdCard(h)
+  const facts = [c.reason, c.note].filter(Boolean).join(' ')
+  const call = (rest: string) => `${DECIDE_TOOL} with {"call": "${h.id}", ${rest}}`
+  const ways = [`${call('"decision": "proceed", "reason": "<why this change does not add to the problem>"')} when it does not`]
+  if (h.shown.length) ways.push(`${call('"decision": "fold", "issue": <one of ' + issueList(h) + '>')} to fold that structural fix into this work`)
+  ways.push(
+    h.agent === null
+      ? `${call('"decision": "restructure"')} to ask Dan whether to restructure first`
+      : `${call('"decision": "restructure"')} when it should be restructured first, which hands the question to the main session to ask Dan; then stop and report that to it`,
+  )
+  return `The area check held this ${h.tool} to ${h.rel}. ${facts} Before editing it, decide: call ${ways.join('; or ')}. Then send the ${h.tool} again, unchanged.`
+}
+
+/** The restructure question as Dan reads it in the dialog; Fold in only where an issue was shown. */
+export const restructureQuestion = (h: Held): { question: string; options: { label: Answer; description: string }[] } => {
+  const facts = holdCard(h).reason
+  const options: { label: Answer; description: string }[] = [
+    { label: 'Restructure first', description: 'The structural fix is done before this work, and the file is released for it.' },
+    { label: 'Proceed anyway', description: 'This work goes ahead on the file as it is.' },
+  ]
+  if (h.shown.length) options.push({ label: 'Fold in', description: `The structural fix for ${issueList(h)} is folded into this work.` })
+  return { question: `Restructure ${h.rel} before this work? ${facts}`, options }
+}
+
+/** Asleep (decision 7): one note per issue shown, which bedtime posts into its Open questions; for growth alone, one for the morning report. */
+export const sleepNotes = (h: Held): { kind: 'question'; repo: string; issue?: number; text: string; options: string[] }[] => {
+  const q = restructureQuestion(h)
+  const options = q.options.map(o => o.label)
+  if (!h.shown.length) return [{ kind: 'question', repo: h.repo, text: q.question, options }]
+  return h.shown.map(m => ({ kind: 'question', repo: h.repo, issue: m.n, text: q.question, options }))
+}
+
+const sameSet = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every(x => b.includes(x))
+
+/** Whether Dan's recorded answer about a file still decides it: within its week, for the same issues. */
+export const answerStands = (q: Question | undefined, issues: readonly number[], now: number): q is Extract<Question, { state: 'answered' }> =>
+  !!q && q.state === 'answered' && typeof q.at === 'number' && now - q.at < ANSWER_MS && Array.isArray(q.issues) && sameSet(q.issues, issues)
+
+/** The store keys to drop: issue lists unread for a week (or unreadable), and answers past their week. A pending question stays. */
+export const sweepKeys = (entries: readonly [string, unknown][], now: number): string[] => {
+  const at = (v: unknown) => (v && typeof v === 'object' && typeof (v as { at?: unknown }).at === 'number' ? (v as { at: number }).at : null)
+  return entries
+    .filter(([k, v]) => {
+      const t = at(v)
+      if (k.startsWith('issues:')) return t === null || now - t >= SWEEP_MS
+      if (k.startsWith('question:')) return (v as { state?: unknown } | null)?.state === 'answered' && (t === null || now - t >= ANSWER_MS)
+      return false
+    })
+    .map(([k]) => k)
 }

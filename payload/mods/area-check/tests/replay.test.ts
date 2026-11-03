@@ -1,13 +1,14 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { RULE_VERSION, replay, type ReplayInput } from '../hooks/rules.ts'
-import { MEASURED, PATHS } from './replay-fixture.ts'
+import { MEASURED, PATHS } from './replay-fixture/index.ts'
 
 // The replay (#1508): 30 days of a real repository's commits through these rules, each commit standing
 // in for a session, measured by tools/area-check-replay.ts from this repository itself (public, so its
 // paths may sit in a fixture, L155), the same way the calibration on #1506 was measured. A rule
 // change that moves how often sessions would be held fails here, and is measured again rather than
-// edited (L48, L354): node tools/area-check-replay.ts . --repo danwright32/claude-config --fixture ...
+// edited (L48, L354): node tools/area-check-replay.ts . --repo danwright32/claude-config
+// --fixture payload/mods/area-check/tests/replay-fixture
 
 const input: ReplayInput = { ...MEASURED.input, sessions: MEASURED.input.sessions.map(s => ({ ...s, files: s.files.map(i => PATHS[i] as string) })) }
 
