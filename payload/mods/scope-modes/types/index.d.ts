@@ -143,6 +143,8 @@ declare module 'claude-code' {
       askedUp: string | null
       /** The repositories first met after sleep began that this session noted, as "generation:owner/name": once a night (#843), across a reload (#1703). */
       firstMet: string[]
+      /** The Chrome tabs this session created, by tab id, with the host each one's page was last seen on (#2064). */
+      browserTabs: Record<string, { host: string | null }>
       /** The nights whose reminder to end sleep mode this session pinned on its card (#1283), by generation, across a reload (#1703). */
       pinnedHere: string[]
       /** The nights whose reminder this session took off its card (#1283), by generation, across a reload (#1703). */

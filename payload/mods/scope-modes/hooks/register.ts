@@ -40,6 +40,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
+import { listedHosts, tabsAfter, type Browser, type BrowserTabs } from './browser.ts'
 import { wakeCheck } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
@@ -1224,9 +1225,71 @@ const lookOf = ($: EngineInterface): Look => ({
   },
 })
 
+// The Chrome tabs this session created (#2064), with the host each one's page was last seen on, so
+// sleep mode lets a session check its own work in its own tab on a test host (browser.ts). Kept in
+// $.state, which survives a hot reload, and recorded awake too, so a tab made before bed is still
+// the session's own. Each Chrome call is remembered by its tool_use_id until its result row arrives.
+const CHROME = 'mcp__claude-in-chrome__'
+const chromeCalls = new Map<string, { tool: string; input: Record<string, unknown>; at: number }>()
+// How long a Chrome call still waiting on its result counts as possibly moving its tab: calls sent
+// at once are judged within moments of each other, and a call refused elsewhere, whose result row
+// may never reach this mod, must not hold its tab for ever.
+const PENDING_MS = 60_000
+const resultTexts = (content: unknown): string[] =>
+  typeof content === 'string'
+    ? [content]
+    : Array.isArray(content)
+      ? content.flatMap(c => (c && typeof c === 'object' && (c as { type?: unknown }).type === 'text' ? [String((c as { text?: unknown }).text ?? '')] : []))
+      : []
+// Written by version, so two results landing at once both count (assume it runs twice).
+const recordTabs = async ($: EngineInterface, tool: string, input: Record<string, unknown>, texts: string[]) => {
+  for (let i = 0; i < 5; i++) {
+    const held = await $.state.get({ plugin: 'scope-modes', key: 'browserTabs' })
+    const next = tabsAfter(held.value ?? {}, tool, input, texts)
+    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserTabs' }, next, { ifVersion: held.version })).isSet) return
+  }
+  throw new Error('the record of Chrome tabs kept changing underneath five writes in a row')
+}
+// The project's hosted test hosts, from CLAUDE.md as the default branch holds it, never the working
+// copy: a session must not add a host by editing the file overnight. The default branch is the one
+// origin/HEAD names, through mod-kit's one reader; when it names none, or anything cannot be read,
+// no host is listed, with no guess at main (fail closed, Dan, 2026-11-03).
+const committedTestHosts = async ($: EngineInterface): Promise<string[]> => {
+  const root = await $.session
+    .repo()
+    .then(r => r?.root ?? null)
+    .catch(() => null)
+  if (!root) return []
+  const b = await $.modkit.branch({ path: root }).catch(() => null)
+  if (!b || 'unreadable' in b || !b.defaultBranch) return []
+  const r = await run($, ['git', '-C', root, 'show', `origin/${b.defaultBranch}:CLAUDE.md`]).catch(() => null)
+  return r && r.exitCode === 0 ? listedHosts(r.stdout) : []
+}
+// A record that cannot be read is no tabs, which refuses every call needing one (fail closed). A
+// call judged at tool.call (self, its tool_use_id) is also judged as though every other Chrome call
+// still waiting on its result had moved its tab, so two calls sent at once (a click and a page read)
+// cannot both be judged against where the tab was before either ran.
+const browserOf = async ($: EngineInterface, self?: string): Promise<Browser> => {
+  let tabs: BrowserTabs = {}
+  try {
+    tabs = (await $.state.get({ plugin: 'scope-modes', key: 'browserTabs' })).value ?? {}
+  } catch {
+    tabs = {}
+  }
+  if (self !== undefined) {
+    const now = await $.clock.now()
+    for (const [id, c] of chromeCalls) if (id !== self && now - c.at < PENDING_MS) tabs = tabsAfter(tabs, c.tool, c.input, [])
+  }
+  return { tabs, listed: await committedTestHosts($) }
+}
+
 // Why a call is on Dan's overnight list (#834), from the call as a tool call or a permission
 // request carries it, or undefined when it is not.
 const overnightWhy = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string | undefined> => {
+  if (tool.startsWith(CHROME)) {
+    const self = typeof input.tool_use_id === 'string' && input.tool_use_id ? input.tool_use_id : undefined
+    return overnightRefusal({ tool, input, raw: '', commands: [], writes: NO_WRITES, cwd: '', home: '', read: text => readCommands($, text), browser: await browserOf($, self) }, lookOf($))
+  }
   const raw = tool === 'Bash' ? String(input.command ?? '') : ''
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME')) ?? ''
@@ -4625,6 +4688,8 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
   if (asleep) {
     const what = await overnightWhy($, tool, input)
     if (what) {
+      // A refused Chrome call never runs, so it moves no tab (#2064).
+      chromeCalls.delete(toolUseId)
       // Kept for this session's morning, where Dan is asked whether to do it now (#1665): on
       // 2026-10-24 the refused branch deletes, pull request close and check rerun reached nobody.
       const kept = await keepBanned($, tool, input, raw, what)
@@ -5154,10 +5219,25 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // A Chrome call's result row updates the record of the session's tabs (#2064). A subagent's rows
+  // count too: its tabs are the session's, in the same tab group.
+  on('session.append', { door: 'tool-result' }, async ($, e, next) => {
+    for (const b of e.message.content) {
+      const block = b as { type?: string; tool_use_id?: unknown; content?: unknown }
+      if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue
+      const made = chromeCalls.get(block.tool_use_id)
+      if (!made) continue
+      chromeCalls.delete(block.tool_use_id)
+      await recordTabs($, made.tool, made.input, resultTexts(block.content)).catch(err => $.ui.log(`scope-modes: the record of Chrome tabs could not be updated: ${msg(err)}`))
+    }
+    return next(e)
+  })
+
   on('tool.call', async ($, e, next) => {
     const input = e as unknown as Record<string, unknown>
     const tool = String(e.tool)
     const toolUseId = String(input.tool_use_id ?? '')
+    if (tool.startsWith(CHROME) && toolUseId) chromeCalls.set(toolUseId, { tool, input, at: await $.clock.now() })
 
     if (tool === 'mcp__scope-modes__switch_to_build') {
       // Answered here and never passed down, so the guards beneath (the secret guard) are asked

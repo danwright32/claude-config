@@ -432,6 +432,12 @@ type Opts = {
   existsFails?: string[]
   /** Folders whose listing fails (#1725). */
   listFails?: string[]
+  /**
+   * The project's CLAUDE.md as git show reads it from the default branch (#2064): by ref, origin/HEAD
+   * and origin/main, each missing ref failing as git does. Neither given is a repository whose
+   * default branch carries no CLAUDE.md.
+   */
+  committedClaudeMd?: { head?: string; main?: string }
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -591,6 +597,13 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'sysctl' && ops[0] === 'kern.boottime') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
     if (cmd === 'sysctl' && ops[0] === 'kern.bootsessionuuid') return o.session === null ? fail(1, 'sysctl: unknown oid') : ok(`${o.session ?? SESSION}\n`)
     if (cmd === 'mkdir') return ok()
+    // The project's CLAUDE.md on its default branch (#2064), never the working copy's.
+    if (cmd === 'git' && a[0] === '-C' && a[2] === 'show' && /^origin\/(?:HEAD|main):CLAUDE\.md$/.test(a[3] ?? '')) {
+      // Recorded here because this answer returns before the general record of runs below.
+      w.runs.push(argv)
+      const text = a[3]?.startsWith('origin/HEAD') ? o.committedClaudeMd?.head : o.committedClaudeMd?.main
+      return text === undefined ? fail(128, `fatal: invalid object name '${a[3]?.split(':')[0]}'.`) : ok(text)
+    }
     // grep -o -E <pattern> <file> over the world's files (#1287: a session's title from its transcript).
     if (cmd === 'grep' && a[0] === '-o' && a[1] === '-E') {
       const file = a[3] as string
@@ -2573,6 +2586,72 @@ test('asleep, the same: focus, files, browser automation and a test build run; a
   // Asleep, the open action is held until wake and delivered then, as a publish is (#1284).
   expect(await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 's6' } as never)).toMatch(/^Held until Dan wakes: /)
   expect(w.cards.map(c => c.toolUseId)).toEqual(['s4', 's5', 's6'])
+})
+// #2064: overnight, a session checks its own work in Chrome, in a tab it created and on a test host.
+// The tab is recorded from its tool result row, as the conversation keeps it, and where each tab is
+// from the Tab Context the extension appends to every result.
+const CHROME = 'mcp__claude-in-chrome__'
+const tabContext = (id: number, url: string) => `Tab Context:\n- Executed on tabId: ${id}\n- Available tabs:\n  • tabId 3: "Mail" ("https://mail.example.com/")\n  • tabId ${id}: "Page" ("${url}")`
+const chromeResult = async ($: $T, id: string, text: string) => {
+  try {
+    await ($ as unknown as { session: { append: (e: never) => Promise<unknown> } }).session.append({
+      door: 'tool-result',
+      origin: { kind: 'tool', tool: 'x' },
+      uuid: `row-${id}`,
+      message: { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text }] }] },
+    } as never)
+  } catch (err) {
+    if (!/no implementation for session.append/.test(String(err))) throw err
+  }
+}
+test('asleep, Chrome runs in a tab the session created once its page is on a test host; Dan\'s own tabs and other hosts are refused (#2064)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  // Recorded while awake too, so a tab made before bed is still the session's own.
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'b1' } as never)).toBe('ran')
+  await chromeResult($ as never, 'b1', `Created new tab. Tab ID: 7\n${tabContext(7, 'chrome://newtab/')}`)
+  w.files[CURRENT] = asleepRecord()
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 3, tool_use_id: 'b2' } as never)).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not use mcp__claude-in-chrome__read_page on tab 3, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'b3' } as never)).toMatch(/did not use mcp__claude-in-chrome__read_page on tab 7, whose page is not on a test host/)
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'https://bank.example.com/', tool_use_id: 'b4' } as never)).toMatch(/did not open bank\.example\.com in the browser, which is not a test host/)
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'b5' } as never)).toBe('ran')
+  await chromeResult($ as never, 'b5', `Navigated to http://localhost:3000\n${tabContext(7, 'http://localhost:3000/')}`)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'b6' } as never)).toBe('ran')
+  expect(await call($ as never, { tool: `${CHROME}computer`, tabId: 7, action: 'left_click', coordinate: [1, 2], tool_use_id: 'b7' } as never)).toBe('ran')
+  // Sent at once with the click, before its result: judged as though the click had moved the page.
+  expect(await call($ as never, { tool: `${CHROME}get_page_text`, tabId: 7, tool_use_id: 'b7a' } as never)).toMatch(/on tab 7, whose page is not on a test host/)
+  // The click left the test host: its result's context says so, and the next read is refused.
+  await chromeResult($ as never, 'b7', `Clicked\n${tabContext(7, 'https://accounts.example.com/signin')}`)
+  expect(await call($ as never, { tool: `${CHROME}get_page_text`, tabId: 7, tool_use_id: 'b8' } as never)).toMatch(/on tab 7, whose page is on accounts\.example\.com, which is not a test host/)
+  // Bringing Chrome forward on Dan's screen, or running his saved workflows, still waits.
+  expect(await call($ as never, { tool: `${CHROME}switch_browser`, tool_use_id: 'b9' } as never)).toMatch(/did not use mcp__claude-in-chrome__switch_browser/)
+  expect(await call($ as never, { tool: `${CHROME}shortcuts_execute`, tabId: 7, tool_use_id: 'b10' } as never)).toMatch(/did not use mcp__claude-in-chrome__shortcuts_execute/)
+  // A closed tab is no longer the session's.
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'b11' } as never)).toBe('ran')
+  await chromeResult($ as never, 'b11', 'Closed tab 7')
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost', tool_use_id: 'b12' } as never)).toMatch(/on tab 7, which this session did not create/)
+  expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}read_page`, `${CHROME}computer`, `${CHROME}tabs_close_mcp`])
+})
+test('asleep, a hosted test host counts only when the default branch\'s CLAUDE.md lists it, never the working copy (#2064)', withDeps, async ($, on) => {
+  const LISTED = 'Sleep mode test hosts: qa.example.dev\n'
+  // The working copy lists the host throughout; only what the default branch says decides.
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), '/repo/CLAUDE.md': LISTED } })
+  await start($ as never, clock)
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'c1' } as never)).toBe('ran')
+  await chromeResult($ as never, 'c1', `Created new tab. Tab ID: 7\n${tabContext(7, 'chrome://newtab/')}`)
+  const go = async (committed: Opts['committedClaudeMd'], id: string) => {
+    w.o.committedClaudeMd = committed
+    return call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'https://qa.example.dev/', tool_use_id: id } as never)
+  }
+  // The default branch is the one origin/HEAD names, as mod-kit reads it (main in this world).
+  expect(await go({ main: LISTED }, 'n1')).toBe('ran')
+  expect(w.runs.some(r => r.join(' ') === 'git -C /repo show origin/main:CLAUDE.md')).toBe(true)
+  // Only in the working copy, or a default branch whose CLAUDE.md does not list it: refused.
+  expect(await go(undefined, 'n3')).toMatch(/did not open qa\.example\.dev in the browser, which is not a test host/)
+  expect(await go({ main: '# Project\n' }, 'n4')).toMatch(/which is not a test host/)
+  // origin/HEAD naming no branch is no listed hosts, with no guess at main (Dan, 2026-11-03).
+  w.o.defaultBranch = ''
+  expect(await go({ head: LISTED, main: LISTED }, 'n5')).toMatch(/which is not a test host/)
 })
 test("asleep, the keystroke guard's test build is not held through the noun either, though place is home (#1269)", { plugins: [deps, isItLive, guardStandIn] }, async ($, on) => {
   const { w, clock } = world(on)

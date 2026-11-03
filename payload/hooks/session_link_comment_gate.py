@@ -61,8 +61,6 @@ def slack_write(tool):
         return None
     return "Slack canvas" if "canvas" in name else "Slack list" if "list" in name else "Slack message"
 API_COMMENT_ENDPOINT = re.compile(r"(?:^|/)(?:comments|replies|reviews)(?:/|\?|$)")
-API_WRITE_FLAGS = {"-f", "-F", "--field", "--raw-field", "--input"}
-API_WRITE_METHODS = {"POST", "PATCH", "PUT"}
 
 REASON = (
     "This would post the Claude session link in a %s. The link goes on commits, pull request "
@@ -134,10 +132,7 @@ def _api_writes_with_link(command, cwd):
             if not found or found[0] != "api" or OVERRIDE in words:
                 continue
             args = list(found[2]) + list(found[3])
-            method = {v.upper() for v in scan.flag_values(args, "--method", "-X")}
-            writes = method & API_WRITE_METHODS or any(
-                a in API_WRITE_FLAGS or any(a.startswith(f + "=") for f in API_WRITE_FLAGS if f.startswith("--"))
-                for a in args)
+            writes = scan.api_writes(args)
             if not writes or not any(API_COMMENT_ENDPOINT.search(a) for a in args if not a.startswith("-")):
                 continue
             if any(LINK.search(a) for a in args):
