@@ -27,6 +27,17 @@ may_post "$payload" || exit 0
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# The shared reader cleans the payload before python3 parses it: a lone surrogate escape there raised
+# when the text was written back out (claude-config#1944). It loads only past the gh test above, so
+# the commonest call never pays for it. Past that test this may be a post, so a library that will not
+# load is refused, naming the file (#1900).
+# shellcheck source=lib/push-scope.sh
+. "$HERE/lib/push-scope.sh" 2>/dev/null || {
+  echo "WORK NAME IN PUBLIC TEXT: check-work-names-publish.sh could not load $HERE/lib/push-scope.sh, which cleans this hook's input before it is read, so whether this gh command posts a work organisation or repository name to a public repository could not be checked. Reinstall the hooks with claude-sync pull." >&2
+  exit 2
+}
+payload="$(ps_clean_payload "$payload")"
+
 if ! command -v python3 >/dev/null 2>&1; then
   echo "WORK NAME IN PUBLIC TEXT: python3 is not on PATH, so check-work-names-publish.sh could not tell whether this gh command posts a work organisation or repository name to a public repository. A gate that did not run is not one that found nothing." >&2
   exit 2

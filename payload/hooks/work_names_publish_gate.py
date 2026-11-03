@@ -338,7 +338,7 @@ def main():
     except ValueError:
         # A payload nothing can parse: refused when its text plainly runs a judged command.
         if scan.gated_in_text(raw, KINDS) or CRUDE_API.search(raw):
-            json.dump(scan.deny_payload("%s: this hook's input could not be read, and it names a gh "
+            json.dump(scan.deny_payload("%s: this hook's payload could not be read, and it names a gh "
                                         "command that posts text, so it was not checked." % HEAD), sys.stdout)
         return 0
     if data.get("tool_name") != "Bash":
