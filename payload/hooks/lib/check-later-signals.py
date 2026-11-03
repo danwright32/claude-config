@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Find what the latest turn left waiting on a later day (claude-config#2079).
 
-    check-later-signals.py <transcript_path>
+    check-later-signals.py <transcript_path> <check-later SKILL.md path>
 
 Read by check-later-nudge.sh, the Stop hook that sends a session to the /check-later skill so a
 dated check reaches Dan's Slack list without his having to remember the command. Dan, 2026-11-02:
@@ -37,7 +37,8 @@ with nothing to check (L98).
 
 The list id has one home, the check-later skill's "## The list" section (`list id `<id>``), and is
 read from the SKILL.md given as the second argument, the same file the hook's reason points at, so a
-list that moves is moved in one place (L83). It is read only once a signal is found. Exit 4, with the
+list that moves is moved in one place (L83). It is read only when a signal is found AND the turn made a Slack list write call (a row can
+only have been written then). Exit 4, with the
 signals still on stdout and the cause on stderr, when that file names no list id: the turn left
 something, but whether its row is already written cannot be told.
 """
