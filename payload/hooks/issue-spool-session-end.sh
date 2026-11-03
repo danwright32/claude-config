@@ -27,7 +27,9 @@
 # file (lib/spool-end-marker.sh: in the spool, or in TMPDIR when the spool is what cannot be
 # written), and the next prompt in any session says it once, through sync-stuck-notice.sh's
 # systemMessage, a channel seen to reach the person that same day.
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
+HERE="$(cd "${HERE:-/}" && pwd)"
 # Without either library the notice still goes to stderr; it just cannot be left for later.
 . "$HERE/lib/hook-notice.sh" 2>/dev/null || hook_defer_notice() { return 1; }
 . "$HERE/lib/spool-end-marker.sh" 2>/dev/null || sem_paths() { SEM_SPOOL_FILE=""; SEM_TMP_FILE=""; }

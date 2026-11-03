@@ -390,7 +390,9 @@ HOLDS
   return 0
 }
 
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # Every systemMessage this prints is built by lib/hook-notice.sh, so it is valid JSON whatever the
 # text holds and with or without jq (#1906). release_held needs the object without the exit.
 # shellcheck source=lib/hook-notice.sh

@@ -45,7 +45,9 @@
 
 set -uo pipefail
 
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 payload="$(cat 2>/dev/null || true)"
 
 # A LIBRARY THIS GATE CANNOT LOAD IS NOT NOTHING TO CHECK (claude-config#1900, L10, L1033).

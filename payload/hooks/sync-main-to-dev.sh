@@ -25,7 +25,9 @@
 set -uo pipefail
 
 payload="$(cat)"
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # The list names work repositories, so it is each Mac's own file, never tracked in the public
 # repository (claude-config#1568). claude-sync moved each Mac's installed copy of the old tracked
 # hooks/main-to-dev-repos.txt here byte for byte (MOVED_TO_LOCAL), and never sends or deletes it.

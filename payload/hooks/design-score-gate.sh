@@ -26,7 +26,9 @@
 #
 # Seam, for the tests only: DESIGN_SCORE_GATE_PY, the judge to run.
 set -uo pipefail
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 payload=$(cat)
 
 # Every word a closing route can be spelled with, `--input` and PATCH included: a state set from a
