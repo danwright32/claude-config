@@ -241,9 +241,8 @@ const world = (on: On, init: Partial<World> = {}) => {
     return w.compact() as never
   })
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
-  // The settings hooks Claude Code runs at a compaction's end (#2082), which a test raises itself.
-  on('classic.PostCompact', () => ({}) as never)
-  on('classic.SessionStart', () => ({}) as never)
+  // The rows a compaction keeps at its end (#2082), which a test raises itself.
+  on('session.append', ($, e, next) => next(e))
   on('prompt.submit', ($, e) => {
     prompts.push({ text: e.text, afterCompacts: compacts.length })
     return w.submit(e.text) as never
@@ -787,12 +786,40 @@ test('a prompt to carry on that the session refuses, or that fails, is said in a
 // reload cancels every wait of the copy it replaces (its types: "a hot reload of the plugin cancels
 // its pending waits with the old environment"), so the copy that started the Compact never heard it
 // finish: no prompt to carry on, and no toast. Modelled here as a Compact that never answers the copy
-// that started it, a second session.start over the same $.state, then the settings hooks Claude Code
-// runs at every compaction's end, which reach whichever copy is running then.
-const compactEnds = ($: unknown, extra: Record<string, unknown> = {}) =>
-  ($ as { classic: { PostCompact: (e: never) => Promise<unknown> } }).classic.PostCompact({ trigger: 'manual', compact_summary: 'summary', ...extra } as never)
-const startsAfterCompact = ($: unknown, extra: Record<string, unknown> = {}) =>
-  ($ as { classic: { SessionStart: (e: never) => Promise<unknown> } }).classic.SessionStart({ source: 'compact', ...extra } as never)
+// that started it, a second session.start over the same $.state, then the rows Claude Code keeps at
+// every compaction's end (its boundary notice and its summary, by the compaction door of
+// session.append), which reach whichever copy is running then. Not the PostCompact or compact
+// SessionStart settings hooks: Claude Code's security default sends every classic event past the
+// tier mods load in (#875, tools/check-mods.sh), so they reach a mod only while the managed settings
+// file is in place.
+const appendRow = async ($: unknown, row: Record<string, unknown>) => {
+  try {
+    await ($ as { session: { append: (e: never) => Promise<unknown> } }).session.append(row as never)
+  } catch (err) {
+    if (!/no implementation for session.append/.test(String(err))) throw err
+  }
+}
+let rowCount = 0
+const boundaryKept = ($: unknown, extra: Record<string, unknown> = {}) =>
+  appendRow($, {
+    door: 'compaction',
+    origin: { kind: 'engine' },
+    uuid: `boundary-${++rowCount}`,
+    message: { type: 'system', name: 'compact_boundary', content: [{ type: 'text', text: 'Conversation compacted' }] },
+    ...extra,
+  })
+const summaryKept = ($: unknown, extra: Record<string, unknown> = {}) =>
+  appendRow($, {
+    door: 'compaction',
+    origin: { kind: 'engine' },
+    uuid: `summary-${++rowCount}`,
+    message: { type: 'user', role: 'user', isMeta: true, content: [{ type: 'text', text: 'summary' }] },
+    ...extra,
+  })
+const compactEnds = async ($: unknown, extra: Record<string, unknown> = {}) => {
+  await boundaryKept($, extra)
+  await summaryKept($, extra)
+}
 const reloadDuringCompact = async ($: unknown, clock: TestClock, w: World, files: Record<string, string>, mtimes: Record<string, number>) => {
   await start($ as never, clock)
   await queueWithNote($, clock, files, mtimes)
@@ -809,13 +836,20 @@ test('a reload in the middle of the compaction the session queued still sends on
   // A reload with no compaction finished sends nothing, however long it waits for one.
   await clock.advance(MIN)
   expect(prompts).toEqual([])
+  // Nor does a subagent's compaction ending meanwhile, which compacts only its own conversation.
+  await compactEnds($, { agentId: 'a1' })
+  await clock.advance(MIN)
+  expect(prompts).toEqual([])
+  expect(cacheIn(files)).not.toBeNull()
   await compactEnds($)
   await clock.advance(10 * SEC)
   expect(prompts).toHaveLength(1)
   expect(prompts[0]?.text).toContain(CARRY_ON)
   expect(toasts).toEqual([])
-  // Neither the settings hooks after it nor a later reload sends it again.
-  await startsAfterCompact($)
+  // The copy running when it ended also resets the cache clock, which the copy it replaced cannot.
+  expect(cacheIn(files)).toBeNull()
+  // Neither a row the compaction keeps after it nor a later reload sends it again.
+  await summaryKept($)
   await start($, clock)
   await clock.advance(20 * MIN)
   expect(prompts).toHaveLength(1)
@@ -830,7 +864,7 @@ test('the prompt to carry on is sent exactly once across two reloads around the 
   await start($, clock)
   await clock.settle()
   expect(prompts).toHaveLength(1)
-  await startsAfterCompact($)
+  await summaryKept($)
   await compactEnds($)
   await clock.advance(20 * MIN)
   expect(prompts).toHaveLength(1)
@@ -838,10 +872,19 @@ test('the prompt to carry on is sent exactly once across two reloads around the 
   expect(toasts).toEqual([])
 })
 
-test("the settings hook for the session starting again after a compaction is enough on its own (#2082)", withKit, async ($, on) => {
+test("either row a compaction keeps at its end is enough on its own (#2082)", withKit, async ($, on) => {
   const { clock, files, mtimes, prompts, w } = world(on)
   await reloadDuringCompact($, clock, w, files, mtimes)
-  await startsAfterCompact($)
+  await summaryKept($)
+  await clock.advance(10 * SEC)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]?.text).toContain(CARRY_ON)
+})
+
+test("a compaction's boundary row alone is enough too (#2082)", withKit, async ($, on) => {
+  const { clock, files, mtimes, prompts, w } = world(on)
+  await reloadDuringCompact($, clock, w, files, mtimes)
+  await boundaryKept($)
   await clock.advance(10 * SEC)
   expect(prompts).toHaveLength(1)
   expect(prompts[0]?.text).toContain(CARRY_ON)
@@ -893,9 +936,8 @@ test("a compaction's end sends nothing for the button's Compact, an automatic on
   expect(prompts).toEqual([])
   // Queued but its turn still running: an automatic compaction then is not the one queued.
   await queueWithNote($, clock, files, mtimes)
-  await compactEnds($, { trigger: 'auto' })
-  await compactEnds($, { agent_id: 'a1' })
-  await startsAfterCompact($)
+  await compactEnds($)
+  await compactEnds($, { agentId: 'a1' })
   await clock.advance(MIN)
   expect(prompts).toEqual([])
   // The queued one still runs at the turn's end, and is followed by its one prompt.
