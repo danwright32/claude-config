@@ -3915,7 +3915,8 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
   decisions (L10). A fact the command does not depend on (no checkout, no GitHub repository, GitHub
   not answering for a merge) lets it through, and the check's own failure lets the command through
   with one dim line kept in the error file. Only this Mac's log is read, so a file decided on the
-  other Mac is not asked for, and every refusal says so.
+  other Mac is not asked for; every refusal that lists lines to paste says so, and the unreadable
+  log refusal says it reads this Mac's log only.
 
 ## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
 
