@@ -123,7 +123,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   payload="$(ps_read_payload)"
   case "$payload" in *SKIP_SCANNERS_CHECK=1*) exit 0 ;; esac
   case "$payload" in *push*) ;; *) exit 0 ;; esac
-  echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/work-names-messages.sh, which reads the messages of the commits this push adds for a work organisation name, so they were not checked. A library this gate cannot load is not a push with clean messages. Reinstall the hooks with claude-sync pull." >&2
+  echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/work-names-messages.sh, which reads the messages of the commits this push adds for a work organisation or repository name, so they were not checked. A library this gate cannot load is not a push with clean messages. Reinstall the hooks with claude-sync pull." >&2
   exit 2
 }
 

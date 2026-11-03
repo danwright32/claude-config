@@ -13,6 +13,9 @@
 #      public too), only where it is.
 #   6. Text that is not a file, a commit message or a pull request's title and description, is read
 #      by the same rule from a labelled stream (claude-config#1995), and a stream cut short is refused.
+#   7. With --work-repos, that text is also judged against the work repository list read live through
+#      a fake gh (claude-config#2111): a listed repository or owner is found in plain prose, and a
+#      list that cannot be read, or a read past its budget, is refused rather than passed.
 # The two parts that need the repository, (1) nothing this repository publishes names one and (5) a
 # send refuses to publish a file naming one, are tests/test-work-names-tree.sh, since this suite is
 # also installed beside the hooks, where there is no repository.

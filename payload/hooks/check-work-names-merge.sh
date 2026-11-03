@@ -102,12 +102,12 @@ command -v gh >/dev/null 2>&1 || deny "$WHAT: gh is not on PATH, so GitHub canno
 
 # One pull request per command: the text read below is one pull request's.
 if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
-  deny "Cannot judge whether this merge publishes a work organisation name: $span_why"
+  deny "Cannot judge whether this merge publishes a work organisation or repository name: $span_why"
 fi
 
 # A merge through the GitHub API whose pull request cannot be named (#1181).
 if mt_api_merge_untold "$command"; then
-  deny "Cannot judge whether this merge publishes a work organisation name: $MT_API_WHY"
+  deny "Cannot judge whether this merge publishes a work organisation or repository name: $MT_API_WHY"
 fi
 
 if mt_is_pr_merge "$command" && mt_reader_missing; then
