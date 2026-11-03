@@ -425,7 +425,7 @@ HEAD_LIST
   fi
 }
 total_note() {  # $1 = total bytes  $2 = a growth_reading line -> the one line note
-  local t="$1" g="${2:-UNREAD no growth reading was taken}" grown days to room
+  local t="$1" g="${2:-UNREAD no growth reading was taken}" grown days to room _
   if [ "$t" -gt "$TOTAL_WARN" ]; then
     printf 'the rule files every session loads total %s characters, %s past the %s at which Claude Code shows its size warning on a 1M window (%s on a 200k one). Nothing is dropped; each session carries the warning and the context it costs.' \
       "$t" "$(( t - TOTAL_WARN ))" "$TOTAL_WARN" "$TOTAL_WARN_SMALL_WINDOW"

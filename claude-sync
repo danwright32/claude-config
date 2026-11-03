@@ -6864,7 +6864,7 @@ ALLBAKS
 # cannot be read (no branch, no tracking ref, a git failure) keeps the whole diff, which holds back
 # more rather than mirroring over the other Mac's work (L42).
 unapplied_paths(){
-  local last head changed branch upstream bases theirs
+  local last head changed branch upstream bases theirs _b
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
