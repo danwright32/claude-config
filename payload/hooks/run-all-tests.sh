@@ -142,8 +142,11 @@ export HOOK_TESTS_RUNNING=1
 # the claude command which model settings.json runs (#828) and finds it on PATH when this seam is
 # unset, so a suite that forgot the seam started the real binary. Pointed at nothing for every
 # suite, unconditionally, so an inherited value cannot point it at a real one either; a suite
-# that is ABOUT the check sets its own stub per command.
-export SYNC_CLAUDE_BIN="/nonexistent/run-all-tests/no-claude-for-suites"
+# that is ABOUT the check sets its own stub per command. The value is the one lib/suite-isolation.sh
+# names, which a suite started on its own is handed by arming its deadline (claude-config#2156), and
+# that list sets it again with the other seams once the run's throwaway folder exists.
+. "$SELF_DIR/lib/suite-isolation.sh" || { echo "run-all-tests: refusing to run: lib/suite-isolation.sh is missing, so every suite would write into the real records." >&2; exit 1; }
+suite_isolation_no_claude
 
 # How long a suite may wait for a lock another run holds (claude-config#1297). The sync suite
 # refuses at once when started by hand, and reporting that refusal as NOT RUN is honest, but on
@@ -1211,51 +1214,47 @@ if [ "$ran" -gt 0 ]; then
   # suite that sources the library, or runs a hook, without setting the override first writes
   # there and never into the live store. Exported only AFTER the live path was read above. A suite
   # that sets its own still wins, which is what every suite in the tree already does.
-  CLAUDE_ISSUE_SPOOL_DIR="$WORK/issue-spool"
-  mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
-  export CLAUDE_ISSUE_SPOOL_DIR
+  #
+  # Every seam below is exported by the one call after them, from the list in lib/suite-isolation.sh,
+  # which suite_deadline_arm reads too, so a suite started on its own gets the same throwaway records
+  # as one started here (claude-config#2156). Each comment says why its seam exists and why it is or
+  # is not bracketed; the list is where a new one is added.
 
   # The same seam for the push gate ledger (claude-config#1075): a suite that drives a model judged
   # push gate without pointing it elsewhere writes its fake pushes here, never into the record the
   # gates' accuracy is read from. Not bracketed like the stores below, because real pushes from
   # other sessions legitimately append to the live one during a run.
-  PUSH_GATE_LEDGER_DIR="$WORK/push-gates"
-  export PUSH_GATE_LEDGER_DIR
 
   # And the record of wrapped command refusals (claude-config#1492), whose counts decide how
   # check-wrapped-commands.sh is narrowed: a suite driving that gate without pointing it elsewhere
   # records its fixtures here, never as real use. Not bracketed, for the push ledger's reason.
-  WRAPPED_REFUSAL_LEDGER_DIR="$WORK/wrapped-refusals"
-  export WRAPPED_REFUSAL_LEDGER_DIR
 
   # And the record of refused GitHub sign ins (claude-config#1626), whose count across runs is what
   # says this Mac's keyring read is failing often: a suite faking a 401 through any merge gate without
   # pointing it elsewhere records it here, never as a real refusal. Not bracketed, for the push
   # ledger's reason.
-  MT_SIGNIN_LEDGER_DIR="$WORK/gh-signin"
-  export MT_SIGNIN_LEDGER_DIR
 
   # And the phase records merge helpers and lessons reviews publish for the load window
   # (lib/merge-phase.sh, claude-config#1676, #1730): a suite that starts a review without pointing it
   # elsewhere publishes its fixture's phase here, never where tools/load-window.sh reads this Mac's.
   # Not bracketed, for the push ledger's reason: real helpers write the live one all through a run.
-  MWR_PHASE_DIR="$WORK/merge-phases"
-  export MWR_PHASE_DIR
 
   # And claude-sync's log (claude-config#1486). claude-sync itself logs nowhere for a fixture home,
   # but a suite running it as a home's own config, with HOME left real, would append its lines to the
   # log the real watcher writes. A suite that names its own still wins. Not bracketed like the stores
   # below either: the live watcher appends to the real one all through a run, and an append is what
   # that bracket excuses anyway, so it would only ever report the watcher.
-  SYNC_LOG_FILE="$WORK/sync-log"
-  export SYNC_LOG_FILE
 
   # And the sleep record (lib/sleep.sh): a record of its own that does not exist, so a suite driving
   # a sleep aware hook is never silenced by the Mac really being asleep. On 2026-10-13 the first run
   # made during a night of sleep mode failed every such suite while CI, with no record, passed. A
   # suite that is ABOUT sleep names its own record and is unaffected.
-  CLAUDE_SLEEP_RECORD="$WORK/sleep-record/current.json"
-  export CLAUDE_SLEEP_RECORD
+  #
+  # All of them, replacing whatever was inherited, as each one here always did. A list that will not
+  # load stops the run before any suite starts, since every suite would then write the real records.
+  . "$SELF_DIR/lib/suite-isolation.sh" || { echo "run-all-tests: refusing to run: lib/suite-isolation.sh is missing, so every suite would write into the real records." >&2; exit 1; }
+  suite_isolate "$WORK" every || { echo "run-all-tests: refusing to run: the throwaway records could not be pointed at '$WORK'." >&2; exit 1; }
+  mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 
   # ---- and the other live stores (claude-config#216) ----
   # The bracket above covers the store the incident happened in. The same class of mistake reaches

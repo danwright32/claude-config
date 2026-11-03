@@ -18020,7 +18020,7 @@ RT20H="$WORK/rt2020-home"; mkdir -p "$RT20H/hooks/lib"
 echo '{"hooks":{}}' > "$RT20H/settings.json"; printf '# rules\n' > "$RT20H/CLAUDE.md"
 rt20_src="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks"
 cp "$rt20_src/test-run-all-tests-real-tree.sh" "$rt20_src/run-all-tests.sh" "$RT20H/hooks/"
-cp "$rt20_src/lib/suite-deadline.sh" "$rt20_src/lib/recorded-pid.sh" "$rt20_src/lib/repo-files.sh" \
+cp "$rt20_src/lib/suite-deadline.sh" "$rt20_src/lib/suite-isolation.sh" "$rt20_src/lib/recorded-pid.sh" "$rt20_src/lib/repo-files.sh" \
   "$rt20_src/lib/whole-number.sh" "$rt20_src/lib/load-average.sh" "$RT20H/hooks/lib/"
 mkskill "$RT20H/skills/milestone/SKILL.md" 'a skill holding a suite'
 printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/skills/milestone/test-ms.sh"
