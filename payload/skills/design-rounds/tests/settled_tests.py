@@ -992,7 +992,8 @@ run().then(function (doc) { var pre = document.createElement("pre"); pre.id = "P
                                "--dump-dom", url], capture_output=True, text=True,
                               env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
         m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
-        doc = html_unescape(m.group(1)) if m else ""
+        # A Chrome run that failed gives no capture at all, so every check on it fails with its output.
+        doc = html_unescape(m.group(1)) if m and proc.returncode == 0 else ""
         # The element's own tag, past the first comment, which names <html> in its text.
         tag = re.search(r"<html\b[^>]*>", re.sub(r"<!--.*?-->", "", doc, flags=re.S))
         note = re.search(r"<!--(.*?)-->", doc, re.S)
