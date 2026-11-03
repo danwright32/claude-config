@@ -1726,7 +1726,7 @@ Three gates close the three parts of that, all reading commands through one libr
   numbered key that moves the hooks, `GIT_CONFIG_PARAMETERS`, and `GIT_CONFIG_GLOBAL`,
   `GIT_CONFIG_SYSTEM` or `GIT_CONFIG` naming a whole file), git's `--config-env`, a config include
   (`include.path`, `includeIf.*.path`) set with `-c` or `git config`, and a key the shell spells so the
-  gate cannot read it. The gate is also registered for Edit, Write and MultiEdit, and refuses an
+  gate cannot read it. The gate is also registered for Edit, Write, MultiEdit and NotebookEdit (NotebookEdit is let through, since it only edits notebook files), and refuses an
   agent's edit of a git config file (the repository's or a worktree's, the global one, or any file
   an include names, existing or not) that changes the hooks location or an include as git reads
   them; any other edit of those files goes through. Since claude-config#2160 three more routes are

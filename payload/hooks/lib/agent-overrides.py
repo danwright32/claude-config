@@ -838,8 +838,9 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 
 
 def _git(args, cwd=None):
-    """git's output, or None when git cannot run there. Never raises: a caller treats None as git
-    having nothing to say about that directory, and the heuristic below still applies."""
+    """git's output, or None when git cannot run there. Never raises: a caller must not read None
+    as git having nothing to say about that directory. The config read refuses when git cannot list
+    a folder's config (claude-config#2160), so None there means unlisted, never clean."""
     import subprocess
     try:
         p = subprocess.run(["git"] + args, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
