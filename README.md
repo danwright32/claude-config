@@ -4143,8 +4143,8 @@ only the save it was drawn for; a second save waits behind the first. Each answe
 a note. Claude Code's own auto-memory writer saves through tool calls, so it is asked about too.
 Skipped when Dan's own latest message, typed or from his phone, gives the rule as an instruction to
 Claude ("from now on", or "always", "never" or "remember" leading a sentence or after "please", "you
-should" or "you must"; never "it ran and never finished"), and not when it limits it ("for now",
-"today", "this session"); then Claude is told to say what it saved. A hook that cannot finish
+should" or "you must"; never "it ran and never finished"), and not when it limits it ("for
+now", "today", "this session"); then Claude is told to say what it saved. A hook that cannot finish
 refuses the write, and says why. It asks only after the settings hooks beneath it have decided, so a
 save the payload write gate refuses is never asked about. Dan's Add to LESSONS.md in the durable
 lesson check's picker (which carries `metadata.source` `durable-lesson` and the rule, stated word
@@ -4496,141 +4496,142 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 Per session modes, each leading the amber line in the band in bold through the status bar, all off
 when the session ends and none carried into a new one. Every phrase counts only as an instruction of
 its own (starting the message, a sentence, a line or a clause), never in passing and never in a
-question. **No build** (`/nobuild`, or Dan's "no coding yet", "stay read only", "read only for now",
-"just file, don't build"; never "read only" in passing): reading, research, tests, scratchpad notes,
-Claude's own memory and plan notes, read only SQL (whatever its strings say), GraphQL reads and
-GitHub issue, milestone and label work go ahead; edits outside the scratchpad, commits, branches,
-PRs, deploys and data changing SQL are refused with the grey card, the shell routes around it
-(redirects, `sed -i`, `awk -i inplace`, `ruby -pi`, `tee`, `cp`, `curl -o`, `wget`, `find -delete`,
-`rm`, inline scripts, `bash -lc`, a file command `xargs` gives its files to) included, every command
-and every file a call changes read through mod-kit's readers (#712). A script fed to python, node,
-ruby, perl or a shell by a heredoc, a here-string or echo is judged by its text, a shell's as the
-commands it runs; one piped in from anything else is refused as one it cannot read, with Claude told
-that inline code or a heredoc is read and judged. It guards the usual routes Claude takes, not a
-sealed box: routes found after #730 collect in #760. Only a real `|` feeds a command, so `cd repo &&
-python3 --version` runs (#724). Inline code is found by each language's own options and judged by
-what it can do in that language (write a file, run a process, or build code at run time, which
-cannot be read), for python, node, ruby, perl, AppleScript, awk and sed, the refusal naming what was
-seen; a database client by every piece of SQL it runs and what it writes itself (`\o`, `\copy ...
-to`, `.output`). A check that throws refuses the call. One edit goes through (#1483, Dan's sign off
-of 2026-10-22): the main session's single Edit of `~/.claude/LESSONS.md` (the Edit tool only, never
-replace_all, never a Write or a shell route) when ask before saving says, through
-`$.askBeforeSaving.isApproved`, that the call carries a live, unspent approval Dan gave for exactly
-that edit, in the durable lesson picker or by For good; ask before saving spends it as the call
-passes, so a resend is refused, and that mod not loaded or its check failing leaves the edit
-refused. Claude asks Dan "Switch to build?" through its `switch_to_build` tool, whose yes alone
-lifts it. **Winding down** (`/winddown`, "pause after this issue", "wind down now", "let's wind
-down"; never "winding down" in passing): the turn end is refused until the branch's PR is merged,
-its issues closed (since #1812 those it refers to with Refs, Ref or References as well as those it
-closes, never Part of, which names an epic as often, a pull request a Refs line names left out), the
-branch and worktree gone and the is it live mod's card for the PR says Live or no deploy step
-recorded (read through `$.isItLive.verdict`, never Claude's own report; deploying, could not
-confirm, no card yet, or is it live not loaded keeps it refused and says which). Turning it on again
-keeps the PR it found; on the default branch it follows the session onto a branch. Winding down
-finalizes everything the session has open: every PR the session or its agents opened (noted from
-what `gh pr create` prints, so another session's PRs never hold it) is outstanding until merged,
-whether or not the session's own branch has a PR, so none is left open waiting on Dan; its note, the
-`/winddown` context and the turn end refusal tell Claude to ask Dan right then with an
-AskUserQuestion picker, one question at a time, when a decision or sign off is needed, and merge
-once he answers, and asking is never refused as new work (#856). Every issue the session worked is
-finished, the verification its fix still owes included (a live check, a measurement, a follow up
-PR), and the turn end refusal names what is left on an open one, read from the merged PR's stated
-next step, else the issue's last comment; the note, the `/winddown` context and the refusal tell
-Claude to do it and never to ask Dan whether to turn winding down off or close the issue unfinished,
-since only new work is refused (#1812, after a session held by #1765 offered Dan exactly those two
-ways out). A PR stays open only on Dan's own answer to the `leave_pr_open` tool (#917): it reads the
-PR's head commit, asks him "Leave PR #N in owner/name open (why)?" with Leave it open or Merge it,
-and records only his Leave it open, against the repository, number and that head; winding down then
-lists the PR as left open by his choice (in the turn end refusal and the finish toast) rather than
-as outstanding, and a push after his answer makes it outstanding again until he is asked again. A PR
-closed without merging (#1033) is outstanding until it is merged or Dan chooses to leave it closed,
-and since Dan would rather merge it (#1767: "I'd always prefer to merge it unless we're never going
-to merge it"), the refusal tells Claude to reopen it (`gh pr reopen`) and finish it. He is asked
-only on a recorded reason it will never merge: its closing comment (one posted no earlier than two
-minutes before it closed, or after: measured in #1777 over 68 closed unmerged PRs across Dan's
-repositories, every closing comment came 0 to 2 seconds before the close or after it, and the
-nearest discussion 477 seconds before), or his own earlier words handed to the tool as `dan_said`,
-naming as `#N`, `owner/name#N` or a pull request's github.com link (its repository read by mod-kit's
-`$.modkit.linkRepo`, #1777) a number GitHub confirms is a PR (a comment naming only an issue, as
-#1716's did, is no reason; a number GitHub cannot place, or a link mod-kit cannot read, is said as
-unread). Each of those GitHub reads takes a look from the session's shared polling budget (#1482)
-and is asked once a session; one that fails is asked again by the minute's check or a turn end only
-after a minute, then the polling library's doubled wait up to ten minutes while it keeps failing,
-while `leave_pr_open` asks it again at once (#1777). Only then does the same tool ask "Leave PR #N
-in owner/name closed without merging, as its closing comment names PR #M ("the comment")?" with
-Leave it closed or Reopen it, and with no recorded reason it asks nothing and says to reopen and
-finish the PR. It records only his Leave it closed, by repository and number with no head (a closed
-PR merges nothing until reopened), with that reason; winding down then lists it as left closed by
-his choice, and once reopened it is an open PR again, outstanding until merged. One answer is kept
-per PR, so a later one replaces it, and none settles another PR. A closed PR whose work merged in
-another PR is never settled without his answer, since GitHub records no link from it to the PR that
-carried its work and a squash merge leaves its commits out of the base branch's history; a closing
-comment naming that PR is what lets him be asked. Any other answer withdraws an earlier one, a
-picker Claude asks itself is never read as his choice, and nothing is asked while he is asleep. A
-branch is the session's own only once it or one of its agents created it, committed to it or pushed
-it (#1074); a branch the checkout merely sat on (a shared primary checkout, say) has no PR or
-cleanup of the session's to finish, and only its uncommitted work counts, as on the default branch.
-The `leave_branch` tool asks Dan "Leave the branch X in owner/name as it is (why)?" with Leave it as
-it is or Clean it up, and records only the first, by repository and branch: winding down then stops
-waiting for that branch to be deleted here or a worktree on it to go, and for the uncommitted files
-his question named, while a change to any other file asks again and the branch on GitHub is still
-deleted. Uncommitted work is named by its files, and a branch to commit it starts only on Dan's
-answer to `open_cleanup_branch` (#1051), which names the files git status lists and records only his
-Open it: that branch may then start once, by `git switch -c` or `git checkout -b`, while nothing
-beyond those files is uncommitted, and any other branch is still refused. GitHub is asked only about
-what can still change (#1037): a turn end reads afresh, the minute's check asks again about a PR
-once a wait has passed that starts at a minute and doubles to ten while its answer has not moved
-(the doubling is the one polling policy's, `hooks/lib/gh-poll.sh`, within winding down's own ten
-minutes, and each read takes a look from the session's shared budget, so none is made during a rate
-limit pause, a turn end then saying why it has no reading rather than finishing on an old one,
-#1482), a merged PR is read once, and a PR's closing issues are read only once it has merged and not
-again once closed; each gh read is one GraphQL point. New work (the next-issue skill, a new branch,
-`gh issue develop`, an agent for another issue) is refused, while an agent named after this PR or an
-issue it closes goes ahead; checked each minute, it ends itself with a "safe to close" toast.
-`/build` or "go ahead and build" turns either off, and "stop winding down", "exit no build mode" or
-"turn read only off" turn off only the mode they name. A message Dan types while a turn runs is read
-the same way, at Enter, as the engine's types document it (not yet seen live; a debug log line
-records each one and how many modes it switched); one asking to end the mode that is on in words
-that do not switch it ("winding down is done for today", never the name in passing or in a question)
-gets a note telling Claude to say it is still on and that `/build` turns it off (#805). **Away**
-(`/away`, "I'm stepping away", or "away" from the phone) and **home** (`/home`, "I'm back at my
-computer") switch every open session on this Mac, told through the session registry and
-`$.session.send`. Away, Claude is told to publish private claude.ai pages, and what needs Dan at the
-Mac is held: AppleScript or JavaScript for Automation that shows a dialog, or that it cannot read (a
-script file included, one `cat` pipes in too), typing or clicking (an AppleScript keystroke or
-click, cliclick, Peekaboo) into anything but a test build, and the Artifact tool's open action; at
-home each session shows a boxed "Held while you were away" card, one row and button per held thing,
-and nothing runs until pressed. Since #1269 (Dan, 2026-10-16 ET: "I don't care if you bring apps to
-the front or do automations for testing") opening an app or a file, BBEdit's helper, bringing an app
-forward, a browser tool opening a page or a tab (Playwright, Chrome) and typing or clicking into a
-test build run while away and asleep. A test build is an executable under Xcode's DerivedData or
-inside a project checkout (a folder holding `.git`, never the home folder or above it), or Simulator
-where Xcode keeps it; the keystroke guard still proves it is in front before any keystroke. Sends
-and purchases are not held by away (Dan's answer the same day: keep this change narrow). A message
-from the phone while home ends the reply with "You're on your phone. Reply away to switch every
-session." Other mods hold their own items through `$.scopeModes.hold({ label, prompt })`, which
-answers a held call's card and refusal in this mod's own words (the keystroke guard holds its
-actions that way). `switch_to_build` asks mod-kit's screen before showing Dan the change. **Sleep
-mode** (#840, phase 1 of the Sleep mode milestone) is the whole Mac's, not a session's: `/sleep`
-writes one record, `~/.claude/state/sleep/current.json` (`v`, `generation`, `since`, `until`,
-`night`, `bootTime`, `bootSession`, `report`, `startedBy`, `workers`, `goals`, `placeBefore`), whole
-beside it and linked into place, so two `/sleep` at once place one record and a second `/sleep` only
-says when and where sleep started; it enrols as `workers` this session and every open session that
-told the session registry it has a person at its prompt (a `-p` or detached run never). While it
-holds, every session shows ASLEEP first in the band and is kept quiet as away (what away holds is
-held, whatever the session's own place, and the held card is not offered until wake). It ends by
-itself at noon ET the day after the night (before noon ET counts as the night before), or on a new
-boot (told by `bootSession`, which only a restart changes, else by `bootTime` within 300 seconds,
-since a clock correction moves it): the first session to see that, each minute, moves it aside to
-`ended/`, notes why in `notes/<generation>.jsonl` and notifies once. `/wake` or Dan's "I'm up" moves
-it aside too, and only the session whose move succeeds acts, putting every session back where Dan
-was before sleep. A `/sleep` that starts it and a wake that ends it each tell Claude to open its
-reply with what the mode now does, from the same definitions in `hooks/modes.ts` as every other
-switch (#1086); "I'm up" adds it right after the line saying what waking did. A record that cannot
-be read reads as awake (a mute that cannot say when it ends never holds), `/sleep` leaves it and
-`/wake` clears it. Whether the Mac is asleep is one predicate read afresh at every decision,
-`readSleep` here and `sleep_active` in `hooks/lib/sleep.sh` for the shell, both held to one fixture
-set (`tests/sleep-fixtures.ts`). While asleep nothing pages Dan (#841) except the power change
+question. **No build** (`/nobuild`, or Dan's "no coding yet", "stay read only", "read only for
+now", "just file, don't build"; never "read only" in passing): reading, research, tests, scratchpad
+notes, Claude's own memory and plan notes, read only SQL (whatever its strings say), GraphQL reads
+and GitHub issue, milestone and label work go ahead; edits outside the scratchpad, commits,
+branches, PRs, deploys and data changing SQL are refused with the grey card, the shell routes around
+it (redirects, `sed -i`, `awk -i inplace`, `ruby -pi`, `tee`, `cp`, `curl -o`, `wget`,
+`find -delete`, `rm`, inline scripts, `bash -lc`, a file command `xargs` gives its files to)
+included, every command and every file a call changes read through mod-kit's readers (#712). A
+script fed to python, node, ruby, perl or a shell by a heredoc, a here-string or echo is judged by
+its text, a shell's as the commands it runs; one piped in from anything else is refused as one it
+cannot read, with Claude told that inline code or a heredoc is read and judged. It guards the usual
+routes Claude takes, not a sealed box: routes found after #730 collect in #760. Only a real `|`
+feeds a command, so `cd repo && python3 --version` runs (#724). Inline code is found by each
+language's own options and judged by what it can do in that language (write a file, run a process,
+or build code at run time, which cannot be read), for python, node, ruby, perl, AppleScript, awk and
+sed, the refusal naming what was seen; a database client by every piece of SQL it runs and what it
+writes itself (`\o`, `\copy ... to`, `.output`). A check that throws refuses the call. One edit goes
+through (#1483, Dan's sign off of 2026-10-22): the main session's single Edit of
+`~/.claude/LESSONS.md` (the Edit tool only, never replace_all, never a Write or a shell route) when
+ask before saving says, through `$.askBeforeSaving.isApproved`, that the call carries a live,
+unspent approval Dan gave for exactly that edit, in the durable lesson picker or by For good; ask
+before saving spends it as the call passes, so a resend is refused, and that mod not loaded or its
+check failing leaves the edit refused. Claude asks Dan "Switch to build?" through its
+`switch_to_build` tool, whose yes alone lifts it. **Winding down** (`/winddown`, "pause after this
+issue", "wind down now", "let's wind down"; never "winding down" in passing): the turn end is
+refused until the branch's PR is merged, its issues closed (since #1812 those it refers to with
+Refs, Ref or References as well as those it closes, never Part of, which names an epic as often, a
+pull request a Refs line names left out), the branch and worktree gone and the is it live mod's card
+for the PR says Live or no deploy step recorded (read through `$.isItLive.verdict`, never Claude's
+own report; deploying, could not confirm, no card yet, or is it live not loaded keeps it refused and
+says which). Turning it on again keeps the PR it found; on the default branch it follows the session
+onto a branch. Winding down finalizes everything the session has open: every PR the session or its
+agents opened (noted from what `gh pr create` prints, so another session's PRs never hold it) is
+outstanding until merged, whether or not the session's own branch has a PR, so none is left open
+waiting on Dan; its note, the `/winddown` context and the turn end refusal tell Claude to ask Dan
+right then with an AskUserQuestion picker, one question at a time, when a decision or sign off is
+needed, and merge once he answers, and asking is never refused as new work (#856). Every issue the
+session worked is finished, the verification its fix still owes included (a live check, a
+measurement, a follow up PR), and the turn end refusal names what is left on an open one, read from
+the merged PR's stated next step, else the issue's last comment; the note, the `/winddown` context
+and the refusal tell Claude to do it and never to ask Dan whether to turn winding down off or close
+the issue unfinished, since only new work is refused (#1812, after a session held by #1765 offered
+Dan exactly those two ways out). A PR stays open only on Dan's own answer to the `leave_pr_open`
+tool (#917): it reads the PR's head commit, asks him "Leave PR #N in owner/name open (why)?" with
+Leave it open or Merge it, and records only his Leave it open, against the repository, number and
+that head; winding down then lists the PR as left open by his choice (in the turn end refusal and
+the finish toast) rather than as outstanding, and a push after his answer makes it outstanding again
+until he is asked again. A PR closed without merging (#1033) is outstanding until it is merged or
+Dan chooses to leave it closed, and since Dan would rather merge it (#1767: "I'd always prefer to
+merge it unless we're never going to merge it"), the refusal tells Claude to reopen it (`gh pr
+reopen`) and finish it. He is asked only on a recorded reason it will never merge: its closing
+comment (one posted no earlier than two minutes before it closed, or after: measured in #1777 over
+68 closed unmerged PRs across Dan's repositories, every closing comment came 0 to 2 seconds before
+the close or after it, and the nearest discussion 477 seconds before), or his own earlier words
+handed to the tool as `dan_said`, naming as `#N`, `owner/name#N` or a pull request's github.com link
+(its repository read by mod-kit's `$.modkit.linkRepo`, #1777) a number GitHub confirms is a PR (a
+comment naming only an issue, as #1716's did, is no reason; a number GitHub cannot place, or a link
+mod-kit cannot read, is said as unread). Each of those GitHub reads takes a look from the session's
+shared polling budget (#1482) and is asked once a session; one that fails is asked again by the
+minute's check or a turn end only after a minute, then the polling library's doubled wait up to ten
+minutes while it keeps failing, while `leave_pr_open` asks it again at once (#1777). Only then does
+the same tool ask "Leave PR #N in owner/name closed without merging, as its closing comment names
+PR #M ("the comment")?" with Leave it closed or Reopen it, and with no recorded reason it asks
+nothing and says to reopen and finish the PR. It records only his Leave it closed, by repository and
+number with no head (a closed PR merges nothing until reopened), with that reason; winding down then
+lists it as left closed by his choice, and once reopened it is an open PR again, outstanding until
+merged. One answer is kept per PR, so a later one replaces it, and none settles another PR. A closed
+PR whose work merged in another PR is never settled without his answer, since GitHub records no link
+from it to the PR that carried its work and a squash merge leaves its commits out of the base
+branch's history; a closing comment naming that PR is what lets him be asked. Any other answer
+withdraws an earlier one, a picker Claude asks itself is never read as his choice, and nothing is
+asked while he is asleep. A branch is the session's own only once it or one of its agents created
+it, committed to it or pushed it (#1074); a branch the checkout merely sat on (a shared primary
+checkout, say) has no PR or cleanup of the session's to finish, and only its uncommitted work
+counts, as on the default branch. The `leave_branch` tool asks Dan "Leave the branch X in owner/name
+as it is (why)?" with Leave it as it is or Clean it up, and records only the first, by repository
+and branch: winding down then stops waiting for that branch to be deleted here or a worktree on it
+to go, and for the uncommitted files his question named, while a change to any other file asks again
+and the branch on GitHub is still deleted. Uncommitted work is named by its files, and a branch to
+commit it starts only on Dan's answer to `open_cleanup_branch` (#1051), which names the files git
+status lists and records only his Open it: that branch may then start once, by `git switch -c` or
+`git checkout -b`, while nothing beyond those files is uncommitted, and any other branch is still
+refused. GitHub is asked only about what can still change (#1037): a turn end reads afresh, the
+minute's check asks again about a PR once a wait has passed that starts at a minute and doubles to
+ten while its answer has not moved (the doubling is the one polling policy's,
+`hooks/lib/gh-poll.sh`, within winding down's own ten minutes, and each read takes a look from the
+session's shared budget, so none is made during a rate limit pause, a turn end then saying why it
+has no reading rather than finishing on an old one, #1482), a merged PR is read once, and a PR's
+closing issues are read only once it has merged and not again once closed; each gh read is one
+GraphQL point. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for
+another issue) is refused, while an agent named after this PR or an issue it closes goes ahead;
+checked each minute, it ends itself with a "safe to close" toast. `/build` or "go ahead and build"
+turns either off, and "stop winding down", "exit no build mode" or "turn read only off" turn off
+only the mode they name. A message Dan types while a turn runs is read the same way, at Enter, as
+the engine's types document it (not yet seen live; a debug log line records each one and how many
+modes it switched); one asking to end the mode that is on in words that do not switch it ("winding
+down is done for today", never the name in passing or in a question) gets a note telling Claude to
+say it is still on and that `/build` turns it off (#805). **Away** (`/away`, "I'm stepping away", or
+"away" from the phone) and **home** (`/home`, "I'm back at my computer") switch every open session
+on this Mac, told through the session registry and `$.session.send`. Away, Claude is told to publish
+private claude.ai pages, and what needs Dan at the Mac is held: AppleScript or JavaScript for
+Automation that shows a dialog, or that it cannot read (a script file included, one `cat` pipes in
+too), typing or clicking (an AppleScript keystroke or click, cliclick, Peekaboo) into anything but a
+test build, and the Artifact tool's open action; at home each session shows a boxed "Held while you
+were away" card, one row and button per held thing, and nothing runs until pressed. Since #1269
+(Dan, 2026-10-16 ET: "I don't care if you bring apps to the front or do automations for testing")
+opening an app or a file, BBEdit's helper, bringing an app forward, a browser tool opening a page or
+a tab (Playwright, Chrome) and typing or clicking into a test build run while away and asleep. A
+test build is an executable under Xcode's DerivedData or inside a project checkout (a folder holding
+`.git`, never the home folder or above it), or Simulator where Xcode keeps it; the keystroke guard
+still proves it is in front before any keystroke. Sends and purchases are not held by away (Dan's
+answer the same day: keep this change narrow). A message from the phone while home ends the reply
+with "You're on your phone. Reply away to switch every session." Other mods hold their own items
+through `$.scopeModes.hold({ label, prompt })`, which answers a held call's card and refusal in this
+mod's own words (the keystroke guard holds its actions that way). `switch_to_build` asks mod-kit's
+screen before showing Dan the change. **Sleep mode** (#840, phase 1 of the Sleep mode milestone) is
+the whole Mac's, not a session's: `/sleep` writes one record, `~/.claude/state/sleep/current.json`
+(`v`, `generation`, `since`, `until`, `night`, `bootTime`, `bootSession`, `report`, `startedBy`,
+`workers`, `goals`, `placeBefore`), whole beside it and linked into place, so two `/sleep` at once
+place one record and a second `/sleep` only says when and where sleep started; it enrols as
+`workers` this session and every open session that told the session registry it has a person at its
+prompt (a `-p` or detached run never). While it holds, every session shows ASLEEP first in the band
+and is kept quiet as away (what away holds is held, whatever the session's own place, and the held
+card is not offered until wake). It ends by itself at noon ET the day after the night (before noon
+ET counts as the night before), or on a new boot (told by `bootSession`, which only a restart
+changes, else by `bootTime` within 300 seconds, since a clock correction moves it): the first
+session to see that, each minute, moves it aside to `ended/`, notes why in
+`notes/<generation>.jsonl` and notifies once. `/wake` or Dan's "I'm up" moves it aside too, and only
+the session whose move succeeds acts, putting every session back where Dan was before sleep. A
+`/sleep` that starts it and a wake that ends it each tell Claude to open its reply with what the
+mode now does, from the same definitions in `hooks/modes.ts` as every other switch (#1086); "I'm up"
+adds it right after the line saying what waking did. A record that cannot be read reads as awake (a
+mute that cannot say when it ends never holds), `/sleep` leaves it and `/wake` clears it. Whether
+the Mac is asleep is one predicate read afresh at every decision, `readSleep` here and
+`sleep_active` in `hooks/lib/sleep.sh` for the shell, both held to one fixture set
+(`tests/sleep-fixtures.ts`). While asleep nothing pages Dan (#841) except the power change
 notification above (#1545): a question (AskUserQuestion, or `switch_to_build`) is refused in every
 session and noted for his morning report in the night's notes, Claude told to leave what needs him
 and carry on; other mods ask through `$.scopeModes.isAsleep()` and note through
