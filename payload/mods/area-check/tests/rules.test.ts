@@ -3,6 +3,10 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   DEADLINE_MS,
   BUDGET_MS,
+  BARS,
+  DEFAULT_BAR,
+  barFor,
+  type Bar,
   FOLDER_MAX,
   GROWTH_MIN,
   ISSUE_LIMIT,
@@ -23,11 +27,26 @@ import {
   replay,
   type CachedIssue,
   type ReplayInput,
+  ANSWER_MS,
+  ANSWERS,
+  ASK_SOURCE,
+  DECIDE_TOOL,
+  SWEEP_MS,
+  answerStands,
+  decideProblem,
+  holdCard,
+  holdRefusal,
+  questionKey,
+  reasonProblem,
+  restructureQuestion,
+  sleepNotes,
+  sweepKeys,
+  type Held,
 } from '../hooks/rules.ts'
 
-// The area check (#1506, phase 1 #1508): the facts about a file at the moment a session first edits
-// it, computed purely here so each rule is tested on its own. Phase 1 only observes: these facts
-// decide what is LOGGED (would_hold or quiet), never what is refused.
+// The area check (#1506, facts #1508, hold #1509): the facts about a file at the moment a session
+// first edits it, computed purely here so each rule is tested on its own. These facts decide a verdict
+// (would_hold or quiet); a would_hold verdict is a held edit, refused until the session decides.
 
 const issue = (n: number, refs: string[], labels: Partial<CachedIssue> = {}): CachedIssue => ({ n, refs, structural: ['tech-debt'], priority: 'p2', ...labels })
 
@@ -181,7 +200,7 @@ test('a quiet repo with tiny growth holds nothing by the bar (decision 6)', () =
 })
 
 test('the ranking is keyed on the repository, origin head sha, the day and the rule version (L573)', () => {
-  expect(rankingKey('o/r', 'abc', Date.UTC(2026, 9, 22, 23, 0))).toBe('o/r abc 2026-10-22 v1')
+  expect(rankingKey('o/r', 'abc', Date.UTC(2026, 9, 22, 23, 0))).toBe('o/r abc 2026-10-22 v2')
   expect(rankingKey('o/r', 'abc', Date.UTC(2026, 9, 23, 1, 0))).not.toBe(rankingKey('o/r', 'abc', Date.UTC(2026, 9, 22, 23, 0)))
 })
 
@@ -195,6 +214,43 @@ test('judged: an unlabelled issue alone is quiet, the growth bar alone would hol
   const m = [{ n: 40, how: 'path' as const, structural: [], priority: null }]
   expect(judge({ matches: m, own: [], crosses: false })).toEqual({ decision: 'quiet', why: [], shown: [], excluded: [] })
   expect(judge({ matches: [], own: [], crosses: true })).toEqual({ decision: 'would_hold', why: ['growth'], shown: [], excluded: [] })
+})
+
+// The bar (#1509), set from the week's log on both Macs, 2026-10-23 to 11-02: the numbers and where
+// each threshold lands are in docs/mods-design.md under the area check.
+test('the bar is dated, and a repository without a bar of its own takes the default one', () => {
+  expect(DEFAULT_BAR).toEqual({ set: '2026-11-02', sizeMin: 1500, growthMin: 300, topN: 10, folderMax: 2, holdPriorities: ['p0', 'p1', 'p2'] })
+  expect(barFor('someone/anything')).toBe(DEFAULT_BAR)
+  expect(BARS).toEqual({})
+})
+
+test('a bar of its own is found by repository name whatever the owner or case, and ranks by its own numbers', () => {
+  const own: Bar = { ...DEFAULT_BAR, set: '2026-11-03', sizeMin: 100, growthMin: 10, topN: 1 }
+  expect(barFor('Owner/Quiet', { quiet: own })).toBe(own)
+  expect(barFor('other/quiet', { quiet: own })).toBe(own)
+  const growth = { 'a.ts': { net: 50, fixes: 0 }, 'b.ts': { net: 40, fixes: 0 } }
+  expect(rank(growth, { 'a.ts': 200, 'b.ts': 200 }, own).top).toEqual(['a.ts'])
+  expect(rank(growth, { 'a.ts': 200, 'b.ts': 200 }).top).toEqual([])
+  expect(sizeCandidates(growth, own)).toEqual(['a.ts', 'b.ts'])
+  expect(sizeCandidates(growth)).toEqual([])
+})
+
+test('judged: only a p0 to p2 structural issue holds; a p3 or p4 one alone is quiet; one with no priority counts as p2', () => {
+  const at = (n: number, priority: string | null) => ({ n, how: 'path' as const, structural: ['tech-debt'], priority })
+  expect(judge({ matches: [at(1, 'p3'), at(2, 'p4')], own: [], crosses: false })).toEqual({ decision: 'quiet', why: [], shown: [], excluded: [] })
+  expect(judge({ matches: [at(1, 'p3'), at(2, 'p1')], own: [], crosses: false })).toEqual({ decision: 'would_hold', why: ['issues'], shown: [2], excluded: [] })
+  expect(judge({ matches: [at(3, null)], own: [], crosses: false })).toEqual({ decision: 'would_hold', why: ['issues'], shown: [3], excluded: [] })
+  expect(judge({ matches: [at(1, 'p3')], own: [], crosses: true })).toEqual({ decision: 'would_hold', why: ['growth'], shown: [], excluded: [] })
+  const lenient: Bar = { ...DEFAULT_BAR, holdPriorities: ['p0', 'p1', 'p2', 'p3'] }
+  expect(judge({ matches: [at(1, 'p3')], own: [], crosses: false, bar: lenient }).shown).toEqual([1])
+})
+
+test('the folder fallback counts only when the folder has at most 2 issues naming its files', () => {
+  expect(FOLDER_MAX).toBe(2)
+  const tracked = ['src/pay/a.ts', 'src/pay/b.ts', 'src/pay/c.ts', 'src/pay/d.ts']
+  const three = [issue(10, ['src/pay/b.ts']), issue(11, ['src/pay/c.ts']), issue(12, ['src/pay/d.ts'])]
+  expect(issuesNaming('src/pay/a.ts', three, tracked)).toEqual([])
+  expect(issuesNaming('src/pay/a.ts', three, tracked, 5).map(m => m.n)).toEqual([10, 11, 12])
 })
 
 test('the replay counts holds per session, a commit standing in for a session and its own issues left out', () => {
@@ -230,4 +286,112 @@ test('the cache keeps each issue with its labels read and the paths the shared r
     { n: 3, structural: ['refactor'], priority: 'p0', refs: ['a.ts'] },
     { n: 4, structural: [], priority: null, refs: [] },
   ])
+})
+
+// ---- The hold (#1509): what a held edit shows, and what a decision must carry ----
+
+const HELD: Held = {
+  id: 'toolu_1', tool: 'Edit', repo: 'dan/app', main: '/w/app', rel: 'src/lib/slack.ts', agent: null, at: 0,
+  why: ['issues'],
+  shown: [{ n: 41, how: 'path', structural: ['tech-debt'], priority: 'p2' }, { n: 57, how: 'suffix', structural: ['refactor'], priority: null }],
+  issues: { state: 'read' },
+  growth: { net: 820, size: 2400, fixes: 3, rank: 2, crosses: true },
+}
+const GROWTH_ONLY: Held = { ...HELD, why: ['growth'], shown: [] }
+
+test('a proceed reason must start with a word, so a bracket, a quote or a dash standing alone never reads as a reason (L675)', () => {
+  for (const r of ['<why this change does not add to the problem>', '"', '-- adds nothing', '...', '  ', '(see above)', '123 lines only'])
+    expect(reasonProblem(r)).toBeDefined()
+})
+
+test('a proceed reason that is a placeholder or too short to say anything is refused, by name', () => {
+  for (const r of ['n/a', 'none', 'TBD', 'ok', 'fine', 'because', 'no reason', 'small change']) expect(reasonProblem(r)).toBeDefined()
+  expect(reasonProblem(undefined)).toContain('reason')
+  expect(reasonProblem(42)).toContain('reason')
+  expect(reasonProblem('Only renames one local variable inside formatDate')).toBeUndefined()
+})
+
+test('a decision is one of three, and proceed is refused without a real reason', () => {
+  expect(decideProblem({ decision: 'skip' }, HELD)).toContain('proceed')
+  expect(decideProblem({ decision: 'proceed', reason: 'ok' }, HELD)).toBeDefined()
+  expect(decideProblem({ decision: 'proceed', reason: 'Only renames one local variable inside formatDate' }, HELD)).toBeUndefined()
+  expect(decideProblem({ decision: 'restructure' }, HELD)).toBeUndefined()
+})
+
+test('fold names an issue the hold showed, never another, and a file held for growth alone has none to fold', () => {
+  expect(decideProblem({ decision: 'fold', issue: 41 }, HELD)).toBeUndefined()
+  expect(decideProblem({ decision: 'fold', issue: 57 }, HELD)).toBeUndefined()
+  expect(decideProblem({ decision: 'fold', issue: 99 }, HELD)).toContain('#41')
+  expect(decideProblem({ decision: 'fold' }, HELD)).toContain('#41')
+  expect(decideProblem({ decision: 'fold', issue: '41' }, HELD)).toContain('#41')
+  expect(decideProblem({ decision: 'fold', issue: 41 }, GROWTH_ONLY)).toContain('growth')
+})
+
+test('the card names the file, each issue with its priority, a missing label read as p2, and growth as rough', () => {
+  const c = holdCard(HELD)
+  expect(c.reason).toContain('src/lib/slack.ts')
+  expect(c.reason).toContain('#41 (p2, tech-debt)')
+  expect(c.reason).toContain('#57 (p2, refactor)')
+  expect(c.note).toMatch(/^Rough: grew 820 lines net in 90 days/)
+  expect(holdCard(GROWTH_ONLY).reason).toContain('fastest growing')
+})
+
+test('the card says when the issues could not be read, with why, and that growth alone decided (decision 12)', () => {
+  const c = holdCard({ ...GROWTH_ONLY, issues: { state: 'unread', why: 'not read within 7 seconds' } })
+  expect(c.reason).toContain('not read within 7 seconds')
+  expect(c.reason).toContain('growth')
+})
+
+test("the refusal names the call to decide under and every way out; a subagent's restructure goes to the main session", () => {
+  const main = holdRefusal(HELD)
+  expect(main).toContain(DECIDE_TOOL)
+  expect(main).toContain('"call": "toolu_1"')
+  for (const w of ['proceed', 'fold', 'restructure', '#41', '#57']) expect(main).toContain(w)
+  const agent = holdRefusal({ ...HELD, agent: 'ag1' })
+  expect(agent).toContain('main session')
+  expect(holdRefusal(GROWTH_ONLY)).not.toContain('"fold"')
+})
+
+test("the restructure question is Dan's three answers, Fold in only where an issue was shown", () => {
+  const q = restructureQuestion(HELD)
+  expect(q.question).toContain('src/lib/slack.ts')
+  expect(q.options.map(o => o.label)).toEqual([...ANSWERS])
+  expect(restructureQuestion(GROWTH_ONLY).options.map(o => o.label)).toEqual(['Restructure first', 'Proceed anyway'])
+  expect(ASK_SOURCE).toBe('area-check')
+})
+
+test("asleep, one note per issue shown, with the repo, the issue and the question, as bedtime reads them", () => {
+  const notes = sleepNotes(HELD)
+  expect(notes.length).toBe(2)
+  expect(notes[0]).toMatchObject({ kind: 'question', repo: 'dan/app', issue: 41 })
+  expect(notes[1]).toMatchObject({ kind: 'question', repo: 'dan/app', issue: 57 })
+  expect(String(notes[0]?.text)).toContain('src/lib/slack.ts')
+  expect(notes[0]?.options).toEqual([...ANSWERS])
+  // Held for growth alone there is no issue to post into: one note for the morning report.
+  const g = sleepNotes(GROWTH_ONLY)
+  expect(g.length).toBe(1)
+  expect(g[0]?.issue).toBeUndefined()
+})
+
+test("Dan's answer stands for a week and for the same issues, so he is not asked again; new issues ask again", () => {
+  const q = { state: 'answered' as const, answer: 'Proceed anyway', at: 1_000, issues: [57, 41] }
+  expect(answerStands(q, [41, 57], 1_000 + ANSWER_MS - 1)).toBe(true)
+  expect(answerStands(q, [41, 57], 1_000 + ANSWER_MS)).toBe(false)
+  expect(answerStands(q, [41, 57, 60], 2_000)).toBe(false)
+  expect(answerStands({ state: 'pending', at: 1_000, issues: [41], session: 's', call: 'c', agent: null }, [41], 2_000)).toBe(false)
+  expect(answerStands(undefined, [41], 2_000)).toBe(false)
+  expect(questionKey('dan/app', 'src/a.ts')).toBe('question:dan/app\nsrc/a.ts')
+})
+
+test('the sweep drops issue lists unread for a week and answers past their week, and keeps a pending question', () => {
+  const now = 100 * SWEEP_MS
+  const keys = sweepKeys([
+    ['issues:dan/old', { at: now - SWEEP_MS }],
+    ['issues:dan/new', { at: now - SWEEP_MS + 1 }],
+    ['issues:dan/bad', 'not a record'],
+    ['question:dan/app\na.ts', { state: 'answered', at: now - ANSWER_MS, issues: [] }],
+    ['question:dan/app\nb.ts', { state: 'pending', at: 0, issues: [] }],
+    ['other', { at: 0 }],
+  ], now)
+  expect(keys.sort()).toEqual(['issues:dan/bad', 'issues:dan/old', 'question:dan/app\na.ts'])
 })
