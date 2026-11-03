@@ -328,6 +328,56 @@ refused "a copy after a cd into a payload subdirectory is refused"
 runbash "grep x <<<foo
 echo hi > $FIX/dev/payload/LESSONS.md" "$FIX/dev"
 refused "a write on the line after a here-string is still refused"
+# Where a heredoc's body ends is read as bash reads it, by lib/shell-words.py (claude-config#2080).
+# Read with a pattern of its own, <<'E'OF ended at a line E and <<END-OF at a line END, so a body
+# that never had such a line hid every command after it; so did a << inside a quoted string, and
+# one in arithmetic. Each write below runs, after the heredoc, and is refused.
+runbash "cat <<'E'OF > /dev/null
+text
+EOF
+cp /tmp/x $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "#2080 a write after a heredoc whose end marker is quoted in part is refused"
+runbash "cat <<END-OF > /dev/null
+text
+END-OF
+cp /tmp/x $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "#2080 a write after a heredoc whose end marker holds a hyphen is refused"
+runbash "echo \"write it with cat <<EOF\"
+cp /tmp/x $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "#2080 a write after a << inside a quoted string is refused"
+runbash "echo \$((x<<y))
+cp /tmp/x $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "#2080 a write after a << in arithmetic is refused"
+# Every line of a heredoc body is judged as if it were a command too (Dan, 2026-11-02, "Also read
+# heredoc text"), so the gate reads everything it read before and more: a > in a body naming a
+# payload path is refused, where it was data and allowed before #2080. Refusing a few more commands
+# was the price chosen over ever refusing fewer.
+runbash "cat <<A; cat <<'B' > /dev/null
+a > $FIX/dev/payload/LESSONS.md
+A
+b
+B
+echo done" "$FIX/dev"
+refused "#2080 a > naming a payload path in the first of two heredoc bodies on one line is judged, and refused"
+runbash "cat <<A; cat <<'B' > /dev/null
+a
+A
+b > $FIX/dev/payload/LESSONS.md
+B
+echo done" "$FIX/dev"
+refused "#2080 so is one in the second body"
+runbash "cat <<'EOF' > /dev/null
+a > b
+EOF
+echo done" "$FIX/dev"
+allowed "#2080 control: a > in a body naming no payload path is still allowed"
+# A body line is judged, but never runs, so a cd in one does not move where a write after the
+# heredoc lands: that write is read where the shell runs it, by lib/shell-words.py.
+runbash "cat <<'EOF' > /dev/null
+cd $FIX/elsewhere
+EOF
+cp /tmp/x payload/LESSONS.md" "$FIX/dev"
+refused "#2080 a cd in a heredoc body does not hide a relative write after it"
 runbash "cat LESSONS.md 2>/dev/null" "$FIX/dev/payload"
 allowed "a read run from inside payload, stderr thrown away, is allowed"
 runbash "cd payload && grep -n needle LESSONS.md 2>/dev/null | head" "$FIX/dev"
@@ -396,6 +446,26 @@ runbash "bash -c 'cp /tmp/x $FIX/dev/payload/LESSONS.md'" "$FIX/dev"
 refused "#1478 with the wrapped reading failing, a payload path in a wrapper is still refused"
 runbash "cat $FIX/dev/payload/LESSONS.md" "$FIX/dev"
 allowed "#1478 control: and a read naming no wrapper is still a read"
+HOOK="$HOOK_SAVED"
+# With no reading of the command at all, no line is taken for a heredoc body, so a write after one
+# is still read (claude-config#2080, L42): never every line after the opener hidden as its body.
+mkdir -p "$FIX/brokencommands"
+cp "$HOOK" "$FIX/brokencommands/payload-write-gate.sh"
+cp -R "$DIR/lib" "$FIX/brokencommands/lib"
+python3 - "$FIX/brokencommands/lib/shell-words.py" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('def commands(s, cwd="", heredocs=None, parts=None):\n', 'def commands(s, cwd="", heredocs=None, parts=None):\n    raise RuntimeError("broken for the test")\n', 1)
+open(p, "w").write(s)
+PY
+grep -q 'broken for the test' "$FIX/brokencommands/lib/shell-words.py" && check "#2080 the broken commands reader is in place" ok || check "#2080 the broken commands reader is in place" "the replace matched nothing"
+HOOK="$FIX/brokencommands/payload-write-gate.sh"
+runbash "cat <<'EOF' > /dev/null
+text
+EOF
+cp /tmp/x $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "#2080 with the command reading failing, a write after a heredoc is still refused"
 HOOK="$HOOK_SAVED"
 # restore --staged rewrites only the index, never the file, and -s names a commit, not a path.
 runbash "git restore --staged LESSONS.md" "$FIX/dev/payload"

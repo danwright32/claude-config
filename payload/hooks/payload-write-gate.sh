@@ -361,22 +361,12 @@ def add(tok, base):
     if p:
         targets.append(p)
 
-# Heredoc BODIES are data, not shell: a python comparison like `a > b` in one is no redirect. They
-# are taken out of the shell reading; the inline script reading below reads the whole command.
-shell = []
-lines = cmd.split("\n")
-i = 0
-while i < len(lines):
-    line = lines[i]
-    shell.append(line)
-    # Only a heredoc opener: the <<< of a here-string names no delimiter and opens no body.
-    delims = re.findall(r"(?<!<)<<(?!<)-?\s*[\"\x27]?([A-Za-z_][A-Za-z0-9_]*)[\"\x27]?", line)
-    i += 1
-    for delim in delims:
-        while i < len(lines) and lines[i].strip() != delim:
-            i += 1
-        i += 1
-shell_text = "\n".join(shell)
+# Every line is read as shell, a heredoc body line included (Dan, 2026-11-02, "Also read heredoc
+# text", claude-config#2080). A body is data the shell never runs, so a `a > b` in one can be refused
+# as a redirect; that was chosen over a reading of where a body ends that could ever hide a command
+# after it, as the pattern this gate kept did with <<'E'OF, <<END-OF and a << inside a quoted string.
+# Where a body really ends is read by lib/shell-words.py, below, for the commands the shell runs.
+shell_text = cmd
 
 # Commands whose arguments ARE what they write. Scanned per segment, in order, so a read in one
 # segment is not blamed on a write in the next, and a `cd` moves where the rest resolve.
@@ -389,10 +379,12 @@ segments = re.split(r"&&|\|\||;|\||\n", shell_text)
 # directory it runs in, so a cd inside one moves only what follows it there. Only added to the cut
 # above, which still reads everything it always read. So are the commands inside a substitution,
 # which the cut above never reads as commands of their own, those in the body of a heredoc whose end
-# marker is unquoted among them, since the shell runs them too (claude-config#2053).
+# marker is unquoted among them, since the shell runs them too (claude-config#2053). And with a
+# heredoc, every command it runs, each in the directory it runs in: the cut above reads a cd in a
+# body as moving the commands after it, which the shell never does (claude-config#2080).
 try:
     for d, text, _, _, depth in _sw.every_command(cmd):
-        if depth > 0 or "$(" in cmd or "`" in cmd:
+        if depth > 0 or "$(" in cmd or "`" in cmd or "<<" in cmd:
             where = d if d.startswith("/") else (os.path.join(cwd, d) if d else cwd)
             segments += ["cd \"%s\"" % where] + re.split(r"&&|\|\||;|\||\n", text)
 except Exception:
