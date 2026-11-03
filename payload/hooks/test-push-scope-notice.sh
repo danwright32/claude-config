@@ -195,6 +195,44 @@ says "and says the override is not an agent's to use" "$(cat "$W/err")" "not ava
 out="$(agent_run "cd $W/abs && git push")"; rc=$?
 [ "$rc" -eq 2 ] && check "an agent's push is refused the same way" ok || check "an agent's push is refused the same way" "exit $rc"
 
+# For an AGENT, a hooks location that exists but holds no hook git would run is not hooks switched
+# off on purpose: an agent may have set it itself, by a config write or an edit of the config file
+# (claude-config#2135). /dev/null, an empty folder and a folder of samples alike. The main session's
+# push is unchanged, since a person's deliberate setting is theirs.
+agent_refused_for_hooks() { # agent_refused_for_hooks <description> <command>
+  local out rc
+  out="$(agent_run "$2")"; rc=$?
+  if [ "$rc" -eq 2 ]; then check "$1" ok; else check "$1" "exit $rc, stderr [$(head -c 300 "$W/err")]"; fi
+}
+agent_allowed() { # agent_allowed <description> <command>
+  local out rc
+  out="$(agent_run "$2")"; rc=$?
+  if [ "$rc" -eq 0 ]; then check "$1" ok; else check "$1" "exit $rc, stderr [$(head -c 300 "$W/err")]"; fi
+}
+git -C "$W/abs" config core.hooksPath /dev/null
+agent_refused_for_hooks "#2135 an agent's push with hooksPath /dev/null is refused" "cd $W/abs && git push"
+err="$(cat "$W/err")"
+says "#2135 and names the issue" "$err" "claude-config#2135"
+says "#2135 and names the setting" "$err" "/dev/null"
+says "#2135 and says to hand back" "$err" "hand back"
+allowed "#2135 while the main session's push with hooksPath /dev/null is still let through" "cd $W/abs && git push"
+mkdir -p "$W/abs-empty"
+git -C "$W/abs" config core.hooksPath "$W/abs-empty"
+agent_refused_for_hooks "#2135 an agent's push with hooksPath an empty folder is refused" "cd $W/abs && git push"
+allowed "#2135 while the main session's push with an empty hooks folder is still let through" "cd $W/abs && git push"
+printf '#!/bin/sh\nexit 0\n' > "$W/abs-empty/pre-push.sample"; chmod +x "$W/abs-empty/pre-push.sample"
+printf 'notes\n' > "$W/abs-empty/README"
+agent_refused_for_hooks "#2135 an agent's push with a folder of samples and notes only is refused" "cd $W/abs && git push"
+printf '#!/bin/sh\nexit 0\n' > "$W/abs-empty/pre-push"
+agent_refused_for_hooks "#2135 a hook git would not run, since it is not executable, is not a hook" "cd $W/abs && git push"
+chmod +x "$W/abs-empty/pre-push"
+agent_allowed "#2135 an agent's push with a folder holding an executable pre-push goes through" "cd $W/abs && git push"
+rm -f "$W/abs-empty/pre-push"
+printf '#!/bin/sh\nexit 0\n' > "$W/abs-empty/pre-commit"; chmod +x "$W/abs-empty/pre-commit"
+agent_allowed "#2135 an agent's push with a folder holding only another hook goes through" "cd $W/abs && git push"
+git -C "$W/abs" config --unset core.hooksPath
+agent_allowed "#2135 an agent's push with hooksPath unset goes through" "cd $W/abs && git push"
+
 # Failure path: a hooksPath this hook cannot read is not a hooksPath that is unset. A git that fails
 # the read (exit 128, as a damaged config gives) must refuse, never let the push out unread (L42).
 mkdir -p "$W/bin"

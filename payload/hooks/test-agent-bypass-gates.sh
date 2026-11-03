@@ -89,6 +89,49 @@ skips_says "an echo of the words is not a skip" 'echo "git commit --no-verify"' 
 skips_says "a plain commit is not a skip" 'git commit -m "x"' 10
 skips_says "a grep for the flag is not a skip" 'grep -rn -- "--no-verify" payload' 10
 
+# A persistent write of core.hooksPath moves where git reads the hooks from for every later command,
+# which -c does for one (claude-config#2135). Every scope and both spellings of git config, the
+# options before the name and the subcommands since git 2.46. Reading it is not a change.
+skips_says "#2135 git config sets core.hooksPath" 'git config core.hooksPath /dev/null' 0
+skips_says "#2135 --unset" 'git config --unset core.hooksPath' 0
+skips_says "#2135 --unset-all" 'git config --unset-all core.hooksPath' 0
+skips_says "#2135 --replace-all" 'git config --replace-all core.hooksPath /tmp/empty' 0
+skips_says "#2135 --add" 'git config --add core.hooksPath /tmp/empty' 0
+skips_says "#2135 --global" 'git config --global core.hooksPath /dev/null' 0
+skips_says "#2135 --system" 'git config --system core.hooksPath /dev/null' 0
+skips_says "#2135 --local" 'git config --local core.hooksPath /dev/null' 0
+skips_says "#2135 --worktree" 'git config --worktree core.hooksPath /dev/null' 0
+skips_says "#2135 --file with the next word" 'git config --file .git/config core.hooksPath /dev/null' 0
+skips_says "#2135 --file=" 'git config --file=.git/config core.hooksPath /dev/null' 0
+skips_says "#2135 -f" 'git config -f .git/config core.hooksPath /dev/null' 0
+skips_says "#2135 -f glued" 'git config -f.git/config core.hooksPath /dev/null' 0
+skips_says "#2135 --type before the name" 'git config --type path core.hooksPath /tmp/empty' 0
+skips_says "#2135 the key in any case" 'git config CORE.HOOKSPATH /dev/null' 0
+skips_says "#2135 git config set" 'git config set core.hooksPath /dev/null' 0
+skips_says "#2135 git config set --global" 'git config set --global core.hooksPath /dev/null' 0
+skips_says "#2135 git config unset" 'git config unset core.hooksPath' 0
+skips_says "#2135 git config unset --all --worktree" 'git config unset --all --worktree core.hooksPath' 0
+skips_says "#2135 --remove-section core takes core.hooksPath with it" 'git config --remove-section core' 0
+skips_says "#2135 git config remove-section core" 'git config remove-section core' 0
+skips_says "#2135 --rename-section into core can bring one in" 'git config --rename-section stash core' 0
+skips_says "#2135 git config rename-section out of core" 'git config rename-section core old' 0
+skips_says "#2135 --edit is a change no gate can read" 'git config --edit' 0
+skips_says "#2135 git config edit --global" 'git config edit --global' 0
+skips_says "#2135 behind git -C" 'git -C /tmp/repo config core.hooksPath /dev/null' 0
+skips_says "#2135 behind rtk" 'rtk git config --global core.hooksPath /dev/null' 0
+skips_says "#2135 inside bash -c" "bash -c 'git config core.hooksPath /dev/null'" 0
+skips_says "#2135 after a cd" 'cd /tmp/repo && git config core.hooksPath /tmp/empty' 0
+skips_says "#2135 reading it with --get is not a change" 'git config --get core.hooksPath' 10
+skips_says "#2135 reading it by name alone is not a change" 'git config core.hooksPath' 10
+skips_says "#2135 reading it with --global by name is not a change" 'git config --global core.hooksPath' 10
+skips_says "#2135 git config get is not a change" 'git config get core.hooksPath' 10
+skips_says "#2135 --list is not a change" 'git config --list --show-origin' 10
+skips_says "#2135 another key is not a change" 'git config user.email x@y.z' 10
+skips_says "#2135 another section removed is not a change" 'git config --remove-section alias' 10
+skips_says "#2135 the key as another key's value is not a change" 'git config alias.hp "config core.hooksPath"' 10
+skips_says "#2135 a repository's own hook install script is not a change" 'bash scripts/install-git-hooks.sh' 10
+skips_says "#2135 an echo of the command is not a change" 'echo "git config core.hooksPath /dev/null"' 10
+
 # ---------------------------------------------------------------------------------------------
 echo "no-verify-gate.sh: an agent's skip of the git hooks is refused, with no approval that lets it through"
 
@@ -136,6 +179,44 @@ run_hook "$NV_GATE" "$(bash_payload 'HUSKY=0 git push origin x' a1b2c3d4)"
 refused "an agent's HUSKY=0 push is refused"
 run_hook "$NV_GATE" "$(bash_payload 'git -c core.hooksPath=/dev/null commit -m x' a1b2c3d4)"
 refused "an agent's core.hooksPath commit is refused"
+# The words before the reading run were matched in three spellings of the key, and git reads it in
+# any case, so a push naming it another way never reached the reading (claude-config#2135).
+run_hook "$NV_GATE" "$(bash_payload 'git -c CORE.HOOKSPATH=/dev/null push origin x' a1b2c3d4)"
+refused "#2135 an agent's -c of the key in capitals on a push is refused"
+
+# A persistent write of the hooks location, in any scope, is refused the same way (claude-config#2135),
+# naming the issue and the install script as the way to set the hooks up.
+nv_config() { # nv_config <label> <command>: an agent's command, refused naming #2135
+  run_hook "$NV_GATE" "$(bash_payload "$2" a1b2c3d4)"
+  refused "#2135 an agent's $1 is refused"
+  says "#2135 and the refusal of $1 names the issue" "claude-config#2135"
+}
+nv_config "git config core.hooksPath" 'git config core.hooksPath /dev/null'
+nv_config "--unset" 'git config --unset core.hooksPath'
+nv_config "--replace-all" 'git config --replace-all core.hooksPath /tmp/empty'
+nv_config "--global" 'git config --global core.hooksPath /dev/null'
+nv_config "--system" 'git config --system core.hooksPath /dev/null'
+nv_config "--local" 'git config --local core.hooksPath /dev/null'
+nv_config "--worktree" 'git config --worktree core.hooksPath /dev/null'
+nv_config "--file" 'git config --file .git/config core.hooksPath /dev/null'
+nv_config "git config set" 'git config set core.hooksPath /tmp/empty'
+nv_config "git config unset" 'git config unset core.hooksPath'
+nv_config "key in capitals" 'git config CORE.HOOKSPATH /dev/null'
+nv_config "--remove-section core" 'git config --remove-section core'
+nv_config "--edit" 'git config --edit'
+says "#2135 the refusal names the install script as the way to set up the hooks" "install script"
+run_hook "$NV_GATE" "$(bash_payload 'git config --global core.hooksPath /dev/null')"
+allowed "#2135 the main session's own git config of the key goes through"
+run_hook "$NV_GATE" "$(bash_payload 'git config --get core.hooksPath' a1b2c3d4)"
+allowed "#2135 an agent reading the key goes through"
+run_hook "$NV_GATE" "$(bash_payload 'git config user.name Someone' a1b2c3d4)"
+allowed "#2135 an agent setting another key goes through"
+run_hook "$NV_GATE" "$(bash_payload 'bash scripts/install-git-hooks.sh' a1b2c3d4)"
+allowed "#2135 an agent running a repository's hook install script goes through"
+run_hook "$NV_GATE" "$(bash_payload 'sh ./scripts/configure-hooks.sh' a1b2c3d4)"
+allowed "#2135 an agent running an install script whose name holds config goes through"
+run_hook "$NV_GATE" "$(bash_payload 'pnpm install' a1b2c3d4)"
+allowed "#2135 an agent running the package install that sets up the hooks goes through"
 # The shell runs the substitutions in the body of a heredoc whose end marker is unquoted
 # (claude-config#2053); a quoted marker keeps the body text.
 run_hook "$NV_GATE" "$(bash_payload $'cat <<EOF\n$(git push --no-verify origin x)\nEOF' a1b2c3d4)"
@@ -528,6 +609,15 @@ refused "a reader that crashes still refuses an agent's commit --no-verify"
 says "saying the skip could not be read" "could not read it"
 run_crashpy "$NV_GATE" "$(bash_payload 'HUSKY=0 git push origin x' a1b2c3d4)"
 refused "a reader that crashes still refuses an agent's HUSKY=0 push"
+# A persistent write of the hooks location reads the same way unread (claude-config#2135).
+run_crashpy "$NV_GATE" "$(bash_payload 'git config CORE.HOOKSPATH /dev/null' a1b2c3d4)"
+refused "#2135 a reader that crashes still refuses an agent's git config of the key in capitals"
+run_crashpy "$NV_GATE" "$(bash_payload 'git config --remove-section core' a1b2c3d4)"
+refused "#2135 a reader that crashes still refuses an agent's removal of the core section"
+run_crashpy "$NV_GATE" "$(bash_payload 'git config --edit' a1b2c3d4)"
+refused "#2135 a reader that crashes still refuses an agent's git config --edit"
+run_crashpy "$NV_GATE" "$(bash_payload 'git config user.name Someone' a1b2c3d4)"
+allowed "#2135 with the reader crashing, an agent's git config of another key still goes through"
 # The control: the stub crashes only the reader, so an agent command it reads but that names nothing
 # it judges still passes, and so does one that never reaches it.
 run_crashpy "$NV_GATE" "$(bash_payload 'git commit -m wip' a1b2c3d4)"
@@ -579,6 +669,8 @@ run_nopy "$NV_GATE" "$(bash_payload 'git commit -m wip' a1b2c3d4)"
 allowed "and lets a command naming no skip through"
 run_nopy "$NV_GATE" "$(bash_payload 'git commit -F /dev/stdin' a1b2c3d4)"
 refused "no-verify-gate.sh refuses an agent's /dev/stdin commit it cannot read"
+run_nopy "$NV_GATE" "$(bash_payload 'git config unset core.HooksPATH' a1b2c3d4)"
+refused "#2135 no-verify-gate.sh refuses an agent's git config of the key it cannot read"
 run_hook "$NV_GATE" '{"agent_id":"a1b2c3d4","tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m wip"'
 refused "an agent payload that cannot be parsed and names a skip is refused"
 run_nopy "$MON_GATE" "$(bash_payload 'until gh pr merge 7; do sleep 60; done' '' Monitor)"

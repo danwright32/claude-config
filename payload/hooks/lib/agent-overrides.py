@@ -43,6 +43,9 @@ core.hooksPath set on the command with -c, and the hook managers' own switches (
 HUSKY_SKIP_HOOKS=1, LEFTHOOK=0, SKIP_SIMPLE_GIT_HOOKS=1) set in front of git or exported. A rebase's
 --exec command is read as a command of its own, since `git rebase --exec "git commit --amend
 --no-verify"` is a skip on every commit it rewrites (seen on this Mac, claude-config 2026-10).
+A git config that CHANGES core.hooksPath in any scope (set, --add, --replace-all, --unset, a removal
+or rename of the core section, or --edit, which no gate can read) is one too, since it moves where
+git reads the hooks from for every later command (claude-config#2135). Reading it is not.
 
 AN OVERRIDE is a gate's documented escape, a SKIP_<NAME> or ALLOW_<NAME> setting given a value other
 than empty or 0, in front of a command, through env, or exported. Only settings the shell would
@@ -172,6 +175,63 @@ def _exec_values(sub, after):
     return vals
 
 
+# git config, read for a persistent change of where git reads the hooks from (claude-config#2135).
+# Both spellings: the options before the name, and the subcommands since git 2.46. Options whose
+# value is the next word, so a file named like the key is not the key.
+CONFIG_VALUED = {"-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url"}
+CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "-l", "--list", "--get-color",
+                "--get-colorbool"}
+CONFIG_WRITES = {"--add", "--replace-all", "--unset", "--unset-all"}
+CONFIG_SECTIONS = {"--rename-section", "--remove-section"}
+CONFIG_SUBCOMMANDS = {"list", "get", "set", "unset", "rename-section", "remove-section", "edit"}
+HOOKS_KEY = "core.hookspath"
+HOOKS_SECTION = "core"
+
+
+def _config_hooks_change(after):
+    """Why a `git config` with these words changes core.hooksPath, or None. A read is not a change; an
+    edit in an editor is one no gate can read, so it counts."""
+    action, positionals, i = None, [], 0
+    while i < len(after):
+        w = after[i]
+        if w == "--":
+            positionals.extend(after[i + 1:])
+            break
+        if w.startswith("--"):
+            name = w.split("=", 1)[0]
+            if name in CONFIG_VALUED and "=" not in w:
+                i += 1
+            elif name in CONFIG_READS | CONFIG_WRITES | CONFIG_SECTIONS or name == "--edit":
+                action = action or name
+        elif w.startswith("-") and len(w) > 1:
+            for k, ch in enumerate(w[1:]):
+                if ch == "f":
+                    if k == len(w) - 2:
+                        i += 1
+                    break
+                if ch == "e":
+                    action = action or "--edit"
+                elif ch == "l":
+                    action = action or "--list"
+        else:
+            positionals.append(w)
+        i += 1
+    if action is None and positionals and positionals[0] in CONFIG_SUBCOMMANDS:
+        action, positionals = positionals[0], positionals[1:]
+    keys = [p.split("=", 1)[0].lower() for p in positionals]
+    if action in ("--edit", "edit"):
+        return "an edit of the config file, which can change core.hooksPath (claude-config#2135)"
+    if action in ("--remove-section", "--rename-section", "remove-section", "rename-section"):
+        if HOOKS_SECTION in keys:
+            return "a change to the core section, which holds core.hooksPath (claude-config#2135)"
+        return None
+    if action in CONFIG_WRITES or action in ("set", "unset"):
+        return "a change to core.hooksPath (claude-config#2135)" if HOOKS_KEY in keys else None
+    if action is None and len(keys) >= 2 and keys[0] == HOOKS_KEY:
+        return "a change to core.hooksPath (claude-config#2135)"
+    return None
+
+
 def skips(s, depth=0):
     """Every git hook skip s runs, as short descriptions."""
     found = []
@@ -200,6 +260,10 @@ def skips(s, depth=0):
             j += 1
         if switched or exported:
             why.extend(switched + exported)
+        if sub == "config":
+            change = _config_hooks_change(after)
+            if change:
+                why.append(change)
         if sub == "commit" and _commit_skips(after):
             why.append("--no-verify")
         elif sub != "commit" and _other_skips(after):
