@@ -3071,10 +3071,37 @@ test('a worker that cannot be told to start is said, and noted for the morning (
   const { w, clock } = world(on, withOther({ sends: [{ refused: 'no such session' }, { refused: 'no such session' }] }))
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
-  expect(r.text).toMatch(asRegExp(' Could not be told to start, so it may do no work tonight: the session in o/other ("Fix the parser") (no such session).'))
+  expect(r.text).toMatch(asRegExp(' Not started, so it may do no work tonight unless you start it: the session in o/other ("Fix the parser"), because its start message could not be sent (no such session).'))
   expect(w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'finding').map(n => n.text)).toEqual([
-    'the session in o/other ("Fix the parser") could not be told to start at bedtime (no such session), so it may have done no work tonight',
+    'the session in o/other ("Fix the parser") was not started at bedtime, because its start message could not be sent (no such session), so it may have done no work tonight',
   ])
+})
+
+// #2062: on 2026-11-02 the start message got no verdict from auto mode's check, and Dan read that
+// a session might do no work only in the morning. It is said right after the switch, both in the
+// command's own text and in Claude's acknowledgement, with how to start the session himself.
+test('a worker whose start message got no verdict is said first, in the reply Dan reads before bed (#2062)', withDeps, async ($, on) => {
+  const NO_VERDICT = 'Auto mode classifier gave no verdict for SendMessage: the request that produced this action did not ask for one'
+  const { w, clock } = world(on, withOther({ sends: [{ refused: NO_VERDICT }, { refused: NO_VERDICT }] }))
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  const said = `Not started, so it may do no work tonight unless you start it: the session in o/other ("Fix the parser"), because auto mode's safety check gave no verdict on its start message (${NO_VERDICT}). To start it, type "start the night's work" in that session before you sleep.`
+  // The second sentence of the command's text, straight after the switch itself.
+  expect(r.text).toMatch(new RegExp(`^Sleep mode is on until [^.]+\\. ${asRegExp(said).source}`))
+  expect(r.text).not.toMatch(/Could not be told to start/)
+  // And Claude is told to say it in its acknowledgement, word for word.
+  expect(ctxOf(r)).toContain(`Sleep mode is on. ${said}`)
+  // Tried as mod-kit tries every refused send, once more and no further.
+  expect(w.sent.length).toBe(2)
+})
+
+test('with every worker told to start, the acknowledgement says nothing about starting (#2062)', withDeps, async ($, on) => {
+  const { clock } = world(on, withOther())
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(ctxOf(r)).toContain(ackOn('sleep'))
+  expect(ctxOf(r)).not.toMatch(/Not started/)
+  expect(r.text).not.toMatch(/Not started/)
 })
 
 test("a worker told to start begins its night's work with the overnight rules, in a turn of its own (#1242)", withDeps, async ($, on) => {

@@ -1429,7 +1429,9 @@ const startedWhere = async ($: EngineInterface, r: SleepRecord) => `it started a
 // is remembered here, without a call, and this session's next /sleep takes it over at once (with
 // the list of unanswered issues it may have written) rather than waiting for it to go stale.
 const abandonedClaims = new Map<string, string>()
-const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: false }, signal?: AbortSignal): Promise<string> => {
+// `began.unstarted` carries what is said about the workers that were not told to start (#2062), so
+// the command can put it in Claude's acknowledgement too.
+const startSleep = async ($: EngineInterface, began: { is: boolean; unstarted?: string } = { is: false }, signal?: AbortSignal): Promise<string> => {
   const held: { claim?: Marker; generation?: string } = {}
   let said: string
   try {
@@ -1442,7 +1444,7 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   if (!began.is && held.claim && held.generation) abandonedClaims.set(held.claim.nonce, held.generation)
   return interruptedSaid(began.is)
 }
-const prepareSleep = async ($: EngineInterface, began: { is: boolean }, held: { claim?: Marker; generation?: string }): Promise<string> => {
+const prepareSleep = async ($: EngineInterface, began: { is: boolean; unstarted?: string }, held: { claim?: Marker; generation?: string }): Promise<string> => {
   // This boot first: without it no record can be judged, and one that is sound must never be
   // called broken for it (L11), nor a new one written that could not be told from an old boot's.
   // The session is kept beside the start when it can be read; without it the record is judged by
@@ -1646,9 +1648,13 @@ const prepareSleep = async ($: EngineInterface, began: { is: boolean }, held: { 
     unnoted += ` The morning report may miss ${issueNoteFailed.length} of the ${issues.notes.length} notes about before bed questions: ${[...new Set(issueNoteFailed)].join('; ')}.`
   // Every other worker with a goal is told to start (#1242): one idle at its prompt has no turn to
   // end, so the driver would never reach it. Its own scope modes starts the turn, once the record it
-  // reads to know it is a worker is in place. One that cannot be told is said and noted.
+  // reads to know it is a worker is in place. One that cannot be told is said and noted. A refusal
+  // is not sent again from here: mod-kit has already tried it once more, and a send made by a
+  // command, outside any request of Claude's, gets the same answer from auto mode however often it
+  // is made (#2062, read from the reason Claude Code gives). So it is said first, while Dan can
+  // still start that session himself, rather than found in the morning.
   const told: string[] = []
-  const untold: string[] = []
+  const untold: Unstarted[] = []
   const unnotedStarts: string[] = []
   for (const id of Object.keys(goals.goals)) {
     if (id === self) continue
