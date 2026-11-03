@@ -395,13 +395,37 @@ class Gate:
         m = re.match(r"https://github\.com/([^/]+/[^/]+)/pull/", view.get("url", ""))
         prepo = m.group(1) if m else slug
         for ref in view.get("closingIssuesReferences") or []:
-            irepo = (ref.get("repository") or {}).get("nameWithOwner") or prepo
+            irepo = closing_repo(ref, prepo)
             if irepo.lower() == prepo.lower():
                 self.judge_issue(prepo, int(ref["number"]), view["headRefOid"],
                                  "merging #%s at its head" % view.get("number"))
             else:
                 branch = self.default_head(irepo)
                 self.judge_issue(irepo, int(ref["number"]), branch, "the head of %s in %s" % (branch, irepo))
+
+
+def closing_repo(ref, prepo):
+    """The owner/name of the repository a closingIssuesReferences entry's issue is in.
+
+    gh answers each entry's repository as {id, name, owner: {id, login}} and carries no
+    nameWithOwner there (claude-config#2065, measured 2026-11-02), so the slug is built from
+    owner.login and name; nameWithOwner is read first in case gh ever adds it. An entry naming no
+    repository at all is the pull request's own. One whose repository is present but unreadable is
+    refused rather than guessed at: guessing the pull request's repository judges whatever issue
+    has that number there, which is how an unmatched build closed before."""
+    rp = ref.get("repository")
+    if rp is None:
+        return prepo
+    if isinstance(rp, dict):
+        slug = rp.get("nameWithOwner")
+        if isinstance(slug, str) and "/" in slug:
+            return slug
+        owner = rp.get("owner") if isinstance(rp.get("owner"), dict) else {}
+        login, name = owner.get("login"), rp.get("name")
+        if isinstance(login, str) and login and isinstance(name, str) and name:
+            return "%s/%s" % (login, name)
+    raise sg.GitHubError("gh pr view named a closing issue (#%s) without a repository this gate can read"
+                         % ref.get("number"))
 
 
 HOW = ("Bring it to 100%: run the platform adapter, then `python3 ~/.claude/skills/design-rounds/score/design_score.py "

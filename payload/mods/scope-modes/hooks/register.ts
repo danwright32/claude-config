@@ -3420,13 +3420,14 @@ const isThere = async ($: EngineInterface, path: string): Promise<boolean> => {
   }
 }
 
+type ClosingRef = { number?: number; repository?: { name?: string; nameWithOwner?: string; owner?: { login?: string } } }
 type PrJson = {
   number?: number
   state?: string
   url?: string
   headRefName?: string
   headRefOid?: string
-  closingIssuesReferences?: { number?: number }[]
+  closingIssuesReferences?: ClosingRef[]
   closedAt?: string
   comments?: PrComment[]
   body?: string
@@ -3502,9 +3503,28 @@ type IssueSeen = 'OPEN' | 'CLOSED' | 'PR'
 type PrSeen = { pr: PrJson | null; issues: Map<number, IssueSeen>; last: Map<number, string>; worked: number[]; askedAt: number; wait: number }
 const prSeen = new Map<string, PrSeen>()
 const IDLE_MAX_MS = 10 * MIN
-const closesOf = (pr: PrJson | null) => (pr?.closingIssuesReferences ?? []).map(x => x.number).filter((n): n is number => typeof n === 'number')
+// The repository a closing reference's issue is in (#2065). gh answers it as {id, name, owner: {id,
+// login}} and carries no nameWithOwner there (measured 2026-11-02), which is read first in case gh
+// ever adds it. One naming no repository it can be read from is undefined, and kept as the PR's own.
+const closingRepo = (x: ClosingRef): string | undefined => {
+  const rp = x.repository
+  if (typeof rp?.nameWithOwner === 'string' && rp.nameWithOwner.includes('/')) return rp.nameWithOwner
+  const login = rp?.owner?.login
+  return typeof login === 'string' && login && typeof rp?.name === 'string' && rp.name ? `${login}/${rp.name}` : undefined
+}
+// The issues a PR closes in `home`, its own repository. An issue it closes in another repository is
+// not this repository's issue of that number (#2065), as a Refs line naming another repository is
+// not (#1812): reading only the number held winding down on an unrelated issue here.
+const closesOf = (pr: PrJson | null, home: string | undefined) =>
+  (pr?.closingIssuesReferences ?? [])
+    .filter(x => {
+      const named = closingRepo(x)
+      return !home || !named || named.toLowerCase() === home.toLowerCase()
+    })
+    .map(x => x.number)
+    .filter((n): n is number => typeof n === 'number')
 // The issues a PR worked (#1812): those it closes, then those its description refers to.
-const workedOf = (pr: PrJson | null, repo: string | undefined) => [...new Set([...closesOf(pr), ...issueRefs(typeof pr?.body === 'string' ? pr.body : '', repo)])]
+const workedOf = (pr: PrJson | null, home: string | undefined, repo: string | undefined) => [...new Set([...closesOf(pr, home), ...issueRefs(typeof pr?.body === 'string' ? pr.body : '', repo)])]
 const settledIssue = (s: IssueSeen | undefined) => s === 'CLOSED' || s === 'PR'
 // Nothing about it can change: merged, with every issue it worked closed. Only a PR read by its
 // number: a lookup by branch asks which PR a branch has, which a new PR on that name changes.
@@ -3730,8 +3750,11 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
       }
       issues = new Map(seen?.issues)
       last = new Map(seen?.last)
-      worked = workedOf(pr, slug)
-      const closing = closesOf(pr)
+      // The PR's own repository, from GitHub's link for it. A link that cannot be read is said by the
+      // reading below (#961), never here, so the repository it was read in stands in for it.
+      const home = (await repoOfLink($, pr?.url).catch(() => undefined)) ?? slug
+      worked = workedOf(pr, home, slug)
+      const closing = closesOf(pr, home)
       // Its issues decide nothing until it has merged (outstanding reads them only then).
       if (pr?.state === 'MERGED')
         for (const n of worked) {
@@ -3771,7 +3794,7 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     if (pr) {
       if (!r.branch && typeof pr.headRefName === 'string') r.branch = pr.headRefName
       const state = pr.state === 'MERGED' || pr.state === 'CLOSED' ? pr.state : 'OPEN'
-      const closes = closesOf(pr)
+      const closes = closesOf(pr, (await repoOfLink($, pr.url).catch(() => undefined)) ?? slug)
       const body = typeof pr.body === 'string' ? pr.body : ''
       // Each issue it worked (#1812), a pull request a Refs line named left out; an open one carries
       // what is left on it, from the PR's stated next step or the issue's last comment.

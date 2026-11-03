@@ -2,7 +2,8 @@
 # Tests for the check-later skill's instructions.
 #
 # The skill writes rows to a Slack list by column KEY, so a key that drifts from the list's schema
-# writes nothing or the wrong column; it must only ever run when Dan types it; and the list's
+# writes nothing or the wrong column; the Skill tool must not start it on its own (Dan types it, or the end of turn hook sends a
+# session to it); and the list's
 # Reminder Saved box is Dan's own record that he set the reminder, so the skill must never tick it.
 # Nothing here reaches Slack. CHECK_LATER_SKILL points the suite at another copy, which is how a
 # broken copy is shown to fail.
@@ -29,8 +30,12 @@ check "the skill is there to read" "$([ -f "$SKILL" ] && echo ok || echo "no $SK
 front="$(awk 'NR==1 && $0=="---" {on=1; next} on && $0=="---" {exit} on {print}' "$SKILL" 2>/dev/null)"
 
 check "its name is check-later" "$(grep -qx 'name: check-later' <<< "$front" && echo ok || echo "frontmatter: $front")"
-check "it runs only when Dan types it" \
+# #2079: the end of turn hook points a session at this file, so the skill no longer runs only when
+# Dan types it; what stays true is that the Skill tool cannot start it on its own.
+check "the Skill tool cannot start it on its own" \
   "$(grep -qx 'disable-model-invocation: true' <<< "$front" && echo ok || echo "no disable-model-invocation: true")"
+check "the description says the end of turn hook starts it too" \
+  "$(grep -qi 'end of turn' <<< "$front" && echo ok || echo "the description says nothing of the end of turn hook")"
 check "its trigger is /check-later" "$(grep -qx 'trigger: /check-later' <<< "$front" && echo ok || echo "no trigger line")"
 
 # The list and every column key the skill writes, as read from the list's schema on 2026-10-22.
@@ -94,6 +99,18 @@ check "the read back confirms the Description names its own record id" \
 # check for the words alone passes with the stop rule deleted.
 check "the schema check stops when a Status option the row moves through is missing" \
   "$(grep -qF 'Status has no `Waiting`, `In progress` or `Done` option' <<< "$list_section" && echo ok || echo "no stop rule for missing Status options")"
+# #2079: the section a session reaches from check-later-nudge.sh's CHECK LATER pointer. Read from
+# inside that section and joined into one line, as step 4 and step 7 are above.
+hook_section="$(awk '/^## Started by the end of turn hook/{on=1; next} /^## /{on=0} on' "$SKILL" 2>/dev/null | tr '\n' ' ' | tr -s ' ')"
+check "the end of turn hook section is there to read" "$([ -n "$hook_section" ] && echo ok || echo "no ## Started by the end of turn hook section")"
+check "the section names the hook that sends a session here" \
+  "$(grep -qF 'check-later-nudge.sh' <<< "$hook_section" && echo ok || echo "no check-later-nudge.sh in the section")"
+check "the section runs it before the reflection and the issue review" \
+  "$(grep -qF 'before any SESSION REFLECTION or ISSUE REVIEW' <<< "$hook_section" && echo ok || echo "no ordering before the reflection and review")"
+check "an item step 5 matches is left out with no question" \
+  "$(grep -qi 'step 5 matches is already on the list' <<< "$hook_section" && grep -qi 'no question and no line' <<< "$hook_section" && echo ok || echo "no rule leaving a step 5 match out silently")"
+check "the section keeps step 6 showing every row before anything is written" \
+  "$(grep -qi 'step 6 still shows' <<< "$hook_section" && grep -qi 'Nothing is written before Dan picks' <<< "$hook_section" && echo ok || echo "the section does not keep step 6's approval")"
 check "the skill holds no long dash" \
   "$(perl -CSD -ne '$f = 1 if /[\x{2013}\x{2014}]/; END { exit($f ? 1 : 0) }' "$SKILL" && echo ok || echo "found one")"
 
