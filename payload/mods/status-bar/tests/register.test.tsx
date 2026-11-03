@@ -1071,6 +1071,27 @@ test('the note passed as handoff is taken and queued, and the carry on prompt na
   expect(prompts[0]?.text).toContain(`Read your handoff note at ${NOTE}`)
 })
 
+test('a note passed as handoff is the one a reload in the middle of the compaction still names (#2071, #2082)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts, w } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(SEC)
+  files[NOTE] = 'Next: push the branch.'
+  mtimes[NOTE] = clock.now()
+  // Passed padded, under handoff: the record a reload reads back holds the path as checked.
+  expect(refusal(await queueCompact($, { note: undefined, handoff: ` ${NOTE} ` }))).toBeUndefined()
+  w.compact = () => never()
+  await turn($)
+  await clock.settle()
+  await start($, clock)
+  expect(compacts).toHaveLength(1)
+  await compactEnds($)
+  await clock.advance(10 * SEC)
+  expect(prompts).toHaveLength(1)
+  // Trimmed as checked: a padded path would leave a doubled space either side of it.
+  expect(prompts[0]?.text).toContain(`Read your handoff note at ${NOTE} and carry on`)
+})
+
 test('the scratchpad path is taken with or without /private in front (#2071)', withKit, async ($, on) => {
   const { clock, compacts, files, mtimes } = world(on)
   await start($, clock)
