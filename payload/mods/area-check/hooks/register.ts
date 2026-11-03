@@ -680,7 +680,8 @@ const prCallsIn = async ($: EngineInterface, command: string, cwd: string, home:
   return calls
 }
 
-// The decision lines of this Mac's log, the newest LOG_READ_BYTES of them (prline.ts).
+// The decision lines of this Mac's log, the newest LOG_READ_BYTES of them (prline.ts). One byte more
+// is read, so a line the bound begins exactly at is kept whole and only a cut one is dropped.
 const readLog = async ($: EngineInterface, d: Deadline): Promise<LogRead> => {
   const home = await homeOf($)
   if (!home) throw new Error('HOME is not set, so the log cannot be found')

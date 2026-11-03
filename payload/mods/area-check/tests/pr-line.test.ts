@@ -6,7 +6,7 @@ import { APP, KIT, LOG, REASON, SLACK, bash, decide, decidedLine, edit, refusal,
 // The area check line a pull request description carries (#1510): every file decided on the branch
 // (and merge base) the pull request is made from has one line, `Area check: <file>: <decision>,
 // <reason>`, checked on gh pr create, gh pr edit and gh pr merge. The decisions come from this Mac's
-// log, read with grep rather than whole; a log that cannot be read is said, never read as none.
+// log, read with a bounded grep rather than whole; a log that cannot be read is said, never read as none.
 
 const A = 'Area check: src/a.ts: proceed, it only renames one local variable inside a function'
 const B = 'Area check: src/b.ts: fold, Refs #41'

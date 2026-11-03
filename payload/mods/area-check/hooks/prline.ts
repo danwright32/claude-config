@@ -3,7 +3,7 @@ import { DECISIONS, type Decision } from './rules.ts'
 // The area check line in a pull request description (#1510, plan phase 5.2). Every file the area
 // check decided on a branch, at the merge base that branch had with the default branch, carries one
 // line in the pull request made from it: `Area check: <file>: <decision>, <reason>`. Pure: register.ts
-// reads the log with grep, the command through mod-kit's readers and GitHub for a merge; this says
+// reads the log with a bounded grep, the command through mod-kit's readers and GitHub for a merge; this says
 // which decisions the branch holds, which lines the description lacks, and the words of a refusal.
 //
 // The match is by repository, branch and merge base, so a branch name used again later starts clean.

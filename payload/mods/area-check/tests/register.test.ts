@@ -68,6 +68,7 @@ test('deciding proceed with a reason claims the file: the edit sent again goes t
   expect(r.result).toBe('done')
   expect(w.passed).toEqual([`Edit ${SLACK}`])
   expect(w.judged().length).toBe(1)
+  // Version 3 (#1510): the branch and merge base the pull request line is matched by.
   expect(w.records().find(x => x.kind === 'decided')).toMatchObject({ v: 3, session: 's1', agent: null, repo: 'dan/app', branch: '12-feature', mergeBase: 'mb123', path: 'src/lib/slack.ts', call: 'c1', decision: 'proceed', reason: REASON })
 })
 

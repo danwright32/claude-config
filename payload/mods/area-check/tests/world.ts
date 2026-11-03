@@ -329,7 +329,8 @@ export const bash = async ($: T$, w: ReturnType<typeof world>, command: string, 
   await w.clock.settle()
   return r as R
 }
-// A decision as the log keeps it (#1510): version 3, with the branch and merge base it was taken on.
+// A decision as the log keeps it (#1510): version 3, with the branch and merge base it was taken on
+// (version 2 records carry neither, and the pull request line leaves them out).
 export const decidedLine = (d: { path: string; decision: string; reason?: string; issue?: number; by?: 'dan'; branch?: string; mergeBase?: string | null; repo?: string }) =>
   JSON.stringify({
     v: 3, kind: 'decided', at: '2026-10-22T15:00:00.000Z', session: 's0', agent: null,
