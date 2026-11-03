@@ -620,6 +620,26 @@ rc, reason, out = gate("ls -la")
 check("and still lets through a command that closes nothing", not reason and rc == 0, out)
 del ENV["DESIGN_SCORE_GATE_PY"]
 
+# 12. closing_repo delegates to lib/repo_slug.py (claude-config#2096), called directly on the gate
+# module: a good record gives owner/name, and a bad one becomes the gate's GitHubError, so the
+# gate still refuses rather than guessing the pull request's own repository.
+import importlib.util  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location("design_score_gate_under_test", os.path.join(HOOKS, "design-score-gate.py"))
+gate_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(gate_mod)
+check("closing_repo builds owner/name from a gh repository record, so the lib loader loaded repo_slug",
+      gate_mod.closing_repo(closing_ref(REPO, 9), "other/repo") == REPO, gate_mod.closing_repo(closing_ref(REPO, 9), "other/repo"))
+check("and uses the pull request's own repository only when the entry names none",
+      gate_mod.closing_repo({"number": 9}, "other/repo") == "other/repo")
+for label, bad in [("no owner login and no nameWithOwner", {"id": "R_x", "name": "widgets", "owner": {"id": "O_x"}}),
+                   ("an empty record", {})]:
+    try:
+        got = gate_mod.closing_repo({"number": 9, "repository": bad}, "other/repo")
+        check("closing_repo raises GitHubError for " + label, False, "returned %r" % (got,))
+    except sg.GitHubError as err:
+        check("closing_repo raises GitHubError for " + label, "without a repository this gate can read" in str(err), str(err))
+
 shutil.rmtree(T, ignore_errors=True)
 print()
 print("passed: %d, failed: %d" % (passed, failed))

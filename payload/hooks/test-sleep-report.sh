@@ -501,6 +501,8 @@ has "naming it" "the note's at must be ms since the epoch" "$out"
 # the caller's folder.
 if command -v zsh >/dev/null 2>&1; then
   mkdir -p "$WORK/hm/.claude/hooks/lib"; cp "$PY" "$WORK/hm/.claude/hooks/lib/sleep-report.py"
+  # The installed lib/ always carries the helper it imports beside it (claude-config#2096).
+  cp "$(dirname "$PY")/repo_slug.py" "$WORK/hm/.claude/hooks/lib/repo_slug.py"
   printf 'import sys\nopen(sys.argv[0] + ".ran", "w").write("decoy")\n' > "$WORK/sleep-report.py"
   out="$(cd "$WORK" && HOME="$WORK/hm" SLEEP_REPORT_NOW_MS=$NOW_ASLEEP zsh -c '. "$1"; sleep_note "{\"kind\":\"finding\",\"by\":\"z\",\"text\":\"from zsh\"}" "$2" "$3" 1759800000' _ "$LIB" "$CUR" "$NOW_ASLEEP" 2>&1)"; rc=$?
   check_eq "sleep_note from zsh writes" 0 "$rc"
