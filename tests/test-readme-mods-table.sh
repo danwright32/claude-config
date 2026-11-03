@@ -122,7 +122,7 @@ pass="$(printf '%s\n' "$out" | grep -c -E '^PASS: ')"
 fail="$(printf '%s\n' "$out" | grep -c -E '^FAIL: ')"
 if [ "$code" -ne 0 ]; then
   printf '%s\n' "$out" | tail -5
-  echo "FAIL: the checks crashed (python exit $code)"
+  echo "FAIL: the checks crashed (they exited $code)"
   fail=$((fail + 1))
 fi
 if [ "$pass" -lt 10 ]; then
