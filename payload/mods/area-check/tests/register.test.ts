@@ -741,6 +741,16 @@ test('a shell command writing a file a structural issue names is held as its fir
   expect(w.judged().length).toBe(1)
 })
 
+test('Fold in on a held shell command says to send the Bash command again, naming it as the hold did', KIT, async ($, on) => {
+  const w = world($, on)
+  await bash($ as never, w, SED)
+  w.ctl.answer = 'Fold in'
+  const s = said(await askDan($ as never, 'b1'))
+  expect(s).toContain('"decision": "fold"')
+  expect(s).toContain('Send the Bash command again, unchanged.')
+  expect(s).not.toContain('send the Bash again')
+})
+
 test('a shell command writing no file, a new file or only files that are no source runs unjudged, asking nothing of GitHub', KIT, async ($, on) => {
   const w = world($, on)
   for (const [i, c] of ['npm test', 'grep -n x src/big.ts > /tmp/out.txt', 'echo x > src/new.ts', 'echo x > "$OUT/log.txt"', 'rm src/big.ts'].entries())

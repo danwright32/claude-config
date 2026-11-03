@@ -826,7 +826,7 @@ export const register: Register = on => {
     if (chosen === 'Fold in') {
       await $.store.delete(k)
       const who = h.agent === null ? 'Call' : `Tell subagent ${h.agent} to call`
-      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${h.shown.map(m => `#${m.n}`).join(', ')}>} to record it, then send the ${h.tool} again.`)
+      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${h.shown.map(m => `#${m.n}`).join(', ')}>} to record it. ${again(h)}`)
     }
     await $.store.set(k, { state: 'answered', answer: chosen, at: await $.clock.now(), issues: h.shown.map(m => m.n) } satisfies Question)
     if (chosen === 'Restructure first') {

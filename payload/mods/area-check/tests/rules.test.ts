@@ -63,7 +63,7 @@ test('only the edit tools name a judged file: Edit, Write, MultiEdit by file_pat
   expect(editedPath('Write', { file_path: '/r/a.ts', content: 'x' })).toBe('/r/a.ts')
   expect(editedPath('MultiEdit', { file_path: '/r/a.ts', edits: [] })).toBe('/r/a.ts')
   expect(editedPath('NotebookEdit', { notebook_path: '/r/n.ipynb' })).toBe('/r/n.ipynb')
-  // A shell write is not judged, so restructuring itself (git mv, a script) is never obstructed.
+  // editedPath names only the edit tools' file; a shell write is read by shellTargets instead (#2142).
   expect(editedPath('Bash', { command: 'echo x > /r/a.ts' })).toBe(null)
   expect(editedPath('Read', { file_path: '/r/a.ts' })).toBe(null)
   expect(editedPath('Edit', {})).toBe(null)
