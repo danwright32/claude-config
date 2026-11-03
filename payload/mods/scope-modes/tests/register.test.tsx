@@ -3383,7 +3383,7 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   await start($ as never, clock)
   await clock.settle()
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md. You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back. The other open session puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers. One session that worked overnight has closed since, so its night is only in the report.")
+  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session; the other open session switches to away within a minute. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md. You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back. The other open session puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers. One session that worked overnight has closed since, so its night is only in the report.")
   // The waking session notes its usage on the record it moved aside, then renders the report once more, checked against GitHub (#835).
   const moved = `${SLEEP}/ended/${T0}-woke-s1.json`
   expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([[moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }]])
@@ -3392,9 +3392,13 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   expect(w.files[CURRENT]).toBeUndefined()
   expect(Object.keys(w.files).filter(f => f.startsWith(SLEEP)).sort()).toEqual([`${SLEEP}/ended/${T0}-woke-s1.json`, `${SLEEP}/notes/g0.needs.json`])
   expect(lastModes(w)).toEqual(['AWAY'])
-  expect(w.sent).toEqual([{ to: 's2', text: AWAY_TEXT }])
+  // The other sessions follow the record waking wrote (#2099), never a message.
+  expect(JSON.parse(w.files[PLACE] as string)).toEqual({ v: 1, place: 'away', at: expect.any(Number), by: 's1', cwd: '/repo', how: 'wake' })
+  expect(w.sent).toEqual([])
+  const placeWrites = () => w.fileOps.filter(op => op[0] === 'mv' && op[op.length - 1] === PLACE).length
+  expect(placeWrites()).toBe(1)
   expect((await command($ as never, 'wake')).text).toBe('Sleep mode was not on.')
-  expect(w.sent.length).toBe(1)
+  expect(placeWrites()).toBe(1)
   // Away, nothing opens on the Mac (#837): the report waits in the held card for home.
   expect(w.opened).toEqual([])
   await command($ as never, 'home')
@@ -3408,8 +3412,8 @@ test('two /wake calls at once: only the one whose move succeeds acts', withDeps,
   const texts = [a.text, b.text].sort()
   expect(texts[0]).toMatch(/^Sleep mode is off\./)
   expect(texts[1]).toBe('Sleep mode was already woken by another session.')
-  // Every other session told once, never twice.
-  expect(w.sent.length).toBe(1)
+  // The switch recorded for the other sessions once, never twice (#2099).
+  expect(w.fileOps.filter(op => op[0] === 'mv' && op[op.length - 1] === PLACE).length).toBe(1)
   expect(Object.keys(w.files).filter(f => f.startsWith(`${SLEEP}/ended/`)).length).toBe(1)
 })
 
@@ -3436,13 +3440,13 @@ test('/wake opens the report in BBEdit on the front window, says focus moved, an
   const { w, clock } = world(on, { open: [interactive('s2'), { sessionId: 's3' }], files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2'] }), [PROPOSED_AT]: PROPOSED } })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe(`Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Home is on in this session and 2 others. The night's report is at ${REPORT}. Focus moved to BBEdit, where it is open. Each of the 2 other open sessions puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers.`)
+  expect(r.text).toBe(`Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Home is on in this session; the 2 other open sessions switch to home within a minute. The night's report is at ${REPORT}. Focus moved to BBEdit, where it is open. Each of the 2 other open sessions puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers.`)
   // Opened only after the final render, so BBEdit shows the finished report.
   expect(w.opened).toEqual([[BBEDIT_TOOL, '--front-window', REPORT]])
   expect(w.reports.map(x => x.op)).toEqual(['note', 'render'])
   // No session is sent a summary request any more (#1285): each puts its own morning at its minute.
   expect(w.sent.filter(x => x.text.startsWith('Dan is up'))).toEqual([])
-  expect(w.sent.filter(x => x.to === 's3').map(x => x.text)).toEqual(['Dan switched every session on this Mac to home.'])
+  expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'home', how: 'wake' })
   // The waking session's own turn: started once the command is done, with its summary and both pickers.
   expect(morningOf(w)).toEqual([])
   await clock.settle()

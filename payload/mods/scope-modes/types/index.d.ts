@@ -115,6 +115,11 @@ declare module 'claude-code' {
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
       /**
+       * When the newest away or home switch this session holds was made, in ms (#2099): its start, or
+       * the switch record's time once it took or wrote one. A record no newer is not taken again.
+       */
+      placeSeen: number
+      /**
        * What this session would have handed Dan while asleep (#1284): each call held, delivered when
        * sleep mode ends, its row and the call as made. Cleared once the session is asked to deliver them.
        * One with `why` is a merge, deploy or push the night's lists refused (#1285), put to Dan as a picker.

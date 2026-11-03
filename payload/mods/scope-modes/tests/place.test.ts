@@ -22,6 +22,9 @@ describe('the switch record', () => {
     expect(readPlace(JSON.stringify({ ...REC, at: '1000' }))).toEqual({ why: 'the switch record is not one scope modes wrote (time "1000")' })
     expect(readPlace(JSON.stringify({ ...REC, at: -1 }))).toEqual({ why: 'the switch record is not one scope modes wrote (time -1)' })
     expect(readPlace(JSON.stringify({ ...REC, by: 7 }))).toEqual({ why: 'the switch record is not one scope modes wrote (session 7)' })
+    expect(readPlace(JSON.stringify({ ...REC, cwd: null }))).toEqual({ why: 'the switch record is not one scope modes wrote (folder null)' })
+    expect(readPlace(JSON.stringify({ ...REC, how: 'peer' }))).toEqual({ why: 'the switch record is not one scope modes wrote (made by "peer")' })
+    expect(readPlace('[]')).toEqual({ why: 'the switch record is not one scope modes wrote (not an object)' })
   })
   test('a session takes a switch only when it is newer than the newest it holds', () => {
     expect(isNewer(REC, 999)).toBe(true)
