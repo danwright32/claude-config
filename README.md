@@ -140,6 +140,21 @@ every route and from `merge-when-ready.sh`; a list of 100 commits or more, one p
 offers none (the gate's own `SKIP_SCANNERS_CHECK=1` still skips the whole gate, as it always has),
 so a message pushed past it is still judged at the merge. The remedy is always to reword.
 
+Pull request and issue text goes further (#2105). `check-work-names-publish.sh` judges every
+`gh pr create`, `pr edit`, `pr comment`, `pr review`, `issue create`, `issue edit` and
+`issue comment`, and every `gh api` write to a repository's issues, pulls or comments endpoints, in
+any repository GitHub reports as public; a private one passes without the list being read, and so
+does a public repository a work owner holds. It reads the whole command, a heredoc body included,
+and every body file it names, and refuses text naming a work organisation OR a work repository,
+showing the name it matched so the text can be rewritten. The names are read live on each judged
+command and never written to disk: the repo digest's repository list (the one
+`lib/lesson-fanout.sh` reads), this Mac's dev update registry, and the two built in hashes. Matching
+repository names departs from #1568, which leaves them out of the file scan on purpose, for public
+text only (Dan, 2026-11-02, after a repository name leaked into a public pull request description);
+the file scan and the send scan are unchanged. Whatever it cannot tell is refused: the visibility or
+the list unreadable, a body file it cannot read, a command it cannot parse, the 35 second budget
+spent. There is no override; the remedy is to rewrite the text.
+
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
 folder under `skills/`, where Claude Code sets aside a skill it removes or replaces (#1009). The
@@ -1011,7 +1026,12 @@ cannot, as it cannot skip the repository's hooks any other way (`no-verify-gate.
 Something at the path that is not a folder, such as `/dev/null`, is hooks switched off on purpose
 and is left alone, and a setting that cannot be read refuses the push. On 2026-11-02 the personal
 MacBook had 5 repositories setting `core.hooksPath` across 8 working trees, every folder present,
-so no push there would have been refused.
+so no push there would have been refused. That leaving alone is the main session's only
+(claude-config#2135): for an AGENT's push, a location that exists but holds no hook git would run
+(`/dev/null`, an empty folder, a folder of samples) refuses too, since an agent may have set it
+itself. A hook git runs is an executable file named after one. On 2026-11-03 each of those 5
+repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
+refused.
 
 Every merge gate judges a merge however it is made (claude-config#1181): `gh pr merge`, a repo's own
 merge tool, the GitHub API's merge endpoint (`gh api -X PUT repos/<owner>/<name>/pulls/<n>/merge`,
@@ -1696,8 +1716,12 @@ Three gates close the three parts of that, all reading commands through one libr
 - `no-verify-gate.sh` (PreToolUse, Bash) refuses an AGENT's git command that skips the repository's
   own git hooks: `--no-verify` on any git subcommand, commit's `-n`, `-c core.hooksPath=...`, and
   `HUSKY=0` and the other hook managers' switches, behind rtk, env, an if or a `bash -c` string, and
-  inside a rebase's `--exec`. Words that only mention one are not one. The main session is not
-  judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
+  inside a rebase's `--exec`. Words that only mention one are not one. Since claude-config#2135 it
+  also refuses an agent's `git config` that changes `core.hooksPath` in any scope and either
+  spelling (set, `--add`, `--replace-all`, `--unset`, the `core` section removed or renamed, or
+  `--edit`), and matches the key in any case; reading it is not refused. An agent never writes the
+  setting itself, even to a folder of tracked hooks: it runs the repository's own hook install
+  script, which this gate does not read into. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
   was removed on Dan's decision of 2026-10-24 (claude-config#1666), since an agent could write the
   same file with the Write tool.
   It also refuses an agent's git command that reads a file from standard input's DEVICE PATH
@@ -1767,7 +1791,7 @@ A fourth gate reads the same library for a different thing an agent does to its 
 
 ### What a push actually waits on
 
-Thirty-four PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-five PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1824,6 +1848,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 | `stacked-branch-delete-gate.sh` (#1723) | 2026-10-28: 0.010 to 0.018 seconds. Earlier: 0.035 to 0.058 seconds on a plain `git push`, five readings on 2026-10-26 (load average 15 to 31), since a command holding no `delete` or `graphql` in any case (#1758 added the second), no short flag cluster with d and no bare `:branch` is answered before anything loads; 0.14 to 0.17 seconds on `git push -u origin feat/1723-stacked-delete`, whose branch name holds the word and so starts the shared reader to find no delete; 0.46 to 0.51 seconds on an API delete of a branch nothing is based on, five readings through the real gh against claude-config, one list of the pull requests based on it |
 | `check-closing-merge.sh` (#1550) | 2026-10-28: 0.009 to 0.016 seconds. Earlier: 0.007 to 0.008 seconds on a push naming no merge, five readings on 2026-10-24 (load average 8 to 9), since it leaves before loading anything; 0.051 to 0.053 seconds on a push whose branch name holds the word (`feat/1550-closing-merge-gate`), which loads the shared reader to find no merge. On a merge, 0.51 to 0.69 seconds, five readings through the real gh against claude-config #1639: one read of the pull request's body and closing issues, run beside `block-red-merge.sh`, which reads the same pull request |
 | `check-work-names-merge.sh` (#1995) | 2026-10-31: 0.029 to 0.044 seconds on a plain `git push`, five readings at load average 62 to 64, timed from outside and so including a python start of about 0.02 seconds; it leaves before loading anything on a command naming no merge. On a merge, two GitHub reads: the pull request's title, description and commits, and the scanner at its base commit |
+| `check-work-names-publish.sh` (#2105) | 2026-11-02: 0.009 to 0.010 seconds on a plain `git push`, five readings at load average 27 to 33, timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109 seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo digest list and the registry, then the match |
 | `design-score-gate.sh` (#1364) | 2026-10-28: 0.009 to 0.015 seconds. Earlier: 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `check-rtk-init.sh` (#1468) | 2026-10-28: 0.009 to 0.014 seconds. Earlier: 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
 | `pr-review-gate.sh` (#560) | 2026-10-28: 0.010 to 0.013 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it acts on a merge, not a push |
@@ -4606,7 +4631,11 @@ modes it switched); one asking to end the mode that is on in words that do not s
 down is done for today", never the name in passing or in a question) gets a note telling Claude to
 say it is still on and that `/build` turns it off (#805). **Away** (`/away`, "I'm stepping away", or
 "away" from the phone) and **home** (`/home`, "I'm back at my computer") switch every open session
-on this Mac, told through the session registry and `$.session.send`. Away, Claude is told to publish
+on this Mac: the switch is recorded in `~/.claude/state/scope-modes/place.json`, which every
+session reads at its next prompt and once a minute, with no message between sessions (#2099). A
+switch is recorded when Dan types it, and when sleep ends (`/wake` or the noon limit) to put every
+session back; a `/away` or `/home` a plugin or Claude runs switches its own session alone. A
+session takes only switches made after it started. Away, Claude is told to publish
 private claude.ai pages, and what needs Dan at the Mac is held: AppleScript or JavaScript for
 Automation that shows a dialog, or that it cannot read (a script file included, one `cat` pipes in
 too), typing or clicking (an AppleScript keystroke or click, cliclick, Peekaboo) into anything but a
@@ -4719,8 +4748,15 @@ beneath; a classifier refusal is noted as `failed` and never retried; and in eve
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, LESSONS.md (a script file handed it as its argument
-included, #1592), write tools under claude.ai, Chrome and PostHog, Supabase and psql writes, a
-branch switch in a primary checkout, force pushes, branch deletes, and `claude-sync` send, sync,
+included, #1592), write tools under claude.ai and PostHog, any Chrome call outside a tab the session
+created (recorded from its tabs_create_mcp result) or on a page off a test host (localhost,
+127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
+project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
+staging or qa before its last label), the page readers included, every action in a browser_batch
+after a click until a navigate re-reads the tab's host, and every Chrome tool reaching past those
+tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
+`hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
+pushes, branch deletes, and `claude-sync` send, sync,
 apply-only and install, and a pull from anywhere but the live sync clone `~/claude-config-sync` or
 with its environment changed; since #1106 that clone's pull is claude-config's deploy step, so it
 runs overnight exactly when the night lets claude-config deploy (`mayDeploy`) and waits for the
@@ -4787,7 +4823,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812
+#1765, #1812, #2064
 
 </td></tr>
 <tr><td>

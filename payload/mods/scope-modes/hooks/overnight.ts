@@ -1,5 +1,6 @@
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, operations, type Cmd } from './nobuild.ts'
+import { browserRefusal, type Browser } from './browser.ts'
 
 // Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
 // by the repository it reaches, never by a phrase anywhere in it (L673). Dan's decision, 2026-10-06
@@ -15,8 +16,10 @@ import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, op
 //   whose repository cannot be resolved is refused (L75);
 // - LESSONS.md written by any route in command position, a script file handed it as its argument
 //   included (#1592);
-// - every write tool under mcp__claude_ai_*, mcp__claude-in-chrome__* and mcp__posthog__*, and
-//   Supabase and psql writes;
+// - every write tool under mcp__claude_ai_* and mcp__posthog__*, and Supabase and psql writes;
+// - any Chrome tool (mcp__claude-in-chrome__*) outside a tab this session created or off a test
+//   host, readers included, and anything reaching past the session's tabs (browser.ts, #2064);
+//   headless automation (Playwright, by tool or by command) is on no list;
 // - git checkout or switch in a primary checkout (H7);
 // - force pushes and branch deletes;
 //   none of these three in a throwaway repository under the temp folder (#1124), below;
@@ -52,6 +55,8 @@ export type OvernightCall = {
   ghRepo?: string | null
   /** mod-kit's reader of a command line, for text the call hands a command as a word (#1132). */
   read: (text: string) => Promise<Cmd[]>
+  /** For a Chrome call: the tabs this session created and the project's test hosts; absent, none (#2064). */
+  browser?: Browser
 }
 
 /** Never approved overnight, whatever else: a question for Dan and the plan approval (H8). */
@@ -504,7 +509,9 @@ const writeRefusal = async (target: string | null | undefined, dir: string | nul
 
 // ---- MCP tools ----
 
-const LISTED = ['mcp__claude_ai_', 'mcp__claude-in-chrome__', 'mcp__posthog__']
+// Chrome is judged by browser.ts before this list is read (#2064), so the list holds only the tools
+// judged by their names.
+const LISTED = ['mcp__claude_ai_', 'mcp__posthog__']
 const READS = new Set(['get', 'list', 'search', 'read', 'fetch', 'find', 'lookup', 'query', 'view', 'describe'])
 const WRITES = new Set(['create', 'update', 'delete', 'remove', 'send', 'post', 'add', 'set', 'edit', 'write', 'upload', 'apply', 'deploy', 'merge', 'reset', 'rebase', 'restore', 'pause', 'save', 'schedule', 'respond', 'complete', 'propose', 'start', 'execute', 'exec', 'run', 'insert', 'publish', 'batch', 'move', 'cancel', 'clear', 'submit', 'upsert', 'patch', 'put', 'invite', 'archive', 'enable', 'disable', 'authenticate', 'navigate', 'click', 'type', 'press', 'fill', 'select', 'drag', 'drop', 'close', 'install', 'register', 'assign', 'share', 'approve', 'reject'])
 // A listed server's tool reads only when its own name says it reads and nothing in it says it writes.
@@ -574,6 +581,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   const db = dbToolRefusal(tool, input)
   if (db && db !== 'reads') return db.what
   if (db === 'reads') return undefined
+  if (tool.startsWith('mcp__claude-in-chrome__')) return browserRefusal(tool, input, call.browser)
   if (LISTED.some(p => tool.startsWith(p))) return mcpWrites(tool) ? `use ${tool}` : undefined
   if (tool !== 'Bash') return undefined
   // A Bash call whose command cannot be read is refused, never approved as an empty one.
