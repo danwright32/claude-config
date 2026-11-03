@@ -4,6 +4,9 @@ import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { ANSWER_MS, DEADLINE_MS, DECIDE_TOOL, ISSUE_LIMIT, ISSUES_TTL_MS, SWEEP_MS, UNREAD_TTL_MS, questionKey } from '../hooks/rules.ts'
+// mod-kit's own reader of what a shell command writes, where it lives, never a copy (#2142): a
+// change to it that breaks the area check's reading of its answer turns these tests red.
+import { commandWrites } from '../../mod-kit/hooks/writes.ts'
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
 // test file is held when an open structural issue names the file or the file is growing fast (#1509),
@@ -30,7 +33,7 @@ const deps: { name: string; register: Register } = {
           repo: async (input: unknown) => ask('repo', input),
           goal: async (input: unknown) => ask('goal', input),
           screen: async () => null, blocked: async (input: unknown) => ask('blocked', input), card: nope('card'), commands: nope('commands'), git: nope('git'), gh: nope('gh'),
-          writes: nope('writes'), pipeline: nope('pipeline'), workingTree: nope('workingTree'), ghRepo: nope('ghRepo'), linkRepo: nope('linkRepo'),
+          writes: async (input: unknown) => ask('writes', input), pipeline: nope('pipeline'), workingTree: nope('workingTree'), ghRepo: nope('ghRepo'), linkRepo: nope('linkRepo'),
           mergeHelper: nope('mergeHelper'), bandRow: nope('bandRow'), clearBandRow: nope('clearBandRow'), pane: nope('pane'), clearPane: nope('clearPane'),
           press: async () => ({ isAnswered: false }), clickable: async () => true, isDans: nope('isDans'), typedAnswer: async (input: unknown) => ask('typedAnswer', input),
           pythonText: nope('pythonText'), login: nope('login'), account: nope('account'), hold: nope('hold'), release: nope('release'),
@@ -115,6 +118,8 @@ const world = ($: unknown, on: On, init: Init = {}) => {
     pathsFails?: boolean
     refuse?: boolean
     slowLogOnce?: boolean
+    writesThrows?: boolean
+    numstat?: string
     sha: string
     goal: string | null
   } = {
@@ -188,6 +193,10 @@ const world = ($: unknown, on: On, init: Init = {}) => {
       }
       if (argv[1] === 'typedAnswer') return answer(ok(JSON.stringify(`Dan typed "${input.typed}" instead of choosing, so nothing is recorded.`)))
       if (argv[1] === 'goal') return answer(ok(JSON.stringify(ctl.goal ? { state: 'set', condition: ctl.goal } : { state: 'none' })))
+      if (argv[1] === 'writes') {
+        if (ctl.writesThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the command could not be read' })
+        return answer(ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home))))
+      }
     }
     if (argv[0] === '__scope') {
       const input = JSON.parse(argv[2] as string)
@@ -229,7 +238,7 @@ const world = ($: unknown, on: On, init: Init = {}) => {
           }
           await clock.sleep(wait)
         }
-        return answer(ok(NUMSTAT))
+        return answer(ok(ctl.numstat ?? NUMSTAT))
       }
       if (sub === 'ls-tree -r --name-only origin/main') return answer(ok(TRACKED + '\n'))
       if (sub.startsWith('grep -c  origin/main -- ')) return answer(ok('origin/main:src/big.ts:2400\n'))
@@ -686,4 +695,79 @@ test('the decide tool is offered at every session start, a headless one included
   await $.session.start({ cwd: APP, surface: 'terminal', isInteractive: false } as never)
   await w.clock.settle()
   expect(w.tools).toEqual(['decide'])
+})
+
+// #2142: a shell command writing a file is held as its first edit would be, the files it writes read
+// by mod-kit's real reader (imported above), so python, sed or a heredoc is no way round the check.
+const bash = async ($: T$, w: ReturnType<typeof world>, command: string, extra: object = {}, id = 'b1') => {
+  const r = await $.tool.call({ tool: 'Bash', tool_use_id: id, command, ...extra } as never)
+  await w.clock.settle()
+  return r as R
+}
+const SED = "sed -i '' 's/a/b/' src/lib/slack.ts"
+const BUILT = 'echo hi > "$OUT/big.ts"'
+
+test('a shell command writing a file a structural issue names is held as its first edit would be, and goes ahead once decided', KIT, async ($, on) => {
+  const w = world($, on)
+  const r = await bash($ as never, w, SED)
+  const why = refusal(r)
+  expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
+  expect(why).toContain('#41 (p2, tech-debt)')
+  expect(why).toContain(`${DECIDE_TOOL} with {"call": "b1", "decision": "proceed"`)
+  expect(why).toContain('Then send the Bash command again, unchanged.')
+  expect(w.passed).toEqual([])
+  expect(w.cards).toEqual([expect.objectContaining({ toolUseId: 'b1', guard: 'Area check' })])
+  expect(w.judged()[0]).toMatchObject({ path: 'src/lib/slack.ts', decision: 'held', agent: null })
+  const d = await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect(said(d)).toContain('Send the Bash command again, unchanged.')
+  expect((await bash($ as never, w, SED, {}, 'b2')).result).toBe('done')
+  // The file is claimed for the session, whichever tool writes it next.
+  expect((await edit($ as never, w, SLACK, {}, 'c3')).result).toBe('done')
+  expect(w.judged().length).toBe(1)
+})
+
+test('a shell command writing no file, a new file or only files that are no source runs unjudged, asking nothing of GitHub', KIT, async ($, on) => {
+  const w = world($, on)
+  for (const [i, c] of ['npm test', 'grep -n x src/big.ts > /tmp/out.txt', 'echo x > src/new.ts', 'echo x > "$OUT/log.txt"', 'rm src/big.ts'].entries())
+    expect((await bash($ as never, w, c, {}, `b${i}`)).result).toBe('done')
+  expect(ghLists(w)).toBe(0)
+  expect(w.judged().length).toBe(0)
+})
+
+test('a shell command whose file cannot be read is held saying so, may only proceed, and the unchanged command then runs', KIT, async ($, on) => {
+  const w = world($, on)
+  const why = refusal(await bash($ as never, w, BUILT))
+  expect(why).toContain('cannot be read')
+  expect(why).toContain('$OUT/big.ts')
+  expect(why).toContain('Edit or Write')
+  expect(w.passed).toEqual([])
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ v: 1, session: 's1', agent: null, repo: 'dan/app', word: '$OUT/big.ts', decision: 'held' })
+  expect(refusal(await decide($ as never, { call: 'b1', decision: 'restructure' }))).toContain('Edit or Write')
+  const d = await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect(said(d)).toContain('Send the Bash command again, unchanged.')
+  expect((await bash($ as never, w, BUILT, {}, 'b2')).result).toBe('done')
+  // Another command is decided on its own.
+  expect(refusal(await bash($ as never, w, 'echo hi > "$OUT/other.ts"', {}, 'b3'))).toContain('cannot be read')
+})
+
+test('a write that cannot be read passes only where nothing could hold it: no checkout, or no fast growing file and no structural issue naming a file', KIT, async ($, on) => {
+  const w = world($, on, { issues: [] })
+  expect((await bash($ as never, w, "perl -pi -e 's/a/b/' /tmp/x/*.ts")).result).toBe('done')
+  w.ctl.numstat = ''
+  expect((await bash($ as never, w, BUILT, {}, 'b2')).result).toBe('done')
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: '$OUT/big.ts', decision: 'passed' })
+})
+
+test("a subagent's shell write is held for itself, where its loop is known", KIT, async ($, on) => {
+  const w = world($, on)
+  expect(refusal(await bash($ as never, w, SED, { agentId: 'a1' }))).toContain('hands the question to the main session')
+  expect(w.judged()[0]).toMatchObject({ agent: 'a1', decision: 'held', path: 'src/lib/slack.ts' })
+})
+
+test('a reader that fails lets the command through, kept in the error file and said once', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.writesThrows = true
+  expect((await bash($ as never, w, SED)).result).toBe('done')
+  expect(w.records(ERRORS)[0]).toMatchObject({ kind: 'error', session: 's1', error: 'the command could not be read' })
+  expect(w.logs.filter(l => l.includes('area check'))).toEqual(["The area check could not read what a shell command writes (the command could not be read), so it went ahead unchecked; the error is kept in ~/.claude-area-check/errors.jsonl."])
 })

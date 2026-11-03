@@ -42,6 +42,9 @@ import {
   sleepNotes,
   sweepKeys,
   type Held,
+  couldHold,
+  shellKey,
+  shellTargets,
 } from '../hooks/rules.ts'
 
 // The area check (#1506, facts #1508, hold #1509): the facts about a file at the moment a session
@@ -394,4 +397,88 @@ test('the sweep drops issue lists unread for a week and answers past their week,
     ['other', { at: 0 }],
   ], now)
   expect(keys.sort()).toEqual(['issues:dan/bad', 'issues:dan/old', 'question:dan/app\na.ts'])
+})
+
+// #2142: a file written by a shell command, read through mod-kit's one reader ($.modkit.writes).
+// Each fixture is that reader's own answer, measured on 2026-11-03 with cwd /w/app (L48).
+const NONE = { files: [], changes: [], unnamed: [] }
+
+test('a shell write is judged by every file it names: a redirect, an in place edit, an emptying, a git write, a script argument, an inline target', () => {
+  // `sed -i '' 's/a/b/' src/lib/slack.ts` and `: > src/big.ts`
+  expect(shellTargets({ ...NONE, files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }] })).toEqual([{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+  // `truncate -s 0 src/big.ts`
+  expect(shellTargets({ ...NONE, changes: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'truncate' }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts' }])
+  // `git checkout -- src/big.ts`: git marks every pathspec as reaching a whole folder, as it may.
+  expect(shellTargets({ ...NONE, byGit: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'write', tree: true, from: '' }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts', tree: true }])
+  // `python3 gen.py src/big.ts`
+  expect(shellTargets({ ...NONE, runs: [{ what: 'a python3 script', script: 'gen.py', path: '/w/app/gen.py', args: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts' }])
+  // `python3 -c "open('src/lib/slack.ts','w').write('x')"`
+  expect(shellTargets({ ...NONE, unnamed: [{ what: 'an inline python3 script', words: ['python3', '-c', '...'], inputs: [], targets: ['/w/app/src/lib/slack.ts'], folder: '/w/app' }] })).toEqual([{ word: '/w/app/src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+})
+
+test('a removal, a stamp, a new folder or a mode change adds no lines, so it is not judged; nor is a command that writes nothing', () => {
+  for (const does of ['remove', 'touch', 'folder', 'mode'] as const) expect(shellTargets({ ...NONE, changes: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does }] })).toEqual([])
+  expect(shellTargets({ ...NONE, byGit: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'remove' }] })).toEqual([])
+  // `npm test`, `git commit -F /tmp/msg.txt`
+  expect(shellTargets(NONE)).toEqual([])
+})
+
+test('a shell write whose file cannot be named is unread, with why; a name that can only be no source file is left out', () => {
+  // `echo hi > "$OUT/big.ts"`
+  const [built] = shellTargets({ ...NONE, files: [{ word: '$OUT/big.ts' }] })
+  expect(built).toMatchObject({ word: '$OUT/big.ts' })
+  expect((built as { unread: string }).unread).toContain('$OUT/big.ts')
+  // `perl -pi -e 's/a/b/' src/*.ts`
+  expect(shellTargets({ ...NONE, files: [{ word: 'src/*.ts', folder: '/w/app/src', edits: true }] })[0]).toHaveProperty('unread')
+  // `git apply /tmp/p.patch`, and a node script handed its file name it builds itself
+  expect((shellTargets({ ...NONE, unnamed: [{ what: 'a patch', words: ['git', 'apply', '/tmp/p.patch'], inputs: ['/tmp/p.patch'] }] })[0] as { unread: string }).unread).toContain('a patch')
+  expect(shellTargets({ ...NONE, unnamed: [{ what: 'an inline node script', words: ['node', '-e', '...', 'src/big.ts'], inputs: [], folder: '/w/app' }] })[0]).toHaveProperty('unread')
+  // A git pathspec matched across folders, and a script handed a pattern.
+  expect(shellTargets({ ...NONE, byGit: [{ word: ':/big.ts', does: 'write' }] })[0]).toHaveProperty('unread')
+  expect(shellTargets({ ...NONE, runs: [{ what: 'a python3 script', script: 'gen.py', args: [{ word: 'src/*.ts', folder: '/w/app/src' }] }] })[0]).toHaveProperty('unread')
+  // `echo hi > "$OUT/log.txt"`: whatever $OUT is, a .txt file is never judged.
+  expect(shellTargets({ ...NONE, files: [{ word: '$OUT/log.txt' }] })).toEqual([])
+  expect(shellTargets({ ...NONE, files: [{ word: 'notes/*.md', folder: '/w/app/notes' }] })).toEqual([])
+})
+
+test('a repository could hold a file only when something there would: a fast growing file, or a structural issue at a held priority naming a file', () => {
+  const issue = (n: number, priority: string | null, structural = ['tech-debt'], refs = ['src/a.ts']) => ({ n, structural, priority, refs })
+  expect(couldHold({ issues: [], own: [], top: [] })).toBe(false)
+  expect(couldHold({ issues: [], own: [], top: ['src/big.ts'] })).toBe(true)
+  expect(couldHold({ issues: [issue(1, 'p1')], own: [], top: [] })).toBe(true)
+  expect(couldHold({ issues: [issue(1, null)], own: [], top: [] })).toBe(true)
+  // A p3 issue, an unlabelled one, the session's own, and one naming no file can hold nothing.
+  expect(couldHold({ issues: [issue(1, 'p3'), issue(2, 'p1', []), issue(3, 'p1'), issue(4, 'p0', ['refactor'], [])], own: [3], top: [] })).toBe(false)
+})
+
+test("an unchanged resend is one key, and another command another, so a decided command is not held again", () => {
+  expect(shellKey('python3 gen.py')).toBe(shellKey('python3 gen.py'))
+  expect(shellKey('python3 gen.py')).not.toBe(shellKey('python3 gen.py x'))
+  expect(shellKey('python3 gen.py').startsWith('shell:')).toBe(true)
+})
+
+const SHELL: Held = { ...HELD, tool: 'Bash' }
+const UNREAD: Held = { ...GROWTH_ONLY, tool: 'Bash', rel: '$OUT/big.ts', why: [], growth: { unread: 'not judged' }, unread: { why: 'its file is built from $OUT, which cannot be read', key: 'shell:1' } }
+
+test("a held Bash command is named as a command that writes the file, and is sent again as a command", () => {
+  const r = holdRefusal(SHELL)
+  expect(r).toContain('Bash command')
+  expect(r).toContain('src/lib/slack.ts')
+  expect(r).toContain('Then send the Bash command again, unchanged.')
+  expect(r).not.toContain('Before editing it')
+})
+
+test('a command whose file cannot be read is held saying so, and can only proceed: there is no file to fold into or restructure', () => {
+  const card = holdCard(UNREAD)
+  expect(card.reason).toContain('cannot be read')
+  expect(card.reason).toContain('$OUT')
+  expect(card.safeWay).toContain('Edit or Write')
+  const r = holdRefusal(UNREAD)
+  expect(r).toContain('"decision": "proceed"')
+  expect(r).not.toContain('"decision": "restructure"')
+  expect(r).not.toContain('"decision": "fold"')
+  expect(r).toContain('Edit or Write')
+  expect(decideProblem({ decision: 'restructure' }, UNREAD)).toContain('Edit or Write')
+  expect(decideProblem({ decision: 'fold', issue: 41 }, UNREAD)).toContain('cannot be read')
+  expect(decideProblem({ decision: 'proceed', reason: 'This command only regenerates the build log, which no issue names.' }, UNREAD)).toBeUndefined()
 })
