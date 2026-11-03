@@ -159,6 +159,35 @@ else check "#2074 a push in a branch after a|b) is a push" "not seen"; fi
 if ps_is_git_push 'case y in a) echo git push;; esac'; then check "#2074 control: a push only echoed in a branch is not a push" "seen as a push"
 else check "#2074 control: a push only echoed in a branch is not a push" ok; fi
 
+# heredoc_openers reads a line on its own, for the whole tree scans that read a file a line at a time
+# and follow neither its quotes nor its arithmetic (claude-config#2080). The marker is the whole
+# word as heredoc_opener reads it, and a word is taken only where it starts as a marker is written,
+# so `$((1<<2))` and a quoted `1<<2` open nothing. Printed by the heredoc-markers mode as
+# <line>TAB<marker>, one row per opener.
+markers() { printf '%s' "$1" | python3 -B "$SW" heredoc-markers 2>&1; }
+_H='<''<'
+got="$(markers "cat ${_H}'E'OF
+x
+cat ${_H}E\"OF\" ${_H}-END-OF
+y=\$((1${_H}2)); grep -c '1${_H}2' f
+z=\$(cat ${_H}<\"\$f\")
+cat ${_H}\\EOF")"
+want="$(printf '1\tEOF\n3\tEOF\n3\tEND-OF\n6\tEOF')"
+[ "$got" = "$want" ] && check "#2080 heredoc-markers reads each marker whole, quotes removed, and opens nothing on a shift or a here string" ok \
+  || check "#2080 heredoc-markers reads each marker whole, quotes removed, and opens nothing on a shift or a here string" "got [$got]"
+got="$(printf '%s' "x" | python3 -B "$SW" heredoc-markers; echo "rc=$?")"
+[ "$got" = "rc=0" ] && check "#2080 a text opening no heredoc prints nothing and exits 0" ok \
+  || check "#2080 a text opening no heredoc prints nothing and exits 0" "got [$got]"
+py_got="$(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+h = "<" "<"
+print(m.heredoc_opener("x" + h + "1EOF", 1), m.heredoc_opener("x" + h + "1EOF", 1, marker_start=True),
+      m.heredoc_opener(h + "$\x27EOF\x27", 0, marker_start=True)[0], m.heredoc_openers("a " + h + "-\x27E\x27OF b")[0])' "$SW" 2>&1)"
+[ "$py_got" = "('1EOF', False, False, 7) None EOF (2, 'EOF', True, True, 10)" ] \
+  && check "#2080 marker_start refuses only a word not started as a marker is written, and heredoc_openers gives where each opens" ok \
+  || check "#2080 marker_start refuses only a word not started as a marker is written, and heredoc_openers gives where each opens" "got [$py_got]"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
