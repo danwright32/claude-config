@@ -599,6 +599,8 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'mkdir') return ok()
     // The project's CLAUDE.md on its default branch (#2064), never the working copy's.
     if (cmd === 'git' && a[0] === '-C' && a[2] === 'show' && /^origin\/(?:HEAD|main):CLAUDE\.md$/.test(a[3] ?? '')) {
+      // Recorded here because this answer returns before the general record of runs below.
+      w.runs.push(argv)
       const text = a[3]?.startsWith('origin/HEAD') ? o.committedClaudeMd?.head : o.committedClaudeMd?.main
       return text === undefined ? fail(128, `fatal: invalid object name '${a[3]?.split(':')[0]}'.`) : ok(text)
     }
@@ -2616,6 +2618,8 @@ test('asleep, Chrome runs in a tab the session created once its page is on a tes
   await chromeResult($ as never, 'b5', `Navigated to http://localhost:3000\n${tabContext(7, 'http://localhost:3000/')}`)
   expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'b6' } as never)).toBe('ran')
   expect(await call($ as never, { tool: `${CHROME}computer`, tabId: 7, action: 'left_click', coordinate: [1, 2], tool_use_id: 'b7' } as never)).toBe('ran')
+  // Sent at once with the click, before its result: judged as though the click had moved the page.
+  expect(await call($ as never, { tool: `${CHROME}get_page_text`, tabId: 7, tool_use_id: 'b7a' } as never)).toMatch(/on tab 7, whose page is not on a test host/)
   // The click left the test host: its result's context says so, and the next read is refused.
   await chromeResult($ as never, 'b7', `Clicked\n${tabContext(7, 'https://accounts.example.com/signin')}`)
   expect(await call($ as never, { tool: `${CHROME}get_page_text`, tabId: 7, tool_use_id: 'b8' } as never)).toMatch(/on tab 7, whose page is on accounts\.example\.com, which is not a test host/)
@@ -2639,12 +2643,15 @@ test('asleep, a hosted test host counts only when the default branch\'s CLAUDE.m
     w.o.committedClaudeMd = committed
     return call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'https://qa.example.dev/', tool_use_id: id } as never)
   }
-  expect(await go({ head: LISTED }, 'n1')).toBe('ran')
-  expect(w.runs.some(r => r.join(' ') === 'git -C /repo show origin/HEAD:CLAUDE.md')).toBe(true)
-  expect(await go({ main: LISTED }, 'n2')).toBe('ran')
-  // Only in the working copy, or a default branch that cannot be read: refused.
+  // The default branch is the one origin/HEAD names, as mod-kit reads it (main in this world).
+  expect(await go({ main: LISTED }, 'n1')).toBe('ran')
+  expect(w.runs.some(r => r.join(' ') === 'git -C /repo show origin/main:CLAUDE.md')).toBe(true)
+  // Only in the working copy, or a default branch whose CLAUDE.md does not list it: refused.
   expect(await go(undefined, 'n3')).toMatch(/did not open qa\.example\.dev in the browser, which is not a test host/)
-  expect(await go({ head: '# Project\n' }, 'n4')).toMatch(/which is not a test host/)
+  expect(await go({ main: '# Project\n' }, 'n4')).toMatch(/which is not a test host/)
+  // origin/HEAD naming no branch is no listed hosts, with no guess at main (Dan, 2026-11-03).
+  w.o.defaultBranch = ''
+  expect(await go({ head: LISTED, main: LISTED }, 'n5')).toMatch(/which is not a test host/)
 })
 test("asleep, the keystroke guard's test build is not held through the noun either, though place is home (#1269)", { plugins: [deps, isItLive, guardStandIn] }, async ($, on) => {
   const { w, clock } = world(on)

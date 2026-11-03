@@ -411,8 +411,22 @@ describe('outward tools: every write under claude.ai, Chrome and PostHog, and da
     expect(await chrome('navigate', { url: 'https://x' })).toMatch(/^use mcp__claude-in-chrome__navigate without naming a tab/)
     expect(await chrome('switch_browser', {}, own)).toMatch(/^use mcp__claude-in-chrome__switch_browser/)
     expect(await chrome('shortcuts_execute', { tabId: 7 }, own)).toMatch(/^use mcp__claude-in-chrome__shortcuts_execute/)
+    // The readers went ahead on any tab before, judged by their names alone; now each needs an own
+    // tab on a test host like every other Chrome tool.
+    const away = { tabs: { 7: { host: 'localhost' }, 8: { host: 'bank.example.com' } }, listed: [] }
+    for (const name of ['read_page', 'get_page_text', 'find', 'read_console_messages', 'read_network_requests']) {
+      expect({ name, r: await chrome(name, { tabId: 3, query: 'x' }, away) }).toEqual({ name, r: expect.stringMatching(new RegExp(`^use mcp__claude-in-chrome__${name} on tab 3, which this session did not create`)) })
+      expect({ name, r: await chrome(name, { tabId: 8, query: 'x' }, away) }).toEqual({ name, r: expect.stringMatching(/on tab 8, whose page is on bank\.example\.com, which is not a test host/) })
+      expect({ name, r: await chrome(name, { tabId: 7, query: 'x' }, away) }).toEqual({ name, r: undefined })
+    }
   })
+  // Headless automation runs in its own browser with none of Dan's tabs or sign ins, so the tab rule
+  // is the Chrome extension's alone: the same page refused in Chrome goes ahead in Playwright.
   test('headless browser automation is not on the list, by tool or by command (#2064)', async () => {
+    const own = { tabs: { 7: { host: 'localhost' } }, listed: [] }
+    expect(
+      await overnightRefusal({ tool: 'mcp__claude-in-chrome__navigate', input: { tabId: 7, url: 'https://bank.example.com' }, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME, read, browser: own }, look),
+    ).toMatch(/^open bank\.example\.com in the browser, which is not a test host/)
     expect(await tool('mcp__playwright__browser_navigate', { url: 'https://bank.example.com' })).toBeUndefined()
     expect(await tool('mcp__playwright__browser_snapshot', {})).toBeUndefined()
     expect(await bash('npx playwright test e2e/login.spec.ts')).toBeUndefined()

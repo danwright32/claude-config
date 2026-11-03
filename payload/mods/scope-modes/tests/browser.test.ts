@@ -113,15 +113,14 @@ describe('the Chrome tools, one by one', () => {
 
 describe('a batch, item by item', () => {
   const batch = (actions: { name: string; input: Record<string, unknown> }[], b: Browser) => refuse('browser_batch', { actions }, b)
-  test('navigate, click, type, then a screenshot, all in an own tab on a test host', () => {
+  test('navigate, a screenshot, a wait, then a click, all in an own tab on a test host', () => {
     expect(
       batch(
         [
           { name: 'navigate', input: { tabId: 7, url: 'localhost:3000/login' } },
-          { name: 'computer', input: { tabId: 7, action: 'left_click', coordinate: [1, 2] } },
-          { name: `${C}computer`, input: { tabId: 7, action: 'type', text: 'x' } },
           { name: 'computer', input: { tabId: 7, action: 'screenshot' } },
           { name: 'computer', input: { tabId: 7, action: 'wait', duration: 1 } },
+          { name: `${C}computer`, input: { tabId: 7, action: 'left_click', coordinate: [1, 2] } },
         ],
         own({ 7: null }),
       ),
@@ -131,12 +130,21 @@ describe('a batch, item by item', () => {
     expect(batch([{ name: 'navigate', input: { tabId: 7, url: 'localhost' } }, { name: 'read_page', input: { tabId: 7 } }], own({ 7: 'bank.example.com' }))).toBeUndefined()
     expect(batch([{ name: 'navigate', input: { tabId: 7, url: 'bank.example.com' } }, { name: 'read_page', input: { tabId: 7 } }], own({ 7: 'localhost' }))).toMatch(/^open bank\.example\.com in the browser/)
   })
-  test('after a click the page may be anywhere, so only a screenshot, zoom or wait runs until a navigate to a test host', () => {
+  // Dan, 2026-11-03: every action after a click that may navigate is judged against the tab's host
+  // again, so typing and every other screen action waits until the host is read again.
+  test('after a click the page may be anywhere, so nothing more runs on that tab until a navigate to a test host', () => {
     const click = { name: 'computer', input: { tabId: 7, action: 'left_click', coordinate: [1, 2] } }
     expect(batch([click, { name: 'get_page_text', input: { tabId: 7 } }], own({ 7: 'localhost' }))).toMatch(/^use mcp__claude-in-chrome__get_page_text on tab 7 after an action in the same batch that may have left the test host/)
     expect(batch([click, { name: 'form_input', input: { tabId: 7, ref: 'r', value: 'v' } }], own({ 7: 'localhost' }))).toMatch(/may have left the test host/)
-    expect(batch([click, { name: 'computer', input: { tabId: 7, action: 'zoom', region: [0, 0, 1, 1] } }], own({ 7: 'localhost' }))).toBeUndefined()
-    expect(batch([click, { name: 'navigate', input: { tabId: 7, url: 'localhost' } }, { name: 'get_page_text', input: { tabId: 7 } }], own({ 7: 'localhost' }))).toBeUndefined()
+    for (const action of [{ action: 'type', text: 'password' }, { action: 'key', text: 'Return' }, { action: 'left_click', coordinate: [3, 4] }, { action: 'screenshot' }, { action: 'zoom', region: [0, 0, 1, 1] }, { action: 'wait', duration: 1 }])
+      expect({ action, r: batch([click, { name: `${C}computer`, input: { tabId: 7, ...action } }], own({ 7: 'localhost' })) }).toEqual({ action, r: expect.stringMatching(/^use mcp__claude-in-chrome__computer on tab 7 after an action in the same batch that may have left the test host/) })
+    // Typing moves the page too (Enter submits a form), so a click after it waits as well.
+    expect(batch([{ name: 'computer', input: { tabId: 7, action: 'type', text: 'x' } }, click], own({ 7: 'localhost' }))).toMatch(/may have left the test host/)
+    // A navigate to a test host reads the host again, and the tab is usable after it.
+    expect(batch([click, { name: 'navigate', input: { tabId: 7, url: 'localhost' } }, { name: 'get_page_text', input: { tabId: 7 } }, { name: 'computer', input: { tabId: 7, action: 'type', text: 'x' } }], own({ 7: 'localhost' }))).toBeUndefined()
+    // A still action leaves the tab usable, and another tab of the session's is not held by the click.
+    expect(batch([{ name: 'computer', input: { tabId: 7, action: 'screenshot' } }, { name: 'computer', input: { tabId: 7, action: 'type', text: 'x' } }], own({ 7: 'localhost' }))).toBeUndefined()
+    expect(batch([click, { name: 'read_page', input: { tabId: 8 } }], own({ 7: 'localhost', 8: 'localhost' }))).toBeUndefined()
   })
   test('a tab made inside the batch, a nested batch, and a refused item refuse the whole batch', () => {
     expect(batch([{ name: 'tabs_create_mcp', input: {} }, { name: 'navigate', input: { tabId: 99, url: 'localhost' } }], own())).toMatch(/on tab 99, which this session did not create/)

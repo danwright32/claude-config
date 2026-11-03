@@ -12,7 +12,8 @@
  *   each one's page is on, read from the LAST Tab Context block of every result (the extension
  *   appends the real one after any page text, so page text cannot forge it). A call that may move
  *   the page (a navigate, a click, typing, a form fill, a script) leaves its tab on no known host
- *   until a result says where it is.
+ *   until a result says where it is. Inside one browser_batch, where no result arrives between
+ *   items, nothing more runs on that tab after such an action until a navigate to a test host.
  * - Anything reaching past the session's tabs (recordings saved to disk, local files sent to a page,
  *   saved workflows, another browser) and any tool nobody listed here is refused.
  *
@@ -133,10 +134,10 @@ const batchRefusal = (input: Record<string, unknown>, b: Browser): string | unde
     const args = (it.input && typeof it.input === 'object' ? it.input : {}) as Record<string, unknown>
     if (name === 'browser_batch') return `use ${tool} inside a browser_batch`
     const tab = tabOf(args)
-    // After a call that may have moved the page, the page's own text, form fields and scripts wait
-    // for a navigate back to a test host; the screen (a screenshot, a click, typing) carries on, as
-    // a click does in its own call until its result says where the page went.
-    if (tab && moved.has(tab) && name !== 'navigate' && name !== 'computer')
+    // After a call that may have moved the page, the tab's host is unknown, so every later action on
+    // it (typing and every other screen action included) waits for a navigate to a test host, which
+    // reads the host again (Dan, 2026-11-03). Across calls, a result's Tab Context reads it instead.
+    if (tab && moved.has(tab) && name !== 'navigate')
       return `use ${C}${name} on tab ${tab} after an action in the same batch that may have left the test host`
     const why = oneRefusal(name, args, tabs, b.listed)
     if (why) return why
