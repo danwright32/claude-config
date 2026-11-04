@@ -67,6 +67,7 @@ plant_deadline_lib() {   # plant_deadline_lib <the fixture's hooks directory>
   mkdir -p "$1/lib"
   cp "$DIR/lib/suite-deadline.sh" "$1/lib/suite-deadline.sh"
   cp "$DIR/lib/kill-tree.sh" "$1/lib/kill-tree.sh"
+  cp "$DIR/lib/suite-isolation.sh" "$1/lib/suite-isolation.sh"
 }
 
 [ -f "$LIB" ] || { echo "FAIL: no shared predicate at $LIB, so the rule is still written twice"; echo "passed: 0, failed: 1"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }

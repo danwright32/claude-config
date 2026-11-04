@@ -437,6 +437,19 @@ It still waits, and counts the skip, when:
 The stuck notice gives whichever of those reasons the last attempt found, rather than one sentence
 for all of them. `claude-sync sync` typed by hand is not gated and still settles any of them now.
 
+### A head still being tested does not hold back a commit that passed
+
+Until #2230 the watcher asked only about the newest shared commit, so while that one was still
+being tested nothing arrived at all, even a commit below it whose tests had already passed. On
+2026-11-04 runs on main took about 50 minutes and commits landed every half hour, and the personal
+MacBook applied nothing from 06:23 AM ET while two pull requests merged.
+
+Now, when the newest shared commit is still being tested, the watcher takes in the newest commit
+on main's own line whose tests passed (at most `SYNC_CI_TESTED_SEARCH` commits back, ten by
+default), and nothing newer. The log says `applied the newest shared commit whose tests passed`.
+This Mac's own changes still go up on top of the newest commit, as above. A newest commit that
+FAILED still takes nothing in, so a red main stays visible on every Mac.
+
 ### A send that catches up says what it sent
 
 A send that finds this Mac behind catches up by running a sync, and so does a send whose own push
@@ -1184,7 +1197,8 @@ python3 ~/.claude/hooks/lib/wrapped-refusal-report.py [--days 7]
 
 It prints the refusals and overrides in the window and the count for each shape, a wrapper and a
 reason, commonest first, which is what the refusal is narrowed by. The suites record into a
-throwaway one (`WRAPPED_REFUSAL_LEDGER_DIR`, which `run-all-tests.sh` hands every suite).
+throwaway one (`WRAPPED_REFUSAL_LEDGER_DIR`, which `run-all-tests.sh` hands every suite, and
+arming a suite's deadline hands one run on its own, #2156).
 Until #2155, a direct run of `test-gates-fail-closed.sh` wrote its own "eval, reader-lib-missing"
 refusals into the real record (129 on the personal MacBook, from 2026-10-29). The report leaves
 those out and says how many (#2157), but only rows in exactly the shape that suite left: that
@@ -1742,10 +1756,16 @@ Three gates close the three parts of that, all reading commands through one libr
   numbered key that moves the hooks, `GIT_CONFIG_PARAMETERS`, and `GIT_CONFIG_GLOBAL`,
   `GIT_CONFIG_SYSTEM` or `GIT_CONFIG` naming a whole file), git's `--config-env`, a config include
   (`include.path`, `includeIf.*.path`) set with `-c` or `git config`, and a key the shell spells so the
-  gate cannot read it. The gate is also registered for Edit, Write and MultiEdit, and refuses an
+  gate cannot read it. The gate is also registered for Edit, Write, MultiEdit and NotebookEdit (NotebookEdit is let through, since it only edits notebook files), and refuses an
   agent's edit of a git config file (the repository's or a worktree's, the global one, or any file
   an include names, existing or not) that changes the hooks location or an include as git reads
-  them; any other edit of those files goes through. The advice about the install script is chosen
+  them; any other edit of those files goes through. Since claude-config#2160 three more routes are
+  refused: git pointed at another git directory (`--git-dir`, `GIT_DIR` or `GIT_COMMON_DIR`), a hook
+  switch or git environment settings in front of, or exported before, a command that is not git
+  (a script's own git commands inherit them and cannot be read before it runs), and any agent shell
+  command other than git that names a git config file, reads included, along with a git command
+  whose output is sent into one (a redirect, or `--output`). When git cannot list a
+  folder's config, both the edit route and the shell route refuse. The advice about the install script is chosen
   from the reader's reasons (`agent-overrides.py hooks-location-advice`), never from the command's
   text. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
   was removed on Dan's decision of 2026-10-24 (claude-config#1666), since an agent could write the
@@ -2692,6 +2712,35 @@ their totals five different ways and the runner had to work out which line was t
 got wrong twice: it printed a per-check line where a verdict belongs, and it read `PASS=805 FAIL=0`
 as 805 failures. A suite that prints no result line is still run and still judged, its score
 guessed from its prose, and the runner NAMES it at the end rather than falling back quietly.
+
+**A suite run on its own writes into the same throwaway records a full run gives it**
+(claude-config#2156). Every record a hook keeps under `~/.claude` that a suite could drive, such as
+the issue spool, the push gate ledger, the record of wrapped command refusals, the sign in and
+merge phase records, claude-sync's log and the sleep record, has a variable naming where it goes
+instead, and `hooks/lib/suite-isolation.sh` holds them as one list. The runner points every one at
+its own throwaway folder, whatever was inherited. A suite typed straight into a shell used to get
+none of them, so a builder's check before a full run wrote into the real records: 123 fixture rows
+from `test-gates-fail-closed.sh` reached the real refusal record that way (#2126). Now
+`suite_deadline_arm`, which every suite calls near its top, fills in each one nothing has set yet,
+in one folder of its own under `$TMPDIR` named `claude-sync-suite-work.isolated.*`, which
+claude-sync's scratch sweep reclaims after four hours. Under the runner every one is already set,
+so no folder is made. A suite that names its own still wins. Arming refuses to run the suite when
+the list cannot be loaded or the folder cannot be made, rather than letting it write the real ones.
+A new record is one line in that list.
+
+A record with no variable is not covered by the list, and this finds one:
+
+```bash
+bash tools/suite-home-writes.sh payload/hooks/test-gates-fail-closed.sh
+```
+
+It runs each suite named on its own, with none of those variables set and `HOME` pointed at a
+throwaway folder, then names every file the suite left under that folder's `.claude` and the
+records kept beside it (`.claude-issue-spool` and the like). It lists paths only and never reads a
+file, and it never writes under the real `~/.claude`. It exits 0 when nothing was left, 1 naming
+the files when something was, and 2 when it could not check, and prints the suite's own exit
+status beside its verdict. It is not run on every full run: doing so costs about one full run
+again, and the runner already hands every suite the list.
 
 The main suite on its own:
 
@@ -5244,7 +5293,11 @@ in no checkout, or where the repository has no fast growing file and no structur
 file. Removals, `touch`, `mkdir`, mode changes and a folder handed to a script are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
 Every judgement, decision and answer is one JSON line in
-`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start; issues are read
+`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
+log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
+later a session start copies its decision lines to `rotated/<stamp>.decisions.jsonl` and only then
+renames it to the archive `rotated/<stamp>.jsonl`. Nothing is ever deleted, and a rotation that
+fails leaves the log where it was, keeps the error, and says so in one dim line. Issues are read
 unfiltered once per repository and kept an hour (a failure ten minutes), warmed at session start, as
 each account gh is logged in to, all under one 7 second deadline, and an edit with nothing to hold
 whose issues or growth could not be read passes without settling the file, so the next edit to it
@@ -5255,14 +5308,16 @@ through the same rules. Every pull request then carries an area check line for e
 its branch, `Area check: <file>: <decision>, <reason>` (a fold line also names `Refs #N`): `gh pr
 create`, `gh pr edit` given a description, and `gh pr merge` (by itself, `--auto` or through the
 merge helper) are refused while the description lacks one, with the lines to paste. Decisions are
-matched by repository, branch and merge base, read from this Mac's log only, and only from its
-newest 1 MiB of decision lines; a rebase moves the merge base, so decisions taken before it are no
-longer asked for. A log that cannot be read refuses the command; a fact the command does not depend
-on that cannot be read (no checkout, GitHub not answering for a merge) lets it through.
+matched by repository, branch and merge base, read from this Mac's log only: every decisions file,
+any log still rotating and the live log, filtered by one `awk` pass to the one repository and
+branch, so no decision is ever too old to be asked for and the scan is the decisions plus at most a
+few MiB of log. A rebase moves the merge base, so decisions taken before it are no longer asked
+for. A log that cannot be read refuses the command; a fact the command does not depend on that
+cannot be read (no checkout, GitHub not answering for a merge) lets it through.
 
 </td><td>
 
-#1506, #1508, #1509, #1510
+#1506, #1508, #1509, #1510, #2143
 
 </td></tr>
 <tr><td>
@@ -5301,6 +5356,34 @@ same box as text, shaped like SESSION REFLECTION.
 </td><td>
 
 #1563, #1749, #1818
+
+</td></tr>
+<tr><td>
+
+`slack-alert-guard`
+
+</td><td>
+
+Holds every edit that changes the wording a Slack alert sends until Dan has seen the message as
+Slack will post it and approved it (Dan, 2026-11-04: "anytime a slack alert is created, we need to
+have a design-rounds esque check on wording so I can approve the wording before it's created"). Only
+a code or config file that posts to Slack counts: one naming a Slack webhook, the chat API, a Slack
+SDK, a Slack env setting, or a send helper named for Slack, called or imported. A Write, Edit or
+MultiEdit there that adds message text, changes it or takes it away is refused, a test file
+included. Claude then shows Dan the whole message, every variable filled in from a realistic
+example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
+words the question and its two answers, Approve wording and Change wording, itself. An approval is
+kept in the mod's store by the exact wording, never by the file, so the same wording repeated in a
+test goes through without a second question, and any change to approved wording is held again. A
+shell command writing into such a file is held as a whole command, since the wording it leaves
+cannot be read before it runs. A subagent's call is refused and told to stop and report to the main
+session. The calls waiting on Dan are dropped at session end, and the guard's own record is never
+written by a call. A message template in a file with no Slack marker, and a shell write to a path
+the write reader cannot name, are outside it.
+
+</td><td>
+
+#2242
 
 </td></tr>
 </tbody>
@@ -5629,7 +5712,8 @@ worker, one worker's heartbeats an hour apart, a wait on a usage limit), is prin
 that night; each other part is `SUITE-PART-UNMEASURED`, saying why (#1662).
 
 **Test runs never read the real record.** `run-all-tests.sh` hands every suite a sleep record of
-its own that does not exist (`CLAUDE_SLEEP_RECORD`, which `hooks/lib/sleep.sh` reads when a caller
+its own that does not exist, and arming a suite's deadline does the same for a suite run on its own
+(#1729, #2156) (`CLAUDE_SLEEP_RECORD`, which `hooks/lib/sleep.sh` reads when a caller
 names no path), so a hook suite run during a night of sleep mode sees an awake Mac. Before this,
 the first suite run made while asleep (2026-10-13) failed every suite driving a quiet hook, and CI,
 with no record, passed. The suites that are about where the record is found unset it.
@@ -5682,7 +5766,7 @@ defined answer for being absent or untrustworthy.
 | `.behind-skips` | a watcher send that found itself behind and whose reconcile did not clear it | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, and the escalation that tells you once rather than on every edit | absent means sending is not stuck, which is the normal state and is said by saying nothing. It holds the count, the moment the run of skips started, the moment of the last one, when the reconcile was last attempted, and why that attempt did not clear it (#1398), which is what the notice gives as the reason; a record from before that last field reads as the general reason it always gave. Any run that gets through removes it, and so does a send that put this Mac's changes up on top of a shared commit still being tested, so the count is a measurement of the current state rather than a total that only grows. A count that will not parse is counted from zero again by the next skip, and until then status and the notice say the record could not be read, never that sending is stuck and never nothing |
 | `.watch-stale` | a change watcher running an older `claude-sync` than the one on disk, on each change it refuses because that newer copy fails its self test (#1569) | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, which says it at once | absent means the watcher is not stuck on an older copy, the normal state. It holds the moment the stretch started, how many changes it has refused, the copy the watcher runs, the copy on disk and what is wrong with it. Removed by a watcher starting, by a tick that finds the file back on the copy it runs, and by a restart. A count that will not parse is said as a record that could not be read, never as stuck and never as nothing |
 | `.watch-restarted` | a change watcher exiting to restart onto a newer `claude-sync` that passed its self test (#1569) | the watcher launchd starts next, which logs that it restarted, from which copy, and sends once | absent means the last watcher to start was not a restart, so it waits for a change before sending. Consumed on read, so it describes only the restart that just happened |
-| `.sent-over-untested` | a watcher send that put this Mac's commits up on top of a shared commit still being tested, without taking that commit in (#1398) | the next such send, to send only what is newer; the record of what this clone has sent, and the two hour unsent check, so the commits it names are not counted as waiting; and the sync that finally takes the tested commit in, which moves this clone's commits onto the one they became | absent means nothing went up that way. It names the last local commit sent and the commit it became in the shared repo, and it is believed only while the first is still in this clone's history and the second in the shared repo's; otherwise it is ignored and removed, and the clone's commits are treated as unsent, which sends again rather than missing anything |
+| `.sent-over-untested` | a watcher send that put this Mac's commits up on top of a shared commit still being tested, without taking that commit in (#1398) | the next such send, to send only what is newer; the record of what this clone has sent, and the two hour unsent check, so the commits it names are not counted as waiting; and the sync that finally takes the tested commit in, which moves this clone's commits onto the one they became; a sync that takes in only an older commit whose tests passed (#2230) points it at the new ids its rebase gave this clone's commits, or removes it when that rebase did not replay every one | absent means nothing went up that way. It names the last local commit sent and the commit it became in the shared repo, and it is believed only while the first is still in this clone's history and the second in the shared repo's; otherwise it is ignored and removed, and the clone's commits are treated as unsent, which sends again rather than missing anything |
 | `.reconcile-outcome` | the sync a send runs to catch up, when it finds itself behind or its own push is refused (#1398, #1402); never a sync typed by hand | that same send, straight after, to report what went (`sent`, `nothing to send`, or the files the hook suite gate held back, which are its lines after the first) or why nothing could, and so what the watcher logs | absent means the sync never decided what to send (it could not fetch, or stopped earlier): a behind send counts a skip with the general reason, and a send whose push was refused says nothing it cannot measure, which the watcher logs as a send that did not say what it did. It is removed before each catch up and after it is read, so it can only describe the run that wrote it |
 | `.send-refused` | the secret scan, whenever it refuses a send (#947) | a `pull` or `sync` that has to set aside the uncommitted edits that refused send left in the clone, to name the scan's finding as the cause rather than leave git's complaint as the only explanation | absent means no send is being refused by the scan, which is the normal state. It holds when the scan last refused and the files it found. The next scan that passes removes it. A time that will not parse is left out of the sentence rather than guessed |
 | `.ci-red-since` | the automatic pull, the first time the shared repo's head reads as having failed its tests | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, and the escalation that tells you once rather than on every tick | absent means the shared repo's head is not red, which is the normal state and is said by saying nothing. It holds when the run of red verdicts started, how many there have been, and, once past its window, when that was first reported, so the alert is raised on the transition rather than on every automatic tick. The clock is on the CONDITION and not on the commit: keyed per commit it would reset on every push, and a push is exactly what keeps happening while somebody is fixing the red. Any readable verdict that is not red removes it, so the count measures the current state rather than growing for ever. Unlike `.ci-unreadable-since` it never expires into applying anyway: nobody can act on an unreadable verdict, and anybody can act on a red one, so the escape here is to tell a person rather than to lower the gate. Only the last field may be empty, because a blank middle column would be read as the one after it. A count that will not parse is reported as a record that could not be read, never as nothing |

@@ -442,10 +442,12 @@ type Opts = {
   listFails?: string[]
   /**
    * The project's CLAUDE.md as git show reads it from the default branch (#2064): by ref, origin/HEAD
-   * and origin/main, each missing ref failing as git does. Neither given is a repository whose
-   * default branch carries no CLAUDE.md.
+   * and origin/main, one not given failing as git does for a ref carrying no CLAUDE.md. Neither
+   * given is a repository whose default branch carries no CLAUDE.md.
    */
   committedClaudeMd?: { head?: string; main?: string }
+  /** git show's error when the committed CLAUDE.md cannot be read at all (#2146). */
+  committedClaudeMdUnreadable?: string
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -615,8 +617,9 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'git' && a[0] === '-C' && a[2] === 'show' && /^origin\/(?:HEAD|main):CLAUDE\.md$/.test(a[3] ?? '')) {
       // Recorded here because this answer returns before the general record of runs below.
       w.runs.push(argv)
+      if (o.committedClaudeMdUnreadable !== undefined) return fail(128, o.committedClaudeMdUnreadable)
       const text = a[3]?.startsWith('origin/HEAD') ? o.committedClaudeMd?.head : o.committedClaudeMd?.main
-      return text === undefined ? fail(128, `fatal: invalid object name '${a[3]?.split(':')[0]}'.`) : ok(text)
+      return text === undefined ? fail(128, `fatal: path 'CLAUDE.md' does not exist in '${a[3]?.split(':')[0]}'`) : ok(text)
     }
     // grep -o -E <pattern> <file> over the world's files (#1287: a session's title from its transcript).
     if (cmd === 'grep' && a[0] === '-o' && a[1] === '-E') {
@@ -2685,10 +2688,15 @@ test('asleep, a hosted test host counts only when the default branch\'s CLAUDE.m
   expect(w.runs.some(r => r.join(' ') === 'git -C /repo show origin/main:CLAUDE.md')).toBe(true)
   // Only in the working copy, or a default branch whose CLAUDE.md does not list it: refused.
   expect(await go(undefined, 'n3')).toMatch(/did not open qa\.example\.dev in the browser, which is not a test host/)
-  expect(await go({ main: '# Project\n' }, 'n4')).toMatch(/which is not a test host/)
+  expect(await go({ main: '# Project\n' }, 'n4')).toMatch(/which is not a test host \(.*Sleep mode test hosts:/)
+  // A CLAUDE.md git cannot read is refused too, saying so rather than that the host is unlisted (#2146).
+  w.o.committedClaudeMdUnreadable = 'fatal: unable to read tree 1234abcd'
+  const UNKNOWN = 'which is not a local test host, and whether the project lists it as a hosted one is not known, because'
+  expect(await go({ main: LISTED }, 'n4a')).toContain(`did not open qa.example.dev in the browser, ${UNKNOWN} CLAUDE.md on origin/main in /repo could not be read (fatal: unable to read tree 1234abcd)`)
+  w.o.committedClaudeMdUnreadable = undefined
   // origin/HEAD naming no branch is no listed hosts, with no guess at main (Dan, 2026-11-03).
   w.o.defaultBranch = ''
-  expect(await go({ head: LISTED, main: LISTED }, 'n5')).toMatch(/which is not a test host/)
+  expect(await go({ head: LISTED, main: LISTED }, 'n5')).toContain(`${UNKNOWN} /repo names no default branch for origin, so its CLAUDE.md was not read`)
 })
 test("asleep, the keystroke guard's test build is not held through the noun either, though place is home (#1269)", { plugins: [deps, isItLive, guardStandIn] }, async ($, on) => {
   const { w, clock } = world(on)

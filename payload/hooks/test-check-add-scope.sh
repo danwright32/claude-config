@@ -570,6 +570,39 @@ allowed "#1478 control: a scoped add in bash -c is allowed"
 run "echo \"bash -c 'git add -A'\""
 allowed "#1478 control: a wrapped add only echoed is no add"
 
+# A command that stages nothing is not an add because the word add is somewhere in it
+# (claude-config#2078). Beside a wrapper nobody can read into (a script file run, a shell or eval
+# whose command is a variable), any bare `add` in the text used to count, so a `git worktree add`
+# chained with a script, and a search whose quoted words held "git worktree add", were refused
+# with the override as the only way through. The add has to be git's own subcommand.
+run "git fetch && git -C $REPO worktree add -b wt-2078 $FIX/wt-2078 main"
+allowed "#2078 a worktree add chained after a fetch stages nothing"
+run "git fetch && git -C $REPO worktree add -b wt-2078 $FIX/wt-2078 main && bash $FIX/setup.sh"
+allowed "#2078 and nor does one chained with a script run"
+run "bash $FIX/milestone-candidates.sh --like \"Stop the add scope guard refusing git worktree add\""
+allowed "#2078 a search whose quoted words hold git worktree add stages nothing"
+run "cd $REPO && bash x/milestone-candidates.sh --like \"git worktree add\""
+allowed "#2078 and nor does one after a cd"
+run "git -C $REPO remote add up https://example.invalid/x.git && bash $FIX/setup.sh"
+allowed "#2078 a remote add beside a script run stages nothing"
+# Every real staging form is still caught, the forms git takes options in front of add included.
+for c in "git -C $REPO add -A" "git -c core.x=1 add -A" "git --git-dir=$REPO/.git --work-tree=$REPO add -A" \
+         "git --git-dir $REPO/.git add ." "rtk git -C $REPO add --all" "git fetch && git add ." \
+         "cd $REPO && git add -A" "git -C $REPO worktree add -b w $FIX/w main && git -C $REPO add -A" \
+         "sh -c 'git -C $REPO add -A'" "bash -c \"cd $REPO && git -c x=1 add .\""; do
+  run "$c"
+  refused "#2078 an unscoped add is still refused: $c"
+done
+# And beside a wrapper nobody can read into, an add the text still names, however it is named.
+for c in "CMD=\"git add -A\"; bash -c \"\$CMD\"" "CMD='git -C $REPO add -A'; eval \"\$CMD\"" \
+         "git fetch && bash $FIX/wrapper.sh add -A" "CMD=\"git \$SUB -A\"; bash -c \"\$CMD\" --label \"stage then add\"" \
+         "SUB=add; bash -c \"\$CMD\"; git log --grep \"fix the add\"" \
+         "bash $FIX/x.sh --like \"git add -A\"" "bash $FIX/x.sh --like \"git -c k=v add .\"" \
+         "git worktree add $FIX/w main && CMD=\"git add -A\"; eval \"\$CMD\""; do
+  run "$c"
+  refused "#2078 an add beside an unreadable wrapper is still refused: $c"
+done
+
 run "git add ."
 refused "a bare dot is refused the same way"
 run "git add --all"
