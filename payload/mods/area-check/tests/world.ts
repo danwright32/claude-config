@@ -6,6 +6,7 @@ import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { DEADLINE_MS, DECIDE_TOOL } from '../hooks/rules.ts'
+import { READ_SCRIPT, ROTATE_SCRIPT } from '../hooks/prline.ts'
 
 // The world the area check's tests run in, shared by every test file: mod-kit, the session
 // registry and scope modes standing in, and the commands the mod runs answered here.
@@ -73,7 +74,8 @@ export const scope: { name: string; register: Register } = {
 export const KIT = { plugins: [deps, scope] }
 
 export const HOME = '/Users/dan'
-export const LOG = `${HOME}/.claude-area-check/log.jsonl`
+export const DIR = `${HOME}/.claude-area-check`
+export const LOG = `${DIR}/log.jsonl`
 export const ERRORS = `${HOME}/.claude-area-check/errors.jsonl`
 export const T0 = Date.UTC(2026, 9, 22, 15, 0, 0)
 export const APP = '/w/app'
@@ -121,11 +123,17 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     numstat?: string
     sha: string
     goal: string | null
-    // The log as grep finds it (#1510): missing, unreadable, or its lines beside those the mod wrote.
+    // The log as the read finds it (#1510): missing, unreadable, or its lines beside those the mod wrote.
     log?: 'missing' | 'unreadable'
-    // The engine cut the bounded read of the log short (process.run's isStdoutTruncated).
+    // The engine cut the read of the log short (process.run's isStdoutTruncated).
     logTruncated?: boolean
     seeded: string[]
+    // The rotated files (#2143), by their names in rotated/: <stamp>.decisions.jsonl and <stamp>.rotating.
+    rotated: Record<string, string[]>
+    // One of them the read cannot open, by its name.
+    rotatedUnreadable?: string
+    // The rotation failing, with these words on stderr.
+    rotateFails?: string
     // The merge base each ref has with origin/main; a ref absent here cannot be read.
     bases: Record<string, string>
     // GitHub's answer to gh pr view, by its words after `gh pr view`.
@@ -133,6 +141,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     unreadableFiles: string[]
   } = {
     seeded: [],
+    rotated: {},
     bases: { HEAD: 'mb123' },
     prView: () => ({ exitCode: 1, stdout: '', stderr: 'no pull requests found' }),
     unreadableFiles: [],
@@ -250,16 +259,45 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     if (argv[0] === '__sessions') return answer(ok(JSON.stringify({ open: [{ sessionId: 's1', transcriptPath: '/t/s1.jsonl' }], closed: [], unreadable: [], selfId: 's1' })))
     ran.push(line)
     if (typeof timeoutMs === 'number') timeouts.push(timeoutMs)
-    // The bounded read of the log (#1510): grep for the two marks, then the last argv[7] bytes.
-    if (argv[0] === '/bin/sh' && String(argv[2]).includes('grep -a -F') && argv[6] === LOG) {
-      if (ctl.log === 'missing') return answer({ exitCode: 2, stdout: '', stderr: `grep: ${LOG}: No such file or directory` })
-      if (ctl.log === 'unreadable') return answer({ exitCode: 2, stdout: '', stderr: `grep: ${LOG}: Permission denied` })
-      const marks = [argv[4] as string, argv[5] as string]
-      const lines = [...(appended[LOG] ?? '').split('\n'), ...ctl.seeded].filter(l => l && marks.some(m => l.includes(m)))
-      if (!lines.length) return answer({ exitCode: 1, stdout: '', stderr: '' })
-      const out = (lines.join('\n') + '\n').slice(-Number(argv[7]))
-      if (ctl.logTruncated) return { value: { exitCode: 0, stdout: out.slice(0, 100), stderr: '', isStdoutTruncated: true, isStderrTruncated: false } } as never
-      return answer(ok(out))
+    // The read of one branch's decisions (#2143): the decision files, any .rotating file, then the
+    // log, filtered as READ_SCRIPT's awk filters them (the repo suite proves the real script).
+    if (argv[0] === '/bin/sh' && argv[2] === READ_SCRIPT && argv[4] === DIR) {
+      const [repo, branch, m1, m2] = [argv[5] as string, argv[6] as string, argv[7] as string, argv[8] as string]
+      const names = Object.keys(ctl.rotated)
+      const rotated = [...names.filter(n => n.endsWith('.decisions.jsonl')).sort(), ...names.filter(n => n.endsWith('.rotating')).sort()]
+      if (ctl.log === 'missing' && !rotated.length) return answer({ exitCode: 2, stdout: '', stderr: `${DIR}/log.jsonl: No such file or directory` })
+      if (ctl.rotatedUnreadable) return answer({ exitCode: 2, stdout: '', stderr: `${DIR}/rotated/${ctl.rotatedUnreadable}: Permission denied` })
+      if (ctl.log === 'unreadable') return answer({ exitCode: 2, stdout: '', stderr: `${LOG}: Permission denied` })
+      const lines = [...rotated.flatMap(n => ctl.rotated[n] as string[]), ...(ctl.log === 'missing' ? [] : [...(appended[LOG] ?? '').split('\n'), ...ctl.seeded])]
+      const out: string[] = []
+      let n = 0
+      for (const l of lines) {
+        if (!l || !(l.includes(m1) || l.includes(m2))) continue
+        if (!l.endsWith('}')) {
+          out.push(`cut ${l}`)
+          continue
+        }
+        if (!l.toLowerCase().includes(repo)) continue
+        n++
+        if (branch !== '' && l.includes(branch)) out.push(`line ${l}`)
+      }
+      const text = [...out, `repo ${n}`].join('\n') + '\n'
+      if (ctl.logTruncated) return { value: { exitCode: 0, stdout: text.slice(0, 100), stderr: '', isStdoutTruncated: true, isStderrTruncated: false } } as never
+      return answer(ok(text))
+    }
+    // The rotation at session start (#2143): the log moved whole into rotated/<stamp>.rotating once
+    // over argv[6] bytes. Settling is not faked; tests/test-area-check-log-rotation.sh proves it.
+    if (argv[0] === '/bin/sh' && argv[2] === ROTATE_SCRIPT && argv[4] === DIR) {
+      if (ctl.rotateFails) return answer({ exitCode: 1, stdout: '', stderr: ctl.rotateFails })
+      const lines = [...(appended[LOG] ?? '').split('\n').filter(Boolean), ...ctl.seeded]
+      const utf8 = new TextEncoder()
+      const bytes = lines.reduce((s, l) => s + utf8.encode(l).length + 1, 0)
+      if (bytes > Number(argv[6])) {
+        ctl.rotated[`${argv[5]}.rotating`] = lines
+        appended[LOG] = ''
+        ctl.seeded.splice(0)
+      }
+      return answer(ok(''))
     }
     if (argv[0] === '/bin/sh') {
       if (ctl.logFails && argv[argv.length - 1] === LOG) return answer({ exitCode: 1, stdout: '', stderr: 'No space left on device' })

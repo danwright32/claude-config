@@ -763,6 +763,20 @@ export const askInstruction = (id: string, files: string[], guessed: string[] = 
 }
 
 /**
+ * What Claude is told first when a shell command writes to a memory index whose one line a For good
+ * covers, but is not read as one that only appends text it spells out (#2181): the refusal alone read
+ * as though Dan had approved nothing. It names the forms shellAppended reads, and says a read of the
+ * file goes in a call of its own. `covers` are the memory files whose line may be added, `index` the
+ * index as Dan reads it. It claims only what was measured: the command was not read as such an append.
+ */
+export const notAnAppendNote = (covers: readonly { name: string; files: readonly string[] }[], index: string): string =>
+  `This command was not read as one that only appends the line linking ${covers.map(c => c.name).join(' or ')} to ${index}, ` +
+  `which Dan's For good on saving ${covers.flatMap(c => c.files).join(', ')} lets through without asking him, so it was not let through. ` +
+  `To add just that line, send the append as a command of its own, with nothing before or after it: ` +
+  `printf '%s\\n' '<the line>' >> ${index}, echo '<the line>' >> ${index}, or cat >> ${index} fed a quoted heredoc, or add it with Edit; ` +
+  `read the file back in a separate call. Only if it has to do more than add that line:`
+
+/**
  * The rule Dan kept for this session only, from the question Claude asked: the plain words after the
  * file it names, without the question mark; the whole question when the file does not lead it.
  */

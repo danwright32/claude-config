@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { browserRefusal, isTestHost, listedHosts, navigateHost, tabsAfter, type Browser, type BrowserTabs } from '../hooks/browser.ts'
+import { browserRefusal, committedHosts, isTestHost, listedHosts, navigateHost, tabsAfter, type Browser, type BrowserTabs } from '../hooks/browser.ts'
 
 // Sleep mode lets a session check its own work in Chrome (#2064): in a tab it created, on a test
 // host. These are the pure rules; overnight.test.ts proves overnightRefusal hands Chrome calls to
@@ -42,6 +42,22 @@ describe("the project's list of hosted test hosts", () => {
     expect(listedHosts('Sleep mode test hosts:\n')).toEqual([])
     expect(listedHosts('Some sentence mentions Sleep mode test hosts: qa.example.dev in passing')).toEqual([])
   })
+  // #2146: git show's answer for the default branch's CLAUDE.md, as git words each case.
+  const shown = (exitCode: number, stdout: string, stderr = '') => ({ exitCode, stdout, stderr })
+  test('a file the default branch carries gives the hosts it lists, or none', () => {
+    expect(committedHosts('origin/main', '/repo', shown(0, 'Sleep mode test hosts: qa.example.dev\n'))).toEqual(['qa.example.dev'])
+    expect(committedHosts('origin/main', '/repo', shown(0, '# Project\n'))).toEqual([])
+  })
+  test('a default branch carrying no CLAUDE.md lists nothing, whether or not the working copy has one', () => {
+    expect(committedHosts('origin/main', '/repo', shown(128, '', "fatal: path 'CLAUDE.md' does not exist in 'origin/main'\n"))).toEqual([])
+    expect(committedHosts('origin/main', '/repo', shown(128, '', "fatal: path 'CLAUDE.md' exists on disk, but not in 'origin/main'\n"))).toEqual([])
+  })
+  test('a file git cannot read is unreadable, naming the file and git\'s reason, never an empty list', () => {
+    expect(committedHosts('origin/main', '/repo', shown(128, '', "fatal: invalid object name 'origin/main'.\n"))).toEqual({
+      unreadable: "CLAUDE.md on origin/main in /repo could not be read (fatal: invalid object name 'origin/main'.)",
+    })
+    expect(committedHosts('origin/dev', '/r', shown(-1, '', ''))).toEqual({ unreadable: 'CLAUDE.md on origin/dev in /r could not be read (git show exited -1 and said nothing)' })
+  })
 })
 
 describe('where a navigate goes', () => {
@@ -79,6 +95,18 @@ describe('the Chrome tools, one by one', () => {
     expect(refuse('navigate', { tabId: 7, url: 'back' }, own({ 7: 'localhost' }))).toMatch(/^go back in the browser/)
     expect(refuse('navigate', { tabId: 7, url: 'forward' }, own({ 7: 'localhost' }))).toMatch(/^go forward in the browser/)
     expect(refuse('navigate', { tabId: 7, url: 'javascript:alert(1)' }, own({ 7: 'localhost' }))).toMatch(/^open javascript:alert\(1\) in the browser, which is not a web address/)
+  })
+  // #2146: a list that could not be read refuses exactly what an empty one does, saying why.
+  test('with the list unreadable, a hosted host is refused as not known, and a local one still runs', () => {
+    const why = 'CLAUDE.md on origin/main in /repo could not be read (fatal: bad tree)'
+    const unread: Browser = { tabs: tabs({ 7: 'qa.example.dev' }), listed: { unreadable: why } }
+    const UNKNOWN = `which is not a local test host, and whether the project lists it as a hosted one is not known, because ${why}`
+    expect(refuse('navigate', { tabId: 7, url: 'https://qa.example.dev/' }, unread)).toBe(`open qa.example.dev in the browser, ${UNKNOWN}`)
+    expect(refuse('read_page', { tabId: 7 }, unread)).toBe(`use ${C}read_page on tab 7, whose page is on qa.example.dev, ${UNKNOWN}`)
+    expect(refuse('navigate', { tabId: 7, url: 'localhost:3000' }, unread)).toBeUndefined()
+    expect(refuse('navigate', { tabId: 7, url: 'https://qa.example.test/' }, unread)).toBeUndefined()
+    expect(isTestHost('qa.example.dev', { unreadable: why })).toBe(false)
+    expect(isTestHost('localhost', { unreadable: why })).toBe(true)
   })
   test('reading, clicking and typing run in an own tab whose page is on a test host', () => {
     for (const t of ['computer', 'read_page', 'find', 'form_input', 'get_page_text', 'javascript_tool', 'read_console_messages', 'read_network_requests', 'resize_window', 'upload_image'])

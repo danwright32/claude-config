@@ -5,19 +5,25 @@ import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import type { ModKitCommand, ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import {
-  LOG_READ_BYTES,
+  MARKS,
+  READ_SCRIPT,
+  ROTATE_BYTES,
+  ROTATE_SCRIPT,
+  SETTLE_MINUTES,
   bodyUnreadableRefusal,
   bodyUnresolvedRefusal,
+  branchNeedle,
   inRepo,
-  keptOf,
   logUnreadableRefusal,
   malformedDim,
   missingFrom,
   missingRefusal,
   noBodyRefusal,
   onBranch,
-  readDecisions,
-  type PrDecision,
+  readOf,
+  repoNeedle,
+  rotationStamp,
+  type LogRead,
 } from './prline.ts'
 import {
   DEADLINE_MS,
@@ -346,7 +352,7 @@ const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? pat
 
 // Its own failure: counted, kept in the error file, said once a session. Every step is caught on its
 // own, so a failure here can never reach the call (L561, L95). `kept` says what it means for the edit.
-const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'shell' | 'command' = 'unchecked') => {
+const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'shell' | 'command' | 'rotation' = 'unchecked') => {
   const error = msg(err)
   let n = 1
   try {
@@ -364,7 +370,9 @@ const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unc
   try {
     const rel = relTo(path, await $.session.cwd())
     $.ui.log(
-      kept === 'shell'
+      kept === 'rotation'
+        ? `The area check could not rotate its log (${error}); nothing was lost, and the error is kept in ~/${DIR}/${ERRORS}.`
+        : kept === 'shell'
         ? `The area check could not read what a shell command writes (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
         : kept === 'command'
         ? `The area check could not check the pull request command (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
@@ -792,13 +800,12 @@ const warm = async ($: EngineInterface) => {
 //
 // gh pr create, gh pr edit given a description, and gh pr merge (by itself or through the merge
 // helper, --auto included) are refused while the description lacks a line for a file decided on the
-// branch they act on, with the lines to paste (prline.ts holds the rules and the words). The log is
-// read through a bounded grep, once per Bash call; a log that cannot be read refuses, never reads
-// as no decisions. A check that cannot be made for want of a fact the command does not depend on
+// branch they act on, with the lines to paste (prline.ts holds the rules and the words). The log
+// and its rotated decision files are read by READ_SCRIPT, once per repository and branch in a Bash
+// call (#2143); a log that cannot be read refuses, never reads as no decisions. A check that cannot be made for want of a fact the command does not depend on
 // (no checkout, no GitHub repository, GitHub not answering for a merge) lets the command through.
 
 type PrCall = { g: ModKitGh; c: ModKitCommand; folder: string | null; viaHelper: boolean }
-type LogRead = { decisions: PrDecision[]; malformed: string[] } | { why: string }
 type PrVerdict = { deny: string } | { dim: string } | null
 
 const PR_ACTS: readonly string[] = ['create', 'edit', 'merge']
@@ -822,21 +829,28 @@ const prCallsIn = async ($: EngineInterface, command: string, cwd: string, home:
   return calls
 }
 
-// The decision lines of this Mac's log, the newest LOG_READ_BYTES of them (prline.ts). One byte more
-// is read, so a line the bound begins exactly at is kept whole and only a cut one is dropped.
-const readLog = async ($: EngineInterface, d: Deadline): Promise<LogRead> => {
+// One repository's decision lines in this Mac's log and its rotated files, those naming `branch`
+// (none when it is null, for the count alone), with how many name the repository (prline.ts).
+const readLog = async ($: EngineInterface, d: Deadline, repo: string, branch: string | null): Promise<LogRead> => {
   const home = await homeOf($)
   if (!home) throw new Error('HOME is not set, so the log cannot be found')
   const ms = await left($, d)
   if (ms <= 0) return { why: LATE }
-  const r = await $.process.run(
-    ['/bin/sh', '-c', 'set -o pipefail; grep -a -F -e "$1" -e "$2" -- "$3" | tail -c "$4"', MOD, '"kind":"decided"', '"applied":', `${home}/${DIR}/${LOG}`, String(LOG_READ_BYTES + 1)],
-    { timeoutMs: ms },
-  )
+  const r = await $.process.run(['/bin/sh', '-c', READ_SCRIPT, MOD, `${home}/${DIR}`, repoNeedle(repo), branch === null ? '' : branchNeedle(branch), ...MARKS], { timeoutMs: ms })
   if (r.isStdoutTruncated) return { why: 'its decisions were more than could be read whole' }
-  if (r.exitCode === 1) return { decisions: [], malformed: [] }
-  if (r.exitCode !== 0) return { why: firstLine(r.stderr) || `grep exited ${r.exitCode}` }
-  return readDecisions(keptOf(r.stdout, LOG_READ_BYTES))
+  if (r.exitCode !== 0) return { why: firstLine(r.stderr) || `its read exited ${r.exitCode}` }
+  return readOf(r.stdout)
+}
+
+// The log rotated and any rotated log settled, at session start (prline.ts). Its failure loses
+// nothing: the log stays where it was and is read as before.
+const ROTATE_MS = 30_000
+const rotate = async ($: EngineInterface) => {
+  const home = await homeOf($)
+  if (!home) throw new Error('HOME is not set, so the log cannot be found')
+  const stamp = rotationStamp(await $.clock.now(), await $.session.id())
+  const r = await $.process.run(['/bin/sh', '-c', ROTATE_SCRIPT, MOD, `${home}/${DIR}`, stamp, String(ROTATE_BYTES), String(SETTLE_MINUTES), ...MARKS], { timeoutMs: ROTATE_MS })
+  if (r.exitCode !== 0) throw new Error(firstLine(r.stderr) || `the rotation exited ${r.exitCode}`)
 }
 
 const prNumber = (s: string): string | null => /^#?(\d+)$/.exec(s)?.[1] ?? /\/pull\/(\d+)/.exec(s)?.[1] ?? null
@@ -896,7 +910,7 @@ const bodyOf = async ($: EngineInterface, call: PrCall, folder: string, home: st
   }
 }
 
-const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: () => Promise<LogRead>): Promise<PrVerdict> => {
+const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: (repo: string, branch: string | null) => Promise<LogRead>): Promise<PrVerdict> => {
   const { g } = call
   const hasBody = g.flags.some(f => BODY_TEXT.includes(f.name) || BODY_FILE.includes(f.name))
   if (g.act === 'edit' && !hasBody) return null
@@ -911,29 +925,36 @@ const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: () =>
   const repo = g.named ?? own
   if (!repo) return null
   const verb = call.viaHelper ? 'merge through merge-when-ready.sh' : `gh pr ${g.act}`
-  const read = await log()
-  if ('why' in read) return { deny: logUnreadableRefusal(verb, read.why) }
-  const here = inRepo(read.decisions, repo)
-  if (here.length === 0) return null
   const selector = g.positionals[0]
+  // The branch is known here for a create and an edit naming a branch or none; a merge and an edit
+  // by number ask GitHub, and only once the log holds a decision in the repository at all.
+  const fromGitHub = g.act === 'merge' || (g.act === 'edit' && selector !== undefined && prNumber(selector) !== null)
   let branch: string | null = b.branch
   let github: Record<string, unknown> | null = null
   if (g.act === 'create') {
     const head = flagOf(g, HEAD)
     if (head && head.value !== true) branch = head.value.replace(/^[^:]*:/, '')
-  } else if (g.act === 'edit' && selector !== undefined) {
-    if (prNumber(selector) !== null) {
-      const v = await prView($, d, selector, repo, 'headRefName')
+  } else if (g.act === 'edit' && selector !== undefined && !fromGitHub) branch = selector
+  if (fromGitHub) {
+    const count = await log(repo, null)
+    if ('why' in count) return { deny: logUnreadableRefusal(verb, count.why) }
+    if (count.count === 0) return null
+    if (g.act === 'edit') {
+      const v = await prView($, d, selector as string, repo, 'headRefName')
       if ('why' in v) return { dim: `The area check could not read the branch of pull request ${selector} (${v.why}), so it let gh pr edit through unchecked.` }
       branch = v.headRefName as string
-    } else branch = selector
-  } else if (g.act === 'merge') {
-    const v = await prView($, d, selector ?? b.branch ?? '', repo, 'body,headRefName')
-    if ('why' in v) return { dim: `The area check could not read pull request ${selector ?? b.branch} on GitHub (${v.why}), so it let the ${verb} through unchecked.` }
-    github = v
-    branch = v.headRefName as string
+    } else {
+      const v = await prView($, d, selector ?? b.branch ?? '', repo, 'body,headRefName')
+      if ('why' in v) return { dim: `The area check could not read pull request ${selector ?? b.branch} on GitHub (${v.why}), so it let the ${verb} through unchecked.` }
+      github = v
+      branch = v.headRefName as string
+    }
   }
   if (!branch) return null
+  const read = await log(repo, branch)
+  if ('why' in read) return { deny: logUnreadableRefusal(verb, read.why) }
+  const here = inRepo(read.decisions, repo)
+  if (here.length === 0) return null
   const mergeBase =
     own && repo.toLowerCase() === own.toLowerCase() && b.defaultBranch
       ? await gitIn($, d, b.root, ['merge-base', branch === b.branch ? 'HEAD' : branch, `origin/${b.defaultBranch}`]).then(s => s.trim() || null).catch(() => null)
@@ -966,6 +987,12 @@ export const register: Register = on => {
     await $.tool.register({ name: 'decide', description: DECIDE_DESCRIPTION, inputSchema: DECIDE_SCHEMA, isDeferred: false })
     later($, e.cwd, async () => {
       await append($, LOG, { v: 1, kind: 'loaded', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), cwd: e.cwd, rule: RULE_VERSION })
+      // The log rotated once it is over its bound (#2143), its failure kept apart so the rest still runs.
+      try {
+        await rotate($)
+      } catch (err) {
+        await failed($, e.cwd, err, 'rotation')
+      }
       // Issue lists no edit has read for a week, and answers past their week (#1509).
       const now = await $.clock.now()
       const entries: [string, unknown][] = []
@@ -1003,15 +1030,22 @@ export const register: Register = on => {
     const command = (e as unknown as Record<string, unknown>).command
     if (typeof command !== 'string' || !/\bgh\b|merge-when-ready/.test(command)) return next(e)
     const cwd = await $.session.cwd()
-    let malformed: string[] | null = null
+    // Each repository and branch is read once per Bash call, and the lines any read could not read
+    // are said once, together.
+    const malformed = new Set<string>()
     try {
       const d: Deadline = { at: (await $.clock.now()) + DEADLINE_MS }
-      let read: Promise<LogRead> | undefined
-      const log = () => {
-        read ??= readLog($, d).then(r => {
-          if (!('why' in r)) malformed = r.malformed
-          return r
-        })
+      const reads = new Map<string, Promise<LogRead>>()
+      const log = (repo: string, branch: string | null) => {
+        const key = `${repo.toLowerCase()}\n${branch ?? ''}`
+        let read = reads.get(key)
+        if (!read) {
+          read = readLog($, d, repo, branch).then(r => {
+            if (!('why' in r)) for (const l of r.malformed) malformed.add(l)
+            return r
+          })
+          reads.set(key, read)
+        }
         return read
       }
       for (const call of await prCallsIn($, command, cwd, await homeOf($))) {
@@ -1019,8 +1053,7 @@ export const register: Register = on => {
         if (v && 'deny' in v) return { deny: v.deny }
         if (v) $.ui.log(v.dim)
       }
-      const skipped = malformed as string[] | null
-      if (skipped && skipped.length) $.ui.log(malformedDim(skipped))
+      if (malformed.size) $.ui.log(malformedDim([...malformed]))
     } catch (err) {
       await failed($, cwd, err instanceof Late ? new Error(LATE) : err, 'command')
     }
