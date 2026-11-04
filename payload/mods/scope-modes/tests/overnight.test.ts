@@ -319,6 +319,50 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     ]
     expect(await Promise.all(built.map(async c => ({ c, r: await bash(c) })))).toEqual(built.map(c => ({ c, r: runs })))
   })
+  test('code building a gh command from a bare gh, or from a list element joined later, is refused (#2225)', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    // A gh with nothing after it in its string, where the string is built while the code runs: the
+    // whole of gh's command arrives then. Every case is read before any is compared, so a failure
+    // names each case that changed.
+    const bare = [
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh ' + sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system(f'sudo gh {sub}')"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh %s' % sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh' + ' ' + sub)"`,
+      `node -e "const sub = 'x'; require('child_process').execSync('sudo gh '+sub)"`,
+    ]
+    expect(await Promise.all(bare.map(async c => ({ c, r: await bash(c) })))).toEqual(bare.map(c => ({ c, r: runs })))
+    // A gh string held as an element of a list, a tuple or an appended item, which code can join
+    // with anything later.
+    const listed = [
+      `python3 -c "import os; sub = 'x'; parts = ['sudo gh -R o/r', sub]; os.system(' '.join(parts))"`,
+      `python3 -c "import os; sub = 'x'; parts = ['sudo gh -R o/r']; os.system(' '.join(parts + [sub]))"`,
+      `python3 -c "import os; sub = 'x'; parts = ('sudo gh -R o/r', sub); os.system(' '.join(parts))"`,
+      `python3 -c "import os; sub = 'x'; parts = []; parts.append('sudo gh -R o/r'); parts.append(sub); os.system(' '.join(parts))"`,
+      `python3 -c "import os; sub = 'x'; parts = ['sudo gh', sub]; os.system(' '.join(parts))"`,
+      `python3 -c "import os; sub = 'x'; os.system(' '.join(p for p in ('sudo gh -R o/r', sub)))"`,
+      `python3 -c "import os; sub = 'x'\nfor p in ('sudo gh -R o/r', sub): os.system(p)"`,
+      `node -e "const sub = 'x'; const parts = ['sudo gh -R o/r', sub]; require('child_process').execSync(parts.join(' '))"`,
+    ]
+    expect(await Promise.all(listed.map(async c => ({ c, r: await bash(c) })))).toEqual(listed.map(c => ({ c, r: runs })))
+    // gh named by its full path after another word is the same gh, in a literal command or a built one.
+    const pathed = [
+      `python3 -c "import os; os.system('sudo /opt/homebrew/bin/gh pr merge 5')"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo /opt/homebrew/bin/gh ' + sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system('nohup /usr/local/bin/gh -R o/r ' + sub)"`,
+    ]
+    expect(await Promise.all(pathed.map(async c => ({ c, r: await bash(c) })))).toEqual(pathed.map(c => ({ c, r: runs })))
+    // Prose naming gh in a string nothing builds, including as one argument of several to a call,
+    // still runs nothing, and an apostrophe after gh in a listed string is no string's end.
+    const harmless = [
+      `python3 -c "import subprocess; print('see gh --help for the list')"`,
+      `python3 -c "import subprocess; print('see gh')"`,
+      `python3 -c "import subprocess; print('see gh --help', 'for the list')"`,
+      `python3 -c "import subprocess; x = 1; print('install gh', x)"`,
+      `python3 -c "import subprocess; notes = [\\"the token in gh's own store\\"]; print(notes)"`,
+    ]
+    expect(await Promise.all(harmless.map(async c => ({ c, r: await bash(c) })))).toEqual(harmless.map(c => ({ c, r: undefined })))
+  })
   test('a line that sources a file is judged by where gh would run, never by the word in its data (#1132)', async () => {
     // The two notes refused on 2026-10-12 and 13: a sourced helper given JSON whose text names gh.
     const refused = [
