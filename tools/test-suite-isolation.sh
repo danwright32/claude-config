@@ -136,6 +136,10 @@ writes(){
 { printf '#!/usr/bin/env bash\n'; writes; } > "$W/test-unarmed.sh"
 { printf '#!/usr/bin/env bash\n'; arm_lines; printf 'mkdir -p "$HOME/.claude/state/stray" && printf x > "$HOME/.claude/state/stray/record"\n'; } > "$W/test-stray.sh"
 { printf '#!/usr/bin/env bash\n'; arm_lines; printf 'mkdir -p "$HOME/.claude-issue-spool" && printf x > "$HOME/.claude-issue-spool/by-hand.jsonl"\nexit 3\n'; } > "$W/test-beside.sh"
+# One that stops before it writes anything, the way a suite refusing to run or crashing at its top
+# does, and one that runs to the end writing nothing (#2208).
+{ printf '#!/usr/bin/env bash\n'; arm_lines; printf 'echo "refusing to run" >&2\nexit 4\n'; } > "$W/test-crashed.sh"
+{ printf '#!/usr/bin/env bash\n'; arm_lines; printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'; } > "$W/test-quiet.sh"
 
 # The HOME the check itself is started with stands in for the real one, and must stay empty.
 mkdir -p "$W/realhome"
@@ -169,6 +173,24 @@ says "with the path itself" "~/.claude/state/stray/record" "$out"
 out="$(HOME="$W/realhome" bash "$CHECK" "$W/test-beside.sh" 2>&1)"; rc=$?
 eq "a store beside ~/.claude written by hand fails too" 1 "$rc"
 says "giving the suite's own exit status" "(the suite exited 3)" "$out"
+lacks "a suite that wrote and then failed keeps its WRITES-HOME verdict" "NOT-MEASURED" "$out"
+
+# A suite that exited non zero having written nothing was never measured: it may have stopped
+# before reaching any write, so nothing it left is a finding, and the check must not say clean or
+# exit 0 (L98, L11, #2208).
+out="$(HOME="$W/realhome" bash "$CHECK" "$W/test-crashed.sh" 2>&1)"; rc=$?
+eq "a suite that failed having written nothing means the check could not measure it (2)" 2 "$rc"
+says "and says not measured, naming the suite's exit status" "NOT-MEASURED $W/test-crashed.sh: it exited 4 having left nothing under ~/.claude" "$out"
+lacks "and never calls it clean" "clean $W/test-crashed.sh" "$out"
+# Beside a suite that wrote, the run still exits 2, because one suite was not measured at all.
+out="$(HOME="$W/realhome" bash "$CHECK" "$W/test-stray.sh" "$W/test-crashed.sh" 2>&1)"; rc=$?
+eq "a not measured suite beside one that wrote still exits 2" 2 "$rc"
+says "naming the one that wrote" "WRITES-HOME $W/test-stray.sh" "$out"
+says "and the one that was not measured" "NOT-MEASURED $W/test-crashed.sh" "$out"
+# A suite that exits 0 having written nothing is still clean.
+out="$(HOME="$W/realhome" bash "$CHECK" "$W/test-quiet.sh" 2>&1)"; rc=$?
+eq "a suite that passed having written nothing is clean (0)" 0 "$rc"
+says "and said to be clean" "clean $W/test-quiet.sh: run on its own it left nothing under ~/.claude (the suite exited 0)" "$out"
 
 out="$(HOME="$W/realhome" bash "$CHECK" "$W/test-armed.sh" "$W/no-such-suite.sh" 2>&1)"; rc=$?
 eq "a suite that is not a file means the check could not run (2), never clean" 2 "$rc"

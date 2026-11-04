@@ -2736,10 +2736,13 @@ bash tools/suite-home-writes.sh payload/hooks/test-gates-fail-closed.sh
 It runs each suite named on its own, with none of those variables set and `HOME` pointed at a
 throwaway folder, then names every file the suite left under that folder's `.claude` and the
 records kept beside it (`.claude-issue-spool` and the like). It lists paths only and never reads a
-file, and it never writes under the real `~/.claude`. It exits 0 when nothing was left, 1 naming
-the files when something was, and 2 when it could not check, and prints the suite's own exit
-status beside its verdict. It is not run on every full run: doing so costs about one full run
-again, and the runner already hands every suite the list.
+file, and it never writes under the real `~/.claude`. Each suite gets one verdict, printed with
+the suite's own exit status: `WRITES-HOME` naming the files when it left something, `clean` when
+it left nothing and exited 0, and `NOT-MEASURED` when it left nothing but exited non zero, since a
+suite that refused to run or crashed at its top writes nothing without that proving anything
+(#2208). The tool exits 0 when every suite was clean, 1 when one wrote there, and 2 when any suite
+could not be checked or was not measured. It is not run on every full run: doing so costs about
+one full run again, and the runner already hands every suite the list.
 
 The main suite on its own:
 
