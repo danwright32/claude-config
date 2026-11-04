@@ -313,6 +313,13 @@ dcs_floor() { # <path> [<name whose access time the scan itself moves>...]
     if [ -d "$hit" ] && dcs_dataless "$hit"; then
       V="unmeasured: part of it is kept only in iCloud ($rel), $why"
     elif [ -n "$(find "$hit" -maxdepth 0 -newermm "$DCS_FLOOR_REF" 2>/dev/null)" ]; then
+      # A folder changes when a file in it is made or removed, and find meets the folder first, so
+      # the file is named when one is there (the folder is not kept only in iCloud, or the branch
+      # above would have taken it, so listing it fetches nothing).
+      if [ -d "$hit" ]; then
+        n="$(find "$hit" -mindepth 1 -maxdepth 1 ! -type d -newermm "$DCS_FLOOR_REF" -print -quit 2>/dev/null)"
+        [ -z "$n" ] || rel="${n#"$p"/}"
+      fi
       V="not offerable: changed within $DCS_UNUSED_DAYS days ($rel)"
     else
       V="not offerable: opened within $DCS_UNUSED_DAYS days ($rel)"
