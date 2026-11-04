@@ -32,8 +32,16 @@ const modKit: { name: string; register: Register } = {
         clickable: async () => true,
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
-        hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
-        release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
+        // #2132: a hold on handoff's reload and its letting go, asked of the world, which keeps them
+        // in order beside each prompt sent and can refuse one as mod-kit would.
+        hold: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'hold', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
+        release: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'release', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
         account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
@@ -106,7 +114,9 @@ const issue = (state: string, updated: string, extra: object = {}) => ({ exitCod
 
 // This Mac beneath the handoff: files in memory, mv and mkdir acting on them, gh answering per
 // path as each test sets it, the clock, the session's repository, and Claude Code's own band.
-const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: string; submit?: () => void; mvFailsTo?: string; noHome?: boolean } = {}) => {
+const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: string; submit?: () => void; mvFailsTo?: string; noHome?: boolean; holdFails?: string; releaseFails?: string } = {}) => {
+  // #2132: each hold, letting go and prompt sent, in the order they happened.
+  const order: string[] = []
   const files: Record<string, string> = { ...init.files }
   const gh: Gh = { ...init.gh }
   const toasts: string[] = []
@@ -128,6 +138,12 @@ const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: s
   on('process.run', ($, e) => {
     const [cmd, ...rest] = e.argv
     const r = (exitCode: number, stdout = '', stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
+    if (cmd === '__modkit' && (rest[0] === 'hold' || rest[0] === 'release')) {
+      const fails = rest[0] === 'hold' ? init.holdFails : init.releaseFails
+      if (fails) return r(1, '', fails)
+      order.push(`${rest[0]} ${rest[1]}`)
+      return r(0)
+    }
     if (cmd === 'mkdir') return r(0)
     if (cmd === 'mv') {
       const [a, b] = rest.filter(x => !x.startsWith('-')) as [string, string]
@@ -156,6 +172,7 @@ const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: s
     return { value: { tool: `mcp__handoff__${e.name}` } } as never
   })
   on('prompt.submit', ($, e) => {
+    order.push('submit')
     init.submit?.()
     submitted.push({ text: e.text, asUser: (e.origin as { asUser?: boolean }).asUser })
     return { text: e.text }
@@ -172,7 +189,7 @@ const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: s
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { files, gh, toasts, logs, submitted, commands, tools, clock }
+  return { files, gh, toasts, logs, submitted, commands, tools, clock, order }
 }
 
 const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, clock: { settle: () => Promise<void> }, isInteractive = true) => {
@@ -473,4 +490,51 @@ test('a save whose old handoff cannot be archived is refused, and the old one is
   expect(r.result).toBeUndefined()
   expect(r.deny ?? r.text).toBe(`The handoff could not be saved: the one it replaces could not be archived (mv: rename ${CURRENT} to ${DIR}/archive/${T0}-replaced.json: Permission denied)`)
   expect(JSON.parse(w.files[CURRENT] as string).title).toBe('Continue milestone 18 design rounds')
+})
+
+// #2132: a prompt handoff sends waits until the session is idle, and a reload of handoff in that
+// time would drop it, so each one holds mod-kit's reload of handoff back until it is sent, sent or not.
+const HOUR_MS = 60 * 60_000
+const held = (id: string, what: string) => `hold ${JSON.stringify({ mod: 'handoff', id, what, ms: HOUR_MS })}`
+const letGo = (id: string) => `release ${JSON.stringify({ mod: 'handoff', id })}`
+test('/handoff and Use each hold back a reload of handoff while their prompt waits to be sent, and let go once it is (#2132)', withKit, async ($, on) => {
+  const w = world(on, { files: { [CURRENT]: saved() }, gh: { ...M18, 'repos/{owner}/{repo}/issues/615': issue('open', 'a') } })
+  await start($, w.clock)
+  await $.command.run({ command: 'handoff', args: '' } as never)
+  await w.clock.settle()
+  expect(w.order).toEqual([held('write', 'the prompt asking for the handoff'), 'submit', letGo('write')])
+  const ui = await mount($)
+  await ui.press({ key: 'handoff:use' })
+  await w.clock.settle()
+  expect(w.order.slice(3)).toEqual([held('use', 'the handoff Use sent'), 'submit', letGo('use')])
+  await ui.unmount()
+})
+
+test('a prompt that cannot be sent still lets go of its hold, and says why as before (#2132)', withKit, async ($, on) => {
+  const w = world(on, {
+    files: { [CURRENT]: saved() },
+    gh: { ...M18, 'repos/{owner}/{repo}/issues/615': issue('open', 'a') },
+    submit: () => {
+      throw new Error('the session is closing')
+    },
+  })
+  await start($, w.clock)
+  await $.command.run({ command: 'handoff', args: '' } as never)
+  await w.clock.settle()
+  const ui = await mount($)
+  await ui.press({ key: 'handoff:use' })
+  await w.clock.settle()
+  expect(w.order).toEqual([held('write', 'the prompt asking for the handoff'), 'submit', letGo('write'), held('use', 'the handoff Use sent'), 'submit', letGo('use')])
+  expect(w.toasts).toHaveLength(2)
+  await ui.unmount()
+})
+
+test('a hold mod-kit refuses is said in the debug log, and the prompt is sent as before (#2132)', withKit, async ($, on) => {
+  const w = world(on, { holdFails: 'mod-kit is not loaded' })
+  await start($, w.clock)
+  await $.command.run({ command: 'handoff', args: '' } as never)
+  await w.clock.settle()
+  expect(w.order).toEqual(['submit'])
+  expect(w.submitted).toHaveLength(1)
+  expect(w.logs).toEqual(["handoff: could not hold back a reload while it waits on the prompt asking for the handoff, so one now would drop that wait (mod-kit is not loaded)"])
 })

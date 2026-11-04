@@ -23,8 +23,16 @@ const deps: { name: string; register: Register } = {
           clickable: async () => true,
           isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
           typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
-          hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
-          release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
+          // #2132: a hold on job-watcher's reload and its letting go, asked of the world, which keeps
+          // them in order beside each look and wake and can refuse one as mod-kit would.
+          hold: async (input: unknown) => {
+            const r = await built.process.run(['__modkit', 'hold', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+          },
+          release: async (input: unknown) => {
+            const r = await built.process.run(['__modkit', 'release', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+          },
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
           login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
           account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
@@ -204,6 +212,8 @@ type World = {
    * (seconds), or unreadable; the test may change them as it goes.
    */
   logs?: Record<string, { size: number; mtime?: number; unreadable?: boolean }>
+  /** #2132: mod-kit refuses the hold on job-watcher's reload with this, as an older or missing mod-kit would. */
+  holdFails?: string
 }
 const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
@@ -244,6 +254,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     answerStops: (_how: 'ok' | 'refused') => undefined as void,
     /** Settles once the world holds the next call that never returns (#1297): see sendHanging. */
     nextHang: () => Promise.resolve() as Promise<void>,
+    /** #2132: each hold on job-watcher's reload, its letting go, each look's stat and each submit, in order. */
+    held: [] as string[],
   }
   const heldStops: ((how: 'ok' | 'refused') => void)[] = []
   const hangWaiters: (() => void)[] = []
@@ -259,6 +271,11 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   const byGroup = (g: number) => list.findIndex((_, i) => groupOf(i) === g)
   on('process.run', async ($, e) => {
     const [cmd, ...args] = e.argv
+    if (cmd === '__modkit' && (args[0] === 'hold' || args[0] === 'release')) {
+      if (args[0] === 'hold' && o.holdFails) return res(1, '', o.holdFails)
+      w.held.push(`${args[0]} ${args[1]}`)
+      return ok('')
+    }
     // #1976: mod-kit's write reader, read with its copy, as the stand-in above asks for it.
     if (cmd === '__writes') {
       const input = JSON.parse(args[0] ?? '{}') as { command: string; cwd: string; home: string }
@@ -381,6 +398,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       return at === undefined ? refusedStat('ENOENT') : statOf(0, at, 'dir')
     }
     w.stats += 1
+    w.held.push('stat')
     const late = list.find(j => j.slow?.cmd === 'stat' && (list.length === 1 || path === outOf(`job${list.indexOf(j) + 1}`)))
     if (late?.slow && o.clock) await o.clock.sleep(late.slow.ms)
     const j = list[byPath(path)]
@@ -420,7 +438,10 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   on('session.cwd', () => ({ value: '/repo' }) as never)
   on('prompt.submit', ($, e) => {
     // A notice from Claude Code (the tests of #706) is not one the watcher submitted.
-    if (e.origin.kind !== 'task-notification') w.submitted.push({ text: e.text, origin: e.origin })
+    if (e.origin.kind !== 'task-notification') {
+      w.submitted.push({ text: e.text, origin: e.origin })
+      w.held.push('submit')
+    }
     if (o.submit === 'throws') throw new Error('the prompt queue is closed')
     if (o.submit === 'drop') return { drop: 'held while Dan is away' } as never
     // A submit that never answers while its test runs: the turn it asks for never starts. Entered
@@ -2858,6 +2879,81 @@ test('a wake that is dropped is said once and carried on the next tool call inst
   expect(quietSaid(w).length).toBe(1)
   await turnStarts($)
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain(HUNG)
+})
+
+// #2132: a wake's prompt waits for the session to be idle, and mod-kit's reload of job-watcher in
+// that time would drop it with the notices already taken off the queue, so the wait holds that
+// reload back until the submit answers, held or thrown.
+const WAKE_HELD = `hold ${JSON.stringify({ mod: 'job-watcher', id: 'wake', what: 'the prompt waking this session about a quiet background agent', ms: 60 * MIN })}`
+const WAKE_LET_GO = `release ${JSON.stringify({ mod: 'job-watcher', id: 'wake' })}`
+const wakeHeld = (w: { held: string[] }) => w.held.filter(h => h === 'submit' || h.includes('"id":"wake"'))
+test('a wake holds back a reload of job-watcher while its prompt waits, and lets go when it is entered (#2132)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await sendHanging($, w)
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  expect(wakeHeld(w)).toEqual([WAKE_HELD, 'submit', WAKE_LET_GO])
+})
+
+test('a wake whose submit throws still lets go of its hold (#2132)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], submit: 'throws' })
+  await start($)
+  await sendHanging($, w)
+  await clock.advance(21 * MIN)
+  expect(wakeHeld(w)).toEqual([WAKE_HELD, 'submit', WAKE_LET_GO])
+  expect(w.logs.filter(l => l.includes('could not wake'))).toEqual([expect.stringContaining('Claude is told on its next tool call instead')])
+})
+
+test('a hold mod-kit refuses is said in the debug log, and the wake is still submitted (#2132)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], holdFails: 'mod-kit is not loaded' })
+  await start($)
+  await sendHanging($, w)
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  expect(wakeHeld(w)).toEqual(['submit'])
+  expect(w.debug).toContain('job-watcher: could not hold back a reload while it waits on the prompt waking this session about a quiet background agent, so one now would drop that wait (mod-kit is not loaded)')
+})
+
+// #2132: a look can wait on a stop Claude Code has not answered, and mod-kit's reload of job-watcher
+// in that time would drop what the look then says of it, so each look holds that reload back for at
+// most its own ten minute deadline, and lets go when it finishes or is given up.
+const LOOK_HELD = `hold ${JSON.stringify({ mod: 'job-watcher', id: 'look', what: 'its look at the background jobs', ms: 10 * MIN })}`
+const LOOK_LET_GO = `release ${JSON.stringify({ mod: 'job-watcher', id: 'look' })}`
+const lookHeld = (w: { held: string[] }) => w.held.filter(h => h === 'stat' || h.includes('"id":"look"'))
+test("each minute's look holds back a reload of job-watcher while it runs, and lets go when it finishes (#2132)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(w.stats).toBe(1)
+  expect(lookHeld(w)).toEqual([LOOK_HELD, 'stat', LOOK_LET_GO])
+})
+
+test('a look given up lets go of its hold at its deadline, though what it waits on never answers (#2132)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18, slow: { cmd: 'stat', ms: 25 * MIN } }, { clock })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(lookHeld(w)).toEqual([LOOK_HELD, 'stat'])
+  await clock.advance(10 * MIN)
+  expect(lookHeld(w).slice(0, 3)).toEqual([LOOK_HELD, 'stat', LOOK_LET_GO])
+})
+
+test('a look hold mod-kit refuses is said in the debug log, and the look runs as before (#2132)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18 }, { holdFails: 'mod-kit is not loaded' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(w.stats).toBe(1)
+  expect(lookHeld(w)).toEqual(['stat'])
+  expect(w.debug).toContain('job-watcher: could not hold back a reload while it waits on its look at the background jobs, so one now would drop that wait (mod-kit is not loaded)')
 })
 
 test('a wake that throws is said once and carried on the next tool call instead (#1234)', withDeps, async ($, on) => {

@@ -138,5 +138,25 @@ check "(control) the same clone with a clean file in it passes: $out_one" [ "$ou
 # same from every mktemp; this names the one this scan added).
 check "the scan's scratch name is one the reaper sweeps" has "$(grep -E '^SYNC_SCRATCH_NAMES=' "$SCRIPT")" "claude-sync-work-names."
 
+# ---------------------------------------------------------------- 4. the real project list reads
+# The publish gate and the message checks read the work MacBook's project list from the global
+# CLAUDE.md (claude-config#2184), and refuse every public text when it cannot be read. So an edit to
+# payload/CLAUDE.md that breaks that block is caught here, before it is installed, rather than by
+# every gh pr create on every Mac. Only the count is printed: the names are work repositories.
+proj_out="$(python3 -I -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("wn", sys.argv[1])
+wn = importlib.util.module_from_spec(spec); spec.loader.exec_module(wn)
+try:
+    names = wn.work_mac_projects()
+except wn.CannotTell as e:
+    print("cannot tell: %s" % e); sys.exit(2)
+print("projects=%d" % len(names))
+' "$SCAN" 2>&1)"; proj_rc=$?
+check "the work MacBook's project list in payload/CLAUDE.md reads (exit $proj_rc): ${proj_out:0:300}" [ "$proj_rc" -eq 0 ]
+proj_n=0
+case "$proj_out" in projects=[0-9]*) proj_n="${proj_out#projects=}" ;; esac
+check "and lists at least one project: ${proj_out:0:300}" [ "$proj_n" -ge 1 ]
+
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
