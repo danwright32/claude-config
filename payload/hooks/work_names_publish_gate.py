@@ -16,16 +16,20 @@ command (so a heredoc fed body is read) and every body file it names that can be
 THE NAMES. Read live on every judged command and never written anywhere, so no file on disk lists
 them: the work repository list (repos.json in the repo digest, the list lib/lesson-fanout.sh reads,
 through each signed in account until one can read it), the owners and repositories in this Mac's dev
-update registry (lib/dev-update-registry.js, a file each Mac keeps for itself), and the two built in
+update registry (lib/dev-update-registry.js, a file each Mac keeps for itself), every project on the
+work MacBook's project list in the global CLAUDE.md (claude-config#2184), and the two built in
 organisation hashes of lib/work-names.py. The match is that scanner's own rule (its Matcher): a
-whole hyphenated run inside a token, in any letter case. Repository names are matched here although
+whole hyphenated run inside a token, in any letter case, and an organisation's login without its
+hyphens written as a web or email domain (after an @, or before a dot and a top level domain; as a
+bare word it is prose, #2184). Repository names are matched here although
 #1568 left them out of the file scan on purpose; this departs from it for public text only (Dan,
 2026-11-02, after a repository name leaked), and the file scan and the send scan are unchanged. The
 list is read by work_repo_names in lib/work-names.py, the one reader the commit message checks
 (work-names.py --work-repos, claude-config#2111) use as well.
 
 CANNOT TELL IS REFUSED (L98, L345): the visibility unreadable under every account, the list
-unreadable, empty or of the wrong shape, the registry unreadable, a body file the command writes from
+unreadable, empty or of the wrong shape, the registry unreadable, the project list unreadable or
+holding no work MacBook project, a body file the command writes from
 something it does not show, a body file a gh api call names that cannot be read, a command that
 cannot be read but names a judged gh command, and the time budget spent. No registry at all is fine.
 
@@ -34,7 +38,8 @@ text the name is in; it is never written to a file or a log.
 
 No override: the remedy is always open, rewrite the text.
 
-Seams (tests): WORK_NAMES_EXTRA_HASHES and WORK_NAMES_REGISTRY_READER, read by lib/work-names.py;
+Seams (tests): WORK_NAMES_EXTRA_HASHES, WORK_NAMES_REGISTRY_READER and WORK_NAMES_PROJECT_LIST,
+read by lib/work-names.py;
 WN_PUBLISH_BUDGET_SECONDS, the whole run's time for GitHub (35, against a hook timeout of 45).
 """
 import importlib.util
@@ -123,7 +128,7 @@ def find(text, matcher, odd):
         hit = matcher.match(token)
         if hit:
             return hit[1]
-    return wn.odd_hit(low, odd)
+    return wn.odd_hit(low, odd) or matcher.domain(low)
 
 
 def _env_value(name, envs, place):

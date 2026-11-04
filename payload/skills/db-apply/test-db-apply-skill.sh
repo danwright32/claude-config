@@ -135,6 +135,81 @@ out="$(cd "$W4" && PATH="$TMP/bin-with" /bin/bash -c "$psql_line" 2>&1)"; rc=$?
 check "with no env file, psql is never started and the refusal names the missing file" \
   "$([ "$rc" -ne 0 ] && [ ! -f "$TMP/psql-args" ] && grep -qi 'no .env.local here' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
 
+# ---- 5. linked projects write through supabase db query, ahead of psql (claude-config#2144) ----
+# On the work MacBook a hook refuses every command that reads .env.local, so the psql path can never
+# run there and the session fell through to handing Dan SQL. The linked path needs no secret in the
+# command at all, so it must come first, must not read an env file, and, because it reports no row
+# count for a write, must be paired with a guard block that rolls back on a wrong count.
+linked_line="$(grep -m 1 -F 'supabase db query --linked --yes -f' <<< "$CODE")"
+check "there is a supabase db query --linked --yes -f command to test" \
+  "$([ -n "$linked_line" ] && echo ok || echo "no linked db query command in a block")"
+first_linked="$(grep -m 1 -n -F 'supabase db query --linked --yes -f' "$SKILL" | cut -d: -f1)"
+psql_cmd_at="$(grep -m 1 -n -E 'psql "\$url"' "$SKILL" | cut -d: -f1)"
+check "the linked path is offered before the psql command" \
+  "$([ -n "$first_linked" ] && [ -n "$psql_cmd_at" ] && [ "$first_linked" -lt "$psql_cmd_at" ] && echo ok || echo "linked at line ${first_linked:-none}, psql at ${psql_cmd_at:-none}")"
+check "the linked command reads no env file" \
+  "$(grep -qE '\.env|\.dev\.vars' <<< "$linked_line" && echo "the line is: $linked_line" || echo ok)"
+
+# The guard: one fenced block that wraps the write in do $$ ... end $$ and refuses a wrong count.
+guard_block="$(awk '
+  /^[[:space:]]*```/ {
+    if (inside && buf ~ /get diagnostics/ && buf ~ /raise exception/) { printf "%s", buf; exit }
+    inside = !inside; buf = ""; next
+  }
+  inside { sub(/^[[:space:]]+/, ""); buf = buf $0 "\n" }' "$SKILL")"
+check "a documented block holds both get diagnostics and raise exception" \
+  "$([ -n "$guard_block" ] && echo ok || echo "no fenced block holds both")"
+check "and that block wraps the write in do \$\$ ... end \$\$ and reads row_count" \
+  "$(grep -qF 'do $$' <<< "$guard_block" && grep -qF 'end $$;' <<< "$guard_block" && grep -qF 'row_count' <<< "$guard_block" && echo ok || echo "block is: $guard_block")"
+check "and it refuses any count other than the expected one, not only zero" \
+  "$(grep -qE 'if n <> [0-9]+ then' <<< "$guard_block" && echo ok || echo "block is: $guard_block")"
+guard_at="$(grep -m 1 -n -F 'get diagnostics' "$SKILL" | cut -d: -f1)"
+check "the guard block sits with the linked path, ahead of psql" \
+  "$([ -n "$guard_at" ] && [ -n "$psql_cmd_at" ] && [ "$guard_at" -lt "$psql_cmd_at" ] && echo ok || echo "guard at line ${guard_at:-none}, psql at ${psql_cmd_at:-none}")"
+check "the skill says which supabase CLI version the command was checked against" \
+  "$(grep -qE 'checked against [^.]*[0-9]+\.[0-9]+\.[0-9]+' "$SKILL" && echo ok || echo "no version named")"
+check "the skill says the write is read back after it runs" \
+  "$(linked_section="$(awk '/supabase db query --linked/,/psql "\$url"/' "$SKILL")"; grep -qi 'read it back\|read back' <<< "$linked_section" && echo ok || echo "no read back step on the linked path")"
+
+# The command line itself, against a stub supabase: one that has db query, one older CLI that
+# prints its parent help and exits 0 for an unknown subcommand (as v2.75.0 does), and none at all.
+mkbin "$TMP/sb-with" grep cat
+mkbin "$TMP/sb-old" grep cat
+mkbin "$TMP/sb-none" grep cat
+cat > "$TMP/sb-with/supabase" <<STUB
+#!/bin/bash
+if [ "\$1 \$2 \$3" = "db query --help" ]; then echo "  -f, --file string   Path to a SQL file to execute."; exit 0; fi
+printf '%s\n' "\$@" > "$TMP/supabase-args"
+echo "stub supabase ran"
+STUB
+cat > "$TMP/sb-old/supabase" <<STUB
+#!/bin/bash
+if [ "\$1 \$2 \$3" = "db query --help" ]; then echo "Available Commands:"; echo "  push   Push new migrations"; exit 0; fi
+printf '%s\n' "\$@" > "$TMP/supabase-args"
+echo "unknown flag: --linked" >&2; exit 1
+STUB
+chmod +x "$TMP/sb-with/supabase" "$TMP/sb-old/supabase"
+
+rm -f "$TMP/supabase-args"
+out="$(cd "$WORK" && PATH="$TMP/sb-with" /bin/bash -c "$linked_line" 2>&1)"; rc=$?
+check "with db query available the command runs it against the linked project" \
+  "$([ "$rc" -eq 0 ] && grep -q 'stub supabase ran' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
+check "and passes db query --linked --yes -f change.sql, so no prompt waits" \
+  "$(got="$(cat "$TMP/supabase-args" 2>/dev/null | tr '\n' ' ')"; [ "$got" = "db query --linked --yes -f change.sql " ] && echo ok || echo "supabase got: $got")"
+check "and nothing it printed holds the env file's secret" \
+  "$(grep -qF "$SECRET" <<< "$out" && echo "printed the secret" || echo ok)"
+
+rm -f "$TMP/supabase-args"
+out="$(cd "$WORK" && PATH="$TMP/sb-old" /bin/bash -c "$linked_line" 2>&1)"; rc=$?
+check "with a CLI that has no db query, nothing is sent and the command fails" \
+  "$([ "$rc" -ne 0 ] && [ ! -f "$TMP/supabase-args" ] && echo ok || echo "exit $rc, said: $out")"
+check "and says the CLI has no db query command" \
+  "$(grep -qi 'no db query command' <<< "$out" && echo ok || echo "said: $out")"
+
+out="$(cd "$WORK" && PATH="$TMP/sb-none" /bin/bash -c "$linked_line" 2>&1)"; rc=$?
+check "with no supabase CLI at all the command fails and says so" \
+  "$([ "$rc" -ne 0 ] && grep -qi 'supabase CLI is not installed' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

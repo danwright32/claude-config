@@ -25,7 +25,7 @@
 # since chflags cannot set that flag) and the Claude Code temp folder moving under TMPDIR. Outside
 # test mode a seam being set refuses everything.
 #
-# Commands: awk cat date dirname du find grep id ls lsof mkdir mktemp ps sed sort stat tr wc xargs,
+# Commands: awk cat date dirname du find grep id ls lsof mkdir mktemp ps sed sort stat touch tr wc xargs,
 # and the builtins. bash 3.2 safe. Sourcing defines constants and functions and runs dcs_init.
 
 DCS_LIB="${BASH_SOURCE[0]%/*}"; [ "$DCS_LIB" != "${BASH_SOURCE[0]}" ] || DCS_LIB=.
@@ -43,7 +43,7 @@ DCS_LARGE_MB=500        # a personal file, and a runaway log, is "large" over th
 DCS_BUILD_DAYS=30       # a project untouched this long keeps no build folder
 DCS_TOOL_DAYS=180       # a tool folder untouched this long, and mentioned nowhere, is forgotten
 DCS_TRANSCRIPT_DAYS=90  # Claude Code keeps 30 days itself, so anything past 90 means that stopped
-DCS_TEMP_MINUTES=1440   # a Claude Code temp folder used in the last 24 hours is kept
+DCS_UNUSED_DAYS=30      # nothing offered, the Trash apart, was changed or opened this recently (#2134)
 
 # The folder to command TABLE for forgotten tools (the plan: a table, never name matching). One line
 # each: the folder relative to HOME | the command it belongs to | the files a project using it holds.
@@ -279,6 +279,71 @@ dcs_recent_file() { # <dir> <days> <stderr file> [<prune name>...]
   local pr=( -name .disk-clean-prunes-nothing )
   for n in "$@"; do pr=( "${pr[@]}" -o -name "$n" ); done
   find "$d" \( "${pr[@]}" \) -prune -o -type d \( "${DCS_DL[@]}" \) -print -quit -o -type f -mtime -"$days" -print -quit 2> "$err"
+}
+
+# The 30 day floor every kind but the Trash keeps on top of its own rule (#2134). Called right after
+# a kind's rules set V to offerable, it keeps V so only when nothing at or beneath <path> was changed
+# (modification time) or opened (access time) in the last DCS_UNUSED_DAYS days; any other V is left
+# as it is, so the floor can only ever take an item out of the offer.
+#
+# Opened is read from access times, because Spotlight's last used date only repeats the change date
+# on this Mac (measured for #2134 and recorded in its pull request). What access time
+# records: running a program moves it on every run, but a plain read of a data file moves it only
+# on the first read after each change. So a data file read again and again without ever changing
+# can look unopened. That is the known gap, and why the review page claims only "changed or run".
+#
+# Folders' access times are never read: listing a folder moves it, and the scan's own du lists every
+# one. <names> are files whose access time the scan itself moves (git reads a worktree's .git file
+# and .gitignore, the Xcode sweep reads info.plist), so for those only the change time counts. It
+# never lists a folder iCloud keeps only in the cloud, since that makes iCloud fetch it: such a part
+# makes the item unmeasured, as does anything find could not read, or find failing.
+dcs_floor() { # <path> [<name whose access time the scan itself moves>...]
+  [ "${V:-}" = offerable ] || return 0
+  local p="${1%/}" n hit rc rel why err="$DCS_WORK/floor.err.$$"
+  shift
+  local ex=( -name .disk-clean-excludes-nothing )
+  for n in "$@"; do ex=( "${ex[@]}" -o -name "$n" ); done
+  why="so whether it was changed or opened in $DCS_UNUSED_DAYS days is not known"
+  dcs_floor_ref || { V="unmeasured: the reference time for the $DCS_UNUSED_DAYS day rule could not be made ($DCS_WHY), $why"; return 0; }
+  hit="$(find "$p" -type d \( "${DCS_DL[@]}" \) -print -quit \
+    -o \( -newermm "$DCS_FLOOR_REF" -o -type f ! \( "${ex[@]}" \) -neweram "$DCS_FLOOR_REF" \) -print -quit 2> "$err")"; rc=$?
+  hit="${hit%%$'\n'*}"
+  if [ -n "$hit" ]; then
+    if [ "$hit" = "$p" ]; then rel="${p##*/}"; else rel="${hit#"$p"/}"; fi
+    if [ -d "$hit" ] && dcs_dataless "$hit"; then
+      V="unmeasured: part of it is kept only in iCloud ($rel), $why"
+    elif [ -n "$(find "$hit" -maxdepth 0 -newermm "$DCS_FLOOR_REF" 2>/dev/null)" ]; then
+      # A folder changes when a file in it is made or removed, and find meets the folder first, so
+      # the file is named when one is there (the folder is not kept only in iCloud, or the branch
+      # above would have taken it, so listing it fetches nothing).
+      if [ -d "$hit" ]; then
+        n="$(find "$hit" -mindepth 1 -maxdepth 1 ! -type d -newermm "$DCS_FLOOR_REF" -print -quit 2>/dev/null)"
+        [ -z "$n" ] || rel="${n#"$p"/}"
+      fi
+      V="not offerable: changed within $DCS_UNUSED_DAYS days ($rel)"
+    else
+      V="not offerable: opened within $DCS_UNUSED_DAYS days ($rel)"
+    fi
+  elif [ -s "$err" ]; then
+    V="unmeasured: part of it could not be read ($(awk 'NR == 1' "$err")), $why"
+  elif [ "$rc" -ne 0 ]; then
+    V="unmeasured: find exited $rc reading it, $why"
+  fi
+  rm -f "$err"
+  return 0
+}
+# Makes, once per process, the file whose modification time is DCS_UNUSED_DAYS days ago, which every
+# floor find compares against. Sets DCS_WHY and fails when it cannot.
+DCS_FLOOR_REF=""
+dcs_floor_ref() {
+  [ -n "$DCS_FLOOR_REF" ] && [ -f "$DCS_FLOOR_REF" ] && return 0
+  local now then stamp f="$DCS_WORK/floor.ref.$$"
+  now="$(date '+%s')" || { DCS_WHY="date failed"; return 1; }
+  then=$(( now - DCS_UNUSED_DAYS * 86400 ))
+  stamp="$(date -r "$then" '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "@$then" '+%Y%m%d%H%M.%S' 2>/dev/null)"
+  [ -n "$stamp" ] || { DCS_WHY="date could not write $then as a time"; return 1; }
+  touch -t "$stamp" "$f" 2>/dev/null || { DCS_WHY="touch could not write $f"; return 1; }
+  DCS_FLOOR_REF="$f"
 }
 
 # Physical path of a folder, or of a file's folder plus its name.

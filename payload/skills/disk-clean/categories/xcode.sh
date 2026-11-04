@@ -33,8 +33,9 @@ classify() { # <out> <folder>...
   DCS_WHY="exit $rc: $(awk 'NR == 1' "$out")"
   return 1
 }
-# Sets V, M (method) and D (detail) from one line of the sweep.
-rules() { # <verdict> <detail>
+# Sets V, M (method) and D (detail) from one line of the sweep, then keeps the 30 day floor on
+# <folder>. The sweep reads info.plist to name the project, so only its change time counts.
+rules() { # <verdict> <detail> <folder>
   M=delete; D="$2"
   case "$1" in
     orphan) M=derived-data; V=offerable; D="its project folder is gone ($2)" ;;
@@ -51,6 +52,7 @@ rules() { # <verdict> <detail>
     refused) V="not offerable: it is not a folder directly inside the DerivedData folder" ;;
     *) V="unmeasured: the Xcode build cache sweep answered '$1'" ;;
   esac
+  dcs_floor "$3" info.plist
 }
 
 do_scan() {
@@ -70,7 +72,7 @@ do_scan() {
   while IFS="$S" read -r p kib size ident; do
     verdict="$(awk -F '\t' -v p="$p" '$2 == p { print $1; exit }' "$DCS_WORK/xcode.classes")"
     detail="$(awk -F '\t' -v p="$p" '$2 == p { print $3; exit }' "$DCS_WORK/xcode.classes")"
-    rules "${verdict:-missing}" "$detail"
+    rules "${verdict:-missing}" "$detail" "$p"
     dcs_item "$p" "$M" "$kib" "$size" "$V" "" "$D" "$ident"
   done < "$DCS_WORK/xcode.sized"
 }
@@ -80,7 +82,7 @@ do_judge() { # <target>
   classify "$DCS_WORK/xcode.one" "$t" || { echo "unmeasured: the Xcode build cache sweep could not classify it ($DCS_WHY)"; return 0; }
   line="$(awk 'NR == 1' "$DCS_WORK/xcode.one")"
   xcodebuild_state
-  rules "${line%%$TAB*}" "$(printf '%s' "$line" | awk -F '\t' '{ print $3 }')"
+  rules "${line%%$TAB*}" "$(printf '%s' "$line" | awk -F '\t' '{ print $3 }')" "$t"
   echo "$V"
 }
 

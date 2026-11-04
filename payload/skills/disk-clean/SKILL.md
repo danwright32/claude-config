@@ -44,7 +44,11 @@ Report what it printed, in plain words, in this order:
    try, so it is not known; say that.
 2. Each kind's total: what can go, with its item count, keeping "at least" wherever the scan said
    it, because then part of the kind could not be measured and the figure is a lower bound. A kind
-   with nothing in it says nothing was found.
+   with nothing in it says nothing was found. Everything offered, the Trash apart, has gone 30 days
+   without being changed or run, on top of its kind's own rule; say "changed or run", never "used"
+   or "opened", because a data file read again and again without changing can still look unopened
+   (access time records only the first read after each change). Docker images and the build cache
+   are always unmeasured, since when they were last used is not read.
 3. Every kind the scan could not measure, by name, stated as unmeasured with the reason it printed
    (timed out, a tool missing, Docker not running), never as zero and never left out, since an
    unmeasured kind may be the large one. A walk that was partial or unmeasured is said the same way,

@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { SimplerOffer } from '../types/index.d.ts'
 import { REPORT_EVERY_MS, judge, pressAt, pressKey, replyHead, requestText, sameReply, weeklyLine } from './simpler.ts'
 import { missingOf } from './mod-kit/skew.ts'
+import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 
 // The Simpler button (claude-config#619, settled in docs/mods-design.md). After an answer over the
 // length threshold or heavy in technical terms, a Simpler button sits at the top of that answer,
@@ -58,7 +59,18 @@ const press = async ($: EngineInterface) => {
   const { value: project } = await $.state.get(PROJECT)
   let refused: string | undefined
   try {
-    const r = await $.prompt.submit({ text: requestText(project ?? undefined), asUser: true })
+    // #2132: the request waits until the session is idle, and mod-kit's reload of simpler in that
+    // time would drop it, so the reload is held back until it is sent, for at most an hour.
+    const held = {
+      mod: 'simpler',
+      id: 'ask',
+      what: 'the request for the short version',
+      ms: HOLD_MAX_MS,
+      hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
+      release: (input: { mod: string; id: string }) => $.modkit.release(input),
+      log: (line: string) => $.ui.log(line, { to: 'debug' }),
+    }
+    const r = await whileHeld(held, () => $.prompt.submit({ text: requestText(project ?? undefined), asUser: true }))
     if (r.drop !== undefined) refused = r.drop
   } catch (err) {
     refused = why(err)
