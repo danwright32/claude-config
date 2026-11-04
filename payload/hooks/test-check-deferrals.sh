@@ -123,6 +123,41 @@ want_finding "a markdown line carrying a phrase is a finding" "$out" "docs/notes
 out="$(detect_file docs/notes.md $'Accepted, for now, with the trade stated (#77).\n')"
 want_clean "a markdown line with its issue number is clean" "$out"
 
+# A phrase QUOTED as the subject of a sentence is a mention, not a deferral (claude-config#2133):
+# the README mods table names the words a mod listens for, and had to split them across two lines
+# to get past this check. Only a short span (six words at most) inside backticks or double quotes
+# closed on the same line is skipped; every way around that is still a finding.
+out="$(detect_file docs/notes.md $'The mod skips a limit ("for now", "today", "this session").\n')"
+want_clean "a phrase inside double quotes is a mention" "$out"
+out="$(detect_file docs/notes.md $'Dan\'s "read only for now" turns the mode on.\n')"
+want_clean "a short double quoted span holding the phrase is a mention" "$out"
+out="$(detect_file docs/notes.md $'The mod listens for `for now` as a limit.\n')"
+want_clean "a phrase inside backticks is a mention" "$out"
+out="$(detect_file a.ts $'const a = 1; // listens for "for now" and `follow up` as limits\n')"
+want_clean "a quoted phrase in a code comment is a mention" "$out"
+out="$(detect_file docs/notes.md $'The mod listens for the limit, for now.\n')"
+want_finding "the same words as plain prose are still a finding" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Leave the "retry" flag off for now.\n')"
+want_finding "a deferral beside a short quoted word elsewhere is still a finding" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Leave the `retry` flag off for now.\n')"
+want_finding "a deferral beside a short backticked word elsewhere is still a finding" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Accepted "for now, with the trade stated.\n')"
+want_finding "an unclosed double quote hides nothing" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Accepted `for now, with the trade stated.\n')"
+want_finding "a lone backtick hides nothing" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Accepted "for now, with\nthe trade stated".\n')"
+want_finding "a double quote closed only on the NEXT line hides nothing" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Accepted `for now, with\nthe trade stated`.\n')"
+want_finding "a backtick closed only on the NEXT line hides nothing" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'The note says "we will wire the retry properly for now and tidy it".\n')"
+want_finding "a quoted span longer than six words is judged, so a quoted deferral sentence is still a finding" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Use a 5" pipe, for now, then "the long one".\n')"
+want_finding "an inch mark straight after a digit opens no span, so it cannot pair with a later quote" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Keep the x"for now"y flag off.\n')"
+want_finding "a quote run into the words either side is not a mention" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'The mod listens for \'for now\' as a limit.\n')"
+want_finding "single quotes are not a quote here (apostrophes would pair), so the phrase is a finding" "$out" "docs/notes.md:1: for now:"
+
 # Word boundaries and case.
 out="$(detect_file a.ts $'// todo: tidy this\n')"
 want_finding "matching is case insensitive" "$out" "todo"
