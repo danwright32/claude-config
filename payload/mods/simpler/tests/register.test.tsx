@@ -14,7 +14,10 @@ const FIRST_BLOCK = 'There are two options here, and the trade-off is speed.'
 
 // Everything beneath the mod: the clock, a store that can be made to fail, the engine's own
 // drawing of a reply, the prompt box, submits, toasts and transcript lines.
-const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; drop?: string; submitThrows?: boolean; noClicks?: true } = {}) => {
+// `held` is each hold on simpler's reload and its letting go, in order beside each prompt sent
+// (#2132); `holdFails` makes mod-kit refuse the hold, as an older or missing mod-kit would.
+const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; drop?: string; submitThrows?: boolean; noClicks?: true; holdFails?: string } = {}) => {
+  const held: string[] = []
   const clock = mock.clock(on, { now: opts.now ?? 100 * DAY })
   const store: Record<string, unknown> = { ...(opts.store ?? {}) }
   const fail = { get: false, set: false, keys: false }
@@ -37,6 +40,7 @@ const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; dr
   })
   const submits: { text: string; asUser?: boolean }[] = []
   on('prompt.submit', ($, e) => {
+    held.push('submit')
     if (opts.submitThrows) throw new Error('session closed')
     submits.push({ text: e.text, asUser: e.origin.kind === 'plugin' ? e.origin.asUser : undefined })
     if (opts.drop) return { drop: opts.drop }
@@ -70,6 +74,12 @@ const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; dr
       const { origin } = JSON.parse(rest[1] as string) as { origin: never }
       return { value: { exitCode: 0, stdout: JSON.stringify(isDans(origin)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
+    // #2132: mod-kit's hold on simpler's reload and its letting go, as the stand in below asks them.
+    if (cmd === '__modkit' && (rest[0] === 'hold' || rest[0] === 'release')) {
+      if (rest[0] === 'hold' && opts.holdFails) return r(1, opts.holdFails)
+      held.push(`${rest[0]} ${rest[1]}`)
+      return r(0)
+    }
     if (cmd === 'mkdir' && rest.includes('-p')) return r(0)
     if (cmd === 'mkdir') {
       if (disk.mkdirFails) return r(1, disk.mkdirFails)
@@ -85,7 +95,7 @@ const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; dr
     if (at === undefined) return { deny: `no such file: ${e.path}` } as never
     return { value: { kind: 'dir', size: 0, mtimeMs: at, isLink: false } } as never
   })
-  return { clock, store, fail, between, submits, toasts, logs, debug, dirs, disk }
+  return { clock, store, fail, between, submits, toasts, logs, debug, dirs, disk, held }
 }
 const CLAIM = '/Users/x/.claude/state/simpler/weekly.lock'
 
@@ -122,8 +132,16 @@ const modKit: { name: string; register: Register } = {
           return JSON.parse(r.stdout) as boolean
         },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
-        hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
-        release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
+        // #2132: a hold on simpler's reload and its letting go, asked of the world, which keeps them
+        // in order beside each prompt sent and can refuse one as mod-kit would.
+        hold: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'hold', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
+        release: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'release', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
         account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
@@ -454,6 +472,44 @@ test('a submit that throws says why and puts the button back', KIT, async ($, on
   expect(w.toasts[0]).toContain('Simpler could not ask for the short version: ')
   expect(w.toasts[0]).toMatch(/: .+/)
   expect(await ui.find({ key: 'simpler' })).toBeDefined()
+  await ui.unmount()
+})
+
+// #2132: the request a press sends waits until the session is idle, and mod-kit's reload of simpler
+// in that time would drop it, so the press holds that reload back until it is sent or refused.
+const ASK_HELD = `hold ${JSON.stringify({ mod: 'simpler', id: 'ask', what: 'the request for the short version', ms: 60 * 60_000 })}`
+const ASK_LET_GO = `release ${JSON.stringify({ mod: 'simpler', id: 'ask' })}`
+test('a press holds back a reload of simpler while its request waits, and lets go once sent (#2132)', KIT, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await answer($, LONG)
+  const ui = await mountReply($, 'terminal')
+  await ui.press({ key: 'simpler' })
+  expect(w.held).toEqual([ASK_HELD, 'submit', ASK_LET_GO])
+  await ui.unmount()
+})
+
+test('a request that throws or is refused still lets go of the hold (#2132)', KIT, async ($, on) => {
+  const w = world(on, { submitThrows: true })
+  await start($)
+  await answer($, LONG)
+  const ui = await mountReply($, 'terminal')
+  await ui.press({ key: 'simpler' })
+  expect(w.held).toEqual([ASK_HELD, 'submit', ASK_LET_GO])
+  expect(w.toasts).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('a hold mod-kit refuses is said in the debug log, and the request is sent as before (#2132)', KIT, async ($, on) => {
+  const w = world(on, { holdFails: 'mod-kit is not loaded' })
+  await start($)
+  await answer($, LONG)
+  const ui = await mountReply($, 'terminal')
+  await ui.press({ key: 'simpler' })
+  expect(w.held).toEqual(['submit'])
+  expect(w.submits).toHaveLength(1)
+  expect(w.debug).toContain('simpler: could not hold back a reload while it waits on the request for the short version, so one now would drop that wait (mod-kit is not loaded)')
+  expect(w.toasts).toEqual([])
   await ui.unmount()
 })
 
