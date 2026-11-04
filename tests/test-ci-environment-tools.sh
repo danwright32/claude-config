@@ -79,7 +79,7 @@ invoked_tools(){   # $@ = files
     # The line with the literal text of each message command quoted first argument turned to spaces.
     sub blank_messages { my ($l) = @_; my $out = $l;
       while ($l =~ /(?:^|[;&|({]|\b(?:then|do|else)\b)\s*(?:$msgs)\s+(?:-[A-Za-z]+\s+)*(?=["\x27])/g) {
-        my $q = pos($l); my $c = substr($l, $q, 1); my @keep;
+        my $q = pos($l); my $c = substr($l, $q, 1);
         if ($c eq "\x27") { my $e = index($l, "\x27", $q + 1); next if $e < 0;
           substr($out, $q + 1, $e - $q - 1) = " " x ($e - $q - 1); pos($l) = $e + 1; next }
         my ($k, $ok) = ($q + 1, 0); my @lit;
