@@ -1,6 +1,27 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { agentRefusal, editedText, heldText, inScope, isOwnRecord, isProse, literalsOf, mentionsStore, refusal, renderedProblem, slackMarked, wordingChange, wordingKey, wordingOf } from '../hooks/rules.ts'
+import {
+  MARKERS,
+  SENDER_PREFILTER,
+  agentRefusal,
+  editedText,
+  heldText,
+  inScope,
+  isOwnRecord,
+  isProse,
+  literalsOf,
+  mentionsStore,
+  refersTo,
+  refusal,
+  renderedProblem,
+  searchTerm,
+  slackMarked,
+  templateLines,
+  textTemplate,
+  wordingChange,
+  wordingKey,
+  wordingOf,
+} from '../hooks/rules.ts'
 
 // The Slack alert guard's pure rules (claude-config#2242). Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -107,4 +128,72 @@ test('a held edit names the wording it adds or takes away; a held shell command 
     expect(r).not.toContain('text away')
   }
   expect(refusal('t1', '/w/a/alert.ts', ['Deploy failed on production'], []).startsWith('Blocked: this edit to /w/a/alert.ts adds')).toBe(true)
+})
+
+// claude-config#2248: a template whose wording a different file sends to Slack.
+
+test('a held template names the file that sends it, and says the template itself posts nothing', () => {
+  expect(heldText('/w/a/templates/deploy.ts', ['Deploy failed on production'], [], '/w/a/notify.ts')).toBe(
+    'This edit to /w/a/templates/deploy.ts, which /w/a/notify.ts sends to Slack, adds Slack message text Dan has not approved: "Deploy failed on production"',
+  )
+  const shell = heldText('/w/a/templates/deploy.ts', [], [], '/w/a/notify.ts')
+  expect(shell).toContain('which /w/a/notify.ts sends to Slack')
+  expect(shell).not.toContain('which posts to Slack')
+  expect(refusal('t1', '/w/a/t.ts', ['Backup is late'], [], '/w/a/notify.ts')).toContain('/w/a/notify.ts sends to Slack')
+  expect(agentRefusal('t1', '/w/a/t.ts', ['Backup is late'], [], '/w/a/notify.ts')).toContain('/w/a/notify.ts sends to Slack')
+})
+
+test('a sender names a template by a relative import, resolved against its own folder or the repository root', () => {
+  const T = 'src/lib/templates/deploy.ts'
+  expect(refersTo('src/lib/notify.ts', "import { deployFailed } from './templates/deploy'\n", T)).toBe(true)
+  expect(refersTo('src/lib/notify.ts', "import { deployFailed } from './templates/deploy.js'\n", T)).toBe(true)
+  expect(refersTo('src/jobs/notify.ts', "const t = require('../lib/templates/deploy')\n", T)).toBe(true)
+  // A shell script runs from the root, so its relative path is read from there too.
+  expect(refersTo('bin/notify.sh', 'MSG=$(cat ./src/lib/templates/deploy.ts)\n', T)).toBe(true)
+  // The same name in another folder is another file.
+  expect(refersTo('src/jobs/notify.ts', "import { deployFailed } from './templates/deploy'\n", T)).toBe(false)
+  expect(refersTo('src/lib/notify.ts', "import { x } from './deploy'\n", T)).toBe(false)
+})
+
+test('a sender names a template by its path, a file name with its extension, an alias, or a python module', () => {
+  const TXT = 'app/templates/backup.txt'
+  expect(refersTo('app/notify.py', 'body = open("templates/backup.txt").read()\n', TXT)).toBe(true)
+  expect(refersTo('app/notify.ts', "readFileSync(path.join(__dirname, 'templates', 'backup.txt'), 'utf8')\n", TXT)).toBe(true)
+  expect(refersTo('app/notify.ts', 'readFileSync(`${__dirname}/templates/backup.txt`)\n', TXT)).toBe(true)
+  expect(refersTo('web/notify.ts', "import { digest } from '@/lib/alerts/digest'\n", 'web/src/lib/alerts/digest.ts')).toBe(true)
+  const PY = 'app/alerts/messages.py'
+  expect(refersTo('app/notify.py', 'from app.alerts.messages import BACKUP_LATE\n', PY)).toBe(true)
+  expect(refersTo('app/notify.py', 'from app.alerts import messages\n', PY)).toBe(true)
+  expect(refersTo('app/alerts/notify.py', 'from . import messages\n', PY)).toBe(true)
+  expect(refersTo('app/alerts/notify.py', 'from .messages import BACKUP_LATE\n', PY)).toBe(true)
+  expect(refersTo('app/alerts/notify.py', 'import messages\n', PY)).toBe(true)
+  // A package's own index is named by its folder.
+  expect(refersTo('src/notify.ts', "import { late } from './alerts'\n", 'src/alerts/index.ts')).toBe(true)
+  expect(refersTo('app/notify.py', 'from app import alerts\n', 'app/alerts/__init__.py')).toBe(true)
+})
+
+test('a word that only shares the template name is not a reference to it', () => {
+  const PY = 'app/alerts/messages.py'
+  expect(refersTo('app/notify.py', 'messages = []\nfor m in messages: print(m)\n', PY)).toBe(false)
+  expect(refersTo('app/notify.ts', "import { messages } from '@slack/web-api'\n", 'app/alerts/messages.ts')).toBe(false)
+  expect(refersTo('app/notify.ts', "const kind = 'messages'\n", 'app/alerts/messages.ts')).toBe(false)
+  expect(refersTo('app/notify.ts', "fetch('/api/messages')\n", 'app/alerts/messages.ts')).toBe(false)
+  // Another file of the same name with a different extension is another file.
+  expect(refersTo('app/notify.py', 'open("templates/backup.json")\n', 'app/templates/backup.txt')).toBe(false)
+})
+
+test('a text template is read line by line, and the search term is the name a sender writes', () => {
+  for (const p of ['/w/a/templates/backup.txt', '/w/a/t/alert.md', '/w/a/t/alert.hbs', '/w/a/t/alert.j2', '/w/a/t/alert.mustache']) expect(textTemplate(p)).toBe(true)
+  for (const p of ['/w/a/x.css', '/w/a/x.ts', '/w/a/Makefile']) expect(textTemplate(p)).toBe(false)
+  expect(templateLines('Backup is late\n\n  on {host}  \n')).toEqual(['Backup is late', 'on {host}'])
+  expect(searchTerm('src/lib/templates/deploy.ts')).toBe('deploy')
+  expect(searchTerm('src/alerts/index.ts')).toBe('alerts')
+  expect(searchTerm('app/alerts/__init__.py')).toBe('alerts')
+})
+
+test('the sender search keeps every file a Slack marker can match: each marker names slack or postMessage', () => {
+  // The repository is searched for SENDER_PREFILTER before any file is read, so a marker that could
+  // match text holding neither word would never see its file read.
+  for (const m of MARKERS) expect(/slack|postmessage/i.test(m.source)).toBe(true)
+  expect(SENDER_PREFILTER).toBe('slack|postmessage')
 })

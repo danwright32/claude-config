@@ -18,6 +18,8 @@ export const SOURCE = 'slack-alert-guard'
 export const HEADER = 'Slack alert'
 export const APPROVE = 'Approve wording'
 export const CHANGE = 'Change wording'
+/** How long the search for a file that sends a template may take, every git call and read in it. */
+export const SCAN_MS = 3000
 
 // Files that can post: code and the config that carries a message. Prose files post nothing.
 const CODE = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'sh', 'bash', 'zsh', 'swift', 'kt', 'java', 'php', 'cs', 'rs', 'json', 'yml', 'yaml'])
