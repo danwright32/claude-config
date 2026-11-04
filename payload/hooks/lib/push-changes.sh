@@ -50,6 +50,13 @@ PC_EXCLUDES=(':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.snap'
 # (a correct, quiet verdict), and 2 when it carries none and there is no upstream: the base may have
 # fallen back to the current commit, so "nothing" is the gate being blind, not the push being empty
 # (#736), and the caller must say so.
+# The files added, copied, modified or renamed between $1 (a commit or tree) and HEAD, one per line,
+# relative to the repository root; fails when git does. One listing for the push's own range below
+# and for the tests a branch pushed earlier, which the test gate reads since claude-config#2153.
+pc_files_since() {   # $1 = commit or tree
+  git diff --name-only --diff-filter=ACMR "$1" HEAD 2>/dev/null
+}
+
 pc_resolve() {   # $1 = command
   local pending_list top f
   PC_UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
@@ -75,7 +82,7 @@ pc_resolve() {   # $1 = command
   [ -n "$PC_MB" ] && pc__set_apart_merged
 
   local committed="" pending=""
-  [ -n "$PC_FROM" ] && committed="$(git diff --name-only --diff-filter=ACMR "$PC_FROM" HEAD 2>/dev/null)"
+  [ -n "$PC_FROM" ] && committed="$(pc_files_since "$PC_FROM")"
 
   # The PENDING files when the command commits before it pushes: the index, plus what the shared
   # reader says the commit takes beyond it (#457), counting only files that exist. Read here, in the

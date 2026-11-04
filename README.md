@@ -2023,10 +2023,16 @@ first call saw, and each part goes to a further call with that code and the chan
 untested, which answers which of them the part tests. A part that starts inside a file repeats up
 to 4 KB of the lines before it, so a test the split cuts through is whole in one part. A change is
 refused as untested only when every part has been read and none tests it, and the refusal says how
-many parts it was read in. At most three further calls are made, and none is started with fewer
-than 20 seconds left of the 110 the gate allows itself inside the 120 its registration declares;
-whatever was not read, and a further call that fails, is refused as could not judge, naming the
-test files no reading was shown in full. That path refused before, so it fails closed where the
+many parts it was read in. At most 40 further calls are made (it was three until #2153, when a
+436 KB batch needed 15 and four tested issues in it were refused as untested), up to 16 at once in
+waves, no wave started with fewer than 20 seconds left of the 110 the gate allows itself inside the
+120 its registration declares, and no wave started once every change is found tested. The width of
+16 holds the 15 further readings of that batch in one wave even if each takes 58 seconds, the
+longest judge call in the gate's record on 2026-11-03; the record held calls running up to 6 at
+once (a median of 10 seconds, at most 26) and none at 16, so the time at 16 at once is unmeasured.
+`REQUIRE_TESTS_MAX_PARTS` can lower the cap, never raise it. Whatever was not read, and a further
+call that fails, is refused as could not judge, naming the test files no reading was shown in full.
+That path refused before, so it fails closed where the
 first call fails open. A push of the issue's shape cost two calls, sent 60,781 and 39,788 bytes,
 measured on 2026-11-01 with the suite's stub judge (these limits are settings, not measured); the first
 call is now told the rest is read separately and to judge only what it was shown, where it used to
@@ -2044,6 +2050,19 @@ slipped into a merge, is still judged; a file that conflicted is always judged, 
 resolved. When no default branch is known (no `origin/HEAD`, `origin/main` or `origin/master`) or
 git cannot work out the merge (it needs 2.38 or later), the whole push is judged as before, never
 none of it, and a refusal says main's changes were in it and why.
+
+The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
+2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
+later pushes, and the gate refused both as untested. Now every test file the branch changed since
+it left the default branch (their merge base), and this push does not carry, is listed to the judge
+under its own heading with its diff after the push's own tests, and counts as a test for the push.
+The changes judged are still only the push's, so the judge still has to find a test that would fail
+if each were reverted. The zero test refusal, made without a model, now needs no test in the push
+and none earlier on the branch. When the merge base cannot be worked out (no default branch known,
+no merge base, or git failing to list or show those tests), the push is judged on its own tests as
+before, and a refusal says the earlier tests were not counted and why. Because earlier tests are
+read with every push of the branch, a could not judge refusal that holds them says a smaller push
+will not make them fit.
 
 Every push either gate reaches is recorded, overrides included (#1075), one line each in
 `~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
