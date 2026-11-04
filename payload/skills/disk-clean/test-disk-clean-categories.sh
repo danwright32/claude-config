@@ -85,6 +85,28 @@ note_of() { dcr_header "$REC" "note.$1" 2>/dev/null; }
 items_in() { [ -f "$REC" ] && dcr_items "$REC" | awk -F "$S" -v c="$1" '$2 == c' | wc -l | tr -d ' ' || echo 0; }
 old() { find "$1" -exec touch -t "$OLD" {} + ; }
 sparse() { mkdir -p "${1%/*}"; dd if=/dev/zero of="$1" bs=1 count=0 seek="$2" 2>/dev/null; } # <file> <size, such as 600m>
+# Five days ago, as touch -t takes it: well inside the 30 day floor, and far enough from its edge
+# that no run, however slow, crosses it (L290: the times are set, never waited for).
+RECENT="$(date -v-5d '+%Y%m%d%H%M' 2>/dev/null || date -d '5 days ago' '+%Y%m%d%H%M')"
+# The 30 day floor every kind but the Trash adds to its own rule (#2134), on <target>, which its
+# own rule offers: <file> is a file at or beneath it. Opened is the access time, changed the
+# modification time, each set alone, and with "folder" a part of it nothing can read is unmeasured.
+# Ends with the target aged again, so the section's later checks see it as they did.
+floor_checks() { # <category> <target> <file> [folder]
+  local c="$1" t="$2" f="$3"
+  old "$t"; judge "$c" "$t"
+  check "$c floor: with nothing in it changed or opened for 30 days it is offerable (the control)" "$(eq "$JUDGED" offerable)"
+  touch -a -t "$RECENT" "$f"; judge "$c" "$t"
+  check "$c floor: a file in it opened 5 days ago, changed long ago, makes it not offerable" "$(has "$JUDGED" "not offerable: opened within 30 days")"
+  old "$t"; touch -m -t "$RECENT" "$f"; judge "$c" "$t"
+  check "$c floor: a file in it changed 5 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: changed within 30 days")"
+  old "$t"
+  [ "${4:-}" = folder ] || return 0
+  mkdir -p "$t/floor-locked"; printf 'x\n' > "$t/floor-locked/f"; old "$t"; chmod 000 "$t/floor-locked"
+  judge "$c" "$t"
+  check "$c floor: a part of it whose times cannot be read makes it unmeasured, never offerable" "$(has "$JUDGED" "unmeasured: ")"
+  chmod 755 "$t/floor-locked"; rm -rf "$t/floor-locked"; old "$t"
+}
 
 # ================================================================================================
 # The Trash: only entries listed at scan time (name plus inode), and never what disk-clean moved
@@ -102,6 +124,10 @@ check "trash: what is inside a folder entry is not listed apart" "$(eq "$(item_o
 check "trash: every entry carries its identity" "$(eq "$(field "$(item_of "$H/.Trash/photo.NEF")" 7 | grep -c ':')" 1)"
 judge trash "$H/.Trash/photo.NEF"
 check "trash judge: an entry listed at scan time is offerable" "$(eq "$JUDGED" offerable)"
+# The Trash is exempt from the 30 day floor (#2134): everything in it was put there to go.
+touch -a -t "$RECENT" "$H/.Trash/photo.NEF"; touch -m -t "$RECENT" "$H/.Trash/photo.NEF"
+judge trash "$H/.Trash/photo.NEF"
+check "trash judge: an entry changed and opened 5 days ago is still offerable, at any age" "$(eq "$JUDGED" offerable)"
 printf 'c\n' > "$H/.Trash/later.txt"
 judge trash "$H/.Trash/later.txt"
 check "trash judge: an entry added after the scan is not offerable" "$(has "$JUDGED" "not offerable: it was not in the Trash when the scan ran")"
@@ -138,6 +164,7 @@ fresh
 C="$H/Library/Caches"
 mkdir -p "$C/com.tinyspeck.slackmacgap" "$C/SomeHelperCache/sub" "$C/com.idle.app" "$C/CloudKit" "$C/com.apple.bird" \
   "$C/com.apple.nsurlsessiond" "$C/ms-playwright/chromium-1"
+printf 'x\n' > "$C/com.idle.app/Cache.db"; old "$C"
 dc_stub lsof "printf 'p10\ncSlack Helper\nf3\nn%s\n' $(printf %q "$C/SomeHelperCache/sub/data.db")"
 run_scan --only caches
 check "caches: a folder not named by bundle id with a file held open beneath it is in use" "$(has "$(state_of "$C/SomeHelperCache")" "not offerable: in use by Slack Helper")"
@@ -149,6 +176,11 @@ done
 check "caches: ms-playwright belongs to the Playwright category, not this one" "$(eq "$(item_of "$C/ms-playwright")" "")"
 judge caches "$C/com.idle.app"
 check "caches judge: an idle cache is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks caches "$C/com.idle.app" "$C/com.idle.app/Cache.db" folder
+touch -a -t "$RECENT" "$C/com.idle.app/Cache.db"
+run_scan --only caches
+check "caches: the scan applies the floor as the judge does: a cache opened 5 days ago is not offered" "$(has "$(state_of "$C/com.idle.app")" "not offerable: opened within 30 days")"
+old "$C"
 judge caches "$C/SomeHelperCache"
 check "caches judge: a cache with an open file beneath it is not" "$(has "$JUDGED" "not offerable: in use by Slack Helper")"
 judge caches "$H/Library/Preferences"
@@ -174,7 +206,8 @@ check "caches: a folder du read cleanly in the same run is still measured" "$(eq
 # ================================================================================================
 fresh
 DD="$H/Library/Developer/Xcode/DerivedData"
-mkdir -p "$DD/App-orphan" "$DD/App-live" "$DD/App-busy" "$DD/ModuleCache.noindex" "$DD/App-noplist"
+mkdir -p "$DD/App-orphan/Build" "$DD/App-live" "$DD/App-busy" "$DD/ModuleCache.noindex" "$DD/App-noplist"
+printf 'x\n' > "$DD/App-orphan/Build/obj.o"; printf '<plist/>\n' > "$DD/App-orphan/info.plist"; old "$H/Library"
 dc_stub derived-data-sweep "T=\$(printf '\t'); [ \"\$1\" = --classify ] || exit 2; shift; for d in \"\$@\"; do case \"\$d\" in
   */App-orphan) echo \"orphan\${T}\$d\${T}/gone/App.xcodeproj\" ;; */App-live) echo \"live\${T}\$d\${T}/here/App.xcodeproj\" ;;
   */App-busy) echo \"in-use\${T}\$d\${T}modified in the last 60 minutes\" ;; */ModuleCache.noindex) echo \"shared-cache\${T}\$d\${T}\" ;;
@@ -196,6 +229,16 @@ check "xcode: when whether xcodebuild runs cannot be told, a live cache is unmea
 dc_stub pgrep 'exit 1'
 judge xcode "$DD/App-orphan"
 check "xcode judge: an orphan is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks xcode "$DD/App-orphan" "$DD/App-orphan/Build/obj.o" folder
+# The sweep reads info.plist to name the project, which moves its access time on the first read
+# after a build; the scan's own read must not count as the folder being opened.
+touch -a -t "$RECENT" "$DD/App-orphan/info.plist"
+judge xcode "$DD/App-orphan"
+check "xcode floor: an info.plist read, as the sweep itself reads it, is not counted as opened" "$(eq "$JUDGED" offerable)"
+touch -m -t "$RECENT" "$DD/App-orphan/info.plist"
+judge xcode "$DD/App-orphan"
+check "xcode floor: but an info.plist changed 5 days ago still counts as changed" "$(has "$JUDGED" "not offerable: changed within 30 days")"
+old "$DD/App-orphan"
 judge xcode "$DD/App-busy"
 check "xcode judge: an orphan in use is not" "$(has "$JUDGED" "not offerable: a build may still be using it")"
 dc_stub derived-data-sweep 'echo "derived-data-sweep: could not read it"; exit 2'
@@ -215,8 +258,12 @@ printf '{}\n' > "$P/active/package.json"; printf 'x\n' > "$P/active/src/a.ts"
 printf 'name = "w"\n' > "$P/worker/wrangler.toml"
 printf '{}\n' > "$H/.nvm/versions/node/v20/lib/package.json"
 old "$P/stale"; old "$P/worker"; old "$P/active"; printf 'edited\n' > "$P/active/src/a.ts"
-# A file inside node_modules itself is new, which must not count as the project being used.
+# A file inside node_modules itself is new, which must not count as the PROJECT being used; it does
+# count as the folder itself having changed, under the 30 day floor every kind keeps (#2134).
 printf 'new\n' > "$P/stale/node_modules/x/fresh.js"
+run_scan --only build-folders
+check "build folders: a new file inside node_modules is the folder changing, not the project" "$(eq "$(state_of "$P/stale/node_modules")" "not offerable: changed within 30 days (x/fresh.js)")"
+old "$P/stale/node_modules"
 run_scan --only build-folders
 check "build folders: node_modules of a project untouched for 30 days is offerable" "$(eq "$(state_of "$P/stale/node_modules")" offerable)"
 check "build folders: by deleting it" "$(eq "$(method_of "$P/stale/node_modules")" delete)"
@@ -231,6 +278,7 @@ judge build-folders "$P/worker/.wrangler/state"
 check "build folders judge: .wrangler/state is not offerable" "$(has "$JUDGED" "not offerable: ")"
 judge build-folders "$P/stale/node_modules"
 check "build folders judge: a stale project's node_modules is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks build-folders "$P/stale/node_modules" "$P/stale/node_modules/x/fresh.js" folder
 printf 'today\n' > "$P/stale/src/b.ts"
 judge build-folders "$P/stale/node_modules"
 check "build folders judge: once the project is edited again it is not" "$(has "$JUDGED" "not offerable: the project's own files changed within 30 days")"
@@ -254,7 +302,10 @@ dl_run_scan --only build-folders
 it="$(item_of "$P/cloudy/node_modules")"
 # What is stored outside the stand-in, read by this suite's own du on its own scratch folder.
 want_kib=$(( $(du -sk "$P/cloudy/node_modules" | awk '{ print $1 }') - $(du -sk "$P/cloudy/node_modules/evicted" | awk '{ print $1 }') ))
-check "build folders: a folder holding a cloud only folder is still listed" "$(eq "$(state_of "$P/cloudy/node_modules")" offerable)"
+# Listed, but never offered: what the cloud only folder holds cannot be read without fetching it, so
+# whether any of it was changed or opened in 30 days is not known (#2134).
+check "build folders: a folder holding a cloud only folder is still listed, and unmeasured" "$(has "$(state_of "$P/cloudy/node_modules")" "unmeasured: part of it is kept only in iCloud")"
+check "build folders: the folder beside it with nothing in the cloud is offerable (the control)" "$(eq "$(state_of "$P/plain/node_modules")" offerable)"
 check "build folders: it is never passed to du" "$(hasnt "$(dc_calls du)" "$P/cloudy/node_modules")"
 check "build folders: its size is what is stored here, the cloud only folder left out" "$(eq "$(field "$it" 6)" "$((want_kib * 1024))")"
 check "build folders: and that size is exact, so measured, never partial" "$(eq "$(field "$it" 8)" measured)"
