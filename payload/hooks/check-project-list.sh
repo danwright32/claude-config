@@ -52,10 +52,16 @@
 #          merge and the exit 3 sentence sends the reader to write a file that already exists, which
 #          is an instruction that cannot change the state they are stuck in (L111). Measured on
 #          2026-09-19: PostRoll was reported bare while its CLAUDE.md sat on origin/main.
+# Exit 6 = this machine's block says its projects are kept in its own projects.local.txt
+#          (claude-config#2112), and that file is not here or lists nothing, so nothing could be
+#          checked. Its own code because its remedy, lib/write-project-list-local.sh, is nobody
+#          else's.
 #
 # Environment:
-#   PROJECT_LIST_FILE   read this file instead of the synced CLAUDE.md
-#   PROJECT_LIST_HOST   judge as this machine instead of the real hostname
+#   PROJECT_LIST_FILE        read this file instead of the synced CLAUDE.md
+#   PROJECT_LIST_HOST        judge as this machine instead of the real hostname
+#   PROJECT_LIST_LOCAL_FILE  read this machine's own list from here instead of the
+#                            projects.local.txt beside the CLAUDE.md read
 
 set -uo pipefail
 
@@ -85,8 +91,15 @@ if [ -z "$HOST" ]; then
   exit 2
 fi
 
+# The one reader of the list's shape, shared with lib/write-project-list-local.sh so the file that
+# writer produces is read here exactly as it was meant (claude-config#2112).
+if ! . "$DIR/lib/project-list.sh" 2>/dev/null; then
+  echo "check-project-list: $DIR/lib/project-list.sh is missing, so the list could not be read. Refusing rather than reporting one with nothing wrong in it." >&2
+  exit 2
+fi
+
 # The Projects section only, so a path mentioned anywhere else in the file is not read as an entry.
-section="$(awk '/^## Projects[[:space:]]*$/ {inside=1; next} /^## / {inside=0} inside {print}' "$FILE")"
+section="$(pl_section < "$FILE")"
 case "$section" in
   *[![:space:]]*) ;;
   *)
@@ -94,39 +107,52 @@ case "$section" in
     exit 2 ;;
 esac
 
-# Every machine the list names, and the entries under this one. Both are collected in a single
-# pass: the count of blocks is what tells a section holding no machine at all apart from one that
-# simply says nothing about THIS machine, and those are different faults (L11).
-blocks=0
-mine=""
-current=""
-while IFS= read -r line; do
-  case "$line" in
-    "On "*:)
-      current="${line#On }"; current="${current%:}"
-      # The hostname is the first word; anything after it, like "(personal MacBook)", is the name
-      # Dan calls that machine and is for people, not for matching. A hostname has no spaces.
-      current="${current%% *}"
-      blocks=$((blocks + 1))
-      continue ;;
-  esac
-  [ "$current" = "$HOST" ] || continue
-  # An entry is a list item whose path is in backticks. Anything else under the heading is prose.
-  case "$line" in
-    '- `'*) ;;
-    *) continue ;;
-  esac
-  p="${line#- \`}"; p="${p%%\`*}"
-  [ -n "$p" ] || continue
-  mine="$mine$p
-"
-done <<EOF
+# Every machine the list names, and the entries under this one. The count of blocks is what tells a
+# section holding no machine at all apart from one that simply says nothing about THIS machine, and
+# those are different faults (L11).
+blocks="$(pl_block_count <<EOF
 $section
 EOF
+)"
+block="$(pl_block "$HOST" <<EOF
+$section
+EOF
+)"
+mine="$(pl_entry_paths <<EOF
+$block
+EOF
+)"
 
 if [ "$blocks" -eq 0 ]; then
   echo "check-project-list: the '## Projects' section in $FILE names no machine at all, so no entry could be attributed to one. Every entry belongs under an 'On <machine>:' heading." >&2
   exit 2
+fi
+
+# A machine whose entries are kept in its own file, because they must not appear in this one, which
+# is public (claude-config#2112: the work MacBook's projects are work repositories). Its block says
+# so with an import of that file inside a sentence, and the file sits beside the CLAUDE.md read.
+# Its absence is said plainly and given a code of its own (6): reading nothing and finding nothing
+# wrong are indistinguishable otherwise (L98), and the remedy, writing the file, is not the remedy
+# for any other outcome here (L11). So is a file that lists nothing, in a sentence of its own.
+if pl_names_local_file <<EOF
+$block
+EOF
+then
+  case "$FILE" in */*) file_dir="${FILE%/*}" ;; *) file_dir=. ;; esac
+  LOCAL="${PROJECT_LIST_LOCAL_FILE:-${file_dir:-/}/$PL_LOCAL_NAME}"
+  if [ ! -f "$LOCAL" ]; then
+    echo "check-project-list: the list says $HOST keeps its projects in its own $LOCAL, and that file is not on this Mac, so none of this Mac's projects were checked and no session here is told where they are. Write it from the last version of the list that held them with: bash ~/.claude/hooks/lib/write-project-list-local.sh" >&2
+    exit 6
+  fi
+  local_paths="$(pl_entry_paths < "$LOCAL")"
+  case "$local_paths" in
+    *[![:space:]]*) ;;
+    *)
+      echo "check-project-list: the list says $HOST keeps its projects in its own $LOCAL, and that file lists no project (an entry is a line starting with a dash and a path in backticks), so none of this Mac's projects were checked." >&2
+      exit 6 ;;
+  esac
+  mine="$mine
+$local_paths"
 fi
 
 case "$mine" in

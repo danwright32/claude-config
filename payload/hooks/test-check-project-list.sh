@@ -552,6 +552,111 @@ grep -q 'AppThree' <<< "$out_named" \
   || check "and the other named machine's entries are not checked here" ok
 
 # ---------------------------------------------------------------------------
+# A machine whose entries are kept in its OWN file (claude-config#2112). The work MacBook's
+# projects are work repositories and the synced CLAUDE.md is public, so its block holds no entries,
+# only a sentence importing that Mac's own projects.local.txt. The check must read that file as
+# this machine's list, say plainly when it is not there rather than pass over a block with nothing
+# in it (L98), and leave the other machine, whose block holds no such sentence, exactly as it was.
+# ---------------------------------------------------------------------------
+mkdir -p "$TMPROOT/localcase"
+LOCALLIST="$(mkfile localcase/CLAUDE.md "## Projects
+
+On MacOne (personal MacBook):
+- \`$TMPROOT/here/AppOne\`
+
+On MacTwo (work MacBook):
+- Kept on that Mac only, in its own @projects.local.txt which the sync never carries.
+- \`$TMPROOT/here/AppTwo\`
+
+## Writing Style")"
+LOCALFILE="$TMPROOT/localcase/projects.local.txt"
+
+# Absent: said plainly, its own code, naming the file and the command that writes it.
+rm -f "$LOCALFILE"
+out_la="$(run "$LOCALLIST" MacTwo)"; code_la=$?
+[ "$code_la" -eq 6 ] \
+  && check "a block kept in a local file that is not there is its own outcome, not a pass" ok \
+  || check "a block kept in a local file that is not there is its own outcome, not a pass" "exit=$code_la out=$out_la"
+grep -q "$LOCALFILE" <<< "$out_la" \
+  && check "and the message names the file it looked for" ok \
+  || check "and the message names the file it looked for" "out=$out_la"
+grep -q 'write-project-list-local.sh' <<< "$out_la" \
+  && check "and names the command that writes it" ok \
+  || check "and names the command that writes it" "out=$out_la"
+grep -q 'not on this Mac' <<< "$out_la" \
+  && check "and says the file is missing in so many words" ok \
+  || check "and says the file is missing in so many words" "out=$out_la"
+
+# The other machine is untouched by a block that is not its own.
+out_lo="$(run "$LOCALLIST" MacOne)"; code_lo=$?
+[ "$code_lo" -eq 0 ] \
+  && check "the other machine's local file sentence changes nothing for this one" ok \
+  || check "the other machine's local file sentence changes nothing for this one" "exit=$code_lo out=$out_lo"
+
+# Present, beside the CLAUDE.md read: its entries are this machine's list, alongside any in the block.
+printf '%s\n' "These are this Mac's projects." "- \`$TMPROOT/here/AppOne\`: from the local file" > "$LOCALFILE"
+out_lp="$(run "$LOCALLIST" MacTwo)"; code_lp=$?
+[ "$code_lp" -eq 0 ] \
+  && check "a local file beside the CLAUDE.md is read as this machine's list" ok \
+  || check "a local file beside the CLAUDE.md is read as this machine's list" "exit=$code_lp out=$out_lp"
+grep -q '2 project(s)' <<< "$out_lp" \
+  && check "and its entries are counted with the block's own" ok \
+  || check "and its entries are counted with the block's own" "out=$out_lp"
+
+# The control that proves the file is really READ: a missing path in it is caught and named.
+printf '%s\n' "- \`$TMPROOT/here/OnlyInLocal\`" >> "$LOCALFILE"
+out_lm="$(run "$LOCALLIST" MacTwo)"; code_lm=$?
+[ "$code_lm" -eq 1 ] \
+  && check "a missing path in the local file fails like one in the block" ok \
+  || check "a missing path in the local file fails like one in the block" "exit=$code_lm out=$out_lm"
+grep -q 'OnlyInLocal' <<< "$out_lm" \
+  && check "and is named" ok \
+  || check "and is named" "out=$out_lm"
+
+# PROJECT_LIST_LOCAL_FILE overrides where it is looked for.
+OTHERLOCAL="$(mkfile other-projects.local.txt "- \`$TMPROOT/here/AppOne\`")"
+out_lv="$(PROJECT_LIST_LOCAL_FILE="$OTHERLOCAL" run "$LOCALLIST" MacTwo)"; code_lv=$?
+[ "$code_lv" -eq 0 ] \
+  && check "PROJECT_LIST_LOCAL_FILE names the local file to read" ok \
+  || check "PROJECT_LIST_LOCAL_FILE names the local file to read" "exit=$code_lv out=$out_lv"
+
+# Present but listing nothing: also refused, in a sentence of its own (L11).
+printf '%s\n' "These are this Mac's projects." > "$LOCALFILE"
+out_le="$(run "$LOCALLIST" MacTwo)"; code_le=$?
+[ "$code_le" -eq 6 ] \
+  && check "a local file listing no project is refused rather than passed" ok \
+  || check "a local file listing no project is refused rather than passed" "exit=$code_le out=$out_le"
+grep -q 'lists no project' <<< "$out_le" \
+  && check "and says it lists none, not that it is missing" ok \
+  || check "and says it lists none, not that it is missing" "out=$out_le"
+grep -q 'not on this Mac' <<< "$out_le" \
+  && check "and does not claim the file is absent" "out=$out_le" \
+  || check "and does not claim the file is absent" ok
+
+# ---------------------------------------------------------------------------
+# The real payload CLAUDE.md, which is public: the work MacBook's block lists no project, and keeps
+# its list in that Mac's own file through an import written INSIDE a sentence. Inside, because the
+# sync refuses a pull whose line start import is missing (verify_rule_imports), and this one is
+# missing on the personal MacBook by design. Claude Code loads an inline import, and skips a missing
+# one silently, both measured headless on 2026-11-04 (claude-config#2112).
+# ---------------------------------------------------------------------------
+REAL="$DIR/../CLAUDE.md"
+work_block="$(awk '/^## Projects[[:space:]]*$/ {s=1; next} /^## / {s=0} s' "$REAL" \
+  | awk '/^On / {b=($2=="Dans-MacBook-Pro:" || $2=="Dans-MacBook-Pro")} b')"
+[ -n "$work_block" ] \
+  && check "the real list still has a block for the work MacBook" ok \
+  || check "the real list still has a block for the work MacBook" "no block found in $REAL"
+grep -q '^- `' <<< "$work_block" \
+  && check "and that block lists no project in the public file" "an entry is still there" \
+  || check "and that block lists no project in the public file" ok
+grep -q '[^[:space:]] @projects\.local\.txt ' <<< "$work_block" \
+  && check "and imports the local file inside a sentence" ok \
+  || check "and imports the local file inside a sentence" "no inline import of projects.local.txt"
+grep -q '^@projects\.local\.txt' "$REAL" \
+  && check "and never as a line start import, which the sync would refuse where it is missing" "found one" \
+  || check "and never as a line start import, which the sync would refuse where it is missing" ok
+
+# ---------------------------------------------------------------------------
 # The real file, last, by which point the checker has been watched failing several ways. On this
 # Mac it names real projects; on the CI runner it names neither Mac and says so.
 #
