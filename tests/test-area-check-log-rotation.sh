@@ -306,7 +306,7 @@ else
     case "$verdict" in
       PASS) seen=$((seen + 1)); check "$name" ok ;;
       FAIL) seen=$((seen + 1)); check "$name" "$evidence" ;;
-      UNMEASURED) seen=$((seen + 1)); echo "UNMEASURED: $name: $evidence" ;;
+      UNMEASURED) seen=$((seen + 1)); echo "SUITE-PART-UNMEASURED $name: $evidence" ;;
     esac
   done <<<"$out"
   done_line="$(printf '%s\n' "$out" | grep -c "^DONE	$EXPECTED\$")"
