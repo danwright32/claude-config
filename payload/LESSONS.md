@@ -8928,6 +8928,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L1036. A test or tool that launches the same installed copy of an app a person uses shares that app's identity with the operating system (its app registration, keychain entries and single running instance), so while it runs the person's own use of the app breaks; launch a separately identified build instead, such as Chrome for Testing or a Debug build with its own bundle id.**
+  (claude-config#2191, 2026-11-03)
+  SHORT: A test launching the installed copy of an app a person uses shares its OS identity and breaks their use of it, so launch a separately identified build.
 - **L842. When a wait sits inside another limit (a request timeout inside a job or step timeout, a proxy's wait inside its caller's), keep each inner limit a stated margin below the one around it and check the pair together, because raising only the inner one lets the outer limit fire first and turns a clean timeout into a failed run.**
   (bidspoke#3240, 2026-11-03)
   SHORT: Keep every inner wait a stated margin below the limit around it and check the pair together; raising only the inner one lets the outer fire first.
