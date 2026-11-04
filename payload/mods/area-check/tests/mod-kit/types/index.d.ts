@@ -377,9 +377,21 @@ export type ModKitCommand = {
    * zsh), for each word the places in it, quotes removed, of each $ outside quotes (#1834).
    */
   splits?: number[][]
+  /**
+   * For each word holding a command substitution, what the shell makes of it (#2141), null for a
+   * word with none: `commands`, what its substitutions run, and either `text`, the word with each one
+   * replaced by what it prints, worked out only where each is a plain cat of a heredoc or a here
+   * string, or `unresolved`, why that cannot be known. The text is derived, never typed: a guard that
+   * must tell what was written from what a command made reads `words`. An unresolved word is unknown,
+   * never empty and never safe.
+   */
+  derived?: (ModKitDerived | null)[]
   /** The folder it runs in, given only when `pipeline` was given `cwd`; null where a cd before it cannot be followed. */
   folder?: string | null
 }
+
+/** What a word holding a command substitution becomes, as `ModKitCommand.derived` gives it (#2141). */
+export type ModKitDerived = { text: string; commands: ModKitCommand[] } | { unresolved: string; commands: ModKitCommand[] }
 
 /** The languages whose inline code the reader judges. */
 export type ModKitLanguage = 'python' | 'node' | 'ruby' | 'perl' | 'osascript' | 'awk' | 'sed'

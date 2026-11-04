@@ -1519,6 +1519,24 @@ for m in inputs-one-line inputs-block; do
     || check "#1765: and names $m, pointing it at inputTexts" "$out"
 done
 case "$out" in *clean-asks-inputs*) check "#1765: a mod handing a command's inputs to inputTexts, or reading only their names, passes" "$out" ;; *) check "#1765: a mod handing a command's inputs to inputTexts, or reading only their names, passes" ok ;; esac
+# #2039: a guard's registration catch is its last word on a call, and one that throws leaves the call
+# unheld. Each catch answers straight through neverThrows from the copy of mod-kit's hooks/hold.ts,
+# on its one line. Only the replay of a call already passed on may sit outside it, written
+# next.called ? next(e) : neverThrows(...), since that call has run and the tool's own failure must
+# reach Claude; a bare catch, one answering before next outside neverThrows, or one whose replay
+# is not that exact form fails the run, pointed at that copy. A promise's own catch (err, never $) passes.
+M9HOLD="$TMPROOT/m9-hold"
+mkmodsrc "$M9HOLD" clean-holds "const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => neverThrows(() => h(\$, e, next), () => ({ deny: 'x' }), { deny: 'y' })); on('tool.check', h).catch((\$, e, next) => next.called ? next(e) : neverThrows(() => h(\$, e, next), () => ({ deny: 'x' }), { deny: 'y' })); void work().catch(err => log(err))"
+mkmodsrc "$M9HOLD" hold-bare "const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => ({ deny: \`could not check (\${next.error})\` }))"
+mkmodsrc "$M9HOLD" hold-async "const h = async (\$, e, next) => next(e); on('tool.check', h).catch(async (\$, e, next) => ({ decision: 'deny', reason: 'x' }))"
+mkmodsrc "$M9HOLD" hold-replay "const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => next.called ? next(e) : ({ deny: 'x' }))"
+out="$(bash "$SHARED" "$M9HOLD" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#2039: a guard's catch not answering through neverThrows fails the run" ok || check "#2039: a guard's catch not answering through neverThrows fails the run" "exit=$code out=$out"
+for m in hold-bare hold-async hold-replay; do
+  printf '%s\n' "$out" | grep "$m keeps its own catch" | grep -q 'hooks/mod-kit/hold.ts' && check "#2039: and names $m, pointing it at hooks/mod-kit/hold.ts" ok \
+    || check "#2039: and names $m, pointing it at hooks/mod-kit/hold.ts" "$out"
+done
+case "$out" in *clean-holds*) check "#2039: a catch answering through neverThrows, and a promise's own catch, pass" "$out" ;; *) check "#2039: a catch answering through neverThrows, and a promise's own catch, pass" ok ;; esac
 # #1205: the status bar and the account room each followed a /login with their own copy of the
 # reading and its half minute wait. A mod hooking the login command itself fails the run, pointed at
 # modkit.login; a mod hooking the event mod-kit raises passes.

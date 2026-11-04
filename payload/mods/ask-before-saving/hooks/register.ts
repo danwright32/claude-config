@@ -1,6 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Hook, MatchedHook, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
+import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingIndexCover, AskBeforeSavingQuestion } from '../types/index.d.ts'
 import {
@@ -115,24 +116,6 @@ let saves = 0
 // An error as words: a call to another mod's noun that failed for a member its loaded copy lacks is
 // said as the two mods out of step, never as the raw TypeError (#1299, mod-kit's hooks/skew.ts).
 const message = (err: unknown) => errorText(err, 'ask-before-saving')
-
-// A hook that failed before it could judge a call is run once more from its catch, and the call is
-// held only when that fails too (#2026). On 2026-11-01 a subagent's read only python run was
-// refused as a possible save because Claude Code's hooks worker missed a heartbeat under load, and
-// the same call passed when sent again: a stall passes, so the second look usually judges the call
-// as it would have been judged, a call writing no lasting memory going on and a save held or asked
-// about as ever. It is the same judgement, through the same readers (mod-kit's for what a command
-// writes), never a second one. The engine runs a catch in a fresh copy of the module when the worker
-// was lost, and its own time there is short (a second, its $ calls not counted); the judgement's own
-// time is a few string scans, everything slow in it a $ call. A second failure holds the call,
-// whatever the first was, so a save is never let through unjudged.
-const againOrHeld = async <R>(run: () => R | Promise<R>, held: () => R): Promise<R> => {
-  try {
-    return await run()
-  } catch {
-    return held()
-  }
-}
 
 // Dan typed an answer instead of choosing one (#1145): nothing is recorded, and mod-kit's one
 // wording, shared with the design round guard, tells him so in a toast and tells Claude to say so,
@@ -803,16 +786,31 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // A hook that failed before it could judge a call is run once more from its catch, and the call is
+  // held only when that fails too (#2026). On 2026-11-01 a subagent's read only python run was
+  // refused as a possible save because Claude Code's hooks worker missed a heartbeat under load, and
+  // the same call passed when sent again: a stall passes, so the second look usually judges the call
+  // as it would have been judged, a call writing no lasting memory going on and a save held or asked
+  // about as ever. It is the same judgement, through the same readers (mod-kit's for what a command
+  // writes), never a second one. The engine runs a catch in a fresh copy of the module when the worker
+  // was lost, and its own time there is short (a second, its $ calls not counted); the judgement's own
+  // time is a few string scans, everything slow in it a $ call. A second failure holds the call,
+  // whatever the first was, so a save is never let through unjudged, and a refusal that fails to
+  // build holds it with the fixed words built here, so the catch never throws (neverThrows, #2039).
+  const heldCall = { deny: cannotCheck(undefined) }
+  const heldCheck = { decision: 'deny' as const, reason: cannotCheck(undefined) }
+
   // A hook that failed after passing the call on had it judged beneath, by the tool.check hook and
   // every guard there, and maybe run: its result is replayed, never refused as a save it may already
-  // be (`next` there runs nothing again). One that failed before is judged once more (#2026).
-  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) =>
-    next.called ? next(e) : againOrHeld(() => saveCall($, e, next), () => ({ deny: cannotCheck(next.error) })),
-  )
+  // be (`next` there runs nothing again). One that failed before is judged once more (#2026). The
+  // replay runs OUTSIDE neverThrows: the call already ran beneath, so a refusal saying it did not run
+  // would be untrue and could make Claude run it twice, and the tool's own failure reaches Claude
+  // instead. Every catch before next stays inside neverThrows (#2039).
+  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => next.called ? next(e) : neverThrows(() => saveCall($, e, next), () => ({ deny: cannotCheck(next.error) }), heldCall))
 
   // At tool.check `next` only reads the verdict beneath and runs nothing, so a failed check is judged
   // once more whether or not it had read it (#2026).
-  on('tool.check', saveCheck).catch(($, e, next) => againOrHeld(() => saveCheck($, e, next), () => ({ decision: 'deny', reason: cannotCheck(next.error) })))
+  on('tool.check', saveCheck).catch(($, e, next) => neverThrows(() => saveCheck($, e, next), () => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), heldCheck))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
   // given the mod's own answers, and Dan's answer is read from the dialog's result.
