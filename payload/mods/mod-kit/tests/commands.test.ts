@@ -269,9 +269,11 @@ describe('pipeline: heredocs', () => {
       { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: false }], language: 'python', program: { text: 'print(1)', stdin: true }, asWritten: true },
     ])
   })
-  // The cat the substitution runs is a command of its own since #974; its body was dropped with the line's.
-  test('a heredoc inside a word feeds no command here, and one that never ends has no body', () => {
-    expect(pipeline(`git commit -m "$(cat <<'EOF'\nit's done\nEOF\n)"`)).toEqual([{ words: ['cat', '<<EOF'], substitution: true }, { words: ['git', 'commit', '-m', "$(cat <<'EOF'\n)"] }])
+  // The cat the substitution runs is a command of its own since #974, and since #2141 it is fed the
+  // body, which the word it sits in gives as its derived text; the word as typed still drops it.
+  test('a heredoc inside a word feeds the cat there, and one that never ends has no body', () => {
+    const cat = { words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: "it's done", quoted: true }], substitution: true as const }
+    expect(pipeline(`git commit -m "$(cat <<'EOF'\nit's done\nEOF\n)"`)).toEqual([cat, { words: ['git', 'commit', '-m', "$(cat <<'EOF'\n)"], derived: [null, null, null, { text: "it's done", commands: [cat] }] }])
     expect(pipeline('cat <<EOF\ngit status')).toEqual([{ words: ['cat', '<<EOF'] }, { words: ['git', 'status'] }])
   })
   test('the commands are the ones commands gives, word for word', () => {
@@ -408,7 +410,7 @@ describe('heredocs name the descriptor they feed (#760)', () => {
 describe('the commands a substitution runs (#974)', () => {
   const subs = (cmd: string) => pipeline(cmd).filter(c => c.substitution).map(c => c.words)
   test('$(...) and backticks, bare or in double quotes, each give their commands, marked, before the command they sit in', () => {
-    expect(pipeline('echo $(git commit -m x)')).toEqual([{ words: ['git', 'commit', '-m', 'x'], substitution: true }, { words: ['echo', '$(git commit -m x)'] }])
+    expect(pipeline('echo $(git commit -m x)').map(({ derived: _, ...c }) => c)).toEqual([{ words: ['git', 'commit', '-m', 'x'], substitution: true }, { words: ['echo', '$(git commit -m x)'] }])
     expect(commands('echo `git push`')).toEqual([['git', 'push'], ['echo', '`git push`']])
     expect(subs('echo "published: $(npm publish)"')).toEqual([['npm', 'publish']])
     expect(subs('echo "pushed: `git push origin main`"')).toEqual([['git', 'push', 'origin', 'main']])
@@ -474,7 +476,7 @@ describe('the commands a substitution runs (#974)', () => {
   })
   // #975: a process substitution runs its commands too, as the command it sits in starts.
   test('a process substitution, <(...) or >(...), gives its commands; in double quotes or a heredoc body it is text', () => {
-    expect(pipeline('diff <(git push) b')).toEqual([{ words: ['git', 'push'], substitution: true }, { words: ['diff', '<(git push)', 'b'] }])
+    expect(pipeline('diff <(git push) b').map(({ derived: _, ...c }) => c)).toEqual([{ words: ['git', 'push'], substitution: true }, { words: ['diff', '<(git push)', 'b'] }])
     expect(subs('tee >(npm publish) < x')).toEqual([['npm', 'publish']])
     expect(subs('diff <(sort <(git push)) b')).toEqual([['git', 'push'], ['sort', '<(git push)']])
     expect(subs('echo "<(git push)" \'>(npm publish)\'')).toEqual([])
@@ -551,5 +553,99 @@ describe('pipeline: which words the shell hands on as written, every pattern cha
     expect(pipeline(`python3 s.py 'a push' plain`).map(c => c.literal)).toEqual([undefined])
     // A shell's script is read by its own quotes.
     expect(pipeline(`bash -c "python3 s.py '*x*' *y*"`).map(c => c.literal)).toEqual([[false, false, true, false]])
+  })
+})
+
+// #2141: a word built from a command substitution gives, beside the word as typed, what the
+// substitution runs and, where that is a plain cat of a heredoc or a here string, the text it puts
+// in the word, so a guard reading a pull request's description reads that description. Anything
+// else is unresolved, with why, never empty and never typed.
+describe('pipeline: the text a command substitution puts in a word (#2141)', () => {
+  const last = (cmd: string) => pipeline(cmd).filter(c => !c.substitution).pop()
+  test("a cat of a quoted heredoc gives its body as the word's derived text, beside the word as typed", () => {
+    const cmd = `gh pr create --title "Area check: t.ts: proceed" --body "$(cat <<'EOF'\nCloses #1\n\nit's done\nEOF\n)"`
+    const gh = last(cmd)
+    expect(gh?.words[6]).toBe("$(cat <<'EOF'\n)")
+    expect(gh?.derived?.[6]).toEqual({ text: "Closes #1\n\nit's done", commands: [{ words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: "Closes #1\n\nit's done", quoted: true }], substitution: true }] })
+    // The title holds no substitution, so it has no derived text: a guard reads it as typed.
+    expect(gh?.derived?.[4]).toBe(null)
+    expect(gh?.derived?.length).toBe(gh?.words.length)
+    // The cat the substitution runs is fed its body too.
+    expect(pipeline(cmd)[0]).toEqual({ words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: "Closes #1\n\nit's done", quoted: true }], substitution: true })
+  })
+  test('a here string, an unquoted heredoc holding no expansion, text around it and backticks are read too', () => {
+    expect(last(`gh pr create --body "$(cat <<< 'one two')"`)?.derived?.[4]).toMatchObject({ text: 'one two' })
+    expect(last(`gh pr create --body "$(cat <<EOF\ncosts \\$5\nEOF\n)"`)?.derived?.[4]).toMatchObject({ text: 'costs $5' })
+    expect(last(`echo "Body: $(cat <<<x)!"`)?.derived?.[1]).toMatchObject({ text: 'Body: x!' })
+    expect(last("echo \"`cat <<'EOF'\nb\nEOF\n`\"")?.derived?.[1]).toMatchObject({ text: 'b' })
+    // Unquoted, a single word the shell neither splits nor matches against files.
+    expect(last('echo $(cat <<<ab)')?.derived?.[1]).toMatchObject({ text: 'ab' })
+  })
+  test('a nested substitution is resolved through the one inside it, and its commands are given', () => {
+    const d = last(`gh pr create --body "$(cat <<< "$(cat <<'EOF'\ninner\nEOF\n)")"`)?.derived?.[4]
+    expect(d).toMatchObject({ text: 'inner' })
+    expect(d?.commands.map(c => c.words)).toEqual([['cat', '<<EOF'], ['cat', '<<<', "$(cat <<'EOF'\n)"]])
+    const bad = last(`gh pr create --body "$(cat <<< "$(git log -1)")"`)?.derived?.[4]
+    expect(bad && 'unresolved' in bad).toBe(true)
+    expect(bad?.commands.map(c => c.words)).toEqual([['git', 'log', '-1'], ['cat', '<<<', '$(git log -1)']])
+  })
+  test('what the reader cannot know is unresolved, with why, and never given as text', () => {
+    const unresolved = (cmd: string, at: number) => {
+      const d = last(cmd)?.derived?.[at]
+      return d && 'unresolved' in d && typeof d.unresolved === 'string' && d.unresolved.length > 0 && !('text' in d) ? 'unresolved' : JSON.stringify(d)
+    }
+    const cases: [string, number][] = [
+      ['gh pr create --body "$(git log -1 --format=%B)"', 4],
+      ['gh pr create --body "$(cat notes.md)"', 4],
+      ['gh pr create --body "$(cat -n <<<x)"', 4],
+      ['gh pr create --body "$(cat <<EOF\nhi $USER\nEOF\n)"', 4],
+      ['gh pr create --body "$(cat <<< "$X")"', 4],
+      ['gh pr create --body "$(cat <<<x)$(date)"', 4],
+      ['gh pr create --body "$(cat <<<x; echo y)"', 4],
+      ['gh pr create --body "$(cat <<<x | tr a b)"', 4],
+      ['diff <(cat <<<x) b', 1],
+      ['echo $((1 + 2))', 1],
+      ["echo $(cat <<<'a b')", 1],
+    ]
+    for (const [cmd, at] of cases) expect(`${cmd} => ${unresolved(cmd, at)}`).toBe(`${cmd} => unresolved`)
+    expect(last('gh pr create --body "$(git log -1)"')?.derived?.[4]).toMatchObject({ commands: [{ words: ['git', 'log', '-1'], substitution: true }] })
+  })
+  test('a command with no substitution in any word carries no derived text', () => {
+    expect(last(`gh pr create --title t --body 'plain $(x)'`)?.derived).toBeUndefined()
+  })
+  test("an unquoted heredoc's substitutions inside a substitution are read once", () => {
+    expect(pipeline('x="$(cat <<EOF\n$(git push)\nEOF\n)"').filter(c => c.substitution).map(c => c.words)).toEqual([['git', 'push'], ['cat', '<<EOF']])
+  })
+  // Lessons review of #2165: a substitution that never closes was read to the end of the text left
+  // once the heredoc lines were dropped, which stops before them, so a body read nowhere else lost
+  // every command it runs. Where the reader cannot place the body it keeps its commands, and the
+  // word stays unresolved.
+  const ran = (cmd: string) => pipeline(cmd).map(c => c.words.join(' '))
+  test('a heredoc inside a substitution that never closes still gives what its body runs', () => {
+    expect(ran('echo $(cat <<EOF\n$(git push)\nEOF')).toContain('git push')
+    expect(ran('echo "$(cat <<EOF\n$(git push)\nEOF')).toContain('git push')
+    const d = last('echo $(cat <<EOF\n$(git push)\nEOF')?.derived?.[1]
+    expect(d && 'unresolved' in d).toBe(true)
+    expect(d?.commands.map(c => c.words.join(' '))).toContain('git push')
+  })
+  test('a substitution nested in that body, or one never closed inside it, is read too', () => {
+    expect(ran('echo $(cat <<EOF\n$(echo $(git push))\nEOF')).toContain('git push')
+    expect(ran('echo $(echo $(cat <<EOF\n$(git push)\nEOF')).toContain('git push')
+    expect(ran('echo $(cat <<EOF\n$(cat <<END\n$(git push)\nEND\n)\nEOF')).toContain('git push')
+  })
+  test('a heredoc whose body stands past the end of the substitution it opens in still gives what the body runs', () => {
+    // The removed lines stand after the ) that closes the substitution, so they are at a place past
+    // its end and were put back nowhere.
+    expect(ran('echo $(cat <<EOF)\n$(git push)\nEOF')).toContain('git push')
+    expect(ran('echo "$(cat <<EOF)" ok\n`git push`\nEOF')).toContain('git push')
+    // bash 3.2 ends that heredoc at the ) and runs the lines after it as commands, so they are read
+    // as commands as well as a body, whichever the delimiter.
+    expect(ran('echo $(cat <<EOF)\ngit push\nEOF')).toContain('git push')
+    expect(ran("echo $(cat <<'EOF')\ngit push\nEOF")).toContain('git push')
+    const d = last('echo $(cat <<EOF)\n$(git push)\nEOF')?.derived?.[1]
+    expect(d && 'unresolved' in d).toBe(true)
+  })
+  test('a quoted heredoc in an unclosed substitution keeps its body as text, so nothing in it runs', () => {
+    expect(ran("echo $(cat <<'EOF'\n$(git push)\nEOF")).not.toContain('git push')
   })
 })

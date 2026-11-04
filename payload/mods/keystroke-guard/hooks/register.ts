@@ -2,6 +2,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import { appNameOf, classify, judge, refusalText, type Refusal } from './keys.ts'
 import { publishInstead } from './mod-kit/deliver.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
+import { neverThrows } from './mod-kit/hold.ts'
 
 // Keystroke guard (claude-config#608). A Go ahead holds for its app until ten minutes pass with
 // nothing sent to it (Dan, 2026-10-03). Kept in memory: a reload asks again, which errs toward
@@ -69,7 +71,18 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: 
   const doing = typing ? `type into ${app}` : `bring ${app} to the front`
   let answer = ''
   try {
-    answer = await $.ui.ask(`I'm about to ${doing}. Ready?`, { options: ['Go ahead', 'Not now'], header: 'Taking over' })
+    // #2132: the question waits on Dan, and mod-kit's reload of keystroke-guard in that time would
+    // drop it, so the reload is held back until he answers, for at most an hour.
+    const held = {
+      mod: 'keystroke-guard',
+      id: 'ready',
+      what: "Dan's answer to the Ready question",
+      ms: HOLD_MAX_MS,
+      hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
+      release: (input: { mod: string; id: string }) => $.modkit.release(input),
+      log: (line: string) => $.ui.log(line, { to: 'debug' }),
+    }
+    answer = await whileHeld(held, () => $.ui.ask(`I'm about to ${doing}. Ready?`, { options: ['Go ahead', 'Not now'], header: 'Taking over' }))
   } catch {
     return { reason: `The question about ${app} was dismissed.` }
   }
@@ -122,6 +135,14 @@ const holdWhileAway = async (
     return { failed: errorText(err, 'keystroke-guard') }
   }
 }
+
+// The refusal the catch gives when this guard itself failed, naming why; HELD is the same refusal
+// built once here, for when even naming the failure throws (#2039).
+const cannotCheck = (why: string) => ({
+  decision: 'deny' as const,
+  reason: `Blocked: the keystroke guard could not check this command (${why}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
+})
+const HELD = cannotCheck('unknown failure')
 
 export const register: Register = on => {
   // Asked at tool.check (#875), which the engine raises inside tool.call once every mod's tool.call
@@ -184,10 +205,12 @@ export const register: Register = on => {
     const declined = await headsUp($, app, typing, c.app !== undefined)
     if (declined) return refuse(declined)
     return decided
-  }).catch(($, e, next) => ({
+  }).catch(($, e, next) => neverThrows(
     // A hook that fails is skipped and the verdict beneath stands, which would let the keystroke
-    // through unchecked, so a failure here refuses (L42). Nothing has run yet at tool.check.
-    decision: 'deny' as const,
-    reason: `Blocked: the keystroke guard could not check this command (${next.error ? errorText(next.error, 'keystroke-guard') : 'unknown failure'}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
-  }))
+    // through unchecked, so a failure here refuses (L42). Nothing has run yet at tool.check. Should
+    // naming the failure fail too, the refusal says unknown failure, so the catch never throws (#2039).
+    () => cannotCheck(next.error ? errorText(next.error, 'keystroke-guard') : 'unknown failure'),
+    () => HELD,
+    HELD,
+  ))
 }
