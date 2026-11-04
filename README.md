@@ -5279,7 +5279,11 @@ in no checkout, or where the repository has no fast growing file and no structur
 file. Removals, `touch`, `mkdir`, mode changes and a folder handed to a script are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
 Every judgement, decision and answer is one JSON line in
-`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start; issues are read
+`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
+log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
+later a session start copies its decision lines to `rotated/<stamp>.decisions.jsonl` and only then
+renames it to the archive `rotated/<stamp>.jsonl`. Nothing is ever deleted, and a rotation that
+fails leaves the log where it was, keeps the error, and says so in one dim line. Issues are read
 unfiltered once per repository and kept an hour (a failure ten minutes), warmed at session start, as
 each account gh is logged in to, all under one 7 second deadline, and an edit with nothing to hold
 whose issues or growth could not be read passes without settling the file, so the next edit to it
@@ -5290,14 +5294,16 @@ through the same rules. Every pull request then carries an area check line for e
 its branch, `Area check: <file>: <decision>, <reason>` (a fold line also names `Refs #N`): `gh pr
 create`, `gh pr edit` given a description, and `gh pr merge` (by itself, `--auto` or through the
 merge helper) are refused while the description lacks one, with the lines to paste. Decisions are
-matched by repository, branch and merge base, read from this Mac's log only, and only from its
-newest 1 MiB of decision lines; a rebase moves the merge base, so decisions taken before it are no
-longer asked for. A log that cannot be read refuses the command; a fact the command does not depend
-on that cannot be read (no checkout, GitHub not answering for a merge) lets it through.
+matched by repository, branch and merge base, read from this Mac's log only: every decisions file,
+any log still rotating and the live log, filtered by one `awk` pass to the one repository and
+branch, so no decision is ever too old to be asked for and the scan is the decisions plus at most a
+few MiB of log. A rebase moves the merge base, so decisions taken before it are no longer asked
+for. A log that cannot be read refuses the command; a fact the command does not depend on that
+cannot be read (no checkout, GitHub not answering for a merge) lets it through.
 
 </td><td>
 
-#1506, #1508, #1509, #1510
+#1506, #1508, #1509, #1510, #2143
 
 </td></tr>
 <tr><td>
