@@ -127,18 +127,20 @@ if [ -n "${STUB_CLAUDE_LOG:-}" ]; then
   n=1; while ! ( set -C; : > "$STUB_CLAUDE_LOG/call.$n" ) 2>/dev/null; do n=$((n+1)); done
   printf '%s' "$input" > "$STUB_CLAUDE_LOG/call.$n"
 fi
-# STUB_CLAUDE_MEET, a directory: a call over the rest of the tests marks itself there and waits, up
-# to 20 seconds, for a second such call to start, recording "met" when one does. Readings made one
-# after another never meet; readings made at once do, without any fixed sleep deciding it.
+# STUB_CLAUDE_MEET, a directory: a call over the rest of the tests marks itself there and waits, no
+# longer than the hang ceiling FAKE_HANG_S hands this stand in (hooks/lib/hang-wait.sh), for a
+# second such call to start, recording "met" when one does. Readings made one after another never
+# meet; readings made at once do, without any fixed sleep deciding it.
 if [ -n "${STUB_CLAUDE_MEET:-}" ]; then
   case "$input" in *'CHANGES THE FIRST READER FOUND NO TEST FOR'*)
     # The mark is taken away when the call ends, so two calls one after the other are never both
-    # marked; once two have met, later calls do not wait.
+    # marked; once two have met, later calls do not wait. The marks are counted by a glob, never a
+    # pipeline into grep (test-pipefail-shortcircuit.sh); this call's own mark is always one of them.
     : > "$STUB_CLAUDE_MEET/started.$$"
-    i=0
-    while [ "$i" -lt 200 ] && [ ! -e "$STUB_CLAUDE_MEET/met" ]; do
-      [ "$(ls "$STUB_CLAUDE_MEET" | grep -c '^started\.')" -ge 2 ] && { : > "$STUB_CLAUDE_MEET/met"; break; }
-      sleep 0.1; i=$((i+1))
+    t0=$SECONDS; while [ ! -e "$STUB_CLAUDE_MEET/met" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do
+      marks=("$STUB_CLAUDE_MEET"/started.*)
+      [ "${#marks[@]}" -ge 2 ] && { : > "$STUB_CLAUDE_MEET/met"; break; }
+      sleep 0.1
     done
     rm -f "$STUB_CLAUDE_MEET/started.$$" ;;
   esac
@@ -570,8 +572,9 @@ else fail=$((fail+1)); echo "FAIL: #2153 the judge was not shown the test the br
 if grep -q 'ALREADY ON THIS BRANCH' "$JUDGE_LOG/call.1" 2>/dev/null; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL: #2153 the judge was not told which tests were pushed earlier on the branch"; fi
 # The source judged is the push's own: the earlier commit's test file is not listed as pushed source.
-if awk '/^SOURCE FILES CHANGED IN THIS PUSH/,/^FAILURE HANDLING/' "$JUDGE_LOG/call.1" | grep -q 'lib/calc.js'; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #2153 the pushed source was not listed as the push's source"; fi
+src_section="$(awk '/^SOURCE FILES CHANGED IN THIS PUSH/,/^FAILURE HANDLING/' "$JUDGE_LOG/call.1" 2>/dev/null)"
+case "$src_section" in *'lib/calc.js'*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: #2153 the pushed source was not listed as the push's source" ;; esac
 
 # A code only push on a branch with no test anywhere on it is still refused at the floor, without a
 # judge call, even when the default branch had tests before the branch left it: those are not the
