@@ -153,10 +153,10 @@ except wn.CannotTell as e:
     print("cannot tell: %s" % e); sys.exit(2)
 print("projects=%d" % len(names))
 ' "$SCAN" 2>&1)"; proj_rc=$?
-check "the work MacBook's project list in payload/CLAUDE.md reads (exit $proj_rc): $(printf '%s' "$proj_out" | head -c 300)" [ "$proj_rc" -eq 0 ]
+check "the work MacBook's project list in payload/CLAUDE.md reads (exit $proj_rc): ${proj_out:0:300}" [ "$proj_rc" -eq 0 ]
 proj_n=0
 case "$proj_out" in projects=[0-9]*) proj_n="${proj_out#projects=}" ;; esac
-check "and lists at least one project: $(printf '%s' "$proj_out" | head -c 300)" [ "$proj_n" -ge 1 ]
+check "and lists at least one project: ${proj_out:0:300}" [ "$proj_n" -ge 1 ]
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

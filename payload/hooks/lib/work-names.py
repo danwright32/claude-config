@@ -24,7 +24,8 @@ WHAT DOES NOT. A product or repository name on its own (a lesson's `name#123`, a
 product named in prose): without the organisation it locates nothing, it is the vocabulary hundreds
 of lessons are written in, and `name#N` is what lesson-fanout.sh parses to skip the repository a
 lesson came from. The same login without its hyphen is a different GitHub account, and the
-company's public web domain, so it is not one either. These are decisions recorded on #1568's pull
+company's public web domain, so it is not one either (in published text it is matched as a domain
+only, see TWO MORE SOURCES below, claude-config#2184). These are decisions recorded on #1568's pull
 request, not omissions, and they still hold for files. The exceptions are text that is published
 without being a file: the publish gate (work_names_publish_gate.py, claude-config#2105) checks public
 pull request and issue text against the work repository names as well, and --work-repos does the
