@@ -29,6 +29,15 @@
 # than inferred, because a marker somebody writes is a decision and a rule guessing from
 # prose would exempt any doc that happened to word itself that way.
 #
+# The same reason one level down (#2185): a decision QUOTED word for word with its date (or an
+# issue comment as its source) right beside the quote, or the `"words"` field of a dated exception
+# in a settled design's JSON, is a citation, because rewording it would falsify the record. Only
+# the reference inside the quote marks; a bare quotation and anything outside it are still judged.
+# The rule and its shapes are in lib/doc-issue-refs.py.
+#
+# And a doc only main changed, arriving through a merge from main, is not read (#2185): the paths
+# come from what the branch did beyond that merge, set apart by lib/push-changes.sh (#2028).
+#
 # WHAT COUNTS: the sentence, not the line, and only a sentence whose pending phrase is
 # ANCHORED to the reference ("#N is the issue for", "tracked in #N", "#N tracks", "#N
 # will", "once #N", "when #N", "#N lands", "#N is open", "#N is pending", "not yet ...
@@ -168,10 +177,30 @@ fi
 # push's whole content is read rather than nothing.
 [ -n "$mb" ] || mb="$(git hash-object -t tree /dev/null 2>/dev/null)"
 
+# What a merge of the default branch brought in is set apart (claude-config#2185), by the one
+# helper the test and simplify gates use (lib/push-changes.sh, #2028). A branch pushed once that
+# then merges main carries, from its upstream, every doc main gained since; those were judged on
+# main, and a stale claim in one refused every branch that brought main in. So the paths are read
+# from what the branch did beyond that merge. A doc the branch itself changes is still read whole,
+# main's lines in it included, because touching a file is when it is re-verified (above). When the
+# merge cannot be set apart (no default branch known, or git cannot work it out), the whole range
+# is judged as before and the refusal says why, never not at all (L93).
+from="$mb"
+merge_unsplit=""
+# shellcheck source=lib/push-changes.sh
+if . "$HOOK_DIR/lib/push-changes.sh" 2>/dev/null && declare -F pc__set_apart_merged >/dev/null; then
+  PC_MB="$mb"; PC_FROM="$mb"; PC_MERGED=""; PC_MERGE_UNSPLIT=""
+  pc__set_apart_merged
+  from="${PC_FROM:-$mb}"
+  merge_unsplit="$PC_MERGE_UNSPLIT"
+elif [ -n "$(git rev-list --merges -n 1 "$mb..HEAD" 2>/dev/null)" ]; then
+  merge_unsplit="lib/push-changes.sh, which sets apart what a merge of main brought in, is missing beside this hook"
+fi
+
 # Two sources, each read where its content lives: committed paths from HEAD, and, when
 # this command commits before it pushes, the working tree paths that commit would take.
 committed_paths=""
-[ -n "$mb" ] && committed_paths="$(git diff --name-only --diff-filter=AMR "$mb" HEAD 2>/dev/null)"
+[ -n "$from" ] && committed_paths="$(git diff --name-only --diff-filter=AMR "$from" HEAD 2>/dev/null)"
 # The pending side is the index plus what the shared reader says the commit takes beyond it
 # (claude-config#457). Any add made this read every untracked file, so another session's untracked
 # doc was judged as this commit's.
@@ -390,6 +419,11 @@ fi
   fi
   if [ "$n_unreach" -gt 0 ]; then
     echo "gh could not answer for $n_unreach other issue(s), so those claims were not judged either way."
+  fi
+  if [ -n "$merge_unsplit" ]; then
+    echo "This push merges commits in, and what the merge brought from main could not be set"
+    echo "apart from what this branch changed, so docs only main changed were read too:"
+    echo "$merge_unsplit."
   fi
   echo "OVERRIDE: if the sentence is not a claim that the issue is pending, or the claim is"
   echo "right despite the state, re-run with:"

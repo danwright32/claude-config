@@ -7559,6 +7559,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   see; write the extra context after the visible words, never in place of them.**
   (bidspoke#2477, 2026-10-19)
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
+- **L843. Join a time of day to its AM or PM, and a figure to its unit, with a non-breaking space
+  wherever it is drawn, because a narrow column otherwise wraps the suffix onto a line of its own.**
+  (pivot#920, 2026-11-03)
+  SHORT: Join a time to its AM or PM, and a figure to its unit, with a non-breaking space, or a narrow column wraps the suffix alone.
 
 ## External systems
 - **L826. A request timeout cleared when the response headers arrive leaves reading the body with no limit, so a server that answers then trickles holds the caller open; keep the timer running until the body is fully read.**

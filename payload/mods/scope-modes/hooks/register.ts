@@ -73,6 +73,7 @@ import {
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { itemChoices, openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
@@ -567,9 +568,23 @@ type Round = { until: number; slept: boolean }
 // One bedtime question, waiting `waitMs`, what is left of the round. An answer given after the
 // wait is handed to `late`, for the nights after this one; tonight it counts as unanswered.
 type Asked = { answer: string } | { unanswered: true } | { failed: string }
+
+// #2132: a wait of this mod's held against mod-kit's reload of scope-modes, which would drop it: a
+// prompt the mod sent, waiting to be entered, or a question waiting on Dan. `ms` is the wait's own
+// deadline where it has one, else mod-kit's ceiling of an hour.
+const heldBy = ($: EngineInterface, id: string, what: string, ms: number = HOLD_MAX_MS) => ({
+  mod: 'scope-modes',
+  id,
+  what,
+  ms,
+  hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
+  release: (input: { mod: string; id: string }) => $.modkit.release(input),
+  log: (line: string) => $.ui.log(line, { to: 'debug' }),
+})
+
 const askOne = async ($: EngineInterface, question: string, options: string[], header: string, waitMs: number, late: (a: string) => Promise<void>): Promise<Asked> => {
   let isLate = false
-  const asking: Promise<Asked> = $.ui.ask(question, { options, header }).then(
+  const ask = (): Promise<Asked> => $.ui.ask(question, { options, header }).then(
     async (a: string) => {
       if (isLate && a !== GO_TO_SLEEP) await late(a).catch(err => $.ui.toast(`A late answer to "${question}" was not kept: ${msg(err)}`))
       return { answer: a }
@@ -577,7 +592,10 @@ const askOne = async ($: EngineInterface, question: string, options: string[], h
     // Dismissed, or the dialog could not be shown: never read as a question left unanswered (L11).
     (err: unknown) => ({ failed: msg(err) }),
   )
-  const first = await Promise.race([asking, $.clock.sleep(waitMs).then((): Asked => ({ unanswered: true }))])
+  // Held from the asking for the round's wait only: an answer after it is late, kept for the nights
+  // after this one, and the hold never outlasts the round.
+  const first = await whileHeld(heldBy($, 'bedtime', "Dan's answer to a bedtime question", waitMs), () =>
+    Promise.race([ask(), $.clock.sleep(waitMs).then((): Asked => ({ unanswered: true }))]))
   if ('unanswered' in first) isLate = true
   return first
 }
@@ -2304,7 +2322,7 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
       ? `Proposals and questions for ${mine} from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now.`
       : `Proposals for ${mine} from an earlier night, which no session in it was open to offer, turn out to be filed or declined already.`
   try {
-    await $.prompt.submit({
+    await whileHeld(heldBy($, 'earlier night', "the prompt offering an earlier night's proposals"), () => $.prompt.submit({
       text: morningPrompt({
         worker: false,
         offers: issues.length > 0 || sorted.filed.length > 0 || sorted.declined.length > 0,
@@ -2319,7 +2337,7 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
         ...(sorted.unchecked !== undefined ? { unchecked: sorted.unchecked } : {}),
         ...(bad ? { bad } : {}),
       }),
-    })
+    }))
   } catch (err) {
     $.ui.log(`scope-modes: ${mine}'s proposals from an earlier night were claimed but could not be offered (${msg(err)}); they are in that night's report`, { to: 'debug' })
   }
@@ -2523,7 +2541,7 @@ const morningAtMinute = async ($: EngineInterface, reading: SleepReading) => {
     }
     watchMorningPickers(m.prompt)
     try {
-      await $.prompt.submit({ text: m.prompt })
+      await whileHeld(heldBy($, 'morning', 'the prompt putting the morning to Dan'), () => $.prompt.submit({ text: m.prompt }))
     } catch (err) {
       morningPickers = undefined
       $.ui.log(`scope-modes: this session's morning could not be put to Dan (${msg(err)}), so it is tried again at the next minute`, { to: 'debug' })
@@ -3318,7 +3336,7 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
   })
   if (!resume) return
   try {
-    await $.prompt.submit({ text: resume })
+    await whileHeld(heldBy($, 'resume', "the prompt resuming this session's work after a wait"), () => $.prompt.submit({ text: resume }))
   } catch (err) {
     // Not started: due again at the next minute.
     await oneAtATime(async () => {
@@ -4189,7 +4207,7 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await $.ui.ask(question, [asIs.keep, asIs.other])
+    answer = await whileHeld(heldBy($, 'left open', "Dan's answer about leaving a PR open"), () => $.ui.ask(question, [asIs.keep, asIs.other]))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on ${pr}.`
   }
@@ -4256,7 +4274,7 @@ const leaveBranch = async ($: EngineInterface, input: Record<string, unknown>): 
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await $.ui.ask(question, ['Leave it as it is', 'Clean it up'])
+    answer = await whileHeld(heldBy($, 'left branch', "Dan's answer about leaving a branch as it is"), () => $.ui.ask(question, ['Leave it as it is', 'Clean it up']))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on the branch ${branch}.`
   }
@@ -4301,7 +4319,7 @@ const openCleanupBranch = async ($: EngineInterface, input: Record<string, unkno
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await $.ui.ask(question, ['Open it', 'Do not'])
+    answer = await whileHeld(heldBy($, 'cleanup branch', "Dan's answer about opening a cleanup branch"), () => $.ui.ask(question, ['Open it', 'Do not']))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still refuses the branch ${branch}.`
   }
@@ -5020,8 +5038,7 @@ export const register: Register = on => {
     if (morning)
       $.clock.after(0, () => {
         watchMorningPickers(morning)
-        void $.prompt
-          .submit({ text: morning })
+        void whileHeld(heldBy($, 'morning', 'the prompt putting the morning to Dan'), () => $.prompt.submit({ text: morning }))
           .then(
             () => morningDone($, true),
             async err => {
@@ -5220,7 +5237,7 @@ export const register: Register = on => {
       if (goal === null) return { consumed: 'scope-modes: a start for the night arrived, but this session has no goal tonight' }
       const where = await repoOf($)
       const text = startPrompt(en.self, where.root ?? (await $.session.cwd()), goal)
-      $.clock.after(0, () => void $.prompt.submit({ text }).catch(err => $.ui.log(`scope-modes: the night's work could not be started: ${msg(err)}`)))
+      $.clock.after(0, () => void whileHeld(heldBy($, 'night start', "the prompt starting the night's work"), () => $.prompt.submit({ text })).catch(err => $.ui.log(`scope-modes: the night's work could not be started: ${msg(err)}`)))
       return { consumed: "scope-modes: started the night's work toward this session's goal" }
     }
     return next(e)
@@ -5265,7 +5282,7 @@ export const register: Register = on => {
       }
       let answer: string
       try {
-        answer = await $.ui.ask(question, ['Yes', 'No'])
+        answer = await whileHeld(heldBy($, 'no build', "Dan's answer to whether Claude may switch to build"), () => $.ui.ask(question, ['Yes', 'No']))
       } catch (err) {
         const text = `Dan was not asked (${msg(err)}): no build stays on.`
         return { result: text, text }
@@ -5452,7 +5469,8 @@ export const register: Register = on => {
         if (!item) return
         await $.state.set(heldRef, held.filter(h => h.id !== id))
         await showHeld($)
-        await $.prompt.submit({ text: `Dan is back and picked this from what was held while he was away: ${item.label}. ${item.prompt}` })
+        await whileHeld(heldBy($, 'held pick', 'the prompt for what Dan picked from what was held while he was away'), () =>
+          $.prompt.submit({ text: `Dan is back and picked this from what was held while he was away: ${item.label}. ${item.prompt}` }))
       })().catch(err => $.ui.toast(`That held row did not finish: ${msg(err)}`))
     })
     return { value: { isAnswered: true } }

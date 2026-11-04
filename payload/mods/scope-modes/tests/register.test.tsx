@@ -97,8 +97,14 @@ const deps: { name: string; register: Register } = {
             return kit('isDans', input)
           },
           typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
-          hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
-          release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
+          // #2132: a hold on scope-modes' reload and its letting go, asked of the world, which keeps
+          // them in order beside each prompt and question and can refuse one as mod-kit would.
+          hold: async (input: unknown) => {
+            await kit('hold', input)
+          },
+          release: async (input: unknown) => {
+            await kit('release', input)
+          },
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
           login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
           account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
@@ -389,6 +395,8 @@ type Opts = {
   registryAnswer?: string
   /** The next prompts beneath the mod that fail, counted (#837: a prompt that never entered). */
   promptFails?: number
+  /** #2132: mod-kit refuses the hold on scope-modes' reload with this, as an older or missing mod-kit would. */
+  holdFails?: string
   /** Opening the report in BBEdit failing (#837): the helper's words, and open -a BBEdit's. */
   openFails?: { helper?: string; open?: string }
   /** `sleep-queue.sh release` refusing, with what it printed (#922: its answer can quote a worker's why). */
@@ -481,6 +489,12 @@ const world = (on: On, o: Opts = {}) => {
     homeGone: false,
     /** What reached the screen and GitHub, in order: each modes change, and the wake check's first read (#834). */
     order: [] as string[],
+    /** #2132: each hold on scope-modes' reload, its letting go, each prompt and each question the mod asks, in order. */
+    held: [] as string[],
+    /** #2132: the holds standing now, by id. */
+    holding: new Set<string>(),
+    /** #2132: each prompt or question the mod made with no hold standing, which a reload would drop. */
+    unheld: [] as string[],
     /** Reading this session's id throws from now on (#834: a permission decision that throws). */
     idThrows: false,
     released: [] as string[][],
@@ -709,6 +723,14 @@ const world = (on: On, o: Opts = {}) => {
     }
     // mod-kit's readers, read here with its copy; a command naming __reader_fails stands for a
     // reader that throws. Not one of the runs a test watches, which reach the Mac.
+    if (cmd === '__modkit' && (a[0] === 'hold' || a[0] === 'release')) {
+      if (a[0] === 'hold' && o.holdFails) return fail(1, o.holdFails)
+      const { id } = JSON.parse(a[1] as string) as { id: string }
+      if (a[0] === 'hold') w.holding.add(id)
+      else w.holding.delete(id)
+      w.held.push(`${a[0]} ${a[1]}`)
+      return ok('')
+    }
     if (cmd === '__modkit') {
       const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null; path?: string; spelling?: string; link?: string }
       if ((input.command ?? '').includes('__reader_fails')) return fail(1, 'the reader broke')
@@ -940,6 +962,12 @@ const world = (on: On, o: Opts = {}) => {
     return (outcome === true ? { isDelivered: true } : { isDelivered: false, reason: outcome.refused }) as never
   })
   on('prompt.submit', ($, e) => {
+    // A prompt the mod sends itself, never one a test types as Dan (#2132), is a wait a reload drops.
+    const from = (e as unknown as { origin?: { kind?: string; name?: string } }).origin
+    if (from?.kind === 'plugin' && from.name === 'scope-modes') {
+      w.held.push('submit')
+      if (!w.holding.size) w.unheld.push(`submit ${e.text.slice(0, 60)}`)
+    }
     if (o.promptFails) {
       o.promptFails--
       throw new Error('the prompt could not be entered')
@@ -981,6 +1009,12 @@ const world = (on: On, o: Opts = {}) => {
     if (e.tool === 'AskUserQuestion') {
       const first = (e as unknown as { questions: { question: string; options?: unknown[] }[] }).questions[0]
       const q = String(first?.question)
+      // A question the mod asks through $.ui.ask: the engine gives its call a generated toolu_ id,
+      // where a test's own call for Claude carries a short one of its own ('q1', 'p1').
+      if (/^toolu_/.test(String((e as unknown as { tool_use_id?: unknown }).tool_use_id))) {
+        w.held.push('ask')
+        if (!w.holding.size) w.unheld.push(`ask ${q.slice(0, 60)}`)
+      }
       w.asked.push(q)
       w.askedOptions.push((first?.options ?? []).map(x => (x && typeof x === 'object' ? String((x as { label?: unknown }).label) : String(x))))
       // A before bed question about an issue (#836), answered as the test says.
@@ -1021,8 +1055,11 @@ const world = (on: On, o: Opts = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
+  everyWorld.push(w)
   return { w, clock, readAttempted }
 }
+// #2132: every world made in this file, so the last test can read every wait the mod made in all of them.
+const everyWorld: { o: Opts; held: string[]; unheld: string[] }[] = []
 
 type $T = {
   session: { start: (e: never) => Promise<unknown>; end: (e: never) => Promise<unknown>; receive: (e: never) => Promise<unknown> }
@@ -7352,4 +7389,41 @@ test('a morning whose pickers were all answered adds nothing to his next message
   await call($ as never, picker('Keep the old export flag?', 'q1'))
   await turnEnd($, 'm1')
   expect(ctxOf(await say($ as never, 'morning'))).not.toMatch(/morning pickers came back unanswered/)
+})
+
+// #2132: mod-kit reloads scope-modes when a mod it depends on changes, and a reload drops every wait
+// in flight: a prompt the mod sent and is waiting to see entered, a question waiting on Dan. So each
+// one holds that reload back while it waits.
+test('a hold mod-kit refuses is said in the debug log, and the morning prompt is still sent (#2132)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) }, holdFails: 'this mod-kit has no hold' })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  expect(morningOf(w)).toHaveLength(1)
+  expect(w.unheld).toHaveLength(1)
+  expect(w.logs.join('\n')).toContain('scope-modes: could not hold back a reload while it waits on the prompt putting the morning to Dan, so one now would drop that wait')
+  expect(w.logs.join('\n')).toContain('this mod-kit has no hold')
+})
+
+test('a morning prompt that cannot be entered still lets go of its hold on a reload (#2132)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) }, promptFails: 1 })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const morning = w.held.filter(h => h === 'submit' || h.includes('"morning'))
+  expect(morning.slice(0, 3)).toEqual([
+    `hold ${JSON.stringify({ mod: 'scope-modes', id: 'morning', what: 'the prompt putting the morning to Dan', ms: 3_600_000 })}`,
+    'submit',
+    `release ${JSON.stringify({ mod: 'scope-modes', id: 'morning' })}`,
+  ])
+  expect(w.holding.size).toBe(0)
+})
+
+// Last in the file, so it reads every wait the mod made in every test above: each one was held, and
+// every kind of wait was reached at least once, so a site that stops being exercised fails here too.
+test('every prompt the mod sends and every question it asks Dan holds back a reload of scope-modes while it waits (#2132)', async () => {
+  const worlds = everyWorld.filter(x => !x.o.holdFails)
+  expect(worlds.flatMap(x => x.unheld)).toEqual([])
+  const ids = new Set(worlds.flatMap(x => x.held.filter(h => h.startsWith('hold ')).map(h => (JSON.parse(h.slice(5)) as { id: string }).id.replace(/ \d+$/, ''))))
+  expect([...ids].sort()).toEqual(['bedtime', 'cleanup branch', 'earlier night', 'held pick', 'left branch', 'left open', 'morning', 'night start', 'no build', 'resume'])
 })

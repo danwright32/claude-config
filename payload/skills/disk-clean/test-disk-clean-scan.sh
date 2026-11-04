@@ -59,12 +59,16 @@ fresh() {
 }
 run_scan() { OUT_TEXT="$(dc_run bash "$SCAN" "$@" 2>&1)"; RC=$?; }
 run_scan_env() { OUT_TEXT="$(dc_run env "$@" 2>&1)"; RC=$?; }
+# Every kind but the Trash offers only what nothing in was changed or opened for 30 days (#2134), so
+# a fixture meant to be offerable is dated long ago, times of change and of access both.
+aged() { find "$@" -exec touch -t 202401011200 {} +; }
 
 # ================================================================================================
 # 1. The record: written through disk-clean-record.sh, whole, with its scan's facts in the header
 # ================================================================================================
 fresh
 mkdir -p "$H/Library/Caches/com.a" "$H/Library/Mail" "$H/.Trash"; printf 'x\n' > "$H/.Trash/t"
+aged "$H/Library/Caches"
 run_scan
 check "a full scan exits 0" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $(tail -5 <<< "$OUT_TEXT")")"
 check "it writes last-scan.json" "$([ -f "$REC" ] && echo ok || echo "no record at $REC")"
@@ -308,22 +312,22 @@ check "dcr_write itself still refuses a header value holding a control character
 # all is never totalled as 0 KB.
 du_mixed='for a in "$@"; do case "$a" in -*) ;; *unread) ;; *com.part) printf "12\t%s\n" "$a"; printf "du: %s/sub: Permission denied\n" "$a" >&2 ;; *) printf "12\t%s\n" "$a" ;; esac; done'
 fresh
-mkdir -p "$H/Library/Caches/com.a" "$H/Library/Caches/com.unread"
+mkdir -p "$H/Library/Caches/com.a" "$H/Library/Caches/com.unread"; aged "$H/Library/Caches"
 dc_stub du "$du_mixed"
 run_scan --only caches
 check "an unread size makes the total at least" "$(has "$OUT_TEXT" "App caches: 2 offerable (at least 12 KB), 0 not offerable, 0 unmeasured.")"
 fresh
-mkdir -p "$H/Library/Caches/com.a" "$H/Library/Caches/com.part"
+mkdir -p "$H/Library/Caches/com.a" "$H/Library/Caches/com.part"; aged "$H/Library/Caches"
 dc_stub du "$du_mixed"
 run_scan --only caches
 check "a partial size makes the total at least" "$(has "$OUT_TEXT" "App caches: 2 offerable (at least 25 KB), 0 not offerable, 0 unmeasured.")"
 fresh
-mkdir -p "$H/Library/Caches/com.unread"
+mkdir -p "$H/Library/Caches/com.unread"; aged "$H/Library/Caches"
 dc_stub du "$du_mixed"
 run_scan --only caches
 check "with no size read at all the total is unknown, never 0 KB" "$(has "$OUT_TEXT" "App caches: 1 offerable (size unknown), 0 not offerable, 0 unmeasured.")"
 fresh
-mkdir -p "$H/Library/Caches/com.a"
+mkdir -p "$H/Library/Caches/com.a"; aged "$H/Library/Caches"
 dc_stub du "$du_mixed"
 run_scan --only caches
 check "every size measured in full keeps the plain total" "$(has "$OUT_TEXT" "App caches: 1 offerable (12 KB), 0 not offerable, 0 unmeasured.")"
