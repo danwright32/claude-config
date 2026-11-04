@@ -878,6 +878,9 @@ def main(argv):
     ap.add_argument("--deadline", type=int, required=True)
     ap.add_argument("--kind", default="push", choices=("push", "pr"))
     ap.add_argument("--base", default="")
+    # The repository beside the folder label, which outlives an agent worktree (#2236): empty from
+    # a caller that names none, such as tools/review-score.py.
+    ap.add_argument("--repository", default="")
     # A later round of a pull request review that reads only what changed since this head (#1358).
     ap.add_argument("--since", default="")
     ap.add_argument("--scope-file", default="")
@@ -889,6 +892,7 @@ def main(argv):
     name = a.name or f"{a.key}-{a.sha}"
     meta = {
         "repo": a.repo_label,
+        "repository": a.repository,
         "branch": a.branch,
         "sha": a.sha,
         "started": a.started,
