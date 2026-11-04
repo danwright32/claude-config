@@ -212,7 +212,7 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
   }
   BEGIN {
     while ((getline line < catfile) > 0) { split(line, c, tab); title[c[1]] = c[3]; total[c[1]] = c[4]; name[c[1]] = c[2]; can[c[1]] = c[5] + 0; why[c[1]] = c[6]; nkinds++ }
-    printf "<header class=\"top\"><h1>Disk clean</h1><p class=\"scanline\">Scanned %s on this Mac. Nothing is removed until you copy your selection back.</p></header>\n", h(scanned)
+    printf "<header class=\"top\"><h1>Disk clean</h1><p class=\"scanline\">Scanned %s on this Mac. Nothing is removed until you copy your selection back. Apart from the Trash, everything offered here has gone at least 30 days without being changed or run.</p></header>\n", h(scanned)
     printf "<div class=\"grouped\" id=\"review\" data-scan-id=\"%s\" data-nonce=\"%s\">\n", h(sid), h(nonce)
     FS = tab
   }

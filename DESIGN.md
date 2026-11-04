@@ -1474,6 +1474,22 @@ or a read past its budget, refuses rather than passes (L98). The merge gate hand
 left of its own deadline and refuses with under 3 seconds left, because Claude Code killing a hook
 that overruns its timeout lets the merge through.
 
+Two more sources for public text (#2184). The #2110 scrub found its second pass catching names the
+gate let through: three work repositories on the work MacBook's project list that neither the list
+nor the registry holds, and an organisation's login without its hyphen, which is its web and email
+domain. `work_repo_names` now also reads every project folder in the "On Dans-MacBook-Pro" block of
+the Projects section in the global CLAUDE.md (`work_mac_projects`, two directories above
+`lib/work-names.py` in the repository and installed), so the gate and the message checks gain both
+at once, and a CLAUDE.md it cannot read, or one with no such block or no project in it, refuses as
+the list does. The hyphenless login is matched only as a domain, after an @ or before a dot and a
+top level domain, never as a bare word: the same letters can be an ordinary word, and a bare match
+would refuse prose that locates nothing, which is what #1568 left it out for. A project folder that
+is such a login is judged by that domain rule rather than as a bare name, for the same reason. The
+domain rule tries every way of putting one or two hyphens back into the word against the built in
+hashes, so the login is never written down. `tests/test-work-names-tree.sh` reads the real block,
+printing only its count, so an edit to CLAUDE.md that breaks it fails a suite before it is
+installed rather than refusing every public write on both Macs.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on

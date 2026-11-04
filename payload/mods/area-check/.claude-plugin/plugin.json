@@ -1,7 +1,7 @@
 {
   "name": "area-check",
   "version": "0.1.0",
-  "description": "Holds the first edit a session makes to each existing source or test file when open p0 to p2 tech-debt or refactor issues name it or it is among the fastest growing large files. A grey card shows the facts, and Claude decides through the mod's decide tool: proceed with a reason, fold an issue's fix in, or restructure, which asks Dan Restructure first, Proceed anyway or Fold in. Every judgement is logged outside ~/.claude, and when the mod itself fails the edit goes ahead with one dim line. A pull request is refused at gh pr create, edit or merge while its description lacks an area check line for each file decided on its branch (#1506, #1508, #1509, #1510).",
+  "description": "Holds the first edit a session makes to each existing source or test file, by an edit tool or a Bash command that writes it, when open p0 to p2 tech-debt or refactor issues name it or it is among the fastest growing large files; a shell write whose file cannot be named is held too wherever something could hold. A grey card shows the facts, and Claude decides through the mod's decide tool: proceed with a reason, fold an issue's fix in, or restructure, which asks Dan Restructure first, Proceed anyway or Fold in. Every judgement is logged outside ~/.claude, and when the mod itself fails the edit goes ahead with one dim line. A pull request is refused at gh pr create, edit or merge while its description lacks an area check line for each file decided on its branch (#1506, #1508, #1509, #1510, #2142).",
   "author": { "name": "Dan Wright" },
   "types": "./types/index.d.ts",
   "dependencies": ["mod-kit", "session-registry"]
