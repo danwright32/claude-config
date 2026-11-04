@@ -40,7 +40,7 @@ command -v python3 >/dev/null 2>&1 || { echo "test-check-zsh-builtins: python3 i
 # a copy identical to the original and every looser run would prove nothing (L100).
 LOOSE="$WORKDIR/loose"; mkdir -p "$LOOSE/lib"
 cp "$HOOK" "$DIR/zsh_builtin_gate.py" "$LOOSE/"
-cp "$DIR/lib/shell-words.py" "$LOOSE/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LOOSE/lib" push-scope.sh shell-words.py || bad "#2147 the hook helpers could not be installed into $LOOSE/lib"
 python3 - "$LOOSE/zsh_builtin_gate.py" <<'PY'
 import sys
 p = sys.argv[1]

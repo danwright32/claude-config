@@ -13,6 +13,8 @@ import json
 import os
 import sys
 
+# Loading lib/shell-words.py must leave no bytecode beside it in lib/ (claude-config#2080).
+sys.dont_write_bytecode = True
 HOOKS = os.path.dirname(os.path.abspath(__file__))
 
 # zsh builtins that shadow a program a command means to run, and that program's full path.

@@ -29,12 +29,16 @@ HOW="In zsh, which runs the Bash tool here, log is the shell's own builtin, not 
 # Bash builtins only up to the python call: with python3 missing, PATH may hold nothing else.
 IFS= read -r -d '' payload
 
+# The raw payload is matched in the session locale and then in C, since under a UTF-8 locale =~
+# stops at a byte that is not UTF-8 and every word after it reads as absent (claude-config#1885).
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+
 # Every Bash call passes through here, and nearly none name log as a word: answer those at once. The
 # payload is JSON, so a newline or tab before the word is the two characters \n or \t. Any end of
 # the word passes on, since a command sent as a list of its words (claude-config#2057) ends it with
 # a quote and a comma.
 FAST='(^|[^A-Za-z0-9_./~-]|\\[nt])log([^A-Za-z0-9_./~-]|$)'
-[[ $payload =~ $FAST ]] || exit 0
+payload_match "$payload" "$FAST" || exit 0
 
 shell_name="${SHELL##*/}"
 if [ -n "$shell_name" ] && [ "$shell_name" != zsh ]; then
@@ -49,10 +53,9 @@ not_judged() {   # $1 = why it could not be read
   local text="$payload"
   local tool='"tool_name"[[:space:]]*:[[:space:]]*"Bash"'
   local crude='(^|"command"[[:space:]]*:[[:space:]]*"|[;&|({`'\''"'$'\n'']|\\n|\$\()[[:space:]]*log[[:space:]]+[^[:space:]"]'
-  [[ $payload =~ $tool ]] || exit 0
-  # shellcheck source=lib/push-scope.sh
-  . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && text="$(ps_payload_text "$payload")"
-  [[ $text =~ $crude ]] || exit 0
+  payload_match "$payload" "$tool" || exit 0
+  [ "$have_ps" = 1 ] && text="$(ps_payload_text "$payload")"
+  payload_match "$text" "$crude" || exit 0
   echo "BLOCKED: this command seems to run log with an argument, and it could not be read word by word: $1. $HOW Write the full path, /usr/bin/log, or put command in front (command log), which looks only for programs." >&2
   exit 2
 }
@@ -62,7 +65,15 @@ case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 JUDGE="$HOOK_DIR/zsh_builtin_gate.py"
 
-command -v python3 >/dev/null 2>&1 || not_judged "python3 is not on PATH, and the command's words are read with it"
+# The shared readers: ps_reader_missing asks whether python3 is installed (claude-config#480), and
+# ps_payload_text gives the crude reading every word of the payload. Without the library the gate
+# still judges, asking for python3 itself, so a missing library never refuses fewer commands.
+have_ps=0
+# shellcheck source=lib/push-scope.sh
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && have_ps=1
+
+if [ "$have_ps" = 1 ]; then ps_reader_missing python3; else ! command -v python3 >/dev/null 2>&1; fi \
+  && not_judged "python3 is not on PATH, and the command's words are read with it"
 [ -f "$JUDGE" ] || not_judged "$JUDGE, the judge, is missing (reinstall the hooks with claude-sync pull)"
 
 # The judge exits 0 to pass, 3 to refuse (printing the fix), and 4 when it could not read the
