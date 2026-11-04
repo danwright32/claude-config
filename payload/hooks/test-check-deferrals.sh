@@ -162,7 +162,8 @@ want_finding "single quotes are not a quote here (apostrophes would pair), so th
 # first, so a reworded row fails here rather than passing a scan of nothing.
 README_FILE="$DIR/../../README.md"
 for needle in 'not when it limits it ("for now",' '"stay read only", "read only for now",'; do
-  n="$(grep -n -F -- "$needle" "$README_FILE" | head -1 | cut -d: -f1)"
+  n="$(grep -n -m 1 -F -- "$needle" "$README_FILE")"
+  n="${n%%:*}"
   if [ -z "$n" ]; then
     check "README holds the quoted phrase whole on one line: $needle" "line not found in README.md"
     continue
