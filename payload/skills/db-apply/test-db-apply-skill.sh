@@ -171,44 +171,80 @@ check "the skill says which supabase CLI version the command was checked against
 check "the skill says the write is read back after it runs" \
   "$(linked_section="$(awk '/supabase db query --linked/,/psql "\$url"/' "$SKILL")"; grep -qi 'read it back\|read back' <<< "$linked_section" && echo ok || echo "no read back step on the linked path")"
 
-# The command line itself, against a stub supabase: one that has db query, one older CLI that
-# prints its parent help and exits 0 for an unknown subcommand (as v2.75.0 does), and none at all.
-mkbin "$TMP/sb-with" grep cat
-mkbin "$TMP/sb-old" grep cat
+# The command line itself, against stub supabase CLIs that behave as each real version was measured
+# or documented to (claude-config#2189). Every stub writes each call it gets to supabase-calls, and
+# the change counts as sent only when a call carries change.sql.
+#   sb-with     3.0.0: db query takes --linked and --file, so its help exits 0.
+#   sb-old      2.75.0, measured on the personal MacBook on 2026-11-04: no db query, so a bare
+#               `db query --help` prints the parent db help and exits 0, while the same help asked
+#               with --linked exits 1 with "unknown flag: --linked".
+#   sb-lookalike  no db query either, but its parent help carries an unrelated --file flag, which a
+#               search of that help for --file mistook for the command (the old detection).
+#   sb-four     4.0.0: db query exists but --linked is removed, so asking for it exits 1.
 mkbin "$TMP/sb-none" grep cat
-cat > "$TMP/sb-with/supabase" <<STUB
+stub_cli(){   # stub_cli <dir> <version> <has db query --linked: yes|no> <parent help line>
+  mkbin "$1" grep cat head
+  cat > "$1/supabase" <<STUB
 #!/bin/bash
-if [ "\$1 \$2 \$3" = "db query --help" ]; then echo "  -f, --file string   Path to a SQL file to execute."; exit 0; fi
-printf '%s\n' "\$@" > "$TMP/supabase-args"
-echo "stub supabase ran"
+printf '%s\n' "\$*" >> "$TMP/supabase-calls"
+if [ "\$1" = "--version" ]; then echo "$2"; echo "A new version of Supabase CLI is available" >&2; exit 0; fi
+help=no; linked=no
+for a in "\$@"; do [ "\$a" = "--help" ] && help=yes; [ "\$a" = "--linked" ] && linked=yes; done
+if [ "\$1 \$2" = "db query" ] && [ "$3" = "yes" ]; then
+  if [ "\$help" = yes ]; then echo "Usage:"; echo "  supabase db query [sql] [flags]"; echo "  -f, --file string   Path to a SQL file to execute."; exit 0; fi
+  echo "stub supabase ran"; exit 0
+fi
+if [ "\$1 \$2" = "db query" ] && [ "\$linked" = yes ]; then
+  echo "Usage:"; echo "  supabase db [command]"; echo "unknown flag: --linked" >&2; exit 1
+fi
+if [ "\$1" = "db" ]; then echo "Usage:"; echo "  supabase db [command]"; echo "$4"; exit 0; fi
+exit 1
 STUB
-cat > "$TMP/sb-old/supabase" <<STUB
-#!/bin/bash
-if [ "\$1 \$2 \$3" = "db query --help" ]; then echo "Available Commands:"; echo "  push   Push new migrations"; exit 0; fi
-printf '%s\n' "\$@" > "$TMP/supabase-args"
-echo "unknown flag: --linked" >&2; exit 1
-STUB
-chmod +x "$TMP/sb-with/supabase" "$TMP/sb-old/supabase"
+  chmod +x "$1/supabase"
+}
+stub_cli "$TMP/sb-with" "3.0.0" yes "  -f, --file string   Path to a SQL file to execute."
+stub_cli "$TMP/sb-old" "2.75.0" no "  push   Push new migrations to the remote database"
+stub_cli "$TMP/sb-lookalike" "2.70.0" no "  -f, --file string   Path to an unrelated file."
+stub_cli "$TMP/sb-four" "4.0.0" no "  query   Execute a SQL query against a database."
 
-rm -f "$TMP/supabase-args"
+sent(){ grep -q 'change\.sql' "$TMP/supabase-calls" 2>/dev/null; }
+
+rm -f "$TMP/supabase-calls"
 out="$(cd "$WORK" && PATH="$TMP/sb-with" /bin/bash -c "$linked_line" 2>&1)"; rc=$?
 check "with db query available the command runs it against the linked project" \
   "$([ "$rc" -eq 0 ] && grep -q 'stub supabase ran' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
-check "and passes db query --linked --yes -f change.sql, so no prompt waits" \
-  "$(got="$(cat "$TMP/supabase-args" 2>/dev/null | tr '\n' ' ')"; [ "$got" = "db query --linked --yes -f change.sql " ] && echo ok || echo "supabase got: $got")"
+check "and sends exactly one call carrying the change: db query --linked --yes -f change.sql" \
+  "$(got="$(grep 'change\.sql' "$TMP/supabase-calls" 2>/dev/null)"; [ "$got" = "db query --linked --yes -f change.sql" ] && echo ok || echo "calls carrying the change: $got")"
 check "and nothing it printed holds the env file's secret" \
   "$(grep -qF "$SECRET" <<< "$out" && echo "printed the secret" || echo ok)"
+# The detection asks for db query with the flags the last step uses, as a help request, and never
+# with --yes or the change file: a CLI that ignored --help would then be sent nothing it could apply.
+probe="$(grep -- '--help' "$TMP/supabase-calls" 2>/dev/null | head -n 1)"
+check "the detection asks for db query --linked --file itself, as a help request" \
+  "$(grep -q '^db query ' <<< "$probe" && grep -q -- '--linked' <<< "$probe" && grep -q -- '--file' <<< "$probe" && echo ok || echo "the help call was: ${probe:-none}")"
+check "and the detection carries neither --yes nor the change file" \
+  "$(grep -qE -- '--yes|change\.sql' <<< "$probe" && echo "the help call was: $probe" || echo ok)"
 
-rm -f "$TMP/supabase-args"
-out="$(cd "$WORK" && PATH="$TMP/sb-old" /bin/bash -c "$linked_line" 2>&1)"; rc=$?
-check "with a CLI that has no db query, nothing is sent and the command fails" \
-  "$([ "$rc" -ne 0 ] && [ ! -f "$TMP/supabase-args" ] && echo ok || echo "exit $rc, said: $out")"
-check "and says the CLI has no db query command" \
-  "$(grep -qi 'no db query command' <<< "$out" && echo ok || echo "said: $out")"
+for cli in sb-old:2.75.0 sb-lookalike:2.70.0 sb-four:4.0.0; do
+  d="${cli%%:*}"; v="${cli#*:}"
+  rm -f "$TMP/supabase-calls"
+  out="$(cd "$WORK" && PATH="$TMP/$d" /bin/bash -c "$linked_line" 2>&1)"; rc=$?
+  check "with CLI $v ($d), which cannot take db query --linked, nothing is sent and the command fails" \
+    "$([ "$rc" -ne 0 ] && ! sent && echo ok || echo "exit $rc, calls: $(tr '\n' ';' < "$TMP/supabase-calls" 2>/dev/null), said: $out")"
+  check "and the refusal names the version found, $v, and the version needed, 2.79.0" \
+    "$(grep -qF "version $v" <<< "$out" && grep -qF '2.79.0' <<< "$out" && echo ok || echo "said: $out")"
+done
 
 out="$(cd "$WORK" && PATH="$TMP/sb-none" /bin/bash -c "$linked_line" 2>&1)"; rc=$?
 check "with no supabase CLI at all the command fails and says so" \
   "$([ "$rc" -ne 0 ] && grep -qi 'supabase CLI is not installed' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
+
+# The versions the skill relies on, and the --linked or --remote decision, with their sources.
+linked_prose="$(awk '/supabase db query --linked/,/psql "\$url"/' "$SKILL")"
+check "the skill names 2.79.0 as the release that added db query, from its release notes" \
+  "$(grep -qF '2.79.0' <<< "$linked_prose" && grep -qi 'release notes' <<< "$linked_prose" && echo ok || echo "no 2.79.0 with its source on the linked path")"
+check "the skill says --remote exists only from 3.0.0 and --linked is removed in v4" \
+  "$(grep -qE -- '--remote. exists only from 3\.0\.0' <<< "$linked_prose" && grep -qF 'removed in v4' <<< "$linked_prose" && echo ok || echo "the --linked or --remote decision is not stated")"
 
 echo ""
 echo "passed: $pass, failed: $fail"
