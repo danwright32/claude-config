@@ -1184,7 +1184,8 @@ python3 ~/.claude/hooks/lib/wrapped-refusal-report.py [--days 7]
 
 It prints the refusals and overrides in the window and the count for each shape, a wrapper and a
 reason, commonest first, which is what the refusal is narrowed by. The suites record into a
-throwaway one (`WRAPPED_REFUSAL_LEDGER_DIR`, which `run-all-tests.sh` hands every suite).
+throwaway one (`WRAPPED_REFUSAL_LEDGER_DIR`, which `run-all-tests.sh` hands every suite, and
+arming a suite's deadline hands one run on its own, #2156).
 Until #2155, a direct run of `test-gates-fail-closed.sh` wrote its own "eval, reader-lib-missing"
 refusals into the real record (129 on the personal MacBook, from 2026-10-29). The report leaves
 those out and says how many (#2157), but only rows in exactly the shape that suite left: that
@@ -2691,6 +2692,35 @@ their totals five different ways and the runner had to work out which line was t
 got wrong twice: it printed a per-check line where a verdict belongs, and it read `PASS=805 FAIL=0`
 as 805 failures. A suite that prints no result line is still run and still judged, its score
 guessed from its prose, and the runner NAMES it at the end rather than falling back quietly.
+
+**A suite run on its own writes into the same throwaway records a full run gives it**
+(claude-config#2156). Every record a hook keeps under `~/.claude` that a suite could drive, such as
+the issue spool, the push gate ledger, the record of wrapped command refusals, the sign in and
+merge phase records, claude-sync's log and the sleep record, has a variable naming where it goes
+instead, and `hooks/lib/suite-isolation.sh` holds them as one list. The runner points every one at
+its own throwaway folder, whatever was inherited. A suite typed straight into a shell used to get
+none of them, so a builder's check before a full run wrote into the real records: 123 fixture rows
+from `test-gates-fail-closed.sh` reached the real refusal record that way (#2126). Now
+`suite_deadline_arm`, which every suite calls near its top, fills in each one nothing has set yet,
+in one folder of its own under `$TMPDIR` named `claude-sync-suite-work.isolated.*`, which
+claude-sync's scratch sweep reclaims after four hours. Under the runner every one is already set,
+so no folder is made. A suite that names its own still wins. Arming refuses to run the suite when
+the list cannot be loaded or the folder cannot be made, rather than letting it write the real ones.
+A new record is one line in that list.
+
+A record with no variable is not covered by the list, and this finds one:
+
+```bash
+bash tools/suite-home-writes.sh payload/hooks/test-gates-fail-closed.sh
+```
+
+It runs each suite named on its own, with none of those variables set and `HOME` pointed at a
+throwaway folder, then names every file the suite left under that folder's `.claude` and the
+records kept beside it (`.claude-issue-spool` and the like). It lists paths only and never reads a
+file, and it never writes under the real `~/.claude`. It exits 0 when nothing was left, 1 naming
+the files when something was, and 2 when it could not check, and prints the suite's own exit
+status beside its verdict. It is not run on every full run: doing so costs about one full run
+again, and the runner already hands every suite the list.
 
 The main suite on its own:
 
@@ -5628,7 +5658,8 @@ worker, one worker's heartbeats an hour apart, a wait on a usage limit), is prin
 that night; each other part is `SUITE-PART-UNMEASURED`, saying why (#1662).
 
 **Test runs never read the real record.** `run-all-tests.sh` hands every suite a sleep record of
-its own that does not exist (`CLAUDE_SLEEP_RECORD`, which `hooks/lib/sleep.sh` reads when a caller
+its own that does not exist, and arming a suite's deadline does the same for a suite run on its own
+(#1729, #2156) (`CLAUDE_SLEEP_RECORD`, which `hooks/lib/sleep.sh` reads when a caller
 names no path), so a hook suite run during a night of sleep mode sees an awake Mac. Before this,
 the first suite run made while asleep (2026-10-13) failed every suite driving a quiet hook, and CI,
 with no record, passed. The suites that are about where the record is found unset it.
