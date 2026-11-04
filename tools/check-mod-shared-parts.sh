@@ -145,7 +145,10 @@
 # reader's `inputs`) by hand, a loop over `.inputs`. Three guards did, and one meeting /dev/stdin or
 # a fifo waited for ever on it, so the call never ran; inputTexts in hooks/mod-kit/inputs.ts never
 # opens a device or anything but a regular file. Reading only the inputs' names (a spread, a some)
-# is not a read, and passes.
+# is not a read, and passes. And a third (#2039), the catch: a hook registered with
+# `.catch(($, e, next) => ...)` answers straight through neverThrows from hooks/mod-kit/hold.ts on
+# that line, since a catch that throws is a guard failing open; only the replay of a call already
+# passed on may sit outside it, as `next.called ? next(e) : neverThrows(...)`.
 #
 # And one shared part every mod must USE rather than must not copy (#707):
 #   screen    a mod that answers a tool call itself (returns     ask $.modkit.screen(e) first, and answer with
@@ -335,6 +338,18 @@ for d in "$dir"/*/; do
     failed=1
     echo "check-mod-shared-parts: $name keeps hooks/mod-kit/skew.ts but no hooks file imports it, so it reads nothing: read a failed call to another mod's noun with its missingOf(err) or errorText(err, '$name'), or delete the copy."
   fi
+  # catch (#2039): a hook's registration catch, `.catch(($, e, next) => ...)`, is the guard's last
+  # word on a call, and one that throws leaves the call unheld. Each answers straight through
+  # neverThrows from the copy of mod-kit's hooks/hold.ts, on the same line, so this line scan can hold
+  # it. The one thing allowed before it is the replay of a call already passed on, written
+  # `next.called ? next(e) : neverThrows(...)`: that call has already run, so the tool's own failure
+  # must reach Claude rather than a refusal saying it did not run. Every catch before next goes
+  # through neverThrows. A promise's own catch takes an error, never `$`, and is not matched.
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    failed=1
+    echo "check-mod-shared-parts: $name keeps its own catch at ${h#"$sd"}: a guard's catch that throws holds nothing, so answer straight through neverThrows(work, fallback, last), with only a replay after next() allowed outside it as next.called ? next(e) : neverThrows(...), from the copy of hooks/hold.ts kept at hooks/mod-kit/hold.ts, on the catch's own line."
+  done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit '\.catch\((async )?\(\$' "$sd/hooks" 2>/dev/null | grep -vE '\.catch\((async )?\(\$[^)]*\) *=> *(next\.called \? next\(e\) : )?neverThrows\(')"
   # press (#939): a file naming the ui.press event and mod-kit anywhere in its code, however the hook
   # is laid out: its call or its filter across lines, or the filter held in a constant (lessons review
   # of #957). A click alone reaches such a hook; mod-kit's typed /press raises modkit.press, which it

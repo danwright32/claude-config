@@ -71,7 +71,7 @@ const GH_TOKEN = 'gho_' + 'Q'.repeat(36)
 // call that gets past the mod is answered here, and recorded, so a test can tell a refusal (the
 // call never arrived) from a pass.
 // files: more files on disk, by path, beside the project .env.
-const world = (on: On, files: Record<string, string> = {}) => {
+const world = (on: On, files: Record<string, string> = {}, failing?: string) => {
   const logs: string[] = []
   const reached: string[] = []
   const toasts: string[] = []
@@ -102,6 +102,7 @@ const world = (on: On, files: Record<string, string> = {}) => {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('tool.call', ($, e) => {
     reached.push(e.tool)
+    if (failing !== undefined && (e as { command?: string }).command === failing) throw new Error('the tool beneath failed')
     return { result: 'ran', text: 'ran' } as never
   })
   return { reached, toasts, cards, logs }
@@ -467,7 +468,7 @@ test('a tool result the guard cannot scrub is withheld rather than kept as it wa
   })
   const w = { stored: () => stored }
   await start($)
-  // A block the scrub cannot read makes the scrub itself throw, and a second try throws the same way.
+  // A block the scrub cannot read makes the scrub itself throw; withholding block by block then turns it into a withheld text without throwing, so no second try runs.
   await appendRow($, {
     door: 'tool-result',
     origin: { kind: 'tool', tool: 'Bash' },
@@ -477,4 +478,164 @@ test('a tool result the guard cannot scrub is withheld rather than kept as it wa
   expect(w.stored()).not.toContain(KNOWN)
   expect(w.stored()).toContain('withheld: the secret guard could not check it for secrets')
   expect(w.stored()).toContain('t4')
+})
+
+// Each tool_result in a withheld row keeps its own block and its id, so no call in the transcript is
+// left with no answer (a request carrying a tool_use with no tool_result for it is refused). The
+// catch's second try, one withheld text, has no ids, and these two pins say why it never reaches
+// the transcript. First: withholding block by block reads only plain data, and the engine refuses a
+// row that is not plain data before any hook sees it, so that first try cannot throw on a row.
+test('a row that is not plain data is refused before the guard sees it, so withholding cannot throw on it (#2039)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  const block: Record<string, unknown> = { type: 'tool_result', tool_use_id: 'a1' }
+  Object.defineProperty(block, 'content', { enumerable: true, get: () => { throw new Error('unreadable') } })
+  const settled = await $.session
+    .append({ door: 'tool-result', origin: { kind: 'tool', tool: 'Bash' }, uuid: 'u5', message: { type: 'user', role: 'user', content: [block] } } as never)
+    .then(() => 'answered', (err: unknown) => String(err))
+  expect(settled).toContain('not plain data')
+})
+
+// Second: the first try fails only in next, and the test world's store beneath always fails (it
+// has no implementation), so this row takes exactly that path. The second try's next is answered
+// with the first outcome, so the store is asked once, and what it keeps is one withheld result per
+// call id.
+test('a withheld row whose store fails keeps one withheld result per call id, never one text (#2039)', withKit, async ($, on) => {
+  const seen: unknown[] = []
+  world(on)
+  on('session.append', ($, e, next) => {
+    seen.push(JSON.parse(JSON.stringify(e.message.content)))
+    return next(e)
+  })
+  await start($)
+  // The null block makes the scrub itself throw, so the row reaches the catch before next.
+  await appendRow($, {
+    door: 'tool-result',
+    origin: { kind: 'tool', tool: 'Bash' },
+    uuid: 'u6',
+    message: { type: 'user', role: 'user', content: [null, { type: 'tool_result', tool_use_id: 'a1', content: `out: ${KNOWN}` }, { type: 'tool_result', tool_use_id: 'a2', content: [{ type: 'text', text: KNOWN }] }] },
+  })
+  const WITHHELD = '[Output withheld: the secret guard could not check it for secrets.]'
+  expect(seen).toEqual([[
+    { type: 'text', text: WITHHELD },
+    { type: 'tool_result', tool_use_id: 'a1', content: WITHHELD },
+    { type: 'tool_result', tool_use_id: 'a2', content: WITHHELD },
+  ]])
+})
+
+// #2039: once next was called the call has already run beneath the guard, so the catch replays what
+// the call settled to, outside neverThrows. Here the tool beneath fails (the test world has nothing
+// below it, so the replay rejects with the engine's own "no implementation"). That failure reaches
+// Claude as the tool's own, never as a refusal saying the call did not run, which would be untrue
+// and could make Claude run it twice.
+test('a call whose tool fails after it was passed on reaches Claude as the tool failing, not a refusal (#2039)', withKit, async ($, on) => {
+  const w = world(on, {}, 'echo boom')
+  await start($)
+  const settled = await $.tool.call({ tool: 'Bash', command: 'echo boom', tool_use_id: 'r1' } as never).then(
+    r => ({ answered: r as { deny?: string; text?: string } }),
+    (err: unknown) => ({ rejected: String(err) }),
+  )
+  expect(w.reached).toEqual(['Bash'])
+  expect(settled).not.toHaveProperty('answered')
+  expect((settled as { rejected: string }).rejected).toContain('no implementation')
+})
+
+// #2039, measured on Claude Code 2.1.317 with the probe in the issue. The hooks beneath a hook run
+// once per next call from the hook BODY, so a body that calls next twice runs them twice. A catch
+// is different: a next(e) there, after the body already called next, is answered with the first
+// call's outcome and the hooks beneath are not run again (also when called twice, or after a
+// timeout). The secret guard replays in its catch and depends on that, so these tests pin both
+// halves. The test world is the engine itself (claude-code/testing), not a model of it.
+// One stand-in mod answers each, switched by a word in the call's command or the row's uuid (an
+// inline plugin cannot reach this file's variables). Its catch runs the whole chain again for
+// 'rerun', the deliberate break each pin was seen failing against.
+const standIn: { name: string; tier: 'prepend'; register: Register } = {
+  name: 'stand-in',
+  tier: 'prepend',
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      if (String((e as { command?: string }).command).includes('twice')) {
+        await next(e).catch(() => undefined)
+        return next(e)
+      }
+      await next(e).catch(() => undefined)
+      throw new Error('after next')
+    }).catch(async ($, e, next) => {
+      if (String((e as { command?: string }).command).includes('rerun')) return $.tool.call({ ...e, command: 'again' } as never) as never
+      return next(e)
+    })
+    on('session.append', async ($, e, next) => {
+      const content = [{ type: 'text', text: 'SCRUBBED' }] as typeof e.message.content
+      await next({ ...e, message: { ...e.message, content } }).catch(() => undefined)
+      throw new Error('after next')
+    }).catch(async ($, e, next) => {
+      if (String(e.uuid).includes('rerun')) return $.session.append({ ...e, uuid: 'again' } as never) as never
+      return next(e)
+    })
+  },
+}
+const withStandIn = { plugins: [kit, standIn] }
+const callOnce = async ($: { tool: { call: (e: never) => Promise<unknown> } }, command: string) =>
+  $.tool.call({ tool: 'Bash', command, tool_use_id: 'p1' } as never)
+
+test('a hook body that calls next a second time runs the hooks beneath again, so nobody writes one (#2039)', withStandIn, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await callOnce($, 'echo twice')
+  expect(w.reached).toEqual(['Bash', 'Bash'])
+})
+
+test('a catch that replays next after the body called it does not run the hooks beneath again (#2039)', withStandIn, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const r = (await callOnce($, 'echo replay')) as { text?: string }
+  expect(w.reached).toEqual(['Bash'])
+  expect(r.text).toBe('ran')
+})
+
+test('the replay pin fails against a replay that runs the chain again (#2039)', withStandIn, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await callOnce($, 'echo rerun')
+  expect(w.reached.length).toBeGreaterThan(1)
+})
+
+// The same on session.append, with the row: the store beneath is asked once and the replay returns
+// the scrubbed row the body passed on, never the raw one.
+const appended = async (uuid: string, $: { session: { append: (e: never) => Promise<unknown> } }, on: On) => {
+  const seen: string[] = []
+  world(on)
+  on('session.append', ($, e, next) => {
+    seen.push(JSON.stringify(e.message.content))
+    return next(e)
+  })
+  await start($ as never)
+  const settled = await $.session
+    .append({ door: 'tool-result', origin: { kind: 'tool', tool: 'Bash' }, uuid, message: { type: 'user', role: 'user', content: [{ type: 'text', text: 'RAW' }] } } as never)
+    .then(r => ({ answered: r }), (err: unknown) => ({ rejected: String(err) }))
+  return { seen, settled }
+}
+test('a replay of a scrubbed row runs the store once and carries the scrubbed row (#2039)', withStandIn, async ($, on) => {
+  const { seen, settled } = await appended('u7', $ as never, on)
+  expect(seen).toEqual(['[{"type":"text","text":"SCRUBBED"}]'])
+  expect(JSON.stringify(settled)).not.toContain('RAW')
+})
+test('the scrubbed row pin fails against a replay that runs the chain again (#2039)', withStandIn, async ($, on) => {
+  const { seen } = await appended('rerun', $ as never, on)
+  expect(seen.length).toBeGreaterThan(1)
+})
+
+// The real guard: the store beneath is asked once for a row carrying a secret, and what it was
+// asked is the scrubbed text.
+test('the guard passes a scrubbed row to the store once (#2039)', withKit, async ($, on) => {
+  const seen: string[] = []
+  world(on)
+  on('session.append', ($, e, next) => {
+    seen.push(JSON.stringify(e.message.content))
+    return next(e)
+  })
+  await start($)
+  await appendRow($, { door: 'tool-result', origin: { kind: 'tool', tool: 'Bash' }, uuid: 'u9', message: { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 't9', content: `out: ${KNOWN}` }] } })
+  expect(seen).toHaveLength(1)
+  expect(seen[0]).not.toContain(KNOWN)
 })

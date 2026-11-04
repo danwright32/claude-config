@@ -90,7 +90,10 @@
 
 set -uo pipefail
 
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) _HD="${BASH_SOURCE[0]%/*}" ;; *) _HD=. ;; esac
+_HD="$(cd "${_HD:-/}" && pwd)"
+SELF="$_HD/${BASH_SOURCE[0]##*/}"
 SELF_DIR="${SELF%/*}"
 
 # How busy the machine was when a suite finished, printed beside a failure (claude-config#1083,

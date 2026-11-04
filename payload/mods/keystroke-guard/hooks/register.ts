@@ -3,6 +3,7 @@ import { appNameOf, classify, judge, refusalText, type Refusal } from './keys.ts
 import { publishInstead } from './mod-kit/deliver.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
+import { neverThrows } from './mod-kit/hold.ts'
 
 // Keystroke guard (claude-config#608). A Go ahead holds for its app until ten minutes pass with
 // nothing sent to it (Dan, 2026-10-03). Kept in memory: a reload asks again, which errs toward
@@ -135,6 +136,14 @@ const holdWhileAway = async (
   }
 }
 
+// The refusal the catch gives when this guard itself failed, naming why; HELD is the same refusal
+// built once here, for when even naming the failure throws (#2039).
+const cannotCheck = (why: string) => ({
+  decision: 'deny' as const,
+  reason: `Blocked: the keystroke guard could not check this command (${why}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
+})
+const HELD = cannotCheck('unknown failure')
+
 export const register: Register = on => {
   // Asked at tool.check (#875), which the engine raises inside tool.call once every mod's tool.call
   // hook and the settings PreToolUse hooks have passed the call on, and before the mode settles an
@@ -196,10 +205,12 @@ export const register: Register = on => {
     const declined = await headsUp($, app, typing, c.app !== undefined)
     if (declined) return refuse(declined)
     return decided
-  }).catch(($, e, next) => ({
+  }).catch(($, e, next) => neverThrows(
     // A hook that fails is skipped and the verdict beneath stands, which would let the keystroke
-    // through unchecked, so a failure here refuses (L42). Nothing has run yet at tool.check.
-    decision: 'deny' as const,
-    reason: `Blocked: the keystroke guard could not check this command (${next.error ? errorText(next.error, 'keystroke-guard') : 'unknown failure'}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
-  }))
+    // through unchecked, so a failure here refuses (L42). Nothing has run yet at tool.check. Should
+    // naming the failure fail too, the refusal says unknown failure, so the catch never throws (#2039).
+    () => cannotCheck(next.error ? errorText(next.error, 'keystroke-guard') : 'unknown failure'),
+    () => HELD,
+    HELD,
+  ))
 }
