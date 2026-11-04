@@ -164,9 +164,26 @@ const ghRefusal = (gh: ModKitGh | undefined): string | undefined => {
   return undefined
 }
 
+// Wrangler commands that only read or run locally, named whole: a first word alone, or a group and
+// its subcommand together where the group's other subcommands change a Worker (#2124: listing the
+// live Worker's deployments was refused as a deploy). Any other wrangler command, one this list
+// has never heard of included, is taken to deploy.
+const WRANGLER_READS = new Set(['dev', 'tail', 'whoami', 'login', 'logout', 'types', 'init', 'docs', '--version', '-v'])
+const WRANGLER_GROUP_READS = new Map([
+  ['deployments', new Set(['list', 'status'])],
+  ['versions', new Set(['list', 'view'])],
+])
+// Help asked for before any `--` prints and runs nothing; after `--` it is an argument handed on.
+const wranglerHelp = (a: string[]): boolean => {
+  const end = a.indexOf('--')
+  return (end < 0 ? a : a.slice(0, end)).some(w => w === '--help' || w === '-h')
+}
+const wranglerReads = (a: string[]): boolean =>
+  WRANGLER_READS.has(a[0] ?? '') || WRANGLER_GROUP_READS.get(a[0] ?? '')?.has(a[1] ?? '') === true || wranglerHelp(a)
+
 // Deploy tools, each with the subcommands that only read or run locally.
 export const DEPLOYERS: Record<string, (args: string[]) => boolean> = {
-  wrangler: a => !['dev', 'tail', 'whoami', 'login', 'logout', 'types', 'init', 'docs', '--version', '-v'].includes(a[0] ?? ''),
+  wrangler: a => !wranglerReads(a),
   vercel: a => !['dev', 'ls', 'list', 'logs', 'inspect', 'whoami', 'login', 'pull', 'env'].includes(a[0] ?? ''),
   netlify: a => ['deploy', 'build'].includes(a[0] ?? ''),
   firebase: a => a[0] === 'deploy',
