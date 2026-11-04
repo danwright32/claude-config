@@ -104,6 +104,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   const notes: Record<string, unknown>[] = []
   const holds: Record<string, unknown>[] = []
   const tools: string[] = []
+  const toolDescriptions: Record<string, string> = {}
   const ctl: {
     answer?: string | 'afk'
     asleep?: boolean
@@ -168,6 +169,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   })
   on('tool.register', ($, e) => {
     tools.push(e.name)
+    toolDescriptions[e.name] = String((e as { description?: string }).description ?? '')
     return { value: { tool: `mcp__area-check__${e.name}` } } as never
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -304,7 +306,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   })
   const records = (file = LOG) => (appended[file] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l) as Record<string, unknown>)
   const judged = () => records().filter(r => r.kind === 'judged')
-  return { clock, ctl, ran, logs, passed, timeouts, store, files, records, judged, cards, asked, notes, holds, tools }
+  return { clock, ctl, ran, logs, passed, timeouts, store, files, records, judged, cards, asked, notes, holds, tools, toolDescriptions }
 }
 
 export type T$ = { tool: { call: (e: never) => Promise<unknown> }; session: { start: (e: never) => Promise<unknown> }; prompt: { submit: (e: never) => Promise<unknown> } }

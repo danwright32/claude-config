@@ -442,6 +442,14 @@ test('the decide tool is offered at every session start, a headless one included
   expect(w.tools).toEqual(['decide'])
 })
 
+test('the decide tool says it decides a held command as well as a held edit, and that the held call is sent again', KIT, async ($, on) => {
+  const w = world($, on)
+  await $.session.start({ cwd: APP, surface: 'terminal', isInteractive: false } as never)
+  await w.clock.settle()
+  expect(w.toolDescriptions.decide).toContain('first edit or command')
+  expect(w.toolDescriptions.decide).toContain('send the held call again')
+})
+
 // #2142: a shell command writing a file is held as its first edit would be, the files it writes as
 // mod-kit's reader answered them (WRITES, measured), so python, sed or a heredoc is no way round the check.
 // `bash` is the world's: a Bash call as Claude sends it, its result settled.

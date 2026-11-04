@@ -645,7 +645,7 @@ const GUARD = 'Area check'
 const HEADER = 'Area check'
 
 const DECIDE_DESCRIPTION =
-  'Decide a first edit the area check held, under the held call\'s id: "proceed" with a "reason" saying why the change does not add to the structural problem, "fold" with the "issue" (one of those shown) whose fix is folded into this work, or "restructure" to have Dan decide whether to restructure the file first. Then send the held edit again, unchanged.'
+  'Decide a first edit or command the area check held, under the held call\'s id: "proceed" with a "reason" saying why the change does not add to the structural problem, "fold" with the "issue" (one of those shown) whose fix is folded into this work, or "restructure" to have Dan decide whether to restructure the file first. Then send the held call again, unchanged.'
 const DECIDE_SCHEMA = {
   type: 'object',
   properties: {
