@@ -157,7 +157,10 @@ does a public repository a work owner holds. It reads the whole command, a hered
 and every body file it names, and refuses text naming a work organisation OR a work repository,
 showing the name it matched so the text can be rewritten. The names are read live on each judged
 command and never written to disk: the repo digest's repository list (the one
-`lib/lesson-fanout.sh` reads), this Mac's dev update registry, and the two built in hashes. Matching
+`lib/lesson-fanout.sh` reads), this Mac's dev update registry, the work MacBook's project folders
+from the Projects section of the global CLAUDE.md, the organisation's web and email domain (matched
+only as a domain, after an @ or before a dot and a top level domain), and the two built in hashes
+(#2184). Matching
 repository names departs from #1568, which leaves them out of the file scan on purpose, for public
 text only (Dan, 2026-11-02, after a repository name leaked into a public pull request description);
 the file scan and the send scan are unchanged, and the commit message checks above read the same
