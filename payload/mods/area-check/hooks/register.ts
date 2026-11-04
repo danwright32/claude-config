@@ -52,6 +52,7 @@ import {
   shellKey,
   shellTargets,
   questionKey,
+  legacyQuestionKey,
   restructureQuestion,
   sleepNotes,
   sweepKeys,
@@ -476,7 +477,7 @@ const judgeEdit = async ($: EngineInterface, tool: string, id: string, path: str
     return PASS
   }
   // Dan's answer about this file, for these issues, within its week (L330): applied, never asked again.
-  const q = (await $.store.get(questionKey(repo, rel))) as Question | undefined
+  const q = await answeredQuestion($, repo, rel)
   if (answerStands(q, j.shown, started) && RELEASING.includes(q.answer)) {
     await claim($, key)
     await record({ decision: 'held', applied: q.answer })
@@ -602,7 +603,8 @@ const gateShell = async ($: EngineInterface, id: string, command: string, agent:
   let targets: ShellTarget[]
   try {
     cwd = await $.session.cwd()
-    targets = shellTargets(await $.modkit.writes({ command, cwd, home: await homeOf($) }))
+    const home = await homeOf($)
+    targets = shellTargets(await $.modkit.writes({ command, cwd, home }), home)
   } catch (err) {
     await failed($, cwd, err, 'shell')
     return PASS
@@ -685,10 +687,21 @@ const release = async ($: EngineInterface, h: Held, decided: { decision: Decisio
 }
 
 // A restructure question still waiting on Dan for this held call is settled by any decision.
+// Under its own key and the key it had before #2246, since a question asked then may still wait.
 const settleQuestion = async ($: EngineInterface, h: Held) => {
-  const k = questionKey(h.repo, h.rel)
-  const q = (await $.store.get(k)) as Question | undefined
-  if (q?.state === 'pending' && q.call === h.id) await $.store.delete(k)
+  for (const k of [await questionKey(h.repo, h.rel), legacyQuestionKey(h.repo, h.rel)]) {
+    if (k === undefined) continue
+    const q = (await $.store.get(k)) as Question | undefined
+    if (q?.state === 'pending' && q.call === h.id) await $.store.delete(k)
+  }
+}
+
+// The question about a file: under its own key, or, for an answer given before #2246, the key it had then.
+const answeredQuestion = async ($: EngineInterface, repo: string, rel: string): Promise<Question | undefined> => {
+  const q = (await $.store.get(await questionKey(repo, rel))) as Question | undefined
+  if (q !== undefined) return q
+  const old = legacyQuestionKey(repo, rel)
+  return old === undefined ? undefined : ((await $.store.get(old)) as Question | undefined)
 }
 
 // Scope modes, called in place as the engine needs (skew.ts). Not loaded is home: awake, and away
@@ -722,7 +735,7 @@ const holdAway = async ($: EngineInterface, label: string, prompt: string) => {
 const asking = (h: Held) => `call AskUserQuestion with one question and metadata {"source": "${ASK_SOURCE}:${h.id}"}; the area check words the question and its answers`
 
 const restructure = async ($: EngineInterface, h: Held, decideId: string) => {
-  const k = questionKey(h.repo, h.rel)
+  const k = await questionKey(h.repo, h.rel)
   const pending: Question = { state: 'pending', at: await $.clock.now(), issues: h.shown.map(m => m.n), session: await $.session.id(), call: h.id, agent: h.agent }
   // A subagent never asks Dan (decision 8): the main session is told at its next prompt.
   if (h.agent !== null) {
@@ -1081,7 +1094,9 @@ export const register: Register = on => {
         return say(`Dan typed "${chosen}" instead of choosing, so nothing is recorded, and ${parts.still}; mod-kit could not tell him so (${msg(err)}). Tell him that in one line, answer what he said, then ${parts.again}.`)
       }
     }
-    const k = questionKey(h.repo, h.rel)
+    const k = await questionKey(h.repo, h.rel)
+    // A question asked before #2246 waits under its old key: Dan has now answered it.
+    await settleQuestion($, h)
     if (chosen === 'Fold in') {
       await $.store.delete(k)
       const who = h.agent === null ? 'Call' : `Tell subagent ${h.agent} to call`

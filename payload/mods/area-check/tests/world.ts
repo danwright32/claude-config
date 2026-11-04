@@ -5,7 +5,7 @@ import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { DEADLINE_MS, DECIDE_TOOL, questionKey } from '../hooks/rules.ts'
+import { DEADLINE_MS, DECIDE_TOOL } from '../hooks/rules.ts'
 
 // The world the area check's tests run in, shared by every test file: mod-kit, the session
 // registry and scope modes standing in, and the commands the mod runs answered here.
@@ -153,8 +153,14 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     if (t === undefined) return { deny: `ENOENT: no such file or directory, open '${e.path}'` } as never
     return { value: t } as never
   })
-  on('store.get', ($, e) => ({ value: store[e.key] }) as never)
+  // Claude Code refuses a store key over 256 characters on get, set and delete, and never on keys
+  // (#2246, read from the 2.1.318 binary: `e.key.length>256` throws "the key is N characters, over
+  // the 256 limit"), so the world refuses one too, or a key too long to keep passes every test here.
+  const tooLong = (key: string) => (key.length > 256 ? ({ deny: `$.store: the key is ${key.length} characters, over the 256 limit` } as never) : undefined)
+  on('store.get', ($, e) => tooLong(e.key) ?? ({ value: store[e.key] } as never))
   on('store.set', ($, e) => {
+    const refused = tooLong(e.key)
+    if (refused) return refused
     store[e.key] = e.value
     return { value: undefined } as never
   })
@@ -164,6 +170,8 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   })
   on('store.keys', () => ({ value: Object.keys(store) }) as never)
   on('store.delete', ($, e) => {
+    const refused = tooLong(e.key)
+    if (refused) return refused
     delete store[e.key]
     return { value: undefined } as never
   })
@@ -331,7 +339,10 @@ export const askDan = async ($: T$, call: string, extra: object = {}) =>
 export const said = (r: R) => [...(r.context ?? []), typeof r.result === 'string' ? r.result : '', r.text ?? ''].join(' ')
 export const REASON = 'This only renames a local variable inside one function.'
 export const SLACK = `${APP}/src/lib/slack.ts`
-export const QKEY = questionKey('dan/app', 'src/lib/slack.ts')
+// The question about that file under its fixed length key (#2246): the SHA-256 of "dan/app\nsrc/lib/slack.ts",
+// measured with shasum rather than with the code under test, and the key it was kept under before.
+export const QKEY = 'question:41ea88a6f2f85188ac883b6c67f9c59a2728aeddb0cdeb7020eeb21976ac7aee'
+export const OLD_QKEY = 'question:dan/app\nsrc/lib/slack.ts'
 
 // A Bash call as Claude sends it, its result settled.
 export const bash = async ($: T$, w: ReturnType<typeof world>, command: string, extra: object = {}, id = 'b1') => {
