@@ -523,6 +523,10 @@ sh_refused "write to a file a relative include names" "$ER" "printf x >> $WORK/r
 sh_refused "script handed .git/config" "$ER" "python3 -c 'import sys' .git/config"
 sh_refused "read of .git/config" "$ER" 'cat .git/config'
 sh_refused "write inside bash -c" "$ER" "bash -c 'printf x >> .git/config'"
+# A git/config by its shape alone, where no such file exists yet, so only the path can tell (the XDG
+# config); a config whose folder only ends in git is not one.
+sh_refused "write to an XDG git config not yet made" "$ER" "printf x >> $WORK/xdg-new/git/config"
+sh_allowed "an agent's write of a config in a folder that only ends in git" "$ER" "printf x >> $WORK/xdg-new/notgit/config"
 sh_allowed "an agent's write of an ordinary file" "$ER" 'printf x >> notes.md'
 sh_allowed "an agent's write of a file no include names" "$ER" "printf x >> $WORK/inc/other.inc"
 sh_allowed "an agent's git config read" "$ER" 'git config --get include.path'

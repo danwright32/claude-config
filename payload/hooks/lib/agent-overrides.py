@@ -1016,7 +1016,9 @@ def _names_git_config(path):
     parent = os.path.dirname(path)
     if base in ("config", "config.worktree") and ".git" in parent.split(os.sep):
         return True
-    if base == "config" and os.path.basename(parent) == "git":
+    # The XDG git/config, matched as a path suffix after a separator so a folder that only ends in
+    # git is not one (the word position scan refuses comparing a word with the name git).
+    if path.endswith(os.sep + os.path.join("git", "config")):
         return True
     return _looks_like_git_config(path)
 
