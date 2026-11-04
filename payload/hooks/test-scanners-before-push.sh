@@ -947,8 +947,8 @@ fi
 #     process group of its own, writing to a file, refuses saying so, and a later push of the SAME
 #     tree and uncommitted files counts its verdict rather than running it again.
 #
-#     The budget is injected (SCANNERS_BUDGET_SECONDS), so these cases wait 2 seconds rather than
-#     150. A held scanner records its process id and each run it makes, so "still running", "not
+#     The budget is injected (SCANNERS_BUDGET_SECONDS), and ends once the held scanner is holding
+#     (below), so these cases wait about 2 seconds rather than 150. A held scanner records its process id and each run it makes, so "still running", "not
 #     run twice" and "stopped" are checked on the processes and the runs rather than believed from
 #     the gate's message (L1). It holds while its hold file exists, for at most 60 seconds, so a
 #     case can release it rather than sleep, and a leaked one ends on its own (L290).
@@ -1027,8 +1027,8 @@ _took=$(( $(date +%s) - _t0 ))
 note_held omega
 [ "$c1881" -eq 2 ] && check "#1881 a scanner still running when the gate's budget runs out blocks the push" ok \
   || check "#1881 a scanner still running when the gate's budget runs out blocks the push" "exit=$c1881 out=$o1881"
-# The budget ended once omega was holding, 2 seconds in or later, so the message names the time it
-# really gave, never the 20 it was set to (#2206, L11).
+# The budget ended once omega was holding, no sooner than the floor this case sets, so the message
+# names the time it really gave, never the budget it was set to (#2206, L11). Settings, not measured.
 grep -q -E 'did not finish in ([2-9]|1[0-9]) seconds' <<< "$o1881" \
   && check "#1881 and says the scanners ran out of time, with the budget" ok \
   || check "#1881 and says the scanners ran out of time, with the budget" "out=$o1881"
@@ -1538,9 +1538,10 @@ nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 =
 HELD_STARTS_LATE=3 nokey_case late pidlock 'lib/pid-lock.sh could not be loaded'
 # The early end is a setting for this suite, honoured only while the record of passes is a
 # throwaway, as it is in every case here and never for a real push (#2206, #2217). One push, the
-# same scanner (it takes 2 seconds, then passes) and the file already there with no floor, fired
-# with a throwaway record and with the real one under a stand in home: honoured, the budget ends at
-# once and the push is refused; ignored, the scanner finishes inside its 20 and the push goes.
+# same scanner (it starts late by the delay this case sets, then passes) and the file already there
+# with no floor, fired with a throwaway record and with the real one under a stand in home:
+# honoured, the budget ends at once and the push is refused; ignored, the scanner finishes inside
+# its budget and the push goes. The times are settings, not measured.
 EEHOME="$TMPROOT/earlyend-home"; mkdir -p "$EEHOME"
 REE="$(mkrepo earlyend)"; add_held_scanner "$REE" eta "$TMPROOT/earlyend-never-held" 0; commit_all "$REE"
 : > "$TMPROOT/earlyend-ready"

@@ -837,7 +837,7 @@ _sc_wait_bounded(){    # waits for this round's runs until the budget runs out, 
       perl -e 'sleep shift; kill "USR1", shift' "$left" "$$" </dev/null >/dev/null 2>&1 &
     else
       # Ends at the budget, or sooner once the named file exists and the floor has passed (#2206).
-      perl -e 'my ($left, $pid, $file, $floor) = @ARGV; my $end = time + $left; sleep $floor if $floor > 0;
+      perl -e 'my ($left, $pid, $file, $floor) = @ARGV; my $end = time + $left; $floor = $left if $floor > $left; sleep $floor if $floor > 0;
         while (time < $end && ! -e $file) { select(undef, undef, undef, 0.1) } kill "USR1", $pid' \
         "$left" "$$" "$_sc_budget_ends_when" "$(( _sc_t0 + _sc_budget_not_before - $(date +%s) ))" </dev/null >/dev/null 2>&1 &
     fi
