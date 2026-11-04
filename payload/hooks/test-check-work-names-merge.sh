@@ -250,17 +250,21 @@ run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 MT_GATE_READ
 expect_deny "so is the budget merge-when-ready.sh hands every gate" "(3 tries, 15 seconds)"
 run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=123456789012345678901234567890
 expect_deny "a budget too long for the shell's arithmetic is clamped too" "(3 tries, 15 seconds)"
+if says "integer expression expected"; then fail "a budget too long for the shell's arithmetic reached a comparison: $hook_out"; else pass; fi
 run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=lots MT_GATE_READ_BUDGET_SECONDS=-5
 expect_deny "a budget that is not a number is not believed, and the read still refuses" "(3 tries, 15 seconds)"
 run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=5
 expect_deny "(control) a budget under the cap is still the test's own" "(3 tries, 5 seconds)"
+run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=0005
+expect_deny "a budget padded with zeros is read as its value, not clamped for its length" "(3 tries, 5 seconds)"
 run_hook "$MERGE 7 --squash" WN_MERGE_READ_BUDGET_SECONDS=08
 expect_allow "a budget with a leading zero is read in base ten, not crashed on"
 pr_json "Add the Acme-HQ reader" "Adds the reader." "clean" > "$WORK/pr.json"
 run_hook "$MERGE 7 --squash" WN_MERGE_READ_BUDGET_SECONDS=lots MT_GATE_READ_BUDGET_SECONDS=lots
 expect_deny "a budget that is not a number never opens the gate" "title:1: a work organisation name"
 # The cap is held below the timeout the gate is registered with, less the 12 seconds the work
-# repository list is given after it: a gate killed at its timeout gives no verdict of its own.
+# repository list is given after it: a gate killed at its timeout gives no verdict of its own. All
+# three numbers are settings, not measured.
 timeout="$(jq -r '[.. | objects | select((.command? // "") | endswith("/check-work-names-merge.sh")) | .timeout] | first // empty' "$HOOK_DIR/../settings.hooks.json" 2>/dev/null)"
 case "$timeout" in
   ''|*[!0-9]*) fail "no timeout for check-work-names-merge.sh could be read from settings.hooks.json (got '$timeout')" ;;
