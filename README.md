@@ -1185,6 +1185,12 @@ python3 ~/.claude/hooks/lib/wrapped-refusal-report.py [--days 7]
 It prints the refusals and overrides in the window and the count for each shape, a wrapper and a
 reason, commonest first, which is what the refusal is narrowed by. The suites record into a
 throwaway one (`WRAPPED_REFUSAL_LEDGER_DIR`, which `run-all-tests.sh` hands every suite).
+Until #2155, a direct run of `test-gates-fail-closed.sh` wrote its own "eval, reader-lib-missing"
+refusals into the real record (129 on the personal MacBook, from 2026-10-29). The report leaves
+those out and says how many (#2157), but only rows in exactly the shape that suite left: that
+wrapper, reason and outcome, before #2155 merged (2026-11-03 17:10 ET), two a second apart, or one
+alone before #1963 (2026-10-30 20:28 ET). Anything else, a burst holding another row included,
+counts as real. Nothing is deleted from the record.
 
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
