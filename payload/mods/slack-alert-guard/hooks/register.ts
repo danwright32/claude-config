@@ -63,20 +63,13 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
   return input
 }
 
-// A python string span's text, without its prefix letters and its quotes.
-const unquoted = (span: string): string => {
-  const body = span.replace(/^[rRbBuUfF]*/, '')
-  const q = /^("""|'''|"|')/.exec(body)?.[1]
-  if (!q) return body
-  return body.slice(q.length, body.endsWith(q) && body.length >= 2 * q.length ? body.length - q.length : body.length)
-}
-
 // Every string a file's text holds, read as its language reads them.
 const literals = async ($: EngineInterface, lang: ReturnType<typeof languageOf>, text: string): Promise<string[]> => {
   if (!text) return []
   if (lang === 'python') {
+    // mod-kit's spans are already the text between the quotes, prefix letters and quotes left out.
     const spans = await $.modkit.pythonText({ code: text })
-    return spans.filter(s => s.kind === 'string' || s.kind === 'formatted').map(s => unquoted(text.slice(s.from, s.to)))
+    return spans.filter(s => s.kind === 'string' || s.kind === 'formatted').map(s => text.slice(s.from, s.to))
   }
   if (lang === 'yaml') return [...literalsOf(text, true), ...plainYamlValues(text)]
   return literalsOf(text, lang === 'hash')

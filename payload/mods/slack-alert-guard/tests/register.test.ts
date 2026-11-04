@@ -270,6 +270,16 @@ test("python alerts are read through mod-kit's reader, and the guard's own recor
   expect(w.ran.length).toBe(1)
 })
 
+test('python wording starting with a letter that can prefix a string is shown whole', withKit, async ($, on) => {
+  world($, on, { files: { '/w/app/notify.py': 'from slack_sdk import WebClient\nmsg = "Backup done"\nnote = f"run {n} done"\n' } })
+  const plain = refusalOf(await call($, { tool: 'Edit', file_path: '/w/app/notify.py', old_string: 'Backup done', new_string: 'Backup failed' }))
+  expect(plain).toContain('Backup failed')
+  expect(plain).not.toContain('"ackup failed"')
+  const formatted = refusalOf(await call($, { tool: 'Edit', file_path: '/w/app/notify.py', old_string: 'run {n} done', new_string: 'run {n} failed' }))
+  expect(formatted).toContain('run {n} failed')
+  expect(formatted).not.toContain('"un {n} failed"')
+})
+
 test('a shell write into a Slack posting file is held until Dan approves it, then the same command runs', withKit, async ($, on) => {
   const w = world($, on)
   const cmd = { tool: 'Bash', command: `printf 'notify("Disk is full")\\n' >> ${ALERT}` }
