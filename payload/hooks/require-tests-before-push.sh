@@ -786,7 +786,7 @@ MISSING_EOF
         if pc_judge "$JUDGE_MODEL" "$t" "$PART_RUBRIC" "$part_in"; then rc=0; else rc=1; fi
         printf '%s' "$PC_JUDGE_OBJ" > "$dir/obj.$j"
         printf '%s' "$PC_JUDGE_ERR" > "$dir/err.$j"
-        printf '%s\t%s\t%s\t%s\t%s\n' "$PC_JUDGE_START" "$PC_JUDGE_END" "$PC_JUDGE_BYTES" "$PC_JUDGE_MS" "$PC_JUDGE_COST" > "$dir/meta.$j"
+        printf '%s|%s|%s|%s|%s\n' "$PC_JUDGE_START" "$PC_JUDGE_END" "$PC_JUDGE_BYTES" "$PC_JUDGE_MS" "$PC_JUDGE_COST" > "$dir/meta.$j"
         printf '%s' "$rc" > "$dir/rc.$j"
       ) >/dev/null 2>&1 &
       pids="$pids $!"
@@ -799,7 +799,8 @@ MISSING_EOF
     while [ "$j" -le "$last" ]; do
       RT_READINGS=$((RT_READINGS + 1))
       meta=""; [ -f "$dir/meta.$j" ] && IFS= read -r meta < "$dir/meta.$j"
-      IFS=$'\t' read -r PC_JUDGE_START PC_JUDGE_END PC_JUDGE_BYTES PC_JUDGE_MS PC_JUDGE_COST <<META_EOF
+      # Split on a pipe, never a tab: a tab is whitespace to IFS, so empty fields would collapse.
+      IFS='|' read -r PC_JUDGE_START PC_JUDGE_END PC_JUDGE_BYTES PC_JUDGE_MS PC_JUDGE_COST <<META_EOF
 $meta
 META_EOF
       add_call_cost

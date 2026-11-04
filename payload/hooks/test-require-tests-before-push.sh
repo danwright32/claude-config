@@ -120,6 +120,9 @@ STUB_DIR="$(mktemp -d)"
 cat > "$STUB_DIR/claude" <<'STUB'
 #!/usr/bin/env bash
 input="$(cat)"
+# STUB_CLAUDE_VANISH: the stand in removes itself once it has read its input, so every later call
+# finds no claude on the path and fails before it launches (#2153).
+[ -n "${STUB_CLAUDE_VANISH:-}" ] && rm -f "$0"
 [ -n "${STUB_CLAUDE_STDIN:-}" ] && printf '%s' "$input" > "$STUB_CLAUDE_STDIN"
 if [ -n "${STUB_CLAUDE_LOG:-}" ]; then
   # Claimed with noclobber, because further readings run at once (#2153) and two calls looking for
@@ -542,6 +545,21 @@ STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
 want_code 2 "#2153 readings at once that fail still refuse"
 want_stderr "could not judge" "#2153 as could not judge"
 want_stderr "tests/register.test.js" "#2153 naming the test file not judged"
+# A reading that fails BEFORE it launches leaves its start and end empty. The record of the run must
+# not take the reading's byte count for a start time (the fields were once split on a tab, which
+# collapses empty ones).
+printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
+W="$(mk_repo)"; seed_big_tests "$W" 400
+cp "$STUB_DIR/claude" "$STUB_DIR/claude.keep"
+STUB_CLAUDE_VANISH=1 STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+cp "$STUB_DIR/claude.keep" "$STUB_DIR/claude"; chmod +x "$STUB_DIR/claude"
+want_code 2 "#2153 readings that fail before launch still refuse"
+rec_start="$(ledger_last 13)"
+case "$rec_start" in
+  ''|*[!0-9]*) fail=$((fail+1)); echo "FAIL: #2153 the record's start is '$rec_start', expected epoch seconds" ;;
+  *) if [ "$rec_start" -gt 1000000000 ]; then pass=$((pass+1))
+     else fail=$((fail+1)); echo "FAIL: #2153 a reading that never launched shifted the record's start to $rec_start (its byte count)"; fi ;;
+esac
 
 # --- claude-config#2153: a push is judged against the tests its whole branch adds -----------------
 # On 2026-11-03 a work branch pushed its failing database tests first, then the migration and code
