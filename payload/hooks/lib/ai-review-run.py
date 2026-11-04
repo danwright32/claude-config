@@ -299,8 +299,11 @@ QUOTE_LINE = re.compile(r"^\s*quote:\s?(.*)$", re.IGNORECASE)
 # 100 or more (4); the 4 misses with a kept length were 94 to 194 characters, and none held a line
 # break. No recorded quote was under 60 characters, so 20 sits in an empty stretch of the
 # distribution (L172) and decided no recorded finding either way, nor would any floor up to 59.
-# Kept at 20 for the short names it exists to refuse. The sample is thin and is this Mac's alone:
-# the work MacBook keeps its own review records, not read here, so re-read the report on both.
+# Kept at 20 for the short names it exists to refuse. Read again over the 1164 reviews started
+# 2026-10-25 to 2026-11-04: 9 of 814 placed by part of a line (the 8 recorded lengths 60 to 99 (4)
+# or 100 or more (4)), and the 8 misses kept whole 77 to 194 characters, so still nothing under 60.
+# The sample is this Mac's alone: the work MacBook keeps its own review records, not read here, so
+# re-read the report on both.
 PART_MIN = 20
 # The mark an unplaced finding carries, written in place_findings and read back here only (L41).
 # Greedy, because the mark is the last thing place_findings writes on the line and a kept quote can
@@ -327,6 +330,14 @@ UNPLACED_KINDS = (
     ("head_unreadable", re.compile(r"^the reviewed head could not be read")),
     ("no_file", re.compile(r"^\S+ is not a file at the reviewed head")),
     ("no_match", re.compile(r"^its quote matches no line of ")),
+)
+# How a quote miss sits against the file, as _miss_shape words it, each read only from the
+# runner's words before the quote (miss_shape), since the quote can hold any words at all.
+MISS_SHAPES = (
+    ("across", re.compile(r", though it runs across lines [0-9]+ to [0-9]+(,|$)")),
+    ("past_end", re.compile(r", though its first [0-9]+ characters end line [0-9]+ and the rest does not "
+                            r"follow it(,|$)")),
+    ("neither", re.compile(r", nor does it run across or past the end of any line(,|$)")),
 )
 
 
@@ -496,6 +507,73 @@ def _match(lines, quote):
     return [], None, f"{tried}, whole or in part"
 
 
+def _miss_shape(lines, quote, cited):
+    """The words saying how a quote that matched no line, whole or in part, sits against the file,
+    worked out while the reviewed head is in hand (claude-config#1701). A review of a worktree
+    records the worktree folder as its repo, and that folder is usually gone by the time anyone
+    reads the report, so the shape cannot be judged afterwards from the kept quote alone.
+
+    Across: the quote is inside the file's lines read on as one, blank lines skipped, so it was
+    copied from more than one line. Past the end: at least PART_MIN of its first characters are the
+    end of a line and the rest does not follow it. Otherwise neither, said in so many words, so a
+    mark written before the shape was said is never counted as neither (L540). The occurrence
+    nearest the cited number wins, as it does for a placed finding."""
+    forms = [quote]
+    if quote[0] in "+-" and quote[1:].strip():
+        forms.append(_normal(quote[1:]))
+    forms = [f for f in forms if len(f) >= PART_MIN]
+    kept = [(n, _normal(line)) for n, line in enumerate(lines, 1) if line.strip()]
+    starts, pos = [], 0
+    for _, text in kept:
+        starts.append(pos)
+        pos += len(text) + 1
+    joined = " ".join(text for _, text in kept)
+
+    def line_at(offset):
+        lo, hi = 0, len(starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if starts[mid] <= offset:
+                lo = mid
+            else:
+                hi = mid - 1
+        return kept[lo][0]
+
+    across = []
+    for form in forms:
+        at = joined.find(form)
+        while at != -1:
+            across.append((line_at(at), line_at(at + len(form) - 1)))
+            at = joined.find(form, at + 1)
+    if across:
+        first, last = min(across, key=lambda span: (abs(span[0] - cited), span[0]))
+        return f", though it runs across lines {first} to {last}"
+    past = []
+    for form in forms:
+        head = form[:PART_MIN]
+        for n, text in kept:
+            at = text.find(head)
+            while at != -1:
+                if form.startswith(text[at:]):
+                    past.append((n, len(text) - at))
+                at = text.find(head, at + 1)
+    if past:
+        n, k = min(past, key=lambda hit: (abs(hit[0] - cited), hit[0], -hit[1]))
+        return f", though its first {k} characters end line {n} and the rest does not follow it"
+    return ", nor does it run across or past the end of any line"
+
+
+def miss_shape(why):
+    """The shape a quote miss's mark says, read from the runner's own words and never from the
+    quote, or None for a mark that says none (written before the shape was said, or a quote too
+    short to be looked for inside lines)."""
+    words = reason_words(why)
+    for kind, pattern in MISS_SHAPES:
+        if pattern.search(words):
+            return kind
+    return None
+
+
 def _place(path, cited, quote, repo_dir, sha, cache, changed=None):
     """(path, line, how, None) for a placed finding, how being whole, marker or part and path the
     one it was placed in, or (path, None, None, why) for one that cannot be placed."""
@@ -515,7 +593,8 @@ def _place(path, cited, quote, repo_dir, sha, cache, changed=None):
         return path, None, None, "the reviewed head could not be read to check it"
     hits, how, tried = _match(lines, quote)
     if not hits:
-        miss = f"its quote matches no line of {fixed or path} at the reviewed head{tried}{_kept_quote(quote)}"
+        shape = _miss_shape(lines, quote, cited) if tried.endswith(", whole or in part") else ""
+        miss = f"its quote matches no line of {fixed or path} at the reviewed head{tried}{shape}{_kept_quote(quote)}"
         # A corrected path is kept only when the quote proves it; otherwise the cited one stays,
         # and the mark says what was tried in its place.
         return path, None, None, (f"{path} is not a file at the reviewed head, and {miss}" if fixed else miss)
