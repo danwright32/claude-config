@@ -81,6 +81,9 @@ check_eq "#2147 the scan sees each hand written copy of a Python helper (by path
 printf '#!/usr/bin/env bash\npython3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$H/lib" sleep-report.py\n' > "$TMPROOT/scan/payload/hooks/test-clean.sh"
 clean="$(printf 'payload/hooks/test-clean.sh\n' | python3 "$SCAN" --root "$TMPROOT/scan" 2>&1)"; clean_rc=$?
 check_eq "#2147 control: a suite installing through lib/install-hook-libs.py passes in silence" "0|" "$clean_rc|$clean"
+unr="$(printf 'payload/hooks/test-clean.sh\npayload/hooks/test-missing.sh\n' | python3 "$SCAN" --root "$TMPROOT/scan" 2>&1)"; unr_rc=$?
+case "$unr" in *"payload/hooks/test-missing.sh could not be read"*) unr_named=named ;; *) unr_named="unnamed: $unr" ;; esac
+check_eq "#2147 a listed suite that cannot be read stops the scan with exit 2 and is named, never skipped" "2 named" "$unr_rc $unr_named"
 
 # ---- and no suite anywhere copies a Python helper by hand ----
 # Every suite in the repository, read from the files git ships rather than a list of names (L96).

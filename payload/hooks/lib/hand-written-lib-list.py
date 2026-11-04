@@ -137,6 +137,7 @@ def main():
         return 2
     names = helpers()
     any_found = False
+    unreadable = False
     for rel in io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8', errors='replace').read().split('\n'):
         rel = rel.strip()
         if not rel or not SUITE.search(rel):
@@ -144,11 +145,15 @@ def main():
         try:
             with open(os.path.join(args.root, rel), encoding='utf-8', errors='replace') as fh:
                 text = fh.read()
-        except OSError:
+        except OSError as e:
+            print('hand-written-lib-list: %s could not be read (%s), so it was not judged' % (rel, e.strerror or e))
+            unreadable = True
             continue
         for n, hit, t in judge(text, names):
             any_found = True
             print('%s:%d: %s: %s' % (rel, n, hit, t))
+    if unreadable:
+        return 2
     return 1 if any_found else 0
 
 
