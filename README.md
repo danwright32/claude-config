@@ -1192,6 +1192,14 @@ wrapper, reason and outcome, before #2155 merged (2026-11-03 17:10 ET), two a se
 alone before #1963 (2026-10-30 20:28 ET). Anything else, a burst holding another row included,
 counts as real. Nothing is deleted from the record.
 
+The record cannot say how many Bash calls its refusals were out of, or whether a refusal taught
+anything. `python3 tools/wrapped-refusal-followups.py --since <day> --until <day>` reads this Mac's
+transcripts for both: every Bash call in the period, each refusal the gate wrote back, the shape
+today's gate gives each refused command (it reruns the gate itself on it, with a throwaway record),
+the script a script-file refusal names (by name only for the shared config's own installed files),
+and what came next per episode: the git, gh or rtk part run on its own, an override, or neither
+within five calls. Counts only, never a command (#1492).
+
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
 after the fact catch in one Slate session was this review, at about 5 minutes of CI a round).
