@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
+import { neverThrows } from './mod-kit/hold.ts'
 import { editedUnder, insideRoot, isScratch, judgedWrites, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, type Rec, type ShellWrite, type Verdict } from './collide.ts'
 
 // Collision guard (claude-config#605): two sessions in one checkout must not edit the same file or
@@ -259,6 +260,14 @@ let toldUnnoted = false
 // (#732): two spellings would part on a call with no id and the edit would never be noted.
 const planKey = (e: unknown) => String((e as { tool_use_id?: unknown }).tool_use_id ?? '')
 
+// The refusal the catch gives when this guard itself failed, naming why; HELD is the same refusal
+// built once here, for when even naming the failure throws (#2039).
+const cannotCheck = (why: string) => ({
+  decision: 'deny' as const,
+  reason: `Blocked: the collision guard could not check this call against the other sessions (${why}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
+})
+const HELD = cannotCheck('unknown failure')
+
 export const register: Register = on => {
   // Judged at tool.check (#875), which the engine raises inside tool.call once every mod's tool.call
   // hook and the settings PreToolUse hooks have passed the call on (#707): a call no build, winding
@@ -281,12 +290,14 @@ export const register: Register = on => {
     // a plan.
     if (c) toNote.set(planKey(e), c)
     return decided
-  }).catch(($, e, next) => ({
+  }).catch(($, e, next) => neverThrows(
     // A hook that fails is skipped and the verdict beneath stands, which would let the edit through
-    // unjudged, so a failure here refuses (L42, lessons review of #878). Nothing has run yet.
-    decision: 'deny' as const,
-    reason: `Blocked: the collision guard could not check this call against the other sessions (${next.error ? errorText(next.error, 'collision-guard') : 'unknown failure'}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
-  }))
+    // unjudged, so a failure here refuses (L42, lessons review of #878). Nothing has run yet. Should
+    // naming the failure fail too, the refusal says unknown failure, so the catch never throws (#2039).
+    () => cannotCheck(next.error ? errorText(next.error, 'collision-guard') : 'unknown failure'),
+    () => HELD,
+    HELD,
+  ))
 
   on('tool.call', async ($, e, next) => {
     if (!watches(String(e.tool))) return next(e)

@@ -139,6 +139,15 @@ base commit holds `payload/hooks/lib/work-names.py` (every other merge leaves af
 every route and from `merge-when-ready.sh`; a list of 100 commits or more, one page of what gh reads and so possibly cut short, is refused. The merge gate has no override, and the push refusal
 offers none (the gate's own `SKIP_SCANNERS_CHECK=1` still skips the whole gate, as it always has),
 so a message pushed past it is still judged at the merge. The remedy is always to reword.
+Both gates also refuse a message naming a work repository (#2111): they pass the scanner
+`--work-repos`, valid only with `--texts0-from`, which reads the same live list the publish gate
+below reads, through the one shared reader in `lib/work-names.py`, and never writes it to disk. A
+name is refused in plain prose too, not only as `owner/name` or `name#N`, and a false hit on an
+ordinary word is fixed by rewording the message, never by an exemption. A list it cannot read, or a
+read that runs past its budget (`WORK_NAMES_REPOS_BUDGET_SECONDS`, 30 by default; the merge gate
+gives it what is left of its own and refuses with under three seconds left, a setting rather than a
+measurement), refuses the push or the
+merge. The file scan is unchanged and still leaves repository names out.
 
 Pull request and issue text goes further (#2105). `check-work-names-publish.sh` judges every
 `gh pr create`, `pr edit`, `pr comment`, `pr review`, `issue create`, `issue edit` and
@@ -151,7 +160,8 @@ command and never written to disk: the repo digest's repository list (the one
 `lib/lesson-fanout.sh` reads), this Mac's dev update registry, and the two built in hashes. Matching
 repository names departs from #1568, which leaves them out of the file scan on purpose, for public
 text only (Dan, 2026-11-02, after a repository name leaked into a public pull request description);
-the file scan and the send scan are unchanged. Whatever it cannot tell is refused: the visibility or
+the file scan and the send scan are unchanged, and the commit message checks above read the same
+list through the same reader (#2111). Whatever it cannot tell is refused: the visibility or
 the list unreadable, a body file it cannot read, a command it cannot parse, the 35 second budget
 spent. There is no override; the remedy is to rewrite the text.
 
@@ -1722,7 +1732,17 @@ Three gates close the three parts of that, all reading commands through one libr
   spelling (set, `--add`, `--replace-all`, `--unset`, the `core` section removed or renamed, or
   `--edit`), and matches the key in any case; reading it is not refused. An agent never writes the
   setting itself, even to a folder of tracked hooks: it runs the repository's own hook install
-  script, which this gate does not read into. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
+  script, which this gate does not read into. Since claude-config#2140 the other routes to the same
+  setting are refused too: config handed to git through the environment (`GIT_CONFIG_COUNT` with a
+  numbered key that moves the hooks, `GIT_CONFIG_PARAMETERS`, and `GIT_CONFIG_GLOBAL`,
+  `GIT_CONFIG_SYSTEM` or `GIT_CONFIG` naming a whole file), git's `--config-env`, a config include
+  (`include.path`, `includeIf.*.path`) set with `-c` or `git config`, and a key the shell spells so the
+  gate cannot read it. The gate is also registered for Edit, Write and MultiEdit, and refuses an
+  agent's edit of a git config file (the repository's or a worktree's, the global one, or any file
+  an include names, existing or not) that changes the hooks location or an include as git reads
+  them; any other edit of those files goes through. The advice about the install script is chosen
+  from the reader's reasons (`agent-overrides.py hooks-location-advice`), never from the command's
+  text. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
   was removed on Dan's decision of 2026-10-24 (claude-config#1666), since an agent could write the
   same file with the Write tool.
   It also refuses an agent's git command that reads a file from standard input's DEVICE PATH
@@ -3620,7 +3640,10 @@ and the `verdict` of the per language judge of inline code (writes files, runs a
 be read), moved here from scope-modes in #712; given `cwd` and `home`, each command also carries
 `folder`, the folder it runs in, a cd or pushd before it followed by the write reader's own reading
 of one and null where that cannot be followed (a variable the command did not set, `cd -`, a
-`popd`), the folder is it live asks GitHub about a merge in, #2000), of which files a command
+`popd`), the folder is it live asks GitHub about a merge in, #2000; and, for each word holding a
+command substitution, `derived` (#2141): what its substitutions run and, where each is a plain `cat`
+of a heredoc or a here string, the text it puts in the word, kept apart from the word as typed, or
+else `unresolved` with why, never empty and never safe), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
@@ -5198,11 +5221,18 @@ whose issues or growth could not be read passes without settling the file, so th
 tries again. When the mod itself fails the edit goes ahead, the error goes to `errors.jsonl` beside
 the log, and the first each session is one dim line saying the edit went ahead unchecked. `node
 tools/area-check-replay.ts <checkout> --repo <owner/name>` replays a repository's last 30 days
-through the same rules.
+through the same rules. Every pull request then carries an area check line for each file decided on
+its branch, `Area check: <file>: <decision>, <reason>` (a fold line also names `Refs #N`): `gh pr
+create`, `gh pr edit` given a description, and `gh pr merge` (by itself, `--auto` or through the
+merge helper) are refused while the description lacks one, with the lines to paste. Decisions are
+matched by repository, branch and merge base, read from this Mac's log only, and only from its
+newest 1 MiB of decision lines; a rebase moves the merge base, so decisions taken before it are no
+longer asked for. A log that cannot be read refuses the command; a fact the command does not depend
+on that cannot be read (no checkout, GitHub not answering for a merge) lets it through.
 
 </td><td>
 
-#1506, #1508, #1509
+#1506, #1508, #1509, #1510
 
 </td></tr>
 <tr><td>

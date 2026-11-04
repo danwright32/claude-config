@@ -859,6 +859,86 @@ OUT="$(printf 'not json at all' \
   | ( cd "$FIX/dev" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1 ))"; RC=$?
 allowed "and one that names nothing under payload/ is not refused"
 
+echo "payload write gate: a relative path is judged where the command runs, from a worktree too (claude-config#2128)"
+
+# Laid out as a builder's is: a linked worktree on its own branch at .claude/worktrees/agent-x
+# inside the primary checkout. Measured on 2026-11-03 through the installed gate from such an agent:
+# the hook payload's cwd names the WORKTREE (a relative ../../../payload/ write was refused naming
+# the primary checkout's payload/), and a cd earlier in the command moved the judged path. What did
+# not follow the cd was a payload path written inside an inline script, which was judged against
+# the payload's cwd: let through when the cd went to the primary checkout, refused naming the wrong
+# file when it went to the worktree. And three kinds of path the gate could not place were let
+# through unjudged: one under a directory not made yet, one held in a variable, and any after a cd
+# to a variable.
+P2128="$FIX/p2128"
+mkdir -p "$P2128"
+git init -q "$P2128/pri" 2>/dev/null
+GG "$P2128/pri" symbolic-ref HEAD refs/heads/main
+mkdir -p "$P2128/pri/payload/hooks"
+: > "$P2128/pri/claude-sync"
+printf 'x\n' > "$P2128/pri/payload/LESSONS.md"
+GG "$P2128/pri" add claude-sync payload/LESSONS.md
+GG "$P2128/pri" commit -q -m seed
+WT2128="$P2128/pri/.claude/worktrees/agent-x"
+GG "$P2128/pri" worktree add -q -b agent-x "$WT2128" 2>/dev/null
+mkdir -p "$WT2128/tests"
+[ -f "$WT2128/payload/LESSONS.md" ] && check "#2128 the nested worktree fixture was built" ok \
+  || check "#2128 the nested worktree fixture was built" "no worktree at $WT2128"
+rm -f "$HOLD"
+# What was measured live, kept so a change to how a cwd is read shows here.
+runbash "touch payload/hooks/z" "$WT2128"
+allowed "#2128 a relative payload write from the worktree is judged in the worktree, and let through"
+runbash "touch ../../../payload/hooks/z" "$WT2128"
+refused "#2128 a relative path climbing out of the worktree is judged in the primary checkout"
+says "#2128 and it names the primary checkout's file" "$P2128/pri/payload/hooks/z"
+runbash "cd tests && touch ../../../../payload/hooks/z" "$WT2128"
+refused "#2128 a relative cd earlier in the command moves where the write is judged"
+# An inline script's payload path, after a cd: the script runs where the cd left it.
+runbash "cd $P2128/pri && python3 -c \"open('payload/LESSONS.md','w')\"" "$WT2128"
+refused "#2128 a python -c write after a cd into the primary checkout is refused"
+says "#2128 and names the primary checkout's file" "$P2128/pri/payload/LESSONS.md"
+runbash "cd $P2128/pri && python3 - <<'PY'
+from pathlib import Path
+Path('payload/LESSONS.md').write_text('x')
+PY" "$WT2128"
+refused "#2128 a heredoc script's write after a cd into the primary checkout is refused"
+runbash "cd $WT2128 && python3 -c \"open('payload/LESSONS.md','w')\"" "$P2128/pri"
+allowed "#2128 a python -c write after a cd into the worktree is judged there, not in the primary checkout"
+runbash "python3 -c \"open('payload/LESSONS.md','w')\"" "$P2128/pri"
+refused "#2128 control: the same script run in the primary checkout is refused"
+# A path under a directory that is not there yet is still under payload/.
+runbash "cp /tmp/x $P2128/pri/payload/newdir/x.sh" "$WT2128"
+refused "#2128 a copy into a payload directory not made yet is refused"
+runbash "mkdir -p payload/a/b" "$P2128/pri"
+refused "#2128 a mkdir -p of nested new payload directories is refused"
+runbash "mkdir -p tests/a/b" "$P2128/pri"
+allowed "#2128 control: a mkdir -p of new directories outside payload/ is not"
+# A path only the shell can work out is judged as the payload write it may be, never let through.
+runbash "cp /tmp/x \"\$P/payload/LESSONS.md\"" "$P2128/pri"
+refused "#2128 a copy to a variable's payload/ path is refused"
+says "#2128 and the refusal says the path could not be worked out" "only the shell can work out"
+runbash "cd \"\$P\" && echo x > payload/LESSONS.md" "$WT2128"
+refused "#2128 a payload write after a cd to a variable is refused, even from the worktree"
+runbash "cd - && echo x > payload/LESSONS.md" "$WT2128"
+refused "#2128 a payload write after a cd to an unknown previous directory is refused"
+runbash "echo x > \"\$PWD/payload/LESSONS.md\"" "$P2128/pri"
+refused "#2128 a write to \$PWD/payload/ is judged in the directory the command runs in, here the primary checkout"
+runbash "echo x > \"\$PWD/payload/LESSONS.md\"" "$WT2128"
+allowed "#2128 and from the worktree, \$PWD/payload/ is the worktree's own"
+runbash "cd \"\$T\" && echo x > out.txt" "$WT2128"
+allowed "#2128 control: a write after a cd to a variable that names no payload path is not refused"
+runbash "cat \"\$P/payload/LESSONS.md\" > /tmp/out" "$P2128/pri"
+allowed "#2128 control: reading a variable's payload/ path is still a read"
+printf '%s\n' "$(( $(date +%s) + 3600 ))" > "$HOLD"
+runbash "cp /tmp/x \"\$P/payload/LESSONS.md\"" "$P2128/pri"
+allowed "#2128 a hold of this session's lets a path only the shell knows through"
+rm -f "$HOLD"
+# With the reading of where wrapped commands run failing, a cd is still followed, never dropped.
+HOOK_SAVED="$HOOK"; HOOK="$FIX/brokenreader/payload-write-gate.sh"
+runbash "cd $P2128/pri && bash -c 'touch payload/LESSONS.md'" "$WT2128"
+refused "#2128 with the wrapped reading failing, a wrapped write after a cd into the primary checkout is refused"
+HOOK="$HOOK_SAVED"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

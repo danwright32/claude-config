@@ -1420,7 +1420,8 @@ rules. It judges a repository whose pull request base holds `payload/hooks/lib/w
 the base so a pull request cannot remove what judges it, which keeps it off work repositories that
 name their own organisation. The merge gate has no override, and the push refusal offers none,
 though the push gate's own `SKIP_SCANNERS_CHECK=1` still skips everything it does; the merge gate
-reads the commit messages too, so a message pushed past the one is judged by the other.
+reads the commit messages too, so a message pushed past the one is judged by the other. Both now
+match work repository names as well (#2111, below the #2105 record).
 
 So does a copy of the tool with no scanner beside it (#1621). #1568 let that send go ahead with a
 notice, on the reasoning that only a copy run outside its checkout lacks the scanner and several
@@ -1456,6 +1457,22 @@ file, an unparsable payload, its budget spent), and it has no override. The rule
 call writes moved into `gh_issue_scan.py` so the session link gate and this one read a write the same
 way. Measured against this repository's own history on 2026-11-02, the rule would have refused 82 of
 856 pull requests, 136 of 1250 issues and 23 of 1079 comments, which is the gate doing its job.
+
+Commit messages name no work repository either (#2111). A commit message becomes the squash body in
+main, so it is public text with the same reason to keep a repository name out of it as a pull
+request description, and the #1995 checks were matching organisation names only. They now pass the
+scanner `--work-repos`, which reads the work repository list through the reader the publish gate
+used to hold alone: that reader moved into `lib/work-names.py` (`GitHub`, `work_repo_names`,
+`odd_hit`, `CannotTell`) and the publish gate now calls it, so the two cannot drift into two rules
+for one list (L370). The flag is refused beside file paths, so the file scan keeps #1568's rule.
+Names are refused in plain prose as well as `owner/name` and `name#N`: measured over the commits on
+main since 2026-10-01, most of the messages the wider rule would refuse name one only in prose, so
+a rule limited to the reference forms would have missed most of what it exists for. Some listed
+names are also ordinary words, and a false hit on one is fixed by rewording the message, with no
+exemption list, because an exemption is a place a real name can hide. A list that cannot be read,
+or a read past its budget, refuses rather than passes (L98). The merge gate hands the read what is
+left of its own deadline and refuses with under 3 seconds left, because Claude Code killing a hook
+that overruns its timeout lets the merge through.
 
 ## One watcher, and a leftover loop stops itself (#604)
 

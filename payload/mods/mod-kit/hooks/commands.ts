@@ -142,18 +142,27 @@ type Heredoc = { at: number; body: string; quoted: boolean }
 // given as `unended` too, its body to the end of the text, since the shell still reads that body
 // (and expands it, unless its delimiter was quoted) as well as its lines being read as commands here
 // (#965). What the shell runs inside each body is read by readLine (#974), so the unended one says
-// where its << stands too.
-export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; unended?: Heredoc } => {
+// where its << stands too. `removed` is each run of lines taken out, as written, with the place in
+// the text left where they stood, so the text of a command substitution a heredoc sits in can be put
+// back whole (#2141: `"$(cat <<'EOF' ... EOF\n)"` was read as a cat of a heredoc with no body).
+export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; unended?: Heredoc; removed: { at: number; lines: string[] }[] } => {
   const out: string[] = []
   const heredocs: Heredoc[] = []
+  const removed: { at: number; lines: string[] }[] = []
   const open: { end: string; tabs: boolean; at: number; quoted: boolean }[] = []
   let body: string[] = []
   // The lines of the heredoc being read, as written, put back as commands if it never ends.
   let unended: string[] = []
   let offset = 0
+  const remove = (line: string) => {
+    const run = removed[removed.length - 1]
+    if (run && run.at === offset) run.lines.push(line)
+    else removed.push({ at: offset, lines: [line] })
+  }
   for (const line of cmd.split('\n')) {
     const h = open[0]
     if (h) {
+      remove(line)
       if (line.trim() === h.end) {
         heredocs.push({ at: h.at, body: body.join('\n'), quoted: h.quoted })
         open.shift()
@@ -173,7 +182,34 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
     offset += line.length + 1
   }
   const h = open[0]
-  return { text: [...out, ...unended].join('\n'), heredocs, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted } } : {}) }
+  // The lines of one that never ends are put back, at the end where they stood, so none was removed.
+  const run = removed[removed.length - 1]
+  if (h && unended.length && run) {
+    run.lines.splice(run.lines.length - unended.length)
+    if (!run.lines.length) removed.pop()
+  }
+  return { text: [...out, ...unended].join('\n'), heredocs, removed, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted } } : {}) }
+}
+
+// Whether the substitution from `from` to `to` in what dropHeredocs left holds a run of heredoc lines
+// removed at `at`: one removed within it, a run at `to` being the last of it (the `)` closing it
+// standing on the line after the heredoc's delimiter), or, for one never closed and so read to the
+// end of the text, any run after it starts. The lines after the last line left are removed at a place
+// past the end of the text, so without that last case a substitution never closed lost the body of
+// a heredoc in it, and every command the body runs (lessons review of #2165).
+const holds = (text: string, from: number, to: number, at: number): boolean => at > from && (at <= to || to >= text.length)
+
+// The text from `from` to `to` in what dropHeredocs left, with the heredoc lines it holds put back.
+const restored = (text: string, removed: readonly { at: number; lines: string[] }[], from: number, to: number): string => {
+  let out = ''
+  let at = from
+  for (const r of removed) {
+    if (!holds(text, from, to, r.at)) continue
+    // A run past the end of the text stood after its last line, whose newline the text does not keep.
+    out += text.slice(at, r.at) + (r.at > text.length ? '\n' : '') + r.lines.map(l => `${l}\n`).join('')
+    at = r.at
+  }
+  return out + text.slice(at, to)
 }
 
 // Words, split on separators outside quotes. A quoted script spanning lines stays one word. Each
@@ -203,12 +239,18 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
 // `unexpanded`, where given, is filled with the place in the text of each word holding a $ or a
 // backtick only inside single quotes or after a backslash (#1953), which the shell hands on as
 // written: `'x$'`, 'costs $5', \$HOME and "a\$b" are, while $P, "$P", '$P'$Q and "$(x)" are not.
+//
+// `subbed`, where given, is filled with each word's command substitutions (#2141): by the word's
+// place in the text, where each starts in the text (`at`), where its text starts in the word and how
+// long it is there (`pos`, `len`), and whether double quotes hold it, so the shell neither splits
+// nor matches against files what it prints.
 type Split = { words: string[]; starts: number[]; from?: number }
+type InWord = { at: number; pos: number; len: number; quoted: boolean }
 // The characters that make a word a pattern the shell may expand: a glob's, a brace's, and zsh's
 // groups and extended glob characters, read wider than any one shell's so a word is never taken for
 // one it hands on as written while some shell would match it against files.
 const GLOB_CHAR = /[*?[\]{}()~^#]/
-const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>): Split[] => {
+const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>): Split[] => {
   const cmds: Split[] = []
   let words: string[] = []
   let starts: number[] = []
@@ -216,6 +258,7 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>,
   let start = 0
   let inWord = false
   let wordBare: number[] = []
+  let wordSubs: InWord[] = []
   // For `literal`: whether the word being read holds a pattern character quoted, one bare, and an
   // expansion (a $ or a backtick, quoted or not, or a substitution).
   let globQuoted = false
@@ -255,6 +298,7 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>,
     inWord = true
     start = i
     wordBare = []
+    wordSubs = []
     globQuoted = false
     globBare = false
     expands = false
@@ -266,6 +310,7 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>,
       words.push(word)
       starts.push(start)
       if (bare && wordBare.length) bare.set(start, wordBare)
+      if (subbed && wordSubs.length) subbed.set(start, wordSubs)
       if (literal && globQuoted && !globBare && !expands) literal.add(start)
       if (unexpanded && dollarText && !dollarLive) unexpanded.add(start)
     }
@@ -327,6 +372,7 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>,
         // In double quotes too, a quote inside a substitution belongs to it, never closing these.
         expands = true
         dollarLive = true
+        wordSubs.push({ at: i, pos: word.length, len: sub + 1 - i, quoted: true })
         word += cmd.slice(i, sub + 1)
         i = sub
       } else {
@@ -369,6 +415,7 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>,
       begin(i)
       expands = true
       dollarLive = true
+      wordSubs.push({ at: i, pos: word.length, len: sub + 1 - i, quoted: false })
       word += cmd.slice(i, sub + 1)
       i = sub
     } else if (c === '"' || c === "'") {
@@ -690,6 +737,92 @@ export type Command = {
   splits?: number[][]
   literal?: boolean[]
   unexpanded?: boolean[]
+  derived?: (Derived | null)[]
+}
+
+/**
+ * What a word holding a command substitution becomes when the shell runs it (#2141), beside the
+ * word as typed, which keeps the substitution's text and loses any heredoc inside it: `commands`,
+ * what its substitutions run, as `pipeline` gives them, and either `text`, the word with each one
+ * replaced by what it prints, worked out only where each is a plain cat of a heredoc or a here
+ * string, or `unresolved`, why that cannot be known. The text is derived, never typed: a guard that
+ * must tell what was written from what a command made reads `words`. An unresolved word is unknown,
+ * never empty and never safe.
+ */
+export type Derived = { text: string; commands: Command[] } | { unresolved: string; commands: Command[] }
+
+// What a word's substitutions make of it: each read where it stands in the line (`subs`, by `at`).
+const wordDerived = (word: string, inWord: readonly InWord[], subs: readonly (Ranged & { line: Line })[]): Derived => {
+  const commands: Command[] = []
+  let why: string | undefined
+  const parts: { pos: number; len: number; text: string }[] = []
+  for (const w of inWord) {
+    // A $(( )) is arithmetic and lists only the substitutions inside it, so every one within the
+    // word's span is its own.
+    for (const s of subs) if (s.at >= w.at && s.at < w.at + w.len) commands.push(...flatten(s.line, true))
+    if (why) continue
+    const s = subs.find(x => x.at === w.at)
+    const made = !s ? { unresolved: 'it is arithmetic, which this reader does not work out' } : s.process ? { unresolved: 'a process substitution stands for a file only the shell knows' } : printed(s.line)
+    if ('unresolved' in made) why = made.unresolved
+    else if (!w.quoted && (!made.text || /\s/.test(made.text) || GLOB_CHAR.test(made.text))) why = 'outside double quotes the shell splits what it prints into words and may match them against files'
+    else parts.push({ pos: w.pos, len: w.len, text: made.text })
+  }
+  if (why) return { unresolved: why, commands }
+  let text = word
+  for (const p of [...parts].reverse()) text = text.slice(0, p.pos) + p.text + text.slice(p.pos + p.len)
+  return { text, commands }
+}
+
+// What a substitution's commands print, where that is known: one command, a cat given nothing but
+// a heredoc or a here string; the shell takes the newlines off the end.
+const printed = (line: Line): { text: string } | { unresolved: string } => {
+  const ran = line.filter((c): c is Command => !('sub' in c))
+  const c = ran[0]
+  if (!c || ran.length > 1) return { unresolved: ran.length ? 'it runs more than one command' : 'it runs no command' }
+  const made = catPrints(c)
+  return 'text' in made ? { text: made.text.replace(/\n+$/, '') } : made
+}
+
+// What a cat given only heredocs and here strings prints: the last one on standard input, as the
+// shell gives it. A heredoc whose body the shell expands, a here string holding an expansion, a file,
+// an option, or anything else cat is given leaves it unknown.
+const catPrints = (c: Command): { text: string } | { unresolved: string } => {
+  const name = c.words[0] as string
+  if (base(name) !== 'cat') return { unresolved: `it runs ${name}, whose output this reader does not know` }
+  let text: string | undefined
+  for (let i = 1; i < c.words.length; i++) {
+    const w = c.words[i] as string
+    const m = INPUT_WORD.exec(w)
+    if (!m || w.startsWith('<(') || !onStdin(w) || m[2] === '<') return { unresolved: `cat is given ${w}, which is no heredoc or here string` }
+    const rest = m[3] as string
+    if (m[2] === '<<<') {
+      const at = rest ? i : i + 1
+      if (at >= c.words.length) return { unresolved: 'a here string with no text' }
+      const made = hereString(c, at, rest ? w.length - rest.length : 0)
+      if ('unresolved' in made) return made
+      text = `${made.text}\n`
+      i = at
+    } else {
+      const h = (c.heredocs ?? []).find(f => f.word === i)
+      if (!rest) i++
+      if (!h) return { unresolved: 'a heredoc whose body this reader does not have' }
+      if (!h.quoted && /[$`]/.test(h.body.replace(/\\[\\$`]/g, ''))) return { unresolved: "the heredoc's body holds an expansion the shell works out" }
+      text = `${h.quoted ? h.body : expandedBody(h.body)}\n`
+    }
+  }
+  return text === undefined ? { unresolved: 'cat reads what feeds the substitution' } : { text }
+}
+
+// A here string's text, the word at `at` past its first `skip` characters: the word's own derived
+// text where a substitution made it, the word itself where it holds no expansion.
+const hereString = (c: Command, at: number, skip: number): { text: string } | { unresolved: string } => {
+  const d = c.derived?.[at]
+  if (d) return 'text' in d ? { text: d.text.slice(skip) } : { unresolved: d.unresolved }
+  const w = (c.words[at] as string).slice(skip)
+  if (c.unexpanded?.[at]) return { text: w }
+  if (/[$`]/.test(w)) return { unresolved: 'the here string holds an expansion the shell works out' }
+  if (w.startsWith('~') && !c.literal?.[at]) return { unresolved: 'the here string starts with a ~ the shell expands' }
+  return { text: w }
 }
 
 /**
@@ -729,7 +862,7 @@ const ownRedirects = (words: readonly string[]): string[] => {
 // is read after it, as a command of its own. The script is read as that shell splits words (#1834),
 // and `splits` is where each word's expansions outside quotes are, when the shell running this one
 // splits their values. `literal` is which words the shell hands on as written (#1951).
-const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][], literal?: boolean[], unexpanded?: boolean[]) => {
+const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][], literal?: boolean[], unexpanded?: boolean[], derived?: (Derived | null)[]) => {
   const stdin = ownStdin(words, fed) ?? feed.stdin
   const kind = kindOf(words[0])
   const { program, script } = kind ? readProgram(words, stdin) : {}
@@ -761,6 +894,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
     ...(splits && splits.some(s => s.length) ? { splits } : {}),
     ...(literal && literal.some(Boolean) ? { literal } : {}),
     ...(unexpanded && unexpanded.some(Boolean) ? { unexpanded } : {}),
+    ...(derived && derived.some(d => d !== null) ? { derived } : {}),
   })
   // Its {} stands for each thing find finds, which this reader writes as the folder find starts
   // from, so the command carries those folders as `found`: what it changes at one of them is that
@@ -818,7 +952,7 @@ export const placed = (c: Command, inSubstitution: boolean): Command => {
  */
 export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}): Line => {
   const out: Line = []
-  const { text, heredocs, unended } = dropHeredocs(cmd)
+  const { text, heredocs, unended, removed } = dropHeredocs(cmd)
   const heredocAt = new Map(heredocs.map(h => [h.at, h]))
   // Each word's expansions outside quotes, by its place in the text (#1834).
   const bare = new Map<number, number[]>()
@@ -826,24 +960,56 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   const literal = new Set<number>()
   // Each word whose every $ and backtick the shell hands on as written, by its place (#1953).
   const unexpanded = new Set<number>()
-  const read = split(text, bare, literal, unexpanded)
+  // Each word's command substitutions, by its place in the text (#2141).
+  const subbed = new Map<number, InWord[]>()
+  const read = split(text, bare, literal, unexpanded, subbed)
   const begun = read.map(r => begins(r.words, r.starts))
+  // A substitution runs in the shell running the line, so it splits words as that shell does.
+  const subFeed: Feed = { ...(outer.pipedFrom ? { pipedFrom: outer.pipedFrom } : {}), ...(outer.stdin ? { stdin: outer.stdin } : {}), ...(outer.splits ? { splits: true } : {}) }
   // Each substitution, by the command it sits in: the last one starting at or before it.
-  const ran = new Map<number, string[]>()
-  const place = (at: number, sub: string) => {
+  const ran = new Map<number, Line[]>()
+  const place = (at: number, sub: Line) => {
     let k = 0
     read.forEach((r, j) => {
       if ((r.starts[0] ?? 0) <= at) k = j
     })
     ran.set(k, [...(ran.get(k) ?? []), sub])
   }
-  for (const s of substitutions(text, false)) place(s.at, s.text)
-  for (const h of [...heredocs, ...(unended ? [unended] : [])]) if (!h.quoted) for (const s of substitutions(h.body, true)) place(h.at, s.text)
-  // A substitution runs in the shell running the line, so it splits words as that shell does.
-  const subFeed: Feed = { ...(outer.pipedFrom ? { pipedFrom: outer.pipedFrom } : {}), ...(outer.stdin ? { stdin: outer.stdin } : {}), ...(outer.splits ? { splits: true } : {}) }
-  const runSubs = (k: number) => {
-    for (const s of ran.get(k) ?? []) out.push({ sub: readLine(s, opts, subFeed) })
+  // Each substitution in the line's own text is read from its text with the heredoc lines dropped
+  // from within it put back (#2141), so a heredoc it holds feeds the command there, and is read once:
+  // by where it stands, for the words it sits in.
+  const subs = ranged(text, false).map(s => {
+    const whole = restored(text, removed, s.from, s.to)
+    return { ...s, line: readLine(s.tick ? unticked(whole) : whole, opts, subFeed) }
+  })
+  for (const s of subs) place(s.at, s.line)
+  // A heredoc's body inside a substitution is read with it, so only the rest are read here.
+  const inSub = (at: number) => subs.some(s => s.from <= at && at < s.to)
+  // A heredoc opened inside a substitution that holds none of its lines (`$(cat <<EOF)` with the
+  // body on the lines after): the reader cannot tell whether the shell reads those lines as the body
+  // or as commands (bash 3.2 ends the heredoc at the `)` and runs them), so they are read as both,
+  // never as neither (lessons review of #2165). Each run of lines is read once.
+  const runOf = (at: number) => removed.find(r => r.at > at)
+  const unheld = new Set<{ at: number; lines: string[] }>()
+  for (const h of heredocs) {
+    const r = runOf(h.at)
+    const sub = subs.find(s => s.from <= h.at && h.at < s.to)
+    if (!sub || !r || holds(text, sub.from, sub.to, r.at)) continue
+    if (!unheld.has(r)) place(h.at, readLine(r.lines.join('\n'), opts, subFeed))
+    unheld.add(r)
+    if (!h.quoted) for (const s of substitutions(h.body, true)) place(h.at, readLine(s.text, opts, subFeed))
   }
+  for (const h of [...heredocs, ...(unended ? [unended] : [])]) {
+    if (!h.quoted && !inSub(h.at)) for (const s of substitutions(h.body, true)) place(h.at, readLine(s.text, opts, subFeed))
+  }
+  const runSubs = (k: number) => {
+    for (const s of ran.get(k) ?? []) out.push({ sub: s })
+  }
+  // What each word the substitutions sit in becomes (#2141), null for a word with none.
+  const derivedOf = (b: Begun): (Derived | null)[] => b.words.map((w, n) => {
+    const inWord = subbed.get(b.starts[n] ?? -1)
+    return inWord ? wordDerived(w, inWord, subs) : null
+  })
   const fedOf = (b: Begun): Fed => {
     const fed: Fed = []
     // The last redirect onto standard input is what the command reads there, as in the shell: a
@@ -883,7 +1049,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
     if (b.xargs || outer.xargs) feed = { ...feed, xargs: true }
     if (outer.found) feed = { ...feed, found: outer.found }
-    emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined, b.starts.map(s => literal.has(s)), b.starts.map(s => unexpanded.has(s)))
+    emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined, b.starts.map(s => literal.has(s)), b.starts.map(s => unexpanded.has(s)), derivedOf(b))
   })
   return out
 }
@@ -940,6 +1106,8 @@ const subEnd = (text: string, i: number): number | undefined => {
   const end = c === '`' ? tickEnd(text, i + 1) : (c === '$' || c === '<' || c === '>') && text[i + 1] === '(' ? closing(text, i + 2) : undefined
   return end === undefined ? undefined : end < 0 ? text.length - 1 : end
 }
+// Inside backticks a backslash before $, a backtick or a backslash stands for that character.
+const unticked = (s: string) => s.replace(/\\([$`\\])/g, '$1')
 // A # begins a comment only where a word would begin.
 const commentAt = (text: string, i: number, start = 0) => i === start || /[\s;&|()]/.test(text[i - 1] as string)
 
@@ -954,8 +1122,14 @@ const commentAt = (text: string, i: number, start = 0) => i === start || /[\s;&|
  * asks rather than passes. Inside backticks a backslash before $, a backtick or a backslash stands
  * for that character.
  */
-export const substitutions = (text: string, body: boolean): { text: string; at: number }[] => {
-  const out: { text: string; at: number }[] = []
+export const substitutions = (text: string, body: boolean): { text: string; at: number }[] => ranged(text, body).map(s => ({ text: s.text, at: s.at }))
+
+// Each substitution as `substitutions` gives it, with where its text stands in `text` as written
+// (`from` to `to`, before a backtick's escapes are read), and which kind it is: `tick` for
+// backticks, `process` for <( and >( (#2141).
+type Ranged = { text: string; at: number; from: number; to: number; tick?: true; process?: true }
+const ranged = (text: string, body: boolean): Ranged[] => {
+  const out: Ranged[] = []
   let quoted = false
   for (let i = 0; i < text.length; i++) {
     const c = text[i] as string
@@ -986,23 +1160,26 @@ export const substitutions = (text: string, body: boolean): { text: string; at: 
       const inner = text[i + 2] === '(' ? closing(text, i + 3) : -1
       if (inner >= 0 && text[inner + 1] === ')') {
         const from = i + 3
-        out.push(...substitutions(text.slice(from, inner), false).map(s => ({ text: s.text, at: from + s.at })))
+        out.push(...ranged(text.slice(from, inner), false).map(s => ({ ...s, at: from + s.at, from: from + s.from, to: from + s.to })))
         i = inner + 1
         continue
       }
       const end = closing(text, i + 2)
-      out.push({ text: text.slice(i + 2, end < 0 ? text.length : end), at: i })
-      i = end < 0 ? text.length : end
+      const to = end < 0 ? text.length : end
+      out.push({ text: text.slice(i + 2, to), at: i, from: i + 2, to })
+      i = to
     } else if ((c === '<' || c === '>') && text[i + 1] === '(' && !body && !quoted) {
       // A process substitution (#975) runs its commands as the command it sits in starts; in double
       // quotes or a heredoc's body it is text.
       const end = closing(text, i + 2)
-      out.push({ text: text.slice(i + 2, end < 0 ? text.length : end), at: i })
-      i = end < 0 ? text.length : end
+      const to = end < 0 ? text.length : end
+      out.push({ text: text.slice(i + 2, to), at: i, from: i + 2, to, process: true })
+      i = to
     } else if (c === '`') {
       const end = tickEnd(text, i + 1)
-      out.push({ text: text.slice(i + 1, end < 0 ? text.length : end).replace(/\\([$`\\])/g, '$1'), at: i })
-      i = end < 0 ? text.length : end
+      const to = end < 0 ? text.length : end
+      out.push({ text: unticked(text.slice(i + 1, to)), at: i, from: i + 1, to, tick: true })
+      i = to
     }
   }
   return out

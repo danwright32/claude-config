@@ -42,6 +42,9 @@ trap 'rm -rf "$WORK"' EXIT
 FAKE_HASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
 printf 'console.log(JSON.stringify({state: "missing", file: "/nowhere/repos.local.json"}))\n' > "$WORK/registry-missing.js"
 printf 'console.log("not json")\n' > "$WORK/registry-broken.js"
+# The work repository list the fake gh answers with: an invented owner and repository, neither of
+# which is the acme/widget the pull requests below come from.
+printf '{"repos":[{"owner":"Globex-Corp","name":"halcyon"}]}\n' > "$WORK/list.json"
 
 # A checkout of acme/widget, and a fake gh whose answers are chosen here: the pull request from
 # $FAKE_PR_JSON, and the scanner at its base present unless FAKE_SCOPE says absent or fails.
@@ -51,6 +54,10 @@ cat > "$WORK/bin/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
 case "$*" in
+  # The work repository list (claude-config#2111), from $FAKE_LIST; every name in it is invented.
+  *"contents/repos.json"*)
+    [ -f "${FAKE_LIST:-}" ] || { printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1; }
+    cat "$FAKE_LIST" ;;
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
   *"pr view"*)
@@ -60,6 +67,10 @@ case "$*" in
     case "${FAKE_SCOPE:-present}" in
       absent) printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1 ;;
       fails) printf 'gh: Bad Gateway (HTTP 502)\n' >&2; exit 1 ;;
+      # A scope read that answers only after 15 seconds, so the hook's own clock has moved past what
+      # its budget leaves for the work repository list (claude-config#2111). A wait this test sets,
+      # not measured.
+      slow) sleep 15; printf '{"name":"work-names.py"}\n' ;;
       *) printf '{"name":"work-names.py"}\n' ;;
     esac ;;
   *"api graphql"*) printf '%s\n' "${FAKE_NODE_JSON:-}" ;;
@@ -86,7 +97,7 @@ run_hook() {
   hook_out="$(printf '{"tool_input":{"command":%s},"cwd":%s}' \
       "$(printf '%s' "$cmd" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
       "$(printf '%s' "$WORK/repo" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
-    | ( cd "$WORK/repo" && env PATH="$WORK/bin:$PATH" FAKE_PR_JSON="$WORK/pr.json" FAKE_GH_LOG="$WORK/gh.log" \
+    | ( cd "$WORK/repo" && env PATH="$WORK/bin:$PATH" FAKE_PR_JSON="$WORK/pr.json" FAKE_GH_LOG="$WORK/gh.log" FAKE_LIST="$WORK/list.json" \
           WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" WORK_NAMES_REGISTRY_READER="$WORK/registry-missing.js" \
           WN_MERGE_SLEEP=true "$@" bash "$HOOK" 2>&1 ))"
   hook_rc=$?
@@ -115,7 +126,7 @@ fi
 pr_json "Add the Acme-HQ reader" "Adds the reader." "clean" > "$WORK/pr.json"
 run_hook "$MERGE 7 --squash"
 expect_deny "a title naming a work organisation" "title:1: a work organisation name"
-expect_deny "the refusal carries the file check's own remedy" "write name#123, never owner/name#123"
+expect_deny "the refusal carries the message check's own remedy" "never write owner/name#123 or name#123"
 expect_deny "and how to fix a title" "gh pr edit 7"
 never_repeats "a title refusal"
 pr_json "Add the reader" "Adds the reader.
@@ -131,6 +142,35 @@ expect_deny "and how to reword a pushed commit" "force push"
 if says "commit 1a2b3c4:"; then fail "a clean commit was named too: $hook_out"; else pass; fi
 # The base the scanner is looked for at is the pull request's own base commit.
 if grep -q 'contents/payload/hooks/lib/work-names.py?ref=b0b0b0b0b0b0b0b0b0b0' "$WORK/gh.log"; then pass; else fail "the scope was not read at the base commit: $(cat "$WORK/gh.log")"; fi
+
+# A work REPOSITORY in a commit message is published by the squash merge just as an organisation is,
+# so the messages are checked against the work repository list too (claude-config#2111), in prose.
+pr_json "Add the reader" "Adds the reader." "copied from the Halcyon checkout" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash"
+expect_deny "a commit message naming a listed work repository" "commit 5d6e7f8:3: a work repository or owner name"
+expect_deny "and the refusal says repository" "names a work organisation or repository"
+if [[ "$(printf '%s' "$hook_out" | tr '[:upper:]' '[:lower:]')" == *"halcyon"* ]]; then fail "the refusal repeated the repository: $hook_out"; else pass; fi
+if says "commit 1a2b3c4:"; then fail "a clean commit was named too: $hook_out"; else pass; fi
+pr_json "Move it to globex-corp/thing" "Adds the reader." "clean" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash"
+expect_deny "a title naming a listed work owner" "title:1: a work repository or owner name"
+# Cannot tell is refused, never passed (L98, L345).
+pr_json "Add the reader" "Adds the reader." "clean" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash" FAKE_LIST="$WORK/no-such-list.json"
+expect_deny "a work repository list that cannot be read refuses the merge" "work repository list"
+expect_deny "as the scanner giving no verdict" "gave no verdict"
+# Under 3 seconds of the budget left for the list is refused before the scanner starts, since a hook
+# killed at its timeout gives no verdict at all. A read budget of 5 leaves 17 seconds for the list,
+# and the slow scope read spends 15 of them, so the read is never asked for. The 5 is slack for the
+# hook to reach its scope read on a loaded machine, which would otherwise refuse it for its earlier
+# reads instead. The wait is real time only because the hook's clock is the shell's own SECONDS.
+# Every number here is one this test or the hook sets, not measured.
+run_hook "$MERGE 7 --squash" FAKE_SCOPE=slow WN_MERGE_READ_BUDGET_SECONDS=5
+expect_deny "under 3 seconds left for the work repository list refuses the merge" "had no time left to be read"
+if grep -q 'contents/payload/hooks/lib/work-names.py' "$WORK/gh.log"; then pass; else fail "the slow case never reached the scope read: $(cat "$WORK/gh.log")"; fi
+if grep -q 'contents/repos.json' "$WORK/gh.log"; then fail "the list was read with no budget left for it: $(cat "$WORK/gh.log")"; else pass; fi
+run_hook "$MERGE 7 --squash"
+expect_allow "(control) clean text with the list read merges"
 
 # Every route to a merge.
 pr_json "Add the Acme-HQ reader" "Adds the reader." "clean" > "$WORK/pr.json"

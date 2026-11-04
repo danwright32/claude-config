@@ -292,7 +292,9 @@ first_unexcused() {   # $1 = command
   return 1
 }
 
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # The one test of a whole number above zero, 00 included as zero (claude-config#1948), for the
 # ledger's size, read before any refusal can be recorded. Missing, the ledger is kept at its default
 # size for this refusal, and the command is refused like any other this gate cannot judge with all

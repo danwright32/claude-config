@@ -50,7 +50,9 @@
 #
 # Override: SKIP_ASSET_CHECK=1 git push ...  Explain to the user first, never skip silently.
 
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # The detector, replaceable from the environment so the test can drive the arms below that a real
 # repository cannot reach (a detector that could not measure, a detector that crashed).
 SCANNER="${PUBLIC_ASSETS_SCANNER:-$HOOK_DIR/lib/public-assets.py}"

@@ -273,12 +273,20 @@ const runsFrom = (program: string, subcommands: ReadonlySet<string>) => {
 }
 const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
 export const runsGit = runsFrom('git', GIT_SUBCOMMANDS)
-// gh's subcommands: a gh named as an argument (a wrapper passing it on) or in code runs when one of
-// these or a flag (`-R o/r`) follows it. A user's own gh alias in that place is not seen; the wake
-// check is the backstop.
+// gh's subcommands: a gh named in code runs when one of these or a flag (`-R o/r`) follows it. A
+// user's own gh alias or extension in that place is not seen; the wake check is the backstop.
 const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
-const ghCallsWith = callsWith(GH_SUBCOMMANDS)
 export const runsGh = runsFrom('gh', GH_SUBCOMMANDS)
+// A gh named as a word of another command (a wrapper passing it on), given the words after it as
+// mod-kit's reader reads them: it runs gh when one of gh's subcommands follows it, or when flags
+// follow and a subcommand comes anywhere after them, whichever of those flags take a value (`gh -R
+// o/r pr merge`). Flags with no subcommand after them are the other command's own, as in a search
+// for the word (`grep -n -e gh -e pipeline src`, #2127): gh could reach none of its commands.
+const ghRunsFrom = (after: readonly string[]): boolean => {
+  const next = after[0]
+  if (next === undefined) return false
+  return GH_SUBCOMMANDS.has(next) || (next.startsWith('-') && after.some(w => GH_SUBCOMMANDS.has(w)))
+}
 
 // ---- git ----
 
@@ -636,9 +644,9 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
     // wrapper is called (#834 review of 46f07ff). Only the commands that name a program without
     // running it are let through; a command missing from that list fails closed. The word is a gh
-    // call only when a gh subcommand or a flag follows it: a search term or a path (`grep gh
-    // README.md`, `ls gh`) runs nothing.
-    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && ghCallsWith(words[i + 2]))) return UNRESOLVED
+    // call only when gh could reach one of its subcommands from it (ghRunsFrom): a search term or a
+    // path (`grep gh README.md`, `ls gh`, `grep -n -e gh -e x src`) runs nothing.
+    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && ghRunsFrom(words.slice(i + 2)))) return UNRESOLVED
     if (c.git) {
       const why = await gitRefusal(c.git, dir, call.home, look, { temp, elsewhere: gitElsewhere(c.words, c.git, call.raw), worktrees })
       if (why) return why
