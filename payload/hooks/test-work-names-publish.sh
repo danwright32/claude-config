@@ -131,12 +131,16 @@ This list records where each project should be.
 '
 write_projects "$GOOD_PROJECTS"
 
+# The hashed work MacBook projects (claude-config#2112) replaced through the test seam, none unless a
+# check sets them, so these fixtures judge only the names their own block lists.
+PROJ_HASHES=""
 run(){   # $1 = the command; output in out, exit code in rc, the decision in decision
   local payload
   payload="$(jq -nc --arg c "$1" --arg d "$CO" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c},cwd:$d}')"
   : > "$CALLS"
   out="$(cd "$CO" && printf '%s' "$payload" | PATH="$BIN:$PATH" HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" \
-    FAKE_VIS="$VIS" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH,$WORD_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" bash "$GATE" 2>&1)"; rc=$?
+    FAKE_VIS="$VIS" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH,$WORD_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" \
+    HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="$PROJ_HASHES" bash "$GATE" 2>&1)"; rc=$?
   decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
 }
 refused(){ [ "$rc" -eq 2 ] || [ "$decision" = deny ]; }
@@ -327,6 +331,17 @@ The list is empty today.
 '
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
 check "a work MacBook block that lists no project is refused, never read as clean: $out" refused
+# claude-config#2112: the same empty block with a hashed project (an invented name) is readable, and
+# the gate refuses that name through its hash alone, as it refuses a listed one.
+PROJ_HASHES="$(printf '%s' "fernhollow" | shasum -a 256 | cut -d' ' -f1)"
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
+check "#2112 an empty block with a hashed project lets a clean comment through: $out" passed
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "moved from the FernHollow checkout"'
+check "#2112 and refuses a comment naming the hashed project: $out" refused
+PROJ_HASHES="$(printf '%s' "nothing-named-this" | shasum -a 256 | cut -d' ' -f1)"
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "moved from the FernHollow checkout"'
+check "#2112 (control) with that hash absent the same comment passes, so the refusal came from it: $out" passed
+PROJ_HASHES=""
 write_projects "$GOOD_PROJECTS"
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
 check "(control) the project list restored, a clean comment passes: $out" passed

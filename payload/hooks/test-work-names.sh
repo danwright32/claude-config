@@ -178,7 +178,8 @@ PROJECTS="$WORK/projects-CLAUDE.md"
 printf '## Projects\n\nOn Daniels-MacBook-Pro-2 (personal MacBook):\n- `~/Apps/home-garden`\n\nOn Dans-MacBook-Pro:\n- `~/Apps/Quillfeather`: a work app\n\n## Writing Style\n' > "$PROJECTS"
 repo_texts(){   # printf format and arguments making the stream -> output, rc in text_rc
   text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
-    WORK_NAMES_PROJECT_LIST="$PROJECTS" python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+    WORK_NAMES_PROJECT_LIST="$PROJECTS" HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="" \
+    python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
 }
 STREAM_REPO='commit 1a2b3c4\0Fix the reader\n\nrefs widget#3\n\0commit 5d6e7f8\0Quote the refusal\n\nfrom the Halcyon#12 checkout\n'
 repo_texts "$STREAM_REPO"
@@ -217,6 +218,51 @@ repo_texts 'commit 1a2b3c4\0clean\n'
 check "an unreadable project list is refused, never read as clean (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
 check "and says the project list could not be read: $text_out" has "$text_out" "project list"
 mv "$PROJECTS.away" "$PROJECTS"
+# claude-config#2112: the work MacBook's block lists no project in the public CLAUDE.md. It imports
+# that Mac's own projects.local.txt inside a sentence instead, and the names are matched through a
+# committed set of hashes (WORK_PROJECTS in work-names.py, built as BUILT_IN is), with the local
+# file an extra source where it exists. WORK_NAMES_PROJECT_HASHES replaces the committed set, and is
+# honoured only under HOOK_TESTS_RUNNING=1. Every name here is invented.
+LOCALDIR="$WORK/local-list"; mkdir -p "$LOCALDIR"
+PROJECTS_LOCAL="$LOCALDIR/CLAUDE.md"
+printf '## Projects\n\nOn Daniels-MacBook-Pro-2 (personal MacBook):\n- `~/Apps/home-garden`\n\nOn Dans-MacBook-Pro:\n- Its projects are kept in that Mac'"'"'s own @projects.local.txt instead, which the sync never carries.\n\n## Writing Style\n' > "$PROJECTS_LOCAL"
+INKWELL_HASH="$(printf '%s' "inkwellcove" | shasum -a 256 | cut -d' ' -f1)"
+OTHER_HASH="$(printf '%s' "nothing-named-this" | shasum -a 256 | cut -d' ' -f1)"
+local_texts(){   # <hashes or "unset"> <printf format and arguments> -> text_out, text_rc
+  local h="$1"; shift
+  if [ "$h" = unset ]; then
+    text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
+      WORK_NAMES_PROJECT_LIST="$PROJECTS_LOCAL" HOOK_TESTS_RUNNING=0 WORK_NAMES_PROJECT_HASHES="" \
+      python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+  else
+    text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
+      WORK_NAMES_PROJECT_LIST="$PROJECTS_LOCAL" HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="$h" \
+      python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+  fi
+}
+INKWELL_TEXT='commit 5d6e7f8\0Move it\n\nfrom the InkwellCove checkout\n'
+local_texts "$INKWELL_HASH" "$INKWELL_TEXT"
+check "#2112 a hashed project is found with no entry in the block and no local file (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
+check "and named as a work repository by its line: $text_out" has "$text_out" "commit 5d6e7f8:3: a work repository or owner name"
+check "and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "inkwellcove"
+local_texts "$INKWELL_HASH" 'commit 5d6e7f8\0Move it\n\nthe inkwellcove-tools fork\n'
+check "#2112 a hashed project inside a hyphenated name is found, as a listed one is: $text_out" has "$text_out" "commit 5d6e7f8:3: a work repository or owner name"
+local_texts "$OTHER_HASH" "$INKWELL_TEXT"
+check "#2112 (control) with that hash absent the same text passes, so the hit came from the hash (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+local_texts "" 'commit 1a2b3c4\0clean\n'
+check "#2112 no hash and no local file is refused, never read as clean (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
+check "and says the project list lists no project: $text_out" has "$text_out" "lists no project"
+printf -- '- `~/Apps/Lanternwick`: a work app\n' > "$LOCALDIR/projects.local.txt"
+local_texts "" 'commit 5d6e7f8\0Move it\n\nfrom the Lanternwick checkout\n'
+check "#2112 a project in the local file beside the CLAUDE.md is found with no hash (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
+check "and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "lanternwick"
+printf 'nothing listed\n' > "$LOCALDIR/projects.local.txt"
+local_texts "" 'commit 1a2b3c4\0clean\n'
+check "#2112 a local file listing nothing, with no hash, is refused (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
+rm -f "$LOCALDIR/projects.local.txt"
+local_texts unset 'commit 1a2b3c4\0clean\n'
+check "#2112 outside a test run the seam is ignored and the committed hashes make the list readable (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+check "and the five committed hashes are counted beside the list's four names: $text_out" has "$text_out" "9 work repository and owner names"
 # Cannot tell is refused, never passed (L98, L345).
 rm -f "$LIST"
 repo_texts "$STREAM_REPO"
