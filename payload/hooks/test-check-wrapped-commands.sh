@@ -147,7 +147,8 @@ check_eq "#1478 with lib/push-scope.sh missing a wrapper beside git is refused" 
 check "#1478 and names the missing file" "lib/push-scope.sh" "$out"
 # And the same for lib/whole-number.sh, which reads the ledger's size (#1948).
 LONEW="$WORKDIR/lone-whole"; mkdir -p "$LONEW/lib"
-cp "$HOOK" "$LONEW/"; cp "$DIR/lib/push-scope.sh" "$DIR/lib/shell-words.py" "$LONEW/lib/"
+cp "$HOOK" "$LONEW/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONEW/lib" push-scope.sh shell-words.py || bad "#2147 the hook helpers could not be installed into $LONEW/lib"
 out="$(payload "bash -c 'git push'" | bash "$LONEW/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1948 with lib/whole-number.sh missing a wrapper beside git is refused" "2" "$rc"
 check "#1948 and names the missing file" "lib/whole-number.sh" "$out"

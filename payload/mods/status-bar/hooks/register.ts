@@ -3,6 +3,7 @@ import type { StatusBar, StatusBarAccount, StatusBarFacts, StatusBarFollowUp, St
 import { CACHE_WARN_MS, checksOf, compactLines, lookParts, unpushedOf } from './facts.ts'
 import type { Job, PrReading, QuietAgent, RollupEntry, UnpushedReading } from './facts.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { whileHeld } from './mod-kit/held.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 
 // The status bar (#610), settled with Dan on 2026-10-04 (docs/mods-design.md "Status bar (#610)").
@@ -951,23 +952,21 @@ export const register: Register = on => {
 // #2100: while it runs, the Compact holds back mod-kit's reload of this mod, which would drop the
 // wait for its end; at most ten minutes, past which mod-kit lets the reload go and says so. A hold
 // that cannot be taken is no reason not to compact, so it is said in the debug log and the Compact
-// runs as before (#2113 already carries the prompt to carry on across a reload).
-const COMPACT_HOLD = { mod: MOD, id: 'compact' } as const
-const compactNow = async ($: EngineInterface): Promise<boolean> => {
-  let held = false
-  try {
-    await $.modkit.hold({ ...COMPACT_HOLD, what: 'the Compact it started', ms: 10 * 60_000 })
-    held = true
-  } catch (err) {
-    $.ui.log(`status-bar: could not hold back a reload while the Compact runs, so one now would drop the wait for its end (${msg(err)})`, { to: 'debug' })
-  }
-  try {
-    return await compactHeld($)
-  } finally {
-    if (held)
-      await $.modkit.release(COMPACT_HOLD).catch(err => $.ui.log(`status-bar: could not let go of the hold on a reload taken for the Compact; it lapses by itself within 10 minutes (${msg(err)})`, { to: 'debug' }))
-  }
-}
+// runs as before (#2113 already carries the prompt to carry on across a reload). #2132: through
+// mod-kit's held.ts, the one way every mod takes and lets go of a hold.
+const compactNow = ($: EngineInterface): Promise<boolean> =>
+  whileHeld(
+    {
+      mod: MOD,
+      id: 'compact',
+      what: 'the Compact it started',
+      ms: 10 * 60_000,
+      hold: input => $.modkit.hold(input),
+      release: input => $.modkit.release(input),
+      log: line => $.ui.log(line, { to: 'debug' }),
+    },
+    () => compactHeld($),
+  )
 const compactHeld = async ($: EngineInterface): Promise<boolean> => {
   let r: { skip?: string } | undefined
   try {

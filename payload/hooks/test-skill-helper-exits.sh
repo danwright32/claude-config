@@ -218,7 +218,8 @@ has "$out" "findings=9" && ok || bad "exactly the nine calls are flagged" "$out"
 # mention, so it says so as a finding of its own rather than passing the script, and the audit's
 # other checks still load (the lessons review of #1188).
 mkdir -p "$TMP/noreader"
-cp "$AUDIT" "$TMP/noreader/skill-audit.py"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMP/noreader" skill-audit.py \
+  || bad "#2147 the hook helpers could not be installed into $TMP/noreader"
 out="$(python3 "$TMP/noreader/skill-audit.py" exits "$TMP/skills" 2>&1)"; rc=$?
 [ "$rc" -eq 1 ] && has "$out" "could not be checked" && has "$out" "shell-words.py" && ok \
   || bad "#1188 a missing reader is a finding naming it, not a pass (rc=$rc)" "$out"

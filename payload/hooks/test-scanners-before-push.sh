@@ -63,6 +63,10 @@ chmod +x "$TMPROOT/ghbin/gh"
 printf '{"repos":[{"owner":"Globex-Corp","name":"halcyon"}]}\n' > "$TMPROOT/wn-list.json"
 export WN_FAKE_LIST="$TMPROOT/wn-list.json"
 export PATH="$TMPROOT/ghbin:$PATH"
+# The work MacBook's project list the message check also reads (claude-config#2184), one invented
+# project on it, since the hooks this suite copies elsewhere have no CLAUDE.md two folders above.
+printf '## Projects\n\nOn Dans-MacBook-Pro:\n- `~/Apps/Quillfeather`\n' > "$TMPROOT/wn-projects.md"
+export WORK_NAMES_PROJECT_LIST="$TMPROOT/wn-projects.md"
 
 # A repository shaped like this one: the marker the hook keys on, plus whatever scanners the test
 # wants. Everything happens in a throwaway git repo, never against the real one (L2).
@@ -482,7 +486,8 @@ o38="$(fire "$R38" "git push")"; c38=$?
 # a copy of the gate whose repo-files.sh refuses the listings of what is not committed, the count's
 # and, since #1910, the key's, and nothing else.
 FAKEHOOKS="$TMPROOT/fakehooks"; mkdir -p "$FAKEHOOKS/lib"
-cp "$H" "$FAKEHOOKS/scanners-before-push.sh"; cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$DIR/lib/work-names-messages.sh" "$DIR/lib/work-names.py" "$DIR/lib/dev-update-registry.js" "$FAKEHOOKS/lib/"
+cp "$H" "$FAKEHOOKS/scanners-before-push.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FAKEHOOKS/lib" push-scope.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js || check "the install of the fake hooks' helpers" "the install refused"
 cat > "$FAKEHOOKS/lib/repo-files.sh" <<EOF
 #!/usr/bin/env bash
 case "\$1" in --uncommitted|--changed) echo "repo-files: git could not list the files under \$2 that are not committed." >&2; exit 1 ;; esac
@@ -1451,7 +1456,7 @@ treefire "$R1910e" "git push" >/dev/null
 nokey_hooks(){   # $1 = folder  $2 = the one thing missing: listing (the listings of what is not committed fail), pidlock or recorded (that lock library is absent), or state (nothing; the state folder is made bad by the caller)
   mkdir -p "$1/lib"
   cp "$H" "$1/scanners-before-push.sh"
-  cp "$DIR/lib/push-scope.sh" "$DIR/lib/load-average.sh" "$DIR/lib/whole-number.sh" "$DIR/lib/work-names-messages.sh" "$DIR/lib/work-names.py" "$DIR/lib/dev-update-registry.js" "$1/lib/"
+  python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$1/lib" push-scope.sh load-average.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js || check "the install of the nokey hooks' helpers" "the install refused"
   [ "$2" = pidlock ] || cp "$DIR/lib/pid-lock.sh" "$1/lib/"
   [ "$2" = recorded ] || cp "$DIR/lib/recorded-pid.sh" "$1/lib/"
   if [ "$2" = listing ]; then

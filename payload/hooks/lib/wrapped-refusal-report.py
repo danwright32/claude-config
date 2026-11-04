@@ -23,6 +23,54 @@ import time
 COLUMNS = 5
 OUTCOMES = ("refused", "overridden")
 
+# The fail closed suite's own refusals (claude-config#2157). Until #2155, a direct run of
+# test-gates-fail-closed.sh ran this gate with a library taken away under the real HOME, so every run
+# wrote "eval, reader-lib-missing" refusals into this record: one per run while the gate needed one
+# library (before #1963 added lib/whole-number.sh), two in the same second or a second apart after.
+# On the personal MacBook on 2026-11-03 that was 129 rows, 51 pairs and 27 lone ones, none within
+# 3 seconds of any other row and none under any other wrapper. A row is skipped only in exactly that
+# shape and only before #2155 merged: a burst of other rows, three or more, a gap of two seconds, an
+# override, another wrapper or anything later counts as real, so the rule can never hide a real
+# refusal behind the test's.
+SUITE_ROWS_UNTIL = 1793743801        # 2026-11-03 17:10:01 ET, #2155 merged
+SUITE_LONE_ROWS_UNTIL = 1793406500   # 2026-10-30 20:28:20 ET, #1963 merged
+SUITE_BURST_SECONDS = 1
+
+
+def suite_shaped(row):
+    return row[1:] == ("eval", "reader-lib-missing", "refused") and row[0] < SUITE_ROWS_UNTIL
+
+
+def suite_rows(rows):
+    """The set of indexes into rows that the fail closed suite wrote, by the rule above. Rows are
+    grouped into bursts, consecutive in time with gaps of at most SUITE_BURST_SECONDS, over every
+    readable row, so a burst holding any other row is not the suite's."""
+    order = sorted(range(len(rows)), key=lambda i: rows[i][0])
+    bursts, cur = [], []
+    for i in order:
+        if cur and rows[i][0] - rows[cur[-1]][0] > SUITE_BURST_SECONDS:
+            bursts.append(cur)
+            cur = []
+        cur.append(i)
+    if cur:
+        bursts.append(cur)
+    skip = set()
+    for b in bursts:
+        if not all(suite_shaped(rows[i]) for i in b):
+            continue
+        if len(b) == 2 or (len(b) == 1 and rows[b[0]][0] < SUITE_LONE_ROWS_UNTIL):
+            skip.update(b)
+    return skip
+
+
+def moment(ts):
+    """A time in US Eastern time to the minute, as day() gives a date."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.fromtimestamp(ts, ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M ET")
+    except Exception:
+        return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M local time")
+
 
 def ledger_default():
     base = os.environ.get("WRAPPED_REFUSAL_LEDGER_DIR") or os.path.join(
@@ -80,7 +128,14 @@ def main(argv):
         print("  the record runs from %s" % day(min(r[0] for r in rows)))
     if bad:
         print("  %d lines could not be read and are not counted." % bad)
-    window = [r for r in rows if r[0] >= since]
+    skip = suite_rows(rows)
+    skipped = sum(1 for i in skip if rows[i][0] >= since)
+    if skipped:
+        print("  %d lines are the fail closed suite's own test refusals and are not counted: eval, "
+              "reader-lib-missing refusals from before %s (#2155 keeps that suite out of this record), "
+              "in the shape its direct runs left, two a second apart, or one alone before %s (#1963) "
+              "(claude-config#2157)." % (skipped, moment(SUITE_ROWS_UNTIL), moment(SUITE_LONE_ROWS_UNTIL)))
+    window = [r for i, r in enumerate(rows) if r[0] >= since and i not in skip]
     if not window:
         print("  No refusal in the last %d days." % a.days)
         return 0

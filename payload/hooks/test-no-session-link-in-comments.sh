@@ -317,7 +317,8 @@ if [ "$rc" -eq 0 ] && [ -z "$why" ]; then pass=$((pass + 1)); else
 # as judged, and a gh comment is still judged, since only an MCP tool reads the list.
 mkdir -p "$TMP_DIR/nolist/lib"
 cp "$HOOK" "$DIR/session_link_comment_gate.py" "$DIR/gh_issue_scan.py" "$TMP_DIR/nolist/"
-cp "$DIR/lib/shell-words.py" "$TMP_DIR/nolist/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMP_DIR/nolist/lib" shell-words.py \
+  || { fail=$((fail + 1)); echo "FAIL: #2147 the hook helpers could not be installed into $TMP_DIR/nolist/lib"; }
 err="$(tool_payload mcp__claude_ai_Slack__slack_send_message "Shipped. $LINK" | bash "$TMP_DIR/nolist/no-session-link-in-comments.sh" 2>&1 >/dev/null)"
 if [[ "$err" == *"SESSION LINK GATE DID NOT RUN"* && "$err" == *"slack-write-tools.txt"* ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a Slack write with no Slack list must say the gate did not run, naming the list (got: ${err:-<nothing>})"; fi

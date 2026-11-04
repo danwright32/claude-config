@@ -819,7 +819,8 @@ got="$(ps_repo_dir "git status" "$S" 2>/dev/null)"; rc=$?
 # the reader's own -B and not this shell's environment (L322). The answer is checked too: a reader
 # that never loaded shell-words.py writes no bytecode either, and would pass unmeasured (L98).
 PYC_LIB="$RD/pyc-lib"; mkdir -p "$PYC_LIB"
-cp "$LIB" "$PYC_LIB/push-scope.sh"; cp "$DIR/lib/shell-words.py" "$PYC_LIB/shell-words.py"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$PYC_LIB" push-scope.sh shell-words.py \
+  || check "#2147 the hook helpers install into $PYC_LIB" "the install refused"
 pyc_got="$(env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX bash -c '. "$1"; shift; "$@"' _ \
   "$PYC_LIB/push-scope.sh" ps_add_scope "bash -c 'git add a.txt b.txt && git commit -m x' && git push" | tr '\n' ' ')"
 pyc_left="$(ls -A "$PYC_LIB/__pycache__" 2>/dev/null | tr '\n' ' ')"

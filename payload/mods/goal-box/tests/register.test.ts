@@ -58,8 +58,16 @@ const kit: { name: string; register: Register } = {
         press: async () => { throw new Error("mod-kit's press is not stood in by these tests") },
         clickable: async () => { throw new Error("mod-kit's clickable is not stood in by these tests") },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
-        hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
-        release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
+        // #2132: a hold on goal-box's reload and its letting go, asked of the world, which keeps
+        // them in order beside each prompt sent and can refuse one as mod-kit would.
+        hold: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'hold', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
+        release: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'release', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
       }
       return { ...built, modkit }
     })
@@ -118,6 +126,9 @@ type World = {
   agents: { id: string; status: string; spawnedBy?: string; description?: string }[]
   /** How each of the mod's own next prompts fails, in order: thrown, or dropped by a hook beneath. */
   submitFails: ('throw' | 'drop')[]
+  /** #2132: each hold, letting go and prompt the mod sent, in order; and why mod-kit refuses a hold, or ''. */
+  held: string[]
+  holdFails: string
   /** What `gh pr view` answers, by the repository it names (or the folder it runs in) and the account's token. */
   view: (q: { pr: string; repo?: string; cwd?: string; token?: string }) => Gh
 }
@@ -125,7 +136,7 @@ const link = (repo: string, pr: number, at = '2026-10-24T18:00:00.000Z') =>
   JSON.stringify({ type: 'pr-link', sessionId: 's1', prNumber: pr, prUrl: `https://github.com/${repo}/pull/${pr}`, prRepository: repo, timestamp: at })
 
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, owed: [], verdicts: {}, links: [], open: {}, agents: [], submitFails: [], view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), ...init }
+  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, owed: [], verdicts: {}, links: [], open: {}, agents: [], submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), ...init }
   const runs: string[][] = []
   const views: { pr: string; repo?: string; cwd?: string; token?: string; fields?: string }[] = []
   const submitted: { text: string; origin: unknown }[] = []
@@ -139,6 +150,11 @@ const world = (on: On, init: Partial<World> = {}) => {
       if (e.argv[1] === 'card') {
         if (w.cardFails) return ok('', 1, w.cardFails)
         w.cards.push(JSON.parse(e.argv[2] as string) as Card)
+        return ok('')
+      }
+      if (e.argv[1] === 'hold' || e.argv[1] === 'release') {
+        if (e.argv[1] === 'hold' && w.holdFails) return ok('', 1, w.holdFails)
+        w.held.push(`${e.argv[1]} ${e.argv[2]}`)
         return ok('')
       }
       return ok(JSON.stringify(w.goal))
@@ -181,6 +197,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   })
   on('prompt.submit', ($, e) => {
     if ((e.origin as { kind?: string } | undefined)?.kind === 'plugin') {
+      w.held.push('submit')
       const fails = w.submitFails.shift()
       if (fails === 'throw') throw new Error('the session is shutting down')
       if (fails === 'drop') return { drop: 'held by a guard beneath' } as never
@@ -568,6 +585,28 @@ test('a prompt for a met goal that could not be sent is said and sent again at t
   expect(submitted.map(x => x.text)).toEqual([expect.stringContaining('GOAL ACCOMPLISHED. The /goal "complete issue 1563" was judged met.')])
   await turnEnds($)
   expect(submitted).toHaveLength(1)
+})
+
+// #2132: the prompt for a met goal waits until the session is idle, and mod-kit's reload of goal-box
+// in that time would drop it, so it holds that reload back until sent, thrown or dropped.
+const GOAL_HELD = `hold ${JSON.stringify({ mod: 'goal-box', id: 'ask', what: 'the prompt asking for the Goal accomplished box', ms: 60 * 60_000 })}`
+const GOAL_LET_GO = `release ${JSON.stringify({ mod: 'goal-box', id: 'ask' })}`
+test('the prompt for a met goal holds back a reload of goal-box while it waits, and lets go sent, thrown or dropped (#2132)', withKit, async ($, on) => {
+  const { w } = world(on, { goal: MET, submitFails: ['throw', 'drop'] })
+  await start($)
+  await turnEnds($)
+  await turnEnds($)
+  await turnEnds($)
+  expect(w.held).toEqual([GOAL_HELD, 'submit', GOAL_LET_GO, GOAL_HELD, 'submit', GOAL_LET_GO, GOAL_HELD, 'submit', GOAL_LET_GO])
+})
+
+test('a hold mod-kit refuses is said in the debug log, and the prompt for a met goal is sent as before (#2132)', withKit, async ($, on) => {
+  const { w, submitted, logs } = world(on, { goal: MET, holdFails: 'mod-kit is not loaded' })
+  await start($)
+  await turnEnds($)
+  expect(w.held).toEqual(['submit'])
+  expect(submitted).toHaveLength(1)
+  expect(logs).toContain('goal-box: could not hold back a reload while it waits on the prompt asking for the Goal accomplished box, so one now would drop that wait (mod-kit is not loaded)')
 })
 
 test("a subagent's turn end, or an interrupted turn, never sends the prompt", withKit, async ($, on) => {

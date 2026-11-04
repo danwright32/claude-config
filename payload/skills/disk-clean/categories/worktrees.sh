@@ -8,6 +8,7 @@
 # cloud is never read, since reading it makes iCloud fetch it: its folder is listed as unmeasured. Offered, through `git worktree remove`
 # without --force (disk-remove.sh's worktree method), only when ALL of these hold, checked in order:
 #   no Claude Code session's working folder is in it (the live session map)
+#   nothing in it was changed or opened in 30 days (the floor every kind keeps, #2134)
 #   `git status --porcelain --untracked-files=all` is empty, untracked files included
 #   it is on a branch, and gh finds a MERGED pull request for that branch whose head is exactly the
 #   worktree's HEAD, so nothing in it is unpushed or unmerged. Asked of gh because squash merges
@@ -56,6 +57,12 @@ wt_rules() { # <worktree>
     [ -n "$cwd" ] || continue
     case "$cwd" in "$t"|"$t"/*) V="not offerable: a session is working in it ($cwd)"; return ;; esac
   done < "$CWDS"
+  # The 30 day floor runs before git does, since git status reads files and so moves their access
+  # times. The .git file and the ignore and attribute files are read by is_worktree above and by git
+  # on every look, so only their change times count.
+  V=offerable
+  dcs_floor "$t" .git .gitignore .gitattributes
+  [ "$V" = offerable ] || return
   st="$(git -C "$t" status --porcelain --untracked-files=all 2> "$err" </dev/null)" || { V="unmeasured: git status failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
   [ -z "$st" ] || { V="not offerable: it has uncommitted or untracked files"; rm -f "$err"; return; }
   br="$(git -C "$t" symbolic-ref --short -q HEAD 2>/dev/null </dev/null)"

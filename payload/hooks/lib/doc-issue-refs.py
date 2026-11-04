@@ -197,6 +197,54 @@ def is_dated_record(text):
     return any(DATED_RECORD in line for line in head)
 
 
+# A decision QUOTED word for word WITH ITS DATE, which is a citation wherever it sits.
+#
+# The same reason as the dated record above, one level down (claude-config#2185): a quote of what
+# somebody decided, carrying the day it was decided, is the record of what was said, so the
+# remedy this gate prints, rewrite the sentence, would falsify it. Measured 2026-11-03 in a work
+# repository: three pushes in a row refused on a decision dated the day before, saying an issue
+# "closes with it as no longer needed", held as two exceptions in a settled design (its HTML page
+# and its JSON source, five lines in all). The issue had since closed, which was the decision.
+#
+# The record has to be visible in the text, never guessed from a quote alone: a quotation with no
+# date beside it is still read as a live claim, and so is anything outside the quote marks. A
+# quoted span counts when its own date or source is right beside it:
+#   a date just before it, with only a short label between ending in a colon or comma
+#     (`2026-11-02: "..."`, `X15, decision D7, 2026-11-02: "..."`, `(Dan, 2026-11-02, #66: "...")`);
+#   a date, or an issue comment link naming its source, in the parentheses just after it
+#     (`"..." (Dan, 2026-11-02)`, `"..." (https://github.com/o/r/issues/5#issuecomment-123)`);
+#   a date just after it, after a comma (`"...", 2026-11-02`).
+# A settled design's JSON keeps the same record as fields (design-rounds' make-settled.py writes
+# `"words"`, `"date"` and `"source"` on each exception), so there the `"words"` value counts when
+# its own object carries a `"date"`; any other field of that object is not a verbatim quote.
+# Dates are ISO (YYYY-MM-DD) only, the form these records are written in.
+DATE = r"\d{4}-\d{2}-\d{2}"
+QUOTED = re.compile(r'"([^"\n]{1,600})"|“([^“”\n]{1,600})”')
+DATED_BEFORE = re.compile(DATE + r"[^\"“”\n]{0,40}?[:,]\s*$")
+DATED_AFTER = re.compile(
+    r"[.,;]?\s*\([^()\"“”\n]{0,80}?(?:" + DATE + r"|#issuecomment-\d+)"
+    r"|,\s*" + DATE + r"\b")
+WORDS_FIELD = re.compile(r'"words"\s*:\s*"((?:[^"\\\n]|\\.)*)"')
+JSON_DATE_FIELD = re.compile(r'"date"\s*:\s*"' + DATE + r'"')
+
+
+def quoted_record_spans(marked):
+    """The (start, end) spans of the paragraph that are a dated quote, so a reference inside one
+    is a citation. Read on the whole paragraph, since a quote can hold more than one sentence."""
+    spans = []
+    for m in QUOTED.finditer(marked):
+        inner = m.span(1) if m.group(1) is not None else m.span(2)
+        before = marked[max(0, m.start() - 60):m.start()]
+        if DATED_BEFORE.search(before) or DATED_AFTER.match(marked, m.end()):
+            spans.append(inner)
+    for m in WORDS_FIELD.finditer(marked):
+        lo = marked.rfind("{", 0, m.start())
+        hi = marked.find("}", m.end())
+        if lo != -1 and hi != -1 and JSON_DATE_FIELD.search(marked, lo, hi):
+            spans.append(m.span(1))
+    return spans
+
+
 def scan(name, text, explain=False):
     if is_dated_record(text):
         return []
@@ -228,6 +276,7 @@ def scan(name, text, explain=False):
                 bounds.append((prev, m.start()))
             prev = m.end()
         bounds.append((prev, len(marked)))
+        records = quoted_record_spans(marked)
         for a, b in bounds:
             sent = marked[a:b].lower()
             if REF not in sent:
@@ -235,6 +284,8 @@ def scan(name, text, explain=False):
             for offset, reason in sorted(pending_refs(sent).items()):
                 if in_past_position(sent, offset):
                     continue
+                if any(lo <= a + offset < hi for lo, hi in records):
+                    continue  # inside a dated quote: the record of a decision, not a claim
                 # Which reference of the paragraph this is: the count of markers before it.
                 idx = marked[: a + offset].count(REF)
                 issue, line_no = ref_ids[idx], ref_lines[idx]

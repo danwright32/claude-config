@@ -3753,7 +3753,8 @@ observing half, so it has no surface of its own: no card, no question, nothing d
   3, `fileKind` in `rules.ts`); docs, config in a source language (`*.config.ts`, `.eslintrc.js`),
   migrations, type declarations and generated or vendored folders are not. Tests are told apart by
   mod-kit's `hooks/testfile.ts`, the design round guard's rule moved there and copied byte for byte
-  into both mods. A shell write is never judged, so restructuring itself is never obstructed. An
+  into both mods. A shell write was not judged here, so restructuring itself was never obstructed;
+  #2142 reversed that once the hold existed (see "A shell write" under the hold below). An
   edit a guard beneath refused is judged too (the attempt is what the hold would meet), its record
   saying `refusedBeneath`.
 - **Off the edit's path.** Whether the file was there is asked before the call runs; everything else
@@ -3843,6 +3844,28 @@ facts and the bar are unchanged.
   for itself (decision 8); its call id goes in a set so `tool.check` does not judge it again, the
   shape the design round guard uses. A query asked with no call id runs nothing and is passed, and
   so is a subagent edit with no call id, which names nothing a decision could be taken under.
+- **A shell write (#2142).** A Bash command is judged at the same two points, by what
+  `$.modkit.writes` says it writes, read through `shellTargets` in `rules.ts`: a redirect, a copy or
+  an in place edit, an emptying, git writing a path, a script's file arguments, and an inline
+  script's own targets. The area check calls the shared reader itself, so no write reading lives in
+  the mod. Each existing named file goes through the same judgement as an edit, the first held one
+  refusing the command, and a decision claims the file, so a later Edit to it is not judged again. A
+  named path the reader marks `tree`, a write that may reach everything under it (a `find -exec` over
+  a folder, git putting a path back), is also judged by each tracked file under it the area check
+  could hold (`heldUnder`: fast growing, named by a structural issue, or in a folder one names), each
+  as its first edit; when the tracked files cannot be listed it is held as unread, saying so. A
+  target whose file cannot be named (a name built as the command runs, a pattern, a program writing
+  files its words do not name, git reaching a whole folder) is held as unread: the card and refusal
+  say it cannot be read, only `proceed` is taken (fold and restructure need a file to name), and the
+  claim is keyed on the command (`shellKey`, a full SHA-256 of its whole text, since a short hash
+  let another command sharing it through), so its unchanged resend runs and any other command is
+  judged. It passes where its folder is in no checkout, or where `couldHold` is false (no fast
+  growing file and no structural issue at a held priority naming a file the session does not work
+  on), since nothing there could hold it. Removals, `touch`, `mkdir`, mode changes and a folder
+  handed to a script add no lines and are not judged. Measured blind spot: a program that builds
+  its own file names (`node gen.js`, `python3 gen.py` with no arguments) reads as writing nothing
+  and is not held. A failure of the reader lets the command through, kept in `errors.jsonl` and
+  said once, as for an edit.
 - **What a hold shows.** mod-kit's grey card (`$.modkit.blocked`, guard `Area check`): the file,
   each issue shown with its priority and labels, or that it is among the fastest growing large
   files, and growth as one `Rough:` line. The refusal Claude reads (`holdRefusal`) carries the same
