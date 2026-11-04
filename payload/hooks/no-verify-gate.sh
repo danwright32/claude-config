@@ -30,7 +30,7 @@
 # any file an include names) that changes the hooks location or an include, as git reads them.
 #
 # Since claude-config#2160 the routes #2140 left out count as well, on a command that is not git too:
-# a hook switch or a git environment setting (GIT_DIR, GIT_COMMON_DIR and the other GIT_ settings) set
+# a hook switch or a git environment setting (GIT_DIR, GIT_COMMON_DIR, or one that carries git config) set
 # in front of any command, git's --git-dir, and a shell command that names a git config file.
 #
 # WHO IS ASKED is read from agent_id, which only a subagent's payload carries (measured on Claude
