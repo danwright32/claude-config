@@ -1743,10 +1743,16 @@ Three gates close the three parts of that, all reading commands through one libr
   numbered key that moves the hooks, `GIT_CONFIG_PARAMETERS`, and `GIT_CONFIG_GLOBAL`,
   `GIT_CONFIG_SYSTEM` or `GIT_CONFIG` naming a whole file), git's `--config-env`, a config include
   (`include.path`, `includeIf.*.path`) set with `-c` or `git config`, and a key the shell spells so the
-  gate cannot read it. The gate is also registered for Edit, Write and MultiEdit, and refuses an
+  gate cannot read it. The gate is also registered for Edit, Write, MultiEdit and NotebookEdit (NotebookEdit is let through, since it only edits notebook files), and refuses an
   agent's edit of a git config file (the repository's or a worktree's, the global one, or any file
   an include names, existing or not) that changes the hooks location or an include as git reads
-  them; any other edit of those files goes through. The advice about the install script is chosen
+  them; any other edit of those files goes through. Since claude-config#2160 three more routes are
+  refused: git pointed at another git directory (`--git-dir`, `GIT_DIR` or `GIT_COMMON_DIR`), a hook
+  switch or git environment settings in front of, or exported before, a command that is not git
+  (a script's own git commands inherit them and cannot be read before it runs), and any agent shell
+  command other than git that names a git config file, reads included, along with a git command
+  whose output is sent into one (a redirect, or `--output`). When git cannot list a
+  folder's config, both the edit route and the shell route refuse. The advice about the install script is chosen
   from the reader's reasons (`agent-overrides.py hooks-location-advice`), never from the command's
   text. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
   was removed on Dan's decision of 2026-10-24 (claude-config#1666), since an agent could write the
