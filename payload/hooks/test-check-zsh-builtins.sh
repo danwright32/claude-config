@@ -195,6 +195,28 @@ out="$(printf '{"tool_name": "Bash", "tool_input": {"command": "log show --last 
 check_eq "#2200 an unparseable payload holding log show is refused" "2" "$rc"
 check "#2200 and says the payload could not be read" "could not read the hook payload" "$out"
 
+# 5. A byte that is not UTF-8 stops bash's =~ matching under a UTF-8 locale (claude-config#1885), so
+# matched in the session locale alone, the quick exit read the log after one as absent and passed the
+# command before anything judged it. Each case writes such a byte raw into the JSON in front of the
+# command, under a UTF-8 locale, and expects the verdict the command gets without it.
+. "$DIR/lib/test_bad_byte_locale.sh" || bad "#1885 lib/test_bad_byte_locale.sh is missing, so the cases with a byte that is not UTF-8 have no locale to run under"
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
+bad_byte_measured regex "#1885 the quick exit past a byte that is not UTF-8" || true
+BAD=$'\xff'
+raw_payload(){ printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$1" "$WORKDIR"; }
+utf8_run(){ # utf8_run <command> [PATH]: sets out and rc
+  out="$(raw_payload "$1" | SHELL=/bin/zsh LC_ALL="$BAD_BYTE_LOCALE" PATH="${2:-$PATH}" bash "$HOOK" 2>&1)"; rc=$?
+}
+utf8_run "echo $BAD; log show --last 1m"
+check_eq "#1885 a byte that is not UTF-8 in front does not hide log show from the gate" "2" "$rc"
+check "#1885 and the refusal names the fix" "/usr/bin/log" "$out"
+utf8_run "echo $BAD; git status"
+check_eq "#1885 control: a byte in front of a command naming no log still passes in silence" "0|" "$rc|$out"
+utf8_run "echo $BAD; log show --last 1m" "$NOPY"
+check_eq "#1885 with no python3, the crude reading past the byte still refuses log show" "2" "$rc"
+utf8_run "echo $BAD; git log -1" "$NOPY"
+check_eq "#1885 control: with no python3, git log past the byte passes in silence" "0|" "$rc|$out"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
