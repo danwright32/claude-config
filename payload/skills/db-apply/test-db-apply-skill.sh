@@ -169,7 +169,7 @@ check "the guard block sits with the linked path, ahead of psql" \
 check "the skill says which supabase CLI version the command was checked against" \
   "$(grep -qE 'checked against [^.]*[0-9]+\.[0-9]+\.[0-9]+' "$SKILL" && echo ok || echo "no version named")"
 check "the skill says the write is read back after it runs" \
-  "$(awk '/supabase db query --linked/,/psql "\$url"/' "$SKILL" | grep -qi 'read it back\|read back' && echo ok || echo "no read back step on the linked path")"
+  "$(linked_section="$(awk '/supabase db query --linked/,/psql "\$url"/' "$SKILL")"; grep -qi 'read it back\|read back' <<< "$linked_section" && echo ok || echo "no read back step on the linked path")"
 
 # The command line itself, against a stub supabase: one that has db query, one older CLI that
 # prints its parent help and exits 0 for an unknown subcommand (as v2.75.0 does), and none at all.
