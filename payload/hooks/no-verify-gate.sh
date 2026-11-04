@@ -25,8 +25,8 @@
 # the environment (GIT_CONFIG_COUNT with its numbered keys, GIT_CONFIG_PARAMETERS, and GIT_CONFIG_GLOBAL,
 # GIT_CONFIG_SYSTEM or GIT_CONFIG naming a whole file), git's --config-env, a config include added or
 # changed with -c or git config, and a key the shell spells so the gate cannot read it. And because no
-# Bash gate sees the file tools, this gate is also registered for Edit, Write and MultiEdit, and
-# refuses an agent's edit of a git config file (the repository's or a worktree's, the global one, or
+# Bash gate sees the file tools, this gate is also registered for Edit, Write, MultiEdit and
+# NotebookEdit (NotebookEdit is let through, since it only edits notebook files), and refuses an agent's edit of a git config file (the repository's or a worktree's, the global one, or
 # any file an include names) that changes the hooks location or an include, as git reads them.
 #
 # WHO IS ASKED is read from agent_id, which only a subagent's payload carries (measured on Claude
