@@ -179,7 +179,8 @@ esac
 # script writes the hooks location or an include into a git config file with no git config to read,
 # and what it does to a file it names cannot be read before it runs, so an agent's command other than
 # git naming one (the repository's, a worktree's, the global one, or any file an include names) is
-# refused outright. lib/agent-overrides.py config-commands finds the files the way config-edit does,
+# refused outright, and so is a git command whose output a redirect or --output sends into one.
+# lib/agent-overrides.py config-commands finds the files the way config-edit does,
 # and refuses when git cannot list a folder's config, whose includes are then unknown.
 if [ "$tool" = "Bash" ]; then
   named="$(printf '%s' "$payload" | python3 "$HOOK_DIR/lib/agent-overrides.py" config-commands 2>&1)"; nrc=$?

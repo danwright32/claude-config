@@ -1743,7 +1743,8 @@ Three gates close the three parts of that, all reading commands through one libr
   refused: git pointed at another git directory (`--git-dir`, `GIT_DIR` or `GIT_COMMON_DIR`), a hook
   switch or git environment settings in front of, or exported before, a command that is not git
   (a script's own git commands inherit them and cannot be read before it runs), and any agent shell
-  command other than git that names a git config file, reads included. When git cannot list a
+  command other than git that names a git config file, reads included, along with a git command
+  whose output is sent into one (a redirect, or `--output`). When git cannot list a
   folder's config, both the edit route and the shell route refuse. The advice about the install script is chosen
   from the reader's reasons (`agent-overrides.py hooks-location-advice`), never from the command's
   text. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,

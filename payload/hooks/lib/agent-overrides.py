@@ -18,7 +18,8 @@ the commands cannot come to disagree about what a skip is (L263, L370).
     agent-overrides.py config-commands       stdin: one hook payload (JSON)
         exit 0 printing the refusal when a Bash call has a command that is not git and names a git
         config file (a read included, since what a shell command does to a file it names cannot be
-        read before it runs), or when git cannot list a folder's config; 10 when none does, 2 when
+        read before it runs), or a git command whose output a redirect or --output sends into one,
+        or when git cannot list a folder's config; 10 when none does, 2 when
         the payload cannot be read (claude-config#2160).
 
     EXIT CODES. No mode answers "nothing found" with 1, which is what Python exits on an uncaught
