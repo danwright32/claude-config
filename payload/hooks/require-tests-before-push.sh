@@ -50,7 +50,9 @@ TESTS_DEADLINE=110
 PART_MIN_SECONDS=20
 
 # The notice library, loaded first because every allow below speaks through it.
-TG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) TG_DIR="${BASH_SOURCE[0]%/*}" ;; *) TG_DIR=. ;; esac
+TG_DIR="$(cd "${TG_DIR:-/}" && pwd)"
 # shellcheck source=lib/hook-notice.sh
 . "$TG_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2

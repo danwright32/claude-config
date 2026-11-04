@@ -35,7 +35,9 @@ case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. 
 # A headless `claude -p` has nobody to add a list row for (see session-reflection.sh).
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) SELF_DIR="${BASH_SOURCE[0]%/*}" ;; *) SELF_DIR=. ;; esac
+SELF_DIR="$(cd "${SELF_DIR:-/}" && pwd)"
 
 # Asleep (claude-config#841): nobody is there to answer the skill's picker. A sleep record that
 # cannot be read counts as awake (lib/sleep.sh).

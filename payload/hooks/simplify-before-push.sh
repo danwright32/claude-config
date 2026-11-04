@@ -43,7 +43,9 @@ DIFF_BUDGET=60000      # max bytes of source diff sent to the model
 # Claude Code discards on exit 0, and no longer exit 1 (the require-tests-before-push.sh precedent,
 # #735), which "onFailure": "block" would turn into a refusal saying the push was allowed.
 # Recorded first once the command is known to be a push, so a gate that could not decide is counted.
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # shellcheck source=lib/hook-notice.sh
 . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2

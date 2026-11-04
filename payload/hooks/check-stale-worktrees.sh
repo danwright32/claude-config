@@ -104,11 +104,14 @@ LIMIT="${STALE_WT_LIMIT:-400}"
 BUDGET="${STALE_WT_BUDGET_SECS:-300}"
 RECENT="${STALE_WT_RECENT_MINUTES:-360}"
 
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/merged-prs.sh" || {
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) _HD="${BASH_SOURCE[0]%/*}" ;; *) _HD=. ;; esac
+_HD="$(cd "${_HD:-/}" && pwd)"
+. "$_HD/lib/merged-prs.sh" || {
   echo "check-stale-worktrees: lib/merged-prs.sh is missing, so whether any work landed cannot be read." >&2
   exit 2
 }
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/agent-lock.sh" || {
+. "$_HD/lib/agent-lock.sh" || {
   echo "check-stale-worktrees: lib/agent-lock.sh is missing, so whether a locked worktree's agent is still running cannot be read." >&2
   exit 2
 }

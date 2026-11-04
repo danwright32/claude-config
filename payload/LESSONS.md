@@ -7559,6 +7559,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   see; write the extra context after the visible words, never in place of them.**
   (bidspoke#2477, 2026-10-19)
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
+- **L843. Join a time of day to its AM or PM, and a figure to its unit, with a non-breaking space
+  wherever it is drawn, because a narrow column otherwise wraps the suffix onto a line of its own.**
+  (pivot#920, 2026-11-03)
+  SHORT: Join a time to its AM or PM, and a figure to its unit, with a non-breaking space, or a narrow column wraps the suffix alone.
 
 ## External systems
 - **L826. A request timeout cleared when the response headers arrive leaves reading the body with no limit, so a server that answers then trickles holds the caller open; keep the timer running until the body is fully read.**
@@ -8928,6 +8932,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L1036. A test or tool that launches the same installed copy of an app a person uses shares that app's identity with the operating system (its app registration, keychain entries and single running instance), so while it runs the person's own use of the app breaks; launch a separately identified build instead, such as Chrome for Testing or a Debug build with its own bundle id.**
+  (claude-config#2191, 2026-11-03)
+  SHORT: A test launching the installed copy of an app a person uses shares its OS identity and breaks their use of it, so launch a separately identified build.
+- **L842. When a wait sits inside another limit (a request timeout inside a job or step timeout, a proxy's wait inside its caller's), keep each inner limit a stated margin below the one around it and check the pair together, because raising only the inner one lets the outer limit fire first and turns a clean timeout into a failed run.**
+  (bidspoke#3240, 2026-11-03)
+  SHORT: Keep every inner wait a stated margin below the limit around it and check the pair together; raising only the inner one lets the outer fire first.
+
 - **L841. When a read succeeds and its result is then written to a cache, a failed cache write must be logged and must never fail the read, because callers sharing a cold cache all write the same key at once and a rate limit on that key then turns good data into an outage.**
   (bidspoke#3186, 2026-11-02)
   SHORT: A failed cache write after a successful read is logged, never fails the read: a cold cache's callers all write one key and its rate limit refuses them.
