@@ -187,7 +187,7 @@ redirected(){ # redirected <name> <command>
   check_eq "#2235 the loose copy lets it through, so the case is one the fix decides: $1" "0" "$rc"
 }
 redirected "behind an error redirection" "2>/dev/null rtk init -g"
-redirected "behind an output redirection" "> /tmp/out rtk init --auto-patch"
+redirected "behind an output redirection" "> /dev/null rtk init --auto-patch"
 redirected "behind input and an assignment" "</dev/null A=1 rtk init -g"
 redirected "after true && and a redirection" "true && 2>&1 rtk init"
 allowed "#2235 control: rtk gain behind a redirection" "2>/dev/null rtk gain"

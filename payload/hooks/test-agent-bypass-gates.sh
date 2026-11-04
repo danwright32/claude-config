@@ -924,7 +924,7 @@ nv_redirected() { # nv_redirected <label> <command>
   allowed "#2235 the loose copy lets it through, so the case is one the fix decides: $1"
 }
 nv_redirected "commit --no-verify behind an error redirection" '2>/dev/null git commit --no-verify -m wip'
-nv_redirected "commit -n behind an output redirection" '> /tmp/out git commit -n -m wip'
+nv_redirected "commit -n behind an output redirection" '> /dev/null git commit -n -m wip'
 nv_redirected "push --no-verify behind input and an assignment" '</dev/null A=1 git push --no-verify origin x'
 nv_redirected "core.hooksPath commit behind nohup and a redirection" 'nohup 2>&1 git -c core.hooksPath=/dev/null commit -m x'
 run_hook "$NV_GATE" "$(bash_payload '2>/dev/null git commit -m wip' a1b2c3d4)"

@@ -407,9 +407,9 @@ redirected() { # redirected <description> <command> <loose copy>...
   done
 }
 redirected "pr comment behind an error redirection" "2>/dev/null gh pr comment 5 --body \"Agreed. $LINK\"" rejoin glue
-redirected "issue comment behind an output redirection" "> /tmp/out gh issue comment 22 --body \"Agreed. $LINK\"" rejoin
+redirected "issue comment behind an output redirection" "> /dev/null gh issue comment 22 --body \"Agreed. $LINK\"" rejoin
 redirected "a body file behind input" "</dev/null gh issue comment 22 --body-file with-link.md" rejoin
-redirected "a review behind both streams" "&>/tmp/log gh pr review 5 --approve --body-file with-link.md" rejoin
+redirected "a review behind both streams" "&>/dev/null gh pr review 5 --approve --body-file with-link.md" rejoin
 redirected "gh api behind an error redirection" "2>/dev/null gh api repos/o/r/issues/22/comments -f body=\"Agreed. $LINK\"" glue
 allows "#2235 control: a clean comment behind a redirection" "2>/dev/null gh issue comment 22 --body-file clean.md"
 

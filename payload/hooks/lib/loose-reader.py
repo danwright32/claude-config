@@ -41,7 +41,9 @@ def main(argv):
         shutil.rmtree(dest)
     shutil.copytree(src, dest, symlinks=True, ignore=shutil.ignore_patterns("__pycache__"))
     reader = os.path.join(dest, "lib", "shell-words.py")
-    with open(reader, encoding="utf-8") as f:
+    # strict: the reader is this repository's own source, so a byte that is not UTF-8 there is a
+    # broken copy to refuse, never text to patch around.
+    with open(reader, encoding="utf-8", errors="strict") as f:
         text = f.read()
     pattern, replacement = UNDO[variant]
     text, n = re.subn(pattern, lambda _m: replacement, text, count=1, flags=re.S)
@@ -52,7 +54,7 @@ def main(argv):
         sys.stderr.write("loose-reader.py: the %s reading was not found in %s, so nothing was undone\n"
                          % (variant, reader))
         return 1
-    with open(reader, "w", encoding="utf-8") as f:
+    with open(reader, "w", encoding="utf-8", errors="strict") as f:
         f.write(text)
     return 0
 

@@ -347,7 +347,7 @@ vr_redirected() {  # $1 = what, $2 = command
   expect_allow "#2235 the loose copy lets it through, so the case is one the fix decides: $1" "$out"
 }
 vr_redirected "a merge behind an error redirection" "2>/dev/null $MERGE 7 --squash --match-head-commit $HEAD"
-vr_redirected "a merge behind an output redirection" "> /tmp/out $MERGE 7 --squash --match-head-commit $HEAD"
+vr_redirected "a merge behind an output redirection" "> /dev/null $MERGE 7 --squash --match-head-commit $HEAD"
 vr_redirected "a merge behind input and an assignment" "</dev/null A=1 $MERGE 7 --squash --match-head-commit $HEAD"
 
 echo "require-verification-run: warn mode allows, says the verdict, and tallies it by pull request"

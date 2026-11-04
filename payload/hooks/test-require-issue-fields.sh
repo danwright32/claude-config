@@ -881,7 +881,7 @@ redirected() { # redirected <description> <command> <loose copy>...
   done
 }
 redirected "no milestone, behind an error redirection" "2>/dev/null gh issue create --title \"T\" $P $C" rejoin glue
-redirected "no priority, behind an output redirection" "> /tmp/out gh issue create --title \"T\" $M $C" rejoin
+redirected "no priority, behind an output redirection" "> /dev/null gh issue create --title \"T\" $M $C" rejoin
 redirected "no category, behind input" "</dev/null gh issue create --title \"T\" $M $P" rejoin
 redirected "no milestone, behind an assignment and a redirection" "A=1 2>&1 gh issue create --title \"T\" $P $C" rejoin glue
 redirected "no milestone, in a later segment behind a redirection" "true && 2>/dev/null gh issue create --title \"T\" $P $C" rejoin glue

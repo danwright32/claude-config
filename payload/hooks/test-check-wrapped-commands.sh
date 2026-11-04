@@ -421,7 +421,7 @@ allowed "a script by path naming none of the three" "./build.sh --fast"
 # A redirection in front of the command's name is the shell's, never the name (claude-config#2235):
 # its target holding a slash is no script file, and a script after it is still named by its own path.
 allowed "#2235 a program after a redirection whose target holds a slash" "2>/dev/null log show --last 5m && git status"
-allowed "#2235 control: with the target the next word, passed before as now" "> /tmp/out.txt ls -la && gh pr view 7"
+allowed "#2235 control: with the target the next word, passed before as now" "> /dev/null ls -la && gh pr view 7"
 refused_file "#2235 a script after a redirection" "2>/dev/null ./build.sh && git push" "./build.sh"
 allowed "paths as arguments" "git add ./build.sh scripts/x.sh && git -C /srv/x/repo status"
 allowed "a path echoed" "echo ./build.sh && git status"

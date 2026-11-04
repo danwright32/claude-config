@@ -358,7 +358,7 @@ redirected(){ # redirected <description> <command> <loose copy>...
   done
 }
 redirected "a public pull request behind an error redirection" '2>/dev/null gh pr create --repo danwright-test/public-notes --title "Fix it" --body "copied from the acme-widgets issue"' rejoin glue
-redirected "a comment behind an output redirection" '> /tmp/out gh issue comment 5 --repo danwright-test/public-notes --body "the acme-corp board"' rejoin
+redirected "a comment behind an output redirection" '> /dev/null gh issue comment 5 --repo danwright-test/public-notes --body "the acme-corp board"' rejoin
 redirected "a pull request edit behind input" '</dev/null gh pr edit 5 --repo danwright-test/public-notes --body "zephyr"' rejoin
 redirected "gh api behind an error redirection" '2>/dev/null gh api repos/danwright-test/public-notes/issues/5/comments -f body="see acme-widgets"' glue
 run '2>/dev/null gh pr create --repo danwright-test/public-notes --title "Fix it" --body "nothing to see"'

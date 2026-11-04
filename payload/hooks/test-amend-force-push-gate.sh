@@ -217,7 +217,7 @@ redirected() { # redirected <label> <command>
     check "#2235 the loose copy lets it through, so the case is one the fix decides: $1" "exit $RC: ${OUT:0:200}"; fi
 }
 redirected "commit --amend behind an error redirection" '2>/dev/null git commit --amend --no-edit'
-redirected "push --force behind an output redirection" '> /tmp/out git push --force origin feature'
+redirected "push --force behind an output redirection" '> /dev/null git push --force origin feature'
 redirected "push --force behind input and an assignment" '</dev/null A=1 git push --force origin feature'
 redirected "commit --amend behind nohup and a redirection" 'nohup 2>&1 git commit --amend --no-edit'
 agent_allowed "#2235 control: a plain commit behind a redirection" '2>/dev/null git commit -m x'

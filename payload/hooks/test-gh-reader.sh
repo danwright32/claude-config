@@ -248,7 +248,9 @@ check_eq "#1478 ps_unreadable: nothing unreadable in a plain wrapper" "none" "$(
 # The shell takes every redirection out of a command before it finds the command's name, so
 # `2>/dev/null log show` runs log. The reader took the redirection for the name: a target holding a
 # slash read as a script run by its path (`direct`), which check-wrapped-commands.sh refuses beside
-# git, gh or rtk, and `>/tmp/out $G push` was a command named >/tmp/out, so no push to any gate.
+# git, gh or rtk, and `>/dev/null $G push` was a command named >/dev/null, so no push to any gate.
+# The targets are /dev/null wherever the shape allows: these strings are read, never run, and a
+# fixed path in the temp folder reads to test-suite-scratch-isolation.sh as one two runs could share.
 # Every case is also read by a copy of the reader whose past_redirects passes nothing over, and must
 # read otherwise there, so each one is seen failing on the reading it replaces; a control reads the
 # same in both.
@@ -277,31 +279,31 @@ redir_same(){ # redir_same <name> <expected> <tool|wrap> <command>
   check_eq "#2235 control, and the copy reads it the same: $1" "$2" "$(redir_read "$LOOSE2235/shell-words.py" "$3" "$4")"
 }
 redir "an error redirection glued to its target" "$G|push||" tool "2>/dev/null $G push"
-redir "an output redirection, its target the next word" "$G|push||origin" tool "> /tmp/out.txt $G push origin"
-redir "an append glued to its target" "gh|pr|merge|7" tool ">>/tmp/log gh pr merge 7"
-redir "an append with a descriptor, its target the next word" "$G|push||" tool "2>> /tmp/log $G push"
+redir "an output redirection, its target the next word" "$G|push||origin" tool "> /dev/null $G push origin"
+redir "an append glued to its target" "gh|pr|merge|7" tool ">>/dev/null gh pr merge 7"
+redir "an append with a descriptor, its target the next word" "$G|push||" tool "2>> /dev/null $G push"
 redir "a descriptor duplicated" "gh|pr|merge|7" tool "2>&1 gh pr merge 7"
-redir "both streams, glued" "$G|push||" tool "&>/tmp/log $G push"
-redir "both streams, the next word" "$G|push||" tool "&> /tmp/log $G push"
+redir "both streams, glued" "$G|push||" tool "&>/dev/null $G push"
+redir "both streams, the next word" "$G|push||" tool "&> /dev/null $G push"
 redir "input, glued" "$G|push||" tool "</dev/null $G push"
 redir "input, the next word" "gh|pr|create|--fill" tool "< /dev/null gh pr create --fill"
-redir "an output that overrides noclobber" "$G|push||" tool ">|/tmp/out $G push"
-redir "several in front" "$G|push||" tool "2>/dev/null >/tmp/out $G push"
+redir "an output that overrides noclobber" "$G|push||" tool ">|/dev/null $G push"
+redir "several in front" "$G|push||" tool "2>/dev/null >/dev/null $G push"
 redir "a quoted target holding a space" "$G|push||" tool "2>\"/tmp/a b.log\" $G push"
 redir "a target made by a substitution holding a space" "$G|push||" tool ">\$(mktemp -d)/x $G push"
 redir "an assignment, then a redirection" "gh|pr|merge|7" tool "GH_TOKEN=x 2>/dev/null gh pr merge 7"
 redir "a redirection, then an assignment" "gh|pr|merge|7" tool "2>/dev/null GH_TOKEN=x gh pr merge 7"
-redir "and the assignments either side of it are each kept" "A=1,GH_TOKEN=x,B=2" assigns "A=1 2>/dev/null GH_TOKEN=x >/tmp/o B=2 gh pr merge 7"
-redir "and an assignment behind env, past a redirection" "GH_TOKEN=x" assigns "env >/tmp/o GH_TOKEN=x gh pr merge 7"
+redir "and the assignments either side of it are each kept" "A=1,GH_TOKEN=x,B=2" assigns "A=1 2>/dev/null GH_TOKEN=x >/dev/null B=2 gh pr merge 7"
+redir "and an assignment behind env, past a redirection" "GH_TOKEN=x" assigns "env >/dev/null GH_TOKEN=x gh pr merge 7"
 redir "behind a reserved word" "$G|push||" tool "then 2>/dev/null $G push"
-redir "behind a runner" "$G|push||" tool "nohup >/tmp/log $G push"
+redir "behind a runner" "$G|push||" tool "nohup >/dev/null $G push"
 redir "in front of rtk's own subcommand" "rtk|init||-g" tool "2>/dev/null rtk init -g"
 redir "a program after a target holding a slash is no script file" "-" wrap "2>/dev/null log show"
-redir "a script after a redirection, its target the next word, is seen" "direct|it runs the script file ./build.sh, whose commands are in the file, not the command" wrap "> /tmp/out.txt ./build.sh"
+redir "a script after a redirection, its target the next word, is seen" "direct|it runs the script file ./build.sh, whose commands are in the file, not the command" wrap "> /dev/null ./build.sh"
 redir "nor after input glued to its target" "-" wrap "</dev/null cat"
 redir "a shell's string read past it" "bash -c ; -" wrap "2>/dev/null bash -c '$G push'"
 redir "a script run by its path is still one, named by its own path" "direct|it runs the script file ./build.sh, whose commands are in the file, not the command" wrap "2>/dev/null ./build.sh"
-redir_same "a program after a redirection, its target the next word" "-" wrap "> /tmp/out.txt ls -la"
+redir_same "a program after a redirection, its target the next word" "-" wrap "> /dev/null ls -la"
 redir_same "a quoted operator is a word, not a redirection" "" tool "'>' $G push"
 redir_same "a quoted redirection is the command's name" "" tool "\"2>/x\" $G push"
 redir_same "a redirection after the command's name stays its word" "$G|push||2>/dev/null" tool "$G push 2>/dev/null"
@@ -353,12 +355,12 @@ words "tokens: an error redirection glued to its target" "gh|issue|create" token
 words "tokens: a descriptor duplicated" "gh|pr|merge" tokens "2>&1 gh pr merge 7" rejoin glue
 words "tokens: behind an assignment" "gh|pr|merge" tokens "A=1 2>/dev/null gh pr merge 7" rejoin glue
 words "tokens: behind a runner" "$G|push|" tokens "nohup 2>/dev/null $G push" rejoin glue
-words "tokens: an output redirection, its target the next word" "gh|pr|comment" tokens "> /tmp/x gh pr comment 7" rejoin
+words "tokens: an output redirection, its target the next word" "gh|pr|comment" tokens "> /dev/null gh pr comment 7" rejoin
 words "tokens: input glued to its target" "$G|add|" tokens "</dev/null $G add -A" rejoin
 words "split: an error redirection is one word" "$G|add|" split "2>/dev/null $G add -A" rejoin
-words "split: an output redirection, its target the next word" "gh|issue|comment" split "> /tmp/x gh issue comment 7" rejoin
+words "split: an output redirection, its target the next word" "gh|issue|comment" split "> /dev/null gh issue comment 7" rejoin
 words_same "tokens: a number then a space is a command named 2" "" tokens "2 >/dev/null gh issue create"
-words_same "tokens: a redirection after the name stays the command's" "gh|issue|comment" tokens "gh issue comment 2 > /tmp/x"
+words_same "tokens: a redirection after the name stays the command's" "gh|issue|comment" tokens "gh issue comment 2 > /dev/null"
 words_same "tokens: a runner's option value is no redirection" "gh|pr|merge" tokens "sudo -p '>' gh pr merge 7"
 words_same "split: a quoted operator is the command's name" "" split "'>' gh pr merge 7"
 
