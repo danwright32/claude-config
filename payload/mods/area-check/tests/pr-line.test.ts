@@ -337,6 +337,19 @@ test("the check's own failure lets the command through with one dim line, kept i
   expect(said(r)).not.toContain('Area check:')
 })
 
+test('a decision with more than 1 MiB of other decisions after it is still asked for (#2143)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.seeded.push(decidedLine({ path: 'src/old.ts', decision: 'proceed', reason: 'the oldest decision, past the old window' }))
+  const filler = decidedLine({ path: 'src/x.ts', decision: 'proceed', reason: 'a decision on another branch', branch: '13-other' })
+  for (let i = 0; i <= (1_048_576 * 1.5) / filler.length; i++) w.ctl.seeded.push(filler)
+  seedAB(w)
+  const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
+  expect(why).toContain('Area check: src/old.ts: proceed, the oldest decision, past the old window')
+  expect(why).toContain(A)
+  expect(why).toContain(B)
+  expect(why).not.toContain('could not')
+})
+
 test('the log is read from its end and bounded, so a long log keeps its newest decisions, and the line the bound cuts is not malformed', KIT, async ($, on) => {
   const w = world($, on)
   w.ctl.seeded.push(decidedLine({ path: 'src/old.ts', decision: 'proceed', reason: 'the oldest decision, past the bound' }))
