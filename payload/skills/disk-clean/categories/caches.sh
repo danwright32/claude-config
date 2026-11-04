@@ -28,6 +28,7 @@ cache_rules() { # <target> <listing>
   held="$(dcs_holders "$t" "$2")"
   if [ -n "$held" ]; then V="not offerable: in use by $held"; return; fi
   V=offerable
+  dcs_floor "$t"
 }
 
 open_listing() {

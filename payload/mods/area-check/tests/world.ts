@@ -2,7 +2,7 @@ import { mock } from 'claude-code/testing'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import { pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
-import { pipelineIn } from './mod-kit/hooks/writes.ts'
+import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { DEADLINE_MS, DECIDE_TOOL, questionKey } from '../hooks/rules.ts'
@@ -30,7 +30,7 @@ export const deps: { name: string; register: Register } = {
           repo: async (input: unknown) => ask('repo', input),
           goal: async (input: unknown) => ask('goal', input),
           screen: async () => null, blocked: async (input: unknown) => ask('blocked', input), card: nope('card'), commands: nope('commands'), git: nope('git'), gh: async (input: unknown) => ask('gh', input),
-          writes: nope('writes'), pipeline: async (input: unknown) => ask('pipeline', input), workingTree: nope('workingTree'), ghRepo: nope('ghRepo'), linkRepo: nope('linkRepo'),
+          writes: async (input: unknown) => ask('writes', input), pipeline: async (input: unknown) => ask('pipeline', input), workingTree: nope('workingTree'), ghRepo: nope('ghRepo'), linkRepo: nope('linkRepo'),
           mergeHelper: async (command: unknown) => ask('mergeHelper', command), bandRow: nope('bandRow'), clearBandRow: nope('clearBandRow'), pane: nope('pane'), clearPane: nope('clearPane'),
           press: async () => ({ isAnswered: false }), clickable: async () => true, isDans: nope('isDans'), typedAnswer: async (input: unknown) => ask('typedAnswer', input),
           pythonText: nope('pythonText'), login: nope('login'), account: nope('account'), hold: nope('hold'), release: nope('release'),
@@ -104,6 +104,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   const notes: Record<string, unknown>[] = []
   const holds: Record<string, unknown>[] = []
   const tools: string[] = []
+  const toolDescriptions: Record<string, string> = {}
   const ctl: {
     answer?: string | 'afk'
     asleep?: boolean
@@ -115,6 +116,9 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     pathsFails?: boolean
     refuse?: boolean
     slowLogOnce?: boolean
+    // mod-kit's shell reader failing (#2142), and the default branch's 90 days in place of NUMSTAT.
+    writesThrows?: boolean
+    numstat?: string
     sha: string
     goal: string | null
     // The log as grep finds it (#1510): missing, unreadable, or its lines beside those the mod wrote.
@@ -165,6 +169,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   })
   on('tool.register', ($, e) => {
     tools.push(e.name)
+    toolDescriptions[e.name] = String((e as { description?: string }).description ?? '')
     return { value: { tool: `mcp__area-check__${e.name}` } } as never
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -199,6 +204,11 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
       if (argv[1] === 'gh' || argv[1] === 'mergeHelper' || argv[1] === 'pipeline') {
         const read = argv[1] === 'gh' ? ghArgs(input.words) : argv[1] === 'mergeHelper' ? mergeHelperArgs(input as Command) : input.cwd !== undefined ? pipelineIn(input.command, input.cwd, input.home ?? '') : pipeline(input.command)
         return answer(ok(read === undefined ? 'null' : JSON.stringify(read)))
+      }
+      // What a Bash call writes (#2142), from the same copy of mod-kit's reader.
+      if (argv[1] === 'writes') {
+        if (ctl.writesThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the command could not be read' })
+        return answer(ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home ?? ''))))
       }
       if (argv[1] === 'branch') {
         if (ctl.branchThrows) return answer({ exitCode: 1, stdout: '', stderr: 'git could not be asked' })
@@ -269,7 +279,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
           }
           await clock.sleep(wait)
         }
-        return answer(ok(NUMSTAT))
+        return answer(ok(ctl.numstat ?? NUMSTAT))
       }
       if (sub === 'ls-tree -r --name-only origin/main') return answer(ok(TRACKED + '\n'))
       if (sub.startsWith('grep -c  origin/main -- ')) return answer(ok('origin/main:src/big.ts:2400\n'))
@@ -296,7 +306,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   })
   const records = (file = LOG) => (appended[file] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l) as Record<string, unknown>)
   const judged = () => records().filter(r => r.kind === 'judged')
-  return { clock, ctl, ran, logs, passed, timeouts, store, files, records, judged, cards, asked, notes, holds, tools }
+  return { clock, ctl, ran, logs, passed, timeouts, store, files, records, judged, cards, asked, notes, holds, tools, toolDescriptions }
 }
 
 export type T$ = { tool: { call: (e: never) => Promise<unknown> }; session: { start: (e: never) => Promise<unknown> }; prompt: { submit: (e: never) => Promise<unknown> } }

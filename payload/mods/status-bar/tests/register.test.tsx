@@ -599,7 +599,8 @@ test('a hold or a letting go mod-kit refuses is said in the debug log, and the C
   expect(compacts).toHaveLength(1)
   expect(toasts).toEqual([])
   expect(debug.filter(d => d.includes('mod-kit is not loaded'))).toEqual([
-    'status-bar: could not hold back a reload while the Compact runs, so one now would drop the wait for its end (mod-kit is not loaded)',
+    // #2132: said in the words of mod-kit's held.ts, the one way every mod holds a reload back.
+    'status-bar: could not hold back a reload while it waits on the Compact it started, so one now would drop that wait (mod-kit is not loaded)',
   ])
   w.holdFails = ''
   w.releaseFails = 'mod-kit is not loaded'
@@ -611,7 +612,7 @@ test('a hold or a letting go mod-kit refuses is said in the debug log, and the C
   // A hold never taken is not let go of; the one taken at the second press could not be.
   expect(order).toEqual(['compact', HELD, 'compact'])
   expect(debug.filter(d => d.includes('let go'))).toEqual([
-    'status-bar: could not let go of the hold on a reload taken for the Compact; it lapses by itself within 10 minutes (mod-kit is not loaded)',
+    'status-bar: could not let go of its hold on a reload while it waited on the Compact it started; it lapses by itself within 10 minutes (mod-kit is not loaded)',
   ])
   await ui.unmount()
 })

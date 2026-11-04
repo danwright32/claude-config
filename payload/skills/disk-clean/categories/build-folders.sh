@@ -47,6 +47,7 @@ build_rules() { # <target>
   rm -f "$err"
   V=offerable
   D="project $PROJ, none of whose own files changed in $DCS_BUILD_DAYS days"
+  dcs_floor "$t"
 }
 
 do_scan() {
