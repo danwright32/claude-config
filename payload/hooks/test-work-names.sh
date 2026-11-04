@@ -15,7 +15,9 @@
 #      by the same rule from a labelled stream (claude-config#1995), and a stream cut short is refused.
 #   7. With --work-repos, that text is also judged against the work repository list read live through
 #      a fake gh (claude-config#2111): a listed repository or owner is found in plain prose, and a
-#      list that cannot be read, or a read past its budget, is refused rather than passed.
+#      list that cannot be read, or a read past its budget, is refused rather than passed. It also
+#      holds the work MacBook's project list and an organisation's web and email domain
+#      (claude-config#2184), with an unreadable project list refused.
 # The two parts that need the repository, (1) nothing this repository publishes names one and (5) a
 # send refuses to publish a file naming one, are tests/test-work-names-tree.sh, since this suite is
 # also installed beside the hooks, where there is no repository.
@@ -171,9 +173,12 @@ SH
 chmod +x "$GHBIN/gh"
 LIST="$WORK/list.json"
 printf '{"repos":[{"owner":"Globex-Corp","name":"halcyon"},{"owner":"Globex-Corp","name":"zephyr-app"},{"owner":"Globex-Corp","name":"globex.site"}]}\n' > "$LIST"
+# The work MacBook's project list (claude-config#2184), one invented project on it.
+PROJECTS="$WORK/projects-CLAUDE.md"
+printf '## Projects\n\nOn Daniels-MacBook-Pro-2 (personal MacBook):\n- `~/Apps/home-garden`\n\nOn Dans-MacBook-Pro:\n- `~/Apps/Quillfeather`: a work app\n\n## Writing Style\n' > "$PROJECTS"
 repo_texts(){   # printf format and arguments making the stream -> output, rc in text_rc
   text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
-    python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+    WORK_NAMES_PROJECT_LIST="$PROJECTS" python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
 }
 STREAM_REPO='commit 1a2b3c4\0Fix the reader\n\nrefs widget#3\n\0commit 5d6e7f8\0Quote the refusal\n\nfrom the Halcyon#12 checkout\n'
 repo_texts "$STREAM_REPO"
@@ -182,7 +187,7 @@ check "and named by its label and line: $text_out" has "$text_out" "commit 5d6e7
 check "and only that one: $text_out" lacks "$text_out" "commit 1a2b3c4:"
 check "the output never repeats the repository it found: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "halcyon"
 check "the remedy says how to write it instead: $text_out" has "$text_out" "a work repository"
-check "the summary says the list was read, by count only: $text_out" has "$text_out" "4 work repository and owner names"
+check "the summary says the list was read, by count only: $text_out" has "$text_out" "5 work repository and owner names"
 texts "$STREAM_REPO"
 check "(control) without --work-repos the same messages pass, so the hit came from the list (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
 repo_texts 'commit 5d6e7f8\0Move it\n\nto globex-corp/thing\n'
@@ -196,6 +201,22 @@ repo_texts 'commit 5d6e7f8\0Move it\n\na halcyonic day, and prehalcyon too\n'
 check "(control) a listed name inside a longer word is no match (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
 repo_texts 'commit 5d6e7f8\0Move it\n\nfrom %s/widget\n' "$FAKE_ORG"
 check "an organisation is still found with the list read: $text_out" has "$text_out" "commit 5d6e7f8:3: a work organisation name"
+# claude-config#2184: the work MacBook's project list, and an organisation's web and email domain.
+repo_texts 'commit 5d6e7f8\0Move it\n\nfrom the QuillFeather checkout\n'
+check "a project on the work MacBook's list is found: $text_out" has "$text_out" "commit 5d6e7f8:3: a work repository or owner name"
+check "and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "quillfeather"
+repo_texts 'commit 5d6e7f8\0Move it\n\nfrom the home-garden checkout\n'
+check "(control) a project on the personal MacBook's list passes (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+repo_texts 'commit 5d6e7f8\0Move it\n\nline two\nask ops@acmehq.com, or see acmehq.io\n'
+check "an organisation without its hyphen as an email or web domain is found by its line: $text_out" has "$text_out" "commit 5d6e7f8:4: a work organisation's web or email domain"
+check "and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "acmehq"
+repo_texts 'commit 5d6e7f8\0Move it\n\nthe acmehq notes, and acmehqs.com\n'
+check "(control) the same letters as a bare word or another domain pass (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+mv "$PROJECTS" "$PROJECTS.away"
+repo_texts 'commit 1a2b3c4\0clean\n'
+check "an unreadable project list is refused, never read as clean (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
+check "and says the project list could not be read: $text_out" has "$text_out" "project list"
+mv "$PROJECTS.away" "$PROJECTS"
 # Cannot tell is refused, never passed (L98, L345).
 rm -f "$LIST"
 repo_texts "$STREAM_REPO"
@@ -209,7 +230,7 @@ repo_texts 'commit 1a2b3c4\0clean\n'
 check "a list of the wrong shape is refused (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
 printf '{"repos":[{"owner":"Globex-Corp","name":"halcyon"}]}\n' > "$LIST"
 t0=$SECONDS
-text_out="$( printf 'commit 1a2b3c4\0clean\n' | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" FAKE_GH_HANG=1 HOME="$EMPTY_HOME" \
+text_out="$( printf 'commit 1a2b3c4\0clean\n' | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" FAKE_GH_HANG=1 HOME="$EMPTY_HOME" WORK_NAMES_PROJECT_LIST="$PROJECTS" \
   WORK_NAMES_REPOS_BUDGET_SECONDS=3 python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
 check "a list that does not answer inside the budget is refused (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
 check "and the scan stops at its budget, not at gh's own wait ($((SECONDS - t0)) seconds)" [ $((SECONDS - t0)) -lt 15 ]

@@ -29,6 +29,7 @@ lf_rules() { # <target>
   case "$b" in ''|*[!0-9]*) V="unmeasured: its size could not be read"; return ;; esac
   [ "$b" -gt $((DCS_LARGE_MB * 1048576)) ] || { V="not offerable: it is no longer over $DCS_LARGE_MB MB"; return; }
   V=offerable
+  dcs_floor "$t"
 }
 
 do_scan() {
