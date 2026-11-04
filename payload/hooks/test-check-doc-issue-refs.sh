@@ -194,13 +194,14 @@ want_row "another field of a dated exception is not a verbatim quote" \
 # A settled design page carries its frames as JSON on ONE line, and a script's template literal
 # there is, to this scanner, a single inline code span, blanked to that many spaces. The table
 # cell half of SENTENCE_END, `\s*\|\s*`, then started at every position of the run and read to its
-# end from each, which is quadratic in the run's length: a 2.35 MB line was still scanning after
-# 180 s, and the gate's 60 s limit refused the push. The span page is timed against a YARDSTICK,
+# end from each, which is quadratic in the run's length: measured 2026-11-04, a 2.35 MB line was
+# still scanning after 180 s, and the gate's 60 s limit refused the push. The span page is timed
+# against a YARDSTICK,
 # the same scanner on a line of the same length with no span, which was linear before the fix and
 # after it, so the budget moves with the machine's load instead of asserting about it (L290), and
 # a machine too starved to scan even the yardstick says UNMEASURED rather than failing (L411).
 # Both pages end in a pending claim, so a scanner that sped up by reading less is caught too.
-long_line="$(SCANNER="$SCANNER" python3 - <<'PY'
+cat > "$WORKDIR/long-line.py" <<'PY'
 import os, subprocess, sys, time
 scanner = os.environ["SCANNER"]
 size = 2_400_000
@@ -220,7 +221,7 @@ STARVED = 60
 try:
     yard, out = run(plain, STARVED)
 except subprocess.TimeoutExpired:
-    print("UNMEASURED the yardstick, a %d character line with no span, took over %d s, so this machine is too loaded to time the span page" % (len(plain), STARVED))
+    print("STARVED the yardstick, a %d character line with no span, took over %d s, so this machine is too loaded to time the span page" % (len(plain), STARVED))
     sys.exit(0)
 if "page.html:2:41:" not in out:
     print("FAIL the yardstick page lost its pending claim, so the scanner did not read the line to its end")
@@ -236,10 +237,10 @@ if "page.html:2:41:" not in out:
     sys.exit(0)
 print("OK span %.2f s against a %.2f s yardstick" % (took, yard))
 PY
-)"
+long_line="$(SCANNER="$SCANNER" python3 "$WORKDIR/long-line.py")"
 case "$long_line" in
   OK*) ok ;;
-  UNMEASURED*) echo "SUITE-PART-UNMEASURED ${long_line#UNMEASURED }" ;;
+  STARVED*) echo "SUITE-PART-UNMEASURED ${long_line#STARVED }" ;;
   '') bad "the long line timing printed no verdict at all, so it never ran to an answer" ;;
   *) bad "${long_line#FAIL }" ;;
 esac
