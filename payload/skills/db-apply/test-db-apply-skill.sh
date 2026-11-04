@@ -219,7 +219,7 @@ check "and nothing it printed holds the env file's secret" \
   "$(grep -qF "$SECRET" <<< "$out" && echo "printed the secret" || echo ok)"
 # The detection asks for db query with the flags the last step uses, as a help request, and never
 # with --yes or the change file: a CLI that ignored --help would then be sent nothing it could apply.
-probe="$(grep -- '--help' "$TMP/supabase-calls" 2>/dev/null | head -n 1)"
+probe="$(grep -m 1 -- '--help' "$TMP/supabase-calls" 2>/dev/null)"
 check "the detection asks for db query --linked --file itself, as a help request" \
   "$(grep -q '^db query ' <<< "$probe" && grep -q -- '--linked' <<< "$probe" && grep -q -- '--file' <<< "$probe" && echo ok || echo "the help call was: ${probe:-none}")"
 check "and the detection carries neither --yes nor the change file" \
