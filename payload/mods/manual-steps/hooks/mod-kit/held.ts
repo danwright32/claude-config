@@ -21,7 +21,7 @@ import { errorText } from './skew.ts'
 /** mod-kit's ceiling on a hold, an hour: a wait with no deadline of its own asks for this. */
 export const HOLD_MAX_MS = 60 * 60_000
 
-/** One wait's hold: which mod, an id unique within it, the wait as Dan would say it, how long at most. */
+/** One wait's hold: which mod, an id naming the wait, the wait as Dan would say it, how long at most. */
 export type Held = {
   mod: string
   id: string
@@ -40,24 +40,50 @@ const minutes = (ms: number) => {
   return n === 1 ? '1 minute' : `${n} minutes`
 }
 
+// mod-kit keeps one hold per mod and id, so two waits of one id in flight at once (two Done presses,
+// two Ready questions) would share one, and the first to finish would let go of the other's. So each
+// wait in flight takes a number under its id, the lowest free, and a second one holds under the id
+// with its number after it ("ask 2"). The number is given back when the wait ends, held or not.
+const inFlight = new Map<string, Set<number>>()
+const takeNumber = (key: string): number => {
+  const taken = inFlight.get(key) ?? new Set<number>()
+  inFlight.set(key, taken)
+  let n = 1
+  while (taken.has(n)) n++
+  taken.add(n)
+  return n
+}
+const giveBack = (key: string, n: number) => {
+  const taken = inFlight.get(key)
+  taken?.delete(n)
+  if (taken?.size === 0) inFlight.delete(key)
+}
+
 /** Runs `wait` with mod-kit's reload of `h.mod` held back, and lets go on every way out. */
 export const whileHeld = async <T>(h: Held, wait: () => Promise<T>): Promise<T> => {
-  let held = false
+  const key = `${h.mod}\n${h.id}`
+  const n = takeNumber(key)
+  const id = n === 1 ? h.id : `${h.id} ${n}`
   try {
-    await h.hold({ mod: h.mod, id: h.id, what: h.what, ms: h.ms })
-    held = true
-  } catch (err) {
-    h.log(`${h.mod}: could not hold back a reload while it waits on ${h.what}, so one now would drop that wait (${errorText(err, h.mod)})`)
-  }
-  try {
-    return await wait()
-  } finally {
-    if (held) {
-      try {
-        await h.release({ mod: h.mod, id: h.id })
-      } catch (err) {
-        h.log(`${h.mod}: could not let go of its hold on a reload while it waited on ${h.what}; it lapses by itself within ${minutes(h.ms)} (${errorText(err, h.mod)})`)
+    let held = false
+    try {
+      await h.hold({ mod: h.mod, id, what: h.what, ms: h.ms })
+      held = true
+    } catch (err) {
+      h.log(`${h.mod}: could not hold back a reload while it waits on ${h.what}, so one now would drop that wait (${errorText(err, h.mod)})`)
+    }
+    try {
+      return await wait()
+    } finally {
+      if (held) {
+        try {
+          await h.release({ mod: h.mod, id })
+        } catch (err) {
+          h.log(`${h.mod}: could not let go of its hold on a reload while it waited on ${h.what}; it lapses by itself within ${minutes(h.ms)} (${errorText(err, h.mod)})`)
+        }
       }
     }
+  } finally {
+    giveBack(key, n)
   }
 }

@@ -83,6 +83,43 @@ test('a member the loaded mod-kit lacks is named as the skew it is, not a bare T
   expect(debug[0]).toContain('demo and mod-kit are out of step in this session')
 })
 
+// Lessons review at b38fe6a: mod-kit keeps one hold per mod and id, so two waits of one id in flight
+// at once (two Done presses, two Ready questions) would share it, and the first to finish would let
+// go of the one still waiting. A second wait in flight takes the id with its number after it.
+test('two waits of one id in flight at once each hold their own, and the first to finish lets go of its own only (#2132)', async () => {
+  const { order, held } = world()
+  let finishFirst = () => {}
+  const first = whileHeld(held('ask', "Dan's answer", 60_000), () => new Promise<string>(resolve => { finishFirst = () => resolve('a') }))
+  const second = whileHeld(held('ask', "Dan's answer", 60_000), async () => {
+    await Promise.resolve()
+    order.push('second waits')
+    finishFirst()
+    await first
+    order.push('second done')
+    return 'b'
+  })
+  expect(await second).toBe('b')
+  expect(order).toEqual([
+    `hold ${JSON.stringify({ mod: 'demo', id: 'ask', what: "Dan's answer", ms: 60_000 })}`,
+    `hold ${JSON.stringify({ mod: 'demo', id: 'ask 2', what: "Dan's answer", ms: 60_000 })}`,
+    'second waits',
+    `release ${JSON.stringify({ mod: 'demo', id: 'ask' })}`,
+    'second done',
+    `release ${JSON.stringify({ mod: 'demo', id: 'ask 2' })}`,
+  ])
+  // Once both are let go of, the next wait takes the id itself again.
+  await whileHeld(held('ask', "Dan's answer", 60_000), async () => 3)
+  expect(order.at(-1)).toBe(`release ${JSON.stringify({ mod: 'demo', id: 'ask' })}`)
+})
+
+test('a wait whose hold was refused gives its number back, so the next wait does not count it (#2132)', async () => {
+  const refused = world({ holdFails: 'mod-kit is not loaded' })
+  await whileHeld(refused.held('ask', "Dan's answer", 60_000), async () => 1)
+  const { order, held } = world()
+  await whileHeld(held('ask', "Dan's answer", 60_000), async () => 2)
+  expect(order[0]).toBe(`hold ${JSON.stringify({ mod: 'demo', id: 'ask', what: "Dan's answer", ms: 60_000 })}`)
+})
+
 test("the longest hold a wait may ask for is mod-kit's own ceiling, an hour (#2132)", async () => {
   expect(HOLD_MAX_MS).toBe(60 * 60_000)
 })
