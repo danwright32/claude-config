@@ -36,6 +36,7 @@ import {
   indexLineAdded,
   linksOnlyTo,
   memoryFileOf,
+  notAnAppendNote,
   shellAppended,
   lapseWait,
   lastingFiles,
@@ -460,8 +461,11 @@ const takeLesson = async ($: EngineInterface, added: string) => {
 // spells out (rules.ts shellAppended, by mod-kit's one reader of what it runs and writes) appended to
 // it. Undefined for anything else, which is asked about. An index that exists and cannot be read fails
 // the hook, and the hook fails closed; one that is no ordinary file (a fifo, a link to a device) is
-// never opened (#1814), and what a call adds to it cannot be told, so it is asked about.
-const indexLineOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, index: string): Promise<string | undefined> => {
+// never opened (#1814), and what a call adds to it cannot be told, so it is asked about. A shell
+// command to a readable index that shellAppended does not read as a plain append is told apart
+// (#2181), so its refusal can say that, rather than read as though Dan had approved nothing.
+const NOT_AN_APPEND = Symbol('not an append')
+const indexLineOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, index: string): Promise<string | typeof NOT_AN_APPEND | undefined> => {
   const now = await textNow($, index)
   if ('unreadable' in now) return undefined
   const old = 'text' in now ? now.text : undefined
@@ -472,7 +476,7 @@ const indexLineOf = async ($: EngineInterface, tool: string, input: Record<strin
   }
   const command = String(input.command ?? '')
   const appended = shellAppended(command, await $.modkit.pipeline({ command }), await $.modkit.writes({ command, cwd: at.cwd, home: at.home }), index)
-  return appended === undefined ? undefined : indexLineAdded(old, (old ?? '') + appended)
+  return appended === undefined ? NOT_AN_APPEND : indexLineAdded(old, (old ?? '') + appended)
 }
 
 // A For good on one memory file, once its save lands, also covers the one line in its folder's index
@@ -491,14 +495,16 @@ const coverFor = async ($: EngineInterface, used: AskBeforeSavingApproval): Prom
 // The cover a saved memory file's For good gives this call (#1794), taken as the call passes: a write
 // whose one target is the index of a cover that still stands, adding only the one line linking that
 // cover's file. Covers past their time are dropped in silence, here and wherever the list is written:
-// Dan never answered about the index, so there is nothing of his to say lapsed.
-const takeCover = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, { files, guessed, handed }: Targets): Promise<AskBeforeSavingIndexCover | undefined> => {
+// Dan never answered about the index, so there is nothing of his to say lapsed. A shell command not
+// read as a plain append takes nothing, and answers the covers that stand for that index (#2181).
+const takeCover = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, { files, guessed, handed }: Targets): Promise<AskBeforeSavingIndexCover | { unread: AskBeforeSavingIndexCover[] } | undefined> => {
   if (files.length !== 1 || guessed.length || handed.length) return undefined
   const now = await $.clock.now()
   const standing = ((await $.state.get(coversRef)).value ?? []).filter(c => stands(c.until, now) && display(c.index, at.home) === files[0])
   const index = standing[0]?.index
   if (index === undefined) return undefined
   const line = await indexLineOf($, tool, input, at, index)
+  if (line === NOT_AN_APPEND) return { unread: standing.filter(c => c.index === index) }
   if (line === undefined) return undefined
   let hit = undefined as AskBeforeSavingIndexCover | undefined
   await update($, coversRef, a => {
@@ -721,7 +727,8 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
     return next(e)
   }
   // The one index line a saved memory file's For good covers (#1794): on beneath the same way.
-  const cover = await takeCover($, tool, input, at, targets)
+  const byCover = await takeCover($, tool, input, at, targets)
+  const cover = byCover && !('unread' in byCover) ? byCover : undefined
   if (cover) {
     coverTaken.set(String(raw.tool_use_id ?? ''), cover)
     return next(e)
@@ -740,7 +747,10 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }
   // One waiting question per save: the same save refused again replaces the one before.
   await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
-  const ask = askInstruction(id, files, targets.guessed, targets.handed)
+  const asked = askInstruction(id, files, targets.guessed, targets.handed)
+  // A shell command to an index a cover stands for, not read as a plain append (#2181): said first.
+  const unread = byCover && 'unread' in byCover ? byCover.unread : []
+  const ask = unread.length ? `${notAnAppendNote(unread.map(c => ({ name: c.name, files: c.files })), files[0] ?? '')} ${asked}` : asked
   const late = lapsed ?? lesson.lapsed
   return { decision: 'deny', reason: late ? `${lapsedNote(late)} ${ask}` : ask }
 }
