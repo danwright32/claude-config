@@ -265,7 +265,8 @@ expect_deny "a budget that is not a number never opens the gate" "title:1: a wor
 # The cap is held below the timeout the gate is registered with, less the 12 seconds the work
 # repository list is given after it: a gate killed at its timeout gives no verdict of its own. All
 # three numbers are settings, not measured.
-timeout="$(jq -r '[.. | objects | select((.command? // "") | endswith("/check-work-names-merge.sh")) | .timeout] | first // empty' "$HOOK_DIR/../settings.hooks.json" 2>/dev/null)"
+. "$HOOK_DIR/lib/settings-file.sh"
+timeout="$(jq -r '[.. | objects | select((.command? // "") | endswith("/check-work-names-merge.sh")) | .timeout] | first // empty' "$(hook_settings_file "$HOOK_DIR/..")" 2>/dev/null)"
 case "$timeout" in
   ''|*[!0-9]*) fail "no timeout for check-work-names-merge.sh could be read from settings.hooks.json (got '$timeout')" ;;
   *) if [ $(( 15 + 12 )) -lt "$timeout" ]; then pass; else fail "the read budget cap of 15 plus the list's 12 seconds is not inside the registered timeout of $timeout"; fi ;;
