@@ -225,7 +225,7 @@ done
 INPUTS="$TMPROOT/inputs"
 mkdir -p "$INPUTS"
 : > "$INPUTS/1-empty"
-printf '{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"gh issue create --title t --body b && gh run watch 1 -i 5 && rtk init -g && git branch -D x && gh pr comment 1 --body b"}}' "$DECOY" > "$INPUTS/2-command"
+printf '{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"gh issue create --title t --body b && gh run watch 1 -i 5 && rtk init -g && git branch -D x && gh pr comment 1 --body b && log show"}}' "$DECOY" > "$INPUTS/2-command"
 # cat alone on PATH, so a hook can read its payload at all, and nothing else (dirname least of all).
 CAT_ONLY="$TMPROOT/cat-only"
 mkdir -p "$CAT_ONLY"
