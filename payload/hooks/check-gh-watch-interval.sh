@@ -32,7 +32,9 @@ payload="$(cat)"
 # Every Bash call passes through here, and nearly none mention a watch: answer those at once,
 # before the shared reader is even loaded.
 case "$payload" in *watch*) ;; *) exit 0 ;; esac
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # shellcheck source=lib/hook-notice.sh
 . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2

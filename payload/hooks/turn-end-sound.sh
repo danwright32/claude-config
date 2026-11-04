@@ -7,7 +7,10 @@
 set -uo pipefail
 cat >/dev/null 2>&1 || true
 
-if . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/sleep.sh" 2>/dev/null && sleep_active; then
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) _HD="${BASH_SOURCE[0]%/*}" ;; *) _HD=. ;; esac
+_HD="$(cd "${_HD:-/}" && pwd)"
+if . "$_HD/lib/sleep.sh" 2>/dev/null && sleep_active; then
   exit 0
 fi
 afplay /System/Library/Sounds/Blow.aiff >/dev/null 2>&1 || true

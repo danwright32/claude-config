@@ -25,7 +25,9 @@ may_post() {
 }
 may_post "$payload" || exit 0
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
+HERE="$(cd "${HERE:-/}" && pwd)"
 
 # The shared reader cleans the payload before python3 parses it: a lone surrogate escape there raised
 # when the text was written back out (claude-config#1944). It loads only past the gh test above, so

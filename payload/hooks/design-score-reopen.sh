@@ -36,7 +36,9 @@ set -uo pipefail
 cat >/dev/null 2>&1 || true
 [ -n "${CLAUDE_DETACHED_RUN:-}" ] && exit 0
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) DIR="${BASH_SOURCE[0]%/*}" ;; *) DIR=. ;; esac
+DIR="$(cd "${DIR:-/}" && pwd)"
 RUNNER="${DESIGN_REOPEN_PY:-$DIR/design-score-reopen.py}"
 STATE="${DESIGN_REOPEN_STATE_DIR:-${CLAUDE_HOME:-$HOME/.claude}/state/design-score-reopen}"
 EVERY="${DESIGN_REOPEN_EVERY:-72000}"
