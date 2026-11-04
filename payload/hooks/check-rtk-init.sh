@@ -46,7 +46,9 @@ not_judged() {   # $1 = what went wrong, as a clause
   exit 2
 }
 
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null \
   || not_judged "$HOOK_DIR/lib/push-scope.sh, the reader of the command, could not be loaded (reinstall the hooks with claude-sync pull)"

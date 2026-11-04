@@ -55,7 +55,9 @@
 # PR_REVIEW_PUSH_POLL_SECONDS (3), PR_REVIEW_PUSH_WAIT_SECONDS (100).
 
 set -uo pipefail
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 payload="$(cat)"
 
 # It runs before EVERY Bash command, so the commonest case leaves before anything is loaded.

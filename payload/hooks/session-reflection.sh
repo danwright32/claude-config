@@ -34,7 +34,10 @@ case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. 
 # stands down. Findings made overnight reach the morning report through the overnight driver's own
 # instruction, never through this hook, which exits on stop_hook_active and so would run once a
 # night. A sleep record that cannot be read counts as awake (lib/sleep.sh).
-if . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/sleep.sh" 2>/dev/null && sleep_active; then
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) SELF_DIR="${BASH_SOURCE[0]%/*}" ;; *) SELF_DIR=. ;; esac
+SELF_DIR="$(cd "${SELF_DIR:-/}" && pwd)"
+if . "$SELF_DIR/lib/sleep.sh" 2>/dev/null && sleep_active; then
   exit 0
 fi
 
@@ -53,7 +56,7 @@ transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/nul
 # python3 is what decides whether this turn did real work, so with none this hook has nothing to
 # run at all. Said once rather than swallowed, because silence here is indistinguishable from a
 # turn with nothing to reflect on (claude-config#490, L98).
-_SPN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/stop-hook-python-notice.sh"
+_SPN="$SELF_DIR/lib/stop-hook-python-notice.sh"
 if [ -f "$_SPN" ]; then
   . "$_SPN"
   stop_hook_python3_notice "session-reflection.sh"
@@ -63,7 +66,7 @@ fi
 # (Edit/Write/Bash/Agent/...)? Chat-only and read-only Q&A turns -> skip, so the
 # reflection doesn't crowd out short question turns (shared helper, also used by
 # feature-issue-review.sh).
-worked=$(python3 "$(dirname "${BASH_SOURCE[0]}")/turn-worked.py" "$transcript" 2>/dev/null)
+worked=$(python3 "$SELF_DIR/turn-worked.py" "$transcript" 2>/dev/null)
 
 [ "$worked" = "yes" ] || exit 0
 
@@ -76,8 +79,8 @@ worked=$(python3 "$(dirname "${BASH_SOURCE[0]}")/turn-worked.py" "$transcript" 2
 # read from the environment. This config is synced between two Macs whose paths
 # differ, so a pointer that resolves itself is correct on both with nothing to
 # configure. test-review-instructions.sh proves that by running a relocated copy of
-# the tree and requiring the reason to name the copy.
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# the tree and requiring the reason to name the copy. SELF_DIR, set near the top of this file,
+# is that location.
 
 # The transcript lets the helper send a short pointer once this session has already read the
 # instruction since its last compaction, rather than another full read (lib/review-reason.py).
