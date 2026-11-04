@@ -66,10 +66,12 @@ def is_name(word):
     return bool(word) and (word[0].isalpha() or word[0] == "_") and all(ch.isalnum() or ch == "_" for ch in word)
 
 
-def split(s):
+def split(s, limit=None):
+    """(the leading NAME=value assignments of s, the text after them); at most limit of them when
+    limit is given, so past_redirects can read one redirection's target as one value."""
     assigns = []
     s = s.lstrip()
-    while True:
+    while limit is None or len(assigns) < limit:
         eq = s.find("=")
         if eq <= 0 or not is_name(s[:eq]):
             break
@@ -818,9 +820,44 @@ def command_rest(text, passed=None):
             if not m2:
                 break
             s = s[m2.end():]
-    assigns, rest = split(s)
+    assigns, rest = past_head(s)
     rest, more = past_runners(rest, passed)
     return rest, "\n".join(assigns + more)
+
+
+# A redirection written in front of a command's name (claude-config#2235): its operator, with or
+# without a descriptor number in front, at the start of the text as written, so a quoted `'>'` is a
+# word and never one. Its target follows, glued to the operator or as the next word.
+LEADING_REDIRECT = re.compile(r"\d*(?:<<<|<<-?|<>|<&|>&|>>|>\||&>>?|<|>)")
+
+
+def past_redirects(s):
+    """s past the redirections written in front of its command's name (claude-config#2235).
+
+    The shell takes every redirection out of a command before it finds the name, so `2>/dev/null log
+    show` runs log. Read as the name, a target holding a slash was a script run by its path (`direct`)
+    that check-wrapped-commands.sh refused beside git, gh or rtk, and `>/tmp/out git push` was a
+    command named >/tmp/out, a push no gate saw. The target, glued or the next word, is read as one
+    word by split(), which reads a value holding quotes and substitutions to its end, so `2>"a b"` and
+    `>$(mktemp -d)/x` are each one target, read exactly as an assignment's value is."""
+    while True:
+        s = s.lstrip()
+        m = LEADING_REDIRECT.match(s)
+        if not m:
+            return s
+        _, s = split("_=" + s[m.end():].lstrip(), 1)
+
+
+def past_head(s):
+    """(the leading NAME=value assignments, the text after them) for s, past the redirections that
+    may stand before, between and after them (`2>/dev/null A=1 gh`, `A=1 2>/dev/null gh`), as the
+    shell reads both before the command's name (claude-config#2235)."""
+    assigns = []
+    while True:
+        more, s = split(past_redirects(s))
+        if not more:
+            return assigns, s
+        assigns.extend(more)
 
 
 # The words that only run the command after them, each with the short options that take a value and
@@ -943,7 +980,7 @@ def past_runners(rest, passed=None):
                 continue
         if passed is not None:
             passed.append((name, s))
-        more, s = split(s)
+        more, s = past_head(s)
         assigns.extend(more)
         rest = s
     return rest, assigns
@@ -1069,8 +1106,64 @@ def rejoin(words):
         return ""
     first = words[0].lstrip("({")
     words = ([first] if first else []) + list(words[1:])
-    return " ".join(w[:m.end()] + shlex.quote(w[m.end():]) if m else shlex.quote(w)
-                    for w, m in ((w, ASSIGNMENT.match(w)) for w in words))
+    pieces = [w[:m.end()] + shlex.quote(w[m.end():]) if m else shlex.quote(w)
+              for w, m in ((w, ASSIGNMENT.match(w)) for w in words)]
+    # A redirection in front of the command's name (claude-config#2235) is written as one, its
+    # operator bare, so command_rest passes over it: quoted, `2>/dev/null gh issue create` read as a
+    # command named 2>/dev/null and no gate built on these words saw the create. A word is written
+    # bare only while it is the word read as the command's name, so the words after the name, and a
+    # `>` that is a runner's option value (`sudo -p '>' gh`), read exactly as they always did.
+    starts, at = [], 0
+    for p in pieces:
+        starts.append(at)
+        at += len(p) + 1
+    for _ in words:
+        text = " ".join(pieces)
+        rest = command_rest(text)[0]
+        k = starts.index(len(text) - len(rest)) if rest and len(text) - len(rest) in starts else None
+        bare = _redirect_bare(words[k]) if k is not None else None
+        if bare is None or bare == pieces[k]:
+            return text
+        grew = len(bare) - len(pieces[k])
+        pieces[k] = bare
+        starts[k + 1:] = [s + grew for s in starts[k + 1:]]
+    return " ".join(pieces)
+
+
+def _redirect_bare(word):
+    """word written as the redirection it is, its operator bare and its target quoted (a word as
+    shlex.split leaves `2>/dev/null`, or the operator alone, as shell_tokens gives `2>`), or None when
+    it is no redirection (claude-config#2235)."""
+    m = LEADING_REDIRECT.match(word)
+    if not m:
+        return None
+    return word[:m.end()] + (shlex.quote(word[m.end():]) if m.end() < len(word) else "")
+
+
+def shell_tokens(text):
+    """text's words and operators as shlex's punctuation lexer cuts them, quotes removed, except that
+    a descriptor number written against its redirection stays one token with it: `2>/dev/null` is
+    `2>` and `/dev/null`, where `2 >/dev/null` is `2`, `>` and `/dev/null` (claude-config#2235).
+
+    The lexer cuts both into the same three tokens, so a reader of them could not tell `2>/dev/null gh
+    issue create`, a create, from `2 >/dev/null gh`, a command named 2. Whether the number ended at
+    the operator or at a space is what the lexer holds back after it: the operator it read and pushed
+    back, or nothing. A lexer keeping no such record reads every number before an operator as its
+    descriptor, the reading that sees the command after it. Raises ValueError as shlex does."""
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    out, glue = [], False
+    while True:
+        tok = lexer.get_token()
+        if tok is None:
+            return out
+        if glue and tok[:1] in ("<", ">"):
+            out[-1] += tok
+        else:
+            out.append(tok)
+        held = getattr(lexer, "_pushback_chars", None)
+        glue = tok.isdigit() and (held is None or any(c in "<>" for c in held))
 
 
 def wrapped_words(words):
