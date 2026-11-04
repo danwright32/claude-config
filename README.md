@@ -2778,7 +2778,9 @@ that path is positively another repository: one it cannot read is refused too.
 CI's environment step is the list the container is built from, and
 `tests/test-ci-environment-tools.sh` fails when claude-sync or any shell file in the repository
 invokes an interpreter or tool from its checked set (python3, perl, node, jq, rsync, pgrep and a few
-more) that the step does not name (#624).
+more) that the step does not name (#624). A tool named inside the quoted text of a message, such as
+`check "(python missing)"` or `echo "FAIL: ..."`, is not read as a call, while a `$( )` inside that
+message and any later argument still are (#2129).
 
 `tests/test-stat-order.sh` fails when claude-sync or any shell, TypeScript or JavaScript file in the
 repository asks BSD stat's `-f` before GNU's `-c`. On the Linux runner `stat -f` means "file system
@@ -3075,8 +3077,27 @@ app and photo libraries, or a folder iCloud keeps only in the cloud, whose listi
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
 Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
 transcripts, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
-`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything. Each
-category and the walk are time bounded by killing their process group (`DISK_CLEAN_CATEGORY_SECONDS`,
+`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything.
+
+On top of its own rule, every kind but the Trash keeps one floor, `dcs_floor` in `scan-lib.sh` with
+`DCS_UNUSED_DAYS=30` (Dan's rule, claude-config#2134): an item is offered only when nothing at or
+beneath it was changed (modification time) or opened (access time) in the last 30 days, and the
+floor can only take an item out of the offer, never add one. Opened is read from access times
+because Spotlight's last used date only repeats the change date. That leaves a known gap: running a
+program moves its access time on every run, but a plain read of a data file moves it only on the
+first read after each change, so a data file read again and again without changing can look
+unopened. The review page therefore claims only "changed or run". Folders' access times are never
+read (the scan's own listing moves them), nor those of files the scan itself reads (a worktree's
+`.git`, `.gitignore` and `.gitattributes`, where the floor runs before git does, and the Xcode
+sweep's `info.plist`), whose change times still count. A part iCloud keeps only in the cloud, a part
+find cannot read, or find failing makes the item unmeasured. Longer rules keep theirs (forgotten
+tools 180 days, transcripts 90). Docker's targets are not files: images are unmeasured, since Docker
+records no time an image was last used; the build cache is unmeasured, since disk-clean removes it
+whole and does not read its last use; a stopped container is judged by Docker's own created, started
+and finished times, and one that cannot be read is unmeasured. The Trash is exempt, because
+everything in it was put there to go.
+
+Each category and the walk are time bounded by killing their process group (`DISK_CLEAN_CATEGORY_SECONDS`,
 default 600; `DISK_CLEAN_WALK_SECONDS`, default 900), and one that runs out is recorded as unmeasured.
 Sizes are du's allocated blocks, classified by du's exit code and stderr as measured, partial or
 permission denied, never 0 for unread. The result is `~/.claude/state/disk-clean/last-scan.json`,
@@ -3550,6 +3571,9 @@ before saving, auto session name, the collision guard, the design round guard, h
 watcher and picker manners build every message from a caught error with its `errorText`, so a
 member missing from an older mod-kit or session registry reaches the screen as that sentence, never
 as the raw `TypeError`.
+Every mod that waits on Dan or on a long job takes mod-kit's reload hold around that wait with one
+helper, mod-kit's `hooks/held.ts`, kept as a byte for byte copy at `hooks/mod-kit/held.ts` in the
+mod, so a prompt a mod sends or an answer Dan gives is not lost when the mods reload mid wait.
 `tools/check-mod-shared-parts.sh` holds each copy to mod-kit's and fails a mod that reads a
 `TypeError` by hand. Overnight every call is still refused while the mods are out of step (none can
 be checked for a merge or deploy), but at the worker's next Stop the driver lets it rest a minute,
@@ -3610,7 +3634,10 @@ and the `verdict` of the per language judge of inline code (writes files, runs a
 be read), moved here from scope-modes in #712; given `cwd` and `home`, each command also carries
 `folder`, the folder it runs in, a cd or pushd before it followed by the write reader's own reading
 of one and null where that cannot be followed (a variable the command did not set, `cd -`, a
-`popd`), the folder is it live asks GitHub about a merge in, #2000), of which files a command
+`popd`), the folder is it live asks GitHub about a merge in, #2000; and, for each word holding a
+command substitution, `derived` (#2141): what its substitutions run and, where each is a plain `cat`
+of a heredoc or a here string, the text it puts in the word, kept apart from the word as typed, or
+else `unresolved` with why, never empty and never safe), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a

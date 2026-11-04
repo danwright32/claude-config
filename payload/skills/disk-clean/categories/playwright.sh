@@ -56,6 +56,7 @@ pw_rules() { # <target> <needs>
   by="$(awk -F '\t' -v n="$name" '$1 == n { print $2; exit }' "$2")"
   if [ -n "$by" ]; then V="not offerable: needed by $by"; return; fi
   V=offerable
+  dcs_floor "$t"
 }
 
 do_scan() {

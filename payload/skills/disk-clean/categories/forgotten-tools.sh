@@ -79,6 +79,7 @@ tool_rules() { # <rel> <command> <markers>
   recently_used "$folder" && return
   V=offerable
   D="nothing in it changed in $DCS_TOOL_DAYS days, and no project or shell file mentions it"
+  dcs_floor "$folder"
 }
 
 # Matches version <v> against a dependent's text <c>: exact, or <c> as a prefix ending at a dot.
@@ -117,6 +118,7 @@ node_rules() { # <version folder>
   recently_used "$d" && return
   V=offerable
   D="no project's .nvmrc nor nvm's default names it, and nothing in it changed in $DCS_TOOL_DAYS days"
+  dcs_floor "$d"
 }
 py_rules() { # <version folder>
   local d="${1%/}" v f c home
@@ -145,6 +147,7 @@ py_rules() { # <version folder>
   recently_used "$d" && return
   V=offerable
   D="no project, environment nor pyenv's global version needs it, and nothing in it changed in $DCS_TOOL_DAYS days"
+  dcs_floor "$d"
 }
 
 emit() { # <path>   V and D set

@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { appNameOf, classify, judge, refusalText, type Refusal } from './keys.ts'
 import { publishInstead } from './mod-kit/deliver.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 
 // Keystroke guard (claude-config#608). A Go ahead holds for its app until ten minutes pass with
@@ -70,7 +71,18 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: 
   const doing = typing ? `type into ${app}` : `bring ${app} to the front`
   let answer = ''
   try {
-    answer = await $.ui.ask(`I'm about to ${doing}. Ready?`, { options: ['Go ahead', 'Not now'], header: 'Taking over' })
+    // #2132: the question waits on Dan, and mod-kit's reload of keystroke-guard in that time would
+    // drop it, so the reload is held back until he answers, for at most an hour.
+    const held = {
+      mod: 'keystroke-guard',
+      id: 'ready',
+      what: "Dan's answer to the Ready question",
+      ms: HOLD_MAX_MS,
+      hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
+      release: (input: { mod: string; id: string }) => $.modkit.release(input),
+      log: (line: string) => $.ui.log(line, { to: 'debug' }),
+    }
+    answer = await whileHeld(held, () => $.ui.ask(`I'm about to ${doing}. Ready?`, { options: ['Go ahead', 'Not now'], header: 'Taking over' }))
   } catch {
     return { reason: `The question about ${app} was dismissed.` }
   }
