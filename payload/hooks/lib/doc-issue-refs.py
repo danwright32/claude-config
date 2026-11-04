@@ -108,7 +108,14 @@ ISSUE_REF = re.compile(
 FENCE = re.compile(r"^\s*(```|~~~)")
 LIST_ITEM = re.compile(r"^\s*([-*+]|\d+[.)])\s+|^\s*\|")
 INLINE_CODE = re.compile(r"`[^`\n]*`")
-SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z*`#(\"'\[\x00])|\s*\|\s*")
+# The table cell half reads whitespace before its `|` only from where a whitespace run starts
+# (claude-config#2220). Written as a bare `\s*\|\s*` it was tried at EVERY position of a run and
+# read to the run's end from each, so a run of n spaces cost n squared steps; blanked inline code is
+# such a run, and a settled design page's one long line holds a script template literal that blanks
+# to two million of them, which took the gate past its 60 s limit on 2026-11-04. The matches are the same: a
+# match inside a run can only begin there when one at the run's start would have matched first, and
+# a `|` right after the previous match (as in "| |") still starts one with no whitespace before it.
+SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z*`#(\"'\[\x00])|(?:(?<!\s)\s+)?\|\s*")
 
 
 def paragraphs(lines):
