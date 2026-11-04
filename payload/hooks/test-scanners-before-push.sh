@@ -63,6 +63,10 @@ chmod +x "$TMPROOT/ghbin/gh"
 printf '{"repos":[{"owner":"Globex-Corp","name":"halcyon"}]}\n' > "$TMPROOT/wn-list.json"
 export WN_FAKE_LIST="$TMPROOT/wn-list.json"
 export PATH="$TMPROOT/ghbin:$PATH"
+# The work MacBook's project list the message check also reads (claude-config#2184), one invented
+# project on it, since the hooks this suite copies elsewhere have no CLAUDE.md two folders above.
+printf '## Projects\n\nOn Dans-MacBook-Pro:\n- `~/Apps/Quillfeather`\n' > "$TMPROOT/wn-projects.md"
+export WORK_NAMES_PROJECT_LIST="$TMPROOT/wn-projects.md"
 
 # A repository shaped like this one: the marker the hook keys on, plus whatever scanners the test
 # wants. Everything happens in a throwaway git repo, never against the real one (L2).

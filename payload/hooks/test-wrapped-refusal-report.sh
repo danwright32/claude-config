@@ -88,6 +88,50 @@ out="$(python3 "$REPORT" --ledger "$TMPROOT/isdir.tsv" 2>&1)"; rc=$?
 [ "$rc" = 1 ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: an unreadable record exits $rc: $out"; }
 want "could not read" "and says so"
 
+# The fail closed suite's own refusals (claude-config#2157). Until #2155, a direct run of
+# test-gates-fail-closed.sh wrote "eval, reader-lib-missing" refusals into the real record: one per
+# run while the gate loaded one library (before #1963, merged 1793406500), two in the same second or
+# a second apart after it. Those are skipped, only in that shape and only before #2155 merged
+# (1793743801); every other row counts, so a real refusal is never lost to the rule. Times are
+# written out of order, as nothing promises the record is sorted.
+L3="$TMPROOT/suite.tsv"
+: > "$L3"
+srow() { printf '%s\tmac\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$L3"; }
+srow 1793500000 eval reader-lib-missing refused          # a pair a second apart: skipped
+srow 1793500100 eval reader-lib-missing refused          # a pair in one second: skipped
+srow 1793500100 eval reader-lib-missing refused
+srow 1793350000 eval reader-lib-missing refused          # alone, before #1963: skipped
+srow 1793500001 eval reader-lib-missing refused          # the first pair's second half, written late
+srow 1793600000 eval reader-lib-missing refused          # alone, after #1963: counts
+srow 1793500200 eval reader-lib-missing refused          # three in a burst: counts
+srow 1793500200 eval reader-lib-missing refused
+srow 1793500201 eval reader-lib-missing refused
+srow 1793750000 eval reader-lib-missing refused          # a pair after #2155: counts
+srow 1793750001 eval reader-lib-missing refused
+srow 1793500300 eval reader-lib-missing overridden       # a pair overridden: counts
+srow 1793500300 eval reader-lib-missing overridden
+srow 1793500400 bash reader-lib-missing refused          # a pair under another wrapper: counts
+srow 1793500400 bash reader-lib-missing refused
+srow 1793500500 eval reader-lib-missing refused          # two seconds apart: counts
+srow 1793500502 eval reader-lib-missing refused
+srow 1793500600 eval reader-lib-missing refused          # beside another shape: both count
+srow 1793500600 "bash -c" variable refused
+printf 'eval\treader-lib-missing\n' >> "$L3"             # unreadable: said, as ever
+out="$(python3 "$REPORT" --ledger "$L3" --now 1793800000 --days 30 2>&1)"; rc=$?
+[ "$rc" = 0 ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL: #2157 exit $rc: $out"; }
+want "14 refusals: 12 refused, 2 overridden" "#2157 only the suite's own shape is left out of the totals"
+want "11  eval, reader-lib-missing: refused 9, overridden 2" "#2157 every eval, reader-lib-missing row outside that shape counts"
+want "2  bash, reader-lib-missing: refused 2, overridden 0" "#2157 another wrapper with that reason counts"
+want "1  bash -c, variable: refused 1, overridden 0" "#2157 a row beside the shape counts"
+want "5 lines are the fail closed suite's own test refusals and are not counted" "#2157 the report says how many it skipped"
+want "before 2026-11-03 17:10 ET (#2155" "#2157 and states the cutoff it skipped them by"
+want "claude-config#2157" "#2157 and names where the rule is recorded"
+want "1 lines could not be read and are not counted" "#2157 an unreadable line is still said"
+# A window holding none of them says nothing about them.
+out="$(python3 "$REPORT" --ledger "$L3" --now 1793800000 --days 1 2>&1)"
+want "2 refusals: 2 refused, 0 overridden" "#2157 a window after the cutoff counts its pair"
+lacks "test refusals" "#2157 and names no skipped line it does not hold"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
