@@ -1038,13 +1038,37 @@ def _path_words(words):
     return [w for w in out if w]
 
 
+_REDIRECT_OPERATOR = re.compile(r"^[0-9&]*[<>][<>&|]*$")
+
+
+def _git_written_words(words):
+    """The words of one git command that name a file the command's output lands in, which the skip
+    reading never judges (the lessons review of #2170): every redirect target, standing alone after
+    its operator (`> .git/config`, `1> x`) or glued to it (`log>.git/config`), and the file
+    --output names (git diff, log, show and format-patch write their output there)."""
+    out = []
+    for i, w in enumerate(words):
+        if _REDIRECT_OPERATOR.match(w):
+            if i + 1 < len(words):
+                out.append(words[i + 1])
+        elif "<" in w or ">" in w:
+            out.append(re.split(r"[<>&|]+", w)[-1])
+        if w == "--output" and i + 1 < len(words):
+            out.append(words[i + 1])
+        elif w.startswith("--output="):
+            out.append(w.split("=", 1)[1])
+    return [w for w in out if w]
+
+
 def config_commands(payload):
     """The refusal for a Bash call (a hook payload) whose commands, other than git's own, name a git
     config file, or None (claude-config#2160). What a shell command does to a file it names (a
     redirect, cp, tee, sed -i, a script) cannot be read before it runs, so naming one is refused
     outright, a read included; git config's own read forms read it, and git's commands are judged by
-    the skip reading instead. The files are the shapes above and every file git reads config from in
-    the folders the commands run in, include targets among them."""
+    the skip reading instead, apart from the files their output is sent into, a redirect's target or
+    an --output, which are judged here like any other command's. The files are the shapes above and
+    every file git reads config from in the folders the commands run in, include targets among
+    them."""
     ti = payload.get("tool_input")
     if not isinstance(ti, dict) or not isinstance(ti.get("command"), str):
         raise ValueError("the Bash call carries no command to read")
@@ -1056,23 +1080,34 @@ def config_commands(payload):
     named = []
     for d, text, _wrap, rest, _assigns, _field, _depth in records:
         words = sw.command_words(rest)
-        if not words or sw.git_read(words) is not None:
+        if not words:
             continue
-        named.append((d if isinstance(d, str) and d else cwd, text, words))
+        is_git = sw.git_read(words) is not None
+        if is_git:
+            # git's own reading of its arguments is the skip reading's; only what the shell or
+            # --output writes its output into is judged here (the lessons review of #2170).
+            targets = _git_written_words(words)
+            if not targets:
+                continue
+        else:
+            targets = _path_words(words)
+        named.append((d if isinstance(d, str) and d else cwd, text, words, targets, is_git))
     if not named:
         return None
-    files, unlisted = _config_files(list(dict.fromkeys([cwd] + [d for d, _t, _w in named])))
-    for d, text, words in named:
+    files, unlisted = _config_files(list(dict.fromkeys([cwd] + [n[0] for n in named])))
+    for d, text, words, targets, is_git in named:
         if unlisted and len(words) > 1:
             return "%s: %s" % (_unlisted_refusal(unlisted), text.strip())
-        for w in _path_words(words):
+        for w in targets:
             p = _real(w, d)
             if _names_git_config(p) or p in files:
-                return ("a command that is not git names a git config file, which the gate cannot tell it "
-                        "does not write, and a write can change where git reads the hooks from "
+                return ("%s, which the gate cannot tell it does not write, and a write can change where "
+                        "git reads the hooks from "
                         "(claude-config#2160): %s\nRead config with git config's own read forms (--get, "
                         "--list) instead, and never write a git config file.\n%s"
-                        % (text.strip(), HOOKS_LOCATION_ADVICE))
+                        % ("a git command sends its output into a git config file" if is_git
+                           else "a command that is not git names a git config file",
+                           text.strip(), HOOKS_LOCATION_ADVICE))
     return None
 
 

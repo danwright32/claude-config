@@ -530,6 +530,20 @@ sh_allowed "an agent's write of a config in a folder that only ends in git" "$ER
 sh_allowed "an agent's write of an ordinary file" "$ER" 'printf x >> notes.md'
 sh_allowed "an agent's write of a file no include names" "$ER" "printf x >> $WORK/inc/other.inc"
 sh_allowed "an agent's git config read" "$ER" 'git config --get include.path'
+# The lessons review of #2170 at 348213e: the reader skipped every command git_read knows as git, so
+# git's own output sent into a git config file by the shell passed unjudged. A git command's redirect
+# targets, and the file git diff and its kin write with --output, are judged like any other command's.
+sh_refused "git output redirected into .git/config" "$ER" 'git show HEAD:x > .git/config'
+sh_refused "git output appended to the global config" "$ER" 'git cat-file -p X >> ~/.gitconfig'
+sh_refused "git output piped into tee of .git/config" "$ER" 'git log | tee .git/config'
+sh_refused "git output redirect glued to .git/config" "$ER" 'git log>.git/config'
+sh_refused "git output with a numbered redirect into .git/config" "$ER" 'git show HEAD:x 1>.git/config'
+sh_refused "git output redirected into .git/config after a cd" "$WORK" "cd $ER && git log > .git/config"
+sh_refused "git diff --output= into .git/config" "$ER" 'git diff --output=.git/config'
+sh_refused "git diff --output with the next word naming .git/config" "$ER" 'git diff --output .git/config'
+sh_allowed "an agent's git output redirected to an ordinary file" "$ER" 'git log > notes.md'
+sh_allowed "an agent's git output with stderr joined to stdout" "$ER" 'git log 2>&1 > notes.md'
+sh_allowed "an agent's git diff --output to an ordinary file" "$ER" 'git diff --output=notes.md'
 sh_allowed "an agent's message naming the path" "$ER" 'echo "never edit .git/config by hand"'
 sh_allowed "the main session's write of .git/config" "$ER" 'printf x >> .git/config' ""
 
