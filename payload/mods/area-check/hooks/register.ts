@@ -7,6 +7,7 @@ import type { ModKitCommand, ModKitGh } from '../.claude-plugin/types/mod-kit/in
 import {
   LOG_READ_BYTES,
   bodyUnreadableRefusal,
+  bodyUnresolvedRefusal,
   inRepo,
   keptOf,
   logUnreadableRefusal,
@@ -717,18 +718,33 @@ const prView = async ($: EngineInterface, d: Deadline, selector: string, repo: s
   }
 }
 
+// The text a --body gives. A word holding a command substitution keeps only its typed form in the
+// words gh reads (`$(cat <<'EOF'\n)`), so its text is the one mod-kit's command reader derives for
+// that word (#2141), with the flag the word also spells taken off; a word the reader marks
+// unresolved is unknown, never a description without lines (#2166). The word is found as the last
+// one ending in the flag's value, either after a flag word or a flag word itself (`--body=`, `-b`).
+const bodyText = (c: ModKitCommand, value: string): { body: string } | { unresolved: string } => {
+  const typed = value.includes('$(') || value.includes('`')
+  for (let i = c.words.length - 1; i > 0; i--) {
+    const w = c.words[i] as string
+    if (!w.endsWith(value)) continue
+    const own = w !== value
+    if (own ? !w.startsWith('-') : !(c.words[i - 1] as string).startsWith('-')) continue
+    const d = c.derived?.[i] ?? null
+    if (d === null) return { body: value }
+    if ('unresolved' in d) return { unresolved: d.unresolved }
+    const flag = w.slice(0, w.length - value.length)
+    return d.text.startsWith(flag) ? { body: d.text.slice(flag.length) } : { unresolved: 'its flag could not be told from its text' }
+  }
+  return typed ? { unresolved: 'the command reader could not place the word it came from' } : { body: value }
+}
+
 // The description a gh pr create or edit gives, or why it cannot be read.
-const bodyOf = async ($: EngineInterface, call: PrCall, command: string, folder: string, home: string): Promise<{ body: string } | { file: string; why: string }> => {
+const bodyOf = async ($: EngineInterface, call: PrCall, folder: string, home: string): Promise<{ body: string } | { file: string; why: string } | { unresolved: string }> => {
   const text = flagOf(call.g, BODY_TEXT)
   const file = flagOf(call.g, BODY_FILE)
   const last = [...call.g.flags].reverse().find(f => BODY_TEXT.includes(f.name) || BODY_FILE.includes(f.name))
-  if (last === text && text) {
-    const value = text.value === true ? '' : text.value
-    // mod-kit's reader drops the text of a substitution from the word (`--body "$(cat <<'EOF' ...)"`
-    // reads as `$(cat <<'EOF'\n)`), so such a description is looked for in the whole command, the
-    // one place its text is still whole. A line found elsewhere in the command (its title) passes too.
-    return { body: value.includes('$(') || value.includes('`') ? command : value }
-  }
+  if (last === text && text) return text.value === true ? { body: '' } : bodyText(call.c, text.value)
   const name = file?.value === true || file === undefined ? '' : file.value
   if (name === '-') {
     const fed = (call.c.heredocs ?? []).filter(h => (h.fd === undefined || h.fd === 0) && !h.replaced)
@@ -744,7 +760,7 @@ const bodyOf = async ($: EngineInterface, call: PrCall, command: string, folder:
   }
 }
 
-const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, command: string, log: () => Promise<LogRead>): Promise<PrVerdict> => {
+const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: () => Promise<LogRead>): Promise<PrVerdict> => {
   const { g } = call
   const hasBody = g.flags.some(f => BODY_TEXT.includes(f.name) || BODY_FILE.includes(f.name))
   if (g.act === 'edit' && !hasBody) return null
@@ -794,7 +810,8 @@ const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, command: s
     return missing.length ? { deny: missingRefusal({ ...r, files: missing, where: 'github', ...(selector ? { selector } : {}) }) } : null
   }
   if (!hasBody) return { deny: noBodyRefusal({ ...r, files }) }
-  const body = await bodyOf($, call, command, call.folder, await homeOf($))
+  const body = await bodyOf($, call, call.folder, await homeOf($))
+  if ('unresolved' in body) return { deny: bodyUnresolvedRefusal({ ...r, files }, body.unresolved) }
   if ('why' in body) return { deny: bodyUnreadableRefusal(verb, body.file, body.why) }
   const missing = missingFrom(files, body.body)
   return missing.length ? { deny: missingRefusal({ ...r, files: missing, where: 'command' }) } : null
@@ -861,7 +878,7 @@ export const register: Register = on => {
         return read
       }
       for (const call of await prCallsIn($, command, cwd, await homeOf($))) {
-        const v = await checkPr($, d, call, command, log)
+        const v = await checkPr($, d, call, log)
         if (v && 'deny' in v) return { deny: v.deny }
         if (v) $.ui.log(v.dim)
       }
