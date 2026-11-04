@@ -188,7 +188,7 @@ type Asked = { questions: { question: string; header: string; options: { label: 
 // any device, never answers, as the real one does (#1765), and resolves `readAttempted`.
 // `stdinLinks`: links to /dev/stdin, read as `fifos` are, whose stat with links followed THROWS
 // EBADF, as Claude Code 2.1.312's does (#1814, measured headless).
-const world = (engine: Engine, on: On, init: { files?: Record<string, string>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
+const world = (engine: Engine, on: On, init: { files?: Record<string, string>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; throwsRun?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
   let gateReads = 0
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
@@ -288,6 +288,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     if (init.auto && next.origin.plugin !== 'engine')
       return { deny: `The server-side auto mode classifier gave no verdict for ${String(tool)}: the request that produced this action did not ask for one.` } as never
     ran.push({ tool: String(tool), input })
+    if (init.throwsRun) throw new Error('the tool beneath broke')
     if (ctl.failWrites) return { isError: true, result: 'String to replace not found in file.', text: 'String to replace not found in file.' } as never
     return { result: 'written', text: 'written' } as never
   })
@@ -1022,6 +1023,20 @@ test('a save to a temporary folder the disk cannot read is refused, never let th
   const r = await call($, { tool: 'Write', file_path: '/tmp/locked/CLAUDE.md', content: '- rule\n' })
   expect(w.ran).toEqual([])
   expect(refusalOf(r)).toContain('could not check whether this writes lasting memory (EACCES: /tmp/locked)')
+})
+
+// #2039: a call the guard judged and passed on has already run beneath it, so when the tool fails
+// there, its own failure reaches Claude. A refusal from the guard saying the check failed, "Try it
+// again", would be untrue and could run the call twice.
+test("a call that fails beneath the guard after it was passed on reaches Claude as the tool's own failure, never a refusal (#2039)", withKit, async ($, on) => {
+  const w = world($, on, { throwsRun: true })
+  const settled = await $.tool.call({ tool: 'Bash', command: 'echo boom', tool_use_id: 'r1' } as never).then(
+    r => ({ answered: r as Result }),
+    (err: unknown) => ({ rejected: String(err) }),
+  )
+  expect(w.ran).toEqual([{ tool: 'Bash', input: { command: 'echo boom' } }])
+  expect(settled).not.toHaveProperty('answered')
+  expect((settled as { rejected: string }).rejected).toContain('no implementation for tool.call')
 })
 
 test('a subagent write the mod cannot judge is refused too, never let through', withKit, async ($, on) => {

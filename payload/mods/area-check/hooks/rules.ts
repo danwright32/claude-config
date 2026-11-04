@@ -488,6 +488,9 @@ export type Held = {
   growth: (FileGrowth & { crosses: boolean }) | { unread: string }
   /** A Bash command whose file cannot be named (#2142): `rel` is its word, `key` the command's claim. */
   unread?: { why: string; key: string }
+  // The branch and merge base the edit was held on (#1510), kept in its version 3 decision; absent in entries held before them.
+  branch?: string | null
+  mergeBase?: string | null
 }
 
 /** The held call as a sentence names it: a Bash command writing the file, or the edit tool to it. */

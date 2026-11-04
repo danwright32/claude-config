@@ -27,7 +27,9 @@
 # or a commit at all, since letting one through unread is the route this closes (L42, L490).
 
 set -uo pipefail
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 payload="$(cat 2>/dev/null || true)"
 
 # Most Monitors are a tail or a poll naming none of these, and leave before anything is loaded.

@@ -40,7 +40,9 @@ set -uo pipefail
 # that produced it; they moved out when the second gate needed them, because two
 # copies would drift silently, each passing its own tests while disagreeing about
 # which pull request it is looking at.
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 payload=$(cat)
 
 # It runs before EVERY Bash command (claude-config#1181): it used to be registered behind an `if` of

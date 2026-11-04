@@ -25,9 +25,11 @@ product named in prose): without the organisation it locates nothing, it is the 
 of lessons are written in, and `name#N` is what lesson-fanout.sh parses to skip the repository a
 lesson came from. The same login without its hyphen is a different GitHub account, and the
 company's public web domain, so it is not one either. These are decisions recorded on #1568's pull
-request, not omissions. The one exception is public pull request and issue text: the publish gate
-(work_names_publish_gate.py, claude-config#2105) gives this Matcher the repository names as well,
-for that text only.
+request, not omissions, and they still hold for files. The exceptions are text that is published
+without being a file: the publish gate (work_names_publish_gate.py, claude-config#2105) checks public
+pull request and issue text against the work repository names as well, and --work-repos does the
+same for commit messages (claude-config#2111, below). Both read the list through work_repo_names
+here, the one reader.
 
 NOTHING PRINTED REPEATS A NAME FOUND. A hit is reported as path:line and which source matched. CI
 logs of a public repository are public, and a refusal message is read in transcripts.
@@ -41,16 +43,24 @@ label and the line, by the same rule and in the same words as a file's. scanners
 it about the messages of the commits a push adds, and check-work-names-merge.sh about a pull
 request's title, description and commit messages before it merges.
 
+WORK REPOSITORIES IN MESSAGES (claude-config#2111). A squash merge publishes every commit message in
+main, so a message naming a work repository is as public as one naming its organisation. With
+--work-repos the text scan also matches every owner and repository in the work repository list
+(read live through gh, never written to disk, refused when it cannot be read, is empty or is of the
+wrong shape) and in this Mac's dev update registry, in plain prose as well as owner/name#N. Both
+callers above pass it. The file scan never takes it (#1568).
+
 Usage:
   work-names.py [--root DIR] [--files0-from FILE|-] [PATH ...]
-  work-names.py --texts0-from FILE|-   labelled text, as above, in place of files
+  work-names.py --texts0-from FILE|- [--work-repos]   labelled text, as above, in place of files
   work-names.py --uncovered-owners     registry owners the built in hashes do not cover
 Exit: 0 clean; 1 at least one name found (each listed); 2 could not judge (a listed file could not
 be read, a text stream held a label with no text, the registry could not be read, or node is missing
-to read it).
+to read it; with --work-repos also the list unreadable or its time budget spent).
 
 Seams (tests): WORK_NAMES_EXTRA_HASHES, comma separated sha256 hex of more lower case logins.
 WORK_NAMES_REGISTRY_READER, the reader to ask (default: dev-update-registry.js beside this file).
+WORK_NAMES_REPOS_BUDGET_SECONDS, the whole --work-repos run's time for GitHub (default 30).
 """
 import hashlib
 import json
@@ -58,6 +68,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 BUILT_IN = {
     "91bb8dd6329de4f774a80b5431e2eaa984575662c24063fd0e6672a0c8d6fc2b",  # the work organisation
@@ -67,7 +78,15 @@ TOKEN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 # The one remedy, said the same for a file and for a message (claude-config#1995).
 REMEDY = ("Replace the organisation with an invented one in a fixture, or drop it from prose and "
           "provenance (write name#123, never owner/name#123).")
-HERE = os.path.dirname(os.path.abspath(__file__))
+# The remedy once messages are checked against the work repository list too (claude-config#2111),
+# where name#123 is itself a hit.
+REPO_REMEDY = ("Rewrite it without the work organisation or repository: say \"a work repository\", and "
+               "never write owner/name#123 or name#123 for one.")
+# The work repository list: the same one lib/lesson-fanout.sh reads (DIGEST_REPO there), read live
+# through gh and never written to disk (claude-config#2105, #2111).
+DIGEST_REPO = "dwright-pennie/repo-digest"
+DIGEST_LIST = "repos.json"
+HERE =os.path.dirname(os.path.abspath(__file__))
 
 
 def sha(s):
@@ -129,10 +148,122 @@ def die(msg):
     sys.exit(2)
 
 
+# ------------------------------------------------------------------ the work repository list
+# One reader, shared by the publish gate (work_names_publish_gate.py, #2105) and the message checks
+# (--work-repos below, #2111), so the two can never read the list by different rules.
+
+class CannotTell(Exception):
+    """Something the verdict needs could not be read; the message says what."""
+
+
+class GitHub:
+    """gh, run under one time budget for a whole run, through each signed in account in turn."""
+
+    def __init__(self, budget, who="this gate"):
+        self.budget = float(budget)
+        self.who = who
+        self.started = time.monotonic()
+        self._tokens = []
+
+    def left(self):
+        return self.budget - (time.monotonic() - self.started)
+
+    def run(self, argv, cwd=None, token=None, extra_env=None):
+        """argv is the whole gh command, gh first. -> (ok, stdout, stderr). token None runs gh as the command would, with the inherited account."""
+        left = self.left()
+        if left <= 1:
+            raise CannotTell("GitHub did not answer within %s's %d second budget" % (self.who, self.budget))
+        env = dict(os.environ)
+        env.update(extra_env or {})
+        if token is not None:
+            env["GH_TOKEN"] = token
+        try:
+            p = subprocess.run(argv, cwd=cwd if cwd and os.path.isdir(cwd) else None, env=env,
+                               capture_output=True, text=True, errors="replace", timeout=min(15, left))
+        except FileNotFoundError:
+            raise CannotTell("gh is not on PATH")
+        except subprocess.TimeoutExpired:
+            return False, "", "gh did not answer within %d seconds" % min(15, left)
+        return p.returncode == 0, p.stdout, p.stderr.strip()
+
+    def tokens(self):
+        """None (the inherited account) first, then each signed in account's token, active first; lazily."""
+        yield None
+        if not self._tokens:
+            ok, out, _ = self.run(["gh", "auth", "status", "--json", "hosts"])
+            accounts = []
+            try:
+                hosts = json.loads(out).get("hosts", {}).get("github.com", []) if ok else []
+                hosts = sorted(hosts, key=lambda h: 0 if h.get("active") else 1)
+                accounts = [h.get("login") for h in hosts if h.get("state") == "success" and h.get("login")]
+            except (ValueError, AttributeError):
+                accounts = []
+            for login in accounts:
+                ok, tok, _ = self.run(["gh", "auth", "token", "--hostname", "github.com", "-u", login])
+                if ok and tok.strip():
+                    self._tokens.append(tok.strip())
+            self._tokens.append("")  # marks the list as built, even when empty
+        for tok in self._tokens:
+            if tok:
+                yield tok
+
+
+def work_repo_names(github):
+    """-> (Matcher, work owners, odd names) from the work repository list and this Mac's dev update
+    registry, or raises CannotTell. Odd names are those that are not one plain token (a dot in them),
+    which the Matcher cannot hold and odd_hit finds instead."""
+    raw, last = None, ""
+    for tok in github.tokens():
+        ok, out, err = github.run(["gh", "api", "-H", "Accept: application/vnd.github.raw",
+                                   "repos/%s/contents/%s" % (DIGEST_REPO, DIGEST_LIST)], None, tok)
+        if ok:
+            raw = out
+            break
+        last = err or last
+    if raw is None:
+        raise CannotTell("the work repository list (%s in %s) could not be read with any signed in "
+                         "account (%s), so the text could not be checked" % (DIGEST_LIST, DIGEST_REPO, last[:200]))
+    try:
+        repos = json.loads(raw).get("repos")
+    except (ValueError, AttributeError):
+        repos = None
+    if not isinstance(repos, list) or not all(
+            isinstance(r, dict) and isinstance(r.get("owner"), str) and isinstance(r.get("name"), str)
+            and r["owner"].strip() and r["name"].strip() for r in repos):
+        raise CannotTell("the work repository list (%s in %s) is not a \"repos\" list of owner and name "
+                         "entries, so the text could not be checked" % (DIGEST_LIST, DIGEST_REPO))
+    if not repos:
+        raise CannotTell("the work repository list (%s in %s) lists no repositories, and an empty list "
+                         "is never read as clean" % (DIGEST_LIST, DIGEST_REPO))
+    pairs = [(r["owner"].strip().lower(), r["name"].strip().lower()) for r in repos]
+    state, where, why, reg = registry_entries(timeout=max(1, int(github.left())))
+    if state == "unreadable":
+        raise CannotTell("this Mac's dev update registry could not be read (%s), so its names could not "
+                         "be checked" % why)
+    for full in reg if state == "ok" else []:
+        owner, _, name = full.strip().lower().partition("/")
+        if owner:
+            pairs.append((owner, name))
+    owners = {o for o, _ in pairs}
+    every = owners | {n for _, n in pairs if n}
+    plain = {n for n in every if TOKEN.fullmatch(n)}
+    odd = sorted(every - plain)
+    return Matcher(BUILT_IN | extra_hashes(), set(), plain), owners, odd
+
+
+def odd_hit(text, odd):
+    """The first odd name (see work_repo_names) the lower case text holds as a whole word, or None."""
+    for n in odd:
+        if re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % re.escape(n), text):
+            return n
+    return None
+
+
 class Matcher:
     """names: further lower case names matched by the same rule, beside the owners. The tree scan and
-    the send scan never pass any; the publish gate passes the work repository names (claude-config#2105,
-    which departs from #1568 for public pull request and issue text only, see DESIGN.md)."""
+    the send scan never pass any; work_repo_names passes the work repository names, for the publish gate
+    (claude-config#2105) and --work-repos (#2111), which depart from #1568 for text that is published
+    without being a file, see DESIGN.md."""
 
     def __init__(self, hashes, owners, names=frozenset()):
         self.hashes = hashes
@@ -178,18 +309,19 @@ def scan_file(path, shown, matcher, hits):
     scan_text(data.decode("utf-8", errors="replace"), shown, matcher, hits)
 
 
-def scan_text(text, shown, matcher, hits):
-    """One file's or one message's text: a hit is `shown:line: source`, never the text itself."""
+def scan_text(text, shown, matcher, hits, odd=()):
+    """One file's or one message's text: a hit is `shown:line: source`, never the text itself. odd:
+    listed names that are not one plain token (work_repo_names), found by odd_hit line by line."""
     text = text.lower()
     tokens = set(TOKEN.findall(text))
-    if not any(matcher.kind(t) for t in tokens):
+    if not any(matcher.kind(t) for t in tokens) and not odd_hit(text, odd):
         return
     for no, line in enumerate(text.splitlines(), 1):
-        for t in TOKEN.findall(line):
-            k = matcher.kind(t)
-            if k:
-                hits.append("%s:%d: %s" % (shown, no, k))
-                break
+        k = next((matcher.kind(t) for t in TOKEN.findall(line) if matcher.kind(t)), None)
+        if not k and odd_hit(line, odd):
+            k = "a work repository or owner name"
+        if k:
+            hits.append("%s:%d: %s" % (shown, no, k))
 
 
 def main(argv):
@@ -197,6 +329,7 @@ def main(argv):
     files = []
     i = 0
     uncovered = False
+    repos = False
     texts = None
     while i < len(argv):
         a = argv[i]
@@ -214,7 +347,27 @@ def main(argv):
             i += 2; continue
         if a == "--uncovered-owners":
             uncovered = True; i += 1; continue
+        if a == "--work-repos":
+            repos = True; i += 1; continue
         files.append(a); i += 1
+
+    if repos:
+        if texts is None or uncovered:
+            die("--work-repos is for messages only, so it is used only with --texts0-from: the file scan "
+                "never reads the work repository list (claude-config#1568).")
+        if isinstance(texts, str):
+            die("the text stream could not be read: %s, so its messages could not be checked." % texts)
+        budget = os.environ.get("WORK_NAMES_REPOS_BUDGET_SECONDS") or 30
+        try:
+            matcher, owners, odd = work_repo_names(GitHub(budget, "the work name check"))
+        except (CannotTell, ValueError) as e:
+            die("%s. A message that cannot be checked is not a clean one." % e)
+        hits = []
+        for label, text in texts:
+            scan_text(text, label, matcher, hits, odd)
+        sentence = ("the work organisation names and %d work repository and owner names from the work "
+                    "repository list and this Mac's dev update registry" % (len(matcher.names) + len(odd)))
+        return report(hits, [], len(texts), "message", sentence, REPO_REMEDY)
 
     owners, sentence = read_registry()
     if uncovered:
@@ -264,7 +417,7 @@ def read_texts(raw):
     return list(zip(dec[0::2], dec[1::2]))
 
 
-def report(hits, unreadable, n, noun, sentence):
+def report(hits, unreadable, n, noun, sentence, remedy=REMEDY):
     for h in hits:
         print(h)
     summary = "work-names: checked %d %s%s for %s" % (n, noun, "" if n == 1 else "s", sentence)
@@ -274,7 +427,7 @@ def report(hits, unreadable, n, noun, sentence):
         return 2
     if hits:
         sys.stderr.write(summary + ". %d line%s name%s one. %s\n" % (
-            len(hits), "" if len(hits) == 1 else "s", "s" if len(hits) == 1 else "", REMEDY))
+            len(hits), "" if len(hits) == 1 else "s", "s" if len(hits) == 1 else "", remedy))
         return 1
     sys.stderr.write(summary + ": none found.\n")
     return 0

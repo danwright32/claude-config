@@ -26,6 +26,9 @@ export type AreaCheckHeld = {
   growth: { net: number; size: number | null; fixes: number; rank: number | null; crosses: boolean } | { unread: string }
   /** A Bash command whose file cannot be named before it runs (#2142): `rel` holds its word, `key` the command's claim. */
   unread?: { why: string; key: string }
+  /** The branch and merge base the edit was held on (#1510); absent in entries held before them. */
+  branch?: string | null
+  mergeBase?: string | null
 }[]
 
 declare module 'claude-code' {
