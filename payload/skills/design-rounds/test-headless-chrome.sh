@@ -141,8 +141,28 @@ check_eq "every disabled feature is folded into one switch with the copy switche
   "--disable-features=Translate,PaintHolding,Foo,MacAppCodeSignClone" "$(grep -e '^--disable-features=' "$FAKE_OUT.args" | tr '\n' ' ' | sed 's/ $//')"
 check_eq "and every other argument is passed as it came, in its order" \
   "--disable-field-trial-config $HL --remote-debugging-pipe --no-sandbox about:blank" \
-  "$(grep -v -e '^--disable-features=' "$FAKE_OUT.args" | tr '\n' ' ' | sed 's/ $//')"
+  "$(grep -v -e '^--disable-features=' -e '^--use-mock-keychain$' "$FAKE_OUT.args" | tr '\n' ' ' | sed 's/ $//')"
 check_eq "and no profile of its own is added, since the caller owns that" "" "$(grep -e '^--user-data-dir' "$FAKE_OUT.args")"
+
+# --- 3b. no Chrome started here ever reaches for this Mac's keychain ---
+# Chrome on a Mac keeps the key to its stored passwords and cookies in the login keychain, found
+# under HOME. tools/suite-home-writes.sh runs suites under a throwaway HOME, so on 2026-11-03 every
+# Chrome a design-rounds suite started found no keychain and macOS put a "Keychain Not Found" dialog
+# on Dan's screen for each. --use-mock-keychain gives Chrome an in-memory stand-in instead.
+check_eq "run in Chrome's place, Chrome is told to use a stand-in keychain, once" "1" "$(grep -c -x -e '--use-mock-keychain' "$FAKE_OUT.args")"
+HEADLESS_DOM_EXEC=1 HEADLESS_DOM_CHROME="$TMP/fake-chrome" "$HEADLESS_DOM" --use-mock-keychain "$HL" about:blank > /dev/null 2>&1
+check_eq "and given it already, as Playwright gives it, it is not passed twice" "1" "$(grep -c -x -e '--use-mock-keychain' "$FAKE_OUT.args")"
+cat > "$TMP/fake-dump-chrome" <<'FAKE'
+#!/bin/bash
+# A stand in Chrome for a page dump: records its arguments and prints a whole page.
+printf '%s\n' "$@" > "$FAKE_OUT.args"
+printf '<html><body>ok</body></html>\n'
+FAKE
+chmod +x "$TMP/fake-dump-chrome"
+rm -f "$FAKE_OUT.args"
+dump="$(HEADLESS_DOM_CHROME="$TMP/fake-dump-chrome" HEADLESS_DOM_DEADLINE=30 "$HEADLESS_DOM" "$HL" --dump-dom about:blank 2> "$TMP/dump.err")"; rc=$?
+check_eq "a page dump through the stand in comes back whole" "0:<html><body>ok</body></html>" "$rc:$dump"
+check_eq "and that Chrome too is told to use a stand-in keychain, once" "1" "$(grep -c -x -e '--use-mock-keychain' "$FAKE_OUT.args" 2>/dev/null)"
 HEADLESS_DOM_EXEC=1 HEADLESS_DOM_CHROME="$TMP/no-such-chrome" "$HEADLESS_DOM" "$HL" about:blank > /dev/null 2> "$TMP/missing.err"; rc=$?
 check_eq "a Chrome that is not there fails" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 check "and says which" "no-such-chrome" "$(cat "$TMP/missing.err")"

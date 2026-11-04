@@ -61,15 +61,22 @@ REAL="${HEADLESS_DOM_CHROME:?headless-dom.sh: set HEADLESS_DOM_CHROME to the Chr
 
 # Told not to copy itself, in ONE --disable-features carrying every feature the caller disabled
 # too: a second such switch replaces the first, so two would silently drop one caller's list.
+# And told to keep its stored passwords' key in an in-memory stand-in keychain, never this Mac's:
+# Chrome finds the login keychain under HOME, so a Chrome started by a suite running under a
+# throwaway HOME (tools/suite-home-writes.sh) found none, and macOS put a "Keychain Not Found"
+# dialog on screen for every one (2026-11-03). Playwright passes the same switch itself, so it is
+# added only when the caller has not.
 args=()
 features=""
+mock_keychain=--use-mock-keychain
 for a in "$@"; do
   case "$a" in
     --disable-features=*) [ -n "${a#--disable-features=}" ] && features="$features${a#--disable-features=}," ;;
+    --use-mock-keychain) mock_keychain=""; args+=("$a") ;;
     *) args+=("$a") ;;
   esac
 done
-args=("--disable-features=${features}MacAppCodeSignClone" ${args[@]+"${args[@]}"})
+args=("--disable-features=${features}MacAppCodeSignClone" ${mock_keychain:+"$mock_keychain"} ${args[@]+"${args[@]}"})
 
 if [ "${HEADLESS_DOM_EXEC:-}" = 1 ]; then
   [ -x "$REAL" ] || { echo "headless-dom.sh: no Chrome to run at $REAL (HEADLESS_DOM_CHROME)" >&2; exit 127; }
