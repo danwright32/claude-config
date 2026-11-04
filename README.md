@@ -3075,8 +3075,27 @@ app and photo libraries, or a folder iCloud keeps only in the cloud, whose listi
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
 Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
 transcripts, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
-`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything. Each
-category and the walk are time bounded by killing their process group (`DISK_CLEAN_CATEGORY_SECONDS`,
+`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything.
+
+On top of its own rule, every kind but the Trash keeps one floor, `dcs_floor` in `scan-lib.sh` with
+`DCS_UNUSED_DAYS=30` (Dan's rule, claude-config#2134): an item is offered only when nothing at or
+beneath it was changed (modification time) or opened (access time) in the last 30 days, and the
+floor can only take an item out of the offer, never add one. Opened is read from access times
+because Spotlight's last used date only repeats the change date. That leaves a known gap: running a
+program moves its access time on every run, but a plain read of a data file moves it only on the
+first read after each change, so a data file read again and again without changing can look
+unopened. The review page therefore claims only "changed or run". Folders' access times are never
+read (the scan's own listing moves them), nor those of files the scan itself reads (a worktree's
+`.git`, `.gitignore` and `.gitattributes`, where the floor runs before git does, and the Xcode
+sweep's `info.plist`), whose change times still count. A part iCloud keeps only in the cloud, a part
+find cannot read, or find failing makes the item unmeasured. Longer rules keep theirs (forgotten
+tools 180 days, transcripts 90). Docker's targets are not files: images are unmeasured, since Docker
+records no time an image was last used; the build cache is unmeasured, since disk-clean removes it
+whole and does not read its last use; a stopped container is judged by Docker's own created, started
+and finished times, and one that cannot be read is unmeasured. The Trash is exempt, because
+everything in it was put there to go.
+
+Each category and the walk are time bounded by killing their process group (`DISK_CLEAN_CATEGORY_SECONDS`,
 default 600; `DISK_CLEAN_WALK_SECONDS`, default 900), and one that runs out is recorded as unmeasured.
 Sizes are du's allocated blocks, classified by du's exit code and stderr as measured, partial or
 permission denied, never 0 for unread. The result is `~/.claude/state/disk-clean/last-scan.json`,
