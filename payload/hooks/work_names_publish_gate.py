@@ -20,7 +20,9 @@ update registry (lib/dev-update-registry.js, a file each Mac keeps for itself), 
 organisation hashes of lib/work-names.py. The match is that scanner's own rule (its Matcher): a
 whole hyphenated run inside a token, in any letter case. Repository names are matched here although
 #1568 left them out of the file scan on purpose; this departs from it for public text only (Dan,
-2026-11-02, after a repository name leaked), and the file scan and the send scan are unchanged.
+2026-11-02, after a repository name leaked), and the file scan and the send scan are unchanged. The
+list is read by work_repo_names in lib/work-names.py, the one reader the commit message checks
+(work-names.py --work-repos, claude-config#2111) use as well.
 
 CANNOT TELL IS REFUSED (L98, L345): the visibility unreadable under every account, the list
 unreadable, empty or of the wrong shape, the registry unreadable, a body file the command writes from
@@ -39,9 +41,7 @@ import importlib.util
 import json
 import os
 import re
-import subprocess
 import sys
-import time
 
 sys.dont_write_bytecode = True
 _HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
@@ -60,16 +60,11 @@ scan = _load("gh_issue_scan", os.path.join(_HERE, "gh_issue_scan.py"))
 field = _load("issue_field_gate", os.path.join(_HERE, "issue_field_gate.py"))
 wn = _load("work_names", os.path.join(_HERE, "lib", "work-names.py"))
 
-# The same list lib/lesson-fanout.sh reads (DIGEST_REPO there).
-DIGEST_REPO = "dwright-pennie/repo-digest"
-DIGEST_LIST = "repos.json"
-
 KINDS = frozenset(scan.BODY_FILE_COMMANDS | {("pr", "review")})
 API_ENDPOINT = re.compile(r"^/?repos/([^/\s]+)/([^/\s?#]+)/(?:issues|pulls|comments)(?:[/?#]|$)")
 PLACEHOLDER = re.compile(r"^(?:\{owner\}|\{repo\}|:owner|:repo)$")
 CRUDE_API = re.compile(r"\bgh\b[^\n]*\bapi\b[^\n]*repos/\S*/(?:issues|pulls|comments)")
 BUDGET = float(os.environ.get("WN_PUBLISH_BUDGET_SECONDS") or 35)
-STARTED = time.monotonic()
 
 HEAD = "WORK NAME IN PUBLIC TEXT"
 REMEDY = ("Scrub it: rewrite the text without the work organisation or repository (say \"a work "
@@ -77,56 +72,12 @@ REMEDY = ("Scrub it: rewrite the text without the work organisation or repositor
           "name work organisations or repositories (claude-config#2105).")
 
 
-class CannotTell(Exception):
-    """Something the verdict needs could not be read; the message says what."""
-
-
-def _left():
-    return BUDGET - (time.monotonic() - STARTED)
-
-
-def _gh(argv, cwd=None, token=None, extra_env=None):
-    """argv is the whole gh command, gh first. -> (ok, stdout, stderr). token None runs gh as the command would, with the inherited account."""
-    left = _left()
-    if left <= 1:
-        raise CannotTell("GitHub did not answer within this gate's %d second budget" % BUDGET)
-    env = dict(os.environ)
-    env.update(extra_env or {})
-    if token is not None:
-        env["GH_TOKEN"] = token
-    try:
-        p = subprocess.run(argv, cwd=cwd if cwd and os.path.isdir(cwd) else None, env=env,
-                           capture_output=True, text=True, errors="replace", timeout=min(15, left))
-    except FileNotFoundError:
-        raise CannotTell("gh is not on PATH")
-    except subprocess.TimeoutExpired:
-        return False, "", "gh did not answer within %d seconds" % min(15, left)
-    return p.returncode == 0, p.stdout, p.stderr.strip()
-
-
-_TOKENS = []
-
-
-def _tokens():
-    """None (the inherited account) first, then each signed in account's token, active first; lazily."""
-    yield None
-    if not _TOKENS:
-        ok, out, _ = _gh(["gh", "auth", "status", "--json", "hosts"])
-        accounts = []
-        try:
-            hosts = json.loads(out).get("hosts", {}).get("github.com", []) if ok else []
-            hosts = sorted(hosts, key=lambda h: 0 if h.get("active") else 1)
-            accounts = [h.get("login") for h in hosts if h.get("state") == "success" and h.get("login")]
-        except (ValueError, AttributeError):
-            accounts = []
-        for login in accounts:
-            ok, tok, _ = _gh(["gh", "auth", "token", "--hostname", "github.com", "-u", login])
-            if ok and tok.strip():
-                _TOKENS.append(tok.strip())
-        _TOKENS.append("")  # marks the list as built, even when empty
-    for tok in _TOKENS:
-        if tok:
-            yield tok
+# gh, the budget, the accounts and the work repository list are read by lib/work-names.py, the one
+# reader the commit message checks use too (claude-config#2111).
+CannotTell = wn.CannotTell
+GH = wn.GitHub(BUDGET)
+_gh = GH.run
+_tokens = GH.tokens
 
 
 _VIS = {}
@@ -160,45 +111,8 @@ _NAMES = []
 
 def names():
     """-> (Matcher, work owners, odd names), read once per run, or raises CannotTell."""
-    if _NAMES:
-        return _NAMES[0]
-    raw, last = None, ""
-    for tok in _tokens():
-        ok, out, err = _gh(["gh", "api", "-H", "Accept: application/vnd.github.raw",
-                            "repos/%s/contents/%s" % (DIGEST_REPO, DIGEST_LIST)], None, tok)
-        if ok:
-            raw = out
-            break
-        last = err or last
-    if raw is None:
-        raise CannotTell("the work repository list (%s in %s) could not be read with any signed in "
-                         "account (%s), so the text could not be checked" % (DIGEST_LIST, DIGEST_REPO, last[:200]))
-    try:
-        repos = json.loads(raw).get("repos")
-    except (ValueError, AttributeError):
-        repos = None
-    if not isinstance(repos, list) or not all(
-            isinstance(r, dict) and isinstance(r.get("owner"), str) and isinstance(r.get("name"), str)
-            and r["owner"].strip() and r["name"].strip() for r in repos):
-        raise CannotTell("the work repository list (%s in %s) is not a \"repos\" list of owner and name "
-                         "entries, so the text could not be checked" % (DIGEST_LIST, DIGEST_REPO))
-    if not repos:
-        raise CannotTell("the work repository list (%s in %s) lists no repositories, and an empty list "
-                         "is never read as clean" % (DIGEST_LIST, DIGEST_REPO))
-    pairs = [(r["owner"].strip().lower(), r["name"].strip().lower()) for r in repos]
-    state, where, why, reg = wn.registry_entries(timeout=max(1, int(_left())))
-    if state == "unreadable":
-        raise CannotTell("this Mac's dev update registry could not be read (%s), so its names could not "
-                         "be checked" % why)
-    for full in reg if state == "ok" else []:
-        owner, _, name = full.strip().lower().partition("/")
-        if owner:
-            pairs.append((owner, name))
-    owners = {o for o, _ in pairs}
-    every = owners | {n for _, n in pairs if n}
-    plain = {n for n in every if wn.TOKEN.fullmatch(n)}
-    odd = sorted(every - plain)
-    _NAMES.append((wn.Matcher(wn.BUILT_IN | wn.extra_hashes(), set(), plain), owners, odd))
+    if not _NAMES:
+        _NAMES.append(wn.work_repo_names(GH))
     return _NAMES[0]
 
 
@@ -209,10 +123,7 @@ def find(text, matcher, odd):
         hit = matcher.match(token)
         if hit:
             return hit[1]
-    for n in odd:
-        if re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % re.escape(n), low):
-            return n
-    return None
+    return wn.odd_hit(low, odd)
 
 
 def _env_value(name, envs, place):

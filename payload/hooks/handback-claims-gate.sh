@@ -41,7 +41,9 @@
 # of one in a transcript says nothing about whether this ran.
 
 set -uo pipefail
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 payload="$(cat 2>/dev/null || true)"
 case "$payload" in *'"agent_id"'*) ;; *) exit 0 ;; esac
 # Each "did not run" below goes out as a systemMessage, since Claude Code discards a PreToolUse

@@ -228,6 +228,12 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh",
             "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/no-verify-gate.sh",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       },

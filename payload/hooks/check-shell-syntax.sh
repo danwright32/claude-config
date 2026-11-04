@@ -40,7 +40,9 @@
 
 set -uo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) DIR="${BASH_SOURCE[0]%/*}" ;; *) DIR=. ;; esac
+DIR="$(cd "${DIR:-/}" && pwd)"
 
 # The tree to read. An explicit argument is used as given and never quietly swapped for the
 # default, because a tool handed a target it then does not use looks exactly like one that used it

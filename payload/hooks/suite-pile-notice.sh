@@ -91,7 +91,10 @@ fault_once() {
   hook_allow_notice "$2 This is said once in this session."
 }
 
-LIB="$(dirname "${BASH_SOURCE[0]}")/lib/suite-pile.sh"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) _HD="${BASH_SOURCE[0]%/*}" ;; *) _HD=. ;; esac
+_HD="$(cd "${_HD:-/}" && pwd)"
+LIB="$_HD/lib/suite-pile.sh"
 if [ ! -f "$LIB" ]; then
   fault_once lib-missing "suite-pile-notice: $LIB is missing, so whether this repo's suites have piled up was not checked."
 fi
@@ -170,7 +173,7 @@ msg="${msg}${status_says} This is said once in this session, and again only if t
 # A deliberate load window running or just ended is named beside it (claude-config#1618): on
 # 2026-10-23 one overlapped four builders' full suites and nothing said so. Read from
 # lib/load-window.sh's record, which tools/load-window.sh writes; a lib that will not load adds nothing.
-if . "$(dirname "${BASH_SOURCE[0]}")/lib/load-window.sh" 2>/dev/null; then
+if . "$_HD/lib/load-window.sh" 2>/dev/null; then
   wn="$(load_window_note "$now")"
   [ -z "$wn" ] || msg="${msg} ${wn}"
 fi
