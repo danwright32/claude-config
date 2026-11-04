@@ -1,6 +1,6 @@
 import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import type { On, Register } from 'claude-code'
+import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { APPROVE, CHANGE, HEADER, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
@@ -16,6 +16,7 @@ import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 // mod-kit, standing in: a mod cannot import another mod's files, so the write reader, the python text
 // reader and the typed answer wording are byte for byte copies under tests/mod-kit, asked through the
 // world (`__modkit`).
+type Kit = EngineInterface['modkit']
 const modKit: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
@@ -26,7 +27,9 @@ const modKit: { name: string; register: Register } = {
         if (r.exitCode !== 0) throw new Error(r.stderr)
         return JSON.parse(r.stdout)
       }
-      const modkit = {
+      // Only the members the guard calls are stood in; any other it ever reached would be undefined
+      // and throw, which every test here would show as a refusal it did not expect.
+      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer'> = {
         writes: async (input: { command: string; cwd: string; home: string }) => ask('writes', input),
         pythonText: async (input: { code: string }) => ask('pythonText', input),
         blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
@@ -36,7 +39,7 @@ const modKit: { name: string; register: Register } = {
           return said.text
         },
       }
-      return { ...built, modkit }
+      return { ...built, modkit: modkit as Kit }
     })
   },
 }

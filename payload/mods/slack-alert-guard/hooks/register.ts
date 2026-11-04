@@ -214,9 +214,7 @@ export const register: Register = on => {
     const decided = await next(e)
     if (decided.decision === 'deny') return decided
     return { decision: 'deny', reason: await refuse($, v, e.tool_use_id ?? '', e.tool, false) }
-  }).catch(($, e, next) =>
-    neverThrows(() => ({ decision: 'deny' as const, reason: cannotCheck(message(next.error)) }), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }),
-  )
+  }).catch(($, e, next) => neverThrows(() => ({ decision: 'deny' as const, reason: cannotCheck(message(next.error)) }), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
 
   // Dan's question, asked in Claude Code's own dialog. The guard words the question and its answers,
   // and reads his choice from the dialog's own result, the one place it comes from him.
