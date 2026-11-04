@@ -248,7 +248,10 @@ rm -f "$_SCPOS"
 #
 #   a paragraph      a run of non-blank lines, ended by a blank one
 #   a table row      its own block, because a table is not a paragraph and a date in one row says
-#                    nothing about the row under it
+#                    nothing about the row under it. A row of an HTML table (the shape the README's
+#                    wide tables have, claude-config#2131) is the lines from <tr><td> to </td></tr>,
+#                    cells included, so a number and the date in the cell beside it read together
+#                    as they did when the row was one line
 #   a list item      its own block, continuing over the lines that wrap it
 #   a fenced block   skipped entirely, for the same reason a code span is: it is code, not a claim
 #
@@ -268,6 +271,9 @@ function flush() {
 }
 /^[[:space:]]*```/ { flush(); fence = !fence; next }
 fence { next }
+/^<tr><td>$/ { flush(); inrow = 1; start = FNR; buf = ""; next }
+inrow && /^<\/td><\/tr>$/ { inrow = 0; flush(); next }
+inrow { if ($0 !~ /^[[:space:]]*$/ && $0 != "</td><td>") buf = (buf == "" ? $0 : buf " " $0); next }
 /^[[:space:]]*$/ { flush(); next }
 /^[[:space:]]*[|]/ { flush(); start = FNR; buf = $0; flush(); next }
 /^[[:space:]]*([-*+]|[0-9]+[.])[[:space:]]/ { flush(); start = FNR; buf = $0; next }
@@ -314,22 +320,25 @@ _SCMDFIX="$WORK/stale-counts-md-fixture.md"
   printf 'A number this code sets: it gives up after 900s, not measured.\n\n'
   printf '```\n'
   printf 'inside a fence: the run took 200 seconds with no date anywhere\n'
-  printf '```\n'
+  printf '```\n\n'
+  # an HTML table row (#2131): the date sits in another cell of the same row, and the next row has none
+  printf '<tr><td>\n\nname\n\n</td><td>\n\n30 seconds\n\n</td><td>\n\ndated cell (2026-01-02)\n\n</td></tr>\n'
+  printf '<tr><td>\n\nname\n\n</td><td>\n\n30 seconds\n\n</td><td>\n\nundated cell\n\n</td></tr>\n'
 } > "$_SCMDFIX"
 _sc_md_fix="$(_sc_md_scan "$_SCMDFIX")"
 dbg "#148 markdown fixture scan: $(printf '%s' "$_sc_md_fix" | tr '\n' '|')"
-for _sc_md_hit in 5 11 14; do
+for _sc_md_hit in 5 11 14 35; do
   check "#148 the markdown scan catches the undated block on line $_sc_md_hit" \
     "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c ':$_sc_md_hit:' | tr -d ' ')\" = 1 ]"
 done
-for _sc_md_quiet in 3 10 13 16 19; do
+for _sc_md_quiet in 3 10 13 16 19 22; do
   check "#148 and leaves the block on line $_sc_md_quiet alone" \
     "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c ':$_sc_md_quiet:' | tr -d ' ')\" = 0 ]"
 done
 # A table row dated in ONE row must not excuse the row beneath it, which is the whole reason a row
-# is its own block. Asserted by the pair above and by the count here: three and no more.
-check "#148 and reports those three and nothing else" \
-  "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c . | tr -d ' ')\" = 3 ]"
+# is its own block. Asserted by the pair above and by the count here: four and no more.
+check "#148 and reports those four and nothing else" \
+  "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c . | tr -d ' ')\" = 4 ]"
 
 # And on a real document, so the zero above is a measurement rather than a scan reading nothing
 # (L182, L171). README.md is the one every other check in this file already depends on being read.
