@@ -119,6 +119,16 @@ describe('refused in no build', () => {
     expect(what(bash(['npm', 'run', 'deploy:prod']))).toBe('run npm run deploy:prod')
     expect(what(bash(['make', 'deploy']))).toBe('run make deploy')
   })
+  // #2124: no build reads the same table of deploy tools as sleep mode, so wrangler's read only
+  // commands run here too, and the commands that change a Worker are still refused.
+  test('wrangler reads run, wrangler writes are refused (#2124)', () => {
+    expect(bash(['npx', 'wrangler', 'deployments', 'list', '--name', 'my-worker'])).toBeUndefined()
+    expect(bash(['wrangler', 'versions', 'view', '1a2b3c'])).toBeUndefined()
+    expect(bash(['wrangler', 'triggers', '--help'])).toBeUndefined()
+    expect(what(bash(['wrangler', 'versions', 'upload']))).toBe('deploy with wrangler')
+    expect(what(bash(['wrangler', 'secret', 'put', 'KEY']))).toBe('deploy with wrangler')
+    expect(what(bash(['wrangler', 'deployments', 'rollback']))).toBe('deploy with wrangler')
+  })
   test('data changing SQL, and SQL that cannot be read', () => {
     expect(what(bash(['psql', '$DB', '-c', "UPDATE shows SET name = 'x'"]))).toBe('change data with SQL')
     expect(what(bash(['psql', '$DB', '-f', 'fix.sql']))).toBe('run SQL that could not be read')

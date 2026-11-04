@@ -7559,6 +7559,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   see; write the extra context after the visible words, never in place of them.**
   (bidspoke#2477, 2026-10-19)
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
+- **L843. Join a time of day to its AM or PM, and a figure to its unit, with a non-breaking space
+  wherever it is drawn, because a narrow column otherwise wraps the suffix onto a line of its own.**
+  (pivot#920, 2026-11-03)
+  SHORT: Join a time to its AM or PM, and a figure to its unit, with a non-breaking space, or a narrow column wraps the suffix alone.
 
 ## External systems
 - **L826. A request timeout cleared when the response headers arrive leaves reading the body with no limit, so a server that answers then trickles holds the caller open; keep the timer running until the body is fully read.**
@@ -8928,6 +8932,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L844. A cache keyed on a calendar period (a day, an hour) is empty for the first reader of every period, so a read under a deadline must find it already written by a scheduled job before the period opens, and a fill started by a read that can overrun its deadline must be held open past that deadline, or one slow read leaves the cache cold for the next reader too.**
+  (bidspoke#3252, 2026-11-04)
+  SHORT: A period-keyed cache is cold for each period's first reader, so seed it on a schedule before the period, and hold open a fill that outlives a deadline.
 - **L1036. A test or tool that launches the same installed copy of an app a person uses shares that app's identity with the operating system (its app registration, keychain entries and single running instance), so while it runs the person's own use of the app breaks; launch a separately identified build instead, such as Chrome for Testing or a Debug build with its own bundle id.**
   (claude-config#2191, 2026-11-03)
   SHORT: A test launching the installed copy of an app a person uses shares its OS identity and breaks their use of it, so launch a separately identified build.

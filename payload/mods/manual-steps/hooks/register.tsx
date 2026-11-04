@@ -7,6 +7,7 @@ import { clearTurnPages, notePinned, pagesAtStop, registerPages } from './pages.
 import { PROSE_MARK, TURN_TIMEOUT_MS, turnAt } from './turn.ts'
 import { saysNoneNow, waitingPhrase } from './waiting.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 
 // The manual steps card (#614), settled with Dan on 2026-10-03 (spec) and 2026-10-04 (design
 // rounds, docs/mods-design.md "Manual steps"). Claude hands steps over through the `steps` tool,
@@ -380,7 +381,18 @@ const pressDone = async ($: EngineInterface, i: number) => {
   if (n === undefined) return
   await refresh($)
   try {
-    await $.prompt.submit({ text: donePrompt(n), asUser: true })
+    // #2132: the prompt waits until the session is idle, and mod-kit's reload of manual-steps in
+    // that time would drop it, so the reload is held back until it is sent, for at most an hour.
+    const held = {
+      mod: MOD,
+      id: 'done',
+      what: 'the prompt telling Claude a step is done',
+      ms: HOLD_MAX_MS,
+      hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
+      release: (input: { mod: string; id: string }) => $.modkit.release(input),
+      log: (line: string) => $.ui.log(line, { to: 'debug' }),
+    }
+    await whileHeld(held, () => $.prompt.submit({ text: donePrompt(n), asUser: true }))
   } catch (err) {
     await unsend($, n, true)
     await refresh($)

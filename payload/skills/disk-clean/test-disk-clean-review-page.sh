@@ -149,6 +149,9 @@ check "the page has a dark theme by the system setting" "$(has "$HTML" "prefers-
 check "it is called Disk clean" "$(has "$HTML" "<h1>Disk clean</h1>")"
 check "it says when the scan was taken" "$(has "$HTML" "Scanned ")"
 check "and that nothing goes until the selection is copied back" "$(has "$HTML" "Nothing is removed until you copy your selection back.")"
+# The 30 day floor (#2134), claiming only what it measures: change and access times, which a plain
+# read of a data file moves only on the first read after each change, so "run", never "opened".
+check "it says the 30 day rule, the Trash apart" "$(has "$HTML" "Apart from the Trash, everything offered here has gone at least 30 days without being changed or run.")"
 
 check "every item has a tick box" "$(eq "$(count_of "$HTML" 'class="tick"')" "$(fixture_items | wc -l | tr -d ' ')")"
 check "nothing is ticked" "$(grep -qE '<input[^>]* checked' <<< "$HTML" && echo "an input is ticked" || echo ok)"

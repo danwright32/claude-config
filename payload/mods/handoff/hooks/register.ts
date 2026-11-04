@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
+import { HOLD_MAX_MS, whileHeld, type Held } from './mod-kit/held.ts'
 import type { HandoffShown } from '../types/index.d.ts'
 import { ageOf, bandLines, changesOf, keyOf, namesIn, readingOf } from './handoff.ts'
 import type { Name, Reading } from './handoff.ts'
@@ -186,7 +187,7 @@ export const register: Register = on => {
     await $.state.set(armedRef, true)
     // Submitted once the command has finished: from inside command.run the prompt would wait on the
     // turn this hook holds, and the engine refuses it.
-    $.clock.after(0, () => void $.prompt.submit({ text: WRITE(e.args) }).catch(err => $.ui.toast(`/handoff could not ask for the handoff: ${message(err)}`)))
+    $.clock.after(0, () => void whileHeld(held($, 'write', 'the prompt asking for the handoff'), () => $.prompt.submit({ text: WRITE(e.args) })).catch(err => $.ui.toast(`/handoff could not ask for the handoff: ${message(err)}`)))
     return {}
   })
 
@@ -231,11 +232,23 @@ export const register: Register = on => {
   })
 }
 
+// #2132: a prompt handoff sends waits until the session is idle, and mod-kit's reload of handoff in
+// that time would drop it, so it is held back until the prompt is sent, for at most mod-kit's hour.
+const held = ($: EngineInterface, id: string, what: string): Held => ({
+  mod: MOD,
+  id,
+  what,
+  ms: HOLD_MAX_MS,
+  hold: input => $.modkit.hold(input),
+  release: input => $.modkit.release(input),
+  log: line => $.ui.log(line, { to: 'debug' }),
+})
+
 const pressUse = async ($: EngineInterface) => {
   const got = await claim($, 'used')
   if (!got) return
   try {
-    await $.prompt.submit({ text: got.rec.prompt, asUser: true })
+    await whileHeld(held($, 'use', 'the handoff Use sent'), () => $.prompt.submit({ text: got.rec.prompt, asUser: true }))
   } catch (err) {
     // Not sent, so not used: it goes back to being the saved handoff, still on the band, unless a
     // newer one was saved meanwhile, which it must not overwrite.

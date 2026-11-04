@@ -16,6 +16,10 @@
 #   5. The names come from three places, each seen to fire: the work repository list, this Mac's dev
 #      update registry, and the built in organisation hashes (handed in by the WORK_NAMES_EXTRA_HASHES
 #      seam, as the scanner's own suite does).
+#   6. Two more (claude-config#2184): every project on the work MacBook's project list in the global
+#      CLAUDE.md (handed in by the WORK_NAMES_PROJECT_LIST seam), and an organisation's name without
+#      its hyphen written as a web or email domain, while the ordinary word sharing those letters
+#      passes. A project list that cannot be read, or holds no work MacBook projects, is refused.
 #
 # Every name here is invented. This repository is public, and no work organisation or repository name
 # belongs in this file.
@@ -98,13 +102,41 @@ printf 'danwright-test/public-notes PUBLIC\ndanwright-test/private-notes PRIVATE
 printf 'danwright-test/public-notes' > "$CO/.fake-default"
 
 FAKE_HASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
+# A second invented organisation whose name without its hyphen is an ordinary word, for the domain
+# rule (claude-config#2184): the word alone is prose, the domain or email address is the organisation.
+WORD_HASH="$(printf '%s' "sun-flower" | shasum -a 256 | cut -d' ' -f1)"
+
+# The work MacBook's project list, as the Projects section of the global CLAUDE.md carries it
+# (claude-config#2184). The personal MacBook's block comes first, so a reader that took the wrong
+# block would be seen. The last work entry is an organisation's name without its hyphen, which is
+# judged as a domain or email address only.
+PROJECTS="$WORK/CLAUDE.md"
+write_projects(){ printf '%s' "$1" > "$PROJECTS"; }
+GOOD_PROJECTS='# Global
+
+## Projects
+
+On Daniels-MacBook-Pro-2 (personal MacBook):
+- `~/Apps/home-garden`: a personal project
+- `~/Apps/Quillwork`: the personal Quillwork
+
+On Dans-MacBook-Pro:
+- `~/Apps/Quillfeather`: Next.js, moved here from elsewhere
+- `~/thornbury-app`: Vite
+- `~/acmehq`: the website
+
+This list records where each project should be.
+
+## Writing Style
+'
+write_projects "$GOOD_PROJECTS"
 
 run(){   # $1 = the command; output in out, exit code in rc, the decision in decision
   local payload
   payload="$(jq -nc --arg c "$1" --arg d "$CO" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c},cwd:$d}')"
   : > "$CALLS"
   out="$(cd "$CO" && printf '%s' "$payload" | PATH="$BIN:$PATH" HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" \
-    FAKE_VIS="$VIS" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" bash "$GATE" 2>&1)"; rc=$?
+    FAKE_VIS="$VIS" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH,$WORD_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" bash "$GATE" 2>&1)"; rc=$?
   decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
 }
 refused(){ [ "$rc" -eq 2 ] || [ "$decision" = deny ]; }
@@ -239,7 +271,67 @@ check "(control) a gh api read passes: $out" passed
 run 'gh api repos/danwright-test/public-notes/issues/5/comments -f body="nothing to see"'
 check "(control) a clean gh api write passes: $out" passed
 
-# ---------------------------------------------------------------- 7. a gate that fails refuses
+# ---------------------------------------------------------------- 7. the work MacBook's projects, and domains
+# claude-config#2184: work repositories on the work MacBook's project list that neither the list nor
+# the registry holds, and an organisation's web and email domain, were let through.
+run 'gh pr create --repo danwright-test/public-notes --title "Fix it" --body "copied from the Quillfeather checkout"'
+check "a project on the work MacBook's list is refused, in any letter case: $out" refused
+check "and names the name it matched: $out" has "$out" "quillfeather"
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "the thornbury-app board"'
+check "every project on that list, a hyphenated one too: $out" refused
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "the home-garden and quillwork notes"'
+check "(control) projects on the personal MacBook's list pass: $out" passed
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "the quillfeathers and thornbury-apple"'
+check "(control) a listed project inside a longer word is no match: $out" passed
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "mail dan@sunflower.com about it"'
+check "an organisation's email domain, the name without its hyphen after an @, is refused: $out" refused
+check "and names what it matched: $out" has "$out" "sunflower"
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "see https://www.SunFlower.io/pricing"'
+check "its web domain, the name without its hyphen before a dot and a top level domain, is refused: $out" refused
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "the form posts to mail.sunflower.co.uk"'
+check "under a subdomain and a two part top level domain too: $out" refused
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "a sunflower grows; sunflowers.com is a florist; plant sunflower seeds"'
+check "(control) the ordinary word sharing those letters passes, alone or in another domain: $out" passed
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "write to team@acmehq.com"'
+check "a project list name that is an organisation without its hyphen is refused as an email domain: $out" refused
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "the acmehq folder"'
+check "(control) and as a bare word it is judged by the domain rule, so it passes: $out" passed
+# Cannot tell is refused (L98, L345): the project list is a source like the others.
+rm -f "$PROJECTS"
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
+check "the project list unreadable refuses a public write: $out" refused
+check "and says the project list could not be read: $out" has "$out" "project list"
+run 'gh issue comment 5 --repo danwright-test/private-notes --body "quillfeather"'
+check "(control) a private repository never needs the project list: $out" passed
+write_projects '# Global
+
+## Writing Style
+- `~/Apps/Quillfeather`
+'
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
+check "a CLAUDE.md with no Projects section is refused: $out" refused
+check "and says the section is missing: $out" has "$out" "Projects"
+write_projects '## Projects
+
+On Daniels-MacBook-Pro-2 (personal MacBook):
+- `~/Apps/home-garden`
+'
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
+check "a Projects section with no work MacBook block is refused: $out" refused
+check "and says that block is missing: $out" has "$out" "Dans-MacBook-Pro"
+write_projects '## Projects
+
+On Dans-MacBook-Pro:
+
+The list is empty today.
+'
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
+check "a work MacBook block that lists no project is refused, never read as clean: $out" refused
+write_projects "$GOOD_PROJECTS"
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
+check "(control) the project list restored, a clean comment passes: $out" passed
+
+# ---------------------------------------------------------------- 8. a gate that fails refuses
 BROKEN="$WORK/broken"; mkdir -p "$BROKEN"
 printf '#!/usr/bin/env bash\nexit 3\n' > "$BROKEN/python3"; chmod +x "$BROKEN/python3"
 payload="$(jq -nc --arg c 'gh pr create --repo danwright-test/public-notes --title Tidy --body ok' --arg d "$CO" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c},cwd:$d}')"

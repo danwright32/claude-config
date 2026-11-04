@@ -826,7 +826,7 @@ does not catch.
 | `check-duplication.sh` | A new copy of a long line (100 characters or more, `${...}` blanked) or a two line block (160 characters or more) under the source roots. Tests and fixtures are not judged. Slate: 6 of the last 40 real pushes would have been refused, each for a genuine copy. | `SKIP_DUPLICATION_CHECK=1` |
 | `check-public-assets.sh` | An asset under `public/`, `static/` or `assets/` that this push added or orphaned and nothing references; a raster image added or changed over 250 KB. Names browsers fetch by convention are exempt; `.claude/hygiene-allow.txt` in the project holds the rest, one path and a reason per line. | `SKIP_ASSET_CHECK=1` |
 | `check-deferrals.sh` | An added comment or doc line that defers work ("for now", "separate effort", "deferred to", "follow up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines. `deferral-edit-check.sh` says the same thing at the moment the text is written. | `SKIP_DEFERRAL_CHECK=1` |
-| `check-doc-issue-refs.sh` | A touched doc whose sentence claims an issue is still pending ("#N is the issue for", "once #N lands") when GitHub says that issue is closed or that pull merged. Anchored to the reference and blind to past tense, because 96 percent of the issues Slate's docs cite are closed. Fails open out loud without `gh`. | `SKIP_DOC_REFS_CHECK=1` |
+| `check-doc-issue-refs.sh` | A touched doc whose sentence claims an issue is still pending ("#N is the issue for", "once #N lands") when GitHub says that issue is closed or that pull merged. Anchored to the reference and blind to past tense, because 96 percent of the issues Slate's docs cite are closed. A decision quoted with its date beside it is a citation, and a doc only main changed, arriving through a merge from main, is not read (#2185). Fails open out loud without `gh`. | `SKIP_DOC_REFS_CHECK=1` |
 | `check-bundle-budget.sh` | The gzipped client bundle (Next `.next/static/chunks`, Vite `dist/assets`) grew past both 3 percent and 10 KB over the recorded total, when the build output is newer than the commit. A stale or absent build is said and not judged. The record follows every total that passes, so it never drifts behind main (#586), and a repository committing its own `bundle-budget.txt` is left to judge itself. | `ACCEPT_BUNDLE_GROWTH=1` records the new total; `SKIP_BUNDLE_BUDGET_CHECK=1` |
 | `ai-review-on-push.sh` | Nothing. It is advisory, and runs only on a push the lessons review gate does not hold (a push of the default branch, or one carrying `SKIP_PR_REVIEW=1`; see below): after a successful push it hands the diff, plus the full text of the changed files and the complete list of every file the push changed, to `claude -p` in a detached process (a finding claiming one of those listed files was left out of the push is marked as resting on a false premise, while one saying a symbol, a line or a part inside a changed file was not updated is left as it is, claude-config#533 and #1354) and returns at once, with the lessons index in its prompt and the rest of the global config switched off; `ai-review-nudge.sh` prints the answer on a later prompt, once per session, marking it shown only once the whole message is out, so a prompt whose hook is cut off at its timeout loses nothing. A session is shown the reviews that finish during it: those already finished at its first prompt are recorded as seen and named in one line with their count and folder, never replayed (claude-config#1216). It exists for the class no scan can see, a sibling left unchanged. | `SKIP_AI_REVIEW_CHECK=1` |
 
@@ -1185,6 +1185,12 @@ python3 ~/.claude/hooks/lib/wrapped-refusal-report.py [--days 7]
 It prints the refusals and overrides in the window and the count for each shape, a wrapper and a
 reason, commonest first, which is what the refusal is narrowed by. The suites record into a
 throwaway one (`WRAPPED_REFUSAL_LEDGER_DIR`, which `run-all-tests.sh` hands every suite).
+Until #2155, a direct run of `test-gates-fail-closed.sh` wrote its own "eval, reader-lib-missing"
+refusals into the real record (129 on the personal MacBook, from 2026-10-29). The report leaves
+those out and says how many (#2157), but only rows in exactly the shape that suite left: that
+wrapper, reason and outcome, before #2155 merged (2026-11-03 17:10 ET), two a second apart, or one
+alone before #1963 (2026-10-30 20:28 ET). Anything else, a burst holding another row included,
+counts as real. Nothing is deleted from the record.
 
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
@@ -2023,10 +2029,16 @@ first call saw, and each part goes to a further call with that code and the chan
 untested, which answers which of them the part tests. A part that starts inside a file repeats up
 to 4 KB of the lines before it, so a test the split cuts through is whole in one part. A change is
 refused as untested only when every part has been read and none tests it, and the refusal says how
-many parts it was read in. At most three further calls are made, and none is started with fewer
-than 20 seconds left of the 110 the gate allows itself inside the 120 its registration declares;
-whatever was not read, and a further call that fails, is refused as could not judge, naming the
-test files no reading was shown in full. That path refused before, so it fails closed where the
+many parts it was read in. At most 40 further calls are made (it was three until #2153, when a
+436 KB batch needed 15 and four tested issues in it were refused as untested), up to 16 at once in
+waves, no wave started with fewer than 20 seconds left of the 110 the gate allows itself inside the
+120 its registration declares, and no wave started once every change is found tested. The width of
+16 holds the 15 further readings of that batch in one wave even if each takes 58 seconds, the
+longest judge call in the gate's record on 2026-11-03; the record held calls running up to 6 at
+once (a median of 10 seconds, at most 26) and none at 16, so the time at 16 at once is unmeasured.
+`REQUIRE_TESTS_MAX_PARTS` can lower the cap, never raise it. Whatever was not read, and a further
+call that fails, is refused as could not judge, naming the test files no reading was shown in full.
+That path refused before, so it fails closed where the
 first call fails open. A push of the issue's shape cost two calls, sent 60,781 and 39,788 bytes,
 measured on 2026-11-01 with the suite's stub judge (these limits are settings, not measured); the first
 call is now told the rest is read separately and to judge only what it was shown, where it used to
@@ -2044,6 +2056,19 @@ slipped into a merge, is still judged; a file that conflicted is always judged, 
 resolved. When no default branch is known (no `origin/HEAD`, `origin/main` or `origin/master`) or
 git cannot work out the merge (it needs 2.38 or later), the whole push is judged as before, never
 none of it, and a refusal says main's changes were in it and why.
+
+The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
+2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
+later pushes, and the gate refused both as untested. Now every test file the branch changed since
+it left the default branch (their merge base), and this push does not carry, is listed to the judge
+under its own heading with its diff after the push's own tests, and counts as a test for the push.
+The changes judged are still only the push's, so the judge still has to find a test that would fail
+if each were reverted. The zero test refusal, made without a model, now needs no test in the push
+and none earlier on the branch. When the merge base cannot be worked out (no default branch known,
+no merge base, or git failing to list or show those tests), the push is judged on its own tests as
+before, and a refusal says the earlier tests were not counted and why. Because earlier tests are
+read with every push of the branch, a could not judge refusal that holds them says a smaller push
+will not make them fit.
 
 Every push either gate reaches is recorded, overrides included (#1075), one line each in
 `~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
@@ -2778,7 +2803,9 @@ that path is positively another repository: one it cannot read is refused too.
 CI's environment step is the list the container is built from, and
 `tests/test-ci-environment-tools.sh` fails when claude-sync or any shell file in the repository
 invokes an interpreter or tool from its checked set (python3, perl, node, jq, rsync, pgrep and a few
-more) that the step does not name (#624).
+more) that the step does not name (#624). A tool named inside the quoted text of a message, such as
+`check "(python missing)"` or `echo "FAIL: ..."`, is not read as a call, while a `$( )` inside that
+message and any later argument still are (#2129).
 
 `tests/test-stat-order.sh` fails when claude-sync or any shell, TypeScript or JavaScript file in the
 repository asks BSD stat's `-f` before GNU's `-c`. On the Linux runner `stat -f` means "file system
@@ -3075,8 +3102,27 @@ app and photo libraries, or a folder iCloud keeps only in the cloud, whose listi
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
 Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
 transcripts, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
-`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything. Each
-category and the walk are time bounded by killing their process group (`DISK_CLEAN_CATEGORY_SECONDS`,
+`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything.
+
+On top of its own rule, every kind but the Trash keeps one floor, `dcs_floor` in `scan-lib.sh` with
+`DCS_UNUSED_DAYS=30` (Dan's rule, claude-config#2134): an item is offered only when nothing at or
+beneath it was changed (modification time) or opened (access time) in the last 30 days, and the
+floor can only take an item out of the offer, never add one. Opened is read from access times
+because Spotlight's last used date only repeats the change date. That leaves a known gap: running a
+program moves its access time on every run, but a plain read of a data file moves it only on the
+first read after each change, so a data file read again and again without changing can look
+unopened. The review page therefore claims only "changed or run". Folders' access times are never
+read (the scan's own listing moves them), nor those of files the scan itself reads (a worktree's
+`.git`, `.gitignore` and `.gitattributes`, where the floor runs before git does, and the Xcode
+sweep's `info.plist`), whose change times still count. A part iCloud keeps only in the cloud, a part
+find cannot read, or find failing makes the item unmeasured. Longer rules keep theirs (forgotten
+tools 180 days, transcripts 90). Docker's targets are not files: images are unmeasured, since Docker
+records no time an image was last used; the build cache is unmeasured, since disk-clean removes it
+whole and does not read its last use; a stopped container is judged by Docker's own created, started
+and finished times, and one that cannot be read is unmeasured. The Trash is exempt, because
+everything in it was put there to go.
+
+Each category and the walk are time bounded by killing their process group (`DISK_CLEAN_CATEGORY_SECONDS`,
 default 600; `DISK_CLEAN_WALK_SECONDS`, default 900), and one that runs out is recorded as unmeasured.
 Sizes are du's allocated blocks, classified by du's exit code and stderr as measured, partial or
 permission denied, never 0 for unread. The result is `~/.claude/state/disk-clean/last-scan.json`,
@@ -3550,6 +3596,9 @@ before saving, auto session name, the collision guard, the design round guard, h
 watcher and picker manners build every message from a caught error with its `errorText`, so a
 member missing from an older mod-kit or session registry reaches the screen as that sentence, never
 as the raw `TypeError`.
+Every mod that waits on Dan or on a long job takes mod-kit's reload hold around that wait with one
+helper, mod-kit's `hooks/held.ts`, kept as a byte for byte copy at `hooks/mod-kit/held.ts` in the
+mod, so a prompt a mod sends or an answer Dan gives is not lost when the mods reload mid wait.
 `tools/check-mod-shared-parts.sh` holds each copy to mod-kit's and fails a mod that reads a
 `TypeError` by hand. Overnight every call is still refused while the mods are out of step (none can
 be checked for a merge or deploy), but at the worker's next Stop the driver lets it rest a minute,
@@ -5183,7 +5232,17 @@ question to the main session, which names every question waiting on him when he 
 is asleep it goes to bedtime's open questions, and while he is away to scope modes' hold. His
 Restructure first or Proceed anyway stands for a week for the same issues, so the file is not asked
 about again. A decided edit goes through when sent again; a quiet one is passed and the file not
-checked again that session. Every judgement, decision and answer is one JSON line in
+checked again that session. A Bash command is judged by the files mod-kit's write reader
+(`$.modkit.writes`) says it writes: a redirect, a copy, an in place edit, an emptying,
+`git checkout --`, a script's file arguments, an inline script's own targets. Each existing file is
+judged as its first edit would be, and a held one is refused as "this Bash command, which writes"
+followed by the file (#2142).
+A write whose file cannot be named (a name built from a variable, a pattern, a program writing files
+its words do not name) is held saying it cannot be read, and may only proceed; it passes where it is
+in no checkout, or where the repository has no fast growing file and no structural issue naming a
+file. Removals, `touch`, `mkdir`, mode changes and a folder handed to a script are not judged, and a
+program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+Every judgement, decision and answer is one JSON line in
 `~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start; issues are read
 unfiltered once per repository and kept an hour (a failure ten minutes), warmed at session start, as
 each account gh is logged in to, all under one 7 second deadline, and an edit with nothing to hold

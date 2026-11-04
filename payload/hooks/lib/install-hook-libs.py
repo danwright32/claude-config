@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Install hook helpers into a suite's scratch home, and refuse one that cannot import.
 
-    python3 tests/install-hook-libs.py SRC_LIB DEST_LIB NAME...
+    python3 lib/install-hook-libs.py SRC_LIB DEST_LIB NAME...
 
 Copies each NAME from SRC_LIB (payload/hooks/lib) into DEST_LIB (the scratch home's
-~/.claude/hooks/lib), with every module in SRC_LIB the Python ones import. Then every Python file in DEST_LIB must find each module it imports, either
-beside it or installed with Python; any that cannot is named and the exit is 1, so a suite stops
-with the cause rather than failing everywhere downstream (claude-config#2138: #2118 made
-sleep-report.py import repo_slug, and tests/test-sleep-real-engine.sh's hand written list went on
-installing sleep-report.py alone, so every night note failed with ModuleNotFoundError).
+~/.claude/hooks/lib, or any folder standing in for it), with every module in SRC_LIB the Python
+ones import. Then every Python file in DEST_LIB must find each module it imports, either beside it
+or installed with Python; any that cannot is named and the exit is 1, so a suite stops with the
+cause rather than failing everywhere downstream (claude-config#2138: #2118 made sleep-report.py
+import repo_slug, and tests/test-sleep-real-engine.sh's hand written list went on installing
+sleep-report.py alone, so every night note failed with ModuleNotFoundError).
+
+It follows `import` statements only. A helper another loads by its path (shell_code_lines.py loads
+shell-words.py that way) is installed only when it is named, so a suite can still build a folder
+missing one on purpose.
+
+It sits in lib/ rather than tests/ because the suites in payload/hooks also run from the installed
+~/.claude/hooks, which carries no tests/ (#2147). Every suite installing a Python helper goes
+through it, and lib/hand-written-lib-list.py fails one that copies a helper by hand instead.
 """
 import ast
 import importlib.util
@@ -20,7 +29,7 @@ import sys
 def imported(path):
     """The top level module names a Python file imports, anywhere in it."""
     try:
-        tree = ast.parse(open(path, encoding='utf-8').read(), path)
+        tree = ast.parse(open(path, encoding='utf-8', errors='strict').read(), path)
     except (OSError, SyntaxError, ValueError) as e:
         raise SystemExit(f'install-hook-libs: {path} could not be read as Python ({e})')
     names = set()

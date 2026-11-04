@@ -7,6 +7,7 @@ import type { ModKitCommand, ModKitGh } from '../.claude-plugin/types/mod-kit/in
 import {
   LOG_READ_BYTES,
   bodyUnreadableRefusal,
+  bodyUnresolvedRefusal,
   inRepo,
   keptOf,
   logUnreadableRefusal,
@@ -42,9 +43,14 @@ import {
   DECIDE_TOOL,
   DECISIONS,
   answerStands,
+  couldHold,
   decideProblem,
+  heldCall,
   holdCard,
   holdRefusal,
+  heldUnder,
+  shellKey,
+  shellTargets,
   questionKey,
   restructureQuestion,
   sleepNotes,
@@ -54,13 +60,14 @@ import {
   type Held,
   type Question,
   type Ranked,
+  type ShellTarget,
 } from './rules.ts'
 
 // The area check (claude-config#1506), phase 2 (#1509): the HOLD. Dan, 2026-10-22: sessions build
 // in fragile areas without noticing that the area already has open structural issues, or is growing
 // fast with nothing filed against it. Phase 1 (#1508) observed for a week; its log set the bar. Now the
 // first Edit, Write, MultiEdit or NotebookEdit a session makes to each existing source or test file
-// (decisions 2 and 3) is held when an open structural issue at p0 to p2 names the file (Dan's choice,
+// (decisions 2 and 3), or a Bash command writing one (#2142, read by mod-kit's $.modkit.writes), is held when an open structural issue at p0 to p2 names the file (Dan's choice,
 // 2026-11-02) or the file crosses the growth bar, and the session decides with the decide tool:
 // proceed with a reason, fold a shown issue in, or restructure, which asks Dan (decision 7). The main
 // session is held at tool.check, beneath the settings hooks; a subagent at tool.call, for itself
@@ -338,7 +345,7 @@ const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? pat
 
 // Its own failure: counted, kept in the error file, said once a session. Every step is caught on its
 // own, so a failure here can never reach the call (L561, L95). `kept` says what it means for the edit.
-const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'command' = 'unchecked') => {
+const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'shell' | 'command' = 'unchecked') => {
   const error = msg(err)
   let n = 1
   try {
@@ -356,7 +363,9 @@ const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unc
   try {
     const rel = relTo(path, await $.session.cwd())
     $.ui.log(
-      kept === 'command'
+      kept === 'shell'
+        ? `The area check could not read what a shell command writes (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
+        : kept === 'command'
         ? `The area check could not check the pull request command (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
         : kept === 'unchecked'
           ? `The area check could not look at ${rel} (${error}), so the edit went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
@@ -517,13 +526,127 @@ const gate = async ($: EngineInterface, tool: string, id: string, path: string, 
   }
 }
 
+// ---- A shell command's writes (#2142) ----
+//
+// A file a command names is judged as its first edit would be, under the same claim, so whichever
+// tool writes it next is let through once decided. A write whose file cannot be named before the
+// command runs is judged by the checkout it lands in (the session's, where the reader names no
+// folder): it passes where there is no checkout on GitHub or nothing there could hold a file, and is
+// otherwise held, claimed by its command once decided, so only that unchanged command then runs.
+
+const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarget, { unread: string }>, command: string, agent: string | null): Promise<Verdict> => {
+  const started = await $.clock.now()
+  const d: Deadline = { at: started + DEADLINE_MS }
+  const key = `${await shellKey(command)}\n${agent ?? ''}`
+  if (await isClaimed($, key)) return PASS
+  const where = t.folder ?? (await $.session.cwd())
+  const b = await $.modkit.branch({ path: where })
+  if (!b || 'unreadable' in b) return PASS
+  const remote = await runIn($, d, ['git', '-C', b.root, 'remote', 'get-url', 'origin'])
+    .then(r => (r.exitCode === 0 ? r.stdout.trim() || null : null))
+    .catch(() => null)
+  const repo = (await $.modkit.repo({ root: b.main, remote })).github
+  if (!repo) return PASS
+  const [issues, ranked, goal] = await Promise.all([issuesFor($, repo, d), ranking($, d, b.root, b.defaultBranch, repo), goalOf($, d)])
+  const own = [...new Set([...b.issues, ...goal.issues])]
+  // An issue list that could not be read leaves growth alone to decide, as it does for an edit.
+  const holds = couldHold({ issues: issues.state === 'unread' ? [] : issues.issues, own, top: 'ranked' in ranked ? ranked.ranked.top : [], bar: barFor(repo) })
+  const record = async (decision: 'held' | 'passed') =>
+    logged($, where, { v: 1, kind: 'unread', at: new Date(started).toISOString(), session: await $.session.id(), agent, repo, word: t.word, why: t.unread, decision })
+  if (!holds) {
+    await record('passed')
+    return PASS
+  }
+  const h: Held = {
+    id,
+    tool: 'Bash',
+    repo,
+    main: b.main,
+    rel: t.word,
+    agent,
+    at: started,
+    why: [],
+    shown: [],
+    issues: issues.state === 'unread' ? { state: 'unread', why: issues.why } : { state: issues.state },
+    growth: { unread: 'no file is named, so no growth is read' },
+    unread: { why: t.unread, key },
+  }
+  await updateHeld($, list => [...list.filter(x => x.id !== id), h].slice(-HELD_MAX))
+  await record('held')
+  return { held: h }
+}
+
+// A write reaching a whole folder (#2142 lessons review) reaches every file under it: the files there
+// the area check could hold, from the same tracked list and issues an edit is judged by, or why they
+// cannot be listed. A folder in no checkout, or in one not on GitHub, holds nothing to judge.
+const underTree = async ($: EngineInterface, path: string): Promise<{ paths: string[] } | { unread: string }> => {
+  const d: Deadline = { at: (await $.clock.now()) + DEADLINE_MS }
+  const b = await $.modkit.branch({ path })
+  if (!b || 'unreadable' in b) return { paths: [] }
+  const remote = await runIn($, d, ['git', '-C', b.root, 'remote', 'get-url', 'origin'])
+    .then(r => (r.exitCode === 0 ? r.stdout.trim() || null : null))
+    .catch(() => null)
+  const repo = (await $.modkit.repo({ root: b.main, remote })).github
+  if (!repo) return { paths: [] }
+  const [issues, ranked] = await Promise.all([issuesFor($, repo, d), ranking($, d, b.root, b.defaultBranch, repo)])
+  if (!('tracked' in ranked)) return { unread: `the files under it cannot be listed (${ranked.unread})` }
+  const rel = path === b.root ? '' : relTo(path, b.root)
+  const held = heldUnder(rel, { tracked: ranked.tracked, top: ranked.ranked.top, issues: issues.state === 'unread' ? [] : issues.issues })
+  return { paths: held.map(r => `${b.root}/${r}`) }
+}
+
+// A command's verdict: the first file it writes that is held refuses it. The reader failing lets the
+// command through, said; a target whose judging fails is passed, said, and the rest are still judged.
+const gateShell = async ($: EngineInterface, id: string, command: string, agent: string | null): Promise<{ deny: string } | typeof PASS> => {
+  let cwd = ''
+  let targets: ShellTarget[]
+  try {
+    cwd = await $.session.cwd()
+    targets = shellTargets(await $.modkit.writes({ command, cwd, home: await homeOf($) }))
+  } catch (err) {
+    await failed($, cwd, err, 'shell')
+    return PASS
+  }
+  for (let t of targets) {
+    if ('path' in t) {
+      const v = await gate($, 'Bash', id, t.path, agent)
+      if ('deny' in v) return v
+      if (!t.tree) continue
+      let under: Awaited<ReturnType<typeof underTree>>
+      try {
+        under = await underTree($, t.path)
+      } catch (err) {
+        await failed($, t.path, err)
+        continue
+      }
+      if ('paths' in under) {
+        for (const p of under.paths) {
+          const w = await gate($, 'Bash', id, p, agent)
+          if ('deny' in w) return w
+        }
+        continue
+      }
+      t = { word: t.word, unread: `${t.word} reaches every file under it, and ${under.unread}`, folder: t.path }
+    }
+    try {
+      const v = await judgeUnread($, id, t, command, agent)
+      if ('pass' in v) continue
+      await card($, id, holdCard(v.held))
+      return { deny: holdRefusal(v.held) }
+    } catch (err) {
+      await failed($, t.folder ?? cwd, err)
+    }
+  }
+  return PASS
+}
+
 // ---- Deciding (decision 7) ----
 
 const GUARD = 'Area check'
 const HEADER = 'Area check'
 
 const DECIDE_DESCRIPTION =
-  'Decide a first edit the area check held, under the held call\'s id: "proceed" with a "reason" saying why the change does not add to the structural problem, "fold" with the "issue" (one of those shown) whose fix is folded into this work, or "restructure" to have Dan decide whether to restructure the file first. Then send the held edit again, unchanged.'
+  'Decide a first edit or command the area check held, under the held call\'s id: "proceed" with a "reason" saying why the change does not add to the structural problem, "fold" with the "issue" (one of those shown) whose fix is folded into this work, or "restructure" to have Dan decide whether to restructure the file first. Then send the held call again, unchanged.'
 const DECIDE_SCHEMA = {
   type: 'object',
   properties: {
@@ -535,14 +658,15 @@ const DECIDE_SCHEMA = {
   required: ['call', 'decision'],
 }
 
-const again = (h: Held) =>
-  h.agent === null
-    ? `Send the ${h.tool} to ${h.rel} again, unchanged.`
-    : `The held ${h.tool} to ${h.rel} was a subagent's: tell that agent, or a new one, to send it again, unchanged.`
+const again = (h: Held) => {
+  const held = h.tool === 'Bash' ? 'Bash command' : `${h.tool} to ${h.rel}`
+  return h.agent === null ? `Send the ${held} again, unchanged.` : `The held ${held} was a subagent's: tell that agent, or a new one, to send it again, unchanged.`
+}
 
 // A decision taken: the file claimed for whoever was held, the held entry gone, the decision logged.
 const release = async ($: EngineInterface, h: Held, decided: { decision: Decision; reason?: string; issue?: number; by?: 'dan' }) => {
-  await claim($, keyOf(h.main, h.rel, h.agent))
+  // A write whose file cannot be named is claimed by its command, so only that command runs unjudged.
+  await claim($, h.unread ? h.unread.key : keyOf(h.main, h.rel, h.agent))
   await updateHeld($, list => list.filter(x => x.id !== h.id))
   // Version 3 (#1510): the branch and merge base, which the pull request line is matched by (L1010).
   await logged($, `${h.main}/${h.rel}`, {
@@ -634,7 +758,7 @@ const waitingLines = async ($: EngineInterface): Promise<string[]> => {
     const h = await heldOf($, q.call)
     if (!h) continue
     const whose = h.agent === null ? 'this session\'s' : `subagent ${h.agent}'s`
-    lines.push(`The area check holds ${whose} ${h.tool} to ${h.rel} in ${h.repo} until Dan decides whether to restructure it first: ${asking(h)}.`)
+    lines.push(`The area check holds ${whose} ${heldCall(h)}, in ${h.repo}, until Dan decides whether to restructure it first: ${asking(h)}.`)
   }
   return lines
 }
@@ -717,18 +841,33 @@ const prView = async ($: EngineInterface, d: Deadline, selector: string, repo: s
   }
 }
 
+// The text a --body gives. A word holding a command substitution keeps only its typed form in the
+// words gh reads (`$(cat <<'EOF'\n)`), so its text is the one mod-kit's command reader derives for
+// that word (#2141), with the flag the word also spells taken off; a word the reader marks
+// unresolved is unknown, never a description without lines (#2166). The word is found as the last
+// one ending in the flag's value, either after a flag word or a flag word itself (`--body=`, `-b`).
+const bodyText = (c: ModKitCommand, value: string): { body: string } | { unresolved: string } => {
+  const typed = value.includes('$(') || value.includes('`')
+  for (let i = c.words.length - 1; i > 0; i--) {
+    const w = c.words[i] as string
+    if (!w.endsWith(value)) continue
+    const own = w !== value
+    if (own ? !w.startsWith('-') : !(c.words[i - 1] as string).startsWith('-')) continue
+    const d = c.derived?.[i] ?? null
+    if (d === null) return { body: value }
+    if ('unresolved' in d) return { unresolved: d.unresolved }
+    const flag = w.slice(0, w.length - value.length)
+    return d.text.startsWith(flag) ? { body: d.text.slice(flag.length) } : { unresolved: 'its flag could not be told from its text' }
+  }
+  return typed ? { unresolved: 'the command reader could not place the word it came from' } : { body: value }
+}
+
 // The description a gh pr create or edit gives, or why it cannot be read.
-const bodyOf = async ($: EngineInterface, call: PrCall, command: string, folder: string, home: string): Promise<{ body: string } | { file: string; why: string }> => {
+const bodyOf = async ($: EngineInterface, call: PrCall, folder: string, home: string): Promise<{ body: string } | { file: string; why: string } | { unresolved: string }> => {
   const text = flagOf(call.g, BODY_TEXT)
   const file = flagOf(call.g, BODY_FILE)
   const last = [...call.g.flags].reverse().find(f => BODY_TEXT.includes(f.name) || BODY_FILE.includes(f.name))
-  if (last === text && text) {
-    const value = text.value === true ? '' : text.value
-    // mod-kit's reader drops the text of a substitution from the word (`--body "$(cat <<'EOF' ...)"`
-    // reads as `$(cat <<'EOF'\n)`), so such a description is looked for in the whole command, the
-    // one place its text is still whole. A line found elsewhere in the command (its title) passes too.
-    return { body: value.includes('$(') || value.includes('`') ? command : value }
-  }
+  if (last === text && text) return text.value === true ? { body: '' } : bodyText(call.c, text.value)
   const name = file?.value === true || file === undefined ? '' : file.value
   if (name === '-') {
     const fed = (call.c.heredocs ?? []).filter(h => (h.fd === undefined || h.fd === 0) && !h.replaced)
@@ -744,7 +883,7 @@ const bodyOf = async ($: EngineInterface, call: PrCall, command: string, folder:
   }
 }
 
-const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, command: string, log: () => Promise<LogRead>): Promise<PrVerdict> => {
+const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: () => Promise<LogRead>): Promise<PrVerdict> => {
   const { g } = call
   const hasBody = g.flags.some(f => BODY_TEXT.includes(f.name) || BODY_FILE.includes(f.name))
   if (g.act === 'edit' && !hasBody) return null
@@ -794,7 +933,8 @@ const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, command: s
     return missing.length ? { deny: missingRefusal({ ...r, files: missing, where: 'github', ...(selector ? { selector } : {}) }) } : null
   }
   if (!hasBody) return { deny: noBodyRefusal({ ...r, files }) }
-  const body = await bodyOf($, call, command, call.folder, await homeOf($))
+  const body = await bodyOf($, call, call.folder, await homeOf($))
+  if ('unresolved' in body) return { deny: bodyUnresolvedRefusal({ ...r, files }, body.unresolved) }
   if ('why' in body) return { deny: bodyUnreadableRefusal(verb, body.file, body.why) }
   const missing = missingFrom(files, body.body)
   return missing.length ? { deny: missingRefusal({ ...r, files: missing, where: 'command' }) } : null
@@ -829,10 +969,11 @@ export const register: Register = on => {
     if (e.agentId === undefined) return next(e)
     const raw = e as unknown as Record<string, unknown>
     const path = editedPath(e.tool, raw)
+    const command = e.tool === 'Bash' && typeof raw.command === 'string' ? raw.command : null
     const id = typeof raw.tool_use_id === 'string' ? raw.tool_use_id : ''
     // A call with no id names nothing a decision could be taken under, so it is passed untouched.
-    if (!path || !id) return next(e)
-    const v = await gate($, e.tool, id, path, e.agentId)
+    if ((!path && command === null) || !id) return next(e)
+    const v = path ? await gate($, e.tool, id, path, e.agentId) : await gateShell($, id, command as string, e.agentId)
     if ('deny' in v) return v
     fromAgent.add(id)
     try {
@@ -861,7 +1002,7 @@ export const register: Register = on => {
         return read
       }
       for (const call of await prCallsIn($, command, cwd, await homeOf($))) {
-        const v = await checkPr($, d, call, command, log)
+        const v = await checkPr($, d, call, log)
         if (v && 'deny' in v) return { deny: v.deny }
         if (v) $.ui.log(v.dim)
       }
@@ -880,11 +1021,13 @@ export const register: Register = on => {
     const x = e as unknown as Record<string, unknown>
     const id = typeof x.tool_use_id === 'string' ? x.tool_use_id : ''
     if (!id || x.agentId !== undefined || fromAgent.has(id)) return next(e)
-    const path = editedPath(e.tool, (e.input ?? {}) as Record<string, unknown>)
-    if (!path) return next(e)
+    const input = (e.input ?? {}) as Record<string, unknown>
+    const path = editedPath(e.tool, input)
+    const command = e.tool === 'Bash' && typeof input.command === 'string' ? input.command : null
+    if (!path && command === null) return next(e)
     const decided = await next(e)
     if (decided.decision === 'deny') return decided
-    const v = await gate($, e.tool, id, path, null)
+    const v = path ? await gate($, e.tool, id, path, null) : await gateShell($, id, command as string, null)
     return 'deny' in v ? { decision: 'deny', reason: v.deny } : decided
   })
 
@@ -942,7 +1085,7 @@ export const register: Register = on => {
     if (chosen === 'Fold in') {
       await $.store.delete(k)
       const who = h.agent === null ? 'Call' : `Tell subagent ${h.agent} to call`
-      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${h.shown.map(m => `#${m.n}`).join(', ')}>} to record it, then send the ${h.tool} again.`)
+      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${h.shown.map(m => `#${m.n}`).join(', ')}>} to record it. ${again(h)}`)
     }
     await $.store.set(k, { state: 'answered', answer: chosen, at: await $.clock.now(), issues: h.shown.map(m => m.n) } satisfies Question)
     if (chosen === 'Restructure first') {

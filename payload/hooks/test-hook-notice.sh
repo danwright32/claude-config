@@ -505,7 +505,7 @@ done
 # The reading of where a here document ends is lib/shell-words.py's, through
 # lib/shell_code_lines.py, and the scan keeps none of its own: without it, it refuses by name.
 mkdir -p "$WORK/nolib"
-cp "$DIR/lib/shell_code_lines.py" "$WORK/nolib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORK/nolib" shell_code_lines.py || bad "#2147 the hook helpers could not be installed into $WORK/nolib"
 noreader="$(HN_SHELL_LIB="$WORK/nolib" python3 "$WORK/scan.py" stderr "$WORK/next-line.sh" 2>&1)"; rc=$?
 [ "$rc" -eq 2 ] && ok || bad "#2080 without lib/shell-words.py the scan did not refuse (exit $rc): $noreader"
 case "$noreader" in *"lib/shell-words.py could not be loaded"*) ok ;; *) bad "#2080 without lib/shell-words.py the scan did not say which reader it could not load: $noreader" ;; esac
