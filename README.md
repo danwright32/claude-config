@@ -1184,7 +1184,8 @@ python3 ~/.claude/hooks/lib/wrapped-refusal-report.py [--days 7]
 
 It prints the refusals and overrides in the window and the count for each shape, a wrapper and a
 reason, commonest first, which is what the refusal is narrowed by. The suites record into a
-throwaway one (`WRAPPED_REFUSAL_LEDGER_DIR`, which `run-all-tests.sh` hands every suite).
+throwaway one (`WRAPPED_REFUSAL_LEDGER_DIR`, which `run-all-tests.sh` hands every suite, and
+arming a suite's deadline hands one run on its own, #2156).
 Until #2155, a direct run of `test-gates-fail-closed.sh` wrote its own "eval, reader-lib-missing"
 refusals into the real record (129 on the personal MacBook, from 2026-10-29). The report leaves
 those out and says how many (#2157), but only rows in exactly the shape that suite left: that
@@ -1742,10 +1743,16 @@ Three gates close the three parts of that, all reading commands through one libr
   numbered key that moves the hooks, `GIT_CONFIG_PARAMETERS`, and `GIT_CONFIG_GLOBAL`,
   `GIT_CONFIG_SYSTEM` or `GIT_CONFIG` naming a whole file), git's `--config-env`, a config include
   (`include.path`, `includeIf.*.path`) set with `-c` or `git config`, and a key the shell spells so the
-  gate cannot read it. The gate is also registered for Edit, Write and MultiEdit, and refuses an
+  gate cannot read it. The gate is also registered for Edit, Write, MultiEdit and NotebookEdit (NotebookEdit is let through, since it only edits notebook files), and refuses an
   agent's edit of a git config file (the repository's or a worktree's, the global one, or any file
   an include names, existing or not) that changes the hooks location or an include as git reads
-  them; any other edit of those files goes through. The advice about the install script is chosen
+  them; any other edit of those files goes through. Since claude-config#2160 three more routes are
+  refused: git pointed at another git directory (`--git-dir`, `GIT_DIR` or `GIT_COMMON_DIR`), a hook
+  switch or git environment settings in front of, or exported before, a command that is not git
+  (a script's own git commands inherit them and cannot be read before it runs), and any agent shell
+  command other than git that names a git config file, reads included, along with a git command
+  whose output is sent into one (a redirect, or `--output`). When git cannot list a
+  folder's config, both the edit route and the shell route refuse. The advice about the install script is chosen
   from the reader's reasons (`agent-overrides.py hooks-location-advice`), never from the command's
   text. The main session is not judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
   was removed on Dan's decision of 2026-10-24 (claude-config#1666), since an agent could write the
@@ -2691,6 +2698,35 @@ their totals five different ways and the runner had to work out which line was t
 got wrong twice: it printed a per-check line where a verdict belongs, and it read `PASS=805 FAIL=0`
 as 805 failures. A suite that prints no result line is still run and still judged, its score
 guessed from its prose, and the runner NAMES it at the end rather than falling back quietly.
+
+**A suite run on its own writes into the same throwaway records a full run gives it**
+(claude-config#2156). Every record a hook keeps under `~/.claude` that a suite could drive, such as
+the issue spool, the push gate ledger, the record of wrapped command refusals, the sign in and
+merge phase records, claude-sync's log and the sleep record, has a variable naming where it goes
+instead, and `hooks/lib/suite-isolation.sh` holds them as one list. The runner points every one at
+its own throwaway folder, whatever was inherited. A suite typed straight into a shell used to get
+none of them, so a builder's check before a full run wrote into the real records: 123 fixture rows
+from `test-gates-fail-closed.sh` reached the real refusal record that way (#2126). Now
+`suite_deadline_arm`, which every suite calls near its top, fills in each one nothing has set yet,
+in one folder of its own under `$TMPDIR` named `claude-sync-suite-work.isolated.*`, which
+claude-sync's scratch sweep reclaims after four hours. Under the runner every one is already set,
+so no folder is made. A suite that names its own still wins. Arming refuses to run the suite when
+the list cannot be loaded or the folder cannot be made, rather than letting it write the real ones.
+A new record is one line in that list.
+
+A record with no variable is not covered by the list, and this finds one:
+
+```bash
+bash tools/suite-home-writes.sh payload/hooks/test-gates-fail-closed.sh
+```
+
+It runs each suite named on its own, with none of those variables set and `HOME` pointed at a
+throwaway folder, then names every file the suite left under that folder's `.claude` and the
+records kept beside it (`.claude-issue-spool` and the like). It lists paths only and never reads a
+file, and it never writes under the real `~/.claude`. It exits 0 when nothing was left, 1 naming
+the files when something was, and 2 when it could not check, and prints the suite's own exit
+status beside its verdict. It is not run on every full run: doing so costs about one full run
+again, and the runner already hands every suite the list.
 
 The main suite on its own:
 
@@ -5243,7 +5279,11 @@ in no checkout, or where the repository has no fast growing file and no structur
 file. Removals, `touch`, `mkdir`, mode changes and a folder handed to a script are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
 Every judgement, decision and answer is one JSON line in
-`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start; issues are read
+`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
+log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
+later a session start copies its decision lines to `rotated/<stamp>.decisions.jsonl` and only then
+renames it to the archive `rotated/<stamp>.jsonl`. Nothing is ever deleted, and a rotation that
+fails leaves the log where it was, keeps the error, and says so in one dim line. Issues are read
 unfiltered once per repository and kept an hour (a failure ten minutes), warmed at session start, as
 each account gh is logged in to, all under one 7 second deadline, and an edit with nothing to hold
 whose issues or growth could not be read passes without settling the file, so the next edit to it
@@ -5254,14 +5294,16 @@ through the same rules. Every pull request then carries an area check line for e
 its branch, `Area check: <file>: <decision>, <reason>` (a fold line also names `Refs #N`): `gh pr
 create`, `gh pr edit` given a description, and `gh pr merge` (by itself, `--auto` or through the
 merge helper) are refused while the description lacks one, with the lines to paste. Decisions are
-matched by repository, branch and merge base, read from this Mac's log only, and only from its
-newest 1 MiB of decision lines; a rebase moves the merge base, so decisions taken before it are no
-longer asked for. A log that cannot be read refuses the command; a fact the command does not depend
-on that cannot be read (no checkout, GitHub not answering for a merge) lets it through.
+matched by repository, branch and merge base, read from this Mac's log only: every decisions file,
+any log still rotating and the live log, filtered by one `awk` pass to the one repository and
+branch, so no decision is ever too old to be asked for and the scan is the decisions plus at most a
+few MiB of log. A rebase moves the merge base, so decisions taken before it are no longer asked
+for. A log that cannot be read refuses the command; a fact the command does not depend on that
+cannot be read (no checkout, GitHub not answering for a merge) lets it through.
 
 </td><td>
 
-#1506, #1508, #1509, #1510
+#1506, #1508, #1509, #1510, #2143
 
 </td></tr>
 <tr><td>
@@ -5628,7 +5670,8 @@ worker, one worker's heartbeats an hour apart, a wait on a usage limit), is prin
 that night; each other part is `SUITE-PART-UNMEASURED`, saying why (#1662).
 
 **Test runs never read the real record.** `run-all-tests.sh` hands every suite a sleep record of
-its own that does not exist (`CLAUDE_SLEEP_RECORD`, which `hooks/lib/sleep.sh` reads when a caller
+its own that does not exist, and arming a suite's deadline does the same for a suite run on its own
+(#1729, #2156) (`CLAUDE_SLEEP_RECORD`, which `hooks/lib/sleep.sh` reads when a caller
 names no path), so a hook suite run during a night of sleep mode sees an awake Mac. Before this,
 the first suite run made while asleep (2026-10-13) failed every suite driving a quiet hook, and CI,
 with no record, passed. The suites that are about where the record is found unset it.

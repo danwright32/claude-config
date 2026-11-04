@@ -595,8 +595,9 @@ out_bare="$(HOOK_TESTS_ROOT="$BARE" bash "$RUNNER" 2>&1)"; code_bare=$?
 DEP="$TMPROOT/deployed"
 mkdir -p "$DEP"
 cp "$RUNNER" "$DEP/run-all-tests.sh"
-# The one library it cannot run without, as an installed copy always has it beside it (#1948).
-mkdir -p "$DEP/lib" && cp "$DIR/lib/whole-number.sh" "$DEP/lib/"
+# The libraries it cannot run without, as an installed copy always has them beside it (#1948,
+# #2156: the list of throwaway records every suite is handed).
+mkdir -p "$DEP/lib" && cp "$DIR/lib/whole-number.sh" "$DIR/lib/suite-isolation.sh" "$DEP/lib/"
 mk_suite "$DEP" plain 0
 mk_notrun_suite "$DEP" auditsrepo "needs the repository, and there is none here"
 # HOOK_TESTS_RUNNING is unset for this one call. It is set whenever this suite is itself being run

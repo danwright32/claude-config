@@ -134,7 +134,7 @@ if [ -n "$terr_guard" ]; then
     "$([ "$trc" -eq 0 ] && grep -q '^SUITE-RESULT passed=[1-9][0-9]* failed=0$' <<< "$tout" && echo ok || { echo "exit $trc:"; grep '^FAIL' <<< "$tout" | sed "s|$ROOT/||g"; })"
   # Its control, on a copy of the territory with the two libraries it reads: whole, the copy passes,
   # so a failure after one Mac first read is added is that read's and not the copy's.
-  for f in $TERR payload/hooks/lib/suite-deadline.sh payload/hooks/lib/recorded-pid.sh payload/hooks/lib/stat-order.sh; do
+  for f in $TERR payload/hooks/lib/suite-deadline.sh payload/hooks/lib/suite-isolation.sh payload/hooks/lib/recorded-pid.sh payload/hooks/lib/stat-order.sh; do
     mkdir -p "$TMP/terr/$(dirname "$f")" && cp "$ROOT/$f" "$TMP/terr/$f"
   done
   tout="$(terr_run "$TMP/terr")"; trc=$?

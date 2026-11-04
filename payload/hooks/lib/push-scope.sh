@@ -1045,6 +1045,32 @@ except Exception:
         if "git" in names and "add" in toks:  # gh-reader: the crude reading, when there is no other
             return ("add", [], toks[toks.index("add") + 1:])
         return None
+def names_an_add(text):
+    # Does this text name a git add anywhere a wrapper nobody can read into might run it
+    # (claude-config#2078)? The bare word add anywhere used to count, so a `git worktree add` or a
+    # search whose quoted words held one was an add. Two readings, each seeing more than the parser:
+    # every `git` in the text with its quotes opened, read by the one reading of git, whose
+    # subcommand is add or a variable (CMD="git add -A"; eval "$CMD" is still one); and a shell word
+    # that is add, or an assignment of it, outside a git command running another subcommand
+    # (bash ./wrapper.sh add -A, SUB=add).
+    for piece in re.split(r"[;&|()\n`]", re.sub(r"[\"\x27]", " ", text)):
+        words = piece.split()
+        for i in range(len(words)):
+            # git_read answers None for any word that is not git, by name or by path.
+            found = shell_words.git_read(words[i:])
+            if found and (found[0] == "add" or "$" in found[0]):
+                return True
+    for seg in re.split(r"&&|\|\||;|\||\n", text):
+        try:
+            toks = shlex.split(seg, posix=True)
+        except ValueError:
+            toks = seg.split()
+        found = git_command(toks)
+        if found and found[0] and "$" not in found[0]:
+            continue
+        if any(t.strip("({)}") == "add" or t.endswith("=add") for t in toks):
+            return True
+    return False
 EVERYTHING = {"-A", "--all", "--no-ignore-removal", ".", "./", ":/", "*"}
 TRACKED_ONLY = {"-u", "--update"}
 REDIRECT = re.compile(r"\d*(>>?|<<?)&?")
@@ -1054,7 +1080,7 @@ for _, text, wrapper, why, depth in wrapped:
     if why:
         # A wrapper whose string cannot be read, in a command naming an add: what it stages cannot be
         # told, so it is an add nobody can account for (UNKNOWN), never no add at all (L98).
-        if re.search(r"(^|[^A-Za-z0-9_-])add([^A-Za-z0-9_-]|$)", cmd):
+        if names_an_add(cmd):
             saw_add, unreadable, unread_wrapper = True, True, True
         continue
     segments.append(text)
