@@ -504,7 +504,7 @@ want_stderr "have no test covering them" "#2153 a setting above the cap reads ev
 # On 2026-11-03 batch/8's test changes came to 436 KB, needing 16 readings where the gate stopped at
 # 4, and it called four tested issues untested. Now the rest of the tests is read in as many parts
 # as it takes, up to 40, several at once so they fit the deadline: real judge calls took a median
-# of 9 and at most 58 seconds over the 896 judged pushes in the gate's record on 2026-11-03, so 16
+# of 9 and at most 58 seconds over the 1,836 judged rows in the gate's record on 2026-11-03, so 16
 # one after another would not fit the 110 seconds the gate allows itself.
 JUDGE_LOG="$TMPROOT/judge-log-2153big"; mkdir -p "$JUDGE_LOG"
 MEET="$TMPROOT/meet-2153"; mkdir -p "$MEET"
