@@ -157,6 +157,19 @@ out="$(detect_file docs/notes.md $'Keep the x"for now"y flag off.\n')"
 want_finding "a quote run into the words either side is not a mention" "$out" "docs/notes.md:1: for now:"
 out="$(detect_file docs/notes.md $'The mod listens for \'for now\' as a limit.\n')"
 want_finding "single quotes are not a quote here (apostrophes would pair), so the phrase is a finding" "$out" "docs/notes.md:1: for now:"
+# The real case: the README mods table rows that had to split the phrase to get past this check
+# now hold it whole on one line, and those real lines are judged clean (L48). Each line is found
+# first, so a reworded row fails here rather than passing a scan of nothing.
+README_FILE="$DIR/../../README.md"
+for needle in 'not when it limits it ("for now",' '"stay read only", "read only for now",'; do
+  n="$(grep -n -F -- "$needle" "$README_FILE" | head -1 | cut -d: -f1)"
+  if [ -z "$n" ]; then
+    check "README holds the quoted phrase whole on one line: $needle" "line not found in README.md"
+    continue
+  fi
+  out="$(python3 "$DETECTOR" --file README.md --lines "$n-$n" < "$README_FILE")"
+  want_clean "the real README line $n quoting the phrase whole is a mention" "$out"
+done
 
 # Word boundaries and case.
 out="$(detect_file a.ts $'// todo: tidy this\n')"
