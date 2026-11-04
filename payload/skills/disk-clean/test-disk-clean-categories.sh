@@ -91,17 +91,23 @@ RECENT="$(date -v-5d '+%Y%m%d%H%M' 2>/dev/null || date -d '5 days ago' '+%Y%m%d%
 # The 30 day floor every kind but the Trash adds to its own rule (#2134), on <target>, which its
 # own rule offers: <file> is a file at or beneath it. Opened is the access time, changed the
 # modification time, each set alone, and with "folder" a part of it nothing can read is unmeasured.
-# Ends with the target aged again, so the section's later checks see it as they did.
-floor_checks() { # <category> <target> <file> [folder]
-  local c="$1" t="$2" f="$3"
+# With "own-age", the kind's own longer rule (90 or 180 days) already refuses a recent change, so
+# only the opened half is the floor's to check. Ends with the target aged again, so the section's
+# later checks see it as they did.
+floor_checks() { # <category> <target> <file> [folder] [own-age]
+  local c="$1" t="$2" f="$3" o folder="" own=""
+  for o in "${@:4}"; do case "$o" in folder) folder=1 ;; own-age) own=1 ;; esac; done
   old "$t"; judge "$c" "$t"
   check "$c floor: with nothing in it changed or opened for 30 days it is offerable (the control)" "$(eq "$JUDGED" offerable)"
   touch -a -t "$RECENT" "$f"; judge "$c" "$t"
   check "$c floor: a file in it opened 5 days ago, changed long ago, makes it not offerable" "$(has "$JUDGED" "not offerable: opened within 30 days")"
-  old "$t"; touch -m -t "$RECENT" "$f"; judge "$c" "$t"
-  check "$c floor: a file in it changed 5 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: changed within 30 days")"
   old "$t"
-  [ "${4:-}" = folder ] || return 0
+  if [ -z "$own" ]; then
+    touch -m -t "$RECENT" "$f"; judge "$c" "$t"
+    check "$c floor: a file in it changed 5 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: changed within 30 days")"
+    old "$t"
+  fi
+  [ -n "$folder" ] || return 0
   mkdir -p "$t/floor-locked"; printf 'x\n' > "$t/floor-locked/f"; old "$t"; chmod 000 "$t/floor-locked"
   judge "$c" "$t"
   check "$c floor: a part of it whose times cannot be read makes it unmeasured, never offerable" "$(has "$JUDGED" "unmeasured: ")"
@@ -340,20 +346,43 @@ dc_stub docker 'case "$1 $2" in
   "volume ls") echo pgdata ;;
   "system df") printf "Images|2GB\nBuild Cache|3.2GB\n" ;;
   "image inspect") echo 0 ;;
-  "container inspect") echo false ;;
+  "container inspect") cat '"$(printf %q "$DC_ROOT/docker-inspect")"' ;;
   *) echo "docker stub: $*" >&2; exit 1 ;;
 esac'
+# What container inspect answers: running, then Created, StartedAt and FinishedAt as Docker prints
+# them (UTC, nanoseconds), all long past; StartedAt is Docker's zero time for a container never run.
+printf 'false 2024-01-01T12:00:00.123456789Z 0001-01-01T00:00:00Z 2024-01-03T08:00:00.5Z\n' > "$DC_ROOT/docker-inspect"
 run_scan --only docker
-check "docker: a dangling image is offerable" "$(eq "$(state_of "image sha256abc")" offerable)"
+# Docker records when an image was made and last tagged, never when it was last used, so whether a
+# dangling image or the build cache was used in 30 days is not read and neither is offered (#2134).
+check "docker: a dangling image is unmeasured under the 30 day floor" "$(has "$(state_of "image sha256abc")" "unmeasured: Docker records no time an image was last used")"
 check "docker: through the docker method" "$(eq "$(method_of "image sha256abc")" docker)"
 check "docker: with Docker's own figure" "$(eq "$(field "$(item_of "image sha256abc")" 8)" reported)"
-check "docker: a stopped container is offerable" "$(eq "$(state_of "container c0ffee")" offerable)"
-check "docker: the build cache is offerable" "$(eq "$(state_of "builder cache")" offerable)"
+check "docker: a stopped container last run long ago is offerable" "$(eq "$(state_of "container c0ffee")" offerable)"
+check "docker: the build cache is unmeasured under the 30 day floor" "$(has "$(state_of "builder cache")" "unmeasured: ")"
 check "docker: a volume is listed and never offerable" "$(has "$(state_of "volume pgdata")" "not offerable: Docker volumes hold data")"
 judge docker "volume pgdata"
 check "docker judge: a volume is not offerable" "$(has "$JUDGED" "not offerable: ")"
 judge docker "image sha256abc"
-check "docker judge: a dangling image is offerable" "$(eq "$JUDGED" offerable)"
+check "docker judge: a dangling image is unmeasured" "$(has "$JUDGED" "unmeasured: Docker records no time an image was last used")"
+judge docker "builder cache"
+check "docker judge: the build cache is unmeasured" "$(has "$JUDGED" "unmeasured: ")"
+judge docker "container c0ffee"
+check "docker judge: a container created, run and stopped long ago is offerable (the control)" "$(eq "$JUDGED" offerable)"
+printf 'false 2024-01-01T12:00:00Z 2024-01-02T00:00:00Z %s\n' "$(date -u -v-5d '+%Y-%m-%dT%H:%M:%S.000000001Z' 2>/dev/null || date -u -d '5 days ago' '+%Y-%m-%dT%H:%M:%S.000000001Z')" > "$DC_ROOT/docker-inspect"
+judge docker "container c0ffee"
+check "docker judge: a container that stopped 5 days ago is not offerable" "$(has "$JUDGED" "not offerable: used within 30 days")"
+run_scan --only docker
+check "docker: the scan applies the floor as the judge does" "$(has "$(state_of "container c0ffee")" "not offerable: used within 30 days")"
+printf 'false 2024-01-01T12:00:00Z yesterday 2024-01-03T00:00:00Z\n' > "$DC_ROOT/docker-inspect"
+judge docker "container c0ffee"
+check "docker judge: a time Docker gave that cannot be read is unmeasured, never offerable" "$(has "$JUDGED" "unmeasured: ")"
+printf 'false 2024-01-01T12:00:00Z\n' > "$DC_ROOT/docker-inspect"
+judge docker "container c0ffee"
+check "docker judge: a missing time is unmeasured too" "$(has "$JUDGED" "unmeasured: ")"
+printf 'true 2024-01-01T12:00:00Z 2024-01-02T00:00:00Z 2024-01-03T00:00:00Z\n' > "$DC_ROOT/docker-inspect"
+judge docker "container c0ffee"
+check "docker judge: a running container is still not offerable" "$(has "$JUDGED" "not offerable: it is running")"
 
 # ================================================================================================
 # Playwright: a revision is offerable only when no project in .links, nor any b/ entry, needs it
@@ -390,6 +419,7 @@ cat > "$LA/browsers.json" <<'JSON'
 JSON
 printf '{\n  "name": "webkit",\n  "revision": "2200",\n  "revisionOverrides": {\n    "mac14": "2359"\n  }\n}\n' > "$LB/browsers.json"
 printf '{\n  "playwrightVersion": "1.63.0",\n  "playwrightLib": "%s",\n  "title": "claude-code"\n}\n' "$LB" > "$PW/b/browser@079b"
+printf 'x\n' > "$PW/chromium-1100/chrome"; old "$PW"
 run_scan --only playwright
 check "playwright: a revision a linked project needs is kept" "$(has "$(state_of "$PW/chromium-1243")" "not offerable: ")"
 check "playwright: chromium-headless-shell's folder is matched by its underscored name" "$(has "$(state_of "$PW/chromium_headless_shell-1243")" "not offerable: ")"
@@ -399,6 +429,8 @@ check "playwright: another browser nothing needs is offerable" "$(eq "$(state_of
 check "playwright: .links and b are never items" "$(eq "$(item_of "$PW/.links")$(item_of "$PW/b")" "")"
 judge playwright "$PW/chromium-1100"
 check "playwright judge: an unneeded revision is offerable" "$(eq "$JUDGED" offerable)"
+# Running a browser moves its executable's access time on every run (measured for #2134).
+floor_checks playwright "$PW/chromium-1100" "$PW/chromium-1100/chrome" folder
 judge playwright "$PW/ffmpeg-1011"
 check "playwright judge: a needed one is not" "$(has "$JUDGED" "not offerable: ")"
 rm -f "$LA/browsers.json"
@@ -406,7 +438,8 @@ run_scan --only playwright
 check "playwright: a linked library whose browsers.json cannot be read makes the category unmeasured" "$(has "$(status_of playwright)" "unmeasured: ")"
 
 # ================================================================================================
-# Claude Code temp: <slug>/<uuid> folders no live session owns, untouched for a day (DCS_TEMP_MINUTES)
+# Claude Code temp: <slug>/<uuid> folders no live session owns, nothing in them changed or opened
+# for 30 days (the floor every kind keeps, #2134, which replaced the 24 hour rule)
 # ================================================================================================
 fresh
 uid="$(id -u)"
@@ -418,15 +451,16 @@ old "$CT/$U1"; old "$CT/$U2"
 printf '{"pid":1,"sessionId":"%s","cwd":"/x"}\n' "$U1" > "$H/.claude/sessions/1.json"
 run_scan --only claude-temp
 check "claude temp: a live session's folder is not offerable, however old" "$(has "$(state_of "$CT/$U1")" "not offerable: a live session")"
-check "claude temp: a folder no session owns, untouched for 24 hours, is offerable" "$(eq "$(state_of "$CT/$U2")" offerable)"
+check "claude temp: a folder no session owns, untouched for 30 days, is offerable" "$(eq "$(state_of "$CT/$U2")" offerable)"
 check "claude temp: by deleting it" "$(eq "$(method_of "$CT/$U2")" delete)"
-check "claude temp: a folder used within 24 hours is not offerable" "$(has "$(state_of "$CT/$U3")" "not offerable: used within the last 24 hours")"
+check "claude temp: a folder changed today is not offerable" "$(has "$(state_of "$CT/$U3")" "not offerable: changed within 30 days")"
 check "claude temp: a folder that is not a session id is not listed" "$(eq "$(item_of "$CT/not-a-uuid")" "")"
 check "claude temp: the slug folder itself is not listed" "$(eq "$(item_of "$CT")" "")"
 judge claude-temp "$CT/$U1"
 check "claude temp judge: a live session's folder is not offerable" "$(has "$JUDGED" "not offerable: a live session")"
 judge claude-temp "$CT/$U2"
 check "claude temp judge: an abandoned one is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks claude-temp "$CT/$U2" "$CT/$U2/scratchpad/f" folder
 rm -f "$H/.claude/sessions/1.json"
 dc_stub ps 'echo "/usr/bin/login"; echo "/usr/local/bin/claude"'
 run_scan --only claude-temp
@@ -456,11 +490,14 @@ chmod 700 "$CT/$U4/locked"
 fresh
 R="$H/Apps/repo"
 mkdir -p "$R/.git/worktrees"
+# What the git stub answers for each worktree is kept in $R/.fx/<name>, outside the worktree, because
+# the stub reading it would otherwise move access times inside the folder the 30 day floor judges.
 wt() { # <name> <status text> <branch> <head> <remote>
-  local d="$R/.claude/worktrees/$1"
-  mkdir -p "$d" "$R/.git/worktrees/$1"
+  local d="$R/.claude/worktrees/$1" x="$R/.fx/$1"
+  mkdir -p "$d" "$x" "$R/.git/worktrees/$1"
   printf 'gitdir: %s\n' "$R/.git/worktrees/$1" > "$d/.git"
-  printf '%s' "$2" > "$d/.fx-status"; printf '%s' "$3" > "$d/.fx-branch"; printf '%s' "$4" > "$d/.fx-head"; printf '%s' "$5" > "$d/.fx-remote"
+  printf '%s' "$2" > "$x/status"; printf '%s' "$3" > "$x/branch"; printf '%s' "$4" > "$x/head"; printf '%s' "$5" > "$x/remote"
+  printf 'x\n' > "$d/README.md"; old "$d"
 }
 GH_URL=https://github.com/dan/repo.git
 wt merged "" feat-a aaa1 "$GH_URL"
@@ -472,17 +509,18 @@ wt detached "" "" fff1 "$GH_URL"
 wt elsewhere "" feat-g ggg1 "https://gitlab.com/dan/repo.git"
 wt ghfail "" feat-h hhh1 "$GH_URL"
 wt insession "" feat-i iii1 "$GH_URL"
-printf 'KEY=1\n' > "$R/.claude/worktrees/merged/.env"
+printf 'KEY=1\n' > "$R/.claude/worktrees/merged/.env"; old "$R/.claude/worktrees"
 # The submodule shape of a .git file is not a worktree.
 mkdir -p "$H/Apps/sub"; printf 'gitdir: ../.git/modules/sub\n' > "$H/Apps/sub/.git"
 mkdir -p "$H/.claude/sessions"
 printf '{"pid":1,"sessionId":"s1","cwd":"%s/src"}\n' "$R/.claude/worktrees/insession" > "$H/.claude/sessions/1.json"
 dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
+x="${d%/.claude/worktrees/*}/.fx/${d##*/}"
 case "$1 $2" in
-  "status --porcelain") cat "$d/.fx-status" ;;
-  "symbolic-ref --short") b="$(cat "$d/.fx-branch")"; [ -n "$b" ] && echo "$b" || exit 1 ;;
-  "rev-parse HEAD") cat "$d/.fx-head" ;;
-  "remote get-url") cat "$d/.fx-remote" ;;
+  "status --porcelain") cat "$x/status" ;;
+  "symbolic-ref --short") b="$(cat "$x/branch")"; [ -n "$b" ] && echo "$b" || exit 1 ;;
+  "rev-parse HEAD") cat "$x/head" ;;
+  "remote get-url") cat "$x/remote" ;;
   *) echo "git stub: $*" >&2; exit 1 ;;
 esac'
 dc_stub gh 'for a in "$@"; do case "$a" in feat-a) echo "41 aaa1" ;; feat-d) echo "42 ddd1" ;; feat-e) : ;; feat-h) echo "gh: could not resolve host" >&2; exit 1 ;; feat-i) echo "43 iii1" ;; esac; done; exit 0'
@@ -502,7 +540,18 @@ check "worktrees: a session working inside it makes it not offerable" "$(has "$(
 check "worktrees: a submodule's .git file is not taken for a worktree" "$(eq "$(item_of "$H/Apps/sub")" "")"
 judge worktrees "$W/merged"
 check "worktrees judge: the merged one is offerable" "$(eq "$JUDGED" offerable)"
-printf ' M late.txt' > "$W/merged/.fx-status"
+floor_checks worktrees "$W/merged" "$W/merged/README.md" folder
+# git reads a worktree's .git file and its .gitignore files on every status, so their access times
+# are the scan's own and never count as the worktree being opened; changing them still counts.
+printf 'node_modules\n' > "$W/merged/.gitignore"; old "$W/merged"
+touch -a -t "$RECENT" "$W/merged/.git" "$W/merged/.gitignore"
+judge worktrees "$W/merged"
+check "worktrees floor: git's own reads of .git and .gitignore are not counted as opened" "$(eq "$JUDGED" offerable)"
+touch -m -t "$RECENT" "$W/merged/.gitignore"
+judge worktrees "$W/merged"
+check "worktrees floor: but a .gitignore changed 5 days ago counts as changed" "$(has "$JUDGED" "not offerable: changed within 30 days (.gitignore)")"
+old "$W/merged"
+printf ' M late.txt' > "$R/.fx/merged/status"
 judge worktrees "$W/merged"
 check "worktrees judge: once it has changes it is not" "$(has "$JUDGED" "not offerable: it has uncommitted or untracked files")"
 # A folder whose own .git file iCloud keeps only in the cloud cannot be read without fetching it, so
@@ -562,6 +611,12 @@ judge transcripts "$TP/vercel-plugin/skill-injections.jsonl"
 check "transcripts judge: a plugin's sidecar file is not offerable" "$(eq "$JUDGED" "not offerable: it is not a Claude Code transcript")"
 judge transcripts "$TP/$U_OLD/subagents/agent-a1b2c3.jsonl"
 check "transcripts judge: an old subagent transcript is offerable" "$(eq "$JUDGED" offerable)"
+T_A="$TP/$U_OLD/subagents/agent-a1b2c3.jsonl"
+floor_checks transcripts "$T_A" "$T_A" own-age
+touch -a -t "$RECENT" "$T_A"
+run_scan --only transcripts
+check "transcripts: the scan applies the floor too: one opened 5 days ago is not offered" "$(has "$(state_of "$T_A")" "not offerable: opened within 30 days (agent-a1b2c3.jsonl)")"
+old "$T_A"
 rm -f "$TP/$U_OLD/subagents/agent-a1b2c3.jsonl" "$TP/$U_OLD/subagents/workflows/wf_1/agent-d4e5f6.jsonl"
 run_scan --only transcripts
 check "transcripts: with only sidecar files old, nothing is listed and there is no note" "$(eq "$(items_in transcripts) $(note_of transcripts)" "0 ")"
@@ -601,10 +656,15 @@ check "transcripts judge: with the core find back, a recent transcript still cha
 fresh
 sparse "$H/Apps/svc/server.log" 600m; sparse "$H/.cache/tool/held.log" 600m; sparse "$H/Apps/svc/small.log" 100m
 dc_stub lsof "for a in \"\$@\"; do case \"\$a\" in */held.log) printf 'p7\ncnode\n'; exit 0 ;; esac; done; exit 1"
+# A log still being written is changed today, so under the 30 day floor (#2134) it is not offered.
+run_scan --only runaway-logs
+check "runaway logs: a big log written today is not offerable" "$(has "$(state_of "$H/Apps/svc/server.log")" "not offerable: changed within 30 days (server.log)")"
+old "$H/Apps"; old "$H/.cache"
 run_scan --only runaway-logs
 check "runaway logs: a big log nothing holds is offerable, deleted" "$(eq "$(state_of "$H/Apps/svc/server.log") $(method_of "$H/Apps/svc/server.log")" "offerable delete")"
 check "runaway logs: a big log in a dotfolder that a process holds is emptied in place" "$(eq "$(state_of "$H/.cache/tool/held.log") $(method_of "$H/.cache/tool/held.log")" "offerable truncate")"
 check "runaway logs: a 100 MB log is not listed" "$(eq "$(item_of "$H/Apps/svc/small.log")" "")"
+floor_checks runaway-logs "$H/Apps/svc/server.log" "$H/Apps/svc/server.log"
 dc_stub lsof 'echo "lsof: permission denied" >&2; exit 1'
 run_scan --only runaway-logs
 check "runaway logs: when lsof cannot tell, it is unmeasured" "$(has "$(state_of "$H/Apps/svc/server.log")" "unmeasured: could not tell whether it is in use")"
@@ -654,6 +714,11 @@ check "forgotten tools: a python version a venv's pyvenv.cfg points into is kept
 check "forgotten tools: a python version nothing depends on is offerable" "$(eq "$(state_of "$H/.pyenv/versions/3.8.0")" offerable)"
 judge forgotten-tools "$H/.gradle"
 check "forgotten tools judge: the stale folder is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks forgotten-tools "$H/.gradle" "$H/.gradle/caches/a" folder own-age
+# Running a tool moves its executable's access time on every run (measured for #2134), so a node
+# or python version run last week is not forgotten, however long ago it was installed.
+floor_checks forgotten-tools "$H/.nvm/versions/node/v18.0.0" "$H/.nvm/versions/node/v18.0.0/bin/node" own-age
+floor_checks forgotten-tools "$H/.pyenv/versions/3.8.0" "$H/.pyenv/versions/3.8.0/bin/python" own-age
 judge forgotten-tools "$H/.mytool"
 check "forgotten tools judge: a folder not in the table is not offerable" "$(has "$JUDGED" "not offerable: ")"
 chmod 000 "$H/Apps/node20/.nvmrc"
@@ -672,6 +737,7 @@ fresh
 sparse "$H/Downloads/disk.iso" 600m; sparse "$H/Documents/talk.mov" 600m; sparse "$H/Pictures/raw.dng" 600m
 sparse "$H/Downloads/small.zip" 10m; sparse "$H/Downloads/huge.log" 600m
 mkdir -p "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents"
+old "$H"
 run_scan --only large-files
 check "large files: a big file in Downloads is offerable" "$(eq "$(state_of "$H/Downloads/disk.iso")" offerable)"
 check "large files: moved to the Trash" "$(eq "$(method_of "$H/Downloads/disk.iso")" trash)"
@@ -682,7 +748,19 @@ check "large files: a small file is not listed" "$(eq "$(item_of "$H/Downloads/s
 check "large files: a big .log is a runaway log, not a personal file" "$(eq "$(item_of "$H/Downloads/huge.log")" "")"
 judge large-files "$H/Downloads/disk.iso"
 check "large files judge: it is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks large-files "$H/Downloads/disk.iso" "$H/Downloads/disk.iso"
 judge large-files "$H/Pictures/raw.dng"
 check "large files judge: outside the four folders it is not" "$(has "$JUDGED" "not offerable: ")"
+
+# ================================================================================================
+# Every kind keeps the 30 day floor (#2134), enumerated from the folder, so a kind added later
+# without it fails here (L613). The Trash is exempt by Dan's decision; Docker's floor reads
+# Docker's own times, since its targets are not files.
+# ================================================================================================
+for m in "$CATS"/*.sh; do
+  case "${m##*/}" in trash.sh|docker.sh) continue ;; esac
+  check "floor: ${m##*/} applies dcs_floor" "$(grep -q 'dcs_floor "' "$m" && echo ok || echo "no dcs_floor call in $m")"
+done
+check "floor: the folder holds the kinds this suite expects (a control on the loop)" "$(eq "$(ls "$CATS"/*.sh | wc -l | tr -d ' ')" 12)"
 
 finish
