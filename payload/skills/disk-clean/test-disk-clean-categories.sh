@@ -439,7 +439,7 @@ check "playwright: a linked library whose browsers.json cannot be read makes the
 
 # ================================================================================================
 # Claude Code temp: <slug>/<uuid> folders no live session owns, nothing in them changed or opened
-# for 30 days (the floor every kind keeps, #2134, which replaced the 24 hour rule)
+# for DCS_UNUSED_DAYS (the floor every kind keeps, #2134)
 # ================================================================================================
 fresh
 uid="$(id -u)"
