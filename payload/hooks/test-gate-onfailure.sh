@@ -70,6 +70,7 @@ REFUSING=(
   no-verify-gate.sh
   amend-force-push-gate.sh
   check-rtk-init.sh
+  check-zsh-builtins.sh
   check-wrapped-commands.sh
   stacked-branch-delete-gate.sh
   scratchpad-subagent-gate.sh
