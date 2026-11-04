@@ -302,6 +302,22 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
       `node -e "require('child_process').execSync('sudo gh --repo o/r release delete v1 --yes')"`,
     ]
     expect(await Promise.all(flagged.map(async c => ({ c, r: await bash(c) })))).toEqual(flagged.map(c => ({ c, r: runs })))
+    // A gh with flags whose string is built while the code runs may be given its subcommand then,
+    // so it is still refused with no subcommand in sight (Dan's condition for this change, #2159).
+    const built = [
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh -R o/r ' + sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system(f'sudo gh -R o/r {sub}')"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh -R o/r {}'.format(sub))"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh -R o/r %s' % sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh -R o/r ' % sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system(' '.join(['sudo gh -R o/r', sub]))"`,
+      `python3 -c "import subprocess; subprocess.run('sudo gh -R o/r \\$SUB', shell=True)"`,
+      `python3 -c "import os; sub = 'x'; os.system(sub + ' sudo gh -R o/r')"`,
+      `node -e "const sub = 'x'; require('child_process').execSync('sudo gh -R o/r '+sub)"`,
+      `python3 -c "import os; sub = 'x'; cmd = 'sudo gh -R o/r'; os.system(cmd + ' ' + sub)"`,
+      `python3 -c "import os; sub = 'x'; cmd = ''; cmd += 'sudo gh -R o/r '; os.system(cmd + sub)"`,
+    ]
+    expect(await Promise.all(built.map(async c => ({ c, r: await bash(c) })))).toEqual(built.map(c => ({ c, r: runs })))
   })
   test('a line that sources a file is judged by where gh would run, never by the word in its data (#1132)', async () => {
     // The two notes refused on 2026-10-12 and 13: a sourced helper given JSON whose text names gh.
