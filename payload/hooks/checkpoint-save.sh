@@ -27,7 +27,10 @@ input=$(cat)
 # python3 is what decides whether this turn did real work, so with none this hook has nothing to
 # run at all. Said once rather than swallowed, because silence here is indistinguishable from a
 # turn with nothing to reflect on (claude-config#490, L98).
-_SPN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/stop-hook-python-notice.sh"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) _HD="${BASH_SOURCE[0]%/*}" ;; *) _HD=. ;; esac
+_HD="$(cd "${_HD:-/}" && pwd)"
+_SPN="$_HD/lib/stop-hook-python-notice.sh"
 if [ -f "$_SPN" ]; then
   . "$_SPN"
   stop_hook_python3_notice "checkpoint-save.sh"

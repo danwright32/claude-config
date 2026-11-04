@@ -42,6 +42,28 @@ trap 'rm -rf "$TMPROOT"' EXIT
 # checks no fixture's record reached the real folder anyway.
 export SCANNERS_STATE_DIR="$TMPROOT/scanners-state"
 
+# The messages of the commits a push adds are checked against the work repository list, read live
+# through gh (claude-config#2111), so every push in a fixture with a commit to judge reads it. CI
+# cannot read the real list, and no case may depend on what it holds, so gh is a fake for the whole
+# suite, exported once here: it answers only the list, from $WN_FAKE_LIST, whose names are invented
+# and are not the acme/widget the fixtures' messages name. A case points WN_FAKE_LIST elsewhere to
+# make the list unreadable.
+mkdir -p "$TMPROOT/ghbin"
+cat > "$TMPROOT/ghbin/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *contents/repos.json*)
+    [ -f "${WN_FAKE_LIST:-}" ] || { echo "HTTP 404: Not Found" >&2; exit 1; }
+    cat "$WN_FAKE_LIST"; exit 0 ;;
+esac
+echo "fake gh in test-scanners-before-push.sh: unexpected call: $*" >&2
+exit 1
+SH
+chmod +x "$TMPROOT/ghbin/gh"
+printf '{"repos":[{"owner":"Globex-Corp","name":"halcyon"}]}\n' > "$TMPROOT/wn-list.json"
+export WN_FAKE_LIST="$TMPROOT/wn-list.json"
+export PATH="$TMPROOT/ghbin:$PATH"
+
 # A repository shaped like this one: the marker the hook keys on, plus whatever scanners the test
 # wants. Everything happens in a throwaway git repo, never against the real one (L2).
 mkrepo(){            # $1 = name  -> prints the repo path
@@ -1518,9 +1540,9 @@ out="$(wn_fire "$RW" "git push -u origin feature")"; rc=$?
 [ "$rc" -eq 2 ] && grep -q -F "commit $named:3: a work organisation name" <<< "$out" \
   && check "#1995 a new commit whose message names a work organisation stops the push, naming the commit and line" ok \
   || check "#1995 a new commit whose message names a work organisation stops the push, naming the commit and line" "exit=$rc out=$out"
-grep -q -F "write name#123, never owner/name#123" <<< "$out" \
-  && check "#1995 and the refusal carries the file check's own remedy" ok \
-  || check "#1995 and the refusal carries the file check's own remedy" "out=$out"
+grep -q -F "never write owner/name#123 or name#123" <<< "$out" \
+  && check "#2111 and the refusal carries the message check's own remedy" ok \
+  || check "#2111 and the refusal carries the message check's own remedy" "out=$out"
 grep -q -F "git reset --soft" <<< "$out" \
   && check "#1995 and says how to reword a commit nobody has pushed" ok \
   || check "#1995 and says how to reword a commit nobody has pushed" "out=$out"
@@ -1538,6 +1560,29 @@ refs widget#5"
 out="$(wn_fire "$RW" "git push")"; rc=$?
 [ "$rc" -eq 0 ] && check "#1995 a commit already on the upstream is not judged again, only what the push adds" ok \
   || check "#1995 a commit already on the upstream is not judged again, only what the push adds" "exit=$rc out=$out"
+# A work REPOSITORY named in a new commit's message, in plain prose, is published by the squash merge
+# as surely as an organisation, so it stops the push too (claude-config#2111). The list is the suite's
+# fake one, so the name is an invented one.
+wn_commit "$RW" "Copy the fixture
+
+from the Halcyon checkout"
+named="$(git -C "$RW" rev-parse --short HEAD)"
+out="$(wn_fire "$RW" "git push")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "commit $named:3: a work repository or owner name" <<< "$out" \
+  && check "#2111 a new commit whose message names a listed work repository stops the push" ok \
+  || check "#2111 a new commit whose message names a listed work repository stops the push" "exit=$rc out=$out"
+grep -q -F "names a work organisation or repository" <<< "$out" \
+  && check "#2111 and the refusal says repository" ok \
+  || check "#2111 and the refusal says repository" "out=$out"
+grep -q -i "halcyon" <<< "$out" \
+  && check "#2111 and never repeats the repository" "out=$out" \
+  || check "#2111 and never repeats the repository" ok
+git -C "$RW" reset -q --hard HEAD~1
+# Cannot tell is refused, never passed (L98, L345): the list unreadable stops a clean push.
+out="$(WN_FAKE_LIST="$TMPROOT/wn-no-such-list.json" wn_fire "$RW" "git push")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "could not judge" <<< "$out" && grep -q -F "work repository list" <<< "$out" \
+  && check "#2111 a work repository list that cannot be read stops the push, saying which" ok \
+  || check "#2111 a work repository list that cannot be read stops the push, saying which" "exit=$rc out=$out"
 # A repository with no remote at all: nothing is published, so every commit is one the push adds.
 RN="$(mkrepo wnames-noremote)"; add_scanner "$RN" alpha 0; commit_all "$RN"
 wn_commit "$RN" "First

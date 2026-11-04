@@ -19,7 +19,9 @@
 #   CLAUDE_ISSUE_HARVEST_OFF   set to anything to disable the harvest entirely
 set -uo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) DIR="${BASH_SOURCE[0]%/*}" ;; *) DIR=. ;; esac
+DIR="$(cd "${DIR:-/}" 2>/dev/null && pwd)"
 [ -n "$DIR" ] || DIR="$HOME/.claude/hooks"
 SPOOL="${CLAUDE_ISSUE_SPOOL_LIB:-$DIR/lib/issue-spool.sh}"
 SPOOL_ROOT="${CLAUDE_ISSUE_SPOOL_DIR:-$HOME/.claude-issue-spool}"

@@ -52,7 +52,9 @@ set -uo pipefail
 # sourced with `|| exit 0`, so with it missing this hook said nothing in any checkout, which reads
 # exactly as one nothing can revert. Now the state is "could not check", said once per session in
 # this hook's own notice, naming the file.
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 SC_LOADED=0
 # shellcheck source=lib/sync-clone.sh
 { . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null && declare -F sc_hold_covers >/dev/null; } && SC_LOADED=1

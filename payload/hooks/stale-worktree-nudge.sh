@@ -66,7 +66,9 @@ input="$(cat 2>/dev/null || true)"
 case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
 . "$_ps_dir/lib/push-scope.sh" 2>/dev/null && input="$(ps_clean_payload "$input")"
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) DIR="${BASH_SOURCE[0]%/*}" ;; *) DIR=. ;; esac
+DIR="$(cd "${DIR:-/}" && pwd)"
 CHECK="${STALE_WT_CHECK:-$DIR/check-stale-worktrees.sh}"
 RUNNER="$DIR/lib/stale-worktree-run.py"
 [ -f "$CHECK" ] || exit 0

@@ -23,7 +23,9 @@
 # Override: SKIP_GREP_QV_CHECK=1 git push ...
 # Fails OPEN on a git error, which allows the push. A hook payload it cannot parse is refused when
 # its raw text names a push (claude-config#1922).
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # shellcheck source=lib/push-scope.sh
 { . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && declare -F ps_parse_payload >/dev/null; } || {
   # A library this gate cannot load is not a push with nothing to check (claude-config#1900, L10):
