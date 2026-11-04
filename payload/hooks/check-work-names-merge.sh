@@ -141,17 +141,18 @@ READ_DEADLINE="$(mt_gate_read_budget "${WN_MERGE_READ_BUDGET_SECONDS:-}" 15)"
 # budget is clamped to the cap rather than ignored, since it asks for as long as possible and the cap
 # is the longest this hook can honour; ignoring it would hand the choice to the next setting, which
 # may be just as long. That holds even where merge-when-ready.sh asks this gate under no hook timeout
-# with a longer budget. mt_gate_read_budget has already refused anything but digits. Leading zeros
-# are cut first, since the shell reads them as octal and a budget of 08 crashed the gate; then three
-# or more digits are past the cap however the shell would read them, too long for its arithmetic
-# included.
+# with a longer budget. mt_gate_read_budget has already refused anything but digits, so a value
+# whole_above_zero (lib/whole-number.sh) refuses is zero however written, and stays zero. Otherwise
+# it hands the value back with its leading zeros cut, since the shell reads them as octal and a
+# budget of 08 crashed the gate; then three or more digits are past the cap however the shell would
+# read them, too long for its arithmetic included.
 READ_BUDGET_CAP=15
-READ_DEADLINE="${READ_DEADLINE#"${READ_DEADLINE%%[!0]*}"}"
-case "${READ_DEADLINE:-0}" in
-  ???*) READ_DEADLINE="$READ_BUDGET_CAP" ;;
-  *) READ_DEADLINE="${READ_DEADLINE:-0}" ;;
-esac
-[ "$READ_DEADLINE" -le "$READ_BUDGET_CAP" ] || READ_DEADLINE="$READ_BUDGET_CAP"
+if whole_above_zero "$READ_DEADLINE" READ_DEADLINE; then
+  case "$READ_DEADLINE" in ???*) READ_DEADLINE="$READ_BUDGET_CAP" ;; esac
+  [ "$READ_DEADLINE" -le "$READ_BUDGET_CAP" ] || READ_DEADLINE="$READ_BUDGET_CAP"
+else
+  READ_DEADLINE=0
+fi
 READ_SLEEP="${WN_MERGE_SLEEP:-sleep}"
 BUDGET_SPENT="this hook's read budget of $READ_DEADLINE seconds was spent before it could be read"
 TRIED_WITHIN=". Tried within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)"
