@@ -8932,6 +8932,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L844. A cache keyed on a calendar period (a day, an hour) is empty for the first reader of every period, so a read under a deadline must find it already written by a scheduled job before the period opens, and a fill started by a read that can overrun its deadline must be held open past that deadline, or one slow read leaves the cache cold for the next reader too.**
+  (bidspoke#3252, 2026-11-04)
+  SHORT: A period-keyed cache is cold for each period's first reader, so seed it on a schedule before the period, and hold open a fill that outlives a deadline.
 - **L1036. A test or tool that launches the same installed copy of an app a person uses shares that app's identity with the operating system (its app registration, keychain entries and single running instance), so while it runs the person's own use of the app breaks; launch a separately identified build instead, such as Chrome for Testing or a Debug build with its own bundle id.**
   (claude-config#2191, 2026-11-03)
   SHORT: A test launching the installed copy of an app a person uses shares its OS identity and breaks their use of it, so launch a separately identified build.
