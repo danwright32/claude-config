@@ -105,6 +105,7 @@ import {
   unsure,
 } from './rules.ts'
 import { errorText } from './mod-kit/skew.ts'
+import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something
@@ -290,6 +291,9 @@ const MID_EDITS_MAX = 64
 // An error as words, a call to another mod's noun that failed for a member its loaded copy lacks said
 // as the two mods out of step, never as the raw TypeError (#1299, mod-kit's one reader, hooks/skew.ts).
 const message = (err: unknown) => errorText(err, 'design-round-guard')
+// The catches' refusal when even naming the guard's own failure throws, built once here, so a catch
+// always ends in a refusal and never in a throw, which the engine reads as no hook at all (#2039).
+const HELD = cannotCheck('unknown failure')
 
 // The arguments the tool takes, without the keys the engine carries beside them.
 const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
@@ -1563,7 +1567,7 @@ export const register: Register = on => {
     } catch (err) {
       return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(err))] }
     }
-  }).catch(($, e, next) => ({ deny: cannotCheck(message(next.error)) }))
+  }).catch(($, e, next) => neverThrows(() => ({ deny: cannotCheck(message(next.error)) }), () => ({ deny: HELD }), { deny: HELD }))
 
   // The main session's shell call, around the tool.check judgement beneath: one that passed with mod
   // .ts hook files to read again (watching) is judged by what it left once it ran (#1296). The check
@@ -1611,7 +1615,7 @@ export const register: Register = on => {
     // with no card drawn and nothing left waiting on Dan (lessons review of #991).
     if (!e.tool_use_id) return { decision: 'deny', reason: previewed(v) }
     return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false, called: await keyOf($, e.tool, input) }) }
-  }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(message(next.error)) }))
+  }).catch(($, e, next) => neverThrows(() => ({ decision: 'deny' as const, reason: cannotCheck(message(next.error)) }), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
 
   // Dan's two questions, asked in Claude Code's own dialog. The guard words each question and its
   // answers, and reads his choice from the dialog's own result, the one place it comes from him.

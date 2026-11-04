@@ -8928,6 +8928,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L842. When a wait sits inside another limit (a request timeout inside a job or step timeout, a proxy's wait inside its caller's), keep each inner limit a stated margin below the one around it and check the pair together, because raising only the inner one lets the outer limit fire first and turns a clean timeout into a failed run.**
+  (bidspoke#3240, 2026-11-03)
+  SHORT: Keep every inner wait a stated margin below the limit around it and check the pair together; raising only the inner one lets the outer fire first.
+
 - **L841. When a read succeeds and its result is then written to a cache, a failed cache write must be logged and must never fail the read, because callers sharing a cold cache all write the same key at once and a rate limit on that key then turns good data into an outage.**
   (bidspoke#3186, 2026-11-02)
   SHORT: A failed cache write after a successful read is logged, never fails the read: a cold cache's callers all write one key and its rate limit refuses them.

@@ -2,6 +2,22 @@ import type { EngineInterface, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
+import { neverThrows } from './mod-kit/hold.ts'
+import type { ModKitCommand, ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import {
+  LOG_READ_BYTES,
+  bodyUnreadableRefusal,
+  inRepo,
+  keptOf,
+  logUnreadableRefusal,
+  malformedDim,
+  missingFrom,
+  missingRefusal,
+  noBodyRefusal,
+  onBranch,
+  readDecisions,
+  type PrDecision,
+} from './prline.ts'
 import {
   DEADLINE_MS,
   GROWTH_DAYS,
@@ -71,6 +87,10 @@ class Late extends Error {}
 type Deadline = { at: number }
 
 const msg = (err: unknown) => errorText(err, MOD)
+// The decide tool's refusal when it failed, naming why; HELD is the same refusal built once here, for
+// when even naming the failure throws, so the catch never throws (#2039).
+const undecided = (why: string) => ({ deny: `The area check could not take the decision (${why}); the edit stays held. Try again.` })
+const HELD = undecided('unknown failure')
 const firstLine = (s: string) => s.trim().split('\n')[0] ?? ''
 
 const homeOf = async ($: EngineInterface) => (await $.env.get('HOME')) ?? ''
@@ -318,7 +338,7 @@ const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? pat
 
 // Its own failure: counted, kept in the error file, said once a session. Every step is caught on its
 // own, so a failure here can never reach the call (L561, L95). `kept` says what it means for the edit.
-const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' = 'unchecked') => {
+const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'command' = 'unchecked') => {
   const error = msg(err)
   let n = 1
   try {
@@ -336,9 +356,11 @@ const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unc
   try {
     const rel = relTo(path, await $.session.cwd())
     $.ui.log(
-      kept === 'unchecked'
-        ? `The area check could not look at ${rel} (${error}), so the edit went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
-        : `The area check could not write its log for ${rel} (${error}); what it decided stands, and the error is kept in ~/${DIR}/${ERRORS}.`,
+      kept === 'command'
+        ? `The area check could not check the pull request command (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
+        : kept === 'unchecked'
+          ? `The area check could not look at ${rel} (${error}), so the edit went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
+          : `The area check could not write its log for ${rel} (${error}); what it decided stands, and the error is kept in ~/${DIR}/${ERRORS}.`,
     )
   } catch {
     // Nothing more can be said.
@@ -463,6 +485,8 @@ const judgeEdit = async ($: EngineInterface, tool: string, id: string, path: str
     shown: matches.filter(m => j.shown.includes(m.n)),
     issues: issues.state === 'unread' ? { state: 'unread', why: issues.why } : { state: issues.state },
     growth,
+    branch: b.branch,
+    mergeBase,
   }
   await updateHeld($, list => [...list.filter(x => x.id !== id), h].slice(-HELD_MAX))
   await record({ decision: 'held' })
@@ -520,13 +544,16 @@ const again = (h: Held) =>
 const release = async ($: EngineInterface, h: Held, decided: { decision: Decision; reason?: string; issue?: number; by?: 'dan' }) => {
   await claim($, keyOf(h.main, h.rel, h.agent))
   await updateHeld($, list => list.filter(x => x.id !== h.id))
+  // Version 3 (#1510): the branch and merge base, which the pull request line is matched by (L1010).
   await logged($, `${h.main}/${h.rel}`, {
-    v: 2,
+    v: 3,
     kind: 'decided',
     at: new Date(await $.clock.now()).toISOString(),
     session: await $.session.id(),
     agent: h.agent,
     repo: h.repo,
+    branch: h.branch ?? null,
+    mergeBase: h.mergeBase ?? null,
     path: h.rel,
     call: h.id,
     ...decided,
@@ -624,6 +651,155 @@ const warm = async ($: EngineInterface) => {
   await Promise.all([issuesFor($, repo, d), ranking($, d, b.root, b.defaultBranch, repo)])
 }
 
+// ---- The area check line in a pull request (#1510) ----
+//
+// gh pr create, gh pr edit given a description, and gh pr merge (by itself or through the merge
+// helper, --auto included) are refused while the description lacks a line for a file decided on the
+// branch they act on, with the lines to paste (prline.ts holds the rules and the words). The log is
+// read through a bounded grep, once per Bash call; a log that cannot be read refuses, never reads
+// as no decisions. A check that cannot be made for want of a fact the command does not depend on
+// (no checkout, no GitHub repository, GitHub not answering for a merge) lets the command through.
+
+type PrCall = { g: ModKitGh; c: ModKitCommand; folder: string | null; viaHelper: boolean }
+type LogRead = { decisions: PrDecision[]; malformed: string[] } | { why: string }
+type PrVerdict = { deny: string } | { dim: string } | null
+
+const PR_ACTS: readonly string[] = ['create', 'edit', 'merge']
+const BODY_TEXT: readonly string[] = ['--body', '-b']
+const BODY_FILE: readonly string[] = ['--body-file', '-F']
+const HEAD: readonly string[] = ['--head', '-H']
+
+const flagOf = (g: ModKitGh, names: readonly string[]) => [...g.flags].reverse().find(f => names.includes(f.name))
+
+const prCallsIn = async ($: EngineInterface, command: string, cwd: string, home: string): Promise<PrCall[]> => {
+  const commands = await $.modkit.pipeline({ command, cwd, home })
+  const moves = commands.some(c => ['cd', 'pushd', 'popd'].includes(c.words[0] ?? ''))
+  const calls: PrCall[] = []
+  for (const c of commands) {
+    const helper = await $.modkit.mergeHelper(c)
+    const g = helper ?? (await $.modkit.gh({ words: c.words }))
+    if (!g || g.unreadable || g.sub !== 'pr' || !PR_ACTS.includes(g.act)) continue
+    if (g.act === 'merge' && g.flags.some(f => f.name === '--disable-auto')) continue
+    calls.push({ g, c, folder: 'folder' in c ? (c.folder ?? null) : moves ? null : cwd, viaHelper: !!helper })
+  }
+  return calls
+}
+
+// The decision lines of this Mac's log, the newest LOG_READ_BYTES of them (prline.ts). One byte more
+// is read, so a line the bound begins exactly at is kept whole and only a cut one is dropped.
+const readLog = async ($: EngineInterface, d: Deadline): Promise<LogRead> => {
+  const home = await homeOf($)
+  if (!home) throw new Error('HOME is not set, so the log cannot be found')
+  const ms = await left($, d)
+  if (ms <= 0) return { why: LATE }
+  const r = await $.process.run(
+    ['/bin/sh', '-c', 'set -o pipefail; grep -a -F -e "$1" -e "$2" -- "$3" | tail -c "$4"', MOD, '"kind":"decided"', '"applied":', `${home}/${DIR}/${LOG}`, String(LOG_READ_BYTES + 1)],
+    { timeoutMs: ms },
+  )
+  if (r.isStdoutTruncated) return { why: 'its decisions were more than could be read whole' }
+  if (r.exitCode === 1) return { decisions: [], malformed: [] }
+  if (r.exitCode !== 0) return { why: firstLine(r.stderr) || `grep exited ${r.exitCode}` }
+  return readDecisions(keptOf(r.stdout, LOG_READ_BYTES))
+}
+
+const prNumber = (s: string): string | null => /^#?(\d+)$/.exec(s)?.[1] ?? /\/pull\/(\d+)/.exec(s)?.[1] ?? null
+
+// One pull request as GitHub gives it, as each account gh is logged in to.
+const prView = async ($: EngineInterface, d: Deadline, selector: string, repo: string, fields: string): Promise<Record<string, unknown> | { why: string }> => {
+  try {
+    const r = await askAnyAccount((argv, env) => runIn($, d, argv, env ? { env } : {}), ['pr', 'view', prNumber(selector) ?? selector, '-R', repo, '--json', fields])
+    if (!('stdout' in r)) return { why: failureOf(r.failures) }
+    const v: unknown = JSON.parse(r.stdout)
+    if (typeof v !== 'object' || v === null || typeof (v as Record<string, unknown>).headRefName !== 'string') return { why: 'GitHub gave no branch for it' }
+    return v as Record<string, unknown>
+  } catch (err) {
+    return { why: err instanceof Late ? LATE : msg(err) }
+  }
+}
+
+// The description a gh pr create or edit gives, or why it cannot be read.
+const bodyOf = async ($: EngineInterface, call: PrCall, command: string, folder: string, home: string): Promise<{ body: string } | { file: string; why: string }> => {
+  const text = flagOf(call.g, BODY_TEXT)
+  const file = flagOf(call.g, BODY_FILE)
+  const last = [...call.g.flags].reverse().find(f => BODY_TEXT.includes(f.name) || BODY_FILE.includes(f.name))
+  if (last === text && text) {
+    const value = text.value === true ? '' : text.value
+    // mod-kit's reader drops the text of a substitution from the word (`--body "$(cat <<'EOF' ...)"`
+    // reads as `$(cat <<'EOF'\n)`), so such a description is looked for in the whole command, the
+    // one place its text is still whole. A line found elsewhere in the command (its title) passes too.
+    return { body: value.includes('$(') || value.includes('`') ? command : value }
+  }
+  const name = file?.value === true || file === undefined ? '' : file.value
+  if (name === '-') {
+    const fed = (call.c.heredocs ?? []).filter(h => (h.fd === undefined || h.fd === 0) && !h.replaced)
+    const h = fed[fed.length - 1]
+    if (h) return { body: h.body }
+    return { file: 'standard input', why: call.c.pipedFrom ? `piped from ${call.c.pipedFrom.join(' ')}` : 'nothing feeds it' }
+  }
+  const abs = name.startsWith('/') ? name : name.startsWith('~/') ? `${home}/${name.slice(2)}` : `${folder}/${name}`
+  try {
+    return { body: await $.fs.read(abs) }
+  } catch (err) {
+    return { file: abs, why: msg(err) }
+  }
+}
+
+const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, command: string, log: () => Promise<LogRead>): Promise<PrVerdict> => {
+  const { g } = call
+  const hasBody = g.flags.some(f => BODY_TEXT.includes(f.name) || BODY_FILE.includes(f.name))
+  if (g.act === 'edit' && !hasBody) return null
+  if (!call.folder) return null
+  const b = await $.modkit.branch({ path: call.folder })
+  if (!b || 'unreadable' in b) return null
+  if (g.named === null) return null
+  const remote = await runIn($, d, ['git', '-C', b.root, 'remote', 'get-url', 'origin'])
+    .then(r => (r.exitCode === 0 ? r.stdout.trim() || null : null))
+    .catch(() => null)
+  const own = (await $.modkit.repo({ root: b.main, remote })).github
+  const repo = g.named ?? own
+  if (!repo) return null
+  const verb = call.viaHelper ? 'merge through merge-when-ready.sh' : `gh pr ${g.act}`
+  const read = await log()
+  if ('why' in read) return { deny: logUnreadableRefusal(verb, read.why) }
+  const here = inRepo(read.decisions, repo)
+  if (here.length === 0) return null
+  const selector = g.positionals[0]
+  let branch: string | null = b.branch
+  let github: Record<string, unknown> | null = null
+  if (g.act === 'create') {
+    const head = flagOf(g, HEAD)
+    if (head && head.value !== true) branch = head.value.replace(/^[^:]*:/, '')
+  } else if (g.act === 'edit' && selector !== undefined) {
+    if (prNumber(selector) !== null) {
+      const v = await prView($, d, selector, repo, 'headRefName')
+      if ('why' in v) return { dim: `The area check could not read the branch of pull request ${selector} (${v.why}), so it let gh pr edit through unchecked.` }
+      branch = v.headRefName as string
+    } else branch = selector
+  } else if (g.act === 'merge') {
+    const v = await prView($, d, selector ?? b.branch ?? '', repo, 'body,headRefName')
+    if ('why' in v) return { dim: `The area check could not read pull request ${selector ?? b.branch} on GitHub (${v.why}), so it let the ${verb} through unchecked.` }
+    github = v
+    branch = v.headRefName as string
+  }
+  if (!branch) return null
+  const mergeBase =
+    own && repo.toLowerCase() === own.toLowerCase() && b.defaultBranch
+      ? await gitIn($, d, b.root, ['merge-base', branch === b.branch ? 'HEAD' : branch, `origin/${b.defaultBranch}`]).then(s => s.trim() || null).catch(() => null)
+      : null
+  const { files, loose } = onBranch(here, { repo, branch, mergeBase })
+  if (files.length === 0) return null
+  const r = { verb, branch, loose, malformed: read.malformed }
+  if (github) {
+    const missing = missingFrom(files, typeof github.body === 'string' ? github.body : '')
+    return missing.length ? { deny: missingRefusal({ ...r, files: missing, where: 'github', ...(selector ? { selector } : {}) }) } : null
+  }
+  if (!hasBody) return { deny: noBodyRefusal({ ...r, files }) }
+  const body = await bodyOf($, call, command, call.folder, await homeOf($))
+  if ('why' in body) return { deny: bodyUnreadableRefusal(verb, body.file, body.why) }
+  const missing = missingFrom(files, body.body)
+  return missing.length ? { deny: missingRefusal({ ...r, files: missing, where: 'command' }) } : null
+}
+
 // The ids of subagent calls judged at tool.call and now running, so tool.check does not judge them again.
 const fromAgent = new Set<string>()
 
@@ -666,6 +842,37 @@ export const register: Register = on => {
     }
   })
 
+  // A pull request command, the main session's or a subagent's (#1510): refused while its
+  // description lacks an area check line for a file decided on its branch. Its own failure lets the
+  // command through with one dim line, kept in the error file.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const command = (e as unknown as Record<string, unknown>).command
+    if (typeof command !== 'string' || !/\bgh\b|merge-when-ready/.test(command)) return next(e)
+    const cwd = await $.session.cwd()
+    let malformed: string[] | null = null
+    try {
+      const d: Deadline = { at: (await $.clock.now()) + DEADLINE_MS }
+      let read: Promise<LogRead> | undefined
+      const log = () => {
+        read ??= readLog($, d).then(r => {
+          if (!('why' in r)) malformed = r.malformed
+          return r
+        })
+        return read
+      }
+      for (const call of await prCallsIn($, command, cwd, await homeOf($))) {
+        const v = await checkPr($, d, call, command, log)
+        if (v && 'deny' in v) return { deny: v.deny }
+        if (v) $.ui.log(v.dim)
+      }
+      const skipped = malformed as string[] | null
+      if (skipped && skipped.length) $.ui.log(malformedDim(skipped))
+    } catch (err) {
+      await failed($, cwd, err instanceof Late ? new Error(LATE) : err, 'command')
+    }
+    return next(e)
+  })
+
   // The main session's edit, judged beneath every mod's tool.call hook, after the settings hooks: an
   // edit one of them refuses is refused in its words, and never held, judged or claimed. A query
   // asked with no call id ($.tool.check) runs nothing and is passed untouched.
@@ -702,7 +909,7 @@ export const register: Register = on => {
     }
     await release($, h, { decision: 'proceed', reason: input.reason as string })
     return { result: `Recorded: this work goes ahead on ${h.rel}. ${again(h)}` }
-  }).catch(($, e, next) => ({ deny: `The area check could not take the decision (${msg(next.error)}); the edit stays held. Try again.` }))
+  }).catch(($, e, next) => neverThrows(() => undecided(msg(next.error)), () => HELD, HELD))
 
   // Dan's restructure question, asked in Claude Code's own dialog: the hook words the question and
   // its answers, and reads his choice from the dialog's own result, the one place it comes from him.

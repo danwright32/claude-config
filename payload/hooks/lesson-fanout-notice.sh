@@ -33,7 +33,10 @@ cat >/dev/null 2>&1 || true
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 # Asleep (sleep mode, claude-config#841): nobody is there to run it, so it waits, with no cooldown
 # spent, and the first tool call after wake asks. Unreadable counts as awake (lib/sleep.sh).
-if . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/sleep.sh" 2>/dev/null \
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) _HD="${BASH_SOURCE[0]%/*}" ;; *) _HD=. ;; esac
+_HD="$(cd "${_HD:-/}" && pwd)"
+if . "$_HD/lib/sleep.sh" 2>/dev/null \
   && sleep_active "$CLAUDE_HOME/state/sleep/current.json"; then
   exit 0
 fi

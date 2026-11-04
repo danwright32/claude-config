@@ -63,7 +63,10 @@ set -uo pipefail
 
 CS_TOKEN="__CLAUDE""_HOME__"
 
-ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) _HD="${BASH_SOURCE[0]%/*}" ;; *) _HD=. ;; esac
+_HD="$(cd "${_HD:-/}" && pwd)"
+ROOT="${1:-$(cd "$_HD/.." && pwd)}"
 [ -d "$ROOT" ] || { echo "check-home-paths: no such directory: $ROOT" >&2; exit 2; }
 
 # The synced set, as claude-sync carries it: its MIRROR_DIRS, plus skills, plus
@@ -95,7 +98,7 @@ SYNCED_DIRS=(hooks agents commands skills)
 # have carried, which is the loud failure this change exists to stop, rather than passing over a
 # file it would have (L42). And a scan quietly widened reads exactly like a normal one, so the
 # notice is printed on a pass as well as a failure (L98).
-UNMANAGED_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/unmanaged-skills.sh"
+UNMANAGED_LIB="$_HD/lib/unmanaged-skills.sh"
 UNMANAGED_SKILLS_LIB_LOADED=""
 if [ -r "$UNMANAGED_LIB" ]; then
   # shellcheck source=payload/hooks/lib/unmanaged-skills.sh
