@@ -191,15 +191,22 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
   return { text: [...out, ...unended].join('\n'), heredocs, removed, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted } } : {}) }
 }
 
-// The text from `from` to `to` in what dropHeredocs left, with the heredoc lines it removed from
-// within it put back: a run removed at `to` is the last of it, the `)` closing a substitution
-// standing on the line after the heredoc's delimiter.
+// Whether the substitution from `from` to `to` in what dropHeredocs left holds a run of heredoc lines
+// removed at `at`: one removed within it, a run at `to` being the last of it (the `)` closing it
+// standing on the line after the heredoc's delimiter), or, for one never closed and so read to the
+// end of the text, any run after it starts. The lines after the last line left are removed at a place
+// past the end of the text, so without that last case a substitution never closed lost the body of
+// a heredoc in it, and every command the body runs (lessons review of #2165).
+const holds = (text: string, from: number, to: number, at: number): boolean => at > from && (at <= to || to >= text.length)
+
+// The text from `from` to `to` in what dropHeredocs left, with the heredoc lines it holds put back.
 const restored = (text: string, removed: readonly { at: number; lines: string[] }[], from: number, to: number): string => {
   let out = ''
   let at = from
   for (const r of removed) {
-    if (r.at <= from || r.at > to) continue
-    out += text.slice(at, r.at) + r.lines.map(l => `${l}\n`).join('')
+    if (!holds(text, from, to, r.at)) continue
+    // A run past the end of the text stood after its last line, whose newline the text does not keep.
+    out += text.slice(at, r.at) + (r.at > text.length ? '\n' : '') + r.lines.map(l => `${l}\n`).join('')
     at = r.at
   }
   return out + text.slice(at, to)
@@ -978,6 +985,20 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   for (const s of subs) place(s.at, s.line)
   // A heredoc's body inside a substitution is read with it, so only the rest are read here.
   const inSub = (at: number) => subs.some(s => s.from <= at && at < s.to)
+  // A heredoc opened inside a substitution that holds none of its lines (`$(cat <<EOF)` with the
+  // body on the lines after): the reader cannot tell whether the shell reads those lines as the body
+  // or as commands (bash 3.2 ends the heredoc at the `)` and runs them), so they are read as both,
+  // never as neither (lessons review of #2165). Each run of lines is read once.
+  const runOf = (at: number) => removed.find(r => r.at > at)
+  const unheld = new Set<{ at: number; lines: string[] }>()
+  for (const h of heredocs) {
+    const r = runOf(h.at)
+    const sub = subs.find(s => s.from <= h.at && h.at < s.to)
+    if (!sub || !r || holds(text, sub.from, sub.to, r.at)) continue
+    if (!unheld.has(r)) place(h.at, readLine(r.lines.join('\n'), opts, subFeed))
+    unheld.add(r)
+    if (!h.quoted) for (const s of substitutions(h.body, true)) place(h.at, readLine(s.text, opts, subFeed))
+  }
   for (const h of [...heredocs, ...(unended ? [unended] : [])]) {
     if (!h.quoted && !inSub(h.at)) for (const s of substitutions(h.body, true)) place(h.at, readLine(s.text, opts, subFeed))
   }

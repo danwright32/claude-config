@@ -616,4 +616,36 @@ describe('pipeline: the text a command substitution puts in a word (#2141)', () 
   test("an unquoted heredoc's substitutions inside a substitution are read once", () => {
     expect(pipeline('x="$(cat <<EOF\n$(git push)\nEOF\n)"').filter(c => c.substitution).map(c => c.words)).toEqual([['git', 'push'], ['cat', '<<EOF']])
   })
+  // Lessons review of #2165: a substitution that never closes was read to the end of the text left
+  // once the heredoc lines were dropped, which stops before them, so a body read nowhere else lost
+  // every command it runs. Where the reader cannot place the body it keeps its commands, and the
+  // word stays unresolved.
+  const ran = (cmd: string) => pipeline(cmd).map(c => c.words.join(' '))
+  test('a heredoc inside a substitution that never closes still gives what its body runs', () => {
+    expect(ran('echo $(cat <<EOF\n$(git push)\nEOF')).toContain('git push')
+    expect(ran('echo "$(cat <<EOF\n$(git push)\nEOF')).toContain('git push')
+    const d = last('echo $(cat <<EOF\n$(git push)\nEOF')?.derived?.[1]
+    expect(d && 'unresolved' in d).toBe(true)
+    expect(d?.commands.map(c => c.words.join(' '))).toContain('git push')
+  })
+  test('a substitution nested in that body, or one never closed inside it, is read too', () => {
+    expect(ran('echo $(cat <<EOF\n$(echo $(git push))\nEOF')).toContain('git push')
+    expect(ran('echo $(echo $(cat <<EOF\n$(git push)\nEOF')).toContain('git push')
+    expect(ran('echo $(cat <<EOF\n$(cat <<END\n$(git push)\nEND\n)\nEOF')).toContain('git push')
+  })
+  test('a heredoc whose body stands past the end of the substitution it opens in still gives what the body runs', () => {
+    // The removed lines stand after the ) that closes the substitution, so they are at a place past
+    // its end and were put back nowhere.
+    expect(ran('echo $(cat <<EOF)\n$(git push)\nEOF')).toContain('git push')
+    expect(ran('echo "$(cat <<EOF)" ok\n`git push`\nEOF')).toContain('git push')
+    // bash 3.2 ends that heredoc at the ) and runs the lines after it as commands, so they are read
+    // as commands as well as a body, whichever the delimiter.
+    expect(ran('echo $(cat <<EOF)\ngit push\nEOF')).toContain('git push')
+    expect(ran("echo $(cat <<'EOF')\ngit push\nEOF")).toContain('git push')
+    const d = last('echo $(cat <<EOF)\n$(git push)\nEOF')?.derived?.[1]
+    expect(d && 'unresolved' in d).toBe(true)
+  })
+  test('a quoted heredoc in an unclosed substitution keeps its body as text, so nothing in it runs', () => {
+    expect(ran("echo $(cat <<'EOF'\n$(git push)\nEOF")).not.toContain('git push')
+  })
 })
