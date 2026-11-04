@@ -258,6 +258,11 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 // - Since #1954: an Edit or MultiEdit the guard would hold that would not apply to the file as it
 //   stands (rules.ts editWouldNotApply) is told so, to be sent again with the file's own text, with
 //   no card and nothing asked of Dan, never held as a change it cannot read.
+// - Since #2161: a .ts hook file's new words that a message's reading reaches only as the reasons a
+//   refusal or reader gives (rules.ts reasonsOnly: each copy the whole value of an object literal's
+//   field whose key no person reads, and no reached code reading that key but to copy it into
+//   another such key) pass (Dan, 2026-11-03). A changed or removed wording, a reason under a key a
+//   person reads (`deny`, `reason`, `text`), and a record handed whole to a message stay held.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const

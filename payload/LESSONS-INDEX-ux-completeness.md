@@ -108,3 +108,4 @@ which is NOT loaded into the session.
 - L732. A browser reload restores unsaved form edits, so a settings form rendered with defaultChecked shows them as stored: turn restoration off.
 - L734. Give every screen, especially a result, its own address that restores it on a fresh load, or refresh, copy link and Back all break.
 - L786. An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
+- L843. Join a time to its AM or PM, and a figure to its unit, with a non-breaking space, or a narrow column wraps the suffix alone.

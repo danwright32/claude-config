@@ -2778,7 +2778,9 @@ that path is positively another repository: one it cannot read is refused too.
 CI's environment step is the list the container is built from, and
 `tests/test-ci-environment-tools.sh` fails when claude-sync or any shell file in the repository
 invokes an interpreter or tool from its checked set (python3, perl, node, jq, rsync, pgrep and a few
-more) that the step does not name (#624).
+more) that the step does not name (#624). A tool named inside the quoted text of a message, such as
+`check "(python missing)"` or `echo "FAIL: ..."`, is not read as a call, while a `$( )` inside that
+message and any later argument still are (#2129).
 
 `tests/test-stat-order.sh` fails when claude-sync or any shell, TypeScript or JavaScript file in the
 repository asks BSD stat's `-f` before GNU's `-c`. On the Linux runner `stat -f` means "file system
@@ -3613,7 +3615,10 @@ and the `verdict` of the per language judge of inline code (writes files, runs a
 be read), moved here from scope-modes in #712; given `cwd` and `home`, each command also carries
 `folder`, the folder it runs in, a cd or pushd before it followed by the write reader's own reading
 of one and null where that cannot be followed (a variable the command did not set, `cd -`, a
-`popd`), the folder is it live asks GitHub about a merge in, #2000), of which files a command
+`popd`), the folder is it live asks GitHub about a merge in, #2000; and, for each word holding a
+command substitution, `derived` (#2141): what its substitutions run and, where each is a plain `cat`
+of a heredoc or a here string, the text it puts in the word, kept apart from the word as typed, or
+else `unresolved` with why, never empty and never safe), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
