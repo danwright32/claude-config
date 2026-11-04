@@ -232,6 +232,7 @@ parts_root="$AR_STATE_DIR/parts"
 parts=""
 parts_for() { printf '%s/%s.%s' "$parts_root" "$name" "$1"; }   # $1 = a run
 repo_label="$(basename "$top")"
+repository="$(ar_repository "$top" || true)"
 # The label: the caller's (the pull request's head branch), else this checkout's branch only when the
 # checkout stands on the reviewed commit, else the commit itself (claude-config#852). Line breaks and
 # spaces are removed, since the label is one field of the review file's header.
@@ -260,8 +261,8 @@ meta_of() {   # $1 = file, $2 = field
 record() {   # $1 = status, $2 = body, $3 = base or empty, $4 = how many groups, for a review in groups
   local now; now="$(date +%s)"
   {
-    printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=%s\nkind=pr\nbase=%s\n' \
-      "$repo_label" "$branch" "${full_sha:-$sha}" "$now" "$now" "$1" "${3:-}"
+    printf 'repo=%s\nrepository=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=%s\nkind=pr\nbase=%s\n' \
+      "$repo_label" "$repository" "$branch" "${full_sha:-$sha}" "$now" "$now" "$1" "${3:-}"
     [ -n "${4:-}" ] && printf 'groups=%s\n' "$4"
     printf 'findings=\n\n'
     printf '%s\n' "$2"
@@ -1002,8 +1003,8 @@ narrow_start() {
   fitted="$(ar_append_full_files "$diff_file" "$since" "$full_sha" $((PRR_MAX_BYTES - size)) "${narrow_specs[@]}")"
   in="${fitted%% *}"; out="${fitted#* }"; out="${out%% *}"
   started="$(date +%s)"
-  printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\nsince=%s\ndir=%s\n' \
-    "$repo_label" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$since" "$top" > "$pending" 2>/dev/null \
+  printf 'repo=%s\nrepository=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\nsince=%s\ndir=%s\n' \
+    "$repo_label" "$repository" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$since" "$top" > "$pending" 2>/dev/null \
     || { rm -f "$diff_file"; record could-not-run "Could not write $pending."; echo "The lessons review could not run: could not write its state."; return 0; }
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
   # Started by a subshell that ends at once, so the reviewer is never this hook's child, and one that
@@ -1099,8 +1100,8 @@ do_start() {
     parts="$(parts_for "$run_id")"
     if plan_groups; then
       started="$(date +%s)"
-      printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\ndir=%s\ngroups=%s\nrun=%s\n' \
-        "$repo_label" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$top" "$groups_n" "$run_id" > "$pending" 2>/dev/null \
+      printf 'repo=%s\nrepository=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\ndir=%s\ngroups=%s\nrun=%s\n' \
+        "$repo_label" "$repository" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$top" "$groups_n" "$run_id" > "$pending" 2>/dev/null \
         || { rm -rf "$parts"; record could-not-run "Could not write $pending."; echo "The lessons review could not run: could not write its state."; return 0; }
       touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
       # Detached, as one reviewer is: the process that runs every group at once, waits for them,
@@ -1127,8 +1128,8 @@ do_start() {
   note="diff plus the full text of $in of $((in + out)) changed files"
   [ "${#left_excl[@]}" -gt 0 ] && note="$note; the whole diff was $(ar_size_text "$whole_size"), over the $((PRR_MAX_BYTES / 1024)) KB cap, so the files named below were left out"
   started="$(date +%s)"
-  printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\ndir=%s\n' \
-    "$repo_label" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$top" > "$pending" 2>/dev/null \
+  printf 'repo=%s\nrepository=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\ndir=%s\n' \
+    "$repo_label" "$repository" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$top" > "$pending" 2>/dev/null \
     || { rm -f "$diff_file"; record could-not-run "Could not write $pending."; echo "The lessons review could not run: could not write its state."; return 0; }
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
   # Detached: no standard streams held, not waited for, and started by a subshell that ends at once,
@@ -1154,7 +1155,7 @@ run_reviewer() {   # $1 = state dir, $2 = name, $3 = diff file, $4 = base, $5 = 
   local rpid rc
   nohup python3 "$PRR_LIB/ai-review-run.py" \
     --state-dir "$1" --key "$key" --sha "$full_sha" --name "$2" --kind pr --base "$4" ${8:+--since "$8"} \
-    --repo-label "$repo_label" --branch "$branch" --repo-dir "$top" \
+    --repo-label "$repo_label" --repository "$repository" --branch "$branch" --repo-dir "$top" \
     --model "$5" --prompt-file "$PRR_LIB/ai-review-prompt.txt" \
     --scope-file "$PRR_LIB/ai-review-pr-scope.txt" \
     --lessons-dir "${AI_REVIEW_LESSONS_DIR:-$PRR_LIB/../..}" \
@@ -1385,8 +1386,8 @@ assemble_groups() {
   done
   [ "$fin" -gt 0 ] || fin="$(date +%s)"
   {
-    printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\nfindings=%s\ngroups=%s\ngroup_starts=%s\n\n' \
-      "$repo_label" "$branch" "$full_sha" "$(meta_of "$pending" started)" "$fin" "$status" \
+    printf 'repo=%s\nrepository=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\nfindings=%s\ngroups=%s\ngroup_starts=%s\n\n' \
+      "$repo_label" "$repository" "$branch" "$full_sha" "$(meta_of "$pending" started)" "$fin" "$status" \
       "$(meta_of "$pending" model)" "$(meta_of "$pending" deadline)" "$(meta_of "$pending" base)" \
       "$([ "$status" = ok ] && printf '%s' "$total")" "$n" "$starts"
     if [ "$status" = ok ]; then
