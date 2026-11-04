@@ -2778,7 +2778,9 @@ that path is positively another repository: one it cannot read is refused too.
 CI's environment step is the list the container is built from, and
 `tests/test-ci-environment-tools.sh` fails when claude-sync or any shell file in the repository
 invokes an interpreter or tool from its checked set (python3, perl, node, jq, rsync, pgrep and a few
-more) that the step does not name (#624).
+more) that the step does not name (#624). A tool named inside the quoted text of a message, such as
+`check "(python missing)"` or `echo "FAIL: ..."`, is not read as a call, while a `$( )` inside that
+message and any later argument still are (#2129).
 
 `tests/test-stat-order.sh` fails when claude-sync or any shell, TypeScript or JavaScript file in the
 repository asks BSD stat's `-f` before GNU's `-c`. On the Linux runner `stat -f` means "file system
