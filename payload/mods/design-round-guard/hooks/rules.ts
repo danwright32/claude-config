@@ -651,6 +651,48 @@ export const outputTrusted = (word: string): boolean => {
   return inner.length > 0 && inner.every((cmd) => /^\s*git\s+(-C\s+[^\s;&|`()<>]+\s+)?rev-parse(\s+[^;&|\n`$()<>]*)?\s*$/.test(cmd))
 }
 
+// The two values of a variable Dan trusts to name a new file outside every screen path (#2171).
+const FRESH_TEMP = new Set(['$(mktemp)', '$(mktemp -d)'])
+// A builtin that sets the variable its argument names, so a name built at run time may be any one.
+const SETS_NAMED = /^(?:export|declare|typeset|local|readonly|read|printf|getopts|mapfile|readarray|unset|let)$/
+/**
+ * Whether a write to a variable alone (`$T`, `${T}`) whose every value mod-kit's reader gives is
+ * `$(mktemp)` or `$(mktemp -d)` names a new file outside every screen path (#2171, Dan, 2026-11-04,
+ * picker answer: trust bare mktemp the way git rev-parse is trusted). A template, -t, -p, any other
+ * flag and backticks are not trusted. Stricter than his rule: nothing is trusted where the command
+ * could make mktemp print another name, or give the variable a value the reader did not give. It is
+ * read with its quotes and backslashes taken out, as zsh takes `"mktemp"(){` and `m\ktemp(){` for a
+ * function named mktemp, and it must not mention TMPDIR or PATH (zsh's `path` array included, set,
+ * appended, by element, or named to `typeset`, `read`, `set` or another setting builtin), define any
+ * function, name mktemp anywhere but those two values, hash a command, use `$'...'`, hand a setting
+ * builtin a name built at run time (`export ${V}DIR=`), or assign the variable anywhere any other
+ * value (a prefix assignment, `T=x cmd`, which the reader drops, an append, an element).
+ */
+export const freshTemp = (word: string, values: readonly string[], command: string): boolean => {
+  const alone = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/.exec(word)
+  if (!alone || values.length === 0 || !values.every((v) => FRESH_TEMP.has(v))) return false
+  if (command.includes("$'")) return false
+  const text = command.replace(/["'\\]/g, '')
+  if (/TMPDIR|\bPATH\b|(?:^|[^A-Za-z0-9_$-])path(?:\[[^\]]*\])?\+?=|\(\s*\)|\bfunctions?\b|\bhash\b|\balias\b/.test(text)) return false
+  if (/mktemp/.test(text.replace(/\$\(mktemp(?: -d)?\)/g, ''))) return false
+  for (const part of text.split(/[;&|\n]/)) {
+    const words = part.trim().split(/\s+/)
+    let i = 0
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++
+    if (!SETS_NAMED.test(words[i] ?? '') && words[i] !== 'set') continue
+    // zsh's path array is PATH: `typeset path`, `read -A path` or `set -A path` may change it.
+    if (words.slice(i + 1).some((w) => w.split(/[=[]/)[0] === 'path')) return false
+    if (words[i] === 'set') continue
+    if (words.slice(i + 1).some((w) => (w.split('=')[0] as string).includes('$'))) return false
+  }
+  const name = (alone[1] ?? alone[2]) as string
+  for (const a of text.matchAll(new RegExp(`(?:^|[^A-Za-z0-9_])${name}(\\[[^\\]]*\\])?(\\+?)=`, 'g'))) {
+    if (a[1] || a[2]) return false
+    if (!/^\$\(mktemp(?: -d)?\)(?=$|[\s;&|)])/.test(text.slice((a.index ?? 0) + a[0].length))) return false
+  }
+  return true
+}
+
 /**
  * Whether a file name the shell expands as a pattern may name a look changing file (#1015): `look`
  * when some name it can expand to is one (`[t]ailwind.config.ts`, `app/[t]okens.json`, `page.ts[x]`,

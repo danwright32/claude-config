@@ -64,6 +64,7 @@ import {
   nameFromOutput,
   nameFromVariable,
   outputTrusted,
+  freshTemp,
   relTo,
   shapeKind,
   shellVarPath,
@@ -363,7 +364,7 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // one file its characters name (#1951).
 // `unexpanded`, for a file a run is handed whose every $ is in single quotes or after a backslash
 // (mod-kit's mark, #1953), which holds no variable's value.
-type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true; removes?: true; quoted?: true; unexpanded?: true }
+type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true; removes?: true; quoted?: true; unexpanded?: true; values?: string[] }
 
 // Every file a call writes or removes, and whether it may write the guard's own record where its
 // words do not say what it writes.
@@ -381,7 +382,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   const targets: Target[] = []
   // Whether the command names the session's scratchpad, where a round's files go (#1191).
   const scratch = namesScratchpad(command, at.session, at.temps)
-  for (const f of w.files) targets.push({ word: f.word, ...(f.path ? { path: f.path } : {}), ...(f.folder ? { folder: f.folder } : {}) })
+  for (const f of w.files) targets.push({ word: f.word, ...(f.path ? { path: f.path } : {}), ...(f.folder ? { folder: f.folder } : {}), ...(f.values ? { values: f.values } : {}) })
   // A removal or an emptying changes the look as surely as a write; a stamp, a folder or a mode does not.
   for (const c of w.changes)
     if (c.does === 'remove' || c.does === 'truncate') targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}), ...(c.does === 'remove' ? { removes: true as const } : {}) })
@@ -1018,6 +1019,9 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       // fills in itself (a variable or a command's output in its last part) may be one: `$D/spec.json`
       // is a spec wherever $D is, so what its heredoc's data names is data (#1151).
       const unknownName = /[$`]/.test(t.word.split('/').pop() ?? '')
+      // A variable alone that only ever holds bare `mktemp` or `mktemp -d` output names a new file
+      // outside every screen path (rules.ts freshTemp; Dan, 2026-11-04, #2171).
+      if (!t.path && tool === 'Bash' && t.values && freshTemp(t.word, t.values, String(input.command ?? ''))) continue
       const named = !t.path && tool === 'Bash' && unknownName ? mentionedLookFiles(String(input.command ?? '')) : []
       if (named.length) {
         unsureFiles.push(t.word)

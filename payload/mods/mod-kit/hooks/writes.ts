@@ -72,6 +72,15 @@ const DECLARES = new Set(['export', 'declare', 'typeset', 'local', 'readonly'])
 const READS = new Set(['read', 'mapfile', 'readarray', 'getopts', 'unset'])
 const LOOPS = new Set(['for', 'select'])
 const RUNS_TEXT = new Set(['eval', 'source', '.'])
+// #2171: a write to a variable alone (`> "$T"`) whose value the reader cannot read is given with
+// every value any plain assignment anywhere in the command gives it, as written (`$(mktemp)`): a loop
+// or a function may run a later one first, so none is dropped. None is given where it was not set
+// before the write (its value is the environment's), or where it may be set any other way anywhere
+// in the command: read and the like, a loop, printf -v, an append, a declare with options, a
+// `${T:=x}` or `${T=x}`, or any text eval, source, trap or alias runs, which may set it.
+const RUNS_TEXT_LATER = new Set(['trap', 'alias'])
+const SETS_IF_UNSET = /\$\{([A-Za-z_][A-Za-z0-9_]*):?=/g
+const ALONE = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/
 type Vars = Map<string, string | null>
 // A loop word the reader follows: nothing the shell expands or matches against files. One holding a
 // space (an issue's title, quoted) is followed too, read whole and as each piece a shell splitting
@@ -596,6 +605,18 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   const seen = new Set<string>()
   let dir: string | undefined = cwd
   let vars: Vars = new Map()
+  // #2171: every value each variable is given anywhere in the command, null once anything else may
+  // set it; whether text the reader does not read may set any; and, for each write to a variable
+  // alone, that variable, or null where it was not set at some write.
+  const setBy = new Map<string, string[] | null>()
+  let textSets = false
+  const alone = new Map<ModKitWrite, string | null>()
+  const aloneIn = (word: string): string | null | undefined => {
+    const m = ALONE.exec(word)
+    if (!m) return undefined
+    const name = (m[1] ?? m[2]) as string
+    return vars.has(name) ? name : null
+  }
   // Each variable a for loop over plain words sets, with its words (#1953); a name here is in no
   // vars entry.
   let each = new Map<string, string[]>()
@@ -615,16 +636,15 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const key = path ?? `word:${word}`
     // A path written twice is kept once, a tree on either keeping the tree, as a change does.
     if (seen.has(key)) {
-      if (tree) {
-        const had = files.find(f => (path ? f.path === path : !f.path && f.word === (shown ?? asWritten.get(word) ?? word)))
-        if (had) had.tree = true
-      }
+      const had = files.find(f => (path ? f.path === path : !f.path && f.word === (shown ?? asWritten.get(word) ?? word)))
+      if (had && tree) had.tree = true
+      if (had && alone.has(had) && aloneIn(had.word) === null) alone.set(had, null)
       return
     }
     seen.add(key)
     const sources = extra?.sources
     const folder = path ? undefined : patternFolder(word, dir, home)
-    files.push({
+    const entry: ModKitWrite = {
       word: shown ?? asWritten.get(word) ?? word,
       ...(path ? { path } : {}),
       ...(folder ? { folder } : {}),
@@ -632,7 +652,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       ...(extra?.edits ? { edits: true as const } : {}),
       ...(extra?.mayBeFolder ? { mayBeFolder: true as const } : {}),
       ...(tree ? { tree: true as const } : {}),
-    })
+    }
+    files.push(entry)
+    const set = path ? undefined : aloneIn(entry.word)
+    if (set !== undefined) alone.set(entry, set)
   }
   const named = (w: string, edits?: true, shown?: string) => add(w, absolutePath(w, dir, home), edits ? { edits } : undefined, shown)
   // A redirect target standard output goes into (#1976), named as `files` names it; a device or a
@@ -702,6 +725,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   const unknown = (name: string) => {
     each.delete(name)
     vars.set(name, null)
+    setBy.set(name, null)
   }
   // A word read once for each word of every loop variable in it (#1953), or as it is past MAX_EACH.
   // A value holding a space is read whole, as a quoted use hands it on, and as each piece a shell
@@ -740,6 +764,8 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     if (home) value = value.replace(HOME_VAR, home).replace(/^~(?=\/|$)/, home)
     const known = /[$`()]/.test(value) ? null : value
     vars.set(name, vars.has(name) && vars.get(name) !== known ? null : known)
+    const given = setBy.get(name)
+    if (given !== null) setBy.set(name, [...new Set([...(given ?? []), m[2] as string])])
   }
   // The folder outside each subshell still open: the reader gives its parentheses as commands of
   // their own (#700), and a cd inside one ends with it. A closing one with no opening leaves the
@@ -750,6 +776,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   for (const c of cmds) {
     folders.push(dir)
     const written = c.words
+    for (const w of written) for (const m of w.matchAll(SETS_IF_UNSET)) setBy.set(m[1] as string, null)
     if (written.length === 1 && written[0] === '(') {
       outside.push(dir)
       varsOutside.push(new Map(vars))
@@ -859,6 +886,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     }
     // Text run by eval or source may set any variable, a loop's included (lessons review of #1968).
     if (RUNS_TEXT.has(name)) for (const k of [...vars.keys(), ...each.keys()]) unknown(k)
+    if (RUNS_TEXT.has(name) || RUNS_TEXT_LATER.has(name)) textSets = true
     const v = name === 'printf' ? rest.indexOf('-v') : -1
     if (v >= 0 && rest[v + 1] !== undefined) unknown(rest[v + 1] as string)
     // Whether this command changes files given as operands, for one xargs runs.
@@ -1035,6 +1063,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   // waits for ever, so the call never runs. Taken out here, where every input is gathered, rather than
   // at each place one is named; the write stays, as one whose input cannot be known before it runs.
   const readable = unnamed.map(u => (u.inputs.some(isDevice) ? { ...u, inputs: u.inputs.filter(p => !isDevice(p)) } : u))
+  for (const [f, name] of alone) {
+    const given = name === null || textSets ? null : setBy.get(name)
+    if (given?.length) f.values = given
+  }
   return { writes: { files, changes, unnamed: readable, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}), ...(stdout.length ? { stdout } : {}) }, folders }
 }
 
@@ -1117,6 +1149,10 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
     if (f.edits) had.edits = true
     if (f.mayBeFolder) had.mayBeFolder = true
     if (f.sources?.length) had.sources = [...new Set([...(had.sources ?? []), ...f.sources])]
+    // #2171: values hold only where both writes of the word have them; the line's assignments never
+    // reach a substitution's write.
+    if (had.values && f.values) had.values = [...new Set([...had.values, ...f.values])]
+    else delete had.values
   }
   for (const c of from.changes) {
     const had = into.changes.find(x => x.does === c.does && (c.path ? x.path === c.path : !x.path && x.word === c.word))
