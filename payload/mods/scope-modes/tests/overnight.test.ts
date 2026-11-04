@@ -172,8 +172,36 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('gh pr merge 5 --squash --subject x --body y')).toBeUndefined()
     expect(await bash('gh pr merge 5 --squash --admin')).toBe('run gh pr merge with --admin')
     expect(await bash('gh pr merge 5 --auto --squash')).toBeUndefined()
+    // With no judge of admin merges handed in, --admin is refused however it is pinned (#2125).
+    expect(await bash(`gh pr merge 5 --admin --squash --match-head-commit ${'a'.repeat(40)}`)).toBe('run gh pr merge with --admin')
     expect(await bash('gh pr create --title x --body y --base main --head b --draft')).toBeUndefined()
     expect(await bash('gh pr create --title x --body y --reviewer someone')).toBe('run gh pr create with --reviewer')
+  })
+  test('an admin merge is put to the judge handed in, only after the write passes the same repository rule (#2125)', async () => {
+    const sha = 'a'.repeat(40)
+    const asked: { repo: string; act: string }[] = []
+    const withJudge = (command: string, answer: string | undefined, cwd = CWD) =>
+      overnightRefusal(
+        {
+          tool: 'Bash', input: { command }, raw: command, commands: readCommands(command), writes: commandWrites(command, cwd, HOME), cwd, home: HOME, read,
+          adminMerge: async (g, repo) => {
+            asked.push({ repo, act: `${g.sub} ${g.act}` })
+            return answer
+          },
+        },
+        look,
+      )
+    const c = `gh pr merge 5 --admin --squash --match-head-commit ${sha}`
+    expect(await withJudge(c, undefined)).toBeUndefined()
+    expect(await withJudge(c, 'admin merge PR #5 in o/r, whose required check test is failure on its head commit')).toBe('admin merge PR #5 in o/r, whose required check test is failure on its head commit')
+    expect(asked).toEqual([{ repo: 'o/r', act: 'pr merge' }, { repo: 'o/r', act: 'pr merge' }])
+    // Another repository is refused by the write rule, and the judge is never asked.
+    expect(await withJudge(`${c} --repo other/x`, undefined)).toBe('write to other/x from a checkout of o/r')
+    expect(await withJudge(c, undefined, '/Users/x/nowhere')).toBe(unresolved)
+    expect(asked.length).toBe(2)
+    // A flag the night bans outright is refused before any judge: deleting the branch.
+    expect(await withJudge(`${c} --delete-branch`, undefined)).toBe('delete a branch')
+    expect(asked.length).toBe(2)
   })
   test('gh run by any wrapper the reader does not look past is refused (#834 review of 46f07ff)', async () => {
     expect(await bash('setsid gh issue comment 5 --body x')).toBe(unresolved)
