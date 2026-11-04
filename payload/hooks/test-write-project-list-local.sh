@@ -75,8 +75,8 @@ write() { # write <host> <out> [repo]
 # ---------------------------------------------------------------------------
 # The ordinary case: the newest commit lists nothing for MacTwo, so the one before it is used.
 # ---------------------------------------------------------------------------
-OUT="$TMPROOT/home/projects.local.txt"
-mkdir -p "$TMPROOT/home"
+OUT="$TMPROOT/claude-dir/projects.local.txt"
+mkdir -p "$TMPROOT/claude-dir"
 out_w="$(write MacTwo "$OUT")"; code_w=$?
 [ "$code_w" -eq 0 ] \
   && check "the writer writes the local file from history" ok \
@@ -99,9 +99,10 @@ grep -q '2 entries' <<< "$out_w" \
 grep -q 'WorkOne\|WorkTwo' <<< "$out_w" \
   && check "and never prints a name it moved" "out=$out_w" \
   || check "and never prints a name it moved" ok
-ls "$TMPROOT/home" | grep -qv '^projects\.local\.txt$' \
-  && check "and leaves no half written copy beside it" "dir=$(ls "$TMPROOT/home")" \
-  || check "and leaves no half written copy beside it" ok
+dir_listing="$(ls -A "$TMPROOT/claude-dir")"
+[ "$dir_listing" = "projects.local.txt" ] \
+  && check "and leaves no half written copy beside it" ok \
+  || check "and leaves no half written copy beside it" "dir=$dir_listing"
 
 # What it wrote is what the check reads: the round trip passes with both entries counted.
 out_rt="$(PROJECT_LIST_FILE="$CURRENT" PROJECT_LIST_LOCAL_FILE="$OUT" PROJECT_LIST_HOST=MacTwo bash "$CHECK" 2>&1)"; code_rt=$?

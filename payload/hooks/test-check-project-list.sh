@@ -657,6 +657,23 @@ grep -q '^@projects\.local\.txt' "$REAL" \
   || check "and never as a line start import, which the sync would refuse where it is missing" ok
 
 # ---------------------------------------------------------------------------
+# lib/project-list.sh, the shared reader the checker and the writer both source, asked directly:
+# the same block read through its own functions must say the local file holds its entries, and
+# must refuse a line start import, the one form the sync will not let be missing.
+# ---------------------------------------------------------------------------
+lib_out="$(
+  . "$DIR/lib/project-list.sh" || exit 9
+  pl_section < "$REAL" | pl_block Dans-MacBook-Pro > "$TMPROOT/lib-block.txt"
+  pl_names_local_file < "$TMPROOT/lib-block.txt" && echo "inline=yes" || echo "inline=no"
+  pl_entry_lines < "$TMPROOT/lib-block.txt" | wc -l | tr -d ' '
+  printf '%s\n' '@projects.local.txt' | pl_names_local_file && echo "linestart=yes" || echo "linestart=no"
+  printf '%s\n' 'Listed in the @projects.local.txt file.' | pl_names_local_file && echo "sentence=yes" || echo "sentence=no"
+)"
+[ "$lib_out" = "$(printf 'inline=yes\n0\nlinestart=no\nsentence=yes')" ] \
+  && check "lib/project-list.sh reads the real work block as kept in the local file, with no entries" ok \
+  || check "lib/project-list.sh reads the real work block as kept in the local file, with no entries" "got: $lib_out"
+
+# ---------------------------------------------------------------------------
 # The real file, last, by which point the checker has been watched failing several ways. On this
 # Mac it names real projects; on the CI runner it names neither Mac and says so.
 #
