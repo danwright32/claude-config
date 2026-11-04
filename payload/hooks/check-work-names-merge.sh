@@ -35,8 +35,8 @@
 #
 # Seams, for the tests: WN_MERGE_READ_TRIES (3 in all), WN_MERGE_READ_RETRY_SECONDS (2),
 # WN_MERGE_READ_BUDGET_SECONDS (15, against a hook timeout of 30; MT_GATE_READ_BUDGET_SECONDS, which
-# merge-when-ready.sh sets, when it is unset), WN_MERGE_SLEEP (sleep), all chosen, not measured;
-# WN_MERGE_SCANNER (the scanner file).
+# merge-when-ready.sh sets, when it is unset; either is clamped to 15), WN_MERGE_SLEEP (sleep), all
+# chosen, not measured; WN_MERGE_SCANNER (the scanner file, honoured only with HOOK_TESTS_RUNNING=1).
 
 set -uo pipefail
 
@@ -59,7 +59,12 @@ WHAT="Cannot tell whether this merge publishes a work organisation or repository
   exit 2
 }
 
-SCANNER="${WN_MERGE_SCANNER:-$HOOK_DIR/lib/work-names.py}"
+# WN_MERGE_SCANNER names the scanner whose answer is the verdict, so it is honoured only under the
+# hooks' own test runner, which exports HOOK_TESTS_RUNNING=1 to every suite (run-all-tests.sh). This
+# hook reads Claude Code's own environment, and a script named there that exits 0 would approve every
+# merge; anywhere else the gate's own scanner judges, whatever the variable says (claude-config#2217).
+SCANNER="$HOOK_DIR/lib/work-names.py"
+[ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "${WN_MERGE_SCANNER:-}" ] && SCANNER="$WN_MERGE_SCANNER"
 SCOPE_PATH="payload/hooks/lib/work-names.py"
 
 # On stderr with exit 2 rather than through deny(), which builds its JSON with jq, one of the tools
@@ -130,6 +135,20 @@ wn_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; e
 READ_TRIES="$(wn_num "${WN_MERGE_READ_TRIES:-}" 3)"
 READ_WAIT="$(wn_num "${WN_MERGE_READ_RETRY_SECONDS:-}" 2)"
 READ_DEADLINE="$(mt_gate_read_budget "${WN_MERGE_READ_BUDGET_SECONDS:-}" 15)"
+# Capped, whichever setting named it (claude-config#2217): the hook is killed at its timeout of 30
+# (settings.hooks.json), and after these reads the work repository list is given up to 12 seconds
+# more, so 15 leaves 3 for the refusal itself. A longer budget is clamped to the cap rather than
+# ignored, since it asks for as long as possible and the cap is the longest this hook can honour;
+# ignoring it would hand the choice to the next setting, which may be just as long. That holds even
+# where merge-when-ready.sh asks this gate under no hook timeout with its 90. mt_gate_read_budget has
+# already refused anything but digits; four or more is past the cap however the shell would read it,
+# and the rest are read in base ten, since a leading zero is octal to the shell and 08 crashed it.
+READ_BUDGET_CAP=15
+case "$READ_DEADLINE" in
+  ????*) READ_DEADLINE="$READ_BUDGET_CAP" ;;
+  *) READ_DEADLINE=$(( 10#$READ_DEADLINE )) ;;
+esac
+[ "$READ_DEADLINE" -le "$READ_BUDGET_CAP" ] || READ_DEADLINE="$READ_BUDGET_CAP"
 READ_SLEEP="${WN_MERGE_SLEEP:-sleep}"
 BUDGET_SPENT="this hook's read budget of $READ_DEADLINE seconds was spent before it could be read"
 TRIED_WITHIN=". Tried within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)"
