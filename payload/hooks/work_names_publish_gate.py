@@ -38,18 +38,54 @@ text the name is in; it is never written to a file or a log.
 
 No override: the remedy is always open, rewrite the text.
 
+WRITES INSIDE A SCRIPT (claude-config#2183). The command hook sees only the Bash command, so a gh
+write a Python or shell script makes is invisible to it (on 2026-11-03 a scrub made 239 of them).
+So the same rule also runs as the guard on gh: bin/gh, put first on a session's PATH by the
+SessionStart hook gh-guard-path.sh, calls this module with --gh <real gh> -- <its arguments>. That
+mode judges the real argument list, refuses with exit 1 and withholds the matched name (a script's
+error output can land in a log), and otherwise execs the real gh with its exit code unchanged. A
+body read from standard input is copied to a temporary file, judged there, and handed to the real
+gh unchanged. Any exception refuses. Both modes take the guard off PATH at import, so the gh this
+module runs for its own reads is the real one.
+
+GH ALIASES (Dan, on #2183). A command whose first word is not one of gh's own commands is read as
+an alias from gh alias list and judged as what it expands to, with gh's $N substitution and the
+leftover arguments appended; a shell alias is judged as its shell text. The refusal says which alias
+it went through. The guard refuses a possible alias whose list cannot be read (cannot tell); the
+command hook passes it, as it did before, since the guard refuses it when it runs.
+
+A SESSION WITHOUT THE GUARD. Every session running when this ships, and any session whose env file
+does not put the guard first on PATH, keeps exactly the checks it had: refusing scripts there would
+stop merge-when-ready.sh, so every merge on both Macs, until each session restarted. The command
+hook tells it once (a stamp per session id under WN_SCRIPTS_NOTICE_DIR) that gh writes inside
+scripts are not checked until a new session starts. Not covered at all: gh run by its absolute path,
+a script that rewrites PATH, curl or an API library, and gh extensions.
+
 Seams (tests): WORK_NAMES_EXTRA_HASHES, WORK_NAMES_REGISTRY_READER and WORK_NAMES_PROJECT_LIST,
 read by lib/work-names.py;
-WN_PUBLISH_BUDGET_SECONDS, the whole run's time for GitHub (35, against a hook timeout of 45).
+WN_PUBLISH_BUDGET_SECONDS, the whole run's time for GitHub (35, against a hook timeout of 45);
+WN_SCRIPTS_NOTICE_DIR and WN_SESSION_ENV_DIR, read by check-work-names-publish.sh for the notice.
 """
 import importlib.util
 import json
 import os
 import re
+import shlex
 import sys
+import tempfile
 
 sys.dont_write_bytecode = True
 _HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
+
+
+def _without_guard(path):
+    """PATH without the guard on gh (bin/gh, claude-config#2183), so the gh this gate runs for its own
+    reads is the real one: through the guard, every one of them would start this gate again."""
+    guard = os.path.realpath(os.path.join(_HERE, "bin"))
+    return ":".join(d for d in (path or "").split(":") if d and os.path.realpath(d) != guard)
+
+
+os.environ["PATH"] = _without_guard(os.environ.get("PATH"))
 
 
 def _load(name, path):
@@ -153,7 +189,7 @@ def judge(what, slug, cwd, gh_repo, command, bodies):
         return None
     hit = find(command, matcher, odd)
     if hit:
-        return "%s posts to %s, a public repository, and its text names `%s`." % (what, full, hit)
+        return "%s posts to %s, a public repository, and its text names %s." % (what, full, _shown(hit))
     for shown, text in bodies:
         if text is None:
             return ("%s posts to %s, a public repository, from %s, which this command writes from "
@@ -162,8 +198,17 @@ def judge(what, slug, cwd, gh_repo, command, bodies):
                     % (what, full, shown))
         hit = find(text, matcher, odd)
         if hit:
-            return "%s posts to %s, a public repository, and %s names `%s`." % (what, full, shown, hit)
+            return "%s posts to %s, a public repository, and %s names %s." % (what, full, shown, _shown(hit))
     return None
+
+
+# The command hook names the name it matched: only the session sees it, and the session already holds
+# the text. The guard on gh (--gh) withholds it, since a script's error output can land in a log.
+_WITHHOLD = []
+
+
+def _shown(hit):
+    return "a work organisation or repository" if _WITHHOLD else "`%s`" % hit
 
 
 def _read(word, cwd):
@@ -210,18 +255,137 @@ def api_writes(command, cwd):
     return out
 
 
-def evaluate(command, cwd):
-    """-> [reasons]. Raises nothing: what cannot be told is a reason."""
+# gh's own top level commands. gh never lets an alias shadow one, so only a first word outside this set
+# can be an alias (claude-config#2183). A word missing here is only asked about as an alias, never
+# passed unjudged: an alias list that does not hold it means it is not one.
+BUILTIN = frozenset("""accessibility agent-task alias api attestation auth browse cache codespace completion
+config copilot extension gist gpg-key help issue label licenses org pr preview project release repo
+ruleset run search secret ssh-key status variable version workflow""".split())
+ALIAS_LINE = re.compile(r"^([^\s:]+): (.*)$")
+_ALIASES = []
+
+
+def _alias_value(raw):
+    if raw.startswith("'") and raw.endswith("'") and len(raw) >= 2:
+        return raw[1:-1].replace("''", "'")
+    if raw.startswith('"') and raw.endswith('"') and len(raw) >= 2:
+        return json.loads(raw)
+    if raw[:1] in ("'", '"', "|", ">", "&", "*", "!", "[", "{"):
+        raise ValueError("a value written in a form this reader does not read: %s" % raw[:40])
+    return raw
+
+
+def aliases():
+    """-> {name: expansion}, from `gh alias list`, read once per run, or raises CannotTell.
+
+    gh prints each alias as YAML: `name: value`, the value quoted when it must be, or a block
+    (`|-`) on the indented lines after it. Anything else is not read as a guess."""
+    if _ALIASES:
+        return _ALIASES[0]
+    ok, out, err = _gh(["gh", "alias", "list"], None, None, None)
+    if not ok:
+        raise CannotTell("the gh aliases could not be read (%s)" % (err or "gh alias list failed")[:200])
+    got, lines, i = {}, out.splitlines(), 0
+    try:
+        while i < len(lines):
+            line = lines[i]
+            i += 1
+            if not line.strip():
+                continue
+            m = ALIAS_LINE.match(line)
+            if not m:
+                raise ValueError("a line that is not an alias: %s" % line[:40])
+            name, raw = m.group(1), m.group(2).strip()
+            if raw in ("|", "|-"):
+                block = []
+                while i < len(lines) and (lines[i].startswith(" ") or not lines[i].strip()):
+                    block.append(lines[i])
+                    i += 1
+                pad = min((len(b) - len(b.lstrip(" ")) for b in block if b.strip()), default=0)
+                got[name] = "\n".join(b[pad:] for b in block).rstrip("\n") + ("\n" if raw == "|" else "")
+            else:
+                got[name] = _alias_value(raw)
+    except ValueError as e:
+        raise CannotTell("the gh aliases could not be read: %s" % e)
+    _ALIASES.append(got)
+    return got
+
+
+def expand_alias(args):
+    """-> (alias name, the gh command text it runs) when args (gh's, without gh) run an alias, else None.
+
+    gh's own expansion: $1, $2 ... take the arguments after the alias name, and the arguments no
+    placeholder took go on the end. A shell alias (`!...`) is the shell command with the arguments
+    after it, so their text is judged with it. Raises CannotTell when the first word could be an
+    alias and the aliases cannot be read."""
+    if not args or args[0].startswith("-") or args[0] in BUILTIN:
+        return None
+    table = aliases()
+    if args[0] not in table:
+        return None
+    expansion, rest = table[args[0]], list(args[1:])
+    if expansion.startswith("!"):
+        return args[0], expansion[1:] + (" " + shlex.join(rest) if rest else "")
+    extra = []
+    for n, a in enumerate(rest, 1):
+        if "$%d" % n in expansion:
+            expansion = expansion.replace("$%d" % n, a)
+        else:
+            extra.append(a)
+    try:
+        words = shlex.split(expansion)
+    except ValueError as e:
+        raise CannotTell("the gh alias %s expands to text that cannot be read (%s)" % (args[0], e))
+    return args[0], shlex.join(["gh"] + words + extra)
+
+
+def alias_runs(command):
+    """Each gh alias the command runs: [(alias name, the command it runs, with any assignments in
+    front of it)]. Raises CannotTell as expand_alias does."""
+    out = []
+    pipelines, _ = scan._stages(command)
+    for stages in pipelines:
+        if not isinstance(stages, list):
+            continue
+        for words, _redirects, _heredocs in stages:
+            at = next((i for i, w in enumerate(words) if os.path.basename(w) == "gh"), None)
+            if at is None or not scan.gh_command(words):
+                continue
+            front = [w for w in words[:at] if scan.ASSIGNMENT.match(w)]
+            got = expand_alias(words[at + 1:])
+            if got:
+                out.append((got[0], " ".join([shlex.quote(w) for w in front] + [got[1]])))
+    return out
+
+
+def evaluate(command, cwd, depth=0):
+    """-> [reasons]. Raises nothing: what cannot be told is a reason.
+
+    A gh alias the command runs is judged as the command it expands to (claude-config#2183). One
+    whose expansion cannot be read is the guard's to refuse (bin/gh, which judges every gh a running
+    command makes); here it passes as it did before, so a session without the guard in front is told
+    once that such writes are not checked, and is never refused more than before."""
     reasons = []
+    if depth < 2 and re.search(r"\bgh\b", command or ""):
+        try:
+            runs = alias_runs(command)
+        except (CannotTell, scan.Unreadable):
+            runs = []
+        for name, text in runs:
+            for why in evaluate(text, cwd, depth + 1):
+                why = "through the gh alias %s, %s" % (name, why)
+                if why not in reasons:
+                    reasons.append(why)
     try:
         found = scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS)
         apis = api_writes(command, cwd) if re.search(r"\bapi\b", command) else []
     except scan.Unreadable as e:
         named = scan.gated_in_text(command, KINDS) or CRUDE_API.search(command or "")
         if named:
-            return ["this command could not be read (%s), and it names a gh command that posts text, so "
-                    "whether that text names a work organisation or repository cannot be told." % e]
-        return []
+            return reasons + ["this command could not be read (%s), and it names a gh command that posts "
+                              "text, so whether that text names a work organisation or repository cannot "
+                              "be told." % e]
+        return reasons
     for kind, args, envs, place in found:
         what = "gh %s %s" % kind
         try:
@@ -250,7 +414,63 @@ def evaluate(command, cwd):
     return reasons
 
 
+GUARD_HEAD = "gh: " + HEAD
+
+
+def _refuse(why):
+    sys.stderr.write("%s: this gh write was refused before it ran, and nothing was sent.\n  - %s\n%s\n"
+                     % (GUARD_HEAD, why, REMEDY))
+    return 1
+
+
+def gh_main(real, args):
+    """The guard on gh (bin/gh, claude-config#2183): judge the gh command a running script makes with
+    the same rule the command hook applies, then run the real gh with the same arguments, standard
+    input and exit code, or refuse it with exit 1 and nothing sent.
+
+    Text a command sends on standard input (an argument of `-`, or a field of `=@-`) is read here, judged
+    from a file holding exactly those bytes, and handed to the real gh on its standard input. The name
+    matched is withheld from the refusal, since a script's error output can land in a log."""
+    _WITHHOLD.append(True)
+    judged = list(args)
+    feed = seen = None
+    try:
+        if any(a == "-" or a.endswith("=@-") for a in judged):
+            feed = tempfile.TemporaryFile()
+            feed.write(sys.stdin.buffer.read())
+            feed.flush()
+            feed.seek(0)
+            seen = tempfile.NamedTemporaryFile(prefix="gh-guard.", delete=False)
+            seen.write(feed.read())
+            seen.close()
+            feed.seek(0)
+            judged = [seen.name if a == "-" else (a[:-1] + seen.name if a.endswith("=@-") else a)
+                      for a in judged]
+        try:
+            got = expand_alias(judged)
+        except CannotTell as e:
+            return _refuse("gh %s could be a gh alias, and %s, so what it runs cannot be told."
+                           % (judged[0], e))
+        reasons = evaluate(got[1] if got else shlex.join(["gh"] + judged), os.getcwd())
+    finally:
+        if seen is not None:
+            os.unlink(seen.name)
+    if reasons:
+        return _refuse("\n  - ".join(("through the gh alias %s, %s" % (got[0], r)) if got else r
+                                     for r in reasons))
+    if feed is not None:
+        os.dup2(feed.fileno(), 0)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(real, [real] + list(args))
+
+
 def main():
+    if len(sys.argv) >= 4 and sys.argv[1] == "--gh" and sys.argv[3] == "--":
+        try:
+            return gh_main(sys.argv[2], sys.argv[4:])
+        except Exception as e:  # noqa: BLE001  a guard that broke refuses: it is not one that found nothing
+            return _refuse("the guard on gh failed (%s), so this write was not checked." % type(e).__name__)
     raw = sys.stdin.buffer.read().decode("utf-8", "replace")
     try:
         data = json.loads(raw)

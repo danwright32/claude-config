@@ -165,6 +165,21 @@ list through the same reader (#2111). Whatever it cannot tell is refused: the vi
 the list unreadable, a body file it cannot read, a command it cannot parse, the 35 second budget
 spent. There is no override; the remedy is to rewrite the text.
 
+The same check reaches GitHub writes made inside a script (#2183). The hook above sees only the
+command Claude runs, so a Python or shell script making gh calls went unjudged (one scrub made 239
+edits that way). `gh-guard-path.sh`, a SessionStart hook, puts `hooks/bin` first on the session's
+PATH through `CLAUDE_ENV_FILE`, and `hooks/bin/gh` there judges every gh a script runs with the same
+rule before handing it to the real gh. It refuses with exit 1 without naming what it matched,
+since a script's output can land in a log, and otherwise runs the real gh with its exit code and
+its standard input unchanged. A gh alias is judged as what it expands to, in the hook and the guard
+alike (Dan, on #2183); the guard refuses an alias it cannot read, while the hook passes it as before
+and leaves it to the guard. A session started before this was installed, or one whose PATH does not
+carry the guard, keeps exactly its old checks and is told once that gh writes inside scripts are
+not checked until a new session starts: refusing those scripts instead would stop
+`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Still not
+covered: gh run by its absolute path, a script that rewrites PATH, curl or an API library, and gh
+extensions.
+
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
 folder under `skills/`, where Claude Code sets aside a skill it removes or replaces (#1009). The
@@ -1869,6 +1884,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 | `check-closing-merge.sh` (#1550) | 2026-10-28: 0.009 to 0.016 seconds. Earlier: 0.007 to 0.008 seconds on a push naming no merge, five readings on 2026-10-24 (load average 8 to 9), since it leaves before loading anything; 0.051 to 0.053 seconds on a push whose branch name holds the word (`feat/1550-closing-merge-gate`), which loads the shared reader to find no merge. On a merge, 0.51 to 0.69 seconds, five readings through the real gh against claude-config #1639: one read of the pull request's body and closing issues, run beside `block-red-merge.sh`, which reads the same pull request |
 | `check-work-names-merge.sh` (#1995) | 2026-10-31: 0.029 to 0.044 seconds on a plain `git push`, five readings at load average 62 to 64, timed from outside and so including a python start of about 0.02 seconds; it leaves before loading anything on a command naming no merge. On a merge, two GitHub reads: the pull request's title, description and commits, and the scanner at its base commit |
 | `check-work-names-publish.sh` (#2105) | 2026-11-02: 0.009 to 0.010 seconds on a plain `git push`, five readings at load average 27 to 33, timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109 seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo digest list and the registry, then the match |
+| `hooks/bin/gh` and the once per session notice (#2183) | 2026-11-03, five readings each at load average 60 to 84, timed from outside with a python3 clock (which adds its own start up to every reading): the hook on a plain `git push` in a session already stamped, 0.06 to 0.36 seconds, against 0.04 to 0.06 with no session id, a file test and noise apart. The guard adds 0.02 to 0.20 seconds to a gh command it does not judge (`gh --version`: real 0.07 to 0.11, guard 0.09 to 0.27) and about 0.11 to one it judges (`gh pr view --help`: real 0.08 to 0.12, guard 0.18 to 0.22), its python3 start; a judged write then pays the publish gate's own reads above. Re-measure at a quieter load |
 | `design-score-gate.sh` (#1364) | 2026-10-28: 0.009 to 0.015 seconds. Earlier: 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `check-rtk-init.sh` (#1468) | 2026-10-28: 0.009 to 0.014 seconds. Earlier: 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
 | `pr-review-gate.sh` (#560) | 2026-10-28: 0.010 to 0.013 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it acts on a merge, not a push |
