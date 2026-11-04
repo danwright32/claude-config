@@ -197,7 +197,7 @@ FOREIGN_LINE='var n=branch.match(/\d+/);'
 seed_copy() {   # $1 = the folder standing for payload/ or ~/.claude
   mkdir -p "$1/hooks/lib" "$1/mods/mod-kit/hooks" "$1/$(dirname "$FOREIGN")"
   cp "$DIR/test-branch-issue-reader.sh" "$1/hooks/"
-  cp "$DIR/lib/suite-deadline.sh" "$DIR/lib/repo-files.sh" "$DIR/lib/checkout-root.sh" "$1/hooks/lib/"
+  cp "$DIR/lib/suite-deadline.sh" "$DIR/lib/suite-isolation.sh" "$DIR/lib/repo-files.sh" "$DIR/lib/checkout-root.sh" "$1/hooks/lib/"
   printf '%s\n' 'export const issuesOfBranch = () => []' > "$1/mods/mod-kit/hooks/branch.ts"
   printf '%s\n' "$FOREIGN_LINE" > "$1/$FOREIGN"
 }

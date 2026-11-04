@@ -31,7 +31,15 @@ PC_EXCLUDES=(':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.snap'
   ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*.jpeg' ':(exclude)*.gif')
 
 # ---- which files the push carries ----
-# Run in the directory the push runs in (ps_repo_dir's answer). Sets:
+# The files added, copied, modified or renamed between $1 (a commit or tree) and HEAD, one per line,
+# relative to the repository root; fails when git does. One listing for the push's own range in
+# pc_resolve and for the tests a branch pushed earlier, which the test gate reads since
+# claude-config#2153.
+pc_files_since() {   # $1 = commit or tree
+  git diff --name-only --diff-filter=ACMR "$1" HEAD 2>/dev/null
+}
+
+# pc_resolve: run in the directory the push runs in (ps_repo_dir's answer). Sets:
 #   PC_UPSTREAM        the branch's upstream, empty when it has none
 #   PC_BASE            the ref the push is judged against (ps_base_ref)
 #   PC_MB              where the committed range starts, empty when no range is read
@@ -75,7 +83,7 @@ pc_resolve() {   # $1 = command
   [ -n "$PC_MB" ] && pc__set_apart_merged
 
   local committed="" pending=""
-  [ -n "$PC_FROM" ] && committed="$(git diff --name-only --diff-filter=ACMR "$PC_FROM" HEAD 2>/dev/null)"
+  [ -n "$PC_FROM" ] && committed="$(pc_files_since "$PC_FROM")"
 
   # The PENDING files when the command commits before it pushes: the index, plus what the shared
   # reader says the commit takes beyond it (#457), counting only files that exist. Read here, in the
