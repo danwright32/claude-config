@@ -1014,8 +1014,11 @@ what it became, and the next send compares from there.
 
 **Rejected:**
 
-- *Reconciling to the newest commit whose tests passed and sending from there.* A push has to sit on
+- *Reconciling to the newest commit whose tests passed and SENDING from there.* A push has to sit on
   top of the head, so a send from an older commit is refused by git however green that commit is.
+  What was rejected is the send, not the receive: since #2230 the watcher does take in the newest
+  commit whose tests passed (the next section), and what this Mac sends still goes up on top of the
+  head by the rule above.
 - *Waiting inside the send for the run to finish.* The send holds the sync lock, and a typed pull
   would then wait up to a quarter of an hour behind it for a verdict that does not concern it.
 - *Retrying the reconcile more often.* Once commits land faster than a run finishes, there is no
@@ -1034,7 +1037,46 @@ applied unjudged is said out loud in the watcher's log rather than passing silen
 `install-autosync` has been re-run on a Mac, because the marker lives in the plist it writes. A
 four minute CI wait is noise against a week, so an old plist is not worth chasing. And the gate
 asks about the head of the branch, not about each commit between: a red commit followed by a green
-one is applied with the green one, which is what a person pulling by hand would get.
+one is applied with the green one, which is what a person pulling by hand would get. Only a head
+still being tested sends it further back, to the newest commit whose tests passed (next section).
+
+### A head still being tested does not hold back a commit whose tests passed (#2230)
+
+Found 2026-11-04 on the personal MacBook. From 06:23 AM ET the watcher applied nothing while #2194
+and #2202 merged, and every tick said the shared repo's newest commit was still being tested. A run
+on main took about 50 minutes and a commit landed every half hour or so, so the head was never green
+at the moment a tick asked, and commits that HAD passed sat unapplied behind ones still running.
+Main's CI groups runs by commit, so every commit on main gets its own verdict and an older one's
+pass is a real answer about it.
+
+**The rule.** When the head is still being tested (a run in progress, or none yet inside
+`SYNC_CI_GRACE`), the watcher walks main's first parent line back from just below the head, over
+commits this clone does not hold yet, and takes in the newest one whose tests passed, by a rebase
+onto it rather than a pull, so nothing newer arrives. The head stays untaken. This Mac's own commits
+still go up on top of the head by #1398's rule, now measured from the commit taken in.
+
+- *First parent only.* A commit that passed on a side branch, or one built on the untested head,
+  would bring that head with it, so it is never a candidate.
+- *Walking past a commit still running, with no run, failed or cancelled is fine;* choosing one is
+  not. The commit chosen is itself green, and its run tested its whole tree, so nothing untested or
+  failed is applied by taking it. This is the same reasoning #221 already applies to a red commit
+  followed by a green head.
+- *A verdict that cannot be read stops the walk.* An answer nobody could read is not a pass (L11),
+  and the head then waits exactly as before. At most `SYNC_CI_TESTED_SEARCH` commits are asked about
+  (ten by default), each one a call to GitHub.
+- *The record of what went up is pointed at its new ids.* `.sent-over-untested` names local commits,
+  and the rebase gives them new ones; without moving it, the next edit to the same file is measured
+  from before the earlier send and refused as overlapping this Mac's own work. It is re-pointed only
+  when the rebase replayed every commit, and removed otherwise, which sends again rather than miss
+  anything.
+- *The snapshot check (#362) is skipped on this path*, because it compares with the shared head and
+  resets onto it when they agree, which would check out the very commit still being tested.
+
+**Decided: a head that FAILED still takes nothing in.** Only a head still being tested walks back.
+Recorded 2026-11-04 by the session that closed #2230: it keeps the change to the starvation the issue
+is about, and a red main stays visible, because a Mac that kept receiving from below a failed head
+would make that failure easy to leave standing. A head still being tested resolves itself; a failed
+one needs somebody to act.
 
 ## Two settings beyond the hooks block, written but never published (#772, #695)
 
