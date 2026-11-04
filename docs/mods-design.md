@@ -3788,7 +3788,7 @@ observing half, so it has no surface of its own: no card, no question, nothing d
   line, the branch, merge base and origin head, `ms`), and `unjudged` with why for a checkout with no
   GitHub remote or a branch git cannot read. The mod's own failures go to `errors.jsonl` beside it,
   by a separate write (L561), and the first each session is one dim line naming the file and saying
-  nothing was held.
+  nothing was held. The log is rotated, never cut (#2143): see "The read and the rotation" below.
 - **The replay.** `node tools/area-check-replay.ts <checkout> --repo <owner/name>` runs a
   repository's last 30 days through `rules.ts` itself, each commit standing in for a session, and
   reports holds per session; `tests/replay-fixture/` is this repository's own month, measured that
@@ -3920,16 +3920,42 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
 - **The rebase gap.** A rebase moves the merge base, so decisions taken before it stop matching and
   are no longer asked for. This is known and accepted: the alternative, matching by branch alone,
   would ask a reused branch name for another change's decisions.
-- **The bounded read.** The log grows about 1 MB in ten days and the engine refuses a whole file
-  read over 4 MiB, so it is never read whole. `/bin/sh` runs `grep -a -F` for the two decision
-  marks piped to `tail -c`, under `set -o pipefail`, and keeps only the newest `LOG_READ_BYTES`
-  (1 MiB) of decision lines. It reads one byte more than the bound: with exactly the bound, a read
-  beginning at a line start looks the same as one beginning mid line, so dropping the first line
-  would lose a whole decision. With the extra byte, everything up to and including the first
-  newline lies outside the bound, so `keptOf` drops a cut line whole and keeps one the bound begins
-  exactly at. Decisions older than the newest 1 MiB of decision lines are not checked; decision
-  lines are only part of the log, so that is thousands of decisions. Output the engine cut short
-  refuses as an unreadable log.
+- **The read and the rotation (#2143, 2026-11-04).** The log grows about 100 KB a day. The first
+  read grepped the whole log for the two decision marks and kept only the newest 1 MiB of decision
+  lines, so past that window an old decision dropped silently, and every `gh pr` command scanned
+  the whole history (0.6 s a call on a year of synthetic log, measured). Both scripts live in
+  `hooks/prline.ts` and are proved against a real shell and `awk` by
+  `tests/test-area-check-log-rotation.sh`, since the mod tests have no shell.
+  - *Rotation, at session start.* After the `loaded` line, once `log.jsonl` is over `ROTATE_BYTES`
+    (4 MiB, about forty days), `ROTATE_SCRIPT` renames it to `rotated/<stamp>.rotating` and begins a
+    new log. A rename copies nothing, and an append still running lands whole in one file or the
+    other; a second session finding the log already moved does nothing.
+  - *Settling.* A `.rotating` file not written for `SETTLE_MINUTES` (10, far past the append's 5
+    second kill) has its decision lines written whole to a temporary file, renamed to
+    `rotated/<stamp>.decisions.jsonl`, and only then is the `.rotating` file renamed to the archive
+    `rotated/<stamp>.jsonl` (L5). A crash between steps leaves a line in two files at worst, read
+    once; two settlers write the same bytes. Nothing is ever deleted: retention is Dan's call (L9).
+  - *A failed rotation* leaves the log where it was, goes to `errors.jsonl`, and is the dim line
+    "The area check could not rotate its log (why); nothing was lost", in its own `try`, so the
+    issue sweep and warm still run. Asked whether that line needed a design round, Dan answered
+    "Skip them" (2026-11-04).
+  - *The read.* `READ_SCRIPT` lists every decisions file, any `.rotating` file and the log (the log
+    missing with nothing rotated is still the missing log refusal), and one `LC_ALL=C awk` pass, its
+    needles passed through the environment because `awk -v` mangles backslashes, prints a decision
+    line not ending in `}` as cut (named malformed), a line naming the repository and the branch,
+    and a count of the repository's lines. TypeScript drops identical lines, parses with
+    `readDecisions` and refilters by repository and branch, since the needles are only a prefilter.
+    A merge or an edit by number reads the count first and asks GitHub nothing when it is zero.
+    Reads are memoized per repository and branch for one Bash call. The scan is the decisions plus
+    at most a few MiB of log, and no decision is too old to be asked for.
+  - *Behaviour that changed.* A decision line ending in `}` that is not JSON and does not name the
+    repository is no longer named as malformed. The count can overcount (a version 2 record, or a
+    detached head line), which costs one GitHub read for a merge, never a wrong answer. Output the
+    engine cut short, an unreadable rotated file, or the script failing still refuses as an
+    unreadable log.
+  - *Ruled out.* Filtering at the source only bounds the output but not the scan. Per branch index
+    files would be bounded too, but add derived state, an offset file and dedupe written from a
+    hook on every Bash call, more moving parts than rotation for no gain at the measured rates.
 - **A description given through a substitution.** mod-kit's reader drops the text of a
   substitution from the word (`--body "$(cat <<'EOF' ...)"` reads as its opening only), so a body
   holding `$(` or a backtick is looked for in the whole command, the one place its text is still

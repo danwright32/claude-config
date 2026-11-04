@@ -369,7 +369,9 @@ const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unc
   try {
     const rel = relTo(path, await $.session.cwd())
     $.ui.log(
-      kept === 'shell'
+      kept === 'rotation'
+        ? `The area check could not rotate its log (${error}); nothing was lost, and the error is kept in ~/${DIR}/${ERRORS}.`
+        : kept === 'shell'
         ? `The area check could not read what a shell command writes (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
         : kept === 'command'
         ? `The area check could not check the pull request command (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`

@@ -3,8 +3,10 @@ import { DECISIONS, type Decision } from './rules.ts'
 // The area check line in a pull request description (#1510, plan phase 5.2). Every file the area
 // check decided on a branch, at the merge base that branch had with the default branch, carries one
 // line in the pull request made from it: `Area check: <file>: <decision>, <reason>`. Pure: register.ts
-// reads the log with a bounded grep, the command through mod-kit's readers and GitHub for a merge; this says
-// which decisions the branch holds, which lines the description lacks, and the words of a refusal.
+// reads the log (the live file plus every rotated decisions file, filtered to one repository and
+// branch by READ_SCRIPT below), the command through mod-kit's readers and GitHub for a merge; this
+// says which decisions the branch holds, which lines the description lacks, and the words of a
+// refusal. ROTATE_SCRIPT, run at session start, keeps the live file small without deleting anything.
 //
 // The match is by repository, branch and merge base, so a branch name used again later starts clean.
 // A rebase moves the merge base, so decisions taken before it stop matching (a known gap, named in
@@ -31,7 +33,7 @@ const text = (x: unknown): x is string => typeof x === 'string' && x.length > 0
 const baseOf = (x: unknown): string | null | undefined => (x === null ? null : typeof x === 'string' && x ? x : undefined)
 
 /**
- * The decisions in the lines grep gave (each holding `"kind":"decided"` or `"applied":`), in log
+ * The decisions in the lines the read gave (each holding `"kind":"decided"` or `"applied":`), in log
  * order. A line that is not JSON, or a decision missing a field it must carry, is MALFORMED: skipped
  * and returned, so the caller can name it (never read as no decision). A `decided` record older
  * than version 3 carries no branch and is left out, not malformed; so is a record of another kind
