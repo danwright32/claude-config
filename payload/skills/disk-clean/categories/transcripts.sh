@@ -46,6 +46,7 @@ tr_rules() { # <target>
   if [ "$rc" -ne 0 ]; then V="unmeasured: find exited $rc reading it, so whether it changed within $DCS_TRANSCRIPT_DAYS days is not known"; return; fi
   [ -n "$old" ] || { V="not offerable: it changed within $DCS_TRANSCRIPT_DAYS days"; return; }
   V=offerable
+  dcs_floor "$t"
 }
 
 do_scan() {

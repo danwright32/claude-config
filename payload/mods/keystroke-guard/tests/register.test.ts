@@ -9,7 +9,9 @@ const DEBUG = '/Users/x/Build/Debug/Overture.app/Contents/MacOS/Overture'
 const LIGHTROOM = '/Applications/Adobe Lightroom Classic.app/Contents/MacOS/Adobe Lightroom Classic'
 const KEYWORD = 'key' + 'stroke'
 
-type World = { front: number; running: Record<number, string>; answer: string | 'dismiss'; away?: boolean }
+// `holdFails` makes mod-kit refuse the hold on keystroke-guard's reload (#2132), as an older or
+// missing mod-kit would.
+type World = { front: number; running: Record<number, string>; answer: string | 'dismiss'; away?: boolean; holdFails?: string }
 type Card = { toolUseId: string; guard: string; reason: string; safeWay?: string }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -63,8 +65,16 @@ const kit: { name: string; register: Register } = {
           clickable: async () => true,
           isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
           typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
-          hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
-          release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
+          // #2132: a hold on keystroke-guard's reload and its letting go, asked of the world, which
+          // keeps them in order beside each question asked and can refuse one as mod-kit would.
+          hold: async (input: unknown) => {
+            const r = await built.process.run(['__modkit', 'hold', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+          },
+          release: async (input: unknown) => {
+            const r = await built.process.run(['__modkit', 'release', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+          },
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
           login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
           account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
@@ -95,8 +105,16 @@ const world = (engine: Engine, on: On, w: World) => {
   const asked: { question: string; header: string; options: string[] }[] = []
   const toasts: string[] = []
   const cards: Card[] = []
+  // #2132: each hold on keystroke-guard's reload, its letting go, and each question, in order.
+  const held: string[] = []
+  const debug: string[] = []
   on('process.run', ($, e) => {
     const [cmd, ...args] = e.argv
+    if (cmd === '__modkit' && (args[0] === 'hold' || args[0] === 'release')) {
+      if (args[0] === 'hold' && w.holdFails) return { value: { exitCode: 1, stdout: '', stderr: w.holdFails, isStdoutTruncated: false, isStderrTruncated: false } }
+      held.push(`${args[0]} ${args[1]}`)
+      return ok('')
+    }
     if (cmd === 'pgrep' && args[0] === '-f') {
       const pids = Object.entries(w.running).filter(([, p]) => p.includes(args[1] ?? '')).map(([pid]) => pid)
       return pids.length ? ok(pids.join('\n') + '\n') : none
@@ -119,6 +137,7 @@ const world = (engine: Engine, on: On, w: World) => {
     const qs = (e as unknown as { questions: { question: string; header: string; options: { label: string }[] }[] }).questions
     const q = qs[0]
     asked.push({ question: q?.question ?? '', header: q?.header ?? '', options: (q?.options ?? []).map(o => o.label) })
+    held.push('ask')
     if (w.answer === 'dismiss') return { deny: 'dismissed' } as never
     // The tool's own result: answers keyed by each question's text, as the dialog records them.
     return { result: { questions: qs, answers: { [q?.question ?? '']: w.answer } }, text: `"${q?.question}"="${w.answer}"` } as never
@@ -140,9 +159,10 @@ const world = (engine: Engine, on: On, w: World) => {
   on('ui.log', ($, e) => {
     if (e.text.startsWith('CARD ')) cards.push(JSON.parse(e.text.slice(5)))
     if (e.text.startsWith('HOLD ')) holds.push(JSON.parse(e.text.slice(5)))
+    if (e.to === 'debug') debug.push(e.text)
     return { value: undefined }
   })
-  return { reached, asked, toasts, cards, holds }
+  return { reached, asked, toasts, cards, holds, held, debug }
 }
 
 const KEY = `TARGET_APP=${OVERTURE} osascript -e 'tell application "System Events" to ${KEYWORD} "n" using command down'`
@@ -252,6 +272,35 @@ test('a dismissed heads up refuses the action', withKit, async ($, on) => {
   const r = await $.tool.call(bash(KEY))
   expect(w.reached).not.toContain('Bash')
   expect(refusal(r)).toBe('Blocked: The question about Overture was dismissed.')
+})
+
+// #2132: the Ready question waits on Dan, and mod-kit's reload of keystroke-guard in that time would
+// drop it, so the question holds that reload back until he answers or it is dismissed.
+const READY_HELD = `hold ${JSON.stringify({ mod: 'keystroke-guard', id: 'ready', what: "Dan's answer to the Ready question", ms: 60 * 60_000 })}`
+const READY_LET_GO = `release ${JSON.stringify({ mod: 'keystroke-guard', id: 'ready' })}`
+test('the Ready question holds back a reload of keystroke-guard while it waits, and lets go answered or dismissed (#2132)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  await $.tool.call(bash(KEY))
+  expect(w.held).toEqual([READY_HELD, 'ask', READY_LET_GO])
+  expect(w.reached).toContain('Bash')
+})
+
+test('a dismissed Ready question still lets go of the hold (#2132)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'dismiss' })
+  const r = await $.tool.call(bash(KEY))
+  expect(w.held).toEqual([READY_HELD, 'ask', READY_LET_GO])
+  expect(refusal(r)).toBe('Blocked: The question about Overture was dismissed.')
+})
+
+test('a hold mod-kit refuses is said in the debug log, and the Ready question is asked as before (#2132)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead', holdFails: 'mod-kit is not loaded' })
+  await $.tool.call(bash(KEY))
+  expect(w.held).toEqual(['ask'])
+  expect(w.reached).toContain('Bash')
+  expect(w.debug).toContain("keystroke-guard: could not hold back a reload while it waits on Dan's answer to the Ready question, so one now would drop that wait (mod-kit is not loaded)")
 })
 
 test('a yes holds while input keeps coming, and lapses after 10 quiet minutes', withKit, async ($, on) => {

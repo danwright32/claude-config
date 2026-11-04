@@ -195,6 +195,13 @@ export const missingRefusal = (r: Refusing & { where: 'command' | 'github'; sele
 export const noBodyRefusal = (r: Refusing): string =>
   [`The area check refused this ${r.verb}: it gives no description to check, and ${plural(r.files.length, 'file was', 'files were')} decided on branch ${r.branch}. Give the description with --body or --body-file, carrying each line below:`, ...linesToPaste(r.files), ...tail(r)].join('\n')
 
+/**
+ * A --body whose command substitution mod-kit's reader marks unresolved (#2166): its text is unknown,
+ * so it is refused with why, the ways to give it that can be read, and the lines it must carry.
+ */
+export const bodyUnresolvedRefusal = (r: Refusing, why: string): string =>
+  [`The area check refused this ${r.verb}: it could not work out the description its --body gives (${why}), and ${plural(r.files.length, 'file was', 'files were')} decided on branch ${r.branch}. Give the description with --body-file and a file, with --body-file - fed by a heredoc, or with --body "$(cat <<'EOF' ... EOF)", carrying each line below:`, ...linesToPaste(r.files), ...tail(r)].join('\n')
+
 /** The description file could not be read: named, never read as a description without lines. */
 export const bodyUnreadableRefusal = (verb: string, file: string, why: string): string =>
   file === 'standard input'

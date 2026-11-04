@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
+import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import type { AgentSeen, Jobs, JobsEntry, JobWatch, WatchedJob, WatchedJobKept, WatcherNotice } from '../types/index.d.ts'
 import { assess, harnessFinished, holdRefusal, holdsOutputBack, inFlight, isErrorLine, isPollLoop, leftoverLine, listedStatuses, logClause, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, startedTask, type InFlight, type Outcome, type Verdict } from './jobs.ts'
 
@@ -532,8 +533,22 @@ const forget = async ($: EngineInterface, id: string) => {
   await forgetWatch($, id)
 }
 
+// #2132: a wait of the watcher's held against mod-kit's reload of job-watcher, which would drop it.
+const heldBy = ($: EngineInterface, id: string, what: string, ms: number) => ({
+  mod: 'job-watcher',
+  id,
+  what,
+  ms,
+  hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
+  release: (input: { mod: string; id: string }) => $.modkit.release(input),
+  log: (line: string) => $.ui.log(line, { to: 'debug' }),
+})
+
 // One look at every job, each in its own failure boundary (L73): a job whose look throws is said to
 // Claude once, and the jobs after it are still looked at (lessons review of #634).
+// #2132: a look can wait on a stop Claude Code has not answered, and a reload of job-watcher then
+// drops what the look would say of it, so the look holds that reload back, for at most its own
+// deadline, and lets go when it finishes or is given up.
 const lookSafely = async ($: EngineInterface) => {
   if (looking) return
   looking = true
@@ -550,7 +565,8 @@ const lookSafely = async ($: EngineInterface) => {
   // only keeps an impossible rejection from being reported as unhandled.
   pass.catch(() => undefined)
   try {
-    if ((await Promise.race([pass, givenUp])) === 'finished') toldLookGivenUp = false
+    const ended = await whileHeld(heldBy($, 'look', 'its look at the background jobs', LOOK_MAX_MS), () => Promise.race([pass, givenUp]))
+    if (ended === 'finished') toldLookGivenUp = false
     else if (!toldLookGivenUp) {
       toldLookGivenUp = true
       await say($, undefined, `The background job watcher's look at its jobs did not finish within ${LOOK_MAX_MS / 60_000} minutes and was given up; the next look starts at the next minute. A job may be stuck without a word from the watcher meanwhile.`)
@@ -675,7 +691,10 @@ const wakeIfIdle = async ($: EngineInterface) => {
     }
   }
   try {
-    const r = await $.prompt.submit({ text: taken.map(n => n.text).join('\n\n') })
+    // #2132: the prompt waits for the session to be idle, with the notices already off the queue,
+    // and a reload of job-watcher meanwhile would drop it and them, so that reload is held back
+    // until the submit answers, for at most mod-kit's hour.
+    const r = await whileHeld(heldBy($, 'wake', 'the prompt waking this session about a quiet background agent', HOLD_MAX_MS), () => $.prompt.submit({ text: taken.map(n => n.text).join('\n\n') }))
     if (r.drop !== undefined) throw new Error(r.drop)
   } catch (err) {
     for (const n of taken) await say($, undefined, n.text)
@@ -1341,6 +1360,9 @@ const judgeClaimed = async ($: EngineInterface, job: Leftover, group: number, no
 // #753: a session list that could not be asked (seen on 2026-10-05 while every mod reloaded, the
 // session registry among them) is a different fact from a record that cannot be read (L11). It is
 // said as such, and asked again once, a minute later, rather than leaving leftovers unchecked.
+// That minute is not held against mod-kit's reload (#2132): a reload starts the session afresh,
+// and every session start asks the session list at once, so a reload in that minute loses nothing
+// and a hold would only put the reload off.
 const ASK_AGAIN_MS = 60_000
 let retriedLeftovers = false
 // The second ask, cancelled by a session start, so an earlier session's never fires into a new one

@@ -39,12 +39,13 @@ test('a decision taken on the branch is asked for on gh pr create: refused with 
 test('a description carrying every line passes, bulleted or with the file in backticks', KIT, async ($, on) => {
   const w = world($, on)
   seedAB(w)
-  const cmd = `gh pr create --title T --body "Summary\n\n- Area check: \`src/a.ts\`: proceed, it only renames one local variable inside a function\n* ${B}\n"`
+  // In single quotes, so the backticks are text; in double quotes the shell would run them (#2166).
+  const cmd = `gh pr create --title T --body 'Summary\n\n- Area check: \`src/a.ts\`: proceed, it only renames one local variable inside a function\n* ${B}\n'`
   const r = await bash($ as never, w, cmd)
   expect(refusal(r)).toBe('')
   expect(ranBash(w, cmd)).toBe(true)
   // The control: the same description without its fold line is refused, so the pass above was a check.
-  const short = refusal(await bash($ as never, w, `gh pr create --title T --body "Summary\n\n- Area check: \`src/a.ts\`: proceed, it only renames one local variable inside a function\n"`, {}, 'b2'))
+  const short = refusal(await bash($ as never, w, `gh pr create --title T --body 'Summary\n\n- Area check: \`src/a.ts\`: proceed, it only renames one local variable inside a function\n'`, {}, 'b2'))
   expect(short).toContain(B)
 })
 
@@ -98,6 +99,33 @@ test('a --body given as a substitution of a heredoc is read as its text', KIT, a
   expect(refusal(await bash($ as never, w, ok))).toBe('')
   const short = refusal(await bash($ as never, w, `gh pr create --title T --body "$(cat <<'EOF'\n${A}\nEOF\n)"`, {}, 'b2'))
   expect(short).toContain(B)
+  // Spelled --body=... and -b, the word the reader derives still carries the flag, which is taken off.
+  expect(refusal(await bash($ as never, w, `gh pr create --title T --body="$(cat <<'EOF'\n${A}\n${B}\nEOF\n)"`, {}, 'b3'))).toBe('')
+  expect(refusal(await bash($ as never, w, `gh pr create --title T -b "$(cat <<'EOF'\n${A}\n${B}\nEOF\n)"`, {}, 'b4'))).toBe('')
+  expect(refusal(await bash($ as never, w, `gh pr create --title T --body="$(cat <<'EOF'\n${A}\nEOF\n)"`, {}, 'b5'))).toContain(B)
+})
+
+test('a line given only in the title, or elsewhere in the command, is not a line of a description given as a substitution (#2166)', KIT, async ($, on) => {
+  const w = world($, on)
+  seedAB(w)
+  // A line counts only at the start of a line, so each sits on a line of its own outside the description.
+  const titled = refusal(await bash($ as never, w, `gh pr create --title "Feature\n${B}" --body "$(cat <<'EOF'\n${A}\nEOF\n)"`))
+  expect(titled).toContain('lacks the area check line for 1 file')
+  expect(titled).toContain(B)
+  const echoed = refusal(await bash($ as never, w, `cat <<'NOTE'\n${B}\nNOTE\ngh pr create --title T --body "$(cat <<'EOF'\n${A}\nEOF\n)"`, {}, 'b2'))
+  expect(echoed).toContain(B)
+})
+
+test('a description whose substitution the command reader cannot work out is refused, saying why, even when its command holds every line (#2166)', KIT, async ($, on) => {
+  const w = world($, on)
+  seedAB(w)
+  const cmd = `gh pr create --title T --body "$(printf '%s' '\n${A}\n${B}\n')"`
+  const why = refusal(await bash($ as never, w, cmd))
+  expect(why).toContain('could not work out the description')
+  expect(why).toContain('--body-file')
+  expect(ranBash(w, cmd)).toBe(false)
+  const read = refusal(await bash($ as never, w, 'gh pr create --title T --body "$(cat pr.md)"', {}, 'b2'))
+  expect(read).toContain('could not work out the description')
 })
 
 test('gh pr create with no body flag is refused while decisions stand, asking for --body or --body-file', KIT, async ($, on) => {
