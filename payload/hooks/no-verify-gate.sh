@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # no-verify-gate.sh
-# Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|NotebookEdit) hook: refuse an AGENT's git command that skips the repository's own
-# git hooks (claude-config#1587). Nothing lets one through (claude-config#1666). Also refuses an
+# Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|NotebookEdit) hook: refuse an AGENT's command that skips the repository's own
+# git hooks (claude-config#1587), a git command or, since claude-config#2160, any other. Nothing lets one through (claude-config#1666). Also refuses an
 # agent's git command reading a file from /dev/stdin, which hangs on a prompt (claude-config#1765).
 #
 # On 2026-10-23 a Bidspoke builder agent made two commits with `git commit --no-verify` because the
@@ -28,6 +28,10 @@
 # Bash gate sees the file tools, this gate is also registered for Edit, Write, MultiEdit and
 # NotebookEdit (NotebookEdit is let through, since it only edits notebook files), and refuses an agent's edit of a git config file (the repository's or a worktree's, the global one, or
 # any file an include names) that changes the hooks location or an include, as git reads them.
+#
+# Since claude-config#2160 the routes #2140 left out count as well, on a command that is not git too:
+# a hook switch or a git environment setting (GIT_DIR, GIT_COMMON_DIR and the other GIT_ settings) set
+# in front of any command, git's --git-dir, and a shell command that names a git config file.
 #
 # WHO IS ASKED is read from agent_id, which only a subagent's payload carries (measured on Claude
 # Code 2.1.274, see playwright-subagent-gate.sh). The main session is not judged: Dan sees what it
