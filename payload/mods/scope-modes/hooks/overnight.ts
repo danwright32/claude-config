@@ -260,33 +260,58 @@ const resolveIn = (word: string, dir: string | null, home: string, expand: (w: s
 // #1132), rather than the word anywhere: on 2026-10-13 a python edit was refused for writing
 // "Scanning git work" and "import subprocess" into a file. A program runs from code when it starts
 // a quoted string or a shell command inside one (`['git', ...]`, `'/usr/bin/git'`, `"cd x && git
-// push"`, a backtick), or when one of its subcommands or an option follows it. Prose naming it with
-// neither (a git repository, the .gitignore, --git-dir, the gh CLI, gh-pages) runs nothing; prose
-// that reads as a command ("then git push", "rerun with gh run rerun") still counts.
-const callsWith = (subcommands: ReadonlySet<string>) => (next: string | undefined): boolean =>
-  next !== undefined && (next.startsWith('-') || subcommands.has(next))
-const runsFrom = (program: string, subcommands: ReadonlySet<string>) => {
+// push"`, a backtick), or when `calls` finds it runs from the words after it: the word straight
+// after, then every word of the code text past that, since code has no command boundary to stop
+// at. Prose naming it with neither (a git repository, the .gitignore, --git-dir, the gh CLI,
+// gh-pages) runs nothing; prose that reads as a command ("then git push", "rerun with gh run
+// rerun") still counts.
+const runsFrom = (program: string, calls: (after: readonly string[]) => boolean, built: (text: string, at: number) => boolean = () => false) => {
   const starts = new RegExp(`(?:['"\`]|;|&&|\\|\\||\\||\\$\\(|\\(|\\n)[ \\t]*(?:[\\w.~/-]*\\/)?${program}(?=[\\s'"\`;|&)]|$)`)
   const followed = new RegExp(`(?<![\\w.$/-])${program}[ \\t]+(-[\\w-]*|[a-z][\\w-]*)`, 'g')
-  const calls = callsWith(subcommands)
-  return (text: string): boolean => starts.test(text) || [...text.matchAll(followed)].some(m => calls(m[1]))
+  const wordsAfter = (text: string, m: RegExpExecArray): string[] => [m[1] ?? '', ...(text.slice((m.index ?? 0) + m[0].length).match(/[\w-]+/g) ?? [])]
+  return (text: string): boolean => starts.test(text) || [...text.matchAll(followed)].some(m => calls(wordsAfter(text, m)) || ((m[1] ?? '').startsWith('-') && built(text, m.index ?? 0)))
+}
+// Whether the string a word at `at` sits in is built while the code runs, so whatever follows the
+// word there is only known then: a placeholder inside it after the word (`{sub}`, `%s`, `$SUB`), or
+// something joined onto it (`+`, `%`, `.format`, `.join`, `.concat`, a variable or another string
+// straight after it closes, `+` before it opens, or a `.join(` it is an argument of), or it is put
+// in a variable (`cmd = '...'`, `cmd += '...'`) that later code can join anything onto. A word
+// outside any string is in no built string.
+const QUOTES = `'"\``
+const builtAround = (text: string, at: number): boolean => {
+  let open = at - 1
+  while (open >= 0 && !QUOTES.includes(text[open] ?? '')) open--
+  if (open < 0) return false
+  const close = text.indexOf(text[open] ?? '', at)
+  if (/[{$]|%[\w(]/.test(text.slice(at, close < 0 ? undefined : close))) return true
+  if (close < 0) return false
+  const before = text.slice(0, open)
+  return /\+\s*[A-Za-z]{0,2}$/.test(before) || /[^=!<>]=\s*[A-Za-z]{0,2}$/.test(before) || /\.join\(\s*\[?[^()]*$/.test(before) || /^(?:\s*(?:\+|%|\.(?:format|join|concat)\b)|[\w$'"`])/.test(text.slice(close + 1))
+}
+// git runs from code when one of its subcommands or any option follows it.
+const callsWith = (subcommands: ReadonlySet<string>) => (after: readonly string[]): boolean => {
+  const next = after[0]
+  return next !== undefined && (next.startsWith('-') || subcommands.has(next))
 }
 const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
-export const runsGit = runsFrom('git', GIT_SUBCOMMANDS)
-// gh's subcommands: a gh named in code runs when one of these or a flag (`-R o/r`) follows it. A
-// user's own gh alias or extension in that place is not seen; the wake check is the backstop.
+export const runsGit = runsFrom('git', callsWith(GIT_SUBCOMMANDS))
+// gh's subcommands. A user's own gh alias or extension in that place is not seen; the wake check is
+// the backstop.
 const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
-export const runsGh = runsFrom('gh', GH_SUBCOMMANDS)
-// A gh named as a word of another command (a wrapper passing it on), given the words after it as
-// mod-kit's reader reads them: it runs gh when one of gh's subcommands follows it, or when flags
-// follow and a subcommand comes anywhere after them, whichever of those flags take a value (`gh -R
-// o/r pr merge`). Flags with no subcommand after them are the other command's own, as in a search
-// for the word (`grep -n -e gh -e pipeline src`, #2127): gh could reach none of its commands.
+// A gh given the words after it, as a word of another command (a wrapper passing it on, read as
+// mod-kit's reader reads it) or in code text: it runs gh when one of gh's subcommands follows it,
+// or when flags follow and a subcommand comes anywhere after them, whichever of those flags take a
+// value (`gh -R o/r pr merge`). Flags with no subcommand after them are another command's own, as
+// in a search for the word (`grep -n -e gh -e pipeline src`, #2127, and the same in code, #2159):
+// gh could reach none of its commands. In code, flags after gh in a string built while the code
+// runs (builtAround) count too, since the subcommand may only arrive then (Dan's condition for
+// #2159, 2026-11-04).
 const ghRunsFrom = (after: readonly string[]): boolean => {
   const next = after[0]
   if (next === undefined) return false
   return GH_SUBCOMMANDS.has(next) || (next.startsWith('-') && after.some(w => GH_SUBCOMMANDS.has(w)))
 }
+export const runsGh = runsFrom('gh', ghRunsFrom, builtAround)
 
 // ---- git ----
 
