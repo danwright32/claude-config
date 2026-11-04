@@ -24,7 +24,9 @@ URL in a string is not a comment and "later" inside a string literal is never a 
 
 A judged line is a FINDING when it carries a phrase from lib/deferral-phrases.txt (case
 insensitive, on word boundaries) and no ISSUE REFERENCE, `#NNNN` or a GitHub issue URL, sits on the
-line itself or on the two lines either side of it in the NEW text. In a diff, removed lines are not
+line itself or on the two lines either side of it in the NEW text. A phrase QUOTED as a word, inside
+a short span of backticks or double quotes closed on the same line, is a mention and is not looked
+at (strip_mentions, below, carries the exact limits, #2133). In a diff, removed lines are not
 part of the new text and cannot clear a finding; context lines can, which is why the push hook asks
 git for at least two lines of context.
 
