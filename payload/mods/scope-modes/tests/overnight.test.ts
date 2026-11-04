@@ -280,6 +280,29 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     ])
       expect({ c, r: await bash(c) }).toEqual({ c, r: runs })
   })
+  test('code naming gh followed by flags runs gh only when a gh subcommand comes after them, as for command words (#2159)', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    // gh followed by another tool's flags, or by gh's own flags with nothing gh could run after
+    // them: the rule #2127 gave command words. Every case is read before any is compared, so a
+    // failure names each case that changed.
+    const harmless = [
+      `python3 -c "import subprocess; print('see gh --help for the list')"`,
+      `python3 -c "import subprocess; subprocess.run('grep -n -e gh -e pipeline src', shell=True)"`,
+      `python3 -c "import os; os.system('rg -n gh -e x --glob src')"`,
+    ]
+    expect(await Promise.all(harmless.map(async c => ({ c, r: await bash(c) })))).toEqual(harmless.map(c => ({ c, r: undefined })))
+    // Flags before a gh subcommand still reach it, wherever in the code the subcommand comes,
+    // whichever of the flags take a value.
+    const flagged = [
+      `python3 -c "import os; os.system('sudo gh -R o/r pr merge 5')"`,
+      `python3 -c "import os; os.system('nohup gh --repo o/r issue comment 5 --body x')"`,
+      `python3 -c "import subprocess; subprocess.run('stdbuf -o0 gh -R o/r api repos/o/r/issues/5/comments -f body=x', shell=True)"`,
+      `python3 -c "import os; r = 'o/r'; os.system('sudo gh -R ' + r + ' pr merge 5')"`,
+      `python3 -c "import subprocess; print('then run gh -R o/r run rerun 5')"`,
+      `node -e "require('child_process').execSync('sudo gh --repo o/r release delete v1 --yes')"`,
+    ]
+    expect(await Promise.all(flagged.map(async c => ({ c, r: await bash(c) })))).toEqual(flagged.map(c => ({ c, r: runs })))
+  })
   test('a line that sources a file is judged by where gh would run, never by the word in its data (#1132)', async () => {
     // The two notes refused on 2026-10-12 and 13: a sourced helper given JSON whose text names gh.
     const refused = [
