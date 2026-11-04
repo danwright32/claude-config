@@ -84,7 +84,9 @@
 #                                  ~/.claude/state/derived-data-sweep, which is never synced)
 set -uo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) DIR="${BASH_SOURCE[0]%/*}" ;; *) DIR=. ;; esac
+DIR="$(cd "${DIR:-/}" && pwd)"
 # shellcheck source=./lib/derived-data.sh
 . "$DIR/lib/derived-data.sh" || { echo "derived-data-sweep: lib/derived-data.sh is missing beside it, so it decided nothing."; exit 2; }
 

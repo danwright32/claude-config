@@ -19,7 +19,9 @@ case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. 
 # The cheap test first: almost no Bash command files an issue, and python costs every one that runs.
 case "$payload" in *issue*create*) ;; *) exit 0 ;; esac
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
+HERE="$(cd "${HERE:-/}" && pwd)"
 # A crash is said as a systemMessage. The hooks documentation: "Claude never sees stderr from a hook
 # that exits 0", and a PostToolUse hook's systemMessage is not among those it discards, so that is
 # the channel that reaches Dan (#1906).

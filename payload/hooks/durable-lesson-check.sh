@@ -32,7 +32,9 @@ payload="$(cat)"
 # The library, not a copy: five near copies of this had already drifted (claude-config#102).
 # `raw` because this hook searches the whole command rather than splitting it, and quoting a
 # command back at somebody with its newlines rewritten shows them something they did not type.
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # A library this hook cannot load is said once, as a systemMessage, on a call whose raw text names an
 # issue create, the one call it checks (claude-config#1922): it stopped here in silence.
 # shellcheck source=lib/hook-notice.sh

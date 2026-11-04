@@ -31,7 +31,9 @@
 # Override, one command, visible: SKIP_PR_REVIEW=1 on the merge. Explain to Dan first.
 
 set -uo pipefail
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 payload="$(cat)"
 
 refuse() { printf '%s\n' "$1" >&2; exit 2; }

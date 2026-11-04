@@ -7,6 +7,15 @@ the commands cannot come to disagree about what a skip is (L263, L370).
     agent-overrides.py skips                 stdin: one command line
         one line per git hook skip it runs, exit 0 when there is one, 10 when there is none.
 
+    agent-overrides.py hooks-location-advice    stdin: one command line
+        exit 0 printing the advice for a persistent change of where git reads the hooks from (a git
+        config of the hooks location or of an include), 10 printing nothing when there is none. Read
+        from the reasons skips gives, never from the command's text (claude-config#2140).
+    agent-overrides.py config-edit           stdin: one hook payload (JSON)
+        exit 0 printing the refusal when an Edit, Write or MultiEdit changes where git reads the
+        hooks from in a git config file, 10 when it does not, 2 when the payload cannot be read
+        (claude-config#2140).
+
     EXIT CODES. No mode answers "nothing found" with 1, which is what Python exits on an uncaught
     exception: a crash must never read as clean (claude-config#1856, #1869, L1033). Each answers it
     with 10, and every caller reads any code it does not expect as could not read.
@@ -46,6 +55,11 @@ HUSKY_SKIP_HOOKS=1, LEFTHOOK=0, SKIP_SIMPLE_GIT_HOOKS=1) set in front of git or 
 A git config that CHANGES core.hooksPath in any scope (set, --add, --replace-all, --unset, a removal
 or rename of the core section, or --edit, which no gate can read) is one too, since it moves where
 git reads the hooks from for every later command (claude-config#2135). Reading it is not.
+Since claude-config#2140 the same goes for every other route to that setting: config handed to git
+through the environment (GIT_CONFIG_COUNT with a key that moves the hooks, GIT_CONFIG_PARAMETERS, and
+GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM or GIT_CONFIG naming a whole file), git's --config-env, a config
+include (include.path, includeIf.*.path) set with -c or with git config, a key the shell spells so the
+gate cannot read it, and an Edit, Write or MultiEdit of a git config file (config-edit, below).
 
 AN OVERRIDE is a gate's documented escape, a SKIP_<NAME> or ALLOW_<NAME> setting given a value other
 than empty or 0, in front of a command, through env, or exported. Only settings the shell would
@@ -195,6 +209,58 @@ CONFIG_LONG = CONFIG_VALUED | CONFIG_READS | CONFIG_WRITES | CONFIG_SECTIONS | {
     "--expiry-date", "--includes", "--fixed-value", "--all", "--regexp", "--append"}
 HOOKS_KEY = "core.hookspath"
 HOOKS_SECTION = "core"
+# Environment settings that hand git a whole config file, or config of its own, that the gate cannot
+# read ahead of git: any value moves where the hooks may be read from (claude-config#2140). Even an
+# empty one, since it drops the file git would otherwise read.
+CONFIG_FILE_ENV = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG")
+CONFIG_PARAMS_ENV = "GIT_CONFIG_PARAMETERS"
+CONFIG_KEY_ENV = re.compile(r"^GIT_CONFIG_KEY_[0-9]+$")
+# A key the shell spells through an expansion, a substitution or an escape is one the gate cannot
+# read: lib/shell-words.py leaves `$'core.hooks\x50ath'` as the word `$core.hooks\x50ath` (measured).
+UNREADABLE_KEY = re.compile(r"[$`\\]")
+# The one advice for a persistent change of where git reads the hooks from, said by the Bash route and
+# the file edit route alike (claude-config#2135, #2140). It is chosen from the reason the reader gives,
+# never by searching text that holds the command (the lessons review of #2139).
+HOOKS_LOCATION_ADVICE = (
+    "No agent may change where git reads the hooks from: not in any config scope, not through a config "
+    "include, and not by editing a git config file (claude-config#2135, claude-config#2140). To set up a "
+    "repository's hooks, run its own hook install script (or the package install that runs it) instead of "
+    "writing core.hooksPath or a config include.")
+
+
+def _moves_hooks(key):
+    """Whether setting config `key` can move where git reads the hooks from: the hooks location itself,
+    a config include (which reads another file that can set it, then or later), or a key the gate
+    cannot read (claude-config#2135, #2140)."""
+    low = key.lower()
+    if low == HOOKS_KEY or low == "include.path":
+        return True
+    if low.startswith("includeif.") and low.endswith(".path"):
+        return True
+    return bool(UNREADABLE_KEY.search(key))
+
+
+def _key_reason(key, how, route_issue="claude-config#2135"):
+    """Why setting `key` through `how` moves the hooks, naming the issue that covers that route: the
+    hooks location set with -c or git config is #2135's, and every other route is #2140's."""
+    if key.lower() == HOOKS_KEY:
+        return "%s (%s)" % (how, route_issue)
+    if UNREADABLE_KEY.search(key):
+        return "%s, a key the gate cannot read (claude-config#2140)" % how
+    return "%s, a config include, which can set where git reads the hooks from (claude-config#2140)" % how
+
+
+def _config_env(pairs):
+    """Why these assignments hand git config that moves the hooks (claude-config#2140), as reasons."""
+    why = []
+    for n, v in pairs:
+        if n in CONFIG_FILE_ENV:
+            why.append("%s=%s, a whole config file the gate cannot read ahead of git (claude-config#2140)" % (n, v))
+        elif n == CONFIG_PARAMS_ENV and v:
+            why.append("%s, config the gate cannot read ahead of git (claude-config#2140)" % n)
+        elif CONFIG_KEY_ENV.match(n) and _moves_hooks(v):
+            why.append(_key_reason(v, "%s=%s" % (n, v), "claude-config#2140"))
+    return why
 
 
 def _config_long(name):
@@ -236,28 +302,39 @@ def _config_hooks_change(after):
         i += 1
     if action is None and positionals and positionals[0] in CONFIG_SUBCOMMANDS:
         action, positionals = positionals[0], positionals[1:]
-    keys = [p.split("=", 1)[0].lower() for p in positionals]
+    raw = [p.split("=", 1)[0] for p in positionals]
+    keys = [k.lower() for k in raw]
     if action in ("--edit", "edit"):
         return "an edit of the config file, which can change core.hooksPath (claude-config#2135)"
     if action in ("--remove-section", "--rename-section", "remove-section", "rename-section"):
         if HOOKS_SECTION in keys:
             return "a change to the core section, which holds core.hooksPath (claude-config#2135)"
+        # A config include's section, or a section name the gate cannot read (claude-config#2140).
+        for k, r in zip(keys, raw):
+            if k == "include" or k == "includeif" or k.startswith("includeif.") or UNREADABLE_KEY.search(r):
+                return "a change to the %s section, a config include, which can set where git reads the hooks from (claude-config#2140)" % r
         return None
     if action in CONFIG_WRITES or action in ("set", "unset"):
-        return "a change to core.hooksPath (claude-config#2135)" if HOOKS_KEY in keys else None
-    if action is None and len(keys) >= 2 and keys[0] == HOOKS_KEY:
-        return "a change to core.hooksPath (claude-config#2135)"
+        if HOOKS_KEY in keys:
+            return "a change to core.hooksPath (claude-config#2135)"
+        if raw and _moves_hooks(raw[0]):
+            return _key_reason(raw[0], "a change to " + raw[0])
+        return None
+    if action is None and len(keys) >= 2 and _moves_hooks(raw[0]):
+        return _key_reason(raw[0], "a change to " + raw[0])
     return None
 
 
-def skips(s, depth=0):
-    """Every git hook skip s runs, as short descriptions."""
+def _findings(s, depth=0):
+    """Every git hook skip s runs, as (short description, whether it is a persistent change of where
+    git reads the hooks from). The second is what picks the advice (claude-config#2140)."""
     found = []
     exported = []
     for text, pairs, words in _commands(s):
         switched = [n + "=" + v for n, v in pairs if HOOK_SWITCHES.get(n) == v]
+        configured = _config_env(pairs)
         if words and words[0] in DECLARERS:
-            exported.extend(switched)
+            exported.extend(switched + configured)
             continue
         reading = sw.git_read(words)
         if reading is None:
@@ -267,31 +344,49 @@ def skips(s, depth=0):
         j = 0
         while j < len(front):
             w = front[j]
-            val = None
+            val, how = None, None
             if w == "-c" and j + 1 < len(front):
-                val = front[j + 1]
+                val, how = front[j + 1], "-c"
                 j += 1
             elif w.startswith("-c") and len(w) > 2:
-                val = w[2:]
-            if val is not None and val.split("=", 1)[0].lower() == "core.hookspath":
-                why.append("-c " + val)
+                val, how = w[2:], "-c"
+            elif w == "--config-env" and j + 1 < len(front):
+                val, how = front[j + 1], "--config-env"
+                j += 1
+            elif w.startswith("--config-env="):
+                val, how = w[len("--config-env="):], "--config-env"
+            if val is not None and _moves_hooks(val.split("=", 1)[0]):
+                why.append(_key_reason(val.split("=", 1)[0], how + " " + val,
+                                       "claude-config#2135" if how == "-c" else "claude-config#2140"))
             j += 1
-        if switched or exported:
-            why.extend(switched + exported)
+        why.extend(switched + configured + exported)
+        persistent = False
         if sub == "config":
             change = _config_hooks_change(after)
             if change:
                 why.append(change)
+                persistent = True
         if sub == "commit" and _commit_skips(after):
             why.append("--no-verify")
         elif sub != "commit" and _other_skips(after):
             why.append("--no-verify")
         if why and sub:
-            found.append("git %s with %s: %s" % (sub, ", ".join(dict.fromkeys(why)), text.strip()))
+            found.append(("git %s with %s: %s" % (sub, ", ".join(dict.fromkeys(why)), text.strip()), persistent))
         if depth < 3:
             for inner in _exec_values(sub, after):
-                found.extend(skips(inner, depth + 1))
+                found.extend(_findings(inner, depth + 1))
     return found
+
+
+def skips(s, depth=0):
+    """Every git hook skip s runs, as short descriptions."""
+    return [f for f, _persistent in _findings(s, depth)]
+
+
+def hooks_location_advice(s):
+    """The advice for s when it makes a persistent change of where git reads the hooks from, else
+    None. Read from the reasons, never from the command's text (claude-config#2140)."""
+    return HOOKS_LOCATION_ADVICE if any(p for _f, p in _findings(s)) else None
 
 
 def overrides(s):
@@ -705,6 +800,163 @@ def check_report(report, transcript):
     return lines
 
 
+# AN EDIT, WRITE OR MULTIEDIT OF A GIT CONFIG FILE (claude-config#2140). No shell command gate reads
+# the file tools, so a git config file written with Write moved the hooks with nothing refusing it.
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
+
+
+def _git(args, cwd=None):
+    """git's output, or None when git cannot run there. Never raises: a caller treats None as git
+    having nothing to say about that directory, and the heuristic below still applies."""
+    import subprocess
+    try:
+        p = subprocess.run(["git"] + args, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return p
+
+
+def _real(path, base):
+    path = os.path.expanduser(path)
+    if not os.path.isabs(path):
+        path = os.path.join(base, path)
+    return os.path.realpath(path)
+
+
+def _config_files(dirs):
+    """Every file git reads config from for a command run in any of `dirs`: what git lists with its
+    includes followed, every file an include names (whether it exists yet or not), the repository's
+    own config and config.worktree (a worktree's and its common directory's), and the global ones."""
+    files = set()
+    home = os.path.expanduser("~")
+    files.add(_real(".gitconfig", home))
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+    files.add(_real(os.path.join("git", "config"), xdg))
+    for name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG"):
+        if os.environ.get(name):
+            files.add(_real(os.environ[name], os.getcwd()))
+    for d in dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        p = _git(["config", "--list", "--show-origin", "--includes", "-z"], d)
+        if p is not None and p.returncode == 0:
+            parts = p.stdout.decode("utf-8", "replace").split("\0")
+            for origin, entry in zip(parts[::2], parts[1::2]):
+                if not origin.startswith("file:"):
+                    continue
+                src = _real(origin[len("file:"):], d)
+                files.add(src)
+                key, _, value = entry.partition("\n")
+                if _moves_hooks(key) and key.lower() != HOOKS_KEY and value:
+                    files.add(_real(value, os.path.dirname(src)))
+        p = _git(["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], d)
+        if p is not None and p.returncode == 0:
+            for g in p.stdout.decode("utf-8", "replace").splitlines():
+                if g:
+                    files.add(_real(os.path.join(g, "config"), d))
+                    files.add(_real(os.path.join(g, "config.worktree"), d))
+    return files
+
+
+def _looks_like_git_config(target):
+    """A config or config.worktree in a git directory (its folder holds HEAD), of any repository, or a
+    .gitconfig anywhere: read whether or not the session's own repository is the one it belongs to."""
+    base = os.path.basename(target)
+    if base == ".gitconfig":
+        return True
+    return base in ("config", "config.worktree") and os.path.isfile(os.path.join(os.path.dirname(target), "HEAD"))
+
+
+def _hooks_entries(text):
+    """The entries of a config file's text that move where git reads the hooks from, in order, as git
+    reads the file on its own (its includes are files of their own), or None when git cannot read
+    the text. Raises ValueError when git cannot run at all, so the gate judges the edit unread."""
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix="agent-overrides-config.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape") as f:
+            f.write(text)
+        p = _git(["config", "--file", tmp, "--list", "-z"])
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    if p is None:
+        raise ValueError("git could not run to read the config file's text")
+    if p.returncode != 0:
+        return None
+    out = []
+    for entry in p.stdout.decode("utf-8", "replace").split("\0"):
+        key, _, value = entry.partition("\n")
+        if key and _moves_hooks(key):
+            out.append((key, value))
+    return out
+
+
+def _apply_edit(text, old, new, replace_all):
+    if old == "":
+        return new if text == "" else text
+    if old not in text:
+        return text
+    return text.replace(old, new) if replace_all else text.replace(old, new, 1)
+
+
+def config_edit(payload):
+    """The refusal for an Edit, Write or MultiEdit (a hook payload) that changes where git reads the
+    hooks from in a git config file, or None (claude-config#2140)."""
+    tool = payload.get("tool_name")
+    ti = payload.get("tool_input")
+    if tool not in EDIT_TOOLS:
+        return None
+    if not isinstance(ti, dict) or not isinstance(ti.get("file_path"), str):
+        raise ValueError("the %s call carries no file_path to read" % tool)
+    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd()
+    target = _real(ti["file_path"], cwd)
+    near = os.path.dirname(target)
+    while near and not os.path.isdir(near) and os.path.dirname(near) != near:
+        near = os.path.dirname(near)
+    if not (_looks_like_git_config(target) or target in _config_files([cwd, near])):
+        return None
+    try:
+        with open(target, encoding="utf-8", errors="surrogateescape") as f:
+            old = f.read()
+    except FileNotFoundError:
+        old = ""
+    if tool == "Write":
+        new = ti.get("content")
+        if not isinstance(new, str):
+            raise ValueError("the Write call carries no content to read")
+    elif tool == "Edit":
+        o, n = ti.get("old_string"), ti.get("new_string")
+        if not isinstance(o, str) or not isinstance(n, str):
+            raise ValueError("the Edit call carries no old_string and new_string to read")
+        new = _apply_edit(old, o, n, bool(ti.get("replace_all")))
+    else:
+        edits = ti.get("edits")
+        if not isinstance(edits, list):
+            raise ValueError("the MultiEdit call carries no edits to read")
+        new = old
+        for e in edits:
+            if not isinstance(e, dict) or not isinstance(e.get("old_string"), str) or not isinstance(e.get("new_string"), str):
+                raise ValueError("a MultiEdit edit carries no old_string and new_string to read")
+            new = _apply_edit(new, e["old_string"], e["new_string"], bool(e.get("replace_all")))
+    if old == new:
+        return None
+    before, after = _hooks_entries(old), _hooks_entries(new)
+    if before is None or after is None:
+        # Two texts git cannot read are not two equal readings: the gate cannot tell what either
+        # sets, so an edit of one is refused rather than compared (the lessons review at 8f5e458).
+        return ("%s of %s is an edit of a git config file whose text git cannot read, %s the edit, so "
+                "the gate cannot tell whether it changes where git reads the hooks from "
+                "(claude-config#2140).\n%s" % (tool, ti["file_path"], "before" if before is None else "after",
+                                               HOOKS_LOCATION_ADVICE))
+    if before == after:
+        return None
+    return ("%s of %s changes where git reads the hooks from, its hooks location or a config include "
+            "(claude-config#2140).\n%s" % (tool, ti["file_path"], HOOKS_LOCATION_ADVICE))
+
+
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ""
     data = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
@@ -714,6 +966,30 @@ def main(argv):
             print(f)
         # Not 1: Python exits 1 on an uncaught exception, and a crash must never read as clean (#1869).
         return 0 if found else 10
+    if mode == "hooks-location-advice":
+        advice = hooks_location_advice(data)
+        if advice:
+            print(advice)
+        # Not 1, for the same reason as skips (#1869).
+        return 0 if advice else 10
+    if mode == "config-edit":
+        try:
+            d = json.loads(data)
+        except ValueError:
+            sys.stderr.write("the hook payload is not JSON\n")
+            return 2
+        if not isinstance(d, dict):
+            sys.stderr.write("the hook payload is not an object\n")
+            return 2
+        try:
+            refusal = config_edit(d)
+        except ValueError as e:
+            sys.stderr.write("%s\n" % e)
+            return 2
+        if refusal:
+            print(refusal)
+        # Not 1: a crash must never read as an edit that moves nothing (#1869).
+        return 0 if refusal else 10
     if mode == "stdin-device":
         found = stdin_device_reads(data)
         for f in found:
@@ -745,7 +1021,7 @@ def main(argv):
         for line in lines:
             print(line)
         return 0 if lines else 10
-    sys.stderr.write("usage: agent-overrides.py skips | stdin-device | stdin-device-refusal <agent> | rewrite-refusal <agent> | runs-script <name> | check-report <transcript>  (input on stdin)\n")
+    sys.stderr.write("usage: agent-overrides.py skips | hooks-location-advice | config-edit | stdin-device | stdin-device-refusal <agent> | rewrite-refusal <agent> | runs-script <name> | check-report <transcript>  (input on stdin)\n")
     return 64
 
 
