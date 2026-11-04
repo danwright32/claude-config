@@ -8932,6 +8932,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L845. When the reason behind queued work is withdrawn, any step that can retry or restart that work must check the reason still holds at the moment it acts, because a cancel that only stops work still running leaves finished but retryable work to go ahead later.**
+  (slate#4546, 2026-11-04)
+  SHORT: A retry must recheck that the work's reason still holds when it acts; a cancel that stops only running work lets retryable work go ahead.
 - **L844. A cache keyed on a calendar period (a day, an hour) is empty for the first reader of every period, so a read under a deadline must find it already written by a scheduled job before the period opens, and a fill started by a read that can overrun its deadline must be held open past that deadline, or one slow read leaves the cache cold for the next reader too.**
   (bidspoke#3252, 2026-11-04)
   SHORT: A period-keyed cache is cold for each period's first reader, so seed it on a schedule before the period, and hold open a fill that outlives a deadline.
