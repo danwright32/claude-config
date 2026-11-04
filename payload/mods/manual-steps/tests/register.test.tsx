@@ -55,8 +55,16 @@ const modKit: { name: string; register: Register } = {
         clickable: async () => true,
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
-        hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
-        release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
+        // #2132: a hold on manual-steps' reload and its letting go, asked of the world, which keeps
+        // them in order beside each prompt sent and can refuse one as mod-kit would.
+        hold: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'hold', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
+        release: async (input: unknown) => {
+          const r = await built.process.run(['__modkit', 'release', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+        },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
         account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
@@ -183,9 +191,9 @@ const ROOT = '/repo'
 // at any width once asked for (#1752); `$.ui.panes()` lists them so, unless `panesFail`.
 // `files` is the disk the mod reads a published page from (#1811); a path not in it is missing. The
 // Artifact tool beneath publishes any page, and refuses one whose path holds REFUSED.
-type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; columns?: number; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; panesFail: boolean; turn: string | { fails: string } | 'truncated'; files: Record<string, string> }
+type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; columns?: number; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; panesFail: boolean; turn: string | { fails: string } | 'truncated'; files: Record<string, string>; held: string[]; holdFails: string }
 const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
-  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, panesFail: false, turn: '', files: {}, ...init }
+  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, panesFail: false, turn: '', files: {}, held: [], holdFails: '', ...init }
   const mem: Record<string, unknown> = { ...store }
   const asked = new Set<string>()
   // Each open pane, and whether it was opened asked, which Claude Code places at any width.
@@ -254,6 +262,7 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
     return { value: [...open.keys()].map(id => ({ id, title: 'Manual steps', isShown: placedNow(id), isFocused: false, isPlaced: placedNow(id) })) } as never
   })
   on('prompt.submit', ($, e) => {
+    w.held.push('submit')
     if (w.submitFails) throw new Error('the prompt queue is closed')
     prompts.push(e.text)
     return { text: e.text } as never
@@ -263,6 +272,11 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
     return { value: w.copied ? { isCopied: true } : { isCopied: false, reason: 'no-clipboard' } } as never
   })
   on('process.run', ($, e) => {
+    if (e.argv[0] === '__modkit' && (e.argv[1] === 'hold' || e.argv[1] === 'release')) {
+      if (e.argv[1] === 'hold' && w.holdFails) return { value: { exitCode: 1, stdout: '', stderr: w.holdFails, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      w.held.push(`${e.argv[1]} ${e.argv[2]}`)
+      return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
     runs.push({ argv: e.argv, timeoutMs: e.init?.timeoutMs })
     if (e.argv[0] === 'perl' && e.argv[3] === '--') {
       const t = w.turn
@@ -529,6 +543,33 @@ test('a Done that cannot reach Claude opens the step again and says so', withKit
   expect(w.toasts).toHaveLength(1)
   expect(w.toasts[0]).toMatch(/^Could not tell Claude step 1 is done: .+\. Press Done again\.$/)
   expect(w.prompts).toEqual([])
+})
+
+// #2132: the prompt a Done sends waits until the session is idle, and mod-kit's reload of
+// manual-steps in that time would drop it, so it holds that reload back until sent or refused.
+const DONE_HELD = `hold ${JSON.stringify({ mod: 'manual-steps', id: 'done', what: "the prompt telling Claude a step is done", ms: 60 * 60_000 })}`
+const DONE_LET_GO = `release ${JSON.stringify({ mod: 'manual-steps', id: 'done' })}`
+test('a Done holds back a reload of manual-steps while its prompt waits, and lets go sent or refused (#2132)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  await press($, 'done-1')
+  expect(w.w.held).toEqual([DONE_HELD, 'submit', DONE_LET_GO])
+  await call($, VERDICT, { step: 1, checked: 'not-done' })
+  w.w.submitFails = true
+  await press($, 'done-1')
+  expect(w.w.held).toEqual([DONE_HELD, 'submit', DONE_LET_GO, DONE_HELD, 'submit', DONE_LET_GO])
+  expect(w.toasts).toHaveLength(1)
+})
+
+test('a hold mod-kit refuses is said in the debug log, and the Done is sent as before (#2132)', withKit, async ($, on) => {
+  const w = world(on, { holdFails: 'mod-kit is not loaded' })
+  await start($)
+  await hand($, [step()])
+  await press($, 'done-1')
+  expect(w.w.held).toEqual(['submit'])
+  expect(w.prompts).toHaveLength(1)
+  expect(w.logs).toContain('manual-steps: could not hold back a reload while it waits on the prompt telling Claude a step is done, so one now would drop that wait (mod-kit is not loaded)')
 })
 
 test('a verdict with no card, or on a step that is not there, is refused by name', withKit, async ($, on) => {
