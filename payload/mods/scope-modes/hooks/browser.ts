@@ -24,18 +24,44 @@ const C = 'mcp__claude-in-chrome__'
 
 /** The tabs this session created, by tab id, with the host each one's page was last seen on. */
 export type BrowserTabs = Record<string, { host: string | null }>
+/**
+ * The project's hosted test hosts, or why its CLAUDE.md on the default branch could not be read
+ * (#2146). Unreadable lists no host, as an empty list does, but is said as not known, never as the
+ * host being unlisted (L11).
+ */
+export type TestHosts = readonly string[] | { unreadable: string }
 /** What a Chrome call is judged against: the record of tabs, and the project's listed test hosts. */
-export type Browser = { tabs: BrowserTabs; listed: readonly string[] }
+export type Browser = { tabs: BrowserTabs; listed: TestHosts }
 
 const HOW_TO_LIST =
   "a test host is localhost, 127.0.0.1, [::1] or a name ending .localhost or .test, or a hosted one the project's CLAUDE.md on its default branch lists on a line reading Sleep mode test hosts: followed by the hosts"
 
-export const isTestHost = (host: string, listed: readonly string[]): boolean => {
+const hostsOf = (listed: TestHosts): readonly string[] => ('unreadable' in listed ? [] : listed)
+
+export const isTestHost = (host: string, listed: TestHosts): boolean => {
   const h = host.toLowerCase()
   if (!h) return false
   if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]') return true
   if (h.endsWith('.localhost') || h.endsWith('.test')) return true
-  return listed.some(l => l.toLowerCase() === h)
+  return hostsOf(listed).some(l => l.toLowerCase() === h)
+}
+
+// Why a host that is not a test host is refused: not on the list, or the list not read (#2146).
+const notTestHost = (listed: TestHosts) =>
+  'unreadable' in listed
+    ? `which is not a local test host, and whether the project lists it as a hosted one is not known, because ${listed.unreadable}`
+    : 'which is not a test host'
+
+/**
+ * The hosts the default branch's CLAUDE.md lists, from git show's answer for `ref` in the checkout
+ * at `where` (#2146). A branch carrying no CLAUDE.md lists nothing, in either of git's wordings (the
+ * second when the working copy has one); any other failure is unreadable, with git's own reason.
+ */
+export const committedHosts = (ref: string, where: string, shown: { exitCode: number; stdout: string; stderr: string }): TestHosts => {
+  if (shown.exitCode === 0) return listedHosts(shown.stdout)
+  if (/^fatal: path '[^']*' (?:does not exist in|exists on disk, but not in) '/m.test(shown.stderr)) return []
+  const said = shown.stderr.trim()
+  return { unreadable: `CLAUDE.md on ${ref} in ${where} could not be read (${said || `git show exited ${shown.exitCode} and said nothing`})` }
 }
 
 const TEST_LABEL = /^(staging|dev|test|qa|sandbox|preview)(\d+|-[a-z0-9-]+)?$/
@@ -88,7 +114,7 @@ const notCreated = (tool: string, tab: string) =>
   `use ${tool} on tab ${tab}, which this session did not create (a tab made with tabs_create_mcp can be used on a test host)`
 const unnamed = (tool: string) => `use ${tool} without naming a tab this session created`
 
-const navigateRefusal = (tool: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: readonly string[]) => {
+const navigateRefusal = (tool: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: TestHosts) => {
   const tab = tabOf(input)
   if (!tab) return unnamed(tool)
   if (!tabs[tab]) return notCreated(tool, tab)
@@ -96,21 +122,21 @@ const navigateRefusal = (tool: string, input: Record<string, unknown>, tabs: Bro
   if (url === 'back' || url === 'forward') return `go ${url} in the browser, where the page it lands on cannot be known before it loads`
   const host = navigateHost(url)
   if (!host) return `open ${url} in the browser, which is not a web address`
-  if (!isTestHost(host, listed)) return `open ${host} in the browser, which is not a test host (${HOW_TO_LIST})`
+  if (!isTestHost(host, listed)) return `open ${host} in the browser, ${notTestHost(listed)}${'unreadable' in listed ? '' : ` (${HOW_TO_LIST})`}`
   return undefined
 }
 
-const onPageRefusal = (tool: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: readonly string[]) => {
+const onPageRefusal = (tool: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: TestHosts) => {
   const tab = tabOf(input)
   if (!tab) return unnamed(tool)
   const seen = tabs[tab]
   if (!seen) return notCreated(tool, tab)
   if (seen.host === null) return `use ${tool} on tab ${tab}, whose page is not on a test host`
-  if (!isTestHost(seen.host, listed)) return `use ${tool} on tab ${tab}, whose page is on ${seen.host}, which is not a test host`
+  if (!isTestHost(seen.host, listed)) return `use ${tool} on tab ${tab}, whose page is on ${seen.host}, ${notTestHost(listed)}`
   return undefined
 }
 
-const oneRefusal = (name: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: readonly string[]): string | undefined => {
+const oneRefusal = (name: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: TestHosts): string | undefined => {
   const tool = `${C}${name}`
   if (FREE.has(name)) return undefined
   if (name === 'navigate') return navigateRefusal(tool, input, tabs, listed)
