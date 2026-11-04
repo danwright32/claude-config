@@ -189,6 +189,61 @@ want_row "another field of a dated exception is not a verbatim quote" \
  }
 ]}' "4:41"
 
+# --- one very long line is scanned in linear time (claude-config#2220) ---------------------
+#
+# A settled design page carries its frames as JSON on ONE line, and a script's template literal
+# there is, to this scanner, a single inline code span, blanked to that many spaces. The table
+# cell half of SENTENCE_END, `\s*\|\s*`, then started at every position of the run and read to its
+# end from each, which is quadratic in the run's length: a 2.35 MB line was still scanning after
+# 180 s, and the gate's 60 s limit refused the push. The span page is timed against a YARDSTICK,
+# the same scanner on a line of the same length with no span, which was linear before the fix and
+# after it, so the budget moves with the machine's load instead of asserting about it (L290), and
+# a machine too starved to scan even the yardstick says UNMEASURED rather than failing (L411).
+# Both pages end in a pending claim, so a scanner that sped up by reading less is caught too.
+long_line="$(SCANNER="$SCANNER" python3 - <<'PY'
+import os, subprocess, sys, time
+scanner = os.environ["SCANNER"]
+size = 2_400_000
+chunk = "<div class=card>x</div>"
+body = (chunk * (size // len(chunk) + 1))[:size]
+claim = " #41 closes with it."
+plain = "<!doctype html>\n<script>const t = '" + body + "';</script>" + claim + "\n"
+span = "<!doctype html>\n<script>const t = `" + body + "`;</script>" + claim + "\n"
+
+def run(text, limit):
+    t0 = time.monotonic()
+    p = subprocess.run([sys.executable, scanner, "--stdin", "page.html"], input=text.encode(),
+                       capture_output=True, timeout=limit)
+    return time.monotonic() - t0, p.stdout.decode(errors="replace")
+
+STARVED = 60
+try:
+    yard, out = run(plain, STARVED)
+except subprocess.TimeoutExpired:
+    print("UNMEASURED the yardstick, a %d character line with no span, took over %d s, so this machine is too loaded to time the span page" % (len(plain), STARVED))
+    sys.exit(0)
+if "page.html:2:41:" not in out:
+    print("FAIL the yardstick page lost its pending claim, so the scanner did not read the line to its end")
+    sys.exit(0)
+budget = max(10.0, 10 * yard)
+try:
+    took, out = run(span, budget)
+except subprocess.TimeoutExpired:
+    print("FAIL a %d character line holding a %d character inline code span took over %.1f s (ten times the %.2f s yardstick on the same length without the span): something in the scanner is super linear in a long line" % (len(span), size, budget, yard))
+    sys.exit(0)
+if "page.html:2:41:" not in out:
+    print("FAIL the span page lost its pending claim after the span, so the scanner did not read the line to its end")
+    sys.exit(0)
+print("OK span %.2f s against a %.2f s yardstick" % (took, yard))
+PY
+)"
+case "$long_line" in
+  OK*) ok ;;
+  UNMEASURED*) echo "SUITE-PART-UNMEASURED ${long_line#UNMEASURED }" ;;
+  '') bad "the long line timing printed no verdict at all, so it never ran to an answer" ;;
+  *) bad "${long_line#FAIL }" ;;
+esac
+
 # The scanner must never be the one asking GitHub (the hook owns the lookups): no process
 # spawning and no network module anywhere in it. Its docstring may SAY "gh"; its code may not
 # reach one.
