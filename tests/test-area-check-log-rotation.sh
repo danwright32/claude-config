@@ -36,7 +36,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-log-rotation.XXXXXX")"
 trap 'chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
-EXPECTED=21
+EXPECTED=22
 
 cat >"$TMP/run.mjs" <<'JS'
 import { spawnSync } from 'node:child_process'
@@ -53,9 +53,9 @@ const fresh = () => {
   mkdirSync(d, { recursive: true })
   return d
 }
-const sh = (script, args) => spawnSync('/bin/sh', ['-c', script, 'area-check', ...args], { encoding: 'utf8' })
+const sh = (script, args, env) => spawnSync('/bin/sh', ['-c', script, 'area-check', ...args], { encoding: 'utf8', ...(env ? { env } : {}) })
 const read = (d, repo, branch) => sh(READ_SCRIPT, [d, repoNeedle(repo), branch === null ? '' : branchNeedle(branch), ...MARKS])
-const rotate = (d, stamp, max, mins = SETTLE_MINUTES) => sh(ROTATE_SCRIPT, [d, stamp, String(max), String(mins), ...MARKS])
+const rotate = (d, stamp, max, mins = SETTLE_MINUTES, env) => sh(ROTATE_SCRIPT, [d, stamp, String(max), String(mins), ...MARKS], env)
 const dec = (o) => JSON.stringify({ v: 3, kind: 'decided', at: '2026-11-04T15:00:00.000Z', session: 's0', agent: null, repo: o.repo ?? 'dan/app', branch: o.branch ?? '12-feature', mergeBase: 'mb123', path: o.path, call: 'c0', decision: 'proceed', reason: o.reason ?? 'a reason' })
 const loaded = (i) => JSON.stringify({ v: 1, kind: 'loaded', at: '2026-11-04T15:00:00.000Z', session: `s${i}`, cwd: '/w/app', rule: 2 })
 const put = (file, lines) => writeFileSync(file, lines.map(l => l + '\n').join(''))
@@ -250,6 +250,24 @@ const markedLines = rotatingLines.filter(l => MARKS.some(m => l.includes(m)))
   put(`${d}/log.jsonl`, [loaded(3)])
   const out = rotate(d, 'st2', 1 << 30)
   say('an archive is never put over another: the settle fails, both left as they were', out.status !== 0 && out.stderr.includes('already exists') && readFileSync(`${d}/rotated/st1.jsonl`, 'utf8') === loaded(0) + '\n' && readFileSync(`${d}/rotated/st1.rotating`, 'utf8') === rotatingLines.map(l => l + '\n').join(''), `exit ${out.status} ${out.stderr}`)
+}
+{
+  // The decision file is written before the rotated log becomes the archive, so a settle stopped
+  // between the two renames leaves the .rotating file, which the read still reads. An mv on the PATH
+  // refuses only the rename into the decision file, as a full disk or a crash there would.
+  n++
+  const d = fresh()
+  mkdirSync(`${d}/rotated`)
+  put(`${d}/rotated/st1.rotating`, rotatingLines)
+  old(`${d}/rotated/st1.rotating`)
+  put(`${d}/log.jsonl`, [loaded(3)])
+  const shim = `${base}/shim${k}`
+  mkdirSync(shim)
+  writeFileSync(`${shim}/mv`, '#!/bin/sh\ncase "$2" in *.decisions.jsonl) echo "mv: refused by the test" >&2; exit 1;; esac\nexec /bin/mv "$@"\n')
+  chmodSync(`${shim}/mv`, 0o755)
+  const out = rotate(d, 'st2', 1 << 30, SETTLE_MINUTES, { ...process.env, PATH: `${shim}:${process.env.PATH}` })
+  const r = readOf(read(d, 'dan/app', '12-feature').stdout)
+  say('a settle stopped before its decision file is written leaves the rotated log, so every decision is still read', out.status !== 0 && existsSync(`${d}/rotated/st1.rotating`) && !existsSync(`${d}/rotated/st1.jsonl`) && paths(r) === 'src/a.ts,src/c.ts', `exit ${out.status} ${out.stderr} left ${readdirSync(`${d}/rotated`)} read ${JSON.stringify(r)}`)
 }
 
 // ---- The whole cycle ----
