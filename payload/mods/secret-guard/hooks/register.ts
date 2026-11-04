@@ -10,6 +10,7 @@ import {
   secretsFromEnvList,
   secretsFromEnvText,
 } from './secrets.ts'
+import { neverThrows } from './mod-kit/hold.ts'
 
 // Secret echo guard (claude-config#607). The known values are held in this module's memory only,
 // never in $.store or on disk: a copy kept to protect a secret would be one more place to leak it.
@@ -186,14 +187,19 @@ export const register: Register = on => {
       await keepWritten($, path)
     }
     return next(e)
-  }).catch(($, e, next) =>
+  }).catch(($, e, next) => next.called ? next(e) : neverThrows(
     // A hook that fails is skipped and the call runs unscreened, so a check that throws (an older
     // mod-kit with no commands reader, #1281) refuses (#1298, L42). Once next was called the call
-    // was judged and passed on, and what it settled to stands.
+    // was judged and passed on, and what it settled to stands, replayed OUTSIDE neverThrows: the
+    // call has already run beneath, so a refusal saying it did not run would be untrue and could
+    // make Claude run it twice, and the tool's own failure reaches Claude instead (#2039).
     // Said by the failure's kind only, never the error's own words, which can quote the very input
-    // the check could not read, secret and all (lessons review of #1298).
-    next.called ? next(e) : { deny: cannotCheck(next.error?.kind === 'timeout' ? 'it ran out of time' : 'it failed') },
-  )
+    // the check could not read, secret and all (lessons review of #1298). Should even reading the
+    // kind fail, the refusal without a reason holds the call, so a catch before next never throws.
+    () => ({ deny: cannotCheck(next.error?.kind === 'timeout' ? 'it ran out of time' : 'it failed') }),
+    () => ({ deny: SCREEN_FAILED }),
+    { deny: SCREEN_FAILED },
+  ))
 
   on('session.append', async ($, e, next) => {
     if (e.door !== 'tool-result' && e.door !== 'tool-message') return next(e)
@@ -226,12 +232,16 @@ export const register: Register = on => {
     const kept = await next({ ...e, message: { ...e.message, content } })
     await $.ui.toast(`Hid ${count} secret${count === 1 ? '' : 's'} from a command's output.`)
     return kept
-  }).catch(($, e, next) => {
+  }).catch(($, e, next) => next.called ? next(e) : neverThrows(
     // A hook that fails is skipped and the row is kept as it came, secrets and all, so a scrub that
     // throws withholds the row's text instead (#1298, L42). Once next was called the scrubbed row
-    // was kept, and that stands.
-    if (next.called) return next(e)
-    if (e.door !== 'tool-result' && e.door !== 'tool-message') return next(e)
-    return next({ ...e, message: { ...e.message, content: withheld(e.message?.content) as typeof e.message.content } })
-  })
+    // was kept, and that stands, replayed outside neverThrows (#2039). Before next, the row goes on
+    // withheld block by block, each tool result keeping its id. That reads only plain data (the
+    // engine refuses any other row before a hook sees it), so it can fail only in next, and a
+    // second next is answered with that first outcome: the one withheld text below, which has no
+    // ids, never reaches the transcript. It and the refusal are there so the catch never throws.
+    () => (e.door !== 'tool-result' && e.door !== 'tool-message') ? next(e) : next({ ...e, message: { ...e.message, content: withheld(e.message?.content) as typeof e.message.content } }),
+    () => next({ ...e, message: { ...e.message, content: [{ type: 'text', text: WITHHELD }] as typeof e.message.content } }),
+    { deny: WITHHELD },
+  ))
 }
