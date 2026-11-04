@@ -180,6 +180,43 @@ eq "the check never wrote under the HOME it was started with" "" "$(find "$W/rea
 left="$(find "$W/tmp" -maxdepth 1 -name 'claude-sync-suite-work.home.*' 2>/dev/null)"
 eq "and removed every throwaway HOME it made" "" "$left"
 
+# ---- 4. the refusals ----
+# Arming refuses (2) rather than running a suite against the real records when the list is missing:
+# a copy of suite-deadline.sh in a lib folder without suite-isolation.sh beside it.
+mkdir -p "$W/nolib/lib"
+cp "$HOOKS/lib/suite-deadline.sh" "$W/nolib/lib/"
+r="$(env "${unsets[@]}" HOME="$W/home1" SUITE_WALL_TIMEOUT=0 bash -c '
+  . "$1/lib/suite-deadline.sh" || exit 9
+  suite_deadline_arm; rc=$?
+  printf "rc=%s spool=%s\n" "$rc" "${CLAUDE_ISSUE_SPOOL_DIR:-}"' _ "$W/nolib" 2>&1)"
+says "arming with no lib/suite-isolation.sh refuses (2)" "rc=2 spool=" "$r"
+says "and says the suite would write into the real records" "lib/suite-isolation.sh is missing" "$r"
+lacks "and points no seam anywhere" "spool=/" "$r"
+
+# Arming refuses when no throwaway folder can be made: TMPDIR names a folder that does not exist.
+r="$(env "${unsets[@]}" HOME="$W/home1" TMPDIR="$W/no-such-tmp" SUITE_WALL_TIMEOUT=0 bash -c '
+  . "$1/lib/suite-deadline.sh" || exit 9
+  suite_deadline_arm; rc=$?
+  printf "rc=%s spool=%s\n" "$rc" "${CLAUDE_ISSUE_SPOOL_DIR:-}"' _ "$HOOKS" 2>&1)"
+says "arming with no throwaway folder refuses (2)" "rc=2 spool=" "$r"
+says "naming why" "no throwaway folder could be made" "$r"
+lacks "and points no seam anywhere" "spool=/" "$r"
+
+# The check exits 2, never clean, when it cannot make a throwaway HOME for a suite.
+out="$(HOME="$W/realhome" TMPDIR="$W/no-such-tmp" bash "$CHECK" "$W/test-armed.sh" 2>&1)"; rc=$?
+eq "the check with no throwaway HOME could not run (2)" 2 "$rc"
+says "and says the suite was not run" "was not run" "$out"
+lacks "and never calls it clean" "clean $W/test-armed.sh" "$out"
+
+# The check exits 2 when the library naming the seams to clear is missing: a copy of it with no
+# payload/hooks/lib beside it.
+mkdir -p "$W/nocheck/tools"
+cp "$CHECK" "$W/nocheck/tools/"
+out="$(HOME="$W/realhome" bash "$W/nocheck/tools/suite-home-writes.sh" "$W/test-armed.sh" 2>&1)"; rc=$?
+eq "the check with no lib/suite-isolation.sh could not run (2)" 2 "$rc"
+says "and says the seams to clear are unknown" "the seams to clear are unknown" "$out"
+eq "the refusals never wrote under the HOME they were started with" "" "$(find "$W/realhome" -mindepth 1 2>/dev/null)"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
