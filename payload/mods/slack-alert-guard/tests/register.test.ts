@@ -163,6 +163,10 @@ test('an edit to a file that posts to Slack, touching no message text, passes; s
   expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/app/README.md', content: 'Posts "Deploy failed" to hooks.slack.com\n' }))).toBe('')
   expect(w.ran.length).toBe(3)
   expect(w.cards).toEqual([])
+  // The same file with its wording changed is held, so the passes above are the guard deciding,
+  // never a guard that judges nothing.
+  expect(refusalOf(await call($, REWORD))).toContain(ALERT)
+  expect(w.ran.length).toBe(3)
 })
 
 test('new wording in a Slack alert is held until Dan approves the message as Slack will post it, then goes through', withKit, async ($, on) => {
@@ -268,6 +272,11 @@ test('a shell write into a Slack posting file is held until Dan approves it, the
   const cmd = { tool: 'Bash', command: `printf 'notify("Disk is full")\\n' >> ${ALERT}` }
   const why = refusalOf(await call($, cmd))
   expect(why).toContain(ALERT)
+  // A shell write's wording cannot be read before it runs, so it is named as that, never as an
+  // empty list of message text taken away.
+  expect(why).toContain('shell command')
+  expect(why).not.toContain('takes Slack message text away')
+  expect(w.cards.at(-1)?.reason).toContain('shell command')
   expect(refusalOf(await call($, { tool: 'Bash', command: `printf 'x\\n' >> ${PLAIN}` }))).toBe('')
   await ask($, w, why, APPROVE, { rendered: 'Disk is full on db-1' })
   expect(refusalOf(await call($, cmd))).toBe('')

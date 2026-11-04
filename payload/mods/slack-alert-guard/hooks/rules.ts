@@ -43,6 +43,10 @@ const MARKERS: RegExp[] = [
   /slack-go\//,
   /SLACK[_]\w*(WEBHOOK|TOKEN|CHANNEL)/i,
   /\b(send|post|notify|alert)\w*slack\w*\s*\(/i,
+  // The same helper imported without being called, as a test asserting its wording does. Only an
+  // import or require line counts, so the name in a comment or a config key is not a post.
+  /^\s*(import|from)\b[^\n]*\b(send|post|notify|alert)\w*slack/im,
+  /\b(send|post|notify|alert)\w*slack\w*\b[^\n]*\brequire\s*\(/i,
   /\bslack\w*\.(send|post|notify|chat)\w*\s*\(/i,
   /\bslack\w*(send|post|notify|message|alert)\w*\s*\(/i,
 ]
@@ -202,13 +206,24 @@ const listed = (xs: string[]): string => xs.map(x => `"${x}"`).join(', ')
 export const changeText = (added: string[], removed: string[]): string =>
   added.length ? `adds Slack message text Dan has not approved: ${listed(added)}` : `takes Slack message text away: ${listed(removed)}`
 
+/**
+ * What is held, as the card and both refusals open. A shell command carries no wording the guard
+ * can read before it runs, so it is named as that rather than as an empty list taken away.
+ */
+export const heldText = (file: string, added: string[], removed: string[]): string =>
+  added.length || removed.length
+    ? `This edit to ${file} ${changeText(added, removed)}`
+    : `This shell command writes to ${file}, which posts to Slack, and the wording it leaves cannot be read until it runs`
+
+const blocked = (file: string, added: string[], removed: string[]): string => `Blocked: t${heldText(file, added, removed).slice(1)}`
+
 /** The main session's refusal: show Dan the message as Slack will post it, then ask. */
 export const refusal = (id: string, file: string, added: string[], removed: string[]): string =>
-  `Blocked: this edit to ${file} ${changeText(added, removed)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
+  `${blocked(file, added, removed)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
 
 /** A subagent's refusal: it may not ask Dan, so it stops and reports. */
 export const agentRefusal = (id: string, file: string, added: string[], removed: string[]): string =>
-  `Blocked: this edit to ${file} ${changeText(added, removed)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
+  `${blocked(file, added, removed)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
 
 /** The question Dan is asked, with the message itself in it. */
 export const question = (file: string, rendered: string): string => `Post this Slack message from ${file}?\n\n${rendered}`

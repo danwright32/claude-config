@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { editedText, inScope, isOwnRecord, isProse, literalsOf, mentionsStore, renderedProblem, slackMarked, wordingChange, wordingKey, wordingOf } from '../hooks/rules.ts'
+import { agentRefusal, editedText, heldText, inScope, isOwnRecord, isProse, literalsOf, mentionsStore, refusal, renderedProblem, slackMarked, wordingChange, wordingKey, wordingOf } from '../hooks/rules.ts'
 
 // The Slack alert guard's pure rules (claude-config#2242). Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -24,6 +24,13 @@ test('a file posts to Slack by a webhook, the chat API, an SDK, or a send helper
   expect(slackMarked('await sendSlackAlert(`Deploy ${id} failed`)')).toBe(true)
   expect(slackMarked('await notifySlack(msg)')).toBe(true)
   expect(slackMarked('slack.send(msg)')).toBe(true)
+  // A test or caller that imports the helper, without calling it, still carries its wording.
+  expect(slackMarked('import { sendSlackAlert } from "./alert"\nexpect(sent).toBe("Backup is late")')).toBe(true)
+  expect(slackMarked('from alerts import send_slack_alert')).toBe(true)
+  expect(slackMarked("const { notifySlack } = require('./slack')")).toBe(true)
+  // The helper's name in a comment or a config key is not a post.
+  expect(slackMarked('// notifySlack is off on weekends\nconst x = 1')).toBe(false)
+  expect(slackMarked('notify_slack: true')).toBe(false)
   // A word about Slack is not a post to it, and neither is a function that only reads a marker.
   expect(slackMarked('// see the slack channel for context\nconst x = 1')).toBe(false)
   expect(slackMarked('export const slackMarked = (text: string) => true')).toBe(false)
@@ -86,4 +93,18 @@ test("the guard's own record is recognised in the store, by name, and in a shell
   expect(isOwnRecord('/w/a/slack-alert-guard/hooks/rules.ts')).toBe(false)
   expect(mentionsStore('cat > ~/.claude/plugins/store/x.json')).toBe(true)
   expect(mentionsStore('echo hi')).toBe(false)
+})
+
+test('a held edit names the wording it adds or takes away; a held shell command says its wording cannot be read', () => {
+  expect(heldText('/w/a/alert.ts', ['Deploy failed on production'], [])).toBe('This edit to /w/a/alert.ts adds Slack message text Dan has not approved: "Deploy failed on production"')
+  expect(heldText('/w/a/alert.ts', [], ['Deploy failed'])).toBe('This edit to /w/a/alert.ts takes Slack message text away: "Deploy failed"')
+  const shell = heldText('/w/a/alert.ts', [], [])
+  expect(shell).toContain('shell command')
+  expect(shell).toContain('/w/a/alert.ts')
+  expect(shell).not.toContain('takes Slack message text away')
+  for (const r of [refusal('t1', '/w/a/alert.ts', [], []), agentRefusal('t1', '/w/a/alert.ts', [], [])]) {
+    expect(r.startsWith('Blocked: this shell command')).toBe(true)
+    expect(r).not.toContain('text away')
+  }
+  expect(refusal('t1', '/w/a/alert.ts', ['Deploy failed on production'], []).startsWith('Blocked: this edit to /w/a/alert.ts adds')).toBe(true)
 })
