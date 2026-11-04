@@ -2792,8 +2792,7 @@ seed_unmanaged_list(){   # $1 = a clone directory holding a copied claude-sync
 # checkout would hold them. Never an exemption: the copy is scanned like any send.
 seed_work_names_scanner(){   # $1 = a clone directory holding a copied claude-sync
   mkdir -p "$1/payload/hooks/lib"
-  cp "$(dirname "$SCRIPT")/payload/hooks/lib/work-names.py" "$1/payload/hooks/lib/work-names.py"
-  cp "$(dirname "$SCRIPT")/payload/hooks/lib/dev-update-registry.js" "$1/payload/hooks/lib/dev-update-registry.js"
+  python3 "$(dirname "$SCRIPT")/payload/hooks/lib/install-hook-libs.py" "$(dirname "$SCRIPT")/payload/hooks/lib" "$1/payload/hooks/lib" work-names.py dev-update-registry.js || bad "seed_work_names_scanner: the install refused"
 }
 # SUITE_DEBUG=1 prints tool output a scenario would otherwise throw away. It exists because a
 # failure that only happens on a machine you cannot run has to be MEASURED there, and a check
