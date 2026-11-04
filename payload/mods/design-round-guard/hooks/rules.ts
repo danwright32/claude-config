@@ -2247,8 +2247,9 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
 // read. With `seeds` 'messages' the same reading starts from where a message a person reads is handed
 // its words (#1823) rather than from what is drawn. `reached` is every place read so in each of the
 // mod's files, with the file as read: the seeds, the top level declarations reached and the values
-// followed (#2161, which asks what a message reads beside what it says).
-const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'messages' = 'units'): { r?: ModRead; parts: Span[]; followed: Span[]; reached: [ModRead, Span][] } | null => {
+// followed (#2161, which asks what a message reads beside what it says). `wide` follows what a call
+// is handed too (`String(why)`'s `why`), which is no part of the look or the words but may read a key.
+const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'messages' = 'units', wide = false): { r?: ModRead; parts: Span[]; followed: Span[]; reached: [ModRead, Span][] } | null => {
   const read = new Map<string, ModRead>()
   for (const f of files) {
     const r = readMod(f)
@@ -2399,14 +2400,14 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
       // A line builder (a unit that is a function, whole) is drawn with its own words; what it is
       // handed is the data it shows, so its parameters are its inputs, as a called function's are.
       const builder = own === undefined && !r.code(u).startsWith('<') ? r.fns.findIndex(f => (u[0] <= f.from && f.to <= u[1]) || f.body === u[0]) : -1
-      for (const { name: x, at } of r.refsAt(u, true, own)) bind(r.name, x, at, builder < 0 ? undefined : builder)
+      for (const { name: x, at } of r.refsAt(u, !wide, own)) bind(r.name, x, at, builder < 0 ? undefined : builder)
     }
   while (queue.length || spans.length) {
     const next = spans.pop()
     if (next) {
       const [file, s, inputs] = next
       const r = read.get(file) as ModRead
-      for (const { name: x, at, call } of r.refsAt(s, true)) {
+      for (const { name: x, at, call } of r.refsAt(s, !wide)) {
         if (call && callee(file, x, at)) continue
         reach(file, x)
         bind(file, x, at, inputs)
@@ -2554,6 +2555,10 @@ const messageReading = (others: readonly ModFile[], name: string, text: string):
   const d = drawnOf([...others, { name, text }], name, 'messages')
   if (!d?.r) return null
   const r = d.r
+  // The same reading following what each call is handed as well, for what the key reading reads
+  // (#2161): `const why = printed(line).unresolved; $.ui.toast(String(why))` reads the key.
+  const wide = drawnOf([...others, { name, text }], name, 'messages', true)
+  if (!wide) return null
   // Everything a call is handed of each top level function that sends a message, itself or through
   // another such function (the goal tracker's waitingOnYou, through notifySoon's promise, to
   // notify's terminal-notifier, which the values followed do not reach).
@@ -2581,7 +2586,7 @@ const messageReading = (others: readonly ModFile[], name: string, text: string):
   const heads = r.fns.filter(f => sent.some(s => s.from <= f.from && f.to <= s.to)).map(f => [r, [f.from, f.body]] as [ModRead, Span])
   // Each wording once: the same words moved into a helper, or said from one more place, say
   // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
-  return { r, words: [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort(), reached: [...d.reached, ...handed.map(s => [r, s] as [ModRead, Span]), ...heads] }
+  return { r, words: [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort(), reached: [...d.reached, ...wide.reached, ...handed.map(s => [r, s] as [ModRead, Span]), ...heads] }
 }
 
 // #2161: a whole record handed to a message, its keys or values taken without naming them, or a key
@@ -2668,13 +2673,14 @@ const bracketReads = (g: ModRead, [a, b]: Span): (string | null)[] => {
 
 // #2161: whether `g` spreads something into an object (`{ ...made }`) or a call (`f(...made)`) at
 // `i`, which copies or hands on every key it has unnamed; never a list's or a parameter list's rest.
+// A parameter list is one a function readMod found opens with (an arrow's, or a `function`'s first),
+// never one a `:` follows, which is as often a ternary's other branch (`ok ? say(...made) : ''`).
 const spreadsAt = (g: ModRead, i: number): boolean => {
   const o = g.inner(i)
   if (o === undefined) return false
   if (g.blank[o] === '{') return !g.fns.some(f => f.body === o)
   if (g.blank[o] !== '(') return false
-  const c = shutAt(g.blank, o)
-  return c === undefined || !/^(?:=>|:|\{)/.test(g.blank.slice(c + 1, c + 40).trimStart())
+  return !g.fns.some(f => f.from === o || (f.from < o && o < f.body && /^function\b\s*\*?\s*[\w$]*\s*$/.test(g.blank.slice(f.from, o))))
 }
 // #2161: a member read (`d.unresolved`) that is the whole value of a field, the field's key captured.
 const COPIED_INTO = /[{,]\s*([A-Za-z_$][\w$]*)\s*:\s*[A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*\s*\??\.\s*$/

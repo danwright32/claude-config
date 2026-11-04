@@ -2287,6 +2287,46 @@ test('#2161: a reason record reached by a quoted, computed, enumerated, reflecte
   expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'const all = (p: object) => Object.keys(p).map(k => Reflect.get(p, k))', "export const tell = ($: EngineInterface, line: Line) => $.ui.toast(all(printed(line)).join(' '))"))).toBe('worded')
 })
 
+// A spread inside a call hands every key on unnamed wherever the call sits: a ternary's branch (whose
+// `:` once read as a return type, so the call as a parameter list), a logical's side, a list or
+// another call. A rest parameter of a function, a return type after it, is no spread.
+test('#2161: a record spread into a call in a ternary, a logical, a list or a call is still held', () => {
+  const tell = (expr: string) => [
+    'const say = (...ws: string[]): string => ws.join(\' \')',
+    'export const tell = ($: EngineInterface, line: Line, ok: boolean) => {',
+    '  const made = printed(line) as unknown as string[]',
+    `  $.ui.toast(${expr})`,
+    '}',
+  ]
+  const forms = ["ok ? say(...made) : ''", "ok ? '' : say(...made)", "ok && say(...made) || ''", "[say(...made)].join('')", 'String(say(...made))']
+  const got = forms.map(expr => [expr, holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, ...tell(expr)))])
+  expect(got).toEqual(forms.map(expr => [expr, 'worded']))
+  // A ternary that spreads nothing, beside the same rest parameter, still passes.
+  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, ...tell("ok ? say(made[0] ?? '') : ''")))).toBe('passes')
+})
+
+// A reason key read off any expression, not only a plain name, is read as the dot reads it: a call's
+// result, a parenthesised expression or an await, then taken into a local a toast says through a call.
+test('#2161: a reason key read off a call result, a parenthesis or an await is still held', () => {
+  const tell = (expr: string) => [
+    'const got = async (line: Line) => printed(line)',
+    'export const tell = async ($: EngineInterface, line: Line) => {',
+    `  const why = ${expr}`,
+    '  $.ui.toast(String(why))',
+    '}',
+  ]
+  const forms = [
+    'printed(line).unresolved',
+    'printed(line)?.unresolved',
+    "printed(line)['unresolved']",
+    '(printed(line)).unresolved',
+    '(await got(line)).unresolved',
+    '(await got(line))?.unresolved',
+  ]
+  const got = forms.map(expr => [expr, holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, ...tell(expr)))])
+  expect(got).toEqual(forms.map(expr => [expr, 'worded']))
+})
+
 // The near copies that read no reason key: an index by a number, or a key quoted by another name,
 // so #2141's own edit, which indexes its words by position, still passes.
 test('#2161: an index by a number or another quoted key is no read of a reason key', () => {
