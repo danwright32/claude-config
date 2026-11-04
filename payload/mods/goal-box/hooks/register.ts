@@ -268,6 +268,7 @@ export const register: Register = on => {
     try {
       // #2132: the prompt waits until the session is idle, and mod-kit's reload of goal-box in that
       // time would drop it, so the reload is held back until it is sent, for at most mod-kit's hour.
+      const condition = goal.met.condition
       const held = {
         mod: MOD,
         id: 'ask',
@@ -277,7 +278,7 @@ export const register: Register = on => {
         release: (input: { mod: string; id: string }) => $.modkit.release(input),
         log: (line: string) => $.ui.log(line, { to: 'debug' }),
       }
-      const sent = await whileHeld(held, () => $.prompt.submit({ text: askText(goal.met.condition) }))
+      const sent = await whileHeld(held, () => $.prompt.submit({ text: askText(condition) }))
       if (sent.drop !== undefined) failed = sent.drop || 'the prompt was dropped'
     } catch (err) {
       failed = msg(err)

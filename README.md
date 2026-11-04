@@ -3540,6 +3540,9 @@ before saving, auto session name, the collision guard, the design round guard, h
 watcher and picker manners build every message from a caught error with its `errorText`, so a
 member missing from an older mod-kit or session registry reaches the screen as that sentence, never
 as the raw `TypeError`.
+Every mod that waits on Dan or on a long job takes mod-kit's reload hold around that wait with one
+helper, mod-kit's `hooks/held.ts`, kept as a byte for byte copy at `hooks/mod-kit/held.ts` in the
+mod, so a prompt a mod sends or an answer Dan gives is not lost when the mods reload mid wait.
 `tools/check-mod-shared-parts.sh` holds each copy to mod-kit's and fails a mod that reads a
 `TypeError` by hand. Overnight every call is still refused while the mods are out of step (none can
 be checked for a merge or deploy), but at the worker's next Stop the driver lets it rest a minute,
