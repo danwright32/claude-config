@@ -264,19 +264,24 @@ const resolveIn = (word: string, dir: string | null, home: string, expand: (w: s
 // after, then every word of the code text past that, since code has no command boundary to stop
 // at. Prose naming it with neither (a git repository, the .gitignore, --git-dir, the gh CLI,
 // gh-pages) runs nothing; prose that reads as a command ("then git push", "rerun with gh run
-// rerun") still counts.
+// rerun") still counts. A program with nothing after it in its string but a placeholder or the
+// string's end (`'sudo gh ' + sub`, `f'sudo gh {sub}'`) runs from code when that string is built
+// while the code runs (`built`), since the whole command arrives then (#2225). A quote with a
+// letter straight after it is an apostrophe (`gh's own store`), not the string's end. Either way
+// the program may be named by its path after another word (`sudo /opt/homebrew/bin/gh`, #2225).
 const runsFrom = (program: string, calls: (after: readonly string[]) => boolean, built: (text: string, at: number) => boolean = () => false) => {
   const starts = new RegExp(`(?:['"\`]|;|&&|\\|\\||\\||\\$\\(|\\(|\\n)[ \\t]*(?:[\\w.~/-]*\\/)?${program}(?=[\\s'"\`;|&)]|$)`)
-  const followed = new RegExp(`(?<![\\w.$/-])${program}[ \\t]+(-[\\w-]*|[a-z][\\w-]*)`, 'g')
+  const followed = new RegExp(`(?<![\\w.$/-])(?:[\\w.~/-]*\\/)?${program}[ \\t]+(-[\\w-]*|[a-z][\\w-]*)`, 'g')
+  const bare = new RegExp(`(?<![\\w.$/-])(?:[\\w.~/-]*\\/)?${program}(?=[ \\t]*(?:['"\`](?![A-Za-z])|[{$%]|$))`, 'g')
   const wordsAfter = (text: string, m: RegExpExecArray): string[] => [m[1] ?? '', ...(text.slice((m.index ?? 0) + m[0].length).match(/[\w-]+/g) ?? [])]
-  return (text: string): boolean => starts.test(text) || [...text.matchAll(followed)].some(m => calls(wordsAfter(text, m)) || ((m[1] ?? '').startsWith('-') && built(text, m.index ?? 0)))
+  return (text: string): boolean => starts.test(text) || [...text.matchAll(followed)].some(m => calls(wordsAfter(text, m)) || ((m[1] ?? '').startsWith('-') && built(text, m.index ?? 0))) || [...text.matchAll(bare)].some(m => built(text, m.index ?? 0))
 }
 // Whether the string a word at `at` sits in is built while the code runs, so whatever follows the
 // word there is only known then: a placeholder inside it after the word (`{sub}`, `%s`, `$SUB`), or
 // something joined onto it (`+`, `%`, `.format`, `.join`, `.concat`, a variable or another string
 // straight after it closes, `+` before it opens, or a `.join(` it is an argument of), or it is put
-// in a variable (`cmd = '...'`, `cmd += '...'`) that later code can join anything onto. A word
-// outside any string is in no built string.
+// in a variable (`cmd = '...'`, `cmd += '...'`) or held in a list (heldInList) that later code can
+// join anything onto. A word outside any string is in no built string.
 const QUOTES = `'"\``
 const builtAround = (text: string, at: number): boolean => {
   let open = at - 1
@@ -286,7 +291,27 @@ const builtAround = (text: string, at: number): boolean => {
   if (/[{$]|%[\w(]/.test(text.slice(at, close < 0 ? undefined : close))) return true
   if (close < 0) return false
   const before = text.slice(0, open)
-  return /\+\s*[A-Za-z]{0,2}$/.test(before) || /[^=!<>]=\s*[A-Za-z]{0,2}$/.test(before) || /\.join\(\s*\[?[^()]*$/.test(before) || /^(?:\s*(?:\+|%|\.(?:format|join|concat)\b)|[\w$'"`])/.test(text.slice(close + 1))
+  return /\+\s*[A-Za-z]{0,2}$/.test(before) || /[^=!<>]=\s*[A-Za-z]{0,2}$/.test(before) || /\.join\(\s*\[?[^()]*$/.test(before) || /^(?:\s*(?:\+|%|\.(?:format|join|concat)\b)|[\w$'"`])/.test(text.slice(close + 1)) || heldInList(text, open)
+}
+// Whether the string opening at `open` is an element of a list (`['sudo gh -R o/r', sub]`), a tuple
+// (`('sudo gh -R o/r', sub)`) or an item appended to one (`parts.append(...)`, `parts.push(...)`):
+// the innermost bracket left open before it is a `[`, or a `(` that is no call's (nothing before
+// it, or a keyword such as `in` or `return`) or one that appends. Code can join a list's elements with anything later (#2225). An argument of any other
+// call (`print('see gh --help', x)`) is in no list.
+const heldInList = (text: string, open: number): boolean => {
+  let depth = 0
+  for (let i = open - 1; i >= 0; i--) {
+    const ch = text[i] ?? ''
+    if (')]}'.includes(ch)) depth++
+    else if ('([{'.includes(ch)) {
+      if (depth > 0) { depth--; continue }
+      if (ch === '[') return true
+      if (ch === '{') return false
+      const head = text.slice(0, i)
+      return !/[\w$)\]]\s*$/.test(head) || /(?<![\w$.])(?:in|of|return|yield|and|or|not|if|elif|else|await)\s*$/.test(head) || /\.(?:append|push|unshift|insert)\s*$/.test(head)
+    }
+  }
+  return false
 }
 // git runs from code when one of its subcommands or any option follows it.
 const callsWith = (subcommands: ReadonlySet<string>) => (after: readonly string[]): boolean => {
