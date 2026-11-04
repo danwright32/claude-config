@@ -50,6 +50,17 @@ main, so a message naming a work repository is as public as one naming its organ
 wrong shape) and in this Mac's dev update registry, in plain prose as well as owner/name#N. Both
 callers above pass it. The file scan never takes it (#1568).
 
+TWO MORE SOURCES FOR PUBLISHED TEXT (claude-config#2184). The #2110 scrub found work names that
+neither the list nor the registry holds, so --work-repos and the publish gate also take:
+  projects   every project folder on the work MacBook's project list, the "On Dans-MacBook-Pro"
+             block of the Projects section in the global CLAUDE.md (read by work_mac_projects, two
+             directories above this file both in the repository and installed). A CLAUDE.md that
+             cannot be read, has no such section or block, or lists no project there is refused.
+  domains    a built in organisation's login without its hyphens, which is its web and email domain,
+             matched only as a domain: after an @, or before a dot and a top level domain. As a bare
+             word it stays prose, as #1568 decided, since the same letters can be an ordinary word.
+             A project folder that is such a login is judged by this rule, not as a bare name.
+
 Usage:
   work-names.py [--root DIR] [--files0-from FILE|-] [PATH ...]
   work-names.py --texts0-from FILE|- [--work-repos]   labelled text, as above, in place of files
@@ -61,6 +72,7 @@ to read it; with --work-repos also the list unreadable or its time budget spent)
 Seams (tests): WORK_NAMES_EXTRA_HASHES, comma separated sha256 hex of more lower case logins.
 WORK_NAMES_REGISTRY_READER, the reader to ask (default: dev-update-registry.js beside this file).
 WORK_NAMES_REPOS_BUDGET_SECONDS, the whole --work-repos run's time for GitHub (default 30).
+WORK_NAMES_PROJECT_LIST, the CLAUDE.md to read the work MacBook's project list from.
 """
 import hashlib
 import json
@@ -87,6 +99,17 @@ REPO_REMEDY = ("Rewrite it without the work organisation or repository: say \"a 
 DIGEST_REPO = "dwright-pennie/repo-digest"
 DIGEST_LIST = "repos.json"
 HERE =os.path.dirname(os.path.abspath(__file__))
+# The work MacBook's project list (claude-config#2184): its block in the Projects section of the
+# global CLAUDE.md, named by the hostname the section uses for it.
+WORK_MAC = "Dans-MacBook-Pro"
+PROJECTS_SECTION = re.compile(r"^## Projects[ \t]*$(.*?)(?=^## |\Z)", re.M | re.S)
+WORK_BLOCK = re.compile(r"^On %s(?: \([^)\n]*\))?:[ \t]*\n((?:[ \t]*\n)*(?:- .*(?:\n|\Z))*)"
+                        % re.escape(WORK_MAC), re.M)
+ENTRY = re.compile(r"^- `([^`]+)`", re.M)
+# A word written as a domain: after an @, or before a dot and a top level domain, never inside a
+# longer hyphenated run (that run is the Matcher's). 39 is GitHub's longest login.
+DOMAIN_AT = re.compile(r"@([a-z0-9]{2,39})(?![a-z0-9-])")
+DOMAIN_DOT = re.compile(r"(?<![a-z0-9-])(?=([a-z0-9]{2,39})\.[a-z]{2,}(?![a-z0-9-]))")
 
 
 def sha(s):
@@ -96,6 +119,18 @@ def sha(s):
 def extra_hashes():
     raw = os.environ.get("WORK_NAMES_EXTRA_HASHES", "")
     return {h.strip().lower() for h in raw.split(",") if h.strip()}
+
+
+def hyphenless(word, hashes):
+    """True when word is a hashed login with its one or two hyphens taken out (claude-config#2184)."""
+    n = len(word)
+    for i in range(1, n):
+        if sha(word[:i] + "-" + word[i:]) in hashes:
+            return True
+        for j in range(i + 1, n):
+            if sha(word[:i] + "-" + word[i:j] + "-" + word[j:]) in hashes:
+                return True
+    return False
 
 
 def registry_entries(timeout=60):
@@ -208,10 +243,43 @@ class GitHub:
                 yield tok
 
 
+def work_mac_projects():
+    """-> [lower case folder name] of each project on the work MacBook's project list, or raises
+    CannotTell (claude-config#2184). Never empty: a list with no project is refused, never clean."""
+    path = os.environ.get("WORK_NAMES_PROJECT_LIST") or os.path.normpath(
+        os.path.join(HERE, "..", "..", "CLAUDE.md"))
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError as e:
+        raise CannotTell("the work MacBook's project list (the Projects section of %s) could not be "
+                         "read (%s), so its projects could not be checked" % (path, e.strerror or e))
+    section = PROJECTS_SECTION.search(text)
+    if not section:
+        raise CannotTell("%s has no '## Projects' section, so the work MacBook's project list could "
+                         "not be read and its projects could not be checked" % path)
+    block = WORK_BLOCK.search(section.group(1))
+    if not block:
+        raise CannotTell("the Projects section of %s has no 'On %s:' block, so the work MacBook's "
+                         "project list could not be read and its projects could not be checked"
+                         % (path, WORK_MAC))
+    names = []
+    for entry in ENTRY.findall(block.group(1)):
+        name = os.path.basename(entry.strip().rstrip("/")).strip().lower()
+        if name and name not in names:
+            names.append(name)
+    if not names:
+        raise CannotTell("the work MacBook's project list in %s lists no project, and an empty project "
+                         "list is never read as clean" % path)
+    return names
+
+
 def work_repo_names(github):
-    """-> (Matcher, work owners, odd names) from the work repository list and this Mac's dev update
-    registry, or raises CannotTell. Odd names are those that are not one plain token (a dot in them),
-    which the Matcher cannot hold and odd_hit finds instead."""
+    """-> (Matcher, work owners, odd names) from the work repository list, this Mac's dev update
+    registry and the work MacBook's project list, or raises CannotTell. Odd names are those that are
+    not one plain token (a dot in them), which the Matcher cannot hold and odd_hit finds instead. The
+    Matcher also finds an organisation's domain (claude-config#2184)."""
+    projects = work_mac_projects()
     raw, last = None, ""
     for tok in github.tokens():
         ok, out, err = github.run(["gh", "api", "-H", "Accept: application/vnd.github.raw",
@@ -246,9 +314,13 @@ def work_repo_names(github):
             pairs.append((owner, name))
     owners = {o for o, _ in pairs}
     every = owners | {n for _, n in pairs if n}
+    hashes = BUILT_IN | extra_hashes()
+    # A project folder that is an organisation's login without its hyphens is that organisation's
+    # domain, which the Matcher's domain rule judges; as a bare word it stays prose (#2184).
+    every |= {p for p in projects if not hyphenless(p, hashes)}
     plain = {n for n in every if TOKEN.fullmatch(n)}
     odd = sorted(every - plain)
-    return Matcher(BUILT_IN | extra_hashes(), set(), plain), owners, odd
+    return Matcher(hashes, set(), plain, domains=True), owners, odd
 
 
 def odd_hit(text, odd):
@@ -263,13 +335,29 @@ class Matcher:
     """names: further lower case names matched by the same rule, beside the owners. The tree scan and
     the send scan never pass any; work_repo_names passes the work repository names, for the publish gate
     (claude-config#2105) and --work-repos (#2111), which depart from #1568 for text that is published
-    without being a file, see DESIGN.md."""
+    without being a file, see DESIGN.md. domains: also find a hashed login without its hyphens
+    written as a domain (claude-config#2184), passed by work_repo_names only, never for files."""
 
-    def __init__(self, hashes, owners, names=frozenset()):
+    def __init__(self, hashes, owners, names=frozenset(), domains=False):
         self.hashes = hashes
         self.owners = owners
         self.names = names
+        self.domains = domains
         self.cache = {}
+
+    def domain(self, text):
+        """None, or the first word the lower case text writes as a domain (after an @, or before a
+        dot and a top level domain) that is a hashed login without its hyphens."""
+        if not self.domains:
+            return None
+        for rx in (DOMAIN_AT, DOMAIN_DOT):
+            for word in rx.findall(text):
+                key = ("domain", word)
+                if key not in self.cache:
+                    self.cache[key] = hyphenless(word, self.hashes)
+                if self.cache[key]:
+                    return word
+        return None
 
     def kind(self, token):
         """None, or which source a token's runs match: every contiguous run of its hyphen parts."""
@@ -314,12 +402,14 @@ def scan_text(text, shown, matcher, hits, odd=()):
     listed names that are not one plain token (work_repo_names), found by odd_hit line by line."""
     text = text.lower()
     tokens = set(TOKEN.findall(text))
-    if not any(matcher.kind(t) for t in tokens) and not odd_hit(text, odd):
+    if not any(matcher.kind(t) for t in tokens) and not odd_hit(text, odd) and not matcher.domain(text):
         return
     for no, line in enumerate(text.splitlines(), 1):
         k = next((matcher.kind(t) for t in TOKEN.findall(line) if matcher.kind(t)), None)
         if not k and odd_hit(line, odd):
             k = "a work repository or owner name"
+        if not k and matcher.domain(line):
+            k = "a work organisation's web or email domain"
         if k:
             hits.append("%s:%d: %s" % (shown, no, k))
 
@@ -365,8 +455,9 @@ def main(argv):
         hits = []
         for label, text in texts:
             scan_text(text, label, matcher, hits, odd)
-        sentence = ("the work organisation names and %d work repository and owner names from the work "
-                    "repository list and this Mac's dev update registry" % (len(matcher.names) + len(odd)))
+        sentence = ("the work organisation names and domains and %d work repository and owner names "
+                    "from the work repository list, this Mac's dev update registry and the work "
+                    "MacBook's project list" % (len(matcher.names) + len(odd)))
         return report(hits, [], len(texts), "message", sentence, REPO_REMEDY)
 
     owners, sentence = read_registry()
