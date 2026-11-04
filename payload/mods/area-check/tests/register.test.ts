@@ -1,13 +1,39 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { ANSWER_MS, DEADLINE_MS, DECIDE_TOOL, ISSUE_LIMIT, ISSUES_TTL_MS, SWEEP_MS, UNREAD_TTL_MS } from '../hooks/rules.ts'
-import { APP, ERRORS, ISSUES, KIT, QKEY, REASON, SHA, SLACK, T0, askDan, decide, edit, ghLists, refusal, said, world, type R } from './world.ts'
+import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { APP, ERRORS, HOME, ISSUES, KIT, QKEY, REASON, SHA, SLACK, T0, askDan, bash, decide, edit, ghLists, refusal, said, world, type R } from './world.ts'
+
+// What mod-kit's reader of a shell command ($.modkit.writes) answered for each command these tests
+// send, measured from the real reader with cwd /w/app (#2142). The world answers $.modkit.writes
+// with this mod's byte for byte copy of that reader (tests/mod-kit/hooks/writes.ts), and the first
+// test below holds the copy to these answers; the repository suite tests/test-area-check-shell-reader.sh
+// holds mod-kit's own reader to them, against rules.ts.
+const WRITES: Record<string, unknown> = {
+  "sed -i '' 's/a/b/' src/lib/slack.ts": { files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], changes: [], unnamed: [] },
+  'echo hi > "$OUT/big.ts"': { files: [{ word: '$OUT/big.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/big.ts' }] },
+  'echo hi > "$OUT/other.ts"': { files: [{ word: '$OUT/other.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/other.ts' }] },
+  'npm test': { files: [], changes: [], unnamed: [] },
+  'grep -n x src/big.ts > /tmp/out.txt': { files: [{ word: '/tmp/out.txt', path: '/tmp/out.txt' }], changes: [], unnamed: [], stdout: [{ word: '/tmp/out.txt', path: '/tmp/out.txt' }] },
+  'echo x > src/new.ts': { files: [{ word: 'src/new.ts', path: '/w/app/src/new.ts' }], changes: [], unnamed: [], stdout: [{ word: 'src/new.ts', path: '/w/app/src/new.ts' }] },
+  'echo x > "$OUT/log.txt"': { files: [{ word: '$OUT/log.txt' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/log.txt' }] },
+  'rm src/big.ts': { files: [], changes: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'remove' }], unnamed: [] },
+  "perl -pi -e 's/a/b/' /tmp/x/*.ts": { files: [{ word: '/tmp/x/*.ts', folder: '/tmp/x', edits: true }], changes: [], unnamed: [] },
+  // Two commands whose 32 bit hash is the same (#2142 lessons review), and a write reaching a whole folder.
+  'echo hi > "$OUT/a132789.ts"': { files: [{ word: '$OUT/a132789.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/a132789.ts' }] },
+  'echo hi > "$OUT/a729192.ts"': { files: [{ word: '$OUT/a729192.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/a729192.ts' }] },
+  "find src -name '*.ts' -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'src', path: '/w/app/src', edits: true, tree: true }], changes: [], unnamed: [] },
+  "find docs -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'docs', path: '/w/app/docs', edits: true, tree: true }], changes: [], unnamed: [] },
+}
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
 // test file is held when an open structural issue names the file or the file is growing fast (#1509),
 // and the session decides, through the decide tool, before it is let through. Phase 1 (#1508) only
 // logged what it would have done; that log, outside ~/.claude, is kept, with the hold's decisions.
 
+test("the world's copy of mod-kit's shell reader answers every measured command as WRITES records it (#2142)", async () => {
+  for (const [command, measured] of Object.entries(WRITES)) expect([command, JSON.parse(JSON.stringify(commandWrites(command, APP, HOME)))]).toEqual([command, measured])
+})
 
 test('a session start writes a loaded record outside ~/.claude, so a week with none reads as no load, never as no firings (L90)', KIT, async ($, on) => {
   const w = world($, on)
@@ -227,15 +253,15 @@ test('a quiet file is claimed: a second edit to it in the session is not judged 
   expect(w.passed.length).toBe(2)
 })
 
-test('a new file, a docs file, a file in no checkout and a shell write are not judged (decisions 2 and 3)', KIT, async ($, on) => {
+// A shell write was not judged here until #2142, which holds it: see the shell tests at the end.
+test('a new file, a docs file and a file in no checkout are not judged (decisions 2 and 3)', KIT, async ($, on) => {
   const w = world($, on)
   await $.tool.call({ tool: 'Write', tool_use_id: 'c1', file_path: `${APP}/src/new.ts`, content: 'x' } as never)
   await edit($ as never, w, `${APP}/docs/x.md`)
   await edit($ as never, w, '/elsewhere/a.ts')
-  await $.tool.call({ tool: 'Bash', tool_use_id: 'c2', command: `echo x >> ${APP}/src/lib/slack.ts` } as never)
   await w.clock.settle()
   expect(w.judged()).toEqual([])
-  expect(w.passed.length).toBe(4)
+  expect(w.passed.length).toBe(3)
 })
 
 test("an issue the session's branch names is left out, and was its only match, so the file is quiet (decision 5)", KIT, async ($, on) => {
@@ -414,4 +440,137 @@ test('the decide tool is offered at every session start, a headless one included
   await $.session.start({ cwd: APP, surface: 'terminal', isInteractive: false } as never)
   await w.clock.settle()
   expect(w.tools).toEqual(['decide'])
+})
+
+test('the decide tool says it decides a held command as well as a held edit, and that the held call is sent again', KIT, async ($, on) => {
+  const w = world($, on)
+  await $.session.start({ cwd: APP, surface: 'terminal', isInteractive: false } as never)
+  await w.clock.settle()
+  expect(w.toolDescriptions.decide).toContain('first edit or command')
+  expect(w.toolDescriptions.decide).toContain('send the held call again')
+})
+
+// #2142: a shell command writing a file is held as its first edit would be, the files it writes as
+// mod-kit's reader answered them (WRITES, measured), so python, sed or a heredoc is no way round the check.
+// `bash` is the world's: a Bash call as Claude sends it, its result settled.
+const SED = "sed -i '' 's/a/b/' src/lib/slack.ts"
+const BUILT = 'echo hi > "$OUT/big.ts"'
+
+test('a shell command writing a file a structural issue names is held as its first edit would be, and goes ahead once decided', KIT, async ($, on) => {
+  const w = world($, on)
+  const r = await bash($ as never, w, SED)
+  const why = refusal(r)
+  expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
+  expect(why).toContain('#41 (p2, tech-debt)')
+  expect(why).toContain(`${DECIDE_TOOL} with {"call": "b1", "decision": "proceed"`)
+  expect(why).toContain('Then send the Bash command again, unchanged.')
+  expect(w.passed).toEqual([])
+  expect(w.cards).toEqual([expect.objectContaining({ toolUseId: 'b1', guard: 'Area check' })])
+  expect(w.judged()[0]).toMatchObject({ path: 'src/lib/slack.ts', decision: 'held', agent: null })
+  const d = await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect(said(d)).toContain('Send the Bash command again, unchanged.')
+  expect((await bash($ as never, w, SED, {}, 'b2')).result).toBe('done')
+  // The file is claimed for the session, whichever tool writes it next.
+  expect((await edit($ as never, w, SLACK, {}, 'c3')).result).toBe('done')
+  expect(w.judged().length).toBe(1)
+})
+
+test('Fold in on a held shell command says to send the Bash command again, naming it as the hold did', KIT, async ($, on) => {
+  const w = world($, on)
+  await bash($ as never, w, SED)
+  w.ctl.answer = 'Fold in'
+  const s = said(await askDan($ as never, 'b1'))
+  expect(s).toContain('"decision": "fold"')
+  expect(s).toContain('Send the Bash command again, unchanged.')
+  expect(s).not.toContain('send the Bash again')
+})
+
+test('a shell command writing no file, a new file or only files that are no source runs unjudged, asking nothing of GitHub', KIT, async ($, on) => {
+  const w = world($, on)
+  for (const [i, c] of ['npm test', 'grep -n x src/big.ts > /tmp/out.txt', 'echo x > src/new.ts', 'echo x > "$OUT/log.txt"', 'rm src/big.ts'].entries())
+    expect((await bash($ as never, w, c, {}, `b${i}`)).result).toBe('done')
+  expect(ghLists(w)).toBe(0)
+  expect(w.judged().length).toBe(0)
+})
+
+test('a shell command whose file cannot be read is held saying so, may only proceed, and the unchanged command then runs', KIT, async ($, on) => {
+  const w = world($, on)
+  const why = refusal(await bash($ as never, w, BUILT))
+  expect(why).toContain('cannot be read')
+  expect(why).toContain('$OUT/big.ts')
+  expect(why).toContain('Edit or Write')
+  expect(w.passed).toEqual([])
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ v: 1, session: 's1', agent: null, repo: 'dan/app', word: '$OUT/big.ts', decision: 'held' })
+  expect(refusal(await decide($ as never, { call: 'b1', decision: 'restructure' }))).toContain('Edit or Write')
+  const d = await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect(said(d)).toContain('Send the Bash command again, unchanged.')
+  expect((await bash($ as never, w, BUILT, {}, 'b2')).result).toBe('done')
+  // Another command is decided on its own.
+  expect(refusal(await bash($ as never, w, 'echo hi > "$OUT/other.ts"', {}, 'b3'))).toContain('cannot be read')
+})
+
+test('a write that cannot be read passes only where nothing could hold it: no checkout, or no fast growing file and no structural issue naming a file', KIT, async ($, on) => {
+  const w = world($, on, { issues: [] })
+  expect((await bash($ as never, w, "perl -pi -e 's/a/b/' /tmp/x/*.ts")).result).toBe('done')
+  w.ctl.numstat = ''
+  expect((await bash($ as never, w, BUILT, {}, 'b2')).result).toBe('done')
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: '$OUT/big.ts', decision: 'passed' })
+})
+
+test('a decided command lets through only that command, never another sharing its 32 bit hash', KIT, async ($, on) => {
+  const w = world($, on)
+  const a = 'echo hi > "$OUT/a132789.ts"'
+  const b = 'echo hi > "$OUT/a729192.ts"'
+  expect(refusal(await bash($ as never, w, a))).toContain('cannot be read')
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, a, {}, 'b2')).result).toBe('done')
+  expect(refusal(await bash($ as never, w, b, {}, 'b3'))).toContain('$OUT/a729192.ts')
+})
+
+// #2142 lessons review: a write reaching a whole folder (find -exec over it, git putting a folder
+// back) reaches every file under it, so each one the area check could hold there is judged.
+const FIND = "find src -name '*.ts' -exec sed -i '' 's/a/b/' {} +"
+
+test('a shell write reaching a whole folder is held for each file under it that could be held, and goes ahead once each is decided', KIT, async ($, on) => {
+  const w = world($, on)
+  // The fast growing file under the folder, then the file a structural issue names, each on its own.
+  expect(refusal(await bash($ as never, w, FIND))).toContain('The area check held this Bash command, which writes src/big.ts.')
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  const why = refusal(await bash($ as never, w, FIND, {}, 'b2'))
+  expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
+  expect(why).toContain('#41 (p2, tech-debt)')
+  await decide($ as never, { call: 'b2', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, FIND, {}, 'b3')).result).toBe('done')
+  expect(w.judged().map(j => j.path)).toEqual(['src/big.ts', 'src/lib/slack.ts'])
+})
+
+test('a write reaching a folder nothing could hold under runs, judging no file', KIT, async ($, on) => {
+  const w = world($, on)
+  expect((await bash($ as never, w, "find docs -exec sed -i '' 's/a/b/' {} +")).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+})
+
+test('a write reaching a folder whose files cannot be listed is held as unread, saying why', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.slowLogOnce = true
+  const p = $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: FIND } as never)
+  await w.clock.advance(DEADLINE_MS + 1000)
+  const why = refusal((await p) as R)
+  expect(why).toContain('src reaches every file under it')
+  expect(why).toContain('cannot be listed')
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src', decision: 'held' })
+})
+
+test("a subagent's shell write is held for itself, where its loop is known", KIT, async ($, on) => {
+  const w = world($, on)
+  expect(refusal(await bash($ as never, w, SED, { agentId: 'a1' }))).toContain('hands the question to the main session')
+  expect(w.judged()[0]).toMatchObject({ agent: 'a1', decision: 'held', path: 'src/lib/slack.ts' })
+})
+
+test('a reader that fails lets the command through, kept in the error file and said once', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.writesThrows = true
+  expect((await bash($ as never, w, SED)).result).toBe('done')
+  expect(w.records(ERRORS)[0]).toMatchObject({ kind: 'error', session: 's1', error: 'the command could not be read' })
+  expect(w.logs.filter(l => l.includes('area check'))).toEqual(["The area check could not read what a shell command writes (the command could not be read), so it went ahead unchecked; the error is kept in ~/.claude-area-check/errors.jsonl."])
 })

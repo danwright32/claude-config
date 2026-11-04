@@ -5207,7 +5207,17 @@ question to the main session, which names every question waiting on him when he 
 is asleep it goes to bedtime's open questions, and while he is away to scope modes' hold. His
 Restructure first or Proceed anyway stands for a week for the same issues, so the file is not asked
 about again. A decided edit goes through when sent again; a quiet one is passed and the file not
-checked again that session. Every judgement, decision and answer is one JSON line in
+checked again that session. A Bash command is judged by the files mod-kit's write reader
+(`$.modkit.writes`) says it writes: a redirect, a copy, an in place edit, an emptying,
+`git checkout --`, a script's file arguments, an inline script's own targets. Each existing file is
+judged as its first edit would be, and a held one is refused as "this Bash command, which writes"
+followed by the file (#2142).
+A write whose file cannot be named (a name built from a variable, a pattern, a program writing files
+its words do not name) is held saying it cannot be read, and may only proceed; it passes where it is
+in no checkout, or where the repository has no fast growing file and no structural issue naming a
+file. Removals, `touch`, `mkdir`, mode changes and a folder handed to a script are not judged, and a
+program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+Every judgement, decision and answer is one JSON line in
 `~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start; issues are read
 unfiltered once per repository and kept an hour (a failure ten minutes), warmed at session start, as
 each account gh is logged in to, all under one 7 second deadline, and an edit with nothing to hold
