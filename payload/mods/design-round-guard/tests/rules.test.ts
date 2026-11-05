@@ -2335,3 +2335,40 @@ test('#2161: an index by a number or another quoted key is no read of a reason k
   for (const expr of ['line[0]', "P['text']", 'P["text"]'])
     expect([expr, holdOf([tellerOf(expr)], 'commands.ts', HELD_2141_BEFORE, exported)]).toEqual([expr, 'passes'])
 })
+
+// #2223: reading a mod hook file costs time in step with its size. Every edit to a 180 KB hook file
+// took about a second through the hook on a quiet Mac, and past five seconds under load, because
+// readMod and drawnOf scanned the whole file again once for each function, local and call in it.
+// Judged by growth between two sizes of the same code, never by a wall clock budget: four times the
+// file took about eleven times as long before the fix; in step with size it is about four.
+test('#2223: four times as much mod hook code takes about four times as long to read, not sixteen', () => {
+  const chunk = (i: number) => [
+    `const pick${i} = (rows: string[]) => rows.map(r => r.trim()).filter(r => r.split(',').length > 1 && r !== 'none')`,
+    `const show${i} = async ($: any, rows: string[]) => {`,
+    `  const names = pick${i}(rows).map((r, k) => { const head = r.slice(0, 4); return head + k })`,
+    `  if (names.some(x => x.startsWith('tmp'))) return`,
+    `  for (const x of names) await $.process.run(['git', 'log', '--format=%H', x])`,
+    `  $.ui.toast(\`Saved \${names.length} rows\`)`,
+    '}',
+    '',
+  ].join('\n')
+  const file = (n: number) =>
+    "import type { Register } from 'claude-code'\n" + Array.from({ length: n }, (_, i) => chunk(i)).join('') +
+    "export const register: Register = on => {\n  on('tool.call', async ($, e) => { await show0($, []) })\n}\n"
+  const timed = (n: number) => {
+    const before = file(n)
+    const after = before.replace('rows.map(r => r.trim())', 'rows.map(r => r.trim() + "")')
+    let best = Infinity
+    for (let i = 0; i < 3; i++) {
+      const start = performance.now()
+      expect(modHookTsHold([], 'rows.ts', before, after)).toBeUndefined()
+      best = Math.min(best, performance.now() - start)
+    }
+    return best
+  }
+  timed(10)
+  const small = timed(100)
+  const large = timed(400)
+  expect(small).toBeGreaterThan(0)
+  expect({ ratio: Math.round((large / small) * 10) / 10, under: large / small < 6 }).toEqual({ ratio: expect.any(Number), under: true })
+})
