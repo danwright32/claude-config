@@ -284,11 +284,13 @@ trap 'rm -rf "$FB_TMP"' EXIT
 FB="$FB_TMP/hooks"
 mkdir -p "$FB/lib"
 cp "$DIR/gh_issue_scan.py" "$DIR/issue_field_gate.py" "$DIR/require-issue-fields.sh" "$FB/"
-cp "$DIR/lib/claude-session-line.sh" "$FB/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FB/lib" claude-session-line.sh >/dev/null \
+  || check "#2204 claude-session-line.sh could be installed with what it sources" "the install refused"
 FB_BROKEN="$FB_TMP/broken"
 mkdir -p "$FB_BROKEN/lib"
 cp "$DIR/gh_issue_scan.py" "$DIR/issue_field_gate.py" "$DIR/require-issue-fields.sh" "$FB_BROKEN/"
-cp "$DIR/lib/claude-session-line.sh" "$FB_BROKEN/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FB_BROKEN/lib" claude-session-line.sh >/dev/null \
+  || check "#2204 claude-session-line.sh could be installed with what it sources" "the install refused"
 printf 'raise RuntimeError("broken on purpose")\n' > "$FB_BROKEN/lib/shell-words.py"
 
 # The control: each copy really has no reader and the real one really has it, or every check below

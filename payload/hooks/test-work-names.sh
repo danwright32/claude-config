@@ -18,6 +18,8 @@
 #      list that cannot be read, or a read past its budget, is refused rather than passed. It also
 #      holds the work MacBook's project list and an organisation's web and email domain
 #      (claude-config#2184), with an unreadable project list refused.
+#   8. README.md and DESIGN.md at the root are also held to the hashed work MacBook projects and the
+#      domains (claude-config#2252), and every other file, a nested README included, is not.
 # The two parts that need the repository, (1) nothing this repository publishes names one and (5) a
 # send refuses to publish a file naming one, are tests/test-work-names-tree.sh, since this suite is
 # also installed beside the hooks, where there is no repository.
@@ -283,6 +285,41 @@ check "and the scan stops at its budget, not at gh's own wait ($((SECONDS - t0))
 file_out="$( cd "$T" && PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" python3 "$SCAN" --root "$T" --work-repos clean.md 2>&1 )"; file_rc=$?
 check "the file scan never takes the list (exit $file_rc): $file_out" [ "$file_rc" -eq 2 ]
 check "and says it is for text only: $file_out" has "$file_out" "only with --texts0-from"
+
+# ---------------------------------------------------------------- 8. the two published documents
+# claude-config#2252: README.md and DESIGN.md at the root are the manual and the design record a
+# stranger reads first, so the file scan also matches the hashed work MacBook projects there, and a
+# work organisation's web or email domain, where #1568 lets every other file keep a product name as
+# vocabulary. The project here is invented and handed in by hash, as WORK_PROJECTS holds the real.
+DOCS="$WORK/docs"; mkdir -p "$DOCS/sub"
+printf '# Manual\n\nNothing named here.\n' > "$DOCS/README.md"
+printf '# Design\n\nA work project, never named.\n' > "$DOCS/DESIGN.md"
+printf '# Manual\n\nOn 2026-10-21 the InkwellCove checkout opened every session with a warning.\n' > "$DOCS/named-readme.md"
+printf '# Design\n\nmail it to dan@%s.com\n' "$(printf '%s' "$FAKE_ORG" | tr -d '-' | tr '[:upper:]' '[:lower:]')" > "$DOCS/named-design.md"
+docs_scan(){   # $1 = hashes  $2.. = files relative to $DOCS -> scan_out, scan_rc
+  local h="$1"; shift
+  scan_out="$( cd "$DOCS" && HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" HOOK_TESTS_RUNNING=1 \
+    WORK_NAMES_PROJECT_HASHES="$h" python3 "$SCAN" --root "$DOCS" "$@" 2>&1 )"; scan_rc=$?
+}
+docs_scan "$INKWELL_HASH" README.md DESIGN.md
+check "#2252 (control) a README and DESIGN.md naming no work project are clean (exit $scan_rc): $scan_out" [ "$scan_rc" -eq 0 ]
+check "#2252 and the summary says the two documents were checked for the hashed projects: $scan_out" has "$scan_out" "1 hashed work MacBook project in README.md and DESIGN.md"
+cp "$DOCS/named-readme.md" "$DOCS/README.md"
+cp "$DOCS/named-design.md" "$DOCS/DESIGN.md"
+docs_scan "$INKWELL_HASH" README.md
+check "#2252 a README naming a hashed work project is refused (exit $scan_rc): $scan_out" [ "$scan_rc" -eq 1 ]
+check "#2252 and named by file and line as a work repository: $scan_out" has "$scan_out" "README.md:3: a work repository or owner name"
+check "#2252 and never repeated: $scan_out" lacks "$(printf '%s' "$scan_out" | tr '[:upper:]' '[:lower:]')" "inkwellcove"
+docs_scan "$INKWELL_HASH" ./README.md
+check "#2252 the README is recognised however its path is spelled (exit $scan_rc): $scan_out" [ "$scan_rc" -eq 1 ]
+docs_scan "$INKWELL_HASH" DESIGN.md
+check "#2252 DESIGN.md writing a work organisation's domain is refused (exit $scan_rc): $scan_out" [ "$scan_rc" -eq 1 ]
+check "#2252 and the hit says it is a domain: $scan_out" has "$scan_out" "DESIGN.md:3: a work organisation's web or email domain"
+docs_scan "$OTHER_HASH" README.md
+check "#2252 (control) with that hash absent the same README passes, so the hit came from the hash (exit $scan_rc): $scan_out" [ "$scan_rc" -eq 0 ]
+cp "$DOCS/named-readme.md" "$DOCS/sub/README.md"
+docs_scan "$INKWELL_HASH" named-readme.md named-design.md sub/README.md
+check "#2252 (control) any other file, a nested README included, keeps #1568's rule (exit $scan_rc): $scan_out" [ "$scan_rc" -eq 0 ]
 
 # The two built in hashes cover every owner in the registry on a Mac that has one, so the check CI
 # runs (with no registry) is the same check for the organisations that matter. Only measurable where
