@@ -5336,10 +5336,21 @@ cannot be read (no checkout, GitHub not answering for a merge) lets it through. 
 labels are also what `/next-issue`'s structural slot brings forward: `rank-next-issues.py` gives the
 last pick of every picker to the highest ranked open structural issue when no pick is one, never in
 place of a p0, a p1 or a lesson sweep, and `test-rank-next-issues.sh` holds its list to this one.
+Once its cooldown has passed, the end of turn issue review runs `hooks/lib/area-check-review.mjs`
+(the mod's `hooks/weekly.ts` under node) before it reads the spool. Once a week the review carries
+one line of this Mac's counts for the last 7 days (sessions loaded, first writes judged and held,
+decisions by kind, judgements with the issue list unread, edits not judged, errors), never a path,
+and a missing or unreadable log is said as that rather than as zeros. The week restarts in
+`~/.claude-area-check/weekly-line.stamp` only once the review carrying the line went out. A file in
+the review's own repository that five sessions proceeded past in 30 days, whose newest judgement
+read the whole issue list and found no issue naming it, gets one spool note asking for an issue
+about its structure, at most once per 30 days per file (a claim file in `escalated/` there). A
+runner that fails is said in the review at most once a week. A suite never reaches the real log:
+under a test run or a redirected spool nothing runs unless `CLAUDE_AREA_CHECK_DIR` names a folder.
 
 </td><td>
 
-#1505, #1506, #1508, #1509, #1510, #2143
+#1505, #1506, #1508, #1509, #1510, #1511, #2143
 
 </td></tr>
 <tr><td>
