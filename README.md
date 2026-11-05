@@ -5356,6 +5356,34 @@ same box as text, shaped like SESSION REFLECTION.
 #1563, #1749, #1818
 
 </td></tr>
+<tr><td>
+
+`slack-alert-guard`
+
+</td><td>
+
+Holds every edit that changes the wording a Slack alert sends until Dan has seen the message as
+Slack will post it and approved it (Dan, 2026-11-04: "anytime a slack alert is created, we need to
+have a design-rounds esque check on wording so I can approve the wording before it's created"). Only
+a code or config file that posts to Slack counts: one naming a Slack webhook, the chat API, a Slack
+SDK, a Slack env setting, or a send helper named for Slack, called or imported. A Write, Edit or
+MultiEdit there that adds message text, changes it or takes it away is refused, a test file
+included. Claude then shows Dan the whole message, every variable filled in from a realistic
+example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
+words the question and its two answers, Approve wording and Change wording, itself. An approval is
+kept in the mod's store by the exact wording, never by the file, so the same wording repeated in a
+test goes through without a second question, and any change to approved wording is held again. A
+shell command writing into such a file is held as a whole command, since the wording it leaves
+cannot be read before it runs. A subagent's call is refused and told to stop and report to the main
+session. The calls waiting on Dan are dropped at session end, and the guard's own record is never
+written by a call. A message template in a file with no Slack marker, and a shell write to a path
+the write reader cannot name, are outside it.
+
+</td><td>
+
+#2242
+
+</td></tr>
 </tbody>
 </table>
 

@@ -146,6 +146,22 @@ notice_of "#1065 a payload nothing can read does not block, and says the payload
 out="$(payload "ls -la" | bash "$LONE/check-gh-watch-interval.sh" 2>&1)"; rc=$?
 check_eq "#1065 control: a command with no watch passes in silence even with the reader missing" "0|" "$rc|$out"
 
+# 5. A redirection in front of gh is the shell's, never the command's name (claude-config#2235).
+# `2>/dev/null gh pr checks 12 --watch` polls at gh's default interval. The reader took the redirection for
+# the command's name, so the guard saw a command named 2>/dev/null and let it run. Each case also runs
+# through a copy of the hooks whose reader passes no redirection over, which must let it through (L1).
+if python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$WORKDIR/loose-redirects" redirects; then ok; else
+  bad "#2235 the loose copy of the hooks is made"; fi
+redirected(){ # redirected <name> <command>
+  refused "#2235 $1" "$2"
+  out="$(payload "$2" | bash "$WORKDIR/loose-redirects/check-gh-watch-interval.sh" 2>&1)"; rc=$?
+  check_eq "#2235 the loose copy lets it through, so the case is one the fix decides: $1" "0|" "$rc|$out"
+}
+redirected "behind an error redirection" "2>/dev/null gh pr checks 12 --watch"
+redirected "behind an output redirection" "> /dev/null gh run watch 123456"
+redirected "behind input and an assignment" "</dev/null A=1 gh pr checks 12 --watch -i 5"
+allowed "#2235 control: a minute interval behind a redirection" "2>/dev/null gh pr checks 12 --watch --interval 60"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

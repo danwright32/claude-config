@@ -385,6 +385,34 @@ PY
 if [ $? -eq 0 ] && [ -z "$wired" ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: $SETTINGS must route Bash and every Slack send tool to the hook, and no read tool: ${wired:-the check did not run}"; fi
 
+# --- a redirection in front of gh (claude-config#2235) ---
+# The shell takes a redirection out of a command before it finds the name, so `2>/dev/null gh pr
+# comment` posts the comment. The scan cut `2>` into `2` and `>` and wrote the words back quoted, so
+# the gate read a command named 2 and let the link through. Each case is also run through a copy of
+# the hooks whose reader reads the redirection the old way, which must let it through.
+PAYLOAD_CWD="$TMP_DIR"
+PAYLOAD_SHAPE=short
+for v in rejoin glue; do
+  if python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$TMP_DIR/loose-$v" "$v"; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL: #2235 the $v copy of the hooks could not be made"; fi
+done
+redirected() { # redirected <description> <command> <loose copy>...
+  local name="$1" cmd="$2" v out
+  shift 2
+  denies "#2235 $name" "$cmd"
+  for v in "$@"; do
+    out="$(bash_payload "$cmd" | bash "$TMP_DIR/loose-$v/no-session-link-in-comments.sh" 2>/dev/null)"
+    if [[ "$out" != *'"deny"'* ]]; then pass=$((pass + 1)); else
+      fail=$((fail + 1)); echo "FAIL: #2235 the $v copy should let it through, or the case decides nothing: $name"; fi
+  done
+}
+redirected "pr comment behind an error redirection" "2>/dev/null gh pr comment 5 --body \"Agreed. $LINK\"" rejoin glue
+redirected "issue comment behind an output redirection" "> /dev/null gh issue comment 22 --body \"Agreed. $LINK\"" rejoin
+redirected "a body file behind input" "</dev/null gh issue comment 22 --body-file with-link.md" rejoin
+redirected "a review behind both streams" "&>/dev/null gh pr review 5 --approve --body-file with-link.md" rejoin
+redirected "gh api behind an error redirection" "2>/dev/null gh api repos/o/r/issues/22/comments -f body=\"Agreed. $LINK\"" glue
+allows "#2235 control: a clean comment behind a redirection" "2>/dev/null gh issue comment 22 --body-file clean.md"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

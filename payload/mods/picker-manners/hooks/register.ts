@@ -4,6 +4,7 @@ import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
 import { bareIssuesIn, etDateOf, issueRefsIn, leavesUnanswered, questionWords, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
+import { guardIgnores } from './mod-kit/designquestions.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 (docs/mods-design.md, "Picker manners (#615)").
 //
@@ -119,7 +120,17 @@ export const register: Register = on => {
     const answer = picked !== null && leavesUnanswered(picked) ? null : picked
     // #1775: an item added open carries the answers the dialog offered, so /sleep offers them too.
     const choices = (e.questions?.[0]?.options ?? []).map(o => String(o.label ?? ''))
-    if (!r.deny && question) offTheDialog($, () => recordOnIssues($, question, answer, choices))
+    if (r.deny || !question) return r
+    // #2253: the design round guard counts only its own picker, so a question in its words asked
+    // without its source is never written onto the issue, where a checked box reads as settled.
+    if (guardIgnores(question, (e.metadata as { source?: unknown } | undefined)?.source)) {
+      const refs = [...issueRefsIn(question, null).map(x => `${x.repo}#${x.issue}`), ...bareIssuesIn(question).map(n => `issue #${n}`)]
+      const where = refs.length ? `${refs.map(x => `${x}'s`).join(', ')} Open questions` : 'any issue'
+      $.ui.log(`Picker manners: this question was not added to ${where}, since the design round guard counts only its own picker, so this answer lets no edit through.`)
+      const told = `Dan's answer to this question lets no edit through: the design round guard counts only its own picker, asked with the metadata its refusal of an edit gives, so nothing is recorded and it was not added to ${where}. Tell Dan that in one line; when the guard refuses an edit, ask its question the way that refusal says.`
+      return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), told] }
+    }
+    offTheDialog($, () => recordOnIssues($, question, answer, choices))
     return r
   })
 
