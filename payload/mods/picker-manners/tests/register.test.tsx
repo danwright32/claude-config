@@ -218,13 +218,14 @@ const kitWithRepo: { name: string; register: Register } = {
     })
   },
 }
-type IssueWorld = { answer: string | string[] | null; bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; noRepo?: boolean; onlyAccount?: string; pulls?: number[]; settle: () => Promise<void> }
+type IssueWorld = { answer: string | string[] | null; bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; noRepo?: boolean; onlyAccount?: string; pulls?: number[]; away?: boolean; settle: () => Promise<void> }
 const issueWorld = (on: On, answer: string | string[] | null, bodies: Record<number, string> = {}): IssueWorld => {
   const clock = mock.clock(on, { now: 0 })
   const w: IssueWorld = { answer, bodies: { ...bodies }, edits: [], logs: [], settle: () => clock.settle() }
   on('tool.call', ($, e) => {
     const q = String((e as unknown as { questions: { question: string }[] }).questions[0]?.question)
-    return { result: { questions: [], answers: w.answer === null ? {} : { [q]: w.answer } }, text: 'answered' } as never
+    // #2261: a dialog that closed while Dan was away can still carry the answer it closed on.
+    return { result: { questions: [], answers: w.answer === null ? {} : { [q]: w.answer }, ...(w.away ? { afkTimeoutMs: 60_000 } : {}) }, text: 'answered' } as never
   })
   on('session.repo', () => ({ value: w.noRepo ? null : { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
   on('ui.log', ($, e) => {
@@ -266,6 +267,95 @@ test('a question about an issue Dan answers is added to its Open questions, chec
   expect(r.result?.answers).toEqual({ 'For o/r#7, how long should the registry keep a record?': '7 days' })
   await w.settle()
   expect(w.edits).toEqual([{ issue: 7, repo: 'o/r', body: 'The bug.\n\n## Open questions\n\n- [x] For o/r#7, how long should the registry keep a record? (answered 1969-12-31 ET: 7 days)' }])
+})
+
+// #2253: on 2026-11-04 a plain question in the design round guard's words was answered Skip them and
+// checked off on its issue, which read as settled, while the guard, which counts only its own picker,
+// refused the next edit anyway. Such a question is left off the issue, and both Dan and Claude are
+// told his answer lets nothing through; the guard's own picker is recorded as before.
+const GUARD_WORDS = 'The sign in button gets a new colour. Skip design rounds for this issue? This is for issue #12 in o/r; the file is app/SignIn.tsx.'
+const askWith = ($: T$, question: string, metadata?: Record<string, unknown>) =>
+  $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q3', questions: [{ ...QUESTION, question }], ...(metadata ? { metadata } : {}) } as never) as Promise<Answered>
+test("a question in the design round guard's words asked without its source is left off the issue, and said to settle nothing (#2253)", { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, 'Skip them (Recommended)', { 12: SECTION })
+  const r = await askWith($ as never, GUARD_WORDS)
+  // His answer still reaches Claude, with why it changes nothing.
+  expect(r.result?.answers).toEqual({ [GUARD_WORDS]: 'Skip them (Recommended)' })
+  const told = ((r as { context?: string[] }).context ?? []).join('\n')
+  expect(told).toContain('lets no edit through')
+  expect(told).toContain('the design round guard')
+  await w.settle()
+  expect(w.edits).toEqual([])
+  expect(w.logs.join('\n')).toContain("was not added to issue #12's Open questions")
+  // A source that is not the guard's own, and the settled question too.
+  const s = await askWith($ as never, 'For o/r#12: Is this design settled?', { source: 'next-issue' })
+  expect(((s as { context?: string[] }).context ?? []).join('\n')).toContain('lets no edit through')
+  await w.settle()
+  expect(w.edits).toEqual([])
+})
+// #2261: the design round guard, standing in. It says it recorded an answer, through
+// $.designRound.answered, only for Skip them, the one answer this stand in records; any other answer,
+// a typed one included, and a dialog that closed while Dan was away, record nothing and say nothing.
+// A plugin in a test runs in its own environment, so it reads nothing from this file.
+const guardStandIn: { name: string; register: Register } = {
+  name: 'design-round-guard',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, designRound: { answered: async () => undefined } as never }
+    })
+    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+      const r = await next(e)
+      const ask = e as unknown as { tool_use_id: string; questions: { question: string; options?: { label: string }[] }[]; metadata?: { source?: string } }
+      if (!String(ask.metadata?.source ?? '').startsWith('design-round-guard:')) return r
+      const out = (r as { result?: { answers?: Record<string, unknown>; afkTimeoutMs?: number } }).result
+      const question = String(ask.questions[0]?.question)
+      if (out?.afkTimeoutMs === undefined && out?.answers?.[question] === 'Skip them') {
+        const options = (ask.questions[0]?.options ?? []).map(o => o.label)
+        await ($ as unknown as { designRound: { answered: (input: object) => Promise<void> } }).designRound.answered({ call: ask.tool_use_id, question, answer: 'Skip them', options })
+      }
+      return r
+    })
+  },
+}
+test("the design round guard's own picker is added to the issue as answered once the guard says it recorded it (#2253, #2261)", { plugins: [kitWithRepo, guardStandIn] }, async ($, on) => {
+  const w = issueWorld(on, 'Skip them', { 12: SECTION })
+  const r = await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })
+  expect((r as { context?: string[] }).context ?? []).toEqual([])
+  await w.settle()
+  expect(w.edits.map(x => x.body)).toEqual([`The bug.\n\n## Open questions\n\n- [x] ${GUARD_WORDS} (answered 1969-12-31 ET: Skip them)`])
+})
+// #2261: on 2026-11-05 the guard's own question was checked off on its issue when Dan typed his own
+// words, which the guard records nothing for, so the issue read as settled while every edit stayed held.
+test("the guard's own picker answered in Dan's own words is left off the issue, since the guard recorded nothing (#2261)", { plugins: [kitWithRepo, guardStandIn] }, async ($, on) => {
+  const w = issueWorld(on, 'Only the colour changes, go ahead', { 12: SECTION })
+  const r = await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })
+  expect(r.result?.answers).toEqual({ [GUARD_WORDS]: 'Only the colour changes, go ahead' })
+  await w.settle()
+  expect(w.edits).toEqual([])
+})
+test("the guard's own picker that closed while Dan was away is left off the issue, whatever answer it closed on (#2261)", { plugins: [kitWithRepo, guardStandIn] }, async ($, on) => {
+  const w = issueWorld(on, 'Skip them', { 12: SECTION })
+  w.away = true
+  await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })
+  await w.settle()
+  expect(w.edits).toEqual([])
+})
+// #2261: designRound.answered is a call to a noun, which Claude Code cuts off at 10 s, and gh is given
+// 20 s, so the hook answers at once and asks GitHub only on a timer, after the noun has returned.
+test("the guard's answered call returns before GitHub is asked, and the issue is written after (#2261)", { plugins: [kitWithRepo, guardStandIn] }, async ($, on) => {
+  const w = issueWorld(on, 'Skip them', { 12: SECTION })
+  await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })
+  expect(w.edits).toEqual([])
+  await w.settle()
+  expect(w.edits.map(x => x.issue)).toEqual([12])
+})
+test("with no design round guard loaded, the guard's own picker is left off the issue, and the answer still reaches Claude (#2261)", { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, 'Skip them', { 12: SECTION })
+  const r = await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })
+  expect(r.result?.answers).toEqual({ [GUARD_WORDS]: 'Skip them' })
+  await w.settle()
+  expect(w.edits).toEqual([])
 })
 
 // Lessons review: a multi-select answer arrives as a list, and is an answer all the same.
@@ -345,7 +435,7 @@ const kitWithoutRepo: { name: string; register: Register } = {
 }
 test("a mod-kit with no repo is said as out of step when issue #N's Open questions cannot be found (#1299)", { plugins: [kitWithoutRepo] }, async ($, on) => {
   const w = issueWorld(on, null, { 12: SECTION })
-  await askAbout($ as never, 'Skip design rounds for issue #12?')
+  await askAbout($ as never, 'Keep the old flag for issue #12?')
   await w.settle()
   expect(w.edits).toEqual([])
   const note = w.logs.find(l => l.includes("issue #12's Open questions")) ?? ''
@@ -388,7 +478,7 @@ test('a question naming a pull request leaves the pull request alone (#1279)', {
 test('issue #N whose repository cannot be told is said, never dropped silently (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
   const w = issueWorld(on, 'Yes', { 12: SECTION })
   w.noRepo = true
-  await askAbout($ as never, 'Skip design rounds for issue #12?')
+  await askAbout($ as never, 'Keep the old flag for issue #12?')
   await w.settle()
   expect(w.edits).toEqual([])
   expect(w.logs).toContain("Picker manners could not add this question to issue #12's Open questions (this session is in no repository GitHub knows), so /sleep will not see it there.")

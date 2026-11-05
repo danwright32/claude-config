@@ -148,15 +148,52 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("wn", sys.argv[1])
 wn = importlib.util.module_from_spec(spec); spec.loader.exec_module(wn)
 try:
-    names = wn.work_mac_projects()
+    names, hashes = wn.work_mac_projects()
 except wn.CannotTell as e:
     print("cannot tell: %s" % e); sys.exit(2)
-print("projects=%d" % len(names))
+print("projects=%d" % (len(names) + len(hashes)))
 ' "$SCAN" 2>&1)"; proj_rc=$?
 check "the work MacBook's project list in payload/CLAUDE.md reads (exit $proj_rc): ${proj_out:0:300}" [ "$proj_rc" -eq 0 ]
 proj_n=0
 case "$proj_out" in projects=[0-9]*) proj_n="${proj_out#projects=}" ;; esac
 check "and lists at least one project: ${proj_out:0:300}" [ "$proj_n" -ge 1 ]
+
+# ---------------------------------------------------------------- 5. the committed project hashes
+# WORK_PROJECTS holds the work MacBook's project folders as hashes since the public CLAUDE.md stopped
+# listing them (claude-config#2112), so CI and the personal MacBook refuse them in public text. Every
+# folder the last CLAUDE.md that listed them named must be in it, the one spelled as an organisation
+# without its hyphens included (claude-config#2190), or that folder passes as a plain word everywhere
+# but the work MacBook. Read from history by the scanner's own patterns, counts only. A checkout with
+# no history to read says so rather than failing (L411).
+hist_out="$(python3 -I -c '
+import importlib.util, os, subprocess, sys
+spec = importlib.util.spec_from_file_location("wn", sys.argv[1])
+wn = importlib.util.module_from_spec(spec); spec.loader.exec_module(wn)
+root = sys.argv[2]
+def git(*a):
+    r = subprocess.run(["git", "-C", root] + list(a), capture_output=True, text=True)
+    return r.returncode, r.stdout
+rc, shallow = git("rev-parse", "--is-shallow-repository")
+if rc != 0 or shallow.strip() != "false":
+    print("unmeasured: no full history here"); sys.exit(3)
+rc, shas = git("log", "--format=%H", "HEAD", "--", "payload/CLAUDE.md")
+for sha in shas.split():
+    rc, text = git("show", sha + ":payload/CLAUDE.md")
+    section = wn.PROJECTS_SECTION.search(text)
+    block = section and wn.WORK_BLOCK.search(section.group(1))
+    names = {os.path.basename(e.strip().rstrip("/")).strip().lower()
+             for e in wn.ENTRY.findall(block.group(1))} - {""} if block else set()
+    if names:
+        missing = [n for n in names if wn.sha(n) not in wn.WORK_PROJECTS]
+        print("listed=%d missing=%d at %s" % (len(names), len(missing), sha[:10]))
+        sys.exit(1 if missing else 0)
+print("no version of payload/CLAUDE.md in history lists the work MacBook projects"); sys.exit(1)
+' "$SCAN" "$ROOT" 2>&1)"; hist_rc=$?
+if [ "$hist_rc" -eq 3 ]; then
+  echo "note: $hist_out, so the committed project hashes were not checked against it."
+else
+  check "every project the last listing named is in WORK_PROJECTS (exit $hist_rc): ${hist_out:0:300}" [ "$hist_rc" -eq 0 ]
+fi
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

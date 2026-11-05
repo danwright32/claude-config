@@ -6,7 +6,7 @@ import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
 import { adminEndpoints } from '../hooks/adminmerge.ts'
-import { GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP_QUESTION } from '../hooks/bedtime.ts'
+import { answerKey, GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP_QUESTION } from '../hooks/bedtime.ts'
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { overnightRules, REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
 import { CLAIM_MS, proposalPath } from '../hooks/proposals.ts'
@@ -443,10 +443,12 @@ type Opts = {
   listFails?: string[]
   /**
    * The project's CLAUDE.md as git show reads it from the default branch (#2064): by ref, origin/HEAD
-   * and origin/main, each missing ref failing as git does. Neither given is a repository whose
-   * default branch carries no CLAUDE.md.
+   * and origin/main, one not given failing as git does for a ref carrying no CLAUDE.md. Neither
+   * given is a repository whose default branch carries no CLAUDE.md.
    */
   committedClaudeMd?: { head?: string; main?: string }
+  /** git show's error when the committed CLAUDE.md cannot be read at all (#2146). */
+  committedClaudeMdUnreadable?: string
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -616,8 +618,9 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'git' && a[0] === '-C' && a[2] === 'show' && /^origin\/(?:HEAD|main):CLAUDE\.md$/.test(a[3] ?? '')) {
       // Recorded here because this answer returns before the general record of runs below.
       w.runs.push(argv)
+      if (o.committedClaudeMdUnreadable !== undefined) return fail(128, o.committedClaudeMdUnreadable)
       const text = a[3]?.startsWith('origin/HEAD') ? o.committedClaudeMd?.head : o.committedClaudeMd?.main
-      return text === undefined ? fail(128, `fatal: invalid object name '${a[3]?.split(':')[0]}'.`) : ok(text)
+      return text === undefined ? fail(128, `fatal: path 'CLAUDE.md' does not exist in '${a[3]?.split(':')[0]}'`) : ok(text)
     }
     // grep -o -E <pattern> <file> over the world's files (#1287: a session's title from its transcript).
     if (cmd === 'grep' && a[0] === '-o' && a[1] === '-E') {
@@ -2686,10 +2689,15 @@ test('asleep, a hosted test host counts only when the default branch\'s CLAUDE.m
   expect(w.runs.some(r => r.join(' ') === 'git -C /repo show origin/main:CLAUDE.md')).toBe(true)
   // Only in the working copy, or a default branch whose CLAUDE.md does not list it: refused.
   expect(await go(undefined, 'n3')).toMatch(/did not open qa\.example\.dev in the browser, which is not a test host/)
-  expect(await go({ main: '# Project\n' }, 'n4')).toMatch(/which is not a test host/)
+  expect(await go({ main: '# Project\n' }, 'n4')).toMatch(/which is not a test host \(.*Sleep mode test hosts:/)
+  // A CLAUDE.md git cannot read is refused too, saying so rather than that the host is unlisted (#2146).
+  w.o.committedClaudeMdUnreadable = 'fatal: unable to read tree 1234abcd'
+  const UNKNOWN = 'which is not a local test host, and whether the project lists it as a hosted one is not known, because'
+  expect(await go({ main: LISTED }, 'n4a')).toContain(`did not open qa.example.dev in the browser, ${UNKNOWN} CLAUDE.md on origin/main in /repo could not be read (fatal: unable to read tree 1234abcd)`)
+  w.o.committedClaudeMdUnreadable = undefined
   // origin/HEAD naming no branch is no listed hosts, with no guess at main (Dan, 2026-11-03).
   w.o.defaultBranch = ''
-  expect(await go({ head: LISTED, main: LISTED }, 'n5')).toMatch(/which is not a test host/)
+  expect(await go({ head: LISTED, main: LISTED }, 'n5')).toContain(`${UNKNOWN} /repo names no default branch for origin, so its CLAUDE.md was not read`)
 })
 test("asleep, the keystroke guard's test build is not held through the noun either, though place is home (#1269)", { plugins: [deps, isItLive, guardStandIn] }, async ($, on) => {
   const { w, clock } = world(on)
@@ -2802,6 +2810,42 @@ test('a switch that could not be recorded still holds here over an older one fro
   await say($ as never, 'one')
   await clock.advance(MIN)
   expect(lastModes(w)).toEqual(['AWAY'])
+})
+
+// #2154: a switch was marked seen before it was applied, so one whose apply threw was never taken.
+test('a switch from another session that cannot be applied is logged, and taken once it can be (#2154)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  const refusing = { on: false }
+  on('state.set', async ($, e, next) => (refusing.on && (e as { key?: string }).key === 'place' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  refusing.on = true
+  await say($ as never, 'one')
+  expect(w.modes.some(m => m.includes('AWAY'))).toBe(false)
+  // Through the failure reporting the check already has, never silently.
+  expect(w.logs.filter(l => l.startsWith('scope-modes: the away or home switch check failed: '))).toEqual([
+    'scope-modes: the away or home switch check failed: scope-modes: $.state.set: state store unavailable',
+  ])
+  refusing.on = false
+  await clock.advance(MIN)
+  expect(lastModes(w)).toEqual(['AWAY'])
+})
+
+test('a switch home that fails partway is applied whole when taken again, so Claude still hears Dan is back (#2154 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  const refusing = { on: false }
+  on('state.set', async ($, e, next) => (refusing.on && (e as { key?: string }).key === 'justHome' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  await say($ as never, 'one')
+  expect(lastModes(w)).toEqual(['AWAY'])
+  w.files[PLACE] = placeRecord('home', T0 + 6)
+  refusing.on = true
+  await clock.advance(MIN)
+  refusing.on = false
+  const back = (await say($ as never, 'two')).context?.join('\n') ?? ''
+  expect(lastModes(w)).toEqual([])
+  expect(back).toMatch(/Dan is back at the Mac/)
 })
 
 test('a record that cannot be read is said once, never read as a switch (L215)', withDeps, async ($, on) => {
@@ -6541,6 +6585,27 @@ test("an answered item a failed check off left open is checked off on a later ni
   expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
   expect(w.edits.map(x => x.body)).toEqual([SECTIONED.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')])
   expect(r.text).not.toContain('still shows it open')
+})
+
+// #2261: a design round guard question on an issue's Open questions is settled only by the guard's
+// own picker, which records the answer the guard reads. Asked by /sleep, the answer records nothing,
+// so the item is never asked there and never checked off, on the repair path either (an answer on
+// record from before this fix), and /sleep says so once.
+test('/sleep never asks or checks off a design round guard question, on the repair path either, and says so once (#2261)', withDeps, async ($, on) => {
+  const body = ['The screen.', '', '## Open questions', '', '- [ ] Skip design rounds for this issue?', '- [ ] Is this design settled?', '- [ ] Keep the old flag?', '', 'Claude-Session: https://claude.ai/code/session_01AbCdEf'].join('\n')
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [`${ANSWERED}${answerKey('o/r', 7, 'Skip design rounds for this issue?')}.json`]: JSON.stringify({ answer: 'Yes' }) },
+    githubRepos: { default: ['o/r'] },
+    issueBodies: { 7: body },
+    issueAnswers: { 'o/r#7: Is this design settled?': 'Yes', 'o/r#7: Keep the old flag?': 'Drop it' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(w.edits.map(x => x.body)).toEqual([body.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')])
+  const said = 'Not asked, since only the design round guard\'s own question can settle them: o/r#7 "Skip design rounds for this issue?" and o/r#7 "Is this design settled?".'
+  expect(r.text).toContain(said)
+  expect((r.text ?? '').split(said).length).toBe(2)
 })
 
 test('notes that cannot be read are said, and the questions in the rest are still asked (L215)', withDeps, async ($, on) => {

@@ -41,7 +41,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
-import { listedHosts, tabsAfter, type Browser, type BrowserTabs } from './browser.ts'
+import { committedHosts, tabsAfter, type Browser, type BrowserTabs, type TestHosts } from './browser.ts'
 import { wakeCheck } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
@@ -75,6 +75,7 @@ import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { itemChoices, openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
+import { guardQuestion } from './mod-kit/designquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
@@ -931,7 +932,14 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
     }
   }
   const open: IssueQuestion[] = []
+  // A design round guard question is settled only by the guard's own picker (#2261): asked here, its
+  // answer records nothing the guard reads, so it is never asked or checked off, answered or not.
+  const guards: string[] = []
   for (const q of found) {
+    if (guardQuestion(q.text)) {
+      guards.push(`${q.repo}#${q.issue} "${q.text}"`)
+      continue
+    }
     const path = answeredPath(dir, q.repo, q.issue, q.text)
     if (!(await $.fs.exists(path))) {
       open.push(q)
@@ -952,6 +960,8 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
     const off = await checkOff($, q.repo, q.issue, q.text, answer)
     if (off) problems.push(`Your answer on ${q.repo}#${q.issue}, "${q.text}" ("${answer}"), is posted but its Open questions still shows it open, and checking it off failed again (${off}); it is not asked again.`)
   }
+  const unasked = [...new Set(guards)]
+  if (unasked.length) problems.push(`Not asked, since only the design round guard's own question can settle ${unasked.length === 1 ? 'it' : 'them'}: ${andList(unasked)}.`)
   // Each issue read once: a closed one is no longer in any queue. One that cannot be read is still
   // asked about, ranked last, since dropping its question would hide it (L215).
   const rank = new Map<string, number>()
@@ -1272,17 +1282,23 @@ const recordTabs = async ($: EngineInterface, tool: string, input: Record<string
 // The project's hosted test hosts, from CLAUDE.md as the default branch holds it, never the working
 // copy: a session must not add a host by editing the file overnight. The default branch is the one
 // origin/HEAD names, through mod-kit's one reader; when it names none, or anything cannot be read,
-// no host is listed, with no guess at main (fail closed, Dan, 2026-11-03).
-const committedTestHosts = async ($: EngineInterface): Promise<string[]> => {
-  const root = await $.session
-    .repo()
-    .then(r => r?.root ?? null)
-    .catch(() => null)
+// no host is listed, with no guess at main (fail closed, Dan, 2026-11-03). What could not be read
+// is said as unreadable, with why, never as a list naming nothing (#2146, L11).
+const committedTestHosts = async ($: EngineInterface): Promise<TestHosts> => {
+  let root: string | null
+  try {
+    root = (await $.session.repo())?.root ?? null
+  } catch (err) {
+    return { unreadable: `this session's repository could not be found (${msg(err)}), so no CLAUDE.md was read` }
+  }
+  // A session in no repository has no CLAUDE.md to list anything.
   if (!root) return []
-  const b = await $.modkit.branch({ path: root }).catch(() => null)
-  if (!b || 'unreadable' in b || !b.defaultBranch) return []
-  const r = await run($, ['git', '-C', root, 'show', `origin/${b.defaultBranch}:CLAUDE.md`]).catch(() => null)
-  return r && r.exitCode === 0 ? listedHosts(r.stdout) : []
+  const b = await $.modkit.branch({ path: root }).catch((err: unknown) => ({ unreadable: msg(err) }))
+  if (!b) return []
+  if ('unreadable' in b) return { unreadable: `the default branch of ${root} could not be read (${b.unreadable}), so its CLAUDE.md was not read` }
+  if (!b.defaultBranch) return { unreadable: `${root} names no default branch for origin, so its CLAUDE.md was not read` }
+  const ref = `origin/${b.defaultBranch}`
+  return committedHosts(ref, root, await run($, ['git', '-C', root, 'show', `${ref}:CLAUDE.md`]))
 }
 // A record that cannot be read is no tabs, which refuses every call needing one (fail closed). A
 // call judged at tool.call (self, its tool_use_id) is also judged as though every other Chrome call
@@ -4583,8 +4599,10 @@ const takeSharedPlace = async ($: EngineInterface): Promise<void> => {
     return
   }
   if (!isNewer(r.record, (await $.state.get(placeSeenRef)).value ?? 0)) return
-  await $.state.set(placeSeenRef, r.record.at)
+  // Seen only once it applies (#2154): a switch whose apply throws is taken again at the next prompt
+  // or minute, and the throw reaches the caller's log, rather than being marked seen and lost.
   if ((await placeOf($)) !== r.record.place) await setPlace($, r.record.place)
+  await $.state.set(placeSeenRef, r.record.at)
 }
 const placeUnread = ($: EngineInterface, why: string) => {
   const said = `Scope modes could not read the away or home switch typed in another session (${why}), so a switch typed there may not reach this one.`
@@ -4593,9 +4611,11 @@ const placeUnread = ($: EngineInterface, why: string) => {
   placeUnreadSaid = true
 }
 
+// The place is written last of the two, so a write that throws leaves the old place and the switch
+// is applied whole when taken again (#2154 lessons review); justHome is read only at home.
 const setPlace = async ($: EngineInterface, place: ScopeModesPlace) => {
-  await $.state.set(placeRef, place)
   await $.state.set(justHomeRef, place === 'home')
+  await $.state.set(placeRef, place)
   await showModes($)
   await showHeld($)
 }
