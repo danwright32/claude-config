@@ -105,8 +105,10 @@
 # else is refused before any call: --admin and --auto would bypass or defer the very checks this
 # waits for, a pin of your own could disagree with the head judged, and free text (a subject or a
 # body) could carry an override token the gates read from the command (ALLOW_RED_MERGE=1 and the
-# like), which would widen this into a bypass (L448). There is no override here: a merge that needs
-# one is typed, visibly.
+# like), which would widen this into a bypass (L448). The one override taken here is a lessons review
+# skip for a branch too large to review, typed in front of this helper with the full head Dan
+# approved and recorded by pr-review-gate.sh (claude-config#2088); any other merge that needs an
+# override is typed, visibly, in front of gh pr merge.
 #
 # STOPS, each in its own words and none of them a merge:
 #   0  merged (or found already merged), confirmed by reading the pull request back

@@ -933,7 +933,8 @@ and walking these reviews (2,008 of 2,010 on 2026-10-12) timed it out on the fir
 new session. A head
 with no review gets one started by the gate. A repo whose own script merges inside it asks the same
 checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does. `check` exits 0 to
-allow, 1 to refuse on a verdict, and 3 to refuse because the review has not finished yet.
+allow, 1 to refuse on a verdict, 3 to refuse because the review has not finished yet, and 4 to
+refuse because the branch is too large to review.
 
 The merge helper, `lib/merge-when-ready.sh`, merges inside itself and takes the key from its
 environment, so the key has to reach it TYPED (claude-config#1673). Before it, a Bash call that ran
