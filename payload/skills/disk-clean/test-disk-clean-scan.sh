@@ -399,11 +399,19 @@ BIG=3000
 mkdir -p "$H/Library/Caches"
 i=1; while [ "$i" -le "$BIG" ]; do mkdir "$H/Library/Caches/c$i"; i=$((i + 1)); done
 mkdir -p "$H/.Trash"; i=1; while [ "$i" -le 1000 ]; do : > "$H/.Trash/t$i"; i=$((i + 1)); done
+# This section asks whether every item is recorded, never how fast: the per category time bound is
+# section 3's subject. Through this harness the caches category costs about a tenth of a second an
+# item, so this scan took 325 s at a load of 24 on 12 cores, and in a full run on 2026-11-04 (load 23 to
+# 83) the caches category ran past the scan's default 600 s bound and recorded 2177 of its 3000
+# (claude-config#2260). So the bound here is the suite's own wall clock, which only a hang outlasts,
+# the way lib/hang-wait.sh bounds a wait.
 start="$(date +%s)"
-run_scan --only caches,trash
+run_scan_env DISK_CLEAN_CATEGORY_SECONDS="$SUITE_WALL_DEFAULT" bash "$SCAN" --only caches,trash
 took=$(( $(date +%s) - start ))
 echo "  ($BIG caches and 1000 Trash entries took ${took}s)"
 check "a scan of $BIG caches and 1000 Trash entries exits 0" "$(eq "$RC" 0)"
+check "the caches category ran to its end, not cut off by its time bound" "$(eq "$(dcr_header "$REC" status.caches)" measured)"
+check "and so did the Trash" "$(eq "$(dcr_header "$REC" status.trash)" measured)"
 check "every cache is in the record" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$2 == "caches"' | wc -l | tr -d ' ')" "$BIG")"
 check "every Trash entry is in the record" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$2 == "trash"' | wc -l | tr -d ' ')" 1000)"
 check "none is unreadable" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$5 == "unreadable"' | wc -l | tr -d ' ')" 0)"
