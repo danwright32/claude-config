@@ -5072,9 +5072,13 @@ missing, longer than 300 characters or names a file. A typed answer to the skip 
 nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in mod-kit's
 one wording (`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not
 yet, with nothing recorded and no toast, and Claude takes his words as the next round's feedback
-rather than asking again (#1336). The grey card drawn for a refused edit leads in plain words and
-names the file after (#1145). Since #1151 a program the shell runs (inline or on standard input) is
-judged by its own text, with a bare name placed in the folder it runs in, a cd before it followed,
+rather than asking again (#1336). Once Skip them or Settled is stored, and only then, the guard
+raises `$.designRound.answered` with the question and answer, which picker manners checks off on
+the issue (#2261). Not a look or wording change raises nothing: it lets one call through and
+records nothing for the issue, so its question stays open there. The grey card drawn for a
+refused edit leads in plain words and names the file after (#1145). Since #1151 a program the
+shell runs (inline or on standard input) is judged by its own text, with a bare name placed in
+the folder it runs in, a cd before it followed,
 never the session's folder, and held as a write that cannot be followed where that cd cannot be; a
 write whose own name is fixed and not look changing (`$D/spec.json`) is no look edit wherever its
 folder is, so what its heredoc's data names is data. A design round's own files in the scratchpad
@@ -5322,7 +5326,7 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954
+#1954, #2261
 
 </td></tr>
 <tr><td>
@@ -5594,9 +5598,12 @@ choice is hidden (#1792; anything typed is the answer). Each answer is posted on
 decision, dated in ET with the question quoted, and recorded so it is not asked again; every issue a
 question was left on is written to `state/sleep/unanswered/<generation>` before the record, so the
 night's queue leaves it out (a list that cannot be written stops sleep starting), and the question
-is noted again for the morning report. Waking (#837, Dan's decisions of 2026-10-07): only `/wake` or
-"I'm up" ends sleep, in every session; a message from Dan between 7 AM and 7 PM ET while asleep has
-Claude ask once a night, in a plain line, whether he is up (`isDaytimeEt` in `hooks/sleep.ts`,
+is noted again for the morning report. A question in the design round guard's words is never asked
+or checked off, an answer on record included, since only the guard's own picker settles it, and
+`/sleep` names them once (#2261, mod-kit's shared `hooks/designquestions.ts`). Waking (#837, Dan's
+decisions of 2026-10-07): only `/wake` or "I'm up" ends sleep, in every session; a message from
+Dan between 7 AM and 7 PM ET while asleep has Claude ask once a night, in a plain line, whether he
+is up (`isDaytimeEt` in `hooks/sleep.ts`,
 tested at both edges in each season and on both change days). The one session whose move of the
 record succeeds opens the finished report with BBEdit's helper and `--front-window` (else `open -a
 BBEdit`, never a bare `open`), saying in the same reply that focus moved; away, or woken from the
@@ -5624,7 +5631,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064
+#1765, #1812, #2064, #2261
 
 </td></tr>
 <tr><td>
@@ -5729,11 +5736,18 @@ offered, written as `(choices: A / B)` by the same shared writer, so `/sleep` of
 ones when it asks it (#1775). `/sleep`'s own before bed dialog reaches this hook too: its "Skip this
 one" and "Go to sleep, no more questions" put a question off rather than answer it, so the item
 stays open to be asked another night; both labels are named once, in that shared module, which
-scope-modes shows them from (#1774).
+scope-modes shows them from (#1774). A question the design round guard asks with its own picker is
+written to the issue only once the guard says it recorded Dan's answer (`$.designRound.answered`),
+and then checked off with that answer; an answer the guard records nothing for on the issue (Run
+design rounds, Not yet, Not a look or wording change, a typed answer, a dialog closed while Dan was
+away) writes nothing, and a question in the
+guard's words asked any other way is never written as settled (#2253, #2261). Picker manners also
+gives `$.designRound` a do nothing default, since a hook on a noun no loaded mod gives stops the mod
+loading.
 
 </td><td>
 
-#615, #703, #726, #744, #1279, #1320, #1774, #1775
+#615, #703, #726, #744, #1279, #1320, #1774, #1775, #2253, #2261
 
 </td></tr>
 <tr><td>
@@ -6004,10 +6018,21 @@ cannot be read (no checkout, GitHub not answering for a merge) lets it through. 
 labels are also what `/next-issue`'s structural slot brings forward: `rank-next-issues.py` gives the
 last pick of every picker to the highest ranked open structural issue when no pick is one, never in
 place of a p0, a p1 or a lesson sweep, and `test-rank-next-issues.sh` holds its list to this one.
+Once its cooldown has passed, the end of turn issue review runs `hooks/lib/area-check-review.mjs`
+(the mod's `hooks/weekly.ts` under node) before it reads the spool. Once a week the review carries
+one line of this Mac's counts for the last 7 days (sessions loaded, first writes judged and held,
+decisions by kind, judgements with the issue list unread, edits not judged, errors), never a path,
+and a missing or unreadable log is said as that rather than as zeros. The week restarts in
+`~/.claude-area-check/weekly-line.stamp` only once the review carrying the line went out. A file in
+the review's own repository that five sessions proceeded past in 30 days, whose newest judgement
+read the whole issue list and found no issue naming it, gets one spool note asking for an issue
+about its structure, at most once per 30 days per file (a claim file in `escalated/` there). A
+runner that fails is said in the review at most once a week. A suite never reaches the real log:
+under a test run or a redirected spool nothing runs unless `CLAUDE_AREA_CHECK_DIR` names a folder.
 
 </td><td>
 
-#1505, #1506, #1508, #1509, #1510, #2143
+#1505, #1506, #1508, #1509, #1510, #1511, #2143
 
 </td></tr>
 <tr><td>

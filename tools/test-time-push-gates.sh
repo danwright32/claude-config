@@ -15,7 +15,16 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679), the two below included (claude-config#2179).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../payload/hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HANG_LIB="$DIR/../payload/hooks/lib/hang-wait.sh"
 T="$DIR/time-push-gates.sh"
 pass=0; fail=0
 check(){ if [[ "$2" == "ok" ]]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $1 ($2)"; fi; }
@@ -93,15 +102,21 @@ awk -v w="${_wall_s:-0}" -v m="${_max_s:-0}" 'BEGIN { exit !(w >= m && w > 0) }'
 # makes: gates compete for the machine when they run together. Two fixture gates each wait for the
 # other to have started, a rendezvous, so run one after another the first can only be killed at its
 # declared bound, and run together both pass at once. Waited on as a condition, never a sleep (L290).
+# Both the wait and the declared bound are the one hang ceiling (lib/hang-wait.sh), because each is
+# a judgement of how soon a busy Mac starts the second gate, and nothing else (claude-config#2179):
+# the bound was 3 seconds, a loaded Mac can start one python3 runner that much after the other, and
+# a partner staged to start 5 seconds late failed it with nothing broken (2026-11-05). Run one
+# after another, the first gate still waits out the ceiling and is killed, so a tool that serialises
+# them still fails here.
 PAR_HOME="$TMPROOT/par-home"; mkdir -p "$PAR_HOME/hooks" "$TMPROOT/rv"
-mkpar(){ printf '#!/usr/bin/env bash\ncat >/dev/null\ntouch "%s/%s"\ni=0\nwhile [ ! -e "%s/%s" ]; do i=$((i + 1)); [ "$i" -gt 400 ] && exit 1; sleep 0.05; done\nexit 0\n' \
-  "$TMPROOT/rv" "$2" "$TMPROOT/rv" "$3" > "$PAR_HOME/hooks/$1"; chmod +x "$PAR_HOME/hooks/$1"; }
+mkpar(){ printf '#!/usr/bin/env bash\ncat >/dev/null\ntouch "%s/%s"\n. "%s" || exit 1\nhang_wait %s 0.05\n' \
+  "$TMPROOT/rv" "$2" "$HANG_LIB" "'[ -e \"$TMPROOT/rv/$3\" ]'" > "$PAR_HOME/hooks/$1"; chmod +x "$PAR_HOME/hooks/$1"; }
 mkpar ping.sh ping pong
 mkpar pong.sh pong ping
-cat > "$PAR_HOME/settings.json" <<'JSON'
+cat > "$PAR_HOME/settings.json" <<JSON
 { "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
-  { "type": "command", "command": "__CLAUDE_HOME__/hooks/ping.sh", "timeout": 3 },
-  { "type": "command", "command": "__CLAUDE_HOME__/hooks/pong.sh", "timeout": 3 }
+  { "type": "command", "command": "__CLAUDE_HOME__/hooks/ping.sh", "timeout": $HANG_S },
+  { "type": "command", "command": "__CLAUDE_HOME__/hooks/pong.sh", "timeout": $HANG_S }
 ] } ] } }
 JSON
 par="$(GATE_TIMING_HOME="$PAR_HOME" bash "$T" --repo "$TMPROOT" 2>&1)"
@@ -126,9 +141,18 @@ awk -v a="${_slow_s:-0}" -v b="${_quick_s:-0}" 'BEGIN { exit !(a > b) }' \
 # and sleep. That start is not a constant: at load average 100 the stub cost 75 ms, so a test against
 # a bare 50 ms failed a correct tool on a busy machine (L290). So the stub is also timed directly,
 # in the same process that starts it, between the tool's readings, and the tool must agree with that
-# reference to within 20 ms, and read no less than the 50 ms the stub sleeps. The least of three of
-# each is judged, because a busy machine can only make a reading LONGER (L656). The old tool read
-# 0.3 0.3 0.3 here.
+# reference to within 20 ms, and read no less than the 50 ms the stub sleeps. The least of each is
+# judged, because a busy machine can only make a reading LONGER (L656). The old tool read 0.3 0.3
+# 0.3 here.
+#
+# Three of each was a fixed sample, and so a judgement of the machine's load (L290): on 2026-11-03,
+# at a load average of 150 to 245, the tool read 0.130 0.175 0.159 and the direct timing 0.111 0.123
+# 0.093, so the least of three were 37 ms apart with nothing wrong in the tool, and the suite passed
+# when run again (claude-config#2179). So pairs are taken until the two least readings agree, three
+# at the fewest, and only the hang ceiling (lib/hang-wait.sh) ends the sampling without agreement.
+# More readings can only bring each least down towards what the stub really costs, so a tool that
+# adds its own 20 ms or more never agrees however long it is sampled, and still fails here, once
+# the ceiling passes. SUITE_HANG_SECONDS=0 stops the sampling one pair after the first three.
 ACC_HOME="$TMPROOT/acc-home"; mkdir -p "$ACC_HOME/hooks"
 printf '#!/usr/bin/env bash\ncat >/dev/null\nsleep 0.05\nexit 0\n' > "$ACC_HOME/hooks/fifty-ms.sh"; chmod +x "$ACC_HOME/hooks/fifty-ms.sh"
 cat > "$ACC_HOME/settings.json" <<'JSON'
@@ -136,20 +160,34 @@ cat > "$ACC_HOME/settings.json" <<'JSON'
   { "type": "command", "command": "__CLAUDE_HOME__/hooks/fifty-ms.sh", "timeout": 10 }
 ] } ] } }
 JSON
-acc=""; ref=""
-for _i in 1 2 3; do
-  acc="$acc $(GATE_TIMING_HOME="$ACC_HOME" bash "$T" --repo "$TMPROOT" 2>&1 | awk '/fifty-ms[.]sh/ { print $1 }')"
+acc=""; ref=""; acc_pairs=0; acc_unread=0
+# One reading by the tool, then one direct timing. A pair where the tool printed no reading ends the
+# sampling at once, because more of them cannot change that, and fails below.
+acc_pair(){
+  local _t
+  _t="$(GATE_TIMING_HOME="$ACC_HOME" bash "$T" --repo "$TMPROOT" 2>&1 | awk '/fifty-ms[.]sh/ { print $1 }')"
+  [ -n "$_t" ] || acc_unread=1
+  acc="$acc $_t"
   ref="$ref $(python3 -c '
 import subprocess, sys, time
 t = time.monotonic()
 subprocess.run(["bash", sys.argv[1]], input=b"{}", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 print("%.3f" % (time.monotonic() - t))' "$ACC_HOME/hooks/fifty-ms.sh")"
-done
-awk -v r="$acc" -v f="$ref" '
-  function least(s,   a, n, i, m) { n = split(s, a, " "); if (n < 3) return -1; m = a[1] + 0; for (i = 2; i <= n; i++) if (a[i] + 0 < m) m = a[i] + 0; return m }
-  BEGIN { t = least(r); g = least(f); if (t < 0 || g < 0) exit 1; d = t - g; if (d < 0) d = -d; exit !(d <= 0.020 && t >= 0.050) }' \
+  acc_pairs=$((acc_pairs + 1))
+}
+acc_least(){ printf '%s\n' "$1" | awk '{ for (i = 1; i <= NF; i++) if (m == "" || $i + 0 < m) m = $i + 0 } END { print (m == "" ? -1 : m) }'; }
+acc_agree(){
+  [ "$acc_unread" -eq 0 ] && [ "$acc_pairs" -ge 3 ] || return 1
+  awk -v t="$(acc_least "$acc")" -v g="$(acc_least "$ref")" \
+    'BEGIN { if (t < 0 || g < 0) exit 1; d = t - g; if (d < 0) d = -d; exit !(d <= 0.020 && t >= 0.050) }'
+}
+acc_more(){ acc_pair; [ "$acc_unread" -eq 1 ] || acc_agree; }
+acc_pair; acc_pair; acc_pair
+acc_agree || [ "$acc_unread" -eq 1 ] || hang_wait acc_more 0
+acc_agree \
   && check "#1870 a gate that sleeps 50 ms is measured to within 20 ms of a direct timing of it" ok \
-  || check "#1870 a gate that sleeps 50 ms is measured to within 20 ms of a direct timing of it" "the tool read, in seconds:$acc; timed directly:$ref"
+  || check "#1870 a gate that sleeps 50 ms is measured to within 20 ms of a direct timing of it" \
+       "after $acc_pairs pairs, the least the tool read was $(acc_least "$acc") s and the least timed directly was $(acc_least "$ref") s; tool printed no reading in some pair: $acc_unread; first three of each:$(printf '%s\n' "$acc" | awk '{ print " " $1, $2, $3 }') /$(printf '%s\n' "$ref" | awk '{ print " " $1, $2, $3 }')"
 
 # A gate whose runner left no reading (here, a --repo that does not exist, so no gate starts) is
 # named as unmeasured and the tool exits non zero, never a row of zeros that reads as free (L98).

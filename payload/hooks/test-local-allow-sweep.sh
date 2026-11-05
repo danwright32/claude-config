@@ -268,7 +268,8 @@ check "three adjacent bare tokens: all three redacted" "$([ "$OUT" = '[REDACTED]
 # The detector is the one redactor (lib/review-redact.sed, through ar_redact). Without it nothing can
 # say whether a rule holds a key, and that is said rather than passed as clean.
 world noredactor
-mkdir -p "$W/lib"; cp "$DIR/lib/ai-review-common.sh" "$W/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$W/lib" ai-review-common.sh >/dev/null \
+  || check "#2204 ai-review-common.sh could be installed with what it sources" "the install refused"
 fixture 'Bash(npm run test:*)'
 sweep LOCAL_ALLOW_REVIEW_COMMON="$W/lib/ai-review-common.sh"
 check "no redactor: says the keys could not be checked" "$(has 'could not check')"
