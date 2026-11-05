@@ -1012,6 +1012,27 @@ says "and says the check did not run" "DID NOT RUN"
 notices "#1906 as a systemMessage, built with no python3 or jq" "HANDBACK CLAIMS CHECK DID NOT RUN"
 
 # ---------------------------------------------------------------------------------------------
+echo "no-verify-gate.sh: a redirection in front of git is the shell's, never the command's name (claude-config#2235)"
+# `2>/dev/null git commit --no-verify` skips the hooks. The reader took the redirection for the
+# command's name, so the gate saw a command named 2>/dev/null and the skip went through. Each case is
+# also run through a copy of the hooks whose reader passes no redirection over, which must let it
+# through, so the case is one the fix decides (L1).
+if python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$WORK/loose-redirects" redirects; then check "#2235 the loose copy of the hooks is made" ok; else
+  check "#2235 the loose copy of the hooks is made" "loose-reader.py failed"; fi
+nv_redirected() { # nv_redirected <label> <command>
+  run_hook "$NV_GATE" "$(bash_payload "$2" a1b2c3d4)"
+  refused "#2235 an agent's $1 is refused"
+  run_hook "$WORK/loose-redirects/no-verify-gate.sh" "$(bash_payload "$2" a1b2c3d4)"
+  allowed "#2235 the loose copy lets it through, so the case is one the fix decides: $1"
+}
+nv_redirected "commit --no-verify behind an error redirection" '2>/dev/null git commit --no-verify -m wip'
+nv_redirected "commit -n behind an output redirection" '> /dev/null git commit -n -m wip'
+nv_redirected "push --no-verify behind input and an assignment" '</dev/null A=1 git push --no-verify origin x'
+nv_redirected "core.hooksPath commit behind nohup and a redirection" 'nohup 2>&1 git -c core.hooksPath=/dev/null commit -m x'
+run_hook "$NV_GATE" "$(bash_payload '2>/dev/null git commit -m wip' a1b2c3d4)"
+allowed "#2235 control: an agent's plain commit behind a redirection goes through"
+
+# ---------------------------------------------------------------------------------------------
 echo "settings.hooks.json: each gate is registered where its header says"
 reg() { # reg <matcher> <hook basename>
   jq -e --arg m "$1" --arg h "$2" '[.hooks.PreToolUse[] | select(.matcher == $m) | .hooks[].command | select(endswith("/hooks/" + $h))] | length == 1' "$SETTINGS" >/dev/null 2>&1
