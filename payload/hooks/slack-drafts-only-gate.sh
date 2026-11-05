@@ -51,7 +51,11 @@ shopt -s nocasematch
 # skipping it: the whole payload is read, cwd and description included.
 MARKERS='chat[._](postmessage|schedulemessage|postephemeral|memessage)|hooks\.slack\.com|slack_webhook|slack_(send|schedule|post)_message|slack_reply_to_thread'
 SCRIPTS='\.(py|sh|bash|zsh|js|mjs|cjs|ts|mts|rb|pl|php|command)([^A-Za-z0-9_]|$)'
-RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|bunx|npx|pnpx|tsx|ts-node|osascript|uv|source)([^A-Za-z0-9_.]|$)|\./'
+# A shell running a script by name (followed by a space, so the payload's own "tool_name":"Bash" does
+# not send every call to python3 under nocasematch), and a program run by its own absolute or home path where a command
+# starts (the JSON's "command":", or after ; & | ( or an escaped newline), so a script with no
+# extension is still read (lessons review, 2026-11-05).
+RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|bunx|npx|pnpx|tsx|ts-node|osascript|uv|source)([^A-Za-z0-9_.]|$)|(^|[^A-Za-z0-9_])(bash|sh|zsh|dash|ksh)[[:space:]]|\./|("command"[[:space:]]*:[[:space:]]*"|[;&|(]|\\n)[[:space:]]*[~/]'
 # Under a UTF-8 locale bash's =~ stops at a byte that is not UTF-8, so a word after one would read as
 # absent and the call would pass unjudged (claude-config#1885); the C locale is tried as well.
 payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
