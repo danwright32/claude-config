@@ -3510,14 +3510,16 @@ runs after every tool call, in the main session and in every subagent, and reads
 request from the transcript's usage fields (input plus cache read plus cache write), never what
 anybody wrote. Both rules were decided by Dan on 2026-11-01.
 
-- **The context line** (`CONTEXT_LINE_TOKENS`, 200,000). A builder (any subagent) or an orchestrator
-  (a main session that has dispatched an agent or set a /goal) whose last request carried more is
-  told to write down what it has decided and then restart or compact. A builder writes
+- **The context line** (`CONTEXT_LINE_TOKENS`, 330,000 tokens of work, Dan, 2026-11-05). Work is a
+  request's context minus the floor, the fixed load the session started with: the context of the
+  session's first request, or of the first request after its latest compaction. A builder (any
+  subagent) or an orchestrator (a main session that has dispatched an agent or set a /goal) whose
+  last request carried more work than that is told to write down what it has decided and then restart or compact. A builder writes
   `handoff.md` in its scratchpad folder and hands back, unless only the push and the report are
   left, and the orchestrator gives the rest to a fresh agent that starts from the note. An
   orchestrator puts each decision that belongs to an issue on that issue as a comment and the rest
   in `handoff.md`, then tells Dan, who sees the notice too, so he can type /compact or start a
-  fresh session. It is said once per band of the line (200K, 400K, ...) and again after a
+  fresh session. It is said once per band of the line (330K, 660K, ... of work) and again after a
   compaction brings the session back under it, never on every call.
 - **What must be written down before a restart**, so nothing decided lives only in the
   transcript: the goal or list in Dan's words with every constraint he stated, quoted and dated;
@@ -3533,7 +3535,7 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   `python3 tools/cache-usage.py --days 31 --summary` re-measures them through the same defaults and
   the same sum: its CONTEXT lines give the share of requests and tokens over the line, its
   COMPACTIONS line the main sessions compacted at least the nudge count. On the personal MacBook in
-  October, requests over 200,000 read 88.5% of subagent tokens and 85.4% of main session tokens.
+  October, requests over 200,000 of whole context (the rule before #2283, which counted the floor too) read 88.5% of subagent tokens and 85.4% of main session tokens.
 - **Cost.** Each run reads only the bytes appended to the transcript since its last run, with the
   offset kept in `~/.claude/state/context-size/` (one small file per session and agent, never
   synced): about 40 ms a call, and 0.11 s the first time over a 21 MB transcript (measured
