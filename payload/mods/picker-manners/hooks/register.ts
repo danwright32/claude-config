@@ -4,7 +4,7 @@ import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
 import { bareIssuesIn, etDateOf, issueRefsIn, leavesUnanswered, questionWords, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
-import { guardIgnores } from './mod-kit/designquestions.ts'
+import { guardAsks, guardIgnores } from './mod-kit/designquestions.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 (docs/mods-design.md, "Picker manners (#615)").
 //
@@ -97,6 +97,14 @@ export const offTheDialog = ($: EngineInterface, work: () => Promise<unknown>) =
   $.clock.after(0, () => void work().catch(err => $.ui.log(`Picker manners could not add this question to its issue's Open questions (${errorText(err, 'picker-manners')}), so /sleep will not see it there.`)))
 
 export const register: Register = on => {
+  // #2261: a hook on a noun no loaded mod provides stops this whole mod loading, so with the design
+  // round guard absent the same no-op bottom it provides is put here too, and nothing raises it; with
+  // the guard loaded the bottom is a no-op whichever of the two is kept.
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, designRound: { answered: async () => undefined } }
+  })
+
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'pickers', description: 'Turns next issue pickers back on for this session.', argumentHint: 'on' })
     return next(e)
@@ -130,8 +138,22 @@ export const register: Register = on => {
       const told = `Dan's answer to this question lets no edit through: the design round guard counts only its own picker, asked with the metadata its refusal of an edit gives, so nothing is recorded and it was not added to ${where}. Tell Dan that in one line; when the guard refuses an edit, ask its question the way that refusal says.`
       return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), told] }
     }
+    // #2261: the guard's own picker is written onto its issue only once the guard says it recorded
+    // the answer (designRound.answered, below): an answer in Dan's own words, Run design rounds, Not
+    // yet and a dialog that closed while he was away record nothing, so a checked box there would
+    // read as settled while every edit stayed held. Nothing is added open either, since /sleep never
+    // asks a guard question.
+    if (guardAsks((e.metadata as { source?: unknown } | undefined)?.source)) return r
     offTheDialog($, () => recordOnIssues($, question, answer, choices))
     return r
+  })
+
+  // #2261: the design round guard has written down Dan's answer to its own picker, so the question
+  // goes onto its issue checked off with that answer, off the dialog's path as every other one is.
+  // With the guard not loaded nothing raises this, and nothing is written: the safe direction.
+  on('designRound.answered', async ($, e, next) => {
+    offTheDialog($, () => recordOnIssues($, e.question, e.answer, e.options))
+    return next(e)
   })
 
   // What Dan types, at the Mac or from his phone through Remote Control, as mod-kit's one reader says

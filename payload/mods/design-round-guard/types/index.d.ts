@@ -66,7 +66,37 @@ export type DesignRoundRecord = {
   reading?: number
 }
 
+/**
+ * An answer of Dan's the guard has just written down (#2261): his Skip them, his Settled, or his
+ * word that one edit changes neither the look nor any wording. Raised only once that write
+ * succeeded in full; a typed answer, Run design rounds, Not yet, a dialog that closed while he was
+ * away and a write that failed raise nothing, since the guard records nothing for them.
+ */
+export type DesignRoundAnswered = {
+  /** The AskUserQuestion call's id. */
+  call: string
+  /** The question as the dialog showed it, in the guard's own words. */
+  question: string
+  /** The option he chose, as its label reads. */
+  answer: string
+  /** Every option's label, in the order the dialog offered them. */
+  options: string[]
+}
+
+/** The guard's own noun. */
+export type DesignRound = {
+  /**
+   * The bottom of every announcement: a no-op, which any mod reading what the guard recorded hooks
+   * with `on('designRound.answered', ...)`, as picker manners does to check the question off on its
+   * issue. With no listener, or with the guard not loaded, nothing happens.
+   */
+  answered: (input: DesignRoundAnswered) => Promise<void>
+}
+
 declare module 'claude-code' {
+  interface EngineInterface {
+    designRound: DesignRound
+  }
   interface PluginState {
     /** The look changing edits waiting on Dan's answer, by the refused call's id; dropped at session end. */
     'design-round-guard': { pending: DesignRoundPending[] }
