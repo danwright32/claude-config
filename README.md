@@ -1838,7 +1838,7 @@ A fourth gate reads the same library for a different thing an agent does to its 
 
 ### What a push actually waits on
 
-Thirty-five PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-six PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1898,6 +1898,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 | `check-work-names-publish.sh` (#2105) | 2026-11-02: 0.009 to 0.010 seconds on a plain `git push`, five readings at load average 27 to 33, timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109 seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo digest list and the registry, then the match |
 | `design-score-gate.sh` (#1364) | 2026-10-28: 0.009 to 0.015 seconds. Earlier: 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `check-rtk-init.sh` (#1468) | 2026-10-28: 0.009 to 0.014 seconds. Earlier: 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
+| `check-zsh-builtins.sh` (#2200) | 2026-11-04: 0.027 to 0.046 seconds on `ls -la`, five readings at load average 13 to 27, timed from outside, since a command not naming log as a word leaves before python starts; 0.055 to 0.070 seconds on `git log -1`, which the judge reads. Over 129,500 past Bash commands on the personal MacBook, 7,604 (5.9%) reach the judge and 31 are refused |
 | `pr-review-gate.sh` (#560) | 2026-10-28: 0.010 to 0.013 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it acts on a merge, not a push |
 | `require-verification-run.sh` (#1529) | 2026-10-28: 0.009 to 0.013 seconds. Earlier: 0.044 to 0.056 seconds on a push, five readings on 2026-10-23 (load average 166 to 168, other suites running), since a command naming no merge leaves before anything loads. On a merge in a repository whose base branch holds no `.claude/verification/areas.json`, which is every repository today, 0.97 to 1.34 seconds, five readings through the real gh against claude-config: one read of the pull request and one of that file at its base commit, run beside `block-red-merge.sh`, which reads the same pull request |
 | `block-red-merge.sh` (#1181) | 2026-10-28: 0.009 to 0.011 seconds. Earlier: 0.014 seconds, five readings on 2026-10-13; it acts on a merge, and since it lost its `if` filter it leaves on a command naming no merge before loading anything |
@@ -2737,10 +2738,13 @@ bash tools/suite-home-writes.sh payload/hooks/test-gates-fail-closed.sh
 It runs each suite named on its own, with none of those variables set and `HOME` pointed at a
 throwaway folder, then names every file the suite left under that folder's `.claude` and the
 records kept beside it (`.claude-issue-spool` and the like). It lists paths only and never reads a
-file, and it never writes under the real `~/.claude`. It exits 0 when nothing was left, 1 naming
-the files when something was, and 2 when it could not check, and prints the suite's own exit
-status beside its verdict. It is not run on every full run: doing so costs about one full run
-again, and the runner already hands every suite the list.
+file, and it never writes under the real `~/.claude`. Each suite gets one verdict, printed with
+the suite's own exit status: `WRITES-HOME` naming the files when it left something, `clean` when
+it left nothing and exited 0, and `NOT-MEASURED` when it left nothing but exited non zero, since a
+suite that refused to run or crashed at its top writes nothing without that proving anything
+(#2208). The tool exits 0 when every suite was clean, 1 when one wrote there, and 2 when any suite
+could not be checked or was not measured. It is not run on every full run: doing so costs about
+one full run again, and the runner already hands every suite the list.
 
 The main suite on its own:
 
@@ -5291,6 +5295,14 @@ its words do not name) is held saying it cannot be read, and may only proceed; i
 in no checkout, or where the repository has no fast growing file and no structural issue naming a
 file. Removals, `touch`, `mkdir`, mode changes and a folder handed to a script are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+One narrowing (#2254): a findings note to the installed helper,
+`bash ~/.claude/hooks/lib/issue-spool.sh note ...` or that path run directly, writes only to
+`~/.claude-issue-spool`, so its arguments are not read as files; a copy of the helper anywhere
+else, another subcommand, a substitution inside the note and everything else in the same command
+are judged as before. A question is kept in the store under a
+SHA-256 of its repository and word (#2246), since a held command's word can pass the store's 256
+character key limit; an answer kept under the earlier key form is still read for its week (#2256
+removes that read).
 Every judgement, decision and answer is one JSON line in
 `~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
 log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
