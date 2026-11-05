@@ -949,6 +949,19 @@ same key typed in front of `gh pr merge` is judged by the gate itself, as before
 Code, where no gate sees the command, the helper therefore takes no key at all; merge there with the
 key in front of `gh pr merge`.
 
+A lessons review skip reaches the helper the same way, for one case only (claude-config#2088): a
+branch the review cannot read because it is too large, which `lib/pr-review.sh check` reports with
+exit 4, apart from the 1 of a refusal on findings. The helper then stops and prints the one command
+that would merge that head unreviewed, `SKIP_PR_REVIEW=<the full head sha> bash
+~/.claude/hooks/lib/merge-when-ready.sh <pr> ...`, for the main session to run once Dan approves.
+The gate records that skip (as `skip:<head>`, beside the typed keys and under the same secret) only
+when it is typed as a literal full 40 or 64 character head in front of the helper, and refuses one
+typed by a subagent, `SKIP_PR_REVIEW=1`, or anything short of a full head. The helper refuses, exit
+64, a skip the gate did not record, and merges unreviewed only when the review cannot run for size
+and the head it is about to merge is the one typed. Findings to read, a review that timed out or
+failed, another head and another branch all stay refused, and a `gh pr merge` in the same command is
+judged by the gate as before.
+
 A session cannot make that record by hand (claude-config#1700). Each record is named by an
 HMAC-SHA256 of the key under a secret only the gate creates (`helper-keys.secret` beside the folder,
 mode 600), so an empty file a session's shell makes under the key's plain sha256, or any name it can
