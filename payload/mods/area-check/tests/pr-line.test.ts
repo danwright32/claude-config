@@ -1,12 +1,13 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { LOG_READ_BYTES } from '../hooks/prline.ts'
-import { APP, KIT, LOG, REASON, SLACK, bash, decide, decidedLine, edit, refusal, said, world, type R } from './world.ts'
+import { READ_SCRIPT, ROTATE_BYTES, ROTATE_SCRIPT, SETTLE_MINUTES, rotationStamp } from '../hooks/prline.ts'
+import { SWEEP_MS } from '../hooks/rules.ts'
+import { APP, DIR, ERRORS, KIT, LOG, REASON, SLACK, T0, bash, decide, decidedLine, edit, ghLists, refusal, said, world, type R } from './world.ts'
 
 // The area check line a pull request description carries (#1510): every file decided on the branch
 // (and merge base) the pull request is made from has one line, `Area check: <file>: <decision>,
 // <reason>`, checked on gh pr create, gh pr edit and gh pr merge. The decisions come from this Mac's
-// log, read with a bounded grep rather than whole; a log that cannot be read is said, never read as none.
+// log and the decision files its rotation keeps (#2143); a log that cannot be read is said, never read as none.
 
 const A = 'Area check: src/a.ts: proceed, it only renames one local variable inside a function'
 const B = 'Area check: src/b.ts: fold, Refs #41'
@@ -16,7 +17,9 @@ const seedAB = (w: ReturnType<typeof world>) => {
     decidedLine({ path: 'src/b.ts', decision: 'fold', issue: 41 }),
   )
 }
-const greps = (w: ReturnType<typeof world>) => w.ran.filter(l => l.startsWith('/bin/sh -c') && l.includes('grep -a -F')).length
+// The reads of the log (#2143), each as ran it: the words after the script, its folder first.
+const readsOf = (w: ReturnType<typeof world>) => w.ran.filter(l => l.startsWith(`/bin/sh -c ${READ_SCRIPT} `))
+const reads = (w: ReturnType<typeof world>) => readsOf(w).length
 const ranBash = (w: ReturnType<typeof world>, command: string) => w.passed.includes(`Bash ${command}`)
 const judgedApplied = (path: string, applied: string, extra: object = {}) =>
   JSON.stringify({ v: 2, kind: 'judged', at: '2026-10-22T15:00:00.000Z', session: 's0', agent: null, repo: 'dan/app', path, branch: '12-feature', mergeBase: 'mb123', decision: 'held', applied, ...extra })
@@ -218,7 +221,7 @@ test('gh pr edit without a body flag passes untouched, the log never read', KIT,
   const cmd = 'gh pr edit 5 --add-label tech-debt'
   expect(refusal(await bash($ as never, w, cmd))).toBe('')
   expect(ranBash(w, cmd)).toBe(true)
-  expect(greps(w)).toBe(0)
+  expect(reads(w)).toBe(0)
   // The control: the same pull request given a description without the lines is refused.
   expect(refusal(await bash($ as never, w, 'gh pr edit 5 --add-label tech-debt --body x', {}, 'b2'))).toContain(A)
 })
@@ -299,7 +302,7 @@ test('nothing but gh pr create, edit and merge is refused, and none of them read
     expect(refusal(r)).toBe('')
     expect(ranBash(w, cmd)).toBe(true)
   }
-  expect(greps(w)).toBe(0)
+  expect(reads(w)).toBe(0)
   // The controls: gh pr create is refused in the same world, and gh pr merge --auto is a merge, checked.
   expect(refusal(await bash($ as never, w, 'gh pr create --title T --body x', {}, 'c1'))).toContain(A)
   w.ctl.prView = () => ({ exitCode: 0, stdout: JSON.stringify({ body: 'Just a summary', headRefName: '12-feature' }), stderr: '' })
@@ -311,7 +314,7 @@ test('a pull request command outside a checkout passes without reading the log',
   seedAB(w)
   const cmd = 'cd /tmp && gh pr create --title T --body x'
   expect(refusal(await bash($ as never, w, cmd))).toBe('')
-  expect(greps(w)).toBe(0)
+  expect(reads(w)).toBe(0)
   // The control: the same command in the checkout is refused.
   expect(refusal(await bash($ as never, w, 'gh pr create --title T --body x', {}, 'b2'))).toContain(A)
 })
@@ -321,7 +324,7 @@ test('with no decisions on the branch the command passes without reading the bod
   const cmd = 'gh pr create --title T --body-file nowhere.md'
   expect(refusal(await bash($ as never, w, cmd))).toBe('')
   expect(ranBash(w, cmd)).toBe(true)
-  expect(greps(w)).toBe(1)
+  expect(reads(w)).toBe(1)
 })
 
 test("the check's own failure lets the command through with one dim line, kept in the error file", KIT, async ($, on) => {
@@ -337,18 +340,17 @@ test("the check's own failure lets the command through with one dim line, kept i
   expect(said(r)).not.toContain('Area check:')
 })
 
-test('the log is read from its end and bounded, so a long log keeps its newest decisions, and the line the bound cuts is not malformed', KIT, async ($, on) => {
+test('a decision with more than 1 MiB of other decisions after it is still asked for (#2143)', KIT, async ($, on) => {
   const w = world($, on)
-  w.ctl.seeded.push(decidedLine({ path: 'src/old.ts', decision: 'proceed', reason: 'the oldest decision, past the bound' }))
+  w.ctl.seeded.push(decidedLine({ path: 'src/old.ts', decision: 'proceed', reason: 'the oldest decision, past the old window' }))
   const filler = decidedLine({ path: 'src/x.ts', decision: 'proceed', reason: 'a decision on another branch', branch: '13-other' })
-  for (let i = 0; i <= LOG_READ_BYTES / filler.length; i++) w.ctl.seeded.push(filler)
+  for (let i = 0; i <= (1_048_576 * 1.5) / filler.length; i++) w.ctl.seeded.push(filler)
   seedAB(w)
   const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
+  expect(why).toContain('Area check: src/old.ts: proceed, the oldest decision, past the old window')
   expect(why).toContain(A)
   expect(why).toContain(B)
-  expect(why).not.toContain('src/old.ts')
-  expect(why).not.toContain('could not be read')
-  expect(w.ran.some(l => l.includes('| tail -c "$4"') && l.endsWith(` ${LOG} ${LOG_READ_BYTES + 1}`))).toBe(true)
+  expect(why).not.toContain('could not')
 })
 
 test('a log read the engine cuts short is refused naming it, never read as the decisions it kept', KIT, async ($, on) => {
@@ -360,35 +362,105 @@ test('a log read the engine cuts short is refused naming it, never read as the d
   expect(why).toContain('more than could be read whole')
 })
 
-// The decision lines that follow `cut` in the log, padded so they hold exactly `bytes` bytes with
-// their newlines: A and B, after one decision on another branch whose reason fills the gap.
-const after = (bytes: number) => {
-  const ab = [decidedLine({ path: 'src/a.ts', decision: 'proceed', reason: 'it only renames one local variable inside a function' }), decidedLine({ path: 'src/b.ts', decision: 'fold', issue: 41 })]
-  const pad = (reason: string) => decidedLine({ path: 'src/x.ts', decision: 'proceed', reason, branch: '13-other' })
-  const fixed = [pad(''), ...ab].join('\n').length + 1
-  return [pad('p'.repeat(bytes - fixed)), ...ab]
-}
+// ---- The rotated log (#2143) ----
 
-const cut = decidedLine({ path: 'src/cut.ts', decision: 'proceed', reason: 'the decision the bound falls on' })
-const old = decidedLine({ path: 'src/old.ts', decision: 'proceed', reason: 'past the bound' })
+const LINE_A = decidedLine({ path: 'src/a.ts', decision: 'proceed', reason: 'it only renames one local variable inside a function' })
+const LINE_B = decidedLine({ path: 'src/b.ts', decision: 'fold', issue: 41 })
 
-test('a decision line the bound cuts through is left out, never counted malformed', KIT, async ($, on) => {
+test('decisions in a settled decision file and in a log still settling are asked for, beside those in the log', KIT, async ($, on) => {
   const w = world($, on)
-  // The newest LOG_READ_BYTES bytes begin ten bytes before the end of `cut`.
-  w.ctl.seeded.push(old, cut, ...after(LOG_READ_BYTES - 10))
+  w.ctl.rotated['st1.decisions.jsonl'] = [LINE_A]
+  w.ctl.rotated['st2.rotating'] = [LINE_B]
+  w.ctl.seeded.push(decidedLine({ path: 'src/c.ts', decision: 'proceed', reason: 'taken since the rotation' }))
   const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
   expect(why).toContain(A)
-  expect(why).not.toContain('src/cut.ts')
-  expect(why).not.toContain('could not be read')
+  expect(why).toContain(B)
+  expect(why).toContain('Area check: src/c.ts: proceed, taken since the rotation')
 })
 
-test('a decision line the bound begins exactly at is read whole, not dropped as cut', KIT, async ($, on) => {
+test('a rotated file the read cannot open is refused naming it, never read as no decisions', KIT, async ($, on) => {
   const w = world($, on)
-  // The newest LOG_READ_BYTES bytes begin at the first byte of `cut`.
-  w.ctl.seeded.push(old, cut, ...after(LOG_READ_BYTES - cut.length - 1))
+  seedAB(w)
+  w.ctl.rotated['st1.decisions.jsonl'] = [LINE_A]
+  w.ctl.rotatedUnreadable = 'st1.decisions.jsonl'
+  const why = refusal(await bash($ as never, w, `gh pr create --title T --body "${A}\n${B}"`))
+  expect(why).toContain(`${DIR}/rotated/st1.decisions.jsonl: Permission denied`)
+  expect(why).toContain('could not read its log')
+})
+
+test('gh pr merge reads how many decisions name the repository first, so with none it never asks GitHub', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.seeded.push(decidedLine({ path: 'src/a.ts', decision: 'proceed', reason: 'elsewhere', repo: 'dan/other' }))
+  w.ctl.prView = () => ({ exitCode: 0, stdout: JSON.stringify({ body: '', headRefName: '12-feature' }), stderr: '' })
+  expect(refusal(await bash($ as never, w, 'gh pr merge 5 --squash'))).toBe('')
+  expect(w.ran.some(l => l.startsWith('gh pr view'))).toBe(false)
+  expect(readsOf(w).length).toBe(1)
+  expect(readsOf(w)[0]).not.toContain('"branch":')
+})
+
+test('gh pr merge with decisions in the repository asks GitHub for the branch, then reads that branch', KIT, async ($, on) => {
+  const w = world($, on)
+  seedAB(w)
+  w.ctl.prView = () => ({ exitCode: 0, stdout: JSON.stringify({ body: 'Just a summary', headRefName: '12-feature' }), stderr: '' })
+  expect(refusal(await bash($ as never, w, 'gh pr merge 5 --squash'))).toContain(A)
+  const at = (p: (l: string) => boolean) => w.ran.findIndex(p)
+  const count = at(l => l.startsWith(`/bin/sh -c ${READ_SCRIPT} `) && !l.includes('"branch":'))
+  const github = at(l => l.startsWith('gh pr view 5'))
+  const branch = at(l => l.startsWith(`/bin/sh -c ${READ_SCRIPT} `) && l.includes('"branch":"12-feature"'))
+  expect(count).toBeGreaterThan(-1)
+  expect(github).toBeGreaterThan(count)
+  expect(branch).toBeGreaterThan(github)
+})
+
+test('one Bash call reads each repository and branch once, however many pull request commands it holds', KIT, async ($, on) => {
+  const w = world($, on)
+  seedAB(w)
+  const cmd = `gh pr create --title T --body "${A}\n${B}" && gh pr edit 12-feature --body "${A}\n${B}"`
+  expect(refusal(await bash($ as never, w, cmd))).toBe('')
+  expect(readsOf(w).length).toBe(1)
+})
+
+const start = async ($: unknown, w: ReturnType<typeof world>) => {
+  await ($ as { session: { start: (e: never) => Promise<unknown> } }).session.start({ cwd: APP, surface: 'terminal', isInteractive: true } as never)
+  await w.clock.settle()
+}
+const rotations = (w: ReturnType<typeof world>) => w.ran.filter(l => l.startsWith(`/bin/sh -c ${ROTATE_SCRIPT} `))
+
+test('a session start runs the rotation with its folder, stamp, bound and settle time, after writing its loaded record', KIT, async ($, on) => {
+  const w = world($, on)
+  await start($, w)
+  const r = rotations(w)
+  expect(r.length).toBe(1)
+  expect((r[0] as string).endsWith(` ${DIR} ${rotationStamp(T0, 's1')} ${ROTATE_BYTES} ${SETTLE_MINUTES} "kind":"decided" "applied":`)).toBe(true)
+  const loaded = w.ran.findIndex(l => !l.includes(ROTATE_SCRIPT) && l.endsWith(LOG))
+  expect(loaded).toBeGreaterThan(-1)
+  expect(w.ran.indexOf(r[0] as string)).toBeGreaterThan(loaded)
+})
+
+test('a rotation that fails is kept in the error file and said once, and the sweep and the warm still run', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.rotateFails = 'mv: rename log.jsonl: Operation not permitted'
+  w.store['issues:dan/old'] = { at: T0 - SWEEP_MS, state: 'read', count: 0, issues: [] }
+  await start($, w)
+  const errors = w.records(ERRORS)
+  expect(errors.length).toBe(1)
+  expect(String(errors[0]?.error)).toContain('Operation not permitted')
+  expect(w.logs.some(l => l.includes('could not rotate its log') && l.includes('nothing was lost'))).toBe(true)
+  expect(w.store['issues:dan/old']).toBeUndefined()
+  expect(ghLists(w)).toBe(1)
+})
+
+test('after a session start rotates a log over its bound, every decision in it is still asked for', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.seeded.push(decidedLine({ path: 'src/old.ts', decision: 'proceed', reason: 'the oldest decision' }))
+  const filler = decidedLine({ path: 'src/x.ts', decision: 'proceed', reason: 'a decision on another branch', branch: '13-other' })
+  for (let i = 0; i <= ROTATE_BYTES / filler.length; i++) w.ctl.seeded.push(filler)
+  seedAB(w)
+  await start($, w)
+  expect(Object.keys(w.ctl.rotated)).toEqual([`${rotationStamp(T0, 's1')}.rotating`])
+  expect(w.ctl.seeded.length).toBe(0)
   const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
-  expect(why).toContain('Area check: src/cut.ts: proceed, the decision the bound falls on')
+  expect(why).toContain('Area check: src/old.ts: proceed, the oldest decision')
   expect(why).toContain(A)
-  expect(why).not.toContain('src/old.ts')
-  expect(why).not.toContain('could not be read')
+  expect(why).toContain(B)
 })

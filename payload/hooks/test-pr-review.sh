@@ -305,6 +305,7 @@ check_eq "the finished review is a pr review" "pr" "$(meta "$F" kind)"
 check_eq "and it finished" "ok" "$(meta "$F" status)"
 check_eq "with one finding counted" "1" "$(meta "$F" findings)"
 check_eq "against the merge base" "$BASE_SHA" "$(meta "$F" base)"
+check_eq "#2236 naming the repository, the main checkout's folder for an origin with no owner/name" "repo" "$(meta "$F" repository)"
 stdin="$(cat "$FAKE_LOG/stdin" 2>/dev/null)"
 check "the Swift file is in the diff (every file type)" "App/Sync.swift" "$stdin"
 check "markdown is in the diff too" "+More." "$stdin"
@@ -583,8 +584,8 @@ plain='at 4dbee97a1c2e3f4a5b6c7d8e9f00112233445566 run_every_hook_against_its_ow
 out="$(printf '%s\n' "$plain" | bash -c '. "$1" && ar_redact' _ "$DIR/lib/ai-review-common.sh")"
 check_eq "the redactor leaves a commit id, a long name, and flags without a literal secret alone" "$plain" "$out"
 # With its rule file missing the redactor withholds and fails, never passes the text through (L42).
-mkdir -p "$WORKDIR/norules"
-cp "$DIR/lib/ai-review-common.sh" "$WORKDIR/norules/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORKDIR/norules" ai-review-common.sh >/dev/null \
+  || bad "#2204 ai-review-common.sh could not be installed with what it sources"
 out="$(printf 'Error: the key %s\n' "$SK" | bash -c '. "$1" && ar_redact' _ "$WORKDIR/norules/ai-review-common.sh")"; rc=$?
 check_eq "a redactor without its rules fails" "1" "$rc"
 check_not "a redactor without its rules never passes the text through" "$SK" "$out"
@@ -1729,6 +1730,7 @@ done
 out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
 check_eq "#601 every group finished: the check writes the branch's review and allows" "0" "$rc"
 check_eq "#601 as ok" "ok" "$(meta "$(final_of "$GRP_SHA")" status)"
+check_eq "#2236 and the review written from its groups names the repository" "repo" "$(meta "$(final_of "$GRP_SHA")" repository)"
 reset_state
 GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
 printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\nrun=t1\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
@@ -3136,6 +3138,17 @@ check_not "#1358 nor is its review narrowed" "ONLY WHAT CHANGED SINCE" "$(cat "$
 runners_done || bad "#1358 a runner was still going at the end"
 G checkout -q feat/sync
 G branch -f main "$ROUNDS_MAIN"
+
+# #2236: a review run from an agent worktree names the repository as well as the worktree's folder,
+# which is deleted with the worktree.
+reset_state
+G worktree add -q --detach "$WORKDIR/agent-pr-wt" "$HEAD_SHA" 2>/dev/null
+FAKE_CLAUDE_OUT="No issues found." prr start --dir "$WORKDIR/agent-pr-wt" --sha "$HEAD_SHA" --branch feat/sync >/dev/null
+wait_final "$HEAD_SHA" && ok || bad "#2236 the worktree's pull request review finishes"
+check_eq "#2236 its record keeps the worktree's folder as the label" "agent-pr-wt" "$(meta "$(final_of "$HEAD_SHA")" repo)"
+check_eq "#2236 and names the main checkout as the repository" "repo" "$(meta "$(final_of "$HEAD_SHA")" repository)"
+G worktree remove --force "$WORKDIR/agent-pr-wt" 2>/dev/null
+runners_done || bad "#2236 a runner was still going at the end"
 
 echo
 echo "passed: $pass, failed: $fail"

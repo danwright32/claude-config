@@ -442,7 +442,8 @@ want_rc 0 "push hook: a command that merely mentions a push is ignored"
 # copy of itself whose lib/ holds no detector.
 mkdir -p "$WORK/nolib/lib"
 cp "$PUSH_HOOK" "$WORK/nolib/check-deferrals.sh"
-cp "$DIR/lib/push-scope.sh" "$WORK/nolib/lib/push-scope.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORK/nolib/lib" push-scope.sh \
+  || check "#2204 push-scope.sh could be installed into the copy with no detector" "the install refused"
 W="$(mk_repo p12)"
 commit_file "$W" src/a.ts $'// TODO wire the retry\n'
 p="$(HK_CMD="git push" HK_CWD="$W" python3 -c 'import json,os,sys

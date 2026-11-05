@@ -155,7 +155,8 @@ s = "/".join((o.get("login"), rp.get("name")))
 print("%s/%s" % (a, b))
 PY
 cp "$TMPROOT/scan/payload/hooks/probe.py" "$TMPROOT/scan/payload/hooks/probe.sh"
-cp "$HELPER" "$TMPROOT/scan/payload/hooks/lib/repo_slug.py"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMPROOT/scan/payload/hooks/lib" repo_slug.py \
+  || check_eq "#2147 the hook helpers install into the scan's fixture tree" 0 1
 probe="$(printf 'payload/hooks/probe.py\npayload/hooks/probe.sh\npayload/hooks/lib/repo_slug.py\n' | python3 "$SCAN" --root "$TMPROOT/scan" 2>&1)"; probe_rc=$?
 probe_lines="$(printf '%s\n' "$probe" | awk -F: 'NF { printf "%s:%s ", $1, $2 }')"
 check_eq "the scan reports each hand written join (subscript, get, f-string, plus, join), and not a lone login read, a comment, a docstring, a shell file or the helper" \

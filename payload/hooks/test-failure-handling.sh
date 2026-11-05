@@ -141,6 +141,14 @@ silent fh_retry payload/hooks/lib/x.py '    The caller retries with backoff, as 
 fires fh_catch "$ISSUE_PATH" "try { render(<Panel />) } catch (e) { return null }" "a real catch in a test file"
 fires fh_retry "$ISSUE_PATH" "await retry(() => expect(screen.getByText('Saved')).toBeVisible())" "a real retry call in a test file"
 fires fh_retry payload/hooks/test-thing.sh 'while [ "$tries" -lt 5 ]; do retry_once && break; done' "a retry loop in a shell suite"
+# The identifier scan reads the text after a retry word in pieces (claude-config#2249): a literal
+# value that is a word, followed by another word, is not a fixture value ending its line, and a line
+# holding the \001 byte the pieces are cut with is read by the old scan instead.
+silent fh_retry "$ISSUE_PATH" "  retries: true," "a fixture key given the literal true"
+fires fh_retry "$ISSUE_PATH" "  retries: true other" "a literal word followed by another word is not a fixture value ending the line"
+fires fh_retry "$ISSUE_PATH" "  retries: 'S' + other" "a quoted fixture value followed by more code is not a fixture value"
+fires fh_retry src/x.ts "$(printf 'const a\001b = 1; await retry(go)')" "a line holding a \\001 byte still finds its retry call"
+silent fh_retry "$ISSUE_PATH" "$(printf '  \001x: 1, retries: 2,')" "a line holding a \\001 byte still exempts its fixture key"
 
 # The shell backoff case above must fire on the CODE, not its comment: with the comment removed it
 # still fires, and with only the comment it does not.
@@ -303,6 +311,139 @@ got="$(LC_ALL="$BAD_BYTE_LOCALE" fh_files < "$WORK/bytediff" | tr '\n' ' ')"
 if [ "$got" = "src/byte.ts " ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: with a byte that is not UTF-8 above it, fh_files listed [$got], expected [src/byte.ts ]"; fi
 printf '// caf\xff note\ncatch (e) { return [] }\n' > "$WORK/bytelines"
 if LC_ALL="$BAD_BYTE_LOCALE" fh_catch src/byte.ts "$WORK/bytelines"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: fh_catch should fire below a byte that is not UTF-8"; fi
+
+# --- one very long line is read in linear time (claude-config#2249) ----------------------------
+#
+# The push gate runs fh_files over the whole diff before its first judge call. A settled design page
+# carries its frames as ONE line of JSON inside a script, and the scan read that line a character at
+# a time with substr, which macOS awk prices by the length of the whole line, and built its code
+# text by appending to one string, which it copies whole on every append: measured 2026-11-04, a
+# 400 KB line took 6.16 s, a 1.6 MB line 99 s, and the gate was killed at its hook limit before it
+# judged anything. Each case below times one long line at a SMALL size and at FOUR times that size
+# and compares the two, less the startup time a one line diff takes: linear scanning grows about 4
+# times and quadratic about 16, so a growth over 8 (the geometric middle) fails. Each reading scans
+# the one line diff, the small line and the large line back to back, so all three meet the same
+# load and the ratio carries no fixed budget (L290), and the verdict is the median of three
+# readings, settled as soon as two agree (L656). A small line too quick to
+# time against the startup is doubled until it is not, so a fast machine still measures growth
+# rather than noise (L101), and a machine too starved to start a one line scan says UNMEASURED
+# (L411). The sizes are tens of kilobytes, so the old quadratic scan fails in seconds and the new
+# one passes in about two. Every page ends in the construct that lists it, so a scan that sped up by
+# reading less is caught too: a string line (the settled page), a code line (the code text and the
+# retry word scan), and a shell line with a quote on every other word (the program runner check
+# made at each quote).
+cat > "$WORK/long-line.py" <<'PY'
+import os, signal, statistics, subprocess, sys, time
+lib = os.environ["FH_LIB"]
+GROWTH = 4            # the large line is this many times the small one
+LIMIT = 8.0           # linear grows about 4 times and quadratic about 16; 8 is the geometric middle
+SAMPLES = 3           # every reading is a median (L656)
+STARVED = 2.0         # seconds for a one line diff: past this the machine is too loaded to time
+SMALL_CEILING = 100   # a small line taking this many startups is super linear on its own
+DOUBLINGS = 3         # how often a small line too quick to time is doubled
+
+def diff(path, lines):
+    return ("diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n"
+            % (path, path, path, len(lines))) + "".join("+" + l + "\n" for l in lines)
+
+def string_case(size):
+    piece = '<div class=\\"card\\" data-id=\\"row\\"><p>Tuesday 4 November, 10:30 at the studio.</p></div> '
+    body = (piece * (size // len(piece) + 1))[:size]
+    return "design/settled.html", ['<script>', 'var DR_TEMPLATE = "' + body + '";', 'throw new Error("no frame");']
+
+def code_case(size):
+    stmts = ";".join("a%d=b%d+c%d" % (i, i, i) for i in range(size // 8 + 1))[:size].rsplit(";", 1)[0]
+    return "src/min.js", [stmts + ";retryLater();"]
+
+def shell_case(size):
+    words = " ".join('a%d "b%d"' % (i, i) for i in range(size // 8 + 1))[:size].rsplit(" ", 1)[0]
+    return "payload/hooks/long.sh", ["printf %s " + words + "; retry_later"]
+
+class Wrong(Exception):
+    pass
+
+def run(text, limit):
+    t0 = time.monotonic()
+    p = subprocess.Popen(["bash", "-c", '. "$1" && fh_files', "fh", lib], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        out, _ = p.communicate(text.encode(), timeout=limit)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL); p.wait()
+        return None, None
+    return time.monotonic() - t0, out.decode(errors="replace").split()
+
+def scan(case, size, limit):
+    """Seconds one scan of a size character line took, or None when it ran past limit and was
+    killed. Raises Wrong when the scan did not list the file, so it stopped reading early."""
+    path, lines = case(size)
+    took, got = run(diff(path, lines), limit)
+    if took is not None and got != [path]:
+        raise Wrong("a %d character line listed %s, expected [%s], so the scan did not read it to its end" % (size, got, path))
+    return took
+
+def sample(case, size):
+    """One growth reading, a one line diff, the small line and the large line scanned back to back
+    so all three meet the same load: ("starved", ...), ("small", ...), ("over", ...) or ("ratio", r)."""
+    startup = scan(case, 100, 30)
+    if startup is None or startup > STARVED:
+        return "starved", "a one line diff took over %.1f s to scan" % STARVED
+    small = scan(case, size, SMALL_CEILING * startup)
+    if small is None:
+        return "small", "took over %.1f s, a hundred times the %.3f s a one line diff takes" % (SMALL_CEILING * startup, startup)
+    net = small - startup
+    if net <= 0:
+        return "starved", "it scanned no slower than a one line diff"
+    large = scan(case, GROWTH * size, startup + LIMIT * net)
+    if large is None:
+        return "over", "took over %.1f s, more than %d times the %.3f s its quarter took past startup" % (startup + LIMIT * net, LIMIT, net)
+    return "ratio", (large - startup) / net, net, startup
+
+BASE = {"string": 100_000, "code": 50_000, "shell": 50_000}
+for case in (string_case, code_case, shell_case):
+    name = case.__name__.replace("_case", "")
+    size = BASE[name]
+    seen = {"starved": [], "small": [], "over": [], "ratio": []}
+    try:
+        while True:
+            got = sample(case, size)
+            # A small line quicker than startup measures noise, so it is doubled before any reading
+            # counts (L101); a quadratic scan never takes this branch, it is slow at the base size.
+            if got[0] == "ratio" and not any(seen.values()) and got[2] < max(got[3], 0.05) \
+                    and size < BASE[name] * 2 ** DOUBLINGS:
+                size *= 2
+                continue
+            seen[got[0]].append(got[1])
+            # The median of SAMPLES readings is settled once a majority agrees.
+            done = [k for k, v in seen.items() if len(v) * 2 > SAMPLES]
+            if done or sum(len(v) for v in seen.values()) == SAMPLES:
+                break
+    except Wrong as e:
+        print("FAIL %s: %s" % (name, e))
+        continue
+    verdict = done[0] if done else "starved"
+    if verdict == "ratio":
+        print("OK %s grew %.1f times for %d times the bytes, %d to %d characters (median of %d readings)"
+              % (name, statistics.median(seen["ratio"]), GROWTH, size, GROWTH * size, len(seen["ratio"])))
+    elif verdict == "over":
+        print("FAIL a %s line of %d characters %s: the scan is super linear in a long line" % (name, GROWTH * size, seen["over"][-1]))
+    elif verdict == "small":
+        print("FAIL a %s line of %d characters %s: the scan is super linear in a long line" % (name, size, seen["small"][-1]))
+    else:
+        print("STARVED the %s line could not be timed, %s, so this machine is too loaded to time a long line" % (name, (seen["starved"] or ["the readings disagreed"])[-1]))
+PY
+long_lines="$(FH_LIB="$LIB" python3 "$WORK/long-line.py")"
+[ -n "$long_lines" ] || { fail=$((fail+1)); echo "FAIL: the long line timing printed no verdict at all, so it never ran to an answer"; }
+while IFS= read -r verdict; do
+  case "$verdict" in
+    '') ;;
+    OK*) pass=$((pass+1)) ;;
+    STARVED*) echo "SUITE-PART-UNMEASURED ${verdict#STARVED }" ;;
+    *) fail=$((fail+1)); echo "FAIL: ${verdict#FAIL }" ;;
+  esac
+done <<VERDICTS
+$long_lines
+VERDICTS
 
 # Every gate that asks the question reads the lib (L261): the advisory, the push gate, the review.
 for caller in lessons-advisory.sh require-tests-before-push.sh lib/ai-review-run.py; do

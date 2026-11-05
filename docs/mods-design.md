@@ -3496,6 +3496,25 @@ worktree-agent-a09a06788b6ba53ab in claude-config" (2026-10-29, for #1859), a na
   `modHookTsHold` that only tests called, is gone; its tests now assert which hold each change gets
   (the look, a message's words, or none), which the wrapper could not tell apart.
 
+### What #2261 changed, 2026-11-05
+
+- **The guard says when it recorded an answer.** Its store is private, so nothing else could tell
+  an answer it kept from one it ignored, and picker manners checked its question off on the issue
+  either way (a typed answer, a dialog closed while Dan was away). Now, after storing Skip them or
+  Settled for the issue, and only then, the guard raises
+  `$.designRound.answered({ call, question, answer, options })`. Not a look or wording change is not
+  raised (lessons review of PR #2274): it lets one call through, records nothing for the issue, and
+  the next look changing edit there is asked about again, so its question must stay open. The
+  event is a noun of its own with a no-op default set in `engine.create`, the pattern
+  `modkit.login` uses. The question is rebuilt by
+  `skipQuestion` and `settledQuestion` and the answer is the constant, so no message Dan reads
+  changed. A listener's failure is caught and never changes the guard's answer or refusals, which
+  are exactly as before: nothing here makes the guard refuse less.
+- **`/sleep` never asks or checks off a guard question.** An Open questions item in the guard's
+  words is skipped, on the repair path for an answer already on record too, and named once among
+  `/sleep`'s problems. The words test is `guardQuestion` in mod-kit's `hooks/designquestions.ts`,
+  which `guardIgnores` now uses, copied byte for byte into picker manners, the guard and scope modes.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
@@ -3530,6 +3549,18 @@ What picker manners does:
   session only, #703). `/pickers on` brings them back.
 - Everything else is Claude Code's own dialog: the prompt is not free while a question is open,
   text typed there is an answer rather than a message, and numbered prose answers nothing.
+- A design round guard question is checked off on its issue only once the guard has recorded the
+  answer (#2261). Picker manners sees the raw dialog result before the guard stores anything, and
+  the guard's store is its own, so the guard says so itself: after storing Skip them or Settled for
+  the issue it raises `$.designRound.answered` with the question, answer and choices, and picker
+  manners' `on('designRound.answered')` writes the item, off the dialog. Its own picker's other
+  answers (Run design rounds, Not yet, and Not a look or wording change, which passes one call and
+  settles nothing for the issue), a typed answer and a dialog closed while Dan
+  was away record nothing, so nothing is written, and the question is no longer added open either.
+  A question in the guard's words asked without its picker is never written as settled (#2253).
+  Picker manners also gives `$.designRound` a no-op default in `engine.create`, because a hook on a
+  noun no loaded mod provides stops the mod loading (measured: "registered designRound.answered,
+  but no loaded plugin provides $.designRound"); with the guard loaded too, both chain fine.
 
 ## Handoff (#613), built 2026-10-04
 
@@ -3788,7 +3819,7 @@ observing half, so it has no surface of its own: no card, no question, nothing d
   line, the branch, merge base and origin head, `ms`), and `unjudged` with why for a checkout with no
   GitHub remote or a branch git cannot read. The mod's own failures go to `errors.jsonl` beside it,
   by a separate write (L561), and the first each session is one dim line naming the file and saying
-  nothing was held.
+  nothing was held. The log is rotated, never cut (#2143): see "The read and the rotation" below.
 - **The replay.** `node tools/area-check-replay.ts <checkout> --repo <owner/name>` runs a
   repository's last 30 days through `rules.ts` itself, each commit standing in for a session, and
   reports holds per session; `tests/replay-fixture/` is this repository's own month, measured that
@@ -3920,16 +3951,42 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
 - **The rebase gap.** A rebase moves the merge base, so decisions taken before it stop matching and
   are no longer asked for. This is known and accepted: the alternative, matching by branch alone,
   would ask a reused branch name for another change's decisions.
-- **The bounded read.** The log grows about 1 MB in ten days and the engine refuses a whole file
-  read over 4 MiB, so it is never read whole. `/bin/sh` runs `grep -a -F` for the two decision
-  marks piped to `tail -c`, under `set -o pipefail`, and keeps only the newest `LOG_READ_BYTES`
-  (1 MiB) of decision lines. It reads one byte more than the bound: with exactly the bound, a read
-  beginning at a line start looks the same as one beginning mid line, so dropping the first line
-  would lose a whole decision. With the extra byte, everything up to and including the first
-  newline lies outside the bound, so `keptOf` drops a cut line whole and keeps one the bound begins
-  exactly at. Decisions older than the newest 1 MiB of decision lines are not checked; decision
-  lines are only part of the log, so that is thousands of decisions. Output the engine cut short
-  refuses as an unreadable log.
+- **The read and the rotation (#2143, 2026-11-04).** The log grows about 100 KB a day. The first
+  read grepped the whole log for the two decision marks and kept only the newest 1 MiB of decision
+  lines, so past that window an old decision dropped silently, and every `gh pr` command scanned
+  the whole history (0.6 s a call on a year of synthetic log, measured). Both scripts live in
+  `hooks/prline.ts` and are proved against a real shell and `awk` by
+  `tests/test-area-check-log-rotation.sh`, since the mod tests have no shell.
+  - *Rotation, at session start.* After the `loaded` line, once `log.jsonl` is over `ROTATE_BYTES`
+    (4 MiB, about forty days), `ROTATE_SCRIPT` renames it to `rotated/<stamp>.rotating` and begins a
+    new log. A rename copies nothing, and an append still running lands whole in one file or the
+    other; a second session finding the log already moved does nothing.
+  - *Settling.* A `.rotating` file not written for `SETTLE_MINUTES` (10, far past the append's 5
+    second kill) has its decision lines written whole to a temporary file, renamed to
+    `rotated/<stamp>.decisions.jsonl`, and only then is the `.rotating` file renamed to the archive
+    `rotated/<stamp>.jsonl` (L5). A crash between steps leaves a line in two files at worst, read
+    once; two settlers write the same bytes. Nothing is ever deleted: retention is Dan's call (L9).
+  - *A failed rotation* leaves the log where it was, goes to `errors.jsonl`, and is the dim line
+    "The area check could not rotate its log (why); nothing was lost", in its own `try`, so the
+    issue sweep and warm still run. Asked whether that line needed a design round, Dan answered
+    "Skip them" (2026-11-04).
+  - *The read.* `READ_SCRIPT` lists every decisions file, any `.rotating` file and the log (the log
+    missing with nothing rotated is still the missing log refusal), and one `LC_ALL=C awk` pass, its
+    needles passed through the environment because `awk -v` mangles backslashes, prints a decision
+    line not ending in `}` as cut (named malformed), a line naming the repository and the branch,
+    and a count of the repository's lines. TypeScript drops identical lines, parses with
+    `readDecisions` and refilters by repository and branch, since the needles are only a prefilter.
+    A merge or an edit by number reads the count first and asks GitHub nothing when it is zero.
+    Reads are memoized per repository and branch for one Bash call. The scan is the decisions plus
+    at most a few MiB of log, and no decision is too old to be asked for.
+  - *Behaviour that changed.* A decision line ending in `}` that is not JSON and does not name the
+    repository is no longer named as malformed. The count can overcount (a version 2 record, or a
+    detached head line), which costs one GitHub read for a merge, never a wrong answer. Output the
+    engine cut short, an unreadable rotated file, or the script failing still refuses as an
+    unreadable log.
+  - *Ruled out.* Filtering at the source only bounds the output but not the scan. Per branch index
+    files would be bounded too, but add derived state, an offset file and dedupe written from a
+    hook on every Bash call, more moving parts than rotation for no gain at the measured rates.
 - **A description given through a substitution.** mod-kit's reader drops the text of a
   substitution from the word (`--body "$(cat <<'EOF' ...)"` reads as its opening only), so a body
   holding `$(` or a backtick is looked for in the whole command, the one place its text is still
@@ -3940,6 +3997,48 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
   with one dim line kept in the error file. Only this Mac's log is read, so a file decided on the
   other Mac is not asked for; every refusal that lists lines to paste says so, and the unreadable
   log refusal says it reads this Mac's log only.
+
+### The weekly line and escalation, built 2026-11-05 (#1511)
+
+- **Where it runs.** The end of turn issue review (`hooks/feature-issue-review.sh`) is the one place
+  that speaks to Dan once a turn in every repository, so the weekly line and the escalations ride
+  on it rather than on a mod surface of their own. Once the review's cooldown has passed, it runs
+  `hooks/lib/area-check-review.mjs` under `node --experimental-strip-types`, which imports the pure
+  `payload/mods/area-check/hooks/weekly.ts`. The cooldown is read above the spool, because the
+  runner has to run before the spool is read for a note it makes to show in the same review. An
+  urgent review (findings waiting) skips the cooldown, but the runner still waits for it, so the
+  node start is paid at most once per cooldown window per project.
+- **The weekly line.** `weeklyLine(log, errors, now)` counts the last 7 days: sessions loaded, first
+  writes judged and held, decisions by kind and those let through by Dan's standing answer,
+  judgements made with the issue list unread, edits not judged, errors, and lines of the log that
+  could not be read. It names no path, since the review may be in any repository. A missing log, an
+  unreadable one, and a log none of whose lines parse are each said as that, never as zeros (L90),
+  and no load record in 7 days is said as the mod not starting, not as zero firings. `lineDue` takes
+  a missing, unreadable or future stamp as due, so a bad stamp costs one extra line, never silence.
+- **The stamp.** `weekly-line.stamp` sits beside the log in `~/.claude-area-check`, outside the temp
+  folder macOS cleans after about three and a half days. The review writes it, from the runner's
+  `now`, only in the branch where its reason was delivered, so a review that failed to build its
+  payload does not restart the week (L98).
+- **Escalation.** For the review's own repository only (read from `origin`), a file is escalated
+  when five distinct sessions decided `proceed` on it in 30 days and the newest judgement of it in
+  that window read the issue list in full (`issues.state` read) and matched no issue. With no
+  judgement in the window there is no escalation: an unread list cannot say no issue exists. Each
+  escalation is one spool note (`escalationNote`, the path capped at 200 characters) asking for one
+  structural issue, so later holds can fold into it, or a recorded reason it needs none.
+- **Once per 30 days, under two reviews at once.** A claim file per escalated file under
+  `escalated/`, created with `wx`, decides which review makes the note. A claim 30 days old (or one
+  that cannot be parsed, or stamped in the future) is renamed aside to `<claim>.stale.<pid>` before being removed and
+  recreated, so only one rename of it can win. A note that fails removes its claim, so the next
+  review tries again, and says so in a count only sentence.
+- **Failure.** An invalid `CLAUDE_AREA_CHECK_NOW` exits 2, never falling back to the real clock. A
+  runner that cannot run (no node, a non zero exit, output that is not its answer) is said in the
+  review as "could not be built" with why, at most once a week by the stamp's age; a log that
+  cannot be read while the line is not due is said, so escalation is never skipped silently.
+- **Suites.** A suite never reaches the real log. Under `CLAUDE_SUITE_RUN_ID`, or with
+  `CLAUDE_ISSUE_SPOOL_DIR` pointed elsewhere (four suites set only that when run standalone),
+  nothing runs unless `CLAUDE_AREA_CHECK_DIR` names a throwaway folder. `tests/weekly.test.ts`
+  proves the pure counting, `tests/test-area-check-weekly.sh` the runner against the real rotation
+  script and spool, and `hooks/test-feature-issue-review.sh` the wiring in the review.
 
 ## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
 
