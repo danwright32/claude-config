@@ -350,6 +350,16 @@ for d in "$dir"/*/; do
     failed=1
     echo "check-mod-shared-parts: $name keeps its own catch at ${h#"$sd"}: a guard's catch that throws holds nothing, so answer straight through neverThrows(work, fallback, last), with only a replay after next() allowed outside it as next.called ? next(e) : neverThrows(...), from the copy of hooks/hold.ts kept at hooks/mod-kit/hold.ts, on the catch's own line."
   done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit '\.catch\((async )?\(\$' "$sd/hooks" 2>/dev/null | grep -vE '\.catch\((async )?\(\$[^)]*\) *=> *(next\.called \? next\(e\) : )?neverThrows\(')"
+  # grace (#2039): a catch that judges the call once more, `neverThrows(() => hook($, e, next), ...)`,
+  # runs the hook's whole judgement inside the 1,000 ms the engine gives a catch, and a catch cut at
+  # that grace lets the call RUN. So such a rerun starts only through withinGrace from the same copy
+  # of hold.ts, which holds the call when too little of the grace is left. A catch answering only a
+  # refusal does no slow work and is not matched.
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    failed=1
+    echo "check-mod-shared-parts: $name reruns its hook in a catch at ${h#"$sd"} with no check of the time left: a catch cut at its 1,000 ms grace lets the call run, so start the rerun through withinGrace(next.budget, () => hook(\$, e, next), outOfTime) from the copy of hooks/hold.ts kept at hooks/mod-kit/hold.ts, with outOfTime refusing in the guard's own could not check words."
+  done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit 'neverThrows\((async )?\(\) *=> *[A-Za-z_][A-Za-z0-9_]*\(\$, *e, *next\)' "$sd/hooks" 2>/dev/null)"
   # press (#939): a file naming the ui.press event and mod-kit anywhere in its code, however the hook
   # is laid out: its call or its filter across lines, or the filter held in a constant (lessons review
   # of #957). A click alone reaches such a hook; mod-kit's typed /press raises modkit.press, which it
