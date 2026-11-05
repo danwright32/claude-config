@@ -3,7 +3,7 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, shellAppended } from '../hooks/rules.ts'
-import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
+import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, rerunInGrace, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
@@ -422,6 +422,31 @@ test('a hook that could not finish is refused with its reason, and with no reaso
   )
   expect(cannotCheck({})).toContain('could not check whether this writes lasting memory (it failed)')
   expect(cannotCheck(undefined)).toContain('could not check whether this writes lasting memory (it failed)')
+})
+
+// #2039: a catch that judges the call once more does it inside the 1,000 ms grace the engine gives a
+// catch, and a catch cut at the grace lets the call run unjudged. Both of the mod's catches start the
+// rerun through rerunInGrace, so with less than half the grace left the judgement never starts and
+// the call is held as out of time; the budget is handed in, as the catch hands in next.budget (L524).
+test('a catch judges the call once more only while half its grace is left, and holds it as out of time otherwise', async () => {
+  let ran = 0
+  const rerun = () => {
+    ran++
+    return 'judged again'
+  }
+  const held = (reason: string) => `held: ${reason}`
+  const outOfTime = `held: ${cannotCheck({ message: 'it ran out of time' })}`
+  expect(outOfTime).toContain('could not check whether this writes lasting memory (it ran out of time)')
+
+  expect(await rerunInGrace({ remainingMs: 0 }, rerun, held)).toBe(outOfTime)
+  expect(await rerunInGrace({ remainingMs: 499 }, rerun, held)).toBe(outOfTime)
+  // How much is left cannot be known, so the call is held too.
+  expect(await rerunInGrace({ remainingMs: Number.NaN }, rerun, held)).toBe(outOfTime)
+  expect(ran).toBe(0)
+
+  expect(await rerunInGrace({ remainingMs: 500 }, rerun, held)).toBe('judged again')
+  expect(await rerunInGrace({ remainingMs: 999 }, rerun, held)).toBe('judged again')
+  expect(ran).toBe(2)
 })
 
 test('the text shown is what would be saved: the new lines of a rewrite, the whole of a new file', () => {

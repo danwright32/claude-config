@@ -165,7 +165,7 @@ out="$(payload "rtk init -g" | bash "$LONE/check-rtk-init.sh" 2>&1)"; rc=$?
 check_eq "#1468 with lib/push-scope.sh missing a command naming rtk init is refused" "2" "$rc"
 check "#1468 and names the missing file" "lib/push-scope.sh" "$out"
 check "#1468 and the remedy" "claude-sync pull" "$out"
-mkdir -p "$LONE/lib"; cp "$DIR/lib/push-scope.sh" "$LONE/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE/lib" push-scope.sh || bad "#2204 push-scope.sh could not be installed beside the lone hook"
 out="$(payload "rtk init -g" | bash "$LONE/check-rtk-init.sh" 2>&1)"; rc=$?
 check_eq "#1468 with lib/shell-words.py missing it is refused" "2" "$rc"
 check "#1468 and names that file" "shell-words.py" "$out"

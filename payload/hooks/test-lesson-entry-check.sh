@@ -283,7 +283,8 @@ echo "lesson entry check: a sync that is running cannot stop it answering"
 LOCKED="$WORK/lockedclone"
 mkdir -p "$LOCKED/payload/hooks/lib"
 cp "$SYNC" "$LOCKED/claude-sync"
-cp "$DIR/lib/lesson-index-cap.sh" "$LOCKED/payload/hooks/lib/lesson-index-cap.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LOCKED/payload/hooks/lib" lesson-index-cap.sh >/dev/null \
+  || check "#2204 lesson-index-cap.sh could be installed with what it sources" "the install refused"
 printf '%s\n' "$LOCKED" > "$WORK/lockedreg"
 # The lock exactly as the tool takes it: a directory holding a LIVE pid and this run's hostname,
 # which is the shape acquire_lock waits on rather than breaks.
