@@ -815,6 +815,17 @@ else
   if [ -z "$readme_section" ]; then
     FAIL=$((FAIL+1)); echo "FAIL: $ADVISORY_README has no section headed 'The lessons advisory on every push'"
   else
+    # A wide table is wrapped as an HTML table (claude-config#2131): one <tr> per row, each cell's
+    # lines between <td> markers. Read it into the pipe form this check compares, one line per row
+    # with the cells joined by ' | '; a pipe table passes through unchanged, so either form reads.
+    readme_section="$(awk '
+      /^<tr><th>/ { l = $0; gsub(/<\/th><th>/, " | ", l); gsub(/<\/?(tr|th)>/, "", l); print "| " l " |"; next }
+      /^<tr><td>$/ { inrow = 1; row = ""; cell = ""; next }
+      inrow && /^<\/td><td>$/ { row = row (row == "" ? "" : " | ") cell; cell = ""; next }
+      inrow && /^<\/td><\/tr>$/ { print "| " row " | " cell " |"; inrow = 0; next }
+      inrow { if ($0 !~ /^[[:space:]]*$/) cell = (cell == "" ? $0 : cell " " $0); next }
+      { print }
+    ' <<< "$readme_section")"
     readme_ids="$(
       # shellcheck disable=SC1090
       eval "$(sed -n '/^TRIG_IDS=(/,/^)/p' "$HOOK")"
