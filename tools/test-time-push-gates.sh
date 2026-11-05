@@ -214,20 +214,24 @@ gates = [l.split("\t", 1)[1] for l in sys.stdin.read().splitlines() if "\t" in l
 m = re.search(r"^### What a push actually waits on\n(.*?)(?=^### )", readme, re.S | re.M)
 if not m:
     print("the README has no \"What a push actually waits on\" section"); sys.exit(0)
-rows, in_table = [], False
-for line in m.group(1).splitlines():
-    if line.startswith("| Gate |"):
-        in_table = True; continue
-    if in_table:
-        if not line.startswith("|"):
-            break
-        if line.startswith("| ---"):
-            continue
-        cell = line.split("|")[1]
-        name = re.search(r"`([^`]+[.]sh)`", cell)
-        rows.append(name.group(1) if name else "(a row naming no gate: %s)" % cell.strip())
+# The table is HTML since #2131 wrapped its long lines, each row a <tr><td> whose first cell, the
+# markdown between it and the first </td>, names the gate. A row whose first cell never closes is
+# reported rather than read into the next row, which would hide that row from the comparison.
+head = "<tr><th>Gate</th>"
+section = m.group(1)
+start = section.find(head)
+end = section.find("</table>", start)
+if start < 0 or end < 0:
+    print("the section has no table headed \"%s\" that closes with </table>" % head); sys.exit(0)
+rows = []
+for piece in section[start:end].split("<tr>")[2:]:
+    cell = piece[len("<td>"):piece.find("</td>")] if piece.startswith("<td>") and "</td>" in piece else None
+    if cell is None:
+        rows.append("(a row that is not <tr><td>...</td>: %s)" % " ".join(piece.split())[:80]); continue
+    name = re.search(r"`([^`]+[.]sh)`", cell)
+    rows.append(name.group(1) if name else "(a row naming no gate: %s)" % " ".join(cell.split()))
 if not rows:
-    print("the section has no table headed \"| Gate |\""); sys.exit(0)
+    print("the table headed \"%s\" has no rows" % head); sys.exit(0)
 out = []
 missing = [g for g in gates if g not in rows]
 extra = [r for r in rows if r not in gates]
