@@ -29,7 +29,8 @@
 # repository name belongs in this file.
 #
 # The scanner honours its test settings (WORK_NAMES_EXTRA_HASHES, WORK_NAMES_REGISTRY_READER,
-# WORK_NAMES_PROJECT_HASHES) only under HOOK_TESTS_RUNNING=1, the marker run-all-tests.sh exports to
+# WORK_NAMES_PROJECT_HASHES, WORK_NAMES_PROJECT_LIST) only under HOOK_TESTS_RUNNING=1, the marker
+# run-all-tests.sh exports to
 # every suite (claude-config#2231). It is exported here too, so this suite run on its own behaves as
 # it does inside a full run; a case that means to be outside a test run clears it on its own line.
 set -uo pipefail
