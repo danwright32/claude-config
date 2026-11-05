@@ -132,11 +132,12 @@ notice_of "#1912 with no python3 it does not block, and says it did not run wher
 # 4. The shared reader missing, or a payload nothing can read, is the same: the command runs, and one
 # line names what is missing and how to put it back (claude-config#1065).
 LONE="$WORKDIR/lone"; mkdir -p "$LONE/lib"
-cp "$HOOK" "$LONE/"; cp "$DIR/lib/hook-notice.sh" "$LONE/lib/"
+cp "$HOOK" "$LONE/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE/lib" hook-notice.sh || bad "#2204 hook-notice.sh could not be installed beside the lone hook"
 json="$(payload "gh pr checks 12 --watch" | bash "$LONE/check-gh-watch-interval.sh" 2>/dev/null)"; rc=$?
 notice_of "#1065 with lib/push-scope.sh missing it does not block, and names the missing file and the remedy" "lib/push-scope.sh.*claude-sync pull"
 notice_of "#1065 in one line" '\A[^\n]*\Z'
-cp "$DIR/lib/push-scope.sh" "$LONE/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE/lib" push-scope.sh || bad "#2204 push-scope.sh could not be installed beside the lone hook"
 json="$(payload "gh pr checks 12 --watch" | bash "$LONE/check-gh-watch-interval.sh" 2>/dev/null)"; rc=$?
 notice_of "#1065 with lib/shell-words.py missing it does not block, and names that file and the remedy" "shell-words.py.*claude-sync pull"
 json="$(printf "{\"tool_input\": {\"command\": \"gh pr checks 12 --watch\"" | bash "$HOOK" 2>/dev/null)"; rc=$?

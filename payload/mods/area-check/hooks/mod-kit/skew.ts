@@ -42,7 +42,7 @@ const NOUN = /^undefined is not an object \(evaluating '\$\.([A-Za-z_]\w*)\.([A-
 // A noun is its mod's name in camel case, but for these. tests/test-mods.sh holds this to the noun
 // every mod's own contract declares (types/index.d.ts), so a noun added or renamed under another
 // name fails there rather than naming a mod that does not exist.
-export const PROVIDERS: Readonly<Record<string, string>> = { modkit: 'mod-kit', jobs: 'job-watcher', sessions: 'session-registry', statusbar: 'status-bar' }
+export const PROVIDERS: Readonly<Record<string, string>> = { modkit: 'mod-kit', jobs: 'job-watcher', sessions: 'session-registry', statusbar: 'status-bar', designRound: 'design-round-guard' }
 const providerOf = (noun: string) => PROVIDERS[noun] ?? noun.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)
 
 // A guard's .catch handler reads why its hook failed as plain data (`next.error`, the engine's

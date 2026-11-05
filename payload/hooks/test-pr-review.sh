@@ -584,8 +584,8 @@ plain='at 4dbee97a1c2e3f4a5b6c7d8e9f00112233445566 run_every_hook_against_its_ow
 out="$(printf '%s\n' "$plain" | bash -c '. "$1" && ar_redact' _ "$DIR/lib/ai-review-common.sh")"
 check_eq "the redactor leaves a commit id, a long name, and flags without a literal secret alone" "$plain" "$out"
 # With its rule file missing the redactor withholds and fails, never passes the text through (L42).
-mkdir -p "$WORKDIR/norules"
-cp "$DIR/lib/ai-review-common.sh" "$WORKDIR/norules/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORKDIR/norules" ai-review-common.sh >/dev/null \
+  || bad "#2204 ai-review-common.sh could not be installed with what it sources"
 out="$(printf 'Error: the key %s\n' "$SK" | bash -c '. "$1" && ar_redact' _ "$WORKDIR/norules/ai-review-common.sh")"; rc=$?
 check_eq "a redactor without its rules fails" "1" "$rc"
 check_not "a redactor without its rules never passes the text through" "$SK" "$out"

@@ -141,7 +141,7 @@ check_eq "#1478 control: with no python3 a command naming no wrapper passes in s
 LONE="$WORKDIR/lone"; mkdir -p "$LONE/lib"
 cp "$HOOK" "$LONE/"
 # Only the library each step names is missing: lib/whole-number.sh is there throughout (#1948).
-cp "$DIR/lib/whole-number.sh" "$LONE/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE/lib" whole-number.sh || bad "#2204 whole-number.sh could not be installed beside the lone hook"
 out="$(payload "bash -c 'git push'" | bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1478 with lib/push-scope.sh missing a wrapper beside git is refused" "2" "$rc"
 check "#1478 and names the missing file" "lib/push-scope.sh" "$out"
@@ -154,7 +154,7 @@ check_eq "#1948 with lib/whole-number.sh missing a wrapper beside git is refused
 check "#1948 and names the missing file" "lib/whole-number.sh" "$out"
 out="$(payload "git status" | bash "$LONEW/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1948 control: with lib/whole-number.sh missing a command naming no wrapper passes in silence" "0|" "$rc|$out"
-mkdir -p "$LONE/lib"; cp "$DIR/lib/push-scope.sh" "$LONE/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE/lib" push-scope.sh || bad "#2204 push-scope.sh could not be installed beside the lone hook"
 out="$(payload "bash -c 'git push'" | bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1478 with lib/shell-words.py missing it is refused" "2" "$rc"
 check "#1478 and names that file" "shell-words.py" "$out"
@@ -300,7 +300,7 @@ OLDREADER="$WORKDIR/oldreader"; mkdir -p "$OLDREADER/lib"
 cp "$HOOK" "$OLDREADER/"
 # Every library but the reader under test is the real one, whole-number.sh included (#1948), or the
 # refusals below would be the gate refusing over a missing library rather than over this reader.
-cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$OLDREADER/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$OLDREADER/lib" push-scope.sh whole-number.sh || bad "#2204 the hook helpers could not be installed into $OLDREADER/lib"
 sed 's/mode == "data-blanked"/mode == "not-a-mode-1574"/' "$DIR/lib/shell-words.py" > "$OLDREADER/lib/shell-words.py"
 out="$(payload "bash $SPOOL note . \"git push\" \"builder\"" | bash "$OLDREADER/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1574 a reader that cannot read the note's quoting refuses it" "2" "$rc"
@@ -312,7 +312,7 @@ check_eq "#1610 a reader that cannot read the duplicate check refuses it" "2" "$
 # a whole script entry, or the token in front, is no match there, so it refuses rather than passes.
 PRE1610="$WORKDIR/pre1610"; mkdir -p "$PRE1610/lib"
 cp "$HOOK" "$PRE1610/"
-cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$PRE1610/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$PRE1610/lib" push-scope.sh whole-number.sh || bad "#2204 the hook helpers could not be installed into $PRE1610/lib"
 python3 -c '
 import re, sys
 src = open(sys.argv[1]).read()

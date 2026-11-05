@@ -93,7 +93,9 @@ rm -f "$TMP/ran"
 # Which bounds are zero is lib/whole-number.sh's answer (claude-config#1948). A copy without it
 # beside it runs nothing, comes back as 125, and says which file is missing, rather than a bare 125
 # a caller reads as a bound it refused.
-mkdir -p "$TMP/lone"; cp "$DIR/lib/bounded-run.sh" "$TMP/lone/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMP/lone" bounded-run.sh >/dev/null \
+  || check "#2204 bounded-run.sh could be installed with what it sources" "the install refused"
+rm -f "$TMP/lone/whole-number.sh"   # the copy without it, on purpose
 lone="$(bash -c '. "$1/bounded-run.sh"; bounded_run 30 sh -c ": > \"$2\""; printf "%s|%s" "$BOUNDED_RC" "$BOUNDED_OUT"' _ "$TMP/lone" "$TMP/ran")"
 case "$lone" in
   125\|*whole-number.sh*) check "with lib/whole-number.sh missing it runs nothing, comes back 125 and names the file" "$([ ! -e "$TMP/ran" ] && echo ok || echo "it ran the command")" ;;

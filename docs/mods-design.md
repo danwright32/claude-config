@@ -3506,6 +3506,25 @@ worktree-agent-a09a06788b6ba53ab in claude-config" (2026-10-29, for #1859), a na
   `modHookTsHold` that only tests called, is gone; its tests now assert which hold each change gets
   (the look, a message's words, or none), which the wrapper could not tell apart.
 
+### What #2261 changed, 2026-11-05
+
+- **The guard says when it recorded an answer.** Its store is private, so nothing else could tell
+  an answer it kept from one it ignored, and picker manners checked its question off on the issue
+  either way (a typed answer, a dialog closed while Dan was away). Now, after storing Skip them or
+  Settled for the issue, and only then, the guard raises
+  `$.designRound.answered({ call, question, answer, options })`. Not a look or wording change is not
+  raised (lessons review of PR #2274): it lets one call through, records nothing for the issue, and
+  the next look changing edit there is asked about again, so its question must stay open. The
+  event is a noun of its own with a no-op default set in `engine.create`, the pattern
+  `modkit.login` uses. The question is rebuilt by
+  `skipQuestion` and `settledQuestion` and the answer is the constant, so no message Dan reads
+  changed. A listener's failure is caught and never changes the guard's answer or refusals, which
+  are exactly as before: nothing here makes the guard refuse less.
+- **`/sleep` never asks or checks off a guard question.** An Open questions item in the guard's
+  words is skipped, on the repair path for an answer already on record too, and named once among
+  `/sleep`'s problems. The words test is `guardQuestion` in mod-kit's `hooks/designquestions.ts`,
+  which `guardIgnores` now uses, copied byte for byte into picker manners, the guard and scope modes.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
@@ -3540,6 +3559,18 @@ What picker manners does:
   session only, #703). `/pickers on` brings them back.
 - Everything else is Claude Code's own dialog: the prompt is not free while a question is open,
   text typed there is an answer rather than a message, and numbered prose answers nothing.
+- A design round guard question is checked off on its issue only once the guard has recorded the
+  answer (#2261). Picker manners sees the raw dialog result before the guard stores anything, and
+  the guard's store is its own, so the guard says so itself: after storing Skip them or Settled for
+  the issue it raises `$.designRound.answered` with the question, answer and choices, and picker
+  manners' `on('designRound.answered')` writes the item, off the dialog. Its own picker's other
+  answers (Run design rounds, Not yet, and Not a look or wording change, which passes one call and
+  settles nothing for the issue), a typed answer and a dialog closed while Dan
+  was away record nothing, so nothing is written, and the question is no longer added open either.
+  A question in the guard's words asked without its picker is never written as settled (#2253).
+  Picker manners also gives `$.designRound` a no-op default in `engine.create`, because a hook on a
+  noun no loaded mod provides stops the mod loading (measured: "registered designRound.answered,
+  but no loaded plugin provides $.designRound"); with the guard loaded too, both chain fine.
 
 ## Handoff (#613), built 2026-10-04
 
@@ -3976,6 +4007,48 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
   with one dim line kept in the error file. Only this Mac's log is read, so a file decided on the
   other Mac is not asked for; every refusal that lists lines to paste says so, and the unreadable
   log refusal says it reads this Mac's log only.
+
+### The weekly line and escalation, built 2026-11-05 (#1511)
+
+- **Where it runs.** The end of turn issue review (`hooks/feature-issue-review.sh`) is the one place
+  that speaks to Dan once a turn in every repository, so the weekly line and the escalations ride
+  on it rather than on a mod surface of their own. Once the review's cooldown has passed, it runs
+  `hooks/lib/area-check-review.mjs` under `node --experimental-strip-types`, which imports the pure
+  `payload/mods/area-check/hooks/weekly.ts`. The cooldown is read above the spool, because the
+  runner has to run before the spool is read for a note it makes to show in the same review. An
+  urgent review (findings waiting) skips the cooldown, but the runner still waits for it, so the
+  node start is paid at most once per cooldown window per project.
+- **The weekly line.** `weeklyLine(log, errors, now)` counts the last 7 days: sessions loaded, first
+  writes judged and held, decisions by kind and those let through by Dan's standing answer,
+  judgements made with the issue list unread, edits not judged, errors, and lines of the log that
+  could not be read. It names no path, since the review may be in any repository. A missing log, an
+  unreadable one, and a log none of whose lines parse are each said as that, never as zeros (L90),
+  and no load record in 7 days is said as the mod not starting, not as zero firings. `lineDue` takes
+  a missing, unreadable or future stamp as due, so a bad stamp costs one extra line, never silence.
+- **The stamp.** `weekly-line.stamp` sits beside the log in `~/.claude-area-check`, outside the temp
+  folder macOS cleans after about three and a half days. The review writes it, from the runner's
+  `now`, only in the branch where its reason was delivered, so a review that failed to build its
+  payload does not restart the week (L98).
+- **Escalation.** For the review's own repository only (read from `origin`), a file is escalated
+  when five distinct sessions decided `proceed` on it in 30 days and the newest judgement of it in
+  that window read the issue list in full (`issues.state` read) and matched no issue. With no
+  judgement in the window there is no escalation: an unread list cannot say no issue exists. Each
+  escalation is one spool note (`escalationNote`, the path capped at 200 characters) asking for one
+  structural issue, so later holds can fold into it, or a recorded reason it needs none.
+- **Once per 30 days, under two reviews at once.** A claim file per escalated file under
+  `escalated/`, created with `wx`, decides which review makes the note. A claim 30 days old (or one
+  that cannot be parsed, or stamped in the future) is renamed aside to `<claim>.stale.<pid>` before being removed and
+  recreated, so only one rename of it can win. A note that fails removes its claim, so the next
+  review tries again, and says so in a count only sentence.
+- **Failure.** An invalid `CLAUDE_AREA_CHECK_NOW` exits 2, never falling back to the real clock. A
+  runner that cannot run (no node, a non zero exit, output that is not its answer) is said in the
+  review as "could not be built" with why, at most once a week by the stamp's age; a log that
+  cannot be read while the line is not due is said, so escalation is never skipped silently.
+- **Suites.** A suite never reaches the real log. Under `CLAUDE_SUITE_RUN_ID`, or with
+  `CLAUDE_ISSUE_SPOOL_DIR` pointed elsewhere (four suites set only that when run standalone),
+  nothing runs unless `CLAUDE_AREA_CHECK_DIR` names a throwaway folder. `tests/weekly.test.ts`
+  proves the pure counting, `tests/test-area-check-weekly.sh` the runner against the real rotation
+  script and spool, and `hooks/test-feature-issue-review.sh` the wiring in the review.
 
 ## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
 
