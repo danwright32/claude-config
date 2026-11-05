@@ -30,9 +30,11 @@
 # AND says why, via fail_open() below. Blocking on infrastructure trouble is
 # worse than allowing, but a push that was never gated must not look identical
 # to a push the gate approved. (#735)
-# One exception: a further call reading tests past the first call's cut refuses, as could not
-# judge, when it fails. The first call has already called a change untested by then, and before
-# #1998 that alone refused the push, so failing open there would loosen the gate.
+# Two exceptions refuse, as could not judge. A further call reading tests past the first call's
+# cut refuses when it fails: the first call has already called a change untested by then, and
+# before #1998 that alone refused the push, so failing open there would loosen the gate. And the
+# first call refuses when too little time is left to start it, or when it runs to a timeout the
+# deadline shortened (#2249): the hook used to be killed there, which refused with no reason.
 #
 # Every push it reaches is recorded, override included, in the ledger the simplify gate writes too
 # (claude-config#1075, #1077): lib/push-gate-report.py reads it.
@@ -58,7 +60,7 @@ TEST_PARTS_MAX=40
 PARTS_AT_ONCE=16
 PART_OVERLAP=4096      # bytes of a file repeated at the start of the next part, so a test cut in two is whole in one
 # The hook's own finish line, inside the 120 seconds its registration in settings.hooks.json sets
-# (a setting, not measured; these two are settings too): a further call is
+# (a setting, not measured; these two are settings too): any call, the first included (#2249), is
 # started only with PART_MIN_SECONDS left, and its timeout never runs past this. A hook killed at
 # its timeout refuses with no reason ("onFailure": "block"), so the gate stops first and says why.
 # REQUIRE_TESTS_DEADLINE_SECONDS sets another, for the suite; it can only end the readings sooner.
@@ -857,7 +859,46 @@ except Exception:
 # measurement behind its flags). It names a judge that was missing, timed out (they have different
 # fixes from one that is down), returned nothing, an error envelope or no JSON object, and this gate
 # fails open on each, saying which.
-pc_judge "$JUDGE_MODEL" "$JUDGE_TIMEOUT" "$RUBRIC" "$judge_input" || fail_open "$PC_JUDGE_ERR" judged
+#
+# It keeps to the hook's deadline like the further readings (claude-config#2249): everything above,
+# the failure handling scan of a large push most of all, takes time before it starts, and a call
+# given the full JUDGE_TIMEOUT that late ran past the 120 second hook limit, so the hook was killed
+# and the push refused with no reason. So it is not started with less than PART_MIN_SECONDS left,
+# its timeout is what is left when that is shorter, and a call that ran to that SHORTENED limit is
+# refused as could not judge. Each changed outcome is a refusal where the old one was a kill or a
+# call answering in the hook's last seconds; a full length call that fails still fails open. Every
+# number in this paragraph is a setting, not measured.
+first_left=$(( TESTS_DEADLINE - SECONDS ))
+first_t=$JUDGE_TIMEOUT; [ "$first_left" -lt "$first_t" ] && first_t=$first_left
+first_cut() {   # $1 = why the reading was not made or not finished
+  refuse cantjudge "$1" "${2:-}" <<REFUSAL
+PUSH BLOCKED: the test gate could not judge this push.
+
+$1, so the reviewer never answered. A gate that could not read the push does
+not approve it. Push fewer commits at a time (one commit, or split the branch) so the
+gate has less to read before it asks, then push again.
+$(widened_note; merge_note; branch_note)
+OVERRIDE: if you have checked that every change in this push IS tested, re-run with:
+    SKIP_TEST_CHECK=1 <your original git push command>
+BEFORE overriding you MUST explain to the user, in plain non-technical
+language, WHY skipping is legitimate here so they can judge whether it
+makes sense. Never override silently.
+REFUSAL
+}
+if [ "$first_left" -lt "$PART_MIN_SECONDS" ]; then
+  first_cut "The gate ran out of time before its first reading: ${SECONDS} seconds had gone reading the push, and the hook must finish inside 120"
+fi
+if ! pc_judge "$JUDGE_MODEL" "$first_t" "$RUBRIC" "$judge_input"; then
+  if [ "$first_t" -lt "$JUDGE_TIMEOUT" ]; then
+    case "$PC_JUDGE_ERR" in
+      "judge timed out"*) first_cut "The first reading was cut short at the gate's deadline: it started ${first_left} seconds before it, short of the ${JUDGE_TIMEOUT} a reading may take, and the hook must finish inside 120" judged ;;
+    esac
+    if [ -n "$PC_JUDGE_START" ] && [ -n "$PC_JUDGE_END" ] && [ $(( PC_JUDGE_END - PC_JUDGE_START )) -ge "$first_t" ]; then
+      first_cut "The first reading ran to the gate's deadline without an answer ($PC_JUDGE_ERR), and the hook must finish inside 120" judged
+    fi
+  fi
+  fail_open "$PC_JUDGE_ERR" judged
+fi
 add_call_cost
 
 verdict="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
