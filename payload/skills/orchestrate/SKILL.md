@@ -11,14 +11,16 @@ Dan hands over a list and wants each item worked by its own subagent while this 
 
 Number every item and say it back in one line, in Dan's words. Settle what you can check cheaply before planning: which repo and checkout each item lives in, whether an alert is still firing. Ask Dan only about an item you cannot place, one picker per question.
 
+Record where each item came from, so it can be answered there (see "Answering each item at its source" below): for a Slack alert, post or thread, the channel id and message ts of the message it started from; for a Slack list row, the list id and record id; for a GitHub issue, the repo and issue number. An item Dan typed into the chat has no source, and the board says so.
+
 ## 2. Dispatch board
 
 Build the board, one row per item:
 
-| # | Item | Repo and area | Kind | Agent | Model | Wave | Waits on |
-|---|---|---|---|---|---|---|---|
+| # | Item | Source | Repo and area | Kind | Agent | Model | Wave | Waits on |
+|---|---|---|---|---|---|---|---|---|
 
-Kind is `check` (read only answer), `investigate` (cause and recommendation) or `build` (fix, pushed as a branch). Model comes from "Which model a builder runs on" below.
+Source is what intake recorded: `Slack <channel id> <ts>`, `list <list id> <record id>`, `<repo>#<n>`, or `chat`. Kind is `check` (read only answer), `investigate` (cause and recommendation) or `build` (fix, pushed as a branch). Model comes from "Which model a builder runs on" below.
 
 Matching items to agents:
 - Two items that edit the same files, component, workflow, job or table never run at the same time. If they are one fix, give both to ONE agent in one brief. Otherwise the later one waits until the earlier one's pull request has merged.
@@ -69,11 +71,22 @@ The rules every agent shares live in `agent-rules.md`, so a brief never restates
 3. Review the full diff against the item. Send problems back to the same agent with `SendMessage`, naming each one; it pushes again.
 4. One merge at a time per repo. Merge in the background with `bash ~/.claude/hooks/lib/merge-when-ready.sh <n> --repo <owner>/<name> --delete-branch`, which brings a branch that has fallen behind up to date and waits for checks. Confirm with `gh pr view <n> --json state`.
 5. Run the repo's post merge deploy step and confirm the change is live. Then release whatever waited on this merge.
+6. Answer the item at its source, by the section below.
+
+### Answering each item at its source
+
+Every item is answered where it came from, by its Source on the board (Dan, 2026-11-04: "when done, save as draft a reply to the alert, post, etc." and, for lists, "just update the waiting/in progress/done indicator instead. and make sure the claude config makes that mandatory as well"). Both halves are mandatory: an item is not finished, and does not leave the board, until its source has been answered this way.
+
+- **A Slack message (an alert, a post, a thread).** When the item finishes (its answer is in for a `check` or `investigate`, its change is live for a `build`), save a draft reply in that message's thread with `slack_send_message_draft`, passing the recorded channel id as `channel_id` and the recorded ts as `thread_ts`. The reply says in plain words what was found and what was done, with the pull request or issue link, and goes through `/no-ai-tells` first. Nothing is sent: Dan reads the draft and sends it himself. The one attached draft per channel limit does not apply to thread replies (two thread drafts in one channel were both accepted, measured 2026-11-04), so save one draft per thread, never one combined draft. Keep the `channel_link` each draft returns, for Finish. A draft that fails (`attached_draft_exists` because Dan already has a draft in that thread, `not_in_channel`, anything else) is reported to Dan with the reply text, never retried over his draft.
+- **A Slack list row.** It gets no reply: a list record's thread refuses a draft with `channel_not_found` (measured 2026-11-04). Move the row's Status column instead, with `slack_update_list_record` and the recorded list id and record id: In progress when its agent reports, Done once every follow on Dan approved is finished, Waiting when it is parked until a later date or event. Read the list's own Status options first with `slack_read_list` (`schema_only`) and use the option that names that state. A move that fails is reported to Dan, never left silent.
+- **A GitHub issue.** Answer it where it came from, as before: a comment on the issue with what was found and what was done, through `/no-ai-tells`, or the pull request that closes it.
+- **An item typed into the chat.** The final table is its answer.
 
 ## 6. Finish
 
 When nothing is running or queued:
 - A final table: item, outcome in one sentence, pull request and live status, and anything that still needs Dan.
+- Each draft reply saved, with its link, so Dan knows where to find and send it; and each list row whose Status moved, with the value it now holds.
 - One git status line per repo.
 - Each decision left for Dan as its own picker, one at a time.
 - Stop anything this session started in the background, and say so.
@@ -100,3 +113,4 @@ A decision that belongs to an issue goes on that issue as a comment, where the n
 | Board kept in your head | Reprint it on every change |
 | A new item started as a new agent in an area already owned | `SendMessage` to the owner |
 | Merging the moment checks go green | Review the diff first, one merge per repo at a time |
+| An item finished with its alert or list row left unanswered | A draft in the message's thread, or the row's Status moved |

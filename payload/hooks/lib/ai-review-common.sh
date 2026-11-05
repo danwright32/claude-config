@@ -44,6 +44,41 @@ ar_repo_key() {   # $1 = a directory inside the repository -> decimal checksum, 
   printf '%s' "$url" | cksum | cut -d ' ' -f1
 }
 
+# The repository a review belongs to, for the repository= line of its record (claude-config#2236).
+# The record's repo= is the checkout's folder name, which for an agent worktree names a folder that
+# is deleted with the worktree: on the personal MacBook 7 of the 9 quote misses from 2026-10-25 to
+# 11-04 named one, and tracing them to their commits meant searching every checkout. This names the
+# repository itself, which every worktree of it shares: the origin's owner/name when origin is a
+# hosted URL, else the folder of the main checkout the git common dir belongs to. Only owner/name
+# is ever kept, never the URL, which can carry a credential. repo= stays as it was, for the readers
+# that show or compare it. The origin is read from config as written, before any insteadOf rewrite.
+ar_repository() {   # $1 = a directory inside the repository -> owner/name or a folder name, or return 1
+  local url path owner name common
+  url="$(git -C "$1" config --get remote.origin.url 2>/dev/null)"
+  path=""
+  case "$url" in
+    file://*) ;;
+    *://*) path="${url#*://}"; case "$path" in */*) path="${path#*/}" ;; *) path="" ;; esac ;;
+    /*|.*) ;;
+    # scp like: git reads it so only when no slash comes before the first colon.
+    *:*) case "${url%%:*}" in */*) ;; *) path="${url#*:}" ;; esac ;;
+  esac
+  path="${path%%[?#]*}"; path="${path%/}"; path="${path%.git}"; path="${path%/}"
+  case "$path" in
+    */*)
+      owner="${path%/*}"; owner="${owner##*/}"; name="${path##*/}"
+      if [[ "$owner" =~ ^[A-Za-z0-9._-]+$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        printf '%s/%s' "$owner" "$name"; return 0
+      fi ;;
+  esac
+  common="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  common="${common%/}"
+  case "$common" in */.git) common="${common%/.git}" ;; *) common="${common%.git}" ;; esac
+  name="${common##*/}"
+  [ -n "$name" ] || return 1
+  printf '%s' "$name" | tr -d '\n\r'
+}
+
 # The fields of a hook payload these hooks read, in one line separated by the unit separator:
 #   cwd, session_id, tool_response.exit_code, tool_response.interrupted
 # A field that is not there is empty. tool_response is an object for the Bash tool and may be a

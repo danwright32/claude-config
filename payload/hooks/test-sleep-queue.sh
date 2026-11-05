@@ -380,7 +380,8 @@ done
 # refusal it did make is recorded and named, so a short count says why instead of only how many.
 CTRL="$WORK/control"; mkdir -p "$CTRL"
 CTRL_REFUSALS="$WORK/control-refusals"
-cp "$DIR/lib/sleep.sh" "$DIR/lib/sleep-queue.py" "$DIR/lib/session_registry.py" "$CTRL/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$CTRL" sleep.sh sleep-queue.py \
+  || check_eq "#2147 the hook helpers install into the control's folder" 0 1
 awk '{ if (index($0, "if err=\"$(ln \"$tmp\"")) sub("[(]ln ", "(_ctrl_overwrite "); print }' "$LIB" > "$CTRL/sleep-queue.sh"
 cat >> "$CTRL/sleep-queue.sh" <<'EOF'
 _ctrl_overwrite(){ local e; e="$( { cat "$1" >| "$2"; } 2>&1 )" && return 0; printf '%s\n' "${e:-the overwrite failed and said nothing}" >> "$CTRL_REFUSALS"; return 1; }
@@ -745,10 +746,9 @@ check_has "an agent worktree's random id names no issue, so 7831 is queued" "$(p
 # A queue that cannot read the branches refuses rather than reading them as naming nothing, which
 # would queue an issue a branch is on: here sleep-queue.py stands where no mod-kit sits beside it.
 mkdir -p "$WORK/lonely/hooks/lib"
-cp "$DIR/lib/sleep-queue.py" "$WORK/lonely/hooks/lib/sleep-queue.py"
-# Its own reading of the session registry, which it imports from beside itself (#1787).
-cp "$DIR/lib/session_registry.py" "$WORK/lonely/hooks/lib/session_registry.py"
-cp "$DIR/lib/branch-issues.mjs" "$WORK/lonely/hooks/lib/branch-issues.mjs" 2>/dev/null
+# With the session registry it imports from beside itself (#1787), which the install brings.
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORK/lonely/hooks/lib" sleep-queue.py branch-issues.mjs \
+  || check_eq "#2147 the hook helpers install into the lonely folder" 0 1
 out="$(named_queue "$WORK/lonely/hooks/lib/sleep-queue.py")"; rc=$?
 check_eq "a queue whose branch reader cannot run refuses" 3 "$rc"
 check_has "saying the branches could not be read" "which issues the branches name could not be read" "$out"

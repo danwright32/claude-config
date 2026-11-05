@@ -15,6 +15,12 @@ the commands cannot come to disagree about what a skip is (L263, L370).
         exit 0 printing the refusal when an Edit, Write or MultiEdit changes where git reads the
         hooks from in a git config file, 10 when it does not, 2 when the payload cannot be read
         (claude-config#2140).
+    agent-overrides.py config-commands       stdin: one hook payload (JSON)
+        exit 0 printing the refusal when a Bash call has a command that is not git and names a git
+        config file (a read included, since what a shell command does to a file it names cannot be
+        read before it runs), or a git command whose output a redirect or --output sends into one,
+        or when git cannot list a folder's config; 10 when none does, 2 when
+        the payload cannot be read (claude-config#2160).
 
     EXIT CODES. No mode answers "nothing found" with 1, which is what Python exits on an uncaught
     exception: a crash must never read as clean (claude-config#1856, #1869, L1033). Each answers it
@@ -60,6 +66,11 @@ through the environment (GIT_CONFIG_COUNT with a key that moves the hooks, GIT_C
 GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM or GIT_CONFIG naming a whole file), git's --config-env, a config
 include (include.path, includeIf.*.path) set with -c or with git config, a key the shell spells so the
 gate cannot read it, and an Edit, Write or MultiEdit of a git config file (config-edit, below).
+Since claude-config#2160 also git pointed at another git directory (--git-dir, GIT_DIR, GIT_COMMON_DIR),
+whose hooks and config it then reads, and the hook managers' switches or git's environment settings
+in front of a command that is not git: a script's own git commands inherit them and cannot be read
+before it runs, so such a command is refused outright. A shell command naming a git config file is
+config-commands, below.
 
 AN OVERRIDE is a gate's documented escape, a SKIP_<NAME> or ALLOW_<NAME> setting given a value other
 than empty or 0, in front of a command, through env, or exported. Only settings the shell would
@@ -215,6 +226,11 @@ HOOKS_SECTION = "core"
 CONFIG_FILE_ENV = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG")
 CONFIG_PARAMS_ENV = "GIT_CONFIG_PARAMETERS"
 CONFIG_KEY_ENV = re.compile(r"^GIT_CONFIG_KEY_[0-9]+$")
+# Settings that point git at a git directory other than the one it would find, whose hooks and config
+# it then reads (claude-config#2160). Any value counts: the gate cannot tell from the words whether a
+# path, perhaps spelled through a variable, is this repository's own.
+GIT_DIR_ENV = ("GIT_DIR", "GIT_COMMON_DIR")
+GIT_DIR_OPTION = "--git-dir"
 # A key the shell spells through an expansion, a substitution or an escape is one the gate cannot
 # read: lib/shell-words.py leaves `$'core.hooks\x50ath'` as the word `$core.hooks\x50ath` (measured).
 UNREADABLE_KEY = re.compile(r"[$`\\]")
@@ -333,11 +349,21 @@ def _findings(s, depth=0):
     for text, pairs, words in _commands(s):
         switched = [n + "=" + v for n, v in pairs if HOOK_SWITCHES.get(n) == v]
         configured = _config_env(pairs)
+        pointed = ["%s=%s, a git directory whose hooks and config git then reads (claude-config#2160)" % (n, v)
+                   for n, v in pairs if n in GIT_DIR_ENV]
         if words and words[0] in DECLARERS:
-            exported.extend(switched + configured)
+            exported.extend(switched + configured + pointed)
             continue
         reading = sw.git_read(words)
         if reading is None:
+            # A command that is not git, run with a hook switch or git's environment settings: a
+            # script's own git commands inherit them, and cannot be read before it runs, so it is
+            # refused outright (claude-config#2160).
+            inherited = switched + configured + pointed + exported
+            if words and inherited:
+                found.append(("a command that is not git, run with %s, which every git command it runs "
+                              "inherits (claude-config#2160): %s" % (", ".join(dict.fromkeys(inherited)),
+                                                                    text.strip()), False))
             continue
         sub, front, after = reading
         why = []
@@ -345,7 +371,14 @@ def _findings(s, depth=0):
         while j < len(front):
             w = front[j]
             val, how = None, None
-            if w == "-c" and j + 1 < len(front):
+            if w == GIT_DIR_OPTION or w.startswith(GIT_DIR_OPTION + "="):
+                where = w[len(GIT_DIR_OPTION) + 1:]
+                if w == GIT_DIR_OPTION:
+                    where = front[j + 1] if j + 1 < len(front) else ""
+                    j += 1
+                why.append("%s %s, a git directory whose hooks and config git then reads (claude-config#2160)"
+                           % (GIT_DIR_OPTION, where))
+            elif w == "-c" and j + 1 < len(front):
                 val, how = front[j + 1], "-c"
                 j += 1
             elif w.startswith("-c") and len(w) > 2:
@@ -359,7 +392,7 @@ def _findings(s, depth=0):
                 why.append(_key_reason(val.split("=", 1)[0], how + " " + val,
                                        "claude-config#2135" if how == "-c" else "claude-config#2140"))
             j += 1
-        why.extend(switched + configured + exported)
+        why.extend(switched + configured + pointed + exported)
         persistent = False
         if sub == "config":
             change = _config_hooks_change(after)
@@ -806,8 +839,9 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 
 
 def _git(args, cwd=None):
-    """git's output, or None when git cannot run there. Never raises: a caller treats None as git
-    having nothing to say about that directory, and the heuristic below still applies."""
+    """git's output, or None when git cannot run there. Never raises: a caller must not read None
+    as git having nothing to say about that directory. The config read refuses when git cannot list
+    a folder's config (claude-config#2160), so None there means unlisted, never clean."""
     import subprocess
     try:
         p = subprocess.run(["git"] + args, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
@@ -824,10 +858,13 @@ def _real(path, base):
 
 
 def _config_files(dirs):
-    """Every file git reads config from for a command run in any of `dirs`: what git lists with its
-    includes followed, every file an include names (whether it exists yet or not), the repository's
-    own config and config.worktree (a worktree's and its common directory's), and the global ones."""
+    """(files, unlisted): every file git reads config from for a command run in any of `dirs` (what git
+    lists with its includes followed, every file an include names whether it exists yet or not, the
+    repository's own config and config.worktree, a worktree's and its common directory's, and the
+    global ones), and the folders whose config git could not list. Those folders' includes are
+    unknown, so a caller refuses rather than judge against a list missing them (claude-config#2160)."""
     files = set()
+    unlisted = []
     home = os.path.expanduser("~")
     files.add(_real(".gitconfig", home))
     xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
@@ -849,13 +886,22 @@ def _config_files(dirs):
                 key, _, value = entry.partition("\n")
                 if _moves_hooks(key) and key.lower() != HOOKS_KEY and value:
                     files.add(_real(value, os.path.dirname(src)))
+        else:
+            unlisted.append(d)
         p = _git(["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], d)
         if p is not None and p.returncode == 0:
             for g in p.stdout.decode("utf-8", "replace").splitlines():
                 if g:
                     files.add(_real(os.path.join(g, "config"), d))
                     files.add(_real(os.path.join(g, "config.worktree"), d))
-    return files
+    return files, unlisted
+
+
+def _unlisted_refusal(unlisted):
+    """The refusal when git could not list the config of the folders in `unlisted` (claude-config#2160)."""
+    return ("git could not list the config of %s, so the files its includes name are unknown and the gate "
+            "cannot tell whether this writes one, which can change where git reads the hooks from "
+            "(claude-config#2160)." % ", ".join(unlisted))
 
 
 def _looks_like_git_config(target):
@@ -916,8 +962,12 @@ def config_edit(payload):
     near = os.path.dirname(target)
     while near and not os.path.isdir(near) and os.path.dirname(near) != near:
         near = os.path.dirname(near)
-    if not (_looks_like_git_config(target) or target in _config_files([cwd, near])):
-        return None
+    if not _looks_like_git_config(target):
+        files, unlisted = _config_files([cwd, near])
+        if unlisted:
+            return "%s of %s: %s" % (tool, ti["file_path"], _unlisted_refusal(unlisted))
+        if target not in files:
+            return None
     try:
         with open(target, encoding="utf-8", errors="surrogateescape") as f:
             old = f.read()
@@ -957,6 +1007,111 @@ def config_edit(payload):
             "(claude-config#2140).\n%s" % (tool, ti["file_path"], HOOKS_LOCATION_ADVICE))
 
 
+def _names_git_config(path):
+    """Whether `path` (absolute, resolved) is a git config file by its shape alone: a .gitconfig or a
+    system gitconfig, a config or config.worktree anywhere inside a .git folder (a worktree's and a
+    submodule's included), the XDG git/config, or one in a bare repository's folder."""
+    base = os.path.basename(path)
+    if base in (".gitconfig", "gitconfig"):
+        return True
+    parent = os.path.dirname(path)
+    if base in ("config", "config.worktree") and ".git" in parent.split(os.sep):
+        return True
+    # The XDG git/config, matched as a path suffix after a separator so a folder that only ends in
+    # git is not one (the word position scan refuses comparing a word with the name git).
+    if path.endswith(os.sep + os.path.join("git", "config")):
+        return True
+    return _looks_like_git_config(path)
+
+
+def _path_words(words):
+    """Every word of one command that may name a file: each word, a redirect's target glued to its
+    operator or to the word before it (`x>.git/config`), and the value after an = (of=, --output=)."""
+    out = []
+    for w in words:
+        if not w:
+            continue
+        out.append(w)
+        if "<" in w or ">" in w:
+            out.append(re.split(r"[<>&|]+", w)[-1])
+        if "=" in w:
+            out.append(w.rsplit("=", 1)[1])
+    return [w for w in out if w]
+
+
+_REDIRECT_OPERATOR = re.compile(r"^[0-9&]*[<>][<>&|]*$")
+
+
+def _git_written_words(words):
+    """The words of one git command that name a file the command's output lands in, which the skip
+    reading never judges (the lessons review of #2170): every redirect target, standing alone after
+    its operator (`> .git/config`, `1> x`) or glued to it (`log>.git/config`), and the file
+    --output names (git diff, log, show and format-patch write their output there)."""
+    out = []
+    for i, w in enumerate(words):
+        if _REDIRECT_OPERATOR.match(w):
+            if i + 1 < len(words):
+                out.append(words[i + 1])
+        elif "<" in w or ">" in w:
+            out.append(re.split(r"[<>&|]+", w)[-1])
+        if w == "--output" and i + 1 < len(words):
+            out.append(words[i + 1])
+        elif w.startswith("--output="):
+            out.append(w.split("=", 1)[1])
+    return [w for w in out if w]
+
+
+def config_commands(payload):
+    """The refusal for a Bash call (a hook payload) whose commands, other than git's own, name a git
+    config file, or None (claude-config#2160). What a shell command does to a file it names (a
+    redirect, cp, tee, sed -i, a script) cannot be read before it runs, so naming one is refused
+    outright, a read included; git config's own read forms read it, and git's commands are judged by
+    the skip reading instead, apart from the files their output is sent into, a redirect's target or
+    an --output, which are judged here like any other command's. The files are the shapes above and
+    every file git reads config from in the folders the commands run in, include targets among
+    them."""
+    ti = payload.get("tool_input")
+    if not isinstance(ti, dict) or not isinstance(ti.get("command"), str):
+        raise ValueError("the Bash call carries no command to read")
+    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd()
+    try:
+        records = sw._records(ti["command"], cwd, 0)[0]
+    except Exception as e:
+        raise ValueError("the command could not be read: %s" % e)
+    named = []
+    for d, text, _wrap, rest, _assigns, _field, _depth in records:
+        words = sw.command_words(rest)
+        if not words:
+            continue
+        is_git = sw.git_read(words) is not None
+        if is_git:
+            # git's own reading of its arguments is the skip reading's; only what the shell or
+            # --output writes its output into is judged here (the lessons review of #2170).
+            targets = _git_written_words(words)
+            if not targets:
+                continue
+        else:
+            targets = _path_words(words)
+        named.append((d if isinstance(d, str) and d else cwd, text, words, targets, is_git))
+    if not named:
+        return None
+    files, unlisted = _config_files(list(dict.fromkeys([cwd] + [n[0] for n in named])))
+    for d, text, words, targets, is_git in named:
+        if unlisted and len(words) > 1:
+            return "%s: %s" % (_unlisted_refusal(unlisted), text.strip())
+        for w in targets:
+            p = _real(w, d)
+            if _names_git_config(p) or p in files:
+                return ("%s, which the gate cannot tell it does not write, and a write can change where "
+                        "git reads the hooks from "
+                        "(claude-config#2160): %s\nRead config with git config's own read forms (--get, "
+                        "--list) instead, and never write a git config file.\n%s"
+                        % ("a git command sends its output into a git config file" if is_git
+                           else "a command that is not git names a git config file",
+                           text.strip(), HOOKS_LOCATION_ADVICE))
+    return None
+
+
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ""
     data = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
@@ -972,7 +1127,7 @@ def main(argv):
             print(advice)
         # Not 1, for the same reason as skips (#1869).
         return 0 if advice else 10
-    if mode == "config-edit":
+    if mode in ("config-edit", "config-commands"):
         try:
             d = json.loads(data)
         except ValueError:
@@ -982,7 +1137,7 @@ def main(argv):
             sys.stderr.write("the hook payload is not an object\n")
             return 2
         try:
-            refusal = config_edit(d)
+            refusal = config_edit(d) if mode == "config-edit" else config_commands(d)
         except ValueError as e:
             sys.stderr.write("%s\n" % e)
             return 2
@@ -1021,7 +1176,7 @@ def main(argv):
         for line in lines:
             print(line)
         return 0 if lines else 10
-    sys.stderr.write("usage: agent-overrides.py skips | hooks-location-advice | config-edit | stdin-device | stdin-device-refusal <agent> | rewrite-refusal <agent> | runs-script <name> | check-report <transcript>  (input on stdin)\n")
+    sys.stderr.write("usage: agent-overrides.py skips | hooks-location-advice | config-edit | config-commands | stdin-device | stdin-device-refusal <agent> | rewrite-refusal <agent> | runs-script <name> | check-report <transcript>  (input on stdin)\n")
     return 64
 
 

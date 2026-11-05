@@ -252,6 +252,13 @@ rm -f "$_SCPOS"
 #                    wide tables have, claude-config#2131) is the lines from <tr><td> to </td></tr>,
 #                    cells included, so a number and the date in the cell beside it read together
 #                    as they did when the row was one line
+#   an HTML row      written any other way is bounded too (#2244): a line opening with <tr starts a
+#                    new block and a line ending with </tr> ends one, so rows written with no blank
+#                    line between them no longer read as one paragraph, where a date in one row
+#                    excused every row beside it. Inside such a row the paragraph rule still holds,
+#                    so a blank line between cells still parts them. Only a tag at the start or end
+#                    of a line counts, so prose that names <tr><td> mid sentence, as the comment
+#                    above the README's mods table does, is not split by it
 #   a list item      its own block, continuing over the lines that wrap it
 #   a fenced block   skipped entirely, for the same reason a code span is: it is code, not a claim
 #
@@ -275,6 +282,8 @@ fence { next }
 inrow && /^<\/td><\/tr>$/ { inrow = 0; flush(); next }
 inrow { if ($0 !~ /^[[:space:]]*$/ && $0 != "</td><td>") buf = (buf == "" ? $0 : buf " " $0); next }
 /^[[:space:]]*$/ { flush(); next }
+/^[[:space:]]*<[Tt][Rr][[:space:]>]/ { flush() }
+/<\/[Tt][Rr]>[[:space:]]*$/ { if (buf == "") { start = FNR; buf = $0 } else { buf = buf " " $0 }; flush(); next }
 /^[[:space:]]*[|]/ { flush(); start = FNR; buf = $0; flush(); next }
 /^[[:space:]]*([-*+]|[0-9]+[.])[[:space:]]/ { flush(); start = FNR; buf = $0; next }
 { if (buf == "") { start = FNR; buf = $0 } else { buf = buf " " $0 } }
@@ -324,21 +333,34 @@ _SCMDFIX="$WORK/stale-counts-md-fixture.md"
   # an HTML table row (#2131): the date sits in another cell of the same row, and the next row has none
   printf '<tr><td>\n\nname\n\n</td><td>\n\n30 seconds\n\n</td><td>\n\ndated cell (2026-01-02)\n\n</td></tr>\n'
   printf '<tr><td>\n\nname\n\n</td><td>\n\n30 seconds\n\n</td><td>\n\nundated cell\n\n</td></tr>\n'
+  # An HTML table with no blank line between its rows (#2244), in both layouts: rows whose first
+  # cell shares the line with <tr><td> (50, 51, 57), and one whose <tr><td> stands alone (52 to 56).
+  # The row on line 51 carries no date and the one above it does; the first cell on line 57 carries
+  # none and the row closing on line 56 does.
+  printf '<table>\n'
+  printf '<tr><th>setting</th><th>what it does</th></tr>\n'
+  printf '<tr><td>dated: on 2026-01-02 a full run took 30 seconds</td><td>x</td></tr>\n'
+  printf '<tr><td>undated: a full run took 30 seconds</td><td>x</td></tr>\n'
+  printf '<tr><td>\nname\n</td><td>\ndated cell (2026-01-02), a full run took 30 seconds\n</td></tr>\n'
+  printf '<tr><td>undated first cell: a full run took 30 seconds</td><td>\n\n'
+  printf 'a cell with no number\n\n'
+  printf '</td></tr>\n'
+  printf '</table>\n'
 } > "$_SCMDFIX"
 _sc_md_fix="$(_sc_md_scan "$_SCMDFIX")"
 dbg "#148 markdown fixture scan: $(printf '%s' "$_sc_md_fix" | tr '\n' '|')"
-for _sc_md_hit in 5 11 14 35; do
+for _sc_md_hit in 5 11 14 35 51 57; do
   check "#148 the markdown scan catches the undated block on line $_sc_md_hit" \
     "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c ':$_sc_md_hit:' | tr -d ' ')\" = 1 ]"
 done
-for _sc_md_quiet in 3 10 13 16 19 22; do
+for _sc_md_quiet in 3 10 13 16 19 22 50 52; do
   check "#148 and leaves the block on line $_sc_md_quiet alone" \
     "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c ':$_sc_md_quiet:' | tr -d ' ')\" = 0 ]"
 done
 # A table row dated in ONE row must not excuse the row beneath it, which is the whole reason a row
-# is its own block. Asserted by the pair above and by the count here: four and no more.
-check "#148 and reports those four and nothing else" \
-  "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c . | tr -d ' ')\" = 4 ]"
+# is its own block. Asserted by the pair above and by the count here: six and no more.
+check "#148 and reports those six and nothing else" \
+  "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c . | tr -d ' ')\" = 6 ]"
 
 # And on a real document, so the zero above is a measurement rather than a scan reading nothing
 # (L182, L171). README.md is the one every other check in this file already depends on being read.

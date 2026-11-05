@@ -440,7 +440,8 @@ check "#2076 control: an assignment in a subshell or a substitution, or an env p
 NOREADER="$FIX/noreader"
 mkdir -p "$NOREADER/lib" "$NOREADER/tree"
 cp "$SCAN" "$NOREADER/scan-subshell-globals.py"
-cp "$DIR/lib/ratchet.py" "$DIR/lib/shell_code_lines.py" "$NOREADER/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$NOREADER/lib" ratchet.py shell_code_lines.py \
+  || check "#2147 the hook helpers install into $NOREADER/lib" "the install refused"
 printf 'f(){\n  x=1\n}\nv="$(f)"\n' > "$NOREADER/tree/a.sh"
 OUT="$(python3 "$NOREADER/scan-subshell-globals.py" --root "$NOREADER/tree" --baseline "$FIX/baseline.txt" 2>&1)"; RC=$?
 check "#2076 without the shared reader the scan refuses" "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC: $OUT")"
@@ -459,7 +460,8 @@ rm -rf "$NOREADER"
 PYC="$FIX/pyc"
 mkdir -p "$PYC/lib" "$PYC/tree"
 cp "$SCAN" "$PYC/scan-subshell-globals.py"
-cp "$DIR/lib/ratchet.py" "$DIR/lib/shell_code_lines.py" "$DIR/lib/shell-words.py" "$PYC/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$PYC/lib" ratchet.py shell_code_lines.py shell-words.py \
+  || check "#2147 the hook helpers install into $PYC/lib" "the install refused"
 printf 'f(){\n  local x=1\n}\nv="$(f)"\n' > "$PYC/tree/a.sh"
 OUT="$(python3 "$PYC/scan-subshell-globals.py" --root "$PYC/tree" --baseline "$FIX/baseline.txt" 2>&1)"; RC=$?
 check "#2076 control: the copied scan ran and judged its tree" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"

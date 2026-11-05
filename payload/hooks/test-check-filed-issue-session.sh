@@ -191,7 +191,9 @@ PY
 # says Claude Code discards a hook's stderr on exit 0 and does not discard a PostToolUse hook's
 # systemMessage, so the notice is the systemMessage on stdout, and the hook still exits 0: the issue
 # already exists, so there is nothing to block. Reached by the hook copied without its Python half.
-mkdir -p "$TMP/lone/lib"; cp "$HOOK" "$TMP/lone/"; cp "$DIR/lib/hook-notice.sh" "$TMP/lone/lib/"
+mkdir -p "$TMP/lone/lib"; cp "$HOOK" "$TMP/lone/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMP/lone/lib" hook-notice.sh \
+  || check "#2204 hook-notice.sh could be installed beside the lone hook" "the install refused"
 . "$DIR/lib/hook-notice.sh"
 lone_out="$(python3 -c 'import json, sys; json.dump({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}, "tool_response": {"stdout": "", "stderr": "", "interrupted": False, "exit_code": 0}}, sys.stdout)' "gh issue create --title t $FIELDS" \
   | bash "$TMP/lone/check-filed-issue-session.sh" 2>/dev/null)"; lone_rc=$?
