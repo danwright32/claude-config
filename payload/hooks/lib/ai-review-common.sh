@@ -320,9 +320,10 @@ with open(sys.argv[1], "rb") as fh:
 sys.stdout.write(hmac.new(secret, sys.stdin.buffer.read(), hashlib.sha256).hexdigest())
 ' "$f" 2>/dev/null
 }
-ar_helper_key_record() {   # $1 = a key typed in front of the helper -> 0 once recorded
+# The one writer and the one reader of a record, whatever was typed; the callers below say what may be.
+ar__helper_key_write() {   # $1 = what was typed, already checked by the caller -> 0 once recorded
   local d m
-  case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
+  [ -n "$1" ] || return 1
   d="$(ar__helper_keys_dir)"
   { mkdir -p "$d"; } 2>/dev/null || return 1
   ar__helper_secret_make || return 1
@@ -332,11 +333,37 @@ ar_helper_key_record() {   # $1 = a key typed in front of the helper -> 0 once r
   find "$d" -mindepth 1 -maxdepth 1 -type f -mtime +14 -delete 2>/dev/null || true
   return 0
 }
-ar_helper_key_typed() {   # $1 = the key the helper was given -> 0 when a typed command presented it
+ar__helper_key_seen() {   # $1 = what the helper was given, already checked -> 0 when it was recorded
   local m
-  case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
+  [ -n "$1" ] || return 1
   m="$(ar__helper_key_mac "$1")" || return 1
   [ "${#m}" -eq 64 ] && [ -f "$(ar__helper_keys_dir)/$m" ]
+}
+ar_helper_key_record() {   # $1 = a key typed in front of the helper -> 0 once recorded
+  case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
+  ar__helper_key_write "$1"
+}
+ar_helper_key_typed() {   # $1 = the key the helper was given -> 0 when a typed command presented it
+  case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
+  ar__helper_key_seen "$1"
+}
+# A LESSONS REVIEW SKIP TYPED IN FRONT OF THE MERGE HELPER (claude-config#2088). When the review
+# cannot run because the branch is too large to review, Dan may approve merging it unreviewed, and the
+# main session then types SKIP_PR_REVIEW=<the full head sha> in front of the helper. The gate records
+# that the way it records a key, under the same secret, as "skip:<head>", which no read key (hex only)
+# can be, so a skip is never taken for a key or a key for a skip. The value is the head, so the
+# approval holds for that head of that branch only; the helper reads the record and never makes one.
+ar__helper_skip_head_ok() {   # $1 = a head -> 0 when it is a full sha (40 or 64 lowercase hex)
+  case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
+  [ "${#1}" -eq 40 ] || [ "${#1}" -eq 64 ]
+}
+ar_helper_key_skip_record() {   # $1 = the head a skip was typed for -> 0 once recorded
+  ar__helper_skip_head_ok "$1" || return 1
+  ar__helper_key_write "skip:$1"
+}
+ar_helper_key_skip_typed() {   # $1 = the head the helper was given a skip for -> 0 when a typed command presented it
+  ar__helper_skip_head_ok "$1" || return 1
+  ar__helper_key_seen "skip:$1"
 }
 
 # Text from the reviewer, made safe to print (claude-config#581): stdin to stdout through the one

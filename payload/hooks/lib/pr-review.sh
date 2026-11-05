@@ -24,8 +24,10 @@
 # check: what the merge gate and a repo's own merge script ask. Exit 0 allows the merge, 1 refuses
 #   on a verdict, and 3 refuses because the review has not finished yet (running, or started by
 #   this very check), so a caller that waits (lib/merge-when-ready.sh) can tell the two apart
-#   without reading the words. stdout says why in every case. A caller that only asks "may this
-#   merge" treats any non zero as a refusal, as before. No review yet for this head starts one.
+#   without reading the words. 4 refuses because the branch is too large to review, the one refusal
+#   a lessons review skip Dan approved can pass in the merge helper (claude-config#2088). stdout says
+#   why in every case. A caller that only asks "may this merge" treats any non zero as a refusal, as
+#   before. No review yet for this head starts one.
 # --branch: the label the messages and the review file carry, which is the PULL REQUEST's head
 #   branch when the caller knows it (the merge gate reads headRefName). Without it, the checkout's
 #   branch is used only when the checkout stands on the reviewed head; otherwise the label is the
@@ -1913,6 +1915,9 @@ do_check() {
     timeout|abandoned) [ -n "$(meta_of "$final" groups)" ] && ar_capped_body "$final" 1 "$PRR_LINE_CHARS" ;;
   esac
   remedy
+  # Its own code, so lib/merge-when-ready.sh can take a lessons review skip Dan approved for a branch
+  # too large to review, and for no other refusal (claude-config#2088).
+  [ "$status" = too-large ] && return 4
   return 1
 }
 

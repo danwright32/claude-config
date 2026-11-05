@@ -261,6 +261,30 @@ if [ -n "$read_key" ]; then
   fi
   ar_helper_key_typed "$read_key" || usage "PR_REVIEW_READ was not typed in front of this command, so it does not show the findings were read: a key read out of this helper's output by a script, or carried in a variable or an export, is refused (claude-config#1673). Read the findings, then type the key from the review's refusal: PR_REVIEW_READ=<key> $SELF <pr> ... Nothing was merged."
 fi
+# A LESSONS REVIEW SKIP DAN APPROVED (claude-config#2088): the full head he approved merging
+# unreviewed, typed in front of this command by the main session, which pr-review-gate.sh records
+# before the command runs, exactly as it records a key. Taken from the environment only when it was
+# recorded, and then used only where the review of exactly that head refuses it as too large to
+# review (exit 4): findings to read, a review that timed out or failed, and any other head still stop
+# this. Unset at once, so nothing this runs inherits it.
+skip_head="${SKIP_PR_REVIEW:-}"
+unset SKIP_PR_REVIEW
+if [ -n "$skip_head" ]; then
+  case "$skip_head" in
+    *[!a-f0-9]*) skip_len=0 ;;
+    *) skip_len="${#skip_head}" ;;
+  esac
+  case "$skip_len" in
+    40|64) ;;
+    *) usage "SKIP_PR_REVIEW=$skip_head names no head. A lessons review skip is taken only for the head Dan approved merging unreviewed, after the review refused the branch as too large to review, typed with that full head: SKIP_PR_REVIEW=<the full head sha, as the refusal prints it> $SELF <pr> ... (claude-config#2088). Nothing was merged." ;;
+  esac
+  # shellcheck source=ai-review-common.sh
+  if ! . "$MWR_LIB/ai-review-common.sh" 2>/dev/null || [ "$(type -t ar_helper_key_skip_typed)" != function ]; then
+    echo "merge-when-ready: $MWR_LIB/ai-review-common.sh is missing, so whether SKIP_PR_REVIEW was typed in front of this command cannot be read. Nothing was merged." >&2
+    exit 1
+  fi
+  ar_helper_key_skip_typed "$skip_head" || usage "SKIP_PR_REVIEW was not typed in front of this command, so it does not show Dan approved merging that head unreviewed: a skip carried in a variable or an export, read out of this helper's output by a script, or typed by a subagent is refused (claude-config#2088). Once Dan approves, the main session types it: SKIP_PR_REVIEW=<the full head sha> $SELF <pr> ... Nothing was merged."
+fi
 
 top="$(git rev-parse --show-toplevel 2>/dev/null)" || usage "run it from a checkout of the repository: the lessons review reads the branch from one."
 # Where the caller stands, read before this moves, so the merged branch's worktree is never removed
@@ -1447,12 +1471,26 @@ while :; do
   rev_out="$(PR_REVIEW_READ="$read_key" bash "$REVIEW_LIB" check "${rev_args[@]}" 2>&1)"; rev_rc=$?
   # Still running (3) is local work going on beside the wait (claude-config#1676, see rest).
   if [ "$rev_rc" -eq 3 ]; then review_busy=1; else review_busy=""; fi
+  review_skipped_for=""
   case "$rev_rc" in
     # An allow can carry findings that repeat ones already answered, listed as answered
     # (claude-config#1338), and minor findings, printed as advisory (claude-config#1356), so the
     # verdict is shown, once each time it changes.
     0) [ -n "$rev_out" ] && [ "$rev_out" != "${rev_said:-}" ] && { printf '%s\n' "$rev_out"; rev_said="$rev_out"; } ;;
     3) waiting="${waiting:+$waiting, }lessons review still running" ;;
+    # Too large to review (claude-config#2088): the one refusal a skip Dan approved can pass, and only
+    # for the head it names. Without one, or with one for another head, it stops like any refusal,
+    # naming the command his approval takes, which only the main session can type.
+    4) if [ -n "$skip_head" ] && [ "$skip_head" = "$head" ]; then
+         rev_out="$rev_out"$'\n'"merge-when-ready: the lessons review of #$pr at ${head:0:7} cannot run, the branch is too large to review, and a lessons review skip was typed for this head (SKIP_PR_REVIEW=${head:0:7}), so it merges unreviewed once everything else is ready."
+         [ "$rev_out" != "${rev_said:-}" ] && { printf '%s\n' "$rev_out"; rev_said="$rev_out"; }
+         review_skipped_for="$head"
+       else
+         printf '%s\n' "$rev_out"
+         skip_said=""
+         [ -n "$skip_head" ] && skip_said=" The lessons review skip typed in front of this run was typed for ${skip_head:0:7}, not ${head:0:7}, and a skip holds for the head it names only."
+         stop 1 "Stopped: the lessons review of #$pr at ${head:0:7} cannot run, the branch is too large to review (above).$skip_said Split the branch, or ask Dan whether to merge this head unreviewed; if he approves, the main session runs: SKIP_PR_REVIEW=$head $SELF $pr --repo $slug${flags[*]:+ ${flags[*]}} . A subagent cannot. Nothing was merged."
+       fi ;;
     *) printf '%s\n' "$rev_out"
        # After three rounds of findings the review asks to step back (claude-config#1358), and this
        # line asks the same rather than for the one finding at a time fix the review is asking to end.
@@ -1484,6 +1522,10 @@ while :; do
     stop 1 "Stopped: block-red-merge.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi
   review_cmd="$cmd"; [ -n "$read_key" ] && review_cmd="PR_REVIEW_READ=$read_key $cmd"
+  # A skip taken above is handed to the review gate as the override a typed merge carries, so that
+  # gate says, visibly, that this merge was not held for the review; the merge is pinned to the
+  # approved head by --match-head-commit (claude-config#2088).
+  [ -n "$review_skipped_for" ] && [ "$review_skipped_for" = "$head" ] && review_cmd="SKIP_PR_REVIEW=1 $cmd"
   if ! why="$(ask_gate "$REVIEW_GATE" "$review_cmd")"; then
     stop 1 "Stopped: pr-review-gate.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi

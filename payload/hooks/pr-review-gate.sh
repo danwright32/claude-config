@@ -145,19 +145,54 @@ case "$command" in
         key_home="${AR_STATE_DIR:-}"; [ -n "$key_home" ] || key_home="the state folder of the lessons review"
         refuse "Refusing to run the merge helper: the read key typed in front of it could not be recorded under $key_home (lib/ai-review-common.sh missing, python3, od or /dev/urandom missing, or the folder not writable), and the helper takes a key only once this gate has recorded it as typed (claude-config#1673). Fix that folder, or merge with the key typed in front of gh pr merge instead."
       fi
+    fi
+    # A LESSONS REVIEW SKIP TYPED IN FRONT OF THE MERGE HELPER (claude-config#2088). When the review
+    # cannot run because the branch is too large to review and Dan approves merging that head
+    # unreviewed, the main session types SKIP_PR_REVIEW=<the full head sha> in front of the helper.
+    # Recorded here like a key, as typed, by the same reader; the helper uses it only where the review
+    # of exactly that head refused as too large (pr-review.sh check exit 4), so findings to read, a
+    # review that timed out or failed, and any other head stay refused. The value is the head because
+    # an approval is for what Dan saw: a head read from GitHub here could be one pushed after it. A
+    # subagent cannot make the record: its payload carries agent_id, and one this cannot read counts
+    # as a subagent's. Nothing exits here, so a gh pr merge in the same command is still judged below.
+    helper_skip="$(mt_presented_assignment "$command" pr_review_runs_helper SKIP_PR_REVIEW)"
+    if [ -n "$helper_skip" ]; then
+      [ "$(printf '%s' "$payload" | jq -r 'has("agent_id") | not' 2>/dev/null)" = true ] \
+        || refuse "Refusing to run the merge helper: a lessons review skip was typed in front of it by a subagent, and a subagent cannot approve one. A skip is for a branch too large to review, once Dan has approved merging that head unreviewed, and the main session types it: SKIP_PR_REVIEW=<the full head sha> bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> ... Hand back to the main session saying the branch is too large to review (claude-config#2088)."
+      helper_skip_ok=""
+      case "$helper_skip" in
+        *[!a-f0-9]*) ;;
+        *) case "${#helper_skip}" in 40|64) helper_skip_ok=1 ;; esac ;;
+      esac
+      [ -n "$helper_skip_ok" ] \
+        || refuse "Refusing to run the merge helper: SKIP_PR_REVIEW=$helper_skip in front of it names no head. The helper takes a lessons review skip only for the head Dan approved merging unreviewed, after its review refused the branch as too large to review: SKIP_PR_REVIEW=<the full head sha, as the helper's refusal prints it> bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> ... (claude-config#2088)."
+      { [ "$(type -t ar_helper_key_skip_record)" = function ] || . "$HOOK_DIR/lib/ai-review-common.sh"; } 2>/dev/null
+      if ! ar_helper_key_skip_record "$helper_skip" 2>/dev/null; then
+        key_home="${AR_STATE_DIR:-}"; [ -n "$key_home" ] || key_home="the state folder of the lessons review"
+        refuse "Refusing to run the merge helper: the lessons review skip typed in front of it could not be recorded under $key_home (lib/ai-review-common.sh missing, python3, od or /dev/urandom missing, or the folder not writable), and the helper takes a skip only once this gate has recorded it as typed (claude-config#2088). Fix that folder and run it again."
+      fi
+      helper_skip_notice="pr-review-gate: SKIP_PR_REVIEW=${helper_skip:0:7} was typed in front of the merge helper, so if the lessons review of exactly that head refuses it as too large to review, the helper merges it unreviewed (claude-config#2088). Findings to read, a review that failed and any other head still stop it. Tell Dan it was skipped and why."
     fi ;;
 esac
 
-mt_runs_merge "$command" || exit 0
-
-if ps_has_override "$command" SKIP_PR_REVIEW; then
-  # To Dan as a systemMessage and to the session as context: a PreToolUse hook's plain stdout on exit
-  # 0 goes to the debug log (hooks documentation), so the line printed plain reached neither (#1906).
+# An allow handed to Dan as a systemMessage and to the session as context: a PreToolUse hook's plain
+# stdout on exit 0 goes to the debug log (hooks documentation), so the line printed plain reached
+# neither (#1906). Exits the hook, 0.
+pr_review_skip_notice() {  # $1 = what to say
   # shellcheck source=lib/hook-notice.sh
   . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
     printf '%s\n' "$1" >&2
     printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
-  hook_allow_notice "pr-review-gate: SKIP_PR_REVIEW=1 was set, so this merge was NOT held for the lessons review. Tell Dan why it was skipped; never skip it silently." PreToolUse
+  hook_allow_notice "$1" PreToolUse
+}
+
+if ! mt_runs_merge "$command"; then
+  [ -n "${helper_skip_notice:-}" ] && pr_review_skip_notice "$helper_skip_notice"
+  exit 0
+fi
+
+if ps_has_override "$command" SKIP_PR_REVIEW; then
+  pr_review_skip_notice "pr-review-gate: SKIP_PR_REVIEW=1 was set, so this merge was NOT held for the lessons review. Tell Dan why it was skipped; never skip it silently."
 fi
 
 # ONE pull request per command (claude-config#1062): the head, the review and the read key below are

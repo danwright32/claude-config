@@ -360,14 +360,26 @@ mt_split_assignments() {  # $1 = one segment
 # Prints the key when it is hex, nothing otherwise. One reader for both gates, so the two cannot come
 # to disagree about what presenting a key looks like.
 mt_presented_read_key() {  # $1 = command, $2 = the predicate the action's segment must satisfy
+  local found
+  found="$(mt_presented_assignment "$1" "$2" PR_REVIEW_READ)"
+  case "$found" in *[!a-f0-9]*) ;; *) printf '%s' "$found" ;; esac
+  return 0
+}
+
+# The value of a NAME= assignment typed in front of the segment the predicate in $2 matches, printed
+# when it is not empty, nothing otherwise. The reader under mt_presented_read_key, and under the
+# lessons review skip typed in front of merge-when-ready (claude-config#2088), so a key and a skip are
+# found in a command by one rule: an echo, an export, or an assignment in front of some other command
+# presents nothing to this action (L673).
+mt_presented_assignment() {  # $1 = command, $2 = the predicate, $3 = NAME
   local line found rest text
   ps__read "$1" || :
   while IFS= read -r line; do
     mt__split_line "$line"; rest="$MT__L_CMD"; text="$(mt__own_text "$line")"
-    found="$(printf '%s\n' "$MT__L_ASSIGNS" | tr '\035' '\n' | awk 'index($0, "PR_REVIEW_READ=") == 1 { v = substr($0, 16) } END { print v }')"
+    found="$(printf '%s\n' "$MT__L_ASSIGNS" | tr '\035' '\n' | awk -v n="$3=" 'index($0, n) == 1 { v = substr($0, length(n) + 1) } END { print v }')"
     # Asked of the command's own text, which the reading holds, so no second reading starts.
     if [ -n "$found" ] && [ -n "$rest" ] && "$2" "$text" </dev/null; then
-      case "$found" in *[!a-f0-9]*) ;; *) printf '%s' "$found" ;; esac
+      printf '%s' "$found"
       return 0
     fi
   done <<MTEOF

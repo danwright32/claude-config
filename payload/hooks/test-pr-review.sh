@@ -801,7 +801,9 @@ check_eq "and no reviewer was started without its interpreter" "0" "$(calls)"
 reset_state
 out="$(PR_REVIEW_MAX_BYTES=10 prr start --dir "$REPO" --sha "$HEAD_SHA")"
 out="$(PR_REVIEW_MAX_BYTES=10 prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "a branch over the size cap refuses" "1" "$rc"
+# Exit 4, its own code, so merge-when-ready can tell this refusal from findings or a failed review and
+# take a lessons review skip Dan approved for it, and only for it (claude-config#2088).
+check_eq "a branch over the size cap refuses, with the too large code" "4" "$rc"
 check "saying it is too large, with its size" "too large" "$out"
 check_eq "and no reviewer ran" "0" "$(calls)"
 
@@ -853,6 +855,11 @@ gk="$(key_in "$out")"
 out="$(fire_gate "gh pr merge 7 --squash --match-head-commit $HEAD_SHA")"; rc=$?
 check_eq "a retry without the read key is refused again" "2" "$rc"
 check "carrying the findings again" "deleteEvent still swallows" "$out"
+# A lessons review skip typed in front of the merge helper is the helper's alone (claude-config#2088):
+# a gh pr merge in the same command is still judged, and still held for its findings.
+out="$(fire_gate "SKIP_PR_REVIEW=$HEAD_SHA bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash; gh pr merge 7 --squash")"; rc=$?
+check_eq "#2088 a skip typed for the merge helper does not let a gh pr merge beside it through" "2" "$rc"
+check "#2088 which is still held for its findings" "deleteEvent still swallows" "$out"
 # The key counts only as an assignment in front of the MERGE itself, never as text elsewhere in the
 # command: an echo or another command carrying it says nothing about this merge (L673).
 out="$(fire_gate "echo 'PR_REVIEW_READ=$gk' && gh pr merge 7 --squash")"; rc=$?
@@ -1505,7 +1512,7 @@ check "#583 and that refusal names what was left out" "scripts/fixtures/big.json
 reset_state
 out="$(PR_REVIEW_MAX_BYTES=300 prr start --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE")"
 out="$(PR_REVIEW_MAX_BYTES=300 prr check --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE")"; rc=$?
-check_eq "#583 code over the cap with the data left out is still refused" "1" "$rc"
+check_eq "#583 code over the cap with the data left out is still refused, as too large" "4" "$rc"
 check "#583 as too large" "too large" "$out"
 check "#583 saying how large the rest still was" "proven to need no reading still leaves" "$out"
 check "#583 and naming, uncut, what it would have left out" "scripts/fixtures/big.json (fixture data" "$(printf '%s\n' "$out" | grep 'Would have been left out')"

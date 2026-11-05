@@ -296,6 +296,7 @@ case "$1" in
       0) echo "The lessons review finished with 0 findings." ;;
       3) echo "Refusing to merge yet: the lessons review is still running (1m of 10m)." ;;
       1) printf 'Refusing to merge until these are read: 1 finding.\n    PR_REVIEW_READ=abc123 <the merge command>\nApp/x.swift:3: swallows the error (L215).\n' ;;
+      4) echo "Refusing to merge: the lessons review of acme/widget could not run, the branch is too large to review: 6.2 MB." ;;
     esac
     exit "$rc" ;;
 esac
@@ -526,6 +527,103 @@ fresh "$OLD" 0 "$GREEN"
 gate_out="$(present "bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
 check_eq "#1673 no key: the gate allows the helper" "0" "$grc"
 check_eq "#1673 and records nothing" "" "$(ls "$AI_REVIEW_STATE_DIR/helper-keys" 2>/dev/null)"
+
+# A LESSONS REVIEW SKIP DAN APPROVED, FOR A BRANCH TOO LARGE TO REVIEW (claude-config#2088). The
+# helper always asked the review itself and read no skip, so a branch too large to review could only
+# merge by a bare SKIP_PR_REVIEW=1 gh pr merge, losing the helper's update, wait and stacked branch
+# handling. A skip is now taken in front of the helper only typed by the main session, naming the
+# full head it approves, recorded by the real gate before the command runs, and used only where the
+# review of exactly that head refused as too large (pr-review.sh check exit 4).
+present_agent(){ jq -nc --arg c "$1" --arg d "$REPO" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,agent_id:"a123"}' | bash "$DIR/pr-review-gate.sh" 2>&1; }
+# Too large, with no approval: stopped as before, and told the exact command Dan's approval takes.
+fresh "$OLD" 0 "$GREEN"
+printf '4\n' > "$ST/review-answers"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2088 a branch too large to review, with no approval, stops" "1" "$rc"
+check_eq "#2088 and merges nothing" "0" "$(count gh-calls 'pr merge')"
+check "#2088 showing the review's own refusal" "too large to review" "$out"
+check "#2088 and naming the skip for this head that only Dan can approve" "SKIP_PR_REVIEW=$OLD bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --repo acme/widget --squash" "$out"
+# With a skip typed for this head by the main session: the gate records it, and the helper merges.
+fresh "$OLD" 0 "$GREEN"
+printf '4\n' > "$ST/review-answers"
+gate_out="$(present "SKIP_PR_REVIEW=$OLD bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#2088 the gate allows a skip typed in front of the helper by the main session" "0" "$grc"
+check "#2088 and says, visibly, that the review may be skipped for that head" "SKIP_PR_REVIEW" "$gate_out"
+out="$(SKIP_PR_REVIEW="$OLD" run 7 --squash)"; rc=$?
+check_eq "#2088 the approved skip merges a branch too large to review" "0" "$rc"
+check_eq "#2088 once" "1" "$(count gh-calls 'pr merge')"
+check "#2088 saying the review was skipped and why" "too large to review, and a lessons review skip was typed for this head" "$out"
+check "#2088 and the merge the review gate judges carries the skip, so that gate says so too" "SKIP_PR_REVIEW=1 gh pr merge 7" "$(cat "$ST/review-gate-payloads")"
+check "#2088 pinned to the approved head" "--match-head-commit $OLD" "$(cat "$ST/review-gate-payloads")"
+# The approval is for one head: a head that moved on, or another branch's, is refused.
+fresh "$NEW" 0 "$GREEN"
+printf '4\n' > "$ST/review-answers"
+present "SKIP_PR_REVIEW=$OLD bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" >/dev/null
+out="$(SKIP_PR_REVIEW="$OLD" run 7 --squash)"; rc=$?
+check_eq "#2088 a skip typed for another head stops it" "1" "$rc"
+check_eq "#2088 and merges nothing" "0" "$(count gh-calls 'pr merge')"
+check "#2088 saying which head the skip was for" "typed for ${OLD:0:7}, not ${NEW:0:7}" "$out"
+check "#2088 and naming the skip this head would need" "SKIP_PR_REVIEW=$NEW bash" "$out"
+# A head given to the helper that the gate never recorded (a variable, an export, a script that read
+# it from this helper's refusal) is refused before anything, however the review would answer.
+fresh "$OLD" 0 "$GREEN"
+printf '4\n' > "$ST/review-answers"
+present "SKIP_PR_REVIEW=$NEW bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" >/dev/null
+out="$(SKIP_PR_REVIEW="$OLD" run 7 --squash)"; rc=$?
+check_eq "#2088 a skip the gate never saw typed is refused" "64" "$rc"
+check "#2088 saying it has to be typed" "SKIP_PR_REVIEW was not typed in front of this command" "$out"
+check_eq "#2088 and merges nothing" "0" "$(count gh-calls 'pr merge')"
+fresh "$OLD" 0 "$GREEN"
+printf '4\n' > "$ST/review-answers"
+present "export SKIP_PR_REVIEW=$OLD; bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" >/dev/null
+check_eq "#2088 an exported skip is recorded by nobody" "" "$(ls "$AI_REVIEW_STATE_DIR/helper-keys" 2>/dev/null)"
+out="$(SKIP_PR_REVIEW="$OLD" run 7 --squash)"; rc=$?
+check_eq "#2088 so the helper refuses it" "64" "$rc"
+check_eq "#2088 and merges nothing" "0" "$(count gh-calls 'pr merge')"
+# A subagent cannot create the approval: the gate refuses the command and records nothing.
+fresh "$OLD" 0 "$GREEN"
+printf '4\n' > "$ST/review-answers"
+gate_out="$(present_agent "SKIP_PR_REVIEW=$OLD bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#2088 a subagent typing a skip in front of the helper is refused" "2" "$grc"
+check "#2088 saying the skip is the main session's to type, once Dan approves it" "a subagent cannot" "$gate_out"
+check_eq "#2088 and nothing is recorded" "" "$(ls "$AI_REVIEW_STATE_DIR/helper-keys" 2>/dev/null)"
+out="$(SKIP_PR_REVIEW="$OLD" run 7 --squash)"; rc=$?
+check_eq "#2088 so the helper refuses it" "64" "$rc"
+check_eq "#2088 and merges nothing" "0" "$(count gh-calls 'pr merge')"
+# Nor can the helper create one: it never writes a record of what was typed, only reads one.
+check_eq "#2088 the helper never calls anything that records a typed skip or key" "" "$(grep -n 'ar_helper_key_record\|ar_helper_key_skip_record\|ar__helper_key_write\|ar__helper_secret_make' "$HELPER")"
+# SKIP_PR_REVIEW=1, the form a typed merge takes, names no head, so in front of the helper the gate
+# refuses it saying what to type, and the helper refuses it if it gets there.
+fresh "$OLD" 0 "$GREEN"
+gate_out="$(present "SKIP_PR_REVIEW=1 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#2088 SKIP_PR_REVIEW=1 in front of the helper is refused by the gate" "2" "$grc"
+check "#2088 saying the skip names the head it approves" "SKIP_PR_REVIEW=<the full head" "$gate_out"
+out="$(SKIP_PR_REVIEW=1 run 7 --squash)"; rc=$?
+check_eq "#2088 and by the helper" "64" "$rc"
+# The skip is for the review that cannot run because of the branch's size, and nothing else: findings
+# to read, a review still running past the deadline and a review that failed are each still a stop.
+fresh "$OLD" 0 "$GREEN"
+printf '1\n' > "$ST/review-answers"
+present "SKIP_PR_REVIEW=$OLD bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" >/dev/null
+out="$(SKIP_PR_REVIEW="$OLD" run 7 --squash)"; rc=$?
+check_eq "#2088 a typed skip does not pass findings to read" "1" "$rc"
+check_eq "#2088 and merges nothing past them" "0" "$(count gh-calls 'pr merge')"
+check "#2088 still asking for their key" "PR_REVIEW_READ=<key>" "$out"
+fresh "$OLD" 0 "$GREEN"
+printf 'Refusing to merge: the lessons review of acme/widget did not finish inside its deadline.' > "$ST/review-gate-refuse"
+printf '0\n' > "$ST/review-answers"
+present "SKIP_PR_REVIEW=$OLD bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" >/dev/null
+out="$(SKIP_PR_REVIEW="$OLD" run 7 --squash)"; rc=$?
+check_eq "#2088 a review that is not too large leaves the review gate's refusal standing" "1" "$rc"
+check_eq "#2088 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+check_eq "#2088 and no skip was handed to that gate" "0" "$(count review-gate-payloads 'SKIP_PR_REVIEW')"
+# Where the skip cannot be recorded, the gate refuses the command saying so (L11, L667).
+fresh "$OLD" 0 "$GREEN"
+mkdir -p "$WORKDIR"; : > "$WORKDIR/ai-review"
+gate_out="$(present "SKIP_PR_REVIEW=$OLD bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+rm -f "$WORKDIR/ai-review"
+check_eq "#2088 a typed skip that cannot be recorded refuses the command" "2" "$grc"
+check "#2088 naming why" "could not be recorded" "$gate_out"
 
 # A RECORD MADE BY HAND (claude-config#1700). The record of a typed key was an empty file named by the
 # key's sha256, which anything able to write the folder could make, a session's own shell included.
