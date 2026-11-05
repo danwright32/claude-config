@@ -663,7 +663,8 @@ refused "and so is one right after do"
 # (lessons review of #1017, L490).
 mkdir -p "$FIX/noreader/lib"
 cp "$HOOK" "$FIX/noreader/check-add-scope.sh"
-cp "$DIR/lib/push-scope.sh" "$FIX/noreader/lib/push-scope.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FIX/noreader/lib" push-scope.sh \
+  || check "#2204 push-scope.sh could be installed into the copy without a reader" "the install refused"
 HOOK_SAVED="$HOOK"; HOOK="$FIX/noreader/check-add-scope.sh"
 run "cd $REPO && git add -A"
 HOOK="$HOOK_SAVED"

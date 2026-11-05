@@ -2811,6 +2811,42 @@ test('a switch that could not be recorded still holds here over an older one fro
   expect(lastModes(w)).toEqual(['AWAY'])
 })
 
+// #2154: a switch was marked seen before it was applied, so one whose apply threw was never taken.
+test('a switch from another session that cannot be applied is logged, and taken once it can be (#2154)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  const refusing = { on: false }
+  on('state.set', async ($, e, next) => (refusing.on && (e as { key?: string }).key === 'place' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  refusing.on = true
+  await say($ as never, 'one')
+  expect(w.modes.some(m => m.includes('AWAY'))).toBe(false)
+  // Through the failure reporting the check already has, never silently.
+  expect(w.logs.filter(l => l.startsWith('scope-modes: the away or home switch check failed: '))).toEqual([
+    'scope-modes: the away or home switch check failed: scope-modes: $.state.set: state store unavailable',
+  ])
+  refusing.on = false
+  await clock.advance(MIN)
+  expect(lastModes(w)).toEqual(['AWAY'])
+})
+
+test('a switch home that fails partway is applied whole when taken again, so Claude still hears Dan is back (#2154 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  const refusing = { on: false }
+  on('state.set', async ($, e, next) => (refusing.on && (e as { key?: string }).key === 'justHome' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  await say($ as never, 'one')
+  expect(lastModes(w)).toEqual(['AWAY'])
+  w.files[PLACE] = placeRecord('home', T0 + 6)
+  refusing.on = true
+  await clock.advance(MIN)
+  refusing.on = false
+  const back = (await say($ as never, 'two')).context?.join('\n') ?? ''
+  expect(lastModes(w)).toEqual([])
+  expect(back).toMatch(/Dan is back at the Mac/)
+})
+
 test('a record that cannot be read is said once, never read as a switch (L215)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [PLACE]: placeRecord('away', T0 + 5) }, unreadableFiles: [PLACE] })
   await start($ as never, clock)

@@ -4592,8 +4592,10 @@ const takeSharedPlace = async ($: EngineInterface): Promise<void> => {
     return
   }
   if (!isNewer(r.record, (await $.state.get(placeSeenRef)).value ?? 0)) return
-  await $.state.set(placeSeenRef, r.record.at)
+  // Seen only once it applies (#2154): a switch whose apply throws is taken again at the next prompt
+  // or minute, and the throw reaches the caller's log, rather than being marked seen and lost.
   if ((await placeOf($)) !== r.record.place) await setPlace($, r.record.place)
+  await $.state.set(placeSeenRef, r.record.at)
 }
 const placeUnread = ($: EngineInterface, why: string) => {
   const said = `Scope modes could not read the away or home switch typed in another session (${why}), so a switch typed there may not reach this one.`
@@ -4602,9 +4604,11 @@ const placeUnread = ($: EngineInterface, why: string) => {
   placeUnreadSaid = true
 }
 
+// The place is written last of the two, so a write that throws leaves the old place and the switch
+// is applied whole when taken again (#2154 lessons review); justHome is read only at home.
 const setPlace = async ($: EngineInterface, place: ScopeModesPlace) => {
-  await $.state.set(placeRef, place)
   await $.state.set(justHomeRef, place === 'home')
+  await $.state.set(placeRef, place)
   await showModes($)
   await showHeld($)
 }
