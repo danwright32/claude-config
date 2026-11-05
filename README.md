@@ -2065,6 +2065,14 @@ call is now told the rest is read separately and to judge only what it was shown
 be told not to call untested anything whose test might be past the cut, which invited a pass over
 tests nobody read.
 
+The first call keeps to the same 110 (#2249). It used to be given its full 90 seconds however long
+reading the push had taken, and on a push carrying a 1.6 MB generated line the failure handling scan
+alone took 99 seconds, so the call ran past 120, the hook was killed, and the push was refused with
+no reason. That scan now takes time in proportion to a line's length, and the first call is not
+started with fewer than 20 seconds left, is given only what is left when that is under 90, and is
+refused as could not judge when it runs to that shortened limit. A full length first call that fails
+still fails open, as before.
+
 A branch that merges main and then pushes is judged on its own change, not on everything main
 gained since the branch was last pushed (#2028). On 2026-11-01 four Pivot pull requests were each
 refused for size alone after merging a busy main, and each needed a one time override. Both gates
