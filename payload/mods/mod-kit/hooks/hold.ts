@@ -22,6 +22,25 @@
  * Run `work`; if it throws or rejects, run `fallback`; if that throws or rejects too, answer `last`.
  * Never throws. `last` is a value, built by the caller before the hook ran, so nothing can fail in it.
  */
+/**
+ * How much of a catch's 1,000 ms grace must be left for its slow part to start: half of it, against
+ * the 0 to 2 ms of its own time a catch was measured to use (#2039).
+ */
+export const CATCH_RESERVE_MS = 500
+
+/**
+ * Run `work` only while at least `reserveMs` of `budget` is left; otherwise answer `outOfTime`, and
+ * the work never starts. `budget` is the catch's `next.budget`, whose `remainingMs` counts the catch's
+ * own time and none of its $ calls; a test hands in its own (L524). A budget that reads as no number
+ * holds the call too, since how much is left cannot be known.
+ */
+export const withinGrace = <R>(
+  budget: { readonly remainingMs: number },
+  work: () => R | Promise<R>,
+  outOfTime: () => R | Promise<R>,
+  reserveMs: number = CATCH_RESERVE_MS,
+): R | Promise<R> => (budget.remainingMs >= reserveMs ? work() : outOfTime())
+
 export const neverThrows = async <R>(work: () => R | Promise<R>, fallback: () => R | Promise<R>, last: R): Promise<R> => {
   try {
     return await work()
