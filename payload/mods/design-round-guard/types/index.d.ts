@@ -50,6 +50,26 @@ export type DesignRoundPass = {
   call: string
 }
 
+/**
+ * A call the guard let through itself, with nothing asked, because its own reading of the edit found
+ * it changes only logic (#2294), kept in the mod's store under `auto:<its call key>` so the skip can
+ * be read back. A record of what happened, never an answer: nothing reads it to let a call through.
+ */
+export type DesignRoundAutoPass = {
+  kind: 'no-screen-change'
+  /** When it went ahead, in milliseconds since the epoch. */
+  at: number
+  /** The tool the call used, and the files it changes, relative to their checkout. */
+  tool: string
+  files: string[]
+  /** What it would have waited on, as the skip question would have named them (the issue). */
+  subjects: string[]
+  /** Why it went ahead, in words. */
+  why: string
+  /** The call written out whole (rules.ts callText). */
+  call: string
+}
+
 /** Dan's own answer, kept in the mod's store under its subject's key (this Mac, every session). */
 export type DesignRoundRecord = {
   /** settled: his Settled to "Is this design settled?". skipped: his Skip them to "Skip design rounds for this issue?". */
