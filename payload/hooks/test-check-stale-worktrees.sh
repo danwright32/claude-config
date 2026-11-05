@@ -82,7 +82,10 @@ check_eq "and asks GitHub nothing, so it costs nothing in the common case" "" "$
 WT="$REPO/.claude/worktrees"; mkdir -p "$WT"
 REPO_REAL="$(cd "$REPO" && pwd -P)"
 merged(){ printf '%s\t%s\t%s\n' "$1" "$(G -C "$2" rev-parse "${3:-HEAD}")" "$4" >>"$GH_MERGED"; }
-add(){ G -C "$REPO" worktree add -q -b "$1" "$WT/$2" >/dev/null 2>&1; }
+# Each branch carries one commit of its own, found on no other branch, as a real agent's does. A
+# branch with none would be judged by what is on main instead (#2309), which is not what these
+# cases are about.
+add(){ G -C "$REPO" worktree add -q -b "$1" "$WT/$2" >/dev/null 2>&1; G -C "$WT/$2" commit -q --allow-empty -m "work on $1"; }
 # Files written by the fixture are seconds old, and a worktree changed recently is kept, so every
 # one is aged except the one whose recency is the point (the same check, with nothing faked).
 age(){ find "$WT/$1" -exec touch -t 202601010000 {} + 2>/dev/null; }
@@ -103,6 +106,7 @@ add fix/419-busy agent-busy; merged fix/419-busy "$WT/agent-busy" HEAD 419
 add fix/420-gone agent-gone
 printf 'fix/420-gone\t1111111111111111111111111111111111111111\t420\n' >>"$GH_MERGED"
 G -C "$REPO" worktree add -q --detach "$WT/agent-detached" >/dev/null 2>&1
+G -C "$WT/agent-detached" commit -q --allow-empty -m "made on no branch"
 for d in landed contained newer open dirty busy gone detached; do age "agent-$d"; done
 # The dirty one's PR merged too, so this pins the ORDER of the rules: uncommitted work has to win,
 # or the one worktree somebody is standing in is the one removed.
@@ -130,12 +134,13 @@ check "and carries the exact command that removes it" \
 check "a worktree its PR went past is stale too, every commit of it having merged" "STALE agent-contained" "$OUT"
 check "a worktree with commits its PR never held is kept" "keeping agent-newer [fix/417-newer]: it has commits PR #417 never held" "$OUT"
 check "a worktree with no merged PR is kept" "keeping agent-open [fix/9999-open]: no merged PR has this branch" "$OUT"
+check "#2309 and says its own commit is on no other branch, which is what keeps it" "keeping agent-open [fix/9999-open]: no merged PR has this branch, and 1 commit(s) on it are on no other branch, local or remote" "$OUT"
 check "a worktree with uncommitted work is kept although its PR merged" "keeping agent-dirty" "$OUT"
 check "and says that is why, in terms of what is in it" "uncommitted change(s)" "$OUT"
 check "a worktree changed in the last six hours is kept although its PR merged" "keeping agent-recent [fix/418-recent]: something in it changed in the last 360 minutes" "$OUT"
 check "a PR merged at a commit this repository lacks is kept, as unconfirmed" "keeping agent-gone [fix/420-gone]: PR #420 merged at a commit this repository does not have" "$OUT"
 check "a worktree on no branch is kept" "keeping agent-detached" "$OUT"
-check "the summary counts the landed against the total" "2 of 9 agent worktree(s)" "$OUT"
+check "the summary counts the landed against the total" "2 of 9 worktree(s)" "$OUT"
 if [ "$CAN_SEE_USE" -eq 1 ]; then
   check "a worktree something is running in is kept although its PR merged" "keeping agent-busy [fix/419-busy]: a running process is working in it" "$OUT"
 else
@@ -155,7 +160,7 @@ printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$GIT_LOG"\nexec "%s" "$@"\n' "$REAL_G
 chmod +x "$TMP/shim/git"
 export GIT_LOG="$TMP/git.log"; : >"$GIT_LOG"
 OUT="$(PATH="$TMP/shim:$PATH" STALE_WT_GH="$TMP/bin/gh" bash "$SCRIPT" "$REPO" 2>&1)"
-check "the shimmed run still judges every worktree" "2 of 9 agent worktree(s)" "$OUT"
+check "the shimmed run still judges every worktree" "2 of 9 worktree(s)" "$OUT"
 check_eq "only the worktrees whose PR landed are asked for their status" 5 "$(grep -c 'status --porcelain' "$GIT_LOG" || true)"
 
 # REMOVE, with no time left: nothing is removed, and it says the rest wait for the next run.
@@ -176,7 +181,7 @@ remaining=0
 for d in newer open dirty recent busy gone detached; do [ -d "$WT/agent-$d" ] && remaining=$((remaining + 1)); done
 check_eq "every worktree it kept is still there" 7 "$remaining"
 check_eq "and the dirty one still holds its work" "work in progress" "$(cat "$WT/agent-dirty/wip.txt")"
-check "the summary says how many were removed" "removed 2 of 9 agent worktree(s)" "$OUT"
+check "the summary says how many were removed" "removed 2 of 9 worktree(s)" "$OUT"
 MARKS="$(cd "$REPO" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/claude-worktree-removing"
 check_eq "a removal that finished leaves no progress marker behind" "" "$(ls "$MARKS" 2>/dev/null)"
 
@@ -450,7 +455,7 @@ check "an older lock whose pid nothing has has its worktree removed" "removed ag
 check_eq "its folder is gone" yes "$(gone agent-lolddead)"
 check "an older lock whose pid is running keeps its worktree" "keeping agent-loldlive [fix/612-oldlive]" "$OUT"
 check_eq "and its lock is left exactly as it was" "$R_OLDLIVE" "$(lockof agent-loldlive)"
-check "the summary counts the removals" "removed 2 of 9 agent worktree(s)" "$OUT"
+check "the summary counts the removals" "removed 2 of 9 worktree(s)" "$OUT"
 # A removal that stops part way with the worktree still listed leaves it part deleted. Its marker
 # stays for the next run to finish, and that finish (one --force) is refused on a locked worktree,
 # so the dead agent's lock must NOT be put back there.
@@ -482,6 +487,144 @@ else
 fi
 kill "$LIVE" 2>/dev/null; wait "$LIVE" 2>/dev/null
 
+# --- every worktree git lists, wherever it lives (claude-config#2309) ---------
+# On 2026-11-05 one work repository held 84 worktrees, 71 of them safe to remove by hand, and the
+# sweep reached few: 23 sat in sibling folders made with `git worktree add`, 8 under a session's
+# scratchpad, 9 inside .claude/worktrees under a name the session chose, and 9 were detached. Work
+# that shipped inside a combined batch branch, its own PR closed or never opened, passed no rule at
+# all. A worktree now qualifies when removing its folder loses nothing: every commit on its branch is
+# also on another branch, local or remote (main among them), or, detached, its HEAD is on the
+# default branch. Rules 2 to 5 are unchanged, so every case kept below would also have been kept.
+# Its own repository, with a remote, so the counts the cases above assert are not disturbed.
+NAPPS="$TMP/apps"; NREPO="$NAPPS/proj"; mkdir -p "$NREPO"; G -C "$NREPO" init -q -b main
+printf 'x\n' >"$NREPO/f.txt"; G -C "$NREPO" add f.txt; G -C "$NREPO" commit -qm base
+G init -q --bare "$TMP/remote.git"
+G -C "$NREPO" remote add origin "$TMP/remote.git"
+G -C "$NREPO" push -q origin main >/dev/null 2>&1
+G -C "$NREPO" remote set-head origin main >/dev/null 2>&1
+NWT="$NREPO/.claude/worktrees"; mkdir -p "$NWT"
+SCR="$TMP/private/claude-501/proj/sess/scratchpad"; mkdir -p "$SCR/task"
+nwt(){ # nwt <branch> <folder>: a worktree on a new branch from main, with one commit of its own
+  G -C "$NREPO" worktree add -q -b "$1" "$2" main >/dev/null 2>&1
+  G -C "$2" commit -q --allow-empty -m "work on $1"
+}
+ngone(){ [ -e "$1" ] && echo yes || echo no; }
+
+# Removed: each has every commit somewhere other than its own branch, or is detached on main.
+nwt feat/600-sib "$NAPPS/proj-wt-1"                     # a sibling folder, merged into main
+G -C "$NREPO" merge -q --no-ff -m "merge sib" feat/600-sib >/dev/null 2>&1
+nwt build/a-told-lines "$SCR/task/wt"                   # a scratchpad worktree, carried by a local batch branch
+G -C "$NREPO" branch batch/abc build/a-told-lines
+nwt feat/551-send-to "$NWT/send-to"                     # a session's own name; its PR was closed, its work
+G -C "$NREPO" branch batch/combined feat/551-send-to    # shipped inside a batch merged into main
+G -C "$NREPO" merge -q --no-ff -m "merge batch" batch/combined >/dev/null 2>&1
+: >"$GH_MERGED"; merged batch/combined "$NREPO" batch/combined 560
+nwt build/b-figures "$NAPPS/proj-7"                     # no PR at all, its commits pushed to a remote branch
+G -C "$NAPPS/proj-7" push -q origin build/b-figures >/dev/null 2>&1
+G -C "$NREPO" worktree add -q --detach "$NAPPS/proj-sql" main >/dev/null 2>&1   # detached, for running SQL from main
+
+# Kept.
+nwt feat/601-unique "$NAPPS/proj-wt-2"                  # a commit found nowhere else
+for k in c-dirty d-untracked e-recent f-busy g-locked h-broken; do
+  nwt "build/$k" "$NAPPS/proj-$k"; G -C "$NREPO" branch "keep/$k" "build/$k"   # each would otherwise qualify
+done
+G -C "$NREPO" worktree add -q --detach "$NAPPS/proj-detached-own" main >/dev/null 2>&1
+G -C "$NAPPS/proj-detached-own" commit -q --allow-empty -m "made on no branch"   # a detached commit on no branch
+G -C "$NREPO" worktree add -q --detach "$NAPPS/proj-detached-side" batch/abc >/dev/null 2>&1   # on a branch, not on main
+if [ "$CAN_DENY" -eq 1 ]; then nwt build/i-unreadable "$NAPPS/proj-i-unreadable"; G -C "$NREPO" branch keep/i build/i-unreadable; fi
+for d in "$NAPPS"/proj-* "$SCR/task/wt" "$NWT/send-to"; do
+  case "$d" in */proj-e-recent) ;; *) find "$d" -exec touch -t 202601010000 {} + 2>/dev/null ;; esac
+done
+printf 'changed\n' >"$NAPPS/proj-c-dirty/f.txt"; touch -t 202601010000 "$NAPPS/proj-c-dirty/f.txt"
+printf 'new\n' >"$NAPPS/proj-d-untracked/new.txt"; touch -t 202601010000 "$NAPPS/proj-d-untracked/new.txt"
+G -C "$NREPO" worktree lock --reason "watching a release" "$NAPPS/proj-g-locked"
+# A worktree git cannot read: its .git file points nowhere, so `git status` fails in it.
+cp "$NAPPS/proj-h-broken/.git" "$TMP/h-broken.git"
+printf 'gitdir: %s/nowhere\n' "$TMP" >"$NAPPS/proj-h-broken/.git"
+( cd "$NAPPS/proj-f-busy" || exit 1
+  sleep 120 </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$TMP/nbusy.pid" ) </dev/null >/dev/null 2>&1
+NBUSY="$(cat "$TMP/nbusy.pid" 2>/dev/null)"
+trap 'kill "$NBUSY" 2>/dev/null; kill "$LIVE" 2>/dev/null; chmod -R u+w "$TMP" 2>/dev/null; kill "$BUSY" 2>/dev/null; rm -rf "$TMP"' EXIT
+[ "$CAN_DENY" -eq 1 ] && chmod 000 "$NAPPS/proj-i-unreadable"
+
+# An lsof that answers nothing has not shown that nothing runs there: every process has a working
+# directory, this run's own shell included, so an empty answer is a failed one, and it keeps.
+printf '#!/usr/bin/env bash\nexit 1\n' >"$TMP/bin/lsof-empty"; chmod +x "$TMP/bin/lsof-empty"
+OUT="$(STALE_WT_LSOF="$TMP/bin/lsof-empty" STALE_WT_GH="$TMP/bin/gh" bash "$SCRIPT" --remove "$NREPO" 2>&1)"; RC=$?
+check "#2309 an lsof that lists no process at all keeps the worktree, saying why" "proj-wt-1 [feat/600-sib]: lsof listed no running process at all, so whether anything is running in it cannot be seen" "$OUT"
+check_eq "#2309 and removes nothing" yes "$(ngone "$NAPPS/proj-wt-1")"
+
+run "$NREPO"
+check "#2309 a landed sibling folder worktree is called stale in report mode" "STALE $(cd "$NAPPS" && pwd -P)/proj-wt-1 [feat/600-sib]: every commit on it is also on another branch" "$OUT"
+check_eq "#2309 report mode removes nothing" yes "$(ngone "$NAPPS/proj-wt-1")"
+
+run --remove "$NREPO"
+check_eq "#2309 a run that removed worktrees exits 1" 1 "$RC"
+check "#2309 a sibling folder worktree merged into main is removed" "removed $(cd "$NAPPS" && pwd -P)/proj-wt-1 [feat/600-sib]: every commit on it is also on another branch" "$OUT"
+check_eq "#2309 its folder is gone" no "$(ngone "$NAPPS/proj-wt-1")"
+check_eq "#2309 its branch is kept" 0 "$(G -C "$NREPO" rev-parse -q --verify feat/600-sib >/dev/null; echo $?)"
+check "#2309 a scratchpad worktree whose commits a local batch branch holds is removed" "scratchpad/task/wt [build/a-told-lines]: every commit on it is also on another branch" "$OUT"
+check_eq "#2309 its folder is gone" no "$(ngone "$SCR/task/wt")"
+check "#2309 a batch carried branch with a closed PR, on main by another route, is removed" "removed send-to [feat/551-send-to]: every commit on it is also on another branch" "$OUT"
+check_eq "#2309 its folder is gone" no "$(ngone "$NWT/send-to")"
+check "#2309 a branch with no PR whose commits are on a remote branch is removed" "proj-7 [build/b-figures]: every commit on it is also on another branch" "$OUT"
+check_eq "#2309 its folder is gone" no "$(ngone "$NAPPS/proj-7")"
+check "#2309 a detached worktree at a main commit is removed" "proj-sql [no branch]: its HEAD is on origin/main" "$OUT"
+check_eq "#2309 its folder is gone" no "$(ngone "$NAPPS/proj-sql")"
+check "#2309 the summary counts the removed" "removed 5 of" "$OUT"
+
+check "#2309 a branch with a commit found nowhere else is kept" "proj-wt-2 [feat/601-unique]: no merged PR has this branch, and 1 commit(s) on it are on no other branch, local or remote" "$OUT"
+check "#2309 uncommitted changes keep a worktree whose work landed" "proj-c-dirty [build/c-dirty]: it holds 1 uncommitted change(s)" "$OUT"
+check "#2309 an untracked file keeps it too" "proj-d-untracked [build/d-untracked]: it holds 1 uncommitted change(s)" "$OUT"
+check_eq "#2309 with the untracked file still there" new "$(cat "$NAPPS/proj-d-untracked/new.txt")"
+check "#2309 a recent change keeps it" "proj-e-recent [build/e-recent]: something in it changed in the last 360 minutes" "$OUT"
+if [ "$CAN_SEE_USE" -eq 1 ]; then
+  check "#2309 a process inside keeps it" "proj-f-busy [build/f-busy]: a running process is working in it" "$OUT"
+else
+  echo "SUITE-PART-UNMEASURED neither lsof nor /proc here, so a busy sibling worktree cannot be tested"
+fi
+check "#2309 a worktree git marks locked is kept" "proj-g-locked [build/g-locked]: git has it locked, and not by a Claude agent (watching a release)" "$OUT"
+check "#2309 a worktree git cannot read is kept, saying why" "proj-h-broken [build/h-broken]: git could not read its status, so whether anything in it is uncommitted cannot be told" "$OUT"
+check "#2309 a detached HEAD on no branch is kept" "proj-detached-own [no branch]: its HEAD is not on origin/main" "$OUT"
+check "#2309 a detached HEAD on another branch but not on main is kept" "proj-detached-side [no branch]: its HEAD is not on origin/main" "$OUT"
+if [ "$CAN_DENY" -eq 1 ]; then
+  check "#2309 a worktree whose folder cannot be read is kept" "proj-i-unreadable [build/i-unreadable]: its folder cannot be read, so whether anything in it is uncommitted cannot be told" "$OUT"
+  chmod 755 "$NAPPS/proj-i-unreadable"
+  check_eq "#2309 and is still there" yes "$(ngone "$NAPPS/proj-i-unreadable/.git")"
+else
+  echo "SUITE-PART-UNMEASURED this user can read a folder it denied itself, so an unreadable worktree cannot be tested"
+fi
+for k in wt-2 c-dirty d-untracked e-recent f-busy g-locked h-broken detached-own detached-side; do
+  check_eq "#2309 kept proj-$k is still there" yes "$(ngone "$NAPPS/proj-$k")"
+done
+check_not "#2309 the main checkout is never judged" "proj [main]" "$OUT"
+check_eq "#2309 and is still there, whole" x "$(cat "$NREPO/f.txt")"
+check_eq "#2309 no branch is deleted" 0 "$(for b in feat/600-sib build/a-told-lines feat/551-send-to build/b-figures; do G -C "$NREPO" rev-parse -q --verify "$b" >/dev/null || echo "$b"; done | grep -c . || true)"
+cp "$TMP/h-broken.git" "$NAPPS/proj-h-broken/.git"
+kill "$NBUSY" 2>/dev/null
+
+# A repository whose default branch cannot be read keeps every detached worktree, since nothing can
+# say its HEAD is saved anywhere.
+DREPO="$TMP/nodefault"; mkdir -p "$DREPO"; G -C "$DREPO" init -q -b trunk
+printf 'x\n' >"$DREPO/f.txt"; G -C "$DREPO" add f.txt; G -C "$DREPO" commit -qm base
+G -C "$DREPO" worktree add -q --detach "$TMP/nodefault-sql" trunk >/dev/null 2>&1
+find "$TMP/nodefault-sql" -exec touch -t 202601010000 {} + 2>/dev/null
+run --remove "$DREPO"
+check "#2309 with no default branch to read, a detached worktree is kept, saying why" "nodefault-sql [no branch]: which branch is the default could not be read" "$OUT"
+check_eq "#2309 and is still there" yes "$(ngone "$TMP/nodefault-sql")"
+
+# --just-merged is not widened: it still judges only an agent worktree under .claude/worktrees, and
+# by its merged PR alone, since with the six hour rule off a fresh branch off main would qualify.
+G -C "$NREPO" worktree add -q -b fix/602-jsib "$NAPPS/proj-jsib" main >/dev/null 2>&1
+run --remove --just-merged "$NAPPS/proj-jsib" "$NREPO"
+check_eq "#2309 --just-merged still refuses a worktree outside .claude/worktrees" 2 "$RC"
+check_eq "#2309 and leaves it" yes "$(ngone "$NAPPS/proj-jsib")"
+G -C "$NREPO" worktree add -q -b fix/603-jreach "$NWT/agent-jreach" main >/dev/null 2>&1
+run --remove --just-merged "$NWT/agent-jreach" "$NREPO"
+check "#2309 --just-merged keeps a worktree with no merged PR even when main holds its commits" "keeping agent-jreach [fix/603-jreach]: no merged PR has this branch" "$OUT"
+check_eq "#2309 and leaves it" yes "$(ngone "$NWT/agent-jreach")"
+
 # --- one named worktree, just merged (claude-config#1521) --------------------
 # merge-when-ready.sh asks about the one worktree of the branch it has just merged, the moment the
 # merge lands, so the six hour recency rule is off: every file in that worktree is minutes old by
@@ -499,7 +642,7 @@ jadd fix/703-jnewer agent-jnewer 703; G -C "$JWT/agent-jnewer" commit -q --allow
 jadd fix/704-jbusy agent-jbusy 704
 (cd "$JWT/agent-jbusy" && exec sleep 120) &
 JBUSY=$!
-trap 'kill "$JBUSY" 2>/dev/null; kill "$LIVE" 2>/dev/null; chmod -R u+w "$TMP" 2>/dev/null; kill "$BUSY" 2>/dev/null; rm -rf "$TMP"' EXIT
+trap 'kill "$JBUSY" 2>/dev/null; kill "$NBUSY" 2>/dev/null; kill "$LIVE" 2>/dev/null; chmod -R u+w "$TMP" 2>/dev/null; kill "$BUSY" 2>/dev/null; rm -rf "$TMP"' EXIT
 jgone(){ [ -e "$JWT/$1" ] && echo no || echo yes; }
 
 # Control: the sweep keeps a worktree this fresh, so what removes it below is the mode, not the age.
@@ -515,7 +658,7 @@ check_eq "#1521 its branch is kept" 0 "$(G -C "$JREPO" rev-parse -q --verify fix
 check_not "#1521 no other worktree is judged, so none is named" "agent-other" "$OUT"
 check_eq "#1521 and the other landed one, aged and removable by the sweep, is left for the sweep" no "$(jgone agent-other)"
 check_eq "#1521 the merged pull requests are read once" 1 "$(grep -c 'pr list' "$GH_CALLS" || true)"
-check "#1521 the summary counts the one worktree judged" "removed 1 of 1 agent worktree(s)" "$OUT"
+check "#1521 the summary counts the one worktree judged" "removed 1 of 1 worktree(s)" "$OUT"
 
 run --remove --just-merged "$JWT/agent-jdirty" "$JREPO"
 check "#1521 a just merged worktree holding uncommitted work is kept, saying so" "keeping agent-jdirty [fix/702-jdirty]: it holds 1 uncommitted change(s)" "$OUT"
