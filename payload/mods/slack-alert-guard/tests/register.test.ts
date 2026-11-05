@@ -69,9 +69,10 @@ const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isSt
 const world = (engine: Engine, on: On, init: { files?: Record<string, string> } = {}) => {
   const files: Record<string, string> = { [ALERT]: ALERT_TEXT, [PLAIN]: 'export const x = 1\n', ...(init.files ?? {}) }
   const store: Record<string, unknown> = {}
-  // gitFails: git cannot be run (a timeout, as the engine kills a command past its timeoutMs);
+  // gitFails: git is killed and exits nonzero with this on stderr (as at its timeoutMs); gitThrows:
+  // git cannot be run at all, so the call rejects (a hook that throws is skipped, and nothing answers);
   // gitSlow: the search answers, but only after the clock has moved past the scan's deadline.
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitSlow: 0 }
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0 }
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
   // guard that never searched.
   const gits: { argv: string[]; timeoutMs?: number }[] = []
@@ -89,13 +90,15 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     // git, standing in over the files above: one repository at /w/app, searched as git grep does.
     if (cmd === 'git') {
       const argv = e.argv.map(String)
-      gits.push({ argv, timeoutMs: (e as { timeoutMs?: number }).timeoutMs })
-      if (ctl.gitFails) throw new Error(ctl.gitFails)
+      gits.push({ argv, timeoutMs: e.init?.timeoutMs })
+      if (ctl.gitThrows) throw new Error('git could not be started')
+      if (ctl.gitFails) return { value: { exitCode: 143, stdout: '', stderr: `${ctl.gitFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
       const dir = argv[2] ?? ''
       const inRepo = dir === REPO || dir.startsWith(`${REPO}/`)
       if (argv[3] === 'rev-parse') {
         if (!inRepo) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
-        return ok(`${REPO}\n`)
+        // As git prints it: the top folder, then the folder below it ending in a slash, empty at the top.
+        return ok(`${REPO}\n${dir === REPO ? '' : `${dir.slice(REPO.length + 1)}/`}\n`)
       }
       if (argv[3] === 'grep') {
         if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
@@ -381,6 +384,11 @@ test('a search that cannot finish, runs past its deadline, or meets an unreadabl
   expect(failed).toContain('could not check')
   expect(failed).toContain('timed out after 3000ms')
   w.ctl.gitFails = ''
+  w.ctl.gitThrows = true
+  const unrun = refusalOf(await call($, RETEMPLATE))
+  expect(unrun).toContain('could not check')
+  expect(unrun).toContain('could not be searched')
+  w.ctl.gitThrows = false
   w.ctl.gitSlow = SCAN_MS + 1
   const late = refusalOf(await call($, RETEMPLATE))
   expect(late).toContain('could not check')
