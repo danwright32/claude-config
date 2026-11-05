@@ -360,8 +360,6 @@ const updateHeld = async ($: EngineInterface, change: (list: Held[]) => Held[]) 
 
 const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
 
-// Its own failure: counted, kept in the error file, said once a session. Every step is caught on its
-// own, so a failure here can never reach the call (L561, L95). `kept` says what it means for the edit.
 // The error file's record of one failure, which never throws; a debug line where it cannot be kept.
 const keepError = async ($: EngineInterface, path: string, error: string) => {
   try {
@@ -371,6 +369,8 @@ const keepError = async ($: EngineInterface, path: string, error: string) => {
   }
 }
 
+// Its own failure: counted, kept in the error file, said once a session. Every step is caught on its
+// own, so a failure here can never reach the call (L561, L95). `kept` says what it means for the edit.
 const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'shell' | 'command' | 'rotation' = 'unchecked') => {
   const error = msg(err)
   let n = 1
