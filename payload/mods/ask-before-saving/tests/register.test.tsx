@@ -2193,3 +2193,56 @@ test("the index line is covered only within the approval's window, and a write o
   // No lapse of a cover is said to Dan: he never answered about the index itself.
   expect(w.toasts.join('\n')).not.toContain(`saving to ${INDEX_SHOWN}`)
 })
+
+// #2181: after a For good on a memory file, `printf '%s\n' '<line>' >> <index>; tail -1 <index>` was
+// refused twice with the full ask, as if nothing had been approved. Which part disqualified it, the
+// trailing read, the em dash in the line, or the printf form, is answered here by sending each one
+// alone: only the trailing read does. The plain append, with its em dash and an absolute path, passes.
+test('only the trailing read disqualified the shell append of the covered index line; the em dash and printf form pass (#2181)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [INDEX]: INDEX_TEXT } })
+  const variants: [string, (name: string) => string][] = [
+    ['printf, em dash, absolute path', n => `printf '%s\\n' '${indexLine(n)}' >> ${INDEX}`],
+    ['the same with a trailing tail', n => `printf '%s\\n' '${indexLine(n)}' >> ${INDEX}; tail -1 ${INDEX}`],
+    ['echo with a trailing tail', n => `echo '${indexLine(n)}' >> ${INDEX}; tail -1 ${INDEX}`],
+    ['printf without the em dash, with a trailing tail', n => `printf '%s\\n' '- [${n}](${n}) the rule it holds' >> ${INDEX}; tail -1 ${INDEX}`],
+  ]
+  const outcomes: string[] = []
+  for (const [i, [variant, command]] of variants.entries()) {
+    const name = `repro-${i}.md`
+    await saveMemoryFile($, w, name)
+    const said = refusalOf(await call($, { tool: 'Bash', command: command(name) }))
+    outcomes.push(`${variant}: ${said.includes(ASKS) ? 'asked' : said ? `refused otherwise: ${said}` : 'passed'}`)
+  }
+  expect(outcomes).toEqual([
+    'printf, em dash, absolute path: passed',
+    'the same with a trailing tail: asked',
+    'echo with a trailing tail: asked',
+    'printf without the em dash, with a trailing tail: asked',
+  ])
+})
+
+// #2181: a shell command to the index that Dan's For good covers, but that is not read as one that
+// only appends that line, says so and names the form that is accepted, before it asks; the refusal
+// alone read as though Dan had approved nothing.
+test('a shell write to a covered index that is not read as a plain append says so and names the accepted form (#2181)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [INDEX]: INDEX_TEXT } })
+  await saveMemoryFile($, w, 'rule.md')
+  const r = await call($, { tool: 'Bash', command: `printf '%s\\n' '${indexLine('rule.md')}' >> ${INDEX}; tail -1 ${INDEX}` })
+  const said = refusalOf(r)
+  expect(said.startsWith(
+    `This command was not read as one that only appends the line linking rule.md to ${INDEX_SHOWN}, which Dan's For good on saving ${MEMDIR_SHOWN}/rule.md lets through without asking him, so it was not let through. ` +
+      `To add just that line, send the append as a command of its own, with nothing before or after it: printf '%s\\n' '<the line>' >> ${INDEX_SHOWN}, echo '<the line>' >> ${INDEX_SHOWN}, or cat >> ${INDEX_SHOWN} fed a quoted heredoc, or add it with Edit; read the file back in a separate call. ` +
+      `Only if it has to do more than add that line: Not saved yet: `,
+  )).toBe(true)
+  expect(said).toContain(ASKS)
+  // Nothing was used up: the append on its own then goes through.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `printf '%s\\n' '${indexLine('rule.md')}' >> ${INDEX}` }))).toBe('')
+  // A command that is read as a plain append, but of a line linking another file, is asked about
+  // with no such note: it was read, and it is not the covered line.
+  await saveMemoryFile($, w, 'next.md')
+  const other = refusalOf(await call($, { tool: 'Bash', command: `echo '${indexLine('next.md', 'other.md')}' >> ${INDEX}` }))
+  expect(other.startsWith('Not saved yet: ')).toBe(true)
+  // A Write or Edit is read whatever it holds, so it never carries the note either.
+  const edit = refusalOf(await call($, { tool: 'Edit', file_path: INDEX, old_string: INDEX_SECOND, new_string: `${INDEX_SECOND}\n${indexLine('next.md')}\n- [Notes](notes.md)` }))
+  expect(edit.startsWith('Not saved yet: ')).toBe(true)
+})

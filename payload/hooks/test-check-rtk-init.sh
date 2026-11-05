@@ -175,6 +175,23 @@ check "#1468 and says the payload could not be read" "could not read the hook pa
 out="$(payload "ls -la" | bash "$LONE/check-rtk-init.sh" 2>&1)"; rc=$?
 check_eq "#1468 control: a command naming neither passes in silence even with the reader missing" "0|" "$rc|$out"
 
+# 5. A redirection in front of rtk is the shell's, never the command's name (claude-config#2235).
+# `2>/dev/null rtk init -g` runs rtk init. The reader took the redirection for the command's name, so
+# the gate saw a command named 2>/dev/null and let it run. Each case also runs through a copy of the
+# hooks whose reader passes no redirection over, which must let it through (L1).
+if python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$WORKDIR/loose-redirects" redirects; then ok; else
+  bad "#2235 the loose copy of the hooks is made"; fi
+redirected(){ # redirected <name> <command>
+  refused "#2235 $1" "$2"
+  out="$(payload "$2" | bash "$WORKDIR/loose-redirects/check-rtk-init.sh" 2>&1)"; rc=$?
+  check_eq "#2235 the loose copy lets it through, so the case is one the fix decides: $1" "0" "$rc"
+}
+redirected "behind an error redirection" "2>/dev/null rtk init -g"
+redirected "behind an output redirection" "> /dev/null rtk init --auto-patch"
+redirected "behind input and an assignment" "</dev/null A=1 rtk init -g"
+redirected "after true && and a redirection" "true && 2>&1 rtk init"
+allowed "#2235 control: rtk gain behind a redirection" "2>/dev/null rtk gain"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

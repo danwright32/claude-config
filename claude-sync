@@ -7875,7 +7875,12 @@ publish_merged_rule_files(){
       # else would be reported as nothing to send while it published the merge (claude-config#1402).
       local ahead=0
       unpushed_commits && ahead=1
-      if git -C "$SYNC_REPO" push -u origin "$branch" -q 2>/dev/null && [ "$ahead" = 1 ]; then
+      if [ -n "${CI_GATE_TESTED:-}" ]; then
+        # This run took in only up to a tested commit, so a plain push is not a fast forward of the
+        # shared head and would be refused: the merge goes up on top of it the way this Mac's other
+        # work did this run (claude-config#2230). It records its own outcome.
+        send_over_untested_tip "$branch"
+      elif git -C "$SYNC_REPO" push -u origin "$branch" -q 2>/dev/null && [ "$ahead" = 1 ]; then
         reconcile_outcome published "$(repo_head)"
       fi
     fi
@@ -7905,8 +7910,17 @@ MERGED_PUBLISH
   is_blank "$published" && return 0
   # Level with the shared repo, or not, said either way. Committed and unpushed is a real state
   # with a real remedy (the next send carries it), and reporting it as published would be the same
-  # false success one level along (L11).
-  if unpushed_commits; then
+  # false success one level along (L11). Sent on top of an untested head, the commits here are in the
+  # shared repo under other ids, so what is unsent is measured from the record of that send.
+  local unsent=1
+  if [ -n "${CI_GATE_TESTED:-}" ]; then
+    local range
+    range="$(unsent_commit_range)" || range=""
+    [ -n "$range" ] && [ "$(git -C "$SYNC_REPO" rev-list --count "$range" 2>/dev/null || echo 1)" = 0 ] && unsent=0
+  else
+    unpushed_commits || unsent=0
+  fi
+  if [ "$unsent" = 1 ]; then
     echo "claude-sync: the entries merged on this Mac were committed here (${published% }) and the push did NOT go through, so they are safe but the other Mac has not got them yet. The next send carries them." >&2
   else
     echo "claude-sync: the entries merged on this Mac were published to the shared repo (${published% }), so the other Mac receives them and the two copies hold the same entries." >&2
@@ -9910,10 +9924,54 @@ ci_rate_limit_note(){   # $1 = rate-limited | rate-limited-secondary -> one clau
 # this run's. A variable rather than a second lookup: the verdict costs a call to GitHub, and asking
 # twice could get two different answers about one commit.
 CI_GATE_VERDICT=""
+# THE NEWEST COMMIT WHOSE TESTS PASSED, when the head's own are still going (claude-config#2230).
+# Set by the gate's still being tested arms and emptied on entry, like the verdict beside it. Empty
+# means the head blocks and nothing of theirs is taken in, exactly as before.
+CI_GATE_TESTED=""
+# Found 2026-11-04 on the personal MacBook: a run on main took about 50 minutes and commits landed
+# every half hour, so the head was never green at the moment a tick asked, and from 06:23 AM ET the
+# watcher applied nothing while commits that HAD passed sat behind ones that had not finished.
+#
+# Walks main's FIRST PARENT line back from just below the head, never past what this clone already
+# holds, so a commit that passed on a side branch, or one built on the untested head, is never a
+# candidate: taking it in would bring the untested commit with it. A commit still being tested, with
+# no run, failed or cancelled is passed over and never chosen; the one chosen is itself green, and
+# its tests ran on its whole tree, so nothing untested or failed is applied by taking it. A verdict
+# that cannot be read stops the walk, since an answer nobody could read is not a pass (L11).
+# At most SYNC_CI_TESTED_SEARCH commits, each one a call to GitHub.
+newest_tested_ancestor(){   # $1 = the shared head -> prints the commit, 0 when one was found
+  local tip="$1" c state n=0 limit="${SYNC_CI_TESTED_SEARCH:-10}" line
+  case "$limit" in ''|*[!0-9]*) limit=10 ;; esac
+  # Read whole into a variable, never through a process substitution: this shell would not wait for
+  # that child (claude-config#1984).
+  line="$(git -C "$SYNC_REPO" rev-list --first-parent "$tip" --not HEAD 2>/dev/null || true)"
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    [ "$c" = "$tip" ] && continue
+    n=$(( n + 1 ))
+    [ "$n" -le "$limit" ] || return 1
+    state="$(remote_ci_state "$c")"
+    case "$state" in
+      green) printf '%s' "$c"; return 0 ;;
+      pending|none|red|cancelled) continue ;;
+      *) return 1 ;;
+    esac
+  done <<< "$line"
+  return 1
+}
+# Said once, from both arms that can find one, so the two cannot drift into different sentences.
+ci_gate_take_tested(){   # $1 = the head
+  local tested
+  tested="$(newest_tested_ancestor "$1")" || return 1
+  CI_GATE_TESTED="$tested"
+  echo "claude-sync: the shared repo's newest commit (${1:0:8}) is still being tested, so this Mac takes in the shared commits only up to ${tested:0:8}, the newest one whose tests passed. The rest applies once its tests finish." >&2
+  return 0
+}
 # The gate itself. Prints nothing and returns 0 when the pull may go ahead.
 ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
   local branch sha state
   CI_GATE_VERDICT=""
+  CI_GATE_TESTED=""
   [ "${SYNC_IN_WATCH:-0}" = "1" ] || return 1
   have_git || return 1
   git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1 || return 1
@@ -10012,9 +10070,14 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       CI_GATE_VERDICT=red
       send_outcome ci-red ;;
     pending)
-      echo "claude-sync: the shared repo's newest commit (${sha:0:8}) is still being tested, so it was not applied here yet. It applies once the tests finish." >&2
       CI_GATE_VERDICT=pending
-      send_outcome ci-pending ;;
+      # Still blocks the HEAD: what do_sync takes in instead is only up to the commit this names.
+      if ci_gate_take_tested "$sha"; then
+        send_outcome ci-tested-ancestor
+      else
+        echo "claude-sync: the shared repo's newest commit (${sha:0:8}) is still being tested, so it was not applied here yet. It applies once the tests finish." >&2
+        send_outcome ci-pending
+      fi ;;
     cancelled)
       echo "claude-sync: the tests for the shared repo's newest commit (${sha:0:8}) were cancelled, so no verdict is coming for it and it was not applied here. Push again, or run '$(receive_command)' yourself if you know it is good." >&2
       notify "not applied: the tests for the shared repo's head were cancelled"
@@ -10033,11 +10096,15 @@ ci_gate_blocks_pull(){   # -> 0 when the automatic pull must be skipped
       age="$(git -C "$SYNC_REPO" log -1 --format=%ct "$sha" 2>/dev/null || true)"
       case "$age" in ''|*[!0-9]*) age="$now" ;; esac
       if [ "$(( now - age ))" -lt "${SYNC_CI_GRACE:-600}" ]; then
-        echo "claude-sync: the shared repo's newest commit (${sha:0:8}) has no test run yet and is less than $(duration_in_words "${SYNC_CI_GRACE:-600}") old, so it was not applied here yet. It applies once a run appears, or once it is old enough that none is coming." >&2
         # A run that has not been created yet is a run still to come, so for what may be sent this is
-        # the same as one in progress.
+        # the same as one in progress, and so is what may be taken in below it (claude-config#2230).
         CI_GATE_VERDICT=pending
-        send_outcome ci-pending
+        if ci_gate_take_tested "$sha"; then
+          send_outcome ci-tested-ancestor
+        else
+          echo "claude-sync: the shared repo's newest commit (${sha:0:8}) has no test run yet and is less than $(duration_in_words "${SYNC_CI_GRACE:-600}") old, so it was not applied here yet. It applies once a run appears, or once it is old enough that none is coming." >&2
+          send_outcome ci-pending
+        fi
         return 0
       fi
       echo "claude-sync: the shared repo's newest commit (${sha:0:8}) has no test run at all and is older than $(duration_in_words "${SYNC_CI_GRACE:-600}"), so nothing is going to judge it and it was applied." >&2
@@ -10254,7 +10321,13 @@ send_over_untested_tip(){   # $1 = branch. Always 0: what happened is said, and 
   fi
   printf '%s %s\n' "$head" "$p" > "$SENT_OVER_UNTESTED_FILE" 2>/dev/null || true
   record_sync_success
-  echo "Sent on top of the shared repo's newest commit (${up:0:8}), which is still being tested. That commit is not applied here until its tests pass, so this Mac goes on running what it had."
+  # Two different states, so two sentences (L11): with an older tested commit taken in this run, this
+  # Mac does NOT go on running what it had (claude-config#2230).
+  if [ -n "${CI_GATE_TESTED:-}" ]; then
+    echo "Sent on top of the shared repo's newest commit (${up:0:8}), which is still being tested. That commit is not applied here until its tests pass; this Mac runs the shared commits up to ${CI_GATE_TESTED:0:8}, the newest whose tests passed."
+  else
+    echo "Sent on top of the shared repo's newest commit (${up:0:8}), which is still being tested. That commit is not applied here until its tests pass, so this Mac goes on running what it had."
+  fi
   reconcile_outcome published "$p"
   return 0
 }
@@ -10263,14 +10336,20 @@ send_over_untested_tip(){   # $1 = branch. Always 0: what happened is said, and 
 # commit they became, so what the pull replays is only what is newer. Without this the pull met
 # them as unsent snapshots of files the shared repo already holds, and dropped them with a notice
 # about another checkout that never existed.
-adopt_sent_over_untested(){
-  local mark l p
+# Given a target, only when what went up is inside it (claude-config#2230): taking in an older commit
+# whose tests passed must never move this clone onto the commit sent on top of the untested head,
+# which carries that head with it. The record is then kept for do_sync to re-point after the rebase.
+adopt_sent_over_untested(){   # $1 = what is being taken in, when it is not the shared head
+  local mark l p target="${1:-}"
   [ -f "$SENT_OVER_UNTESTED_FILE" ] || return 0
   if ! mark="$(sent_over_untested)"; then
     rm -f "$SENT_OVER_UNTESTED_FILE" 2>/dev/null || true
     return 0
   fi
   l="${mark%% *}"; p="${mark#* }"
+  if [ -n "$target" ] && ! git -C "$SYNC_REPO" merge-base --is-ancestor "$p" "$target" 2>/dev/null; then
+    return 0
+  fi
   # Uncommitted work in the clone is somebody's edit to the tool itself: left to the ordinary pull,
   # which knows how to carry it.
   git -C "$SYNC_REPO" diff --quiet HEAD 2>/dev/null || return 0
@@ -10346,24 +10425,55 @@ do_sync(){
     # Held back is about what INSTALLS here, never about what this Mac may send: when the head is
     # only still being tested, this Mac's own commits go up on top of it without it being taken in
     # (claude-config#1398). send_over_untested_tip says which, and records it for the send.
-    if ci_gate_blocks_pull; then send_over_untested_tip "$branch"; return 0; fi
+    # Unless an older commit on main's own line has passed its tests while the head's are still going:
+    # then that commit is what is taken in, and nothing newer (claude-config#2230). The head stays
+    # untaken, and this Mac's own commits still go up on top of it, as above.
+    local target=""
+    if ci_gate_blocks_pull; then
+      if [ -z "$CI_GATE_TESTED" ]; then send_over_untested_tip "$branch"; return 0; fi
+      target="$CI_GATE_TESTED"
+    fi
     # integrate the other Mac's changes (only if the remote branch exists yet)
     ensure_derived_file_merge_rule
     if git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1; then
       # This Mac's commits that already went up on top of an untested head are moved onto what
       # they became there, so the pull replays only what is newer and nothing is taken for a
-      # superseded snapshot (claude-config#1398).
-      adopt_sent_over_untested
+      # superseded snapshot (claude-config#1398). With a target, only when what went up is in it.
+      adopt_sent_over_untested "$target"
 
       # Before the rebase is asked to replay anything, because a snapshot the shared repo already
       # holds has nothing to replay and the rebase's only possible answer to it is a conflict over
       # nothing (claude-config#362). The live config has just been staged and committed above, so
       # the comparison this makes is against what this Mac is actually running.
-      drop_snapshot_already_in_tip "$branch" || true
+      # NOT with a target: it compares with the shared HEAD and resets onto it when they agree, which
+      # would check out the very commit that is still being tested (claude-config#2230).
+      [ -n "$target" ] || drop_snapshot_already_in_tip "$branch" || true
+      # What already went up on top of the untested head, when the take in below rewrites it: the
+      # record names commits by id, and the rebase gives them new ones. Counted from the end of the
+      # history, where the rebase leaves them, so the record can be pointed at their new ids after
+      # (claude-config#2230). Without it the next edit to the same file is measured from the old base
+      # and refused as overlapping this Mac's own earlier send.
+      local keep_mark="" keep_n="" keep_m="" keep_p=""
+      if [ -n "$target" ] && keep_mark="$(sent_over_untested)"; then
+        keep_p="${keep_mark#* }"
+        if git -C "$SYNC_REPO" merge-base --is-ancestor "$keep_p" "$target" 2>/dev/null; then
+          keep_p=""
+        else
+          keep_n="$(git -C "$SYNC_REPO" rev-list --count "${keep_mark%% *}..HEAD" 2>/dev/null || true)"
+          keep_m="$(git -C "$SYNC_REPO" rev-list --count "$target..HEAD" 2>/dev/null || true)"
+        fi
+      fi
       # Counted around the pull because git DROPS the autostash on a clean restore and
       # KEEPS it on a conflicted one. See the check after the pull for why that matters.
       stash_before="$(git -C "$SYNC_REPO" stash list 2>/dev/null | wc -l | tr -d ' ')"
-      if ! pull_err="$(git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" pull --rebase --autostash -q origin "$branch" 2>&1)"; then
+      # With a target, a rebase onto it rather than a pull, which would take in the shared head.
+      local pull_rc=0
+      if [ -n "$target" ]; then
+        pull_err="$(git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" rebase --autostash -q "$target" 2>&1)" || pull_rc=$?
+      else
+        pull_err="$(git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" pull --rebase --autostash -q origin "$branch" 2>&1)" || pull_rc=$?
+      fi
+      if [ "$pull_rc" -ne 0 ]; then
         # Which failure this is, decided from git's own STATE rather than from the words
         # in its message: a real content conflict is the only one that leaves a rebase
         # half finished. Matching on message text would be a second, drifting definition.
@@ -10433,6 +10543,22 @@ do_sync(){
       if git -C "$SYNC_REPO" merge-base --is-ancestor "origin/$branch" HEAD 2>/dev/null; then
         rm -f "$SENT_OVER_UNTESTED_FILE" 2>/dev/null || true
       fi
+      # Pointed at the new ids only when the rebase replayed every one of this clone's commits: a
+      # count that moved means one was dropped or merged away, and the record would then name a commit
+      # that is not what went up, so it is removed and the next send measures from the merge base.
+      if [ -n "$keep_p" ]; then
+        local keep_now keep_l=""
+        keep_now="$(git -C "$SYNC_REPO" rev-list --count "$target..HEAD" 2>/dev/null || true)"
+        case "$keep_n" in ''|*[!0-9]*) keep_n="" ;; esac
+        if [ -n "$keep_n" ] && [ -n "$keep_m" ] && [ "$keep_now" = "$keep_m" ] && [ "$keep_n" -le "$keep_now" ] 2>/dev/null; then
+          keep_l="$(git -C "$SYNC_REPO" rev-parse --verify -q "HEAD~$keep_n" 2>/dev/null || true)"
+        fi
+        if [ -n "$keep_l" ]; then
+          printf '%s %s\n' "$keep_l" "$keep_p" > "$SENT_OVER_UNTESTED_FILE" 2>/dev/null || true
+        else
+          rm -f "$SENT_OVER_UNTESTED_FILE" 2>/dev/null || true
+        fi
+      fi
     fi
     after="$(repo_head)"
     # Re-checked AFTER the rebase, not from $pushed alone: the daemon runs this, so a
@@ -10444,7 +10570,12 @@ do_sync(){
     # refused this run, nothing leaves this Mac until a scan passes (claude-config#947).
     # What came of this Mac's own work is recorded for a send that ran this as its reconcile, which
     # otherwise finds everything already gone and calls it nothing to send (claude-config#1402).
-    if [ -z "$SEND_REFUSED" ]; then
+    if [ -n "$target" ]; then
+      # Taken in only up to a tested commit, so this clone is not on top of the shared head and a plain
+      # push would be refused as not a fast forward. What goes up goes on top of the head without it,
+      # exactly as when nothing was taken in; it says what it did, and handles a refused scan itself.
+      send_over_untested_tip "$branch"
+    elif [ -z "$SEND_REFUSED" ]; then
       if [ "$pushed" -eq 1 ] || unpushed_commits; then
         # A commit the rebase found already there (drop_snapshot_already_in_tip) leaves HEAD level with
         # the shared repo, and the push that follows sends nothing, so it must not be called a send.
@@ -13922,6 +14053,9 @@ do_watch(){
           # line they would read as one condition, and they need different remedies: pending
           # resolves itself, red needs a fix on the other Mac, cancelled needs another push, and
           # unreadable is about gh on THIS Mac (L11).
+          # Its own line, because it APPLIED something: read as ci-pending, a tick that took in a
+          # tested commit would look like one more that applied nothing (claude-config#2230).
+          *"SEND-OUTCOME ci-tested-ancestor"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: applied the newest shared commit whose tests passed; the head is still being tested and is not applied yet" ;;
           *"SEND-OUTCOME ci-pending"*)    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: not applied yet, the shared repo's head is still being tested" ;;
           *"SEND-OUTCOME ci-red"*)        echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, the shared repo's head failed its tests" ;;
           *"SEND-OUTCOME ci-cancelled"*)  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, the tests for the shared repo's head were cancelled, so no verdict is coming" ;;

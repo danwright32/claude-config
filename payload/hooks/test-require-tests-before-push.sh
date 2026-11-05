@@ -120,10 +120,36 @@ STUB_DIR="$(mktemp -d)"
 cat > "$STUB_DIR/claude" <<'STUB'
 #!/usr/bin/env bash
 input="$(cat)"
+# STUB_CLAUDE_VANISH: the stand in removes itself once it has read its input, so every later call
+# finds no claude on the path and fails before it launches (#2153).
+[ -n "${STUB_CLAUDE_VANISH:-}" ] && rm -f "$0"
+# STUB_CLAUDE_SLEEP: seconds each call takes, so the hook's own clock moves past a deadline while
+# a reading runs (#2249); the hook's clock cannot be set mid run, only at its start.
+[ -n "${STUB_CLAUDE_SLEEP:-}" ] && sleep "$STUB_CLAUDE_SLEEP"
 [ -n "${STUB_CLAUDE_STDIN:-}" ] && printf '%s' "$input" > "$STUB_CLAUDE_STDIN"
 if [ -n "${STUB_CLAUDE_LOG:-}" ]; then
-  n=1; while [ -e "$STUB_CLAUDE_LOG/call.$n" ]; do n=$((n+1)); done
+  # Claimed with noclobber, because further readings run at once (#2153) and two calls looking for
+  # the first free number at the same moment would write one file.
+  n=1; while ! ( set -C; : > "$STUB_CLAUDE_LOG/call.$n" ) 2>/dev/null; do n=$((n+1)); done
   printf '%s' "$input" > "$STUB_CLAUDE_LOG/call.$n"
+fi
+# STUB_CLAUDE_MEET, a directory: a call over the rest of the tests marks itself there and waits, no
+# longer than the hang ceiling FAKE_HANG_S hands this stand in (hooks/lib/hang-wait.sh), for a
+# second such call to start, recording "met" when one does. Readings made one after another never
+# meet; readings made at once do, without any fixed sleep deciding it.
+if [ -n "${STUB_CLAUDE_MEET:-}" ]; then
+  case "$input" in *'CHANGES THE FIRST READER FOUND NO TEST FOR'*)
+    # The mark is taken away when the call ends, so two calls one after the other are never both
+    # marked; once two have met, later calls do not wait. The marks are counted by a glob, never a
+    # pipeline into grep (test-pipefail-shortcircuit.sh); this call's own mark is always one of them.
+    : > "$STUB_CLAUDE_MEET/started.$$"
+    t0=$SECONDS; while [ ! -e "$STUB_CLAUDE_MEET/met" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do
+      marks=("$STUB_CLAUDE_MEET"/started.*)
+      [ "${#marks[@]}" -ge 2 ] && { : > "$STUB_CLAUDE_MEET/met"; break; }
+      sleep 0.1
+    done
+    rm -f "$STUB_CLAUDE_MEET/started.$$" ;;
+  esac
 fi
 [ -n "${STUB_CLAUDE_ARGS:-}" ] && printf '%s\n' "$@" > "$STUB_CLAUDE_ARGS"
 if [ -n "${STUB_CLAUDE_RULES:-}" ]; then
@@ -459,32 +485,193 @@ want_code 2 "#1998 a later call that returns nothing still refuses"
 want_stderr "returned nothing" "#1998 naming that the later call returned nothing"
 if [ "$(ledger_last 4)" = cantjudge ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #1998 the record says $(ledger_last 4), expected cantjudge"; fi
 
-# The cost stays bounded: tests far past the budget take at most three more calls, and what is
-# left after them is refused as could not judge, naming the file, never judged on what was unseen.
+# The cost stays bounded: past the gate's cap on readings, what is left is refused as could not
+# judge, naming the file, never judged on what was unseen. The cap is 40 parts (#2153), lowered to
+# 3 here through the setting that may only lower it, so the case stays the size it was.
 JUDGE_LOG="$TMPROOT/judge-log-1998d"; mkdir -p "$JUDGE_LOG"
 printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
 W="$(mk_repo)"; seed_big_tests "$W" 260
-STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
-want_code 2 "#1998 tests past what four calls can show are refused"
+REQUIRE_TESTS_MAX_PARTS=3 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#1998 tests past what the cap of readings can show are refused"
 want_stderr "could not judge" "#1998 as could not judge"
 want_stderr "tests/register.test.js" "#1998 naming the test file not shown in full"
+want_stderr "at most 4 " "#1998 naming the cap it stopped at"
 n_calls="$(calls_in "$JUDGE_LOG")"
 if [ "$n_calls" = 4 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #1998 260 KB of tests took $n_calls judge calls, expected the cap of 4"; fi
+else fail=$((fail+1)); echo "FAIL: #1998 260 KB of tests under a cap of 3 parts took $n_calls judge calls, expected 4"; fi
+# The setting can only lower the cap: a value above it, or one that is not a number, leaves 40.
+JUDGE_LOG="$TMPROOT/judge-log-2153cap"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; seed_big_tests "$W" 260
+REQUIRE_TESTS_MAX_PARTS=9999 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2153 260 KB of tests no part covers is refused"
+want_stderr "have no test covering them" "#2153 a setting above the cap reads every part, then refuses as missing a test"
+
+# --- claude-config#2153: a large push is read whole, however many parts it needs ----------------
+# On 2026-11-03 batch/8's test changes came to 436 KB, needing 16 readings where the gate stopped at
+# 4, and it called four tested issues untested. Now the rest of the tests is read in as many parts
+# as it takes, up to 40, several at once so they fit the deadline: real judge calls took a median
+# of 9 and at most 58 seconds over the 1,836 judged rows in the gate's record on 2026-11-03, so 16
+# one after another would not fit the 110 seconds the gate allows itself.
+JUDGE_LOG="$TMPROOT/judge-log-2153big"; mkdir -p "$JUDGE_LOG"
+MEET="$TMPROOT/meet-2153"; mkdir -p "$MEET"
+printf 'WINDING_DOWN_MARKER\t%s\n%s\t%s\n' "$COVERED_ONE" "$LATER_CALL" "$COVERED_NONE" > "$RULES"
+W="$(mk_repo)"; seed_big_tests "$W" 400
+STUB_CLAUDE_MEET="$MEET" STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 0 "#2153 a 400 KB batch whose covering test is in its last part is read whole and allowed"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" -gt 4 ] 2>/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 400 KB of tests took $n_calls judge calls, expected more than the old cap of 4 (each part under 60 KB)"; fi
+if grep -q -h 'case 00000' "$JUDGE_LOG"/call.* && grep -q -h 'case 06399' "$JUDGE_LOG"/call.* \
+   && grep -q -h 'WINDING_DOWN_MARKER' "$JUDGE_LOG"/call.*; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 some of the 400 KB of test changes reached no judge call"; fi
+if [ -f "$JUDGE_LOG/call.1" ] && ! grep -q 'WINDING_DOWN_MARKER' "$JUDGE_LOG/call.1"; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 the first call held the covering test, so this case never exercised the later parts"; fi
+if [ -e "$MEET/met" ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 no two readings of the rest ran at once, so 16 readings cannot fit the deadline"; fi
+big=0
+for f in "$JUDGE_LOG"/call.*; do [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 70000 ] && big=1; done
+if [ "$big" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2153 a judge call was sent more than 70,000 bytes"; fi
+if [ "$(ledger_last 4)" = pass ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2153 the record says $(ledger_last 4), expected pass"; fi
+# The same batch with no part covering the change: every part read, then refused as missing a test.
+JUDGE_LOG="$TMPROOT/judge-log-2153none"; mkdir -p "$JUDGE_LOG"
+printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
+W="$(mk_repo)"; seed_big_tests "$W" 400
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2153 a 400 KB batch no part covers is still refused"
+want_stderr "have no test covering them" "#2153 as missing a test, every part having been read"
+# A reading in a wave that fails, with the change in no part that answered: could not judge, never
+# allowed, naming the file.
+printf '%s\t%s\n' "$LATER_CALL" '{"result":"I could not tell"}' > "$RULES"
+W="$(mk_repo)"; seed_big_tests "$W" 400
+STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2153 readings at once that fail still refuse"
+want_stderr "could not judge" "#2153 as could not judge"
+want_stderr "tests/register.test.js" "#2153 naming the test file not judged"
+# A reading that fails BEFORE it launches leaves its start and end empty. The record of the run must
+# not take the reading's byte count for a start time (the fields were once split on a tab, which
+# collapses empty ones).
+printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
+W="$(mk_repo)"; seed_big_tests "$W" 400
+cp "$STUB_DIR/claude" "$STUB_DIR/claude.keep"
+STUB_CLAUDE_VANISH=1 STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+cp "$STUB_DIR/claude.keep" "$STUB_DIR/claude"; chmod +x "$STUB_DIR/claude"
+want_code 2 "#2153 readings that fail before launch still refuse"
+rec_start="$(ledger_last 13)"
+case "$rec_start" in
+  ''|*[!0-9]*) fail=$((fail+1)); echo "FAIL: #2153 the record's start is '$rec_start', expected epoch seconds" ;;
+  *) if [ "$rec_start" -gt 1000000000 ]; then pass=$((pass+1))
+     else fail=$((fail+1)); echo "FAIL: #2153 a reading that never launched shifted the record's start to $rec_start (its byte count)"; fi ;;
+esac
+
+# --- claude-config#2153: a push is judged against the tests its whole branch adds -----------------
+# On 2026-11-03 a work branch pushed its failing database tests first, then the migration and code
+# in two later pushes, and the gate refused those as untested: it read only the pushed commits. Now
+# the tests the branch changed since it left the default branch (their merge base) count too. The
+# source judged is still only what the push carries.
+mk_branch_with_earlier_test() {   # $1 = repo  ->  branch feat, its test already on the remote
+  (
+    cd "$1" || exit 1
+    git checkout -qb feat
+    mkdir -p tests lib
+    printf 'test("adds", () => { expect(add(1,2)).toBe(3); }); // EARLIER_TEST_MARKER\n' > tests/calc.test.js
+    git add tests/calc.test.js
+    git commit -qm "Add failing calc case"
+    git push -qu origin feat
+    printf 'export function add(a, b) { return a + b; }\n' > lib/calc.js
+    git add lib/calc.js
+    git commit -qm "add calc"
+  ) >/dev/null 2>&1
+}
+JUDGE_LOG="$TMPROOT/judge-log-2153branch"; mkdir -p "$JUDGE_LOG"
+printf 'EARLIER_TEST_MARKER\t%s\n' '{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' > "$RULES"
+W="$(mk_repo)"; mk_branch_with_earlier_test "$W"
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 0 "#2153 a push whose test went up in an earlier push of the branch is judged and allowed"
+if grep -q 'EARLIER_TEST_MARKER' "$JUDGE_LOG/call.1" 2>/dev/null && grep -q 'tests/calc.test.js' "$JUDGE_LOG/call.1"; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 the judge was not shown the test the branch pushed earlier"; fi
+if grep -q 'ALREADY ON THIS BRANCH' "$JUDGE_LOG/call.1" 2>/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 the judge was not told which tests were pushed earlier on the branch"; fi
+# The source judged is the push's own: the earlier commit's test file is not listed as pushed source.
+src_section="$(awk '/^SOURCE FILES CHANGED IN THIS PUSH/,/^FAILURE HANDLING/' "$JUDGE_LOG/call.1" 2>/dev/null)"
+case "$src_section" in *'lib/calc.js'*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: #2153 the pushed source was not listed as the push's source" ;; esac
+
+# A code only push on a branch with no test anywhere on it is still refused at the floor, without a
+# judge call, even when the default branch had tests before the branch left it: those are not the
+# branch's.
+JUDGE_LOG="$TMPROOT/judge-log-2153none2"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"
+(
+  cd "$W" || exit 1
+  mkdir -p tests lib
+  printf 'test("old", () => { expect(1).toBe(1); });\n' > tests/old.test.js
+  git add tests/old.test.js; git commit -qm "an old test on main"; git push -q origin HEAD
+  git checkout -qb feat
+  printf 'export const a = 1;\n' > lib/a.js
+  git add lib/a.js; git commit -qm "a"; git push -qu origin feat
+  printf 'export const b = 2;\n' > lib/b.js
+  git add lib/b.js; git commit -qm "b"
+) >/dev/null 2>&1
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' run_hook "$W" "git push"
+want_code 2 "#2153 a code only push on a branch with no test anywhere is still refused"
+want_stderr "adds or modifies no tests" "#2153 at the zero test floor"
+if [ "$(calls_in "$JUDGE_LOG")" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 a branch with no test reached the judge, so the floor no longer holds"; fi
+
+# The branch's base cannot be worked out (no default branch known for origin): judged as before, on
+# the push's own tests alone, so the push is refused, and the refusal says why the branch's earlier
+# tests were not counted.
+W="$(mk_repo)"; mk_branch_with_earlier_test "$W"
+( cd "$W" && git update-ref -d refs/remotes/origin/master && git update-ref -d refs/remotes/origin/main ) >/dev/null 2>&1
+STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' run_hook "$W" "git push"
+want_code 2 "#2153 with no default branch known the push is judged as before and refused"
+want_stderr "adds or modifies no tests" "#2153 at the zero test floor, as before"
+want_stderr "earlier on this branch" "#2153 saying the branch's earlier tests could not be counted"
+
+# Tests the branch pushed earlier that cannot all be read are refused as could not judge, never
+# allowed, and the refusal says a smaller push does not shrink them, since they are read with every
+# push of the branch.
+printf '%s\t%s\n' "$LATER_CALL" '{"result":"I could not tell"}' > "$RULES"
+W="$(mk_repo)"
+(
+  cd "$W" || exit 1
+  git checkout -qb feat
+) >/dev/null 2>&1
+seed_big_tests "$W" 120
+(
+  cd "$W" || exit 1
+  git push -qu origin feat
+  printf 'export const later = 1;\n' > lib/later.js
+  git add lib/later.js; git commit -qm "later code"
+) >/dev/null 2>&1
+STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2153 earlier branch tests too large to read are refused, not allowed"
+want_stderr "could not judge" "#2153 as could not judge"
+want_stderr "pushed earlier are read with every push" "#2153 saying a smaller push does not shrink the earlier tests"
 
 # Out of time: the hook must finish inside the 120 seconds its registration sets (a setting, not
 # measured), so a later call is not started without time for it, and the push is refused saying so.
+# Since #2249 the first call keeps to the deadline too, so the deadline here (25) leaves the first
+# call its 20 seconds, and the stand in judge taking 6 seconds leaves the later call short of them.
+# A machine slow enough to spend 5 seconds reading the push refuses before the first call instead,
+# which measures nothing about the later one, so that case is reported unmeasured (L411).
 JUDGE_LOG="$TMPROOT/judge-log-1998e"; mkdir -p "$JUDGE_LOG"
 printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
 W="$(mk_repo)"; seed_issue_push "$W"
-REQUIRE_TESTS_DEADLINE_SECONDS=1 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+REQUIRE_TESTS_DEADLINE_SECONDS=25 STUB_CLAUDE_SLEEP=6 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
   run_hook "$W" "git push"
-want_code 2 "#1998 no time left for a later call refuses"
-want_stderr "could not judge" "#1998 as could not judge"
-want_stderr "time" "#1998 saying it ran out of time"
 n_calls="$(calls_in "$JUDGE_LOG")"
-if [ "$n_calls" = 1 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #1998 with no time left the gate made $n_calls calls, expected 1"; fi
+case "$ERR" in *"before its first reading"*) first_refused=1 ;; *) first_refused=0 ;; esac
+if [ "$n_calls" = 0 ] && [ "$first_refused" = 1 ]; then
+  echo "SUITE-PART-UNMEASURED #1998 later call deadline: reading the push took past 5 s, so the first call was refused instead"
+else
+  want_code 2 "#1998 no time left for a later call refuses"
+  want_stderr "could not judge" "#1998 as could not judge"
+  want_stderr "ran out of time" "#1998 saying it ran out of time"
+  if [ "$n_calls" = 1 ]; then pass=$((pass+1))
+  else fail=$((fail+1)); echo "FAIL: #1998 with no time left the gate made $n_calls calls, expected 1"; fi
+fi
 
 # --- claude-config#2021: the deadline setting's two untested edges ----------
 # REQUIRE_TESTS_DEADLINE_SECONDS (#2009) can only end the further readings SOONER: it is capped at
@@ -513,11 +700,13 @@ JUDGE_LOG="$TMPROOT/judge-log-2021cap"; mkdir -p "$JUDGE_LOG"
 W="$(mk_repo)"; seed_issue_push "$W"
 SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
   run_hook "$W" "git push"
-want_code 2 "#2021 a setting above 110 is held to 110, so 95 seconds in no further reading starts"
+want_code 2 "#2021 a setting above 110 is held to 110, so 95 seconds in no reading starts"
 want_stderr "ran out of time" "#2021 and the refusal says it ran out of time"
+# None at all: 15 seconds is short of the 20 any reading needs, the first one included (#2249);
+# both are numbers the hook and this test set, not measured.
 n_calls="$(calls_in "$JUDGE_LOG")"
-if [ "$n_calls" = 1 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #2021 a setting of 500 was not held to 110: 95 seconds in the gate made $n_calls judge calls, expected 1"; fi
+if [ "$n_calls" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 a setting of 500 was not held to 110: 95 seconds in the gate made $n_calls judge calls, expected 0"; fi
 
 # 2. Without lib/whole-number.sh the setting cannot be read, and the default 110 stands. A copy of
 # the hook and its libraries with that one file taken away, so the real tree is never touched.
@@ -544,11 +733,71 @@ JUDGE_LOG="$TMPROOT/judge-log-2021nw2"; mkdir -p "$JUDGE_LOG"
 W="$(mk_repo)"; seed_issue_push "$W"
 SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
   run_hook "$W" "git push"
-want_code 2 "#2021 without lib/whole-number.sh the deadline is the default 110, so 95 seconds in no further reading starts"
+want_code 2 "#2021 without lib/whole-number.sh the deadline is the default 110, so 95 seconds in no reading starts"
 n_calls="$(calls_in "$JUDGE_LOG")"
-if [ "$n_calls" = 1 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh, 95 seconds in, the gate made $n_calls judge calls, expected 1"; fi
+if [ "$n_calls" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh, 95 seconds in, the gate made $n_calls judge calls, expected 0"; fi
 HOOK="$REAL_HOOK"
+
+# --- claude-config#2249: the FIRST reading keeps to the deadline too -------
+# The further readings were started only with PART_MIN_SECONDS left and timed to end by the deadline
+# (#1998), but the first was always given the full JUDGE_TIMEOUT of 90 however late it started. A
+# slow scan of a large push before it left the call running past the 120 second hook limit, and
+# the hook was killed with no reason given. Every number in this block is one the hook or this
+# test sets, not measured. Now the first reading is not started
+# with less than PART_MIN_SECONDS left, its timeout is what is left when that is less than 90, and a
+# reading cut short by that shortened timeout is refused as could not judge, never let through: a
+# killed hook was a refusal already, so no push refused today is allowed by this.
+#
+# 1. Too late to start: 95 seconds in (a start this test sets) leaves 15, and no reading is made.
+JUDGE_LOG="$TMPROOT/judge-log-2249late"; mkdir -p "$JUDGE_LOG"
+printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
+W="$(mk_repo)"; seed_issue_push "$W"
+SECONDS=95 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2249 a first reading with 15 seconds left is refused"
+want_stderr "could not judge" "#2249 as could not judge"
+want_stderr "ran out of time" "#2249 saying it ran out of time"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2249 with 15 seconds left the gate still made $n_calls judge calls, expected 0"; fi
+if [ "$(ledger_last 4)" = cantjudge ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2249 the late start is recorded as $(ledger_last 4), expected cantjudge"; fi
+
+# A stand in for `timeout`, first on the PATH, that records the seconds it was handed and answers
+# as GNU timeout does when the time runs out (124), without running the judge: what a slow judge
+# looks like to the gate, with no real wait.
+TSTUB="$TMPROOT/timeout-stub"; mkdir -p "$TSTUB"
+cat > "$TSTUB/timeout" <<'TSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$STUB_TIMEOUT_ARGS"
+cat > /dev/null
+exit 124
+TSTUB
+chmod +x "$TSTUB/timeout"
+
+# 2. Started 60 seconds in, the first reading is given the 50 left, not 90, and when it runs out
+# the push is refused as could not judge, never the DID NOT RUN allow. These are numbers this test
+# sets, not measured.
+TARGS="$TMPROOT/timeout-args-2249short"; : > "$TARGS"
+W="$(mk_repo)"; seed_issue_push "$W"
+SECONDS=60 STUB_TIMEOUT_ARGS="$TARGS" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push" "$TSTUB:$PATH_STUB"
+want_code 2 "#2249 a first reading cut short by the deadline is refused"
+want_stderr "could not judge" "#2249 a reading cut short is could not judge"
+want_stderr "deadline" "#2249 naming the deadline it was cut short by"
+case "$OUT$ERR" in *"DID NOT RUN"*) fail=$((fail+1)); echo "FAIL: #2249 a reading cut short by the deadline was let through ungated" ;; *) pass=$((pass+1)) ;; esac
+first_t="$(head -n 1 "$TARGS")"
+if [ -n "$first_t" ] && [ "$first_t" -ge 45 ] && [ "$first_t" -le 50 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2249 started 60 seconds in, the first reading was given a timeout of [$first_t], expected the 50 or so left"; fi
+if [ "$(ledger_last 4)" = cantjudge ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2249 the reading cut short is recorded as $(ledger_last 4), expected cantjudge"; fi
+
+# 3. The control: started at 0 the first reading keeps its full 90, and a judge that times out
+# there is still the DID NOT RUN allow it was, so the change narrows only the late start.
+TARGS="$TMPROOT/timeout-args-2249full"; : > "$TARGS"
+W="$(mk_repo)"; seed_issue_push "$W"
+STUB_TIMEOUT_ARGS="$TARGS" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push" "$TSTUB:$PATH_STUB"
+want_allowed_notice "#2249 the control: a full length reading that times out is the DID NOT RUN allow, as before"
+first_t="$(head -n 1 "$TARGS")"
+if [ "$first_t" = 90 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2249 started at 0, the first reading was given a timeout of [$first_t], expected the full 90"; fi
 
 # --- claude-config#930, end to end: the push that was refused --------------
 # A push changing only a suite file inside an Xcode test target folder changes no source, so the
@@ -913,28 +1162,45 @@ not_in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "main's merged change is left 
 not_in_call "$JUDGE_LOG/call.1" "MAIN_COMMIT_SUBJECT" "main's commit subjects are left out of the messages"
 if [ "$(calls_in "$JUDGE_LOG")" = 1 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2028 expected one judge call, got $(calls_in "$JUDGE_LOG")"; fi
 
-# The same with its own change untested is refused, naming that change and not main's.
+# The same with its own change untested is refused, naming that change and not main's. The branch
+# pushed tests/shared.test.js earlier, so since #2153 that test counts for the push and the judge,
+# not the zero test floor, decides: the stub here refuses whatever shows it the named source file,
+# as a judge finding the earlier test does not cover it would. The cases check the judge is shown
+# the branch's earlier test and not main's change, and that the refusal names the branch's change.
+merge_block_rules() {   # $1 = the source file the stub judge finds untested
+  printf 'BIG_MAIN_MARKER\t%s\n%s\t%s\n' \
+    '{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"main big change\"]}"}' \
+    "$1" "{\"result\":\"{\\\"verdict\\\":\\\"block\\\",\\\"changes\\\":[],\\\"missing\\\":[\\\"$1 has no test\\\"]}\"}" > "$MERGE_RULES"
+}
+JUDGE_LOG="$TMPROOT/judge-log-2028b"; mkdir -p "$JUDGE_LOG"
+merge_block_rules lib/own.js
 W="$(mk_repo)"; mk_merged_main "$W" untested
-STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
 want_code 2 "#2028 a branch that merged main with its own untested change is refused"
-want_stderr "adds or modifies no tests" "#2028 the untested own change is refused by the floor"
 want_stderr "lib/own\.js" "#2028 the refusal names the branch's change"
 not_in_stderr "lib/big\.js" "the refusal does not name main's change"
+in_call "$JUDGE_LOG/call.1" "tests/shared.test.js" "the untested push is judged against the test the branch pushed earlier"
+not_in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "the untested push is judged without main's change"
 
 # A conflict resolution is a change in the merge result in neither parent: it is still judged.
+JUDGE_LOG="$TMPROOT/judge-log-2028c"; mkdir -p "$JUDGE_LOG"
+merge_block_rules lib/shared.js
 W="$(mk_repo)"; mk_merged_main "$W" conflict
-STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
 want_code 2 "#2028 an untested conflict resolution is refused"
-want_stderr "adds or modifies no tests" "#2028 the conflict resolution is judged on its own"
 want_stderr "lib/shared\.js" "#2028 the refusal names the resolved file"
 not_in_stderr "lib/big\.js" "the conflict refusal does not name main's change"
+not_in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "the conflict resolution is judged without main's change"
 
 # So is an edit slipped into a clean merge's commit.
+merge_block_rules lib/evil.js
 W="$(mk_repo)"; mk_merged_main "$W" evil
 STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
 want_code 2 "#2028 an untested edit made inside a merge commit is refused"
 want_stderr "lib/evil\.js" "#2028 the refusal names the edit made in the merge"
 not_in_stderr "lib/big\.js" "the merge edit refusal does not name main's change"
+# Restored for the cases below, which expect the stub to refuse only main's change.
+printf 'BIG_MAIN_MARKER\t%s\n' '{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"main big change\"]}"}' > "$MERGE_RULES"
 
 # No default branch known: the gate cannot tell main's commits from the branch's, so it judges
 # everything, as before #2028, never nothing, and says main's changes could not be set apart.

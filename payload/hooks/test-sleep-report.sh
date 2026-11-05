@@ -500,9 +500,9 @@ has "naming it" "the note's at must be ms since the epoch" "$out"
 # Sourced from zsh, where BASH_SOURCE is empty, sleep_note uses the installed script, never one in
 # the caller's folder.
 if command -v zsh >/dev/null 2>&1; then
-  mkdir -p "$WORK/hm/.claude/hooks/lib"; cp "$PY" "$WORK/hm/.claude/hooks/lib/sleep-report.py"
-  # The installed lib/ always carries the helper it imports beside it (claude-config#2096).
-  cp "$(dirname "$PY")/repo_slug.py" "$WORK/hm/.claude/hooks/lib/repo_slug.py"
+  # The installed lib/ always carries the helpers it imports beside it (claude-config#2096).
+  python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORK/hm/.claude/hooks/lib" sleep-report.py
+  check_eq "the install put sleep-report.py and its imports in the home" 0 "$?"
   printf 'import sys\nopen(sys.argv[0] + ".ran", "w").write("decoy")\n' > "$WORK/sleep-report.py"
   out="$(cd "$WORK" && HOME="$WORK/hm" SLEEP_REPORT_NOW_MS=$NOW_ASLEEP zsh -c '. "$1"; sleep_note "{\"kind\":\"finding\",\"by\":\"z\",\"text\":\"from zsh\"}" "$2" "$3" 1759800000' _ "$LIB" "$CUR" "$NOW_ASLEEP" 2>&1)"; rc=$?
   check_eq "sleep_note from zsh writes" 0 "$rc"
