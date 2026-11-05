@@ -225,7 +225,7 @@ done
 INPUTS="$TMPROOT/inputs"
 mkdir -p "$INPUTS"
 : > "$INPUTS/1-empty"
-printf '{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"gh issue create --title t --body b && gh run watch 1 -i 5 && rtk init -g && git branch -D x && gh pr comment 1 --body b"}}' "$DECOY" > "$INPUTS/2-command"
+printf '{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"gh issue create --title t --body b && gh run watch 1 -i 5 && rtk init -g && git branch -D x && gh pr comment 1 --body b && log show"}}' "$DECOY" > "$INPUTS/2-command"
 # cat alone on PATH, so a hook can read its payload at all, and nothing else (dirname least of all).
 CAT_ONLY="$TMPROOT/cat-only"
 mkdir -p "$CAT_ONLY"
@@ -243,8 +243,10 @@ for hook in "$DIR"/*.sh; do
   verdict="no input reached the line where it finds its own folder"
   for input in "$INPUTS"/*; do
     # HOOK_TESTS_LIST_ONLY makes the test runner list its directories and stop, instead of running
-    # every suite in the repo from the decoy folder; no other hook reads it.
-    bounded_run 20 env -i HOME="$TMPROOT/home" TMPDIR="$TMPROOT/tmp" HOOK_TESTS_LIST_ONLY=1 PS4='+ ' "$BASH" -c \
+    # every suite in the repo from the decoy folder; no other hook reads it. SHELL is set to zsh, as
+    # on both Macs, because bash fills an unset SHELL from the login shell: bash on the CI runner,
+    # where check-zsh-builtins.sh then passed every command before finding its folder (#2240).
+    bounded_run 20 env -i HOME="$TMPROOT/home" TMPDIR="$TMPROOT/tmp" SHELL=/bin/zsh HOOK_TESTS_LIST_ONLY=1 PS4='+ ' "$BASH" -c \
       'cd "$1" && PATH="$4" exec "$BASH" -x "$2" < "$3"' _ "$DECOY" "$hook" "$input" "$CAT_ONLY"
     if [[ "$BOUNDED_OUT" == *"DECOY LOADED"* ]]; then
       decoy_line="${BOUNDED_OUT#*DECOY LOADED}"
