@@ -24,7 +24,6 @@ import importlib.util
 import itertools
 import os
 import re
-import shlex
 import sys
 
 # Which gh subcommand a command runs is read by lib/shell-words.py (gh_command), the one reading of gh
@@ -452,14 +451,11 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
     command = _lexed(command)
 
     try:
-        # punctuation_chars is a lexer option, not a split() argument: it makes the
-        # shell operators separate tokens so a segment head can be recognised.
-        # commenters is cleared so a '#' inside an issue title is not treated as a
-        # comment and does not swallow the rest of the command.
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        tokens = list(lexer)
+        # The shared reader's tokens: shell operators are separate tokens so a segment head can be
+        # recognised, a '#' inside an issue title is no comment, and a descriptor number stays glued
+        # to its redirection, so `2>/dev/null gh issue create` is a create and not a command named 2
+        # (claude-config#2235).
+        tokens = _sw.shell_tokens(command)
     except ValueError as e:
         # The reader read it to its end, so what the lexer refuses is a backslash ending it, or a
         # quote the two read differently.
@@ -626,6 +622,9 @@ def _cut_heredocs(command):
     return "".join(out), bodies
 
 
+REDIRECT_TOKEN = re.compile(r"\d*[<>&|]+\Z")
+
+
 def _stages(command):
     """Every pipeline in the command, as a list of stages, each a (words, redirects, heredocs) triple.
 
@@ -637,10 +636,7 @@ def _stages(command):
     _no_reader()
     text, bodies = _cut_heredocs(command)
     try:
-        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        tokens = list(lexer)
+        tokens = _sw.shell_tokens(text)
     except ValueError:
         raise Unreadable("unbalanced quotes")
     pipelines, stages, stage = [], [], ([], [], [])
@@ -660,9 +656,11 @@ def _stages(command):
         elif tok in ("|", "|&"):
             stages.append(stage)
             stage = ([], [], [])
-        elif set(tok) <= set("<>&|") and ("<" in tok or ">" in tok):
+        elif REDIRECT_TOKEN.match(tok) and ("<" in tok or ">" in tok):
+            # Its descriptor number (`2>`, claude-config#2235) is the shell's, never a word of the
+            # command, and the operator is recorded without it, as it always was.
             target = tokens[i + 1] if i + 1 < len(tokens) else ""
-            stage[1].append((tok, target))
+            stage[1].append((tok.lstrip("0123456789"), target))
             i += 1
         else:
             stage[0].append(tok)

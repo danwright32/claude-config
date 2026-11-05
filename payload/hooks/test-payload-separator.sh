@@ -138,6 +138,7 @@ family "Monitor merge" monitor-action-gate.sh Monitor "gh pr merge 7 --squash" "
 family "branch delete" stacked-branch-delete-gate.sh Bash "git push origin --delete somebranch" "$PLAIN"
 family "wrapped commands" check-wrapped-commands.sh Bash 'bash -c "$CMD git"' "$PLAIN"
 family "rtk" check-rtk-init.sh Bash "rtk init -g" "$PLAIN"
+family "zsh builtins" check-zsh-builtins.sh Bash "zsh -c 'log show --last 1m'" "$PLAIN"
 family "gh watchers" check-gh-watch-interval.sh Bash "gh pr checks 5 --watch" "$PLAIN"
 family "issue fields" require-issue-fields.sh Bash "gh issue create --title x --body y" "$PLAIN"
 
