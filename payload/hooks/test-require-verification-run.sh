@@ -331,6 +331,25 @@ setup '{}'
 out="$(VR_SCRIPTS="$WORK/no-such-scripts" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
 expect_deny "the judge itself missing" "$out" "$WORK/no-such-scripts/merge_check.py"
 
+echo "require-verification-run: a redirection in front of gh is the shell's, never the command's name (claude-config#2235)"
+# `2>/dev/null gh pr merge 7` merges. The reader took the redirection for the command's name, so the
+# gate saw a command named 2>/dev/null and the unverified merge went through. Each case also runs
+# through a copy of the hooks whose reader passes no redirection over, which must let it through (L1).
+# The copy is the hooks folder alone, so VR_SCRIPTS names the real judge beside this suite.
+if python3 -B "$HOOK_DIR/lib/loose-reader.py" "$HOOK_DIR" "$WORK/loose-redirects" redirects; then pass
+else fail "#2235 the loose copy of the hooks is made"; fi
+vr_redirected() {  # $1 = what, $2 = command
+  setup '{"no_record": true}'
+  out="$(run_hook "$2")"
+  expect_deny "#2235 $1" "$out" "no verification-run record"
+  out="$(payload "$2" "$REPO" | ( cd "$REPO" && PATH="$WORK/bin:$PATH" FAKE="$FAKE" VERIFICATION_HOME="$HOME_V" \
+    VR_SLEEP=true VR_SCRIPTS="$SCRIPTS" bash "$WORK/loose-redirects/require-verification-run.sh" ))"
+  expect_allow "#2235 the loose copy lets it through, so the case is one the fix decides: $1" "$out"
+}
+vr_redirected "a merge behind an error redirection" "2>/dev/null $MERGE 7 --squash --match-head-commit $HEAD"
+vr_redirected "a merge behind an output redirection" "> /dev/null $MERGE 7 --squash --match-head-commit $HEAD"
+vr_redirected "a merge behind input and an assignment" "</dev/null A=1 $MERGE 7 --squash --match-head-commit $HEAD"
+
 echo "require-verification-run: warn mode allows, says the verdict, and tallies it by pull request"
 for pr in 1 2 3 4 5; do
   setup "{\"mode\": \"warn\", \"unmeasured\": true, \"pr\": $pr}"

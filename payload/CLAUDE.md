@@ -214,12 +214,7 @@ On Daniels-MacBook-Pro-2 (personal MacBook):
 - `~/claude-config-sync`: the clone the scheduled sync actually runs from
 
 On Dans-MacBook-Pro:
-- `~/Apps/Bidspoke`: Next.js 14 + Cloudflare Workers + Supabase. Moved here on 2026-10-25 from `~/Documents/Documents - Dan’s MacBook Pro/Bidspoke`, out of the folder iCloud Desktop & Documents syncs, whose sync churn starved file watching and loaded the machine (Bidspoke #2007, lesson L759).
-- `~/eavesly-web-app`: Vite + React + TypeScript + shadcn/ui + Supabase
-- `~/trypennie`: Next.js 15 + Prismic CMS + Google Maps
-- `~/Apps/PET`: the Project Enrollment Tracker (Node + Supabase + Cloudflare Pages). Moved here on 2026-10-23 from the iCloud synced `~/Documents/Documents - Dan’s MacBook Pro/Project Enrollment Tracker (PET)` so its `.env` credentials stop syncing to iCloud (PET #1924, #1627).
-- `~/Apps/Slate`: Next.js 16 + Cloudflare Workers + Supabase, Pennie's booking app. Moved here on 2026-10-26 from `~/Documents/Documents - Dan’s MacBook Pro/Slate`, out of the folder iCloud Desktop & Documents syncs, because iCloud's sync process ran at 91% of a core and drove load past 130 while the pre-push gate built (lesson L759).
-- `~/Apps/Pivot`: Cloudflare Workers + the Cloudflare agents SDK, the AI web chat that enrolls leads into debt resolution (repo pivot). Private since 2026-10-28: Geoff's material, business figures, and transcripts and personas with names removed may be committed, but real lead data, credit profiles and credentials never are (its own CLAUDE.md has the rule).
+- Its projects are work repositories and this file is public, so they are listed in that Mac's own @projects.local.txt instead, which the sync never carries. Claude Code loads it from beside this file where it exists and skips it silently everywhere else. `hooks/check-project-list.sh` reads it on that Mac and says so when it is missing, and `hooks/lib/write-project-list-local.sh` writes it from the last version of this file that listed them (claude-config#2112). The import sits inside this sentence on purpose, because the sync refuses a pull whose line start import is missing.
 
 This list records where each project should be, never whether it is there today. That is
 `hooks/check-project-list.sh`'s answer, given fresh on each Mac every time it runs, so trust its

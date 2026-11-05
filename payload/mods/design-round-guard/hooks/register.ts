@@ -107,6 +107,7 @@ import {
 import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
+import { guardAsks } from './mod-kit/designquestions.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something
 // without my input. If we can make this something that can't be ignored rather than just a memory,
@@ -1622,9 +1623,9 @@ export const register: Register = on => {
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const ask = e as unknown as AskInput
     const source = ask.metadata?.source
-    if (typeof source !== 'string') return next(e)
+    // Read by the one rule picker manners reads too, before it writes an answer onto an issue (#2253).
+    if (!guardAsks(source)) return next(e)
     const isSkip = source.startsWith(`${SKIP_SOURCE}:`)
-    if (!isSkip && source !== SETTLED_SOURCE) return next(e)
 
     // Asked of Dan with the guard's own question and answers; his choice read back, or why there is none.
     const asked = async (question: string, options: { label: string; description: string }[]): Promise<{ r: Awaited<ReturnType<typeof next>>; chosen?: string; none?: string }> => {
