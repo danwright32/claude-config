@@ -205,8 +205,9 @@ eq "and removed every throwaway HOME it made" "" "$left"
 # ---- 4. the refusals ----
 # Arming refuses (2) rather than running a suite against the real records when the list is missing:
 # a copy of suite-deadline.sh in a lib folder without suite-isolation.sh beside it.
-mkdir -p "$W/nolib/lib"
-cp "$HOOKS/lib/suite-deadline.sh" "$W/nolib/lib/"
+python3 "$HOOKS/lib/install-hook-libs.py" "$HOOKS/lib" "$W/nolib/lib" suite-deadline.sh >/dev/null \
+  || bad "#2204 suite-deadline.sh could not be installed with what it sources"
+rm -f "$W/nolib/lib/suite-isolation.sh"   # the copy without the list, on purpose
 r="$(env "${unsets[@]}" HOME="$W/home1" SUITE_WALL_TIMEOUT=0 bash -c '
   . "$1/lib/suite-deadline.sh" || exit 9
   suite_deadline_arm; rc=$?
