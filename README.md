@@ -4407,10 +4407,10 @@ yet, with nothing recorded and no toast, and Claude takes his words as the next 
 rather than asking again (#1336). Once Skip them or Settled is stored, and only then, the guard
 raises `$.designRound.answered` with the question and answer, which picker manners checks off on
 the issue (#2261). Not a look or wording change raises nothing: it lets one call through and
-records nothing for the issue, so its question stays open there. The grey card drawn for a refused edit leads in
-plain words and names the file after (#1145). Since #1151 a program the shell runs (inline or on
-standard input) is judged by its own text, with a bare name placed in the folder it runs in, a cd
-before it followed,
+records nothing for the issue, so its question stays open there. The grey card drawn for a
+refused edit leads in plain words and names the file after (#1145). Since #1151 a program the
+shell runs (inline or on standard input) is judged by its own text, with a bare name placed in
+the folder it runs in, a cd before it followed,
 never the session's folder, and held as a write that cannot be followed where that cd cannot be; a
 write whose own name is fixed and not look changing (`$D/spec.json`) is no look edit wherever its
 folder is, so what its heredoc's data names is data. A design round's own files in the scratchpad
