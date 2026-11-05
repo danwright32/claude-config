@@ -5332,11 +5332,14 @@ any log still rotating and the live log, filtered by one `awk` pass to the one r
 branch, so no decision is ever too old to be asked for and the scan is the decisions plus at most a
 few MiB of log. A rebase moves the merge base, so decisions taken before it are no longer asked
 for. A log that cannot be read refuses the command; a fact the command does not depend on that
-cannot be read (no checkout, GitHub not answering for a merge) lets it through.
+cannot be read (no checkout, GitHub not answering for a merge) lets it through. Its structural
+labels are also what `/next-issue`'s structural slot brings forward: `rank-next-issues.py` gives the
+last pick of every picker to the highest ranked open structural issue when no pick is one, never in
+place of a p0, a p1 or a lesson sweep, and `test-rank-next-issues.sh` holds its list to this one.
 
 </td><td>
 
-#1506, #1508, #1509, #1510, #2143
+#1505, #1506, #1508, #1509, #1510, #2143
 
 </td></tr>
 <tr><td>
