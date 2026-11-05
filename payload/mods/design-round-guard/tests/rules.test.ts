@@ -2341,7 +2341,7 @@ test('#2161: an index by a number or another quoted key is no read of a reason k
 // readMod and drawnOf scanned the whole file again once for each function, local and call in it.
 // Judged by growth between two sizes of the same code, never by a wall clock budget: four times the
 // file took about eleven times as long before the fix; in step with size it is about four.
-test('#2223: four times as much mod hook code takes about four times as long to read, not sixteen', () => {
+test('#2223: four times as much mod hook code takes under six times as long to read (it took about eleven)', () => {
   const chunk = (i: number) => [
     `const pick${i} = (rows: string[]) => rows.map(r => r.trim()).filter(r => r.split(',').length > 1 && r !== 'none')`,
     `const show${i} = async ($: any, rows: string[]) => {`,

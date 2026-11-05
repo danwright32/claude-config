@@ -1718,7 +1718,6 @@ const readMod = (f: ModFile): ModRead | null => {
     const name = m[1] || nameBefore(m.index as number)
     fns.push({ from: m.index as number, to: shut + 1, body: brace, params: namesIn(paren + 1, end), ...(name ? { name } : { receiver: receiverOf(m.index as number) }) })
   }
-  // The innermost function holding i, as an index into fns, or -1 at the top level; `not` excepted.
   // #2223: the functions holding each offset, found once. Between two neighbouring function ends the
   // same functions hold every offset, so each stretch keeps their indexes in order; nothing assumes
   // the functions nest.
@@ -1740,6 +1739,7 @@ const readMod = (f: ModFile): ModRead | null => {
   const none: readonly number[] = []
   // Every function holding offset i, as indexes into fns in order.
   const holding = (i: number): readonly number[] => cover[stretchAt(i)] ?? none
+  // The innermost function holding i, as an index into fns, or -1 at the top level; `not` excepted.
   const fnAt = (i: number, not = -1): number => {
     let best = -1
     for (const k of holding(i)) {
@@ -2451,8 +2451,6 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
       })
     }
   }
-  // The functions around offset `at`, innermost first.
-  const around = (r: ModRead, at: number) => r.around(at)
   const returned = new Set<string>()
   const returnsOf = (file: string, k: number) => {
     const key = `${file}\n${k}`
@@ -2465,7 +2463,7 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
   // where `x` called at `at` is such a function, a local one, one at the top level, or one imported.
   const callee = (file: string, x: string, at: number): boolean => {
     const r = read.get(file) as ModRead
-    for (const [f, k] of around(r, at)) {
+    for (const [f, k] of r.around(at)) {
       const own = r.localsOf(k, x)
       if (own.length) {
         const g = r.fnsNamed(x).find(j => own.some(l => l.span[0] <= (r.fns[j] as Fn).from && (r.fns[j] as Fn).to <= l.span[1])) ?? -1
@@ -2491,7 +2489,7 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
     if (x === '$') return
     const r = read.get(file) as ModRead
     const within = inputs === undefined ? undefined : r.fns[inputs]
-    for (const [f, k] of around(r, at)) {
+    for (const [f, k] of r.around(at)) {
       const own = r.localsOf(k, x)
       if (own.length) {
         // A local of the called function carries on as one of its values.
