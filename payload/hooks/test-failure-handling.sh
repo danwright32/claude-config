@@ -141,6 +141,14 @@ silent fh_retry payload/hooks/lib/x.py '    The caller retries with backoff, as 
 fires fh_catch "$ISSUE_PATH" "try { render(<Panel />) } catch (e) { return null }" "a real catch in a test file"
 fires fh_retry "$ISSUE_PATH" "await retry(() => expect(screen.getByText('Saved')).toBeVisible())" "a real retry call in a test file"
 fires fh_retry payload/hooks/test-thing.sh 'while [ "$tries" -lt 5 ]; do retry_once && break; done' "a retry loop in a shell suite"
+# The identifier scan reads the text after a retry word in pieces (claude-config#2249): a literal
+# value that is a word, followed by another word, is not a fixture value ending its line, and a line
+# holding the \001 byte the pieces are cut with is read by the old scan instead.
+silent fh_retry "$ISSUE_PATH" "  retries: true," "a fixture key given the literal true"
+fires fh_retry "$ISSUE_PATH" "  retries: true other" "a literal word followed by another word is not a fixture value ending the line"
+fires fh_retry "$ISSUE_PATH" "  retries: 'S' + other" "a quoted fixture value followed by more code is not a fixture value"
+fires fh_retry src/x.ts "$(printf 'const a\001b = 1; await retry(go)')" "a line holding a \\001 byte still finds its retry call"
+silent fh_retry "$ISSUE_PATH" "$(printf '  \001x: 1, retries: 2,')" "a line holding a \\001 byte still exempts its fixture key"
 
 # The shell backoff case above must fire on the CODE, not its comment: with the comment removed it
 # still fires, and with only the comment it does not.
@@ -303,6 +311,103 @@ got="$(LC_ALL="$BAD_BYTE_LOCALE" fh_files < "$WORK/bytediff" | tr '\n' ' ')"
 if [ "$got" = "src/byte.ts " ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: with a byte that is not UTF-8 above it, fh_files listed [$got], expected [src/byte.ts ]"; fi
 printf '// caf\xff note\ncatch (e) { return [] }\n' > "$WORK/bytelines"
 if LC_ALL="$BAD_BYTE_LOCALE" fh_catch src/byte.ts "$WORK/bytelines"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: fh_catch should fire below a byte that is not UTF-8"; fi
+
+# --- one very long line is read in linear time (claude-config#2249) ----------------------------
+#
+# The push gate runs fh_files over the whole diff before its first judge call. A settled design page
+# carries its frames as ONE line of JSON inside a script, and the scan read that line a character at
+# a time with substr, which macOS awk prices by the length of the whole line, and built its code
+# text by appending to one string, which it copies whole on every append: measured 2026-11-04, a
+# 400 KB line took 6.16 s, a 1.6 MB line 99 s, and the gate was killed at its hook limit before it
+# judged anything. Each long line below is timed against a YARDSTICK, the same bytes cut into short
+# lines, which is linear before the fix and after it, so the budget moves with the machine's load
+# (L290), and a machine too starved to scan even the yardstick says UNMEASURED (L411). Every page
+# ends in the construct that lists it, so a scan that sped up by reading less is caught too: a
+# string line (the settled page), a code line (the code text and the retry word scan), and a shell
+# line with a quote on every other word (the program runner check made at each quote).
+cat > "$WORK/long-line.py" <<'PY'
+import os, signal, subprocess, sys, time
+lib = os.environ["FH_LIB"]
+size = 1_200_000
+
+def diff(path, lines):
+    return ("diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n"
+            % (path, path, path, len(lines))) + "".join("+" + l + "\n" for l in lines)
+
+def cut(text, sep, width=120):
+    out, cur = [], ""
+    for part in text.split(sep):
+        cur = cur + part + sep if cur else part + sep
+        if len(cur) >= width:
+            out.append(cur); cur = ""
+    if cur: out.append(cur)
+    return out
+
+def string_case():
+    piece = '<div class=\\"card\\" data-id=\\"row\\"><p>Tuesday 4 November, 10:30 at the studio.</p></div> '
+    body = (piece * (size // len(piece) + 1))[:size]
+    long_ = ['<script>', 'var DR_TEMPLATE = "' + body + '";', 'throw new Error("no frame");']
+    yard = ['<script>'] + ['var DR_PART = "' + l + '";' for l in cut(body, " ")] + ['throw new Error("no frame");']
+    return "design/settled.html", long_, yard
+
+def code_case():
+    stmts = ";".join("a%d=b%d+c%d" % (i, i, i) for i in range(size // 12))[:size].rsplit(";", 1)[0]
+    long_ = [stmts + ";retryLater();"]
+    yard = cut(stmts, ";") + ["retryLater();"]
+    return "src/min.js", long_, yard
+
+def shell_case():
+    words = " ".join('a%d "b%d"' % (i, i) for i in range(size // 12))[:size].rsplit(" ", 1)[0]
+    long_ = ["printf %s " + words + "; retry_later"]
+    yard = ["printf %s " + l for l in cut(words, " ")] + ["retry_later"]
+    return "payload/hooks/long.sh", long_, yard
+
+def run(text, limit):
+    t0 = time.monotonic()
+    p = subprocess.Popen(["bash", "-c", '. "$1" && fh_files', "fh", lib], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        out, _ = p.communicate(text.encode(), timeout=limit)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL); p.wait()
+        raise
+    return time.monotonic() - t0, out.decode(errors="replace").split()
+
+STARVED = 60
+for case in (string_case, code_case, shell_case):
+    path, long_, yard = case()
+    name = case.__name__.replace("_case", "")
+    try:
+        ytook, got = run(diff(path, yard), STARVED)
+    except subprocess.TimeoutExpired:
+        print("STARVED the %s yardstick, %d short lines, took over %d s, so this machine is too loaded to time the long line" % (name, len(yard), STARVED))
+        continue
+    if got != [path]:
+        print("FAIL the %s yardstick listed %s, expected [%s], so the scan did not read it to its end" % (name, got, path))
+        continue
+    budget = max(10.0, 10 * ytook)
+    try:
+        took, got = run(diff(path, long_), budget)
+    except subprocess.TimeoutExpired:
+        print("FAIL a %s line of %d characters took over %.1f s (ten times the %.2f s yardstick of the same bytes in short lines): the scan is super linear in a long line" % (name, max(len(l) for l in long_), budget, ytook))
+        continue
+    if got != [path]:
+        print("FAIL the long %s line listed %s, expected [%s], so the scan did not read it to its end" % (name, got, path))
+        continue
+    print("OK %s %.2f s against a %.2f s yardstick" % (name, took, ytook))
+PY
+long_lines="$(FH_LIB="$LIB" python3 "$WORK/long-line.py")"
+[ -n "$long_lines" ] || { fail=$((fail+1)); echo "FAIL: the long line timing printed no verdict at all, so it never ran to an answer"; }
+while IFS= read -r verdict; do
+  case "$verdict" in
+    '') ;;
+    OK*) pass=$((pass+1)) ;;
+    STARVED*) echo "SUITE-PART-UNMEASURED ${verdict#STARVED }" ;;
+    *) fail=$((fail+1)); echo "FAIL: ${verdict#FAIL }" ;;
+  esac
+done <<VERDICTS
+$long_lines
+VERDICTS
 
 # Every gate that asks the question reads the lib (L261): the advisory, the push gate, the review.
 for caller in lessons-advisory.sh require-tests-before-push.sh lib/ai-review-run.py; do
