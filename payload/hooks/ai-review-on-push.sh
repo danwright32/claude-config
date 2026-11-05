@@ -302,14 +302,17 @@ fi
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] && [ "$branch" != "HEAD" ] || branch="$short_head"
 repo_label="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$repo_dir")")"
+# The label is this checkout's folder, a worktree's own when pushed from one; the repository beside
+# it outlives the worktree (claude-config#2236, lib/ai-review-common.sh).
+repository="$(ar_repository "$repo_dir" || true)"
 model="${AI_REVIEW_MODEL:-sonnet}"
 started="$(date +%s)"
 
 # The pending marker is written by the HOOK, before the runner exists, so a nudge fired in the gap
 # between this exit and the runner's first instruction still sees that a review is under way.
 {
-  printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nsession=%s\n' \
-    "$repo_label" "$branch" "$head_sha" "$started" "$model" "$AR_DEADLINE" "$session_id"
+  printf 'repo=%s\nrepository=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nsession=%s\n' \
+    "$repo_label" "$repository" "$branch" "$head_sha" "$started" "$model" "$AR_DEADLINE" "$session_id"
 } > "$pending_file" 2>/dev/null || { rm -f "$diff_file"; say "skipped: could not write $pending_file."; }
 touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
 
@@ -318,7 +321,7 @@ touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
 # is being written, and bash 3.2 drops the rest of a write its SIGCHLD interrupts (L1035, #1989).
 ( nohup python3 "$HOOK_DIR/lib/ai-review-run.py" \
   --state-dir "$AR_STATE_DIR" --key "$repo_key" --sha "$head_sha" \
-  --repo-label "$repo_label" --branch "$branch" --repo-dir "$repo_dir" \
+  --repo-label "$repo_label" --repository "$repository" --branch "$branch" --repo-dir "$repo_dir" \
   --model "$model" --prompt-file "$HOOK_DIR/lib/ai-review-prompt.txt" \
   --lessons-dir "${AI_REVIEW_LESSONS_DIR:-$HOOK_DIR/..}" \
   --diff-file "$diff_file" --deadline "$AR_DEADLINE" --started "$started" \
