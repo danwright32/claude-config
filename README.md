@@ -3587,8 +3587,8 @@ to tracked files (untracked and ignored files do not count), it names the one co
 fast forward it, `git -C '<checkout>' pull --ff-only`, and never runs it, since another session may
 be standing on that checkout. Said once per session for each answer, so a compaction or a resume is
 not told twice; a new session, which loaded the old file again, is. A current checkout costs two git
-processes and says nothing, held by `hooks/test-per-prompt-hook-cost.sh`. Bidspoke is why: its
-CLAUDE.md was cut from 36,964 to 20,423 characters on 2026-10-29, and a day later all 12 sessions
+processes and says nothing, held by `hooks/test-per-prompt-hook-cost.sh`. One of the work projects
+is why: its CLAUDE.md was cut from 36,964 to 20,423 characters on 2026-10-29, and a day later all 12 sessions
 since had loaded the old one from a primary checkout 22 commits behind.
 
 ### status says when this Mac's mods are older than the shared repo's (#1535)
@@ -4889,10 +4889,9 @@ and deploy runs since sleep began, and notes each for the top of the report. Wha
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
-waits (no merge, no deploy), listed or not, in any case and ahead of both lists. Dan's list as
-confirmed on 2026-10-07: Bidspoke and Slate and everything owned by the agency's organisation wait;
-claude-config, project-enrollment-tracker, paperboi, sonar, new-agent-onboarding, repo-digest,
-Overture, Ovation, Downbeat, PostRoll, backstage, PlayedIt and NurseDex merge and deploy. At
+waits (no merge, no deploy), listed or not, in any case and ahead of both lists. Dan's list,
+confirmed on 2026-10-07, is in that file and summarised under "Sleep mode" below, without naming
+the repositories (#2112). At
 `/sleep` each repository a worker with a goal is in that the file does not decide is asked about
 (each question waits ten minutes, a chosen limit, not a measurement; the answer written into this
 Mac's own file, so it is asked once on each Mac; "Go to sleep, no more questions" asks nothing
@@ -5657,15 +5656,15 @@ Mac's own `~/.claude/mods/sleep-repos.local.json` since #1568: it names work rep
 never sent between Macs, and an answer given at bedtime is kept on the Mac that asked. A Mac without
 the file merges and deploys nothing overnight and says why):
 
-- Wait overnight, no merge and no deploy (a green pull request stays open for the morning):
-  bidspoke, slate, and every repository owned by the agency's organisation, now and
-  any added later (today that is the website repository).
-- Merge and deploy as in the daytime: danwright32/claude-config, project-enrollment-tracker,
-  paperboi, sonar, dwright-pennie/new-agent-onboarding,
-  dwright-pennie/repo-digest, danwright32/overture, danwright32/ovation, danwright32/downbeat,
-  danwright32/PostRoll, danwright32/backstage, PlayedItApp/playedit and nursedexapp/nursedex.
-- Anything else (eavesly-web-app, for one) is asked once at bedtime, as above, and waits for that
-  night if you do not answer.
+- Wait overnight, no merge and no deploy (a green pull request stays open for the morning): the
+  two work repositories Dan named, and every repository owned by the agency's organisation, now
+  and any added later.
+- Merge and deploy as in the daytime: the thirteen repositories Dan named, this one and the
+  personal apps among them.
+- Anything else is asked once at bedtime, as above, and waits for that night if you do not answer.
+
+The repositories themselves are named only in that file, never here, because this README is
+public and several of them are work repositories (#2112).
 
 The file has three lists: `waitOwners` (owners every repository of which waits, which outranks the
 other two), `mergeOnly` (merging allowed, deploying never; each entry says with `mergeDeploys`
