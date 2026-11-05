@@ -392,7 +392,7 @@ check "no disk-clean script but the units library words an unread count" "$([ -z
 check "the review checker words its totals through dcu_tally_words" "$(grep -q 'dcu_tally_words(' "$DIR/review-check.sh" && echo ok || echo "it does not")"
 
 # ================================================================================================
-# 7. Thousands of items (L101): every one recorded, sized in one batch, in bounded time
+# 7. Thousands of items (L101): every one recorded and sized in one batch, however long it takes
 # ================================================================================================
 fresh
 BIG=3000
