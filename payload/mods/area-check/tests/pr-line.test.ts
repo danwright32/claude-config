@@ -369,7 +369,10 @@ test('the hook failing before its check holds a pull request command through its
   const pr = 'gh pr merge 5 --squash'
   const why = refusal(await bash($ as never, w, pr))
   expect(why).toContain('The area check refused this pull request command')
-  expect(why).toContain('the session folder could not be read')
+  // The engine names why the session folder could not be had (the test's hook failing leaves nothing
+  // to answer it); the refusal carries that reason, never the fallback's "unknown failure".
+  expect(why).toContain('session.cwd')
+  expect(why).not.toContain('unknown failure')
   expect(ranBash(w, pr)).toBe(false)
   const other = 'gh issue list'
   expect(refusal(await bash($ as never, w, other, {}, 'b2'))).toBe('')

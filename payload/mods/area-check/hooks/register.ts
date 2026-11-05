@@ -107,6 +107,14 @@ const msg = (err: unknown) => errorText(err, MOD)
 // when even naming the failure throws, so the catch never throws (#2039).
 const undecided = (why: string) => ({ deny: `The area check could not take the decision (${why}); the edit stays held. Try again.` })
 const HELD = undecided('unknown failure')
+// The pull request check's catch (#2173): a command that could be a gh pr create, edit or merge is
+// held naming why; any other is left to run, the hook absent, as it was before. PR_HELD is built once
+// here for when even that throws.
+const PR_HELD = checkFailedRefusal('unknown failure')
+const prCaught = (e: unknown, error: unknown): { deny: string } | undefined => {
+  const command = (e as Record<string, unknown>).command
+  return typeof command === 'string' && !mayActOnPr(command) ? undefined : { deny: checkFailedRefusal(msg(error)) }
+}
 const firstLine = (s: string) => s.trim().split('\n')[0] ?? ''
 
 const homeOf = async ($: EngineInterface) => (await $.env.get('HOME')) ?? ''
