@@ -108,8 +108,8 @@ WORD_HASH="$(printf '%s' "sun-flower" | shasum -a 256 | cut -d' ' -f1)"
 
 # The work MacBook's project list, as the Projects section of the global CLAUDE.md carries it
 # (claude-config#2184). The personal MacBook's block comes first, so a reader that took the wrong
-# block would be seen. The last work entry is an organisation's name without its hyphen, which is
-# judged as a domain or email address only.
+# block would be seen. The last work entry is an organisation's name without its hyphen, a project
+# all the same, so it is refused as a plain word as well as a domain (claude-config#2190).
 PROJECTS="$WORK/CLAUDE.md"
 write_projects(){ printf '%s' "$1" > "$PROJECTS"; }
 GOOD_PROJECTS='# Global

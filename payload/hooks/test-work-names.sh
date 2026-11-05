@@ -232,7 +232,7 @@ check "#2190 a listed project spelled as an organisation without its hyphens is 
 check "#2190 and named as a work repository by its line: $text_out" has "$text_out" "commit 5d6e7f8:3: a work repository or owner name"
 check "#2190 and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "$FAKE_PLAIN_LOWER"
 org_texts 'commit 5d6e7f8\0Move it\n\nline two\nask ops@%s.com\n' "$FAKE_PLAIN_LOWER"
-check "#2190 and as a domain it is still refused by its line (exit $text_rc): $text_out" has "$text_out" "commit 5d6e7f8:4:"
+check "#2190 written in an email address it is refused by its line too (exit $text_rc): $text_out" has "$text_out" "commit 5d6e7f8:4:"
 org_texts 'commit 5d6e7f8\0Move it\n\nfrom %s/widget\n' "$FAKE_ORG"
 check "#2190 (control) the hyphenated organisation login is still an organisation name: $text_out" has "$text_out" "commit 5d6e7f8:3: a work organisation name"
 org_texts 'commit 5d6e7f8\0Move it\n\nthe %ss notes, and pre%s too\n' "$FAKE_PLAIN_LOWER" "$FAKE_PLAIN_LOWER"
