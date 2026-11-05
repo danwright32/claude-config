@@ -338,8 +338,27 @@ diff_docs_only() {
 }
 
 # Lines of context the docs-only check reads around each change: the whole file, so a
-# '*' line can be placed inside or outside the block comment it sits in.
+# '*' line can be placed inside or outside the block comment it sits in, and a Python
+# line inside or outside a docstring.
 DOCS_ONLY_CONTEXT=1000000
+
+# A Python file's diff on stdin, written back with each changed line lying wholly inside a
+# docstring turned into a '#' comment, so diff_docs_only reads it as the documentation it is
+# (claude-config#2247). lib/py-docstring-lines.py decides, with Python's own parser over both
+# images of the file, and leaves alone anything it cannot place: an ordinary string, code on a
+# docstring's line, a file that does not parse. It rewrites line for line, so any other line count
+# (no python3, the helper missing or dying part way) means the diff goes on exactly as git gave
+# it, and the file is judged as it was before.
+py_docstrings_as_comments() {
+  local raw out
+  raw="$(cat)"
+  out="$(printf '%s\n' "$raw" | python3 "$HOOK_DIR/lib/py-docstring-lines.py" 2>/dev/null)" || out=""
+  if [ -n "$out" ] && [ "$(printf '%s\n' "$out" | wc -l)" -eq "$(printf '%s\n' "$raw" | wc -l)" ]; then
+    printf '%s\n' "$out"
+  else
+    printf '%s\n' "$raw"
+  fi
+}
 
 source_changed=0
 test_changed=0
@@ -435,9 +454,10 @@ if [ "$test_changed" -eq 0 ]; then
     [ -z "$f" ] && continue
     examined=$((examined+1))
     style="$(docs_style_for "$f")"
-    if ! PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | diff_docs_only "$style"; then
-      docs_only=0; break
-    fi
+    case "$f" in
+      *.py) PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | py_docstrings_as_comments | diff_docs_only "$style" ;;
+      *) PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | diff_docs_only "$style" ;;
+    esac || { docs_only=0; break; }
   done <<DOCS_ONLY_EOF
 $source_paths
 DOCS_ONLY_EOF
