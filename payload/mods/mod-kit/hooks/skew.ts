@@ -81,6 +81,8 @@ export const errorText = (err: unknown, mod: string): string => {
   return String((err as Error)?.message ?? err)
 }
 
+export const errorCode = (_err: unknown): string | null => null
+
 // The skews already told in this load, by mod and member. A module of each mod's own copy, so it
 // starts over when that mod loads again, which is when a skew can have mended.
 const told = new Set<string>()
