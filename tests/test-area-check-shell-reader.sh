@@ -38,7 +38,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-shell-reader.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=17
+EXPECTED=22
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -46,7 +46,7 @@ const [writesPath, rulesPath, testPath] = process.argv.slice(2)
 const { commandWrites } = await import(writesPath)
 const { shellTargets } = await import(rulesPath)
 const CWD = '/w/app'
-const targets = c => shellTargets(commandWrites(c, CWD, '/Users/dan'))
+const targets = c => shellTargets(commandWrites(c, CWD, '/Users/dan'), '/Users/dan')
 const canon = v => JSON.stringify(v, (k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x))
 const say = (name, ok, evidence) => console.log(ok ? `PASS\t${name}` : `FAIL\t${name}\t${evidence}`)
 let n = 0
@@ -78,6 +78,23 @@ is('a command writing nothing is not judged', 'npm test', [])
 is('a removal adds no lines, so it is not judged', 'rm src/big.ts', [])
 is('known blind spot: a script run with no arguments that builds its own file names passes unjudged (node)', 'node gen.js', [])
 is('known blind spot: a script run with no arguments that builds its own file names passes unjudged (python3)', 'python3 gen.py', [])
+// #2254: a findings note to the installed spool helper writes no file of the repository; nothing else is let off.
+const F = 'reads $PWD and every *.ts file, so why?'
+const NOTE = `bash ~/.claude/hooks/lib/issue-spool.sh note . "${F}" "builder 2254"`
+is('a findings note to the installed spool helper is not judged, whatever its text holds', NOTE, [])
+is('a findings note chained with an in place edit still judges the edit', `${NOTE} && sed -i '' 's/a/b/' src/lib/slack.ts`, [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+is('an edit run by substitution inside the note text is still judged', `bash ~/.claude/hooks/lib/issue-spool.sh note . "$(sed -i '' s/a/b/ src/lib/slack.ts)" "x"`, [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+is('a copy of the spool helper in a checkout is judged as any script', `bash payload/hooks/lib/issue-spool.sh note . "${F}" "builder 2254"`, [
+  { word: 'note', path: '/w/app/note' },
+  { word: '.', path: '/w/app' },
+  { word: F, unread: `a bash script file is handed ${F}, built as the command runs` },
+  { word: 'builder 2254', path: '/w/app/builder 2254' },
+])
+is("the spool helper's other subcommands are judged as before", 'bash ~/.claude/hooks/lib/issue-spool.sh append . "$RECORD"', [
+  { word: 'append', path: '/w/app/append' },
+  { word: '.', path: '/w/app' },
+  { word: '$RECORD', unread: 'a bash script file is handed $RECORD, built as the command runs' },
+])
 
 // register.test.ts answers for the reader with WRITES: each must be what the real reader answers.
 const text = readFileSync(testPath, 'utf8')

@@ -5,7 +5,7 @@ ai-review-on-push.sh starts this in the background the moment a `git push` has s
 returns at once, so the push waits for nothing. This process then asks `claude` to review the
 diff and writes the answer where ai-review-nudge.sh will find it on a later prompt.
 
-    ai-review-run.py --state-dir D --key K --sha S --repo-label L --branch B --repo-dir R
+    ai-review-run.py --state-dir D --key K --sha S --repo-label L [--repository OWNER/NAME] --branch B --repo-dir R
                      --model M --prompt-file P --lessons-dir D --diff-file F --deadline SECONDS
                      --started EPOCH
 
@@ -48,7 +48,7 @@ this script all still produce a finished file, each saying which it was in its o
 L514). The deadline is enforced here with subprocess's own timeout because macOS has no `timeout`
 command, and the whole process group is killed on expiry so a stuck child cannot outlive it.
 
-The finished file's first lines are `name=value` metadata (repo, branch, sha, started, finished,
+The finished file's first lines are `name=value` metadata (repo, repository, branch, sha, started, finished,
 status, model), then a blank line, then the review. The nudge reads only that shape.
 
 PLACED BY QUOTE (claude-config#1357). The reviewer writes a `Quote:` line under each finding, the
@@ -878,6 +878,9 @@ def main(argv):
     ap.add_argument("--deadline", type=int, required=True)
     ap.add_argument("--kind", default="push", choices=("push", "pr"))
     ap.add_argument("--base", default="")
+    # The repository beside the folder label, which outlives an agent worktree (#2236): empty from
+    # a caller that names none, such as tools/review-score.py.
+    ap.add_argument("--repository", default="")
     # A later round of a pull request review that reads only what changed since this head (#1358).
     ap.add_argument("--since", default="")
     ap.add_argument("--scope-file", default="")
@@ -889,6 +892,7 @@ def main(argv):
     name = a.name or f"{a.key}-{a.sha}"
     meta = {
         "repo": a.repo_label,
+        "repository": a.repository,
         "branch": a.branch,
         "sha": a.sha,
         "started": a.started,

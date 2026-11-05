@@ -147,7 +147,8 @@ check_eq "#1478 with lib/push-scope.sh missing a wrapper beside git is refused" 
 check "#1478 and names the missing file" "lib/push-scope.sh" "$out"
 # And the same for lib/whole-number.sh, which reads the ledger's size (#1948).
 LONEW="$WORKDIR/lone-whole"; mkdir -p "$LONEW/lib"
-cp "$HOOK" "$LONEW/"; cp "$DIR/lib/push-scope.sh" "$DIR/lib/shell-words.py" "$LONEW/lib/"
+cp "$HOOK" "$LONEW/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONEW/lib" push-scope.sh shell-words.py || bad "#2147 the hook helpers could not be installed into $LONEW/lib"
 out="$(payload "bash -c 'git push'" | bash "$LONEW/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1948 with lib/whole-number.sh missing a wrapper beside git is refused" "2" "$rc"
 check "#1948 and names the missing file" "lib/whole-number.sh" "$out"
@@ -417,6 +418,11 @@ allowed "a Homebrew program by its path" "/opt/homebrew/bin/jq . x.json && git s
 allowed "a program in /usr/local/bin" "/usr/local/bin/node x.js && git status"
 allowed "the command line tools' git" "/Library/Developer/CommandLineTools/usr/bin/git status"
 allowed "a script by path naming none of the three" "./build.sh --fast"
+# A redirection in front of the command's name is the shell's, never the name (claude-config#2235):
+# its target holding a slash is no script file, and a script after it is still named by its own path.
+allowed "#2235 a program after a redirection whose target holds a slash" "2>/dev/null log show --last 5m && git status"
+allowed "#2235 control: with the target the next word, passed before as now" "> /dev/null ls -la && gh pr view 7"
+refused_file "#2235 a script after a redirection" "2>/dev/null ./build.sh && git push" "./build.sh"
 allowed "paths as arguments" "git add ./build.sh scripts/x.sh && git -C /srv/x/repo status"
 allowed "a path echoed" "echo ./build.sh && git status"
 allowed "a path in a pipe's argument" "cat ~/x.txt | grep git"

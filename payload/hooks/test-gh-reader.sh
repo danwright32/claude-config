@@ -244,6 +244,126 @@ check_eq "#1478 ps_unreadable names the wrapper" "bash -c" "${u%%|*}"
 case "$u" in *"variable"*) ok ;; *) bad "#1478 and says why it cannot be read: $u" ;; esac
 check_eq "#1478 ps_unreadable: nothing unreadable in a plain wrapper" "none" "$(unread "bash -c '$G push'")"
 
+# --- a redirection written in front of the command word (claude-config#2235) ----------------------
+# The shell takes every redirection out of a command before it finds the command's name, so
+# `2>/dev/null log show` runs log. The reader took the redirection for the name: a target holding a
+# slash read as a script run by its path (`direct`), which check-wrapped-commands.sh refuses beside
+# git, gh or rtk, and `>/dev/null $G push` was a command named >/dev/null, so no push to any gate.
+# The targets are /dev/null wherever the shape allows: these strings are read, never run, and a
+# fixed path in the temp folder reads to test-suite-scratch-isolation.sh as one two runs could share.
+# Every case is also read by a copy of the reader whose past_redirects passes nothing over, and must
+# read otherwise there, so each one is seen failing on the reading it replaces; a control reads the
+# same in both.
+LOOSE2235="$WORK/loose2235/lib"
+python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$WORK/loose2235" redirects
+check_eq "#2235 the copy that passes no redirection over was made from the reader" "0" "$?"
+redir_read(){ # redir_read <reader> <tool|wrap> <command>
+  case "$2" in
+    tool) printf '%s' "$3" | python3 -B "$1" tool | tr '\035\037' '|,' ;;
+    wrap) printf '%s' "$3" | python3 -B "$1" read | python3 -c '
+import sys
+print(" ; ".join(r.split("\x1c")[8].replace("\x1d", "|") or "-" for r in sys.stdin.read().split("\x1e") if r))' ;;
+    assigns) printf '%s' "$3" | python3 -B "$1" read | python3 -c '
+import sys
+print(sys.stdin.read().split("\x1e")[0].split("\x1c")[6].replace("\n", ","))' ;;
+  esac
+}
+redir(){ # redir <name> <expected> <tool|wrap> <command>
+  local loose
+  check_eq "#2235 $1" "$2" "$(redir_read "$SW" "$3" "$4")"
+  loose="$(redir_read "$LOOSE2235/shell-words.py" "$3" "$4")"
+  if [[ "$loose" != "$2" ]]; then ok; else bad "#2235 and the copy that passes no redirection over reads it otherwise: $1 (it read '$loose' too)"; fi
+}
+redir_same(){ # redir_same <name> <expected> <tool|wrap> <command>
+  check_eq "#2235 control: $1" "$2" "$(redir_read "$SW" "$3" "$4")"
+  check_eq "#2235 control, and the copy reads it the same: $1" "$2" "$(redir_read "$LOOSE2235/shell-words.py" "$3" "$4")"
+}
+redir "an error redirection glued to its target" "$G|push||" tool "2>/dev/null $G push"
+redir "an output redirection, its target the next word" "$G|push||origin" tool "> /dev/null $G push origin"
+redir "an append glued to its target" "gh|pr|merge|7" tool ">>/dev/null gh pr merge 7"
+redir "an append with a descriptor, its target the next word" "$G|push||" tool "2>> /dev/null $G push"
+redir "a descriptor duplicated" "gh|pr|merge|7" tool "2>&1 gh pr merge 7"
+redir "both streams, glued" "$G|push||" tool "&>/dev/null $G push"
+redir "both streams, the next word" "$G|push||" tool "&> /dev/null $G push"
+redir "input, glued" "$G|push||" tool "</dev/null $G push"
+redir "input, the next word" "gh|pr|create|--fill" tool "< /dev/null gh pr create --fill"
+redir "an output that overrides noclobber" "$G|push||" tool ">|/dev/null $G push"
+redir "several in front" "$G|push||" tool "2>/dev/null >/dev/null $G push"
+redir "a quoted target holding a space" "$G|push||" tool "2>\"/tmp/a b.log\" $G push"
+redir "a target made by a substitution holding a space" "$G|push||" tool ">\$(mktemp -d)/x $G push"
+redir "an assignment, then a redirection" "gh|pr|merge|7" tool "GH_TOKEN=x 2>/dev/null gh pr merge 7"
+redir "a redirection, then an assignment" "gh|pr|merge|7" tool "2>/dev/null GH_TOKEN=x gh pr merge 7"
+redir "and the assignments either side of it are each kept" "A=1,GH_TOKEN=x,B=2" assigns "A=1 2>/dev/null GH_TOKEN=x >/dev/null B=2 gh pr merge 7"
+redir "and an assignment behind env, past a redirection" "GH_TOKEN=x" assigns "env >/dev/null GH_TOKEN=x gh pr merge 7"
+redir "behind a reserved word" "$G|push||" tool "then 2>/dev/null $G push"
+redir "behind a runner" "$G|push||" tool "nohup >/dev/null $G push"
+redir "in front of rtk's own subcommand" "rtk|init||-g" tool "2>/dev/null rtk init -g"
+redir "a program after a target holding a slash is no script file" "-" wrap "2>/dev/null log show"
+redir "a script after a redirection, its target the next word, is seen" "direct|it runs the script file ./build.sh, whose commands are in the file, not the command" wrap "> /dev/null ./build.sh"
+redir "nor after input glued to its target" "-" wrap "</dev/null cat"
+redir "a shell's string read past it" "bash -c ; -" wrap "2>/dev/null bash -c '$G push'"
+redir "a script run by its path is still one, named by its own path" "direct|it runs the script file ./build.sh, whose commands are in the file, not the command" wrap "2>/dev/null ./build.sh"
+redir_same "a program after a redirection, its target the next word" "-" wrap "> /dev/null ls -la"
+redir_same "a quoted operator is a word, not a redirection" "" tool "'>' $G push"
+redir_same "a quoted redirection is the command's name" "" tool "\"2>/x\" $G push"
+redir_same "a redirection after the command's name stays its word" "$G|push||2>/dev/null" tool "$G push 2>/dev/null"
+redir_same "a descriptor number alone is a program's name" "" tool "2 $G push"
+
+# The words a caller split itself (claude-config#2235): gh_issue_scan.py cuts a command with
+# shell_tokens, push-scope.sh's add reader with shlex.split, and each hands its words to
+# tool_command, which writes them back as text with rejoin. Quoted there, `2>` and `>` were words,
+# so the command was named 2> and no create, comment or add was seen. Each case is also read by a
+# copy whose rejoin quotes every word, and the token cases with a digit by a copy whose
+# shell_tokens cuts the digit from its operator, and must read otherwise in each.
+python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$WORK/loose-rejoin" rejoin
+check_eq "#2235 the copy whose rejoin quotes every word was made from the reader" "0" "$?"
+python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$WORK/loose-glue" glue
+check_eq "#2235 the copy whose shell_tokens cuts a descriptor off was made from the reader" "0" "$?"
+words_read(){ # words_read <reader> <split|tokens|cut> <command>
+  python3 -B -c '
+import importlib.util, shlex, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+if sys.argv[2] == "cut":
+    print(",".join(sw.shell_tokens(sys.argv[3])))
+    sys.exit(0)
+words = shlex.split(sys.argv[3]) if sys.argv[2] == "split" else sw.shell_tokens(sys.argv[3])
+found = sw.tool_command(words)
+print("|".join(found[:3]) if found else "")' "$1" "$2" "$3"
+}
+words(){ # words <name> <expected> <split|tokens|cut> <command> <loose copy>...
+  local name="$1" want="$2" how="$3" cmd="$4" copy got
+  shift 4
+  check_eq "#2235 $name" "$want" "$(words_read "$SW" "$how" "$cmd")"
+  for copy in "$@"; do
+    got="$(words_read "$WORK/loose-$copy/lib/shell-words.py" "$how" "$cmd")"
+    if [[ "$got" != "$want" ]]; then ok; else bad "#2235 and the $copy copy reads it otherwise: $name (it read '$got' too)"; fi
+  done
+}
+words "shell_tokens keeps a descriptor glued to its operator" "2>,/dev/null,gh" cut "2>/dev/null gh" glue
+words_same(){ # words_same <name> <expected> <split|tokens|cut> <command>
+  local copy
+  check_eq "#2235 control: $1" "$2" "$(words_read "$SW" "$3" "$4")"
+  for copy in rejoin glue; do
+    check_eq "#2235 control, and the $copy copy reads it the same: $1" "$2" "$(words_read "$WORK/loose-$copy/lib/shell-words.py" "$3" "$4")"
+  done
+}
+words_same "shell_tokens: a number then a space is a word of its own" "2,>,/dev/null,gh" cut "2 >/dev/null gh"
+words_same "shell_tokens: a number inside a word is that word's" "a2,>,x" cut "a2>x"
+words "tokens: an error redirection glued to its target" "gh|issue|create" tokens "2>/dev/null gh issue create --title T" rejoin glue
+words "tokens: a descriptor duplicated" "gh|pr|merge" tokens "2>&1 gh pr merge 7" rejoin glue
+words "tokens: behind an assignment" "gh|pr|merge" tokens "A=1 2>/dev/null gh pr merge 7" rejoin glue
+words "tokens: behind a runner" "$G|push|" tokens "nohup 2>/dev/null $G push" rejoin glue
+words "tokens: an output redirection, its target the next word" "gh|pr|comment" tokens "> /dev/null gh pr comment 7" rejoin
+words "tokens: input glued to its target" "$G|add|" tokens "</dev/null $G add -A" rejoin
+words "split: an error redirection is one word" "$G|add|" split "2>/dev/null $G add -A" rejoin
+words "split: an output redirection, its target the next word" "gh|issue|comment" split "> /dev/null gh issue comment 7" rejoin
+words_same "tokens: a number then a space is a command named 2" "" tokens "2 >/dev/null gh issue create"
+words_same "tokens: a redirection after the name stays the command's" "gh|issue|comment" tokens "gh issue comment 2 > /dev/null"
+words_same "tokens: a runner's option value is no redirection" "gh|pr|merge" tokens "sudo -p '>' gh pr merge 7"
+words_same "split: a quoted operator is the command's name" "" split "'>' gh pr merge 7"
+
 # --- the scan ----------------------------------------------------------------------------------
 scan(){ out="$(python3 -B "$SCAN" "$1" 2>&1)"; rc=$?; }
 scan "$DIR"

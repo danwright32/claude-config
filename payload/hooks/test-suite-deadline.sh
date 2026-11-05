@@ -292,7 +292,7 @@ overrun_with slowreader LOAD_AVERAGE_CMD="$TMPROOT/load-slowreader" LOAD_AVERAGE
 # and says the reader is missing rather than printing nothing (L90).
 NOLOAD="$TMPROOT/noload-lib"
 mkdir -p "$NOLOAD"
-cp "$LIB" "$DIR/lib/kill-tree.sh" "$NOLOAD/"
+cp "$LIB" "$DIR/lib/kill-tree.sh" "$DIR/lib/suite-isolation.sh" "$NOLOAD/"
 {
   printf '#!/usr/bin/env bash\n'
   printf '. "%s"\n' "$NOLOAD/suite-deadline.sh"

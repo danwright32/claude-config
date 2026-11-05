@@ -40,7 +40,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
-import { listedHosts, tabsAfter, type Browser, type BrowserTabs } from './browser.ts'
+import { committedHosts, tabsAfter, type Browser, type BrowserTabs, type TestHosts } from './browser.ts'
 import { wakeCheck } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
@@ -1271,17 +1271,23 @@ const recordTabs = async ($: EngineInterface, tool: string, input: Record<string
 // The project's hosted test hosts, from CLAUDE.md as the default branch holds it, never the working
 // copy: a session must not add a host by editing the file overnight. The default branch is the one
 // origin/HEAD names, through mod-kit's one reader; when it names none, or anything cannot be read,
-// no host is listed, with no guess at main (fail closed, Dan, 2026-11-03).
-const committedTestHosts = async ($: EngineInterface): Promise<string[]> => {
-  const root = await $.session
-    .repo()
-    .then(r => r?.root ?? null)
-    .catch(() => null)
+// no host is listed, with no guess at main (fail closed, Dan, 2026-11-03). What could not be read
+// is said as unreadable, with why, never as a list naming nothing (#2146, L11).
+const committedTestHosts = async ($: EngineInterface): Promise<TestHosts> => {
+  let root: string | null
+  try {
+    root = (await $.session.repo())?.root ?? null
+  } catch (err) {
+    return { unreadable: `this session's repository could not be found (${msg(err)}), so no CLAUDE.md was read` }
+  }
+  // A session in no repository has no CLAUDE.md to list anything.
   if (!root) return []
-  const b = await $.modkit.branch({ path: root }).catch(() => null)
-  if (!b || 'unreadable' in b || !b.defaultBranch) return []
-  const r = await run($, ['git', '-C', root, 'show', `origin/${b.defaultBranch}:CLAUDE.md`]).catch(() => null)
-  return r && r.exitCode === 0 ? listedHosts(r.stdout) : []
+  const b = await $.modkit.branch({ path: root }).catch((err: unknown) => ({ unreadable: msg(err) }))
+  if (!b) return []
+  if ('unreadable' in b) return { unreadable: `the default branch of ${root} could not be read (${b.unreadable}), so its CLAUDE.md was not read` }
+  if (!b.defaultBranch) return { unreadable: `${root} names no default branch for origin, so its CLAUDE.md was not read` }
+  const ref = `origin/${b.defaultBranch}`
+  return committedHosts(ref, root, await run($, ['git', '-C', root, 'show', `${ref}:CLAUDE.md`]))
 }
 // A record that cannot be read is no tabs, which refuses every call needing one (fail closed). A
 // call judged at tool.call (self, its tool_use_id) is also judged as though every other Chrome call

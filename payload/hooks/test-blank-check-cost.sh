@@ -246,6 +246,7 @@ if [ -z "${BLANK_CHECK_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
   # refuses to run without the helper, so the fixture carries the helper as well as the file.
   cp "$DIR/lib/suite-deadline.sh" "$WT_MAIN/payload/hooks/lib/suite-deadline.sh"
   cp "$DIR/lib/kill-tree.sh" "$WT_MAIN/payload/hooks/lib/kill-tree.sh"
+  cp "$DIR/lib/suite-isolation.sh" "$WT_MAIN/payload/hooks/lib/suite-isolation.sh"
   cp "$DIR/lib/repo-files.sh" "$WT_MAIN/payload/hooks/lib/repo-files.sh"
   cp "$DIR/lib/checkout-root.sh" "$WT_MAIN/payload/hooks/lib/checkout-root.sh"
   # Assembled, for the reason the planted file above is: written whole it is an occurrence here.
