@@ -31,6 +31,8 @@ import os
 import re
 import sys
 
+# Loading lib/shell-words.py by path must leave no bytecode beside it in the installed lib/ (#2080).
+sys.dont_write_bytecode = True
 HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
 ISSUE = "claude-config#2302"
 
@@ -273,6 +275,8 @@ class Judge:
 
 
 def main():
+    # A lone surrogate from the payload, echoed in a reason, must not raise on the way out (#1944).
+    sys.stdout.reconfigure(errors="replace")
     raw = sys.stdin.buffer.read().decode("utf-8", "replace")
     try:
         d = json.loads(raw)

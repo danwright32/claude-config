@@ -52,7 +52,10 @@ shopt -s nocasematch
 MARKERS='chat[._](postmessage|schedulemessage|postephemeral|memessage)|hooks\.slack\.com|slack_webhook|slack_(send|schedule|post)_message|slack_reply_to_thread'
 SCRIPTS='\.(py|sh|bash|zsh|js|mjs|cjs|ts|mts|rb|pl|php|command)([^A-Za-z0-9_]|$)'
 RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|bunx|npx|pnpx|tsx|ts-node|osascript|uv|source)([^A-Za-z0-9_.]|$)|\./'
-if ! [[ "$payload" =~ $MARKERS || "$payload" =~ $SCRIPTS || "$payload" =~ $RUNS ]]; then
+# Under a UTF-8 locale bash's =~ stops at a byte that is not UTF-8, so a word after one would read as
+# absent and the call would pass unjudged (claude-config#1885); the C locale is tried as well.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+if ! { payload_match "$payload" "$MARKERS" || payload_match "$payload" "$SCRIPTS" || payload_match "$payload" "$RUNS"; }; then
   exit 0
 fi
 
@@ -94,7 +97,7 @@ case "$verdict" in
         '*hooks.slack.com*' '*slack_webhook*' '*slack_send_message*' '*slack_schedule_message*' \
         '*slack_post_message*' '*slack_reply_to_thread*'
     fi
-    if [[ "$payload" =~ $MARKERS ]]; then
+    if payload_match "$payload" "$MARKERS"; then
       printf 'BLOCKED: slack-drafts-only-gate.sh could not read its hook payload as a call (%s), and the payload names a Slack send route, so whether this sends a Slack message could not be checked (claude-config#2302, #1922). Save a draft with slack_send_message_draft instead.\n' "$detail" >&2
       exit 2
     fi
