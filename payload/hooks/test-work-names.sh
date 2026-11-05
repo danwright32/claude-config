@@ -379,6 +379,44 @@ check "#2231 nor with the marker set to anything but 1: $text_out" [ ! -e "$WORK
 check "#2231 and the extra hashes not honoured with it either (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
 reader_texts ""
 check "#2231 outside a test run the default reader reads the registry under HOME: $text_out" has "$text_out" "$EMPTY_HOME/.claude/skills/pennie-dev-update/repos.local.json"
+# The project list is a test setting too: a CLAUDE.md named there that lists nothing would take the
+# work MacBook's projects out of every real message check. One that cannot be read shows which file
+# was asked for, so the case needs no list of its own.
+list_texts(){   # $1 = the test marker's value -> text_out, text_rc
+  text_out="$( printf 'commit 1a2b3c4\0clean\n' | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" \
+    WORK_NAMES_PROJECT_LIST="$WORK/nowhere/CLAUDE.md" HOOK_TESTS_RUNNING="$1" \
+    python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+}
+list_texts 1
+check "#2231 (control) under the test marker the named project list is read (exit $text_rc): $text_out" has "$text_out" "$WORK/nowhere/CLAUDE.md"
+list_texts ""
+check "#2231 outside a test run a project list named in the environment is never read: $text_out" lacks "$text_out" "$WORK/nowhere/CLAUDE.md"
+list_texts 0
+check "#2231 nor with the marker set to anything but 1: $text_out" lacks "$text_out" "$WORK/nowhere/CLAUDE.md"
+# The work repository list's budget is not a test setting: check-work-names-merge.sh hands in what is
+# left of its own timeout. So it is honoured always, and may only shorten the default of 30, never
+# lengthen it, so no value named in the environment can hold the scan past the calling hook.
+budget_of(){   # $1 = the value, or "unset" -> the budget the scan would use, or "refused"
+  if [ "$1" = unset ]; then
+    env -u WORK_NAMES_REPOS_BUDGET_SECONDS -u HOOK_TESTS_RUNNING python3 -c "$BUDGET_PY" "$SCAN" 2>&1
+  else
+    env -u HOOK_TESTS_RUNNING WORK_NAMES_REPOS_BUDGET_SECONDS="$1" python3 -c "$BUDGET_PY" "$SCAN" 2>&1
+  fi
+}
+BUDGET_PY='import importlib.util, sys
+spec = importlib.util.spec_from_file_location("work_names", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+try:
+    print("%g" % mod.repos_budget())
+except ValueError:
+    print("refused")'
+check "#2231 (control) the repository list budget is 30 seconds when unset: $(budget_of unset)" [ "$(budget_of unset)" = 30 ]
+check "#2231 (control) a shorter budget handed in is honoured outside a test run: $(budget_of 12)" [ "$(budget_of 12)" = 12 ]
+check "#2231 a longer budget named in the environment is capped at 30: $(budget_of 1000)" [ "$(budget_of 1000)" = 30 ]
+check "#2231 an infinite budget is capped too: $(budget_of inf)" [ "$(budget_of inf)" = 30 ]
+check "#2231 a budget that is not a number is refused, never believed: $(budget_of nan)" [ "$(budget_of nan)" = refused ]
+check "#2231 nor is one that is a word: $(budget_of lots)" [ "$(budget_of lots)" = refused ]
 
 # The two built in hashes cover every owner in the registry on a Mac that has one, so the check CI
 # runs (with no registry) is the same check for the organisations that matter. Only measurable where

@@ -87,8 +87,10 @@ to read it; with --work-repos also the list unreadable or its time budget spent)
 Seams (tests): WORK_NAMES_EXTRA_HASHES, comma separated sha256 hex of more lower case logins.
 WORK_NAMES_REGISTRY_READER, the reader to ask (default: dev-update-registry.js beside this file).
 Both are honoured only under HOOK_TESTS_RUNNING=1 (claude-config#2231), as below.
-WORK_NAMES_REPOS_BUDGET_SECONDS, the whole --work-repos run's time for GitHub (default 30).
-WORK_NAMES_PROJECT_LIST, the CLAUDE.md to read the work MacBook's project list from.
+WORK_NAMES_PROJECT_LIST, the CLAUDE.md to read the work MacBook's project list from, honoured only
+under HOOK_TESTS_RUNNING=1 too.
+WORK_NAMES_REPOS_BUDGET_SECONDS, the whole --work-repos run's time for GitHub (default 30), is not a
+test setting: the merge gate hands in what is left of its timeout. It may only shorten the default.
 WORK_NAMES_PROJECT_HASHES, comma separated sha256 hex replacing WORK_PROJECTS (empty means none),
 honoured only under HOOK_TESTS_RUNNING=1, so no real run can empty the committed set.
 """
@@ -160,6 +162,25 @@ def under_test():
     (run-all-tests.sh). The gates that ask this scanner read Claude Code's own environment, so every
     test setting here is honoured only with it (claude-config#2217, #2231)."""
     return os.environ.get("HOOK_TESTS_RUNNING") == "1"
+
+
+REPOS_BUDGET_CAP = 30
+
+
+def repos_budget():
+    """-> the seconds a --work-repos run may spend on GitHub, or raises ValueError. Not a test
+    setting: check-work-names-merge.sh hands in what is left of its own timeout, so it is honoured
+    always, but only to SHORTEN the default (claude-config#2231): a longer one named in Claude Code's
+    environment would hold the scan past the calling hook's timeout, where it gives no verdict. The
+    cap is the default, a setting, not measured. Anything but a finite number is refused, never
+    believed, and main() refuses the message check for it."""
+    raw = os.environ.get("WORK_NAMES_REPOS_BUDGET_SECONDS")
+    if not raw:
+        return REPOS_BUDGET_CAP
+    value = float(raw)
+    if value != value:
+        raise ValueError("WORK_NAMES_REPOS_BUDGET_SECONDS is not a number")
+    return min(value, REPOS_BUDGET_CAP)
 
 
 def extra_hashes():
@@ -306,8 +327,8 @@ def work_mac_projects():
     that Mac's projects.local.txt, that file's entries where it exists; the hashes are
     project_hashes(), taken when the block itself lists no project (claude-config#2112). Never both
     empty: a list with no project is refused, never clean."""
-    path = os.environ.get("WORK_NAMES_PROJECT_LIST") or os.path.normpath(
-        os.path.join(HERE, "..", "..", "CLAUDE.md"))
+    named = os.environ.get("WORK_NAMES_PROJECT_LIST") if under_test() else None
+    path = named or os.path.normpath(os.path.join(HERE, "..", "..", "CLAUDE.md"))
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
@@ -527,9 +548,8 @@ def main(argv):
                 "never reads the work repository list (claude-config#1568).")
         if isinstance(texts, str):
             die("the text stream could not be read: %s, so its messages could not be checked." % texts)
-        budget = os.environ.get("WORK_NAMES_REPOS_BUDGET_SECONDS") or 30
         try:
-            matcher, owners, odd = work_repo_names(GitHub(budget, "the work name check"))
+            matcher, owners, odd = work_repo_names(GitHub(repos_budget(), "the work name check"))
         except (CannotTell, ValueError) as e:
             die("%s. A message that cannot be checked is not a clean one." % e)
         hits = []
