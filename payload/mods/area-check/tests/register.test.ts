@@ -408,7 +408,7 @@ test("a later edit sharing a ranking that failed for lack of the first edit's ti
   await w.clock.advance(DEADLINE_MS + 3000)
   await Promise.all([a, b])
   const [first, second] = w.judged()
-  expect(first).toMatchObject({ path: 'src/lib/slack.ts', growth: { unread: `area-check: $.process.run: git log was still running after ${DEADLINE_MS} ms` } })
+  expect(first).toMatchObject({ path: 'src/lib/slack.ts', growth: { unread: `git log was still running after ${DEADLINE_MS} ms` } })
   expect(second).toMatchObject({ path: 'src/big.ts', decision: 'held', growth: { net: 800, crosses: true } })
 })
 
