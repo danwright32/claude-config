@@ -174,6 +174,57 @@ run_bash "cd $T && bash notify"
 refused "an extensionless script that posts, run by bash by its bare name"
 run_bash "$T/notify"
 refused "an extensionless script that posts, run by its absolute path"
+# The same script by a relative path with a directory, and behind every wrapper the shared reader
+# reads through: the quick exit must send each to the full rule (lessons review, 2026-11-05).
+mkdir -p "$T/bin"; cp "$T/alert.sh" "$T/bin/notify-slack"; chmod +x "$T/bin/notify-slack"
+run_bash "cd $T && bin/notify-slack"
+refused "an extensionless script run by a relative path with a directory"
+run_bash "cd $T && X=1 bin/notify-slack"
+refused "the same, after an assignment"
+for wrapped in "sudo $T/notify" "sudo -u root $T/notify" "env X=1 $T/notify" "rtk $T/notify" \
+  "nohup $T/notify" "time $T/notify" "command $T/notify" "exec $T/notify" "nice -n 5 $T/notify" \
+  "timeout 30 $T/notify" "echo x | xargs $T/notify" "cd $T && sudo bin/notify-slack" \
+  "if true; then bin/notify-slack; fi" "find $T -name notify -exec $T/notify {} \\;" \
+  ">/dev/null bin/notify-slack"; do
+  run_raw "$(payload Bash "$(bash_input "$wrapped")")"
+  refused "a script that posts, run as: $wrapped"
+done
+run_bash "git push origin HEAD:fix/2302-slack-drafts-only"
+allowed "a plain push naming a branch with a slash"
+
+# A package script is followed the way a shell script is: repo-digest's CLAUDE.md documents
+# `npm run digest` as a local command that posts to Slack.
+mkdir -p "$T/pkg/scripts" "$T/pkg/sub"
+cp "$T/alert.py" "$T/pkg/scripts/digest.py"
+cp "$T/alert.sh" "$T/pkg/scripts/post.sh"
+cat > "$T/pkg/package.json" <<'JSON'
+{"name": "p", "scripts": {
+  "digest": "python3 scripts/digest.py",
+  "lint": "echo lint ok",
+  "test": "bash scripts/post.sh",
+  "predeploy": "curl -d '{}' https://hooks.slack.com/services/T0/B0/x",
+  "deploy": "echo deployed",
+  "announce": "curl -d '{}' https://slack.com/api/chat.postMessage"
+}}
+JSON
+for posts in "cd $T/pkg && npm run digest" "cd $T/pkg && npm run-script digest" "cd $T/pkg && npm run digest -- --dry-run" \
+  "cd $T/pkg/sub && pnpm run digest" "cd $T/pkg && pnpm digest" "cd $T/pkg && yarn digest" "cd $T/pkg && yarn run digest" \
+  "npm --prefix $T/pkg run digest" "pnpm -C $T/pkg run digest" "cd $T/pkg && npm test" "cd $T/pkg && npm t" \
+  "cd $T/pkg && npm run deploy" "cd $T/pkg && npm run announce" "cd $T/pkg && sudo npm run digest"; do
+  run_bash "$posts"
+  refused "a package script that posts, run as: $posts"
+done
+run_bash "cd $T && npm exec -- bin/notify-slack"
+refused "npm exec running a script that posts"
+mkdir -p "$T/badpkg"; printf '%s\n' '{"scripts": {"go": "curl https://hooks.slack.com/services/T0/B0/x",}' > "$T/badpkg/package.json"
+run_bash "cd $T/badpkg && npm run go"
+refused "a package.json that is not valid JSON but names an endpoint"
+run_bash "cd $T/pkg && npm run lint"
+allowed "a package script that does not post"
+run_bash "cd $T/pkg && npm run missing"
+allowed "a package script that does not exist runs nothing"
+run_bash "cd $T && npm run digest"
+allowed "npm run with no package.json above it runs nothing"
 run_bash "$T/alert.sh"
 refused "the same script run by its path"
 run_bash "bash $T/calls-alert.sh"
@@ -230,9 +281,21 @@ NOPY="$(mktemp -d "${TMPDIR:-/tmp}/slack-gate-nopy.XXXXXXXX")"
 ln -s "$(command -v cat)" "$NOPY/cat"
 errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
 OUT="$(payload Bash "$(bash_input "python3 $T/alert.py")" | PATH="$NOPY" "$BASH" "$HOOK" 2>"$errf")"; RC=$?
-ERR="$(cat "$errf")"; rm -rf "$errf" "$NOPY"
+ERR="$(cat "$errf")"
 refused "a reader that cannot start refuses a call that runs a script"
 says "and says the gate could not judge it" "could not"
+# The quick exit, proved by what it does not start rather than by a timing: a plain push in the
+# measured payload shape (its own {", a cwd and a transcript path full of slashes) passes with no
+# python3 anywhere. A { matched without its space sent every call to python3 (0.05 s each).
+for plain in "git push -u origin HEAD:fix/2302-slack-drafts-only" "git status" "ls -la $T" "rtk git status"; do
+  OUT="$(payload Bash "$(bash_input "$plain")" | PATH="$NOPY" "$BASH" "$HOOK" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"
+  case "$plain" in
+    rtk*) refused "a wrapped command still goes to the full rule (here unable to start, so refused): $plain" ;;
+    *) allowed "the quick exit passes without starting python3: $plain" ;;
+  esac
+done
+rm -rf "$errf" "$NOPY"
 
 echo "slack drafts only: it is wired"
 

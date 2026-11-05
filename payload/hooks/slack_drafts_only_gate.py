@@ -16,7 +16,9 @@ Two routes are judged:
     endpoint, an inline script holding one, a script fed on stdin holding one, or a script file run
     by the command that holds one. A command that only MENTIONS an endpoint (a grep, an echo, a
     test) runs nothing that posts and passes. A shell script is read as commands, so one that only
-    greps passes and one that curls is refused. The one script let through is /nudge, at
+    greps passes and one that curls is refused. A package script (`npm run digest`, pnpm, yarn,
+    npm test) is followed through the nearest package.json, pre and post scripts included, and
+    judged as the command line it runs. The one script let through is /nudge, at
     skills/nudge/nudge.py beside this hooks folder, by its real path; a copy anywhere else is
     refused like any other script that posts.
 
@@ -57,6 +59,11 @@ VALUED = {"-m", "-W", "-X", "-r", "--require", "-I", "-i", "--import", "--loader
 SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
 SHELL_BANG = re.compile(r"^#!\s*\S*?(?:/env\s+(?:-\S+\s+)*)?/?(?:\S*/)?(ba|z|da|k)?sh\b")
 MAX_FILE = 2 * 1024 * 1024
+PACKAGERS = {"npm", "pnpm", "yarn"}
+NPM_RUN = {"run", "run-script", "rum", "urn"}
+NPM_LIFECYCLE = {"test": "test", "t": "test", "tst": "test", "start": "start", "stop": "stop", "restart": "restart"}
+PKG_DIR_OPTS = {"--prefix", "-C", "--dir", "--cwd"}
+PKG_EXEC = {"exec", "x", "dlx"}
 MAX_DEPTH = 3
 
 
@@ -150,6 +157,8 @@ class Judge:
             if not words:
                 return None
             name = os.path.basename(words[0])
+        if name in PACKAGERS:
+            return self.package(name, words, d, depth)
         hit = MARKER.search(text)
         if name in SENDERS:
             if hit:
@@ -195,6 +204,87 @@ class Judge:
                 return f"{words[0]} is run with {hit.group(0)} in its arguments"
             return self.script(words[0], d, depth, False)
         return None
+
+    def package(self, name, words, d, depth):
+        """The reason `npm run <script>` (pnpm, yarn) posts, or None.
+
+        A package script is followed the way a shell script is: the nearest package.json at or above
+        the directory it runs in (or the one --prefix, -C, --dir or --cwd names) gives the script's
+        command, and that command, with its pre and post scripts, is judged as a command line run
+        from the package's folder. repo-digest's CLAUDE.md documents `npm run digest` as a local
+        command that posts to Slack. `npm exec`, `npm x` and `pnpm dlx` run their words as npx does.
+        """
+        k, where = 1, d
+        while k < len(words) and words[k].startswith("-"):
+            opt, eq, val = words[k].partition("=")
+            if opt in PKG_DIR_OPTS:
+                target = val if eq else (words[k + 1] if k + 1 < len(words) else "")
+                where = self.resolve(target, d) if target else where
+                k += 1 if eq else 2
+                continue
+            k += 1
+        if k >= len(words):
+            return None
+        sub = words[k]
+        if sub in PKG_EXEC:
+            rest = [w for w in words[k + 1:] if w != "--"]
+            while rest and rest[0].startswith("-"):
+                rest = rest[1:]
+            if not rest or depth >= MAX_DEPTH:
+                return None
+            return self.record(where, " ".join(rest), "", "", depth + 1, " ".join(rest))
+        if name == "npm" and sub not in NPM_RUN:
+            script = NPM_LIFECYCLE.get(sub)
+        else:
+            if sub in NPM_RUN:
+                k += 1
+                while k < len(words) and words[k].startswith("-"):
+                    k += 1
+                if k >= len(words):
+                    return None
+            script = words[k]
+        if not script:
+            return None
+        found = self.package_json(where)
+        if not found:
+            return None
+        pkg_dir, body = found
+        try:
+            scripts = json.loads(body).get("scripts") or {}
+            if not isinstance(scripts, dict):
+                raise ValueError("scripts is not an object")
+        except Exception:
+            hit = MARKER.search(body)
+            return f"{name} runs a script from a package.json it cannot read, which names {hit.group(0)}" if hit else None
+        for key in ("pre" + script, script, "post" + script):
+            cmd = scripts.get(key)
+            if not isinstance(cmd, str) or depth >= MAX_DEPTH:
+                continue
+            try:
+                inner = self.line(cmd, pkg_dir, depth + 1, cmd)
+            except Exception:
+                hit = MARKER.search(cmd)
+                inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
+            if inner:
+                return f"the package script {key} runs a command that posts: {inner}"
+        return None
+
+    @staticmethod
+    def package_json(where):
+        """(the folder, the text) of the nearest package.json at or above where, or None."""
+        cur = os.path.abspath(where or os.getcwd())
+        while True:
+            path = os.path.join(cur, "package.json")
+            if os.path.isfile(path):
+                try:
+                    with open(path, "rb") as f:
+                        return cur, f.read(MAX_FILE).decode("utf-8", "replace")
+                except OSError:
+                    return None  # unreadable to us is unreadable to the package manager
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                return None
+            cur = parent
 
     @staticmethod
     def fed(text, whole):

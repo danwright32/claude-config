@@ -20,7 +20,9 @@
 #   * a Bash command that makes the request: curl, wget and the like aimed at chat.postMessage,
 #     chat.scheduleMessage, chat.postEphemeral, chat.meMessage or hooks.slack.com; inline code or a
 #     script fed on stdin holding one; a script file the command runs that holds one (a project's own
-#     alert scripts too). A command that only mentions an endpoint (grep, echo, a test) passes.
+#     alert scripts too), by any path and behind any runner (sudo, env, rtk, nohup, xargs, find
+#     -exec); a package script (npm run, pnpm, yarn) whose package.json command posts.
+#     A command that only mentions an endpoint (grep, echo, a test) passes.
 #   The one exemption is /nudge, skills/nudge/nudge.py beside this hooks folder by its real path (it
 #   posts as Nudge Bot, never as Dan, and runs only when he types it; his choice, 2026-11-05). A copy
 #   of it anywhere else is refused. There is no override variable, on purpose.
@@ -52,10 +54,20 @@ shopt -s nocasematch
 MARKERS='chat[._](postmessage|schedulemessage|postephemeral|memessage)|hooks\.slack\.com|slack_webhook|slack_(send|schedule|post)_message|slack_reply_to_thread'
 SCRIPTS='\.(py|sh|bash|zsh|js|mjs|cjs|ts|mts|rb|pl|php|command)([^A-Za-z0-9_]|$)'
 # A shell running a script by name (followed by a space, so the payload's own "tool_name":"Bash" does
-# not send every call to python3 under nocasematch), and a program run by its own absolute or home path where a command
-# starts (the JSON's "command":", or after ; & | ( or an escaped newline), so a script with no
-# extension is still read (lessons review, 2026-11-05).
-RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|bunx|npx|pnpx|tsx|ts-node|osascript|uv|source)([^A-Za-z0-9_.]|$)|(^|[^A-Za-z0-9_])(bash|sh|zsh|dash|ksh)[[:space:]]|\./|("command"[[:space:]]*:[[:space:]]*"|[;&|(]|\\n)[[:space:]]*[~/]'
+# not send every call to python3 under nocasematch). A package manager, whose scripts are followed.
+# Where a command starts (the JSON's "command":", or after ; & | ( { ` or an escaped newline), past
+# any NAME=value assignments: a first word holding a slash at all (/abs, ~/x, ./x, bin/x, a leading
+# redirect), so a script with no extension is still read; and any runner or reserved word the shared
+# reader reads through (sudo, env, rtk, nohup, time, xargs, then, ...), whatever follows it. find's
+# -exec runs a command mid line. Lessons review, 2026-11-05, twice: each shape listed here was one a
+# narrower list let through unjudged.
+# A { opens a group only with a space after it, so the payload's own opening {" is not a command start
+# (measured: with a bare { every call went to python3, 0.05 s each).
+START='("command"[[:space:]]*:[[:space:]]*"|[;&|(`]|\{[[:space:]]|\\n)[[:space:]]*'
+RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|tsx|ts-node|osascript|uv|source)([^A-Za-z0-9_.]|$)|(^|[^A-Za-z0-9_])(bash|sh|zsh|dash|ksh)[[:space:]]|\./'
+RUNS+="|${START}([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[^[:space:];&|()]*/"
+RUNS+="|${START}(sudo|doas|env|rtk|command|exec|nohup|nice|time|timeout|gtimeout|caffeinate|stdbuf|xargs|if|then|else|elif|do|while|until|!)([[:space:]]|\$)"
+RUNS+='|[[:space:]]-(exec|execdir|ok|okdir)[[:space:]]'
 # Under a UTF-8 locale bash's =~ stops at a byte that is not UTF-8, so a word after one would read as
 # absent and the call would pass unjudged (claude-config#1885); the C locale is tried as well.
 payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
