@@ -268,6 +268,38 @@ test('a question about an issue Dan answers is added to its Open questions, chec
   expect(w.edits).toEqual([{ issue: 7, repo: 'o/r', body: 'The bug.\n\n## Open questions\n\n- [x] For o/r#7, how long should the registry keep a record? (answered 1969-12-31 ET: 7 days)' }])
 })
 
+// #2253: on 2026-11-04 a plain question in the design round guard's words was answered Skip them and
+// checked off on its issue, which read as settled, while the guard, which counts only its own picker,
+// refused the next edit anyway. Such a question is left off the issue, and both Dan and Claude are
+// told his answer lets nothing through; the guard's own picker is recorded as before.
+const GUARD_WORDS = 'The sign in button gets a new colour. Skip design rounds for this issue? This is for issue #12 in o/r; the file is app/SignIn.tsx.'
+const askWith = ($: T$, question: string, metadata?: Record<string, unknown>) =>
+  $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q3', questions: [{ ...QUESTION, question }], ...(metadata ? { metadata } : {}) } as never) as Promise<Answered>
+test("a question in the design round guard's words asked without its source is left off the issue, and said to settle nothing (#2253)", { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, 'Skip them (Recommended)', { 12: SECTION })
+  const r = await askWith($ as never, GUARD_WORDS)
+  // His answer still reaches Claude, with why it changes nothing.
+  expect(r.result?.answers).toEqual({ [GUARD_WORDS]: 'Skip them (Recommended)' })
+  const told = ((r as { context?: string[] }).context ?? []).join('\n')
+  expect(told).toContain('lets no edit through')
+  expect(told).toContain('the design round guard')
+  await w.settle()
+  expect(w.edits).toEqual([])
+  expect(w.logs.join('\n')).toContain("was not added to issue #12's Open questions")
+  // A source that is not the guard's own, and the settled question too.
+  const s = await askWith($ as never, 'For o/r#12: Is this design settled?', { source: 'next-issue' })
+  expect(((s as { context?: string[] }).context ?? []).join('\n')).toContain('lets no edit through')
+  await w.settle()
+  expect(w.edits).toEqual([])
+})
+test("the design round guard's own picker is still added to the issue as answered (#2253)", { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, 'Skip them', { 12: SECTION })
+  const r = await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })
+  expect((r as { context?: string[] }).context ?? []).toEqual([])
+  await w.settle()
+  expect(w.edits.map(x => x.body)).toEqual([`The bug.\n\n## Open questions\n\n- [x] ${GUARD_WORDS} (answered 1969-12-31 ET: Skip them)`])
+})
+
 // Lessons review: a multi-select answer arrives as a list, and is an answer all the same.
 test('a question answered with several choices is checked off with all of them (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
   const w = issueWorld(on, ['Retention', 'Archive'], { 7: SECTION })
@@ -345,7 +377,7 @@ const kitWithoutRepo: { name: string; register: Register } = {
 }
 test("a mod-kit with no repo is said as out of step when issue #N's Open questions cannot be found (#1299)", { plugins: [kitWithoutRepo] }, async ($, on) => {
   const w = issueWorld(on, null, { 12: SECTION })
-  await askAbout($ as never, 'Skip design rounds for issue #12?')
+  await askAbout($ as never, 'Keep the old flag for issue #12?')
   await w.settle()
   expect(w.edits).toEqual([])
   const note = w.logs.find(l => l.includes("issue #12's Open questions")) ?? ''
@@ -388,7 +420,7 @@ test('a question naming a pull request leaves the pull request alone (#1279)', {
 test('issue #N whose repository cannot be told is said, never dropped silently (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
   const w = issueWorld(on, 'Yes', { 12: SECTION })
   w.noRepo = true
-  await askAbout($ as never, 'Skip design rounds for issue #12?')
+  await askAbout($ as never, 'Keep the old flag for issue #12?')
   await w.settle()
   expect(w.edits).toEqual([])
   expect(w.logs).toContain("Picker manners could not add this question to issue #12's Open questions (this session is in no repository GitHub knows), so /sleep will not see it there.")
