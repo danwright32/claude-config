@@ -1384,7 +1384,7 @@ NAMES
         groups_refusal="$p ${q%%$'\t'*} alone is $(ar_size_text "${q##*$'\t'}") of diff, more than the $(ar_size_text "$pbudget") one part of a file can hold beside the file list, and a line cannot be cut"
         return 1
       fi
-      case "$q" in ''|*[!0-9]*|0) groups_refusal="the diff of $p could not be cut into parts"; return 1 ;; esac
+      whole_above_zero "$q" q || { groups_refusal="the diff of $p could not be cut into parts"; return 1; }
       for i in $(seq 1 "$q"); do
         printf '%s\n' "$p" > "$parts/g$k.list"
         printf '%s of %s\n' "$i" "$q" > "$parts/g$k.part"
