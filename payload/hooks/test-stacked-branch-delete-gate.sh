@@ -253,7 +253,8 @@ check_eq "#1723 control: and none of them asked GitHub anything" "" "$calls"
 LONE="$WORKDIR/lone"
 mkdir -p "$LONE/lib"
 cp "$HOOK" "$LONE/"
-cp "$DIR/lib/push-scope.sh" "$DIR/lib/stacked-prs.sh" "$LONE/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE/lib" push-scope.sh stacked-prs.sh >/dev/null \
+  || bad "#2204 push-scope.sh and stacked-prs.sh could not be installed with what they source"
 fresh
 out="$(payload "gh api -X DELETE repos/acme/widget/git/refs/heads/feat/x" | PATH="$STUB:$PATH" bash "$LONE/stacked-branch-delete-gate.sh" 2>&1)"; rc=$?
 check_eq "#1723 with lib/shell-words.py missing a delete is refused" "2" "$rc"

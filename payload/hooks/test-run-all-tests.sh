@@ -597,7 +597,8 @@ mkdir -p "$DEP"
 cp "$RUNNER" "$DEP/run-all-tests.sh"
 # The libraries it cannot run without, as an installed copy always has them beside it (#1948,
 # #2156: the list of throwaway records every suite is handed).
-mkdir -p "$DEP/lib" && cp "$DIR/lib/whole-number.sh" "$DIR/lib/suite-isolation.sh" "$DEP/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$DEP/lib" whole-number.sh suite-isolation.sh >/dev/null \
+  || check "#2204 the runner's helpers could be installed with what they source" "the install refused"
 mk_suite "$DEP" plain 0
 mk_notrun_suite "$DEP" auditsrepo "needs the repository, and there is none here"
 # HOOK_TESTS_RUNNING is unset for this one call. It is set whenever this suite is itself being run
