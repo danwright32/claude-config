@@ -549,8 +549,8 @@ Rejected for #48, which named it as the real fix.
 
 `enabledPlugins` lives in `~/.claude/settings.json`, and this tool carries only the `hooks` block out
 of that file. Carrying the plugin block as well would mean this Mac's survey of which projects use
-which plugin lands on a Mac holding different projects: Bidspoke, trypennie, Slate and
-project-enrollment-tracker are not checked out here and were never surveyed, and at least one of them
+which plugin lands on a Mac holding different projects: the work MacBook's four work repositories
+are not checked out here and were never surveyed, and at least one of them
 is a plausible Vercel user. The fix would arrive there as a regression, which is exactly what the
 issue warns about.
 
@@ -1155,8 +1155,8 @@ nothing by having it put back.
 
 Answering a permission prompt with "Yes, don't ask again" saves that exact command as an allow rule in
 the project's `.claude/settings.local.json`, out of git and read by nothing we own. On 2026-10-21 to 23
-Slate, Bidspoke and PET each opened every session with Claude Code's "allows any option at its *"
-warnings for one off rules, and Bidspoke's held a live Cloudflare and Supabase token in plain text.
+three work projects each opened every session with Claude Code's "allows any option at its *"
+warnings for one off rules, and one of them held a live Cloudflare and Supabase token in plain text.
 Dan chose "Sweep and report" on 2026-10-23: flag, say once, remove only what he picks. Allowing read
 only commands everywhere was offered and not chosen, so this adds no allow rule of its own.
 
@@ -1165,14 +1165,14 @@ record and the removal are `hooks/lib/local-allow-rules.py`, whose header is the
 
 **What counts as holding a key or token is the one redactor, not a second list (L370, L655).**
 `lib/review-redact.sed`, applied through `ar_redact` in `ai-review-common.sh`, is already trusted with
-exactly this case (a Supabase key inside a curl rule, Bidspoke 2026-09-24, which is why `ar_redact
+exactly this case (a Supabase key inside a curl rule, a work project 2026-09-24, which is why `ar_redact
 --stderr` drops permission rule lines). A rule it would change holds a key. claude-sync's `scan_secrets`
 was the other candidate and was not used: it lives outside the payload, so no installed hook can read
 it, and it has no rule for a bearer header, which is how tokens reach curl rules. Two shapes the
 redactor could not see were added to it, not to this hook, so the review's redaction gained them too
 (#1585): a secret after a flag and a space (`--token VALUE`, `--api-key VALUE`, `--auth VALUE`, unless
 the value starts like a path, a variable, a placeholder or the next flag), and a bare 40 character
-Cloudflare API token, the shape Bidspoke's rules held. A commit id is 40 characters too, so a run
+Cloudflare API token, the shape that project's rules held. A commit id is 40 characters too, so a run
 counts only when it holds a digit, an upper case and a lower case letter, and a run beside `+` or `/`
 is base64 and is left alone. Measured on 2026-10-23 over the repository's 1044 tracked text files
 (349,776 lines): the two rules changed only the two invented fixtures written for them, after the
@@ -1426,7 +1426,7 @@ Mac from the next scan; CI has no registry and checks the hashes only, and says 
 the name it found, because CI logs of a public repository are public and a refusal is read in
 transcripts.
 
-Deliberately not a name: a product or repository name on its own (`slate#123`, a checkout folder,
+Deliberately not a name: a product or repository name on its own (`name#123`, a checkout folder,
 a product in prose). Without the organisation it locates nothing, it is the vocabulary hundreds of
 lessons are written in, and `name#N` is what `lesson-fanout.sh` parses to skip the repository a
 lesson came from, so provenance drops the owner and keeps the name. The same login without its
@@ -1905,12 +1905,12 @@ the branch the command left the checkout on.
 ### What the thresholds measured
 
 Each is in its hook header with the date; the two that decided a design are here because they cut
-against the issue text. The duplication floor of 160 characters for a block leaves Slate's day
+against the issue text. The duplication floor of 160 characters for a block leaves the booking app's day
 header cell (131 characters) uncaught, because 130 refuses 10 of the last 40 real pushes and 160
-refuses 4, all genuine. The deferral list dropped "later" (362 hits across Slate, at most two
+refuses 4, all genuine. The deferral list dropped "later" (362 hits across the booking app, at most two
 deferrals), "not yet" (32, none) and "eventually" (25, none), and narrowed "deferred" to "deferred
-to", "deferred until" and "deferred pending" because Slate uses the bare word for work handed off
-after a response. The doc reference guard anchors every phrase to the issue number and vetoes a
+to", "deferred until" and "deferred pending" because the booking app uses the bare word for work handed off
+after a response (all measured for #446). The doc reference guard anchors every phrase to the issue number and vetoes a
 past tense verb, because a first draft matching the phrase anywhere in the sentence named 50
 issues of which 44 were closed and about 10 were genuine pending claims.
 

@@ -91,13 +91,31 @@ const mayBeSource = (word: string) => {
   return ext === undefined || SOURCE_EXTENSIONS.includes(ext)
 }
 
+type ModKitRun = NonNullable<ModKitWrites['runs']>[number]
+
+/**
+ * Whether a run is a findings note to the installed spool helper (#2254):
+ * `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"`, or the helper run directly.
+ * Its note writes one record under ~/.claude-issue-spool and nothing in any repository, so its words,
+ * a finding that often holds $ or *, are no files it writes. Only that path under the home given and
+ * only its note subcommand: a copy of the helper elsewhere may be any script, and without a home
+ * nothing is let off. Any substitution inside the note, and every other part of the command, is read
+ * by mod-kit as its own write and judged as before.
+ */
+const spoolNote = (r: ModKitRun, home: string | undefined): boolean =>
+  home !== undefined &&
+  (r.what === 'a bash script file' || r.what === 'a script file run directly') &&
+  r.path === `${home}/.claude/hooks/lib/issue-spool.sh` &&
+  r.args[0]?.word === 'note'
+
 /**
  * Every file a command writes that could add lines to a source or test file: a redirect, a copy or an
  * in place edit (`files`), an emptying (`changes` truncate), git writing a path (`byGit` write), a
  * script's arguments (`runs`), and a program's own targets (`unnamed`). A removal, a stamp, a new
  * folder and a mode change add no lines, so they are not judged; nor is a folder handed to a script.
+ * Nor are the words of a findings note (#2254), given `home`: see spoolNote.
  */
-export const shellTargets = (w: ModKitWrites): ShellTarget[] => {
+export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   const out: ShellTarget[] = []
   const seen = new Set<string>()
   const add = (t: ShellTarget) => {
@@ -119,13 +137,15 @@ export const shellTargets = (w: ModKitWrites): ShellTarget[] => {
     if (g.path && g.tree && literalExt(g.path) === undefined) add({ word: g.word, unread: `git writes ${g.word}, which reaches a whole folder` })
     else named(g.word, g.path, undefined, `git matches ${g.word} across folders`, g.tree)
   }
-  for (const r of w.runs ?? [])
+  for (const r of w.runs ?? []) {
+    if (spoolNote(r, home)) continue
     for (const a of r.args) {
       if (a.path) add({ word: a.word, path: a.path })
       else if (a.folder) {
         if (mayBeSource(a.word)) add({ word: a.word, unread: `${a.word} is a pattern handed to ${r.what}`, folder: a.folder })
       } else if (mayBeSource(a.word) && !a.unexpanded) add({ word: a.word, unread: `${r.what} is handed ${a.word}, built as the command runs` })
     }
+  }
   for (const u of w.unnamed) {
     const targets = (u.targets ?? []).filter(t => t.startsWith('/'))
     if (targets.length && targets.length === (u.targets ?? []).length) for (const t of targets) add({ word: t, path: t })
@@ -149,9 +169,12 @@ export const couldHold = (f: { issues: readonly CachedIssue[]; own: readonly num
  * a full SHA-256 of its whole text, since a short hash lets another command sharing it pass unjudged
  * (#2142 lessons review: two commands differing in one number shared the 32 bit one first used).
  */
-export const shellKey = async (command: string): Promise<string> => {
-  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(command)))
-  return `shell:${Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')}`
+export const shellKey = async (command: string): Promise<string> => `shell:${await sha256(command)}`
+
+/** The SHA-256 of a text as 64 hex digits, the one hash every key here is made with. */
+const sha256 = async (text: string): Promise<string> => {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
 }
 
 const GENERATED_PARTS = new Set(['node_modules', 'dist', 'build', 'out', '.next', 'vendor', '__generated__', 'generated', 'Generated'])
@@ -504,7 +527,25 @@ export type Question =
   | { state: 'pending'; at: number; issues: number[]; session: string; call: string; agent: string | null }
   | { state: 'answered'; answer: string; at: number; issues: number[] }
 
-export const questionKey = (repo: string, rel: string) => `question:${repo}\n${rel}`
+/**
+ * The question's key: a SHA-256 of the repository and the held word, 73 characters whatever the word
+ * (#2246). A held shell command's word can be its whole unreadable text, and Claude Code refuses a
+ * store key over 256 characters, which left such a hold impossible to decide.
+ */
+export const questionKey = async (repo: string, rel: string): Promise<string> => `question:${await sha256(`${repo}\n${rel}`)}`
+
+/** The store's own limit on a key, which it refuses past on get, set and delete (#2246). */
+export const STORE_KEY_MAX = 256
+
+/**
+ * The key a question had before #2246, read so an answer Dan already gave still stands for its week,
+ * and cleared with the call it waits on. Undefined where it would pass the store's limit, since no
+ * question was ever kept there. Deleting this read is #2256, once a week has passed since install.
+ */
+export const legacyQuestionKey = (repo: string, rel: string): string | undefined => {
+  const k = `question:${repo}\n${rel}`
+  return k.length <= STORE_KEY_MAX ? k : undefined
+}
 
 // A reason that is a stock word, a template's slot or a mark standing alone says nothing (L675).
 const PLACEHOLDER = /^(?:n\/?a|none|nothing|tbd|todo|fixme|reason|because|ok(?:ay)?|fine|yes|no|test|whatever|see above|not needed|no reason|small change|minor change|minor|trivial)$/i
