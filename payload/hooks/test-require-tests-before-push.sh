@@ -123,6 +123,9 @@ input="$(cat)"
 # STUB_CLAUDE_VANISH: the stand in removes itself once it has read its input, so every later call
 # finds no claude on the path and fails before it launches (#2153).
 [ -n "${STUB_CLAUDE_VANISH:-}" ] && rm -f "$0"
+# STUB_CLAUDE_SLEEP: seconds each call takes, so the hook's own clock moves past a deadline while
+# a reading runs (#2249); the hook's clock cannot be set mid run, only at its start.
+[ -n "${STUB_CLAUDE_SLEEP:-}" ] && sleep "$STUB_CLAUDE_SLEEP"
 [ -n "${STUB_CLAUDE_STDIN:-}" ] && printf '%s' "$input" > "$STUB_CLAUDE_STDIN"
 if [ -n "${STUB_CLAUDE_LOG:-}" ]; then
   # Claimed with noclobber, because further readings run at once (#2153) and two calls looking for
@@ -649,17 +652,25 @@ want_stderr "pushed earlier are read with every push" "#2153 saying a smaller pu
 
 # Out of time: the hook must finish inside the 120 seconds its registration sets (a setting, not
 # measured), so a later call is not started without time for it, and the push is refused saying so.
+# Since #2249 the first call keeps to the deadline too, so the deadline here (25) leaves the first
+# call its 20 seconds, and the stand in judge taking 6 seconds leaves the later call short of them.
+# A machine slow enough to spend 5 seconds reading the push refuses before the first call instead,
+# which measures nothing about the later one, so that case is reported unmeasured (L411).
 JUDGE_LOG="$TMPROOT/judge-log-1998e"; mkdir -p "$JUDGE_LOG"
 printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
 W="$(mk_repo)"; seed_issue_push "$W"
-REQUIRE_TESTS_DEADLINE_SECONDS=1 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+REQUIRE_TESTS_DEADLINE_SECONDS=25 STUB_CLAUDE_SLEEP=6 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
   run_hook "$W" "git push"
-want_code 2 "#1998 no time left for a later call refuses"
-want_stderr "could not judge" "#1998 as could not judge"
-want_stderr "time" "#1998 saying it ran out of time"
 n_calls="$(calls_in "$JUDGE_LOG")"
-if [ "$n_calls" = 1 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #1998 with no time left the gate made $n_calls calls, expected 1"; fi
+if [ "$n_calls" = 0 ] && printf '%s' "$ERR" | grep -q "before its first reading"; then
+  echo "SUITE-PART-UNMEASURED #1998 later call deadline: reading the push took past 5 s, so the first call was refused instead"
+else
+  want_code 2 "#1998 no time left for a later call refuses"
+  want_stderr "could not judge" "#1998 as could not judge"
+  want_stderr "ran out of time" "#1998 saying it ran out of time"
+  if [ "$n_calls" = 1 ]; then pass=$((pass+1))
+  else fail=$((fail+1)); echo "FAIL: #1998 with no time left the gate made $n_calls calls, expected 1"; fi
+fi
 
 # --- claude-config#2021: the deadline setting's two untested edges ----------
 # REQUIRE_TESTS_DEADLINE_SECONDS (#2009) can only end the further readings SOONER: it is capped at
@@ -688,11 +699,12 @@ JUDGE_LOG="$TMPROOT/judge-log-2021cap"; mkdir -p "$JUDGE_LOG"
 W="$(mk_repo)"; seed_issue_push "$W"
 SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
   run_hook "$W" "git push"
-want_code 2 "#2021 a setting above 110 is held to 110, so 95 seconds in no further reading starts"
+want_code 2 "#2021 a setting above 110 is held to 110, so 95 seconds in no reading starts"
 want_stderr "ran out of time" "#2021 and the refusal says it ran out of time"
+# None at all: 15 seconds is short of the 20 any reading needs, the first one included (#2249).
 n_calls="$(calls_in "$JUDGE_LOG")"
-if [ "$n_calls" = 1 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #2021 a setting of 500 was not held to 110: 95 seconds in the gate made $n_calls judge calls, expected 1"; fi
+if [ "$n_calls" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 a setting of 500 was not held to 110: 95 seconds in the gate made $n_calls judge calls, expected 0"; fi
 
 # 2. Without lib/whole-number.sh the setting cannot be read, and the default 110 stands. A copy of
 # the hook and its libraries with that one file taken away, so the real tree is never touched.
@@ -719,11 +731,69 @@ JUDGE_LOG="$TMPROOT/judge-log-2021nw2"; mkdir -p "$JUDGE_LOG"
 W="$(mk_repo)"; seed_issue_push "$W"
 SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
   run_hook "$W" "git push"
-want_code 2 "#2021 without lib/whole-number.sh the deadline is the default 110, so 95 seconds in no further reading starts"
+want_code 2 "#2021 without lib/whole-number.sh the deadline is the default 110, so 95 seconds in no reading starts"
 n_calls="$(calls_in "$JUDGE_LOG")"
-if [ "$n_calls" = 1 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh, 95 seconds in, the gate made $n_calls judge calls, expected 1"; fi
+if [ "$n_calls" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh, 95 seconds in, the gate made $n_calls judge calls, expected 0"; fi
 HOOK="$REAL_HOOK"
+
+# --- claude-config#2249: the FIRST reading keeps to the deadline too -------
+# The further readings were started only with PART_MIN_SECONDS left and timed to end by the deadline
+# (#1998), but the first was always given the full JUDGE_TIMEOUT of 90 however late it started. A
+# scan of a large push that took 40 seconds before it left the call running past the 120 second
+# hook limit, and the hook was killed with no reason given. Now the first reading is not started
+# with less than PART_MIN_SECONDS left, its timeout is what is left when that is less than 90, and a
+# reading cut short by that shortened timeout is refused as could not judge, never let through: a
+# killed hook was a refusal already, so no push refused today is allowed by this.
+#
+# 1. Too late to start: 95 seconds in (a start this test sets) leaves 15, and no reading is made.
+JUDGE_LOG="$TMPROOT/judge-log-2249late"; mkdir -p "$JUDGE_LOG"
+printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
+W="$(mk_repo)"; seed_issue_push "$W"
+SECONDS=95 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2249 a first reading with 15 seconds left is refused"
+want_stderr "could not judge" "#2249 as could not judge"
+want_stderr "ran out of time" "#2249 saying it ran out of time"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2249 with 15 seconds left the gate still made $n_calls judge calls, expected 0"; fi
+if [ "$(ledger_last 4)" = cantjudge ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2249 the late start is recorded as $(ledger_last 4), expected cantjudge"; fi
+
+# A stand in for `timeout`, first on the PATH, that records the seconds it was handed and answers
+# as GNU timeout does when the time runs out (124), without running the judge: what a slow judge
+# looks like to the gate, with no real wait.
+TSTUB="$TMPROOT/timeout-stub"; mkdir -p "$TSTUB"
+cat > "$TSTUB/timeout" <<'TSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$STUB_TIMEOUT_ARGS"
+cat > /dev/null
+exit 124
+TSTUB
+chmod +x "$TSTUB/timeout"
+
+# 2. Started 60 seconds in, the first reading is given the 50 left, not 90, and when it runs out
+# the push is refused as could not judge, never the DID NOT RUN allow.
+TARGS="$TMPROOT/timeout-args-2249short"; : > "$TARGS"
+W="$(mk_repo)"; seed_issue_push "$W"
+SECONDS=60 STUB_TIMEOUT_ARGS="$TARGS" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push" "$TSTUB:$PATH_STUB"
+want_code 2 "#2249 a first reading cut short by the deadline is refused"
+want_stderr "could not judge" "#2249 a reading cut short is could not judge"
+want_stderr "deadline" "#2249 naming the deadline it was cut short by"
+case "$OUT$ERR" in *"DID NOT RUN"*) fail=$((fail+1)); echo "FAIL: #2249 a reading cut short by the deadline was let through ungated" ;; *) pass=$((pass+1)) ;; esac
+first_t="$(head -n 1 "$TARGS")"
+if [ -n "$first_t" ] && [ "$first_t" -ge 45 ] && [ "$first_t" -le 50 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2249 started 60 seconds in, the first reading was given a timeout of [$first_t], expected the 50 or so left"; fi
+if [ "$(ledger_last 4)" = cantjudge ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2249 the reading cut short is recorded as $(ledger_last 4), expected cantjudge"; fi
+
+# 3. The control: started at 0 the first reading keeps its full 90, and a judge that times out
+# there is still the DID NOT RUN allow it was, so the change narrows only the late start.
+TARGS="$TMPROOT/timeout-args-2249full"; : > "$TARGS"
+W="$(mk_repo)"; seed_issue_push "$W"
+STUB_TIMEOUT_ARGS="$TARGS" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push" "$TSTUB:$PATH_STUB"
+want_allowed_notice "#2249 the control: a full length reading that times out is the DID NOT RUN allow, as before"
+first_t="$(head -n 1 "$TARGS")"
+if [ "$first_t" = 90 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2249 started at 0, the first reading was given a timeout of [$first_t], expected the full 90"; fi
 
 # --- claude-config#930, end to end: the push that was refused --------------
 # A push changing only a suite file inside an Xcode test target folder changes no source, so the
