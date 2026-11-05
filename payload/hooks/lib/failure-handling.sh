@@ -83,7 +83,8 @@ FH_AWK='
 # LINEAR IN A LONG LINE (claude-config#2249). macOS awk prices substr(s, i, 1) by the length of the
 # whole of s, and copies a string whole on every append, so a scan that read each character with
 # substr and built its code text as out = out c was quadratic in the length of one line: a settled
-# design page holds its frames as one line of JSON, and at 1.6 MB that line took 99 s, long enough
+# design page holds its frames as one line of JSON, and at 1.6 MB that line took 99 s (measured
+# 2026-11-04), long enough
 # for the push gate to be killed before it judged anything. So each line is split ONCE into its
 # characters, C[1..NC], and the code text is kept as an array of characters, O[1..OLEN], joined once
 # when the line is done. The answers are the old ones: the two were compared over a corpus of real

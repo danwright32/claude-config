@@ -662,7 +662,8 @@ W="$(mk_repo)"; seed_issue_push "$W"
 REQUIRE_TESTS_DEADLINE_SECONDS=25 STUB_CLAUDE_SLEEP=6 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
   run_hook "$W" "git push"
 n_calls="$(calls_in "$JUDGE_LOG")"
-if [ "$n_calls" = 0 ] && printf '%s' "$ERR" | grep -q "before its first reading"; then
+case "$ERR" in *"before its first reading"*) first_refused=1 ;; *) first_refused=0 ;; esac
+if [ "$n_calls" = 0 ] && [ "$first_refused" = 1 ]; then
   echo "SUITE-PART-UNMEASURED #1998 later call deadline: reading the push took past 5 s, so the first call was refused instead"
 else
   want_code 2 "#1998 no time left for a later call refuses"
@@ -701,7 +702,8 @@ SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_
   run_hook "$W" "git push"
 want_code 2 "#2021 a setting above 110 is held to 110, so 95 seconds in no reading starts"
 want_stderr "ran out of time" "#2021 and the refusal says it ran out of time"
-# None at all: 15 seconds is short of the 20 any reading needs, the first one included (#2249).
+# None at all: 15 seconds is short of the 20 any reading needs, the first one included (#2249);
+# both are numbers the hook and this test set, not measured.
 n_calls="$(calls_in "$JUDGE_LOG")"
 if [ "$n_calls" = 0 ]; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL: #2021 a setting of 500 was not held to 110: 95 seconds in the gate made $n_calls judge calls, expected 0"; fi
@@ -740,8 +742,9 @@ HOOK="$REAL_HOOK"
 # --- claude-config#2249: the FIRST reading keeps to the deadline too -------
 # The further readings were started only with PART_MIN_SECONDS left and timed to end by the deadline
 # (#1998), but the first was always given the full JUDGE_TIMEOUT of 90 however late it started. A
-# scan of a large push that took 40 seconds before it left the call running past the 120 second
-# hook limit, and the hook was killed with no reason given. Now the first reading is not started
+# slow scan of a large push before it left the call running past the 120 second hook limit, and
+# the hook was killed with no reason given. Every number in this block is one the hook or this
+# test sets, not measured. Now the first reading is not started
 # with less than PART_MIN_SECONDS left, its timeout is what is left when that is less than 90, and a
 # reading cut short by that shortened timeout is refused as could not judge, never let through: a
 # killed hook was a refusal already, so no push refused today is allowed by this.
@@ -772,7 +775,8 @@ TSTUB
 chmod +x "$TSTUB/timeout"
 
 # 2. Started 60 seconds in, the first reading is given the 50 left, not 90, and when it runs out
-# the push is refused as could not judge, never the DID NOT RUN allow.
+# the push is refused as could not judge, never the DID NOT RUN allow. These are numbers this test
+# sets, not measured.
 TARGS="$TMPROOT/timeout-args-2249short"; : > "$TARGS"
 W="$(mk_repo)"; seed_issue_push "$W"
 SECONDS=60 STUB_TIMEOUT_ARGS="$TARGS" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push" "$TSTUB:$PATH_STUB"

@@ -864,7 +864,8 @@ except Exception:
 # and the push refused with no reason. So it is not started with less than PART_MIN_SECONDS left,
 # its timeout is what is left when that is shorter, and a call that ran to that SHORTENED limit is
 # refused as could not judge. Each changed outcome is a refusal where the old one was a kill or a
-# call answering in the hook's last seconds; a full length call that fails still fails open.
+# call answering in the hook's last seconds; a full length call that fails still fails open. Every
+# number in this paragraph is a setting, not measured.
 first_left=$(( TESTS_DEADLINE - SECONDS ))
 first_t=$JUDGE_TIMEOUT; [ "$first_left" -lt "$first_t" ] && first_t=$first_left
 first_cut() {   # $1 = why the reading was not made or not finished

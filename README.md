@@ -2067,7 +2067,7 @@ tests nobody read.
 
 The first call keeps to the same 110 (#2249). It used to be given its full 90 seconds however long
 reading the push had taken, and on a push carrying a 1.6 MB generated line the failure handling scan
-alone took 99 seconds, so the call ran past 120, the hook was killed, and the push was refused with
+alone took 99 seconds (measured 2026-11-04), so the call ran past 120, the hook was killed, and the push was refused with
 no reason. That scan now takes time in proportion to a line's length, and the first call is not
 started with fewer than 20 seconds left, is given only what is left when that is under 90, and is
 refused as could not judge when it runs to that shortened limit. A full length first call that fails
