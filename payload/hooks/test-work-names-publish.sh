@@ -339,5 +339,30 @@ out="$(printf '%s' "$payload" | PATH="$BROKEN:$BIN:$PATH" bash "$GATE" 2>&1)"; r
 check "a gate that crashes refuses the command rather than passing it: rc=$rc $out" [ "$rc" -eq 2 ]
 check "and says it could not check: $out" has "$out" "could not be checked"
 
+# ---------------------------------------------------------------- a redirection in front of gh (claude-config#2235)
+# The shell takes a redirection out of a command before it finds the name, so `2>/dev/null gh pr
+# create` opens the pull request. The scan cut `2>` into `2` and `>` and wrote the words back quoted,
+# so the gate read a command named 2 and let a work name through. Each case is also run through a
+# copy of the hooks whose reader reads the redirection the old way, which must let it through.
+for v in rejoin glue; do
+  check "#2235 the $v copy of the hooks is made" python3 -B "$HERE/lib/loose-reader.py" "$HERE" "$WORK/loose-$v" "$v"
+done
+redirected(){ # redirected <description> <command> <loose copy>...
+  local name="$1" cmd="$2" v
+  shift 2
+  run "$cmd"
+  check "#2235 $name: $out" refused
+  for v in "$@"; do
+    GATE="$WORK/loose-$v/check-work-names-publish.sh" run "$cmd"
+    check "#2235 the $v copy should let it through, or the case decides nothing: $name: $out" passed
+  done
+}
+redirected "a public pull request behind an error redirection" '2>/dev/null gh pr create --repo danwright-test/public-notes --title "Fix it" --body "copied from the acme-widgets issue"' rejoin glue
+redirected "a comment behind an output redirection" '> /dev/null gh issue comment 5 --repo danwright-test/public-notes --body "the acme-corp board"' rejoin
+redirected "a pull request edit behind input" '</dev/null gh pr edit 5 --repo danwright-test/public-notes --body "zephyr"' rejoin
+redirected "gh api behind an error redirection" '2>/dev/null gh api repos/danwright-test/public-notes/issues/5/comments -f body="see acme-widgets"' glue
+run '2>/dev/null gh pr create --repo danwright-test/public-notes --title "Fix it" --body "nothing to see"'
+check "#2235 control: clean text behind a redirection passes: $out" passed
+
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
