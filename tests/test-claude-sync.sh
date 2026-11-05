@@ -2784,8 +2784,8 @@ mkskill(){   # $1 = path to a SKILL.md  $2 = body line
 # always carries beside the tool: the list of skills the sync leaves alone (#415). Without it such
 # a run stops, correctly, so a fixture modelling a real clone seeds it.
 seed_unmanaged_list(){   # $1 = a clone directory holding a copied claude-sync
-  mkdir -p "$1/payload/hooks/lib"
-  cp "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$1/payload/hooks/lib/unmanaged-skills.sh"
+  python3 "$(dirname "$SCRIPT")/payload/hooks/lib/install-hook-libs.py" "$(dirname "$SCRIPT")/payload/hooks/lib" "$1/payload/hooks/lib" unmanaged-skills.sh >/dev/null \
+    || bad "#2204 seed_unmanaged_list: the install refused"
 }
 # A send refuses when the work names scanner is not beside the tool (claude-config#1621), so a copy
 # of the tool that sends is given the scanner, and the registry reader it asks, exactly as its own
@@ -13041,8 +13041,8 @@ check "#415 and carries no skills at all, the platform's least of all" \
   "[ ! -e '$ULR/payload/skills' ]"
 # The control: the same copy with the list beside it sends, so the refusal above is about the list
 # and not about something else this copy lacks.
-mkdir -p "$ULC/payload/hooks/lib"
-cp "$ULREPO/payload/hooks/lib/unmanaged-skills.sh" "$ULC/payload/hooks/lib/unmanaged-skills.sh"
+python3 "$ULREPO/payload/hooks/lib/install-hook-libs.py" "$ULREPO/payload/hooks/lib" "$ULC/payload/hooks/lib" unmanaged-skills.sh >/dev/null \
+  || bad "#2204 the unmanaged skills list could not be installed beside the copy"
 # The list alone is not enough: this copy has no work names scanner beside it either, and a send
 # that cannot run that scanner refuses rather than publishing what nothing judged (claude-config#1621,
 # L98). #1568 let it through with a notice, so the guard keeping work names out of a public
@@ -18179,8 +18179,9 @@ RT20H="$WORK/rt2020-home"; mkdir -p "$RT20H/hooks/lib"
 echo '{"hooks":{}}' > "$RT20H/settings.json"; printf '# rules\n' > "$RT20H/CLAUDE.md"
 rt20_src="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks"
 cp "$rt20_src/test-run-all-tests-real-tree.sh" "$rt20_src/run-all-tests.sh" "$RT20H/hooks/"
-cp "$rt20_src/lib/suite-deadline.sh" "$rt20_src/lib/suite-isolation.sh" "$rt20_src/lib/recorded-pid.sh" "$rt20_src/lib/repo-files.sh" \
-  "$rt20_src/lib/whole-number.sh" "$rt20_src/lib/load-average.sh" "$RT20H/hooks/lib/"
+python3 "$rt20_src/lib/install-hook-libs.py" "$rt20_src/lib" "$RT20H/hooks/lib" suite-deadline.sh suite-isolation.sh \
+  recorded-pid.sh repo-files.sh whole-number.sh load-average.sh >/dev/null \
+  || bad "#2204 the runner's helpers could not be installed into the #2020 home"
 mkskill "$RT20H/skills/milestone/SKILL.md" 'a skill holding a suite'
 printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/skills/milestone/test-ms.sh"
 printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/hooks/test-clean.sh"
