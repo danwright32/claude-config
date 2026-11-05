@@ -1526,7 +1526,7 @@ case "$out" in *clean-asks-inputs*) check "#1765: a mod handing a command's inpu
 # reach Claude; a bare catch, one answering before next outside neverThrows, or one whose replay
 # is not that exact form fails the run, pointed at that copy. A promise's own catch (err, never $) passes.
 M9HOLD="$TMPROOT/m9-hold"
-mkmodsrc "$M9HOLD" clean-holds "const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => neverThrows(() => h(\$, e, next), () => ({ deny: 'x' }), { deny: 'y' })); on('tool.check', h).catch((\$, e, next) => next.called ? next(e) : neverThrows(() => h(\$, e, next), () => ({ deny: 'x' }), { deny: 'y' })); void work().catch(err => log(err))"
+mkmodsrc "$M9HOLD" clean-holds "const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => neverThrows(() => withinGrace(next.budget, () => h(\$, e, next), () => ({ deny: 'late' })), () => ({ deny: 'x' }), { deny: 'y' })); on('tool.check', h).catch((\$, e, next) => next.called ? next(e) : neverThrows(() => withinGrace(next.budget, () => h(\$, e, next), () => ({ deny: 'late' })), () => ({ deny: 'x' }), { deny: 'y' })); on('tool.call', h).catch((\$, e, next) => neverThrows(() => ({ deny: 'x' }), () => ({ deny: 'x' }), { deny: 'y' })); void work().catch(err => log(err))"
 mkmodsrc "$M9HOLD" hold-bare "const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => ({ deny: \`could not check (\${next.error})\` }))"
 mkmodsrc "$M9HOLD" hold-async "const h = async (\$, e, next) => next(e); on('tool.check', h).catch(async (\$, e, next) => ({ decision: 'deny', reason: 'x' }))"
 mkmodsrc "$M9HOLD" hold-replay "const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => next.called ? next(e) : ({ deny: 'x' }))"
@@ -1537,6 +1537,19 @@ for m in hold-bare hold-async hold-replay; do
     || check "#2039: and names $m, pointing it at hooks/mod-kit/hold.ts" "$out"
 done
 case "$out" in *clean-holds*) check "#2039: a catch answering through neverThrows, and a promise's own catch, pass" "$out" ;; *) check "#2039: a catch answering through neverThrows, and a promise's own catch, pass" ok ;; esac
+# #2039: a catch that judges the call once more runs the hook's whole judgement in its own 1,000 ms
+# grace (the engine's next.budget, read 2026-11-05), and one cut at the grace lets the call run. So the rerun starts only through withinGrace,
+# which holds the call when too little of the grace is left; a rerun straight inside neverThrows, sync
+# or async, fails the run, pointed at withinGrace. A catch answering only a refusal (above) passes.
+M9GRACE="$TMPROOT/m9-grace"
+mkmodsrc "$M9GRACE" grace-rerun "const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => neverThrows(() => h(\$, e, next), () => ({ deny: 'x' }), { deny: 'y' }))"
+mkmodsrc "$M9GRACE" grace-rerun-async "const h = async (\$, e, next) => next(e); on('tool.check', h).catch((\$, e, next) => next.called ? next(e) : neverThrows(async () => h(\$, e, next), () => ({ deny: 'x' }), { deny: 'y' }))"
+out="$(bash "$SHARED" "$M9GRACE" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#2039: a catch rerunning its hook outside withinGrace fails the run" ok || check "#2039: a catch rerunning its hook outside withinGrace fails the run" "exit=$code out=$out"
+for m in grace-rerun grace-rerun-async; do
+  printf '%s\n' "$out" | grep "$m reruns its hook" | grep -q 'withinGrace(next.budget' && check "#2039: and names $m, pointing it at withinGrace" ok \
+    || check "#2039: and names $m, pointing it at withinGrace" "$out"
+done
 # #1205: the status bar and the account room each followed a /login with their own copy of the
 # reading and its half minute wait. A mod hooking the login command itself fails the run, pointed at
 # modkit.login; a mod hooking the event mod-kit raises passes.
