@@ -2396,6 +2396,45 @@ the same scan over that. A test fixture is written whole, in a shape the scan ac
 above (spaces, or under a pattern's minimum length); a control that must be token shaped is a hash
 made at run time, so no token sits in the file to be split.
 
+## Slack: drafts only
+
+No session sends or schedules a Slack message; it saves a draft for Dan to send himself (his words,
+2026-11-05: "it should only ever save as draft in slack, never send directly"). The rule is in
+`payload/CLAUDE.md`, and `hooks/slack-drafts-only-gate.sh` enforces it on every Bash call and every
+Slack tool call (#2302). Its rule lives in `hooks/slack_drafts_only_gate.py`, which reads commands
+with the shared `lib/shell-words.py`.
+
+What it refuses:
+
+- `slack_send_message`, `slack_schedule_message`, `slack_post_message` and `slack_reply_to_thread`,
+  from any Slack integration (the plugin or the claude.ai connector), judged by the tool name's last
+  `__` segment. The refusal names `slack_send_message_draft` with the same channel and thread.
+- A command that posts: `curl`, `wget` and their kind aimed at a posting endpoint
+  (`chat.postMessage`, `chat.scheduleMessage`, `chat.postEphemeral`, `chat.meMessage`, an incoming
+  webhook on `hooks.slack.com`, or a `slack_webhook` variable), an interpreter's inline code naming
+  one, a script fed on standard input or in a heredoc naming one, and a script file the command runs
+  (by an interpreter, a shell, `source`, `npx`, `uv run` or its own path) that names one. A shell
+  script is read as commands, so one that only greps for an endpoint passes and one that curls it is
+  refused.
+
+What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
+(a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one exemption (Dan,
+2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+What it does not see, so a pass is not read as more than it measured: a module a script imports, a
+program run by bare name from the PATH (so `npm test` or `npm run x` is never followed into its
+scripts), and an endpoint assembled from pieces on purpose. The threat it answers is a session that
+means well choosing the quickest way to post. It fails closed: a python that is missing or crashes,
+or a payload it cannot read that names a send route, is refused with the reason.
+
+Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
+names `chat.postMessage`; `python3 -m unittest` over the same file passes. This is a known false
+positive, left for Dan to decide rather than exempted.
+
+Cost, 20 calls each by a timer around the gate alone on 2026-11-05: 21 ms on a call it skips, 72 ms
+on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, which it reads, and 154 ms
+on `run-all-tests.sh`. Suite: `test-slack-drafts-only-gate.sh`.
+
 ## Tests
 
 ```bash
