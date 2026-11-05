@@ -7,22 +7,30 @@ the transcript, never what anybody wrote (L222), and it reads each transcript on
 the byte offset it has read to is kept per session and agent, and each run reads only what was
 appended since, so a call costs the same at request 10 as at request 7,000.
 
-THE CONTEXT LINE (#1960, decided by Dan 2026-11-01). A request's context is everything it sent:
-input_tokens + cache_read_input_tokens + cache_creation_input_tokens of its usage. Once the last
-request of a builder (any subagent) or an orchestrator (a main session that has dispatched an agent
-or set a /goal) carries more than CONTEXT_LINE_TOKENS, it is told, once, to write down what it has
-decided and then restart or compact. Said once per BAND of the line (200K, 400K, 600K, ...), so one
-that carries on is told again a band later rather than on every call, and re-armed when a
-compaction brings it back under the line.
+THE CONTEXT LINE (#1960, decided by Dan 2026-11-01; measured from a floor since #2283). A request's
+context is everything it sent: input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+of its usage. Its WORK is that context minus the FLOOR of its stretch: the context of the
+transcript's first request, or of its first request after its latest compaction. The floor is the
+fixed load every request carries (the rules, the tool list, the skills re-attached after a
+compaction, the summary), which a compaction cannot remove, so only the work above it is what the
+notice's remedy can change (L111). Once the last request of a builder (any subagent) or an
+orchestrator (a main session that has dispatched an agent or set a /goal) carries more than
+CONTEXT_LINE_TOKENS of work, it is told, once, to write down what it has decided and then restart
+or compact. Said once per BAND of the line (330K, 660K, 990K, ... of work), so one that carries on
+is told again a band later rather than on every call, and re-armed by a compaction, after which
+nothing sent is no work at all.
 
-  Default 200,000. Measured on the personal MacBook with
-  `python3 tools/cache-usage.py --days 31 --now 2026-11-01T16:00:00Z --summary`, whose CONTEXT lines
-  use this module's default and context_of, so re-running it re-measures this claim: 559 of 677
-  subagents passed the line, and their requests over it were 75.1% of subagent requests and read
-  88.5% of subagent tokens; 249 of 8,576 main sessions passed it, with 57.2% of main requests and
-  85.4% of main tokens. The issue's own audit (one project, five days) found one goal run's
-  orchestrator averaging about 500K a turn and peaking near 966K, 94% of that project's spend. The
-  line sits where most builders cross it on purpose: the cost is in the requests above it.
+  Default 330,000 of work, Dan's decision of 2026-11-05 ("maybe 330k of work?", then confirmed as
+  330K of work, not of total context). Before #2283 the line was 200,000 of whole context, and on
+  the work MacBook a session's first request carried a median of 111,043 tokens and its first after
+  a compaction 134,075, so that line left about 65,000 tokens of working room after a compaction.
+  Measured on the personal MacBook with `python3 tools/cache-usage.py --days 7 --summary` on
+  2026-11-05, whose CONTEXT, FLOOR and STRETCHES lines use this module's default, work_of and
+  band_of, so re-running it re-measures this claim: floors were a median of 42,333 at a main
+  session's start (most of them one request headless runs) and 121,352 after a compaction (45
+  compactions), and 75,738 at a subagent's start. At 330,000 of work 8 of 353 subagent stretches
+  and 5 of 1,919 main stretches crossed, a median of 181 and 232 requests in; at 200,000 of work
+  it would have been 34 and 8. Re-measure each Mac with that command, reading only those lines.
 
 THE LONG SESSION NUDGE (#1940, decided by Dan 2026-11-01). A main session compacted
 CONTEXT_COMPACTIONS_NUDGE times is told, with Dan, that it should start fresh, and what its next
@@ -56,7 +64,7 @@ import os
 import re
 import sys
 
-DEFAULT_LINE = 200_000
+DEFAULT_LINE = 330_000  # of work above the floor (Dan, 2026-11-05)
 DEFAULT_COMPACTIONS = 5
 # 2 (#2283) added the floor. A version 1 state is never read as a 2 with a floor of zero: it is
 # started again from the top of its transcript, which holds everything the state is derived from.
