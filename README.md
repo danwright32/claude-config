@@ -3114,8 +3114,8 @@ names `chat.postMessage`; `python3 -m unittest` over the same file passes. This 
 positive, left for Dan to decide rather than exempted.
 
 Cost, the gate alone timed by its caller on 2026-11-05: a plain `git push` stays on the quick exit
-and costs 0.007 to 0.010 s (the push gate table's figure; 0.010 s as the mean of 10 at load average
-22, where bare bash took 0.005 s); a call the full rule reads starts python3, 0.05 s for `npm run x`
+and costs 0.007 to 0.008 s in the push gate table's five readings, and 0.010 s as the mean of 10 at
+load average 22, where bare bash took 0.005 s; a call the full rule reads starts python3, 0.05 s for `npm run x`
 or `bin/x`, 72 ms on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, and 154
 ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 calls by a timer
 around the gate, was not reproduced by these and is replaced by them. Suite: `test-slack-drafts-only-gate.sh`.
