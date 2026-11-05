@@ -30,9 +30,11 @@
 # AND says why, via fail_open() below. Blocking on infrastructure trouble is
 # worse than allowing, but a push that was never gated must not look identical
 # to a push the gate approved. (#735)
-# One exception: a further call reading tests past the first call's cut refuses, as could not
-# judge, when it fails. The first call has already called a change untested by then, and before
-# #1998 that alone refused the push, so failing open there would loosen the gate.
+# Two exceptions refuse, as could not judge. A further call reading tests past the first call's
+# cut refuses when it fails: the first call has already called a change untested by then, and
+# before #1998 that alone refused the push, so failing open there would loosen the gate. And the
+# first call refuses when too little time is left to start it, or when it runs to a timeout the
+# deadline shortened (#2249): the hook used to be killed there, which refused with no reason.
 #
 # Every push it reaches is recorded, override included, in the ledger the simplify gate writes too
 # (claude-config#1075, #1077): lib/push-gate-report.py reads it.
