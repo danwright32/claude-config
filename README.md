@@ -4325,7 +4325,13 @@ once per load, and a noun that is absent (its mod not loaded) stays its own case
 before saving, auto session name, the collision guard, the design round guard, handoff, the job
 watcher and picker manners build every message from a caught error with its `errorText`, so a
 member missing from an older mod-kit or session registry reaches the screen as that sentence, never
-as the raw `TypeError`.
+as the raw `TypeError`. Since #2150 `errorText` also says a call the engine refused or that failed
+in plain words, never with the engine's own name for the call: "the file could not be read:
+permission denied (/path)", not "scope-modes: $.fs.read: EACCES: ...". A code it has no words for
+keeps the engine's own reason, and an abandoned command's "aborted" text is left as it is for
+/sleep. A caller that decides by the kind of failure asks `errorCode` (the job watcher's check for
+an output file that is gone), and `tools/check-mod-shared-parts.sh` fails a mod that reads the
+prefix by hand (its engine-prefix part).
 Every mod that waits on Dan or on a long job takes mod-kit's reload hold around that wait with one
 helper, mod-kit's `hooks/held.ts`, kept as a byte for byte copy at `hooks/mod-kit/held.ts` in the
 mod, so a prompt a mod sends or an answer Dan gives is not lost when the mods reload mid wait.

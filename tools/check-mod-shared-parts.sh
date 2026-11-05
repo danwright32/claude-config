@@ -92,7 +92,12 @@
 #             by hand (instanceof TypeError anywhere)          five mods each read absence their own way,
 #                                                               and each took a member missing from an older
 #                                                               copy of the provider for the mod being absent)
-#   press    a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
+#   engine-prefix                                               errorText(err, mod), which says it in words
+#             reading the engine's "<mod>: $.noun.member: "    without the prefix, and errorCode(err) for
+#             prefix off an error (a pattern on ': \$\.')       a caller deciding by its code (#2150: auto
+#                                                               session name stripped it alone, every other
+#                                                               mod showed it to Dan)
+#   press   a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
 #                                                               cannot land (#939) is never answered by a
