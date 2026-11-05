@@ -224,6 +224,7 @@ pending="$final.pending"
 acknowledged="$final.acknowledged"  # a merge presented the read key; this is what allows it
 push_acknowledged="$final.push-acknowledged"  # a push presented it; allows later pushes, never a merge
 leftout="$final.leftout"            # the files this review did not read, for its verdict (#583)
+embedded="$final.embedded"          # the embedded base64 it did not read, for its verdict (#2307)
 prread="$final.prread"              # what reading the pull request came to, for the ledger (#1168)
 # A review in groups (#601) keeps each group's input and answer in a folder of its own RUN, named by
 # the run= its pending marker records, so a restarted review never reads an answer an earlier run's
@@ -841,6 +842,7 @@ ROWS
   [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.acknowledged" "$rf" "$fin" merge && ar_readkeys_ack_write "$acknowledged" "$final" "$fin" merge
   [ -n "$fin" ] && ar_readkeys_ack_ok "$rf.push-acknowledged" "$rf" "$fin" push && ar_readkeys_ack_write "$push_acknowledged" "$final" "$fin" push
   [ -s "$rf.leftout" ] && cp "$rf.leftout" "$leftout" 2>/dev/null
+  [ -s "$rf.embedded" ] && cp "$rf.embedded" "$embedded" 2>/dev/null
   touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
   printf '%s' "$s"
 }
@@ -1012,7 +1014,21 @@ narrow_start() {
   ( run_reviewer "$AR_STATE_DIR" "$name" "$diff_file" "$mb" "$model" "$PRR_DEADLINE" "$started" "$since" \
     </dev/null >/dev/null 2>&1 & )
   echo "The lessons review of the changes since ${since:0:7} on $repo_label $branch (${since:0:7}..$short, $((size / 1024)) KB, diff plus the full text of $in of $((in + out)) files changed since) started in the background with $model, after $narrow_rounds earlier rounds of findings on this pull request, whose reviews read the branch up to ${since:0:7}; the $act waits for it (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
+  embedded_said
   return 0
+}
+
+# The embedded base64 left out of what this review reads, deduplicated from the rows every input
+# built for it logged (one run is measured more than once), and named (#2307). A run in a file left
+# out whole (#583) is named there, so it is not named twice.
+embedded_said() {   # [$1 = the review's status]
+  if [ -s "$embedded.raw" ]; then
+    LC_ALL=C awk -F '\t' 'FILENAME == ARGV[1] { lo[$2] = 1; next } !($2 in lo)' "$( [ -e "$leftout" ] && printf '%s' "$leftout" || printf /dev/null)" "$embedded.raw" 2>/dev/null \
+      | LC_ALL=C sort -u > "$embedded" 2>/dev/null
+    rm -f "$embedded.raw"
+  fi
+  [ -s "$embedded" ] || rm -f "$embedded"
+  ar_embedded_note "$embedded" "${1:-}"
 }
 
 # Why a review after three rounds reads the whole branch after all, when narrow_plan said why.
@@ -1030,7 +1046,9 @@ do_start() {
   fi
   # A new review answers for itself: a read key or an acknowledgement left by an earlier review of
   # this head (its file swept, or restarted) must not let THESE findings through unread (#788).
-  rm -f "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" "$leftout" "$prread" 2>/dev/null
+  rm -f "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" "$leftout" "$embedded" "$embedded.raw" "$prread" 2>/dev/null
+  # Every run of embedded base64 the review inputs leave out is logged here, then named (#2307).
+  export AR_EMBEDDED_LOG="$embedded.raw"
   # The groups of a review in groups (#601) are removed once it is written; these are what is left
   # when its waiting process died and nothing wrote it up, swept on the reviews' own 14 days.
   find "$parts_root" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} + 2>/dev/null || true
@@ -1111,16 +1129,19 @@ do_start() {
       echo "The lessons review of the whole branch $repo_label $branch ($short_mb..$short, $(ar_size_text "$whole_size") of diff, over the $((PRR_MAX_BYTES / 1024)) KB one review can use) started in the background in $groups_n groups of files read at once ($groups_text), each by $model with the same deadline; the $act waits for every group (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
       narrow_said
       ar_left_out_note "$leftout"
+      embedded_said
       return 0
     fi
     rm -rf "$parts"
-    local after="" after_line=""
+    local after="" after_line="" emb_note
+    emb_note="$(embedded_said too-large)"
     if [ "${#left_excl[@]}" -gt 0 ]; then
       after=", $(ar_size_text "$size") without the files proven to need no reading"
       after_line=$'\n'"Leaving out the ${#left_excl[@]} file(s) proven to need no reading still leaves $(ar_size_text "$size")."
     fi
-    record too-large "The whole branch diff $short_mb..$short is $(ar_size_text "$whole_size"), over the $((PRR_MAX_BYTES / 1024)) KB a review can use (PR_REVIEW_MAX_BYTES; 11 of 600 measured branches were over it)$base_note, and it cannot be read in groups of files either: $groups_refusal. Split the branch, or merge with the override after telling Dan why.$after_line" "$mb"
-    echo "The lessons review could not run: the branch diff is too large ($(ar_size_text "$whole_size")$after, and $groups_refusal)."; return 0
+    record too-large "The whole branch diff $short_mb..$short is $(ar_size_text "$whole_size"), over the $((PRR_MAX_BYTES / 1024)) KB a review can use (PR_REVIEW_MAX_BYTES; 11 of 600 measured branches were over it)$base_note, and it cannot be read in groups of files either: $groups_refusal. Split the branch, or merge with the override after telling Dan why. Every size here is measured with embedded base64 already left out.$after_line${emb_note:+$'\n'$emb_note}" "$mb"
+    echo "The lessons review could not run: the branch diff is too large ($(ar_size_text "$whole_size")$after, and $groups_refusal)."
+    ar_embedded_note "$embedded" too-large; return 0
   fi
   local fitted in out note
   fitted="$(ar_append_full_files "$diff_file" "$mb" "$full_sha" $((PRR_MAX_BYTES - size)) ${left_excl[@]+"${left_excl[@]}"})"
@@ -1139,6 +1160,7 @@ do_start() {
   echo "The lessons review of the whole branch $repo_label $branch ($short_mb..$short, $((size / 1024)) KB, $note) started in the background with $model; the $act waits for it (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
   narrow_said
   ar_left_out_note "$leftout"
+  embedded_said
 }
 
 # One reviewer over one review input, waited for: the single review of a branch that fits, and
@@ -1221,8 +1243,67 @@ prr_phase() {   # $1 = review or clear, $2 = the reviewer's pid, $3 = what, $4 =
 }
 
 # What each group is told about itself, after the complete file list.
-group_note() {   # $1 = this group, $2 = how many
-  printf '===== THIS REVIEW IS GROUP %s OF %s OF THE WHOLE BRANCH: the branch is over the size one review can use, so its files are read in %s groups at once, each by its own reviewer. Review only the files whose changes are shown below. The list above names every file the branch changed; a file marked as reviewed in another group is read there, so its absence below is not a finding. =====\n\n' "$1" "$2" "$2"
+group_note() {   # $1 = this group, $2 = how many, [$3 = "<p> of <q> of <path>" for a part of one file]
+  printf '===== THIS REVIEW IS GROUP %s OF %s OF THE WHOLE BRANCH: the branch is over the size one review can use, so its files are read in %s groups at once, each by its own reviewer. Review only the files whose changes are shown below. The list above names every file the branch changed; a file marked as reviewed in another group is read there, so its absence below is not a finding.' "$1" "$2" "$2"
+  [ -n "${3:-}" ] && printf ' This group shows part %s: that one file'"'"'s diff is over what a group can hold, so it is cut into consecutive parts at hunk or line boundaries, each read by its own group, and a change that seems to begin or end at the edge of this part continues in the part before or after it.' "$3"
+  printf ' =====\n\n'
+}
+
+# One file's review diff cut into consecutive parts of at most $2 bytes each, written to $3.1, $3.2
+# and so on (claude-config#2307). Every part repeats the file's header (everything before its first
+# hunk); whole hunks are packed in order; a hunk bigger than a part is cut at line boundaries, each
+# piece under a hunk header recomputed for the lines it holds, so line numbers stay true. Prints how
+# many parts. A single line longer than a part cannot be cut, so it prints "<line n>[ of the
+# base]<TAB><bytes>" for it and returns 1: that branch is still refused, naming the line.
+split_parts() {   # $1 = the file's diff, $2 = most bytes per part, $3 = output prefix
+  LC_ALL=C awk -v max="$2" -v out="$3" '
+    function newpart() { if (q) close(f); q++; f = out "." q; printf "%s", hdr > f; cur = length(hdr) }
+    function put(s) { printf "%s\n", s > f; cur += length(s) + 1 }
+    function chunk(from, to,   i, c, oc, nc, os, ns) {
+      oc = nc = 0
+      for (i = from; i <= to; i++) { c = substr(L[i], 1, 1); if (c == " " || c == "-") oc++; if (c == " " || c == "+") nc++ }
+      os = oc ? O[from] : O[from] - 1; ns = nc ? N[from] : N[from] - 1
+      put(sprintf("@@ -%d,%d +%d,%d @@", os < 0 ? 0 : os, oc, ns < 0 ? 0 : ns, nc))
+      for (i = from; i <= to; i++) put(L[i])
+    }
+    function place(   i, hs, ls, from, acc) {
+      if (!n) return
+      if (!q) newpart()
+      hs = length(H) + 1; for (i = 1; i <= n; i++) hs += length(L[i]) + 1
+      if (cur + hs > max && length(hdr) + hs <= max) newpart()
+      if (cur + hs <= max) { put(H); for (i = 1; i <= n; i++) put(L[i]); n = 0; return }
+      from = 1; acc = 0
+      for (i = 1; i <= n; i++) {
+        ls = length(L[i]) + 1
+        if (length(hdr) + 40 + ls > max) {
+          why = (substr(L[i], 1, 1) == "-") ? "line " O[i] " of the base" : "line " N[i]
+          why = why "\t" ls; refused = 1; return
+        }
+        if (cur + 40 + acc + ls > max) { if (acc) chunk(from, i - 1); newpart(); from = i; acc = 0 }
+        acc += ls
+      }
+      chunk(from, n); n = 0
+    }
+    refused { exit }
+    /^@@ -[0-9]/ {
+      place(); if (refused) exit
+      inhunk = 1; H = $0; n = 0
+      split(substr($2, 2), a, ","); oc0 = (2 in a) ? a[2] + 0 : 1; o = oc0 ? a[1] : a[1] + 1
+      split(substr($3, 2), a, ","); nc0 = (2 in a) ? a[2] + 0 : 1; nn = nc0 ? a[1] : a[1] + 1
+      next
+    }
+    !inhunk { hdr = hdr $0 "\n"; next }
+    {
+      n++; L[n] = $0; O[n] = o; N[n] = nn; c = substr($0, 1, 1)
+      if (c == " " || c == "-") o++
+      if (c == " " || c == "+") nn++
+    }
+    END {
+      if (!refused) place()
+      if (refused) { print why; exit 1 }
+      if (q) close(f)
+      print q + 0
+    }' "$1"
 }
 
 # A BRANCH STILL OVER THE CAP, in groups of files whose review input each fits it (claude-config#601).
@@ -1250,7 +1331,7 @@ plan_groups() {
     [ -n "$p" ] || continue
     ng_excl+=(":(exclude,literal)$p")
     # A generated file is shown at no context, and named in its section's header line.
-    b="$(git diff --no-color -U0 "$mb" "$full_sha" -- ":(literal)$p" 2>/dev/null | wc -c | tr -d '[:space:]')"
+    b="$(git diff --no-color -U0 "$mb" "$full_sha" -- ":(literal)$p" 2>/dev/null | ar_elide_embedded | wc -c | tr -d '[:space:]')"
     printf '%s\t%s\n' "$((b + ${#p} + 1))" "$p" >> "$rows"
     gen_reserve=300
   done <<GEN
@@ -1259,15 +1340,16 @@ GEN
   # Every other file measured in one pass: one diff, cut at each file's header, paired with the
   # names in the order git gives both. A count that disagrees measures each file on its own instead.
   ng_names="$(git -c core.quotepath=false diff --no-renames --name-only "$mb" "$full_sha" -- ${ng_excl[@]+"${ng_excl[@]}"} 2>/dev/null)"
+  # Measured with embedded base64 left out, as ar_review_diff shows them (#2307).
   ng_sizes="$(git diff --no-color --no-renames -U20 "$mb" "$full_sha" -- ${ng_excl[@]+"${ng_excl[@]}"} 2>/dev/null \
-    | LC_ALL=C awk '/^diff --git / { if (n) print b; n++; b = 0 } { b += length($0) + 1 } END { if (n) print b }')"
+    | ar_elide_embedded | LC_ALL=C awk '/^diff --git / { if (n) print b; n++; b = 0 } { b += length($0) + 1 } END { if (n) print b }')"
   if [ -n "$ng_names" ]; then
     if [ "$(printf '%s\n' "$ng_names" | grep -c .)" = "$(printf '%s\n' "$ng_sizes" | grep -c .)" ]; then
       printf '%s\n' "$ng_names" | paste <(printf '%s\n' "$ng_sizes") - >> "$rows"
     else
       while IFS= read -r p; do
         [ -n "$p" ] || continue
-        b="$(git diff --no-color --no-renames -U20 "$mb" "$full_sha" -- ":(literal)$p" 2>/dev/null | wc -c | tr -d '[:space:]')"
+        b="$(git diff --no-color --no-renames -U20 "$mb" "$full_sha" -- ":(literal)$p" 2>/dev/null | ar_elide_embedded | wc -c | tr -d '[:space:]')"
         printf '%s\t%s\n' "$b" "$p" >> "$rows"
       done <<NAMES
 $ng_names
@@ -1284,11 +1366,34 @@ NAMES
   if [ "$budget" -le 0 ]; then
     groups_refusal="the list of its $total changed files alone leaves no room under the cap for any file's changes"; return 1
   fi
+  # A part's file list mark and note are longer than a group's, so a part holds that much less.
+  local q i pbudget pmark
+  pmark="$(printf '(changed, part 99 of 99 shown below; the other parts are read in other groups)' | wc -c)"
   k=1; sz=0
   while IFS=$'\t' read -r b p; do
     [ -n "$p" ] || continue
     if [ "$b" -gt "$budget" ]; then
-      groups_refusal="$p alone is $(ar_size_text "$b") of diff, more than the $(ar_size_text "$budget") one group can hold beside the file list"; return 1
+      # One file whose own diff is over what a group holds is read in consecutive parts, each a
+      # group of its own (#2307; #601 refused the branch). The next file starts a new group.
+      pbudget=$((budget - $(group_note 99 99 "99 of 99 of $p" | wc -c) + $(group_note 99 99 | wc -c) - pmark))
+      [ "$sz" -gt 0 ] && k=$((k + 1))
+      ar_review_diff "$(ar_generated_paths "$mb" "$full_sha" ":(literal)$p" </dev/null)" "$mb" "$full_sha" ":(literal)$p" \
+        > "$parts/big.diff" 2>/dev/null </dev/null \
+        || { groups_refusal="the diff of $p could not be read to cut it into parts"; return 1; }
+      if ! q="$(split_parts "$parts/big.diff" "$pbudget" "$parts/big.part" </dev/null)"; then
+        groups_refusal="$p ${q%%$'\t'*} alone is $(ar_size_text "${q##*$'\t'}") of diff, more than the $(ar_size_text "$pbudget") one part of a file can hold beside the file list, and a line cannot be cut"
+        return 1
+      fi
+      case "$q" in ''|*[!0-9]*|0) groups_refusal="the diff of $p could not be cut into parts"; return 1 ;; esac
+      for i in $(seq 1 "$q"); do
+        printf '%s\n' "$p" > "$parts/g$k.list"
+        printf '%s of %s\n' "$i" "$q" > "$parts/g$k.part"
+        mv "$parts/big.part.$i" "$parts/g$k.partdiff" || { groups_refusal="part $i of $p could not be kept"; return 1; }
+        k=$((k + 1))
+      done
+      k=$((k - 1)); sz="$budget"
+      rm -f "$parts/big.diff"
+      continue
     fi
     if [ "$sz" -gt 0 ] && [ $((sz + b)) -gt "$budget" ]; then k=$((k + 1)); sz=0; fi
     sz=$((sz + b))
@@ -1301,6 +1406,22 @@ NAMES
   for k in $(seq 1 "$groups_n"); do
     gspecs=()
     while IFS= read -r p; do [ -n "$p" ] && gspecs+=(":(literal)$p"); done < "$parts/g$k.list"
+    if [ -s "$parts/g$k.part" ]; then
+      # A part of one file: its piece of the diff, the file's full text being far over a group.
+      i="$(cat "$parts/g$k.part")"; p="$(cat "$parts/g$k.list")"
+      { [ -n "$lo_marks" ] && printf '%s\n' "$lo_marks"
+        printf '%s\t(changed, part %s shown below; the other parts are read in other groups)\n' "$p" "$i"
+        awk -F '\t' -v me="$p" '$2 != me { printf "%s\t(changed, reviewed in another group: not shown below)\n", $2 }' "$rows"
+      } > "$marks"
+      { file_list "$marks"; group_note "$k" "$groups_n" "$i of $p"; history_text; cat "$parts/g$k.partdiff"; } > "$parts/$name-g$k.diff" 2>/dev/null
+      rm -f "$parts/g$k.partdiff"
+      sz="$(wc -c < "$parts/$name-g$k.diff" | tr -d '[:space:]')"
+      if [ "$sz" -gt "$PRR_MAX_BYTES" ]; then
+        groups_refusal="group $k (part $i of $p) came to $(ar_size_text "$sz"), over the cap all the same"; return 1
+      fi
+      groups_text="$groups_text${groups_text:+; }group $k: part $i of $p, $(ar_size_text "$sz") of diff"
+      continue
+    fi
     { [ -n "$lo_marks" ] && printf '%s\n' "$lo_marks"
       awk -F '\t' 'FILENAME == ARGV[1] { mine[$0] = 1; next } !($2 in mine) { printf "%s\t(changed, reviewed in another group: not shown below)\n", $2 }' "$parts/g$k.list" "$rows"
     } > "$marks"
@@ -1406,6 +1527,7 @@ assemble_groups() {
       esac
       cnt="$(grep -c . "$parts/g$k.list" 2>/dev/null || true)"
       names="$(head -5 "$parts/g$k.list" 2>/dev/null | paste -sd ',' - | sed 's/,/, /g')"
+      [ -s "$parts/g$k.part" ] && names="$names (part $(cat "$parts/g$k.part" 2>/dev/null))"
       [ "${cnt:-0}" -gt 5 ] && names="$names and $((cnt - 5)) more"
       printf '\n===== Group %s of %s, %s file(s): %s (%s) =====\n' "$k" "$n" "${cnt:-?}" "$gs" "$names"
       awk 'found { print } /^$/ && !found { found = 1 }' "$f"
@@ -1930,9 +2052,9 @@ case "$verb" in
   start) do_start ;;
   # Every verdict names what the review did not read (#583); a review still running is said by
   # its start line, which named them already.
-  check) do_check; rc=$?; [ "$rc" -eq 3 ] || { ar_left_out_note "$leftout" "$(meta_of "$final" status)"; pr_read_note; }; exit "$rc" ;;
+  check) do_check; rc=$?; [ "$rc" -eq 3 ] || { ar_left_out_note "$leftout" "$(meta_of "$final" status)"; ar_embedded_note "$embedded" "$(meta_of "$final" status)"; pr_read_note; }; exit "$rc" ;;
   # A restart is asked for a fresh reading, so it never carries an earlier review (#1280 lessons review).
-  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" "$leftout" "$prread"; rm -rf "$parts_root/$name".*; no_carry=1; do_start ;;
+  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" "$leftout" "$embedded" "$prread"; rm -rf "$parts_root/$name".*; no_carry=1; do_start ;;
   _groups) do_groups ;;
 esac
 exit 0
