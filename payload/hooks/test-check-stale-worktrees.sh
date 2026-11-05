@@ -570,7 +570,9 @@ check "#2309 a batch carried branch with a closed PR, on main by another route, 
 check_eq "#2309 its folder is gone" no "$(ngone "$NWT/send-to")"
 check "#2309 a branch with no PR whose commits are on a remote branch is removed" "proj-7 [build/b-figures]: every commit on it is also on another branch" "$OUT"
 check_eq "#2309 its folder is gone" no "$(ngone "$NAPPS/proj-7")"
-check "#2309 a detached worktree at a main commit is removed" "proj-sql [no branch]: its HEAD is on origin/main" "$OUT"
+# The fixture's merges moved local main past origin/main, so it is the local default branch that
+# holds this HEAD, and the line names that one rather than claiming the remote does.
+check "#2309 a detached worktree at a main commit is removed" "proj-sql [no branch]: its HEAD is on main" "$OUT"
 check_eq "#2309 its folder is gone" no "$(ngone "$NAPPS/proj-sql")"
 check "#2309 the summary counts the removed" "removed 5 of" "$OUT"
 
