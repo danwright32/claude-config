@@ -27,7 +27,13 @@
 # The scanner holds the two organisation names only as sha256 hashes, and this suite tests with an
 # invented organisation handed in the same way (WORK_NAMES_EXTRA_HASHES). No work organisation or
 # repository name belongs in this file.
+#
+# The scanner honours its test settings (WORK_NAMES_EXTRA_HASHES, WORK_NAMES_REGISTRY_READER,
+# WORK_NAMES_PROJECT_HASHES) only under HOOK_TESTS_RUNNING=1, the marker run-all-tests.sh exports to
+# every suite (claude-config#2231). It is exported here too, so this suite run on its own behaves as
+# it does inside a full run; a case that means to be outside a test run clears it on its own line.
 set -uo pipefail
+export HOOK_TESTS_RUNNING=1
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SCAN="$HERE/lib/work-names.py"
@@ -349,6 +355,30 @@ check "#2252 (control) with that hash absent the same README passes, so the hit 
 cp "$DOCS/named-readme.md" "$DOCS/sub/README.md"
 docs_scan "$INKWELL_HASH" named-readme.md named-design.md sub/README.md
 check "#2252 (control) any other file, a nested README included, keeps #1568's rule (exit $scan_rc): $scan_out" [ "$scan_rc" -eq 0 ]
+
+# ---------------------------------------------------------------- 9. its test settings, outside a test
+# claude-config#2231: the scanner is asked by gates that read Claude Code's own environment, so a
+# setting meant for its tests must not be honoured anywhere else. A reader named there that answers
+# "nothing registered" would empty the registry half on every real run; the extra hashes are honoured
+# under the same marker, so one rule decides every setting.
+printf 'require("fs").writeFileSync(process.env.READER_RAN, "ran"); console.log(JSON.stringify({state: "missing", file: "/nowhere/repos.local.json"}))\n' > "$WORK/marking-reader.js"
+reader_texts(){   # $1 = the test marker's value -> text_out, text_rc
+  rm -f "$WORK/reader-ran"
+  text_out="$( printf 'commit 1a2b3c4\0Fix the %s reader\n' "$FAKE_ORG" | HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
+    WORK_NAMES_REGISTRY_READER="$WORK/marking-reader.js" READER_RAN="$WORK/reader-ran" HOOK_TESTS_RUNNING="$1" \
+    python3 "$SCAN" --texts0-from - 2>&1 )"; text_rc=$?
+}
+reader_texts 1
+check "#2231 (control) under the test marker the named registry reader is asked: $text_out" [ -e "$WORK/reader-ran" ]
+check "#2231 (control) and the extra hash finds the invented organisation (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
+reader_texts ""
+check "#2231 outside a test run a registry reader named in the environment is never run: $text_out" [ ! -e "$WORK/reader-ran" ]
+check "#2231 outside a test run the extra hashes are not honoured (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+reader_texts 0
+check "#2231 nor with the marker set to anything but 1: $text_out" [ ! -e "$WORK/reader-ran" ]
+check "#2231 and the extra hashes not honoured with it either (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+reader_texts ""
+check "#2231 outside a test run the default reader reads the registry under HOME: $text_out" has "$text_out" "$EMPTY_HOME/.claude/skills/pennie-dev-update/repos.local.json"
 
 # The two built in hashes cover every owner in the registry on a Mac that has one, so the check CI
 # runs (with no registry) is the same check for the organisations that matter. Only measurable where

@@ -284,17 +284,63 @@ expect_deny "a missing scanner refuses rather than passes" "no-such-scanner.py i
 # Its test seams hold only under its tests, and its read budget stays inside its timeout
 # (claude-config#2217). The hook reads Claude Code's own environment, so a scanner named there would
 # be the verdict on every merge, and a budget past the timeout lets the hook be killed mid read.
+# Outside its tests the scanner's own seams are ignored too (claude-config#2231), so the invented
+# organisation is nobody's there: these cases name the listed work owner instead, which the scanner
+# matches through the work repository list the fake gh serves, and run with an empty HOME so this
+# Mac's own dev update registry plays no part.
 printf 'import sys\nsys.exit(0)\n' > "$WORK/scanner-passes.py"
-pr_json "Add the Acme-HQ reader" "Adds the reader." "clean" > "$WORK/pr.json"
-run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/scanner-passes.py" HOOK_TESTS_RUNNING=
-expect_deny "outside its tests, a scanner named in the environment is not the verdict" "title:1: a work organisation name"
-run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/scanner-passes.py" HOOK_TESTS_RUNNING=0
-expect_deny "nor with the test marker set to anything but 1" "title:1: a work organisation name"
+mkdir -p "$WORK/empty-home"
+pr_json "Move it to globex-corp/thing" "Adds the reader." "clean" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/scanner-passes.py" HOOK_TESTS_RUNNING= HOME="$WORK/empty-home"
+expect_deny "outside its tests, a scanner named in the environment is not the verdict" "title:1: a work repository or owner name"
+run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/scanner-passes.py" HOOK_TESTS_RUNNING=0 HOME="$WORK/empty-home"
+expect_deny "nor with the test marker set to anything but 1" "title:1: a work repository or owner name"
 run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/scanner-passes.py"
 expect_allow "(control) under its tests the named scanner is the verdict, so the seam still works"
 pr_json "Add the reader" "Adds the reader." "clean" > "$WORK/pr.json"
-run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/no-such-scanner.py" HOOK_TESTS_RUNNING=
+run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/no-such-scanner.py" HOOK_TESTS_RUNNING= HOME="$WORK/empty-home"
 expect_allow "outside its tests the gate's own scanner judges, whatever file the environment names"
+# The scanner's own registry reader, named in the gate's environment, is not asked outside its tests
+# either: one that answers "nothing registered" would empty the registry half of every real merge.
+printf 'require("fs").writeFileSync(process.env.READER_RAN, "ran"); console.log(JSON.stringify({state: "missing", file: "/nowhere/repos.local.json"}))\n' > "$WORK/marking-reader.js"
+rm -f "$WORK/reader-ran"
+run_hook "$MERGE 7 --squash" WORK_NAMES_REGISTRY_READER="$WORK/marking-reader.js" READER_RAN="$WORK/reader-ran" HOOK_TESTS_RUNNING= HOME="$WORK/empty-home"
+expect_allow "(control) clean text outside its tests merges with the real registry reader"
+if [ -e "$WORK/reader-ran" ]; then fail "outside its tests the gate's scanner ran a registry reader named in the environment"; else pass; fi
+rm -f "$WORK/reader-ran"
+run_hook "$MERGE 7 --squash" WORK_NAMES_REGISTRY_READER="$WORK/marking-reader.js" READER_RAN="$WORK/reader-ran"
+if [ -e "$WORK/reader-ran" ]; then pass; else fail "(control) under its tests the named registry reader is asked: $hook_out"; fi
+
+# The retry settings hold only under its tests too, and the wait between reads is capped whoever set
+# it (claude-config#2231): a wait or a count of tries named in Claude Code's environment could hold
+# the hook past its timeout, and a gate killed there gives no verdict at all. Each wait is read off a
+# sleep that records what it was asked for and returns at once, so no case waits in real time (L524).
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$SLEPT_FILE"\n' > "$WORK/record-sleep"
+chmod +x "$WORK/record-sleep"
+slept_run() {  # [VAR=value ...] ; a scope read that keeps failing, its waits in $WORK/slept
+  rm -f "$WORK/slept"
+  run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_SLEEP="$WORK/record-sleep" SLEPT_FILE="$WORK/slept" "$@"
+  slept="$(cat "$WORK/slept" 2>/dev/null | tr '\n' ' ')"
+}
+slept_run WN_MERGE_READ_TRIES=1 HOOK_TESTS_RUNNING=
+expect_deny "outside its tests a count of tries named in the environment is not honoured" "(3 tries, 15 seconds)"
+tries="$(grep -c 'contents/payload' "$WORK/gh.log")"
+if [ "$tries" -eq 3 ]; then pass; else fail "outside its tests the scope was asked $tries times, wanted the default 3"; fi
+slept_run WN_MERGE_READ_RETRY_SECONDS=4 HOOK_TESTS_RUNNING=
+if [ "$slept" = "2 2 " ]; then pass; else fail "outside its tests a wait named in the environment was honoured: slept [$slept], wanted the default [2 2 ]"; fi
+slept_run WN_MERGE_READ_RETRY_SECONDS=4 HOOK_TESTS_RUNNING=0
+if [ "$slept" = "2 2 " ]; then pass; else fail "nor with the test marker set to anything but 1: slept [$slept]"; fi
+slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=3
+if [ "$slept" = "3 " ]; then pass; else fail "(control) under its tests the retry settings are its own: slept [$slept], wanted [3 ]"; fi
+slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=12
+if [ "$slept" = "5 " ]; then pass; else fail "a wait past the cap is clamped to 5 seconds: slept [$slept]"; fi
+slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=123456789012345678901234567890
+if [ "$slept" = "5 " ]; then pass; else fail "a wait too long for the shell's arithmetic is clamped too: slept [$slept]"; fi
+if says "integer expression expected"; then fail "a wait too long for the shell's arithmetic reached a comparison: $hook_out"; else pass; fi
+slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=03
+if [ "$slept" = "3 " ]; then pass; else fail "a wait padded with zeros is read as its value: slept [$slept]"; fi
+slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=soon
+if [ "$slept" = "2 " ]; then pass; else fail "a wait that is not a number is not believed, and the default holds: slept [$slept]"; fi
 
 # The budget, read off the refusal a scope read that keeps failing gives, which names it.
 run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=100

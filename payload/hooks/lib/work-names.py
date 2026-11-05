@@ -86,6 +86,7 @@ to read it; with --work-repos also the list unreadable or its time budget spent)
 
 Seams (tests): WORK_NAMES_EXTRA_HASHES, comma separated sha256 hex of more lower case logins.
 WORK_NAMES_REGISTRY_READER, the reader to ask (default: dev-update-registry.js beside this file).
+Both are honoured only under HOOK_TESTS_RUNNING=1 (claude-config#2231), as below.
 WORK_NAMES_REPOS_BUDGET_SECONDS, the whole --work-repos run's time for GitHub (default 30).
 WORK_NAMES_PROJECT_LIST, the CLAUDE.md to read the work MacBook's project list from.
 WORK_NAMES_PROJECT_HASHES, comma separated sha256 hex replacing WORK_PROJECTS (empty means none),
@@ -154,15 +155,22 @@ def sha(s):
     return hashlib.sha256(s.encode("utf-8", "surrogatepass")).hexdigest()
 
 
+def under_test():
+    """True only under the hooks' own test runner, which exports HOOK_TESTS_RUNNING=1 to every suite
+    (run-all-tests.sh). The gates that ask this scanner read Claude Code's own environment, so every
+    test setting here is honoured only with it (claude-config#2217, #2231)."""
+    return os.environ.get("HOOK_TESTS_RUNNING") == "1"
+
+
 def extra_hashes():
-    raw = os.environ.get("WORK_NAMES_EXTRA_HASHES", "")
+    raw = os.environ.get("WORK_NAMES_EXTRA_HASHES", "") if under_test() else ""
     return {h.strip().lower() for h in raw.split(",") if h.strip()}
 
 
 def project_hashes():
     """The hashed work MacBook projects: WORK_PROJECTS, or in a test run only (HOOK_TESTS_RUNNING=1)
     the comma separated WORK_NAMES_PROJECT_HASHES when it is set, where empty means none."""
-    if os.environ.get("HOOK_TESTS_RUNNING") == "1" and "WORK_NAMES_PROJECT_HASHES" in os.environ:
+    if under_test() and "WORK_NAMES_PROJECT_HASHES" in os.environ:
         raw = os.environ["WORK_NAMES_PROJECT_HASHES"]
         return {h.strip().lower() for h in raw.split(",") if h.strip()}
     return set(WORK_PROJECTS)
@@ -188,7 +196,9 @@ def registry_entries(timeout=60):
     publish gate (work_names_publish_gate.py, claude-config#2105) both read the registry through it;
     the gate passes what is left of its own time budget as timeout.
     """
-    reader = os.environ.get("WORK_NAMES_REGISTRY_READER") or os.path.join(HERE, "dev-update-registry.js")
+    # A reader named in the environment, which could answer "nothing registered" on every real run,
+    # is asked only under test (claude-config#2231).
+    reader = (under_test() and os.environ.get("WORK_NAMES_REGISTRY_READER")) or os.path.join(HERE, "dev-update-registry.js")
     try:
         p = subprocess.run(["node", reader, "repos"], capture_output=True, text=True, timeout=timeout, errors="replace")
     except FileNotFoundError:
