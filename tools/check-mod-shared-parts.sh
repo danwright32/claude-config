@@ -217,6 +217,9 @@ PARTS=(
   "login-follower|command: *[\"'\`]login[\"'\`]|on('modkit.login', ...), which mod-kit raises with the account a /login landed on"
   "missing-reader|instanceof TypeError|missingOf(err) (errorText, skewNews) from the copy of hooks/skew.ts kept at hooks/mod-kit/skew.ts"
   "input-reader|of [^ ;()]*\\.inputs\\)|inputTexts from the copy of hooks/inputs.ts kept at hooks/mod-kit/inputs.ts, which never opens a device or a fifo"
+  # #2150: a pattern reading the engine's "<mod>: $.noun.member: " prefix off an error. errorText says
+  # such a failure in words without it, and errorCode gives its code to a caller deciding by it.
+  "engine-prefix|: \\\\\\\$\\\\\\.|errorText(err, mod) (errorCode(err) for its code) from the copy of hooks/skew.ts kept at hooks/mod-kit/skew.ts, which says an engine call's failure in words without its prefix"
 )
 
 n=0
