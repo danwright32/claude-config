@@ -1645,7 +1645,8 @@ export const register: Register = on => {
       if (typeof chosen !== 'string' || !chosen.trim()) return { r, none: 'Dan gave no answer, so nothing is recorded. Ask him again, or leave it.' }
       return { r, chosen }
     }
-    // Said once his answer is written down in full, and never otherwise (#2261), for any mod reading
+    // Said once his answer is written down in full for the issue (Skip them, Settled), and never
+    // otherwise (#2261), so never for a one call Not a look or wording change pass, for any mod reading
     // what the guard recorded: picker manners checks the question off on its issue only then. Said
     // after the write, so it changes nothing the guard decides. A mod listening says its own failures
     // (picker manners logs whatever its issue write meets); one that throws is caught here, so his
@@ -1755,8 +1756,9 @@ export const register: Register = on => {
           } catch (err) {
             return say(r, `Dan answered ${NOT_LOOK}, but it could not be recorded (${message(err)}), so the edit to ${listed(waiting.files)} stays blocked. Tell him, and ask again.`)
           }
+          // Not said as recorded (lessons review of PR #2274): nothing is kept for the issue, whose
+          // next look changing edit is asked about again, so its question stays open there.
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
-          await recorded(skipQuestion(onScreen, waiting.files, open), NOT_LOOK, options)
           return say(r, `Dan answered ${NOT_LOOK}: this one edit to ${listed(waiting.files)} goes ahead, recorded as his word that it changes neither the look nor any wording. ${again(waiting)} Any other edit that changes the look on ${s} is still held.`)
         }
         if (chosen !== SKIP_YES) return typed(r, chosen, skipTyped(waiting.files, open))

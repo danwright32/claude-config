@@ -4404,9 +4404,10 @@ missing, longer than 300 characters or names a file. A typed answer to the skip 
 nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in mod-kit's
 one wording (`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not
 yet, with nothing recorded and no toast, and Claude takes his words as the next round's feedback
-rather than asking again (#1336). Once Skip them, Settled or Not a look or wording change is
-stored, and only then, the guard raises `$.designRound.answered` with the question and answer, which
-picker manners checks off on the issue (#2261). The grey card drawn for a refused edit leads in
+rather than asking again (#1336). Once Skip them or Settled is stored, and only then, the guard
+raises `$.designRound.answered` with the question and answer, which picker manners checks off on
+the issue (#2261). Not a look or wording change raises nothing: it lets one call through and
+records nothing for the issue, so its question stays open there. The grey card drawn for a refused edit leads in
 plain words and names the file after (#1145). Since #1151 a program the shell runs (inline or on
 standard input) is judged by its own text, with a bare name placed in the folder it runs in, a cd
 before it followed,
@@ -5069,8 +5070,9 @@ one" and "Go to sleep, no more questions" put a question off rather than answer 
 stays open to be asked another night; both labels are named once, in that shared module, which
 scope-modes shows them from (#1774). A question the design round guard asks with its own picker is
 written to the issue only once the guard says it recorded Dan's answer (`$.designRound.answered`),
-and then checked off with that answer; an answer the guard records nothing for (Run design rounds,
-Not yet, a typed answer, a dialog closed while Dan was away) writes nothing, and a question in the
+and then checked off with that answer; an answer the guard records nothing for on the issue (Run
+design rounds, Not yet, Not a look or wording change, a typed answer, a dialog closed while Dan was
+away) writes nothing, and a question in the
 guard's words asked any other way is never written as settled (#2253, #2261). Picker manners also
 gives `$.designRound` a do nothing default, since a hook on a noun no loaded mod gives stops the mod
 loading.

@@ -67,10 +67,11 @@ export type DesignRoundRecord = {
 }
 
 /**
- * An answer of Dan's the guard has just written down (#2261): his Skip them, his Settled, or his
- * word that one edit changes neither the look nor any wording. Raised only once that write
- * succeeded in full; a typed answer, Run design rounds, Not yet, a dialog that closed while he was
- * away and a write that failed raise nothing, since the guard records nothing for them.
+ * An answer of Dan's the guard has just written down for the issue (#2261): his Skip them or his
+ * Settled. Raised only once that write succeeded in full; a typed answer, Run design rounds, Not
+ * yet, a dialog that closed while he was away and a write that failed raise nothing, since the guard
+ * records nothing for them. Not a look or wording change raises nothing either: it lets one call
+ * through and records nothing for the issue, whose question stays open (lessons review of PR #2274).
  */
 export type DesignRoundAnswered = {
   /** The AskUserQuestion call's id. */
