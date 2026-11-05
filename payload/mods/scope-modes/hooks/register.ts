@@ -74,6 +74,7 @@ import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { itemChoices, openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
+import { guardQuestion } from './mod-kit/designquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
@@ -930,7 +931,14 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
     }
   }
   const open: IssueQuestion[] = []
+  // A design round guard question is settled only by the guard's own picker (#2261): asked here, its
+  // answer records nothing the guard reads, so it is never asked or checked off, answered or not.
+  const guards: string[] = []
   for (const q of found) {
+    if (guardQuestion(q.text)) {
+      guards.push(`${q.repo}#${q.issue} "${q.text}"`)
+      continue
+    }
     const path = answeredPath(dir, q.repo, q.issue, q.text)
     if (!(await $.fs.exists(path))) {
       open.push(q)
@@ -951,6 +959,8 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
     const off = await checkOff($, q.repo, q.issue, q.text, answer)
     if (off) problems.push(`Your answer on ${q.repo}#${q.issue}, "${q.text}" ("${answer}"), is posted but its Open questions still shows it open, and checking it off failed again (${off}); it is not asked again.`)
   }
+  const unasked = [...new Set(guards)]
+  if (unasked.length) problems.push(`Not asked, since only the design round guard's own question can settle ${unasked.length === 1 ? 'it' : 'them'}: ${andList(unasked)}.`)
   // Each issue read once: a closed one is no longer in any queue. One that cannot be read is still
   // asked about, ranked last, since dropping its question would hide it (L215).
   const rank = new Map<string, number>()

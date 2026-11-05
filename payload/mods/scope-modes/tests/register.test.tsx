@@ -5,7 +5,7 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
-import { GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP_QUESTION } from '../hooks/bedtime.ts'
+import { answerKey, GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP_QUESTION } from '../hooks/bedtime.ts'
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { overnightRules, REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
 import { CLAIM_MS, proposalPath } from '../hooks/proposals.ts'
@@ -6516,6 +6516,27 @@ test("an answered item a failed check off left open is checked off on a later ni
   expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
   expect(w.edits.map(x => x.body)).toEqual([SECTIONED.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')])
   expect(r.text).not.toContain('still shows it open')
+})
+
+// #2261: a design round guard question on an issue's Open questions is settled only by the guard's
+// own picker, which records the answer the guard reads. Asked by /sleep, the answer records nothing,
+// so the item is never asked there and never checked off, on the repair path either (an answer on
+// record from before this fix), and /sleep says so once.
+test('/sleep never asks or checks off a design round guard question, on the repair path either, and says so once (#2261)', withDeps, async ($, on) => {
+  const body = ['The screen.', '', '## Open questions', '', '- [ ] Skip design rounds for this issue?', '- [ ] Is this design settled?', '- [ ] Keep the old flag?', '', 'Claude-Session: https://claude.ai/code/session_01AbCdEf'].join('\n')
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [`${ANSWERED}${answerKey('o/r', 7, 'Skip design rounds for this issue?')}.json`]: JSON.stringify({ answer: 'Yes' }) },
+    githubRepos: { default: ['o/r'] },
+    issueBodies: { 7: body },
+    issueAnswers: { 'o/r#7: Is this design settled?': 'Yes', 'o/r#7: Keep the old flag?': 'Drop it' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(w.edits.map(x => x.body)).toEqual([body.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')])
+  const said = 'Not asked, since only the design round guard\'s own question can settle them: o/r#7 "Skip design rounds for this issue?" and o/r#7 "Is this design settled?".'
+  expect(r.text).toContain(said)
+  expect(r.text.split(said).length).toBe(2)
 })
 
 test('notes that cannot be read are said, and the questions in the rest are still asked (L215)', withDeps, async ($, on) => {
