@@ -291,8 +291,12 @@ overrun_with slowreader LOAD_AVERAGE_CMD="$TMPROOT/load-slowreader" LOAD_AVERAGE
 # A copy of the helper with no load reader beside it cannot read a figure, so it fails as before
 # and says the reader is missing rather than printing nothing (L90).
 NOLOAD="$TMPROOT/noload-lib"
-mkdir -p "$NOLOAD"
-cp "$LIB" "$DIR/lib/kill-tree.sh" "$DIR/lib/suite-isolation.sh" "$NOLOAD/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$NOLOAD" suite-deadline.sh kill-tree.sh suite-isolation.sh >/dev/null \
+  || check "#2204 suite-deadline.sh could be installed with what it sources" "the install refused"
+rm -f "$NOLOAD/load-average.sh"   # the copy without the load reader, on purpose
+[ ! -e "$NOLOAD/load-average.sh" ] && [ -f "$NOLOAD/suite-deadline.sh" ] \
+  && check "control: the noload copy has the helper and no load reader" ok \
+  || check "control: the noload copy has the helper and no load reader" "$(ls "$NOLOAD")"
 {
   printf '#!/usr/bin/env bash\n'
   printf '. "%s"\n' "$NOLOAD/suite-deadline.sh"

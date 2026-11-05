@@ -102,7 +102,8 @@ fi
 cp -R "$DIR/session-id-probe" "$PROBE"
 mkdir -p "$PROBE/hooks/mod-kit"
 cp "$ROOT/payload/mods/mod-kit/hooks/ghpoll.ts" "$PROBE/hooks/mod-kit/ghpoll.ts"
-cp "$ROOT/payload/hooks/lib/gh-poll.sh" "$HOME/.claude/hooks/lib/gh-poll.sh"
+python3 "$ROOT/payload/hooks/lib/install-hook-libs.py" "$ROOT/payload/hooks/lib" "$HOME/.claude/hooks/lib" gh-poll.sh >/dev/null \
+  || check "#2204 gh-poll.sh could be installed with what it sources" "the install refused"
 git -C "$WORK/repo" init -q
 POLL_STATE="$WORK/gh-poll"
 BASH_LOG="$WORK/bash.log"

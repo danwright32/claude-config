@@ -2,6 +2,7 @@
 // made a rule permanent, and what Claude is told to ask in Claude Code's own dialog (#777). Pure, so
 // each rule is tested on its own.
 import type { AskBeforeSavingApproval } from '../types/index.d.ts'
+import { withinGrace } from './mod-kit/hold.ts'
 
 export const MOD = 'ask-before-saving'
 
@@ -375,6 +376,19 @@ export const addedText = (content: string, old: string | undefined): string => {
  */
 export const cannotCheck = (failure: { message?: string } | undefined): string =>
   `Not saved: Ask before saving could not check whether this writes lasting memory (${failure?.message || 'it failed'}). Tell Dan what you meant to save instead.`
+
+/** The engine's own words for a hook out of time, for a catch that had too little grace left (#2039). */
+export const OUT_OF_TIME = { message: 'it ran out of time' }
+
+/**
+ * How each of the mod's catches judges the call once more (#2026, #2039). The engine gives a catch
+ * 1,000 ms of its own time, and a catch cut there lets the call run unjudged, so the rerun starts
+ * only through withinGrace, while half that grace is left; otherwise the call is held, `held` shaping
+ * the refusal for the hook it answers. `budget` is the catch's next.budget, handed in so a test can
+ * set it (L524).
+ */
+export const rerunInGrace = <R>(budget: { readonly remainingMs: number }, rerun: () => R | Promise<R>, held: (reason: string) => R): R | Promise<R> =>
+  withinGrace(budget, rerun, () => held(cannotCheck(OUT_OF_TIME)))
 
 /**
  * What a save writes, as the key For good approves it by (#738): a Write's file and content, an
