@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for lib/install-hook-libs.py, the one way a suite installs Python hook helpers into a
+# Tests for lib/install-hook-libs.py, the one way a suite installs Python and shell hook helpers into a
 # scratch home or any folder standing in for hooks/lib (claude-config#2138), and for
 # lib/hand-written-lib-list.py, the scan that fails a suite copying one by hand instead (#2147).
 # A hand written list misses the module a helper starts importing, and the copy then fails only on
@@ -40,7 +40,7 @@ check_eq "#2138 the install refuses a helper that imports a module nobody has, n
 # A helper loaded by its path, never imported, stays out unless it is named, so a suite can still
 # build a folder missing one on purpose: shell_code_lines.py loads shell-words.py that way.
 said="$(python3 "$INSTALL" "$DIR/lib" "$TMPROOT/noreader" hand-written-lib-list.py 2>&1)"; rc=$?
-check_eq "#2147 the install follows imports only, so a helper loaded by its path is left out" \
+check_eq "#2147 the install follows imports and source lines only, so a helper loaded by its path is left out" \
   "0 hand-written-lib-list.py shell_code_lines.py " "$rc $(ls "$TMPROOT/noreader" | tr '\n' ' ')${said:+ said: $said}"
 
 # ---- the install follows what a shell helper sources (#2204) ----
@@ -88,7 +88,7 @@ printf '#!/usr/bin/env bash\n. "${BASH_SOURCE[0]%%/*}/no-such-2204.sh"\n' > "$TM
 said="$(python3 "$INSTALL" "$TMPROOT/shbad" "$TMPROOT/shbaddest2" needs-gone.sh 2>&1)"; rc=$?
 check_eq "#2204 the install refuses a helper sourcing a file its folder does not have, naming it" \
   "1 yes" "$rc $(says "needs-gone.sh line 2 sources no-such-2204.sh, which $TMPROOT/shbad does not have" "$said")"
-# The real helpers: merge-target.sh sources four others, and every one arrives with it.
+# The real helpers: merge-target.sh sources five others, directly or through them, and every one arrives with it.
 said="$(python3 "$INSTALL" "$DIR/lib" "$TMPROOT/mt" merge-target.sh 2>&1)"; rc=$?
 check_eq "#2204 installing merge-target.sh brings the five helpers it sources" \
   "0 ai-review-common.sh gh-poll.sh hook-notice.sh merge-target.sh push-scope.sh whole-number.sh " \
