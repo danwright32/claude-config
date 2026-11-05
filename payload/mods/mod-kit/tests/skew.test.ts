@@ -136,6 +136,17 @@ test("a failed call's code is read from the engine's own text, for a caller deci
   expect(errorCode(undefined)).toBeNull()
 })
 
+// A path may hold a bracket ("/tmp/out (1)/job.log"), and a reading that stopped the path at the
+// first ")" found no engine call at all: no code, so job-watcher never judged a gone file gone,
+// and the engine's own text shown in place of the words.
+test("a failed call's code and words are read whatever its path holds, a bracket included", async () => {
+  expect(errorCode(new Error('job-watcher: $.fs.stat(/tmp/out (1)/job.log) failed: ENOENT'))).toBe('ENOENT')
+  expect(errorCode(new Error('job-watcher: $.fs.stat(/tmp/a)b/job.log) failed: EACCES'))).toBe('EACCES')
+  expect(errorText(new Error('scope-modes: $.fs.stat(/tmp/out (1)/job.log) failed: ENOENT'), 'scope-modes')).toBe(
+    'the file could not be looked up: there is no such file or folder (/tmp/out (1)/job.log)',
+  )
+})
+
 test('the news of a skew is given once per mod and member in a load, and never for anything else', async () => {
   const a = await thrown(() => $.modkit.mergeHelper({}))
   const b = await thrown(() => $.modkit.mergeHelper({}))

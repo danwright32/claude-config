@@ -74,7 +74,9 @@ export const skewSentence = (mod: string, m: Missing): string =>
 // test's deny and the real engine's denied reads), and a failure, "<mod>: $.fs.stat(<path>) failed:
 // <reason>" (the real engine, 2026-11-01). An abandoned command's "<mod>: $.process.run(mkdir)
 // aborted" has no reason after it and is left as it is: /sleep reads it as abandoned (#1677).
-const ENGINE_CALL = /^[a-z0-9][\w-]*: \$\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)(?:\(([^)]*)\) failed)?: ([\s\S]*)$/
+// The call's argument runs to the first ") failed: ", not the first ")", since a path may hold a
+// bracket ("/tmp/out (1)/job.log") and stopping there found no call, and so no code, at all.
+const ENGINE_CALL = /^[a-z0-9][\w-]*: \$\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)(?:\(([\s\S]*?)\) failed)?: ([\s\S]*)$/
 // A system error as Node and the engine spell it: its code, then optionally its own words and, for a
 // file, the call and the path ("EACCES: permission denied, open '/p'").
 const SYSTEM_ERROR = /^(E[A-Z0-9]{2,})(?::\s*([\s\S]*))?$/
