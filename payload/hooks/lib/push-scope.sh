@@ -993,8 +993,15 @@ ps_commit_in_chain() {
 # questions, because ps_add_scope has to tell them apart: an add names what it stages, a
 # `commit -a` stages every tracked change and names nothing. The first is a cheap filter only;
 # ps__read_adds decides what an add really is.
+#
+# Two shapes the first pattern cannot see (claude-config#2203): a git written straight after a
+# substitution's opener, `x=$(git add -A)` or a backquote, and an add reached through a variable,
+# whose word add comes before any git (`SUB=add; git $SUB -A`) or follows a program held in one
+# (`$G add -A`). So a command holding a $ or a backquote and the word add, alone or as a value, is
+# handed to the parser too.
 ps__git_add_in_chain() {
-  grep -Eq '(^|[[:space:];&|"'"'"'])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]"'"'"']|$)' <<< "$1"
+  grep -Eq '(^|[[:space:];&|"'"'"'(`])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]"'"'"')`]|$)' <<< "$1" && return 0
+  grep -Eq '[$`]' <<< "$1" && grep -Eq '(^|[[:space:];&|"'"'"'(`=])add([[:space:];&|"'"'"')`]|$)' <<< "$1"
 }
 ps__commit_stages_all() {
   grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a' <<< "$1"
@@ -1032,16 +1039,19 @@ try:
     shell_words = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(shell_words)
     git_command = shell_words.git_command
-    # The commands a wrapper runs (bash -c, eval, env -S, claude-config#1478), as segments of their own
-    # beside the cut below, and each wrapper whose string cannot be read. The cut below still reads
-    # what it always read; these only add to it.
-    wrapped = [r for r in shell_words.every_command(cmd) if r[4] > 0 or r[3]]
+    # Every command the shell would run, as segments of their own beside the cut below: the commands
+    # a wrapper runs (bash -c, eval, env -S, claude-config#1478), the commands inside a command
+    # substitution, `echo "$(git add -A)"` or `x=$(git add -A)` (claude-config#2203), which the cut
+    # below reads only as the word after echo or an assignment, and each wrapper whose string cannot
+    # be read. The cut below still reads what it always read; these only add to it.
+    wrapped = shell_words.every_command(cmd)
 except Exception:
-    wrapped = []
+    shell_words, wrapped = None, []
     # With no reader of git, any segment naming git and add is an add, the words after add its own:
-    # the reading that sees more adds, never fewer (L42).
+    # the reading that sees more adds, never fewer (L42). A git glued behind an assignment or a
+    # substitution opener, `x=$(git`, is git too (claude-config#2203).
     def git_command(toks):
-        names = [t.lstrip("({").split("/")[-1] for t in toks]
+        names = [re.split(r"[=(`{]", t)[-1].split("/")[-1] for t in toks]
         if "git" in names and "add" in toks:  # gh-reader: the crude reading, when there is no other
             return ("add", [], toks[toks.index("add") + 1:])
         return None
@@ -1060,6 +1070,12 @@ def names_an_add(text):
             found = shell_words.git_read(words[i:])
             if found and (found[0] == "add" or "$" in found[0]):
                 return True
+    return add_named(text)
+def add_named(text):
+    # Is the word add named anywhere a variable could carry it into a command: a shell word that is
+    # add, or an assignment of it, outside a git command running another subcommand (SUB=add,
+    # `for s in add`, bash ./wrapper.sh add -A)? The second reading of names_an_add, and what makes
+    # a git whose subcommand is a variable an add (claude-config#2203).
     for seg in re.split(r"&&|\|\||;|\||\n", text):
         try:
             toks = shlex.split(seg, posix=True)
@@ -1095,10 +1111,24 @@ for seg in segments:
     # claude-config#1188): past reserved words, assignments, rtk, env and sudo, and the options
     # git takes itself.
     found = git_command(toks)
+    # An add reached through a variable (claude-config#2203): a git whose subcommand is a variable or
+    # a substitution in a command naming add (SUB=add; git $SUB -A), or a program held in one whose
+    # first word is add ($G add -A, "$GIT" add ., $(command -v git) add -A). What either really runs
+    # is known only as it runs, so it is an add nobody can account for, the words after it read as
+    # the words of an add.
+    through_variable = False
+    if shell_words is not None:
+        if found and re.search(r"[$`]", found[0]) and add_named(cmd):
+            found, through_variable = ("add",) + tuple(found[1:]), True
+        elif not found:
+            rest, _ = shell_words.command_rest(seg)
+            head = shell_words.command_words(shell_words.bare(rest))
+            if len(head) > 1 and head[0][:1] in "$`" and head[1] == "add":
+                found, through_variable = ("add", [], head[2:]), True
     if not found or found[0].rstrip(")}") != "add":
         continue
     saw_add = True
-    if not readable:
+    if not readable or through_variable:
         unreadable = True
     skip = False
     for a in found[2]:
@@ -1114,7 +1144,8 @@ for seg in segments:
             takes_all = True
         elif a in TRACKED_ONLY:
             tracked = True
-        elif a and not a.startswith("-") and readable:
+        elif a and not a.startswith("-") and readable and a not in paths:
+            # Once: a command is read both by the cut and by the records of the shell reader.
             paths.append(a)
 if mode == "takes":
     print("yes" if (takes_all or tracked or unread_wrapper) else "no")
