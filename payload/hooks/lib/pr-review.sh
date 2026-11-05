@@ -90,10 +90,19 @@
 # group by the same runner with the same deadline, all at once, and its review is ok only when every
 # group returned one; a group that timed out, failed or answered in some other shape makes the
 # branch's review that outcome, which refuses as before. One review file holds every group's
-# findings under its own header, so one read key covers them. It is refused as too large only when
-# no split fits: one file's own diff over what a group can hold, or more than PR_REVIEW_MAX_GROUPS
-# (8) groups. That same 2026-10-08 range, run through it with a stand-in reviewer: 3.7 s to plan,
-# two groups of 30 and 21 files, inputs of 306 and 304 KB.
+# findings under its own header, so one read key covers them. That same 2026-10-08 range, run
+# through it with a stand-in reviewer: 3.7 s to plan, two groups of 30 and 21 files, inputs of 306
+# and 304 KB.
+# EMBEDDED BASE64 is left out of everything a review reads, its size included (claude-config#2307,
+# ar_elide_embedded in lib/ai-review-common.sh): a data URI's payload of 100 or more characters and
+# any unbroken run of 1,000 or more is replaced by a note naming its file, line and size, and every
+# replacement is named in the start line, the reviewer's input and every verdict. A file whose own
+# diff is still over what a group holds is cut into consecutive parts, each a group of its own, so
+# it is refused as too large only when a single line is longer than a part, or when it would take
+# more than PR_REVIEW_MAX_GROUPS (8) groups. Measured 2026-11-05 on the 22 of the 600 sample
+# branches over the cap: 5 were refused before (all Ovation, docs/design pages carrying screenshot
+# data, 541 KB to 1.06 MB) and none after (4 now fit one review, 1 reads in 2 groups); the other 17
+# start exactly as before. None of the 22 needed parts. A 6 MB single line filters in 0.22 s.
 # PR_REVIEW_DEADLINE_SECONDS defaults to 600, measured 2026-09-24 with sonnet on two real branches:
 # Overture 5c7bdd8 (117 KB with 5 of 10 full files) took 195 s and returned one finding citing L11;
 # claude-config #567 (82 KB, 7 of 7 full files) took 231 s and was clean. 600 is about 2.6 times the
