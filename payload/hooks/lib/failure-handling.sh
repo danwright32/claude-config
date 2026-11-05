@@ -80,33 +80,61 @@ fh_lang() {   # $1 = path
 # The awk that does the work. `want` is code (print the normalized lines), catch, retry or any (exit
 # 0 when the construct is present, 1 when not). One pass, so a large pushed file costs one read.
 FH_AWK='
-function keep_expansion(s, i,   c, d, j) {
+# LINEAR IN A LONG LINE (claude-config#2249). macOS awk prices substr(s, i, 1) by the length of the
+# whole of s, and copies a string whole on every append, so a scan that read each character with
+# substr and built its code text as out = out c was quadratic in the length of one line: a settled
+# design page holds its frames as one line of JSON, and at 1.6 MB that line took 99 s (measured
+# 2026-11-04), long enough
+# for the push gate to be killed before it judged anything. So each line is split ONCE into its
+# characters, C[1..NC], and the code text is kept as an array of characters, O[1..OLEN], joined once
+# when the line is done. The answers are the old ones: the two were compared over a corpus of real
+# diffs before this shipped, and test-failure-handling.sh times a long line against short ones.
+function emit1(c) {
+  O[++OLEN] = c
+  if (lang != "shell") return
+  # What runs_program needs, kept as the text arrives: whether a word since the last | ; & ( or
+  # backtick names a program runner (RUNS), and where the word being written began (WS).
+  if (index("|;&(`", c)) { RUNS = 0; WS = OLEN + 1 }
+  else if (c == " " || c == "\t") { if (WS < OLEN && runner_word(join(O, WS, OLEN - 1))) RUNS = 1; WS = OLEN + 1 }
+}
+function emitn(x,   E, m, k) { m = split(x, E, ""); for (k = 1; k <= m; k++) emit1(E[k]) }
+function emit_span(i, k,   j) { for (j = i; j <= k && j <= NC; j++) emit1(C[j]) }
+function reset_out() { OLEN = 0; RUNS = 0; WS = 1 }
+function join(A, lo, hi,   B, m, j, k, t) {
+  # Short pieces first, then pairs of pieces, so no string is copied more than log2 times.
+  if (hi < lo) return ""
+  m = 0
+  for (j = lo; j <= hi; j += 256) { t = ""; for (k = j; k <= hi && k < j + 256; k++) t = t A[k]; B[++m] = t }
+  while (m > 1) { k = 0; for (j = 1; j <= m; j += 2) { t = (j < m) ? B[j] B[j + 1] : B[j]; B[++k] = t }; m = k }
+  return B[1]
+}
+function keep_expansion(i,   c, d, j) {
   # A shell $expansion inside double quotes is code: $name, ${...}, $(...), $((...)).
-  c = substr(s, i + 1, 1)
+  c = C[i + 1]
   if (c == "(") {
     d = 0
-    for (j = i + 1; j <= length(s); j++) {
-      c = substr(s, j, 1)
+    for (j = i + 1; j <= NC; j++) {
+      c = C[j]
       if (c == "(") d++
       else if (c == ")") { d--; if (d == 0) break }
     }
     return j
   }
-  if (c == "{") { j = index(substr(s, i + 1), "}"); return (j ? i + j : length(s)) }
-  for (j = i + 1; j <= length(s) && substr(s, j, 1) ~ /[A-Za-z0-9_]/; j++) ;
+  if (c == "{") { for (j = i + 2; j <= NC; j++) if (C[j] == "}") return j; return NC }
+  for (j = i + 1; j <= NC && C[j] ~ /[A-Za-z0-9_]/; j++) ;
   return j - 1
 }
-function template_expr_end(s, i,   d, j, c) {
+function template_expr_end(i,   d, j, c) {
   # The ${...} of a template literal is code, and may hold another template with its own ${...}, so
   # it ends at the brace that balances its opening one, never at the first } (9ed36c578 lost five
   # real catches to that misread).
   d = 0
-  for (j = i + 1; j <= length(s); j++) {
-    c = substr(s, j, 1)
+  for (j = i + 1; j <= NC; j++) {
+    c = C[j]
     if (c == "{") d++
     else if (c == "}") { d--; if (d == 0) return j }
   }
-  return length(s)
+  return NC
 }
 function closes_unseen(s, i,   before, after) {
   # A triple quote met outside any string, on lines that may begin INSIDE a string opened above the
@@ -122,39 +150,39 @@ function closes_unseen(s, i,   before, after) {
   if (before ~ /(^|[^A-Za-z0-9_])[rRbBfFuU]{1,2}$/) return 0
   return 1
 }
-function normalize(s,   out, i, c, n, nx, k) {
-  out = ""; n = length(s); i = 1
+function normalize(s,   i, c, nx, k, t3) {
+  NC = split(s, C, ""); reset_out(); i = 1
   # A slash language line that is the middle of a block comment opened above the hunk.
   if (lang == "slash" && !block && triple == "" && !tmpl && s ~ /^[ \t]*\*([ \t\/]|$)/) {
     k = index(s, "*/")
     if (!k) return ""
     i = k + 2
   }
-  while (i <= n) {
-    c = substr(s, i, 1); nx = substr(s, i, 2)
+  while (i <= NC) {
+    c = C[i]; nx = c C[i + 1]
     if (block) { if (nx == "*/") { block = 0; i += 2 } else i++; continue }
     if (triple != "") {
-      if (substr(s, i, 3) == triple) { out = out (qn ? "S" : "") triple; triple = ""; i += 3 } else { qn++; i++ }
+      if (nx C[i + 2] == triple) { if (qn) emit1("S"); emitn(triple); triple = ""; i += 3 } else { qn++; i++ }
       continue
     }
     if (tmpl) {
       if (c == "\\") { qn++; i += 2; continue }
-      if (c == "`") { out = out (qn ? "S" : "") "`"; tmpl = 0; i++; continue }
-      if (nx == "${") { k = template_expr_end(s, i); out = out substr(s, i, k - i + 1); i = k + 1; continue }
+      if (c == "`") { if (qn) emit1("S"); emit1("`"); tmpl = 0; i++; continue }
+      if (nx == "${") { k = template_expr_end(i); emit_span(i, k); i = k + 1; continue }
       qn++; i++; continue
     }
     if (q != "") {
       if (qcode) {
         # A program handed to a command that runs it: its text is code, copied as it stands.
-        if (q == "\"" && c == "\\") { out = out substr(s, i, 2); i += 2; continue }
-        if (c == q) { out = out q; q = ""; qcode = 0; i++; continue }
-        out = out c; i++; continue
+        if (q == "\"" && c == "\\") { emit_span(i, i + 1); i += 2; continue }
+        if (c == q) { emit1(q); q = ""; qcode = 0; i++; continue }
+        emit1(c); i++; continue
       }
       # Inside shell single quotes a backslash is an ordinary character, never an escape.
       if (c == "\\" && !(lang == "shell" && q == "\x27")) { qn++; i += 2; continue }
-      if (c == q) { out = out (qn ? "S" : "") q; q = ""; i++; continue }
-      if (lang == "shell" && q == "\"" && (c == "$") && substr(s, i + 1, 1) ~ /[A-Za-z_({]/) {
-        k = keep_expansion(s, i); out = out substr(s, i, k - i + 1); i = k + 1; continue
+      if (c == q) { if (qn) emit1("S"); emit1(q); q = ""; i++; continue }
+      if (lang == "shell" && q == "\"" && (c == "$") && C[i + 1] ~ /[A-Za-z_({]/) {
+        k = keep_expansion(i); emit_span(i, k); i = k + 1; continue
       }
       qn++; i++; continue
     }
@@ -162,54 +190,76 @@ function normalize(s,   out, i, c, n, nx, k) {
     if (lang == "slash" && nx == "//") break
     if (lang == "slash" && nx == "/*") { block = 1; i += 2; continue }
     # The close of a block comment opened above the hunk: what came before it was comment.
-    if ((lang == "slash" || lang == "sql") && nx == "*/") { out = ""; i += 2; continue }
+    if ((lang == "slash" || lang == "sql") && nx == "*/") { reset_out(); i += 2; continue }
     if (lang == "sql" && nx == "--") break
     if (lang == "sql" && nx == "/*") { block = 1; i += 2; continue }
     if ((lang == "shell" || lang == "python" || lang == "ruby" || lang == "hash") && c == "#") {
       if (lang != "shell") break
       # In shell a # opens a comment only at the start of a word, never in $# or ${#x}.
-      if (i == 1 || substr(s, i - 1, 1) ~ /[ \t;&|(]/) break
+      if (i == 1 || C[i - 1] ~ /[ \t;&|(]/) break
     }
-    if ((lang == "python" || lang == "slash") && (substr(s, i, 3) == "\"\"\"" || substr(s, i, 3) == "\x27\x27\x27")) {
-      if (closes_unseen(s, i)) { out = ""; i += 3; continue }
-      triple = substr(s, i, 3); out = out triple; qn = 0; i += 3; continue
+    t3 = nx C[i + 2]
+    if ((lang == "python" || lang == "slash") && (t3 == "\"\"\"" || t3 == "\x27\x27\x27")) {
+      if (closes_unseen(s, i)) { reset_out(); i += 3; continue }
+      triple = t3; emitn(triple); qn = 0; i += 3; continue
     }
-    if (lang == "slash" && c == "`") { tmpl = 1; qn = 0; out = out c; i++; continue }
+    if (lang == "slash" && c == "`") { tmpl = 1; qn = 0; emit1(c); i++; continue }
     if (c == "\"" || c == "\x27") {
       # In shell, a quoted string handed to a command that runs it (awk, a shell, python -c, trap,
       # eval) is a program, so its text stays code; handed to any other command it is data.
-      q = c; qn = 0; qcode = (lang == "shell" && runs_program(out)); out = out c; qi = i; qo = length(out); i++; continue
+      q = c; qn = 0; qcode = (lang == "shell" && runs_program()); emit1(c); qi = i; qo = OLEN; i++; continue
     }
-    out = out c; i++
+    emit1(c); i++
   }
   # A shell single quote still open at the end of the line most often CLOSES a program opened above
   # the hunk (an awk program whose last line reads: quote, "$f" || exit 1), so what follows it is the code that runs it, kept as
   # it stands; when it opens one instead, the text after it is the first line of that program.
-  if (lang == "shell" && q == "\x27" && !qcode) out = substr(out, 1, qo) substr(s, qi + 1)
-  else if (q != "" && qn) out = out "S"
+  if (lang == "shell" && q == "\x27" && !qcode) { q = ""; qcode = 0; return join(O, 1, qo) substr(s, qi + 1) }
+  if (q != "" && qn) emit1("S")
   q = ""; qcode = 0   # an ordinary string never runs past its line
-  return out
+  return join(O, 1, OLEN)
 }
-function runs_program(p,   k, n, t, j, w) {
+function runs_program() {
   # The simple command a quote belongs to is the text after the last | ; & ( or backtick; it runs a
-  # program when any of its words, read without a leading path, names something that runs one.
-  for (k = length(p); k > 0; k--) if (index("|;&(`", substr(p, k, 1))) break
-  n = split(substr(p, k + 1), t, /[ \t]+/)
-  for (j = 1; j <= n; j++) {
-    w = t[j]; sub(/^.*\//, "", w)
-    if (w ~ /^(awk|gawk|mawk|nawk|sed|jq|perl|ruby|node|deno|bun|python[0-9.]*|bash|sh|zsh|dash|ksh|fish|pwsh|osascript|eval|trap|ssh|watch)$/) return 1
-  }
-  return 0
+  # program when any of its words, read without a leading path, names something that runs one. The
+  # finished words were read as they were written (emit1); only the word in progress is read here.
+  return RUNS || (WS <= OLEN && runner_word(join(O, WS, OLEN)))
+}
+function runner_word(w) {
+  sub(/^.*\//, "", w)
+  return (w ~ /^(awk|gawk|mawk|nawk|sed|jq|perl|ruby|node|deno|bun|python[0-9.]*|bash|sh|zsh|dash|ksh|fish|pwsh|osascript|eval|trap|ssh|watch)$/)
 }
 function is_retry_token(t) { return tolower(t) ~ /retr(y|ies|ied|ying)/ }
 function is_attempt_token(t) {
   return t ~ /^([Aa]ttempts?|[Tt]ries)$/ || tolower(t) ~ /_(attempts?|tries)$/ || t ~ /[a-z0-9](Attempts?|Tries)$/
 }
-function has_retry(code, low,   rest, t, after, loop, attempts) {
+function has_retry(code, low,   rest, t, after, loop, attempts, P, np, k) {
   if (low ~ /backoff|exponential|maxattempts/) return 1
   if (low ~ /(^|[^a-z0-9_])2[ \t]*\*\*[ \t]*[a-z_$(]/ || low ~ /pow\([ \t]*2[ \t]*,/ || low ~ /(^|[^a-z0-9_])1[ \t]*<<[ \t]*[a-z_$(]/) return 1
   loop = (low ~ /(^|[^a-z0-9_])(for|while|until|repeat)([^a-z0-9_]|$)/)
   attempts = 0
+  # Every identifier in one pass: each is wrapped in a \001 byte, so split leaves the text before the
+  # first in P[1], the identifiers at the even indexes and the text between them at the odd ones. The
+  # old scan copied the rest of the line after every identifier, quadratic in a long line (#2249).
+  if (!index(code, "\001")) {
+    t = code
+    gsub(/[A-Za-z_][A-Za-z0-9_]*/, "\001&\001", t)
+    np = split(t, P, "\001")
+    for (k = 2; k <= np; k += 2) {
+      if (is_attempt_token(P[k])) attempts = 1
+      if (!is_retry_token(P[k])) continue
+      if (testfile) {
+        # The fixture value and what ends it sit in the next three pieces; the fourth, an identifier,
+        # is added when there is one so that $ cannot match before it.
+        after = P[k + 1] P[k + 2] P[k + 3]
+        if (k + 4 <= np) after = after P[k + 4]
+        if (after ~ /^[ \t]*:[ \t]*(-?[0-9][0-9.]*|true|false|null|nil|none|None|undefined|"S?"|\x27S?\x27)[ \t]*([,}\]]|$)/) continue
+      }
+      return 1
+    }
+    return (loop && attempts)
+  }
+  # A line holding a \001 byte of its own is read by the old scan, so the split cannot misplace it.
   rest = code
   while (match(rest, /[A-Za-z_][A-Za-z0-9_]*/)) {
     t = substr(rest, RSTART, RLENGTH)

@@ -1,0 +1,6 @@
+{
+  "name": "catch-grace-probe",
+  "version": "0.1.0",
+  "description": "A test fixture for tests/test-catch-grace.sh: a stand-in guard whose catch uses up most of its 1,000 ms grace, so mod-kit's withinGrace can be seen holding the call the engine would otherwise let through (#2039).",
+  "author": { "name": "Dan Wright" }
+}
