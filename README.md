@@ -5294,6 +5294,14 @@ its words do not name) is held saying it cannot be read, and may only proceed; i
 in no checkout, or where the repository has no fast growing file and no structural issue naming a
 file. Removals, `touch`, `mkdir`, mode changes and a folder handed to a script are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+One narrowing (#2254): a findings note to the installed helper,
+`bash ~/.claude/hooks/lib/issue-spool.sh note ...` or that path run directly, writes only to
+`~/.claude-issue-spool`, so its arguments are not read as files; a copy of the helper anywhere
+else, another subcommand, a substitution inside the note and everything else in the same command
+are judged as before. A question is kept in the store under a
+SHA-256 of its repository and word (#2246), since a held command's word can pass the store's 256
+character key limit; an answer kept under the earlier key form is still read for its week (#2256
+removes that read).
 Every judgement, decision and answer is one JSON line in
 `~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
 log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
