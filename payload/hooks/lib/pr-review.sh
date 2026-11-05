@@ -1314,7 +1314,8 @@ split_parts() {   # $1 = the file's diff, $2 = most bytes per part, $3 = output 
 # another group, or left out) and the note saying which group it is. Then each group's own files'
 # full text is added while it fits, as one review's is. Called from do_start, whose variables it
 # reads. Writes $parts/<name>-g<k>.diff for each group and sets groups_n and groups_text, or returns
-# 1 with groups_refusal saying why no split fits: one file's own diff over what a group can hold, or
+# 1 with groups_refusal saying why no split fits: a single line longer than one part of a file can
+# hold (a file whose own diff is over what a group holds is cut into consecutive parts, #2307), or
 # more groups than PR_REVIEW_MAX_GROUPS (8 by default, the branches measured on 2026-09-24 needing
 # at most 4) runs at once. A group that comes out over the cap all the same refuses too: an estimate
 # is never trusted over the measured input (L42).

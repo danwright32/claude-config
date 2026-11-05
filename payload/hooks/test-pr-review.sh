@@ -1859,7 +1859,20 @@ check "#2307 a removed run is named by its line in the base" "-[base64 left out 
 check "#2307 a removed line that looks like a header is still content" "--- a/not-a-header [base64 left out of this review: 1.0 KB, x.txt line 7 of the base]" "$filt"
 check "#2307 an added run is named by its line in the head" "+[base64 left out of this review: 1.2 KB, x.txt line 7]" "$filt"
 check "#2307 the file's own header is untouched" $'--- a/x.txt\n+++ b/x.txt\n@@ -5,3 +5,3 @@ head\n keep' "$filt"
-check_eq "#2307 every replacement is recorded for the start line and the verdict" "3" "$(grep -c . "$EMB_LOG" 2>/dev/null || echo 0)"
+check_eq "#2307 every replacement is recorded for the start line and the verdict" "3" "$(grep -c . "$EMB_LOG" 2>/dev/null)"
+
+# A full file whose text could not be read through the filter is left out and named, never counted
+# as read with an empty body under its header (the status of every command in the pipe is checked).
+FREPO="$WORKDIR/fullfail"; rm -rf "$FREPO"; git init -q "$FREPO"
+git -C "$FREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m base
+printf 'small\n' > "$FREPO/a.txt"; git -C "$FREPO" add a.txt
+git -C "$FREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q -m add
+ffok="$(cd "$FREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_append_full_files '$WORKDIR/ff-ok.txt' HEAD~1 HEAD 100000")"
+check_eq "#2307 a full file that reads cleanly is counted as read" "1 0" "$ffok"
+ffout="$(cd "$FREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; git(){ if [ \"\$1\" = show ]; then return 128; fi; command git \"\$@\"; }; ar_append_full_files '$WORKDIR/ff-fail.txt' HEAD~1 HEAD 100000")"
+check_eq "#2307 a full file git could not show is left out and named, never counted as read" "0 1 a.txt" "$ffout"
+ffout="$(cd "$FREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_elide_embedded(){ cat >/dev/null; return 1; }; ar_append_full_files '$WORKDIR/ff-fail2.txt' HEAD~1 HEAD 100000")"
+check_eq "#2307 and so is one the filter failed on" "0 1 a.txt" "$ffout"
 
 # One file whose own diff is over what a group can hold is read in consecutive parts.
 reset_state

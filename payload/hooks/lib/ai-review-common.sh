@@ -674,7 +674,7 @@ GEN
 # large generated file and five small real ones should still show the five, and a file that does
 # not fit is named rather than silently absent (L98).
 ar_append_full_files() {   # $1 = input file, $2 = base, $3 = head, $4 = byte budget, $5.. = pathspecs
-  local out="$1" base="$2" head="$3" budget="$4" line fsize f in=0 left=0 names="" short gen
+  local out="$1" base="$2" head="$3" budget="$4" line fsize f in=0 left=0 names="" short gen st=()
   shift 4
   short="$(git rev-parse --short "$head" 2>/dev/null || printf '%s' "$head")"
   # A generated file's full text is the bulk ar_review_diff exists to leave out (claude-config#591),
@@ -700,7 +700,8 @@ $f
       fsize="$(git show "$head:$f" 2>/dev/null | AR_EMBEDDED_LOG= ar_elide_embedded "$f" | wc -c | tr -d '[:space:]')"
     fi
     if [ "$fsize" -le "$budget" ] \
-       && { printf '\n\n===== FULL FILE at %s: %s =====\n' "$short" "$f"; git show "$head:$f" | ar_elide_embedded "$f"; } >> "$out" 2>/dev/null; then
+       && { printf '\n\n===== FULL FILE at %s: %s =====\n' "$short" "$f"; git show "$head:$f" | ar_elide_embedded "$f"
+            st=("${PIPESTATUS[@]}"); [ "${st[0]}" -eq 0 ] && [ "${st[1]}" -eq 0 ]; } >> "$out" 2>/dev/null; then
       budget=$((budget - fsize)); in=$((in + 1))
     else
       left=$((left + 1)); names="$names $f"
