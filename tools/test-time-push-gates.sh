@@ -105,8 +105,9 @@ awk -v w="${_wall_s:-0}" -v m="${_max_s:-0}" 'BEGIN { exit !(w >= m && w > 0) }'
 # Both the wait and the declared bound are the one hang ceiling (lib/hang-wait.sh), because each is
 # a judgement of how soon a busy Mac starts the second gate, and nothing else (claude-config#2179):
 # the bound was 3 seconds, a loaded Mac can start one python3 runner that much after the other, and
-# a partner started 5 seconds late failed it with nothing broken. Run one after another, the first
-# gate still waits out the ceiling and is killed, so a tool that serialises them still fails here.
+# a partner staged to start 5 seconds late failed it with nothing broken (2026-11-05). Run one
+# after another, the first gate still waits out the ceiling and is killed, so a tool that serialises
+# them still fails here.
 PAR_HOME="$TMPROOT/par-home"; mkdir -p "$PAR_HOME/hooks" "$TMPROOT/rv"
 mkpar(){ printf '#!/usr/bin/env bash\ncat >/dev/null\ntouch "%s/%s"\n. "%s" || exit 1\nhang_wait %s 0.05\n' \
   "$TMPROOT/rv" "$2" "$HANG_LIB" "'[ -e \"$TMPROOT/rv/$3\" ]'" > "$PAR_HOME/hooks/$1"; chmod +x "$PAR_HOME/hooks/$1"; }
