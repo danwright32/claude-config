@@ -4526,8 +4526,8 @@ where every group was one no rule read, and so held: bash's extglob (`@(a|b)` as
 qualifier ending the name (`*.css(N)`, also read as nothing), a bar outside any group as splitting
 the name, and every group and bar also as the characters written, as a script that globs nothing
 receives a quoted argument (rules.ts `groupSpellings`). So a quoted code snippet a script is handed,
-such as a mutation script's `'if (a || b) {'` (a work project, 2026-10-26), spells no look changing name
-however it is read and runs, while a group that may spell one (`'app/page.(tsx|md)'`,
+such as a mutation script's `'if (a || b) {'` (a work project, 2026-10-26), spells no look changing
+name however it is read and runs, while a group that may spell one (`'app/page.(tsx|md)'`,
 `'app/**/*.@(ts|tsx)'` handed to prettier) is held as before; zsh's globbing flags (`(#i)`), a name
 ending inside a command substitution (`$(git ls-files 'app/*.tsx')`) and more than 256 spellings are
 still read by no rule, and held. Measured on 2026-10-27 over the 107,354 distinct Bash commands in
