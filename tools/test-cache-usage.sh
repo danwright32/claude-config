@@ -97,12 +97,14 @@ check "the report ends" "END" "$out"
 # the defaults the hook uses, read from hooks/lib/context_size.py rather than written twice (L83).
 check "the context line defaults to the hook's" $'CONTEXT\tmain\tline=200000\ttranscripts_over=0\trequests_over=0' "$out"
 check "the compaction nudge defaults to the hook's" $'COMPACTIONS\tmain\tnudge_at=5\ttranscripts=1\tat_or_over=0' "$out"
-out="$(run --context-line 1100 --compactions 1)"
-# Requests: main A 1,010 and B 1,205; subagents 2,503, 2,602 and 4,001.
-check "requests over the line and their share of requests and tokens, main" \
-  $'CONTEXT\tmain\tline=1100\ttranscripts_over=1\trequests_over=1\tshare_of_requests=50.0%\tshare_of_tokens=54.4%' "$out"
+out="$(run --context-line 50 --compactions 1)"
+# The line is judged on the work above each stretch's floor, the hook's own predicate (#2283).
+# Requests: main A 1,010 (its session's floor) and B 1,205 (the floor after its compaction), so no
+# work at all; subagents 2,503 then 2,602 (99 above its floor of 2,503), and 4,001 (its floor).
+check "requests whose work passes the line and their share of requests and tokens, main" \
+  $'CONTEXT\tmain\tline=50\ttranscripts_over=0\trequests_over=0\tshare_of_requests=0.0%\tshare_of_tokens=0.0%\twhole_context_requests_over=2' "$out"
 check "and subagents" \
-  $'CONTEXT\tsubagent\tline=1100\ttranscripts_over=2\trequests_over=3\tshare_of_requests=100.0%\tshare_of_tokens=100.0%' "$out"
+  $'CONTEXT\tsubagent\tline=50\ttranscripts_over=1\trequests_over=1\tshare_of_requests=33.3%\tshare_of_tokens=28.6%\twhole_context_requests_over=3' "$out"
 check "main sessions compacted at least the nudge count, and the tokens they read" \
   $'COMPACTIONS\tmain\tnudge_at=1\ttranscripts=1\tat_or_over=1\tshare_of_tokens=100.0%\tmax=1' "$out"
 
@@ -129,6 +131,37 @@ out="$(python3 "$TOOL" --root "$Q" --rules "$R/CLAUDE.md" --now 2026-10-23T00:00
 check "a timestamp without an offset is read as UTC" $'SESSION\tmain\tsess4\t-proj-c\tentrypoint=unknown\trequests=1\tinput=4\tcache_read=6' "$out"
 check "a request with no timestamp is counted as untimed" $'untimed_requests=1' "$out"
 [ "$rc" -eq 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: naive timestamp run exit $rc"; }
+
+# The floor each stretch is measured from (claude-config#2283): a session's first request, and its
+# first after each compaction. Main fl1 starts at 100,000 and reaches 320,000 (220,000 of work),
+# is compacted, starts again at 150,000 and reaches 360,000 (210,000 of work) at its third request.
+# Subagent fa1 starts at 130,000 and reaches 320,000, only 190,000 of work, so it never crosses.
+F="$WORK/projects-f"; mkdir -p "$F/-proj-f/fl1/subagents"
+req(){ # req <kind> <id> <minute> <context>: one invented request whose input totals <context>
+  local side=false; [ "$1" = sub ] && side=true
+  printf '{"type":"assistant","isSidechain":%s,"sessionId":"fl1","timestamp":"2026-10-20T10:%02d:00Z","message":{"id":"%s","model":"m","usage":{"input_tokens":0,"cache_read_input_tokens":%d,"cache_creation_input_tokens":0,"output_tokens":1}}}\n' "$side" "$3" "$2" "$4"
+}
+{
+  req main m1 1 100000; req main m2 2 250000; req main m3 3 320000
+  printf '{"type":"system","subtype":"compact_boundary","isSidechain":false,"sessionId":"fl1","timestamp":"2026-10-20T10:04:00Z","compactMetadata":{"preTokens":320000,"postTokens":45000}}\n'
+  req main m4 5 150000; req main m5 6 330000; req main m6 7 360000
+} > "$F/-proj-f/fl1.jsonl"
+{ req sub s1 1 130000; req sub s2 2 320000; } > "$F/-proj-f/fl1/subagents/agent-fa1.jsonl"
+out="$(python3 "$TOOL" --root "$F" --rules "$R/CLAUDE.md" --now 2026-10-23T00:00:00Z --days 7 --summary 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: floor run exit $rc"; echo "${out:0:2000}"; }
+check "the line counts only work above the floor, beside what the whole context would have counted" \
+  $'CONTEXT\tmain\tline=200000\ttranscripts_over=1\trequests_over=2\tshare_of_requests=33.3%\tshare_of_tokens=45.0%\twhole_context_requests_over=4' "$out"
+check "a subagent whose work stays under the line has no request over it" \
+  $'CONTEXT\tsubagent\tline=200000\ttranscripts_over=0\trequests_over=0\tshare_of_requests=0.0%\tshare_of_tokens=0.0%\twhole_context_requests_over=1' "$out"
+check "the floors are reported, session starts apart from after a compaction" \
+  $'FLOOR\tmain\tsession_starts=1\tmedian=100000\tmin=100000\tmax=100000\tafter_compaction=1\tmedian=150000\tmin=150000\tmax=150000' "$out"
+check "and for subagents, which here never compacted" \
+  $'FLOOR\tsubagent\tsession_starts=1\tmedian=130000\tmin=130000\tmax=130000\tafter_compaction=0\tmedian=n/a\tmin=n/a\tmax=n/a' "$out"
+check "each stretch, and how many requests into it the line was crossed" \
+  $'STRETCHES\tmain\tline=200000\tstretches=2\tcrossed=2\tmedian_requests_to_cross=3' "$out"
+check "a stretch that never crossed is counted, not dropped" \
+  $'STRETCHES\tsubagent\tline=200000\tstretches=1\tcrossed=0\tmedian_requests_to_cross=n/a' "$out"
+absent "counts only: no session id or project in the floor and stretch lines" $'FLOOR\tmain\tfl1' "$out"
 
 echo
 echo "passed: $pass, failed: $fail"

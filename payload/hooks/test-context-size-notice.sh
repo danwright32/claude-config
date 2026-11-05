@@ -3,8 +3,11 @@
 # session nudge, both read from the transcript a PostToolUse payload names.
 #
 # - A builder (any subagent) or an orchestrator (a main session that has dispatched an agent or set
-#   a /goal) whose last request carried more than the line (CONTEXT_LINE_TOKENS, 200,000) is told,
-#   once per band of the line, to write down what it has decided and then restart or compact.
+#   a /goal) whose last request carried more than the line (CONTEXT_LINE_TOKENS, 200,000) ABOVE its
+#   floor is told, once per band of the line, to write down what it has decided and then restart or
+#   compact. The floor is the first request of the session, or of the stretch since its latest
+#   compaction (claude-config#2283), so the fixed load every request carries is never counted as
+#   work. Most fixtures below open with a small first request (`start`), so their floor is 10,000.
 # - A main session compacted CONTEXT_COMPACTIONS_NUDGE (5) times is nudged to start fresh, saying
 #   what its next request costs.
 # Every check below was seen failing before the hook existed (L1).
@@ -47,6 +50,9 @@ unset CONTEXT_LINE_TOKENS CONTEXT_COMPACTIONS_NUDGE
 usage(){ # usage <file> <message id> <context tokens>: one request whose input totals <context>
   printf '{"type":"assistant","isSidechain":false,"message":{"id":"%s","model":"claude-opus-5-5","role":"assistant","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":10,"cache_read_input_tokens":%d,"cache_creation_input_tokens":100}}}\n' "$2" "$(( $3 - 110 ))" >> "$1"
 }
+start(){ # start <file>: a first request of 10,000, so the fixture's floor is small (#2283)
+  usage "$1" msg_start 10000
+}
 agent_call(){ # agent_call <file>: the session dispatches an agent
   printf '{"type":"assistant","message":{"id":"msg_agent%s","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_%s","name":"Agent","input":{"prompt":"go"}}]}}\n' "$RANDOM" "$RANDOM" >> "$1"
 }
@@ -77,6 +83,7 @@ print(d.get("systemMessage", "") if k == "system" else d.get("hookSpecificOutput
 # ---- 1. A builder: any subagent, its own transcript beside its parent's ----
 P="$WORK/proj/s1.jsonl"; mkdir -p "$WORK/proj/s1/subagents"; : > "$P"
 A="$WORK/proj/s1/subagents/agent-a1.jsonl"; : > "$A"
+start "$A"
 usage "$A" msg_1 150000
 check_eq "1 a builder under the line hears nothing" "" "$(agent_fire s1 "$P" a1 "$A")"
 usage "$A" msg_2 212345
@@ -102,8 +109,8 @@ check "1 a further band of the line is said again" "410,000" "$(field "$(agent_f
 compacted "$A" 410000
 usage "$A" msg_5 30000
 check_eq "1 back under the line after a compaction, quiet" "" "$(agent_fire s1 "$P" a1 "$A")"
-usage "$A" msg_6 205000
-check "1 crossing the line again after that is said again" "205,000" "$(field "$(agent_fire s1 "$P" a1 "$A")" additionalContext)"
+usage "$A" msg_6 235000
+check "1 crossing the line again after that is said again" "235,000" "$(field "$(agent_fire s1 "$P" a1 "$A")" additionalContext)"
 
 # One request is written as one line per content block, all with the same id and usage; the last
 # line's usage is the request's (the shape tools/cache-usage.py records, measured 2026-10-23).
@@ -116,6 +123,7 @@ check_eq "1 three lines of one request under the line count as one, quiet" "" "$
 # No agent_transcript_path: the agent's own transcript is found beside the parent's, never the
 # parent's read in its place.
 A3="$WORK/proj/s1/subagents/agent-a3.jsonl"; : > "$A3"
+start "$A3"
 usage "$A3" msg_1 250000
 usage "$P" msg_p 10000
 check "1 without agent_transcript_path its own transcript is still read" "250,000" "$(field "$(agent_fire s1 "$P" a3)" additionalContext)"
@@ -129,6 +137,7 @@ check_eq "1 synthetic and malformed lines are not requests" "" "$(agent_fire s1 
 
 # ---- 2. A main session: only an orchestrator is held to the line ----
 M="$WORK/proj/m1.jsonl"; : > "$M"
+start "$M"
 usage "$M" msg_1 300000
 check_eq "2 a main session that dispatched nothing is not held to the line" "" "$(main_fire m1 "$M")"
 agent_call "$M"
@@ -147,20 +156,24 @@ check "2 Dan sees it too" "310,000" "$(field "$out" system)"
 check_eq "2 once per band" "" "$(main_fire m1 "$M")"
 G="$WORK/proj/g1.jsonl"; : > "$G"
 goal_set "$G"
+start "$G"
 usage "$G" msg_1 260000
 check "2 a /goal run is an orchestrator too" "260,000" "$(field "$(main_fire g1 "$G")" additionalContext)"
 # The mark inside a tool's printed output is escaped, so it is not a dispatch.
 E="$WORK/proj/e1.jsonl"; : > "$E"
+start "$E"
 printf '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\\"type\\":\\"tool_use\\",\\"name\\":\\"Agent\\"} and \\"type\\":\\"goal_status\\""}]}}\n' >> "$E"
 usage "$E" msg_1 300000
 check_eq "2 a dispatch quoted in a tool result is not one" "" "$(main_fire e1 "$E")"
 
 # ---- 3. The line is a setting ----
 L="$WORK/proj/s2/subagents/agent-b1.jsonl"; mkdir -p "$WORK/proj/s2/subagents"; : > "$L"; : > "$WORK/proj/s2.jsonl"
+start "$L"
 usage "$L" msg_1 150000
 out="$(printf '{"session_id":"s2","transcript_path":"%s","agent_id":"b1","agent_transcript_path":"%s","hook_event_name":"PostToolUse","tool_name":"Read"}' "$WORK/proj/s2.jsonl" "$L" | CONTEXT_LINE_TOKENS=100000 bash "$HOOK" 2>/dev/null)"
 check "3 CONTEXT_LINE_TOKENS moves the line" "past the line of 100,000" "$(field "$out" additionalContext)"
 L2="$WORK/proj/s2/subagents/agent-b2.jsonl"; : > "$L2"
+start "$L2"
 usage "$L2" msg_1 250000
 out="$(printf '{"session_id":"s2","transcript_path":"%s","agent_id":"b2","agent_transcript_path":"%s","hook_event_name":"PostToolUse","tool_name":"Read"}' "$WORK/proj/s2.jsonl" "$L2" | CONTEXT_LINE_TOKENS=lots bash "$HOOK" 2>/dev/null)"
 check "3 a setting that is not a number falls back to the default line" "past the line of 200,000" "$(field "$out" additionalContext)"
@@ -207,6 +220,7 @@ check_eq "4 a subagent is never nudged to start a fresh session" "" "$(agent_fir
 
 # ---- 5. Reading only what is new, and a transcript that was rewritten ----
 R="$WORK/proj/r1/subagents/agent-r1.jsonl"; mkdir -p "$WORK/proj/r1/subagents"; : > "$R"; : > "$WORK/proj/r1.jsonl"
+start "$R"
 usage "$R" msg_1 250000
 check "5 the first read says it" "250,000" "$(field "$(agent_fire r1 "$WORK/proj/r1.jsonl" r1 "$R")" additionalContext)"
 # The state file by its own name: a bare *r1* also matches the .lock beside it, and Linux lists a
@@ -221,8 +235,8 @@ check "5 and read whole once it is finished" "410,000" "$(field "$(agent_fire r1
 : > "$R"
 usage "$R" msg_9 20000
 check_eq "5 a transcript shorter than what was read starts over, quietly" "" "$(agent_fire r1 "$WORK/proj/r1.jsonl" r1 "$R")"
-usage "$R" msg_10 220000
-check "5 and its next crossing is said" "220,000" "$(field "$(agent_fire r1 "$WORK/proj/r1.jsonl" r1 "$R")" additionalContext)"
+usage "$R" msg_10 230000
+check "5 and its next crossing is said" "230,000" "$(field "$(agent_fire r1 "$WORK/proj/r1.jsonl" r1 "$R")" additionalContext)"
 
 # ---- 6. Failure paths: never block, and say once what could not be checked ----
 out="$(main_fire x1 "$WORK/proj/missing.jsonl")"
@@ -242,6 +256,7 @@ check_eq "6 a payload with no transcript exits 0 and says nothing" "rc=0" "$out"
 if [ "$(id -u)" != 0 ]; then
   RO="$WORK/ro"; mkdir -p "$RO"; chmod 500 "$RO"
   U="$WORK/proj/u1/subagents/agent-u1.jsonl"; mkdir -p "$WORK/proj/u1/subagents"; : > "$U"
+  start "$U"
   usage "$U" msg_1 250000
   out="$(printf '{"session_id":"u1","transcript_path":"%s","agent_id":"u1","agent_transcript_path":"%s","hook_event_name":"PostToolUse"}' "$WORK/proj/u1.jsonl" "$U" | CONTEXT_SIZE_STATE_DIR="$RO/state" bash "$HOOK" 2>/dev/null; echo "rc=$?")"
   check "6 a state folder that cannot be written still exits 0" "rc=0" "$out"
@@ -251,6 +266,7 @@ fi
 
 # ---- 7. Two runs at once speak once: the second finds the state locked and leaves it ----
 K="$WORK/proj/k1/subagents/agent-k1.jsonl"; mkdir -p "$WORK/proj/k1/subagents"; : > "$K"; : > "$WORK/proj/k1.jsonl"
+start "$K"
 usage "$K" msg_1 260000
 mkdir -p "$CONTEXT_SIZE_STATE_DIR"
 ready="$WORK/held"
@@ -309,6 +325,7 @@ by_path(){ # by_path <session> <transcript>: the exact state file a subagent wit
   python3 -c 'import hashlib, sys; print("%s/%s.bypath-%s.json" % (sys.argv[1], sys.argv[2], hashlib.sha256(sys.argv[3].encode("utf-8", "surrogatepass")).hexdigest()[:16]))' "$CONTEXT_SIZE_STATE_DIR" "$1" "$2"
 }
 Z="$WORK/proj/z1.jsonl"; : > "$Z"
+start "$Z"
 agent_call "$Z"
 usage "$Z" msg_1 310000
 check "11 the orchestrator is told its size first" "310,000" "$(field "$(main_fire z1 "$Z")" additionalContext)"
@@ -316,6 +333,7 @@ ZS="$CONTEXT_SIZE_STATE_DIR/z1.main.json"
 main_before="$(cat "$ZS" 2>/dev/null)"
 check "11 and its state is kept under its own name" '"offset"' "$main_before"
 EA="$WORK/proj/z1/subagents/agent-empty.jsonl"; mkdir -p "$WORK/proj/z1/subagents"; : > "$EA"
+start "$EA"
 usage "$EA" msg_1 250000
 out="$(printf '{"session_id":"z1","transcript_path":"%s","agent_id":"","agent_transcript_path":"%s","hook_event_name":"PostToolUse","tool_name":"Read"}' "$Z" "$EA" | bash "$HOOK" 2>/dev/null)"
 check "11 a subagent with an empty agent_id is told its own size" "250,000" "$(field "$out" additionalContext)"
@@ -324,6 +342,7 @@ check_eq "11 and its notice is not put in front of Dan" "" "$(field "$out" syste
 check_eq "11 the main session's state is untouched by it" "$main_before" "$(cat "$ZS" 2>/dev/null)"
 check_eq "11 it keeps its own state, named by its transcript" "yes" "$([ -f "$(by_path z1 "$EA")" ] && echo yes || echo no)"
 EB="$WORK/proj/z1/subagents/agent-number.jsonl"; : > "$EB"
+start "$EB"
 usage "$EB" msg_1 260000
 out="$(printf '{"session_id":"z1","transcript_path":"%s","agent_id":42,"agent_transcript_path":"%s","hook_event_name":"PostToolUse","tool_name":"Read"}' "$Z" "$EB" | bash "$HOOK" 2>/dev/null)"
 check "11 a subagent whose agent_id is a number is told its own size" "260,000" "$(field "$out" additionalContext)"
@@ -357,6 +376,63 @@ usage "$Z" msg_2 410000
 check "11 the main session's own reading goes on unchanged: its next band is said" "410,000" "$(field "$(main_fire z1 "$Z")" additionalContext)"
 off="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["offset"])' "$ZS" 2>/dev/null)"
 check_eq "11 having read exactly its own transcript" "$(wc -c < "$Z" | tr -d ' ')" "$off"
+
+# ---- 12. The line measures the work above the session's own floor, never its fixed load
+# (claude-config#2283). On the work MacBook a session's first request carried a median of 111,043
+# tokens and its first after a compaction 134,075 (the rules, the tool list, the re-attached skills
+# and the summary), so a line on the whole context fired after about 65,000 tokens of work ----
+F="$WORK/proj/f1/subagents/agent-f1.jsonl"; mkdir -p "$WORK/proj/f1/subagents"; : > "$F"; : > "$WORK/proj/f1.jsonl"
+usage "$F" msg_1 130000
+usage "$F" msg_2 250000
+check_eq "12 a builder that started at 130,000 is not told at 250,000 (120,000 of work)" "" "$(agent_fire f1 "$WORK/proj/f1.jsonl" f1 "$F")"
+usage "$F" msg_3 320000
+check_eq "12 nor at 320,000 (190,000 of work)" "" "$(agent_fire f1 "$WORK/proj/f1.jsonl" f1 "$F")"
+usage "$F" msg_4 335000
+ctx="$(field "$(agent_fire f1 "$WORK/proj/f1.jsonl" f1 "$F")" additionalContext)"
+check "12 it is told once its work passes the line" "335,000" "$ctx"
+check "12 saying how much of it is work" "205,000" "$ctx"
+check "12 and the floor it is measured from" "130,000" "$ctx"
+check "12 naming this issue" "claude-config#2283" "$ctx"
+
+O="$WORK/proj/o1.jsonl"; : > "$O"
+agent_call "$O"
+usage "$O" msg_1 110000
+usage "$O" msg_2 320000
+out="$(main_fire o1 "$O")"
+check "12 an orchestrator that started at 110,000 is told at 320,000 (210,000 of work)" "320,000" "$(field "$out" additionalContext)"
+check "12 Dan sees how much of it is work" "210,000" "$(field "$out" system)"
+compacted "$O" 330000
+check_eq "12 compacted, with no request since, it is quiet" "" "$(main_fire o1 "$O")"
+# The case the issue names: a first request after a compaction already at 150,000.
+usage "$O" msg_3 150000
+check_eq "12 its first request after the compaction, at 150,000, is its new floor" "" "$(main_fire o1 "$O")"
+usage "$O" msg_4 330000
+check_eq "12 330,000 after that floor is 180,000 of work, so quiet" "" "$(main_fire o1 "$O")"
+usage "$O" msg_5 360000
+out="$(main_fire o1 "$O")"
+ctx="$(field "$out" additionalContext)"
+check "12 at 360,000 it is 210,000 of work, and said" "360,000" "$ctx"
+check "12 measured from the floor after its last compaction" "150,000" "$ctx"
+check "12 named as the floor since the compaction" "after its last compaction" "$ctx"
+check "12 Dan sees that floor too" "150,000" "$(field "$out" system)"
+check_eq "12 once per band" "" "$(main_fire o1 "$O")"
+
+# ---- 13. A state kept before the floor existed is read again from the start, so the floor of a
+# session already running when this ships is known rather than taken as zero (L1010: a new state
+# version, never an edited one) ----
+V="$WORK/proj/v1/subagents/agent-w1.jsonl"; mkdir -p "$WORK/proj/v1/subagents"; : > "$V"; : > "$WORK/proj/v1.jsonl"
+usage "$V" msg_1 130000
+usage "$V" msg_2 250000
+python3 -c '
+import json, sys
+json.dump({"v": 1, "offset": int(sys.argv[2]), "last_id": "msg_2", "last_ctx": 250000, "first_ctx": 130000,
+           "requests": 2, "ctx_sum": 380000, "compactions": 0, "last_pre": 0, "orchestrator": False,
+           "band_told": 1, "compactions_told": 0, "unreadable_told": False}, open(sys.argv[1], "w"))
+' "$CONTEXT_SIZE_STATE_DIR/v1.w1.json" "$(wc -c < "$V" | tr -d ' ')"
+usage "$V" msg_3 340000
+ctx="$(field "$(agent_fire v1 "$WORK/proj/v1.jsonl" w1 "$V")" additionalContext)"
+check "13 a state from before #2283 is read again, so the floor is the first request" "130,000" "$ctx"
+check "13 and the work above it is said" "210,000" "$ctx"
 
 echo
 echo "passed: $pass, failed: $fail"
