@@ -245,6 +245,62 @@ case "$long_line" in
   *) bad "${long_line#FAIL }" ;;
 esac
 
+# --- many pending claims in one paragraph are reported in linear time (claude-config#2233) -----
+#
+# Each row the scanner reports says which reference of the paragraph it is about. That index was
+# counted afresh for every row over the whole paragraph up to the reference, so a paragraph holding
+# n claims cost n times its own length: measured 2026-11-05, 80,000 claims in one 2 MB paragraph
+# took 33 s against 1.4 s for the same paragraph with one claim. The claims page is timed against a
+# YARDSTICK of the same length and the same references, every sentence but the last a citation, so
+# the two differ only in how many rows they report. The yardstick is the MEDIAN of three runs, so
+# one stalled run cannot set the standard (L656), and a machine too starved to scan it says
+# UNMEASURED rather than failing (L411). Both pages are counted row by row, so a scanner that sped
+# up by reporting fewer claims is caught too.
+cat > "$WORKDIR/many-claims.py" <<'PY'
+import os, statistics, subprocess, sys, time
+scanner = os.environ["SCANNER"]
+n = 80_000
+claims = "Part #41 closes with it.\n" * n
+plain = "Part #41 closed with it.\n" * (n - 1) + "Part #41 closes with it.\n"
+
+def run(text, limit):
+    t0 = time.monotonic()
+    p = subprocess.run([sys.executable, scanner, "--stdin", "page.md"], input=text.encode(),
+                       capture_output=True, timeout=limit)
+    return time.monotonic() - t0, p.stdout.decode(errors="replace").splitlines()
+
+STARVED = 60
+yards = []
+for _ in range(3):
+    try:
+        took, rows = run(plain, STARVED)
+    except subprocess.TimeoutExpired:
+        print("STARVED the yardstick, a %d character paragraph holding one claim, took over %d s, so this machine is too loaded to time the claims page" % (len(plain), STARVED))
+        sys.exit(0)
+    if rows != ["page.md:%d:41:Part #41 closes with it." % n]:
+        print("FAIL the yardstick page should report its one claim, on line %d, and reported %d rows" % (n, len(rows)))
+        sys.exit(0)
+    yards.append(took)
+yard = statistics.median(yards)
+budget = max(10.0, 10 * yard)
+try:
+    took, rows = run(claims, budget)
+except subprocess.TimeoutExpired:
+    print("FAIL a paragraph of %d pending claims took over %.1f s (ten times the %.2f s median yardstick on the same paragraph with one claim): something in the scanner costs rows times paragraph length" % (n, budget, yard))
+    sys.exit(0)
+if len(rows) != n or rows[0] != "page.md:1:41:Part #41 closes with it." or rows[-1] != "page.md:%d:41:Part #41 closes with it." % n:
+    print("FAIL the claims page should report all %d claims, one per line, and reported %d rows" % (n, len(rows)))
+    sys.exit(0)
+print("OK claims %.2f s against a %.2f s median yardstick" % (took, yard))
+PY
+many_claims="$(SCANNER="$SCANNER" python3 "$WORKDIR/many-claims.py")"
+case "$many_claims" in
+  OK*) ok ;;
+  STARVED*) echo "SUITE-PART-UNMEASURED ${many_claims#STARVED }" ;;
+  '') bad "the many claims timing printed no verdict at all, so it never ran to an answer" ;;
+  *) bad "${many_claims#FAIL }" ;;
+esac
+
 # The scanner must never be the one asking GitHub (the hook owns the lookups): no process
 # spawning and no network module anywhere in it. Its docstring may SAY "gh"; its code may not
 # reach one.
