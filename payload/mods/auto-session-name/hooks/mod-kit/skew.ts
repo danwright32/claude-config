@@ -69,16 +69,88 @@ export const missingOf = (err: unknown): Missing | null => {
 export const skewSentence = (mod: string, m: Missing): string =>
   `${mod} and ${m.provider} are out of step in this session: the ${m.provider} loaded here has no ${m.member}, which ${mod} needs, so a mod was updated after this session loaded it. A new session loads them together.`
 
+// A call the engine refused or that failed arrives led by the engine's own name for it, shorthand
+// Dan cannot read (#2150). Two shapes are measured: a refusal, "<mod>: $.fs.read: <reason>" (a
+// test's deny and the real engine's denied reads), and a failure, "<mod>: $.fs.stat(<path>) failed:
+// <reason>" (the real engine, 2026-11-01). An abandoned command's "<mod>: $.process.run(mkdir)
+// aborted" has no reason after it and is left as it is: /sleep reads it as abandoned (#1677).
+const ENGINE_CALL = /^[a-z0-9][\w-]*: \$\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)(?:\(([^)]*)\) failed)?: ([\s\S]*)$/
+// A system error as Node and the engine spell it: its code, then optionally its own words and, for a
+// file, the call and the path ("EACCES: permission denied, open '/p'").
+const SYSTEM_ERROR = /^(E[A-Z0-9]{2,})(?::\s*([\s\S]*))?$/
+const SYSCALL_PATH = /^[^,]*, [a-z_]+ '([^']*)'(?: -> '[^']*')?$/
+
+// What a file call could not do, in words. A call missing here keeps only its reason.
+const CALL_WORDS: Readonly<Record<string, string>> = {
+  'fs.read': 'the file could not be read',
+  'fs.write': 'the file could not be written',
+  'fs.stat': 'the file could not be looked up',
+  'fs.exists': 'whether the file is there could not be checked',
+  'fs.list': 'the folder could not be listed',
+}
+
+// Why, in words, for the codes a file call meets. A code missing here keeps the engine's own text
+// for it, never a blank or a generic failure (L11).
+const CODE_WORDS: Readonly<Record<string, string>> = {
+  EACCES: 'permission denied',
+  EPERM: 'the operation is not permitted',
+  ENOENT: 'there is no such file or folder',
+  ENOTDIR: 'a part of its path is not a folder',
+  EISDIR: 'it is a folder, not a file',
+  EEXIST: 'it already exists',
+  ENOSPC: 'the disk is full',
+  EROFS: 'the disk is read only',
+  EBUSY: 'it is in use',
+  EMFILE: 'too many files are open',
+  ENFILE: 'too many files are open',
+  ENAMETOOLONG: 'its name is too long',
+  ELOOP: 'its path loops through links',
+  ETIMEDOUT: 'it timed out',
+}
+
+/** An engine call's failure as plain words, or null when the text is not one. */
+const engineWords = (text: string): string | null => {
+  const call = ENGINE_CALL.exec(text)
+  if (!call) return null
+  const [, noun, member, arg, reason] = call as unknown as [string, string, string, string | undefined, string]
+  const sys = SYSTEM_ERROR.exec(reason.trim())
+  const words = sys ? CODE_WORDS[sys[1] as string] : undefined
+  let why = reason
+  if (words !== undefined) {
+    const detail = (sys?.[2] ?? '').trim()
+    const path = SYSCALL_PATH.exec(detail)?.[1] ?? (detail.startsWith('/') || detail.startsWith('~') ? detail : arg)
+    why = path ? `${words} (${path})` : words
+  }
+  const what = CALL_WORDS[`${noun}.${member}`]
+  return what ? `${what}: ${why}` : why
+}
+
+const rawText = (err: unknown): string => (isFailure(err) ? failureMessage(err) : String((err as Error)?.message ?? err))
+
 /**
  * An error as words: its message, or for a skew the one sentence, so every message a mod builds
- * from a failure it caught names the skew and the remedy. An absent noun keeps its own message,
+ * from a failure it caught names the skew and the remedy. An engine call's failure is said in
+ * plain words without the engine's name for the call (#2150). An absent noun keeps its own message,
  * since what absence means is each caller's rule.
  */
 export const errorText = (err: unknown, mod: string): string => {
   const m = missingOf(err)
   if (m?.kind === 'member') return skewSentence(mod, m)
-  if (isFailure(err)) return failureMessage(err)
-  return String((err as Error)?.message ?? err)
+  const text = rawText(err)
+  return engineWords(text) ?? text
+}
+
+/**
+ * The system error code a failed call carries (ENOENT, EACCES, ...), or null: for a caller that
+ * decides by the kind of failure, which the words errorText gives no longer spell.
+ */
+export const errorCode = (err: unknown): string | null => {
+  const own = (err as { code?: unknown } | null | undefined)?.code
+  if (typeof own === 'string' && /^E[A-Z0-9]{2,}$/.test(own)) return own
+  if (err === undefined || err === null) return null
+  const text = rawText(err)
+  const reason = ENGINE_CALL.exec(text)?.[4] ?? text
+  return SYSTEM_ERROR.exec(reason.trim())?.[1] ?? null
 }
 
 // The skews already told in this load, by mod and member. A module of each mod's own copy, so it
