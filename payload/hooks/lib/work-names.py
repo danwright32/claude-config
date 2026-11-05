@@ -26,7 +26,8 @@ of lessons are written in, and `name#N` is what lesson-fanout.sh parses to skip 
 lesson came from. The same login without its hyphen is a different GitHub account, and the
 company's public web domain, so it is not one either (in published text it is matched as a domain
 only, see TWO MORE SOURCES below, claude-config#2184). These are decisions recorded on #1568's pull
-request, not omissions, and they still hold for files. The exceptions are text that is published
+request, not omissions, and they still hold for files, save the two published documents (THE TWO
+PUBLISHED DOCUMENTS below, claude-config#2252). The other exceptions are text that is published
 without being a file: the publish gate (work_names_publish_gate.py, claude-config#2105) checks public
 pull request and issue text against the work repository names as well, and --work-repos does the
 same for commit messages (claude-config#2111, below). Both read the list through work_repo_names
@@ -67,6 +68,13 @@ neither the list nor the registry holds, so --work-repos and the publish gate al
              word it stays prose, as #1568 decided, since the same letters can be an ordinary word.
              A project folder that is such a login is judged by this rule, not as a bare name.
 
+THE TWO PUBLISHED DOCUMENTS (claude-config#2252). README.md and DESIGN.md at the root are the manual
+and the design record, read by strangers before anything else, and once named the work MacBook's
+projects in dated anecdotes. The file scan holds those two, and only those, to WORK_PROJECTS and to
+the domain rule as well, so a new mention there is refused by the tree suite (before every push and
+in CI) rather than found by a sweep. It uses the committed hashes only, never the live list or this
+Mac's projects.local.txt, so CI judges them exactly as a Mac does. Every other file keeps #1568's rule.
+
 Usage:
   work-names.py [--root DIR] [--files0-from FILE|-] [PATH ...]
   work-names.py --texts0-from FILE|- [--work-repos]   labelled text, as above, in place of files
@@ -105,6 +113,9 @@ WORK_PROJECTS = {
     "d6386c59a6bcfcb1e4ced6beeb4594757afaa891ac805388076d0c83d2f5260a",  # a work MacBook project
     "eb54300f6828b72efe018d2575f8189ebcc6e0f152afa14d00c6a7382de14171",  # a work MacBook project
 }
+# The two documents at the root a stranger reads first, which the file scan holds to the hashed
+# projects and the domains as well (claude-config#2252), as paths relative to the root.
+PUBLISHED_DOCS = ("README.md", "DESIGN.md")
 TOKEN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 # The one remedy, said the same for a file and for a message (claude-config#1995).
 REMEDY = ("Replace the organisation with an invented one in a fixture, or drop it from prose and "
@@ -530,6 +541,9 @@ def main(argv):
         return 0
 
     matcher = Matcher(BUILT_IN | extra_hashes(), owners)
+    # README.md and DESIGN.md at the root also match the hashed projects and the domains (#2252).
+    projects = frozenset(project_hashes())
+    docs = Matcher(BUILT_IN | extra_hashes(), owners, domains=True, project_hashes=projects)
     hits = []
     unreadable = []
     if texts is not None:
@@ -538,15 +552,28 @@ def main(argv):
         for label, text in texts:
             scan_text(text, label, matcher, hits)
         return report(hits, [], len(texts), "message", sentence)
+    saw_doc = False
     for f in files:
         path = os.path.join(root, f) if root and not os.path.isabs(f) else f
         if os.path.isdir(path):
             continue
+        doc = published_doc(f, root)
+        saw_doc = saw_doc or doc
         try:
-            scan_file(path, f, matcher, hits)
+            scan_file(path, f, docs if doc else matcher, hits)
         except OSError as e:
             unreadable.append("%s (%s)" % (f, e.strerror or e))
+    if saw_doc:
+        sentence += (", and %d hashed work MacBook project%s in %s, with the work organisations' web "
+                     "and email domains" % (len(projects), "" if len(projects) == 1 else "s",
+                                            " and ".join(PUBLISHED_DOCS)))
     return report(hits, unreadable, len(files), "file", sentence)
+
+
+def published_doc(f, root):
+    """True when the listed file is README.md or DESIGN.md at the root (claude-config#2252)."""
+    rel = os.path.relpath(f, root) if root and os.path.isabs(f) else f
+    return os.path.normpath(rel) in PUBLISHED_DOCS
 
 
 def read_texts(raw):
