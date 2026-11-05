@@ -4995,7 +4995,13 @@ Write, Edit, or a shell append of one quoted `echo`, `printf` or `cat` heredoc w
 must be left as it was with exactly one line added whose one markdown link is the file's name; a
 second line, a changed line, a line linking another file, another folder's index, or a write after
 the window is asked about as before, and the cover lapses in silence (rules.ts `indexLineAdded`,
-`shellAppended`). Another mod asks `$.askBeforeSaving.isApproved({ tool, input })` whether a call
+`shellAppended`). Since #2216 that append may be followed by one plain read of the index alone,
+after `;`, `&&` or a new line: `tail` or `head` with at most a line count, `cat` with no option, or
+`wc` with at most one of `-l -w -c -m`, naming the index by its absolute path or a bare `~/`
+(rules.ts `readBack`); any other or further command, a read with a redirect, pipe, substitution,
+glob, variable, here doc, `..` or another file, a reader led by anything, `||` or `&`, and a read
+before the append are still asked about. Another mod asks
+`$.askBeforeSaving.isApproved({ tool, input })` whether a call
 carries a live, unspent approval for exactly what it writes, matched as a call sent again is (#1483:
 no build asks it before letting that one lessons Edit through); it only looks, and the approval is
 spent here as the call passes. A patch it reads from a device or a fifo is never opened, through
@@ -5008,7 +5014,7 @@ writes is said whole, with why its new lines could not be told.
 
 </td><td>
 
-#618, #705, #707, #726, #743, #738, #867, #1241, #1483, #1592, #1794, #1765, #1814, #1883
+#618, #705, #707, #726, #743, #738, #867, #1241, #1483, #1592, #1794, #1765, #1814, #1883, #2216
 
 </td></tr>
 <tr><td>
