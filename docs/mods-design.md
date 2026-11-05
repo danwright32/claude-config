@@ -3967,6 +3967,48 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
   other Mac is not asked for; every refusal that lists lines to paste says so, and the unreadable
   log refusal says it reads this Mac's log only.
 
+### The weekly line and escalation, built 2026-11-05 (#1511)
+
+- **Where it runs.** The end of turn issue review (`hooks/feature-issue-review.sh`) is the one place
+  that speaks to Dan once a turn in every repository, so the weekly line and the escalations ride
+  on it rather than on a mod surface of their own. Once the review's cooldown has passed, it runs
+  `hooks/lib/area-check-review.mjs` under `node --experimental-strip-types`, which imports the pure
+  `payload/mods/area-check/hooks/weekly.ts`. The cooldown is read above the spool, because the
+  runner has to run before the spool is read for a note it makes to show in the same review. An
+  urgent review (findings waiting) skips the cooldown, but the runner still waits for it, so the
+  node start is paid at most once per cooldown window per project.
+- **The weekly line.** `weeklyLine(log, errors, now)` counts the last 7 days: sessions loaded, first
+  writes judged and held, decisions by kind and those let through by Dan's standing answer,
+  judgements made with the issue list unread, edits not judged, errors, and lines of the log that
+  could not be read. It names no path, since the review may be in any repository. A missing log, an
+  unreadable one, and a log none of whose lines parse are each said as that, never as zeros (L90),
+  and no load record in 7 days is said as the mod not starting, not as zero firings. `lineDue` takes
+  a missing, unreadable or future stamp as due, so a bad stamp costs one extra line, never silence.
+- **The stamp.** `weekly-line.stamp` sits beside the log in `~/.claude-area-check`, outside the temp
+  folder macOS cleans after about three and a half days. The review writes it, from the runner's
+  `now`, only in the branch where its reason was delivered, so a review that failed to build its
+  payload does not restart the week (L98).
+- **Escalation.** For the review's own repository only (read from `origin`), a file is escalated
+  when five distinct sessions decided `proceed` on it in 30 days and the newest judgement of it in
+  that window read the issue list in full (`issues.state` read) and matched no issue. With no
+  judgement in the window there is no escalation: an unread list cannot say no issue exists. Each
+  escalation is one spool note (`escalationNote`, the path capped at 200 characters) asking for one
+  structural issue, so later holds can fold into it, or a recorded reason it needs none.
+- **Once per 30 days, under two reviews at once.** A claim file per escalated file under
+  `escalated/`, created with `wx`, decides which review makes the note. A claim 30 days old (or one
+  that cannot be parsed, or stamped in the future) is renamed aside to `<claim>.stale.<pid>` before being removed and
+  recreated, so only one rename of it can win. A note that fails removes its claim, so the next
+  review tries again, and says so in a count only sentence.
+- **Failure.** An invalid `CLAUDE_AREA_CHECK_NOW` exits 2, never falling back to the real clock. A
+  runner that cannot run (no node, a non zero exit, output that is not its answer) is said in the
+  review as "could not be built" with why, at most once a week by the stamp's age; a log that
+  cannot be read while the line is not due is said, so escalation is never skipped silently.
+- **Suites.** A suite never reaches the real log. Under `CLAUDE_SUITE_RUN_ID`, or with
+  `CLAUDE_ISSUE_SPOOL_DIR` pointed elsewhere (four suites set only that when run standalone),
+  nothing runs unless `CLAUDE_AREA_CHECK_DIR` names a throwaway folder. `tests/weekly.test.ts`
+  proves the pure counting, `tests/test-area-check-weekly.sh` the runner against the real rotation
+  script and spool, and `hooks/test-feature-issue-review.sh` the wiring in the review.
+
 ## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
 
 The one GitHub polling policy (`hooks/lib/gh-poll.sh`, #1482) keys each session's looks a minute
