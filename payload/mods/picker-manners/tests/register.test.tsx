@@ -341,6 +341,15 @@ test("the guard's own picker that closed while Dan was away is left off the issu
   await w.settle()
   expect(w.edits).toEqual([])
 })
+// #2261: designRound.answered is a call to a noun, which Claude Code cuts off at 10 s, and gh is given
+// 20 s, so the hook answers at once and asks GitHub only on a timer, after the noun has returned.
+test("the guard's answered call returns before GitHub is asked, and the issue is written after (#2261)", { plugins: [kitWithRepo, guardStandIn] }, async ($, on) => {
+  const w = issueWorld(on, 'Skip them', { 12: SECTION })
+  await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })
+  expect(w.edits).toEqual([])
+  await w.settle()
+  expect(w.edits.map(x => x.issue)).toEqual([12])
+})
 test("with no design round guard loaded, the guard's own picker is left off the issue, and the answer still reaches Claude (#2261)", { plugins: [kitWithRepo] }, async ($, on) => {
   const w = issueWorld(on, 'Skip them', { 12: SECTION })
   const r = await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })

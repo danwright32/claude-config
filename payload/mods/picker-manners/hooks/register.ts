@@ -93,8 +93,9 @@ const recordOnIssues = async ($: EngineInterface, question: string, answer: stri
 
 // Work done after the dialog has answered and off its path, so a slow GitHub never holds the answer
 // back. Whatever escapes it is said, never left as an unhandled rejection nobody reads (lessons review).
-export const offTheDialog = ($: EngineInterface, work: () => Promise<unknown>) =>
-  $.clock.after(0, () => void work().catch(err => $.ui.log(`Picker manners could not add this question to its issue's Open questions (${errorText(err, 'picker-manners')}), so /sleep will not see it there.`)))
+const reportingFailure = ($: EngineInterface, work: () => Promise<unknown>) => () =>
+  void work().catch(err => $.ui.log(`Picker manners could not add this question to its issue's Open questions (${errorText(err, 'picker-manners')}), so /sleep will not see it there.`))
+export const offTheDialog = ($: EngineInterface, work: () => Promise<unknown>) => $.clock.after(0, reportingFailure($, work))
 
 export const register: Register = on => {
   // #2261: a hook on a noun no loaded mod provides stops this whole mod loading, so with the design
@@ -150,9 +151,11 @@ export const register: Register = on => {
 
   // #2261: the design round guard has written down Dan's answer to its own picker, so the question
   // goes onto its issue checked off with that answer, off the dialog's path as every other one is.
-  // With the guard not loaded nothing raises this, and nothing is written: the safe direction.
+  // With the guard not loaded nothing raises this, and nothing is written: the safe direction. This is
+  // a call to a noun, which Claude Code cuts off at 10 s while gh is given 20, so the timer is started
+  // here, where the noun's code can be seen to hand GitHub over and answer at once (#744, #939).
   on('designRound.answered', async ($, e, next) => {
-    offTheDialog($, () => recordOnIssues($, e.question, e.answer, e.options))
+    $.clock.after(0, reportingFailure($, () => recordOnIssues($, e.question, e.answer, e.options)))
     return next(e)
   })
 
