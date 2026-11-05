@@ -997,11 +997,23 @@ ps_commit_in_chain() {
 # Two shapes the first pattern cannot see (claude-config#2203): a git written straight after a
 # substitution's opener, `x=$(git add -A)` or a backquote, and an add reached through a variable,
 # whose word add comes before any git (`SUB=add; git $SUB -A`) or follows a program held in one
-# (`$G add -A`). So a command holding a $ or a backquote and the word add, alone or as a value, is
-# handed to the parser too.
+# (`$G add -A`). So two variable shapes are handed to the parser too: a program held in a variable or
+# a substitution with the word add straight after it, and a git whose subcommand, past its own
+# options, is a variable or a substitution in a command that names add anywhere, alone or as a
+# value. Not any $ beside any add, which hands the parser every heredoc whose prose says add.
 ps__git_add_in_chain() {
   grep -Eq '(^|[[:space:];&|"'"'"'(`])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]"'"'"')`]|$)' <<< "$1" && return 0
-  grep -Eq '[$`]' <<< "$1" && grep -Eq '(^|[[:space:];&|"'"'"'(`=])add([[:space:];&|"'"'"')`]|$)' <<< "$1"
+  grep -Eq '(^|[[:space:];&|(`])"?(\$[{]?[A-Za-z_][A-Za-z0-9_]*[}]?|\$\([^)]*\)|`[^`]*`)"?[[:space:]]+add([[:space:];&|)`]|$)' <<< "$1" && return 0
+  grep -Eq '(^|[[:space:];&|"'"'"'(`])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|-[^Cc[:space:]][^[:space:]]*))*[[:space:]]+"?[$`]' <<< "$1" \
+    && grep -Eq '(^|[[:space:];&|"'"'"'(`=])add([[:space:];&|"'"'"')`]|$)' <<< "$1"
+}
+# The reach the first pattern had before #2203, and still the only one an unreadable wrapper is
+# judged by: a script run or a wrapper nobody can read into is refused beside a named add only where
+# a git and the word add share a line, as before (#2078). The shapes #2203 added refuse only on an
+# add the parser finds being run; measured over 6,597 real commands, letting them reach that rule
+# too refused 40 that stage nothing, most of them a script run beside a heredoc whose prose says add.
+ps__git_names_add() {
+  grep -Eq '(^|[[:space:];&|"'"'"'])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]"'"'"']|$)' <<< "$1"
 }
 ps__commit_stages_all() {
   grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a' <<< "$1"
@@ -1030,7 +1042,9 @@ ps__read_adds() {   # $1 = command  $2 = scope | takes
   # git add -A; fi` (lessons review of #1017) and `env X=1 git -C <dir> add -A` (#1188) are adds here
   # as they are to ps_is_git_add. With that file missing, any segment naming git and add is one.
   # -B: loading shell-words.py as a module would otherwise leave a bytecode cache in the hooks' lib/.
-  printf '%s' "$1" | PS_MODE="${2:-scope}" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
+  local git_names_add=0
+  ps__git_names_add "$1" && git_names_add=1
+  printf '%s' "$1" | PS_MODE="${2:-scope}" PS_GIT_NAMES_ADD="$git_names_add" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
 import importlib.util, io, os, re, shlex, sys
 cmd = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
 mode = os.environ.get("PS_MODE", "scope")
@@ -1096,7 +1110,9 @@ for _, text, wrapper, why, depth in wrapped:
     if why:
         # A wrapper whose string cannot be read, in a command naming an add: what it stages cannot be
         # told, so it is an add nobody can account for (UNKNOWN), never no add at all (L98).
-        if names_an_add(cmd):
+        # Judged only where a git and the word add share a line, the reach this rule had before
+        # #2203 widened the filter in front of this reader (ps__git_names_add).
+        if os.environ.get("PS_GIT_NAMES_ADD") == "1" and names_an_add(cmd):
             saw_add, unreadable, unread_wrapper = True, True, True
         continue
     segments.append(text)

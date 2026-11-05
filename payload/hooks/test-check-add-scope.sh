@@ -625,6 +625,16 @@ for c in "echo \"git add -A\"" "echo 'x=\$(git add -A)'" "git commit -m \"fix th
   run "$c"
   allowed "#2203 control: no unscoped add here: $c"
 done
+# Measured against 6,597 real commands holding the word add: a $ anywhere and the word add anywhere
+# is not a variable shape. A script run beside a heredoc whose prose says add, or a script given its
+# own add subcommand with no git anywhere, stages nothing the guard can see, so it still passes.
+for c in "bash $FIX/x.sh && cat > $FIX/n.txt <<'EOF'"$'\n'"add \$HOME to the note"$'\n'"EOF" \
+         "bash $FIX/x.sh add \"\$ITEM\"" "source $FIX/x.sh \"\$HOME\" && echo add" \
+         "echo add && git --no-pager log -1 \"\$REV\" && bash $FIX/x.sh" \
+         "bash $FIX/x.sh && cat > $FIX/n.txt <<'EOF'"$'\n'"run \`git status\` and add a note"$'\n'"EOF"; do
+  run "$c"
+  allowed "#2203 control: a script beside the word add is no variable shape: $c"
+done
 
 run "git add ."
 refused "a bare dot is refused the same way"
