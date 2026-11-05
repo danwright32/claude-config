@@ -66,7 +66,9 @@ export PATH="$TMPROOT/ghbin:$PATH"
 # The work MacBook's project list the message check also reads (claude-config#2184), one invented
 # project on it, since the hooks this suite copies elsewhere have no CLAUDE.md two folders above.
 printf '## Projects\n\nOn Dans-MacBook-Pro:\n- `~/Apps/Quillfeather`\n' > "$TMPROOT/wn-projects.md"
-export WORK_NAMES_PROJECT_LIST="$TMPROOT/wn-projects.md"
+# The scanner reads a list named here only under the test marker (claude-config#2231), which the
+# runner exports; it is set here too, so this suite run on its own reads the same list.
+export HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_LIST="$TMPROOT/wn-projects.md"
 
 # A repository shaped like this one: the marker the hook keys on, plus whatever scanners the test
 # wants. Everything happens in a throwaway git repo, never against the real one (L2).
@@ -1518,7 +1520,7 @@ printf 'console.log(JSON.stringify({state: "missing", file: "/nowhere/repos.loca
 WN_BROKEN="$TMPROOT/wn-registry-broken.js"
 printf 'console.log("not json")\n' > "$WN_BROKEN"
 wn_fire(){           # $1 = repo  $2 = command  [$3 = registry reader] -> output, the gate's exit code
-  ( export WORK_NAMES_EXTRA_HASHES="$WN_HASH" WORK_NAMES_REGISTRY_READER="${3:-$WN_READER}"; fire "$1" "$2" )
+  ( export HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$WN_HASH" WORK_NAMES_REGISTRY_READER="${3:-$WN_READER}"; fire "$1" "$2" )
 }
 wn_commit(){ git -C "$1" commit -q --allow-empty -m "$2" >/dev/null 2>&1; }
 # A repository with a remote whose main holds one commit naming the organisation, already published,
