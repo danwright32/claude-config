@@ -98,6 +98,8 @@ def rank_key(issue, milestone):
     level = level_of(issue)
     sweep = "lesson-sweep" in issue["lower"]
     tier = 0 if level == 0 else (1 if sweep else level + 1)
+    if tier == 1:
+        return (tier, issue["number"])  # lesson sweeps are oldest first, whatever else they carry
     return (
         tier,
         0 if "user-facing" in issue["lower"] else 1,

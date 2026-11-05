@@ -111,6 +111,11 @@ same "a p4 tech-debt issue displaces a p2 in the last pick" "#2 #3 #20" "$(picks
 out="$(rank "$(list "$(issue 5 '' priority-p1 enhancement)" "$(issue 9 'Ungrouped' priority-p2 lesson-sweep)" \
   "$(issue 8 'Ungrouped' priority-p2 lesson-sweep)" "$(issue 1 '' priority-p0 bug)")")"
 same "p0 first, then lesson sweeps oldest first, then p1" "#1 #8 #9" "$(picks "$out")"
+# Sweeps are oldest first whatever else they carry: a newer sweep that is also a user-facing bug
+# does not jump an older one.
+out="$(rank "$(list "$(issue 9 'Ungrouped' priority-p2 lesson-sweep user-facing bug)" \
+  "$(issue 8 'Ungrouped' priority-p2 lesson-sweep)" "$(issue 5 '' priority-p1 enhancement)")")"
+same "lesson sweeps stay oldest first when a newer one is a user-facing bug" "#8 #9 #5" "$(picks "$out")"
 out="$(rank "$(list "$(issue 5 '' priority-p2 enhancement)" "$(issue 6 '' priority-p2 bug)" \
   "$(issue 7 'Saved views' priority-p2 enhancement)" "$(issue 8 '' priority-p2 enhancement user-facing)")" --milestone 'Saved views')"
 same "within a level: user-facing, then the milestone just shipped, then bugs, then oldest" "#8 #7 #6" "$(picks "$out")"
