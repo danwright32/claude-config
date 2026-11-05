@@ -397,7 +397,8 @@ class Matcher:
     the send scan never pass any; work_repo_names passes the work repository names, for the publish gate
     (claude-config#2105) and --work-repos (#2111), which depart from #1568 for text that is published
     without being a file, see DESIGN.md. domains: also find a hashed login without its hyphens
-    written as a domain (claude-config#2184), passed by work_repo_names only, never for files.
+    written as a domain (claude-config#2184), passed by work_repo_names and, among files, for
+    README.md and DESIGN.md at the root only (claude-config#2252), never for any other file.
     project_hashes: sha256 of further names matched as names are (the hashed work MacBook projects,
     claude-config#2112), kept apart from hashes, which the publish gate reads as organisations."""
 
