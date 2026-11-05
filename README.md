@@ -3264,7 +3264,8 @@ bash tools/shipped-worktrees.sh --remove ~/Non-icloudDocuments/Apps/claude-confi
 It is a sibling of `shipped-branches.sh` rather than a mode of it because it deletes things and so
 may not act on a guess, and it is not a `claude-sync` command because it is about any git checkout
 rather than the synced config. Which branch counts as main is one rule both read, in
-`tools/lib/default-branch.sh`, and how GitHub's record of a branch's pull requests is read is one
+`payload/hooks/lib/default-branch.sh` (beside the hooks, since the installed sweep below reads it
+too), and how GitHub's record of a branch's pull requests is read is one
 reading both use, in `tools/lib/pull-requests.sh`.
 
 Agent worktrees are also removed automatically, at two moments (#1521). When
@@ -3275,9 +3276,17 @@ from inside its own worktree keeps it, and the sweep takes it later. What it rem
 it, is printed after the merge line, and nothing about it turns a merge that landed into a failure.
 And on the first prompt of a session, then again on the first prompt at least three hours after the
 session's last run (`STALE_WT_RERUN_MINUTES`), `hooks/stale-worktree-nudge.sh` starts
-`hooks/check-stale-worktrees.sh --remove` in the background. It removes a worktree only when its PR
-merged holding every commit, nothing in it is uncommitted, nothing changed in the last six hours,
-and no running process is working in it. A locked worktree is kept, with one exception:
+`hooks/check-stale-worktrees.sh --remove` in the background. The sweep judges every worktree
+`git worktree list` names, wherever its folder is (a sibling folder, a scratchpad, a name a session
+chose), and never the main checkout (#2309). It removes one only when its work is kept somewhere
+else, nothing in it is uncommitted, nothing changed in the last six hours, and no running process is
+working in it. Its work counts as kept elsewhere when its PR merged holding every commit, or when
+every commit on its branch is also on another branch, local or remote (which covers work shipped in
+a combined batch branch, or pushed with no PR), or, for a worktree on no branch, when its HEAD is on
+the default branch. The `--just-merged` removal at a merge still judges only an agent worktree
+under `.claude/worktrees`, by its merged PR alone. Anything it cannot read (the folder, git's
+status, a file's age, or an lsof that lists no process at all) keeps the worktree and says why.
+Its branch is never deleted. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
 worktree with the reason `claude agent <name> (pid <pid> start <time>)` and lifts the lock when the
 agent finishes, so an agent that never finished, because the Mac went down for example, leaves a
