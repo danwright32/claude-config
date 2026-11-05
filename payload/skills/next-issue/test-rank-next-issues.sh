@@ -22,6 +22,12 @@ suite_deadline_arm || exit $?
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RANK="$DIR/rank-next-issues.py"
 RULES="$DIR/../../mods/area-check/hooks/rules.ts"
+. "$DIR/../../hooks/lib/test_bad_byte_locale.sh" || {
+  echo "FAIL: $(basename "$0"): lib/test_bad_byte_locale.sh is missing, so its cases with a byte that is not UTF-8 have no locale to run under."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+BAD_BYTE_LOCALE="$(bad_byte_locale)"
 
 pass=0; fail=0
 check(){ if [ "$2" = ok ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
@@ -128,8 +134,9 @@ same "no open issues is not an error" 0 "$code"
 has "no open issues is said" "NO OPEN ISSUES" "$out"
 
 # A title holding a byte that is not UTF-8 is ranked with it replaced, under a UTF-8 locale (where
-# a text mode read raised) and under C.
-for loc in en_US.UTF-8 C; do
+# a text mode read raised) and under C. The UTF-8 locale is one this machine has (lib/test_bad_byte_locale.sh).
+bad_byte_measured python-stdin "#1505 rank-next-issues reading a list whose title holds a byte that is not UTF-8" || true
+for loc in "$BAD_BYTE_LOCALE" C; do
   out="$(printf '[{"number":5,"title":"Caf\xff bar","labels":[{"name":"priority-p2"}],"milestone":null}]' | LC_ALL=$loc python3 "$RANK" 2>&1)"; code=$?
   same "a title with a byte that is not UTF-8 still ranks under $loc" 0 "$code"
   same "a title with a byte that is not UTF-8 is offered under $loc" "#5" "$(picks "$out")"
