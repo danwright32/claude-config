@@ -1,7 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Hook, MatchedHook, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
-import { neverThrows, withinGrace } from './mod-kit/hold.ts'
+import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingIndexCover, AskBeforeSavingQuestion } from '../types/index.d.ts'
 import {
@@ -30,6 +30,7 @@ import {
   askInstruction,
   callShown,
   cannotCheck,
+  rerunInGrace,
   dialogOptions,
   display,
   editedFile,
@@ -809,10 +810,9 @@ export const register: Register = on => {
   // build holds it with the fixed words built here, so the catch never throws (neverThrows, #2039).
   const heldCall = { deny: cannotCheck(undefined) }
   const heldCheck = { decision: 'deny' as const, reason: cannotCheck(undefined) }
-  // A catch's rerun starts only while half its 1,000 ms grace is left (withinGrace, #2039): one cut
-  // at the grace lets the call run unjudged, so with less left the call is held, in the engine's own
-  // words for a hook out of time.
-  const OUT_OF_TIME = { message: 'it ran out of time' }
+  // A catch's rerun starts only while half its 1,000 ms grace is left (rerunInGrace, built on
+  // withinGrace, #2039): one cut at the grace lets the call run unjudged, so with less left the call
+  // is held, in the engine's own words for a hook out of time.
 
   // A hook that failed after passing the call on had it judged beneath, by the tool.check hook and
   // every guard there, and maybe run: its result is replayed, never refused as a save it may already
@@ -820,11 +820,11 @@ export const register: Register = on => {
   // replay runs OUTSIDE neverThrows: the call already ran beneath, so a refusal saying it did not run
   // would be untrue and could make Claude run it twice, and the tool's own failure reaches Claude
   // instead. Every catch before next stays inside neverThrows (#2039).
-  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => next.called ? next(e) : neverThrows(() => withinGrace(next.budget, () => saveCall($, e, next), () => ({ deny: cannotCheck(OUT_OF_TIME) })), () => ({ deny: cannotCheck(next.error) }), heldCall))
+  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => next.called ? next(e) : neverThrows(() => rerunInGrace(next.budget, () => saveCall($, e, next), reason => ({ deny: reason })),() => ({ deny: cannotCheck(next.error) }), heldCall))
 
   // At tool.check `next` only reads the verdict beneath and runs nothing, so a failed check is judged
   // once more whether or not it had read it (#2026).
-  on('tool.check', saveCheck).catch(($, e, next) => neverThrows(() => withinGrace(next.budget, () => saveCheck($, e, next), () => ({ decision: 'deny' as const, reason: cannotCheck(OUT_OF_TIME) })), () => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), heldCheck))
+  on('tool.check', saveCheck).catch(($, e, next) => neverThrows(() => rerunInGrace(next.budget, () => saveCheck($, e, next), reason => ({ decision: 'deny' as const, reason })),() => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), heldCheck))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
   // given the mod's own answers, and Dan's answer is read from the dialog's result.

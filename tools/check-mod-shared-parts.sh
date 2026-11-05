@@ -148,7 +148,11 @@
 # is not a read, and passes. And a third (#2039), the catch: a hook registered with
 # `.catch(($, e, next) => ...)` answers straight through neverThrows from hooks/mod-kit/hold.ts on
 # that line, since a catch that throws is a guard failing open; only the replay of a call already
-# passed on may sit outside it, as `next.called ? next(e) : neverThrows(...)`.
+# passed on may sit outside it, as `next.called ? next(e) : neverThrows(...)`. A catch that judges
+# the call once more does that inside the 1,000 ms grace the engine gives a catch, and a catch cut at
+# the grace lets the call run, so a rerun straight inside neverThrows, `neverThrows(() => hook($, e,
+# next), ...)`, fails: it starts through withinGrace from the same hold.ts, which holds the call when
+# too little of the grace is left (ask before saving's rerunInGrace in its rules.ts, tested there).
 #
 # And one shared part every mod must USE rather than must not copy (#707):
 #   screen    a mod that answers a tool call itself (returns     ask $.modkit.screen(e) first, and answer with
@@ -354,8 +358,9 @@ for d in "$dir"/*/; do
   # runs the hook's whole judgement inside the 1,000 ms the engine gives a catch (its next.budget,
   # read 2026-11-05), and a catch cut at
   # that grace lets the call RUN. So such a rerun starts only through withinGrace from the same copy
-  # of hold.ts, which holds the call when too little of the grace is left. A catch answering only a
-  # refusal does no slow work and is not matched.
+  # of hold.ts, which holds the call when too little of the grace is left, or through a function of
+  # the guard's own built on it (ask before saving's rerunInGrace). A catch answering only a refusal
+  # does no slow work and is not matched.
   while IFS= read -r h; do
     [ -n "$h" ] || continue
     failed=1
