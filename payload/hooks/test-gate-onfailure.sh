@@ -78,6 +78,7 @@ REFUSING=(
   handback-claims-gate.sh
   playwright-subagent-gate.sh
   no-session-link-in-comments.sh
+  slack-drafts-only-gate.sh
   require-tests-before-push.sh
   simplify-before-push.sh
   check-public-assets.sh
