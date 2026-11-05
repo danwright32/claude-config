@@ -113,7 +113,8 @@
 # STOPS, each in its own words and none of them a merge:
 #   0  merged (or found already merged), confirmed by reading the pull request back
 #   1  needs a person: a gate refused, the review has findings to read (they are printed, with how to
-#      come back carrying their key), GitHub refused the update (a conflict, except one confined to
+#      come back carrying their key), the review cannot run because the branch is too large and no
+#      skip was typed for this head (claude-config#2088), GitHub refused the update (a conflict, except one confined to
 #      rows of README.md's mods table, which is merged here, see readme_rows_merge), the pull request is
 #      closed, its head is still not its branch's tip after the base was set again (or the branch
 #      is gone), an update GitHub has still not shown four minutes after it, a read GitHub
@@ -130,7 +131,8 @@
 #      based on it could not be moved, GitHub could not be read, or the branch holds commits the
 #      merge did not; running it again finishes the branch
 #   64 refused its arguments, was run outside a checkout, was given a read key nobody typed in front
-#      of it (claude-config#1673), or was passed no merge method for a repository that allows more
+#      of it (claude-config#1673) or a lessons review skip that is not a full head or was not
+#      recorded as typed (claude-config#2088), or was passed no merge method for a repository that allows more
 #      than one (or does not say which)
 #
 # Findings to read: the review's own refusal carries a read key. Read them, fix what is real, then
