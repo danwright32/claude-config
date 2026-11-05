@@ -5399,9 +5399,10 @@ same box as text, shaped like SESSION REFLECTION.
 
 Holds every edit that changes the wording a Slack alert sends until Dan has seen the message as
 Slack will post it and approved it (Dan, 2026-11-04: "anytime a slack alert is created, we need to
-have a design-rounds esque check on wording so I can approve the wording before it's created"). Only
-a code or config file that posts to Slack counts: one naming a Slack webhook, the chat API, a Slack
-SDK, a Slack env setting, or a send helper named for Slack, called or imported. A Write, Edit or
+have a design-rounds esque check on wording so I can approve the wording before it's created"). A
+code or config file that posts to Slack counts: one naming a Slack webhook, the chat API, a Slack
+SDK, a Slack env setting, or a send helper named for Slack, called or imported, and so does a
+template such a file sends (below). A Write, Edit or
 MultiEdit there that adds message text, changes it or takes it away is refused, a test file
 included. Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
