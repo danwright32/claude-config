@@ -348,16 +348,24 @@ DOCS_ONLY_CONTEXT=1000000
 # images of the file, and leaves alone anything it cannot place: an ordinary string, code on a
 # docstring's line, a file that does not parse. It rewrites line for line, so any other line count
 # (no python3, the helper missing or dying part way) means the diff goes on exactly as git gave
-# it, and the file is judged as it was before.
+# it, and the file is judged as it was before. The diff is held in files rather than a shell
+# variable, so the raw diff passed on is byte for byte what git wrote. Where no scratch file can be
+# made, the diff passes straight through untouched; where the diff cannot be written to one, nothing
+# is passed on, which diff_docs_only reads as not documentation, so the gate fails closed.
 py_docstrings_as_comments() {
-  local raw out
-  raw="$(cat)"
-  out="$(printf '%s\n' "$raw" | python3 "$HOOK_DIR/lib/py-docstring-lines.py" 2>/dev/null)" || out=""
-  if [ -n "$out" ] && [ "$(printf '%s\n' "$out" | wc -l)" -eq "$(printf '%s\n' "$raw" | wc -l)" ]; then
-    printf '%s\n' "$out"
-  else
-    printf '%s\n' "$raw"
+  local in="" out=""
+  { in="$(mktemp)" && out="$(mktemp)"; } || { rm -f "$in"; cat; return 0; }
+  if ! cat > "$in"; then
+    rm -f "$in" "$out"
+    return 0
   fi
+  if python3 "$HOOK_DIR/lib/py-docstring-lines.py" < "$in" > "$out" 2>/dev/null \
+      && [ -s "$out" ] && [ "$(wc -l < "$out")" -eq "$(wc -l < "$in")" ]; then
+    cat "$out"
+  else
+    cat "$in"
+  fi
+  rm -f "$in" "$out"
 }
 
 source_changed=0

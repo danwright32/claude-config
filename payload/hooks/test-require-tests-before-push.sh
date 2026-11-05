@@ -128,6 +128,8 @@ want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Doc."""\n
 want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Doc.\n-    return 1"""\n+    """Doc."""\n+    return 1\n')"
 # Still refused: a diff not read from the file's first line, or in two hunks, places no line.
 want_notpydocs "$(printf -- "$PYH"'@@ -4,3 +4,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n@@ -9,2 +9,2 @@\n def g():\n-    """Old."""\n+    """New."""\n')"
+# Still refused: a hunk header that cannot be read.
 want_notpydocs "$(printf -- "$PYH"'@@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
 # Still refused: a file whose own code reads __doc__ (a usage message or an argparse description
 # cut from its docstring, as regal-journey-edits/jdiff.py does) runs on its docstrings, so none
@@ -136,6 +138,30 @@ want_notpydocs "$(printf -- "$PYH"'@@ -1,5 +1,5 @@\n """Tool.\n \n-Usage: old\n+
 want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old."""\n+    """New."""\n print(f.__doc__)\n')"
 # Still refused: no change at all, as before.
 want_notpydocs ""
+# When the helper cannot be trusted, the diff goes on exactly as git gave it: a docstring change is
+# judged as code again, and a plain '#' comment change still passes as it did before #2247.
+PYDOC_OK="$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+PYCOMMENT="$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    # old words\n+    # new words\n     return 1\n')"
+PYFAKE="$(mktemp -d)"
+mkdir -p "$PYFAKE/missing/lib" "$PYFAKE/short/lib" "$PYFAKE/dies/lib"
+printf '%s\n' 'import sys' 'sys.stdout.write("+# x\n")' > "$PYFAKE/short/lib/py-docstring-lines.py"
+printf '%s\n' 'import sys' 'sys.stdout.write("+# x\n")' 'sys.exit(3)' > "$PYFAKE/dies/lib/py-docstring-lines.py"
+for PYCASE in missing short dies; do
+  HOOK_DIR="$PYFAKE/$PYCASE"
+  want_notpydocs "$PYDOC_OK"
+  want_pydocs "$PYCOMMENT"
+done
+HOOK_DIR="$DIR"
+# No scratch file can be made: the diff passes through untouched, judged as before.
+mktemp() { return 1; }
+want_notpydocs "$PYDOC_OK"
+want_pydocs "$PYCOMMENT"
+# A scratch file is made but the diff cannot be written to it: nothing goes on, which is never
+# documentation, so even a comment change is refused rather than judged on part of its diff.
+mktemp() { printf '%s\n' "$PYFAKE/no-such-dir/x"; }
+want_notpydocs "$PYCOMMENT"
+unset -f mktemp
+rm -rf "$PYFAKE"
 
 # ===========================================================================
 # END TO END: drive the real hook and assert its exit code. (#734)

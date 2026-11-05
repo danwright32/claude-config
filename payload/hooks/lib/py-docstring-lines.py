@@ -39,7 +39,7 @@ OWNERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 def docstring_lines(lines):
     """The 1 based numbers of the lines lying wholly inside a docstring, or None if it cannot say."""
     try:
-        text = [line.decode("utf-8") for line in lines]
+        text = [line.decode("utf-8", "strict") for line in lines]  # refusing is the decision
     except UnicodeDecodeError:
         return None
     if any("\r" in line.rstrip("\r") for line in text):
