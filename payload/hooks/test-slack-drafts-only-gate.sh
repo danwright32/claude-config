@@ -189,6 +189,15 @@ for wrapped in "sudo $T/notify" "sudo -u root $T/notify" "env X=1 $T/notify" "rt
   run_raw "$(payload Bash "$(bash_input "$wrapped")")"
   refused "a script that posts, run as: $wrapped"
 done
+# An option the reader takes for one that carries a value must not hide the script after it: every
+# word naming a file is read, not only the one an option table points at (lessons review, round 3).
+for flagged in "python3 -I $T/alert.py" "python3 -i $T/alert.py" "python3 -u -W ignore $T/alert.py" \
+  "bash -i $T/notify" "bash -o pipefail $T/notify" "ruby -I lib $T/alert.py"; do
+  run_bash "$flagged"
+  refused "a script that posts behind interpreter options: $flagged"
+done
+run_bash "python3 -I $T/plain.py"
+allowed "a script that names no endpoint, behind the same options"
 run_bash "git push origin HEAD:fix/2302-slack-drafts-only"
 allowed "a plain push naming a branch with a slash"
 

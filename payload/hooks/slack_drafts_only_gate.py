@@ -174,8 +174,11 @@ class Judge:
             operand, inline, stdin = self.operands(words)
             if inline or (wrapper.endswith(" -c") and why):
                 return f"{name} -c runs a string naming {hit.group(0)}" if hit else None
+            reason = self.every_file(words, d, depth, True)
+            if reason:
+                return reason
             if operand and operand != "-":
-                return self.script(operand, d, depth, True)
+                return None  # read above with every other word naming a file
             fed, is_body = self.fed(text, whole)
             if is_body and depth < MAX_DEPTH:
                 try:
@@ -191,8 +194,12 @@ class Judge:
             operand, inline, stdin = self.operands(words)
             if inline:
                 return None
+            if "-m" not in words[1:]:
+                reason = self.every_file(words, d, depth, False)
+                if reason:
+                    return reason
             if operand and operand != "-":
-                return self.script(operand, d, depth, False)
+                return None  # read above with every other word naming a file
             if stdin:
                 hit = MARKER.search(self.fed(text, whole)[0])
                 return f"{name} runs a script from its input that names {hit.group(0)}" if hit else None
@@ -203,6 +210,21 @@ class Judge:
             if hit:
                 return f"{words[0]} is run with {hit.group(0)} in its arguments"
             return self.script(words[0], d, depth, False)
+        return None
+
+    def every_file(self, words, d, depth, shell_hint):
+        """The reason any word after the program that names a file posts, or None.
+
+        Which word is the script depends on each program's own option table (python3 -I takes no
+        value, ruby -I does), and a table that is wrong for one program hides the script behind an
+        option. So every word naming a file is read, which can only refuse more (lessons review,
+        2026-11-05, round 3)."""
+        for w in words[1:]:
+            if w.startswith("-") or w.startswith("+") or self.sw.REDIRECT_WORD.match(w):
+                continue
+            reason = self.script(w, d, depth, shell_hint)
+            if reason:
+                return reason
         return None
 
     def package(self, name, words, d, depth):
