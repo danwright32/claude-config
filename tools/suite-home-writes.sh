@@ -18,9 +18,12 @@
 # own identity, through GIT_CONFIG_GLOBAL, so a suite that commits in a fixture repository is not
 # stopped before it reaches whatever it writes.
 #
-# Exit 0 when no suite named wrote there, 1 when one did, 2 when it could not run a check at all (a
-# suite that is not a file, no throwaway folder). Each suite's own exit status is printed beside
-# its verdict, because a suite that stopped at its first line wrote nothing and reads as clean.
+# Each suite gets one verdict: WRITES-HOME when it left something, clean when it left nothing and
+# exited 0, and NOT-MEASURED when it left nothing but exited non zero, because a suite that refused
+# to run or crashed at its first line wrote nothing without that saying anything about it (#2208).
+# Exit 0 when every suite named was clean, 1 when one wrote there, 2 when any suite could not be
+# measured (a suite that is not a file, no throwaway folder, a NOT-MEASURED verdict). Each suite's
+# own exit status is printed beside its verdict.
 set -uo pipefail
 
 _shw_dir="${BASH_SOURCE[0]%/*}"; [ "$_shw_dir" != "${BASH_SOURCE[0]}" ] || _shw_dir=.
@@ -68,6 +71,11 @@ for suite in "$@"; do
     echo "WRITES-HOME $suite: run on its own it left $n file(s) under ~/.claude (the suite exited $rc):"
     printf '%s\n' "$wrote" | sed 's/^/  ~\//'
     [ "$worst" -eq 2 ] || worst=1
+  elif [ "$rc" -ne 0 ]; then
+    # A suite that failed may have stopped before reaching any write, so an empty HOME measured
+    # nothing about it (L98, #2208).
+    echo "NOT-MEASURED $suite: it exited $rc having left nothing under ~/.claude, so it may have stopped before any write and whether it writes there is unknown."
+    worst=2
   else
     echo "clean $suite: run on its own it left nothing under ~/.claude (the suite exited $rc)."
   fi

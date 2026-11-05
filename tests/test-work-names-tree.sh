@@ -148,10 +148,10 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("wn", sys.argv[1])
 wn = importlib.util.module_from_spec(spec); spec.loader.exec_module(wn)
 try:
-    names = wn.work_mac_projects()
+    names, hashes = wn.work_mac_projects()
 except wn.CannotTell as e:
     print("cannot tell: %s" % e); sys.exit(2)
-print("projects=%d" % len(names))
+print("projects=%d" % (len(names) + len(hashes)))
 ' "$SCAN" 2>&1)"; proj_rc=$?
 check "the work MacBook's project list in payload/CLAUDE.md reads (exit $proj_rc): ${proj_out:0:300}" [ "$proj_rc" -eq 0 ]
 proj_n=0
