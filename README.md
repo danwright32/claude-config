@@ -5315,10 +5315,21 @@ branch, so no decision is ever too old to be asked for and the scan is the decis
 few MiB of log. A rebase moves the merge base, so decisions taken before it are no longer asked
 for. A log that cannot be read refuses the command; a fact the command does not depend on that
 cannot be read (no checkout, GitHub not answering for a merge) lets it through.
+Once its cooldown has passed, the end of turn issue review runs `hooks/lib/area-check-review.mjs`
+(the mod's `hooks/weekly.ts` under node) before it reads the spool. Once a week the review carries
+one line of this Mac's counts for the last 7 days (sessions loaded, first writes judged and held,
+decisions by kind, judgements with the issue list unread, edits not judged, errors), never a path,
+and a missing or unreadable log is said as that rather than as zeros. The week restarts in
+`~/.claude-area-check/weekly-line.stamp` only once the review carrying the line went out. A file in
+the review's own repository that five sessions proceeded past in 30 days, whose newest judgement
+read the whole issue list and found no issue naming it, gets one spool note asking for an issue
+about its structure, at most once per 30 days per file (a claim file in `escalated/` there). A
+runner that fails is said in the review at most once a week. A suite never reaches the real log:
+under a test run or a redirected spool nothing runs unless `CLAUDE_AREA_CHECK_DIR` names a folder.
 
 </td><td>
 
-#1506, #1508, #1509, #1510, #2143
+#1506, #1508, #1509, #1510, #1511, #2143
 
 </td></tr>
 <tr><td>
