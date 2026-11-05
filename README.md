@@ -1837,7 +1837,7 @@ A fourth gate reads the same library for a different thing an agent does to its 
 
 ### What a push actually waits on
 
-Thirty-five PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-six PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1897,6 +1897,7 @@ clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` ev
 | `check-work-names-publish.sh` (#2105) | 2026-11-02: 0.009 to 0.010 seconds on a plain `git push`, five readings at load average 27 to 33, timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109 seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo digest list and the registry, then the match |
 | `design-score-gate.sh` (#1364) | 2026-10-28: 0.009 to 0.015 seconds. Earlier: 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `check-rtk-init.sh` (#1468) | 2026-10-28: 0.009 to 0.014 seconds. Earlier: 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
+| `check-zsh-builtins.sh` (#2200) | 2026-11-04: 0.027 to 0.046 seconds on `ls -la`, five readings at load average 13 to 27, timed from outside, since a command not naming log as a word leaves before python starts; 0.055 to 0.070 seconds on `git log -1`, which the judge reads. Over 129,500 past Bash commands on the personal MacBook, 7,604 (5.9%) reach the judge and 31 are refused |
 | `pr-review-gate.sh` (#560) | 2026-10-28: 0.010 to 0.013 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it acts on a merge, not a push |
 | `require-verification-run.sh` (#1529) | 2026-10-28: 0.009 to 0.013 seconds. Earlier: 0.044 to 0.056 seconds on a push, five readings on 2026-10-23 (load average 166 to 168, other suites running), since a command naming no merge leaves before anything loads. On a merge in a repository whose base branch holds no `.claude/verification/areas.json`, which is every repository today, 0.97 to 1.34 seconds, five readings through the real gh against claude-config: one read of the pull request and one of that file at its base commit, run beside `block-red-merge.sh`, which reads the same pull request |
 | `block-red-merge.sh` (#1181) | 2026-10-28: 0.009 to 0.011 seconds. Earlier: 0.014 seconds, five readings on 2026-10-13; it acts on a merge, and since it lost its `if` filter it leaves on a command naming no merge before loading anything |
@@ -2736,10 +2737,13 @@ bash tools/suite-home-writes.sh payload/hooks/test-gates-fail-closed.sh
 It runs each suite named on its own, with none of those variables set and `HOME` pointed at a
 throwaway folder, then names every file the suite left under that folder's `.claude` and the
 records kept beside it (`.claude-issue-spool` and the like). It lists paths only and never reads a
-file, and it never writes under the real `~/.claude`. It exits 0 when nothing was left, 1 naming
-the files when something was, and 2 when it could not check, and prints the suite's own exit
-status beside its verdict. It is not run on every full run: doing so costs about one full run
-again, and the runner already hands every suite the list.
+file, and it never writes under the real `~/.claude`. Each suite gets one verdict, printed with
+the suite's own exit status: `WRITES-HOME` naming the files when it left something, `clean` when
+it left nothing and exited 0, and `NOT-MEASURED` when it left nothing but exited non zero, since a
+suite that refused to run or crashed at its top writes nothing without that proving anything
+(#2208). The tool exits 0 when every suite was clean, 1 when one wrote there, and 2 when any suite
+could not be checked or was not measured. It is not run on every full run: doing so costs about
+one full run again, and the runner already hands every suite the list.
 
 The main suite on its own:
 
@@ -3587,8 +3591,8 @@ to tracked files (untracked and ignored files do not count), it names the one co
 fast forward it, `git -C '<checkout>' pull --ff-only`, and never runs it, since another session may
 be standing on that checkout. Said once per session for each answer, so a compaction or a resume is
 not told twice; a new session, which loaded the old file again, is. A current checkout costs two git
-processes and says nothing, held by `hooks/test-per-prompt-hook-cost.sh`. Bidspoke is why: its
-CLAUDE.md was cut from 36,964 to 20,423 characters on 2026-10-29, and a day later all 12 sessions
+processes and says nothing, held by `hooks/test-per-prompt-hook-cost.sh`. One of the work projects
+is why: its CLAUDE.md was cut from 36,964 to 20,423 characters on 2026-10-29, and a day later all 12 sessions
 since had loaded the old one from a primary checkout 22 commits behind.
 
 ### status says when this Mac's mods are older than the shared repo's (#1535)
@@ -4889,10 +4893,9 @@ and deploy runs since sleep began, and notes each for the top of the report. Wha
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
-waits (no merge, no deploy), listed or not, in any case and ahead of both lists. Dan's list as
-confirmed on 2026-10-07: Bidspoke and Slate and everything owned by the agency's organisation wait;
-claude-config, project-enrollment-tracker, paperboi, sonar, new-agent-onboarding, repo-digest,
-Overture, Ovation, Downbeat, PostRoll, backstage, PlayedIt and NurseDex merge and deploy. At
+waits (no merge, no deploy), listed or not, in any case and ahead of both lists. Dan's list,
+confirmed on 2026-10-07, is in that file and summarised under "Sleep mode" below, without naming
+the repositories (#2112). At
 `/sleep` each repository a worker with a goal is in that the file does not decide is asked about
 (each question waits ten minutes, a chosen limit, not a measurement; the answer written into this
 Mac's own file, so it is asked once on each Mac; "Go to sleep, no more questions" asks nothing
@@ -5291,6 +5294,14 @@ its words do not name) is held saying it cannot be read, and may only proceed; i
 in no checkout, or where the repository has no fast growing file and no structural issue naming a
 file. Removals, `touch`, `mkdir`, mode changes and a folder handed to a script are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+One narrowing (#2254): a findings note to the installed helper,
+`bash ~/.claude/hooks/lib/issue-spool.sh note ...` or that path run directly, writes only to
+`~/.claude-issue-spool`, so its arguments are not read as files; a copy of the helper anywhere
+else, another subcommand, a substitution inside the note and everything else in the same command
+are judged as before. A question is kept in the store under a
+SHA-256 of its repository and word (#2246), since a held command's word can pass the store's 256
+character key limit; an answer kept under the earlier key form is still read for its week (#2256
+removes that read).
 Every judgement, decision and answer is one JSON line in
 `~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
 log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
@@ -5660,15 +5671,15 @@ Mac's own `~/.claude/mods/sleep-repos.local.json` since #1568: it names work rep
 never sent between Macs, and an answer given at bedtime is kept on the Mac that asked. A Mac without
 the file merges and deploys nothing overnight and says why):
 
-- Wait overnight, no merge and no deploy (a green pull request stays open for the morning):
-  bidspoke, slate, and every repository owned by the agency's organisation, now and
-  any added later (today that is the website repository).
-- Merge and deploy as in the daytime: danwright32/claude-config, project-enrollment-tracker,
-  paperboi, sonar, dwright-pennie/new-agent-onboarding,
-  dwright-pennie/repo-digest, danwright32/overture, danwright32/ovation, danwright32/downbeat,
-  danwright32/PostRoll, danwright32/backstage, PlayedItApp/playedit and nursedexapp/nursedex.
-- Anything else (eavesly-web-app, for one) is asked once at bedtime, as above, and waits for that
-  night if you do not answer.
+- Wait overnight, no merge and no deploy (a green pull request stays open for the morning): the
+  two work repositories Dan named, and every repository owned by the agency's organisation, now
+  and any added later.
+- Merge and deploy as in the daytime: the thirteen repositories Dan named, this one and the
+  personal apps among them.
+- Anything else is asked once at bedtime, as above, and waits for that night if you do not answer.
+
+The repositories themselves are named only in that file, never here, because this README is
+public and several of them are work repositories (#2112).
 
 The file has three lists: `waitOwners` (owners every repository of which waits, which outranks the
 other two), `mergeOnly` (merging allowed, deploying never; each entry says with `mergeDeploys`
