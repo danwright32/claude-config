@@ -132,8 +132,8 @@ run_as(){   # $1 = CLAUDE_HOME  $2 = command  then extra environment as NAME=val
 BARE="$WORK/remote.git"; git init -q --bare -b main "$BARE"
 SEED="$WORK/seed"; git clone -q "$BARE" "$SEED" 2>/dev/null
 cp "$SCRIPT" "$SEED/claude-sync"
-mkdir -p "$SEED/payload/hooks/lib"
-cp "$HERE/../payload/hooks/lib/unmanaged-skills.sh" "$SEED/payload/hooks/lib/unmanaged-skills.sh"
+python3 "$HERE/../payload/hooks/lib/install-hook-libs.py" "$HERE/../payload/hooks/lib" "$SEED/payload/hooks/lib" unmanaged-skills.sh >/dev/null \
+  || check "#2204 unmanaged-skills.sh could be installed with what it sources" false
 printf '#!/bin/sh\n' > "$SEED/payload/hooks/dummy.sh"
 git -C "$SEED" add -A
 git -C "$SEED" -c user.name=t -c user.email=t@e commit -q -m seed
