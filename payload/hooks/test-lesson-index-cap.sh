@@ -64,10 +64,8 @@ want() { # want <description> <expected> <actual>
 # A copy of a suite arms its own deadline like the original does, and refuses to run without the
 # helper (claude-config#465), so every fixture holding a copy carries the helper beside it.
 plant_deadline_lib() {   # plant_deadline_lib <the fixture's hooks directory>
-  mkdir -p "$1/lib"
-  cp "$DIR/lib/suite-deadline.sh" "$1/lib/suite-deadline.sh"
-  cp "$DIR/lib/kill-tree.sh" "$1/lib/kill-tree.sh"
-  cp "$DIR/lib/suite-isolation.sh" "$1/lib/suite-isolation.sh"
+  python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$1/lib" suite-deadline.sh kill-tree.sh suite-isolation.sh >/dev/null \
+    || check "#2204 the deadline helpers could be installed with what they source" "the install refused"
 }
 
 [ -f "$LIB" ] || { echo "FAIL: no shared predicate at $LIB, so the rule is still written twice"; echo "passed: 0, failed: 1"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
@@ -213,7 +211,8 @@ want "the shared predicate names the same two" "$send_nums" "$pred_nums"
 # count rather than a list, so the count is what is compared; a hook that named a different NUMBER
 # of entries would be applying a different rule whatever it called them.
 BP="$WORK/budgetpayload"; mkdir -p "$BP/hooks/lib"
-cp "$LIB" "$BP/hooks/lib/lesson-index-cap.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$BP/hooks/lib" lesson-index-cap.sh >/dev/null \
+  || check "#2204 lesson-index-cap.sh could be installed with what it sources" "the install refused"
 cp "${IDXFILES[@]}" "$BP/"
 : > "$BP/CLAUDE.md"
 for _ix in "${IDXFILES[@]}"; do printf '@%s\n' "$(basename "$_ix")" >> "$BP/CLAUDE.md"; done
