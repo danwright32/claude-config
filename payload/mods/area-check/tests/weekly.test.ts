@@ -83,6 +83,15 @@ test('a missing errors file is no errors, an unreadable one is said, never zero 
   expect(said).not.toContain('0 errors')
 })
 
+test('lines of the errors file that cannot be read are said beside the count, never dropped (L90)', () => {
+  const log = read(loaded('s1'))
+  const partly = weeklyLine(log, read(err(), 'garbage', '{"half":'), NOW)
+  expect(partly).toContain('; 1 error, and 2 lines of the errors file could not be read. ')
+  const wholly = weeklyLine(log, read('garbage', '{"half":'), NOW)
+  expect(wholly).toContain('errors not counted, none of the errors file\'s 2 lines could be read')
+  expect(wholly).not.toContain('0 errors')
+})
+
 test('a log that does not exist, cannot be read, or holds no readable line says so instead of zeros (L90)', () => {
   expect(weeklyLine(none, none, NOW)).toBe('Area check, this Mac, last 7 days: no load record, the log does not exist, so the mod has never started here. ' + TAIL)
   expect(weeklyLine({ state: 'unreadable', code: 'EACCES' }, none, NOW)).toBe('Area check, this Mac, last 7 days: no counts, the log could not be read (EACCES). ' + TAIL)
@@ -179,6 +188,11 @@ test('a claim is stale after thirty days, and a claim that cannot be read is sta
   expect(claimStale(JSON.stringify({ at: NOW - 30 * DAY_MS }), NOW)).toBe(true)
   expect(claimStale('{', NOW)).toBe(true)
   expect(claimStale(JSON.stringify({ at: 'x' }), NOW)).toBe(true)
+})
+
+test('a claim stamped in the future is stale, so a skewed clock costs one extra note, never silence', () => {
+  expect(claimStale(JSON.stringify({ at: NOW + DAY_MS }), NOW)).toBe(true)
+  expect(claimStale(JSON.stringify({ at: NOW }), NOW)).toBe(false)
 })
 
 test('the key is the repository lowercased and the path, and the note names the count and the file', () => {

@@ -2,7 +2,7 @@
 // proceeding past (#1511). Pure: the clock and every file's text are handed in, so the issue
 // review's runner (hooks/lib/area-check-review.mjs) does the reading and this decides what it says.
 // It is not a hook module (hooks.json does not list it); tests/weekly.test.ts proves it and
-// hooks/test-area-check-weekly.sh proves the runner against the real rotation script.
+// tests/test-area-check-weekly.sh at the repository root proves the runner against the real rotation script.
 //
 // The line carries counts only, never a path: the review it lands in may be in any repository, and
 // a path from a work repository must never reach another one's review. The escalation does name a
@@ -111,9 +111,17 @@ export const weeklyLine = (log: Read, errors: Read, nowMs: number): string => {
     errorPart = `errors not counted, the errors file could not be read (${errors.code})`
     errorsSay = true
   } else {
-    const n = errors.state === 'missing' ? 0 : parseLines(errors.texts).records.filter(x => x.atMs >= since).length
-    errorPart = plural(n, 'error', 'errors')
-    errorsSay = n > 0
+    // Lines of the errors file that cannot be read are said beside the count, never dropped, or a
+    // damaged file reads as a confident count (L90). A file none of whose lines parse has no count.
+    const e = errors.state === 'missing' ? { records: [], malformed: 0, lines: 0 } : parseLines(errors.texts)
+    const n = e.records.filter(x => x.atMs >= since).length
+    if (e.lines > 0 && e.records.length === 0) {
+      errorPart = `errors not counted, none of the errors file's ${e.lines} lines could be read`
+    } else {
+      errorPart = plural(n, 'error', 'errors')
+      if (e.malformed > 0) errorPart += `, and ${plural(e.malformed, 'line of the errors file', 'lines of the errors file')} could not be read`
+    }
+    errorsSay = n > 0 || e.malformed > 0
   }
   const parts = [
     `${plural(firings, 'first write judged', 'first writes judged')}, ${held} held`,
@@ -177,11 +185,15 @@ export const escalations = (records: readonly Rec[], repo: string, nowMs: number
 /** One file's identity for its claim: the repository lowercased and the path. */
 export const escalationKey = (e: Escalation): string => `${e.repo.toLowerCase()}\n${e.path}`
 
-/** Whether a claim file's text is old enough, or unreadable enough, to escalate the file again. */
+/**
+ * Whether a claim file's text is old enough, or unreadable enough, to escalate the file again. A
+ * claim stamped in the future is stale, as a future stamp makes the line due: one extra note, never
+ * a file kept quiet for as long as a skewed clock says.
+ */
 export const claimStale = (text: string, nowMs: number): boolean => {
   try {
     const at = (JSON.parse(text) as { at?: unknown }).at
-    return typeof at !== 'number' || !Number.isFinite(at) || nowMs - at >= ESCALATE_AGAIN_MS
+    return typeof at !== 'number' || !Number.isFinite(at) || at > nowMs || nowMs - at >= ESCALATE_AGAIN_MS
   } catch {
     return true
   }
