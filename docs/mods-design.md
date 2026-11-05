@@ -3996,7 +3996,7 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
   structural issue, so later holds can fold into it, or a recorded reason it needs none.
 - **Once per 30 days, under two reviews at once.** A claim file per escalated file under
   `escalated/`, created with `wx`, decides which review makes the note. A claim 30 days old (or one
-  that cannot be parsed) is renamed aside to `<claim>.stale.<pid>` before being removed and
+  that cannot be parsed, or stamped in the future) is renamed aside to `<claim>.stale.<pid>` before being removed and
   recreated, so only one rename of it can win. A note that fails removes its claim, so the next
   review tries again, and says so in a count only sentence.
 - **Failure.** An invalid `CLAUDE_AREA_CHECK_NOW` exits 2, never falling back to the real clock. A
