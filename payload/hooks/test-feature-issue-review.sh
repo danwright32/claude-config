@@ -48,6 +48,13 @@ mkdir -p "$TMPDIR"
 export CLAUDE_ISSUE_SPOOL_DIR="$WORK/spool"
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 
+# The area check's weekly line (claude-config#1511) reads a log of its own. Pointed at a throwaway
+# folder whose weekly stamp is fresh, so every review below that is not about the line sees no line
+# and touches nothing real; the cases near the end point each review at a folder of their own.
+export CLAUDE_AREA_CHECK_DIR="$WORK/area"
+mkdir -p "$CLAUDE_AREA_CHECK_DIR"
+printf '%s' "$(( $(date +%s) * 1000 ))" > "$CLAUDE_AREA_CHECK_DIR/weekly-line.stamp"
+
 pass=0
 fail=0
 check() { # check <description> <ok|why-not>
@@ -780,6 +787,125 @@ else
     || check "#1019 a ledger the review could not keep is said in its reason" "reason=${kr_reason:0:300}"
 fi
 rm -rf "${TMPDIR%/}/claude-issue-findings-0000000000aa.sess-r.seen" "$CLAUDE_ISSUE_SPOOL_DIR/seen"
+
+# ---------------------------------------------------------------------------
+# The area check's weekly line and its escalations (claude-config#1511).
+# ---------------------------------------------------------------------------
+# The review runs lib/area-check-review.mjs once its cooldown has passed. Each case gets a folder of
+# its own, holding a fixture log, and a fixed clock through CLAUDE_AREA_CHECK_NOW; the real
+# ~/.claude-area-check is never read. A second review of one project needs its cooldown stamp gone.
+AC_T="$(python3 -c 'import datetime; print(int(datetime.datetime(2026, 11, 5, 12, tzinfo=datetime.timezone.utc).timestamp() * 1000))')"
+AC_DAY=86400000
+ac_cooldown_gone() { # ac_cooldown_gone <project dir>
+  rm -f "${TMPDIR%/}/claude-feature-issue-review-$(printf '%s' "$1" | shasum | cut -c1-12).stamp"
+}
+ac_log() { # ac_log <area dir>: one session loaded, and one file five sessions proceeded past
+  {
+    printf '%s\n' '{"v":1,"kind":"loaded","at":"2026-11-04T12:00:00.000Z","session":"s1","cwd":"/w/app","rule":3,"n":1}'
+    printf '%s\n' '{"v":2,"kind":"judged","at":"2026-11-04T12:00:00.000Z","session":"s1","agent":null,"repo":"dan/app","path":"src/a.ts","decision":"held","issues":{"state":"read","count":2},"matches":[],"why":"x","n":2}'
+    for s in a b c d e; do
+      printf '{"v":3,"kind":"decided","at":"2026-11-04T12:00:00.000Z","session":"%s","agent":null,"repo":"dan/app","branch":"b","mergeBase":null,"path":"src/a.ts","call":"c%s","decision":"proceed","reason":"r"}\n' "$s" "$s"
+    done
+  } > "$1/log.jsonl"
+}
+AC_HEAD="Area check, this Mac, last 7 days:"
+
+# Due: no stamp yet, so the line goes out with the log's counts, and the week restarts from the
+# runner's clock only because the reason carrying it was delivered.
+AC_DUE="$WORK/area-due"; mkdir -p "$AC_DUE"; ac_log "$AC_DUE"
+AC_PROJ="$(mktemp -d "$WORK/areaweekly.XXXXXX")"
+ac_r1="$(reason_of "$(CLAUDE_AREA_CHECK_DIR="$AC_DUE" CLAUDE_AREA_CHECK_NOW="$AC_T" run_review "$AC_PROJ")")"
+holds "$ac_r1" "$AC_HEAD loaded in 1 session" \
+  && check "#1511 a review with the weekly line due carries it, with the log's counts" ok \
+  || check "#1511 a review with the weekly line due carries it, with the log's counts" "reason=${ac_r1:0:400}"
+[ "$(cat "$AC_DUE/weekly-line.stamp" 2>/dev/null)" = "$AC_T" ] \
+  && check "#1511 the delivered line restarts the week from the runner's clock" ok \
+  || check "#1511 the delivered line restarts the week from the runner's clock" "stamp=[$(cat "$AC_DUE/weekly-line.stamp" 2>/dev/null)] want [$AC_T]"
+
+# Within the week: the next review says nothing of it.
+ac_cooldown_gone "$AC_PROJ"
+ac_r2="$(reason_of "$(CLAUDE_AREA_CHECK_DIR="$AC_DUE" CLAUDE_AREA_CHECK_NOW="$(( AC_T + AC_DAY ))" run_review "$AC_PROJ")")"
+case "$ac_r2" in
+  "NO PAYLOAD AT ALL"|"PAYLOAD DOES NOT PARSE"*) check "#1511 a review a day later leaves the weekly line out" "the review itself did not go out: ${ac_r2:0:200}" ;;
+  *"$AC_HEAD"*) check "#1511 a review a day later leaves the weekly line out" "reason=${ac_r2:0:400}" ;;
+  *) check "#1511 a review a day later leaves the weekly line out" ok ;;
+esac
+
+# After the week: back again.
+ac_cooldown_gone "$AC_PROJ"
+ac_r3="$(reason_of "$(CLAUDE_AREA_CHECK_DIR="$AC_DUE" CLAUDE_AREA_CHECK_NOW="$(( AC_T + 8 * AC_DAY ))" run_review "$AC_PROJ")")"
+holds "$ac_r3" "$AC_HEAD" \
+  && check "#1511 a review eight days later carries the weekly line again" ok \
+  || check "#1511 a review eight days later carries the weekly line again" "reason=${ac_r3:0:400}"
+
+# A runner that cannot run is said, once a week, never at every review. An invalid clock makes the
+# real runner exit 2, which is the failure the review has to report.
+AC_FAIL="$WORK/area-fail"; mkdir -p "$AC_FAIL"
+AC_FPROJ="$(mktemp -d "$WORK/areafail.XXXXXX")"
+ac_f1="$(reason_of "$(CLAUDE_AREA_CHECK_DIR="$AC_FAIL" CLAUDE_AREA_CHECK_NOW=soon run_review "$AC_FPROJ")")"
+holds "$ac_f1" "The area check's weekly line could not be built (its runner exited 2" \
+  && check "#1511 a runner that fails is said in the review, with its exit code" ok \
+  || check "#1511 a runner that fails is said in the review, with its exit code" "reason=${ac_f1:0:400}"
+holds "$ac_f1" "$AC_HEAD" \
+  && check "#1511 and no counts stand in for the line it could not build" "reason=${ac_f1:0:400}" \
+  || check "#1511 and no counts stand in for the line it could not build" ok
+ac_cooldown_gone "$AC_FPROJ"
+ac_f2="$(reason_of "$(CLAUDE_AREA_CHECK_DIR="$AC_FAIL" CLAUDE_AREA_CHECK_NOW=soon run_review "$AC_FPROJ")")"
+case "$ac_f2" in
+  "NO PAYLOAD AT ALL"|"PAYLOAD DOES NOT PARSE"*) check "#1511 the failure is not said again within the week" "the review itself did not go out: ${ac_f2:0:200}" ;;
+  *"could not be built"*) check "#1511 the failure is not said again within the week" "reason=${ac_f2:0:400}" ;;
+  *) check "#1511 the failure is not said again within the week" ok ;;
+esac
+touch -t 202001010000 "$AC_FAIL/weekly-line.stamp" 2>/dev/null
+ac_cooldown_gone "$AC_FPROJ"
+ac_f3="$(reason_of "$(CLAUDE_AREA_CHECK_DIR="$AC_FAIL" CLAUDE_AREA_CHECK_NOW=soon run_review "$AC_FPROJ")")"
+holds "$ac_f3" "could not be built" \
+  && check "#1511 and is said again once the week has passed" ok \
+  || check "#1511 and is said again once the week has passed" "reason=${ac_f3:0:400}"
+
+# An escalation the runner spools shows in this same review, because the runner runs before the
+# spool is read. The project is a repository on GitHub; the line is not due, so only the note shows.
+AC_ESC="$WORK/area-esc"; mkdir -p "$AC_ESC"; ac_log "$AC_ESC"; printf '%s' "$AC_T" > "$AC_ESC/weekly-line.stamp"
+AC_EPROJ="$(mktemp -d "$WORK/areaesc.XXXXXX")"
+git init -q "$AC_EPROJ" 2>/dev/null && git -C "$AC_EPROJ" remote add origin https://github.com/dan/app.git 2>/dev/null
+ac_e1="$(PATH="$WORK/bin:$PATH" reason_of "$(CLAUDE_AREA_CHECK_DIR="$AC_ESC" CLAUDE_AREA_CHECK_NOW="$AC_T" PATH="$WORK/bin:$PATH" run_review "$AC_EPROJ")")"
+ac_named="$(named_in "$ac_e1")"
+if named_file_ok "#1511 a file sessions keep proceeding past is named in the same review" "$ac_named"; then
+  grep -qF "The area check held first writes to src/a.ts" "$ac_named" 2>/dev/null \
+    && check "#1511 a file sessions keep proceeding past is named in the same review" ok \
+    || check "#1511 a file sessions keep proceeding past is named in the same review" "file=$(first_lines 4 "$ac_named")"
+fi
+holds "$ac_e1" "$AC_HEAD" \
+  && check "#1511 and the line, not yet due, stays out of it" "reason=${ac_e1:0:400}" \
+  || check "#1511 and the line, not yet due, stays out of it" ok
+
+# What the runner could not do is said in the review: a log it cannot read, with the line not due.
+AC_SAID="$WORK/area-said"; mkdir -p "$AC_SAID"; ac_log "$AC_SAID"; printf '%s' "$AC_T" > "$AC_SAID/weekly-line.stamp"
+chmod 000 "$AC_SAID/log.jsonl"
+if cat "$AC_SAID/log.jsonl" >/dev/null 2>&1; then
+  echo "SUITE-PART-UNMEASURED #1511 an unreadable area check log cannot be made here (chmod does not restrict this user)"
+else
+  # The note above makes that review urgent, which skips the cooldown, but the runner waits for it.
+  ac_cooldown_gone "$AC_EPROJ"
+  ac_s1="$(PATH="$WORK/bin:$PATH" reason_of "$(CLAUDE_AREA_CHECK_DIR="$AC_SAID" CLAUDE_AREA_CHECK_NOW="$AC_T" PATH="$WORK/bin:$PATH" run_review "$AC_EPROJ")")"
+  holds "$ac_s1" "could not look for files sessions keep proceeding past" \
+    && check "#1511 a log the runner could not read is said in the review" ok \
+    || check "#1511 a log the runner could not read is said in the review" "reason=${ac_s1:0:400}"
+fi
+chmod 600 "$AC_SAID/log.jsonl"
+
+# A suite that names no folder never reaches the real log: with the spool pointed elsewhere and
+# CLAUDE_AREA_CHECK_DIR unset, nothing runs and nothing is written under HOME.
+AC_HOME="$WORK/area-home"; mkdir -p "$AC_HOME"
+AC_UPROJ="$(mktemp -d "$WORK/areaunset.XXXXXX")"
+ac_u1="$(reason_of "$(unset CLAUDE_AREA_CHECK_DIR; HOME="$AC_HOME" CLAUDE_AREA_CHECK_NOW="$AC_T" run_review "$AC_UPROJ")")"
+case "$ac_u1" in
+  "NO PAYLOAD AT ALL"|"PAYLOAD DOES NOT PARSE"*) check "#1511 with no area check folder named, a suite's review runs nothing" "the review itself did not go out: ${ac_u1:0:200}" ;;
+  *"$AC_HEAD"*|*"could not be built"*) check "#1511 with no area check folder named, a suite's review runs nothing" "reason=${ac_u1:0:400}" ;;
+  *) [ ! -e "$AC_HOME/.claude-area-check" ] \
+       && check "#1511 with no area check folder named, a suite's review runs nothing" ok \
+       || check "#1511 with no area check folder named, a suite's review runs nothing" "it wrote $(ls -A "$AC_HOME/.claude-area-check" 2>/dev/null | tr '\n' ' ')" ;;
+esac
 
 # --- the hook stays quiet when nothing happened ---
 # It fires on Stop, so a chat-only turn must not trigger a review. An absent
