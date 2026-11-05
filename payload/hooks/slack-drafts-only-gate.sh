@@ -66,7 +66,7 @@ SCRIPTS='\.(py|sh|bash|zsh|js|mjs|cjs|ts|mts|rb|pl|php|command)([^A-Za-z0-9_]|$)
 START='("command"[[:space:]]*:[[:space:]]*"|[;&|(`]|\{[[:space:]]|\\n)[[:space:]]*'
 RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|tsx|ts-node|osascript|uv|source)([^A-Za-z0-9_.]|$)|(^|[^A-Za-z0-9_])(bash|sh|zsh|dash|ksh)[[:space:]]|\./'
 RUNS+="|${START}([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[^[:space:];&|()]*/"
-RUNS+="|${START}(sudo|doas|env|rtk|command|exec|nohup|nice|time|timeout|gtimeout|caffeinate|stdbuf|xargs|if|then|else|elif|do|while|until|!)([[:space:]]|\$)"
+RUNS+="|${START}(sudo|doas|env|rtk|command|exec|nohup|nice|time|timeout|gtimeout|caffeinate|stdbuf|xargs|if|then|else|elif|do|while|until|!|\\.)([[:space:]]|\$)"
 RUNS+='|[[:space:]]-(exec|execdir|ok|okdir)[[:space:]]'
 # Under a UTF-8 locale bash's =~ stops at a byte that is not UTF-8, so a word after one would read as
 # absent and the call would pass unjudged (claude-config#1885); the C locale is tried as well.

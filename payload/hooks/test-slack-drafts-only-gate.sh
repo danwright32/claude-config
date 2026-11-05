@@ -185,7 +185,7 @@ for wrapped in "sudo $T/notify" "sudo -u root $T/notify" "env X=1 $T/notify" "rt
   "nohup $T/notify" "time $T/notify" "command $T/notify" "exec $T/notify" "nice -n 5 $T/notify" \
   "timeout 30 $T/notify" "echo x | xargs $T/notify" "cd $T && sudo bin/notify-slack" \
   "if true; then bin/notify-slack; fi" "find $T -name notify -exec $T/notify {} \\;" \
-  ">/dev/null bin/notify-slack"; do
+  ">/dev/null bin/notify-slack" "cd $T && . notify" "cd $T && source notify"; do
   run_raw "$(payload Bash "$(bash_input "$wrapped")")"
   refused "a script that posts, run as: $wrapped"
 done
