@@ -6536,7 +6536,7 @@ test('/sleep never asks or checks off a design round guard question, on the repa
   expect(w.edits.map(x => x.body)).toEqual([body.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')])
   const said = 'Not asked, since only the design round guard\'s own question can settle them: o/r#7 "Skip design rounds for this issue?" and o/r#7 "Is this design settled?".'
   expect(r.text).toContain(said)
-  expect(r.text.split(said).length).toBe(2)
+  expect((r.text ?? '').split(said).length).toBe(2)
 })
 
 test('notes that cannot be read are said, and the questions in the rest are still asked (L215)', withDeps, async ($, on) => {
