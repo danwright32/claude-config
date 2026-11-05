@@ -188,8 +188,9 @@ echo "sync clone: with the hold reader missing"
 # A copy of the library with no hold-record.sh beside it still LOADS, because every hook treats a
 # library that fails to load as nothing to say and allows the write. It counts no hold instead, the
 # side that refuses, and says why (the lessons review of #1894, L42).
-mkdir -p "$FIX/noreader"
-cp "$LIB" "$FIX/noreader/sync-clone.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FIX/noreader" sync-clone.sh >/dev/null \
+  || check "#2204 sync-clone.sh could be installed with what it sources" "the install refused"
+rm -f "$FIX/noreader/hold-record.sh"   # the copy without the hold reader, on purpose
 printf '%s %s host session=unknown from a terminal\n' "$(( now + 3600 ))" "$now" > "$SYNC_HOLD_FILE"
 nr_out="$(bash -c '. "$1" || { echo NOT-LOADED; exit 0; }
   if sc_hold_covers "$2"; then echo COVERED; else echo NOT-COVERED; fi

@@ -787,7 +787,9 @@ got="$(ps_repo_dirs "cd $T && git push; cd $RD/no-such-dir && git push" "$S" 2>/
 # in the session directory (lessons review of #1017, L490): a reader that cannot run reads no cd,
 # and no cd is exactly what sends a push to the wrong repository. A command naming no directory is
 # still the session's.
-LONE="$RD/lone-lib"; mkdir -p "$LONE"; cp "$LIB" "$LONE/push-scope.sh"
+LONE="$RD/lone-lib"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE" push-scope.sh >/dev/null \
+  || check "#2204 push-scope.sh could be installed with what it sources" "the install refused"
 lone() { bash -c '. "$1"; shift; "$@"' _ "$LONE/push-scope.sh" "$@"; }
 got="$(lone ps_repo_dir "cd $T && git push" "$S" 2>"$RD/lone.err")"; rc=$?
 if [ "$rc" -eq 2 ] && [ -z "$got" ] && grep -q "shell-words.py" "$RD/lone.err"; then

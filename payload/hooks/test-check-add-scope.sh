@@ -603,6 +603,39 @@ for c in "CMD=\"git add -A\"; bash -c \"\$CMD\"" "CMD='git -C $REPO add -A'; eva
   refused "#2078 an add beside an unreadable wrapper is still refused: $c"
 done
 
+# A command substitution runs its commands as surely as the line does (claude-config#2203). An echo
+# of `$(git add -A)`, or a variable assigned from one, stages everything, and the guard never saw
+# it: the reader cut the line at its separators and read only what each piece started with. And an
+# add reached through a variable, the subcommand or the program held in one, was missed whenever no
+# git word came before the word add, because the cheap filter in front of the reader wanted git
+# first. Both are read now; what only mentions an add, or a substitution running something else, is
+# still no add.
+for c in "echo \"\$(git add -A)\"" "echo \$(git add -A)" "x=\$(git add -A)" "x=\`git add -A\`" \
+         "out=\"\$(git -C $REPO add .)\"" "echo \"staged: \$(cd $REPO && git add --all)\"" \
+         "printf '%s' \"\$(git add -u)\"" "SUB=add; git \$SUB -A" "SUB=add; eval \"git \$SUB -A\"" \
+         "for s in add; do git \"\$s\" .; done" "G=git; \$G add -A" "\"\$GIT\" add ." \
+         "\$(command -v git) add -A"; do
+  run "$c"
+  refused "#2203 an unscoped add in a substitution or through a variable is refused: $c"
+done
+for c in "echo \"git add -A\"" "echo 'x=\$(git add -A)'" "git commit -m \"fix the git add -A shape\"" \
+         "x=\$(git status --short)" "echo \"\$(git status)\" && git add mine.txt" \
+         "echo \"\$(git add mine.txt)\"" "SUB=add; git \$SUB mine.txt" "git \$SUB log -1" \
+         "echo \"\$HOME\" && echo add"; do
+  run "$c"
+  allowed "#2203 control: no unscoped add here: $c"
+done
+# Measured against 6,597 real commands holding the word add: a $ anywhere and the word add anywhere
+# is not a variable shape. A script run beside a heredoc whose prose says add, or a script given its
+# own add subcommand with no git anywhere, stages nothing the guard can see, so it still passes.
+for c in "bash $FIX/x.sh && cat > $FIX/n.txt <<'EOF'"$'\n'"add \$HOME to the note"$'\n'"EOF" \
+         "bash $FIX/x.sh add \"\$ITEM\"" "source $FIX/x.sh \"\$HOME\" && echo add" \
+         "echo add && git --no-pager log -1 \"\$REV\" && bash $FIX/x.sh" \
+         "bash $FIX/x.sh && cat > $FIX/n.txt <<'EOF'"$'\n'"run \`git status\` and add a note"$'\n'"EOF"; do
+  run "$c"
+  allowed "#2203 control: a script beside the word add is no variable shape: $c"
+done
+
 run "git add ."
 refused "a bare dot is refused the same way"
 run "git add --all"
@@ -630,7 +663,8 @@ refused "and so is one right after do"
 # (lessons review of #1017, L490).
 mkdir -p "$FIX/noreader/lib"
 cp "$HOOK" "$FIX/noreader/check-add-scope.sh"
-cp "$DIR/lib/push-scope.sh" "$FIX/noreader/lib/push-scope.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FIX/noreader/lib" push-scope.sh \
+  || check "#2204 push-scope.sh could be installed into the copy without a reader" "the install refused"
 HOOK_SAVED="$HOOK"; HOOK="$FIX/noreader/check-add-scope.sh"
 run "cd $REPO && git add -A"
 HOOK="$HOOK_SAVED"
