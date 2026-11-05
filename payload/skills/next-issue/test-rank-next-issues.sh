@@ -127,6 +127,14 @@ out="$(rank '[]')"; code=$?
 same "no open issues is not an error" 0 "$code"
 has "no open issues is said" "NO OPEN ISSUES" "$out"
 
+# A title holding a byte that is not UTF-8 is ranked with it replaced, under a UTF-8 locale (where
+# a text mode read raised) and under C.
+for loc in en_US.UTF-8 C; do
+  out="$(printf '[{"number":5,"title":"Caf\xff bar","labels":[{"name":"priority-p2"}],"milestone":null}]' | LC_ALL=$loc python3 "$RANK" 2>&1)"; code=$?
+  same "a title with a byte that is not UTF-8 still ranks under $loc" 0 "$code"
+  same "a title with a byte that is not UTF-8 is offered under $loc" "#5" "$(picks "$out")"
+done
+
 # A list that cannot be read is refused, never ranked as an empty backlog (L10).
 out="$(rank 'not json')"; code=$?
 same "a list that cannot be read exits 2" 2 "$code"

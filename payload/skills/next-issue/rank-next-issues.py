@@ -145,7 +145,10 @@ def main(argv):
         print("\n".join(STRUCTURAL_LABELS))
         return 0
     opts = parse_args(argv)
-    issues = read_issues(sys.stdin.read())
+    # Bytes, decoded with a stated policy: a title holding a byte that is not UTF-8 (which jq reads
+    # as U+FFFD) is ranked with that character replaced, never a traceback in place of the picks.
+    sys.stdout.reconfigure(errors="replace")
+    issues = read_issues(sys.stdin.buffer.read().decode("utf-8", errors="replace"))
     if opts["limit"] is not None and len(issues) >= opts["limit"]:
         fail(3, f"TRUNCATED the list holds {len(issues)} issues, its whole --limit; raise the limit and list again")
     if not issues:
