@@ -215,6 +215,30 @@ check "an organisation without its hyphen as an email or web domain is found by 
 check "and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "acmehq"
 repo_texts 'commit 5d6e7f8\0Move it\n\nthe acmehq notes, and acmehqs.com\n'
 check "(control) the same letters as a bare word or another domain pass (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+# claude-config#2190: a work MacBook project folder spelled as an organisation's login without its
+# hyphens is a work project, so it is refused as a plain word wherever it is written, not only as a
+# domain. The spelling is derived from the invented organisation here, never written down.
+FAKE_PLAIN="$(printf '%s' "$FAKE_ORG" | tr -d '-')"
+FAKE_PLAIN_LOWER="$(printf '%s' "$FAKE_PLAIN" | tr '[:upper:]' '[:lower:]')"
+PROJECTS_ORG="$WORK/projects-org-CLAUDE.md"
+printf '## Projects\n\nOn Daniels-MacBook-Pro-2 (personal MacBook):\n- `~/Apps/home-garden`\n\nOn Dans-MacBook-Pro:\n- `~/Apps/%s`: a work app\n\n## Writing Style\n' "$FAKE_PLAIN_LOWER" > "$PROJECTS_ORG"
+org_texts(){   # printf format and arguments -> text_out, text_rc, with that project listed
+  text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
+    WORK_NAMES_PROJECT_LIST="$PROJECTS_ORG" HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="" \
+    python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+}
+org_texts 'commit 5d6e7f8\0Move it\n\nthe %s notes are done\n' "$FAKE_PLAIN"
+check "#2190 a listed project spelled as an organisation without its hyphens is refused as a plain word (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
+check "#2190 and named as a work repository by its line: $text_out" has "$text_out" "commit 5d6e7f8:3: a work repository or owner name"
+check "#2190 and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "$FAKE_PLAIN_LOWER"
+org_texts 'commit 5d6e7f8\0Move it\n\nline two\nask ops@%s.com\n' "$FAKE_PLAIN_LOWER"
+check "#2190 and as a domain it is still refused by its line (exit $text_rc): $text_out" has "$text_out" "commit 5d6e7f8:4:"
+org_texts 'commit 5d6e7f8\0Move it\n\nfrom %s/widget\n' "$FAKE_ORG"
+check "#2190 (control) the hyphenated organisation login is still an organisation name: $text_out" has "$text_out" "commit 5d6e7f8:3: a work organisation name"
+org_texts 'commit 5d6e7f8\0Move it\n\nthe %ss notes, and pre%s too\n' "$FAKE_PLAIN_LOWER" "$FAKE_PLAIN_LOWER"
+check "#2190 (control) a longer word holding the same letters passes (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+org_texts 'commit 5d6e7f8\0Move it\n\nan ordinary sentence about the widget\n'
+check "#2190 (control) an unrelated message passes with that project listed (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
 mv "$PROJECTS" "$PROJECTS.away"
 repo_texts 'commit 1a2b3c4\0clean\n'
 check "an unreadable project list is refused, never read as clean (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
@@ -258,13 +282,18 @@ printf -- '- `~/Apps/Lanternwick`: a work app\n' > "$LOCALDIR/projects.local.txt
 local_texts "" 'commit 5d6e7f8\0Move it\n\nfrom the Lanternwick checkout\n'
 check "#2112 a project in the local file beside the CLAUDE.md is found with no hash (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
 check "and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "lanternwick"
+# claude-config#2190: the work MacBook's own shape, its local file listing the project spelled as an
+# organisation without its hyphens.
+printf -- '- `~/Apps/%s`: a work app\n' "$FAKE_PLAIN" > "$LOCALDIR/projects.local.txt"
+local_texts "" 'commit 5d6e7f8\0Move it\n\nthe %s notes are done\n' "$FAKE_PLAIN_LOWER"
+check "#2190 that project in the local file is refused as a plain word (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
 printf 'nothing listed\n' > "$LOCALDIR/projects.local.txt"
 local_texts "" 'commit 1a2b3c4\0clean\n'
 check "#2112 a local file listing nothing, with no hash, is refused (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
 rm -f "$LOCALDIR/projects.local.txt"
 local_texts unset 'commit 1a2b3c4\0clean\n'
 check "#2112 outside a test run the seam is ignored and the committed hashes make the list readable (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
-check "and the five committed hashes are counted beside the list's four names: $text_out" has "$text_out" "9 work repository and owner names"
+check "and the six committed hashes are counted beside the list's four names: $text_out" has "$text_out" "10 work repository and owner names"
 # Cannot tell is refused, never passed (L98, L345).
 rm -f "$LIST"
 repo_texts "$STREAM_REPO"

@@ -299,7 +299,9 @@ check "(control) the ordinary word sharing those letters passes, alone or in ano
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "write to team@acmehq.com"'
 check "a project list name that is an organisation without its hyphen is refused as an email domain: $out" refused
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "the acmehq folder"'
-check "(control) and as a bare word it is judged by the domain rule, so it passes: $out" passed
+check "#2190 and as a bare word it is a project all the same, so it is refused: $out" refused
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "the acmehqs and preacmehq notes"'
+check "#2190 (control) that project inside a longer word is no match: $out" passed
 # Cannot tell is refused (L98, L345): the project list is a source like the others.
 rm -f "$PROJECTS"
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
