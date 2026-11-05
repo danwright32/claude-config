@@ -1,7 +1,7 @@
 #!/bin/bash
 # mod-kit's withinGrace, seen holding a real call end to end, and seen failing without it (#2039, L1).
 #
-# A guard's catch gets 1,000 ms from the engine. A catch that spends its own time and then waits on
+# A guard's catch gets 1,000 ms from the engine (its next.budget, read 2026-11-05). A catch that spends its own time and then waits on
 # something the engine does not count as a $ call is cut at the grace, and the call it was guarding
 # RUNS. withinGrace (payload/mods/mod-kit/hooks/hold.ts) checks how much of the grace is left before
 # the slow part starts, and holds the call when too little is. Its unit tests hand in a budget; this

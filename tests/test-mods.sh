@@ -1538,7 +1538,7 @@ for m in hold-bare hold-async hold-replay; do
 done
 case "$out" in *clean-holds*) check "#2039: a catch answering through neverThrows, and a promise's own catch, pass" "$out" ;; *) check "#2039: a catch answering through neverThrows, and a promise's own catch, pass" ok ;; esac
 # #2039: a catch that judges the call once more runs the hook's whole judgement in its own 1,000 ms
-# grace, and one cut at the grace lets the call run. So the rerun starts only through withinGrace,
+# grace (the engine's next.budget, read 2026-11-05), and one cut at the grace lets the call run. So the rerun starts only through withinGrace,
 # which holds the call when too little of the grace is left; a rerun straight inside neverThrows, sync
 # or async, fails the run, pointed at withinGrace. A catch answering only a refusal (above) passes.
 M9GRACE="$TMPROOT/m9-grace"

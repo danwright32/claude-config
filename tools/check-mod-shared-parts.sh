@@ -351,7 +351,8 @@ for d in "$dir"/*/; do
     echo "check-mod-shared-parts: $name keeps its own catch at ${h#"$sd"}: a guard's catch that throws holds nothing, so answer straight through neverThrows(work, fallback, last), with only a replay after next() allowed outside it as next.called ? next(e) : neverThrows(...), from the copy of hooks/hold.ts kept at hooks/mod-kit/hold.ts, on the catch's own line."
   done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit '\.catch\((async )?\(\$' "$sd/hooks" 2>/dev/null | grep -vE '\.catch\((async )?\(\$[^)]*\) *=> *(next\.called \? next\(e\) : )?neverThrows\(')"
   # grace (#2039): a catch that judges the call once more, `neverThrows(() => hook($, e, next), ...)`,
-  # runs the hook's whole judgement inside the 1,000 ms the engine gives a catch, and a catch cut at
+  # runs the hook's whole judgement inside the 1,000 ms the engine gives a catch (its next.budget,
+  # read 2026-11-05), and a catch cut at
   # that grace lets the call RUN. So such a rerun starts only through withinGrace from the same copy
   # of hold.ts, which holds the call when too little of the grace is left. A catch answering only a
   # refusal does no slow work and is not matched.
