@@ -2830,6 +2830,23 @@ test('a switch from another session that cannot be applied is logged, and taken 
   expect(lastModes(w)).toEqual(['AWAY'])
 })
 
+test('a switch home that fails partway is applied whole when taken again, so Claude still hears Dan is back (#2154 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  const refusing = { on: false }
+  on('state.set', async ($, e, next) => (refusing.on && (e as { key?: string }).key === 'justHome' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  await say($ as never, 'one')
+  expect(lastModes(w)).toEqual(['AWAY'])
+  w.files[PLACE] = placeRecord('home', T0 + 6)
+  refusing.on = true
+  await clock.advance(MIN)
+  refusing.on = false
+  const back = (await say($ as never, 'two')).context?.join('\n') ?? ''
+  expect(lastModes(w)).toEqual([])
+  expect(back).toMatch(/Dan is back at the Mac/)
+})
+
 test('a record that cannot be read is said once, never read as a switch (L215)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [PLACE]: placeRecord('away', T0 + 5) }, unreadableFiles: [PLACE] })
   await start($ as never, clock)

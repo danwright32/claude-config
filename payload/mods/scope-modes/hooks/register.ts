@@ -4594,9 +4594,11 @@ const placeUnread = ($: EngineInterface, why: string) => {
   placeUnreadSaid = true
 }
 
+// The place is written last of the two, so a write that throws leaves the old place and the switch
+// is applied whole when taken again (#2154 lessons review); justHome is read only at home.
 const setPlace = async ($: EngineInterface, place: ScopeModesPlace) => {
-  await $.state.set(placeRef, place)
   await $.state.set(justHomeRef, place === 'home')
+  await $.state.set(placeRef, place)
   await showModes($)
   await showHeld($)
 }
