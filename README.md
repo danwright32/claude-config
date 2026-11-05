@@ -3100,9 +3100,12 @@ What passes: every Slack read, `slack_send_message_draft`, a command that only m
 (a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one exemption (Dan,
 2026-11-05), matched by its real path, so a copy anywhere else is refused.
 
-What it does not see, so a pass is not read as more than it measured: a module a script imports, a
-program run by bare name from the PATH (so `npm test` or `npm run x` is never followed into its
-scripts), and an endpoint assembled from pieces on purpose. The threat it answers is a session that
+A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
+`package.json`, its pre and post scripts included, and judged as the command line it runs.
+
+What it does not see, so a pass is not read as more than it measured: a module a script imports (so
+repo-digest's `npm run digest`, whose `src/digest.ts` imports the file that posts, still passes), a
+program run by bare name from the PATH, and an endpoint assembled from pieces on purpose. The threat it answers is a session that
 means well choosing the quickest way to post. It fails closed: a python that is missing or crashes,
 or a payload it cannot read that names a send route, is refused with the reason.
 
@@ -3110,9 +3113,12 @@ Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, becaus
 names `chat.postMessage`; `python3 -m unittest` over the same file passes. This is a known false
 positive, left for Dan to decide rather than exempted.
 
-Cost, 20 calls each by a timer around the gate alone on 2026-11-05: 21 ms on a call it skips, 72 ms
-on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, which it reads, and 154 ms
-on `run-all-tests.sh`. Suite: `test-slack-drafts-only-gate.sh`.
+Cost, the gate alone timed by its caller on 2026-11-05: a plain `git push` stays on the quick exit
+and costs 0.007 to 0.010 s (the push gate table's figure; 0.010 s as the mean of 10 at load average
+22, where bare bash took 0.005 s); a call the full rule reads starts python3, 0.05 s for `npm run x`
+or `bin/x`, 72 ms on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, and 154
+ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 calls by a timer
+around the gate, was not reproduced by these and is replaced by them. Suite: `test-slack-drafts-only-gate.sh`.
 
 ## Tests
 
