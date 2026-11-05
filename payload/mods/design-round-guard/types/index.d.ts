@@ -57,14 +57,17 @@ export type DesignRoundPass = {
  */
 export type DesignRoundAutoPass = {
   kind: 'no-screen-change'
-  /** When it went ahead, in milliseconds since the epoch. */
+  /**
+   * When this guard let it through, in milliseconds since the epoch. Written before the call runs, so
+   * a settings hook or another mod may still have refused it: a record of this guard's decision only.
+   */
   at: number
   /** The tool the call used, and the files it changes, relative to their checkout. */
   tool: string
   files: string[]
   /** What it would have waited on, as the skip question would have named them (the issue). */
   subjects: string[]
-  /** Why it went ahead, in words. */
+  /** Why this guard let it through, in words. */
   why: string
   /** The call written out whole (rules.ts callText). */
   call: string

@@ -1321,7 +1321,7 @@ export const logicOnlyChange = (before: string, after: string): boolean => {
 
 /** An automatic pass of a logic only edit (#2294), kept with the call: what it let through, and why. */
 export const autoPassWhy = (files: readonly string[]): string =>
-  `The guard read this edit to ${listed(files)} itself and found it changes only logic: no JSX, text, comment, number, true or false, style word, stylesheet or swapped import. So it went ahead with no design round and nothing asked (#2294).`
+  `The guard read this edit to ${listed(files)} itself and found it changes only logic: no JSX, text, comment, number, true or false, style word, stylesheet or swapped import. So this guard let it through with no design round and nothing asked (#2294); another check may still have refused it.`
 
 /**
  * What a refusal says of a mod hook file a shell command writes that could not be read before it ran

@@ -676,10 +676,12 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
   }
   // Whether a run passed only by the #1823 reading, so the whole change's message wording is asked.
   let readByDrawing = false
-  const shows = async (b: string, a: string) => {
+  // The logic reading (#2294) judges only the whole change, never a run at a time: its whole file
+  // rules (an import swapped for another) would let through two runs each holding half of one.
+  const shows = async (b: string, a: string, whole = false) => {
     if (dataOnlyChange(b, a)) return false
     if (!modHook) {
-      if (read && logicOnlyChange(b, a)) {
+      if (read && whole && logicOnlyChange(b, a)) {
         read.logic = true
         return false
       }
@@ -691,7 +693,7 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
     readByDrawing = true
     return false
   }
-  if (before === after || !(await shows(before, after))) return true
+  if (before === after || !(await shows(before, after, true))) return true
   const runs = changedRuns(before, after)
   if (runs.length < 2) return false
   readByDrawing = false

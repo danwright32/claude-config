@@ -1870,6 +1870,12 @@ test('#2294: a logic only edit to an app page goes through unasked and is record
   expect(refusalOf(await call($, edit('  return (', "  if (!slots) throw new Error('No slots to book')\n  return (")))).toContain(SKIP_QUESTION)
   expect(refusalOf(await call($, edit('  return (', '  const theme = pick(slots)\n  return (')))).toContain(SKIP_QUESTION)
   expect(refusalOf(await call($, edit('  return (', "  const a = 'x\n  return (")))).toContain(SKIP_QUESTION)
+  // An import swapped for another is held even split into two runs of lines, one taking the old
+  // import away at the top and one adding the new at the end (lessons review of #2294): the
+  // logic reading judges the whole change, never a run at a time.
+  const page = String(w.files[RESULT])
+  const swapped = `${page.replace("import { BookingCalendar } from '@/components/BookingCalendar'\n", '')}import { BookingCalendar } from '@/components/OtherCalendar'\n`
+  expect(refusalOf(await call($, { tool: 'Write', file_path: RESULT, content: swapped }))).toContain(SKIP_QUESTION)
   expect(w.ran.length).toBe(1)
   // A pass that cannot be recorded is not made: held and asked, as before.
   w.ctl.storeSetFails = true
