@@ -203,6 +203,25 @@ else
   check "amend-force-push-gate.sh is registered under Bash once" "not registered in $SETTINGS"
 fi
 
+# ---------------------------------------------------------------------------------------------
+echo "a redirection in front of git is the shell's, never the command's name (claude-config#2235)"
+# `2>/dev/null git commit --amend` amends. The reader took the redirection for the command's name,
+# so the gate saw a command named 2>/dev/null and the amend went through. Each case is also run
+# through a copy of the hooks whose reader passes no redirection over, which must let it through.
+if python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$WORK/loose-redirects" redirects; then check "#2235 the loose copy of the hooks is made" ok; else
+  check "#2235 the loose copy of the hooks is made" "loose-reader.py failed"; fi
+redirected() { # redirected <label> <command>
+  agent_refused "#2235 $1" "$2"
+  OUT="$(bash_payload "$2" a1b2c3d4 | bash "$WORK/loose-redirects/amend-force-push-gate.sh" 2>&1)"; RC=$?
+  if [ "$RC" -eq 0 ]; then check "#2235 the loose copy lets it through, so the case is one the fix decides: $1" ok; else
+    check "#2235 the loose copy lets it through, so the case is one the fix decides: $1" "exit $RC: ${OUT:0:200}"; fi
+}
+redirected "commit --amend behind an error redirection" '2>/dev/null git commit --amend --no-edit'
+redirected "push --force behind an output redirection" '> /dev/null git push --force origin feature'
+redirected "push --force behind input and an assignment" '</dev/null A=1 git push --force origin feature'
+redirected "commit --amend behind nohup and a redirection" 'nohup 2>&1 git commit --amend --no-edit'
+agent_allowed "#2235 control: a plain commit behind a redirection" '2>/dev/null git commit -m x'
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

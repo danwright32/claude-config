@@ -66,10 +66,12 @@ def is_name(word):
     return bool(word) and (word[0].isalpha() or word[0] == "_") and all(ch.isalnum() or ch == "_" for ch in word)
 
 
-def split(s):
+def split(s, limit=None):
+    """(the leading NAME=value assignments of s, the text after them); at most limit of them when
+    limit is given, so past_redirects can read one redirection's target as one value."""
     assigns = []
     s = s.lstrip()
-    while True:
+    while limit is None or len(assigns) < limit:
         eq = s.find("=")
         if eq <= 0 or not is_name(s[:eq]):
             break
@@ -818,9 +820,44 @@ def command_rest(text, passed=None):
             if not m2:
                 break
             s = s[m2.end():]
-    assigns, rest = split(s)
+    assigns, rest = past_head(s)
     rest, more = past_runners(rest, passed)
     return rest, "\n".join(assigns + more)
+
+
+# A redirection written in front of a command's name (claude-config#2235): its operator, with or
+# without a descriptor number in front, at the start of the text as written, so a quoted `'>'` is a
+# word and never one. Its target follows, glued to the operator or as the next word.
+LEADING_REDIRECT = re.compile(r"\d*(?:<<<|<<-?|<>|<&|>&|>>|>\||&>>?|<|>)")
+
+
+def past_redirects(s):
+    """s past the redirections written in front of its command's name (claude-config#2235).
+
+    The shell takes every redirection out of a command before it finds the name, so `2>/dev/null log
+    show` runs log. Read as the name, a target holding a slash was a script run by its path (`direct`)
+    that check-wrapped-commands.sh refused beside git, gh or rtk, and `>/tmp/out git push` was a
+    command named >/tmp/out, a push no gate saw. The target, glued or the next word, is read as one
+    word by split(), which reads a value holding quotes and substitutions to its end, so `2>"a b"` and
+    `>$(mktemp -d)/x` are each one target, read exactly as an assignment's value is."""
+    while True:
+        s = s.lstrip()
+        m = LEADING_REDIRECT.match(s)
+        if not m:
+            return s
+        _, s = split("_=" + s[m.end():].lstrip(), 1)
+
+
+def past_head(s):
+    """(the leading NAME=value assignments, the text after them) for s, past the redirections that
+    may stand before, between and after them (`2>/dev/null A=1 gh`, `A=1 2>/dev/null gh`), as the
+    shell reads both before the command's name (claude-config#2235)."""
+    assigns = []
+    while True:
+        more, s = split(past_redirects(s))
+        if not more:
+            return assigns, s
+        assigns.extend(more)
 
 
 # The words that only run the command after them, each with the short options that take a value and
@@ -943,7 +980,7 @@ def past_runners(rest, passed=None):
                 continue
         if passed is not None:
             passed.append((name, s))
-        more, s = split(s)
+        more, s = past_head(s)
         assigns.extend(more)
         rest = s
     return rest, assigns
@@ -1069,8 +1106,64 @@ def rejoin(words):
         return ""
     first = words[0].lstrip("({")
     words = ([first] if first else []) + list(words[1:])
-    return " ".join(w[:m.end()] + shlex.quote(w[m.end():]) if m else shlex.quote(w)
-                    for w, m in ((w, ASSIGNMENT.match(w)) for w in words))
+    pieces = [w[:m.end()] + shlex.quote(w[m.end():]) if m else shlex.quote(w)
+              for w, m in ((w, ASSIGNMENT.match(w)) for w in words)]
+    # A redirection in front of the command's name (claude-config#2235) is written as one, its
+    # operator bare, so command_rest passes over it: quoted, `2>/dev/null gh issue create` read as a
+    # command named 2>/dev/null and no gate built on these words saw the create. A word is written
+    # bare only while it is the word read as the command's name, so the words after the name, and a
+    # `>` that is a runner's option value (`sudo -p '>' gh`), read exactly as they always did.
+    starts, at = [], 0
+    for p in pieces:
+        starts.append(at)
+        at += len(p) + 1
+    for _ in words:
+        text = " ".join(pieces)
+        rest = command_rest(text)[0]
+        k = starts.index(len(text) - len(rest)) if rest and len(text) - len(rest) in starts else None
+        bare = _redirect_bare(words[k]) if k is not None else None
+        if bare is None or bare == pieces[k]:
+            return text
+        grew = len(bare) - len(pieces[k])
+        pieces[k] = bare
+        starts[k + 1:] = [s + grew for s in starts[k + 1:]]
+    return " ".join(pieces)
+
+
+def _redirect_bare(word):
+    """word written as the redirection it is, its operator bare and its target quoted (a word as
+    shlex.split leaves `2>/dev/null`, or the operator alone, as shell_tokens gives `2>`), or None when
+    it is no redirection (claude-config#2235)."""
+    m = LEADING_REDIRECT.match(word)
+    if not m:
+        return None
+    return word[:m.end()] + (shlex.quote(word[m.end():]) if m.end() < len(word) else "")
+
+
+def shell_tokens(text):
+    """text's words and operators as shlex's punctuation lexer cuts them, quotes removed, except that
+    a descriptor number written against its redirection stays one token with it: `2>/dev/null` is
+    `2>` and `/dev/null`, where `2 >/dev/null` is `2`, `>` and `/dev/null` (claude-config#2235).
+
+    The lexer cuts both into the same three tokens, so a reader of them could not tell `2>/dev/null gh
+    issue create`, a create, from `2 >/dev/null gh`, a command named 2. Whether the number ended at
+    the operator or at a space is what the lexer holds back after it: the operator it read and pushed
+    back, or nothing. A lexer keeping no such record reads every number before an operator as its
+    descriptor, the reading that sees the command after it. Raises ValueError as shlex does."""
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    out, glue = [], False
+    while True:
+        tok = lexer.get_token()
+        if tok is None:
+            return out
+        if glue and tok[:1] in ("<", ">"):
+            out[-1] += tok
+        else:
+            out.append(tok)
+        held = getattr(lexer, "_pushback_chars", None)
+        glue = tok.isdigit() and (held is None or any(c in "<>" for c in held))
 
 
 def wrapped_words(words):
@@ -1419,12 +1512,65 @@ def _env_split_string(words):
     return ("env -S", " ".join([value] + [shlex.quote(a) for a in after]), "")
 
 
-def _records(s, cwd, depth):
+# ---- the commands in a script file a command runs (claude-config#2301) ---------------------------
+# A script file's commands are in the file, so no gate could read them, and `bash ./wrapper.sh`
+# holding `git add -A` passed the add scope guard with no git word in the command at all. A caller
+# that asks for it (every_command's scripts list) has each script file a command runs read off disk,
+# its commands records of their own right after the script's record, in the directory the script runs
+# in, recursively up to MAX_DEPTH. The script's own record keeps its reason (WHY_FILE), so whatever a
+# gate refused for an unreadable script it still refuses: reading only ever adds commands. A file that
+# is not there, cannot be read, is larger than SCRIPT_MAX_BYTES, is named through a variable, or is
+# run by its path with a #! line naming no shell (a python script) is left unread, as before.
+SCRIPT_MAX_BYTES = 256 * 1024
+_WHY_FILE_HEAD, _, _WHY_FILE_TAIL = WHY_FILE.partition("%s")
+
+
+def script_file(why):
+    """The script file a WHY_FILE reason names, as written, or None for any other reason."""
+    if why.startswith(_WHY_FILE_HEAD) and why.endswith(_WHY_FILE_TAIL) \
+            and len(why) > len(_WHY_FILE_HEAD) + len(_WHY_FILE_TAIL):
+        return why[len(_WHY_FILE_HEAD):len(why) - len(_WHY_FILE_TAIL)]
+    return None
+
+
+def script_text(path, d, wrapper):
+    """(full path, text) of the script file path names, run by wrapper in directory d, or None when it
+    cannot be read: not there, unreadable, too large, a variable in its name, a relative name with no
+    absolute directory to resolve it against, or a file run by its path whose #! names no shell."""
+    if "$" in path or "`" in path:
+        return None
+    path = os.path.expanduser(path)
+    if not os.path.isabs(path):
+        if not os.path.isabs(d or ""):
+            return None
+        path = os.path.join(d, path)
+    path = os.path.normpath(path)
+    try:
+        if not os.path.isfile(path):
+            return None
+        with open(path, "rb") as f:
+            data = f.read(SCRIPT_MAX_BYTES + 1)
+    except OSError:
+        return None
+    if len(data) > SCRIPT_MAX_BYTES:
+        return None
+    text = data.decode("utf-8", "replace")
+    if wrapper == "direct" and text.startswith("#!"):
+        line = text.split("\n", 1)[0][2:].split()
+        names = [w.split("/")[-1] for w in line[:2]]
+        if not any(n in SHELLS for n in names):
+            return None
+    return path, text
+
+
+def _records(s, cwd, depth, scripts=None):
     """(records, crude) for a command line: each record (dir, text, wrap, rest, assigns, field, depth), a
     wrapper's commands right after it (claude-config#1478). wrap is "" for a command that is no
     wrapper, the wrapper's name (`bash -c`, `eval`, ...) for one whose string was read, and that name
     0x1d the reason for one whose string cannot be read; depth is how many wrappers it is inside; crude
-    says s itself could only be read by the crude cut."""
+    says s itself could only be read by the crude cut. scripts, a list, asks for the commands of each
+    script file a command runs as well, right after its record, and is given (path, text) for each
+    one read (claude-config#2301)."""
     try:
         cut, crude = commands(s, cwd), False
     except Unreadable:
@@ -1438,11 +1584,22 @@ def _records(s, cwd, depth):
             continue
         wrapper, string, why = found
         inner = []
+        if string is None and scripts is not None and depth < MAX_DEPTH and script_file(why):
+            found_script = script_text(script_file(why), d, wrapper)
+            if found_script is not None:
+                # Given in the order the records are, so the nth script whose commands follow its
+                # record is the nth entry; one holding no command is taken back out.
+                scripts.append(found_script)
+                at = len(scripts) - 1
+                # Its commands, never its reason: the script's record keeps WHY_FILE below.
+                inner, _ = _records(found_script[1], d, depth + 1, scripts)
+                if not inner:
+                    del scripts[at]
         if string is not None:
             if depth >= MAX_DEPTH:
                 why = why or WHY_DEEP
             else:
-                inner, inner_crude = _records(string, d, depth + 1)
+                inner, inner_crude = _records(string, d, depth + 1, scripts)
                 if inner_crude:
                     why = why or WHY_QUOTE
                 for _, t2, _, rest2, _, _, _ in inner:
@@ -1458,13 +1615,16 @@ def _records(s, cwd, depth):
     return out, crude
 
 
-def every_command(s, cwd=""):
+def every_command(s, cwd="", scripts=None):
     """Every command s runs, as (dir, text, wrapper, why, depth): the commands reading (commands(), or the
     crude cut when it cannot be trusted) with the commands each wrapper runs right after it (wrapped,
     claude-config#1478). wrapper is "" for a command that is none; why is "" unless the wrapper's
-    string cannot be read, and then says why; depth is how many wrappers the command is inside."""
+    string cannot be read, and then says why; depth is how many wrappers the command is inside.
+    scripts, a list, reads each script file a command runs too, its commands right after the script's
+    record one wrapper deeper, and is given (path, text) for each file read (claude-config#2301); a
+    relative script name is resolved only against an absolute cwd, so pass the session's directory."""
     out = []
-    for d, t, wrap, _, _, _, depth in _records(s, cwd, 0)[0]:
+    for d, t, wrap, _, _, _, depth in _records(s, cwd, 0, scripts)[0]:
         wrapper, _, why = wrap.partition("\x1d")
         out.append((d, t, wrapper, why, depth))
     return out

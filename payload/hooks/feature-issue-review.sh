@@ -101,6 +101,54 @@ findings_dir="${TMPDIR:-/tmp}"
 findings_dir="${findings_dir%/}"
 findings_path="${findings_dir}/${findings_prefix}${hash}.txt"
 stamp_file="${findings_path%.txt}.$(basename "$transcript" .jsonl).manifest"
+
+# The cooldown is read here, before the spool, because the area check's part below runs only once it
+# has passed, and it has to run before the spool is read so a note it makes shows in this same review.
+COOLDOWN_SECONDS=1800  # 30 minutes
+stamp="${TMPDIR:-/tmp}/claude-feature-issue-review-${hash}.stamp"
+now=$(date +%s)
+last=0
+[ -f "$stamp" ] && last=$(cat "$stamp" 2>/dev/null || echo 0)
+
+# THE AREA CHECK'S WEEKLY LINE AND ITS ESCALATIONS (claude-config#1511). Once the cooldown has passed,
+# lib/area-check-review.mjs reads this Mac's area check log: once a week it returns a line of counts
+# (never a path, since this review may be in any repository), and for this repository's own files
+# that sessions keep proceeding past it spools one note each, which `pending` below then shows. The
+# stamp sits beside the log, outside the temp folder macOS cleans, and is written only once the
+# reason carrying the line was delivered. A suite reads the real log never: under a test run, or with
+# the spool pointed elsewhere, nothing runs unless CLAUDE_AREA_CHECK_DIR names a throwaway folder.
+AREA_DIR="${CLAUDE_AREA_CHECK_DIR:-$HOME/.claude-area-check}"
+area_line=""
+area_said=""
+area_failed=""
+area_now=""
+if [ $(( now - last )) -ge "$COOLDOWN_SECONDS" ] \
+  && { [ -n "${CLAUDE_AREA_CHECK_DIR:-}" ] || { [ -z "${CLAUDE_SUITE_RUN_ID:-}" ] && [ -z "${CLAUDE_ISSUE_SPOOL_DIR:-}" ]; }; }; then
+  area_why=""
+  if ! command -v node >/dev/null 2>&1; then
+    area_why="node is not installed"
+  else
+    area_err="$(mktemp "${TMPDIR:-/tmp}/claude-area-review.XXXXXX" 2>/dev/null)" || area_err="/dev/null"
+    area_rc=0
+    area_out="$(node --experimental-strip-types --no-warnings "$SELF_DIR/lib/area-check-review.mjs" "$AREA_DIR" "$proj" "$transcript" "$SPOOL_LIB" 2>"$area_err")" || area_rc=$?
+    if [ "$area_rc" -ne 0 ]; then
+      area_why="its runner exited $area_rc: $(head -n 1 "$area_err" 2>/dev/null | cut -c1-160)"
+    elif ! area_now="$(printf '%s' "$area_out" | jq -er '.now | numbers' 2>/dev/null)"; then
+      area_why="its runner printed no answer that could be read"
+      area_now=""
+    else
+      area_line="$(printf '%s' "$area_out" | jq -r '.line // empty' 2>/dev/null)" || area_line=""
+      area_said="$(printf '%s' "$area_out" | jq -r '(.said // []) | join(" ")' 2>/dev/null)" || area_said=""
+    fi
+    [ "$area_err" = "/dev/null" ] || rm -f "$area_err"
+  fi
+  # A runner that cannot run is said once a week, like the line it replaces, never at every review.
+  if [ -n "$area_why" ] && { [ ! -f "$AREA_DIR/weekly-line.stamp" ] || [ -n "$(find "$AREA_DIR/weekly-line.stamp" -mmin +10080 2>/dev/null)" ]; }; then
+    area_failed="The area check's weekly line could not be built ($area_why), so this Mac's counts are not shown; it is tried again next week."
+    case "${CLAUDE_AREA_CHECK_NOW:-}" in ''|*[!0-9]*) area_now=$(( $(date +%s) * 1000 )) ;; *) area_now="$CLAUDE_AREA_CHECK_NOW" ;; esac
+  fi
+fi
+
 seen_ledger=""
 kept_said=""
 if [ -f "$SPOOL_LIB" ]; then
@@ -154,13 +202,7 @@ fi
 # report AND silence the next week of them (L98). The findings file is for the
 # findings; anything settled by being shown is shown.
 
-# Throttle: only re-prompt once per cooldown window, tracked per project.
-COOLDOWN_SECONDS=1800  # 30 minutes
-stamp="${TMPDIR:-/tmp}/claude-feature-issue-review-${hash}.stamp"
-
-now=$(date +%s)
-last=0
-[ -f "$stamp" ] && last=$(cat "$stamp" 2>/dev/null || echo 0)
+# Throttle: only re-prompt once per cooldown window, tracked per project (read above the spool).
 if [ "$urgent" != "yes" ] && [ $(( now - last )) -lt "$COOLDOWN_SECONDS" ]; then
   exit 0
 fi
@@ -290,6 +332,10 @@ if [ -n "$muted_line" ]; then reason_args+=(--extra "$muted_line"); fi
 # the held back count, and both go out: lib/review-reason.py collects --extra with action="append",
 # which test-review-reason.sh asserts with two of them.
 if [ -n "$kept_said" ]; then reason_args+=(--extra "$kept_said"); fi
+# The area check's weekly line, or why it could not be built, and anything it could not record (#1511).
+if [ -n "$area_line" ]; then reason_args+=(--extra "$area_line"); fi
+if [ -n "$area_failed" ]; then reason_args+=(--extra "$area_failed"); fi
+if [ -n "$area_said" ]; then reason_args+=(--extra "$area_said"); fi
 
 payload="$(python3 "$SELF_DIR/lib/review-reason.py" "${reason_args[@]}" 2>/dev/null)" || payload=""
 
@@ -317,6 +363,10 @@ if [ -n "$payload" ]; then
   if [ -n "$muted_line" ] && [ -f "$SPOOL_LIB" ]; then
     bash "$SPOOL_LIB" file-muted "$proj" "$transcript" >/dev/null 2>&1 || true
     printf '%s' "$(date +%s)" > "$muted_stamp" 2>/dev/null || true
+  fi
+  # The week restarts only once the line, or why it could not be built, actually went out (#1511).
+  if [ -n "$area_now" ] && { [ -n "$area_line" ] || [ -n "$area_failed" ]; }; then
+    mkdir -p "$AREA_DIR" 2>/dev/null && printf '%s' "$area_now" > "$AREA_DIR/weekly-line.stamp" 2>/dev/null || true
   fi
 else
   # The pointer could not be built. Losing its detail is a nuisance; losing the

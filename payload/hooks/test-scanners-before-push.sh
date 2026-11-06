@@ -486,7 +486,8 @@ o38="$(fire "$R38" "git push")"; c38=$?
 # a copy of the gate whose repo-files.sh refuses the listings of what is not committed, the count's
 # and, since #1910, the key's, and nothing else.
 FAKEHOOKS="$TMPROOT/fakehooks"; mkdir -p "$FAKEHOOKS/lib"
-cp "$H" "$FAKEHOOKS/scanners-before-push.sh"; cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$DIR/lib/work-names-messages.sh" "$DIR/lib/work-names.py" "$DIR/lib/dev-update-registry.js" "$FAKEHOOKS/lib/"
+cp "$H" "$FAKEHOOKS/scanners-before-push.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FAKEHOOKS/lib" push-scope.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js || check "the install of the fake hooks' helpers" "the install refused"
 cat > "$FAKEHOOKS/lib/repo-files.sh" <<EOF
 #!/usr/bin/env bash
 case "\$1" in --uncommitted|--changed) echo "repo-files: git could not list the files under \$2 that are not committed." >&2; exit 1 ;; esac
@@ -1487,17 +1488,17 @@ treefire "$R1910e" "git push" >/dev/null
 nokey_hooks(){   # $1 = folder  $2 = the one thing missing: listing (the listings of what is not committed fail), pidlock or recorded (that lock library is absent), or state (nothing; the state folder is made bad by the caller)
   mkdir -p "$1/lib"
   cp "$H" "$1/scanners-before-push.sh"
-  cp "$DIR/lib/push-scope.sh" "$DIR/lib/load-average.sh" "$DIR/lib/whole-number.sh" "$DIR/lib/work-names-messages.sh" "$DIR/lib/work-names.py" "$DIR/lib/dev-update-registry.js" "$1/lib/"
-  [ "$2" = pidlock ] || cp "$DIR/lib/pid-lock.sh" "$1/lib/"
-  [ "$2" = recorded ] || cp "$DIR/lib/recorded-pid.sh" "$1/lib/"
+  python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$1/lib" push-scope.sh load-average.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js pid-lock.sh recorded-pid.sh repo-files.sh || check "the install of the nokey hooks' helpers" "the install refused"
+  # The one library this case is missing, removed on purpose after the install.
+  [ "$2" = pidlock ] && rm -f "$1/lib/pid-lock.sh"
+  [ "$2" = recorded ] && rm -f "$1/lib/recorded-pid.sh"
+  # A listing that fails stands in for the real repo-files.sh; every other case keeps the installed one.
   if [ "$2" = listing ]; then
     cat > "$1/lib/repo-files.sh" <<EOF
 #!/usr/bin/env bash
 case "\$1" in --uncommitted|--changed) echo "repo-files: git could not list the files under \$2 that are not committed." >&2; exit 1 ;; esac
 exec bash "$DIR/lib/repo-files.sh" "\$@"
 EOF
-  else
-    cp "$DIR/lib/repo-files.sh" "$1/lib/"
   fi
 }
 # What the refusal says for each cause, and so must not say for any other.
@@ -1673,7 +1674,9 @@ out="$(wn_fire "$RC2" "git push" "$WN_BROKEN")"; rc=$?
   || check "#1995 messages the scanner could not judge stop the push, saying so" "exit=$rc out=$out"
 # A copy of the gate without the library that reads the messages is no push with clean messages.
 WN_NOLIB="$TMPROOT/wn-nolib-hooks"; mkdir -p "$WN_NOLIB/lib"
-cp "$H" "$WN_NOLIB/scanners-before-push.sh"; cp "$DIR/lib/push-scope.sh" "$DIR/lib/whole-number.sh" "$WN_NOLIB/lib/"
+cp "$H" "$WN_NOLIB/scanners-before-push.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WN_NOLIB/lib" push-scope.sh whole-number.sh >/dev/null \
+  || check "#2204 push-scope.sh and whole-number.sh could be installed with what they source" "the install refused"
 out="$(H="$WN_NOLIB/scanners-before-push.sh" wn_fire "$RC2" "git push")"; rc=$?
 [ "$rc" -eq 2 ] && grep -q -F "wn-nolib-hooks/lib/work-names-messages.sh, which reads the messages" <<< "$out" \
   && check "#1995 a gate that cannot load the message reader refuses the push, naming the file" ok \

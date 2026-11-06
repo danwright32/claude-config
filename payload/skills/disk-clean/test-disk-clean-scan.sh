@@ -140,16 +140,29 @@ check "the probe never ran ls on anything outside HOME" "$(eq "$(dc_refusals)" "
 # ================================================================================================
 fresh
 mkdir -p "$H/Library/Caches/com.slow"
-dc_stub du 'exec sleep 31.7'
-start="$(date +%s)"
+# The stuck command records its own pid and its sleep's, and marks the end it would reach if nothing
+# killed it. So "did not wait" is that end not reached when the scan returns, and "killed" is both
+# pids gone: never a number of seconds, which a loaded Mac can pass, and never a match on the
+# command's text, which another run of this suite at the same moment also matches (L290, L1011,
+# claude-config#2260). The sleep is in the stub's own process group, as the real du's work would be.
+STUCK_PID="$DC_ROOT/stuck.pid"; STUCK_END="$DC_ROOT/stuck.end"
+rm -f "$STUCK_PID" "$STUCK_END"
+dc_stub du "sleep 31.7 & s=\$!; echo \"\$\$ \$s\" > '$STUCK_PID'; wait \"\$s\" && : > '$STUCK_END'"
 run_scan_env DISK_CLEAN_CATEGORY_SECONDS=1 bash "$SCAN" --only caches,trash
-took=$(( $(date +%s) - start ))
+ended_alone="$([ -e "$STUCK_END" ] && echo yes || echo no)"
+stuck="$(cat "$STUCK_PID" 2>/dev/null)"
+left=""
+for p in $stuck; do
+  st="$(ps -o stat= -p "$p" 2>/dev/null | tr -d ' ')"
+  [ -n "$st" ] && [ "${st#Z}" = "$st" ] && left="$left pid $p ($st)"
+done
 check "a category that overruns is reported as timed out" "$(eq "$(dcr_header "$REC" status.caches)" "unmeasured: timed out after 1s")"
 check "the scan still finishes and writes its record" "$(eq "$RC $(dcr_complete "$REC" && echo whole)" "0 whole")"
 check "the other categories still ran" "$(eq "$(dcr_header "$REC" status.trash)" measured)"
-check "it did not wait for the stuck command" "$([ "$took" -lt 25 ] && echo ok || echo "took ${took}s")"
+check "the stuck command did start, so the two checks below are about it" "$(eq "$(wc -w <<< "$stuck" | tr -d ' ')" 2)"
+check "it did not wait for the stuck command" "$([ "$ended_alone" = no ] && echo ok || echo "the stuck command ran to its own end before the scan returned")"
 check "the stuck command's whole process group was killed (nothing left sleeping)" \
-  "$(/usr/bin/pgrep -f 'sleep 31.7' >/dev/null && echo "sleep 31.7 is still running" || echo ok)"
+  "$([ -z "$left" ] && echo ok || echo "still running:$left")"
 run_scan_env DISK_CLEAN_CATEGORY_SECONDS=soon bash "$SCAN" --only trash
 check "a time bound that is not a number is refused" "$(eq "$RC" 2)"
 
@@ -392,18 +405,26 @@ check "no disk-clean script but the units library words an unread count" "$([ -z
 check "the review checker words its totals through dcu_tally_words" "$(grep -q 'dcu_tally_words(' "$DIR/review-check.sh" && echo ok || echo "it does not")"
 
 # ================================================================================================
-# 7. Thousands of items (L101): every one recorded, sized in one batch, in bounded time
+# 7. Thousands of items (L101): every one recorded and sized in one batch, however long it takes
 # ================================================================================================
 fresh
 BIG=3000
 mkdir -p "$H/Library/Caches"
 i=1; while [ "$i" -le "$BIG" ]; do mkdir "$H/Library/Caches/c$i"; i=$((i + 1)); done
 mkdir -p "$H/.Trash"; i=1; while [ "$i" -le 1000 ]; do : > "$H/.Trash/t$i"; i=$((i + 1)); done
+# This section asks whether every item is recorded, never how fast: the per category time bound is
+# section 3's subject. Through this harness the caches category costs about a tenth of a second an
+# item, so this scan took 325 s at a load of 24 on 12 cores, and in a full run on 2026-11-04 (load 23 to
+# 83) the caches category ran past the scan's default 600 s bound and recorded 2177 of its 3000
+# (claude-config#2260). So the bound here is the suite's own wall clock, which only a hang outlasts,
+# the way lib/hang-wait.sh bounds a wait.
 start="$(date +%s)"
-run_scan --only caches,trash
+run_scan_env DISK_CLEAN_CATEGORY_SECONDS="$SUITE_WALL_DEFAULT" bash "$SCAN" --only caches,trash
 took=$(( $(date +%s) - start ))
 echo "  ($BIG caches and 1000 Trash entries took ${took}s)"
 check "a scan of $BIG caches and 1000 Trash entries exits 0" "$(eq "$RC" 0)"
+check "the caches category ran to its end, not cut off by its time bound" "$(eq "$(dcr_header "$REC" status.caches)" measured)"
+check "and so did the Trash" "$(eq "$(dcr_header "$REC" status.trash)" measured)"
 check "every cache is in the record" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$2 == "caches"' | wc -l | tr -d ' ')" "$BIG")"
 check "every Trash entry is in the record" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$2 == "trash"' | wc -l | tr -d ' ')" 1000)"
 check "none is unreadable" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$5 == "unreadable"' | wc -l | tr -d ' ')" 0)"

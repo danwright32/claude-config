@@ -30,12 +30,14 @@ import {
   askInstruction,
   callShown,
   cannotCheck,
+  rerunInGrace,
   dialogOptions,
   display,
   editedFile,
   indexLineAdded,
   linksOnlyTo,
   memoryFileOf,
+  notAnAppendNote,
   shellAppended,
   lapseWait,
   lastingFiles,
@@ -460,8 +462,11 @@ const takeLesson = async ($: EngineInterface, added: string) => {
 // spells out (rules.ts shellAppended, by mod-kit's one reader of what it runs and writes) appended to
 // it. Undefined for anything else, which is asked about. An index that exists and cannot be read fails
 // the hook, and the hook fails closed; one that is no ordinary file (a fifo, a link to a device) is
-// never opened (#1814), and what a call adds to it cannot be told, so it is asked about.
-const indexLineOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, index: string): Promise<string | undefined> => {
+// never opened (#1814), and what a call adds to it cannot be told, so it is asked about. A shell
+// command to a readable index that shellAppended does not read as a plain append is told apart
+// (#2181), so its refusal can say that, rather than read as though Dan had approved nothing.
+const NOT_AN_APPEND = Symbol('not an append')
+const indexLineOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, index: string): Promise<string | typeof NOT_AN_APPEND | undefined> => {
   const now = await textNow($, index)
   if ('unreadable' in now) return undefined
   const old = 'text' in now ? now.text : undefined
@@ -471,8 +476,8 @@ const indexLineOf = async ($: EngineInterface, tool: string, input: Record<strin
     return edited === undefined ? undefined : indexLineAdded(old, edited)
   }
   const command = String(input.command ?? '')
-  const appended = shellAppended(command, await $.modkit.pipeline({ command }), await $.modkit.writes({ command, cwd: at.cwd, home: at.home }), index)
-  return appended === undefined ? undefined : indexLineAdded(old, (old ?? '') + appended)
+  const appended = shellAppended(command, await $.modkit.pipeline({ command }), await $.modkit.writes({ command, cwd: at.cwd, home: at.home }), index, at.home)
+  return appended === undefined ? NOT_AN_APPEND : indexLineAdded(old, (old ?? '') + appended)
 }
 
 // A For good on one memory file, once its save lands, also covers the one line in its folder's index
@@ -491,14 +496,16 @@ const coverFor = async ($: EngineInterface, used: AskBeforeSavingApproval): Prom
 // The cover a saved memory file's For good gives this call (#1794), taken as the call passes: a write
 // whose one target is the index of a cover that still stands, adding only the one line linking that
 // cover's file. Covers past their time are dropped in silence, here and wherever the list is written:
-// Dan never answered about the index, so there is nothing of his to say lapsed.
-const takeCover = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, { files, guessed, handed }: Targets): Promise<AskBeforeSavingIndexCover | undefined> => {
+// Dan never answered about the index, so there is nothing of his to say lapsed. A shell command not
+// read as a plain append takes nothing, and answers the covers that stand for that index (#2181).
+const takeCover = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, { files, guessed, handed }: Targets): Promise<AskBeforeSavingIndexCover | { unread: AskBeforeSavingIndexCover[] } | undefined> => {
   if (files.length !== 1 || guessed.length || handed.length) return undefined
   const now = await $.clock.now()
   const standing = ((await $.state.get(coversRef)).value ?? []).filter(c => stands(c.until, now) && display(c.index, at.home) === files[0])
   const index = standing[0]?.index
   if (index === undefined) return undefined
   const line = await indexLineOf($, tool, input, at, index)
+  if (line === NOT_AN_APPEND) return { unread: standing.filter(c => c.index === index) }
   if (line === undefined) return undefined
   let hit = undefined as AskBeforeSavingIndexCover | undefined
   await update($, coversRef, a => {
@@ -721,7 +728,8 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
     return next(e)
   }
   // The one index line a saved memory file's For good covers (#1794): on beneath the same way.
-  const cover = await takeCover($, tool, input, at, targets)
+  const byCover = await takeCover($, tool, input, at, targets)
+  const cover = byCover && !('unread' in byCover) ? byCover : undefined
   if (cover) {
     coverTaken.set(String(raw.tool_use_id ?? ''), cover)
     return next(e)
@@ -740,7 +748,10 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }
   // One waiting question per save: the same save refused again replaces the one before.
   await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
-  const ask = askInstruction(id, files, targets.guessed, targets.handed)
+  const asked = askInstruction(id, files, targets.guessed, targets.handed)
+  // A shell command to an index a cover stands for, not read as a plain append (#2181): said first.
+  const unread = byCover && 'unread' in byCover ? byCover.unread : []
+  const ask = unread.length ? `${notAnAppendNote(unread.map(c => ({ name: c.name, files: c.files })), files[0] ?? '')} ${asked}` : asked
   const late = lapsed ?? lesson.lapsed
   return { decision: 'deny', reason: late ? `${lapsedNote(late)} ${ask}` : ask }
 }
@@ -799,6 +810,9 @@ export const register: Register = on => {
   // build holds it with the fixed words built here, so the catch never throws (neverThrows, #2039).
   const heldCall = { deny: cannotCheck(undefined) }
   const heldCheck = { decision: 'deny' as const, reason: cannotCheck(undefined) }
+  // A catch's rerun starts only while half its 1,000 ms grace is left (rerunInGrace, built on
+  // withinGrace, #2039): one cut at the grace lets the call run unjudged, so with less left the call
+  // is held, in the engine's own words for a hook out of time.
 
   // A hook that failed after passing the call on had it judged beneath, by the tool.check hook and
   // every guard there, and maybe run: its result is replayed, never refused as a save it may already
@@ -806,11 +820,11 @@ export const register: Register = on => {
   // replay runs OUTSIDE neverThrows: the call already ran beneath, so a refusal saying it did not run
   // would be untrue and could make Claude run it twice, and the tool's own failure reaches Claude
   // instead. Every catch before next stays inside neverThrows (#2039).
-  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => next.called ? next(e) : neverThrows(() => saveCall($, e, next), () => ({ deny: cannotCheck(next.error) }), heldCall))
+  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => next.called ? next(e) : neverThrows(() => rerunInGrace(next.budget, () => saveCall($, e, next), reason => ({ deny: reason })),() => ({ deny: cannotCheck(next.error) }), heldCall))
 
   // At tool.check `next` only reads the verdict beneath and runs nothing, so a failed check is judged
   // once more whether or not it had read it (#2026).
-  on('tool.check', saveCheck).catch(($, e, next) => neverThrows(() => saveCheck($, e, next), () => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), heldCheck))
+  on('tool.check', saveCheck).catch(($, e, next) => neverThrows(() => rerunInGrace(next.budget, () => saveCheck($, e, next), reason => ({ decision: 'deny' as const, reason })),() => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), heldCheck))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
   // given the mod's own answers, and Dan's answer is read from the dialog's result.

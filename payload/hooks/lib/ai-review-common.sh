@@ -44,6 +44,41 @@ ar_repo_key() {   # $1 = a directory inside the repository -> decimal checksum, 
   printf '%s' "$url" | cksum | cut -d ' ' -f1
 }
 
+# The repository a review belongs to, for the repository= line of its record (claude-config#2236).
+# The record's repo= is the checkout's folder name, which for an agent worktree names a folder that
+# is deleted with the worktree: on the personal MacBook 7 of the 9 quote misses from 2026-10-25 to
+# 11-04 named one, and tracing them to their commits meant searching every checkout. This names the
+# repository itself, which every worktree of it shares: the origin's owner/name when origin is a
+# hosted URL, else the folder of the main checkout the git common dir belongs to. Only owner/name
+# is ever kept, never the URL, which can carry a credential. repo= stays as it was, for the readers
+# that show or compare it. The origin is read from config as written, before any insteadOf rewrite.
+ar_repository() {   # $1 = a directory inside the repository -> owner/name or a folder name, or return 1
+  local url path owner name common
+  url="$(git -C "$1" config --get remote.origin.url 2>/dev/null)"
+  path=""
+  case "$url" in
+    file://*) ;;
+    *://*) path="${url#*://}"; case "$path" in */*) path="${path#*/}" ;; *) path="" ;; esac ;;
+    /*|.*) ;;
+    # scp like: git reads it so only when no slash comes before the first colon.
+    *:*) case "${url%%:*}" in */*) ;; *) path="${url#*:}" ;; esac ;;
+  esac
+  path="${path%%[?#]*}"; path="${path%/}"; path="${path%.git}"; path="${path%/}"
+  case "$path" in
+    */*)
+      owner="${path%/*}"; owner="${owner##*/}"; name="${path##*/}"
+      if [[ "$owner" =~ ^[A-Za-z0-9._-]+$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        printf '%s/%s' "$owner" "$name"; return 0
+      fi ;;
+  esac
+  common="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  common="${common%/}"
+  case "$common" in */.git) common="${common%/.git}" ;; *) common="${common%.git}" ;; esac
+  name="${common##*/}"
+  [ -n "$name" ] || return 1
+  printf '%s' "$name" | tr -d '\n\r'
+}
+
 # The fields of a hook payload these hooks read, in one line separated by the unit separator:
 #   cwd, session_id, tool_response.exit_code, tool_response.interrupted
 # A field that is not there is empty. tool_response is an object for the Bash tool and may be a
@@ -515,8 +550,99 @@ $names
 NAMES
 }
 
+# EMBEDDED BASE64 IS LEFT OUT of what a review reads (claude-config#2307). The branch behind #2088
+# was 6.2 MB of diff, almost all of it image data in saved design captures, and was refused whole
+# over content no reviewer can read. Reads stdin, writes stdout. With no argument stdin is a git diff:
+# only content lines are touched (hunk counts decide what is content, so a removed line starting
+# "--- a/" is content), their one character prefix is kept out of the run, and a line is named by
+# its line in the head, or "of the base" for a removed one. With a path, stdin is that file's full
+# text. Each run of base64 characters is replaced by "[base64 left out of this review: <size>,
+# <path> line <n>]" when it is AR_EMBEDDED_MIN (1,000) or more long, or AR_EMBEDDED_DATA_MIN (100)
+# or more right after "data:<type>;base64,", whose prefix stays visible. Measured over every first
+# parent commit of four repositories (6,040): no run that was not a data URI's payload reached 109
+# characters, and the data URI payloads under 100 were test fixtures whose few bytes are the test.
+# With AR_EMBEDDED_LOG set, each replacement appends "<bytes><TAB><path><TAB>line <n>[ of the
+# base]" to it, for ar_embedded_note. Linear in the line: runs are bracketed by one gsub and split,
+# never cut out one substr at a time, so a 6 MB line costs one pass; a line shorter than the
+# smaller minimum is printed untouched, and a line already holding the bracket bytes is too.
+AR_EMBEDDED_MIN="${AR_EMBEDDED_MIN:-1000}"
+AR_EMBEDDED_DATA_MIN="${AR_EMBEDDED_DATA_MIN:-100}"
+ar_elide_embedded() {   # [$1 = the path whose full text stdin is]
+  LC_ALL=C awk -v plain="${1:-}" -v min="$AR_EMBEDDED_MIN" -v dmin="$AR_EMBEDDED_DATA_MIN" -v logf="${AR_EMBEDDED_LOG:-}" "$AR_AWK_SIZE"'
+    BEGIN { least = (dmin < min) ? dmin : min }
+    function datauri(recent) { return recent ~ /data:[^;,"'"'"' ]*(;[^;,"'"'"' ]*)*;base64,$/ }
+    function elide(s, path, where,   n, parts, i, recent, hit, len, note) {
+      if (length(s) < least || index(s, "\001") || index(s, "\002")) return s
+      gsub(/[A-Za-z0-9+\/]+=*/, "\001&\002", s)
+      n = split(s, parts, /[\001\002]/)
+      recent = ""; hit = 0
+      for (i = 1; i <= n; i++) {
+        keep[i] = 1
+        if (i % 2 == 0) {
+          len = length(parts[i])
+          if (len >= min || (len >= dmin && datauri(recent))) { keep[i] = 0; hit = 1 }
+        }
+        recent = recent parts[i]
+        if (length(recent) > 120) recent = substr(recent, length(recent) - 119)
+      }
+      if (!hit) { gsub(/[\001\002]/, "", s); return s }
+      s = ""
+      for (i = 1; i <= n; i++) {
+        if (keep[i]) { printf "%s", parts[i]; continue }
+        len = length(parts[i])
+        printf "[base64 left out of this review: %s, %s %s]", size(len), path, where
+        if (logf != "") printf "%d\t%s\t%s\n", len, path, where >> logf
+      }
+      return "\001"
+    }
+    function emit(prefix, s, path, where,   r) {
+      if (length(s) < least) { print prefix s; return }
+      printf "%s", prefix
+      r = elide(s, path, where)
+      if (r == "\001") printf "\n"; else print r
+    }
+    plain != "" { emit("", $0, plain, "line " NR); next }
+    (ob > 0 || nb > 0) && /^[ +-]/ {
+      c = substr($0, 1, 1)
+      if (c == " ") { o++; n++; ob--; nb--; w = "line " n }
+      else if (c == "-") { o++; ob--; w = "line " o " of the base" }
+      else { n++; nb--; w = "line " n }
+      emit(c, substr($0, 2), path, w); next
+    }
+    /^diff --git / { path = ""; ob = nb = 0 }
+    /^--- a\// { path = substr($0, 7) }
+    /^\+\+\+ b\// { path = substr($0, 7) }
+    /^@@ -[0-9]/ {
+      split(substr($2, 2), a, ","); o = a[1] - 1; ob = (2 in a) ? a[2] + 0 : 1
+      split(substr($3, 2), a, ","); n = a[1] - 1; nb = (2 in a) ? a[2] + 0 : 1
+    }
+    { print }
+    END { if (logf != "") close(logf) }'
+}
+
+# The one sentence naming the embedded base64 a review did not read, from the rows ar_elide_embedded
+# logged, deduplicated into <review>.embedded by lib/pr-review.sh. Largest first, under the same ten
+# names and 1,500 characters as ar_left_out_note, for the same reason. Prints nothing when none.
+ar_embedded_note() {   # $1 = the .embedded file, $2 = the review's status
+  [ -s "$1" ] || return 0
+  local rows
+  rows="$(LC_ALL=C sort -t "$(printf '\t')" -k1,1nr "$1" 2>/dev/null)"
+  LC_ALL=C awk -F '\t' -v file="$1" -v max=10 -v chars=1500 -v status="${2:-}" "$AR_AWK_SIZE"'
+    NF >= 3 && $2 != "" {
+      n++; total += $1
+      item = $2 " " $3 " (" size($1) ")"
+      if (shown < max && length(list) + length(item) <= chars) { list = list (list == "" ? "" : "; ") item; shown++ }
+    }
+    END {
+      if (!n) exit
+      more = (n > shown) ? sprintf("%s%d %s, all listed in %s", shown ? "; and " : "", n - shown, shown ? "more" : "run(s)", file) : ""
+      printf "%s %d run(s) of embedded base64, %s in all, which no reviewer can read as text, the code around each still read: %s%s.\n", (status == "too-large" ? "Would have been left out of the review:" : "Not read by this review:"), n, size(total), list, more
+    }' <<< "$rows"
+}
+
 # The review diff: every file at -U20, except the generated ones, which follow under a header saying
-# so, at -U0, every changed line and none of the context (claude-config#591). Printed to stdout.
+# so, at -U0, every changed line and none of the context (claude-config#591). Printed to stdout, with
+# embedded base64 left out (ar_elide_embedded, #2307), so every size measured from it is too.
 ar_review_diff() {   # $1 = generated paths (newline list, from ar_generated_paths), $2 = base, $3 = head, $4.. = pathspecs
   local gen="$1" base="$2" head="$3" p short rc=0
   local -a excl=() incl=()
@@ -527,12 +653,16 @@ ar_review_diff() {   # $1 = generated paths (newline list, from ar_generated_pat
   done <<GEN
 $gen
 GEN
-  git diff --no-color -U20 "$base" "$head" -- "$@" ${excl[@]+"${excl[@]}"} || rc=$?
+  # A failure of git or of the filter is the diff's failure: a part read is never passed as whole.
+  local -a st
+  git diff --no-color -U20 "$base" "$head" -- "$@" ${excl[@]+"${excl[@]}"} | ar_elide_embedded; st=("${PIPESTATUS[@]}")
+  [ "${st[0]}" -eq 0 ] || rc="${st[0]}"; [ "${st[1]}" -eq 0 ] || rc="${st[1]}"
   [ "${#incl[@]}" -gt 0 ] || return "$rc"
   short="$(git rev-parse --short "$head" 2>/dev/null || printf '%s' "$head")"
   printf '\n===== GENERATED FILES (marked so by .gitattributes at %s): only the changed lines, no context, and their full text is left out: %s =====\n' \
     "$short" "$(printf '%s\n' "$gen" | sed '/^$/d' | paste -sd ' ' -)"
-  git diff --no-color -U0 "$base" "$head" -- "${incl[@]}" || rc=$?
+  git diff --no-color -U0 "$base" "$head" -- "${incl[@]}" | ar_elide_embedded; st=("${PIPESTATUS[@]}")
+  [ "${st[0]}" -eq 0 ] || rc="${st[0]}"; [ "${st[1]}" -eq 0 ] || rc="${st[1]}"
   return "$rc"
 }
 
@@ -544,7 +674,7 @@ GEN
 # large generated file and five small real ones should still show the five, and a file that does
 # not fit is named rather than silently absent (L98).
 ar_append_full_files() {   # $1 = input file, $2 = base, $3 = head, $4 = byte budget, $5.. = pathspecs
-  local out="$1" base="$2" head="$3" budget="$4" line fsize f in=0 left=0 names="" short gen
+  local out="$1" base="$2" head="$3" budget="$4" line fsize f in=0 left=0 names="" short gen st=()
   shift 4
   short="$(git rev-parse --short "$head" 2>/dev/null || printf '%s' "$head")"
   # A generated file's full text is the bulk ar_review_diff exists to leave out (claude-config#591),
@@ -563,8 +693,15 @@ $gen
 " in *"
 $f
 "*) continue ;; esac
+    # Measured and appended with embedded base64 left out (#2307), so a page whose bulk is image
+    # data is read for its code. Only text over the budget is filtered to measure it: the filtered
+    # text is never longer, so one already under the budget fits as it is.
+    if [ "$fsize" -gt "$budget" ]; then
+      fsize="$(git show "$head:$f" 2>/dev/null | AR_EMBEDDED_LOG= ar_elide_embedded "$f" | wc -c | tr -d '[:space:]')"
+    fi
     if [ "$fsize" -le "$budget" ] \
-       && { printf '\n\n===== FULL FILE at %s: %s =====\n' "$short" "$f"; git show "$head:$f"; } >> "$out" 2>/dev/null; then
+       && { printf '\n\n===== FULL FILE at %s: %s =====\n' "$short" "$f"; git show "$head:$f" | ar_elide_embedded "$f"
+            st=("${PIPESTATUS[@]}"); [ "${st[0]}" -eq 0 ] && [ "${st[1]}" -eq 0 ]; } >> "$out" 2>/dev/null; then
       budget=$((budget - fsize)); in=$((in + 1))
     else
       left=$((left + 1)); names="$names $f"

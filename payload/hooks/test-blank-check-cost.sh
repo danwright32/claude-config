@@ -241,13 +241,12 @@ if [ -z "${BLANK_CHECK_NESTED:-}" ] && command -v git >/dev/null 2>&1; then
   mkdir -p "$WT_MAIN/payload/hooks/lib"
   cp "${BASH_SOURCE[0]}" "$WT_MAIN/payload/hooks/test-blank-check-cost.sh"
   cp "$CHECK" "$WT_MAIN/payload/hooks/check-home-paths.sh"
-  cp "$SPOOL" "$WT_MAIN/payload/hooks/lib/issue-spool.sh"
   # The copy of this suite arms its own deadline like every suite does (claude-config#465), and it
-  # refuses to run without the helper, so the fixture carries the helper as well as the file.
-  cp "$DIR/lib/suite-deadline.sh" "$WT_MAIN/payload/hooks/lib/suite-deadline.sh"
-  cp "$DIR/lib/kill-tree.sh" "$WT_MAIN/payload/hooks/lib/kill-tree.sh"
-  cp "$DIR/lib/repo-files.sh" "$WT_MAIN/payload/hooks/lib/repo-files.sh"
-  cp "$DIR/lib/checkout-root.sh" "$WT_MAIN/payload/hooks/lib/checkout-root.sh"
+  # refuses to run without the helper, so the fixture carries the helper as well as the file, with
+  # whatever each one sources (#2204).
+  python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WT_MAIN/payload/hooks/lib" \
+    issue-spool.sh suite-deadline.sh kill-tree.sh repo-files.sh checkout-root.sh \
+    || check "#2204 the fixture's hook helpers could be installed" "the install refused"
   # Assembled, for the reason the planted file above is: written whole it is an occurrence here.
   printf '%s\n' '#!/usr/bin/env bash' 'y=""' "[ -z \"\${y${SS}[[:space:]]/}\" ] && echo blank" > "$WT_MAIN/claude-sync"
   git init -q "$WT_MAIN" 2>/dev/null
