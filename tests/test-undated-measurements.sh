@@ -248,15 +248,17 @@ rm -f "$_SCPOS"
 #
 #   a paragraph      a run of non-blank lines, ended by a blank one
 #   a table row      its own block, because a table is not a paragraph and a date in one row says
-#                    nothing about the row under it
-#   an HTML row      bounded the same way (#2244): a line opening with <tr starts a new block and a
-#                    line ending with </tr> ends one, whether the first cell shares the <tr><td>
-#                    line or starts on a line below it. Inside a row the paragraph rule still holds,
-#                    so a blank line between cells still parts them. Without this, rows written with
-#                    no blank line between them read as one paragraph, and a date in one row excused
-#                    every row beside it. Only a tag at the start or end of a line counts, so prose
-#                    that names <tr><td> mid sentence, as the comment above the README's mods table
-#                    does, is not split by it
+#                    nothing about the row under it. A row of an HTML table (the shape the README's
+#                    wide tables have, claude-config#2131) is the lines from <tr><td> to </td></tr>,
+#                    cells included, so a number and the date in the cell beside it read together
+#                    as they did when the row was one line
+#   an HTML row      written any other way is bounded too (#2244): a line opening with <tr starts a
+#                    new block and a line ending with </tr> ends one, so rows written with no blank
+#                    line between them no longer read as one paragraph, where a date in one row
+#                    excused every row beside it. Inside such a row the paragraph rule still holds,
+#                    so a blank line between cells still parts them. Only a tag at the start or end
+#                    of a line counts, so prose that names <tr><td> mid sentence, as the comment
+#                    above the README's mods table does, is not split by it
 #   a list item      its own block, continuing over the lines that wrap it
 #   a fenced block   skipped entirely, for the same reason a code span is: it is code, not a claim
 #
@@ -276,6 +278,9 @@ function flush() {
 }
 /^[[:space:]]*```/ { flush(); fence = !fence; next }
 fence { next }
+/^<tr><td>$/ { flush(); inrow = 1; start = FNR; buf = ""; next }
+inrow && /^<\/td><\/tr>$/ { inrow = 0; flush(); next }
+inrow { if ($0 !~ /^[[:space:]]*$/ && $0 != "</td><td>") buf = (buf == "" ? $0 : buf " " $0); next }
 /^[[:space:]]*$/ { flush(); next }
 /^[[:space:]]*<[Tt][Rr][[:space:]>]/ { flush() }
 /<\/[Tt][Rr]>[[:space:]]*$/ { if (buf == "") { start = FNR; buf = $0 } else { buf = buf " " $0 }; flush(); next }
@@ -325,10 +330,13 @@ _SCMDFIX="$WORK/stale-counts-md-fixture.md"
   printf '```\n'
   printf 'inside a fence: the run took 200 seconds with no date anywhere\n'
   printf '```\n\n'
+  # an HTML table row (#2131): the date sits in another cell of the same row, and the next row has none
+  printf '<tr><td>\n\nname\n\n</td><td>\n\n30 seconds\n\n</td><td>\n\ndated cell (2026-01-02)\n\n</td></tr>\n'
+  printf '<tr><td>\n\nname\n\n</td><td>\n\n30 seconds\n\n</td><td>\n\nundated cell\n\n</td></tr>\n'
   # An HTML table with no blank line between its rows (#2244), in both layouts: rows whose first
-  # cell shares the line with <tr><td> (24, 25, 31), and one whose <tr><td> stands alone (26 to 30).
-  # The row on line 25 carries no date and the one above it does; the first cell on line 31 carries
-  # none and the row closing on line 30 does.
+  # cell shares the line with <tr><td> (50, 51, 57), and one whose <tr><td> stands alone (52 to 56).
+  # The row on line 51 carries no date and the one above it does; the first cell on line 57 carries
+  # none and the row closing on line 56 does.
   printf '<table>\n'
   printf '<tr><th>setting</th><th>what it does</th></tr>\n'
   printf '<tr><td>dated: on 2026-01-02 a full run took 30 seconds</td><td>x</td></tr>\n'
@@ -341,18 +349,18 @@ _SCMDFIX="$WORK/stale-counts-md-fixture.md"
 } > "$_SCMDFIX"
 _sc_md_fix="$(_sc_md_scan "$_SCMDFIX")"
 dbg "#148 markdown fixture scan: $(printf '%s' "$_sc_md_fix" | tr '\n' '|')"
-for _sc_md_hit in 5 11 14 25 31; do
+for _sc_md_hit in 5 11 14 35 51 57; do
   check "#148 the markdown scan catches the undated block on line $_sc_md_hit" \
     "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c ':$_sc_md_hit:' | tr -d ' ')\" = 1 ]"
 done
-for _sc_md_quiet in 3 10 13 16 19 24 26; do
+for _sc_md_quiet in 3 10 13 16 19 22 50 52; do
   check "#148 and leaves the block on line $_sc_md_quiet alone" \
     "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c ':$_sc_md_quiet:' | tr -d ' ')\" = 0 ]"
 done
 # A table row dated in ONE row must not excuse the row beneath it, which is the whole reason a row
-# is its own block. Asserted by the pair above and by the count here: five and no more.
-check "#148 and reports those five and nothing else" \
-  "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c . | tr -d ' ')\" = 5 ]"
+# is its own block. Asserted by the pair above and by the count here: six and no more.
+check "#148 and reports those six and nothing else" \
+  "[ \"\$(printf '%s' \"\$_sc_md_fix\" | grep -c . | tr -d ' ')\" = 6 ]"
 
 # And on a real document, so the zero above is a measurement rather than a scan reading nothing
 # (L182, L171). README.md is the one every other check in this file already depends on being read.

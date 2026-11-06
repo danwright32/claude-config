@@ -11,6 +11,7 @@ import {
   isProse,
   literalsOf,
   mentionsStore,
+  question,
   refersTo,
   refusal,
   renderedProblem,
@@ -22,6 +23,7 @@ import {
   wordingKey,
   wordingOf,
 } from '../hooks/rules.ts'
+import { readsAsSend } from './send-wording.ts'
 
 // The Slack alert guard's pure rules (claude-config#2242). Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -196,4 +198,25 @@ test('the sender search keeps every file a Slack marker can match: each marker n
   // match text holding neither word would never see its file read.
   for (const m of MARKERS) expect(/slack|postmessage/i.test(m.source)).toBe(true)
   expect(SENDER_PREFILTER).toBe('slack|postmessage')
+})
+
+// claude-config#2284. Dan, 2026-11-05, rejecting "Post this Slack message from ...?" twice: "You
+// should never be posting a Slack message for me".
+test('the send detector is seen to fire on wording that asks to post or send, and not on wording that says nothing is sent', () => {
+  for (const s of ['Post this Slack message from /w/a/alert.ts?', 'post it', 'Send this alert?', 'This will be posted to #alerts', 'Approve and send', 'Sent to Slack'])
+    expect(readsAsSend(s)).toBe(true)
+  for (const s of ['Approve the wording of this alert? Approving sends nothing.', 'Hold the edit, and say what it should say instead.']) expect(readsAsSend(s)).toBe(false)
+})
+
+test('the question approves the wording of an automated alert in the named file, says approving sends nothing, and never asks to post', () => {
+  const q = question('/w/a/alert.ts', 'Deploy 4182 failed on production')
+  const [lead] = q.split('\n\n')
+  expect(readsAsSend(lead ?? '')).toBe(false)
+  expect(/^\s*post\b/i.test(q)).toBe(false)
+  expect(lead).toContain('/w/a/alert.ts')
+  expect(lead).toMatch(/approve/i)
+  expect(lead).toContain('wording')
+  expect(lead).toContain('automated')
+  expect(lead).toContain('sends nothing')
+  expect(q.endsWith('\n\nDeploy 4182 failed on production')).toBe(true)
 })
