@@ -94,7 +94,7 @@ When nothing is running or queued:
 
 ## 7. The context line
 
-`hooks/context-size-notice.sh` tells this session once it has dispatched an agent or set a /goal and its last request carries more than 200,000 tokens (claude-config#1960). Every request past that rereads the whole conversation, so stop and write down what has been decided before going on, whichever step you are at. Nothing decided may live only in the transcript:
+`hooks/context-size-notice.sh` tells this session once it has dispatched an agent or set a /goal and its last request carries more than 330,000 tokens of work, meaning its context minus the floor it started with (claude-config#1960, #2283). Every request past that rereads the whole conversation, so stop and write down what has been decided before going on, whichever step you are at. Nothing decided may live only in the transcript:
 
 1. The list or goal being worked, in Dan's words, and every constraint he has stated, quoted with its date.
 2. Every decision made in this conversation, with its reason and what was ruled out.

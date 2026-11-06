@@ -14,8 +14,9 @@
 # different things. shipped-branches.sh ACTS ON NOTHING, so it may fall back to a guess from a
 # matching commit subject. This one deletes a directory, and a guess is not enough to delete on
 # (L5), so it takes its verdict from GitHub's own record of the pull request and from nothing else.
-# What the two share lives once in lib/: which branch counts as main (default-branch.sh) and how
-# that record of pull requests is read (pull-requests.sh).
+# What the two share lives once: which branch counts as main (payload/hooks/lib/default-branch.sh,
+# which the stale worktree sweep reads too) and how that record of pull requests is read
+# (lib/pull-requests.sh).
 #
 # A worktree is REMOVABLE only when every one of these is proven, and KEEP names each that is not:
 #
@@ -78,12 +79,14 @@ git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 \
   || fail "$repo is not a git checkout, so there are no worktrees here to judge"
 command -v jq >/dev/null 2>&1 || fail "it needs jq to read what gh answers, and jq is not installed"
 
+# default-branch.sh lives with the hooks, since the installed stale worktree sweep reads it too (#2309).
 libdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
-for lib in default-branch.sh pull-requests.sh; do
-  [ -f "$libdir/$lib" ] || fail "its library is missing: $libdir/$lib"
+default_branch_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/payload/hooks/lib/default-branch.sh"
+for lib in "$default_branch_lib" "$libdir/pull-requests.sh"; do
+  [ -f "$lib" ] || fail "its library is missing: $lib"
 done
-# shellcheck source=lib/default-branch.sh
-. "$libdir/default-branch.sh"
+# shellcheck source=../payload/hooks/lib/default-branch.sh
+. "$default_branch_lib"
 # shellcheck source=lib/pull-requests.sh
 . "$libdir/pull-requests.sh"
 agent_lock_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/payload/hooks/lib/agent-lock.sh"
