@@ -56,8 +56,8 @@ SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 LAUNCHERS = {"npx", "bunx", "pnpx"}
 # Options that hold code to run, per interpreter family (python -c, node -e or -p, perl -e or -E,
 # ruby -e, osascript -e, deno eval), and a short cluster ending in one (perl -ne, python -Bc). Inline
-# code is in the command's own text, which is judged first, so this decides only that there is no
-# script file to read.
+# code is in the command's own text, which is judged first, so this decides that there is no script
+# file to read, and the word after it is the code whose imports are followed (claude-config#2318).
 INLINE = {"-c", "-e", "-E", "-p", "--eval", "--print", "eval"}
 INLINE_CLUSTER = re.compile(r"^-[A-Za-z]{1,4}[ceE]$")
 # Options whose value is the next word, so it is never taken for the script.
