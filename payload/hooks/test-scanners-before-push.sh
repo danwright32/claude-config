@@ -1743,6 +1743,32 @@ out="$(wn_fire "$RD" "git push -u origin comment-only")"; rc=$?
 [ "$rc" -eq 2 ] && grep -q -F "tests/test-talk.sh" <<< "$out" \
   && check "#2330 a suite that only mentions the deadline in comments is refused, as the full suite refuses it" ok \
   || check "#2330 a suite that only mentions the deadline in comments is refused, as the full suite refuses it" "exit=$rc out=$out"
+# A push that only DELETES a suite has nothing to judge: the suite is not in the tree it delivers,
+# so it can neither arm nor fail to. The push's file list must leave deletions out, or the gate
+# fails to read the deleted file and refuses the push as unread (#2341 review). Asked here of a
+# committed deletion of an unarmed and of an armed suite. A deletion the command itself commits never
+# reaches this check (the work names check above refuses every push chained after its commit), so
+# that listing is asked of lib/push-changes.sh directly, in test-push-changes.sh.
+dl_branch del-unarmed; git -C "$RD" rm -q tests/test-old.sh; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin del-unarmed")"; rc=$?
+[ "$rc" -eq 0 ] && ! grep -q -F "tests/test-old.sh" <<< "$out" && ! grep -q -F "could not be read from the tree" <<< "$out" \
+  && check "#2330 a push that only deletes an unarmed suite is let through, the deleted suite not judged" ok \
+  || check "#2330 a push that only deletes an unarmed suite is let through, the deleted suite not judged" "exit=$rc out=$out"
+git -C "$RD" checkout -q main; dl_armed "$RD/tests/test-keep.sh" keep; commit_all "$RD"
+git -C "$RD" push -q origin main >/dev/null 2>&1; git -C "$RD" fetch -q origin >/dev/null 2>&1
+dl_branch del-armed; git -C "$RD" rm -q tests/test-keep.sh; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin del-armed")"; rc=$?
+[ "$rc" -eq 0 ] && ! grep -q -F "tests/test-keep.sh" <<< "$out" && ! grep -q -F "could not be read from the tree" <<< "$out" \
+  && check "#2330 a push that only deletes an armed suite is let through, the deleted suite not judged" ok \
+  || check "#2330 a push that only deletes an armed suite is let through, the deleted suite not judged" "exit=$rc out=$out"
+# A RENAME is a deletion plus an addition: the old name drops out, and the new one, still unarmed,
+# is judged and refused under its new name.
+dl_branch rename-unarmed; git -C "$RD" mv tests/test-old.sh tests/test-renamed.sh; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin rename-unarmed")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "tests/test-renamed.sh" <<< "$out" && grep -q -F "$DL_WHY" <<< "$out" \
+  && ! grep -q -F "tests/test-old.sh" <<< "$out" && ! grep -q -F "could not be read from the tree" <<< "$out" \
+  && check "#2330 a push renaming an unarmed suite is refused under its new name, the old name not read" ok \
+  || check "#2330 a push renaming an unarmed suite is refused under its new name, the old name not read" "exit=$rc out=$out"
 # A copy of the gate without the shared check refuses the push, naming the file, rather than pass a
 # suite nobody judged.
 DL_NOLIB="$TMPROOT/dl-nolib-hooks"; mkdir -p "$DL_NOLIB/lib"
