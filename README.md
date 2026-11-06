@@ -2112,7 +2112,7 @@ A fourth gate reads the same library for a different thing an agent does to its 
 
 ### What a push actually waits on
 
-Thirty-six PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-seven PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2376,6 +2376,17 @@ subagent's `git push --force`, refused
 leaves before anything loads; 0.037 to 0.053 seconds on a subagent's, five readings the same day at
 load average 15 to 17 by a timer around the gate alone, since the tool sends no agent id: one python
 start reads the payload and finds no skip
+
+</td></tr>
+<tr><td>
+
+`slack-drafts-only-gate.sh` (#2302)
+
+</td><td>
+
+2026-11-05: 0.007 to 0.008 seconds on `git push -u origin fix/2302-slack-drafts-only`, five readings
+at load average 48 by bash's timer around the gate alone, since a command naming no Slack endpoint,
+script file or interpreter is answered before anything loads; it acts on a Slack send, not a push
 
 </td></tr>
 <tr><td>
@@ -3104,6 +3115,51 @@ quoted pieces glued together (#1125). It reads every test file the way the shell
 the same scan over that. A test fixture is written whole, in a shape the scan accepts by the rules
 above (spaces, or under a pattern's minimum length); a control that must be token shaped is a hash
 made at run time, so no token sits in the file to be split.
+
+## Slack: drafts only
+
+No session sends or schedules a Slack message; it saves a draft for Dan to send himself (his words,
+2026-11-05: "it should only ever save as draft in slack, never send directly"). The rule is in
+`payload/CLAUDE.md`, and `hooks/slack-drafts-only-gate.sh` enforces it on every Bash call and every
+Slack tool call (#2302). Its rule lives in `hooks/slack_drafts_only_gate.py`, which reads commands
+with the shared `lib/shell-words.py`.
+
+What it refuses:
+
+- `slack_send_message`, `slack_schedule_message`, `slack_post_message` and `slack_reply_to_thread`,
+  from any Slack integration (the plugin or the claude.ai connector), judged by the tool name's last
+  `__` segment. The refusal names `slack_send_message_draft` with the same channel and thread.
+- A command that posts: `curl`, `wget` and their kind aimed at a posting endpoint
+  (`chat.postMessage`, `chat.scheduleMessage`, `chat.postEphemeral`, `chat.meMessage`, an incoming
+  webhook on `hooks.slack.com`, or a `slack_webhook` variable), an interpreter's inline code naming
+  one, a script fed on standard input or in a heredoc naming one, and a script file the command runs
+  (by an interpreter, a shell, `source`, `npx`, `uv run` or its own path) that names one. A shell
+  script is read as commands, so one that only greps for an endpoint passes and one that curls it is
+  refused.
+
+What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
+(a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one exemption (Dan,
+2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
+`package.json`, its pre and post scripts included, and judged as the command line it runs.
+
+What it does not see, so a pass is not read as more than it measured: a module a script imports (so
+repo-digest's `npm run digest`, whose `src/digest.ts` imports the file that posts, still passes), a
+program run by bare name from the PATH, and an endpoint assembled from pieces on purpose. The threat it answers is a session that
+means well choosing the quickest way to post. It fails closed: a python that is missing or crashes,
+or a payload it cannot read that names a send route, is refused with the reason.
+
+Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
+names `chat.postMessage`; `python3 -m unittest` over the same file passes. This is a known false
+positive, left for Dan to decide rather than exempted.
+
+Cost, the gate alone timed by its caller on 2026-11-05: a plain `git push` stays on the quick exit
+and costs 0.007 to 0.008 s in the push gate table's five readings, and 0.010 s as the mean of 10 at
+load average 22, where bare bash took 0.005 s; a call the full rule reads starts python3, 0.05 s for `npm run x`
+or `bin/x`, 72 ms on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, and 154
+ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 calls by a timer
+around the gate, was not reproduced by these and is replaced by them. Suite: `test-slack-drafts-only-gate.sh`.
 
 ## Tests
 

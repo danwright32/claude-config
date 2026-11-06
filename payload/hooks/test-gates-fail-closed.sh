@@ -535,6 +535,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged playwright-subagent-gate.sh  mcp__playwright__browser_navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice playwright-subagent-gate.sh header"
   judged chrome-subagent-tab-gate.sh  mcp__claude-in-chrome__navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice chrome-subagent-tab-gate.sh header"
   judged no-session-link-in-comments.sh Bash "$(bash_call "gh pr comment 5 --body 'see https://claude.ai/code/session_01abc'")" '{}' refuse
+  judged slack-drafts-only-gate.sh    Bash "$(bash_call 'curl -d x https://slack.com/api/chat.postMessage')" '{}' refuse
 } > "$WORK/judged"
 # Every blocking gate is in the table, so one added later is not exempt by being unlisted (L96).
 while IFS= read -r g; do
