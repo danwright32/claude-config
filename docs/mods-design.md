@@ -3506,6 +3506,32 @@ worktree-agent-a09a06788b6ba53ab in claude-config" (2026-10-29, for #1859), a na
   `modHookTsHold` that only tests called, is gone; its tests now assert which hold each change gets
   (the look, a message's words, or none), which the wrapper could not tell apart.
 
+### What #2294 changed, 2026-11-05
+
+Dan, 2026-11-05: "if nothing on screen changes, why even ask me to skip. If you're confident that
+nothing on screen changes don't ask me to make a decision and just skip design rounds
+automatically". The same day a skip question for #2173 said "Nothing on screen changes" of an edit
+adding a refusal Dan reads, so confidence comes from the guard's own reading, never the session's.
+
+- **What passes.** An Edit, MultiEdit, Write or git put back to an app's React screen file (a .tsx or
+  .jsx file that is no mod's hook file) that rules.ts `logicOnlyChange` reads as logic only: on the
+  lines the change touches, no JSX, no string but a module's name, no template literal, no colour
+  and no word a look is spelled in (`APP_LOOK_WORDS`: class, style, theme, colour, size, icon and
+  the like, read on each part of a camelCase name); across the whole file every comment, string,
+  JSX element, number and true or false the same, in order; no stylesheet or bare import coming or
+  going and no import swapped for another. Only when every file the call waits on passes so.
+- **What it leaves.** Nothing asked and no card. `auto:<the call's key>` in the mod's store holds a
+  `DesignRoundAutoPass`: kind `no-screen-change`, when, the tool, the files, the issue it would have
+  waited on, why (rules.ts `autoPassWhy`) and the call. Nothing reads it to let a call through.
+- **What stays held.** A mod's hook file (its own readings, #1138 to #2161, decide it, and a
+  message's words there are asked about, which keeps the #2173 shape held); any string, comment or
+  number change anywhere in an app file; a call also changing a file that is held for any other
+  reason; an issue whose answers or checkout cannot be read; text the reader cannot follow; and a
+  pass whose record cannot be written, which is held and asked about as before.
+- **Known risk.** Logic decides which element renders, so a condition changed (`a > 0` to `a >= 0`)
+  can show or hide something with no text changing. The issue allows logic; what Dan reads and how
+  it looks are what is held.
+
 ### What #2261 changed, 2026-11-05
 
 - **The guard says when it recorded an answer.** Its store is private, so nothing else could tell

@@ -382,7 +382,10 @@ pc_push_tree() {
   fi
   idx="$(git rev-parse --git-path index 2>/dev/null)"
   tmp="$(mktemp "${TMPDIR:-/tmp}/pc-index.XXXXXXXX")" || return 0
-  if [ -f "$idx" ]; then cp "$idx" "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  # cp -p keeps the index's modification time, which git's racy clean check reads: a plain copy is
+  # newer than every entry, so a same size edit made in the second the index was written matched
+  # its stat data and the copy kept the committed blob (claude-config#2258).
+  if [ -f "$idx" ]; then cp -p "$idx" "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
   else rm -f "$tmp"; GIT_INDEX_FILE="$tmp" git read-tree HEAD 2>/dev/null || { rm -f "$tmp"; return 0; }; fi
   while IFS= read -r f; do [ -n "$f" ] && paths+=("$f"); done <<< "$PC_PENDING_ALL"
   if [ "${#paths[@]}" -gt 0 ]; then
