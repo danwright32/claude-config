@@ -371,8 +371,8 @@ CHROME="$REAL_CHROME"
 # Every real Chrome run below is this, so each one names headless-dom.sh where it runs and
 # check-chrome-launches.py can tell it from a Chrome started around it (claude-config#1537).
 #
-# Its deadline is the suite's hang ceiling (lib/hang-wait.sh), never headless-dom.sh's fixed 60 s:
-# these checks ask what a page draws, not how fast Chrome starts on a loaded Mac (L290, #2260). And
+# Its deadline is the suite's hang ceiling (lib/hang-wait.sh), never headless-dom.sh's fixed 60 s
+# (not measured: the default headless-dom.sh sets): these checks ask what a page draws, not how fast Chrome starts on a loaded Mac (L290, #2260). And
 # each run's account (how it ended, what it handed back, its last words) is kept for check, check_eq
 # and check_not to print when they fail, so a missed page names its cause (L177).
 headless_dom(){
@@ -390,7 +390,8 @@ headless_dom(){
   return "$rc"
 }
 
-# claude-config#2260: in full runs at a load of 23 to 83 on 12 cores this suite twice lost one page
+# claude-config#2260: in full runs on 2026-11-04 and 2026-11-05, at a load of 23 to 83 on 12 cores,
+# this suite twice lost one page
 # check of its 320, a different one each time, as NO-STAGE and then NO-PROBE, and passed on rerun.
 # NO-STAGE came from a page whose stage is in its static HTML, so Chrome handed back no page at all,
 # and the run said nothing more, because every real Chrome run's last words go to /dev/null. Proved
@@ -407,8 +408,9 @@ check "and that run's last words" "stand in: nothing was loaded" "$said"
 said="$(pass=0; fail=0; check "a stand in page check" "drawn:A" "$missed")"
 check "and so does a contains check that misses" "exit 0, 40 bytes back" "$said"
 # Second: these checks ask what a page draws, never how fast Chrome starts, so a real Chrome run here
-# is bounded by the suite's hang ceiling and not headless-dom.sh's fixed 60 s, which a loaded Mac can
-# reach (L290). The 60 s deadline itself is tested above on stand in Chromes, at 2 s.
+# is bounded by the suite's hang ceiling and not headless-dom.sh's fixed 60 s, which a loaded Mac may
+# reach (L290). That deadline itself is tested above on stand in Chromes, at 2 s (both not measured:
+# values the code sets).
 printf '#!/bin/bash\nprintf "<html><body>deadline %%s</body></html>\\n" "${HEADLESS_DOM_DEADLINE:-none}"\n' > "$TMP/deadline-chrome"
 chmod +x "$TMP/deadline-chrome"
 check_eq "a real Chrome run in this suite is bounded by its hang ceiling, never a fixed deadline (#2260)" \
