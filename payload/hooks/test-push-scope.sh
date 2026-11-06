@@ -832,6 +832,40 @@ elif [ -n "$pyc_left" ]; then
   check "#1017 reading an add leaves no shell-words bytecode beside it" "it wrote [$pyc_left]"
 else check "#1017 reading an add leaves no shell-words bytecode beside it" ok; fi
 
+# The review runner is loaded by path from three places, and each used to leave
+# lib/__pycache__/ai-review-run.cpython-*.pyc in the installed, synced lib (#2353, the #1017 class):
+# ai-review-placement.py's runner(), and the two ai-review suites. Each is run in a private copy of
+# the hooks directory, never the shared one other suites write into (#2103, L411), with the
+# environment's bytecode switches cleared so only the loader's own setting is measured (L322).
+# The copy holds no bytecode before the run, so anything there afterwards was written by it.
+PYC2353="$RD/pyc2353/hooks"; mkdir -p "$PYC2353"
+cp -R "$DIR/." "$PYC2353/" && find "$PYC2353" -name __pycache__ -type d -prune -exec rm -rf {} +
+cp "$DIR"/../LESSONS-INDEX-*.md "$RD/pyc2353/"   # the review suite reads the lessons beside the hooks
+pyc2353_run() { env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX "$@"; }
+# Only the runner's own bytecode counts: the probe below loads ai-review-placement.py itself.
+pyc2353_left() { find "$PYC2353/lib" -name 'ai-review-run*.pyc' -print | tr '\n' ' '; }
+pyc2353_ans="$(pyc2353_run python3 -c 'import importlib.util,sys
+s=importlib.util.spec_from_file_location("p",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(hasattr(m.runner(),"framework_line"))' "$PYC2353/lib/ai-review-placement.py" 2>&1)"
+pyc2353_got="$(pyc2353_left)"
+if [ "$pyc2353_ans" != "True" ]; then
+  check "#2353 ai-review-placement.py's runner() leaves no bytecode in lib" "runner() did not load the review runner ([$pyc2353_ans]), so whether it writes bytecode was not measured"
+elif [ -n "$pyc2353_got" ]; then
+  check "#2353 ai-review-placement.py's runner() leaves no bytecode in lib" "it wrote [$pyc2353_got]"
+else check "#2353 ai-review-placement.py's runner() leaves no bytecode in lib" ok; fi
+rm -rf "$PYC2353/lib/__pycache__"
+for pyc2353_suite in test-ai-review-start-order.sh test-ai-review-on-push.sh; do
+  pyc2353_out="$(pyc2353_run bash "$PYC2353/$pyc2353_suite" 2>&1 | grep '^SUITE-RESULT')"
+  pyc2353_got="$(pyc2353_left)"
+  case "$pyc2353_out" in
+    *"failed=0"*) : ;;
+    *) check "#2353 $pyc2353_suite leaves no bytecode in lib" "the copy's run did not pass ([$pyc2353_out]), so it was not measured"; continue ;;
+  esac
+  if [ -n "$pyc2353_got" ]; then check "#2353 $pyc2353_suite leaves no bytecode in lib" "it wrote [$pyc2353_got]"
+  else check "#2353 $pyc2353_suite leaves no bytecode in lib" ok; fi
+  rm -rf "$PYC2353/lib/__pycache__"
+done
+
 # The reader's edges, each one a way a plausible scanner gets the directory wrong.
 want_repo "cd $T &>/dev/null && git push" "$T" \
   "#1017 &> is a redirect, not a cd sent to the background"
