@@ -26,7 +26,8 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/read-only-query-allow.sh"
-SETTINGS="$DIR/../settings.hooks.json"
+. "$DIR/lib/settings-file.sh" 2>/dev/null || { echo "FAIL: lib/settings-file.sh is missing beside this suite"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
+SETTINGS="$(hook_settings_file "$DIR/..")" || SETTINGS=""
 
 pass=0
 fail=0
