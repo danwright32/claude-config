@@ -123,6 +123,33 @@ absent "a call before the period is not counted" "Bash calls: 19" "$out"
 for leak in zq proj-a proj-b agent-q "$P"; do
   absent "no command text, path or project name is printed ($leak)" "$leak" "$out"
 done
+# The count of transcripts left out is always printed, so a zero is a reading, not an absence.
+check "a run that read every transcript says none was left out" "transcripts that could not be read: 0" "$out"
+check "a run that read every transcript says none was gone" "transcripts gone before they could be read (deleted or moved after being listed): 0" "$out"
+absent "a run that read every transcript gives no shortfall warning" "every total below leaves out" "$out"
+
+# A transcript that cannot be opened, and one gone between being listed and being read, are each
+# counted beside the totals, never skipped silently (claude-config#2239).
+U="$WORK/unread"
+mkdir -p "$U"
+cp -R "$P/." "$U/"
+printf '%s\n' '{"type":"assistant","timestamp":"2026-10-25T15:00:00Z","message":{"content":[{"type":"tool_use","id":"u1","name":"Bash","input":{"command":"bash ./locked-zq.sh && git push"}}]}}' > "$U/-proj-b/locked-zq.jsonl"
+chmod 000 "$U/-proj-b/locked-zq.jsonl"
+ln -s "$U/-proj-b/deleted-zq.jsonl" "$U/-proj-b/gone-zq.jsonl"
+if [ -r "$U/-proj-b/locked-zq.jsonl" ]; then
+  # Running as a user chmod cannot lock out (root): the unreadable case cannot be built here.
+  echo "UNMEASURED: a file with no read permission is still readable to this user, so the unreadable transcript case was not tested"
+else
+  out="$(python3 "$TOOL" --root "$U" --ledger "$L/refusals.tsv" --since 2026-10-23 --until 2026-11-04 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a run with an unreadable transcript exits $rc"; echo "${out:0:3000}"; }
+  check "a transcript that cannot be opened is counted" "transcripts that could not be read: 1" "$out"
+  check "a transcript gone before it was read is counted on its own" "transcripts gone before they could be read (deleted or moved after being listed): 1" "$out"
+  check "the totals say they are short" "every total below leaves out whatever those 2 transcripts hold" "$out"
+  check "the readable transcripts are still measured" "Bash calls: 17" "$out"
+  for leak in zq locked-zq gone-zq deleted-zq "$U"; do
+    absent "no name or path of a transcript left out is printed ($leak)" "$leak" "$out"
+  done
+fi
 
 # A root holding no transcript is unmeasured, never a rate of zero.
 mkdir -p "$WORK/empty"
