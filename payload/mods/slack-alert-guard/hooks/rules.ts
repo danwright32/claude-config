@@ -225,5 +225,9 @@ export const refusal = (id: string, file: string, added: string[], removed: stri
 export const agentRefusal = (id: string, file: string, added: string[], removed: string[]): string =>
   `${blocked(file, added, removed)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
 
-/** The question Dan is asked, with the message itself in it. */
-export const question = (file: string, rendered: string): string => `Post this Slack message from ${file}?\n\n${rendered}`
+/**
+ * The question Dan is asked, with the message itself in it. Approving posts nothing: it only lets
+ * the held edit through, so the question never asks to post (claude-config#2284).
+ */
+export const question = (file: string, rendered: string): string =>
+  `Approve the wording of an automated Slack alert defined in ${file}? Approving sends nothing: it only lets the held edit to that file go ahead.\n\n${rendered}`

@@ -77,6 +77,7 @@ REFUSING=(
   monitor-action-gate.sh
   handback-claims-gate.sh
   playwright-subagent-gate.sh
+  chrome-subagent-tab-gate.sh
   no-session-link-in-comments.sh
   slack-drafts-only-gate.sh
   require-tests-before-push.sh
@@ -178,6 +179,7 @@ samples = {
     "SubagentHandback": {"message": "Done."},
     "mcp__playwright__browser_snapshot": {},
     "mcp__plugin_playwright_playwright__browser_snapshot": {},
+    "mcp__claude-in-chrome__navigate": {"url": "https://example.com"},
     # For the Slack drafts only gate an ordinary Slack call is a read, since it refuses every send
     # (#2302). It sits ahead of the send so a matcher naming any Slack tool is probed with the read;
     # the session link gate's matcher names only send tools, so its probe still takes the send.

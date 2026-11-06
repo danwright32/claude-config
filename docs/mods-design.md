@@ -2620,15 +2620,25 @@ and the band question is removed rather than kept beside it (L29). Three defects
   reads), and a shell append, read with mod-kit's own readers as one command only: `echo`, `printf
   '%s\n'` or `printf '<text>\n'` of text quoted whole, or `cat` fed a heredoc (quoted, or holding no
   `$`, backtick or backslash), with `>>` into the index and no other redirect, pipe, command or file
-  written (rules.ts `shellAppended`). Anything else to `MEMORY.md` (a second line, a changed line, a
-  line linking another file, another folder's index, `tee -a`, a write after the window, a write
-  before the memory file is saved) is asked about as before. Chosen: the cover is made when the
-  memory file's save lands, not at the press, so the line can never point at a file that was not
-  saved; and it lapses in silence, since Dan never answered about the index and a toast saying it
-  went unused would be noise. A write of the line that does not land gives the cover back for the
-  rest of the window, as an approval is given back; a shell command that failed spends it. A Bash
-  For good covering more than one file, and Dan's own permanent words, record no cover. The noun
-  (`isApproved`, #1483) does not answer for a cover: its one caller asks only about the lessons file.
+  written (rules.ts `shellAppended`). Since #2216 (after `printf ... >> MEMORY.md; tail -1
+  MEMORY.md` was asked about twice in #2181) that append may be followed by one plain read of the
+  index and nothing more: after `;`, `&&` or a new line, `tail` or `head` with at most a line count
+  (`-1`, `-n 3`, `-n3`), `cat` with no option, or `wc` with at most one of `-l`, `-w`, `-c`, `-m`,
+  naming the index alone by its absolute path (bare, or quoted whole) or by a bare `~/` (rules.ts
+  `readBack`). The append before it is judged exactly as it is alone. Still asked about: any other
+  second command or more than one, a read with a redirect, pipe, `tee`, substitution, glob,
+  variable, backslash, here doc or `..`, a read of another file or of the index and another, `tail
+  -f` or any other option, a reader led by `sudo`, `env`, `exec`, `!`, a group or an assignment,
+  `||` or `&` between the two, and a read before the append. Anything else to `MEMORY.md` (a
+  second line, a changed line, a line linking another file, another folder's index, `tee -a`, a
+  write after the window, a write before the memory file is saved) is asked about as before.
+  Chosen: the cover is made when the memory file's save lands, not at the press, so the line can
+  never point at a file that was not saved; and it lapses in silence, since Dan never answered about
+  the index and a toast saying it went unused would be noise. A write of the line that does not land
+  gives the cover back for the rest of the window, as an approval is given back; a shell command
+  that failed spends it. A Bash For good covering more than one file, and Dan's own permanent words,
+  record no cover. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
+  only about the lessons file.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
   which for a heredoc or a script was unreadable.
