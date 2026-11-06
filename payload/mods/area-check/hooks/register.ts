@@ -13,7 +13,9 @@ import {
   bodyUnreadableRefusal,
   bodyUnresolvedRefusal,
   branchNeedle,
+  checkFailedRefusal,
   inRepo,
+  mayActOnPr,
   logUnreadableRefusal,
   malformedDim,
   missingFrom,
@@ -105,6 +107,14 @@ const msg = (err: unknown) => errorText(err, MOD)
 // when even naming the failure throws, so the catch never throws (#2039).
 const undecided = (why: string) => ({ deny: `The area check could not take the decision (${why}); the edit stays held. Try again.` })
 const HELD = undecided('unknown failure')
+// The pull request check's catch (#2173): a command that could be a gh pr create, edit or merge is
+// held naming why; any other is left to run, the hook absent, as it was before. PR_HELD is built once
+// here for when even that throws.
+const PR_HELD = checkFailedRefusal('unknown failure')
+const prCaught = (e: unknown, error: unknown): { deny: string } | undefined => {
+  const command = (e as Record<string, unknown>).command
+  return typeof command === 'string' && !mayActOnPr(command) ? undefined : { deny: checkFailedRefusal(msg(error)) }
+}
 const firstLine = (s: string) => s.trim().split('\n')[0] ?? ''
 
 const homeOf = async ($: EngineInterface) => (await $.env.get('HOME')) ?? ''
@@ -350,6 +360,15 @@ const updateHeld = async ($: EngineInterface, change: (list: Held[]) => Held[]) 
 
 const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
 
+// The error file's record of one failure, which never throws; a debug line where it cannot be kept.
+const keepError = async ($: EngineInterface, path: string, error: string) => {
+  try {
+    await append($, ERRORS, { v: 1, kind: 'error', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), path, error })
+  } catch (again) {
+    $.ui.log(`${MOD}: an error could not be kept in ~/${DIR}/${ERRORS} (${msg(again)}); it was: ${error}`, { to: 'debug' })
+  }
+}
+
 // Its own failure: counted, kept in the error file, said once a session. Every step is caught on its
 // own, so a failure here can never reach the call (L561, L95). `kept` says what it means for the edit.
 const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'shell' | 'command' | 'rotation' = 'unchecked') => {
@@ -361,11 +380,7 @@ const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unc
   } catch {
     // The count is a convenience; the error file below is the record.
   }
-  try {
-    await append($, ERRORS, { v: 1, kind: 'error', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), path, error })
-  } catch (again) {
-    $.ui.log(`${MOD}: an error could not be kept in ~/${DIR}/${ERRORS} (${msg(again)}); it was: ${error}`, { to: 'debug' })
-  }
+  await keepError($, path, error)
   if (n !== 1) return
   try {
     const rel = relTo(path, await $.session.cwd())
@@ -1028,8 +1043,12 @@ export const register: Register = on => {
   })
 
   // A pull request command, the main session's or a subagent's (#1510): refused while its
-  // description lacks an area check line for a file decided on its branch. Its own failure lets the
-  // command through with one dim line, kept in the error file.
+  // description lacks an area check line for a file decided on its branch. Its own failure holds a
+  // command that could be one, with why, kept in the error file, as every guard's failure holds its
+  // call (#2148, #2173): the check at merge time is no backstop, since a merge is the last check there
+  // is, it runs the same code, and only on this Mac. A command whose words hold no gh pr create, edit
+  // or merge cannot be one it refuses, so it goes ahead with one dim line, as before. Should the hook
+  // fail before its own catch, the registration catch answers the same way through neverThrows.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const command = (e as unknown as Record<string, unknown>).command
     if (typeof command !== 'string' || !/\bgh\b|merge-when-ready/.test(command)) return next(e)
@@ -1059,10 +1078,15 @@ export const register: Register = on => {
       }
       if (malformed.size) $.ui.log(malformedDim([...malformed]))
     } catch (err) {
-      await failed($, cwd, err instanceof Late ? new Error(LATE) : err, 'command')
+      const why = err instanceof Late ? LATE : msg(err)
+      if (mayActOnPr(command)) {
+        await keepError($, cwd, why)
+        return { deny: checkFailedRefusal(why) }
+      }
+      await failed($, cwd, new Error(why), 'command')
     }
     return next(e)
-  })
+  }).catch(($, e, next) => next.called ? next(e) : neverThrows(() => prCaught(e, next.error), () => ({ deny: PR_HELD }), { deny: PR_HELD }))
 
   // The main session's edit, judged beneath every mod's tool.call hook, after the settings hooks: an
   // edit one of them refuses is refused in its words, and never held, judged or claimed. A query
