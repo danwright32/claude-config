@@ -6272,6 +6272,10 @@ each call a noun makes to the function the TypeScript compiler's own checker res
 parameters are the language's answer rather than the first function of that name in the mod (#895).
 A promise kept in a variable outside a noun's code is linked to a noun's read the same way, so only
 a read of that same variable counts, never another function's variable sharing its name (#915).
+Work a noun's code hands to a timer runs after the noun answered and is not read as its code (#939),
+and that includes a function written in place and handed to a mod helper that only gives it to a
+timer it starts, such as picker manners' `offTheDialog`: the helper is recognised by what its body
+does with that parameter, never by its name (#2299).
 Run on its own, it installs that compiler as the type check does, and refuses (exit 4, naming why
 and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
