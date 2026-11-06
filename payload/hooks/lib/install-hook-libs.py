@@ -5,7 +5,8 @@
 
 Copies each NAME from SRC_LIB (payload/hooks/lib) into DEST_LIB (the scratch home's
 ~/.claude/hooks/lib, or any folder standing in for it), with every helper in SRC_LIB the Python
-ones import and the shell ones source, and so on through what those import and source. Then every
+ones import, the shell ones source and the JavaScript ones require, and so on through what those
+import, source and require. Then every
 Python file in DEST_LIB must find each module it imports, either beside it or installed with
 Python; any that cannot is named and the exit is 1, so a suite stops with the cause rather than
 failing everywhere downstream (claude-config#2138: #2118 made sleep-report.py import repo_slug, and
@@ -259,7 +260,8 @@ def main(argv):
     src, dest, names = argv[0], argv[1], argv[2:]
     os.makedirs(dest, exist_ok=True)
     # The named files, then every helper beside them in SRC_LIB that an installed Python file
-    # imports or an installed shell file sources, and so on, so a helper gaining an import or a
+    # imports, an installed shell file sources or an installed JavaScript file requires, and so on,
+    # so a helper gaining an import, a require or a
     # source line needs no edit to any suite's list.
     todo, done, missing = list(names), set(), []
     while todo:

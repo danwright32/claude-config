@@ -24,8 +24,9 @@ stand in the suite writes) is not the suite's own command and is not judged
 (lib/shell_code_lines.py).
 
 A suite that means to leave a helper out (to see a scan refuse without lib/shell-words.py) still
-goes through install-hook-libs.py: it follows `import` and `source` lines only, so a helper loaded
-by its path stays out unless it is named, and one that is imported or sourced is installed and then
+goes through install-hook-libs.py: it follows `import`, `source` and `require` lines only, so a
+helper loaded by its path stays out unless it is named, and one imported, sourced or required is
+installed and then
 removed by the suite, in a line that says so.
 
 Reads the paths to judge, relative to --root, one per line on stdin, and judges only the suite files

@@ -41,7 +41,7 @@ check_eq "#2138 the install refuses a helper that imports a module nobody has, n
 # A helper loaded by its path, never imported, stays out unless it is named, so a suite can still
 # build a folder missing one on purpose: shell_code_lines.py loads shell-words.py that way.
 said="$(python3 "$INSTALL" "$DIR/lib" "$TMPROOT/noreader" hand-written-lib-list.py 2>&1)"; rc=$?
-check_eq "#2147 the install follows imports and source lines only, so a helper loaded by its path is left out" \
+check_eq "#2147 the install follows imports, source lines and requires only, so a helper loaded by its path is left out" \
   "0 hand-written-lib-list.py shell_code_lines.py " "$rc $(ls "$TMPROOT/noreader" | tr '\n' ' ')${said:+ said: $said}"
 
 # ---- the install follows what a shell helper sources (#2204) ----
