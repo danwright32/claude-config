@@ -41,7 +41,8 @@ tp__gh(){   # $1 = account or empty, then gh's arguments
   [ -n "$account" ] && tok="$(gh auth token -u "$account" 2>/dev/null)"
   if [ -n "$tok" ]; then GH_TOKEN="$tok" gh "$@"; else gh "$@"; fi
 }
-tp__first(){ printf '%s' "$1" | awk 'NF { print; exit }' | cut -c1-200; }
+# The first line that holds anything, cut to 200 characters, read without a pipe that stops early.
+tp__first(){ local l; while IFS= read -r l; do [ -n "${l//[[:space:]]/}" ] && { printf '%s' "${l:0:200}"; return 0; }; done <<<"$1"; }
 
 tp_carried_green(){
   local slug="$1" head="$2" account="${3:-}" rollup="${4:-[]}"

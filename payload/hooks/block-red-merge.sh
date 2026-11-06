@@ -493,7 +493,7 @@ slug=$(printf '%s' "$rollup" | jq -r '.url // ""' 2>/dev/null \
 [ -n "$slug" ] || slug="$remote_slug"
 
 # AN IDENTICAL TREE CARRIES THE GREEN IT ALREADY EARNED (claude-config#2310). A pull request updated
-# from main gets a new head whose checks start again, a 30 to 38 minute suite here, and with main
+# from main gets a new head whose checks start again (a 30 to 38 minute suite here on 2026-11-05), and with main
 # moving often the pull request holding the merge line kept losing its turn to the rerun. When that
 # head's tree is byte for byte the tree of a parent whose checks all passed beside a base it already
 # held, the rerun can only test the same tree again (L312), so a head whose checks are only still
