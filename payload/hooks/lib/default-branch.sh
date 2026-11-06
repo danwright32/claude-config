@@ -1,7 +1,9 @@
 # default-branch.sh: which remote branch a checkout's work merges into. Sourced, not run.
 #
-# One copy, shared by shipped-branches.sh and shipped-worktrees.sh, because both judge work
-# against it and two copies of "which branch is main" drift apart with no symptom (L613).
+# One copy, shared by tools/shipped-branches.sh, tools/shipped-worktrees.sh and
+# hooks/check-stale-worktrees.sh, because all three judge work against it and two copies of "which
+# branch is main" drift apart with no symptom (L613). It lives with the hooks because the sweep is
+# installed into ~/.claude and the tools are not (#2309).
 #
 # default_branch <repo>
 #   Prints the branch, like origin/main, from the remote's own HEAD where it says, and from the
