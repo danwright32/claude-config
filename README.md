@@ -5613,9 +5613,17 @@ and deploy runs since sleep began, and notes each for the top of the report. Wha
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
-waits (no merge, no deploy), listed or not, in any case and ahead of both lists. Dan's list,
-confirmed on 2026-10-07, is in that file and summarised under "Sleep mode" below, without naming
-the repositories (#2112). At
+waits (no merge, no deploy), listed or not, in any case and ahead of both lists. A `mergeOnly`
+entry may also say `"adminMerge": "green-pinned"` (#2125; no entry says it unless Dan writes it),
+and only there is a `gh pr merge --admin` allowed overnight, judged in `hooks/adminmerge.ts`: a
+squash pinned by `--match-head-commit` to the full sha of an open, non draft PR's head, on the
+checkout's own repository, once GitHub shows every check the base branch requires (its rulesets and
+its branch protection) as success on that commit, with no other check run failed or unfinished and
+no status pending or failed. Anything GitHub does not answer, a base branch requiring no checks at
+all, and a merge the night would not let run anyway (the repository waits, or a merge there deploys)
+refuse; any other `adminMerge` value makes the whole file unreadable. Dan's list, confirmed on
+2026-10-07, is in that file and summarised under "Sleep mode" below, without naming the
+repositories (#2112). At
 `/sleep` each repository a worker with a goal is in that the file does not decide is asked about
 (each question waits ten minutes, a chosen limit, not a measurement; the answer written into this
 Mac's own file, so it is asked once on each Mac; "Go to sleep, no more questions" asks nothing
@@ -6426,6 +6434,15 @@ The file has three lists: `waitOwners` (owners every repository of which waits, 
 other two), `mergeOnly` (merging allowed, deploying never; each entry says with `mergeDeploys`
 whether a merge there deploys by itself, and only `false` lets the merge run) and `mayDeploy`. A
 repository on both lists, or one GitHub cannot confirm at bedtime, waits.
+
+A `mergeOnly` entry can opt in to admin merges of green pull requests overnight by adding
+`"adminMerge": "green-pinned"`, as in `{ "repo": "owner/name", "mergeDeploys": false, "adminMerge":
+"green-pinned" }`. No repository is opted in until you add that yourself. An admin merge there then
+goes ahead only as a squash pinned to the exact commit GitHub shows at the head of an open pull
+request, and only when GitHub shows every check the base branch requires passing on that commit and
+nothing else failing or still running. If GitHub cannot be read, the branch requires no checks, or
+anything else is unclear, the merge is refused and waits for the morning. Any other `adminMerge`
+value makes the whole file unreadable, so the night waits everywhere rather than guessing.
 
 **The reports** are one per session with news (#1287): every worker, and any other session that
 noted something overnight; a session with nothing to say gets none. Each is in your Downloads
