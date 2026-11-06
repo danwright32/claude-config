@@ -1512,12 +1512,65 @@ def _env_split_string(words):
     return ("env -S", " ".join([value] + [shlex.quote(a) for a in after]), "")
 
 
-def _records(s, cwd, depth):
+# ---- the commands in a script file a command runs (claude-config#2301) ---------------------------
+# A script file's commands are in the file, so no gate could read them, and `bash ./wrapper.sh`
+# holding `git add -A` passed the add scope guard with no git word in the command at all. A caller
+# that asks for it (every_command's scripts list) has each script file a command runs read off disk,
+# its commands records of their own right after the script's record, in the directory the script runs
+# in, recursively up to MAX_DEPTH. The script's own record keeps its reason (WHY_FILE), so whatever a
+# gate refused for an unreadable script it still refuses: reading only ever adds commands. A file that
+# is not there, cannot be read, is larger than SCRIPT_MAX_BYTES, is named through a variable, or is
+# run by its path with a #! line naming no shell (a python script) is left unread, as before.
+SCRIPT_MAX_BYTES = 256 * 1024
+_WHY_FILE_HEAD, _, _WHY_FILE_TAIL = WHY_FILE.partition("%s")
+
+
+def script_file(why):
+    """The script file a WHY_FILE reason names, as written, or None for any other reason."""
+    if why.startswith(_WHY_FILE_HEAD) and why.endswith(_WHY_FILE_TAIL) \
+            and len(why) > len(_WHY_FILE_HEAD) + len(_WHY_FILE_TAIL):
+        return why[len(_WHY_FILE_HEAD):len(why) - len(_WHY_FILE_TAIL)]
+    return None
+
+
+def script_text(path, d, wrapper):
+    """(full path, text) of the script file path names, run by wrapper in directory d, or None when it
+    cannot be read: not there, unreadable, too large, a variable in its name, a relative name with no
+    absolute directory to resolve it against, or a file run by its path whose #! names no shell."""
+    if "$" in path or "`" in path:
+        return None
+    path = os.path.expanduser(path)
+    if not os.path.isabs(path):
+        if not os.path.isabs(d or ""):
+            return None
+        path = os.path.join(d, path)
+    path = os.path.normpath(path)
+    try:
+        if not os.path.isfile(path):
+            return None
+        with open(path, "rb") as f:
+            data = f.read(SCRIPT_MAX_BYTES + 1)
+    except OSError:
+        return None
+    if len(data) > SCRIPT_MAX_BYTES:
+        return None
+    text = data.decode("utf-8", "replace")
+    if wrapper == "direct" and text.startswith("#!"):
+        line = text.split("\n", 1)[0][2:].split()
+        names = [w.split("/")[-1] for w in line[:2]]
+        if not any(n in SHELLS for n in names):
+            return None
+    return path, text
+
+
+def _records(s, cwd, depth, scripts=None):
     """(records, crude) for a command line: each record (dir, text, wrap, rest, assigns, field, depth), a
     wrapper's commands right after it (claude-config#1478). wrap is "" for a command that is no
     wrapper, the wrapper's name (`bash -c`, `eval`, ...) for one whose string was read, and that name
     0x1d the reason for one whose string cannot be read; depth is how many wrappers it is inside; crude
-    says s itself could only be read by the crude cut."""
+    says s itself could only be read by the crude cut. scripts, a list, asks for the commands of each
+    script file a command runs as well, right after its record, and is given (path, text) for each
+    one read (claude-config#2301)."""
     try:
         cut, crude = commands(s, cwd), False
     except Unreadable:
@@ -1531,11 +1584,22 @@ def _records(s, cwd, depth):
             continue
         wrapper, string, why = found
         inner = []
+        if string is None and scripts is not None and depth < MAX_DEPTH and script_file(why):
+            found_script = script_text(script_file(why), d, wrapper)
+            if found_script is not None:
+                # Given in the order the records are, so the nth script whose commands follow its
+                # record is the nth entry; one holding no command is taken back out.
+                scripts.append(found_script)
+                at = len(scripts) - 1
+                # Its commands, never its reason: the script's record keeps WHY_FILE below.
+                inner, _ = _records(found_script[1], d, depth + 1, scripts)
+                if not inner:
+                    del scripts[at]
         if string is not None:
             if depth >= MAX_DEPTH:
                 why = why or WHY_DEEP
             else:
-                inner, inner_crude = _records(string, d, depth + 1)
+                inner, inner_crude = _records(string, d, depth + 1, scripts)
                 if inner_crude:
                     why = why or WHY_QUOTE
                 for _, t2, _, rest2, _, _, _ in inner:
@@ -1551,13 +1615,16 @@ def _records(s, cwd, depth):
     return out, crude
 
 
-def every_command(s, cwd=""):
+def every_command(s, cwd="", scripts=None):
     """Every command s runs, as (dir, text, wrapper, why, depth): the commands reading (commands(), or the
     crude cut when it cannot be trusted) with the commands each wrapper runs right after it (wrapped,
     claude-config#1478). wrapper is "" for a command that is none; why is "" unless the wrapper's
-    string cannot be read, and then says why; depth is how many wrappers the command is inside."""
+    string cannot be read, and then says why; depth is how many wrappers the command is inside.
+    scripts, a list, reads each script file a command runs too, its commands right after the script's
+    record one wrapper deeper, and is given (path, text) for each file read (claude-config#2301); a
+    relative script name is resolved only against an absolute cwd, so pass the session's directory."""
     out = []
-    for d, t, wrap, _, _, _, depth in _records(s, cwd, 0)[0]:
+    for d, t, wrap, _, _, _, depth in _records(s, cwd, 0, scripts)[0]:
         wrapper, _, why = wrap.partition("\x1d")
         out.append((d, t, wrapper, why, depth))
     return out
