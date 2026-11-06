@@ -18,20 +18,26 @@ Two routes are judged:
     test) runs nothing that posts and passes. A shell script is read as commands, so one that only
     greps passes and one that curls is refused. A package script (`npm run digest`, pnpm, yarn,
     npm test) is followed through the nearest package.json, pre and post scripts included, and
-    judged as the command line it runs. The one script let through is /nudge, at
-    skills/nudge/nudge.py beside this hooks folder, by its real path; a copy anywhere else is
-    refused like any other script that posts.
+    judged as the command line it runs. The local modules a JavaScript, TypeScript or Python script
+    imports, from a file, inline code (`node -e`, `python3 -c`) or its input, are followed, each
+    judged the same way (claude-config#2318). The one script let through is /nudge, at
+    skills/nudge/nudge.py beside this hooks folder, by its real path; a copy anywhere else is refused
+    like any other script that posts.
 
-Limits, stated so nobody reads more into a pass than it measured: a module a script imports is not
-followed, a program run by bare name from the PATH is not read, and deliberate obfuscation (an
-endpoint assembled from pieces) is not the threat this answers. The threat is a session that means
-well choosing the quickest way to post.
+Limits, stated so nobody reads more into a pass than it measured: a JavaScript import of a package or
+through a path alias (`@/lib/x`), a Python module not on disk beside the script (the standard library,
+an installed package), a module run with `python3 -m`, and an import of another language's files are
+not followed; a program run by bare name from the PATH is not read; and deliberate obfuscation (an
+endpoint assembled from pieces, an import path built at run time) is not the threat this answers.
+The threat is a session that means well choosing the quickest way to post.
 """
+import ast
 import importlib.util
 import json
 import os
 import re
 import sys
+import warnings
 
 # Loading lib/shell-words.py by path must leave no bytecode beside it in the installed lib/ (#2080).
 sys.dont_write_bytecode = True
@@ -65,6 +71,28 @@ NPM_LIFECYCLE = {"test": "test", "t": "test", "tst": "test", "start": "start", "
 PKG_DIR_OPTS = {"--prefix", "-C", "--dir", "--cwd"}
 PKG_EXEC = {"exec", "x", "dlx"}
 MAX_DEPTH = 3
+# A JavaScript or TypeScript script's relative imports are followed (claude-config#2318): repo-digest's
+# `npm run digest` runs src/digest.ts, which names no endpoint and imports src/slack.ts, which does.
+JS_EXT = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
+JS_RUNTIME = re.compile(r"^(node|nodejs|deno|bun|tsx|ts-node)$")
+JS_BANG = re.compile(r"^#!.*\b(node|nodejs|deno|bun|tsx|ts-node)\b")
+# The .js a TypeScript ESM file writes for its own sibling, which is a .ts on disk.
+JS_TO_TS = {".js": (".ts", ".tsx"), ".mjs": (".mts",), ".cjs": (".cts",), ".jsx": (".tsx",)}
+# Every way a module names another: import ... from 'x', export ... from 'x', import 'x', import('x'),
+# require('x'). Read from the text, comments included, which can only refuse more.
+IMPORT_SPEC = re.compile(r"""(?:\bfrom|\bimport\s*\(?|\brequire\s*\()\s*(['"`])([^'"`\n]+)\1""")
+# A Python script's imports are followed the same way: a script is Python by its .py, its #!, or a
+# python interpreter running a file with no extension.
+PY_RUNTIME = re.compile(r"^(python[0-9.]*|pypy[0-9.]*)$")
+PY_BANG = re.compile(r"^#!.*\b(python[0-9.]*|pypy[0-9.]*)\b")
+# Read when a file cannot be parsed as Python by this python3: each import statement's first line.
+PY_IMPORT_LINE = re.compile(r"^[ \t]*(?:from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+\(?([^#\n)]*)|import[ \t]+([^#\n]+))",
+                            re.M)
+# The most modules one script's imports are read through, itself included. Measured 2026-11-06 over
+# the 139 scripts in repo-digest's src/ and NurseDex's scripts/ and the 110 Python files in this
+# payload: the largest reaches 11 (repo-digest's src/manage-repos.ts; src/digest.ts reaches 8,
+# NurseDex's largest 5), and none imports a local file that could not be found.
+IMPORT_MAX_FILES = 300
 
 
 def load_reader():
@@ -109,8 +137,9 @@ class Judge:
             p = os.path.join(d or os.getcwd(), p)
         return p
 
-    def script(self, word, d, depth, shell_hint):
-        """The reason a script file posts, or None."""
+    def script(self, word, d, depth, shell_hint, lang=None):
+        """The reason a script file posts, or None. lang ("js" or "py") is the language of the
+        program running it, taken for a file with no extension of its own."""
         path = self.resolve(word, d)
         if not os.path.isfile(path):
             return None  # nothing there to run
@@ -132,7 +161,170 @@ class Judge:
             except Exception:
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
             return f"the script {word} runs a command that posts: {inner}" if inner else None
-        return f"the script {word} posts to Slack (it names {hit.group(0)})" if hit else None
+        if hit:
+            return f"the script {word} posts to Slack (it names {hit.group(0)})"
+        kind = self.language(real, first, lang)
+        if kind:
+            return self.imports(f"the script {word}", real, os.path.dirname(real), body, kind)
+        return None
+
+    @staticmethod
+    def language(path, first, lang):
+        """"js" or "py" for a script whose imports are followed, by its extension, its #!, or, for a
+        file with no extension, the program running it; None for anything else (a data file)."""
+        ext = os.path.splitext(path)[1]
+        if ext in JS_EXT or JS_BANG.match(first):
+            return "js"
+        if ext == ".py" or PY_BANG.match(first):
+            return "py"
+        return lang if not ext else None
+
+    def imports(self, start, origin, root, body, kind):
+        """The reason a script posts through a module it imports, or None (claude-config#2318).
+
+        start names the script ("the script x.ts", "the code given to node -e"), origin is its file
+        (None for inline code), root the directory it runs from, where Python finds its absolute
+        imports. Each import is resolved as node and TypeScript, or Python, would, and each module
+        found is judged as the script is, by the endpoint it names, then its own imports followed,
+        each module read once however many import it, so a cycle ends. A package, a node builtin and
+        a Python module not on disk under root (the standard library, an installed package) are not
+        ours to read. An import that names a local file the gate cannot find or read is refused,
+        because node or Python may still find it (package.json exports, a path alias, a loader) and
+        run what the gate never saw; so is a script reaching more than IMPORT_MAX_FILES modules. An
+        import whose path is assembled at run time (a template holding ${...}, importlib) is not
+        followed: no file is named to read."""
+        seen = {origin} if origin else set()
+        queue = [(origin, root, body, start)]
+        while queue:
+            cur, cur_dir, text, chain = queue.pop(0)
+            for spec, targets in self.import_targets(text, kind, cur_dir, root):
+                via = f"{chain}, which imports {spec}"
+                if targets is False:
+                    return f"{via}, a module the gate cannot find, so it cannot see what that runs"
+                for target in targets:
+                    target = os.path.realpath(target)
+                    if target in seen:
+                        continue
+                    seen.add(target)
+                    if len(seen) > IMPORT_MAX_FILES:
+                        return (f"{start} imports more than {IMPORT_MAX_FILES} modules, past what the gate "
+                                "reads, so it cannot see what they run")
+                    try:
+                        with open(target, "rb") as f:
+                            found = f.read(MAX_FILE).decode("utf-8", "replace")
+                    except OSError:
+                        return f"{via} ({target}), a module the gate cannot read, so it cannot see what that runs"
+                    hit = MARKER.search(found)
+                    if hit:
+                        return f"{via} ({target}), which posts to Slack (it names {hit.group(0)})"
+                    queue.append((target, os.path.dirname(target), found, f"{via} ({os.path.basename(target)})"))
+        return None
+
+    def import_targets(self, text, kind, cur_dir, root):
+        """(the import as written, the files it runs, or False when it names a local file not there),
+        for each import in text; a package or a builtin gives an empty list."""
+        if kind == "js":
+            for m in IMPORT_SPEC.finditer(text):
+                spec = m.group(2)
+                if "${" in spec:
+                    continue
+                target = self.resolve_import(spec, cur_dir)
+                if target is not None:
+                    yield spec, ([target] if target else False)
+            return
+        for level, module, names in self.py_imports(text):
+            spec = "." * level + module + (f" import {', '.join(names)}" if level and not module else "")
+            yield spec, self.resolve_py(level, module, names, cur_dir, root)
+
+    @staticmethod
+    def py_imports(text):
+        """(level, module, names) for each import statement in Python source, by its syntax tree, or
+        by each statement's first line when this python3 cannot parse it."""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            out = []
+            for m in PY_IMPORT_LINE.finditer(text):
+                if m.group(3) is not None:
+                    out += [(0, a.split()[0], ()) for a in m.group(3).split(",") if a.split()]
+                else:
+                    dots = len(m.group(1)) - len(m.group(1).lstrip("."))
+                    names = tuple(a.split()[0] for a in m.group(2).split(",") if a.split())
+                    out.append((dots, m.group(1)[dots:], names))
+            return out
+        out = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                out += [(0, a.name, ()) for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                out.append((node.level, node.module or "", tuple(a.name for a in node.names)))
+        return out
+
+    @staticmethod
+    def resolve_py(level, module, names, cur_dir, root):
+        """The local files a Python import runs (each package's __init__.py, the module, and any
+        submodule it names), an empty list for one not on disk under root (the standard library or an
+        installed package), or False for a relative import, or a local package's missing part, that
+        names nothing there."""
+        base = cur_dir if level else root
+        for _ in range(max(level - 1, 0)):
+            base = os.path.dirname(base)
+        parts = [p for p in module.split(".") if p]
+        found, d = [], base
+        for i, part in enumerate(parts):
+            p = os.path.join(d, part)
+            if os.path.isfile(p + ".py"):
+                found.append(p + ".py")
+                return found  # a module: what follows its name is an attribute, not a file
+            if os.path.isdir(p):
+                if os.path.isfile(os.path.join(p, "__init__.py")):
+                    found.append(os.path.join(p, "__init__.py"))
+                d = p
+                continue
+            return False if (level or i) else []
+        if level and not parts and os.path.isfile(os.path.join(d, "__init__.py")):
+            found.append(os.path.join(d, "__init__.py"))
+        for n in names:
+            if n == "*":
+                continue
+            p = os.path.join(d, n)
+            if os.path.isfile(p + ".py"):
+                found.append(p + ".py")
+            elif os.path.isfile(os.path.join(p, "__init__.py")):
+                found.append(os.path.join(p, "__init__.py"))
+            elif level and not parts and not os.path.isfile(os.path.join(d, "__init__.py")):
+                return False  # `from . import n` with no module n and no package to hold it
+        return found
+
+    @staticmethod
+    def resolve_import(spec, base):
+        """The file a relative or absolute import names, False when none is there, or None for a
+        package or a node builtin. Tried as node and TypeScript do: the path itself, with each
+        extension, the .ts a .js names, a folder's package.json main, and a folder's index."""
+        spec = spec.split("?", 1)[0]
+        if spec.startswith("file://"):
+            spec = spec[len("file://"):]
+        if not (spec.startswith("./") or spec.startswith("../") or spec in (".", "..") or spec.startswith("/")):
+            return None
+        p = os.path.normpath(os.path.join(base, spec))
+        stem, ext = os.path.splitext(p)
+        tries = [p] + [p + e for e in JS_EXT + (".json",)] + [stem + e for e in JS_TO_TS.get(ext, ())]
+        if os.path.isdir(p):
+            try:
+                with open(os.path.join(p, "package.json"), "rb") as f:
+                    main = json.loads(f.read(MAX_FILE).decode("utf-8", "replace")).get("main")
+                if isinstance(main, str) and main:
+                    m = os.path.normpath(os.path.join(p, main))
+                    tries += [m] + [m + e for e in JS_EXT] + [os.path.join(m, "index" + e) for e in JS_EXT]
+            except (OSError, ValueError, AttributeError):
+                pass
+            tries += [os.path.join(p, "index" + e) for e in JS_EXT + (".json",)]
+        for t in tries:
+            if os.path.isfile(t):
+                return t
+        return False
 
     def line(self, s, cwd, depth, whole):
         """The reason a command line posts, or None."""
@@ -192,17 +384,25 @@ class Judge:
             if hit:
                 return f"{name} runs code naming {hit.group(0)}"
             operand, inline, stdin = self.operands(words)
+            lang = "js" if JS_RUNTIME.match(name) else "py" if PY_RUNTIME.match(name) else None
+            here = os.path.abspath(d or os.getcwd())
             if inline:
-                return None
+                # The code imports from the directory it runs in (claude-config#2318).
+                code = next((words[k + 1] for k in range(1, len(words) - 1)
+                             if words[k] in INLINE or INLINE_CLUSTER.match(words[k])), text)
+                return self.imports(f"the code given to {name}", None, here, code, lang) if lang else None
             if "-m" not in words[1:]:
-                reason = self.every_file(words, d, depth, False)
+                reason = self.every_file(words, d, depth, False, lang)
                 if reason:
                     return reason
             if operand and operand != "-":
                 return None  # read above with every other word naming a file
             if stdin:
-                hit = MARKER.search(self.fed(text, whole)[0])
-                return f"{name} runs a script from its input that names {hit.group(0)}" if hit else None
+                fed = self.fed(text, whole)[0]
+                hit = MARKER.search(fed)
+                if hit:
+                    return f"{name} runs a script from its input that names {hit.group(0)}"
+                return self.imports(f"the script {name} reads from its input", None, here, fed, lang) if lang else None
             return None
         if name in ("source", "."):
             return self.script(words[1], d, depth, True) if len(words) > 1 else None
@@ -212,7 +412,7 @@ class Judge:
             return self.script(words[0], d, depth, False)
         return None
 
-    def every_file(self, words, d, depth, shell_hint):
+    def every_file(self, words, d, depth, shell_hint, lang=None):
         """The reason any word after the program that names a file posts, or None.
 
         Which word is the script depends on each program's own option table (python3 -I takes no
@@ -222,7 +422,7 @@ class Judge:
         for w in words[1:]:
             if w.startswith("-") or w.startswith("+") or self.sw.REDIRECT_WORD.match(w):
                 continue
-            reason = self.script(w, d, depth, shell_hint)
+            reason = self.script(w, d, depth, shell_hint, lang)
             if reason:
                 return reason
         return None
