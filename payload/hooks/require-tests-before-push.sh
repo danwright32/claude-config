@@ -338,7 +338,8 @@ diff_docs_only() {
 }
 
 # Lines of context the docs-only check reads around each change: the whole file, so a
-# '*' line can be placed inside or outside the block comment it sits in.
+# '*' line can be placed inside or outside the block comment it sits in, and a Python
+# line inside or outside a docstring.
 DOCS_ONLY_CONTEXT=1000000
 
 # A mod's copy of a mod-kit helper, tested by mod-kit's own tests (claude-config#2258). Every mod
@@ -384,6 +385,32 @@ modkit_note() {
   echo "which mod-kit's tests import, so they were counted as tested and not judged:"
   printf '%s' "$modkit_list"
   echo ""
+}
+
+# A Python file's diff on stdin, written back with each changed line lying wholly inside a
+# docstring turned into a '#' comment, so diff_docs_only reads it as the documentation it is
+# (claude-config#2247). lib/py-docstring-lines.py decides, with Python's own parser over both
+# images of the file, and leaves alone anything it cannot place: an ordinary string, code on a
+# docstring's line, a file that does not parse. It rewrites line for line, so any other line count
+# (no python3, the helper missing or dying part way) means the diff goes on exactly as git gave
+# it, and the file is judged as it was before. The diff is held in files rather than a shell
+# variable, so the raw diff passed on is byte for byte what git wrote. Where no scratch file can be
+# made, the diff passes straight through untouched; where the diff cannot be written to one, nothing
+# is passed on, which diff_docs_only reads as not documentation, so the gate fails closed.
+py_docstrings_as_comments() {
+  local in="" out=""
+  { in="$(mktemp)" && out="$(mktemp)"; } || { rm -f "$in"; cat; return 0; }
+  if ! cat > "$in"; then
+    rm -f "$in" "$out"
+    return 0
+  fi
+  if python3 "$HOOK_DIR/lib/py-docstring-lines.py" < "$in" > "$out" 2>/dev/null \
+      && [ -s "$out" ] && [ "$(wc -l < "$out")" -eq "$(wc -l < "$in")" ]; then
+    cat "$out"
+  else
+    cat "$in"
+  fi
+  rm -f "$in" "$out"
 }
 
 source_changed=0
@@ -487,9 +514,10 @@ if [ "$test_changed" -eq 0 ]; then
     [ -z "$f" ] && continue
     examined=$((examined+1))
     style="$(docs_style_for "$f")"
-    if ! PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | diff_docs_only "$style"; then
-      docs_only=0; break
-    fi
+    case "$f" in
+      *.py) PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | py_docstrings_as_comments | diff_docs_only "$style" ;;
+      *) PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | diff_docs_only "$style" ;;
+    esac || { docs_only=0; break; }
   done <<DOCS_ONLY_EOF
 $source_paths
 DOCS_ONLY_EOF

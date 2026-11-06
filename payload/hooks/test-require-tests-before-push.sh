@@ -89,6 +89,80 @@ want_notdocsonly slash "$(printf -- 'diff --git a/h.js b/h.js\n--- a/h.js\n+++ b
 # A line holding code beside a comment is code, whichever comes first.
 want_notdocsonly slash "$(printf -- 'diff --git a/i.js b/i.js\n--- a/i.js\n+++ b/i.js\n@@ -1,2 +1,2 @@\n x = 1;\n-/* a */ y = 2;\n+/* b */ y = 3;\n')"
 
+# --- claude-config#2247: a line inside a Python docstring is documentation ---
+# A docstring (the first statement of a module, class or function, when it is a plain string, as
+# Python defines it) is read by lib/py-docstring-lines.py with Python's own parser, from both images
+# of the file, and each changed line lying wholly inside one is handed to the reader as a '#'
+# comment. Anything else is judged as before: an ordinary string, a string that is not the first
+# statement, code on the docstring's own line, a file either image of which does not parse, and a
+# diff not covering the file from its first line.
+HOOK_DIR="$DIR"
+eval "$(sed -n '/^py_docstrings_as_comments() {/,/^}/p' "$HOOK")"
+want_pydocs()    { if printf '%s' "$1" | py_docstrings_as_comments | diff_docs_only hash; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2247 expected DOCS-ONLY: [$1]"; fi; }
+want_notpydocs() { if printf '%s' "$1" | py_docstrings_as_comments | diff_docs_only hash; then fail=$((fail+1)); echo "FAIL: #2247 expected NOT-docs-only: [$1]"; else pass=$((pass+1)); fi; }
+PYH='diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n'
+# Newly let through: a function, class, async function or module docstring reworded, one line or
+# several, with a comment after its closing quotes, or with a comment changed beside it.
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,5 +1,5 @@\n """Module summary.\n \n-Old detail.\n+New detail.\n """\n import os\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,4 +1,4 @@\n class A:\n     """Summary.\n-    old\n+    new\n     """\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n async def g():\n-    """Old."""  # note\n+    """New."""  # note\n     return 2\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,4 @@\n def f():\n-    """Old."""\n+    # a comment\n+    """New."""\n     return 1\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    r"""Raw \\d old."""\n+    r"""Raw \\d new."""\n     return 1\n')"
+# Still refused: a docstring and a code line changed together.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n-    return 1\n+    """New words."""\n+    return 2\n')"
+# Still refused: an ordinary string literal, and a string statement that is not the first.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,1 +1,1 @@\n-x = """old"""\n+x = """new"""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n     y = 1\n-    """old"""\n+    """new"""\n')"
+# Still refused: a bytes string and an f-string are not docstrings.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f():\n-    b"""old"""\n+    b"""new"""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f():\n-    f"""old"""\n+    f"""new"""\n')"
+# Still refused: code on the docstring's own line, before it or after it.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f():\n-    """Doc."""; x = 1\n+    """Doc."""; x = 2\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,1 +1,1 @@\n-def f(): """Old."""\n+def f(): """New."""\n')"
+# Still refused: a file that does not parse, in the new image or the old one.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f(:\n-    """Old."""\n+    """New."""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n-def f(:\n+def f():\n     """Doc."""\n')"
+# Still refused: code moved into a docstring, or out of one, is code in the image it is code in.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Doc."""\n-    return 1\n+    """Doc.\n+    return 1"""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Doc.\n-    return 1"""\n+    """Doc."""\n+    return 1\n')"
+# Still refused: a diff not read from the file's first line, or in two hunks, places no line.
+want_notpydocs "$(printf -- "$PYH"'@@ -4,3 +4,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n@@ -9,2 +9,2 @@\n def g():\n-    """Old."""\n+    """New."""\n')"
+# Still refused: a hunk header that cannot be read.
+want_notpydocs "$(printf -- "$PYH"'@@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+# Still refused: a file whose own code reads __doc__ (a usage message or an argparse description
+# cut from its docstring, as regal-journey-edits/jdiff.py does) runs on its docstrings, so none
+# of them is documentation there.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,5 +1,5 @@\n """Tool.\n \n-Usage: old\n+Usage: new\n """\n USAGE = __doc__.split("\\n\\n")[1]\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old."""\n+    """New."""\n print(f.__doc__)\n')"
+# Still refused: no change at all, as before.
+want_notpydocs ""
+# When the helper cannot be trusted, the diff goes on exactly as git gave it: a docstring change is
+# judged as code again, and a plain '#' comment change still passes as it did before #2247.
+PYDOC_OK="$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+PYCOMMENT="$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    # old words\n+    # new words\n     return 1\n')"
+PYFAKE="$(mktemp -d)"
+mkdir -p "$PYFAKE/missing/lib" "$PYFAKE/short/lib" "$PYFAKE/dies/lib"
+printf '%s\n' 'import sys' 'sys.stdout.write("+# x\n")' > "$PYFAKE/short/lib/py-docstring-lines.py"
+printf '%s\n' 'import sys' 'sys.stdout.write("+# x\n")' 'sys.exit(3)' > "$PYFAKE/dies/lib/py-docstring-lines.py"
+for PYCASE in missing short dies; do
+  HOOK_DIR="$PYFAKE/$PYCASE"
+  want_notpydocs "$PYDOC_OK"
+  want_pydocs "$PYCOMMENT"
+done
+HOOK_DIR="$DIR"
+# No scratch file can be made: the diff passes through untouched, judged as before.
+mktemp() { return 1; }
+want_notpydocs "$PYDOC_OK"
+want_pydocs "$PYCOMMENT"
+# A scratch file is made but the diff cannot be written to it: nothing goes on, which is never
+# documentation, so even a comment change is refused rather than judged on part of its diff.
+mktemp() { printf '%s\n' "$PYFAKE/no-such-dir/x"; }
+want_notpydocs "$PYCOMMENT"
+unset -f mktemp
+rm -rf "$PYFAKE"
+
 # ===========================================================================
 # END TO END: drive the real hook and assert its exit code. (#734)
 #
@@ -871,6 +945,49 @@ W="$(mk_repo)"
 ( cd "$W" && printf '/* the factor */\nconst a = b\n  * 3;\n' > lib/n.js && git add lib/n.js && git commit -qm bump ) >/dev/null 2>&1
 run_hook "$W" "git push"
 want_code 2 "#1238 a leading-operator change below a closed block comment still BLOCKS"
+
+# claude-config#2247: rewording a line inside a Python docstring is documentation. On 2026-11-04 a
+# two line docstring fix in lib/ai-review-run.py needed a one time override. The docstring's opening
+# quotes sit more than git's three lines of default context above the changed line, so only a diff
+# read with the whole file around it can place the line inside it.
+PYDOC_BEFORE='"""Adds numbers.\n\nBoth may be negative.\nNeither may be NaN.\n\nReturns their sum.\n"""\n\n\ndef add(a, b):\n    """Add two numbers.\n\n    Both may be negative.\n    Neither may be NaN.\n\n    Returns their sum.\n    """\n    return a + b\n'
+PYDOC_AFTER='"""Adds numbers.\n\nBoth may be negative.\nNeither may be NaN.\n\nReturns the sum of both.\n"""\n\n\ndef add(a, b):\n    """Add two numbers.\n\n    Both may be negative.\n    Neither may be NaN.\n\n    Returns the sum of both.\n    """\n    return a + b\n'
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$PYDOC_BEFORE" > lib/doc.py && git add lib/doc.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf "$PYDOC_AFTER" > lib/doc.py && git add lib/doc.py && git commit -qm reword ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 0 "#2247 rewording inside a module and a function docstring is allowed"
+# The same edit made by the commit in the command, which reads a different diff.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$PYDOC_BEFORE" > lib/doc.py && git add lib/doc.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf "$PYDOC_AFTER" > lib/doc.py ) >/dev/null 2>&1
+run_hook "$W" "git add lib/doc.py && git commit -m reword && git push"
+want_code 0 "#2247 the same docstring rewording made by the command's own commit is allowed"
+# The docstring reworded and the code beside it changed still blocks.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$PYDOC_BEFORE" > lib/doc.py && git add lib/doc.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+PYDOC_BOTH='"""Adds numbers.\n\nBoth may be negative.\nNeither may be NaN.\n\nReturns the sum of both.\n"""\n\n\ndef add(a, b):\n    """Add two numbers.\n\n    Both may be negative.\n    Neither may be NaN.\n\n    Returns the sum of both.\n    """\n    return a - b\n'
+( cd "$W" && printf "$PYDOC_BOTH" > lib/doc.py && git add lib/doc.py && git commit -qm both ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 a docstring and a code line changed together still BLOCKS"
+# An ordinary triple quoted string is a value, not a docstring, and still blocks.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'def f():\n    x = 1\n    return """old\n    words"""\n' > lib/s.py && git add lib/s.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf 'def f():\n    x = 1\n    return """new\n    words"""\n' > lib/s.py && git add lib/s.py && git commit -qm bump ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 changing an ordinary triple quoted string still BLOCKS"
+# A file Python cannot parse is judged as before, so a docstring edit in it still blocks.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'def f(:\n    """Old."""\n' > lib/e.py && git add lib/e.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf 'def f(:\n    """New."""\n' > lib/e.py && git add lib/e.py && git commit -qm bump ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 a docstring edit in a file that does not parse still BLOCKS"
+# The same triple quoted lines in a Ruby file are judged as before: code.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'def f\n  """Old."""\nend\n' > lib/r.rb && git add lib/r.rb && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf 'def f\n  """New."""\nend\n' > lib/r.rb && git add lib/r.rb && git commit -qm bump ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 the same lines in a file that is not Python still BLOCK"
 
 # Mode-only change: the diff has no content lines, which is not the same as
 # having no change to see. Must block.
