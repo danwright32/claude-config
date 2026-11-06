@@ -457,6 +457,27 @@ fire_push "git push origin main" 0
 check "a diff over the cap is skipped and says the size and the cap" "over the 300 KB cap" "$OUT"
 check_eq "and starts nothing" 2 "$(calls)"
 
+# #2307: a diff over the cap only because of an embedded image is read with the image's base64 left
+# out, and the start line names what was not read. The big file is removed in a push of its own
+# first (its removal is over the cap too, so it is skipped), so this push's diff holds only the image.
+G rm -q src/huge.ts
+G commit -q -m "remove huge"
+G push -q origin main 2>/dev/null
+fire_push "git push origin main" 0
+python3 -c '
+import sys
+with open(sys.argv[1], "w") as f:
+    f.write("export const logo = \"data:image/png;base64," + "QUJD" * 100000 + "\";\n")
+    f.write("export const size = 64;\n")
+' "$REPO/src/logo.ts"
+G add src/logo.ts; G commit -q -m logo
+G push -q origin main 2>/dev/null
+fire_push "git push origin main" 0
+check "#2307 an image over the cap is read with its base64 left out" "started in the background" "$OUT"
+check "#2307 and the start line names it by file and line" "src/logo.ts line 1" "$OUT"
+check "#2307 saying what kind of thing was left out" "embedded base64" "$OUT"
+wait_for_final "$(G rev-parse HEAD)" && ok || bad "#2307 that review finishes before section 4 counts calls"
+
 # ===========================================================================
 # 4. The deadline: a review that does not return is recorded as unfinished, and the fake is killed.
 # ===========================================================================

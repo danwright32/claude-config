@@ -1,7 +1,8 @@
 // The design round guard's two questions (claude-config#978) and which asks of them it answers
 // (#2253). The guard counts Dan's answer only from its own picker, a question asked with its
 // metadata source, so a question in its words asked any other way lets nothing through; picker
-// manners reads that here before writing an answer onto the issue, where it would read as settled.
+// manners reads that here before writing an answer onto the issue, where it would read as settled,
+// and scope modes' /sleep before asking an issue's Open questions item (#2261).
 // Pure. Kept here once and copied byte for byte into each mod that asks it
 // (hooks/mod-kit/designquestions.ts, which tools/check-mod-shared-parts.sh holds to this one),
 // since a mod cannot import another mod's files.
@@ -25,8 +26,15 @@ const SKIPS = /\bskip\s+(?:the\s+)?design\s+rounds?\b/i
 const SETTLED = DESIGN_SETTLED_QUESTION.toLowerCase()
 
 /**
+ * Whether a question's words ask what only the guard's own picker can settle, however it is asked
+ * (#2261): /sleep reads an issue's Open questions with no picker metadata, so it never asks such an
+ * item or checks it off.
+ */
+export const guardQuestion = (question: string): boolean =>
+  SKIPS.test(question) || question.split(/\s+/).filter(Boolean).join(' ').toLowerCase().includes(SETTLED)
+
+/**
  * Whether a question asks what only the guard's own picker can settle, asked without it (#2253): its
  * answer records nothing the guard reads, so it must not be written anywhere as settled.
  */
-export const guardIgnores = (question: string, source: unknown): boolean =>
-  !guardAsks(source) && (SKIPS.test(question) || question.split(/\s+/).filter(Boolean).join(' ').toLowerCase().includes(SETTLED))
+export const guardIgnores = (question: string, source: unknown): boolean => !guardAsks(source) && guardQuestion(question)

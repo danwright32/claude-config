@@ -242,7 +242,10 @@ if [ -e "$final_file" ] || [ -e "$pending_file" ]; then
 fi
 
 CODE_PATHS=('*.ts' '*.tsx' '*.js' '*.jsx' '*.py' '*.sh' '*.sql')
-# Generated files at no context (claude-config#591), by the same helper the pull request review uses.
+# Generated files at no context (claude-config#591), by the same helper the pull request review uses,
+# which leaves embedded base64 out (#2307); each run left out is logged here and named below.
+export AR_EMBEDDED_LOG="$diff_file.embedded"
+rm -f "$AR_EMBEDDED_LOG"
 ar_review_diff "$(ar_generated_paths "$mb" "$head_sha" "${CODE_PATHS[@]}")" "$mb" "$head_sha" "${CODE_PATHS[@]}" > "$diff_file" 2>/dev/null \
   || { rm -f "$diff_file"; say "skipped: git could not produce the diff $short_mb..$short_head."; }
 
@@ -297,6 +300,13 @@ context_note="diff alone"
 if [ "$files_in" -gt 0 ] || [ "$files_out" -gt 0 ]; then
   context_note="diff plus the full text of $files_in of $((files_in + files_out)) changed files"
   [ "$files_out" -gt 0 ] && context_note="$context_note; left out for size:$left_out"
+fi
+if [ -s "$AR_EMBEDDED_LOG" ]; then
+  LC_ALL=C sort -u -o "$AR_EMBEDDED_LOG" "$AR_EMBEDDED_LOG"
+  embedded_note="$(ar_embedded_note "$AR_EMBEDDED_LOG")"
+  context_note="$context_note; ${embedded_note%.}"
+else
+  rm -f "$AR_EMBEDDED_LOG"   # kept only when it lists something, since the note may point at it
 fi
 
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
