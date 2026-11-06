@@ -6157,9 +6157,9 @@ git repository sends it: one that carries a Slack marker and names the template 
 relative import, or its python module. The card and refusal name that sender. The search is one
 `git grep` for files holding both the template's name and the word slack or postMessage, then a
 read of each, all within 3 seconds per call; a search that fails, runs out of time, meets an
-unreadable file, or finds more than 200 files to read holds the call as could not check. A file in no git repository is not searched,
-and a template reached only through a re-exporting index is not followed. A shell write to a path
-the write reader cannot name is outside it.
+unreadable file, or finds more than 200 files to read holds the call as could not check. A file in
+no git repository is not searched, and a template reached only through a re-exporting index is not
+followed. A shell write to a path the write reader cannot name is outside it.
 
 </td><td>
 
