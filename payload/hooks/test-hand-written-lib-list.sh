@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Tests for lib/install-hook-libs.py, the one way a suite installs Python and shell hook helpers into a
+# Tests for lib/install-hook-libs.py, the one way a suite installs Python, shell and JavaScript
+# (#2298) hook helpers into a
 # scratch home or any folder standing in for hooks/lib (claude-config#2138), and for
 # lib/hand-written-lib-list.py, the scan that fails a suite copying one by hand instead (#2147).
 # A hand written list misses the module a helper starts importing, and the copy then fails only on
@@ -98,6 +99,61 @@ every_sh="$(cd "$DIR/lib" && ls -- *.sh)"
 said="$(cd "$DIR/lib" && python3 "$INSTALL" "$DIR/lib" "$TMPROOT/allsh" $every_sh 2>&1)"; rc=$?
 check_eq "#2204 every source line in every shell helper in lib/ resolves" "0|" "$rc|$said"
 
+# ---- the install follows what a JavaScript helper requires (#2298) ----
+# A require naming a file beside the helper brings it, in each spelling a helper uses (a relative
+# path with or without .js, path.join(__dirname, ...), __dirname + "/..."), and on through what that
+# one requires. A built in or package name, and a require in a comment or inside a quoted string,
+# brings nothing.
+mkdir -p "$TMPROOT/jssrc"
+cat > "$TMPROOT/jssrc/top.js" <<'TOP'
+const fs = require('fs');
+const path = require("path");
+const a = require('./by-relative');
+const b = require("./by-relative-ext.js");
+const c = require(path.join(__dirname, 'by-join.js'));
+const d = require(__dirname + "/by-concat.js");
+// const old = require('./in-line-comment.js');
+/* const older = require('./in-block-comment.js');
+   still the comment */
+const s = "require('./in-string.js')";
+const t = `require('./in-template.js')`;
+const re = /it's "quoted"/; const g = require('./after-regex.js');
+const half = d.length / 2; const h = require('./after-division.js');
+TOP
+printf "module.exports = require('./chained.js');\n" > "$TMPROOT/jssrc/by-relative.js"
+for f in by-relative-ext by-join by-concat after-regex after-division chained in-line-comment in-block-comment in-string in-template unrelated; do
+  printf 'module.exports = "%s";\n' "$f" > "$TMPROOT/jssrc/$f.js"
+done
+said="$(python3 "$INSTALL" "$TMPROOT/jssrc" "$TMPROOT/jsdest" top.js 2>&1)"; rc=$?
+check_eq "#2298 the install brings every helper a JavaScript helper requires beside it (after a regular expression holding quotes, and after a division), and what those require, and nothing named only by a built in, a comment or a quoted string" \
+  "0 after-division.js after-regex.js by-concat.js by-join.js by-relative-ext.js by-relative.js chained.js top.js " \
+  "$rc $(ls "$TMPROOT/jsdest" | tr '\n' ' ')${said:+ said: $said}"
+# A relative require naming a file the source folder does not have stops the install, naming it.
+mkdir -p "$TMPROOT/jsbad"
+printf "const x = require('./no-such-2298');\n" > "$TMPROOT/jsbad/needs-gone.js"
+said="$(python3 "$INSTALL" "$TMPROOT/jsbad" "$TMPROOT/jsbaddest" needs-gone.js 2>&1)"; rc=$?
+check_eq "#2298 the install refuses a helper requiring a file its folder does not have, naming it" \
+  "1 yes" "$rc $(says "needs-gone.js line 1 requires ./no-such-2298, which $TMPROOT/jsbad does not have" "$said")"
+# A require whose path is not written out, or reaches outside the folder, cannot be followed, so it
+# stops the install with its line, never skipped in silence.
+printf "const m = require(process.env.SOME_MODULE);\n" > "$TMPROOT/jsbad/dynamic.js"
+said="$(python3 "$INSTALL" "$TMPROOT/jsbad" "$TMPROOT/jsbaddest2" dynamic.js 2>&1)"; rc=$?
+check_eq "#2298 the install refuses a require whose path it cannot read, naming the helper and the line" \
+  "1 yes" "$rc $(says "dynamic.js line 1 requires process.env.SOME_MODULE, which could not be resolved to a file beside it" "$said")"
+printf "const m = require('../elsewhere.js');\n" > "$TMPROOT/jsbad/outside.js"
+said="$(python3 "$INSTALL" "$TMPROOT/jsbad" "$TMPROOT/jsbaddest3" outside.js 2>&1)"; rc=$?
+check_eq "#2298 the install refuses a require reaching outside the helper's folder, naming it" \
+  "1 yes" "$rc $(says "outside.js line 1 requires ../elsewhere.js, which could not be resolved to a file beside it" "$said")"
+# The real helpers: changelog-entry.test.js requires changelog-entry.js through path.join(__dirname).
+said="$(python3 "$INSTALL" "$DIR/lib" "$TMPROOT/ce" changelog-entry.test.js 2>&1)"; rc=$?
+check_eq "#2298 installing changelog-entry.test.js brings the changelog-entry.js it requires" \
+  "0 changelog-entry.js changelog-entry.test.js " \
+  "$rc $(ls "$TMPROOT/ce" | tr '\n' ' ')${said:+ said: $said}"
+# Every JavaScript helper in lib/ installs on its own: each require in every one resolves.
+every_js="$(cd "$DIR/lib" && ls -- *.js)"
+said="$(cd "$DIR/lib" && python3 "$INSTALL" "$DIR/lib" "$TMPROOT/alljs" $every_js 2>&1)"; rc=$?
+check_eq "#2298 every require in every JavaScript helper in lib/ resolves" "0|" "$rc|$said"
+
 # ---- the scan refuses when it cannot read the suites ----
 # Without lib/shell-words.py no line can be told from a heredoc's body, so nothing is judged, which
 # is said, and never reported as a tree with no hand written list.
@@ -137,17 +193,33 @@ check_eq "#2147 #2204 the scan sees each hand written copy of a Python or shell 
 printf '#!/usr/bin/env bash\npython3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$H/lib" sleep-report.py\n' > "$TMPROOT/scan/payload/hooks/test-clean.sh"
 clean="$(printf 'payload/hooks/test-clean.sh\n' | python3 "$SCAN" --root "$TMPROOT/scan" 2>&1)"; clean_rc=$?
 check_eq "#2147 control: a suite installing through lib/install-hook-libs.py passes in silence" "0|" "$clean_rc|$clean"
+# A JavaScript helper copied by hand is a list too (#2298): workflow-syntax.js and
+# dev-update-registry.js are installed beside the shell and Python ones, and a list naming them goes
+# stale the first time one requires another. A copy of a .js file outside lib/ is not a helper.
+cat > "$TMPROOT/scan/payload/hooks/test-probe-js.sh" <<'PROBE'
+#!/usr/bin/env bash
+cp "$DIR/lib/workflow-syntax.js" "$H/lib/"
+READER="$ROOT/payload/hooks/lib/dev-update-registry.js"
+cp "$READER" "$H/lib/dev-update-registry.js"
+cp "$(dirname "$READER")/changelog-entry.js" "$H/lib/"
+cp "$ROOT/tools/typescript/package.json" "$H/"
+cp "$WORK/stand-in.js" "$H/lib/workflow-syntax.js"
+PROBE
+probe="$(printf 'payload/hooks/test-probe-js.sh\n' | python3 "$SCAN" --root "$TMPROOT/scan" 2>&1)"; probe_rc=$?
+probe_lines="$(printf '%s\n' "$probe" | awk -F': ' 'NF { split($1, p, ":"); printf "%s=%s ", p[2], $2 }')"
+check_eq "#2298 the scan sees each hand written copy of a JavaScript helper (by path, through a variable, through dirname), and not a file outside lib/ or a stand in written under a helper's name" \
+  "1 2=workflow-syntax.js 4=dev-update-registry.js 5=changelog-entry.js " "$probe_rc $probe_lines"
 unr="$(printf 'payload/hooks/test-clean.sh\npayload/hooks/test-missing.sh\n' | python3 "$SCAN" --root "$TMPROOT/scan" 2>&1)"; unr_rc=$?
 case "$unr" in *"payload/hooks/test-missing.sh could not be read"*) unr_named=named ;; *) unr_named="unnamed: $unr" ;; esac
 check_eq "#2147 a listed suite that cannot be read stops the scan with exit 2 and is named, never skipped" "2 named" "$unr_rc $unr_named"
 
-# ---- and no suite anywhere copies a Python or shell helper by hand ----
+# ---- and no suite anywhere copies a Python, shell or JavaScript helper by hand ----
 # Every suite in the repository, read from the files git ships rather than a list of names (L96).
 SELF_TOP="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 FILES="$(bash "$DIR/lib/repo-files.sh" "$SELF_TOP" 2>/dev/null || true)"
 if [ -n "$SELF_TOP" ] && [ -f "$SELF_TOP/claude-sync" ] && [ -n "$FILES" ]; then
   found="$(printf '%s\n' "$FILES" | python3 "$SCAN" --root "$SELF_TOP" 2>&1)"; found_rc=$?
-  check_eq "#2147 #2204 no suite copies a Python or shell hook helper by hand; each installs through lib/install-hook-libs.py" \
+  check_eq "#2147 #2204 #2298 no suite copies a Python, shell or JavaScript hook helper by hand; each installs through lib/install-hook-libs.py" \
     "0" "$found_rc${found:+
 $found}"
 else
