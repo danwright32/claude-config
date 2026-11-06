@@ -1468,6 +1468,35 @@ want_code 0 "#2258 a mod with its own tested code and an identical copy passes"
 call_has "$JUDGE_LOG/call.1" "payload/mods/newmod/hooks/index.ts" "the mod's own code is judged"
 call_lacks "$JUDGE_LOG/call.1" "$COPY/hold.ts" "the counted copy is left out of what the judge reads"
 
+# claude-config#2337: when the gate cannot read the tree or git fails part way, an otherwise
+# identical, tested copy counts as nothing and is judged as untested source (refused, as before
+# #2258). A stub git on the path fails one call at a time: STUB_GIT_FAIL names which. The control
+# case runs the same stub with nothing to fail and must still let the copy through, so each refusal
+# below is the failure's doing and not the stub's.
+FAKE_GIT_2337="$TMPROOT/fake-git-2337"; mkdir -p "$FAKE_GIT_2337"
+cat > "$FAKE_GIT_2337/git" <<STUB
+#!/usr/bin/env bash
+case "\${STUB_GIT_FAIL:-}" in
+  tree) [ "\${1:-}" = rev-parse ] && [[ "\$*" == *'HEAD^{tree}'* ]] && exit 128 ;;
+  copy) [ "\${1:-}" = ls-tree ] && [[ "\$*" == *newmod* ]] && exit 128 ;;
+  src)  [ "\${1:-}" = ls-tree ] && [[ "\$*" == *mod-kit/hooks/hold.ts* ]] && [[ "\$*" != *newmod* ]] && exit 128 ;;
+  grep) [ "\${1:-}" = grep ] && exit 128 ;;
+  emptytree) [ "\${1:-}" = rev-parse ] && [[ "\$*" == *'HEAD^{tree}'* ]] && exit 0 ;;
+esac
+exec "$GIT_REAL" "\$@"
+STUB
+chmod +x "$FAKE_GIT_2337/git"
+for mode in none tree copy src grep emptytree; do
+  W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n' "new mod"
+  STUB_GIT_FAIL="$mode" run_hook "$W" "git push" "$FAKE_GIT_2337:$PATH_STUB"
+  if [ "$mode" = none ]; then
+    want_code 0 "#2337 control: the same stub with nothing failing still counts the identical copy"
+  else
+    want_code 2 "#2337 an identical copy counts as nothing when git fails at: $mode"
+    want_stderr "$COPY/hold.ts" "#2337 the copy is judged as untested source when git fails at: $mode"
+  fi
+done
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
