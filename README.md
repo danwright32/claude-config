@@ -6246,9 +6246,10 @@ same box as text, shaped like SESSION REFLECTION.
 
 Holds every edit that changes the wording a Slack alert sends until Dan has seen the message as
 Slack will post it and approved it (Dan, 2026-11-04: "anytime a slack alert is created, we need to
-have a design-rounds esque check on wording so I can approve the wording before it's created"). Only
-a code or config file that posts to Slack counts: one naming a Slack webhook, the chat API, a Slack
-SDK, a Slack env setting, or a send helper named for Slack, called or imported. A Write, Edit or
+have a design-rounds esque check on wording so I can approve the wording before it's created"). A
+code or config file that posts to Slack counts: one naming a Slack webhook, the chat API, a Slack
+SDK, a Slack env setting, or a send helper named for Slack, called or imported, and so does a
+template such a file sends (below). A Write, Edit or
 MultiEdit there that adds message text, changes it or takes it away is refused, a test file
 included. Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
@@ -6258,12 +6259,19 @@ test goes through without a second question, and any change to approved wording 
 shell command writing into such a file is held as a whole command, since the wording it leaves
 cannot be read before it runs. A subagent's call is refused and told to stop and report to the main
 session. The calls waiting on Dan are dropped at session end, and the guard's own record is never
-written by a call. A message template in a file with no Slack marker, and a shell write to a path
-the write reader cannot name, are outside it.
+written by a call. A template whose own file has no Slack marker (a code file, or a text template
+such as `.txt`, `.md` or `.hbs`, read line by line) is held the same way when another file in its
+git repository sends it: one that carries a Slack marker and names the template by its path, a
+relative import, or its python module. The card and refusal name that sender. The search is one
+`git grep` for files holding both the template's name and the word slack or postMessage, then a
+read of each, all within 3 seconds per call; a search that fails, runs out of time, meets an
+unreadable file, or finds more than 200 files to read holds the call as could not check. A file in
+no git repository is not searched, and a template reached only through a re-exporting index is not
+followed. A shell write to a path the write reader cannot name is outside it.
 
 </td><td>
 
-#2242
+#2242, #2248
 
 </td></tr>
 </tbody>
