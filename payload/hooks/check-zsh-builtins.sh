@@ -23,6 +23,18 @@
 # an argument at the start of a command or a quoted string, saying it could not be read, and erring
 # toward refusing since it cannot tell which shell runs it; everything else passes. The fix is always
 # one word, so there is no override.
+#
+# TIED NAMES (claude-config#2347). zsh ties the lowercase path to PATH, and cdpath, fpath, manpath and
+# module_path to CDPATH, FPATH, MANPATH and MODULE_PATH, so a command that assigns path replaces the
+# command search path and every later command fails with "command not found". On 2026-11-06 a loop
+# reading `while read -r repo path` had all 11 of its git calls fail with an empty error line. The
+# same judge, over the same reading, refuses a zsh command assigning one of those names: name=,
+# name+=, name[i]=, a prefix assignment, a loop's names (for, foreach, select), a declaring builtin
+# (local, export, typeset and the rest, except typeset -p printing a name with no value), read,
+# vared, getopts, print -v, printf -v and unset. It passes reading $path, path as an argument
+# (git log -- path/to), the uppercase PATH, a longer name (filepath, path_x), env path=x (the child's
+# environment), unset -f, and bash -c and sh -c, since bash ties nothing to a lowercase path. The fix
+# is a rename (p, repo_path), or the uppercase name when changing the search path is the point.
 
 HOW="In zsh, which runs the Bash tool here, log is the shell's own builtin, not the macOS log tool, so any argument makes it print only \"(eval):log:1: too many arguments\" and the real tool never runs. With the error hidden, or piped into wc, grep or tail, that reads as no matching log entries rather than as a failure (claude-config#2200)."
 
@@ -38,7 +50,10 @@ payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 # the word passes on, since a command sent as a list of its words (claude-config#2057) ends it with
 # a quote and a comma.
 FAST='(^|[^A-Za-z0-9_./~-]|\\[nt])log([^A-Za-z0-9_./~-]|$)'
-payload_match "$payload" "$FAST" || exit 0
+# The same for the names zsh ties to an uppercase twin (claude-config#2347). A $ in front is a read.
+TIED_NAMES='(path|cdpath|fpath|manpath|module_path)'
+TIED_FAST='(^|[^A-Za-z0-9_./~$-]|\\[nt])'"$TIED_NAMES"'([^A-Za-z0-9_./~-]|$)'
+payload_match "$payload" "$FAST" || payload_match "$payload" "$TIED_FAST" || exit 0
 
 shell_name="${SHELL##*/}"
 if [ -n "$shell_name" ] && [ "$shell_name" != zsh ]; then
@@ -55,10 +70,29 @@ not_judged() {   # $1 = why it could not be read
   local crude='(^|"command"[[:space:]]*:[[:space:]]*"|[;&|({`'\''"'$'\n'']|\\n|\$\()[[:space:]]*log[[:space:]]+[^[:space:]"]'
   payload_match "$payload" "$tool" || exit 0
   [ "$have_ps" = 1 ] && text="$(ps_payload_text "$payload")"
-  payload_match "$text" "$crude" || exit 0
-  echo "BLOCKED: this command seems to run log with an argument, and it could not be read word by word: $1. $HOW Write the full path, /usr/bin/log, or put command in front (command log), which looks only for programs." >&2
-  exit 2
+  if payload_match "$text" "$crude"; then
+    echo "BLOCKED: this command seems to run log with an argument, and it could not be read word by word: $1. $HOW Write the full path, /usr/bin/log, or put command in front (command log), which looks only for programs." >&2
+    exit 2
+  fi
+  local pattern
+  for pattern in "$TIED_SET" "$TIED_DECLARED" "$TIED_LOOP" "$TIED_READ"; do
+    payload_match "$text" "$pattern" || continue
+    echo "BLOCKED: this command seems to assign path, or another name zsh ties to an uppercase twin, and it could not be read word by word: $1. $TIED_HOW" >&2
+    exit 2
+  done
+  exit 0
 }
+
+# The crude readings of a tied name being assigned (claude-config#2347), each at the start of a
+# command or of a quoted string: name= (or name+=, name[i]=, behind a declaring builtin), a declaring
+# builtin or unset naming it, a loop's names, and the names read, vared or getopts store into.
+TIED_START='(^|"command"[[:space:]]*:[[:space:]]*"|[;&|({`'\''"'$'\n'']|\\n|\$\()[[:space:]]*'
+TIED_DECLARER='(local|export|typeset|declare|readonly|integer|float|private|unset)[[:space:]]+([-+][^[:space:]]*[[:space:]]+)*'
+TIED_SET="$TIED_START($TIED_DECLARER)?$TIED_NAMES"'(\[[^]]*\])?\+?='
+TIED_DECLARED="$TIED_START$TIED_DECLARER$TIED_NAMES"'([^A-Za-z0-9_./~-]|$)'
+TIED_LOOP='(^|[^A-Za-z0-9_])(for|foreach|select)[[:space:]]+([A-Za-z_][A-Za-z0-9_]*[[:space:]]+)*'"$TIED_NAMES"'([[:space:](\\]|$)'
+TIED_READ='(^|[^A-Za-z0-9_./-])(read|vared|getopts)[[:space:]]+([^;&|]*[[:space:]])?['\''"]?'"$TIED_NAMES"'([^A-Za-z0-9_./~-]|$)'
+TIED_HOW="In zsh, which runs the Bash tool here, path is tied to PATH (and cdpath, fpath, manpath and module_path to CDPATH, FPATH, MANPATH and MODULE_PATH), so assigning it, in a loop (for path in, while read -r repo path), a read, a declaration or a plain path=, replaces the command search path, and every later command fails with \"command not found\" (claude-config#2347). Rename the variable to one zsh does not tie, for example p or repo_path; to change the search path on purpose, assign the uppercase PATH."
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
@@ -76,13 +110,18 @@ if [ "$have_ps" = 1 ]; then ps_reader_missing python3; else ! command -v python3
   && not_judged "python3 is not on PATH, and the command's words are read with it"
 [ -f "$JUDGE" ] || not_judged "$JUDGE, the judge, is missing (reinstall the hooks with claude-sync pull)"
 
-# The judge exits 0 to pass, 3 to refuse (printing the fix), and 4 when it could not read the
-# command (printing why). Anything else is the judge failing, and the crude reading decides.
+# The judge exits 0 to pass, 3 to refuse log (printing the fix), 5 to refuse a tied name being
+# assigned (printing the name and its uppercase twin), and 4 when it could not read the command
+# (printing why). Anything else is the judge failing, and the crude reading decides.
 said="$(printf '%s' "$payload" | python3 "$JUDGE")"
 case $? in
   0) exit 0 ;;
   3)
     echo "BLOCKED: this command runs log with an argument. $HOW Write the full path instead, $said, or put command in front (command log), which looks only for programs." >&2
+    exit 2 ;;
+  5)
+    name="${said%% *}"; twin="${said##* }"
+    echo "BLOCKED: this command assigns $name, which zsh, running the Bash tool here, ties to $twin: assigning it replaces $twin, so every later command in the call fails with \"command not found\" (claude-config#2347). Rename it to a name zsh does not tie, for example p or repo_path; to change $twin on purpose, assign $twin itself." >&2
     exit 2 ;;
   4) not_judged "$said" ;;
   *) not_judged "$JUDGE failed while reading it" ;;
