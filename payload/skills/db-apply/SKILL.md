@@ -33,7 +33,36 @@ Try in order, and record which one works in the project's memory so future sessi
 
 2. **Ad hoc SQL (backfills, one off fixes, reads):** the Supabase MCP `execute_sql` tool, with the project id. It needs no local tools. When it refuses a write because the connection is read only (an error saying the statement cannot run in a read only transaction), go to the next path. For a schema change in a project with no `supabase/migrations` folder, `apply_migration` is the same tool for DDL and records the change in the database's migration history; in a project that has the folder, use path 1 instead, so the history and the repository agree.
 
-3. **psql, only where it is installed** (it was not on Daniels-MacBook-Pro-2 on 2026-10-08). Write the SQL to a file, then run it with the connection string read from the project's env file inside the command, so the command text never holds it. Use the variable name and env file the project actually uses (`DATABASE_URL` in `.env.local` here; `.dev.vars` and other names exist):
+3. **Ad hoc writes in a linked project: `supabase db query --linked`.** When the project directory has been linked with `supabase link`, this sends the SQL through the cached link and the Supabase Management API. No password or connection string is in the command and no env file is read, which is why it runs on the work MacBook, where a hook refuses any command that reads `.env.local`. That hook is right: never read, print or source an env file to get past it, and never route around it. Write the SQL to a file, then from the project directory:
+
+   ```bash
+   if ! command -v supabase >/dev/null; then echo "the supabase CLI is not installed, so nothing ran"; false; elif ! supabase db query --linked --file /dev/null --help >/dev/null 2>&1; then v="$(supabase --version 2>/dev/null | head -n 1)"; echo "this supabase CLI is version ${v:-unknown}, which does not accept db query --linked: that needs 2.79.0 or later, before 4.0. Nothing ran"; false; else supabase db query --linked --yes -f change.sql; fi
+   ```
+
+   `--yes` answers the confirmation a hosted database asks for, so nothing waits on a prompt. The middle test asks the CLI for the exact command and flags the last step uses, and asks only for their help: a CLI that has them prints it and exits 0, and one that lacks any of them exits non zero. It never carries `--yes` or the change file, so even a CLI that ignored `--help` would be sent an empty file and refuse it at the hosted confirmation. A bare `supabase db query --help` cannot be the test, because a CLI without the command prints the parent `db` help and exits 0 (measured on 2.75.0).
+
+   Versions, from Supabase's own records: `db query` arrived in 2.79.0 (release notes, 2026-03-16: "add `supabase db query` command for executing SQL"), with `--linked` and `-f`/`--file` from the start and `--yes` a global flag. In 3.0.0 (2026-11-02) `--linked` still works but is deprecated: it prints a warning naming `--remote`, and the CLI docs say it is "removed in v4". The line keeps `--linked` because it is the only form that runs on both 2.79.0 and later 2.x and on 3.x, while `--remote` exists only from 3.0.0. When either Mac reaches 4.0 the middle test refuses, naming the version; then change `--linked` to `--remote` in both places on this line, and put `--remote` last if the command ever gains an argument. The line was checked against 2.75.0 on the personal MacBook on 2026-11-04, which refuses, and against the 3.0.0 source and docs.
+
+   - **The CLI is older than 2.79.0, is 4.0 or later, or is not installed:** the line refuses, naming the version it found, and nothing is sent. Go to path 4 where it can run, otherwise path 5, and tell Dan in one line that `brew upgrade supabase` would open this path. Never upgrade it yourself.
+   - **The project is not linked:** the CLI exits non zero asking for a project ref or saying no project is linked, and nothing is sent. Stop and hand Dan `supabase link` to run in his own terminal, as in path 1. Never pass `--password` or `--db-url`.
+
+   **This command reports no row count for a write**, so section 4 is kept by the SQL itself. Wrap every data modifying statement in one `do` block that reads the count and raises when it is not exactly what was expected. A `do` block is one statement, so the raise rolls back everything inside it; put every write of one change in the same block, each with its own check, so a wrong count on any of them undoes all of them:
+
+   ```sql
+   do $$
+   declare n bigint;
+   begin
+     delete from public.example_table where id = any (array[101, 102, 103]);
+     get diagnostics n = row_count;
+     if n <> 3 then
+       raise exception 'expected 3 rows deleted from example_table, got %; nothing was changed', n;
+     end if;
+   end $$;
+   ```
+
+   The expected count comes from a select of the same `where` clause, run first and shown at the confirmation gate in section 3. A run that exits 0 proves the count matched; an exit with the raised message proves nothing changed. Then read it back: run a select that proves the data landed (the rows are gone, the new values are there), through the Supabase MCP `execute_sql` tool, or through this same path with `--read-only` added where the CLI has it, and report the count it shows. Schema changes do not take this path: they go through path 1 or `apply_migration`.
+
+4. **psql, only where it is installed** (it was not on Daniels-MacBook-Pro-2 on 2026-10-08). Write the SQL to a file, then run it with the connection string read from the project's env file inside the command, so the command text never holds it. Use the variable name and env file the project actually uses (`DATABASE_URL` in `.env.local` here; `.dev.vars` and other names exist):
 
    ```bash
    if ! command -v psql >/dev/null; then echo "psql is not installed, so nothing ran"; false; elif [ ! -f .env.local ]; then echo "there is no .env.local here, so nothing ran"; false; elif url="$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?DATABASE_URL=//p' .env.local | head -n 1 | tr -d "\"'")"; [ -z "$url" ]; then echo "DATABASE_URL is not set in .env.local, so nothing ran"; false; else psql "$url" -X -1 -v ON_ERROR_STOP=1 -f change.sql; fi
@@ -41,7 +70,7 @@ Try in order, and record which one works in the project's memory so future sessi
 
    `-1` runs the file as one transaction and `ON_ERROR_STOP=1` stops at the first error, so a failure leaves nothing half applied. An empty connection string is refused before psql starts, because psql given an empty one connects to its default local database instead. The connection string is still visible to other processes on this Mac while psql runs; it never reaches the transcript.
 
-4. **No write path exists:** hand Dan exactly one copy-paste block per statement, following the hand-off rules in the global CLAUDE.md, and the SQL must print its own result (counts, RETURNING) so he has something concrete to paste back.
+5. **No write path exists:** hand Dan exactly one copy-paste block per statement, following the hand-off rules in the global CLAUDE.md, and the SQL must print its own result (counts, RETURNING) so he has something concrete to paste back.
 
 ## 3. Confirmation gate for live data
 
@@ -49,7 +78,7 @@ Before any data-modifying statement (INSERT, UPDATE, DELETE, ALTER, migration) a
 
 ## 4. Row counts, always
 
-Every data-modifying statement reports how many rows it affected (RETURNING, `GET DIAGNOSTICS`, or the client's row count). "Done" without a count is not done. Read-only verification queries after a change are encouraged and need no confirmation.
+Every data-modifying statement reports how many rows it affected (RETURNING, `GET DIAGNOSTICS`, or the client's row count). On path 3, which prints no count for a write, that is the `do` block's checked count plus the read-back. "Done" without a count is not done. Read-only verification queries after a change are encouraged and need no confirmation.
 
 ## 5. Verify
 

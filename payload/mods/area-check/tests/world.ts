@@ -2,10 +2,11 @@ import { mock } from 'claude-code/testing'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import { pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
-import { pipelineIn } from './mod-kit/hooks/writes.ts'
+import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { DEADLINE_MS, DECIDE_TOOL, questionKey } from '../hooks/rules.ts'
+import { DEADLINE_MS, DECIDE_TOOL } from '../hooks/rules.ts'
+import { READ_SCRIPT, ROTATE_SCRIPT } from '../hooks/prline.ts'
 
 // The world the area check's tests run in, shared by every test file: mod-kit, the session
 // registry and scope modes standing in, and the commands the mod runs answered here.
@@ -30,7 +31,7 @@ export const deps: { name: string; register: Register } = {
           repo: async (input: unknown) => ask('repo', input),
           goal: async (input: unknown) => ask('goal', input),
           screen: async () => null, blocked: async (input: unknown) => ask('blocked', input), card: nope('card'), commands: nope('commands'), git: nope('git'), gh: async (input: unknown) => ask('gh', input),
-          writes: nope('writes'), pipeline: async (input: unknown) => ask('pipeline', input), workingTree: nope('workingTree'), ghRepo: nope('ghRepo'), linkRepo: nope('linkRepo'),
+          writes: async (input: unknown) => ask('writes', input), pipeline: async (input: unknown) => ask('pipeline', input), workingTree: nope('workingTree'), ghRepo: nope('ghRepo'), linkRepo: nope('linkRepo'),
           mergeHelper: async (command: unknown) => ask('mergeHelper', command), bandRow: nope('bandRow'), clearBandRow: nope('clearBandRow'), pane: nope('pane'), clearPane: nope('clearPane'),
           press: async () => ({ isAnswered: false }), clickable: async () => true, isDans: nope('isDans'), typedAnswer: async (input: unknown) => ask('typedAnswer', input),
           pythonText: nope('pythonText'), login: nope('login'), account: nope('account'), hold: nope('hold'), release: nope('release'),
@@ -73,7 +74,8 @@ export const scope: { name: string; register: Register } = {
 export const KIT = { plugins: [deps, scope] }
 
 export const HOME = '/Users/dan'
-export const LOG = `${HOME}/.claude-area-check/log.jsonl`
+export const DIR = `${HOME}/.claude-area-check`
+export const LOG = `${DIR}/log.jsonl`
 export const ERRORS = `${HOME}/.claude-area-check/errors.jsonl`
 export const T0 = Date.UTC(2026, 9, 22, 15, 0, 0)
 export const APP = '/w/app'
@@ -104,6 +106,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   const notes: Record<string, unknown>[] = []
   const holds: Record<string, unknown>[] = []
   const tools: string[] = []
+  const toolDescriptions: Record<string, string> = {}
   const ctl: {
     answer?: string | 'afk'
     asleep?: boolean
@@ -115,13 +118,26 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     pathsFails?: boolean
     refuse?: boolean
     slowLogOnce?: boolean
+    // mod-kit's shell reader failing (#2142), and the default branch's 90 days in place of NUMSTAT.
+    writesThrows?: boolean
+    // mod-kit's pipeline reader failing, and the session's folder failing to be read (#2173): the one
+    // inside the pull request check, the other before it, so the hook itself fails.
+    pipelineThrows?: boolean
+    cwdThrows?: boolean
+    numstat?: string
     sha: string
     goal: string | null
-    // The log as grep finds it (#1510): missing, unreadable, or its lines beside those the mod wrote.
+    // The log as the read finds it (#1510): missing, unreadable, or its lines beside those the mod wrote.
     log?: 'missing' | 'unreadable'
-    // The engine cut the bounded read of the log short (process.run's isStdoutTruncated).
+    // The engine cut the read of the log short (process.run's isStdoutTruncated).
     logTruncated?: boolean
     seeded: string[]
+    // The rotated files (#2143), by their names in rotated/: <stamp>.decisions.jsonl and <stamp>.rotating.
+    rotated: Record<string, string[]>
+    // One of them the read cannot open, by its name.
+    rotatedUnreadable?: string
+    // The rotation failing, with these words on stderr.
+    rotateFails?: string
     // The merge base each ref has with origin/main; a ref absent here cannot be read.
     bases: Record<string, string>
     // GitHub's answer to gh pr view, by its words after `gh pr view`.
@@ -129,6 +145,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     unreadableFiles: string[]
   } = {
     seeded: [],
+    rotated: {},
     bases: { HEAD: 'mb123' },
     prView: () => ({ exitCode: 1, stdout: '', stderr: 'no pull requests found' }),
     unreadableFiles: [],
@@ -140,7 +157,10 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   const clock = mock.clock(on, { now: T0 })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
-  on('session.cwd', () => ({ value: APP }) as never)
+  on('session.cwd', () => {
+    if (ctl.cwdThrows) throw new Error('the session folder could not be read')
+    return { value: APP } as never
+  })
   on('session.repo', () => ({ value: { root: APP, remote: 'git@github.com:dan/app.git' } }) as never)
   on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
   on('fs.read', ($, e) => {
@@ -149,8 +169,14 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     if (t === undefined) return { deny: `ENOENT: no such file or directory, open '${e.path}'` } as never
     return { value: t } as never
   })
-  on('store.get', ($, e) => ({ value: store[e.key] }) as never)
+  // Claude Code refuses a store key over 256 characters on get, set and delete, and never on keys
+  // (#2246, read from the 2.1.318 binary: `e.key.length>256` throws "the key is N characters, over
+  // the 256 limit"), so the world refuses one too, or a key too long to keep passes every test here.
+  const tooLong = (key: string) => (key.length > 256 ? ({ deny: `$.store: the key is ${key.length} characters, over the 256 limit` } as never) : undefined)
+  on('store.get', ($, e) => tooLong(e.key) ?? ({ value: store[e.key] } as never))
   on('store.set', ($, e) => {
+    const refused = tooLong(e.key)
+    if (refused) return refused
     store[e.key] = e.value
     return { value: undefined } as never
   })
@@ -160,11 +186,14 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   })
   on('store.keys', () => ({ value: Object.keys(store) }) as never)
   on('store.delete', ($, e) => {
+    const refused = tooLong(e.key)
+    if (refused) return refused
     delete store[e.key]
     return { value: undefined } as never
   })
   on('tool.register', ($, e) => {
     tools.push(e.name)
+    toolDescriptions[e.name] = String((e as { description?: string }).description ?? '')
     return { value: { tool: `mcp__area-check__${e.name}` } } as never
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -196,9 +225,15 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     if (argv[0] === '__modkit') {
       const input = JSON.parse(argv[2] as string)
       // mod-kit's command readers, standing in: their byte for byte copies, as is it live keeps.
+      if (argv[1] === 'pipeline' && ctl.pipelineThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the pipeline could not be read' })
       if (argv[1] === 'gh' || argv[1] === 'mergeHelper' || argv[1] === 'pipeline') {
         const read = argv[1] === 'gh' ? ghArgs(input.words) : argv[1] === 'mergeHelper' ? mergeHelperArgs(input as Command) : input.cwd !== undefined ? pipelineIn(input.command, input.cwd, input.home ?? '') : pipeline(input.command)
         return answer(ok(read === undefined ? 'null' : JSON.stringify(read)))
+      }
+      // What a Bash call writes (#2142), from the same copy of mod-kit's reader.
+      if (argv[1] === 'writes') {
+        if (ctl.writesThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the command could not be read' })
+        return answer(ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home ?? ''))))
       }
       if (argv[1] === 'branch') {
         if (ctl.branchThrows) return answer({ exitCode: 1, stdout: '', stderr: 'git could not be asked' })
@@ -232,16 +267,45 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     if (argv[0] === '__sessions') return answer(ok(JSON.stringify({ open: [{ sessionId: 's1', transcriptPath: '/t/s1.jsonl' }], closed: [], unreadable: [], selfId: 's1' })))
     ran.push(line)
     if (typeof timeoutMs === 'number') timeouts.push(timeoutMs)
-    // The bounded read of the log (#1510): grep for the two marks, then the last argv[7] bytes.
-    if (argv[0] === '/bin/sh' && String(argv[2]).includes('grep -a -F') && argv[6] === LOG) {
-      if (ctl.log === 'missing') return answer({ exitCode: 2, stdout: '', stderr: `grep: ${LOG}: No such file or directory` })
-      if (ctl.log === 'unreadable') return answer({ exitCode: 2, stdout: '', stderr: `grep: ${LOG}: Permission denied` })
-      const marks = [argv[4] as string, argv[5] as string]
-      const lines = [...(appended[LOG] ?? '').split('\n'), ...ctl.seeded].filter(l => l && marks.some(m => l.includes(m)))
-      if (!lines.length) return answer({ exitCode: 1, stdout: '', stderr: '' })
-      const out = (lines.join('\n') + '\n').slice(-Number(argv[7]))
-      if (ctl.logTruncated) return { value: { exitCode: 0, stdout: out.slice(0, 100), stderr: '', isStdoutTruncated: true, isStderrTruncated: false } } as never
-      return answer(ok(out))
+    // The read of one branch's decisions (#2143): the decision files, any .rotating file, then the
+    // log, filtered as READ_SCRIPT's awk filters them (the repo suite proves the real script).
+    if (argv[0] === '/bin/sh' && argv[2] === READ_SCRIPT && argv[4] === DIR) {
+      const [repo, branch, m1, m2] = [argv[5] as string, argv[6] as string, argv[7] as string, argv[8] as string]
+      const names = Object.keys(ctl.rotated)
+      const rotated = [...names.filter(n => n.endsWith('.decisions.jsonl')).sort(), ...names.filter(n => n.endsWith('.rotating')).sort()]
+      if (ctl.log === 'missing' && !rotated.length) return answer({ exitCode: 2, stdout: '', stderr: `${DIR}/log.jsonl: No such file or directory` })
+      if (ctl.rotatedUnreadable) return answer({ exitCode: 2, stdout: '', stderr: `${DIR}/rotated/${ctl.rotatedUnreadable}: Permission denied` })
+      if (ctl.log === 'unreadable') return answer({ exitCode: 2, stdout: '', stderr: `${LOG}: Permission denied` })
+      const lines = [...rotated.flatMap(n => ctl.rotated[n] as string[]), ...(ctl.log === 'missing' ? [] : [...(appended[LOG] ?? '').split('\n'), ...ctl.seeded])]
+      const out: string[] = []
+      let n = 0
+      for (const l of lines) {
+        if (!l || !(l.includes(m1) || l.includes(m2))) continue
+        if (!l.endsWith('}')) {
+          out.push(`cut ${l}`)
+          continue
+        }
+        if (!l.toLowerCase().includes(repo)) continue
+        n++
+        if (branch !== '' && l.includes(branch)) out.push(`line ${l}`)
+      }
+      const text = [...out, `repo ${n}`].join('\n') + '\n'
+      if (ctl.logTruncated) return { value: { exitCode: 0, stdout: text.slice(0, 100), stderr: '', isStdoutTruncated: true, isStderrTruncated: false } } as never
+      return answer(ok(text))
+    }
+    // The rotation at session start (#2143): the log moved whole into rotated/<stamp>.rotating once
+    // over argv[6] bytes. Settling is not faked; tests/test-area-check-log-rotation.sh proves it.
+    if (argv[0] === '/bin/sh' && argv[2] === ROTATE_SCRIPT && argv[4] === DIR) {
+      if (ctl.rotateFails) return answer({ exitCode: 1, stdout: '', stderr: ctl.rotateFails })
+      const lines = [...(appended[LOG] ?? '').split('\n').filter(Boolean), ...ctl.seeded]
+      const utf8 = new TextEncoder()
+      const bytes = lines.reduce((s, l) => s + utf8.encode(l).length + 1, 0)
+      if (bytes > Number(argv[6])) {
+        ctl.rotated[`${argv[5]}.rotating`] = lines
+        appended[LOG] = ''
+        ctl.seeded.splice(0)
+      }
+      return answer(ok(''))
     }
     if (argv[0] === '/bin/sh') {
       if (ctl.logFails && argv[argv.length - 1] === LOG) return answer({ exitCode: 1, stdout: '', stderr: 'No space left on device' })
@@ -269,7 +333,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
           }
           await clock.sleep(wait)
         }
-        return answer(ok(NUMSTAT))
+        return answer(ok(ctl.numstat ?? NUMSTAT))
       }
       if (sub === 'ls-tree -r --name-only origin/main') return answer(ok(TRACKED + '\n'))
       if (sub.startsWith('grep -c  origin/main -- ')) return answer(ok('origin/main:src/big.ts:2400\n'))
@@ -296,7 +360,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   })
   const records = (file = LOG) => (appended[file] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l) as Record<string, unknown>)
   const judged = () => records().filter(r => r.kind === 'judged')
-  return { clock, ctl, ran, logs, passed, timeouts, store, files, records, judged, cards, asked, notes, holds, tools }
+  return { clock, ctl, ran, logs, passed, timeouts, store, files, records, judged, cards, asked, notes, holds, tools, toolDescriptions }
 }
 
 export type T$ = { tool: { call: (e: never) => Promise<unknown> }; session: { start: (e: never) => Promise<unknown> }; prompt: { submit: (e: never) => Promise<unknown> } }
@@ -321,7 +385,10 @@ export const askDan = async ($: T$, call: string, extra: object = {}) =>
 export const said = (r: R) => [...(r.context ?? []), typeof r.result === 'string' ? r.result : '', r.text ?? ''].join(' ')
 export const REASON = 'This only renames a local variable inside one function.'
 export const SLACK = `${APP}/src/lib/slack.ts`
-export const QKEY = questionKey('dan/app', 'src/lib/slack.ts')
+// The question about that file under its fixed length key (#2246): the SHA-256 of "dan/app\nsrc/lib/slack.ts",
+// measured with shasum rather than with the code under test, and the key it was kept under before.
+export const QKEY = 'question:41ea88a6f2f85188ac883b6c67f9c59a2728aeddb0cdeb7020eeb21976ac7aee'
+export const OLD_QKEY = 'question:dan/app\nsrc/lib/slack.ts'
 
 // A Bash call as Claude sends it, its result settled.
 export const bash = async ($: T$, w: ReturnType<typeof world>, command: string, extra: object = {}, id = 'b1') => {

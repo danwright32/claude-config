@@ -137,6 +137,170 @@ want_none "list items are separate sentences: a pending word in the next item do
 out="$(printf '%s\n' "**#1041** is the issue for the booker." | python3 "$SCANNER" --explain --stdin d.md)"
 case "$out" in *$'\t['*']') ok ;; *) bad "--explain appends the reason: got [$out]" ;; esac
 
+# --- a QUOTED, DATED decision is a citation, not a live claim (claude-config#2185) ---------
+#
+# The same shape as the dated record above, one level down: a decision somebody made, quoted word
+# for word with the date it was made, is the record of what was said that day. Rewording it to
+# satisfy the gate would falsify the record. The quote has to carry its own date (or an issue
+# comment as its source) right beside it, so a bare quotation is still a claim.
+want_none "a quote whose date comes just before it is a dated record" \
+"Exception X2, decision D4, 2026-10-30: \"#41 closes with it, as nobody needs it now\" (review thread)"
+want_none "the same record as a settled design renders it in HTML" \
+"<li><strong>X2</strong>, decision D4, 2026-10-30: \"#41 closes with it, as nobody needs it now\" (review thread)</li>"
+want_none "a quote whose date follows it in parentheses" \
+"The owner put it this way: \"#41 closes with it, as nobody needs it now\" (owner, 2026-10-30)."
+want_none "a quote whose source is a named issue comment" \
+"\"#41 closes with it, as nobody needs it now\" (https://github.com/acme/widgets/issues/40#issuecomment-123456)"
+want_none "curly quotes count the same as straight ones" \
+"$(printf '2026-10-30: \342\200\234#41 closes with it, as nobody needs it now\342\200\235')"
+want_none "the words field of a dated exception in a settled design's JSON" \
+'{"exceptions": [
+ {
+  "id": "X2",
+  "decision": "D4",
+  "words": "#41 closes with it, as nobody needs it now",
+  "date": "2026-10-30",
+  "source": "review thread"
+ }
+]}'
+# The controls: each takes away one part of the record, and the claim is judged again (L1).
+want_row "the same sentence unquoted is a live claim" \
+"#41 closes with it, as nobody needs it now." "1:41"
+want_row "a quote with no date beside it is still a claim" \
+"The owner said \"#41 closes with it, as nobody needs it now\" and moved on." "1:41"
+want_row "a dated quote does not cover a claim outside its quote marks" \
+"On 2026-10-30 the owner said \"keep the export\". Then #41 closes with it." "1:41"
+want_row "a date far from the quote does not make it a record" \
+"2026-10-30 was a long day and after the review the owner said \"#41 closes with it\" to the room." "1:41"
+want_row "a words field whose exception carries no date is still judged" \
+'{"exceptions": [
+ {
+  "id": "X2",
+  "words": "#41 closes with it, as nobody needs it now",
+  "source": "review thread"
+ }
+]}' "4:41"
+want_row "another field of a dated exception is not a verbatim quote" \
+'{"exceptions": [
+ {
+  "id": "X2",
+  "decision": "#41 closes with it, as nobody needs it now",
+  "date": "2026-10-30"
+ }
+]}' "4:41"
+
+# --- one very long line is scanned in linear time (claude-config#2220) ---------------------
+#
+# A settled design page carries its frames as JSON on ONE line, and a script's template literal
+# there is, to this scanner, a single inline code span, blanked to that many spaces. The table
+# cell half of SENTENCE_END, `\s*\|\s*`, then started at every position of the run and read to its
+# end from each, which is quadratic in the run's length: measured 2026-11-04, a 2.35 MB line was
+# still scanning after 180 s, and the gate's 60 s limit refused the push. The span page is timed
+# against a YARDSTICK,
+# the same scanner on a line of the same length with no span, which was linear before the fix and
+# after it, so the budget moves with the machine's load instead of asserting about it (L290), and
+# a machine too starved to scan even the yardstick says UNMEASURED rather than failing (L411).
+# Both pages end in a pending claim, so a scanner that sped up by reading less is caught too.
+cat > "$WORKDIR/long-line.py" <<'PY'
+import os, subprocess, sys, time
+scanner = os.environ["SCANNER"]
+size = 2_400_000
+chunk = "<div class=card>x</div>"
+body = (chunk * (size // len(chunk) + 1))[:size]
+claim = " #41 closes with it."
+plain = "<!doctype html>\n<script>const t = '" + body + "';</script>" + claim + "\n"
+span = "<!doctype html>\n<script>const t = `" + body + "`;</script>" + claim + "\n"
+
+def run(text, limit):
+    t0 = time.monotonic()
+    p = subprocess.run([sys.executable, scanner, "--stdin", "page.html"], input=text.encode(),
+                       capture_output=True, timeout=limit)
+    return time.monotonic() - t0, p.stdout.decode(errors="replace")
+
+STARVED = 60
+try:
+    yard, out = run(plain, STARVED)
+except subprocess.TimeoutExpired:
+    print("STARVED the yardstick, a %d character line with no span, took over %d s, so this machine is too loaded to time the span page" % (len(plain), STARVED))
+    sys.exit(0)
+if "page.html:2:41:" not in out:
+    print("FAIL the yardstick page lost its pending claim, so the scanner did not read the line to its end")
+    sys.exit(0)
+budget = max(10.0, 10 * yard)
+try:
+    took, out = run(span, budget)
+except subprocess.TimeoutExpired:
+    print("FAIL a %d character line holding a %d character inline code span took over %.1f s (ten times the %.2f s yardstick on the same length without the span): something in the scanner is super linear in a long line" % (len(span), size, budget, yard))
+    sys.exit(0)
+if "page.html:2:41:" not in out:
+    print("FAIL the span page lost its pending claim after the span, so the scanner did not read the line to its end")
+    sys.exit(0)
+print("OK span %.2f s against a %.2f s yardstick" % (took, yard))
+PY
+long_line="$(SCANNER="$SCANNER" python3 "$WORKDIR/long-line.py")"
+case "$long_line" in
+  OK*) ok ;;
+  STARVED*) echo "SUITE-PART-UNMEASURED ${long_line#STARVED }" ;;
+  '') bad "the long line timing printed no verdict at all, so it never ran to an answer" ;;
+  *) bad "${long_line#FAIL }" ;;
+esac
+
+# --- many pending claims in one paragraph are reported in linear time (claude-config#2233) -----
+#
+# Each row the scanner reports says which reference of the paragraph it is about. That index was
+# counted afresh for every row over the whole paragraph up to the reference, so a paragraph holding
+# n claims cost n times its own length: measured 2026-11-05, 80,000 claims in one 2 MB paragraph
+# took 33 s against 1.4 s for the same paragraph with one claim. The claims page is timed against a
+# YARDSTICK of the same length and the same references, every sentence but the last a citation, so
+# the two differ only in how many rows they report. The yardstick is the MEDIAN of three runs, so
+# one stalled run cannot set the standard (L656), and a machine too starved to scan it says
+# UNMEASURED rather than failing (L411). Both pages are counted row by row, so a scanner that sped
+# up by reporting fewer claims is caught too.
+cat > "$WORKDIR/many-claims.py" <<'PY'
+import os, statistics, subprocess, sys, time
+scanner = os.environ["SCANNER"]
+n = 80_000
+claims = "Part #41 closes with it.\n" * n
+plain = "Part #41 closed with it.\n" * (n - 1) + "Part #41 closes with it.\n"
+
+def run(text, limit):
+    t0 = time.monotonic()
+    p = subprocess.run([sys.executable, scanner, "--stdin", "page.md"], input=text.encode(),
+                       capture_output=True, timeout=limit)
+    return time.monotonic() - t0, p.stdout.decode(errors="replace").splitlines()
+
+STARVED = 60
+yards = []
+for _ in range(3):
+    try:
+        took, rows = run(plain, STARVED)
+    except subprocess.TimeoutExpired:
+        print("STARVED the yardstick, a %d character paragraph holding one claim, took over %d s, so this machine is too loaded to time the claims page" % (len(plain), STARVED))
+        sys.exit(0)
+    if rows != ["page.md:%d:41:Part #41 closes with it." % n]:
+        print("FAIL the yardstick page should report its one claim, on line %d, and reported %d rows" % (n, len(rows)))
+        sys.exit(0)
+    yards.append(took)
+yard = statistics.median(yards)
+budget = max(10.0, 10 * yard)
+try:
+    took, rows = run(claims, budget)
+except subprocess.TimeoutExpired:
+    print("FAIL a paragraph of %d pending claims took over %.1f s (ten times the %.2f s median yardstick on the same paragraph with one claim): something in the scanner costs rows times paragraph length" % (n, budget, yard))
+    sys.exit(0)
+if len(rows) != n or rows[0] != "page.md:1:41:Part #41 closes with it." or rows[-1] != "page.md:%d:41:Part #41 closes with it." % n:
+    print("FAIL the claims page should report all %d claims, one per line, and reported %d rows" % (n, len(rows)))
+    sys.exit(0)
+print("OK claims %.2f s against a %.2f s median yardstick" % (took, yard))
+PY
+many_claims="$(SCANNER="$SCANNER" python3 "$WORKDIR/many-claims.py")"
+case "$many_claims" in
+  OK*) ok ;;
+  STARVED*) echo "SUITE-PART-UNMEASURED ${many_claims#STARVED }" ;;
+  '') bad "the many claims timing printed no verdict at all, so it never ran to an answer" ;;
+  *) bad "${many_claims#FAIL }" ;;
+esac
+
 # The scanner must never be the one asking GitHub (the hook owns the lookups): no process
 # spawning and no network module anywhere in it. Its docstring may SAY "gh"; its code may not
 # reach one.
@@ -506,6 +670,78 @@ want_code 0 "the visible override still clears the missing detector refusal"
 # the refusal above is the detector's absence and not a fixture that refuses everything (L159).
 run_hook "$BIN" "$R" "git push"
 want_code 0 "the control still allows the same push with python3 present"
+
+# --- a merge from main does not bring main's docs under judgement again (claude-config#2185) ---
+#
+# A branch already pushed once merges main and pushes again. From its upstream, the range holds
+# every doc main gained since, and a stale claim in one of them refused every branch in the repo
+# that brought main in, until each took a one time skip. Those lines are main's: they are set
+# apart the way lib/push-changes.sh sets them apart for the test and simplify gates (#2028).
+# The branch is pushed once, then writes $1 in a commit of its own that is not pushed yet, then
+# merges main, so its own line sits BEFORE the merge, where only the set apart can find it.
+mk_merged() {  # $1 = what the branch writes to docs/feat.md ; prints the work dir
+  local R; R="$(mk_repo "$GH_URL")"
+  ( cd "$R" && git remote set-url origin "$(dirname "$R")/origin.git" \
+    && git checkout -qb feat && printf '%s\n' "Feature notes." > docs/feat.md && git add docs/feat.md \
+    && git -c user.name=t -c user.email=t@t commit -qm feat && git push -qu origin feat \
+    && printf '%s\n' "$1" > docs/feat.md && git add docs/feat.md \
+    && git -c user.name=t -c user.email=t@t commit -qm "feat edits its notes" \
+    && git checkout -q main && printf '%s\n' "$PENDING_DOC" > docs/pii.md && git add docs/pii.md \
+    && git -c user.name=t -c user.email=t@t commit -qm "main gains a doc" && git push -q origin main \
+    && git checkout -q feat && git -c user.name=t -c user.email=t@t merge -q --no-edit origin/main \
+    && git remote set-url origin "$GH_URL" ) >/dev/null 2>&1
+  printf '%s' "$R"
+}
+BIN="$(mk_bin)"; set_state "$BIN" 1041 CLOSED "x"; set_state "$BIN" 77 CLOSED "Export the report"
+R="$(mk_merged "Nothing to see.")"
+if [ -f "$R/docs/pii.md" ] && [ "$(git -C "$R" rev-parse --abbrev-ref '@{u}' 2>/dev/null)" = origin/feat ]; then ok
+else bad "the fixture did not build: the branch must track origin/feat and hold main's doc after the merge"; fi
+run_hook "$BIN" "$R" "git push"
+want_code 0 "a stale claim already on main, arriving only through a merge from main, is not judged again"
+[ "$(calls "$BIN")" = "0" ] && ok || bad "a doc only main changed must not be read, got $(calls "$BIN") call(s)"
+run_hook "$BIN" "$R" "git commit -q --allow-empty -m more && git push"
+want_code 0 "the same holds when the command commits before it pushes"
+
+# ... while a claim the branch writes itself is still judged, merge or no merge.
+BIN="$(mk_bin)"; set_state "$BIN" 1041 CLOSED "x"; set_state "$BIN" 77 CLOSED "Export the report"
+R="$(mk_merged "#77 is the issue for exporting the report.")"
+run_hook "$BIN" "$R" "git push"
+want_code 2 "a stale claim the branch adds is refused even though the branch also merged main"
+want_says "docs/feat.md:1" "the refusal names the branch's own line"
+case "$MSG" in *docs/pii.md*) bad "main's doc was judged beside the branch's: [$MSG]" ;; *) ok ;; esac
+
+# ... and when the merge cannot be set apart, the whole range is judged as before, and says so.
+BIN="$(mk_bin)"; set_state "$BIN" 1041 CLOSED "x"; set_state "$BIN" 77 CLOSED "Export the report"
+R="$(mk_merged "Nothing to see.")"
+git -C "$R" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
+run_hook "$BIN" "$R" "git push"
+want_code 2 "with no default branch known the merge is not set apart, so main's doc is judged as before"
+want_says "docs/pii.md:2" "the whole range was read"
+want_says "could not be told from the branch's" "the refusal says part of what it judged came in through the merge"
+
+# ... and the same when the helper that sets the merge apart is missing beside the hook.
+NOPC="$WORKDIR/nopc"; mkdir -p "$NOPC"
+cp "$HOOK" "$NOPC/" && cp -R "$DIR/lib" "$NOPC/lib" && rm -f "$NOPC/lib/push-changes.sh"
+BIN="$(mk_bin)"; set_state "$BIN" 1041 CLOSED "x"
+R="$(mk_merged "Nothing to see.")"
+SAVED_HOOK="$HOOK"; HOOK="$NOPC/check-doc-issue-refs.sh"
+run_hook "$BIN" "$R" "git push"
+HOOK="$SAVED_HOOK"
+want_code 2 "with lib/push-changes.sh missing the whole range is judged, never skipped"
+want_says "push-changes.sh, which sets apart what a merge of main brought in, is missing" "and the refusal names the missing helper"
+
+# --- a quoted dated decision passes end to end, and an unquoted one beside it does not ---------
+BIN="$(mk_bin)"; set_state "$BIN" 41 CLOSED "Export the report"
+R="$(mk_repo "$GH_URL")"
+commit_file "$R" docs/design.md 'Exception X2, decision D4, 2026-10-30: "#41 closes with it, as nobody needs it now" (review thread)'
+run_hook "$BIN" "$R" "git push"
+want_code 0 "a decision quoted with its date is a record, not a claim to rewrite"
+commit_file "$R" docs/design.md 'Exception X2, decision D4, 2026-10-30: "#41 closes with it, as nobody needs it now" (review thread)
+
+#41 closes with it.'
+run_hook "$BIN" "$R" "git push"
+want_code 2 "the same claim made outside the quote, in the same file, is still refused"
+want_says "docs/design.md:3" "and the refusal names the live claim's line"
 
 echo
 echo "passed: $pass, failed: $fail"

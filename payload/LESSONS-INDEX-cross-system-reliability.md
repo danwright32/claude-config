@@ -5,6 +5,9 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L845. A retry must recheck that the work's reason still holds when it acts; a cancel that stops only running work lets retryable work go ahead.
+- L844. A period-keyed cache is cold for each period's first reader, so seed it on a schedule before the period, and hold open a fill that outlives a deadline.
+- L1036. A test launching the installed copy of an app a person uses shares its OS identity and breaks their use of it, so launch a separately identified build.
 - L842. Keep every inner wait a stated margin below the limit around it and check the pair together; raising only the inner one lets the outer fire first.
 - L841. A failed cache write after a successful read is logged, never fails the read: a cold cache's callers all write one key and its rate limit refuses them.
 - L840. A step consuming another step's output must run on that step's OUTCOME this run, not a copied gate, or a gate change leaves it reading stale output.

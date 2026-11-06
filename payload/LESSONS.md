@@ -3303,6 +3303,8 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L847. A deliberate refusal expressed as a failed build, job or deploy is read by every watcher of that thing as breakage, so they retry it and alert with the wrong cause; give the refusal a marker those watchers recognise, in the same change that introduces it.** (project-enrollment-tracker#2023, 2026-11-06)
+  SHORT: A refusal shipped as a failed build is retried and misreported by every watcher; give it a marker they recognise in the same change.
 - **L838. A component that runs inside someone else's page (an embed, a widget, a script tag) must report its own failures, timeouts and slow loads included and not only thrown errors, back to your own system, because a failure surfaced only to the host page lands in the host's analytics, which nobody on your side watches.** (slate#4456, 2026-11-01)
   SHORT: An embed reports its own failures, timeouts included, to your system: one surfaced only to the host lands in analytics nobody of yours watches.
 - **L837. An alert raised about one part of a subject must clear when that part recovers: a part that cannot be measured yet (past a horizon, not synced) is 'could not tell' for itself only, because letting it hold the whole subject's alert open means the alert never clears and its all clear never posts.** (slate#4449, 2026-11-01)
@@ -7559,8 +7561,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   see; write the extra context after the visible words, never in place of them.**
   (bidspoke#2477, 2026-10-19)
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
+- **L843. Join a time of day to its AM or PM, and a figure to its unit, with a non-breaking space
+  wherever it is drawn, because a narrow column otherwise wraps the suffix onto a line of its own.**
+  (pivot#920, 2026-11-03)
+  SHORT: Join a time to its AM or PM, and a figure to its unit, with a non-breaking space, or a narrow column wraps the suffix alone.
 
 ## External systems
+- **L846. A dependency install that exits 0 is not a working install: npm 11 skips every install script not listed in package.json's allowScripts and only warns, so commit that list and prove a clean install by building or starting the app, never by the unit tests passing.**
+  (new-agent-onboarding#903, 2026-11-05)
+  SHORT: npm 11 skips install scripts missing from allowScripts and only warns; commit the list and prove a clean install by building, not tests.
 - **L826. A request timeout cleared when the response headers arrive leaves reading the body with no limit, so a server that answers then trickles holds the caller open; keep the timer running until the body is fully read.**
   (bidspoke#3089, 2026-10-30)
   SHORT: A request timeout cleared when headers arrive leaves the body read unbounded; keep the timer running until the body is fully read.
@@ -8928,6 +8937,15 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L845. When the reason behind queued work is withdrawn, any step that can retry or restart that work must check the reason still holds at the moment it acts, because a cancel that only stops work still running leaves finished but retryable work to go ahead later.**
+  (slate#4546, 2026-11-04)
+  SHORT: A retry must recheck that the work's reason still holds when it acts; a cancel that stops only running work lets retryable work go ahead.
+- **L844. A cache keyed on a calendar period (a day, an hour) is empty for the first reader of every period, so a read under a deadline must find it already written by a scheduled job before the period opens, and a fill started by a read that can overrun its deadline must be held open past that deadline, or one slow read leaves the cache cold for the next reader too.**
+  (bidspoke#3252, 2026-11-04)
+  SHORT: A period-keyed cache is cold for each period's first reader, so seed it on a schedule before the period, and hold open a fill that outlives a deadline.
+- **L1036. A test or tool that launches the same installed copy of an app a person uses shares that app's identity with the operating system (its app registration, keychain entries and single running instance), so while it runs the person's own use of the app breaks; launch a separately identified build instead, such as Chrome for Testing or a Debug build with its own bundle id.**
+  (claude-config#2191, 2026-11-03)
+  SHORT: A test launching the installed copy of an app a person uses shares its OS identity and breaks their use of it, so launch a separately identified build.
 - **L842. When a wait sits inside another limit (a request timeout inside a job or step timeout, a proxy's wait inside its caller's), keep each inner limit a stated margin below the one around it and check the pair together, because raising only the inner one lets the outer limit fire first and turns a clean timeout into a failed run.**
   (bidspoke#3240, 2026-11-03)
   SHORT: Keep every inner wait a stated margin below the limit around it and check the pair together; raising only the inner one lets the outer fire first.

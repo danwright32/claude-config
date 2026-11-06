@@ -38,6 +38,9 @@
 #                          at a folder of their own). Copies are only ever removed when it exists
 #                          and sits inside this user's own per user temp folder, by real path.
 #   HEADLESS_DOM_LSOF      the lsof to tell this run's copy by, default lsof
+#   HEADLESS_DOM_CHROME_ERR a file to receive a copy of everything Chrome wrote on stderr, on every
+#                          way out, a complete page included, whose stderr is otherwise thrown away
+#                          (claude-config#2260: a test can then say why a page came back empty)
 #   HEADLESS_DOM_EXEC      1 to run Chrome IN PLACE of this script instead, for a caller that starts
 #                          and stops Chrome itself (below)
 #
@@ -61,15 +64,22 @@ REAL="${HEADLESS_DOM_CHROME:?headless-dom.sh: set HEADLESS_DOM_CHROME to the Chr
 
 # Told not to copy itself, in ONE --disable-features carrying every feature the caller disabled
 # too: a second such switch replaces the first, so two would silently drop one caller's list.
+# And told to keep its stored passwords' key in an in-memory stand-in keychain, never this Mac's:
+# Chrome finds the login keychain under HOME, so a Chrome started by a suite running under a
+# throwaway HOME (tools/suite-home-writes.sh) found none, and macOS put a "Keychain Not Found"
+# dialog on screen for every one (2026-11-03). Playwright passes the same switch itself, so it is
+# added only when the caller has not.
 args=()
 features=""
+mock_keychain=--use-mock-keychain
 for a in "$@"; do
   case "$a" in
     --disable-features=*) [ -n "${a#--disable-features=}" ] && features="$features${a#--disable-features=}," ;;
+    --use-mock-keychain) mock_keychain=""; args+=("$a") ;;
     *) args+=("$a") ;;
   esac
 done
-args=("--disable-features=${features}MacAppCodeSignClone" ${args[@]+"${args[@]}"})
+args=("--disable-features=${features}MacAppCodeSignClone" ${mock_keychain:+"$mock_keychain"} ${args[@]+"${args[@]}"})
 
 if [ "${HEADLESS_DOM_EXEC:-}" = 1 ]; then
   [ -x "$REAL" ] || { echo "headless-dom.sh: no Chrome to run at $REAL (HEADLESS_DOM_CHROME)" >&2; exit 127; }
@@ -80,7 +90,7 @@ LIMIT="${HEADLESS_DOM_DEADLINE:-60}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KILL_TREE="$HERE/../../hooks/lib/kill-tree.sh"
 work="$(mktemp -d "${TMPDIR:-/tmp}/headless-dom.XXXXXX")" || { echo "headless-dom.sh: could not make a scratch folder" >&2; exit 1; }
-trap 'rm -rf "$work"' EXIT
+trap '[ -n "${HEADLESS_DOM_CHROME_ERR:-}" ] && cp "$work/err" "$HEADLESS_DOM_CHROME_ERR" 2>/dev/null; rm -rf "$work"' EXIT
 
 # This user's own per user temp folder, the parent of getconf DARWIN_USER_TEMP_DIR, by its real
 # path (lsof reports /private/var where TMPDIR says /var). Built only from a lookup that succeeded,

@@ -5,8 +5,9 @@
 #
 # Claude Code keeps a folder per project and session at /tmp/claude-<uid>/<project slug>/<session
 # id>, each session's scratchpad among them. Offered, by deleting it: a <slug>/<session id> folder
-# whose id is in no ~/.claude/sessions/*.json (the live session map) and in which nothing changed in
-# the last day (DCS_TEMP_MINUTES, a threshold the code sets, not measured). Neither half alone is enough: a live session's folder can sit untouched for
+# whose id is in no ~/.claude/sessions/*.json (the live session map) and in which nothing was
+# changed or opened in the last 30 days (the floor every kind keeps, DCS_UNUSED_DAYS in scan-lib.sh,
+# #2134). Neither half alone is enough: a live session's folder can sit untouched for
 # days, and a session can end a minute ago. The whole category is unmeasured when the session map
 # cannot be read, and when it is EMPTY while a Claude Code process runs, because an empty map then
 # means the map is wrong, not that every session ended (the plan's rule). One folder is unmeasured
@@ -37,7 +38,7 @@ is_uuid() {
 }
 # Sets V for <target>; read_map has run.
 temp_rules() { # <target>
-  local t="${1%/}" root_phys grand u recent rc err="$DCS_WORK/ct.find.err.$$"
+  local t="${1%/}" root_phys grand u
   u="${t##*/}"
   root_phys="$(CDPATH= cd -P "$ROOT" 2>/dev/null && pwd -P)" || root_phys=""
   grand="$(CDPATH= cd -P "${t%/*}/.." 2>/dev/null && pwd -P)" || grand=""
@@ -45,15 +46,11 @@ temp_rules() { # <target>
   [ -d "$t" ] && [ ! -L "$t" ] || { V="not offerable: it is no longer there"; return; }
   if [ -n "$MAP_WHY" ]; then V="unmeasured: $MAP_WHY"; return; fi
   if grep -qxF -- "$u" "$IDS"; then V="not offerable: a live session ($u) owns it"; return; fi
-  # find's complaints are read, as build-folders.sh and forgotten-tools.sh read dcs_recent_file's:
-  # a folder find could not wholly read may hold something used a minute ago, so it is unmeasured,
-  # never offerable (#1851, L10, L11). A find that failed saying nothing is unmeasured too.
-  recent="$(find "$t" -mmin -"$DCS_TEMP_MINUTES" -print -quit 2> "$err")"; rc=$?
-  if [ -n "$recent" ]; then V="not offerable: used within the last 24 hours"; rm -f "$err"; return; fi
-  if [ -s "$err" ]; then V="unmeasured: part of it could not be read ($(awk 'NR == 1' "$err")), so whether it was used in the last 24 hours is not known"; rm -f "$err"; return; fi
-  rm -f "$err"
-  if [ "$rc" -ne 0 ]; then V="unmeasured: find exited $rc reading it, so whether it was used in the last 24 hours is not known"; return; fi
+  # Whether it was used is the 30 day floor's question, which reads find's complaints: a folder find
+  # could not wholly read may hold something used a minute ago, so it is unmeasured, never
+  # offerable (#1851, L10, L11), and a find that failed saying nothing is unmeasured too.
   V=offerable
+  dcs_floor "$t"
 }
 
 do_scan() {

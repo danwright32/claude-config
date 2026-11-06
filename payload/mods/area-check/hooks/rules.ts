@@ -4,6 +4,7 @@
 // The facts decide a verdict, `would_hold` or `quiet` (Judged.decision). Phase 1 only logged it; #1509
 // set the bar below from that week's log on both Macs, and a `would_hold` verdict is now a HELD edit
 // (the Held record below) that is refused until the session decides.
+import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { isTestPath } from './mod-kit/testfile.ts'
 
 /** Bumped whenever a rule here changes what a file's facts are, so a cached ranking is never reused across it (L573). */
@@ -64,7 +65,7 @@ export const STRUCTURAL_LABELS: readonly string[] = ['tech-debt', 'refactor', 't
  */
 export const SOURCE_EXTENSIONS: readonly string[] = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'sh', 'swift', 'rb', 'go', 'rs', 'java', 'kt', 'kts', 'vue', 'svelte', 'php', 'cs', 'cpp', 'c', 'h', 'm', 'css', 'scss']
 
-/** The edit tools, each by the input key carrying its file (decision 2); a shell write is never judged. */
+/** The edit tools, each by the input key carrying its file (decision 2); a shell write is read by shellTargets below (#2142). */
 const PATH_KEY: Readonly<Record<string, string>> = { Edit: 'file_path', Write: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path' }
 
 /** The absolute path an edit tool's call writes, or null for any other tool or a path that is not absolute. */
@@ -72,6 +73,108 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
   const key = PATH_KEY[tool]
   const p = key ? input[key] : undefined
   return typeof p === 'string' && p.startsWith('/') ? p : null
+}
+
+/**
+ * A file a Bash command writes (#2142), read from mod-kit's one reader of a command ($.modkit.writes):
+ * a path, judged as that file's first edit would be (`tree` where the write may reach every file
+ * under it, so each one there that could be held is judged too, `heldUnder` choosing them), or a write
+ * whose file cannot be named, with why, which is held unless nothing in the repository could hold it.
+ * `folder` is where such a write lands when the reader knows it, so its checkout is the one judged.
+ */
+export type ShellTarget = { word: string; path: string; tree?: true } | { word: string; unread: string; folder?: string }
+
+const literalExt = (word: string): string | undefined => /\.([A-Za-z0-9]+)$/.exec(word.slice(word.lastIndexOf('/') + 1))?.[1]?.toLowerCase()
+// A name whose extension is written out and is no source one is never judged, whatever its folder is.
+const mayBeSource = (word: string) => {
+  const ext = literalExt(word)
+  return ext === undefined || SOURCE_EXTENSIONS.includes(ext)
+}
+
+type ModKitRun = NonNullable<ModKitWrites['runs']>[number]
+
+/**
+ * Whether a run is a findings note to the installed spool helper (#2254):
+ * `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"`, or the helper run directly.
+ * Its note writes one record under ~/.claude-issue-spool and nothing in any repository, so its words,
+ * a finding that often holds $ or *, are no files it writes. Only that path under the home given and
+ * only its note subcommand: a copy of the helper elsewhere may be any script, and without a home
+ * nothing is let off. Any substitution inside the note, and every other part of the command, is read
+ * by mod-kit as its own write and judged as before.
+ */
+const spoolNote = (r: ModKitRun, home: string | undefined): boolean =>
+  home !== undefined &&
+  (r.what === 'a bash script file' || r.what === 'a script file run directly') &&
+  r.path === `${home}/.claude/hooks/lib/issue-spool.sh` &&
+  r.args[0]?.word === 'note'
+
+/**
+ * Every file a command writes that could add lines to a source or test file: a redirect, a copy or an
+ * in place edit (`files`), an emptying (`changes` truncate), git writing a path (`byGit` write), a
+ * script's arguments (`runs`), and a program's own targets (`unnamed`). A removal, a stamp, a new
+ * folder and a mode change add no lines, so they are not judged; nor is a folder handed to a script.
+ * Nor are the words of a findings note (#2254), given `home`: see spoolNote.
+ */
+export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
+  const out: ShellTarget[] = []
+  const seen = new Set<string>()
+  const add = (t: ShellTarget) => {
+    const k = 'path' in t ? `p\n${t.path}` : `u\n${t.word}`
+    if (seen.has(k)) return
+    seen.add(k)
+    out.push(t)
+  }
+  const named = (word: string, path: string | undefined, folder: string | undefined, why: string, tree?: true) => {
+    if (path) return add({ word, path, ...(tree ? { tree } : {}) })
+    if (!mayBeSource(word)) return
+    add(folder ? { word, unread: `${word} is a pattern, matched only as it runs`, folder } : { word, unread: why })
+  }
+  for (const f of w.files) named(f.word, f.path, f.folder, `${f.word} is built as the command runs`, f.tree)
+  for (const c of w.changes) if (c.does === 'truncate') named(c.word, c.path, c.folder, `${c.word} is built as the command runs`, c.tree)
+  for (const g of w.byGit ?? []) {
+    if (g.does !== 'write') continue
+    // A path with no extension git may fill is a folder: everything under it can be put back.
+    if (g.path && g.tree && literalExt(g.path) === undefined) add({ word: g.word, unread: `git writes ${g.word}, which reaches a whole folder` })
+    else named(g.word, g.path, undefined, `git matches ${g.word} across folders`, g.tree)
+  }
+  for (const r of w.runs ?? []) {
+    if (spoolNote(r, home)) continue
+    for (const a of r.args) {
+      if (a.path) add({ word: a.word, path: a.path })
+      else if (a.folder) {
+        if (mayBeSource(a.word)) add({ word: a.word, unread: `${a.word} is a pattern handed to ${r.what}`, folder: a.folder })
+      } else if (mayBeSource(a.word) && !a.unexpanded) add({ word: a.word, unread: `${r.what} is handed ${a.word}, built as the command runs` })
+    }
+  }
+  for (const u of w.unnamed) {
+    const targets = (u.targets ?? []).filter(t => t.startsWith('/'))
+    if (targets.length && targets.length === (u.targets ?? []).length) for (const t of targets) add({ word: t, path: t })
+    else add({ word: u.words.join(' '), unread: `${u.what} writes files its words do not name`, ...(u.folder ? { folder: u.folder } : {}) })
+  }
+  return out
+}
+
+/**
+ * Whether anything in a repository could hold a file (#2142): a fast growing file, or an open
+ * structural issue at a held priority naming a file that the session does not work on. A write whose
+ * file cannot be named passes only where this is false, since no file there could be held.
+ */
+export const couldHold = (f: { issues: readonly CachedIssue[]; own: readonly number[]; top: readonly string[]; bar?: Bar }): boolean => {
+  const bar = f.bar ?? DEFAULT_BAR
+  return f.top.length > 0 || f.issues.some(i => i.structural.length > 0 && i.refs.length > 0 && !f.own.includes(i.n) && bar.holdPriorities.includes(i.priority ?? 'p2'))
+}
+
+/**
+ * A command's own key, so its unchanged resend after a decision runs and any other command is judged:
+ * a full SHA-256 of its whole text, since a short hash lets another command sharing it pass unjudged
+ * (#2142 lessons review: two commands differing in one number shared the 32 bit one first used).
+ */
+export const shellKey = async (command: string): Promise<string> => `shell:${await sha256(command)}`
+
+/** The SHA-256 of a text as 64 hex digits, the one hash every key here is made with. */
+const sha256 = async (text: string): Promise<string> => {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
 }
 
 const GENERATED_PARTS = new Set(['node_modules', 'dist', 'build', 'out', '.next', 'vendor', '__generated__', 'generated', 'Generated'])
@@ -182,6 +285,28 @@ export const issuesNaming = (rel: string, issues: readonly CachedIssue[], tracke
   if (folder.length > folderMax) return exact
   const named = new Set(exact.map(m => m.n))
   return [...exact, ...folder.filter(i => !named.has(i.n)).map(i => fact(i, 'folder'))]
+}
+
+/**
+ * The files under a folder a write reaching all of it could add lines to that the area check could
+ * hold (#2142 lessons review): each tracked source or test file below `folder` ('' for the whole
+ * checkout) that is growing fast, that a structural issue names as `issuesNaming` resolves a name,
+ * or that sits in a folder a structural issue names a file in. Each is then judged as its first edit
+ * would be, so this only chooses which files are asked about, and errs toward asking.
+ */
+export const heldUnder = (folder: string, f: { tracked: readonly string[]; top: readonly string[]; issues: readonly CachedIssue[] }): string[] => {
+  const prefix = folder.replace(/\/+$/, '')
+  const ix = indexOf(f.tracked)
+  const named = new Set<string>()
+  for (const i of f.issues) {
+    if (!i.structural.length) continue
+    for (const r of i.refs) {
+      const cands = (ix.get(baseOf(r)) ?? []).filter(p => p === r || p.endsWith('/' + r))
+      if (cands.length === 1) named.add(cands[0] as string)
+    }
+  }
+  const dirs = new Set([...named].map(dirOf))
+  return f.tracked.filter(p => (prefix === '' || p.startsWith(`${prefix}/`)) && fileKind(p) !== null && (f.top.includes(p) || named.has(p) || dirs.has(dirOf(p))))
 }
 
 /** The issues a session's /goal names, as #N (decision 5). */
@@ -384,10 +509,15 @@ export type Held = {
   shown: Match[]
   issues: { state: 'read' | 'truncated' } | { state: 'unread'; why: string }
   growth: (FileGrowth & { crosses: boolean }) | { unread: string }
+  /** A Bash command whose file cannot be named (#2142): `rel` is its word, `key` the command's claim. */
+  unread?: { why: string; key: string }
   // The branch and merge base the edit was held on (#1510), kept in its version 3 decision; absent in entries held before them.
   branch?: string | null
   mergeBase?: string | null
 }
+
+/** The held call as a sentence names it: a Bash command writing the file, or the edit tool to it. */
+export const heldCall = (h: Held): string => (h.tool === 'Bash' ? `Bash command, which writes ${h.rel}` : `${h.tool} to ${h.rel}`)
 
 /**
  * The restructure question about one file in one repository, in $.store so every session reads it
@@ -397,7 +527,25 @@ export type Question =
   | { state: 'pending'; at: number; issues: number[]; session: string; call: string; agent: string | null }
   | { state: 'answered'; answer: string; at: number; issues: number[] }
 
-export const questionKey = (repo: string, rel: string) => `question:${repo}\n${rel}`
+/**
+ * The question's key: a SHA-256 of the repository and the held word, 73 characters whatever the word
+ * (#2246). A held shell command's word can be its whole unreadable text, and Claude Code refuses a
+ * store key over 256 characters, which left such a hold impossible to decide.
+ */
+export const questionKey = async (repo: string, rel: string): Promise<string> => `question:${await sha256(`${repo}\n${rel}`)}`
+
+/** The store's own limit on a key, which it refuses past on get, set and delete (#2246). */
+export const STORE_KEY_MAX = 256
+
+/**
+ * The key a question had before #2246, read so an answer Dan already gave still stands for its week,
+ * and cleared with the call it waits on. Undefined where it would pass the store's limit, since no
+ * question was ever kept there. Deleting this read is #2256, once a week has passed since install.
+ */
+export const legacyQuestionKey = (repo: string, rel: string): string | undefined => {
+  const k = `question:${repo}\n${rel}`
+  return k.length <= STORE_KEY_MAX ? k : undefined
+}
 
 // A reason that is a stock word, a template's slot or a mark standing alone says nothing (L675).
 const PLACEHOLDER = /^(?:n\/?a|none|nothing|tbd|todo|fixme|reason|because|ok(?:ay)?|fine|yes|no|test|whatever|see above|not needed|no reason|small change|minor change|minor|trivial)$/i
@@ -422,6 +570,7 @@ export const decideProblem = (input: { decision?: unknown; reason?: unknown; iss
   const d = input.decision
   if (typeof d !== 'string' || !(DECISIONS as readonly string[]).includes(d)) return `"${String(d)}" is not a decision: give "decision" as proceed, fold or restructure.`
   if (d === 'proceed') return reasonProblem(input.reason)
+  if (h.unread) return 'This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.'
   if (d === 'fold') {
     if (!h.shown.length) return `${h.rel} was held for its growth alone, so no issue was shown to fold in: proceed with a reason, or restructure.`
     if (!h.shown.some(m => m.n === input.issue)) return `"${String(input.issue)}" is not an issue the hold showed: give "issue" as one of ${issueList(h)}, as a number.`
@@ -440,6 +589,12 @@ const growthLine = (h: Held): string | undefined => {
 
 /** The grey card's words (mod-kit draws it): the file, each issue shown with its priority, growth as rough. */
 export const holdCard = (h: Held): { reason: string; safeWay: string; note?: string } => {
+  if (h.unread) {
+    return {
+      reason: `This command writes a file whose name cannot be read before it runs (${h.unread.why}), and ${h.repo} has files the area check would hold.`,
+      safeWay: 'Claude proceeds with a reason, or makes the change with Edit or Write, which the area check can judge.',
+    }
+  }
   const parts: string[] = []
   if (h.shown.length) parts.push(`${h.rel} has open structural issues: ${h.shown.map(m => `#${m.n} (${priorityOf(m)}, ${m.structural.join(', ')})`).join('; ')}.`)
   else if (h.why.includes('growth')) parts.push(`${h.rel} is among the fastest growing large files in ${h.repo}.`)
@@ -454,12 +609,14 @@ export const holdRefusal = (h: Held): string => {
   const facts = [c.reason, c.note].filter(Boolean).join(' ')
   const call = (rest: string) => `${DECIDE_TOOL} with {"call": "${h.id}", ${rest}}`
   const ways = [`${call('"decision": "proceed", "reason": "<why this change does not add to the problem>"')} when it does not`]
+  if (h.unread) return `The area check held this ${heldCall(h)}. ${facts} Decide: call ${ways[0]}, or make the change with Edit or Write instead, which the area check can judge. Then send the Bash command again, unchanged.`
   if (h.shown.length) ways.push(`${call('"decision": "fold", "issue": <one of ' + issueList(h) + '>')} to fold that structural fix into this work`)
   ways.push(
     h.agent === null
       ? `${call('"decision": "restructure"')} to ask Dan whether to restructure first`
       : `${call('"decision": "restructure"')} when it should be restructured first, which hands the question to the main session to ask Dan; then stop and report that to it`,
   )
+  if (h.tool === 'Bash') return `The area check held this ${heldCall(h)}. ${facts} Decide: call ${ways.join('; or ')}. Then send the Bash command again, unchanged.`
   return `The area check held this ${h.tool} to ${h.rel}. ${facts} Before editing it, decide: call ${ways.join('; or ')}. Then send the ${h.tool} again, unchanged.`
 }
 

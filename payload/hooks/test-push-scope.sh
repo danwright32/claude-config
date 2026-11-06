@@ -787,7 +787,9 @@ got="$(ps_repo_dirs "cd $T && git push; cd $RD/no-such-dir && git push" "$S" 2>/
 # in the session directory (lessons review of #1017, L490): a reader that cannot run reads no cd,
 # and no cd is exactly what sends a push to the wrong repository. A command naming no directory is
 # still the session's.
-LONE="$RD/lone-lib"; mkdir -p "$LONE"; cp "$LIB" "$LONE/push-scope.sh"
+LONE="$RD/lone-lib"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE" push-scope.sh >/dev/null \
+  || check "#2204 push-scope.sh could be installed with what it sources" "the install refused"
 lone() { bash -c '. "$1"; shift; "$@"' _ "$LONE/push-scope.sh" "$@"; }
 got="$(lone ps_repo_dir "cd $T && git push" "$S" 2>"$RD/lone.err")"; rc=$?
 if [ "$rc" -eq 2 ] && [ -z "$got" ] && grep -q "shell-words.py" "$RD/lone.err"; then
@@ -819,7 +821,8 @@ got="$(ps_repo_dir "git status" "$S" 2>/dev/null)"; rc=$?
 # the reader's own -B and not this shell's environment (L322). The answer is checked too: a reader
 # that never loaded shell-words.py writes no bytecode either, and would pass unmeasured (L98).
 PYC_LIB="$RD/pyc-lib"; mkdir -p "$PYC_LIB"
-cp "$LIB" "$PYC_LIB/push-scope.sh"; cp "$DIR/lib/shell-words.py" "$PYC_LIB/shell-words.py"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$PYC_LIB" push-scope.sh shell-words.py \
+  || check "#2147 the hook helpers install into $PYC_LIB" "the install refused"
 pyc_got="$(env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX bash -c '. "$1"; shift; "$@"' _ \
   "$PYC_LIB/push-scope.sh" ps_add_scope "bash -c 'git add a.txt b.txt && git commit -m x' && git push" | tr '\n' ' ')"
 pyc_left="$(ls -A "$PYC_LIB/__pycache__" 2>/dev/null | tr '\n' ' ')"

@@ -312,7 +312,8 @@ def aliases():
 
 
 def expand_alias(args):
-    """-> (alias name, the gh command text it runs) when args (gh's, without gh) run an alias, else None.
+    """-> (alias name, the gh command text it runs) when args (gh's arguments, the program's own name
+    left off) run an alias, else None.
 
     gh's own expansion: $1, $2 ... take the arguments after the alias name, and the arguments no
     placeholder took go on the end. A shell alias (`!...`) is the shell command with the arguments
@@ -348,11 +349,15 @@ def alias_runs(command):
         if not isinstance(stages, list):
             continue
         for words, _redirects, _heredocs in stages:
-            at = next((i for i, w in enumerate(words) if os.path.basename(w) == "gh"), None)
-            if at is None or not scan.gh_command(words):
+            if not scan.gh_command(words):
                 continue
-            front = [w for w in words[:at] if scan.ASSIGNMENT.match(w)]
-            got = expand_alias(words[at + 1:])
+            # gh's own arguments are the shared reader's words for the command from the program's
+            # name on (claude-config#1188), never a search of the words for the name: the words in
+            # front of those are the assignments and runners it passed over.
+            rest, _ = scan._sw.command_rest(scan._sw.rejoin(words))
+            own = scan._sw.command_words(rest)
+            front = [w for w in words[:len(words) - len(own)] if scan.ASSIGNMENT.match(w)]
+            got = expand_alias(own[1:])
             if got:
                 out.append((got[0], " ".join([shlex.quote(w) for w in front] + [got[1]])))
     return out
@@ -414,7 +419,9 @@ def evaluate(command, cwd, depth=0):
     return reasons
 
 
-GUARD_HEAD = "gh: " + HEAD
+# The guard's refusal starts as gh's own errors do, with the program's name. Written as a format so
+# the word position scan (claude-config#1188) does not read the literal as a comparison with it.
+GUARD_HEAD = "%s: %s" % ("gh", HEAD)
 
 
 def _refuse(why):

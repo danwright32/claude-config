@@ -35,7 +35,11 @@ HERE="$(cd "${HERE:-/}" && pwd)"
 # session, so every later command pays one file test; the session's env file is read only before it.
 notice=""
 sid=""
-[[ "$payload" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9-]+)\" ]] && sid="${BASH_REMATCH[1]}"
+# The payload is matched in the session's locale and then in C's (claude-config#1885), since in a
+# UTF-8 locale a byte that is not UTF-8 hides every word after it. BASH_REMATCH is the matching try's.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+SID_RE='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9-]+)"'
+payload_match "$payload" "$SID_RE" && sid="${BASH_REMATCH[1]}"
 notice_dir="${WN_SCRIPTS_NOTICE_DIR:-${CLAUDE_HOME:-$HOME/.claude}/state/work-names-scripts-notice}"
 if [ -n "$sid" ] && [ ! -e "$notice_dir/$sid" ]; then
   env_dir="${WN_SESSION_ENV_DIR:-$HERE/../session-env}"

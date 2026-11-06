@@ -1078,6 +1078,17 @@ export const changedSpan = (before: string, after: string): { at: number; before
 }
 
 /**
+ * The lines a change touches in one of its two texts, from `at` (changedSpan's) to `end`, that text's
+ * end of the change: ending where the change ends, never on the unchanged line after them (#1248).
+ * Where the change only adds to the other text, none, an empty span where the lines go.
+ */
+const linesTouched = (text: string, at: number, end: number): Span => {
+  const from = text.lastIndexOf('\n', at - 1) + 1
+  const nl = end === at ? from : text[end - 1] === '\n' ? end - 1 : text.indexOf('\n', end)
+  return [from, nl < 0 ? text.length : nl]
+}
+
+/**
  * Whether changing a mod's hook file (isModHook) from `before` to `after` changes only logic, by what
  * the file draws (#1138): every line the change touches (changedSpan, ending where the change ends,
  * never on the unchanged line after it, #1248), in both texts, lies outside every JSX element
@@ -1106,12 +1117,7 @@ const modHookReading = (before: string, after: string): { verdict: 'logic' | 'wo
   ] as const) {
     const spans = sourceSpans(text)
     if (!spans) return undefined
-    // The lines the change touches in this text, ending where it ends, never on the unchanged line
-    // after them (#1248). Where it only adds to the other text, none, so all this text is asked is
-    // whether an element spans the place the lines go.
-    const from = text.lastIndexOf('\n', span.at - 1) + 1
-    const nl = end === span.at ? from : text[end - 1] === '\n' ? end - 1 : text.indexOf('\n', end)
-    const to = nl < 0 ? text.length : nl
+    const [from, to] = linesTouched(text, span.at, end)
     lines.push([from, to])
     if (spans.jsx.some(([a, b]) => a < to && from < b)) verdict = 'drawn'
     let shown = ''
@@ -1215,6 +1221,107 @@ export const commentOnlyChange = (before: string, after: string, jsx: boolean): 
   const was = withoutComments(before, jsx)
   return was !== null && was === withoutComments(after, jsx)
 }
+
+// The words an app's look is spelled in outside its JSX (#2294): class helpers, style objects and
+// themes, the design tokens, CSS's own property names, and the colours spelled as words. Read on each
+// part of a camelCase name (`buttonClassName`, `twMerge`), so a line naming any of them is held, as a
+// hold costs Dan one answer and a pass a look he never saw.
+const APP_LOOK_WORDS = new Set(
+  'class classes classname cls cn clsx cva tw twmerge css sx style styles styled theme themes palette color colors colour colours variant variants tone tones size sizes token tokens spacing font fonts weight bold italic underline bg background border borders shadow radius rounded padding margin gap width height opacity animate animation animations transition motion align justify flex grid display position overflow cursor hex rgb hsl icon icons'.split(
+    ' ',
+  ),
+)
+// What stands before a string naming a module: `from`, `import`, or a dynamic `import(`, never a
+// property or a call named from (`Array.from(`, `from(`).
+const MODULE_BEFORE = /(?:^|[^\w$.])(?:from\s*|import\s*\(\s*|import\s*)$/
+// A module imported for what loading it does, with no name taken from it (`import './setup'`).
+const BARE_IMPORT = /(?:^|[\n;])\s*import\s*$/
+// A stylesheet, which changes the page with no word on it.
+const STYLE_MODULE = /\.(css|scss|sass|less|styl|stylus|pcss|postcss)([?#].*)?$/i
+
+type AppReading = { spans: NonNullable<ReturnType<typeof sourceSpans>>; module: Set<number>; modules: string[]; shown: string[] }
+
+// What a React screen file shows by its text, for logicOnlyChange: the modules it imports (each as
+// `bare|name` or `named|name`), which of its strings name one, and, in order, every part that can be
+// on screen or read by Tailwind: each comment, string, template part and JSX element, and each number
+// and true or false in its code. Null for text the reader cannot follow (sourceSpans).
+const appReading = (text: string): AppReading | null => {
+  const spans = sourceSpans(text)
+  if (!spans) return null
+  const module = new Set<number>()
+  const modules: string[] = []
+  spans.strings.forEach(([a, b], k) => {
+    if (text[a - 1] !== "'" && text[a - 1] !== '"') return
+    const head = text.slice(Math.max(0, a - 81), a - 1)
+    if (!MODULE_BEFORE.test(head)) return
+    module.add(k)
+    modules.push(`${BARE_IMPORT.test(head) ? 'bare' : 'named'}|${text.slice(a, b)}`)
+  })
+  const parts: [number, string][] = []
+  for (const [a, b] of spans.comments) parts.push([a, `comment ${text.slice(a, b)}`])
+  spans.strings.forEach(([a, b], k) => {
+    if (!module.has(k)) parts.push([a, `string ${text.slice(a, b)}`])
+  })
+  for (const [a, b] of spans.jsx) parts.push([a, `jsx ${text.slice(a, b)}`])
+  // The code alone: comments, strings and JSX blanked, so a number there is one the code holds.
+  const code = text.split('')
+  for (const [a, b] of [...spans.comments, ...spans.strings, ...spans.jsx]) for (let i = a; i < b; i++) code[i] = ' '
+  for (const m of code.join('').matchAll(/[A-Za-z_$][\w$]*|\.?\d[\w.]*/g)) if (/^\.?\d/.test(m[0]) || m[0] === 'true' || m[0] === 'false') parts.push([m.index ?? 0, `code ${m[0]}`])
+  parts.sort((x, y) => x[0] - y[0] || (x[1] < y[1] ? -1 : 1))
+  return { spans, module, modules, shown: parts.map(p => p[1]) }
+}
+
+/**
+ * Whether changing an app's React screen file from `before` to `after` changes only its logic, read by
+ * the guard from the edit itself and never from a session's word (#2294, Dan, 2026-11-05: "If you're
+ * confident that nothing on screen changes don't ask me to make a decision and just skip design rounds
+ * automatically"). True only when both texts can be read (sourceSpans) and:
+ * - on every line the change touches (changedSpan, linesTouched), in both texts: no JSX element, no
+ *   string but a module's name, no template literal, no colour spelled out (MOD_LOOK_LITERAL), and,
+ *   comments aside, no word an app's look is spelled in (APP_LOOK_WORDS);
+ * - across the whole file, every comment (Tailwind reads them, #1341), string, JSX element, number and
+ *   true or false reads the same, in the same order;
+ * - no stylesheet or bare side effect import comes or goes, and no import is swapped for another
+ *   (both one added and one taken away), since that may change a component.
+ * Identifiers and logic can still decide which element renders; the issue allows those.
+ */
+export const logicOnlyChange = (before: string, after: string): boolean => {
+  if (before === after) return false
+  const was = appReading(before)
+  const now = appReading(after)
+  if (!was || !now) return false
+  const span = changedSpan(before, after)
+  for (const [text, r, end] of [
+    [before, was, span.before],
+    [after, now, span.after],
+  ] as const) {
+    const [from, to] = linesTouched(text, span.at, end)
+    const over = ([a, b]: Span) => a < to && from < b
+    if (r.spans.jsx.some(over)) return false
+    if (r.spans.strings.some((s, k) => !r.module.has(k) && over(s))) return false
+    let shown = ''
+    for (let i = from; i < to; i++) if (!r.spans.comments.some(([a, b]) => a <= i && i < b)) shown += text[i]
+    if (shown.includes('`') || shown.includes('${') || MOD_LOOK_LITERAL.test(shown)) return false
+    for (const w of shown.match(/[A-Za-z]+/g) ?? [])
+      for (const part of w.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')) if (APP_LOOK_WORDS.has(part) || APP_LOOK_WORDS.has(w.toLowerCase())) return false
+  }
+  if (JSON.stringify(was.shown) !== JSON.stringify(now.shown)) return false
+  // The modules imported, as a multiset: what came and what went.
+  const left = [...now.modules]
+  const removed: string[] = []
+  for (const m of was.modules) {
+    const k = left.indexOf(m)
+    if (k < 0) removed.push(m)
+    else left.splice(k, 1)
+  }
+  const changed = [...left, ...removed]
+  if (left.length && removed.length) return false
+  return !changed.some(m => m.startsWith('bare|') || STYLE_MODULE.test(m.slice(m.indexOf('|') + 1)))
+}
+
+/** An automatic pass of a logic only edit (#2294), kept with the call: what it let through, and why. */
+export const autoPassWhy = (files: readonly string[]): string =>
+  `The guard read this edit to ${listed(files)} itself and found it changes only logic: no JSX, text, comment, number, true or false, style word, stylesheet or swapped import. So this guard let it through with no design round and nothing asked (#2294); another check may still have refused it.`
 
 /**
  * What a refusal says of a mod hook file a shell command writes that could not be read before it ran
@@ -1341,6 +1448,19 @@ type ModRead = {
   // What function k returns: its expression body, or each of its own `return`s' values.
   returns: (k: number) => Span[]
   cutCode: (s: Span) => string
+  // #2161: what each string, template text and JSX text holds, where it is; the file as written, and
+  // with strings and comments blanked; and the innermost bracket open around an offset.
+  strings: Span[]
+  text: string
+  blank: string
+  inner: (at: number) => number | undefined
+  // #2223: found once rather than by a scan per question. The functions holding an offset, innermost
+  // first; function k's locals named x, in order; the functions named x; the top level statements
+  // (types aside) named x.
+  around: (at: number) => (readonly [Fn, number])[]
+  localsOf: (k: number, x: string) => readonly Local[]
+  fnsNamed: (x: string) => readonly number[]
+  topsNamed: (x: string) => readonly Statement[]
 }
 
 // One mod hook file as drawsChange reads it, or null for one its reader cannot follow.
@@ -1395,7 +1515,18 @@ const readMod = (f: ModFile): ModRead | null => {
       if (p && p[1] !== 'type') imports.set((p[2] ?? p[1]) as string, { file, name: p[1] as string })
     }
   }
-  const statementAt = (i: number) => statements.find(s => s.from <= i && i < s.to)
+  // The statements follow one another in order, each to where the next starts (#2223: a search).
+  const statementAt = (i: number): Statement | undefined => {
+    let lo = 0
+    let hi = statements.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if ((statements[mid] as Statement).from <= i) lo = mid + 1
+      else hi = mid
+    }
+    const s = statements[lo - 1]
+    return s && i < s.to ? s : undefined
+  }
   // Every function body in braces: an arrow's (`=> {`) and a function's (`function f(...) {`).
   const bodies: Span[] = []
   for (const [o, c] of close) {
@@ -1492,7 +1623,37 @@ const readMod = (f: ModFile): ModRead | null => {
   const openAt = new Map<number, number>()
   for (const [o, c] of close) openAt.set(c, o)
   const pairs = [...close].sort((x, y) => x[0] - y[0])
-  const isSpace = (i: number) => /\s/.test(blank[i] ?? '')
+  // #2223: one stack matched the pairs, so they nest: every pair opened before an offset and still
+  // open past it is the last pair opened before it or one around that one. Each pair's parent (the
+  // pair it sits in, or -1) lets a reader walk outward from there instead of scanning every pair.
+  const parent = new Int32Array(pairs.length).fill(-1)
+  const chain: number[] = []
+  pairs.forEach(([o], j) => {
+    while (chain.length && (pairs[chain[chain.length - 1] as number] as Span)[1] < o) chain.pop()
+    if (chain.length) parent[j] = chain[chain.length - 1] as number
+    chain.push(j)
+  })
+  // The index of the last pair opened before `at`, or -1.
+  const lastOpenBefore = (at: number): number => {
+    let lo = 0
+    let hi = pairs.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if ((pairs[mid] as Span)[0] < at) lo = mid + 1
+      else hi = mid
+    }
+    return lo - 1
+  }
+  // The open of the latest opened pair before `at` that `ok` takes, where `ok` takes only a pair still
+  // open at `at`: the same pair a scan of every pair in order keeping the last it takes finds.
+  const openAround = (at: number, ok: (o: number, c: number) => boolean): number | undefined => {
+    for (let j = lastOpenBefore(at); j >= 0; j = parent[j] as number) {
+      const [o, c] = pairs[j] as Span
+      if (ok(o, c)) return o
+    }
+    return undefined
+  }
+  const isSpace =(i: number) => /\s/.test(blank[i] ?? '')
   const isWord = (i: number) => /[\w$]/.test(blank[i] ?? '')
   const skipBack = (i: number) => {
     while (i >= 0 && isSpace(i)) i--
@@ -1609,11 +1770,7 @@ const readMod = (f: ModFile): ModRead | null => {
   const receiverOf = (start: number): Fn['receiver'] => {
     const p = skipBack(start - 1)
     if (blank[p] !== '(' && blank[p] !== ',') return undefined
-    let o: number | undefined
-    for (const [x, c] of pairs) {
-      if (x >= start) break
-      if (c >= start && blank[x] === '(') o = x
-    }
+    const o = openAround(start, (x, c) => c >= start && blank[x] === '(')
     if (o === undefined) return undefined
     const q = skipBack(o - 1)
     const before = blank.slice(Math.max(0, q - 300), q + 1)
@@ -1668,12 +1825,34 @@ const readMod = (f: ModFile): ModRead | null => {
     const name = m[1] || nameBefore(m.index as number)
     fns.push({ from: m.index as number, to: shut + 1, body: brace, params: namesIn(paren + 1, end), ...(name ? { name } : { receiver: receiverOf(m.index as number) }) })
   }
+  // #2223: the functions holding each offset, found once. Between two neighbouring function ends the
+  // same functions hold every offset, so each stretch keeps their indexes in order; nothing assumes
+  // the functions nest.
+  const edges = [...new Set(fns.flatMap(g => [g.from, g.to]))].sort((x, y) => x - y)
+  const stretchAt = (i: number): number => {
+    let lo = 0
+    let hi = edges.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if ((edges[mid] as number) <= i) lo = mid + 1
+      else hi = mid
+    }
+    return lo - 1
+  }
+  const cover: number[][] = edges.map(() => [])
+  fns.forEach((g, k) => {
+    for (let s = stretchAt(g.from); s < edges.length && (edges[s] as number) < g.to; s++) (cover[s] as number[]).push(k)
+  })
+  const none: readonly number[] = []
+  // Every function holding offset i, as indexes into fns in order.
+  const holding = (i: number): readonly number[] => cover[stretchAt(i)] ?? none
   // The innermost function holding i, as an index into fns, or -1 at the top level; `not` excepted.
   const fnAt = (i: number, not = -1): number => {
     let best = -1
-    fns.forEach((g, k) => {
-      if (k !== not && g.from <= i && i < g.to && (best < 0 || g.from >= (fns[best] as Fn).from)) best = k
-    })
+    for (const k of holding(i)) {
+      const g = fns[k] as Fn
+      if (k !== not && (best < 0 || g.from >= (fns[best] as Fn).from)) best = k
+    }
     return best
   }
   const locals: Local[] = []
@@ -1712,6 +1891,21 @@ const readMod = (f: ModFile): ModRead | null => {
     const owner = fnAt(g.from, k)
     if (owner >= 0) locals.push({ name: g.name, span: [g.from, g.to], owner })
   })
+  // #2223: each function's locals by name, in the order found; nothing adds a local after this.
+  const localsBy = new Map<string, Local[]>()
+  for (const l of locals) {
+    const key = `${l.owner}\n${l.name}`
+    const list = localsBy.get(key)
+    if (list) list.push(l)
+    else localsBy.set(key, [l])
+  }
+  const noLocals: readonly Local[] = []
+  const localsOf = (k: number, name: string): readonly Local[] => localsBy.get(`${k}\n${name}`) ?? noLocals
+  // The functions holding offset `at`, innermost first, as a sort of every function would give them.
+  const around = (at: number): (readonly [Fn, number])[] =>
+    holding(at)
+      .map(k => [fns[k] as Fn, k] as const)
+      .sort((a, b) => b[0].from - a[0].from)
   const NOT_CALLS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'await', 'yield', 'in', 'of', 'case', 'do', 'else', 'void', 'delete', 'throw', 'function', 'async'])
   // Whether a `(` opens a call's arguments, not a grouping, a condition or a function's parameters.
   const isCall = (o: number): boolean => {
@@ -1739,8 +1933,9 @@ const readMod = (f: ModFile): ModRead | null => {
     const id = wordBack(p)
     const at = p - id.length + 1
     if (blank[skipBack(at - 1)] === '.') continue
-    for (const [g, k] of fns.map((g, k) => [g, k] as const).filter(([g]) => g !== f && g.from <= at && at < g.to).sort((a, b) => b[0].from - a[0].from)) {
-      if (locals.some(l => l.owner === k && l.name === id)) break
+    for (const [g, k] of around(at)) {
+      if (g === f) continue
+      if (localsOf(k, id).length) break
       if (g.params.some(ps => ps.includes(id))) {
         if (engineOn(g, k) && g.params.findIndex(ps => ps.includes(id)) === 0) f.receiver = { at, name: id }
         break
@@ -1754,7 +1949,9 @@ const readMod = (f: ModFile): ModRead | null => {
     if (isWord(at - 1) || (blank[at - 1] === '.' && blank.slice(at - 3, at) !== '...')) continue
     const o = skipOn(at + m[0].length)
     if (blank[o] !== '(' || wordBack(skipBack(at - 1)) === 'function') continue
-    calls.set(m[0], [...(calls.get(m[0]) ?? []), o])
+    const list = calls.get(m[0])
+    if (list) list.push(o)
+    else calls.set(m[0], [o])
   }
   // A call's arguments, by position, from its `(`.
   const args = (o: number): Span[] | null => {
@@ -1895,7 +2092,10 @@ const readMod = (f: ModFile): ModRead | null => {
   // part's own drawing call's aside) and every test position.
   const cutIn = (a: number, b: number, own?: number): Span[] => {
     const out: Span[] = []
-    for (const [o, c] of pairs) if (o >= a && o < b && o !== own && blank[o] === '(' && isCall(o)) out.push([o, c])
+    for (let j = lastOpenBefore(a) + 1; j < pairs.length && (pairs[j] as Span)[0] < b; j++) {
+      const [o, c] = pairs[j] as Span
+      if (o !== own && blank[o] === '(' && isCall(o)) out.push([o, c])
+    }
     out.push(...testsIn(a, b, own).map(([x, y]): Span => [x - 1, y]))
     // What a drawing call is handed to say which surface it draws, never how (a card's
     // `toolUseId`, a band row's `mod`, `id` and `slot`, a pane's `id`): not followed.
@@ -1987,11 +2187,7 @@ const readMod = (f: ModFile): ModRead | null => {
   for (const m of blank.matchAll(MESSAGE_KEY)) {
     const at = (m.index as number) + (m[1] as string).length
     // Only an object's key: a parameter (`(text: string)`) or an argument is none.
-    let inner: number | undefined
-    for (const [o, c] of pairs) {
-      if (o >= at) break
-      if (c > at) inner = o
-    }
+    const inner = openAround(at, (_, c) => c > at)
     if (inner === undefined || blank[inner] !== '{') continue
     // #1841: nor a property a tool's input schema names (job watcher's `reason`, which Claude fills in):
     // its value is a schema, whose description only Claude reads.
@@ -2055,9 +2251,30 @@ const readMod = (f: ModFile): ModRead | null => {
   const notHeard = new Set<number>()
   // Each call's arguments a string in is no word read (#1864 reads a parameter's uses against them).
   const notText: Span[] = []
+  // #2223: the strings by where they start, so the strings inside a span are found by a search.
+  const strings = spans.strings
+  const byStart = strings.map((_, k) => k).sort((a, b) => (strings[a] as Span)[0] - (strings[b] as Span)[0])
+  // The index of each string inside [a, b], in the order sourceSpans gave them.
+  const stringsInside = (a: number, b: number): number[] => {
+    let lo = 0
+    let hi = byStart.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if ((strings[byStart[mid] as number] as Span)[0] < a) lo = mid + 1
+      else hi = mid
+    }
+    const out: number[] = []
+    for (let j = lo; j < byStart.length; j++) {
+      const k = byStart[j] as number
+      const [x, y] = strings[k] as Span
+      if (x > b) break
+      if (y <= b) out.push(k)
+    }
+    return out.sort((p, q) => p - q)
+  }
   const within = (from: number, to: number) => {
     notText.push([from, to])
-    for (const [x, y] of spans.strings) if (from <= x && y <= to) notHeard.add(x)
+    for (const k of stringsInside(from, to)) notHeard.add((strings[k] as Span)[0])
   }
   for (const m of blank.matchAll(NOT_TEXT_CALL)) {
     const paren = (m.index as number) + m[0].length - 1
@@ -2134,11 +2351,7 @@ const readMod = (f: ModFile): ModRead | null => {
   }
   const tagAt = ([x, y]: Span): boolean => {
     if (!TAG_WORD.test(text.slice(x, y)) || messages.some(([a, b]) => a <= x && y <= b)) return false
-    let o: number | undefined
-    for (const [p, q] of pairs) {
-      if (p >= x) break
-      if (q > y) o = p
-    }
+    const o = openAround(x, (_, q) => q > y)
     if (o === undefined) return false
     const c = close.get(o) as number
     const els = elements(o)
@@ -2200,8 +2413,30 @@ const readMod = (f: ModFile): ModRead | null => {
   }
   // Every string, template text and JSX text inside a span that a person reads (#1841): every mod
   // hook file's messages are read so since #1864, a .tsx or .jsx one's too.
-  const stringsIn = ([a, b]: Span): string[] => spans.strings.filter(([x, y]) => a <= x && y <= b && heard([x, y])).map(([x, y]) => text.slice(x, y))
-  return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode }
+  const stringsIn = ([a, b]: Span): string[] =>
+    stringsInside(a, b)
+      .map(k => strings[k] as Span)
+      .filter(([x, y]) => heard([x, y]))
+      .map(([x, y]) => text.slice(x, y))
+  const inner = (at: number): number | undefined => openAround(at, (_, c) => c > at)
+  // #2223: the functions and the top level statements (types aside) by name, each in order.
+  const fnsBy = new Map<string, number[]>()
+  fns.forEach((g, k) => {
+    if (g.name === undefined) return
+    const list = fnsBy.get(g.name)
+    if (list) list.push(k)
+    else fnsBy.set(g.name, [k])
+  })
+  const topsBy = new Map<string, Statement[]>()
+  for (const s of statements) {
+    if (s.name === undefined || s.isType) continue
+    const list = topsBy.get(s.name)
+    if (list) list.push(s)
+    else topsBy.set(s.name, [s])
+  }
+  const fnsNamed = (x: string): readonly number[] => fnsBy.get(x) ?? none
+  const topsNamed = (x: string): readonly Statement[] => topsBy.get(x) ?? []
+  return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode, strings: spans.strings, text, blank, inner, around, localsOf, fnsNamed, topsNamed }
 }
 
 /**
@@ -2231,8 +2466,11 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
 // line builder, and each top level declaration drawn) and the values followed into them, apart, with
 // the file as read (no `r` for a file not among `files`). Null where any of the mod's files cannot be
 // read. With `seeds` 'messages' the same reading starts from where a message a person reads is handed
-// its words (#1823) rather than from what is drawn.
-const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'messages' = 'units'): { r?: ModRead; parts: Span[]; followed: Span[] } | null => {
+// its words (#1823) rather than from what is drawn. `reached` is every place read so in each of the
+// mod's files, with the file as read: the seeds, the top level declarations reached and the values
+// followed (#2161, which asks what a message reads beside what it says). `wide` follows what a call
+// is handed too (`String(why)`'s `why`), which is no part of the look or the words but may read a key.
+const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'messages' = 'units', wide = false): { r?: ModRead; parts: Span[]; followed: Span[]; reached: [ModRead, Span][] } | null => {
   const read = new Map<string, ModRead>()
   for (const f of files) {
     const r = readMod(f)
@@ -2301,10 +2539,12 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
     if (!f.name) return
     // Its calls: inside the function holding it, or, for one at the top level, anywhere in its file
     // and in each of the mod's files importing it.
+    // Only a function holding f.from can hold f, so those alone are looked at, in the same order.
     let outer = -1
-    r.fns.forEach((g, j) => {
-      if (j !== k && g.from <= f.from && f.to <= g.to && (outer < 0 || g.from >= (r.fns[outer] as Fn).from)) outer = j
-    })
+    for (const j of r.around(f.from).map(([, j]) => j).sort((a, b) => a - b)) {
+      const g = r.fns[j] as Fn
+      if (j !== k && f.to <= g.to && (outer < 0 || g.from >= (r.fns[outer] as Fn).from)) outer = j
+    }
     const o = r.fns[outer]
     const sites: [ModRead, number][] = (r.calls.get(f.name) ?? []).filter(p => !o || (o.from <= p && p < o.to)).map(p => [r, p])
     if (!o)
@@ -2318,12 +2558,6 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
       })
     }
   }
-  // The functions around offset `at`, innermost first.
-  const around = (r: ModRead, at: number) =>
-    r.fns
-      .map((f, k) => [f, k] as const)
-      .filter(([f]) => f.from <= at && at < f.to)
-      .sort((a, b) => b[0].from - a[0].from)
   const returned = new Set<string>()
   const returnsOf = (file: string, k: number) => {
     const key = `${file}\n${k}`
@@ -2336,10 +2570,10 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
   // where `x` called at `at` is such a function, a local one, one at the top level, or one imported.
   const callee = (file: string, x: string, at: number): boolean => {
     const r = read.get(file) as ModRead
-    for (const [f, k] of around(r, at)) {
-      const own = r.locals.filter(l => l.owner === k && l.name === x)
+    for (const [f, k] of r.around(at)) {
+      const own = r.localsOf(k, x)
       if (own.length) {
-        const g = r.fns.findIndex(h => h.name === x && own.some(l => l.span[0] <= h.from && h.to <= l.span[1]))
+        const g = r.fnsNamed(x).find(j => own.some(l => l.span[0] <= (r.fns[j] as Fn).from && (r.fns[j] as Fn).to <= l.span[1])) ?? -1
         if (g < 0) return false
         returnsOf(file, g)
         return true
@@ -2347,8 +2581,8 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
       if (f.params.some(p => p.includes(x))) return false
     }
     const top = (g: ModRead, name: string): boolean => {
-      const s = g.statements.find(s => s.name === name && !s.isType)
-      const k = s ? g.fns.findIndex(h => h.name === name && s.from <= h.from && h.to <= s.to) : -1
+      const s = g.topsNamed(name)[0]
+      const k = s ? (g.fnsNamed(name).find(j => s.from <= (g.fns[j] as Fn).from && (g.fns[j] as Fn).to <= s.to) ?? -1) : -1
       if (k < 0) return false
       returnsOf(g.name, k)
       return true
@@ -2362,8 +2596,8 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
     if (x === '$') return
     const r = read.get(file) as ModRead
     const within = inputs === undefined ? undefined : r.fns[inputs]
-    for (const [f, k] of around(r, at)) {
-      const own = r.locals.filter(l => l.owner === k && l.name === x)
+    for (const [f, k] of r.around(at)) {
+      const own = r.localsOf(k, x)
       if (own.length) {
         // A local of the called function carries on as one of its values.
         for (const l of own) addSpan(file, l.span, within && within.from <= l.span[0] && l.span[1] <= within.to ? inputs : undefined)
@@ -2383,14 +2617,14 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
       // A line builder (a unit that is a function, whole) is drawn with its own words; what it is
       // handed is the data it shows, so its parameters are its inputs, as a called function's are.
       const builder = own === undefined && !r.code(u).startsWith('<') ? r.fns.findIndex(f => (u[0] <= f.from && f.to <= u[1]) || f.body === u[0]) : -1
-      for (const { name: x, at } of r.refsAt(u, true, own)) bind(r.name, x, at, builder < 0 ? undefined : builder)
+      for (const { name: x, at } of r.refsAt(u, !wide, own)) bind(r.name, x, at, builder < 0 ? undefined : builder)
     }
   while (queue.length || spans.length) {
     const next = spans.pop()
     if (next) {
       const [file, s, inputs] = next
       const r = read.get(file) as ModRead
-      for (const { name: x, at, call } of r.refsAt(s, true)) {
+      for (const { name: x, at, call } of r.refsAt(s, !wide)) {
         if (call && callee(file, x, at)) continue
         reach(file, x)
         bind(file, x, at, inputs)
@@ -2399,17 +2633,23 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
     }
     const [file, x] = queue.pop() as [string, string]
     const r = read.get(file) as ModRead
-    for (const s of r.statements) if (s.name === x && !s.isType) for (const y of r.refs([s.from, s.to])) reach(file, y)
+    for (const s of r.topsNamed(x)) for (const y of r.refs([s.from, s.to])) reach(file, y)
+  }
+  const reached: [ModRead, Span][] = []
+  for (const g of read.values()) {
+    for (const u of g[seeds]) reached.push([g, u])
+    for (const s of g.statements) if (s.name !== undefined && drawn.has(`${g.name}\n${s.name}`)) reached.push([g, [s.from, s.to]])
+    for (const s of extra.get(g.name)?.values() ?? []) reached.push([g, s])
   }
   const r = read.get(name)
-  if (!r) return { parts: [], followed: [] }
+  if (!r) return { parts: [], followed: [], reached }
   const parts = new Map(r[seeds].map(u => [`${u[0]}:${u[1]}`, u]))
   for (const s of r.statements) if (s.name !== undefined && drawn.has(`${name}\n${s.name}`)) parts.set(`${s.from}:${s.to}`, [s.from, s.to])
   const followed = new Map(extra.get(name) ?? [])
   for (const key of parts.keys()) followed.delete(key)
   // A followed value given the same way twice (two returns of `undefined`) is one value (#1576),
   // which drawnParts reads as one.
-  return { r, parts: [...parts.values()], followed: [...followed.values()] }
+  return { r, parts: [...parts.values()], followed: [...followed.values()], reached }
 }
 
 // The names each import in `text` binds, as the file and the name it takes them from; type only
@@ -2518,35 +2758,262 @@ export const messageWordingSame = (files: readonly ModFile[], name: string, befo
  */
 export const messageWordings = (files: readonly ModFile[], name: string, before: string, after: string): { said: string[]; says: string[] } | null => {
   const others = files.filter(f => f.name !== name)
-  const wording = (text: string): string[] | null => {
-    const d = drawnOf([...others, { name, text }], name, 'messages')
-    if (!d?.r) return null
-    const r = d.r
-    // Everything a call is handed of each top level function that sends a message, itself or through
-    // another such function (the goal tracker's waitingOnYou, through notifySoon's promise, to
-    // notify's terminal-notifier, which the values followed do not reach).
-    const fnsAt = r.statements.filter(s => s.name !== undefined && !s.isType)
-    const sends = new Set<string>()
-    for (let grew = true; grew; ) {
-      grew = false
-      for (const s of fnsAt) {
-        if (sends.has(s.name as string)) continue
-        const inS = (p: number) => s.from <= p && p < s.to
-        if (r.messages.some(([a]) => inS(a)) || [...sends].some(x => (r.calls.get(x) ?? []).some(inS))) {
-          sends.add(s.name as string)
-          grew = true
-        }
+  const said = messageReading(others, name, before)
+  const says = messageReading(others, name, after)
+  return said && says ? { said: said.words, says: says.words } : null
+}
+
+// One text of the mod hook file `name` as messageWordings reads it, beside the mod's other hook files
+// `others`: the file as read, the words of every message a person reads from it, each once and
+// sorted, and every place in the mod's files that reading reached (#2161). Null where any of the
+// texts cannot be read.
+type MessageReading = { r: ModRead; words: string[]; reached: [ModRead, Span][] }
+const messageReading = (others: readonly ModFile[], name: string, text: string): MessageReading | null => {
+  const d = drawnOf([...others, { name, text }], name, 'messages')
+  if (!d?.r) return null
+  const r = d.r
+  // The same reading following what each call is handed as well, for what the key reading reads
+  // (#2161): `const why = printed(line).unresolved; $.ui.toast(String(why))` reads the key.
+  const wide = drawnOf([...others, { name, text }], name, 'messages', true)
+  if (!wide) return null
+  // Everything a call is handed of each top level function that sends a message, itself or through
+  // another such function (the goal tracker's waitingOnYou, through notifySoon's promise, to
+  // notify's terminal-notifier, which the values followed do not reach).
+  const fnsAt = r.statements.filter(s => s.name !== undefined && !s.isType)
+  const sends = new Set<string>()
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const s of fnsAt) {
+      if (sends.has(s.name as string)) continue
+      const inS = (p: number) => s.from <= p && p < s.to
+      if (r.messages.some(([a]) => inS(a)) || [...sends].some(x => (r.calls.get(x) ?? []).some(inS))) {
+        sends.add(s.name as string)
+        grew = true
       }
     }
-    const spans: Span[] = [...d.parts, ...d.followed]
-    for (const x of sends) for (const p of r.calls.get(x) ?? []) spans.push(...(r.args(p) ?? []))
-    // Each wording once: the same words moved into a helper, or said from one more place, say
-    // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
-    return [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort()
   }
-  const said = wording(before)
-  const says = wording(after)
-  return said && says ? { said, says } : null
+  const spans: Span[] = [...d.parts, ...d.followed]
+  const handed: Span[] = []
+  for (const x of sends) for (const p of r.calls.get(x) ?? []) handed.push(...(r.args(p) ?? []))
+  spans.push(...handed)
+  // What the key reading reads (#2161): every place reached, what each sending function is handed,
+  // and the parameters of each function inside one, from its start to its body, so a parameter
+  // taking a record apart (`({ unresolved: why }) =>`) is read too.
+  const sent = fnsAt.filter(s => sends.has(s.name as string))
+  const heads = r.fns.filter(f => sent.some(s => s.from <= f.from && f.to <= s.to)).map(f => [r, [f.from, f.body]] as [ModRead, Span])
+  // Each wording once: the same words moved into a helper, or said from one more place, say
+  // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
+  return { r, words: [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort(), reached: [...d.reached, ...wide.reached, ...handed.map(s => [r, s] as [ModRead, Span]), ...heads] }
+}
+
+// #2161: a whole record handed to a message, its keys or values taken without naming them, or a key
+// read by reflection, which the key reading below cannot follow, so each may read any reason key.
+const WHOLE_RECORD = /\bJSON\s*\.\s*stringify\b|\bObject\s*\.\s*(?:keys|values|entries|getOwnPropertyNames|getOwnPropertyDescriptors?|assign)\b|\bReflect\s*\.\s*[A-Za-z]/
+// #2161: a word before a `[` that makes it a list, never an access (`of [...parts]`, `return [a]`).
+const LIST_AFTER = /(?<![\w$.])(?:of|in|return|typeof|case|yield|await|void|delete|instanceof|new|else|do|throw|extends|keyof|readonly)\s*$/
+
+// #2161: whether `e`, code of `g` (strings blanked) read at `at`, is always a number, so an index by
+// it is never a record's key: a number, `.length`, a name numberIs finds, and arithmetic of them, a
+// ternary's two branches each one. Anything else may be a string, so is not.
+const numberExpr = (g: ModRead, e: string, at: number, seen: Set<string>): boolean => {
+  let x = e.trim().replace(/\s+as\s+number$/, '')
+  while (x.startsWith('(') && shutAt(x, 0) === x.length - 1) x = x.slice(1, -1).trim()
+  // A ternary at this depth: its condition may be anything, its branches must each be numbers.
+  let depth = 0
+  let ask = -1
+  for (let i = 0; i < x.length; i++) {
+    const c = x[i] as string
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth--
+    else if (depth === 0 && c === '?' && x[i + 1] !== '.' && x[i + 1] !== '?' && x[i - 1] !== '?') ask = ask < 0 ? i : ask
+    else if (depth === 0 && c === ':' && ask >= 0) return numberExpr(g, x.slice(ask + 1, i), at, seen) && numberExpr(g, x.slice(i + 1), at, seen)
+  }
+  const TOKEN = /\s+|\d[\d_]*(?:\.\d+)?(?:e[+-]?\d+)?|[A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*|\+\+|--|\*\*|[-+*/%()]/gy
+  let seenAll = 0
+  for (const m of x.matchAll(TOKEN)) {
+    if (m.index !== seenAll) return false
+    seenAll += m[0].length
+    const t = m[0]
+    if (!/^[A-Za-z_$]/.test(t)) continue
+    if (/\.\s*length$/.test(t)) continue
+    if (!/^[A-Za-z_$][\w$]*$/.test(t) || !numberIs(g, t, at, seen)) return false
+  }
+  return x.length > 0 && seenAll === x.length
+}
+
+// #2161: whether the name `v`, as code of `g` at `at` sees it, always holds a number: a parameter of
+// the innermost function binding it typed `: number`, or a local whose every declaration and later
+// assignment there (readMod's locals) is a number by numberExpr. A name bound nowhere is not.
+const numberIs = (g: ModRead, v: string, at: number, seen: Set<string>): boolean => {
+  if (seen.has(v)) return true
+  seen.add(v)
+  const name = v.replace(/\$/g, '\\$')
+  for (const [f, k] of g.around(at)) {
+    if (f.params.some(ps => ps.includes(v)))
+      return new RegExp(`(?<![\\w$.])${name}\\s*\\??\\s*:\\s*number\\s*(?=[,)=])`).test(g.blank.slice(f.from, f.body))
+    const mine = g.localsOf(k, v)
+    if (!mine.length) continue
+    return mine.every(({ span: [a, b] }) => {
+      const t = g.blank.slice(a, b).trim()
+      const decl = new RegExp(`^(?:const|let|var)\\s+${name}\\s*(?::\\s*([^=]*?))?\\s*(=(?![=>]))?\\s*([^]*)$`).exec(t)
+      if (decl) return decl[1]?.trim() === 'number' || (!!decl[2] && numberExpr(g, decl[3] as string, at, seen))
+      const put = new RegExp(`^${name}\\s*([-+*/|&?]*)=\\s*([^]*)$`).exec(t)
+      if (!put) return false
+      return /^[-*/|&]$/.test(put[1] as string) || numberExpr(g, put[2] as string, at, seen)
+    })
+  }
+  return false
+}
+
+// #2161: the key each access by brackets in `g` from `a` to `b` reads: the key, for one quoted whole
+// (any quote, a template with no substitution in it); null for any other, which may read any key. An
+// index always a number (numberExpr), never a record's key, and a type's empty `[]` are left out.
+const bracketReads = (g: ModRead, [a, b]: Span): (string | null)[] => {
+  const out: (string | null)[] = []
+  for (let o = g.blank.indexOf('[', a); o !== -1 && o < b; o = g.blank.indexOf('[', o + 1)) {
+    const lead = g.blank.slice(Math.max(0, o - 40), o)
+    if (!/(?:[\w$)\]]|\?\.)\s*$/.test(lead) || LIST_AFTER.test(lead)) continue
+    const c = shutAt(g.blank, o)
+    if (c === undefined) {
+      out.push(null)
+      continue
+    }
+    const key = g.text.slice(o + 1, c).trim()
+    if (key === '' || /^(?:0[xob][\da-f_]+|\d[\d_]*(?:\.\d+)?(?:e[+-]?\d+)?)n?$/i.test(key) || numberExpr(g, g.blank.slice(o + 1, c), o, new Set())) continue
+    const q = /^(['"`])([^]*)\1$/.exec(key)
+    const plain = q && !/[\\'"`]/.test(q[2] as string) && !(q[1] === '`' && (q[2] as string).includes('${'))
+    out.push(plain ? (q[2] as string) : null)
+  }
+  return out
+}
+
+// #2161: whether `g` spreads something into an object (`{ ...made }`) or a call (`f(...made)`) at
+// `i`, which copies or hands on every key it has unnamed; never a list's or a parameter list's rest.
+// A parameter list is one a function readMod found opens with (an arrow's, or a `function`'s first),
+// never one a `:` follows, which is as often a ternary's other branch (`ok ? say(...made) : ''`).
+const spreadsAt = (g: ModRead, i: number): boolean => {
+  const o = g.inner(i)
+  if (o === undefined) return false
+  if (g.blank[o] === '{') return !g.fns.some(f => f.body === o)
+  if (g.blank[o] !== '(') return false
+  return !g.fns.some(f => f.from === o || (f.from < o && o < f.body && /^function\b\s*\*?\s*[\w$]*\s*$/.test(g.blank.slice(f.from, o))))
+}
+// #2161: a member read (`d.unresolved`) that is the whole value of a field, the field's key captured.
+const COPIED_INTO = /[{,]\s*([A-Za-z_$][\w$]*)\s*:\s*[A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*\s*\??\.\s*$/
+
+// The bracket closing the one opened at `o` in `blank`, whose strings and comments are blanked.
+const shutAt = (blank: string, o: number): number | undefined => {
+  let depth = 0
+  for (let i = o; i < blank.length; i++) {
+    const c = blank[i]
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if ((c === ')' || c === ']' || c === '}') && --depth === 0) return i
+  }
+  return undefined
+}
+
+// #2161: whether position `i` of `g` sits in a pattern taking a record apart, which reads each key it
+// names however it is spelled (`const { unresolved: why } = made`, one nested in another, or a
+// parameter's `({ unresolved: why }) =>`), never in an object literal defining one. A record or list
+// that an `=` follows is one, and so is one in a parameter list (an arrow, a return type or a body
+// after its parentheses, as readMod's picker reading tells them). A function's body ends the walk.
+const inPattern = (g: ModRead, i: number): boolean => {
+  for (let o = g.inner(i); o !== undefined; o = g.inner(o)) {
+    if (g.fns.some(f => f.body === o)) return false
+    const c = shutAt(g.blank, o)
+    if (c === undefined) return true
+    const after = g.blank.slice(c + 1, c + 40).trimStart()
+    if (g.blank[o] === '(') return /^(?:=>|:|\{)/.test(after)
+    if (g.blank[o] !== '{' && g.blank[o] !== '[') return false
+    if (/^=(?![=>])/.test(after)) return true
+  }
+  return false
+}
+
+/**
+ * Whether the words a change to the mod hook file `name` brings into its messages are only the
+ * reasons a refusal or reader gives, which nothing a person reads is handed (#2161; Dan, 2026-11-03,
+ * approving this narrowing: mod-kit's #2141 shell reader was held for its `{ unresolved: '...' }`
+ * reasons, swept in because a `text` key beside them is a message's key and its value was followed
+ * whole). `was` and `now` are the file before and after, as messageReading reads them. True only
+ * where no word is taken away, so a changed wording stays held; where every copy of each new word in
+ * `now` is a string that is, itself, the value of a field of an object literal (a ternary's branch or
+ * a template's part of it), outside any call in that value, any message and anything drawn, whose key
+ * a person never reads (not WORD_KEY, so `deny`, `reason` and `text` stay held as #1864 recorded);
+ * and where nothing the message reading reaches, in any of the mod's files, reads such a key, but to
+ * define it or copy it whole into another such key, which is then read the same way (a pattern
+ * taking the record apart, `const { unresolved: why } = made` or a parameter's, reads it). drawsChange has
+ * already found nothing new drawn. A key read by a quoted name (`made['unresolved']`, any quote) is
+ * read as the dot reads it, but never counted a copy. Not followed, so held: a record handed whole to
+ * a message or taken apart unnamed (JSON.stringify, Object.keys, values or entries, Reflect, in the
+ * file anywhere or anywhere reached), a key read by brackets holding anything but a quoted name or a
+ * number (`made[k]`; numberExpr), and a record spread into an object or a call, anywhere reached.
+ */
+const reasonsOnly = (was: MessageReading, now: MessageReading): boolean => {
+  if (was.words.some(x => !now.words.includes(x))) return false
+  const added = new Set(now.words.filter(x => !was.words.includes(x)))
+  if (!added.size) return false
+  const r = now.r
+  const keys = new Set<string>()
+  const found = new Set<string>()
+  for (const s of r.strings) {
+    const word = r.text.slice(s[0], s[1])
+    if (!added.has(word)) continue
+    const k = reasonKey(r, s)
+    if (k === undefined) return false
+    keys.add(k)
+    found.add(word)
+  }
+  if (found.size !== added.size) return false
+  if (WHOLE_RECORD.test(r.blank) || now.reached.some(([g, [a, b]]) => WHOLE_RECORD.test(g.blank.slice(a, b)))) return false
+  const queue = [...keys]
+  for (let k = queue.pop(); k !== undefined; k = queue.pop()) {
+    // A key is word characters and `$`, which a pattern would read as an end anchor and match nothing.
+    const at = new RegExp(`(?<![\\w$])${k.replace(/\$/g, '\\$')}(?![\\w$])`, 'g')
+    for (const [g, [a, b]] of now.reached)
+      for (const m of g.blank.slice(a, b).matchAll(at)) {
+        const i = a + (m.index as number)
+        const lead = g.blank.slice(Math.max(0, i - 200), i)
+        const rest = g.blank.slice(i + k.length, i + k.length + 200)
+        if (/[{,]\s*$/.test(lead) && /^\s*:/.test(rest) && !inPattern(g, i)) continue
+        const into = COPIED_INTO.exec(lead)
+        if (!into || !/^\s*[,}]/.test(rest) || WORD_KEY.test(into[1] as string)) return false
+        if (!keys.has(into[1] as string)) {
+          keys.add(into[1] as string)
+          queue.push(into[1] as string)
+        }
+      }
+  }
+  // A key read by brackets: quoted, as the dot reads it; any other may be every reason key. A record
+  // spread into an object or a call hands every key on unnamed.
+  for (const [g, s] of now.reached) {
+    if (bracketReads(g, s).some(k => k === null || keys.has(k))) return false
+    for (let i = g.blank.indexOf('...', s[0]); i !== -1 && i < s[1]; i = g.blank.indexOf('...', i + 3)) if (spreadsAt(g, i)) return false
+  }
+  return true
+}
+
+// The key of the object literal field whose value is the string at `s`, itself (#2161), or undefined
+// where it is anything else: inside a call, an array or a tagged template in that value, in a
+// function's body, a message or anything drawn, or under a key a person reads (WORD_KEY).
+const reasonKey = (r: ModRead, [x, y]: Span): string | undefined => {
+  const o = r.inner(x)
+  if (o === undefined || r.blank[o] !== '{' || r.fns.some(f => f.body === o)) return undefined
+  if ([...r.messages, ...r.units].some(([a, b]) => a <= x && y <= b)) return undefined
+  const q = x - 1
+  if (r.blank[q] === '`' && /[\w$)\]]/.test(r.blank.slice(0, q).trimEnd().slice(-1))) return undefined
+  // The field the string is in: from the last comma at the object's own depth.
+  let sep = o
+  let depth = 0
+  for (let i = o + 1; i < x; i++) {
+    const c = r.blank[i] as string
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth--
+    else if (c === ',' && depth === 0) sep = i
+  }
+  const m = /^\s*([A-Za-z_$][\w$]*)\s*:/.exec(r.blank.slice(sep + 1, x))
+  const k = m?.[1]
+  return k === undefined || WORD_KEY.test(k) ? undefined : k
 }
 
 // The longest the words a hold names may run (#1859): one short phrase the refusal can carry.
@@ -2602,14 +3069,19 @@ export type Worded = { file: string; words: string }
  * reads, pass; and only the words a person reads count (Dan, 2026-10-28: "Narrow it first"), so a
  * regular expression, a value compared, a command's words or a separator a message is computed from
  * passes. A file any of them cannot be read in is held. The one reading of such a change: the yes or
- * no wrapper that stood beside it, which only tests called, is gone (#1911).
+ * no wrapper that stood beside it, which only tests called, is gone (#1911). New words a message
+ * reading reaches only as the reasons a refusal or reader gives, in fields no person reads, pass too
+ * (reasonsOnly, #2161; Dan, 2026-11-03); a record handed whole to a message stays held.
  */
 export const modHookTsHold = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): HookHold | undefined => {
   if (drawsChange(files, name, before, after)) return { look: true }
-  const w = messageWordings(files, name, before ?? '', after ?? '')
-  if (!w) return { look: true }
-  if (w.said.length === w.says.length && w.said.every((x, i) => x === w.says[i])) return undefined
-  return { worded: heldWords(w.said, w.says) }
+  const others = files.filter(f => f.name !== name)
+  const was = messageReading(others, name, before ?? '')
+  const now = messageReading(others, name, after ?? '')
+  if (!was || !now) return { look: true }
+  if (was.words.length === now.words.length && was.words.every((x, i) => x === now.words[i])) return undefined
+  if (reasonsOnly(was, now)) return undefined
+  return { worded: heldWords(was.words, now.words) }
 }
 
 /** A call written out whole, in a fixed order: its tool, every key of its input, its folder and session. */

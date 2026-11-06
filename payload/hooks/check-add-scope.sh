@@ -55,6 +55,15 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
   exit 2
 }
 
+# Whether the command can run a script file at all, read off the payload before python starts
+# (claude-config#2301): the one copy of those patterns, shared with check-wrapped-commands.sh. With
+# it missing there is no filter, so every command has the scripts it runs read, which costs a python
+# start and never an answer. So it is an optional library in test-gates-fail-closed.sh's sense (the
+# `|| true` below): taking it away refuses nothing and allows nothing that was not allowed with it.
+SRW_LOADED=0
+# shellcheck source=lib/script-run-words.sh
+{ . "$HOOK_DIR/lib/script-run-words.sh" 2>/dev/null && declare -F srw_may_run_script >/dev/null && SRW_LOADED=1; } || true
+
 payload="$(ps_read_payload)"
 # A payload a reader is present for and still cannot parse names its add only in its raw text, so it
 # is judged by that, as a missing library is above (claude-config#1922). With no reader at all the
@@ -102,8 +111,28 @@ else
     # of its own beside that parser, and the copy had already drifted: it never saw an add inside a
     # subshell (claude-config#457, L613). A `git add` naming nothing stages nothing, so it is not
     # this shape.
-    ps_add_takes_all "$cmd" || exit 0
+    #
+    # A script file the command runs is read too (claude-config#2301): `bash ./wrapper.sh` whose
+    # file holds `git add -A` stages everything with no git word in the command, and passed. The
+    # shared reader finds the script and reads its commands, in the directory it runs in; a script
+    # it cannot read (not there, unreadable, a variable for its name) is judged exactly as before.
+    # Asked only of a command that can run a script, by the cheap filter above.
+    read_scripts=""
+    if [ "$SRW_LOADED" = 0 ] || srw_may_run_script "$payload"; then read_scripts="$cwd"; fi
+    ps_add_takes_all "$cmd" "$read_scripts" || exit 0
   fi
+fi
+
+# When the only add that takes everything is in a script, the command names no add to find the
+# repository by, so it is the one the script's add runs in (claude-config#2301). Not a repository
+# there: the add stages nothing, so there is nothing to judge.
+script_note=""
+if [ -n "${PS_ADD_SCRIPT_DIR:-}" ]; then
+  repo="$(git -C "$PS_ADD_SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)" || exit 0
+  [ -n "$repo" ] || exit 0
+  script_note="
+The unscoped add is inside the script file $PS_ADD_SCRIPT, which this command runs.
+"
 fi
 
 # The repository the ADD runs in: the cd in force for it, not for a push later in the command.
@@ -114,13 +143,15 @@ fi
 # One call, its answer and its exit status read from one capture: on exit 0 the text is the
 # directory, on exit 2 the sentence saying why it was not judged. No temporary file, because this
 # gate also has to refuse on a machine whose PATH holds almost nothing.
-repo_out="$(ps_repo_dir "$cmd" "$cwd" ps_is_git_add 2>&1; printf '\035%s' "$?")"
-repo_rc="${repo_out##*$'\035'}"; repo="${repo_out%$'\035'*}"
-if [ "$repo_rc" = 2 ]; then
-  printf 'claude-sync: REFUSED a git add.\n\n%s\n\nStage the paths you changed by name with git -C <repository> add <path>. If this refusal is wrong, say so and add SKIP_ADD_SCOPE_CHECK=1 to that one command.\n' "$repo" >&2
-  exit 2
+if [ -z "$script_note" ]; then
+  repo_out="$(ps_repo_dir "$cmd" "$cwd" ps_is_git_add 2>&1; printf '\035%s' "$?")"
+  repo_rc="${repo_out##*$'\035'}"; repo="${repo_out%$'\035'*}"
+  if [ "$repo_rc" = 2 ]; then
+    printf 'claude-sync: REFUSED a git add.\n\n%s\n\nStage the paths you changed by name with git -C <repository> add <path>. If this refusal is wrong, say so and add SKIP_ADD_SCOPE_CHECK=1 to that one command.\n' "$repo" >&2
+    exit 2
+  fi
+  [ "$repo_rc" = 0 ] && [ -n "$repo" ] || exit 0
 fi
-[ "$repo_rc" = 0 ] && [ -n "$repo" ] || exit 0
 
 # Everything the add would sweep up. --porcelain gives "XY path"; a rename gives "old -> new" and
 # both halves are checked, because staging a rename touches both.
@@ -213,7 +244,7 @@ if [ -z "$transcript" ] || [ ! -f "$transcript" ]; then
 claude-sync: REFUSED an unscoped 'git add' in $repo.
 
 This checkout holds changes, and this hook could not read the session transcript, so it cannot tell which of them this session made. An unscoped add would stage every one of them, including anything a concurrent session is still working on.
-
+$script_note
 Stage the paths you actually changed, by name:
 
   git -C $repo add <path> [<path> ...]
@@ -520,7 +551,7 @@ cat >&2 <<MSG
 claude-sync: REFUSED an unscoped 'git add' in $repo.
 
 These changes are in the tree and this session never touched them, so they belong to another session working in the same checkout:
-$foreign$unread_note$removed_note
+$foreign$unread_note$removed_note$script_note
 An unscoped add stages them too, and they then travel in a commit whose message does not describe them, judged by a test gate that was not asked about them. That happened on 2026-09-10, in this repo, and the work only survived because it happened to be correct.
 
 Stage what this session actually changed, by name:

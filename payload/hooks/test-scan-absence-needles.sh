@@ -163,7 +163,8 @@ check "a missing baseline refuses rather than treating every finding as new" "$(
 # judged, which is said, and never reported as a tree agreeing with its baseline.
 NOREADER="$FIX/noreader"; mkdir -p "$NOREADER/lib" "$NOREADER/tree"
 cp "$SCAN" "$NOREADER/"
-cp "$DIR/lib/ratchet.py" "$DIR/lib/shell_code_lines.py" "$NOREADER/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$NOREADER/lib" ratchet.py shell_code_lines.py \
+  || check "#2147 the hook helpers install into $NOREADER/lib" "the install refused"
 printf 'echo hi\n' > "$NOREADER/tree/test-x.sh"
 printf '# none\n' > "$NOREADER/baseline.txt"
 OUT="$(python3 "$NOREADER/scan-absence-needles.py" --root "$NOREADER/tree" --baseline "$NOREADER/baseline.txt" 2>&1)"; RC=$?

@@ -609,6 +609,59 @@ test("Run /design-rounds, an answer in Dan's own words, and a dialog that closed
   expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
 })
 
+// #2261: picker manners checks the guard's question off on its issue only when the guard says it
+// wrote Dan's answer down for the issue, so that is said for Skip them and Settled, once each is
+// stored, and for nothing the guard does not record for the issue.
+test('the guard says it recorded an answer only once it has: never for one it records nothing for, nor one whose save failed (#2261)', withKit, async ($, on) => {
+  const w = world($, on)
+  const heard: { call: string; question: string; answer: string; options: string[] }[] = []
+  on('designRound.answered', async ($, e, next) => {
+    heard.push({ ...e })
+    return next(e)
+  })
+  const why = refusalOf(await call($, PAGE))
+  await askSkip($, w, why, SKIP_NO)
+  await askSkip($, w, refusalOf(await call($, PAGE)), 'maybe later')
+  w.dialog.afk = true
+  await askSkip($, w, refusalOf(await call($, PAGE)), SKIP_YES)
+  w.dialog.afk = false
+  await askSettled($, w, SETTLED_NO)
+  await askSettled($, w, 'it is fine I guess')
+  w.ctl.storeSetFails = true
+  await askSkip($, w, refusalOf(await call($, PAGE)), SKIP_YES)
+  w.ctl.storeSetFails = false
+  expect(heard).toEqual([])
+  const skipped = await askSkip($, w, refusalOf(await call($, PAGE)), SKIP_YES)
+  expect(contextOf(skipped)).toContain(`Dan answered ${SKIP_YES}`)
+  const shown = w.asked[w.asked.length - 1]?.questions[0]
+  expect(heard).toEqual([{ call: expect.any(String), question: shown?.question, answer: SKIP_YES, options: [SKIP_YES, SKIP_NO, NOT_LOOK] }])
+  expect(heard[0]?.question).toContain(SKIP_QUESTION)
+})
+// Lessons review of PR #2274: Not a look or wording change lets one call through and records nothing
+// for the issue, whose next look changing edit is held and asked about again, so it is never said as
+// recorded, or picker manners would check the issue's question off while it is still open.
+test('the guard says it recorded Settled, and never a not a look change answer, which settles nothing for the issue (#2261)', withKit, async ($, on) => {
+  const w = world($, on)
+  const heard: { answer: string; question: string }[] = []
+  on('designRound.answered', async ($, e, next) => {
+    heard.push({ answer: e.answer, question: e.question })
+    return next(e)
+  })
+  const why = refusalOf(await call($, PAGE))
+  const passed = await askSkip($, w, why, NOT_LOOK)
+  expect(contextOf(passed)).toContain(`Dan answered ${NOT_LOOK}`)
+  expect(heard).toEqual([])
+  // The one call still goes through, unchanged, as before.
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  // Another edit to the page is held again, and the settled question asked about it.
+  expect(refusalOf(await call($, { ...PAGE, content: 'another look' }))).toContain(SKIP_QUESTION)
+  expect(heard).toEqual([])
+  await askSettled($, w, SETTLED_YES)
+  expect(heard.map(x => x.answer)).toEqual([SETTLED_YES])
+  expect(heard[0]?.question).toContain('Is this design settled?')
+  expect(heard[0]?.question).toBe(w.asked[w.asked.length - 1]?.questions[0]?.question)
+})
+
 // Lessons review of #991: the refused call was taken off the waiting list before Dan's answer was
 // acted on, so "ask him again" after a save that failed, or an answer in his own words, was refused.
 test('when Skip them cannot be recorded, or Dan answers in his own words, he can be asked again about the same call', withKit, async ($, on) => {
@@ -1205,8 +1258,9 @@ test('#1010: a Next.js dynamic segment is followed as the folder it names, relat
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect([command, why.includes('issue #978 in slate') && why.includes(shown) && !why.includes('could not be followed')]).toEqual([command, true])
   }
-  // The edit tools were never in doubt, and once Dan answers, the shell write goes through.
-  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/src/app/booking/[SO_ID]/page.tsx', content: 'x' }))).toContain('issue #978 in slate')
+  // The edit tools were never in doubt, and once Dan answers, the shell write goes through. The Write
+  // draws something, since one changing only logic goes ahead unasked (#2294).
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/src/app/booking/[SO_ID]/page.tsx', content: 'export default function P() { return <p>x</p> }\n' }))).toContain('issue #978 in slate')
   await askSkip($, w, refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/src/app/booking/[SO_ID]/page.tsx' })), SKIP_YES)
   expect(refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/src/app/booking/[SO_ID]/page.tsx' }))).toBe('')
   // A bracket that is a pattern is no route segment: since #1015 its folder is followed, so it is held
@@ -1627,15 +1681,22 @@ test("#1138: a mod hook file: a logic edit outside its JSX passes unasked; its J
     ["kind: 'left-rule'", "kind: 'box'"],
   ]
   for (const [from, to] of drawn) expect(refusalOf(await call($, edit(from, to)))).toContain(SKIP_QUESTION)
-  // The same logic edit in an app's screen file is still asked: only a mod's hook file is read so.
-  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/app/page.tsx')))).toContain(SKIP_QUESTION)
-  // So is an app's own hooks folder under a folder named mods, which no plugin.json beside it makes a
-  // Claude Code mod (lessons review).
-  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/src/mods/shop/hooks/useCart.tsx')))).toContain(SKIP_QUESTION)
+  // The same logic edit in an app's screen file was asked until #2294: it now goes ahead by the app
+  // reading (rules.ts logicOnlyChange), never the mod one, so it is kept as an automatic pass, which a
+  // mod hook file's pass never is. The mod one's comment edit above would be held there (Tailwind
+  // reads comments), and so would its quoted 'y'.
+  expect(Object.keys(w.store).some(k => k.startsWith('auto:'))).toBe(false)
+  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/app/page.tsx')))).toBe('')
+  // So does an app's own hooks folder under a folder named mods, which no plugin.json beside it makes
+  // a Claude Code mod (lessons review): read as an app's file, never a mod's.
+  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/src/mods/shop/hooks/useCart.tsx')))).toBe('')
+  expect(Object.keys(w.store).filter(k => k.startsWith('auto:')).length).toBe(2)
+  expect(refusalOf(await call($, edit("if (!sameReply(e.props.text, 'x')) return next(e)", "if (!sameReply(e.props.text, 'y')) return next(e)", '/w/slate/app/page.tsx')))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(5)
   // A mod hook file whose text the reader cannot follow is asked about, never passed.
   w.files[MOD_HOOK] = MOD_TEXT.replace('// Whether the reply is the one offered.', 'const unclosed = <Box>')
   expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b')))).toContain(SKIP_QUESTION)
-  expect(w.ran.length).toBe(3)
+  expect(w.ran.length).toBe(5)
 })
 
 // #1248: a logic line added directly above a line that draws was asked about for that untouched line.
@@ -1839,6 +1900,50 @@ test("#1841: a toast reworded in a mod's .ts hook file is asked about, by an Edi
   expect(why).toContain(SKIP_QUESTION)
   expect(why).toContain('was undone')
   expect(w.files[GUARD_HOOK]).toBe(now)
+})
+
+// #2294: Dan, 2026-11-05: "If you're confident that nothing on screen changes don't ask me to make a
+// decision and just skip design rounds automatically". Decided by the guard's own reading of the edit
+// (rules.ts logicOnlyChange), never by what a session says, and each pass is recorded with why.
+test('#2294: a logic only edit to an app page goes through unasked and is recorded as an automatic pass; text, a look, unreadable text and a failed record are still held', withKit, async ($, on) => {
+  const w = world($, on, { files: { [RESULT]: RESULT_TEXT } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: RESULT, old_string: from, new_string: to })
+  expect(refusalOf(await call($, edit('}: Props)', '}: ResultProps)')))).toBe('')
+  expect(w.ran.length).toBe(1)
+  const autos = Object.entries(w.store).filter(([k]) => k.startsWith('auto:'))
+  expect(autos.length).toBe(1)
+  expect(autos[0]?.[1]).toMatchObject({ kind: 'no-screen-change', tool: 'Edit', files: ['src/app/my-offers/result/page.tsx'], subjects: ['issue #978 in slate'] })
+  expect(String((autos[0]?.[1] as { why?: string }).why)).toContain('#2294')
+  // Nothing asked, no card, no answer for the issue, and Dan's own passes are never written.
+  expect(w.asked).toEqual([])
+  expect(w.cards).toEqual([])
+  expect(w.store['record:/w/slate|issue:978']).toBeUndefined()
+  expect(Object.keys(w.store).some(k => k.startsWith('pass:'))).toBe(false)
+  // Held: a new message, a look word, text the reader cannot follow.
+  expect(refusalOf(await call($, edit('  return (', "  if (!slots) throw new Error('No slots to book')\n  return (")))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('  return (', '  const theme = pick(slots)\n  return (')))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('  return (', "  const a = 'x\n  return (")))).toContain(SKIP_QUESTION)
+  // An import swapped for another is held even split into two runs of lines, one taking the old
+  // import away at the top and one adding the new at the end (lessons review of #2294): the
+  // logic reading judges the whole change, never a run at a time.
+  const page = String(w.files[RESULT])
+  const swapped = `${page.replace("import { BookingCalendar } from '@/components/BookingCalendar'\n", '')}import { BookingCalendar } from '@/components/OtherCalendar'\n`
+  expect(refusalOf(await call($, { tool: 'Write', file_path: RESULT, content: swapped }))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+  // A pass that cannot be recorded is not made: held and asked, as before.
+  w.ctl.storeSetFails = true
+  expect(refusalOf(await call($, edit('}: Props)', '}: PageProps)')))).toContain(SKIP_QUESTION)
+  w.ctl.storeSetFails = false
+  expect(w.ran.length).toBe(1)
+})
+
+test('#2294: a new refusal message in a mod hook file is still held (the #2173 shape), however little else changes', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: GUARD_HOOK, old_string: from, new_string: to })
+  expect(refusalOf(await call($, edit('  if (what.length > 3)', "  if (!what) return { deny: 'Blocked: there was nothing to check.' }\n  if (what.length > 3)")))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('Blocked a command that would', 'Blocked a command that may')))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(0)
+  expect(Object.keys(w.store).some(k => k.startsWith('auto:'))).toBe(false)
 })
 
 // #1925: the #1904 builder's Edit adding "or wording" to the skip question's answers in the guard's own

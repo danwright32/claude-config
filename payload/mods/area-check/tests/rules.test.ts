@@ -36,12 +36,18 @@ import {
   decideProblem,
   holdCard,
   holdRefusal,
+  legacyQuestionKey,
   questionKey,
   reasonProblem,
   restructureQuestion,
   sleepNotes,
   sweepKeys,
   type Held,
+  couldHold,
+  heldUnder,
+  shellKey,
+  shellTargets,
+  type ShellTarget,
 } from '../hooks/rules.ts'
 
 // The area check (#1506, facts #1508, hold #1509): the facts about a file at the moment a session
@@ -60,7 +66,7 @@ test('only the edit tools name a judged file: Edit, Write, MultiEdit by file_pat
   expect(editedPath('Write', { file_path: '/r/a.ts', content: 'x' })).toBe('/r/a.ts')
   expect(editedPath('MultiEdit', { file_path: '/r/a.ts', edits: [] })).toBe('/r/a.ts')
   expect(editedPath('NotebookEdit', { notebook_path: '/r/n.ipynb' })).toBe('/r/n.ipynb')
-  // A shell write is not judged, so restructuring itself (git mv, a script) is never obstructed.
+  // editedPath names only the edit tools' file; a shell write is read by shellTargets instead (#2142).
   expect(editedPath('Bash', { command: 'echo x > /r/a.ts' })).toBe(null)
   expect(editedPath('Read', { file_path: '/r/a.ts' })).toBe(null)
   expect(editedPath('Edit', {})).toBe(null)
@@ -380,7 +386,20 @@ test("Dan's answer stands for a week and for the same issues, so he is not asked
   expect(answerStands(q, [41, 57, 60], 2_000)).toBe(false)
   expect(answerStands({ state: 'pending', at: 1_000, issues: [41], session: 's', call: 'c', agent: null }, [41], 2_000)).toBe(false)
   expect(answerStands(undefined, [41], 2_000)).toBe(false)
-  expect(questionKey('dan/app', 'src/a.ts')).toBe('question:dan/app\nsrc/a.ts')
+})
+
+test('a question is kept under a fixed length key, so a held command naming a long word can still be decided (#2246)', async () => {
+  // The SHA-256 of "dan/app\nsrc/a.ts", measured with shasum rather than with the code under test.
+  expect(await questionKey('dan/app', 'src/a.ts')).toBe('question:4a58b19b28d1b3e1b5d8ac84dac32deaf18e46cfa1e6d7b5772f0531fd6c788d')
+  expect(await questionKey('dan/app', 'src/a.ts')).not.toBe(await questionKey('dan/app', 'src/b.ts'))
+  expect(await questionKey('dan/app', 'src/a.ts')).not.toBe(await questionKey('dan/other', 'src/a.ts'))
+  // A word of a thousand characters gives a key of the same 73, well under the store's 256.
+  expect((await questionKey('dan/app', 'x'.repeat(1000))).length).toBe(73)
+  // The key it was kept under before, read for an answer already given; none past the store's limit.
+  expect(legacyQuestionKey('dan/app', 'src/a.ts')).toBe('question:dan/app\nsrc/a.ts')
+  // "question:dan/app\n" is 17 characters, so a word of 239 makes a key of exactly 256 and 240 one too long.
+  expect(legacyQuestionKey('dan/app', 'x'.repeat(239))).toBe(`question:dan/app\n${'x'.repeat(239)}`)
+  expect(legacyQuestionKey('dan/app', 'x'.repeat(240))).toBeUndefined()
 })
 
 test('the sweep drops issue lists unread for a week and answers past their week, and keeps a pending question', () => {
@@ -394,4 +413,155 @@ test('the sweep drops issue lists unread for a week and answers past their week,
     ['other', { at: 0 }],
   ], now)
   expect(keys.sort()).toEqual(['issues:dan/bad', 'issues:dan/old', 'question:dan/app\na.ts'])
+})
+
+// #2142: a file written by a shell command, read through mod-kit's one reader ($.modkit.writes).
+// Each fixture is that reader's own answer, measured on 2026-11-03 with cwd /w/app (L48).
+const NONE = { files: [], changes: [], unnamed: [] }
+
+test('a shell write is judged by every file it names: a redirect, an in place edit, an emptying, a git write, a script argument, an inline target', () => {
+  // `sed -i '' 's/a/b/' src/lib/slack.ts` and `: > src/big.ts`
+  expect(shellTargets({ ...NONE, files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }] })).toEqual([{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+  // `truncate -s 0 src/big.ts`
+  expect(shellTargets({ ...NONE, changes: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'truncate' }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts' }])
+  // `git checkout -- src/big.ts`: git marks every pathspec as reaching a whole folder, as it may.
+  expect(shellTargets({ ...NONE, byGit: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'write', tree: true, from: '' }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts', tree: true }])
+  // `python3 gen.py src/big.ts`
+  expect(shellTargets({ ...NONE, runs: [{ what: 'a python3 script', script: 'gen.py', path: '/w/app/gen.py', args: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts' }])
+  // `python3 -c "open('src/lib/slack.ts','w').write('x')"`
+  expect(shellTargets({ ...NONE, unnamed: [{ what: 'an inline python3 script', words: ['python3', '-c', '...'], inputs: [], targets: ['/w/app/src/lib/slack.ts'], folder: '/w/app' }] })).toEqual([{ word: '/w/app/src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+})
+
+test('a removal, a stamp, a new folder or a mode change adds no lines, so it is not judged; nor is a command that writes nothing', () => {
+  for (const does of ['remove', 'touch', 'folder', 'mode'] as const) expect(shellTargets({ ...NONE, changes: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does }] })).toEqual([])
+  expect(shellTargets({ ...NONE, byGit: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'remove' }] })).toEqual([])
+  // `npm test`, `git commit -F /tmp/msg.txt`
+  expect(shellTargets(NONE)).toEqual([])
+})
+
+test('a shell write whose file cannot be named is unread, with why; a name that can only be no source file is left out', () => {
+  // `echo hi > "$OUT/big.ts"`
+  const [built] = shellTargets({ ...NONE, files: [{ word: '$OUT/big.ts' }] })
+  expect(built).toMatchObject({ word: '$OUT/big.ts' })
+  expect((built as { unread: string }).unread).toContain('$OUT/big.ts')
+  // `perl -pi -e 's/a/b/' src/*.ts`
+  expect(shellTargets({ ...NONE, files: [{ word: 'src/*.ts', folder: '/w/app/src', edits: true }] })[0]).toHaveProperty('unread')
+  // `git apply /tmp/p.patch`, and a node script handed its file name it builds itself
+  expect((shellTargets({ ...NONE, unnamed: [{ what: 'a patch', words: ['git', 'apply', '/tmp/p.patch'], inputs: ['/tmp/p.patch'] }] })[0] as { unread: string }).unread).toContain('a patch')
+  expect(shellTargets({ ...NONE, unnamed: [{ what: 'an inline node script', words: ['node', '-e', '...', 'src/big.ts'], inputs: [], folder: '/w/app' }] })[0]).toHaveProperty('unread')
+  // A git pathspec matched across folders, and a script handed a pattern.
+  expect(shellTargets({ ...NONE, byGit: [{ word: ':/big.ts', does: 'write' }] })[0]).toHaveProperty('unread')
+  expect(shellTargets({ ...NONE, runs: [{ what: 'a python3 script', script: 'gen.py', args: [{ word: 'src/*.ts', folder: '/w/app/src' }] }] })[0]).toHaveProperty('unread')
+  // `echo hi > "$OUT/log.txt"`: whatever $OUT is, a .txt file is never judged.
+  expect(shellTargets({ ...NONE, files: [{ word: '$OUT/log.txt' }] })).toEqual([])
+  expect(shellTargets({ ...NONE, files: [{ word: 'notes/*.md', folder: '/w/app/notes' }] })).toEqual([])
+})
+
+// #2254: `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"`, as mod-kit's reader
+// answers it with cwd /w/app and home /Users/dan (measured 2026-11-04): the finding, holding $PWD and
+// *.ts, has no path, so it was judged a file built as the command runs.
+const FINDING = { word: 'reads $PWD and every *.ts file it holds, so why?' }
+const noteRun = (what: string, path: string, verb = 'note') => ({
+  what,
+  script: '~/.claude/hooks/lib/issue-spool.sh',
+  path,
+  args: [{ word: verb, path: `/w/app/${verb}` }, { word: '.', path: '/w/app' }, FINDING, { word: 'builder 2254', path: '/w/app/builder 2254' }],
+})
+const SPOOL = '/Users/dan/.claude/hooks/lib/issue-spool.sh'
+
+test("a findings note to the installed spool helper writes no file of the repository, so its words are not judged (#2254)", () => {
+  expect(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL)] }, '/Users/dan')).toEqual([])
+  // `~/.claude/hooks/lib/issue-spool.sh note ...`, run directly.
+  expect(shellTargets({ ...NONE, runs: [noteRun('a script file run directly', SPOOL)] }, '/Users/dan')).toEqual([])
+  // Anything else in the same command is still judged: `<note> && sed -i '' 's/a/b/' src/lib/slack.ts`.
+  expect(shellTargets({ ...NONE, files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], runs: [noteRun('a bash script file', SPOOL)] }, '/Users/dan')).toEqual([{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+})
+
+test('only the installed helper, only its note, and only with a home known: every other run is judged as before (#2254)', () => {
+  const unread = (t: ShellTarget[]) => t.filter(x => 'unread' in x).map(x => x.word)
+  // No home given: nothing is exempt.
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL)] }))).toEqual([FINDING.word])
+  // A copy of the helper inside a checkout, which may be any script.
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', '/w/app/payload/hooks/lib/issue-spool.sh')] }, '/Users/dan'))).toEqual([FINDING.word])
+  // Another subcommand of the installed helper.
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL, 'append')] }, '/Users/dan'))).toEqual([FINDING.word])
+  // The helper handed to another interpreter.
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a python3 script', SPOOL)] }, '/Users/dan'))).toEqual([FINDING.word])
+})
+
+test('a repository could hold a file only when something there would: a fast growing file, or a structural issue at a held priority naming a file', () => {
+  const issue = (n: number, priority: string | null, structural = ['tech-debt'], refs = ['src/a.ts']) => ({ n, structural, priority, refs })
+  expect(couldHold({ issues: [], own: [], top: [] })).toBe(false)
+  expect(couldHold({ issues: [], own: [], top: ['src/big.ts'] })).toBe(true)
+  expect(couldHold({ issues: [issue(1, 'p1')], own: [], top: [] })).toBe(true)
+  expect(couldHold({ issues: [issue(1, null)], own: [], top: [] })).toBe(true)
+  // A p3 issue, an unlabelled one, the session's own, and one naming no file can hold nothing.
+  expect(couldHold({ issues: [issue(1, 'p3'), issue(2, 'p1', []), issue(3, 'p1'), issue(4, 'p0', ['refactor'], [])], own: [3], top: [] })).toBe(false)
+})
+
+test("an unchanged resend is one key, and another command another, so a decided command is not held again", async () => {
+  expect(await shellKey('python3 gen.py')).toBe(await shellKey('python3 gen.py'))
+  expect(await shellKey('python3 gen.py')).not.toBe(await shellKey('python3 gen.py x'))
+  expect((await shellKey('python3 gen.py')).startsWith('shell:')).toBe(true)
+})
+
+// The key the area check first used, a 32 bit FNV-1a hash of the command (#2142 lessons review).
+const fnv32 = (s: string) => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0
+  return h
+}
+// Two commands of one shape found to share that hash, by a search over the number in the name.
+const TWIN_A = 'echo hi > "$OUT/a132789.ts"'
+const TWIN_B = 'echo hi > "$OUT/a729192.ts"'
+
+test('two different commands never share a key, even two a 32 bit hash of the command could not tell apart', async () => {
+  expect(fnv32(TWIN_A)).toBe(fnv32(TWIN_B))
+  expect(await shellKey(TWIN_A)).not.toBe(await shellKey(TWIN_B))
+  // Keyed on the whole command: a full SHA-256 of its text, 64 hex digits.
+  expect(await shellKey(TWIN_A)).toMatch(/^shell:[0-9a-f]{64}$/)
+})
+
+test('a tree write is judged by every tracked file under its folder that the area check could hold, and by nothing outside it', () => {
+  const tracked = ['src/big.ts', 'src/lib/slack.ts', 'src/lib/util.ts', 'src/pay/stripe.ts', 'src/lib/notes.md', 'docs/x.md', 'lib/other.ts']
+  const issues = [
+    { n: 41, structural: ['tech-debt'], priority: 'p2', refs: ['lib/slack.ts'] },
+    // An issue that is no structural one holds nothing, so it names no file here.
+    { n: 7, structural: [], priority: 'p1', refs: ['src/pay/stripe.ts'] },
+  ]
+  // The file the issue names, the source file in its folder (the folder match), the fast growing file.
+  expect(heldUnder('src', { tracked, top: ['src/big.ts'], issues })).toEqual(['src/big.ts', 'src/lib/slack.ts', 'src/lib/util.ts'])
+  expect(heldUnder('src/lib', { tracked, top: ['src/big.ts'], issues })).toEqual(['src/lib/slack.ts', 'src/lib/util.ts'])
+  // The whole checkout, and a folder whose name only begins like another's.
+  expect(heldUnder('', { tracked, top: [], issues })).toEqual(['src/lib/slack.ts', 'src/lib/util.ts'])
+  expect(heldUnder('src/li', { tracked, top: [], issues })).toEqual([])
+  // A folder nothing could hold under, and a file (no tracked file sits below a file).
+  expect(heldUnder('src/pay', { tracked, top: ['src/big.ts'], issues })).toEqual([])
+  expect(heldUnder('src/lib/slack.ts', { tracked, top: [], issues })).toEqual([])
+})
+
+const SHELL: Held = { ...HELD, tool: 'Bash' }
+const UNREAD: Held = { ...GROWTH_ONLY, tool: 'Bash', rel: '$OUT/big.ts', why: [], growth: { unread: 'not judged' }, unread: { why: 'its file is built from $OUT, which cannot be read', key: 'shell:1' } }
+
+test("a held Bash command is named as a command that writes the file, and is sent again as a command", () => {
+  const r = holdRefusal(SHELL)
+  expect(r).toContain('Bash command')
+  expect(r).toContain('src/lib/slack.ts')
+  expect(r).toContain('Then send the Bash command again, unchanged.')
+  expect(r).not.toContain('Before editing it')
+})
+
+test('a command whose file cannot be read is held saying so, and can only proceed: there is no file to fold into or restructure', () => {
+  const card = holdCard(UNREAD)
+  expect(card.reason).toContain('cannot be read')
+  expect(card.reason).toContain('$OUT')
+  expect(card.safeWay).toContain('Edit or Write')
+  const r = holdRefusal(UNREAD)
+  expect(r).toContain('"decision": "proceed"')
+  expect(r).not.toContain('"decision": "restructure"')
+  expect(r).not.toContain('"decision": "fold"')
+  expect(r).toContain('Edit or Write')
+  expect(decideProblem({ decision: 'restructure' }, UNREAD)).toContain('Edit or Write')
+  expect(decideProblem({ decision: 'fold', issue: 41 }, UNREAD)).toContain('cannot be read')
+  expect(decideProblem({ decision: 'proceed', reason: 'This command only regenerates the build log, which no issue names.' }, UNREAD)).toBeUndefined()
 })

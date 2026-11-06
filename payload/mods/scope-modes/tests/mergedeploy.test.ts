@@ -43,6 +43,18 @@ describe('the lists file of this Mac, read', () => {
     expect(why('{"v":1,"mergeOnly":[],"mayDeploy":["slate"]}')).toMatch(/mayDeploy entry that is not owner\/name/)
     expect(why('{"v":1,"mergeOnly":[{"repo":"o/r","mergeDeploys":"yes"}],"mayDeploy":[]}')).toMatch(/mergeDeploys that is not true or false/)
   })
+  test('adminMerge on a mergeOnly entry is read only as "green-pinned", is off when unsaid, and reaches the night and its policy (#2125)', () => {
+    const r = readRepoLists('{"v":1,"mergeOnly":[{"repo":"o/r","mergeDeploys":false,"adminMerge":"green-pinned"},{"repo":"o/q","mergeDeploys":false}],"mayDeploy":[]}')
+    expect('lists' in r && r.lists.mergeOnly).toEqual([
+      { repo: 'o/r', mergeDeploys: false, adminMerge: 'green-pinned' },
+      { repo: 'o/q', mergeDeploys: false },
+    ])
+    const night = nightRepos(r, [])
+    expect(policyOf(night, 'O/R')).toEqual({ kind: 'merge-only', repo: 'O/R', mergeDeploys: false, adminMerge: 'green-pinned' })
+    expect(policyOf(night, 'o/q')).toEqual({ kind: 'merge-only', repo: 'o/q', mergeDeploys: false })
+    const bad = readRepoLists('{"v":1,"mergeOnly":[{"repo":"o/r","mergeDeploys":false,"adminMerge":true}],"mayDeploy":[]}')
+    expect('why' in bad && bad.why).toBe('mods/sleep-repos.local.json gives o/r an adminMerge this reader does not know (only "green-pinned")')
+  })
 })
 
 describe('a bedtime answer, added to the lists file of this Mac', () => {
@@ -306,6 +318,51 @@ describe('what a command does, by effect', () => {
     expect(kinds('npm test', { ...ON_BRANCH, scripts: { unreadable: 'not JSON' } })).toEqual(['deploy'])
     // No package.json: nothing to run.
     expect(kinds('npm run build')).toEqual([])
+  })
+  // #2124: a wrangler command that only reads (the live Worker's deployments and versions, its
+  // logs, its help) is not a deploy, and every command that changes a Worker, or that the list
+  // does not name, still is.
+  test('wrangler: the read only commands are not deploys, and every write or unknown one is (#2124)', () => {
+    for (const read of [
+      'npx wrangler deployments list --name my-worker',
+      'wrangler deployments status',
+      'wrangler versions list --name my-worker',
+      'wrangler versions view 1a2b3c --name my-worker',
+      'wrangler tail my-worker --format pretty',
+      'wrangler triggers --help',
+      'wrangler deploy --help',
+      'wrangler versions deploy -h',
+      'wrangler whoami',
+      'wrangler --version',
+    ]) expect({ read, kinds: kinds(read) }).toEqual({ read, kinds: [] })
+    for (const write of [
+      'npx wrangler deploy',
+      'wrangler deploy --name my-worker',
+      'wrangler versions upload',
+      'wrangler versions deploy 1a2b3c@100',
+      'wrangler versions secret put KEY',
+      'wrangler rollback',
+      'wrangler secret put KEY',
+      'wrangler secret delete KEY',
+      'wrangler secret bulk secrets.json',
+      'wrangler triggers deploy',
+      'wrangler publish',
+      'wrangler delete',
+      // A group named without a read subcommand, or with an unknown one, is still taken to deploy.
+      'wrangler deployments',
+      'wrangler deployments rollback',
+      'wrangler versions',
+      // A read word that is not the subcommand reads nothing: the command it sits in is judged.
+      'wrangler deploy list',
+      'wrangler --config wrangler.toml deployments list',
+      // After `--`, help is an argument handed on, so the command runs.
+      'wrangler deploy -- --help',
+      // Unknown subcommands are deploys until the list names them.
+      'wrangler kv key put k v',
+      'wrangler frobnicate',
+      // A word an object inherits names no group.
+      'wrangler constructor list',
+    ]) expect({ write, kinds: kinds(write) }).toEqual({ write, kinds: ['deploy'] })
   })
   test('a push reaching the default branch, by refspec, by HEAD, by pushing everything, or bare from the default branch', () => {
     expect(kinds('git push origin main')).toEqual(['push-default'])

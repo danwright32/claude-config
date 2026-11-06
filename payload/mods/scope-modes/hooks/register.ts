@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
-import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import { ghApiOf, judgeAdminMerge } from './adminmerge.ts'
 import type {
   ScopeModes,
   ScopeModesCleanup,
@@ -40,7 +41,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
-import { listedHosts, tabsAfter, type Browser, type BrowserTabs } from './browser.ts'
+import { committedHosts, tabsAfter, type Browser, type BrowserTabs, type TestHosts } from './browser.ts'
 import { wakeCheck } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
@@ -72,7 +73,9 @@ import {
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { itemChoices, openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
+import { guardQuestion } from './mod-kit/designquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
@@ -566,9 +569,23 @@ type Round = { until: number; slept: boolean }
 // One bedtime question, waiting `waitMs`, what is left of the round. An answer given after the
 // wait is handed to `late`, for the nights after this one; tonight it counts as unanswered.
 type Asked = { answer: string } | { unanswered: true } | { failed: string }
+
+// #2132: a wait of this mod's held against mod-kit's reload of scope-modes, which would drop it: a
+// prompt the mod sent, waiting to be entered, or a question waiting on Dan. `ms` is the wait's own
+// deadline where it has one, else mod-kit's ceiling of an hour.
+const heldBy = ($: EngineInterface, id: string, what: string, ms: number = HOLD_MAX_MS) => ({
+  mod: 'scope-modes',
+  id,
+  what,
+  ms,
+  hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
+  release: (input: { mod: string; id: string }) => $.modkit.release(input),
+  log: (line: string) => $.ui.log(line, { to: 'debug' }),
+})
+
 const askOne = async ($: EngineInterface, question: string, options: string[], header: string, waitMs: number, late: (a: string) => Promise<void>): Promise<Asked> => {
   let isLate = false
-  const asking: Promise<Asked> = $.ui.ask(question, { options, header }).then(
+  const ask = (): Promise<Asked> => $.ui.ask(question, { options, header }).then(
     async (a: string) => {
       if (isLate && a !== GO_TO_SLEEP) await late(a).catch(err => $.ui.toast(`A late answer to "${question}" was not kept: ${msg(err)}`))
       return { answer: a }
@@ -576,7 +593,10 @@ const askOne = async ($: EngineInterface, question: string, options: string[], h
     // Dismissed, or the dialog could not be shown: never read as a question left unanswered (L11).
     (err: unknown) => ({ failed: msg(err) }),
   )
-  const first = await Promise.race([asking, $.clock.sleep(waitMs).then((): Asked => ({ unanswered: true }))])
+  // Held from the asking for the round's wait only: an answer after it is late, kept for the nights
+  // after this one, and the hold never outlasts the round.
+  const first = await whileHeld(heldBy($, 'bedtime', "Dan's answer to a bedtime question", waitMs), () =>
+    Promise.race([ask(), $.clock.sleep(waitMs).then((): Asked => ({ unanswered: true }))]))
   if ('unanswered' in first) isLate = true
   return first
 }
@@ -912,7 +932,14 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
     }
   }
   const open: IssueQuestion[] = []
+  // A design round guard question is settled only by the guard's own picker (#2261): asked here, its
+  // answer records nothing the guard reads, so it is never asked or checked off, answered or not.
+  const guards: string[] = []
   for (const q of found) {
+    if (guardQuestion(q.text)) {
+      guards.push(`${q.repo}#${q.issue} "${q.text}"`)
+      continue
+    }
     const path = answeredPath(dir, q.repo, q.issue, q.text)
     if (!(await $.fs.exists(path))) {
       open.push(q)
@@ -933,6 +960,8 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
     const off = await checkOff($, q.repo, q.issue, q.text, answer)
     if (off) problems.push(`Your answer on ${q.repo}#${q.issue}, "${q.text}" ("${answer}"), is posted but its Open questions still shows it open, and checking it off failed again (${off}); it is not asked again.`)
   }
+  const unasked = [...new Set(guards)]
+  if (unasked.length) problems.push(`Not asked, since only the design round guard's own question can settle ${unasked.length === 1 ? 'it' : 'them'}: ${andList(unasked)}.`)
   // Each issue read once: a closed one is no longer in any queue. One that cannot be read is still
   // asked about, ranked last, since dropping its question would hide it (L215).
   const rank = new Map<string, number>()
@@ -1253,17 +1282,23 @@ const recordTabs = async ($: EngineInterface, tool: string, input: Record<string
 // The project's hosted test hosts, from CLAUDE.md as the default branch holds it, never the working
 // copy: a session must not add a host by editing the file overnight. The default branch is the one
 // origin/HEAD names, through mod-kit's one reader; when it names none, or anything cannot be read,
-// no host is listed, with no guess at main (fail closed, Dan, 2026-11-03).
-const committedTestHosts = async ($: EngineInterface): Promise<string[]> => {
-  const root = await $.session
-    .repo()
-    .then(r => r?.root ?? null)
-    .catch(() => null)
+// no host is listed, with no guess at main (fail closed, Dan, 2026-11-03). What could not be read
+// is said as unreadable, with why, never as a list naming nothing (#2146, L11).
+const committedTestHosts = async ($: EngineInterface): Promise<TestHosts> => {
+  let root: string | null
+  try {
+    root = (await $.session.repo())?.root ?? null
+  } catch (err) {
+    return { unreadable: `this session's repository could not be found (${msg(err)}), so no CLAUDE.md was read` }
+  }
+  // A session in no repository has no CLAUDE.md to list anything.
   if (!root) return []
-  const b = await $.modkit.branch({ path: root }).catch(() => null)
-  if (!b || 'unreadable' in b || !b.defaultBranch) return []
-  const r = await run($, ['git', '-C', root, 'show', `origin/${b.defaultBranch}:CLAUDE.md`]).catch(() => null)
-  return r && r.exitCode === 0 ? listedHosts(r.stdout) : []
+  const b = await $.modkit.branch({ path: root }).catch((err: unknown) => ({ unreadable: msg(err) }))
+  if (!b) return []
+  if ('unreadable' in b) return { unreadable: `the default branch of ${root} could not be read (${b.unreadable}), so its CLAUDE.md was not read` }
+  if (!b.defaultBranch) return { unreadable: `${root} names no default branch for origin, so its CLAUDE.md was not read` }
+  const ref = `origin/${b.defaultBranch}`
+  return committedHosts(ref, root, await run($, ['git', '-C', root, 'show', `${ref}:CLAUDE.md`]))
 }
 // A record that cannot be read is no tabs, which refuses every call needing one (fail closed). A
 // call judged at tool.call (self, its tool_use_id) is also judged as though every other Chrome call
@@ -1297,8 +1332,14 @@ const overnightWhy = async ($: EngineInterface, tool: string, input: Record<stri
   // that cannot be read, which refuses every write naming none itself (L42).
   const spelling = (await $.env.get('GH_REPO')) || undefined
   const ghRepo = spelling === undefined ? undefined : await $.modkit.ghRepo({ spelling }).catch(() => null)
+  // An admin merge (#2125) is judged by the lists the sleep record carries (none when it is not
+  // asleep or cannot be read, which refuses) and GitHub's answers, all in adminmerge.ts.
+  const adminMerge = async (g: ModKitGh, repo: string) => {
+    const reading = await sleepNow($)
+    return judgeAdminMerge(reading.state === 'asleep' ? reading.record.repos : undefined, g, repo, ghApiOf(argv => run($, argv)), link => $.modkit.linkRepo({ link }))
+  }
   return overnightRefusal(
-    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo !== undefined ? { ghRepo } : {}), read: text => readCommands($, text) },
+    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo !== undefined ? { ghRepo } : {}), read: text => readCommands($, text), adminMerge },
     lookOf($),
   )
 }
@@ -2297,7 +2338,7 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
       ? `Proposals and questions for ${mine} from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now.`
       : `Proposals for ${mine} from an earlier night, which no session in it was open to offer, turn out to be filed or declined already.`
   try {
-    await $.prompt.submit({
+    await whileHeld(heldBy($, 'earlier night', "the prompt offering an earlier night's proposals"), () => $.prompt.submit({
       text: morningPrompt({
         worker: false,
         offers: issues.length > 0 || sorted.filed.length > 0 || sorted.declined.length > 0,
@@ -2312,7 +2353,7 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
         ...(sorted.unchecked !== undefined ? { unchecked: sorted.unchecked } : {}),
         ...(bad ? { bad } : {}),
       }),
-    })
+    }))
   } catch (err) {
     $.ui.log(`scope-modes: ${mine}'s proposals from an earlier night were claimed but could not be offered (${msg(err)}); they are in that night's report`, { to: 'debug' })
   }
@@ -2516,7 +2557,7 @@ const morningAtMinute = async ($: EngineInterface, reading: SleepReading) => {
     }
     watchMorningPickers(m.prompt)
     try {
-      await $.prompt.submit({ text: m.prompt })
+      await whileHeld(heldBy($, 'morning', 'the prompt putting the morning to Dan'), () => $.prompt.submit({ text: m.prompt }))
     } catch (err) {
       morningPickers = undefined
       $.ui.log(`scope-modes: this session's morning could not be put to Dan (${msg(err)}), so it is tried again at the next minute`, { to: 'debug' })
@@ -3311,7 +3352,7 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
   })
   if (!resume) return
   try {
-    await $.prompt.submit({ text: resume })
+    await whileHeld(heldBy($, 'resume', "the prompt resuming this session's work after a wait"), () => $.prompt.submit({ text: resume }))
   } catch (err) {
     // Not started: due again at the next minute.
     await oneAtATime(async () => {
@@ -4182,7 +4223,7 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await $.ui.ask(question, [asIs.keep, asIs.other])
+    answer = await whileHeld(heldBy($, 'left open', "Dan's answer about leaving a PR open"), () => $.ui.ask(question, [asIs.keep, asIs.other]))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on ${pr}.`
   }
@@ -4249,7 +4290,7 @@ const leaveBranch = async ($: EngineInterface, input: Record<string, unknown>): 
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await $.ui.ask(question, ['Leave it as it is', 'Clean it up'])
+    answer = await whileHeld(heldBy($, 'left branch', "Dan's answer about leaving a branch as it is"), () => $.ui.ask(question, ['Leave it as it is', 'Clean it up']))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on the branch ${branch}.`
   }
@@ -4294,7 +4335,7 @@ const openCleanupBranch = async ($: EngineInterface, input: Record<string, unkno
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await $.ui.ask(question, ['Open it', 'Do not'])
+    answer = await whileHeld(heldBy($, 'cleanup branch', "Dan's answer about opening a cleanup branch"), () => $.ui.ask(question, ['Open it', 'Do not']))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still refuses the branch ${branch}.`
   }
@@ -4558,8 +4599,10 @@ const takeSharedPlace = async ($: EngineInterface): Promise<void> => {
     return
   }
   if (!isNewer(r.record, (await $.state.get(placeSeenRef)).value ?? 0)) return
-  await $.state.set(placeSeenRef, r.record.at)
+  // Seen only once it applies (#2154): a switch whose apply throws is taken again at the next prompt
+  // or minute, and the throw reaches the caller's log, rather than being marked seen and lost.
   if ((await placeOf($)) !== r.record.place) await setPlace($, r.record.place)
+  await $.state.set(placeSeenRef, r.record.at)
 }
 const placeUnread = ($: EngineInterface, why: string) => {
   const said = `Scope modes could not read the away or home switch typed in another session (${why}), so a switch typed there may not reach this one.`
@@ -4568,9 +4611,11 @@ const placeUnread = ($: EngineInterface, why: string) => {
   placeUnreadSaid = true
 }
 
+// The place is written last of the two, so a write that throws leaves the old place and the switch
+// is applied whole when taken again (#2154 lessons review); justHome is read only at home.
 const setPlace = async ($: EngineInterface, place: ScopeModesPlace) => {
-  await $.state.set(placeRef, place)
   await $.state.set(justHomeRef, place === 'home')
+  await $.state.set(placeRef, place)
   await showModes($)
   await showHeld($)
 }
@@ -5013,8 +5058,7 @@ export const register: Register = on => {
     if (morning)
       $.clock.after(0, () => {
         watchMorningPickers(morning)
-        void $.prompt
-          .submit({ text: morning })
+        void whileHeld(heldBy($, 'morning', 'the prompt putting the morning to Dan'), () => $.prompt.submit({ text: morning }))
           .then(
             () => morningDone($, true),
             async err => {
@@ -5213,7 +5257,7 @@ export const register: Register = on => {
       if (goal === null) return { consumed: 'scope-modes: a start for the night arrived, but this session has no goal tonight' }
       const where = await repoOf($)
       const text = startPrompt(en.self, where.root ?? (await $.session.cwd()), goal)
-      $.clock.after(0, () => void $.prompt.submit({ text }).catch(err => $.ui.log(`scope-modes: the night's work could not be started: ${msg(err)}`)))
+      $.clock.after(0, () => void whileHeld(heldBy($, 'night start', "the prompt starting the night's work"), () => $.prompt.submit({ text })).catch(err => $.ui.log(`scope-modes: the night's work could not be started: ${msg(err)}`)))
       return { consumed: "scope-modes: started the night's work toward this session's goal" }
     }
     return next(e)
@@ -5258,7 +5302,7 @@ export const register: Register = on => {
       }
       let answer: string
       try {
-        answer = await $.ui.ask(question, ['Yes', 'No'])
+        answer = await whileHeld(heldBy($, 'no build', "Dan's answer to whether Claude may switch to build"), () => $.ui.ask(question, ['Yes', 'No']))
       } catch (err) {
         const text = `Dan was not asked (${msg(err)}): no build stays on.`
         return { result: text, text }
@@ -5445,7 +5489,8 @@ export const register: Register = on => {
         if (!item) return
         await $.state.set(heldRef, held.filter(h => h.id !== id))
         await showHeld($)
-        await $.prompt.submit({ text: `Dan is back and picked this from what was held while he was away: ${item.label}. ${item.prompt}` })
+        await whileHeld(heldBy($, 'held pick', 'the prompt for what Dan picked from what was held while he was away'), () =>
+          $.prompt.submit({ text: `Dan is back and picked this from what was held while he was away: ${item.label}. ${item.prompt}` }))
       })().catch(err => $.ui.toast(`That held row did not finish: ${msg(err)}`))
     })
     return { value: { isAnswered: true } }

@@ -2784,16 +2784,15 @@ mkskill(){   # $1 = path to a SKILL.md  $2 = body line
 # always carries beside the tool: the list of skills the sync leaves alone (#415). Without it such
 # a run stops, correctly, so a fixture modelling a real clone seeds it.
 seed_unmanaged_list(){   # $1 = a clone directory holding a copied claude-sync
-  mkdir -p "$1/payload/hooks/lib"
-  cp "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$1/payload/hooks/lib/unmanaged-skills.sh"
+  python3 "$(dirname "$SCRIPT")/payload/hooks/lib/install-hook-libs.py" "$(dirname "$SCRIPT")/payload/hooks/lib" "$1/payload/hooks/lib" unmanaged-skills.sh >/dev/null \
+    || bad "#2204 seed_unmanaged_list: the install refused"
 }
 # A send refuses when the work names scanner is not beside the tool (claude-config#1621), so a copy
 # of the tool that sends is given the scanner, and the registry reader it asks, exactly as its own
 # checkout would hold them. Never an exemption: the copy is scanned like any send.
 seed_work_names_scanner(){   # $1 = a clone directory holding a copied claude-sync
   mkdir -p "$1/payload/hooks/lib"
-  cp "$(dirname "$SCRIPT")/payload/hooks/lib/work-names.py" "$1/payload/hooks/lib/work-names.py"
-  cp "$(dirname "$SCRIPT")/payload/hooks/lib/dev-update-registry.js" "$1/payload/hooks/lib/dev-update-registry.js"
+  python3 "$(dirname "$SCRIPT")/payload/hooks/lib/install-hook-libs.py" "$(dirname "$SCRIPT")/payload/hooks/lib" "$1/payload/hooks/lib" work-names.py dev-update-registry.js || bad "seed_work_names_scanner: the install refused"
 }
 # SUITE_DEBUG=1 prints tool output a scenario would otherwise throw away. It exists because a
 # failure that only happens on a machine you cannot run has to be MEASURED there, and a check
@@ -7308,6 +7307,166 @@ CLAUDE_HOME="$UTHA" SYNC_REPO="$UTA" SYNC_HOSTNAME=mac-ut-A SYNC_CLONE_REGISTRY=
   SYNC_NO_NOTIFY=1 SYNC_RECONCILE_RETRY=0 SYNC_SEND_RECONCILE=true bash "$SCRIPT" send >/dev/null 2>&1 || true
 check "#1398 a reconcile that gives no reason is reported with the general one, not the last reason" \
   "ut_stuck_sending_says 'the reconcile it tried did not clear them' && ! ut_stuck_sending_says 'also change'"
+
+section "== a head still being tested does not hold back an older commit whose tests passed (#2230) =="
+# Found 2026-11-04 on the personal MacBook: the watcher applied nothing from 06:23 AM ET onward while
+# #2194 and #2202 merged, and its log said on every tick that the shared repo's newest commit was
+# still being tested. A run on main took about 50 minutes and commits landed every half hour or so,
+# so the newest commit was never green at the moment a tick asked, and a commit that HAD passed sat
+# unapplied behind one that had not finished. The rule kept is the gate's own: nothing untested is
+# applied. What changes is which commit is taken in when the head is still being tested: the newest
+# one on main's own line whose tests passed, and nothing newer than it.
+TAB="$WORK/ta-bare.git"; git init -q --bare -b main "$TAB"
+TAA="$WORK/ta-repoA"; git clone -q "$TAB" "$TAA" 2>/dev/null
+TAR="$WORK/ta-repoB"; git clone -q "$TAB" "$TAR" 2>/dev/null
+TAHA="$WORK/ta-homeA"; mkdir -p "$TAHA/skills"; echo '{"hooks":{}}' > "$TAHA/settings.json"
+TAHB="$WORK/ta-homeB"; mkdir -p "$TAHB/skills"; echo '{"hooks":{}}' > "$TAHB/settings.json"
+TAREG="$WORK/ta-clone-registry"; : > "$TAREG"
+# A gh that answers each commit with the state recorded for it (the last line for a commit wins), and
+# in_progress for a commit nothing was recorded for: a run is still going until something says not.
+TABIN="$WORK/ta-bin"; mkdir -p "$TABIN"
+TASTATES="$WORK/ta-ci-states"; : > "$TASTATES"
+cat > "$TABIN/gh" <<'STUB'
+#!/usr/bin/env bash
+sha=""
+for a in "$@"; do
+  case "$a" in repos/*/commits/*/check-runs) sha="${a#*/commits/}"; sha="${sha%%/*}" ;; esac
+done
+st="$(awk -v s="$sha" '$1 == s { v = $2 } END { print v }' "$TA_STATES" 2>/dev/null)"
+printf '%s\n' "${st:-in_progress}"
+STUB
+chmod +x "$TABIN/gh"
+ta_set(){ printf '%s %s\n' "$1" "$2" >> "$TASTATES"; }   # $1 = commit  $2 = its check state
+ta_publish(){   # $1 = skill  $2 = body -> the other Mac publishes by hand, and the new head is printed
+  mkskill "$TAHA/skills/$1/SKILL.md" "$2"
+  CLAUDE_HOME="$TAHA" SYNC_REPO="$TAA" SYNC_HOSTNAME=mac-ta-A SYNC_CLONE_REGISTRY="$TAREG" \
+    SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1 || true
+  git -C "$TAB" rev-parse main
+}
+ta_tick(){   # -> the output of an automatic tick on Mac B, the one the watcher runs
+  TA_STATES="$TASTATES" SYNC_GH="$TABIN/gh" SYNC_REPO_SLUG="acme/widgets" SYNC_IN_WATCH=1 \
+    CLAUDE_HOME="$TAHB" SYNC_REPO="$TAR" SYNC_HOSTNAME=mac-ta-B SYNC_CLONE_REGISTRY="$TAREG" \
+    SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync 2>&1 || true
+}
+ta_has(){ grep -q "$2" "$TAHB/skills/$1/SKILL.md" 2>/dev/null; }   # $1 = skill  $2 = text Mac B runs
+ta_shared_has(){   # $1 = skill  $2 = text -> does the shared repo's main hold it
+  local body; body="$(git -C "$TAB" show "main:payload/skills/$1/SKILL.md" 2>/dev/null || true)"
+  case "$body" in *"$2"*) return 0 ;; *) return 1 ;; esac
+}
+ta_clone_holds(){ git -C "$TAR" merge-base --is-ancestor "$1" HEAD 2>/dev/null; }
+ta_publish base 'base' >/dev/null
+CLAUDE_HOME="$TAHB" SYNC_REPO="$TAR" SYNC_HOSTNAME=mac-ta-B SYNC_CLONE_REGISTRY="$TAREG" \
+  SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1 || true
+# The other Mac publishes twice, faster than one run of the tests takes, and this Mac edits too.
+ta_c1="$(ta_publish first 'C1, its tests passed')"
+ta_c2="$(ta_publish second 'C2, still being tested')"
+mkskill "$TAHB/skills/mine/SKILL.md" 'B1'
+out_ta0="$(ta_tick)"
+dbg "#2230 every commit still being tested: $out_ta0"
+check "#2230 the fixture: B starts level with the base and behind both new commits" \
+  "ta_has base 'base' && ! ta_clone_holds '$ta_c1'"
+check "#2230 while every new commit is still being tested nothing of them is applied" \
+  "[ ! -e '$TAHB/skills/first/SKILL.md' ] && [ ! -e '$TAHB/skills/second/SKILL.md' ]"
+check "#2230 and this Mac's edit still goes up on top of them, as #1398 sends it" \
+  "ta_shared_has mine 'B1' && ta_shared_has second 'C2, still being tested'"
+# THE STARVATION: the first commit passes while the second, newer one is still being tested.
+ta_set "$ta_c1" success
+out_ta1="$(ta_tick)"
+dbg "#2230 the first commit passed: $out_ta1"
+check "#2230 a commit whose tests passed is applied while a newer one is still being tested" \
+  "ta_has first 'C1, its tests passed'"
+check "#2230 and the newer commit, still being tested, is not applied" \
+  "[ ! -e '$TAHB/skills/second/SKILL.md' ]"
+check "#2230 nor checked out in the clone the watcher runs from" \
+  "[ ! -e '$TAR/payload/skills/second/SKILL.md' ] && ta_clone_holds '$ta_c1' && ! ta_clone_holds '$ta_c2'"
+check "#2230 and it names the commit it took in and says the newest is still being tested" \
+  "line_has \"\$out_ta1\" '${ta_c1:0:8}' 'still being tested'"
+check "#2230 with a marker of its own, so the watcher's log can tell it from a tick that applied nothing" \
+  "grep -q '^SEND-OUTCOME ci-tested-ancestor' <<< \"\$out_ta1\" && ! grep -q '^SEND-OUTCOME ci-pending' <<< \"\$out_ta1\""
+check "#2230 and this Mac's own edit is intact, here and in the shared repo" \
+  "ta_has mine 'B1' && ta_shared_has mine 'B1'"
+# This Mac's commit went up on top of the untested head BEFORE the older commit was taken in, so the
+# take in rewrote it. The next edit to the same file must still be measured from what already went
+# up, or it reads as overlapping this Mac's own earlier send and is refused (#1398's record).
+mkskill "$TAHB/skills/mine/SKILL.md" 'B2, after the older commit was taken in'
+out_ta2="$(ta_tick)"
+dbg "#2230 a later edit: $out_ta2"
+check "#2230 a later edit to a file this Mac already sent over the untested head still goes up" \
+  "ta_shared_has mine 'B2, after the older commit' && ta_shared_has second 'C2, still being tested'"
+check "#2230 and is not refused as overlapping this Mac's own earlier send" \
+  "! grep -q 'were not sent' <<< \"\$out_ta2\""
+check "#2230 and the commit still being tested is still not applied" \
+  "[ ! -e '$TAHB/skills/second/SKILL.md' ]"
+# Assume it runs twice: a tick with nothing new changes nothing here or in the shared repo.
+ta_tip="$(git -C "$TAB" rev-parse main)"; ta_head="$(git -C "$TAR" rev-parse HEAD)"
+out_ta3="$(ta_tick)"
+check "#2230 a tick with nothing new moves neither this clone nor the shared repo" \
+  "[ \"\$(git -C '$TAB' rev-parse main)\" = '$ta_tip' ] && [ \"\$(git -C '$TAR' rev-parse HEAD)\" = '$ta_head' ]"
+# The second commit passes while this Mac's own sends on top of it are still being tested.
+ta_set "$ta_c2" success
+out_ta4="$(ta_tick)"
+dbg "#2230 the second commit passed: $out_ta4"
+check "#2230 the second commit is applied once its own tests pass, though the sends on top are untested" \
+  "ta_has second 'C2, still being tested'"
+check "#2230 and this Mac's latest edit is intact, here and in the shared repo" \
+  "ta_has mine 'B2, after the older commit' && ta_shared_has mine 'B2, after the older commit'"
+# The head itself passes: the ordinary path takes everything in.
+ta_set "$(git -C "$TAB" rev-parse main)" success
+out_ta5="$(ta_tick)"
+dbg "#2230 the head passed: $out_ta5"
+check "#2230 once the head passes the clone is level with the shared repo in both directions" \
+  "git -C '$TAR' fetch -q origin 2>/dev/null; [ \"\$(git -C '$TAR' rev-list --count HEAD...origin/main)\" = 0 ]"
+check "#2230 with nothing reported as a dropped snapshot, since every commit was this Mac's own send" \
+  "! grep -qi 'dropped' <<< \"\$out_ta5\""
+check "#2230 and this Mac's edit is still the shared repo's" "ta_shared_has mine 'B2, after the older commit'"
+
+# A newest commit that FAILED: nothing changes there. It is never applied, and a failed head takes
+# nothing in, the older commit that passed included, exactly as before (#221).
+ta_c3="$(ta_publish third 'C3, passed')"; ta_set "$ta_c3" success
+ta_c4="$(ta_publish fourth 'C4, failed its tests')"; ta_set "$ta_c4" failure
+out_ta6="$(ta_tick)"
+dbg "#2230 a failed head: $out_ta6"
+check "#2230 a newest commit that FAILED its tests is not applied" \
+  "[ ! -e '$TAHB/skills/fourth/SKILL.md' ] && ! ta_clone_holds '$ta_c4'"
+check "#2230 and it says the tests failed, as it always has" "grep -q 'FAILED its tests' <<< \"\$out_ta6\""
+check "#2230 and a failed head still takes in nothing, the older commit that passed included" \
+  "[ ! -e '$TAHB/skills/third/SKILL.md' ]"
+# A commit still being tested lands on top of the failed one. The newest commit that passed is
+# older than the failed one, so it is applied, and neither newer commit is.
+ta_c5="$(ta_publish fifth 'C5, still being tested')"
+out_ta7="$(ta_tick)"
+dbg "#2230 an untested head over a failed one: $out_ta7"
+check "#2230 under a head still being tested the newest commit that passed is applied, past a failed one" \
+  "ta_has third 'C3, passed'"
+check "#2230 and the failed commit is never applied" \
+  "[ ! -e '$TAHB/skills/fourth/SKILL.md' ] && ! ta_clone_holds '$ta_c4'"
+check "#2230 nor the commit still being tested" "[ ! -e '$TAHB/skills/fifth/SKILL.md' ] && ! ta_clone_holds '$ta_c5'"
+
+# A commit whose tests passed but that is not on main's own line: a branch built on the untested
+# head. Taking it in would bring that head with it, so it is never a candidate.
+TASIDE="$WORK/ta-side"; git clone -q "$TAB" "$TASIDE" 2>/dev/null
+mkskill "$TASIDE/payload/skills/side/SKILL.md" 'side, passed but not on main'
+git -C "$TASIDE" add payload/skills/side/SKILL.md
+git -C "$TASIDE" -c user.name=fixture -c user.email=fixture@example.invalid commit -q -m 'a side branch'
+git -C "$TASIDE" push -q origin HEAD:refs/heads/side 2>/dev/null
+ta_side="$(git -C "$TASIDE" rev-parse HEAD)"; ta_set "$ta_side" success
+out_ta8="$(ta_tick)"
+dbg "#2230 a passed commit off main: $out_ta8"
+check "#2230 the fixture: the side commit really is in this clone's view of the shared repo" \
+  "git -C '$TAR' cat-file -e '$ta_side^{commit}' 2>/dev/null"
+check "#2230 a commit whose tests passed but which is not an ancestor of main is never applied" \
+  "[ ! -e '$TAHB/skills/side/SKILL.md' ] && ! ta_clone_holds '$ta_side'"
+check "#2230 nor the untested head it sits on" "[ ! -e '$TAHB/skills/fifth/SKILL.md' ]"
+check "#2230 and the tick says the head is still being tested and takes nothing in" \
+  "grep -q '^SEND-OUTCOME ci-pending' <<< \"\$out_ta8\" && ! grep -q '^SEND-OUTCOME ci-tested-ancestor' <<< \"\$out_ta8\""
+# A head with no run yet, young enough that one is still coming, counts as still being tested too.
+ta_set "$ta_c5" success
+ta_c6="$(ta_publish sixth 'C6, no run yet')"; ta_set "$ta_c6" none
+out_ta9="$(ta_tick)"
+dbg "#2230 a head with no run yet: $out_ta9"
+check "#2230 under a head with no run yet the newest commit that passed is applied" \
+  "ta_has fifth 'C5, still being tested'"
+check "#2230 and the head with no run yet is not" "[ ! -e '$TAHB/skills/sixth/SKILL.md' ] && ! ta_clone_holds '$ta_c6'"
 
 section "== a send that catches up says what it sent, and gates what it sends (#1402, #1403) =="
 # #1402. A watcher send that finds this Mac behind catches up by running a sync, and that sync
@@ -12882,8 +13041,8 @@ check "#415 and carries no skills at all, the platform's least of all" \
   "[ ! -e '$ULR/payload/skills' ]"
 # The control: the same copy with the list beside it sends, so the refusal above is about the list
 # and not about something else this copy lacks.
-mkdir -p "$ULC/payload/hooks/lib"
-cp "$ULREPO/payload/hooks/lib/unmanaged-skills.sh" "$ULC/payload/hooks/lib/unmanaged-skills.sh"
+python3 "$ULREPO/payload/hooks/lib/install-hook-libs.py" "$ULREPO/payload/hooks/lib" "$ULC/payload/hooks/lib" unmanaged-skills.sh >/dev/null \
+  || bad "#2204 the unmanaged skills list could not be installed beside the copy"
 # The list alone is not enough: this copy has no work names scanner beside it either, and a send
 # that cannot run that scanner refuses rather than publishing what nothing judged (claude-config#1621,
 # L98). #1568 let it through with a notice, so the guard keeping work names out of a public
@@ -12932,7 +13091,7 @@ WNE="$WORK/worknames-emptyhome"; mkdir -p "$WNE"
 WNR="$WORK/worknames-repo"; mkdir -p "$WNR/payload"
 WNLOG="$WORK/worknames-sync.log"
 WNHASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
-_wn(){ HOME="$WNE" WORK_NAMES_EXTRA_HASHES="$WNHASH" SYNC_LOG_FILE="$WNLOG" CLAUDE_HOME="$WNH" SYNC_REPO="$WNR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1; }
+_wn(){ HOME="$WNE" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$WNHASH" SYNC_LOG_FILE="$WNLOG" CLAUDE_HOME="$WNH" SYNC_REPO="$WNR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1; }
 if out_wn1="$(_wn)"; then rc_wn1=0; else rc_wn1=$?; fi
 dbg "push carrying the invented organisation: $out_wn1"
 check "#1568 a send carrying a work organisation name is refused" "[ '$rc_wn1' -ne 0 ]"
@@ -18020,8 +18179,9 @@ RT20H="$WORK/rt2020-home"; mkdir -p "$RT20H/hooks/lib"
 echo '{"hooks":{}}' > "$RT20H/settings.json"; printf '# rules\n' > "$RT20H/CLAUDE.md"
 rt20_src="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks"
 cp "$rt20_src/test-run-all-tests-real-tree.sh" "$rt20_src/run-all-tests.sh" "$RT20H/hooks/"
-cp "$rt20_src/lib/suite-deadline.sh" "$rt20_src/lib/recorded-pid.sh" "$rt20_src/lib/repo-files.sh" \
-  "$rt20_src/lib/whole-number.sh" "$rt20_src/lib/load-average.sh" "$RT20H/hooks/lib/"
+python3 "$rt20_src/lib/install-hook-libs.py" "$rt20_src/lib" "$RT20H/hooks/lib" suite-deadline.sh suite-isolation.sh \
+  recorded-pid.sh repo-files.sh whole-number.sh load-average.sh >/dev/null \
+  || bad "#2204 the runner's helpers could not be installed into the #2020 home"
 mkskill "$RT20H/skills/milestone/SKILL.md" 'a skill holding a suite'
 printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/skills/milestone/test-ms.sh"
 printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/hooks/test-clean.sh"

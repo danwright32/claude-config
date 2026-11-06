@@ -1,0 +1,8 @@
+{
+  "name": "slack-alert-guard",
+  "version": "0.1.0",
+  "description": "Holds every edit that changes the words a Slack alert posts until Dan has seen the message as Slack will post it, every variable filled in, and approved that exact wording.",
+  "author": { "name": "Dan Wright" },
+  "types": "./types/index.d.ts",
+  "dependencies": ["mod-kit"]
+}

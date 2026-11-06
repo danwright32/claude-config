@@ -5,7 +5,8 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
-import { GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP_QUESTION } from '../hooks/bedtime.ts'
+import { adminEndpoints } from '../hooks/adminmerge.ts'
+import { answerKey, GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP_QUESTION } from '../hooks/bedtime.ts'
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { overnightRules, REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
 import { CLAIM_MS, proposalPath } from '../hooks/proposals.ts'
@@ -96,8 +97,14 @@ const deps: { name: string; register: Register } = {
             return kit('isDans', input)
           },
           typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
-          hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
-          release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
+          // #2132: a hold on scope-modes' reload and its letting go, asked of the world, which keeps
+          // them in order beside each prompt and question and can refuse one as mod-kit would.
+          hold: async (input: unknown) => {
+            await kit('hold', input)
+          },
+          release: async (input: unknown) => {
+            await kit('release', input)
+          },
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
           login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
           account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
@@ -388,6 +395,8 @@ type Opts = {
   registryAnswer?: string
   /** The next prompts beneath the mod that fail, counted (#837: a prompt that never entered). */
   promptFails?: number
+  /** #2132: mod-kit refuses the hold on scope-modes' reload with this, as an older or missing mod-kit would. */
+  holdFails?: string
   /** Opening the report in BBEdit failing (#837): the helper's words, and open -a BBEdit's. */
   openFails?: { helper?: string; open?: string }
   /** `sleep-queue.sh release` refusing, with what it printed (#922: its answer can quote a worker's why). */
@@ -434,10 +443,12 @@ type Opts = {
   listFails?: string[]
   /**
    * The project's CLAUDE.md as git show reads it from the default branch (#2064): by ref, origin/HEAD
-   * and origin/main, each missing ref failing as git does. Neither given is a repository whose
-   * default branch carries no CLAUDE.md.
+   * and origin/main, one not given failing as git does for a ref carrying no CLAUDE.md. Neither
+   * given is a repository whose default branch carries no CLAUDE.md.
    */
   committedClaudeMd?: { head?: string; main?: string }
+  /** git show's error when the committed CLAUDE.md cannot be read at all (#2146). */
+  committedClaudeMdUnreadable?: string
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -480,6 +491,12 @@ const world = (on: On, o: Opts = {}) => {
     homeGone: false,
     /** What reached the screen and GitHub, in order: each modes change, and the wake check's first read (#834). */
     order: [] as string[],
+    /** #2132: each hold on scope-modes' reload, its letting go, each prompt and each question the mod asks, in order. */
+    held: [] as string[],
+    /** #2132: the holds standing now, by id. */
+    holding: new Set<string>(),
+    /** #2132: each prompt or question the mod made with no hold standing, which a reload would drop. */
+    unheld: [] as string[],
     /** Reading this session's id throws from now on (#834: a permission decision that throws). */
     idThrows: false,
     released: [] as string[][],
@@ -601,8 +618,9 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'git' && a[0] === '-C' && a[2] === 'show' && /^origin\/(?:HEAD|main):CLAUDE\.md$/.test(a[3] ?? '')) {
       // Recorded here because this answer returns before the general record of runs below.
       w.runs.push(argv)
+      if (o.committedClaudeMdUnreadable !== undefined) return fail(128, o.committedClaudeMdUnreadable)
       const text = a[3]?.startsWith('origin/HEAD') ? o.committedClaudeMd?.head : o.committedClaudeMd?.main
-      return text === undefined ? fail(128, `fatal: invalid object name '${a[3]?.split(':')[0]}'.`) : ok(text)
+      return text === undefined ? fail(128, `fatal: path 'CLAUDE.md' does not exist in '${a[3]?.split(':')[0]}'`) : ok(text)
     }
     // grep -o -E <pattern> <file> over the world's files (#1287: a session's title from its transcript).
     if (cmd === 'grep' && a[0] === '-o' && a[1] === '-E') {
@@ -708,6 +726,14 @@ const world = (on: On, o: Opts = {}) => {
     }
     // mod-kit's readers, read here with its copy; a command naming __reader_fails stands for a
     // reader that throws. Not one of the runs a test watches, which reach the Mac.
+    if (cmd === '__modkit' && (a[0] === 'hold' || a[0] === 'release')) {
+      if (a[0] === 'hold' && o.holdFails) return fail(1, o.holdFails)
+      const { id } = JSON.parse(a[1] as string) as { id: string }
+      if (a[0] === 'hold') w.holding.add(id)
+      else w.holding.delete(id)
+      w.held.push(`${a[0]} ${a[1]}`)
+      return ok('')
+    }
     if (cmd === '__modkit') {
       const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null; path?: string; spelling?: string; link?: string }
       if ((input.command ?? '').includes('__reader_fails')) return fail(1, 'the reader broke')
@@ -939,6 +965,12 @@ const world = (on: On, o: Opts = {}) => {
     return (outcome === true ? { isDelivered: true } : { isDelivered: false, reason: outcome.refused }) as never
   })
   on('prompt.submit', ($, e) => {
+    // A prompt the mod sends itself, never one a test types as Dan (#2132), is a wait a reload drops.
+    const from = (e as unknown as { origin?: { kind?: string; name?: string } }).origin
+    if (from?.kind === 'plugin' && from.name === 'scope-modes') {
+      w.held.push('submit')
+      if (!w.holding.size) w.unheld.push(`submit ${e.text.slice(0, 60)}`)
+    }
     if (o.promptFails) {
       o.promptFails--
       throw new Error('the prompt could not be entered')
@@ -980,6 +1012,12 @@ const world = (on: On, o: Opts = {}) => {
     if (e.tool === 'AskUserQuestion') {
       const first = (e as unknown as { questions: { question: string; options?: unknown[] }[] }).questions[0]
       const q = String(first?.question)
+      // A question the mod asks through $.ui.ask: the engine gives its call a generated toolu_ id,
+      // where a test's own call for Claude carries a short one of its own ('q1', 'p1').
+      if (/^toolu_/.test(String((e as unknown as { tool_use_id?: unknown }).tool_use_id))) {
+        w.held.push('ask')
+        if (!w.holding.size) w.unheld.push(`ask ${q.slice(0, 60)}`)
+      }
       w.asked.push(q)
       w.askedOptions.push((first?.options ?? []).map(x => (x && typeof x === 'object' ? String((x as { label?: unknown }).label) : String(x))))
       // A before bed question about an issue (#836), answered as the test says.
@@ -1020,8 +1058,11 @@ const world = (on: On, o: Opts = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
+  everyWorld.push(w)
   return { w, clock, readAttempted }
 }
+// #2132: every world made in this file, so the last test can read every wait the mod made in all of them.
+const everyWorld: { o: Opts; held: string[]; unheld: string[] }[] = []
 
 type $T = {
   session: { start: (e: never) => Promise<unknown>; end: (e: never) => Promise<unknown>; receive: (e: never) => Promise<unknown> }
@@ -2648,10 +2689,15 @@ test('asleep, a hosted test host counts only when the default branch\'s CLAUDE.m
   expect(w.runs.some(r => r.join(' ') === 'git -C /repo show origin/main:CLAUDE.md')).toBe(true)
   // Only in the working copy, or a default branch whose CLAUDE.md does not list it: refused.
   expect(await go(undefined, 'n3')).toMatch(/did not open qa\.example\.dev in the browser, which is not a test host/)
-  expect(await go({ main: '# Project\n' }, 'n4')).toMatch(/which is not a test host/)
+  expect(await go({ main: '# Project\n' }, 'n4')).toMatch(/which is not a test host \(.*Sleep mode test hosts:/)
+  // A CLAUDE.md git cannot read is refused too, saying so rather than that the host is unlisted (#2146).
+  w.o.committedClaudeMdUnreadable = 'fatal: unable to read tree 1234abcd'
+  const UNKNOWN = 'which is not a local test host, and whether the project lists it as a hosted one is not known, because'
+  expect(await go({ main: LISTED }, 'n4a')).toContain(`did not open qa.example.dev in the browser, ${UNKNOWN} CLAUDE.md on origin/main in /repo could not be read (fatal: unable to read tree 1234abcd)`)
+  w.o.committedClaudeMdUnreadable = undefined
   // origin/HEAD naming no branch is no listed hosts, with no guess at main (Dan, 2026-11-03).
   w.o.defaultBranch = ''
-  expect(await go({ head: LISTED, main: LISTED }, 'n5')).toMatch(/which is not a test host/)
+  expect(await go({ head: LISTED, main: LISTED }, 'n5')).toContain(`${UNKNOWN} /repo names no default branch for origin, so its CLAUDE.md was not read`)
 })
 test("asleep, the keystroke guard's test build is not held through the noun either, though place is home (#1269)", { plugins: [deps, isItLive, guardStandIn] }, async ($, on) => {
   const { w, clock } = world(on)
@@ -2764,6 +2810,42 @@ test('a switch that could not be recorded still holds here over an older one fro
   await say($ as never, 'one')
   await clock.advance(MIN)
   expect(lastModes(w)).toEqual(['AWAY'])
+})
+
+// #2154: a switch was marked seen before it was applied, so one whose apply threw was never taken.
+test('a switch from another session that cannot be applied is logged, and taken once it can be (#2154)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  const refusing = { on: false }
+  on('state.set', async ($, e, next) => (refusing.on && (e as { key?: string }).key === 'place' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  refusing.on = true
+  await say($ as never, 'one')
+  expect(w.modes.some(m => m.includes('AWAY'))).toBe(false)
+  // Through the failure reporting the check already has, never silently.
+  expect(w.logs.filter(l => l.startsWith('scope-modes: the away or home switch check failed: '))).toEqual([
+    'scope-modes: the away or home switch check failed: scope-modes: $.state.set: state store unavailable',
+  ])
+  refusing.on = false
+  await clock.advance(MIN)
+  expect(lastModes(w)).toEqual(['AWAY'])
+})
+
+test('a switch home that fails partway is applied whole when taken again, so Claude still hears Dan is back (#2154 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  const refusing = { on: false }
+  on('state.set', async ($, e, next) => (refusing.on && (e as { key?: string }).key === 'justHome' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  w.files[PLACE] = placeRecord('away', T0 + 5)
+  await say($ as never, 'one')
+  expect(lastModes(w)).toEqual(['AWAY'])
+  w.files[PLACE] = placeRecord('home', T0 + 6)
+  refusing.on = true
+  await clock.advance(MIN)
+  refusing.on = false
+  const back = (await say($ as never, 'two')).context?.join('\n') ?? ''
+  expect(lastModes(w)).toEqual([])
+  expect(back).toMatch(/Dan is back at the Mac/)
 })
 
 test('a record that cannot be read is said once, never read as a switch (L215)', withDeps, async ($, on) => {
@@ -5068,6 +5150,38 @@ test('an entry GitHub does not know under any account is closed for the night', 
   expect(await call($ as never, bash('gh pr merge 3'))).toBe('ran')
 })
 
+// #2125: an admin merge overnight is judged by the night's lists and by GitHub, read through gh api.
+const ADMIN_SHA = 'a'.repeat(40)
+const ADMIN_MERGE_CMD = `gh pr merge 7 --admin --squash --match-head-commit ${ADMIN_SHA}`
+const OPTED_NIGHT = { mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: false, adminMerge: 'green-pinned' }], closed: [] }
+const adminGithub = (conclusion: string): Record<string, string> => ({
+  'gh api repos/o/r/pulls/7': JSON.stringify({ state: 'open', draft: false, head: { sha: ADMIN_SHA }, base: { ref: 'main' } }),
+  'gh api repos/o/r/rules/branches/main?per_page=100': JSON.stringify([{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test' }] } }]),
+  'gh api repos/o/r/branches/main': JSON.stringify({ protected: false }),
+  [`gh api repos/o/r/commits/${ADMIN_SHA}/check-runs?per_page=100`]: JSON.stringify({ total_count: 1, check_runs: [{ name: 'test', status: 'completed', conclusion }] }),
+  [`gh api repos/o/r/commits/${ADMIN_SHA}/status?per_page=100`]: JSON.stringify({ state: 'pending', total_count: 0, statuses: [] }),
+})
+
+test('an admin merge overnight runs where the night opts in and GitHub shows its pinned commit green (#2125)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...night(OPTED_NIGHT), night: adminGithub('success') })
+  await start($ as never, clock)
+  expect(await call($ as never, bash(ADMIN_MERGE_CMD))).toBe('ran')
+  expect(w.runs.filter(r => r[0] === 'gh' && r[1] === 'api' && r[2]?.startsWith('repos/o/r/')).map(r => r[2])).toEqual(adminEndpoints('o/r', 7, ADMIN_SHA, 'main'))
+})
+
+test('an admin merge overnight is refused when its required check failed on the pinned commit (#2125)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(OPTED_NIGHT), night: adminGithub('failure') })
+  await start($ as never, clock)
+  expect(await call($ as never, bash(ADMIN_MERGE_CMD))).toMatch(asRegExp('Refused: sleep mode is on and Dan bans this while he sleeps, so this did not admin merge PR #7 in o/r, whose required check test is failure on its head commit.'))
+})
+
+test('an admin merge overnight is refused in a repository whose entry does not opt in, and GitHub is never asked (#2125)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...night({ mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: false }], closed: [] }), night: adminGithub('success') })
+  await start($ as never, clock)
+  expect(await call($ as never, bash(ADMIN_MERGE_CMD))).toMatch(asRegExp('Refused: sleep mode is on and Dan bans this while he sleeps, so this did not admin merge a PR in o/r, which does not allow admin merges overnight'))
+  expect(w.runs.some(r => r[0] === 'gh' && r[1] === 'api' && r[2]?.startsWith('repos/o/r/pulls/'))).toBe(false)
+})
+
 test('a repository first met after sleep began is closed and noted once', withDeps, async ($, on) => {
   const { w, clock } = world(on, night({ mayDeploy: [], mergeOnly: [{ repo: 'o/other', mergeDeploys: false }], closed: [] }))
   await start($ as never, clock)
@@ -6473,6 +6587,27 @@ test("an answered item a failed check off left open is checked off on a later ni
   expect(r.text).not.toContain('still shows it open')
 })
 
+// #2261: a design round guard question on an issue's Open questions is settled only by the guard's
+// own picker, which records the answer the guard reads. Asked by /sleep, the answer records nothing,
+// so the item is never asked there and never checked off, on the repair path either (an answer on
+// record from before this fix), and /sleep says so once.
+test('/sleep never asks or checks off a design round guard question, on the repair path either, and says so once (#2261)', withDeps, async ($, on) => {
+  const body = ['The screen.', '', '## Open questions', '', '- [ ] Skip design rounds for this issue?', '- [ ] Is this design settled?', '- [ ] Keep the old flag?', '', 'Claude-Session: https://claude.ai/code/session_01AbCdEf'].join('\n')
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [`${ANSWERED}${answerKey('o/r', 7, 'Skip design rounds for this issue?')}.json`]: JSON.stringify({ answer: 'Yes' }) },
+    githubRepos: { default: ['o/r'] },
+    issueBodies: { 7: body },
+    issueAnswers: { 'o/r#7: Is this design settled?': 'Yes', 'o/r#7: Keep the old flag?': 'Drop it' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(w.edits.map(x => x.body)).toEqual([body.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')])
+  const said = 'Not asked, since only the design round guard\'s own question can settle them: o/r#7 "Skip design rounds for this issue?" and o/r#7 "Is this design settled?".'
+  expect(r.text).toContain(said)
+  expect((r.text ?? '').split(said).length).toBe(2)
+})
+
 test('notes that cannot be read are said, and the questions in the rest are still asked (L215)', withDeps, async ($, on) => {
   const { w, clock } = world(on, {
     files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: ['{"kind":"question"', ONE_NOTE].join('\n') },
@@ -7319,4 +7454,41 @@ test('a morning whose pickers were all answered adds nothing to his next message
   await call($ as never, picker('Keep the old export flag?', 'q1'))
   await turnEnd($, 'm1')
   expect(ctxOf(await say($ as never, 'morning'))).not.toMatch(/morning pickers came back unanswered/)
+})
+
+// #2132: mod-kit reloads scope-modes when a mod it depends on changes, and a reload drops every wait
+// in flight: a prompt the mod sent and is waiting to see entered, a question waiting on Dan. So each
+// one holds that reload back while it waits.
+test('a hold mod-kit refuses is said in the debug log, and the morning prompt is still sent (#2132)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) }, holdFails: 'this mod-kit has no hold' })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  expect(morningOf(w)).toHaveLength(1)
+  expect(w.unheld).toHaveLength(1)
+  expect(w.logs.join('\n')).toContain('scope-modes: could not hold back a reload while it waits on the prompt putting the morning to Dan, so one now would drop that wait')
+  expect(w.logs.join('\n')).toContain('this mod-kit has no hold')
+})
+
+test('a morning prompt that cannot be entered still lets go of its hold on a reload (#2132)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) }, promptFails: 1 })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const morning = w.held.filter(h => h === 'submit' || h.includes('"morning'))
+  expect(morning.slice(0, 3)).toEqual([
+    `hold ${JSON.stringify({ mod: 'scope-modes', id: 'morning', what: 'the prompt putting the morning to Dan', ms: 3_600_000 })}`,
+    'submit',
+    `release ${JSON.stringify({ mod: 'scope-modes', id: 'morning' })}`,
+  ])
+  expect(w.holding.size).toBe(0)
+})
+
+// Last in the file, so it reads every wait the mod made in every test above: each one was held, and
+// every kind of wait was reached at least once, so a site that stops being exercised fails here too.
+test('every prompt the mod sends and every question it asks Dan holds back a reload of scope-modes while it waits (#2132)', async () => {
+  const worlds = everyWorld.filter(x => !x.o.holdFails)
+  expect(worlds.flatMap(x => x.unheld)).toEqual([])
+  const ids = new Set(worlds.flatMap(x => x.held.filter(h => h.startsWith('hold ')).map(h => (JSON.parse(h.slice(5)) as { id: string }).id.replace(/ \d+$/, ''))))
+  expect([...ids].sort()).toEqual(['bedtime', 'cleanup branch', 'earlier night', 'held pick', 'left branch', 'left open', 'morning', 'night start', 'no build', 'resume'])
 })

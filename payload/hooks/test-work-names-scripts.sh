@@ -114,7 +114,10 @@ On Dans-MacBook-Pro:
 ' > "$PROJECTS"
 
 fixture_env(){   # the environment every run shares, then the command
-  env HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" FAKE_VIS="$VIS" FAKE_STDIN_SAVE="$STDIN_SAVE" \
+  # The scanner reads the invented hashes and project list only under the test marker
+  # (claude-config#2231), which the runner exports; it is set here too, so this suite run on its own
+  # judges the same names.
+  env HOOK_TESTS_RUNNING=1 HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" FAKE_VIS="$VIS" FAKE_STDIN_SAVE="$STDIN_SAVE" \
     WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" WN_SESSION_ENV_DIR="$ENVDIR" \
     WN_SCRIPTS_NOTICE_DIR="$NOTICED" FAKE_ALIASES="$ALIAS_SRC" "$@"
 }
@@ -222,8 +225,11 @@ sys.exit(r.returncode)'
 check "(control) gh's own commands still run when the aliases cannot be read: rc=$rc $out" [ "$rc" -eq 0 ]
 ALIAS_SRC="$ALIASES"
 
+# A folder holding only bash, which the guard's own line asks for: /usr/bin holds a gh on a CI runner,
+# so a PATH of the system folders had a real gh past the guard there and the case never ran.
+NOGH="$WORK/nogh"; mkdir -p "$NOGH"; ln -s "$(command -v bash)" "$NOGH/bash"
 : > "$CALLS"
-out="$(cd "$CO" && fixture_env PATH="$GUARD_BIN:/usr/bin:/bin" "$GUARD" pr view 5 2>&1)"; rc=$?
+out="$(cd "$CO" && fixture_env PATH="$GUARD_BIN:$NOGH" "$GUARD" pr view 5 2>&1)"; rc=$?
 check "with no real gh past itself on PATH the guard fails as a missing command: rc=$rc $out" [ "$rc" -eq 127 ]
 check "and says so: $out" has "$out" "no gh"
 
@@ -308,6 +314,14 @@ check "the command's own gh writes are still judged in a guarded session: $out" 
 hook 'gh cm 5 "seen in acme-widgets"' "$GUARDED"
 check "a command running an alias that expands to a comment naming a work repository is refused: $out" refused
 check "and says it went through the alias: $out" has "$out" "gh alias cm"
+# gh's arguments are the shared reader's words from the program's name on (claude-config#1188), so
+# an alias behind an assignment or a runner is found as one written bare is.
+hook 'GH_HOST=github.com gh cm 5 "seen in acme-widgets"' "$GUARDED"
+check "an alias run behind an assignment is judged as what it expands to: $out" refused
+check "through the alias: $out" has "$out" "gh alias cm"
+hook 'env GH_HOST=github.com gh cm 5 "seen in acme-widgets"' "$GUARDED"
+check "and one run behind env: $out" refused
+check "through the alias too: $out" has "$out" "gh alias cm"
 hook 'gh lv 5' "$GUARDED"
 check "(control) a command running an alias to a read only command passes: $out" silent
 ALIAS_SRC="$WORK/no-such-aliases"
