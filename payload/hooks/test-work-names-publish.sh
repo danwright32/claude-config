@@ -108,8 +108,8 @@ WORD_HASH="$(printf '%s' "sun-flower" | shasum -a 256 | cut -d' ' -f1)"
 
 # The work MacBook's project list, as the Projects section of the global CLAUDE.md carries it
 # (claude-config#2184). The personal MacBook's block comes first, so a reader that took the wrong
-# block would be seen. The last work entry is an organisation's name without its hyphen, which is
-# judged as a domain or email address only.
+# block would be seen. The last work entry is an organisation's name without its hyphen, a project
+# all the same, so it is refused as a plain word as well as a domain (claude-config#2190).
 PROJECTS="$WORK/CLAUDE.md"
 write_projects(){ printf '%s' "$1" > "$PROJECTS"; }
 GOOD_PROJECTS='# Global
@@ -131,12 +131,16 @@ This list records where each project should be.
 '
 write_projects "$GOOD_PROJECTS"
 
+# The hashed work MacBook projects (claude-config#2112) replaced through the test seam, none unless a
+# check sets them, so these fixtures judge only the names their own block lists.
+PROJ_HASHES=""
 run(){   # $1 = the command; output in out, exit code in rc, the decision in decision
   local payload
   payload="$(jq -nc --arg c "$1" --arg d "$CO" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c},cwd:$d}')"
   : > "$CALLS"
   out="$(cd "$CO" && printf '%s' "$payload" | PATH="$BIN:$PATH" HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" \
-    FAKE_VIS="$VIS" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH,$WORD_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" bash "$GATE" 2>&1)"; rc=$?
+    FAKE_VIS="$VIS" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH,$WORD_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" \
+    HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="$PROJ_HASHES" bash "$GATE" 2>&1)"; rc=$?
   decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
 }
 refused(){ [ "$rc" -eq 2 ] || [ "$decision" = deny ]; }
@@ -295,7 +299,9 @@ check "(control) the ordinary word sharing those letters passes, alone or in ano
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "write to team@acmehq.com"'
 check "a project list name that is an organisation without its hyphen is refused as an email domain: $out" refused
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "the acmehq folder"'
-check "(control) and as a bare word it is judged by the domain rule, so it passes: $out" passed
+check "#2190 and as a bare word it is a project all the same, so it is refused: $out" refused
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "the acmehqs and preacmehq notes"'
+check "#2190 (control) that project inside a longer word is no match: $out" passed
 # Cannot tell is refused (L98, L345): the project list is a source like the others.
 rm -f "$PROJECTS"
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
@@ -327,6 +333,17 @@ The list is empty today.
 '
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
 check "a work MacBook block that lists no project is refused, never read as clean: $out" refused
+# claude-config#2112: the same empty block with a hashed project (an invented name) is readable, and
+# the gate refuses that name through its hash alone, as it refuses a listed one.
+PROJ_HASHES="$(printf '%s' "fernhollow" | shasum -a 256 | cut -d' ' -f1)"
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
+check "#2112 an empty block with a hashed project lets a clean comment through: $out" passed
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "moved from the FernHollow checkout"'
+check "#2112 and refuses a comment naming the hashed project: $out" refused
+PROJ_HASHES="$(printf '%s' "nothing-named-this" | shasum -a 256 | cut -d' ' -f1)"
+run 'gh issue comment 5 --repo danwright-test/public-notes --body "moved from the FernHollow checkout"'
+check "#2112 (control) with that hash absent the same comment passes, so the refusal came from it: $out" passed
+PROJ_HASHES=""
 write_projects "$GOOD_PROJECTS"
 run 'gh issue comment 5 --repo danwright-test/public-notes --body "nothing to see"'
 check "(control) the project list restored, a clean comment passes: $out" passed
@@ -338,6 +355,31 @@ payload="$(jq -nc --arg c 'gh pr create --repo danwright-test/public-notes --tit
 out="$(printf '%s' "$payload" | PATH="$BROKEN:$BIN:$PATH" bash "$GATE" 2>&1)"; rc=$?
 check "a gate that crashes refuses the command rather than passing it: rc=$rc $out" [ "$rc" -eq 2 ]
 check "and says it could not check: $out" has "$out" "could not be checked"
+
+# ---------------------------------------------------------------- a redirection in front of gh (claude-config#2235)
+# The shell takes a redirection out of a command before it finds the name, so `2>/dev/null gh pr
+# create` opens the pull request. The scan cut `2>` into `2` and `>` and wrote the words back quoted,
+# so the gate read a command named 2 and let a work name through. Each case is also run through a
+# copy of the hooks whose reader reads the redirection the old way, which must let it through.
+for v in rejoin glue; do
+  check "#2235 the $v copy of the hooks is made" python3 -B "$HERE/lib/loose-reader.py" "$HERE" "$WORK/loose-$v" "$v"
+done
+redirected(){ # redirected <description> <command> <loose copy>...
+  local name="$1" cmd="$2" v
+  shift 2
+  run "$cmd"
+  check "#2235 $name: $out" refused
+  for v in "$@"; do
+    GATE="$WORK/loose-$v/check-work-names-publish.sh" run "$cmd"
+    check "#2235 the $v copy should let it through, or the case decides nothing: $name: $out" passed
+  done
+}
+redirected "a public pull request behind an error redirection" '2>/dev/null gh pr create --repo danwright-test/public-notes --title "Fix it" --body "copied from the acme-widgets issue"' rejoin glue
+redirected "a comment behind an output redirection" '> /dev/null gh issue comment 5 --repo danwright-test/public-notes --body "the acme-corp board"' rejoin
+redirected "a pull request edit behind input" '</dev/null gh pr edit 5 --repo danwright-test/public-notes --body "zephyr"' rejoin
+redirected "gh api behind an error redirection" '2>/dev/null gh api repos/danwright-test/public-notes/issues/5/comments -f body="see acme-widgets"' glue
+run '2>/dev/null gh pr create --repo danwright-test/public-notes --title "Fix it" --body "nothing to see"'
+check "#2235 control: clean text behind a redirection passes: $out" passed
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

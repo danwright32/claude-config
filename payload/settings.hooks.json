@@ -195,6 +195,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-zsh-builtins.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-wrapped-commands.sh",
             "timeout": 10,
             "onFailure": "block"
@@ -276,6 +282,17 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/playwright-subagent-gate.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__claude-in-chrome__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/chrome-subagent-tab-gate.sh",
             "timeout": 10,
             "onFailure": "block"
           }

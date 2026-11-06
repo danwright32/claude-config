@@ -549,8 +549,8 @@ Rejected for #48, which named it as the real fix.
 
 `enabledPlugins` lives in `~/.claude/settings.json`, and this tool carries only the `hooks` block out
 of that file. Carrying the plugin block as well would mean this Mac's survey of which projects use
-which plugin lands on a Mac holding different projects: Bidspoke, trypennie, Slate and
-project-enrollment-tracker are not checked out here and were never surveyed, and at least one of them
+which plugin lands on a Mac holding different projects: the work MacBook's four work repositories
+are not checked out here and were never surveyed, and at least one of them
 is a plausible Vercel user. The fix would arrive there as a regression, which is exactly what the
 issue warns about.
 
@@ -1014,8 +1014,11 @@ what it became, and the next send compares from there.
 
 **Rejected:**
 
-- *Reconciling to the newest commit whose tests passed and sending from there.* A push has to sit on
+- *Reconciling to the newest commit whose tests passed and SENDING from there.* A push has to sit on
   top of the head, so a send from an older commit is refused by git however green that commit is.
+  What was rejected is the send, not the receive: since #2230 the watcher does take in the newest
+  commit whose tests passed (the next section), and what this Mac sends still goes up on top of the
+  head by the rule above.
 - *Waiting inside the send for the run to finish.* The send holds the sync lock, and a typed pull
   would then wait up to a quarter of an hour behind it for a verdict that does not concern it.
 - *Retrying the reconcile more often.* Once commits land faster than a run finishes, there is no
@@ -1034,7 +1037,46 @@ applied unjudged is said out loud in the watcher's log rather than passing silen
 `install-autosync` has been re-run on a Mac, because the marker lives in the plist it writes. A
 four minute CI wait is noise against a week, so an old plist is not worth chasing. And the gate
 asks about the head of the branch, not about each commit between: a red commit followed by a green
-one is applied with the green one, which is what a person pulling by hand would get.
+one is applied with the green one, which is what a person pulling by hand would get. Only a head
+still being tested sends it further back, to the newest commit whose tests passed (next section).
+
+### A head still being tested does not hold back a commit whose tests passed (#2230)
+
+Found 2026-11-04 on the personal MacBook. From 06:23 AM ET the watcher applied nothing while #2194
+and #2202 merged, and every tick said the shared repo's newest commit was still being tested. A run
+on main took about 50 minutes and a commit landed every half hour or so, so the head was never green
+at the moment a tick asked, and commits that HAD passed sat unapplied behind ones still running.
+Main's CI groups runs by commit, so every commit on main gets its own verdict and an older one's
+pass is a real answer about it.
+
+**The rule.** When the head is still being tested (a run in progress, or none yet inside
+`SYNC_CI_GRACE`), the watcher walks main's first parent line back from just below the head, over
+commits this clone does not hold yet, and takes in the newest one whose tests passed, by a rebase
+onto it rather than a pull, so nothing newer arrives. The head stays untaken. This Mac's own commits
+still go up on top of the head by #1398's rule, now measured from the commit taken in.
+
+- *First parent only.* A commit that passed on a side branch, or one built on the untested head,
+  would bring that head with it, so it is never a candidate.
+- *Walking past a commit still running, with no run, failed or cancelled is fine;* choosing one is
+  not. The commit chosen is itself green, and its run tested its whole tree, so nothing untested or
+  failed is applied by taking it. This is the same reasoning #221 already applies to a red commit
+  followed by a green head.
+- *A verdict that cannot be read stops the walk.* An answer nobody could read is not a pass (L11),
+  and the head then waits exactly as before. At most `SYNC_CI_TESTED_SEARCH` commits are asked about
+  (ten by default), each one a call to GitHub.
+- *The record of what went up is pointed at its new ids.* `.sent-over-untested` names local commits,
+  and the rebase gives them new ones; without moving it, the next edit to the same file is measured
+  from before the earlier send and refused as overlapping this Mac's own work. It is re-pointed only
+  when the rebase replayed every commit, and removed otherwise, which sends again rather than miss
+  anything.
+- *The snapshot check (#362) is skipped on this path*, because it compares with the shared head and
+  resets onto it when they agree, which would check out the very commit still being tested.
+
+**Decided: a head that FAILED still takes nothing in.** Only a head still being tested walks back.
+Recorded 2026-11-04 by the session that closed #2230: it keeps the change to the starvation the issue
+is about, and a red main stays visible, because a Mac that kept receiving from below a failed head
+would make that failure easy to leave standing. A head still being tested resolves itself; a failed
+one needs somebody to act.
 
 ## Two settings beyond the hooks block, written but never published (#772, #695)
 
@@ -1113,8 +1155,8 @@ nothing by having it put back.
 
 Answering a permission prompt with "Yes, don't ask again" saves that exact command as an allow rule in
 the project's `.claude/settings.local.json`, out of git and read by nothing we own. On 2026-10-21 to 23
-Slate, Bidspoke and PET each opened every session with Claude Code's "allows any option at its *"
-warnings for one off rules, and Bidspoke's held a live Cloudflare and Supabase token in plain text.
+three work projects each opened every session with Claude Code's "allows any option at its *"
+warnings for one off rules, and one of them held a live Cloudflare and Supabase token in plain text.
 Dan chose "Sweep and report" on 2026-10-23: flag, say once, remove only what he picks. Allowing read
 only commands everywhere was offered and not chosen, so this adds no allow rule of its own.
 
@@ -1123,14 +1165,14 @@ record and the removal are `hooks/lib/local-allow-rules.py`, whose header is the
 
 **What counts as holding a key or token is the one redactor, not a second list (L370, L655).**
 `lib/review-redact.sed`, applied through `ar_redact` in `ai-review-common.sh`, is already trusted with
-exactly this case (a Supabase key inside a curl rule, Bidspoke 2026-09-24, which is why `ar_redact
+exactly this case (a Supabase key inside a curl rule, a work project 2026-09-24, which is why `ar_redact
 --stderr` drops permission rule lines). A rule it would change holds a key. claude-sync's `scan_secrets`
 was the other candidate and was not used: it lives outside the payload, so no installed hook can read
 it, and it has no rule for a bearer header, which is how tokens reach curl rules. Two shapes the
 redactor could not see were added to it, not to this hook, so the review's redaction gained them too
 (#1585): a secret after a flag and a space (`--token VALUE`, `--api-key VALUE`, `--auth VALUE`, unless
 the value starts like a path, a variable, a placeholder or the next flag), and a bare 40 character
-Cloudflare API token, the shape Bidspoke's rules held. A commit id is 40 characters too, so a run
+Cloudflare API token, the shape that project's rules held. A commit id is 40 characters too, so a run
 counts only when it holds a digit, an upper case and a lower case letter, and a run beside `+` or `/`
 is base64 and is left alone. Measured on 2026-10-23 over the repository's 1044 tracked text files
 (349,776 lines): the two rules changed only the two invented fixtures written for them, after the
@@ -1384,7 +1426,7 @@ Mac from the next scan; CI has no registry and checks the hashes only, and says 
 the name it found, because CI logs of a public repository are public and a refusal is read in
 transcripts.
 
-Deliberately not a name: a product or repository name on its own (`slate#123`, a checkout folder,
+Deliberately not a name: a product or repository name on its own (`name#123`, a checkout folder,
 a product in prose). Without the organisation it locates nothing, it is the vocabulary hundreds of
 lessons are written in, and `name#N` is what `lesson-fanout.sh` parses to skip the repository a
 lesson came from, so provenance drops the owner and keeps the name. The same login without its
@@ -1484,8 +1526,12 @@ at once, and a CLAUDE.md it cannot read, or one with no such block or no project
 the list does. The hyphenless login is matched only as a domain, after an @ or before a dot and a
 top level domain, never as a bare word: the same letters can be an ordinary word, and a bare match
 would refuse prose that locates nothing, which is what #1568 left it out for. A project folder that
-is such a login is judged by that domain rule rather than as a bare name, for the same reason. The
-domain rule tries every way of putting one or two hyphens back into the word against the built in
+is such a login was at first judged by that domain rule alone, so the project's own name passed as a
+plain word; since #2190 it is a project name like the others, refused as a plain word wherever it is
+written, and its hash is in `WORK_PROJECTS`. That word is no dictionary word, and measured over this
+repository's tracked files, its commit messages and every issue and pull request, no occurrence was
+ordinary prose. The organisation's bare hyphenless word with no project of that spelling is still
+prose. The domain rule tries every way of putting one or two hyphens back into the word against the built in
 hashes, so the login is never written down. `tests/test-work-names-tree.sh` reads the real block,
 printing only its count, so an edit to CLAUDE.md that breaks it fails a suite before it is
 installed rather than refusing every public write on both Macs.
@@ -1863,12 +1909,12 @@ the branch the command left the checkout on.
 ### What the thresholds measured
 
 Each is in its hook header with the date; the two that decided a design are here because they cut
-against the issue text. The duplication floor of 160 characters for a block leaves Slate's day
+against the issue text. The duplication floor of 160 characters for a block leaves the booking app's day
 header cell (131 characters) uncaught, because 130 refuses 10 of the last 40 real pushes and 160
-refuses 4, all genuine. The deferral list dropped "later" (362 hits across Slate, at most two
+refuses 4, all genuine. The deferral list dropped "later" (362 hits across the booking app, at most two
 deferrals), "not yet" (32, none) and "eventually" (25, none), and narrowed "deferred" to "deferred
-to", "deferred until" and "deferred pending" because Slate uses the bare word for work handed off
-after a response. The doc reference guard anchors every phrase to the issue number and vetoes a
+to", "deferred until" and "deferred pending" because the booking app uses the bare word for work handed off
+after a response (all measured for #446). The doc reference guard anchors every phrase to the issue number and vetoes a
 past tense verb, because a first draft matching the phrase anywhere in the sentence named 50
 issues of which 44 were closed and about 10 were genuine pending claims.
 

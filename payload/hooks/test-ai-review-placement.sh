@@ -133,6 +133,24 @@ check "--misses lists a short miss" "1-pr-h.txt src/a.ts:6: 9 characters: e.amou
 check "--misses says when an older mark kept only the first 60" "1-pr-i.txt src/a.ts:9: longer than 60, only its first 60 kept: wwww" "$misses"
 check_not "--misses lists only quote misses" "src/a.ts:7:" "$misses"
 
+# How each miss sits against the file, as its mark says (claude-config#1701): across a line break,
+# past the end of one line, or neither. A mark from before the shape was said is left out of the
+# count and the count says how many of the misses it covers.
+SHAPE="$WORK/shapes"
+mkdir -p "$SHAPE"
+{
+  printf 'repo=r\nsha=j\nstarted=6000\nfinished=6010\nstatus=ok\nkind=pr\nfindings=4\n'
+  printf 'placement=whole:0,marker:0,part:0,path:0,unplaced:4\npart_quote_lengths=\n\n'
+  printf 'docs/a.md:3: one.%s%s\n' "$S" "$(mark 'its quote matches no line of docs/a.md at the reviewed head, whole or in part, though it runs across lines 3 to 4, 30 characters quoted: "the first line ends. and goes on"' 3)"
+  printf 'docs/a.md:5: two.%s%s\n' "$S" "$(mark 'its quote matches no line of docs/a.md at the reviewed head, whole or in part, though its first 22 characters end line 5 and the rest does not follow it, 40 characters quoted: "nor does it run across or past the end of"' 5)"
+  printf 'docs/a.md:6: three.%s%s\n' "$S" "$(mark 'its quote matches no line of docs/a.md at the reviewed head, whole or in part, nor does it run across or past the end of any line, 25 characters quoted: "though it runs across lines 1 to 2"' 6)"
+  printf 'docs/a.md:7: four.%s%s\n' "$S" "$(mark 'its quote matches no line of docs/a.md at the reviewed head, whole or in part, 25 characters quoted: "written before the shape"' 7)"
+} > "$SHAPE/1-pr-j.txt"
+shapes="$(python3 "$REPORT" --state-dir "$SHAPE" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok || bad "a folder of reviews with miss shapes exits 0 (got $rc): $shapes"
+check "the shapes of quote misses, read from the words before the quote, never the quote itself" \
+  "quote misses by shape, from the 3 of 4 that record it: across a line break 1, past the end of a line 1, neither 1" "$shapes"
+
 # A window can be given as a date and time, read on this Mac's clock.
 dated="$(TZ=America/New_York python3 "$REPORT" --state-dir "$STATE" --since "1969-12-31 19:40" 2>&1)"
 check "a window given as a local date and time is read as one" "reviews: 2 (pr 1, push 1)" "$dated"

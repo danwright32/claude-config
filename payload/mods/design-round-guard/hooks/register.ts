@@ -1,6 +1,6 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { DesignRoundPass, DesignRoundPending, DesignRoundRecord, DesignRoundSubject } from '../types/index.d.ts'
+import type { DesignRoundAutoPass, DesignRoundPass, DesignRoundPending, DesignRoundRecord, DesignRoundSubject } from '../types/index.d.ts'
 import {
   CONTRACT,
   GUARD,
@@ -26,6 +26,8 @@ import {
   bracketsOpen,
   commentOnlyChange,
   dataOnlyChange,
+  logicOnlyChange,
+  autoPassWhy,
   shellUnread,
   targetUnread,
   addedOntoFolder,
@@ -108,6 +110,7 @@ import {
 import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
+import { guardAsks } from './mod-kit/designquestions.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something
 // without my input. If we can make this something that can't be ignored rather than just a memory,
@@ -264,6 +267,13 @@ import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 //   field whose key no person reads, and no reached code reading that key but to copy it into
 //   another such key) pass (Dan, 2026-11-03). A changed or removed wording, a reason under a key a
 //   person reads (`deny`, `reason`, `text`), and a record handed whole to a message stay held.
+// - Since #2294: an edit, a git put back included, to an app's React screen file (no mod's hook file)
+//   that the guard's own reading finds changes only logic (rules.ts logicOnlyChange) goes ahead with
+//   nothing asked, and is kept under `auto:<call key>` (DesignRoundAutoPass) saying why (Dan,
+//   2026-11-05: "If you're confident that nothing on screen changes don't ask me to make a decision
+//   and just skip design rounds automatically"). Only when every file the call waits on is one: any
+//   JSX, string, comment, number, look word, stylesheet or swapped import, a mod's hook file, an issue
+//   whose answers cannot be read, and a pass that cannot be kept, stay held and asked as before.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -652,7 +662,11 @@ const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: 
 // one is, and passes where it touches nothing the mod draws and changes no message's words (rules.ts
 // modHookDrawingUntouched); hook files that cannot be listed or read leave it held. `words` false
 // leaves the messages' wording out (#1859), only to tell a hold for wording alone (wordsOnly).
-const nothingShown = async ($: EngineInterface, path: string, tree: string, before: string, after: string, words = true): Promise<boolean> => {
+// Since #2294 a caller handing `read` also has an app's React screen file (no mod's hook file) pass
+// where the guard's own reading finds the change touches only logic (rules.ts logicOnlyChange), and
+// `read.logic` set says that reading is what let it pass, so the caller records the pass and Dan is
+// never asked. A caller handing none (wordsOnly, afterShell) is unchanged.
+const nothingShown = async ($: EngineInterface, path: string, tree: string, before: string, after: string, words = true, read?: { logic?: boolean }): Promise<boolean> => {
   // Only a real Claude Code mod's folder, whose plugin.json says so; one that cannot be read is asked.
   const modHook = isModHook(relTo(path, tree)) && (await $.fs.exists(modManifestOf(path)).catch(() => false))
   const name = path.slice(path.lastIndexOf('/') + 1)
@@ -663,16 +677,24 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
   }
   // Whether a run passed only by the #1823 reading, so the whole change's message wording is asked.
   let readByDrawing = false
-  const shows = async (b: string, a: string) => {
+  // The logic reading (#2294) judges only the whole change, never a run at a time: its whole file
+  // rules (an import swapped for another) would let through two runs each holding half of one.
+  const shows = async (b: string, a: string, whole = false) => {
     if (dataOnlyChange(b, a)) return false
-    if (!modHook) return true
+    if (!modHook) {
+      if (read && whole && logicOnlyChange(b, a)) {
+        read.logic = true
+        return false
+      }
+      return true
+    }
     if (modHookLogicOnly(b, a) || commentOnlyChange(b, a, true)) return false
     const others = await modFiles()
     if (!others || !modHookDrawingUntouched(others, name, b, a, words)) return true
     readByDrawing = true
     return false
   }
-  if (before === after || !(await shows(before, after))) return true
+  if (before === after || !(await shows(before, after, true))) return true
   const runs = changedRuns(before, after)
   if (runs.length < 2) return false
   readByDrawing = false
@@ -909,8 +931,10 @@ const sealedAfter = async ($: EngineInterface, w: Watched, after: string | undef
 // in place of the screen's look.
 // `stale`, the file an Edit or MultiEdit that would not apply names (#1954), which is told so rather
 // than held for Dan.
+// `auto`, on a pass, what would have waited on Dan but for the guard's own reading that only logic
+// changed (#2294): judge records it before the call goes ahead.
 type Verdict =
-  | { pass: true; watch?: Watched[] }
+  | { pass: true; watch?: Watched[]; auto?: { files: string[]; subjects: DesignRoundSubject[]; trees: string[] } }
   | { forged: string }
   | { stale: string }
   | { unsure: string[]; why: string; worded?: Worded[] }
@@ -920,8 +944,31 @@ type Verdict =
 // The judgement every call gets, the main session's and a subagent's alike. Dan's Not a look or wording change
 // for this very call (#1010) is looked up only for a call that would otherwise wait on him, so no
 // other call pays a store read for it (lessons review of #1010).
-const judge = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Verdict> => {
+// Since #2294 a pass the guard's own reading made (`auto`) is kept under `auto:<call key>` before the
+// call goes ahead, when the call has an id: one with none is a preview, which runs nothing and is
+// recorded nowhere. A pass that cannot be kept is not made: the call is held and asked about as before.
+const judge = async ($: EngineInterface, tool: string, input: Record<string, unknown>, id = ''): Promise<Verdict> => {
   const v = await judged($, tool, input)
+  if ('pass' in v && v.auto) {
+    const { auto, ...pass } = v
+    if (!id) return pass
+    try {
+      const called = await keyOf($, tool, input)
+      await $.store.set(`auto:${called.key}`, {
+        kind: 'no-screen-change',
+        at: await $.clock.now(),
+        tool,
+        files: auto.files,
+        subjects: auto.subjects.map(s => s.label),
+        why: autoPassWhy(auto.files),
+        call: called.call,
+      } satisfies DesignRoundAutoPass)
+      return pass
+    } catch (err) {
+      $.ui.log(`design-round-guard: an automatic pass could not be recorded, so the call is held: ${message(err)}`, { to: 'debug' })
+      return { missing: { ...auto, unread: [], worded: [] } }
+    }
+  }
   if (!('unsure' in v || 'missing' in v)) return v
   return (await passed($, await keyOf($, tool, input))) ? { pass: true } : v
 }
@@ -952,6 +999,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   // would not apply (#1954).
   const editedIn = new Map<string, string>()
   const passing = (): Verdict => (watch.length ? { pass: true, watch } : { pass: true })
+  // The React screen files the guard's own reading found change only logic (#2294), and that
+  // reading's answer for the file being judged.
+  const logicOnly = new Set<string>()
+  let read: { logic?: boolean } = {}
   let why = ''
   for (const t of targets) {
     // A name the shell expands as a pattern (#1015) is judged by every name it may expand to, and in
@@ -1129,8 +1180,12 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       const notes = unreadIn.get(tree) ?? []
       if (!notes.includes(said)) notes.push(said)
       unreadIn.set(tree, notes)
-    } else if (change && (await nothingShown($, t.path, tree, change.before, change.after))) continue
-    else if (!change && tool === 'Bash' && t.from === undefined && isModHook(relTo(t.path, tree)) && (await $.fs.exists(modManifestOf(t.path)).catch(() => false))) {
+    } else if (change && (await nothingShown($, t.path, tree, change.before, change.after, true, (read = {})))) {
+      // Let through by the guard's own reading that only logic changed (#2294): held like any other
+      // file below, and passed unasked, recorded, only where every file the call waits on is one.
+      if (!read.logic) continue
+      logicOnly.add(t.path)
+    } else if (!change && tool === 'Bash' && t.from === undefined && isModHook(relTo(t.path, tree)) && (await $.fs.exists(modManifestOf(t.path)).catch(() => false))) {
       // A shell write to a mod's TSX or JSX hook file, which cannot be read before it runs (#1341), is
       // judged by what it leaves once it ran, by the rule an Edit there is (#1576, afterShell). A file
       // that cannot be read now is held whole, saying so.
@@ -1158,7 +1213,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       unreadIn.set(tree, notes)
     }
     // A mod hook file held for a message's wording alone says so (#1859).
-    if (change && 'after' in change) {
+    if (change && 'after' in change && !logicOnly.has(t.path)) {
       const words = await wordsOnly($, t.path, tree, change.before, change.after)
       if (words !== undefined) worded.push({ file: relTo(t.path, tree), words })
     }
@@ -1169,6 +1224,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   if (!byTree.size && !unsureFiles.length) return passing()
 
   const missingFiles: string[] = []
+  const missingPaths: string[] = []
   const missing: DesignRoundSubject[] = []
   const missingTrees: string[] = []
   const unread: string[] = []
@@ -1189,6 +1245,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     }
     if (!lacking.length) continue
     missingFiles.push(...shown)
+    missingPaths.push(...paths)
     missingTrees.push(tree)
     unread.push(...(unreadIn.get(tree) ?? []))
     for (const s of lacking) if (!missing.some(m => m.key === s.key)) missing.push(s)
@@ -1205,6 +1262,13 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     }
   }
   if (unsureFiles.length) return { unsure: unsureFiles, why, worded }
+  // #2294: a call waiting on Dan only for files the guard's own reading found change only logic goes
+  // ahead unasked, for judge to record. Anything else waiting, a checkout or issue that could not be
+  // read (unsure, above), or a note on what could not be read, keeps the whole call held as before.
+  if (missing.length && !unread.length && !worded.length && missingPaths.every(p => logicOnly.has(p))) {
+    const auto = { files: missingFiles, subjects: missing, trees: missingTrees }
+    return watch.length ? { pass: true, watch, auto } : { pass: true, auto }
+  }
   if (missing.length) return { missing: { files: missingFiles, subjects: missing, trees: missingTrees, unread, worded } }
   return passing()
 }
@@ -1544,6 +1608,13 @@ type AskInput = { questions?: { question?: unknown }[]; answers?: unknown; metad
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; afkTimeoutMs?: unknown }
 
 export const register: Register = on => {
+  // The guard's own noun (#2261): the bottom of designRound.answered, a no-op every mod reading what
+  // the guard recorded hooks on its way down, as mod-kit's modkit.login is (#1205).
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, designRound: { answered: async () => undefined } }
+  })
+
   // A subagent's call, judged where its loop is known: refused like the main session's, and told to
   // stop and report rather than ask Dan. One it lets through is not judged again beneath.
   on('tool.call', async ($, e, next) => {
@@ -1551,7 +1622,7 @@ export const register: Register = on => {
     const raw = e as unknown as Record<string, unknown>
     const id = String(raw.tool_use_id ?? '')
     const input = argsOf(raw)
-    const v = await judge($, e.tool, input)
+    const v = await judge($, e.tool, input, id)
     // An empty id names no call to wait under: refused as a check with no id is (lessons review of #991).
     if (!('pass' in v)) return { deny: id ? await refuse($, v, { id, tool: e.tool, agent: true, called: await keyOf($, e.tool, input) }) : previewed(v) }
     // An empty id names no one call, so it is never marked: any other call carrying it would skip its
@@ -1601,7 +1672,7 @@ export const register: Register = on => {
   on('tool.check', async ($, e, next) => {
     if (e.tool_use_id !== undefined && fromAgent.has(e.tool_use_id)) return next(e)
     const input = (e.input ?? {}) as Record<string, unknown>
-    const v = await judge($, e.tool, input)
+    const v = await judge($, e.tool, input, e.tool_use_id ?? '')
     if ('pass' in v) {
       const decided = await next(e)
       // Read again once it ran, by the tool.call hook around this one (#1296): only a call the checks
@@ -1626,9 +1697,9 @@ export const register: Register = on => {
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const ask = e as unknown as AskInput
     const source = ask.metadata?.source
-    if (typeof source !== 'string') return next(e)
+    // Read by the one rule picker manners reads too, before it writes an answer onto an issue (#2253).
+    if (!guardAsks(source)) return next(e)
     const isSkip = source.startsWith(`${SKIP_SOURCE}:`)
-    if (!isSkip && source !== SETTLED_SOURCE) return next(e)
 
     // Asked of Dan with the guard's own question and answers; his choice read back, or why there is none.
     const asked = async (question: string, options: { label: string; description: string }[]): Promise<{ r: Awaited<ReturnType<typeof next>>; chosen?: string; none?: string }> => {
@@ -1641,6 +1712,14 @@ export const register: Register = on => {
       if (typeof chosen !== 'string' || !chosen.trim()) return { r, none: 'Dan gave no answer, so nothing is recorded. Ask him again, or leave it.' }
       return { r, chosen }
     }
+    // Said once his answer is written down in full for the issue (Skip them, Settled), and never
+    // otherwise (#2261), so never for a one call Not a look or wording change pass, for any mod reading
+    // what the guard recorded: picker manners checks the question off on its issue only then. Said
+    // after the write, so it changes nothing the guard decides. A mod listening says its own failures
+    // (picker manners logs whatever its issue write meets); one that throws is caught here, so his
+    // answer, recorded all the same, is never told to Claude as unread.
+    const recorded = (question: string, answer: string, options: { label: string }[]) =>
+      $.designRound.answered({ call: String(e.tool_use_id ?? ''), question, answer, options: options.map(o => o.label) }).catch(() => undefined)
     // What Claude is told beside Dan's answer, in the dialog's own result; a refusal carries none.
     const say = (r: Awaited<ReturnType<typeof next>>, text: string) => (r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), text] })
     // Dan's answer kept for each subject, one at a time: what was kept, and, when a write failed,
@@ -1728,7 +1807,8 @@ export const register: Register = on => {
           return { deny: `Nothing to ask: ${listed(waiting.subjects.map(x => x.label))} already has his answer, so the edit goes through. Make it again.` }
         }
         const s = listed(open.map(x => x.label))
-        const { r, chosen, none } = await asked(skipQuestion(onScreen, waiting.files, open), skipOptions(open))
+        const options = skipOptions(open)
+        const { r, chosen, none } = await asked(skipQuestion(onScreen, waiting.files, open), options)
         if (chosen === undefined) return none ? say(r, none) : r
         // The call stays waiting until his Skip them is recorded, so an answer in his own words, a
         // Run /design-rounds he changes his mind on, or a record that failed can be asked about again
@@ -1743,6 +1823,8 @@ export const register: Register = on => {
           } catch (err) {
             return say(r, `Dan answered ${NOT_LOOK}, but it could not be recorded (${message(err)}), so the edit to ${listed(waiting.files)} stays blocked. Tell him, and ask again.`)
           }
+          // Not said as recorded (lessons review of PR #2274): nothing is kept for the issue, whose
+          // next look changing edit is asked about again, so its question stays open there.
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
           return say(r, `Dan answered ${NOT_LOOK}: this one edit to ${listed(waiting.files)} goes ahead, recorded as his word that it changes neither the look nor any wording. ${again(waiting)} Any other edit that changes the look on ${s} is still held.`)
         }
@@ -1750,6 +1832,7 @@ export const register: Register = on => {
         const kept = await record(open, 'skipped')
         if (kept.why !== undefined) return say(r, partly(SKIP_YES, kept))
         await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
+        await recorded(skipQuestion(onScreen, waiting.files, open), SKIP_YES, options)
         return say(r, `Dan answered ${SKIP_YES}: edits that change the look go ahead on ${s} without a design round, until the next issue. ${again(waiting)}`)
       }
 
@@ -1765,7 +1848,8 @@ export const register: Register = on => {
       if ('deny' in found) return { deny: found.deny }
       const { subjects, from } = found
       const s = listed(subjects.map(x => x.label))
-      const { r, chosen, none } = await asked(settledQuestion(subjects), settledOptions(subjects))
+      const options = settledOptions(subjects)
+      const { r, chosen, none } = await asked(settledQuestion(subjects), options)
       if (chosen === undefined) return none ? say(r, none) : r
       if (chosen === SETTLED_NO) return say(r, `Dan answered ${SETTLED_NO}: ${settledNotYet}`)
       // A typed answer counts as Not yet, and is the next round's feedback (#1336).
@@ -1776,6 +1860,7 @@ export const register: Register = on => {
       // where a skip question about it is told it already has his answer.
       const done = new Set(kept.done.map(x => x.key))
       const resend = from.filter(w => w.subjects.every(y => done.has(y.key))).map(again)
+      await recorded(settledQuestion(subjects), SETTLED_YES, options)
       return say(r, `Dan answered ${SETTLED_YES}: the design is recorded as settled for ${s}, and edits that change the look go ahead there. Now write the settled design file the design rounds skill describes.${resend.length ? ` ${resend.join(' ')}` : ''}`)
     }
     try {

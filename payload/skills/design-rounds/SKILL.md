@@ -228,6 +228,16 @@ nothing on screen changes, build no switcher, and close one of two ways.
   every other look changing edit stays held. Then send the refused call again, unchanged.
 - **Nothing is waiting**: there is nothing to unblock, so ask nothing and carry on.
 
+Since claude-config#2294 the guard decides the logic case itself and the question is no longer
+asked for it. An edit to an app's React screen file that the guard's own reading finds changes
+only logic (no JSX, no string, comment, number or true or false, no word a look is spelled in, no
+stylesheet or swapped import) goes ahead with nothing asked, and is recorded under
+`auto:<the call's key>` with why. Dan, 2026-11-05: "If you're confident that nothing on screen
+changes don't ask me to make a decision and just skip design rounds automatically". Your own
+sentence that nothing changes never lets an edit through: on 2026-11-05 one said so of an edit
+adding a refusal message Dan reads. So any edit the guard still refuses is one it could not show
+changes nothing, and is asked about as above, with an honest `onScreen`.
+
 ## What Dan reads first: what changes on screen
 
 Every time the guard's skip question is asked, its metadata carries `"onScreen"`: one plain

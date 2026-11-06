@@ -2620,15 +2620,25 @@ and the band question is removed rather than kept beside it (L29). Three defects
   reads), and a shell append, read with mod-kit's own readers as one command only: `echo`, `printf
   '%s\n'` or `printf '<text>\n'` of text quoted whole, or `cat` fed a heredoc (quoted, or holding no
   `$`, backtick or backslash), with `>>` into the index and no other redirect, pipe, command or file
-  written (rules.ts `shellAppended`). Anything else to `MEMORY.md` (a second line, a changed line, a
-  line linking another file, another folder's index, `tee -a`, a write after the window, a write
-  before the memory file is saved) is asked about as before. Chosen: the cover is made when the
-  memory file's save lands, not at the press, so the line can never point at a file that was not
-  saved; and it lapses in silence, since Dan never answered about the index and a toast saying it
-  went unused would be noise. A write of the line that does not land gives the cover back for the
-  rest of the window, as an approval is given back; a shell command that failed spends it. A Bash
-  For good covering more than one file, and Dan's own permanent words, record no cover. The noun
-  (`isApproved`, #1483) does not answer for a cover: its one caller asks only about the lessons file.
+  written (rules.ts `shellAppended`). Since #2216 (after `printf ... >> MEMORY.md; tail -1
+  MEMORY.md` was asked about twice in #2181) that append may be followed by one plain read of the
+  index and nothing more: after `;`, `&&` or a new line, `tail` or `head` with at most a line count
+  (`-1`, `-n 3`, `-n3`), `cat` with no option, or `wc` with at most one of `-l`, `-w`, `-c`, `-m`,
+  naming the index alone by its absolute path (bare, or quoted whole) or by a bare `~/` (rules.ts
+  `readBack`). The append before it is judged exactly as it is alone. Still asked about: any other
+  second command or more than one, a read with a redirect, pipe, `tee`, substitution, glob,
+  variable, backslash, here doc or `..`, a read of another file or of the index and another, `tail
+  -f` or any other option, a reader led by `sudo`, `env`, `exec`, `!`, a group or an assignment,
+  `||` or `&` between the two, and a read before the append. Anything else to `MEMORY.md` (a
+  second line, a changed line, a line linking another file, another folder's index, `tee -a`, a
+  write after the window, a write before the memory file is saved) is asked about as before.
+  Chosen: the cover is made when the memory file's save lands, not at the press, so the line can
+  never point at a file that was not saved; and it lapses in silence, since Dan never answered about
+  the index and a toast saying it went unused would be noise. A write of the line that does not land
+  gives the cover back for the rest of the window, as an approval is given back; a shell command
+  that failed spends it. A Bash For good covering more than one file, and Dan's own permanent words,
+  record no cover. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
+  only about the lessons file.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
   which for a heredoc or a script was unreadable.
@@ -3496,6 +3506,51 @@ worktree-agent-a09a06788b6ba53ab in claude-config" (2026-10-29, for #1859), a na
   `modHookTsHold` that only tests called, is gone; its tests now assert which hold each change gets
   (the look, a message's words, or none), which the wrapper could not tell apart.
 
+### What #2294 changed, 2026-11-05
+
+Dan, 2026-11-05: "if nothing on screen changes, why even ask me to skip. If you're confident that
+nothing on screen changes don't ask me to make a decision and just skip design rounds
+automatically". The same day a skip question for #2173 said "Nothing on screen changes" of an edit
+adding a refusal Dan reads, so confidence comes from the guard's own reading, never the session's.
+
+- **What passes.** An Edit, MultiEdit, Write or git put back to an app's React screen file (a .tsx or
+  .jsx file that is no mod's hook file) that rules.ts `logicOnlyChange` reads as logic only: on the
+  lines the change touches, no JSX, no string but a module's name, no template literal, no colour
+  and no word a look is spelled in (`APP_LOOK_WORDS`: class, style, theme, colour, size, icon and
+  the like, read on each part of a camelCase name); across the whole file every comment, string,
+  JSX element, number and true or false the same, in order; no stylesheet or bare import coming or
+  going and no import swapped for another. Only when every file the call waits on passes so.
+- **What it leaves.** Nothing asked and no card. `auto:<the call's key>` in the mod's store holds a
+  `DesignRoundAutoPass`: kind `no-screen-change`, when, the tool, the files, the issue it would have
+  waited on, why (rules.ts `autoPassWhy`) and the call. Nothing reads it to let a call through.
+- **What stays held.** A mod's hook file (its own readings, #1138 to #2161, decide it, and a
+  message's words there are asked about, which keeps the #2173 shape held); any string, comment or
+  number change anywhere in an app file; a call also changing a file that is held for any other
+  reason; an issue whose answers or checkout cannot be read; text the reader cannot follow; and a
+  pass whose record cannot be written, which is held and asked about as before.
+- **Known risk.** Logic decides which element renders, so a condition changed (`a > 0` to `a >= 0`)
+  can show or hide something with no text changing. The issue allows logic; what Dan reads and how
+  it looks are what is held.
+
+### What #2261 changed, 2026-11-05
+
+- **The guard says when it recorded an answer.** Its store is private, so nothing else could tell
+  an answer it kept from one it ignored, and picker manners checked its question off on the issue
+  either way (a typed answer, a dialog closed while Dan was away). Now, after storing Skip them or
+  Settled for the issue, and only then, the guard raises
+  `$.designRound.answered({ call, question, answer, options })`. Not a look or wording change is not
+  raised (lessons review of PR #2274): it lets one call through, records nothing for the issue, and
+  the next look changing edit there is asked about again, so its question must stay open. The
+  event is a noun of its own with a no-op default set in `engine.create`, the pattern
+  `modkit.login` uses. The question is rebuilt by
+  `skipQuestion` and `settledQuestion` and the answer is the constant, so no message Dan reads
+  changed. A listener's failure is caught and never changes the guard's answer or refusals, which
+  are exactly as before: nothing here makes the guard refuse less.
+- **`/sleep` never asks or checks off a guard question.** An Open questions item in the guard's
+  words is skipped, on the repair path for an answer already on record too, and named once among
+  `/sleep`'s problems. The words test is `guardQuestion` in mod-kit's `hooks/designquestions.ts`,
+  which `guardIgnores` now uses, copied byte for byte into picker manners, the guard and scope modes.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
@@ -3530,6 +3585,18 @@ What picker manners does:
   session only, #703). `/pickers on` brings them back.
 - Everything else is Claude Code's own dialog: the prompt is not free while a question is open,
   text typed there is an answer rather than a message, and numbered prose answers nothing.
+- A design round guard question is checked off on its issue only once the guard has recorded the
+  answer (#2261). Picker manners sees the raw dialog result before the guard stores anything, and
+  the guard's store is its own, so the guard says so itself: after storing Skip them or Settled for
+  the issue it raises `$.designRound.answered` with the question, answer and choices, and picker
+  manners' `on('designRound.answered')` writes the item, off the dialog. Its own picker's other
+  answers (Run design rounds, Not yet, and Not a look or wording change, which passes one call and
+  settles nothing for the issue), a typed answer and a dialog closed while Dan
+  was away record nothing, so nothing is written, and the question is no longer added open either.
+  A question in the guard's words asked without its picker is never written as settled (#2253).
+  Picker manners also gives `$.designRound` a no-op default in `engine.create`, because a hook on a
+  noun no loaded mod provides stops the mod loading (measured: "registered designRound.answered,
+  but no loaded plugin provides $.designRound"); with the guard loaded too, both chain fine.
 
 ## Handoff (#613), built 2026-10-04
 
@@ -3788,7 +3855,7 @@ observing half, so it has no surface of its own: no card, no question, nothing d
   line, the branch, merge base and origin head, `ms`), and `unjudged` with why for a checkout with no
   GitHub remote or a branch git cannot read. The mod's own failures go to `errors.jsonl` beside it,
   by a separate write (L561), and the first each session is one dim line naming the file and saying
-  nothing was held.
+  nothing was held. The log is rotated, never cut (#2143): see "The read and the rotation" below.
 - **The replay.** `node tools/area-check-replay.ts <checkout> --repo <owner/name>` runs a
   repository's last 30 days through `rules.ts` itself, each commit standing in for a session, and
   reports holds per session; `tests/replay-fixture/` is this repository's own month, measured that
@@ -3920,26 +3987,105 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
 - **The rebase gap.** A rebase moves the merge base, so decisions taken before it stop matching and
   are no longer asked for. This is known and accepted: the alternative, matching by branch alone,
   would ask a reused branch name for another change's decisions.
-- **The bounded read.** The log grows about 1 MB in ten days and the engine refuses a whole file
-  read over 4 MiB, so it is never read whole. `/bin/sh` runs `grep -a -F` for the two decision
-  marks piped to `tail -c`, under `set -o pipefail`, and keeps only the newest `LOG_READ_BYTES`
-  (1 MiB) of decision lines. It reads one byte more than the bound: with exactly the bound, a read
-  beginning at a line start looks the same as one beginning mid line, so dropping the first line
-  would lose a whole decision. With the extra byte, everything up to and including the first
-  newline lies outside the bound, so `keptOf` drops a cut line whole and keeps one the bound begins
-  exactly at. Decisions older than the newest 1 MiB of decision lines are not checked; decision
-  lines are only part of the log, so that is thousands of decisions. Output the engine cut short
-  refuses as an unreadable log.
+- **The read and the rotation (#2143, 2026-11-04).** The log grows about 100 KB a day. The first
+  read grepped the whole log for the two decision marks and kept only the newest 1 MiB of decision
+  lines, so past that window an old decision dropped silently, and every `gh pr` command scanned
+  the whole history (0.6 s a call on a year of synthetic log, measured). Both scripts live in
+  `hooks/prline.ts` and are proved against a real shell and `awk` by
+  `tests/test-area-check-log-rotation.sh`, since the mod tests have no shell.
+  - *Rotation, at session start.* After the `loaded` line, once `log.jsonl` is over `ROTATE_BYTES`
+    (4 MiB, about forty days), `ROTATE_SCRIPT` renames it to `rotated/<stamp>.rotating` and begins a
+    new log. A rename copies nothing, and an append still running lands whole in one file or the
+    other; a second session finding the log already moved does nothing.
+  - *Settling.* A `.rotating` file not written for `SETTLE_MINUTES` (10, far past the append's 5
+    second kill) has its decision lines written whole to a temporary file, renamed to
+    `rotated/<stamp>.decisions.jsonl`, and only then is the `.rotating` file renamed to the archive
+    `rotated/<stamp>.jsonl` (L5). A crash between steps leaves a line in two files at worst, read
+    once; two settlers write the same bytes. Nothing is ever deleted: retention is Dan's call (L9).
+  - *A failed rotation* leaves the log where it was, goes to `errors.jsonl`, and is the dim line
+    "The area check could not rotate its log (why); nothing was lost", in its own `try`, so the
+    issue sweep and warm still run. Asked whether that line needed a design round, Dan answered
+    "Skip them" (2026-11-04).
+  - *The read.* `READ_SCRIPT` lists every decisions file, any `.rotating` file and the log (the log
+    missing with nothing rotated is still the missing log refusal), and one `LC_ALL=C awk` pass, its
+    needles passed through the environment because `awk -v` mangles backslashes, prints a decision
+    line not ending in `}` as cut (named malformed), a line naming the repository and the branch,
+    and a count of the repository's lines. TypeScript drops identical lines, parses with
+    `readDecisions` and refilters by repository and branch, since the needles are only a prefilter.
+    A merge or an edit by number reads the count first and asks GitHub nothing when it is zero.
+    Reads are memoized per repository and branch for one Bash call. The scan is the decisions plus
+    at most a few MiB of log, and no decision is too old to be asked for.
+  - *Behaviour that changed.* A decision line ending in `}` that is not JSON and does not name the
+    repository is no longer named as malformed. The count can overcount (a version 2 record, or a
+    detached head line), which costs one GitHub read for a merge, never a wrong answer. Output the
+    engine cut short, an unreadable rotated file, or the script failing still refuses as an
+    unreadable log.
+  - *Ruled out.* Filtering at the source only bounds the output but not the scan. Per branch index
+    files would be bounded too, but add derived state, an offset file and dedupe written from a
+    hook on every Bash call, more moving parts than rotation for no gain at the measured rates.
 - **A description given through a substitution.** mod-kit's reader drops the text of a
   substitution from the word (`--body "$(cat <<'EOF' ...)"` reads as its opening only), so a body
   holding `$(` or a backtick is looked for in the whole command, the one place its text is still
   whole. The gap: a line found elsewhere in the command, such as the title, passes too.
 - **When a fact cannot be read.** A log that cannot be read refuses the command, never reads as no
   decisions (L10). A fact the command does not depend on (no checkout, no GitHub repository, GitHub
-  not answering for a merge) lets it through, and the check's own failure lets the command through
-  with one dim line kept in the error file. Only this Mac's log is read, so a file decided on the
+  not answering for a merge) lets it through. Only this Mac's log is read, so a file decided on the
   other Mac is not asked for; every refusal that lists lines to paste says so, and the unreadable
   log refusal says it reads this Mac's log only.
+- **When the check itself fails (#2173, 2026-11-05).** The check's own failure (a throw, the
+  deadline, or the hook failing before its `try`, answered by the registration catch through
+  `neverThrows`) holds a command that could be a pull request one, as every guard's failure holds
+  its call since #2148: `mayActOnPr` in `hooks/prline.ts` asks whether its words hold `gh pr
+  create`, `gh pr edit`, `gh pr merge` or the merge helper, and `checkFailedRefusal` names why and
+  that the error is kept in `errors.jsonl`. It was let through with a dim line until then, on the
+  reasoning that a check at merge time would catch what was missed; it cannot, since a merge is the
+  last check there is, it runs the same code (a fault that fails one fails both), and it reads this
+  Mac's log only, so a merge from the other Mac, the web or GitHub's auto merge is never checked.
+  The same check already refused when its log could not be read, and a false hold costs one refused
+  command that names why. Any other command (`gh issue create`, `gh pr view`) cannot be one it
+  refuses, so it goes ahead with one dim line kept in the error file, as before.
+
+### The weekly line and escalation, built 2026-11-05 (#1511)
+
+- **Where it runs.** The end of turn issue review (`hooks/feature-issue-review.sh`) is the one place
+  that speaks to Dan once a turn in every repository, so the weekly line and the escalations ride
+  on it rather than on a mod surface of their own. Once the review's cooldown has passed, it runs
+  `hooks/lib/area-check-review.mjs` under `node --experimental-strip-types`, which imports the pure
+  `payload/mods/area-check/hooks/weekly.ts`. The cooldown is read above the spool, because the
+  runner has to run before the spool is read for a note it makes to show in the same review. An
+  urgent review (findings waiting) skips the cooldown, but the runner still waits for it, so the
+  node start is paid at most once per cooldown window per project.
+- **The weekly line.** `weeklyLine(log, errors, now)` counts the last 7 days: sessions loaded, first
+  writes judged and held, decisions by kind and those let through by Dan's standing answer,
+  judgements made with the issue list unread, edits not judged, errors, and lines of the log that
+  could not be read. It names no path, since the review may be in any repository. A missing log, an
+  unreadable one, and a log none of whose lines parse are each said as that, never as zeros (L90),
+  and no load record in 7 days is said as the mod not starting, not as zero firings. `lineDue` takes
+  a missing, unreadable or future stamp as due, so a bad stamp costs one extra line, never silence.
+- **The stamp.** `weekly-line.stamp` sits beside the log in `~/.claude-area-check`, outside the temp
+  folder macOS cleans after about three and a half days. The review writes it, from the runner's
+  `now`, only in the branch where its reason was delivered, so a review that failed to build its
+  payload does not restart the week (L98).
+- **Escalation.** For the review's own repository only (read from `origin`), a file is escalated
+  when five distinct sessions decided `proceed` on it in 30 days and the newest judgement of it in
+  that window read the issue list in full (`issues.state` read) and matched no issue. With no
+  judgement in the window there is no escalation: an unread list cannot say no issue exists. Each
+  escalation is one spool note (`escalationNote`, the path capped at 200 characters) asking for one
+  structural issue, so later holds can fold into it, or a recorded reason it needs none.
+- **Once per 30 days, under two reviews at once.** A claim file per escalated file under
+  `escalated/`, created with `wx`, decides which review makes the note. A claim 30 days old (or one
+  that cannot be parsed, or stamped in the future) is renamed aside to `<claim>.stale.<pid>` before being removed and
+  recreated, so only one rename of it can win. A note that fails removes its claim, so the next
+  review tries again, and says so in a count only sentence.
+- **Failure.** An invalid `CLAUDE_AREA_CHECK_NOW` exits 2, never falling back to the real clock. A
+  runner that cannot run (no node, a non zero exit, output that is not its answer) is said in the
+  review as "could not be built" with why, at most once a week by the stamp's age; a log that
+  cannot be read while the line is not due is said, so escalation is never skipped silently.
+- **Suites.** A suite never reaches the real log. Under `CLAUDE_SUITE_RUN_ID`, or with
+  `CLAUDE_ISSUE_SPOOL_DIR` pointed elsewhere (four suites set only that when run standalone),
+  nothing runs unless `CLAUDE_AREA_CHECK_DIR` names a throwaway folder. `tests/weekly.test.ts`
+  proves the pure counting, `tests/test-area-check-weekly.sh` the runner against the real rotation
+  script and spool, and `hooks/test-feature-issue-review.sh` the wiring in the review.
 
 ## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
 

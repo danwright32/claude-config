@@ -522,15 +522,18 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged amend-force-push-gate.sh     Bash "$(bash_call 'git commit --amend -m wip')" "$AGENT" refuse
   judged check-gh-watch-interval.sh   Bash "$(bash_call 'gh run watch 5')" '{}' "notice #1912"
   judged check-rtk-init.sh            Bash "$(bash_call 'rtk init -g')" '{}' refuse
+  # In zsh -c, so it is refused whatever shell runs this suite (bash on the Linux runner).
+  judged check-zsh-builtins.sh        Bash "$(bash_call "zsh -c 'log show --last 1m'")" '{}' refuse
   judged check-wrapped-commands.sh    Bash "$(bash_call 'eval $CMD && git status')" '{}' refuse
   judged stacked-branch-delete-gate.sh Bash "$(bash_call 'git push origin :feat/x')" '{}' refuse
-  # Three gates let a call they cannot parse through, saying so, by the decision each records in its
-  # header: refusing there takes away the scratchpad, the hand-back or the browser with no remedy
+  # Four gates let a call they cannot parse through, saying so, by the decision each records in its
+  # header: refusing there takes away the scratchpad, the hand-back or a browser with no remedy
   # inside the session, since what makes a payload unparseable is not something the agent can change.
   judged scratchpad-subagent-gate.sh  Write '{"file_path": "/private/tmp/claude-501/proj/sess/scratchpad/notes.md", "content": "cut @@", "description": "cut @@"}' "$AGENT" "notice scratchpad-subagent-gate.sh header"
   judged monitor-action-gate.sh       Monitor "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged handback-claims-gate.sh      SubagentHandback '{"message": "Done. No --no-verify, no overrides. cut @@", "description": "cut @@"}' "{\"agent_id\": \"a1b2c3d4\", \"agent_transcript_path\": \"$WORK/hb/agent.jsonl\"}" "notice handback-claims-gate.sh header"
   judged playwright-subagent-gate.sh  mcp__playwright__browser_navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice playwright-subagent-gate.sh header"
+  judged chrome-subagent-tab-gate.sh  mcp__claude-in-chrome__navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice chrome-subagent-tab-gate.sh header"
   judged no-session-link-in-comments.sh Bash "$(bash_call "gh pr comment 5 --body 'see https://claude.ai/code/session_01abc'")" '{}' refuse
 } > "$WORK/judged"
 # Every blocking gate is in the table, so one added later is not exempt by being unlisted (L96).

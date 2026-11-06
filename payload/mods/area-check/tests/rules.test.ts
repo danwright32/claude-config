@@ -36,6 +36,7 @@ import {
   decideProblem,
   holdCard,
   holdRefusal,
+  legacyQuestionKey,
   questionKey,
   reasonProblem,
   restructureQuestion,
@@ -46,6 +47,7 @@ import {
   heldUnder,
   shellKey,
   shellTargets,
+  type ShellTarget,
 } from '../hooks/rules.ts'
 
 // The area check (#1506, facts #1508, hold #1509): the facts about a file at the moment a session
@@ -384,7 +386,20 @@ test("Dan's answer stands for a week and for the same issues, so he is not asked
   expect(answerStands(q, [41, 57, 60], 2_000)).toBe(false)
   expect(answerStands({ state: 'pending', at: 1_000, issues: [41], session: 's', call: 'c', agent: null }, [41], 2_000)).toBe(false)
   expect(answerStands(undefined, [41], 2_000)).toBe(false)
-  expect(questionKey('dan/app', 'src/a.ts')).toBe('question:dan/app\nsrc/a.ts')
+})
+
+test('a question is kept under a fixed length key, so a held command naming a long word can still be decided (#2246)', async () => {
+  // The SHA-256 of "dan/app\nsrc/a.ts", measured with shasum rather than with the code under test.
+  expect(await questionKey('dan/app', 'src/a.ts')).toBe('question:4a58b19b28d1b3e1b5d8ac84dac32deaf18e46cfa1e6d7b5772f0531fd6c788d')
+  expect(await questionKey('dan/app', 'src/a.ts')).not.toBe(await questionKey('dan/app', 'src/b.ts'))
+  expect(await questionKey('dan/app', 'src/a.ts')).not.toBe(await questionKey('dan/other', 'src/a.ts'))
+  // A word of a thousand characters gives a key of the same 73, well under the store's 256.
+  expect((await questionKey('dan/app', 'x'.repeat(1000))).length).toBe(73)
+  // The key it was kept under before, read for an answer already given; none past the store's limit.
+  expect(legacyQuestionKey('dan/app', 'src/a.ts')).toBe('question:dan/app\nsrc/a.ts')
+  // "question:dan/app\n" is 17 characters, so a word of 239 makes a key of exactly 256 and 240 one too long.
+  expect(legacyQuestionKey('dan/app', 'x'.repeat(239))).toBe(`question:dan/app\n${'x'.repeat(239)}`)
+  expect(legacyQuestionKey('dan/app', 'x'.repeat(240))).toBeUndefined()
 })
 
 test('the sweep drops issue lists unread for a week and answers past their week, and keeps a pending question', () => {
@@ -440,6 +455,38 @@ test('a shell write whose file cannot be named is unread, with why; a name that 
   // `echo hi > "$OUT/log.txt"`: whatever $OUT is, a .txt file is never judged.
   expect(shellTargets({ ...NONE, files: [{ word: '$OUT/log.txt' }] })).toEqual([])
   expect(shellTargets({ ...NONE, files: [{ word: 'notes/*.md', folder: '/w/app/notes' }] })).toEqual([])
+})
+
+// #2254: `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"`, as mod-kit's reader
+// answers it with cwd /w/app and home /Users/dan (measured 2026-11-04): the finding, holding $PWD and
+// *.ts, has no path, so it was judged a file built as the command runs.
+const FINDING = { word: 'reads $PWD and every *.ts file it holds, so why?' }
+const noteRun = (what: string, path: string, verb = 'note') => ({
+  what,
+  script: '~/.claude/hooks/lib/issue-spool.sh',
+  path,
+  args: [{ word: verb, path: `/w/app/${verb}` }, { word: '.', path: '/w/app' }, FINDING, { word: 'builder 2254', path: '/w/app/builder 2254' }],
+})
+const SPOOL = '/Users/dan/.claude/hooks/lib/issue-spool.sh'
+
+test("a findings note to the installed spool helper writes no file of the repository, so its words are not judged (#2254)", () => {
+  expect(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL)] }, '/Users/dan')).toEqual([])
+  // `~/.claude/hooks/lib/issue-spool.sh note ...`, run directly.
+  expect(shellTargets({ ...NONE, runs: [noteRun('a script file run directly', SPOOL)] }, '/Users/dan')).toEqual([])
+  // Anything else in the same command is still judged: `<note> && sed -i '' 's/a/b/' src/lib/slack.ts`.
+  expect(shellTargets({ ...NONE, files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], runs: [noteRun('a bash script file', SPOOL)] }, '/Users/dan')).toEqual([{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+})
+
+test('only the installed helper, only its note, and only with a home known: every other run is judged as before (#2254)', () => {
+  const unread = (t: ShellTarget[]) => t.filter(x => 'unread' in x).map(x => x.word)
+  // No home given: nothing is exempt.
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL)] }))).toEqual([FINDING.word])
+  // A copy of the helper inside a checkout, which may be any script.
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', '/w/app/payload/hooks/lib/issue-spool.sh')] }, '/Users/dan'))).toEqual([FINDING.word])
+  // Another subcommand of the installed helper.
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL, 'append')] }, '/Users/dan'))).toEqual([FINDING.word])
+  // The helper handed to another interpreter.
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a python3 script', SPOOL)] }, '/Users/dan'))).toEqual([FINDING.word])
 })
 
 test('a repository could hold a file only when something there would: a fast growing file, or a structural issue at a held priority naming a file', () => {

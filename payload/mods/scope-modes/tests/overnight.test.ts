@@ -172,8 +172,36 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('gh pr merge 5 --squash --subject x --body y')).toBeUndefined()
     expect(await bash('gh pr merge 5 --squash --admin')).toBe('run gh pr merge with --admin')
     expect(await bash('gh pr merge 5 --auto --squash')).toBeUndefined()
+    // With no judge of admin merges handed in, --admin is refused however it is pinned (#2125).
+    expect(await bash(`gh pr merge 5 --admin --squash --match-head-commit ${'a'.repeat(40)}`)).toBe('run gh pr merge with --admin')
     expect(await bash('gh pr create --title x --body y --base main --head b --draft')).toBeUndefined()
     expect(await bash('gh pr create --title x --body y --reviewer someone')).toBe('run gh pr create with --reviewer')
+  })
+  test('an admin merge is put to the judge handed in, only after the write passes the same repository rule (#2125)', async () => {
+    const sha = 'a'.repeat(40)
+    const asked: { repo: string; act: string }[] = []
+    const withJudge = (command: string, answer: string | undefined, cwd = CWD) =>
+      overnightRefusal(
+        {
+          tool: 'Bash', input: { command }, raw: command, commands: readCommands(command), writes: commandWrites(command, cwd, HOME), cwd, home: HOME, read,
+          adminMerge: async (g, repo) => {
+            asked.push({ repo, act: `${g.sub} ${g.act}` })
+            return answer
+          },
+        },
+        look,
+      )
+    const c = `gh pr merge 5 --admin --squash --match-head-commit ${sha}`
+    expect(await withJudge(c, undefined)).toBeUndefined()
+    expect(await withJudge(c, 'admin merge PR #5 in o/r, whose required check test is failure on its head commit')).toBe('admin merge PR #5 in o/r, whose required check test is failure on its head commit')
+    expect(asked).toEqual([{ repo: 'o/r', act: 'pr merge' }, { repo: 'o/r', act: 'pr merge' }])
+    // Another repository is refused by the write rule, and the judge is never asked.
+    expect(await withJudge(`${c} --repo other/x`, undefined)).toBe('write to other/x from a checkout of o/r')
+    expect(await withJudge(c, undefined, '/Users/x/nowhere')).toBe(unresolved)
+    expect(asked.length).toBe(2)
+    // A flag the night bans outright is refused before any judge: deleting the branch.
+    expect(await withJudge(`${c} --delete-branch`, undefined)).toBe('delete a branch')
+    expect(asked.length).toBe(2)
   })
   test('gh run by any wrapper the reader does not look past is refused (#834 review of 46f07ff)', async () => {
     expect(await bash('setsid gh issue comment 5 --body x')).toBe(unresolved)
@@ -279,6 +307,89 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
       `python3 -c "import subprocess; subprocess.run(['x', 'gh -R o/r pr merge 5'])"`,
     ])
       expect({ c, r: await bash(c) }).toEqual({ c, r: runs })
+  })
+  test('code naming gh followed by flags runs gh only when a gh subcommand comes after them, as for command words (#2159)', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    // gh followed by another tool's flags, or by gh's own flags with nothing gh could run after
+    // them: the rule #2127 gave command words. Every case is read before any is compared, so a
+    // failure names each case that changed.
+    const harmless = [
+      `python3 -c "import subprocess; print('see gh --help for the list')"`,
+      `python3 -c "import subprocess; subprocess.run('grep -n -e gh -e pipeline src', shell=True)"`,
+      `python3 -c "import os; os.system('rg -n gh -e x --glob src')"`,
+    ]
+    expect(await Promise.all(harmless.map(async c => ({ c, r: await bash(c) })))).toEqual(harmless.map(c => ({ c, r: undefined })))
+    // Flags before a gh subcommand still reach it, wherever in the code the subcommand comes,
+    // whichever of the flags take a value.
+    const flagged = [
+      `python3 -c "import os; os.system('sudo gh -R o/r pr merge 5')"`,
+      `python3 -c "import os; os.system('nohup gh --repo o/r issue comment 5 --body x')"`,
+      `python3 -c "import subprocess; subprocess.run('stdbuf -o0 gh -R o/r api repos/o/r/issues/5/comments -f body=x', shell=True)"`,
+      `python3 -c "import os; r = 'o/r'; os.system('sudo gh -R ' + r + ' pr merge 5')"`,
+      `python3 -c "import subprocess; print('then run gh -R o/r run rerun 5')"`,
+      `node -e "require('child_process').execSync('sudo gh --repo o/r release delete v1 --yes')"`,
+    ]
+    expect(await Promise.all(flagged.map(async c => ({ c, r: await bash(c) })))).toEqual(flagged.map(c => ({ c, r: runs })))
+    // A gh with flags whose string is built while the code runs may be given its subcommand then,
+    // so it is still refused with no subcommand in sight (Dan's condition for this change, #2159).
+    const built = [
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh -R o/r ' + sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system(f'sudo gh -R o/r {sub}')"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh -R o/r {}'.format(sub))"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh -R o/r %s' % sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh -R o/r ' % sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system(' '.join(['sudo gh -R o/r', sub]))"`,
+      `python3 -c "import subprocess; subprocess.run('sudo gh -R o/r \\$SUB', shell=True)"`,
+      `python3 -c "import os; sub = 'x'; os.system(sub + ' sudo gh -R o/r')"`,
+      `node -e "const sub = 'x'; require('child_process').execSync('sudo gh -R o/r '+sub)"`,
+      `python3 -c "import os; sub = 'x'; cmd = 'sudo gh -R o/r'; os.system(cmd + ' ' + sub)"`,
+      `python3 -c "import os; sub = 'x'; cmd = ''; cmd += 'sudo gh -R o/r '; os.system(cmd + sub)"`,
+    ]
+    expect(await Promise.all(built.map(async c => ({ c, r: await bash(c) })))).toEqual(built.map(c => ({ c, r: runs })))
+  })
+  test('code building a gh command from a bare gh, or from a list element joined later, is refused (#2225)', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    // A gh with nothing after it in its string, where the string is built while the code runs: the
+    // whole of gh's command arrives then. Every case is read before any is compared, so a failure
+    // names each case that changed.
+    const bare = [
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh ' + sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system(f'sudo gh {sub}')"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh %s' % sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo gh' + ' ' + sub)"`,
+      `node -e "const sub = 'x'; require('child_process').execSync('sudo gh '+sub)"`,
+    ]
+    expect(await Promise.all(bare.map(async c => ({ c, r: await bash(c) })))).toEqual(bare.map(c => ({ c, r: runs })))
+    // A gh string held as an element of a list, a tuple or an appended item, which code can join
+    // with anything later.
+    const listed = [
+      `python3 -c "import os; sub = 'x'; parts = ['sudo gh -R o/r', sub]; os.system(' '.join(parts))"`,
+      `python3 -c "import os; sub = 'x'; parts = ['sudo gh -R o/r']; os.system(' '.join(parts + [sub]))"`,
+      `python3 -c "import os; sub = 'x'; parts = ('sudo gh -R o/r', sub); os.system(' '.join(parts))"`,
+      `python3 -c "import os; sub = 'x'; parts = []; parts.append('sudo gh -R o/r'); parts.append(sub); os.system(' '.join(parts))"`,
+      `python3 -c "import os; sub = 'x'; parts = ['sudo gh', sub]; os.system(' '.join(parts))"`,
+      `python3 -c "import os; sub = 'x'; os.system(' '.join(p for p in ('sudo gh -R o/r', sub)))"`,
+      `python3 -c "import os; sub = 'x'\nfor p in ('sudo gh -R o/r', sub): os.system(p)"`,
+      `node -e "const sub = 'x'; const parts = ['sudo gh -R o/r', sub]; require('child_process').execSync(parts.join(' '))"`,
+    ]
+    expect(await Promise.all(listed.map(async c => ({ c, r: await bash(c) })))).toEqual(listed.map(c => ({ c, r: runs })))
+    // gh named by its full path after another word is the same gh, in a literal command or a built one.
+    const pathed = [
+      `python3 -c "import os; os.system('sudo /opt/homebrew/bin/gh pr merge 5')"`,
+      `python3 -c "import os; sub = 'x'; os.system('sudo /opt/homebrew/bin/gh ' + sub)"`,
+      `python3 -c "import os; sub = 'x'; os.system('nohup /usr/local/bin/gh -R o/r ' + sub)"`,
+    ]
+    expect(await Promise.all(pathed.map(async c => ({ c, r: await bash(c) })))).toEqual(pathed.map(c => ({ c, r: runs })))
+    // Prose naming gh in a string nothing builds, including as one argument of several to a call,
+    // still runs nothing, and an apostrophe after gh in a listed string is no string's end.
+    const harmless = [
+      `python3 -c "import subprocess; print('see gh --help for the list')"`,
+      `python3 -c "import subprocess; print('see gh')"`,
+      `python3 -c "import subprocess; print('see gh --help', 'for the list')"`,
+      `python3 -c "import subprocess; x = 1; print('install gh', x)"`,
+      `python3 -c "import subprocess; notes = [\\"the token in gh's own store\\"]; print(notes)"`,
+    ]
+    expect(await Promise.all(harmless.map(async c => ({ c, r: await bash(c) })))).toEqual(harmless.map(c => ({ c, r: undefined })))
   })
   test('a line that sources a file is judged by where gh would run, never by the word in its data (#1132)', async () => {
     // The two notes refused on 2026-10-12 and 13: a sourced helper given JSON whose text names gh.

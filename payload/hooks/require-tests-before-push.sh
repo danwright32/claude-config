@@ -14,10 +14,13 @@
 # Pipeline (cheap to expensive):
 #   1. Not a `git push`, or SKIP_TEST_CHECK=1 override .......... allow
 #   2. No source files changed in the pushed commits ........... allow
-#   3. Source changed but push contains ZERO tests ............. BLOCK (no model)
+#   3. Source changed but ZERO tests in the push and none pushed
+#      earlier on the branch since it left the default branch .. BLOCK (no model)
 #   4. Source + some tests -> model grades per-change coverage . allow / BLOCK
-#      Test changes too large for one call are read in further calls, at most 1 + TEST_PARTS_MAX
-#      in all, so no refusal rests on a test the model was not shown (#1998, step 6 below).
+#      The tests the branch pushed earlier count beside the push's own (#2153, step 4b below).
+#      Test changes too large for one call are read in further calls, PARTS_AT_ONCE at a time and
+#      at most 1 + TEST_PARTS_MAX (41) in all, so no refusal rests on a test the model was not
+#      shown (#1998, #2153, step 6 below).
 #
 # Override: SKIP_TEST_CHECK=1 git push ...   (docs/config/copy-only, or a
 # refactor already covered by existing tests; state why).
@@ -27,9 +30,11 @@
 # AND says why, via fail_open() below. Blocking on infrastructure trouble is
 # worse than allowing, but a push that was never gated must not look identical
 # to a push the gate approved. (#735)
-# One exception: a further call reading tests past the first call's cut refuses, as could not
-# judge, when it fails. The first call has already called a change untested by then, and before
-# #1998 that alone refused the push, so failing open there would loosen the gate.
+# Two exceptions refuse, as could not judge. A further call reading tests past the first call's
+# cut refuses when it fails: the first call has already called a change untested by then, and
+# before #1998 that alone refused the push, so failing open there would loosen the gate. And the
+# first call refuses when too little time is left to start it, or when it runs to a timeout the
+# deadline shortened (#2249): the hook used to be killed there, which refused with no reason.
 #
 # Every push it reaches is recorded, override included, in the ledger the simplify gate writes too
 # (claude-config#1075, #1077): lib/push-gate-report.py reads it.
@@ -39,10 +44,23 @@ JUDGE_TIMEOUT=90       # seconds for the model call
 DIFF_BUDGET=60000      # max bytes of diff sent to the model in one call
 # Test changes past the first call's cut go to further calls (claude-config#1998), each within
 # DIFF_BUDGET. At most this many, so a push's judge cost is bounded at 1 + TEST_PARTS_MAX calls.
-TEST_PARTS_MAX=3
+# It was 3 until claude-config#2153, when a 436 KB batch needed 15 and its tested changes were
+# refused; 40 parts is about 2.3 MB of test changes. REQUIRE_TESTS_MAX_PARTS can only lower it.
+TEST_PARTS_MAX=40
+# Further calls run this many at once, in waves, so the parts a push needs fit the deadline below.
+# In the gate's record on 2026-11-03 (1,836 judged rows) a judge call took a median of 9 seconds,
+# 16 at the 90th percentile and at most 58. Nearly every row overlapped one other call (this gate
+# and the simplify gate judge each push side by side), and 57 overlapped two to five others (up to
+# 6 at once) with a median of 10 and a maximum of 26 seconds, so calls side by side were not seen
+# to slow down; nothing in the record ran more than 6 at once, so the time at 16 is unmeasured.
+# So the width is set to hold if every reading takes the 58 second maximum: after the first call
+# only one wave fits for certain, and 16 puts the 15 further readings of the 436 KB batch that
+# raised #2153 in that one wave. A push needing more relies on a second wave fitting, and when it
+# does not, it is refused as could not judge, never allowed unread.
+PARTS_AT_ONCE=16
 PART_OVERLAP=4096      # bytes of a file repeated at the start of the next part, so a test cut in two is whole in one
 # The hook's own finish line, inside the 120 seconds its registration in settings.hooks.json sets
-# (a setting, not measured; these two are settings too): a further call is
+# (a setting, not measured; these two are settings too): any call, the first included (#2249), is
 # started only with PART_MIN_SECONDS left, and its timeout never runs past this. A hook killed at
 # its timeout refuses with no reason ("onFailure": "block"), so the gate stops first and says why.
 # REQUIRE_TESTS_DEADLINE_SECONDS sets another, for the suite; it can only end the readings sooner.
@@ -120,6 +138,10 @@ PC_GATE=tests
 . "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null || true
 whole_above_zero "${REQUIRE_TESTS_DEADLINE_SECONDS:-}" TESTS_DEADLINE 2>/dev/null || :
 [ "$TESTS_DEADLINE" -le 110 ] 2>/dev/null || TESTS_DEADLINE=110
+# The cap on further readings, lowered for the suite; a value above 40 or one that fails leaves 40.
+parts_setting=""
+whole_above_zero "${REQUIRE_TESTS_MAX_PARTS:-}" parts_setting 2>/dev/null || parts_setting=""
+[ -n "$parts_setting" ] && [ "$parts_setting" -lt "$TEST_PARTS_MAX" ] 2>/dev/null && TEST_PARTS_MAX=$parts_setting
 
 # ---------------------------------------------------------------------------
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
@@ -316,8 +338,80 @@ diff_docs_only() {
 }
 
 # Lines of context the docs-only check reads around each change: the whole file, so a
-# '*' line can be placed inside or outside the block comment it sits in.
+# '*' line can be placed inside or outside the block comment it sits in, and a Python
+# line inside or outside a docstring.
 DOCS_ONLY_CONTEXT=1000000
+
+# A mod's copy of a mod-kit helper, tested by mod-kit's own tests (claude-config#2258). Every mod
+# keeps copies of mod-kit's helpers at payload/mods/<mod>/hooks/mod-kit/<name>, and
+# tools/check-mod-shared-parts.sh fails when one differs from payload/mods/mod-kit/hooks/<name>, yet
+# this gate refused a new mod for the copies alone: on 2026-11-04 the slack-alert-guard push was
+# refused for hold.ts and skew.ts, and got through only once mod-kit's tests were copied into the
+# mod with their imports repointed. A copy counts as tested, and is left out of the source judged,
+# only when ALL of these hold in the tree the push delivers (pc_push_tree), never in a list or in
+# the base: the mod is not mod-kit itself; payload/mods/mod-kit/hooks/<name> is there as a regular
+# file of the same mode and the same bytes (the same blob); and a test file under
+# payload/mods/mod-kit/tests/ imports ../hooks/<name>, with or without its extension. Anything short
+# of that is judged exactly as before. No tree, or git failing, counts nothing. A change to the
+# mod-kit helper itself is still source here and still needs its own test.
+MODKIT_TREE=""; modkit_tree_read=0; modkit_list=""; MODKIT_EXCLUDES=()
+modkit_copy_tested() {   # $1 = a path the push carries
+  local f="$1" mod rel stem src copy_meta src_meta hits
+  [[ "$f" =~ ^payload/mods/([^/]+)/hooks/mod-kit/(.+)$ ]] || return 1
+  mod="${BASH_REMATCH[1]}"; rel="${BASH_REMATCH[2]}"
+  [ "$mod" != mod-kit ] || return 1
+  src="payload/mods/mod-kit/hooks/$rel"
+  if [ "$modkit_tree_read" -eq 0 ]; then MODKIT_TREE="$(pc_push_tree)"; modkit_tree_read=1; fi
+  [ -n "$MODKIT_TREE" ] || return 1
+  # "<mode> <type> <blob>" of each, cut at the tab before the path.
+  copy_meta="$(git ls-tree "$MODKIT_TREE" -- "$f" 2>/dev/null)" || return 1
+  src_meta="$(git ls-tree "$MODKIT_TREE" -- "$src" 2>/dev/null)" || return 1
+  copy_meta="${copy_meta%%$'\t'*}"; src_meta="${src_meta%%$'\t'*}"
+  case "$src_meta" in "100644 blob "*|"100755 blob "*) ;; *) return 1 ;; esac
+  [ "$copy_meta" = "$src_meta" ] || return 1
+  stem="${rel%.*}"
+  hits="$(git grep -l -F \
+      -e "../hooks/$rel'" -e "../hooks/$rel\"" \
+      -e "../hooks/$stem'" -e "../hooks/$stem\"" \
+      "$MODKIT_TREE" -- payload/mods/mod-kit/tests/ 2>/dev/null)" || return 1
+  # Every path under a tests/ folder is a test to is_test, so a hit there needs no second check.
+  [ -n "$hits" ]
+}
+
+# Said in a refusal when copies were counted, so the reader knows they were left out on purpose.
+modkit_note() {
+  [ -n "$modkit_list" ] || return 0
+  echo "Note: these copies of mod-kit's helpers are byte identical to mod-kit's own,"
+  echo "which mod-kit's tests import, so they were counted as tested and not judged:"
+  printf '%s' "$modkit_list"
+  echo ""
+}
+
+# A Python file's diff on stdin, written back with each changed line lying wholly inside a
+# docstring turned into a '#' comment, so diff_docs_only reads it as the documentation it is
+# (claude-config#2247). lib/py-docstring-lines.py decides, with Python's own parser over both
+# images of the file, and leaves alone anything it cannot place: an ordinary string, code on a
+# docstring's line, a file that does not parse. It rewrites line for line, so any other line count
+# (no python3, the helper missing or dying part way) means the diff goes on exactly as git gave
+# it, and the file is judged as it was before. The diff is held in files rather than a shell
+# variable, so the raw diff passed on is byte for byte what git wrote. Where no scratch file can be
+# made, the diff passes straight through untouched; where the diff cannot be written to one, nothing
+# is passed on, which diff_docs_only reads as not documentation, so the gate fails closed.
+py_docstrings_as_comments() {
+  local in="" out=""
+  { in="$(mktemp)" && out="$(mktemp)"; } || { rm -f "$in"; cat; return 0; }
+  if ! cat > "$in"; then
+    rm -f "$in" "$out"
+    return 0
+  fi
+  if python3 "$HOOK_DIR/lib/py-docstring-lines.py" < "$in" > "$out" 2>/dev/null \
+      && [ -s "$out" ] && [ "$(wc -l < "$out")" -eq "$(wc -l < "$in")" ]; then
+    cat "$out"
+  else
+    cat "$in"
+  fi
+  rm -f "$in" "$out"
+}
 
 source_changed=0
 test_changed=0
@@ -335,6 +429,11 @@ while IFS= read -r f; do
     TEST_PATHSPEC+=("$f")
     continue
   fi
+  if is_source "$f" && modkit_copy_tested "$f"; then
+    modkit_list="${modkit_list}  - ${f}"$'\n'
+    MODKIT_EXCLUDES+=(":(exclude)$f")
+    continue
+  fi
   if is_source "$f"; then
     source_changed=1
     source_list="${source_list}  - ${f}"$'\n'
@@ -344,8 +443,65 @@ done <<EOF
 $PC_FILES
 EOF
 
-# No source touched -> nothing to gate.
-[ "$source_changed" -eq 1 ] || allow nosource
+# No source touched -> nothing to gate. The record names any mod-kit copies counted (#2258), so a
+# push let through for them reads apart from one that carried no source at all.
+[ "$source_changed" -eq 1 ] || allow nosource \
+  "$([ -n "$modkit_list" ] && printf 'mod-kit copies counted as tested: %s' "$(printf '%s' "$modkit_list" | sed 's/^  - //' | paste -sd ',' -)")"
+
+# ---------------------------------------------------------------------------
+# 4b. The tests this branch already pushed (claude-config#2153).
+# ---------------------------------------------------------------------------
+# A branch that pushes its failing tests first and the code after was refused, because only the
+# pushed commits were read: on 2026-11-03 a work branch's migration and code came in two pushes
+# after its database tests, and each was called untested. So the test files the branch changed
+# since it left the default branch (their merge base), and this push does not carry, count as tests
+# too, and their diffs follow the push's own in what the judge is shown. The source judged is still
+# only the push's. Where that base cannot be worked out (no default branch known, no merge base, a
+# git call that fails), no earlier test is counted and the push is judged as before on its own
+# tests, the conservative side, with BRANCH_NOTE saying why for a refusal to carry.
+EARLIER_TESTS=(); earlier_list=""; EARLIER_DIFF=""; BRANCH_BASE=""; BRANCH_NOTE=""; BRANCH_DEF=""
+branch_tests() {
+  local names f
+  BRANCH_DEF="$(ps__default_ref)" || BRANCH_DEF=""
+  if [ -z "$BRANCH_DEF" ]; then
+    BRANCH_NOTE="this checkout knows no default branch for origin (no origin/HEAD, origin/main or origin/master)"; return 0
+  fi
+  # The shared reading (#457), never a hook's own: it prints nothing when there is no merge base.
+  BRANCH_BASE="$(ps__base_merge_base "$BRANCH_DEF")" || BRANCH_BASE=""
+  if [ -z "$BRANCH_BASE" ]; then
+    BRANCH_NOTE="git found no point where this branch left $BRANCH_DEF"; return 0
+  fi
+  if ! names="$(pc_files_since "$BRANCH_BASE")"; then
+    BRANCH_BASE=""; BRANCH_NOTE="git could not list what this branch changed since it left $BRANCH_DEF"; return 0
+  fi
+  while IFS= read -r f; do
+    [ -n "$f" ] && is_test "$f" || continue
+    printf '%s\n' "$PC_FILES" | grep -Fxq -- "$f" && continue
+    EARLIER_TESTS+=("$f")
+    earlier_list="${earlier_list}  - ${f}"$'\n'
+  done <<NAMES_EOF
+$names
+NAMES_EOF
+  [ "${#EARLIER_TESTS[@]}" -gt 0 ] || return 0
+  # Read here, before the zero test floor, so an earlier test whose diff cannot be shown (git
+  # failing, or every one of them generated content the judge is never shown) counts for nothing
+  # rather than sending the judge a push with no test in front of it.
+  if ! EARLIER_DIFF="$(git diff "$BRANCH_BASE" HEAD -- "${EARLIER_TESTS[@]}" "${PC_EXCLUDES[@]}" 2>/dev/null)" \
+     || [ -z "$EARLIER_DIFF" ]; then
+    EARLIER_TESTS=(); earlier_list=""; EARLIER_DIFF=""; BRANCH_BASE=""
+    BRANCH_NOTE="git could not show the diff of the tests this branch changed since it left $BRANCH_DEF"
+  fi
+  return 0
+}
+branch_tests
+
+# Said in a refusal when the branch's earlier tests could not be counted.
+branch_note() {
+  [ -n "$BRANCH_NOTE" ] || return 0
+  echo "Note: tests pushed earlier on this branch were not counted, because"
+  echo "$BRANCH_NOTE, so only this push's own tests were read."
+  echo ""
+}
 
 # Source touched but not a single test in the push -> block without a model.
 if [ "$test_changed" -eq 0 ]; then
@@ -358,21 +514,26 @@ if [ "$test_changed" -eq 0 ]; then
     [ -z "$f" ] && continue
     examined=$((examined+1))
     style="$(docs_style_for "$f")"
-    if ! PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | diff_docs_only "$style"; then
-      docs_only=0; break
-    fi
+    case "$f" in
+      *.py) PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | py_docstrings_as_comments | diff_docs_only "$style" ;;
+      *) PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | diff_docs_only "$style" ;;
+    esac || { docs_only=0; break; }
   done <<DOCS_ONLY_EOF
 $source_paths
 DOCS_ONLY_EOF
   [ "$examined" -ge 1 ] && [ "$docs_only" -eq 1 ] && allow docsonly
+fi
 
+# Source touched and no test in the push or anywhere else on the branch -> block without a model.
+# With a test the branch pushed earlier, the judge decides whether it covers this push (#2153).
+if [ "$test_changed" -eq 0 ] && [ "${#EARLIER_TESTS[@]}" -eq 0 ]; then
   refuse untested "$(printf '%s' "$source_list" | sed 's/^  - //' | paste -sd ',' -)" <<REFUSAL
 PUSH BLOCKED: this push changes source code but adds or modifies no tests.
 
 Source files in this push:
-${source_list}
+${source_list}$( [ -n "$BRANCH_BASE" ] && printf '%s\n' "No earlier push of this branch changed a test either, since it left $BRANCH_DEF.")
 Add a test for each distinct change, then push again.
-$(widened_note; merge_note)
+$(widened_note; merge_note; branch_note; modkit_note)
 OVERRIDE: if a test genuinely does not apply (docs / config / copy only,
 or a refactor already covered by existing tests), or the gate missed a
 test that IS in this push (false positive), re-run with:
@@ -394,12 +555,22 @@ msgs="$(pc_messages)"
 # model never saw it. Pull the test files' diffs out separately and place them
 # first, untruncated, so an edit to an existing test is always visible. A test
 # file new in this very command is in them too, as a diff against nothing (#1076).
-diff_tests="$(pc_diff "${TEST_PATHSPEC[@]}")"
+diff_tests=""
+[ "${#TEST_PATHSPEC[@]}" -gt 0 ] && diff_tests="$(pc_diff "${TEST_PATHSPEC[@]}")"
+# Then the tests the branch pushed earlier (step 4b), after the push's own so those are what the
+# first call is shown first, under a heading the rubric names. Their diff is the branch's whole
+# change to each since it left the default branch, which this push does not touch.
+if [ "${#EARLIER_TESTS[@]}" -gt 0 ]; then
+  diff_tests="${diff_tests:+$diff_tests
+}TESTS ALREADY ON THIS BRANCH (pushed earlier, changed since the branch left $BRANCH_DEF; they count as tests for this push):
+$EARLIER_DIFF"
+fi
 
 # Everything that is NOT a test file, so the budget is not spent showing the tests twice.
 TEST_EXCLUDES=()
 for tp in "${TEST_PATHSPEC[@]}"; do TEST_EXCLUDES+=(":(exclude)$tp"); done
-diff_code="$(pc_diff . "${TEST_EXCLUDES[@]}")"
+# The mod-kit copies counted as tested (#2258) are left out too: they are not judged.
+diff_code="$(pc_diff . "${TEST_EXCLUDES[@]}" ${MODKIT_EXCLUDES[@]+"${MODKIT_EXCLUDES[@]}"})"
 
 # THE BUDGET, test changes first (claude-config#723). They are what this gate judges, so they get
 # what they need, and the rest of the diff gets what is left, down to half the budget: when both
@@ -464,12 +635,16 @@ For each distinct change, decide:
 - needsTest: true if it changes runtime/library/UI behavior or fixes a bug.
   false for pure formatting, comments, copy/text, docs, config, or type-only
   edits.
-- hasTest: true only if THIS diff adds or modifies a test that would fail if
+- hasTest: true only if THIS diff (the tests already on this branch included)
+  adds or modifies a test that would fail if
   that specific change were reverted or broken. A MODIFIED existing test file
   counts exactly the same as a brand-new test file -- judge by whether the test
   change exercises the behavior, NOT by whether the test file is new. The test
   files in this push are listed explicitly below; trust that list even if a
-  given test diff hunk looks truncated.
+  given test diff hunk looks truncated. Tests this branch pushed earlier,
+  shown under TESTS ALREADY ON THIS BRANCH and listed as TEST FILES ALREADY ON
+  THIS BRANCH, count exactly like tests in this push: a change they would catch
+  if reverted has a test. The changes to judge are still only those in this push.
   SPECIAL CASE: if the change touches error handling or a retry, or a background
   or scheduled job, or a call to an external API/service, hasTest is true ONLY if
   at least one of the tests exercises a failure or edge case for that change
@@ -492,8 +667,12 @@ EOF
 
 test_list_str="$test_list"; [ -n "$test_list_str" ] || test_list_str="  none"
 source_list_str="$source_list"; [ -n "$source_list_str" ] || source_list_str="  none"
-judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\nTEST FILES CHANGED IN THIS PUSH, new OR modified existing -- all count as tests:\n%s\nSOURCE FILES CHANGED IN THIS PUSH:\n%s\nFAILURE HANDLING FILES (their added code catches, raises, branches on an error or status, or retries):\n%s\nDIFF:\n%s\n' \
-  "$msgs" "$test_list_str" "$source_list_str" "$failure_files" "$diff")"
+# The tests the branch pushed earlier (step 4b) are named apart from the push's own, so the judge
+# can tell which changes it is judging (only the push's) from which tests it may count (both).
+earlier_str=""
+[ -n "$earlier_list" ] && earlier_str="$(printf 'TEST FILES ALREADY ON THIS BRANCH, pushed earlier (they count as tests too):\n%s' "$earlier_list")"$'\n'
+judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\nTEST FILES CHANGED IN THIS PUSH, new OR modified existing -- all count as tests:\n%s\n%sSOURCE FILES CHANGED IN THIS PUSH:\n%s\nFAILURE HANDLING FILES (their added code catches, raises, branches on an error or status, or retries):\n%s\nDIFF:\n%s\n' \
+  "$msgs" "$test_list_str" "$earlier_str" "$source_list_str" "$failure_files" "$diff")"
 
 # ---------------------------------------------------------------------------
 # 6. The rest of the tests, when the first call was cut short of them (claude-config#1998).
@@ -519,6 +698,14 @@ judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\nTEST FILES CHANGED IN THIS PUSH, 
 # to PART_OVERLAP repeated, fit one further call. Measured on 2026-11-01 with the suite's stub judge
 # on a push of that shape (35,072 bytes of test changes, about 31 KB of code): two calls, sent
 # 60,781 and 39,788 bytes.
+#
+# The cap was 3 further calls until claude-config#2153, when a 436 KB batch needed 15 and four tested
+# issues in it were refused as untested. It is now 40 (about 2.3 MB of test changes), read in waves
+# of PARTS_AT_ONCE made at once so they fit the deadline, and no further wave starts once every
+# change is found tested, so the larger cap costs only the pushes that need it. Judging such a batch
+# once per merged branch, the issue's other way, was not chosen: a batch push carries no record of
+# which commits came from which branch that the gate could rely on, and reading every part already
+# answers for all of them.
 
 # Splits the test changes from byte $1 on into parts of at most $2 bytes, in directory $3, as
 # part.1, part.2 and so on, each with part.N.files naming the test files it holds. A part that starts
@@ -592,8 +779,10 @@ print(len(parts))
 # carries all of its calls rather than the last one.
 J_BYTES=0; J_MS=""; J_COST=""; J_START=""; J_END=""
 add_call_cost() {
-  [ -n "$J_START" ] || J_START="$PC_JUDGE_START"
-  [ -n "$PC_JUDGE_END" ] && J_END="$PC_JUDGE_END"
+  # Readings made at once are added in part order, not the order they ended, so the end kept is the
+  # latest seen and the start the earliest.
+  case "$PC_JUDGE_START" in ''|*[!0-9]*) ;; *) { [ -z "$J_START" ] || [ "$PC_JUDGE_START" -lt "$J_START" ]; } && J_START="$PC_JUDGE_START" ;; esac
+  case "$PC_JUDGE_END" in ''|*[!0-9]*) ;; *) { [ -z "$J_END" ] || [ "$PC_JUDGE_END" -gt "$J_END" ]; } && J_END="$PC_JUDGE_END" ;; esac
   J_BYTES=$(( J_BYTES + ${PC_JUDGE_BYTES:-0} ))
   case "$PC_JUDGE_MS" in ''|*[!0-9]*) ;; *) J_MS=$(( ${J_MS:-0} + PC_JUDGE_MS )) ;; esac
   case "$PC_JUDGE_COST" in ''|*[!0-9.eE-]*) ;; *) J_COST="$(awk -v a="${J_COST:-0}" -v b="$PC_JUDGE_COST" 'BEGIN { printf "%.6f", a + b }')" ;; esac
@@ -615,7 +804,9 @@ the first reader was not shown in full.
 
 For each numbered change, decide whether THESE test changes add or modify a test that would fail if
 that specific change were reverted or broken. A MODIFIED existing test counts exactly the same as a
-brand-new test. Judge only the numbered changes, and only from the test changes shown to you.
+brand-new test. Test changes under TESTS ALREADY ON THIS BRANCH were pushed earlier on this
+branch and count exactly the same as the push's own. Judge only the numbered changes, and only
+from the test changes shown to you.
 SPECIAL CASE: if the change touches error handling or a retry, or a background or scheduled job, or
 a call to an external API/service, it is covered ONLY if these test changes exercise a failure or
 edge case for it (a rejected/erroring call, a timeout, a duplicate/concurrent invocation, a
@@ -646,8 +837,16 @@ MISSING_EOF
   if ! [ "$n" -ge 1 ] 2>/dev/null; then
     rm -rf "$dir"; RT_WHY="the gate could not split the rest of the test changes into parts"; RT_UNSEEN="$tests_cut"; return 0
   fi
+  # The parts are read in waves of up to PARTS_AT_ONCE readings made at once (#2153), each in its
+  # own subshell writing what it got to files in $dir, since a background call cannot set this
+  # shell's variables. A wave is started only inside the cap and with PART_MIN_SECONDS left, and
+  # every reading in it is given at most the time that is left, so the wave ends by the deadline.
+  # A reading that fails or answers in a form that cannot be read ends the judging after its wave,
+  # and its part counts as unseen; a reading that leaves no result file at all counts as failed.
+  local last j p pids failed covered_all meta
+  failed=""
   k=1
-  while [ "$k" -le "$n" ]; do
+  while [ "$k" -le "$n" ] && [ -n "$nums" ]; do
     if [ "$k" -gt "$TEST_PARTS_MAX" ]; then
       RT_WHY="the test changes needed $((n + 1)) readings and the gate makes at most $((TEST_PARTS_MAX + 1)) for one push"; break
     fi
@@ -656,17 +855,46 @@ MISSING_EOF
       RT_WHY="it ran out of time: ${SECONDS} seconds had gone and the hook must finish inside 120"; break
     fi
     t=$JUDGE_TIMEOUT; [ "$left" -lt "$t" ] && t=$left
+    last=$(( k + PARTS_AT_ONCE - 1 ))
+    [ "$last" -gt "$n" ] && last=$n
+    [ "$last" -gt "$TEST_PARTS_MAX" ] && last=$TEST_PARTS_MAX
     list=""
     for x in $nums; do list="${list}${x}. ${miss[x]}"$'\n'; done
-    part_in="$(printf 'COMMIT MESSAGES:\n%s\n\nCHANGES THE FIRST READER FOUND NO TEST FOR:\n%s\nFAILURE HANDLING FILES (their added code catches, raises, branches on an error or status, or retries):\n%s\n\n%s\n%s\n\nMORE TEST FILE CHANGES (reading %s of %s of the test changes the first reader was not shown in full):\n%s\n' \
-      "$msgs" "$list" "$failure_files" "$c_label" "$code_diff" "$k" "$n" "$(cat "$dir/part.$k")")"
-    RT_READINGS=$((RT_READINGS + 1))
-    if ! pc_judge "$JUDGE_MODEL" "$t" "$PART_RUBRIC" "$part_in"; then
+    pids=""
+    j=$k
+    while [ "$j" -le "$last" ]; do
+      part_in="$(printf 'COMMIT MESSAGES:\n%s\n\nCHANGES THE FIRST READER FOUND NO TEST FOR:\n%s\nFAILURE HANDLING FILES (their added code catches, raises, branches on an error or status, or retries):\n%s\n\n%s\n%s\n\nMORE TEST FILE CHANGES (reading %s of %s of the test changes the first reader was not shown in full):\n%s\n' \
+        "$msgs" "$list" "$failure_files" "$c_label" "$code_diff" "$j" "$n" "$(cat "$dir/part.$j")")"
+      (
+        if pc_judge "$JUDGE_MODEL" "$t" "$PART_RUBRIC" "$part_in"; then rc=0; else rc=1; fi
+        printf '%s' "$PC_JUDGE_OBJ" > "$dir/obj.$j"
+        printf '%s' "$PC_JUDGE_ERR" > "$dir/err.$j"
+        printf '%s|%s|%s|%s|%s\n' "$PC_JUDGE_START" "$PC_JUDGE_END" "$PC_JUDGE_BYTES" "$PC_JUDGE_MS" "$PC_JUDGE_COST" > "$dir/meta.$j"
+        printf '%s' "$rc" > "$dir/rc.$j"
+      ) >/dev/null 2>&1 &
+      pids="$pids $!"
+      j=$((j + 1))
+    done
+    for p in $pids; do wait "$p" 2>/dev/null || :; done
+    # The results, in part order, so the first failure named is the earliest part's.
+    covered_all=" "
+    j=$k
+    while [ "$j" -le "$last" ]; do
+      RT_READINGS=$((RT_READINGS + 1))
+      meta=""; [ -f "$dir/meta.$j" ] && IFS= read -r meta < "$dir/meta.$j"
+      # Split on a pipe, never a tab: a tab is whitespace to IFS, so empty fields would collapse.
+      IFS='|' read -r PC_JUDGE_START PC_JUDGE_END PC_JUDGE_BYTES PC_JUDGE_MS PC_JUDGE_COST <<META_EOF
+$meta
+META_EOF
       add_call_cost
-      RT_WHY="reading $k of the rest failed: $PC_JUDGE_ERR"; break
-    fi
-    add_call_cost
-    answer="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
+      if [ "$(cat "$dir/rc.$j" 2>/dev/null)" != 0 ]; then
+        PC_JUDGE_ERR="$(cat "$dir/err.$j" 2>/dev/null)"
+        [ -n "$PC_JUDGE_ERR" ] || PC_JUDGE_ERR="the reading left no result behind"
+        [ -n "$RT_WHY" ] || RT_WHY="reading $j of the rest failed: $PC_JUDGE_ERR"
+        failed="$failed $j"; j=$((j + 1)); continue
+      fi
+      PC_JUDGE_OBJ="$(cat "$dir/obj.$j" 2>/dev/null)"
+      answer="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
 import sys, json
 sys.stdout.reconfigure(errors="replace")
 try:
@@ -679,15 +907,18 @@ try:
 except Exception:
     print("ERR")
 ' 2>/dev/null)"
-    case "$answer" in
-      OK*) covered=" ${answer#OK} " ;;
-      *) RT_WHY="reading $k of the rest answered without a list of covered changes, so its answer could not be read"; break ;;
-    esac
+      case "$answer" in
+        OK*) covered_all="${covered_all}${answer#OK} " ;;
+        *) [ -n "$RT_WHY" ] || RT_WHY="reading $j of the rest answered without a list of covered changes, so its answer could not be read"
+           failed="$failed $j" ;;
+      esac
+      j=$((j + 1))
+    done
     local still=""
-    for x in $nums; do case "$covered" in *" $x "*) ;; *) still="${still:+$still }$x" ;; esac; done
+    for x in $nums; do case "$covered_all" in *" $x "*) ;; *) still="${still:+$still }$x" ;; esac; done
     nums="$still"
-    k=$((k + 1))
-    [ -n "$nums" ] || break
+    k=$((last + 1))
+    [ -z "$RT_WHY" ] || break
   done
   RT_MISSING=""
   for x in $nums; do RT_MISSING="${RT_MISSING}  - ${miss[x]}"$'\n'; done
@@ -696,7 +927,8 @@ except Exception:
   elif [ -z "$RT_WHY" ]; then
     RT_STATE=block
   else
-    RT_UNSEEN="$(i=$k; while [ "$i" -le "$n" ]; do cat "$dir/part.$i.files"; i=$((i + 1)); done | awk 'NF && !seen[$0]++' | tr '\n' ' ')"
+    # Unseen: the parts whose reading failed, and every part no reading was started for.
+    RT_UNSEEN="$( { for i in $failed; do cat "$dir/part.$i.files"; done; i=$k; while [ "$i" -le "$n" ]; do cat "$dir/part.$i.files"; i=$((i + 1)); done; } | awk 'NF && !seen[$0]++' | tr '\n' ' ')"
     RT_UNSEEN="${RT_UNSEEN% }"
     [ -n "$RT_UNSEEN" ] || RT_UNSEEN="$tests_cut"
   fi
@@ -708,7 +940,46 @@ except Exception:
 # measurement behind its flags). It names a judge that was missing, timed out (they have different
 # fixes from one that is down), returned nothing, an error envelope or no JSON object, and this gate
 # fails open on each, saying which.
-pc_judge "$JUDGE_MODEL" "$JUDGE_TIMEOUT" "$RUBRIC" "$judge_input" || fail_open "$PC_JUDGE_ERR" judged
+#
+# It keeps to the hook's deadline like the further readings (claude-config#2249): everything above,
+# the failure handling scan of a large push most of all, takes time before it starts, and a call
+# given the full JUDGE_TIMEOUT that late ran past the 120 second hook limit, so the hook was killed
+# and the push refused with no reason. So it is not started with less than PART_MIN_SECONDS left,
+# its timeout is what is left when that is shorter, and a call that ran to that SHORTENED limit is
+# refused as could not judge. Each changed outcome is a refusal where the old one was a kill or a
+# call answering in the hook's last seconds; a full length call that fails still fails open. Every
+# number in this paragraph is a setting, not measured.
+first_left=$(( TESTS_DEADLINE - SECONDS ))
+first_t=$JUDGE_TIMEOUT; [ "$first_left" -lt "$first_t" ] && first_t=$first_left
+first_cut() {   # $1 = why the reading was not made or not finished
+  refuse cantjudge "$1" "${2:-}" <<REFUSAL
+PUSH BLOCKED: the test gate could not judge this push.
+
+$1, so the reviewer never answered. A gate that could not read the push does
+not approve it. Push fewer commits at a time (one commit, or split the branch) so the
+gate has less to read before it asks, then push again.
+$(widened_note; merge_note; branch_note; modkit_note)
+OVERRIDE: if you have checked that every change in this push IS tested, re-run with:
+    SKIP_TEST_CHECK=1 <your original git push command>
+BEFORE overriding you MUST explain to the user, in plain non-technical
+language, WHY skipping is legitimate here so they can judge whether it
+makes sense. Never override silently.
+REFUSAL
+}
+if [ "$first_left" -lt "$PART_MIN_SECONDS" ]; then
+  first_cut "The gate ran out of time before its first reading: ${SECONDS} seconds had gone reading the push, and the hook must finish inside 120"
+fi
+if ! pc_judge "$JUDGE_MODEL" "$first_t" "$RUBRIC" "$judge_input"; then
+  if [ "$first_t" -lt "$JUDGE_TIMEOUT" ]; then
+    case "$PC_JUDGE_ERR" in
+      "judge timed out"*) first_cut "The first reading was cut short at the gate's deadline: it started ${first_left} seconds before it, short of the ${JUDGE_TIMEOUT} a reading may take, and the hook must finish inside 120" judged ;;
+    esac
+    if [ -n "$PC_JUDGE_START" ] && [ -n "$PC_JUDGE_END" ] && [ $(( PC_JUDGE_END - PC_JUDGE_START )) -ge "$first_t" ]; then
+      first_cut "The first reading ran to the gate's deadline without an answer ($PC_JUDGE_ERR), and the hook must finish inside 120" judged
+    fi
+  fi
+  fail_open "$PC_JUDGE_ERR" judged
+fi
 add_call_cost
 
 verdict="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
@@ -748,6 +1019,11 @@ case "$verdict" in
 reviewer read them in $RT_READINGS parts, every byte of them, and no part held a test
 for the changes above."$'\n\n' ;;
         *)
+      # Earlier tests are read whatever the push's size (#2153), so a smaller push does not make
+      # them fit, and the advice below would not work alone; say so.
+      earlier_fit=""
+      [ "${#EARLIER_TESTS[@]}" -gt 0 ] && earlier_fit="The tests this branch pushed earlier are read with every push of it, so a smaller
+push does not make them smaller; if they alone are too many, split the branch."$'\n'
       refuse cantjudge "$missing_detail" judged <<REFUSAL
 PUSH BLOCKED: the test gate could not judge this push in full.
 
@@ -763,7 +1039,7 @@ These test files were not shown in full to any reading that answered:
 A test in one of them reads to the reviewer exactly like no test, so this is not a
 finding that tests are missing. Push fewer commits at a time (one commit, or split the
 branch) so each push's tests fit, then push again.
-$(widened_note; merge_note)
+${earlier_fit}$(widened_note; merge_note; branch_note; modkit_note)
 OVERRIDE: if you have checked that each change named above IS tested, re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>
 BEFORE overriding you MUST explain to the user, in plain non-technical
@@ -780,7 +1056,7 @@ Distinct changes still needing a test:
 $missing_shown
 
 ${parts_note}Add a test for each, then push again.
-$(widened_note; merge_note)
+$(widened_note; merge_note; branch_note; modkit_note)
 OVERRIDE: if the gate is wrong (the change is genuinely test-exempt,
 or an existing test already covers it), re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>

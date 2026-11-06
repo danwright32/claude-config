@@ -31,7 +31,15 @@ PC_EXCLUDES=(':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.snap'
   ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*.jpeg' ':(exclude)*.gif')
 
 # ---- which files the push carries ----
-# Run in the directory the push runs in (ps_repo_dir's answer). Sets:
+# The files added, copied, modified or renamed between $1 (a commit or tree) and HEAD, one per line,
+# relative to the repository root; fails when git does. One listing for the push's own range in
+# pc_resolve and for the tests a branch pushed earlier, which the test gate reads since
+# claude-config#2153.
+pc_files_since() {   # $1 = commit or tree
+  git diff --name-only --diff-filter=ACMR "$1" HEAD 2>/dev/null
+}
+
+# pc_resolve: run in the directory the push runs in (ps_repo_dir's answer). Sets:
 #   PC_UPSTREAM        the branch's upstream, empty when it has none
 #   PC_BASE            the ref the push is judged against (ps_base_ref)
 #   PC_MB              where the committed range starts, empty when no range is read
@@ -75,7 +83,7 @@ pc_resolve() {   # $1 = command
   [ -n "$PC_MB" ] && pc__set_apart_merged
 
   local committed="" pending=""
-  [ -n "$PC_FROM" ] && committed="$(git diff --name-only --diff-filter=ACMR "$PC_FROM" HEAD 2>/dev/null)"
+  [ -n "$PC_FROM" ] && committed="$(pc_files_since "$PC_FROM")"
 
   # The PENDING files when the command commits before it pushes: the index, plus what the shared
   # reader says the commit takes beyond it (#457), counting only files that exist. Read here, in the
@@ -374,7 +382,10 @@ pc_push_tree() {
   fi
   idx="$(git rev-parse --git-path index 2>/dev/null)"
   tmp="$(mktemp "${TMPDIR:-/tmp}/pc-index.XXXXXXXX")" || return 0
-  if [ -f "$idx" ]; then cp "$idx" "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  # cp -p keeps the index's modification time, which git's racy clean check reads: a plain copy is
+  # newer than every entry, so a same size edit made in the second the index was written matched
+  # its stat data and the copy kept the committed blob (claude-config#2258).
+  if [ -f "$idx" ]; then cp -p "$idx" "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
   else rm -f "$tmp"; GIT_INDEX_FILE="$tmp" git read-tree HEAD 2>/dev/null || { rm -f "$tmp"; return 0; }; fi
   while IFS= read -r f; do [ -n "$f" ] && paths+=("$f"); done <<< "$PC_PENDING_ALL"
   if [ "${#paths[@]}" -gt 0 ]; then
