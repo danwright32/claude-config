@@ -134,7 +134,6 @@ guard(){   # $1 = a python script body run with the guard first on PATH; output 
   printf '%s\n' "$1" > "$CO/scrub.py"
   out="$(cd "$CO" && fixture_env PATH="$GUARD_BIN:$BIN:$PATH" python3 scrub.py 2>&1)"; rc=$?
 }
-posted(){ grep -q '^POST|' "$CALLS"; }
 not_posted(){ ! grep -q '^POST|' "$CALLS"; }
 
 check "the guard is an executable file" [ -x "$GUARD" ]
@@ -267,7 +266,6 @@ hook(){   # $1 = the command, $2 = the session id (may be empty); stdout in out,
   decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
 }
 refused(){ [ "$rc" -eq 2 ] || [ "$decision" = deny ]; }
-passed(){ [ "$rc" -eq 0 ] && [ -z "$decision" ]; }
 
 printf 'import subprocess\nfor n in (1, 2):\n    subprocess.run(["gh", "issue", "edit", str(n), "--body", "x"])\n' > "$CO/scrub.py"
 printf '#!/usr/bin/env bash\ngh pr comment 5 --body "$1"\n' > "$CO/sub/post.sh"; chmod +x "$CO/sub/post.sh"
@@ -297,6 +295,25 @@ check "and a refusal does not use up the notice, which the next command carries:
 UNGUARDED3="77777777-2222-3333-4444-555555555555"
 hook 'gh pr view 5' "$UNGUARDED3"
 check "a gh command the gate clears carries the notice too: $out" told
+
+# A byte that is not UTF-8 in the command, ahead of the session id, under a UTF-8 locale: bash's =~
+# matches nothing past it there (claude-config#1885), so read in the session's locale alone the id was
+# never found and the session was never told. jq will not write such a byte, so the payload is
+# written by hand.
+if . "$HERE/lib/test_bad_byte_locale.sh" 2>/dev/null; then
+  if bad_byte_measured regex "#1885 the session id behind a byte that is not UTF-8"; then
+    BAD_SID="66666666-2222-3333-4444-555555555555"
+    printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo \377 done"},"cwd":"%s","session_id":"%s"}' \
+      "$CO" "$BAD_SID" > "$WORK/bad-byte-payload"
+    out="$(cd "$CO" && fixture_env LC_ALL="$(bad_byte_locale)" PATH="$BIN:$PATH" bash "$GATE" \
+      < "$WORK/bad-byte-payload" 2>"$WORK/hook-err")"; rc=$?
+    err="$(cat "$WORK/hook-err")"
+    decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+    check "#1885 a session id behind a byte that is not UTF-8 is still read, so the session is told: $out" told
+  fi
+else
+  check "lib/test_bad_byte_locale.sh loads, for the case with a byte that is not UTF-8" false
+fi
 
 hook 'python3 scrub.py' ""
 check "a payload with no session id runs as today and is told nothing, since once per session cannot be kept: $out" silent
