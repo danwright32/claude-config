@@ -3161,6 +3161,39 @@ or `bin/x`, 72 ms on `python3` running `nudge.py`, 130 ms on `bash` running a su
 ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 calls by a timer
 around the gate, was not reproduced by these and is replaced by them. Suite: `test-slack-drafts-only-gate.sh`.
 
+## Read only queries are approved without asking
+
+Auto mode's classifier refused a plain select against a production database on 2026-11-05 ("[Production
+Reads]", a category in its default soft deny list), though reads are meant to run without asking (Dan,
+2026-11-05: "you should be allowed to do reads"). `hooks/read-only-query-allow.sh` approves a read by
+itself, which skips the prompt and the classifier (#2343). It only ever approves or says nothing, so
+whatever it does not approve goes to the usual check exactly as before, and it is registered without
+`onFailure: "block"`, so a crash leaves a read to that check rather than refusing it.
+
+What it approves:
+
+- The six tools of the claude.ai Salesforce connection named "Read Only" (`find`, `getObjectSchema`,
+  `getRelatedRecords`, `getUserInfo`, `listRecentSobjectRecords`, `soqlQuery`), by exact name. A tool
+  added to that connection later is not approved until it is named. The writable Salesforce connection
+  never is, its query tool included.
+- The claude.ai Supabase `execute_sql` when its query is one statement starting with `select`, `with`,
+  `explain` or `show`, against any project.
+
+What it leaves to the usual check: any query that holds a semicolon other than one at the end, a
+comment, a character outside plain ASCII, any of the words insert, update, delete, merge, alter, drop,
+truncate, create, grant, revoke, into, share, execute, declare, call or copy anywhere (inside a string
+too), or a bracket after a name that is not a known pure built in function or a syntax word (so any
+other function call, schema qualified or quoted, is left). That covers a write hidden in a `with`,
+`select into`, a row lock, and `explain analyze` of a write.
+
+What it cannot see, since it reads only the statement's text: the database's own definitions. A select
+over a view that calls a function that writes, an operator or cast the database defined, a function on
+a table's row type called as a column (`t.some_function`), or a function the database defined under
+the name of a built in one, can still write. Suite: `test-read-only-query-allow.sh`.
+
+The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
+`environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
+
 ## Tests
 
 ```bash
