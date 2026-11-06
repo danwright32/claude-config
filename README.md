@@ -911,7 +911,9 @@ now", "separate
 effort", "deferred
 to", "follow
 up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines.
-`deferral-edit-check.sh` says the same thing at the moment the text is written.
+A phrase quoted as a word, inside backticks or double quotes closed on the same line and six words
+at most, is a mention and is not judged (#2133). `deferral-edit-check.sh` says the same thing at the
+moment the text is written.
 
 </td><td>
 
