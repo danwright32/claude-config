@@ -78,8 +78,17 @@ case "\$*" in
     if [ -n "\${GH_RUNS_FAILS:-}" ] && [ -s "\$GH_RUNS_FAILS" ]; then
       head -1 "\$GH_RUNS_FAILS" >&2; tail -n +2 "\$GH_RUNS_FAILS" > "\$GH_RUNS_FAILS.t"; mv "\$GH_RUNS_FAILS.t" "\$GH_RUNS_FAILS"; exit 1
     fi
-    if [ -n "\${GH_RUNS_JSON:-}" ]; then printf '%s\n' "\$GH_RUNS_JSON"
+    # GH_RUNS_DIR/<sha>: one commit's own runs, for the identical tree proof's parent (#2310).
+    sha=\$(printf '%s\n' "\$*" | sed -nE 's/.*head_sha=([0-9a-f]+).*/\1/p')
+    if [ -n "\${GH_RUNS_DIR:-}" ] && [ -n "\$sha" ] && [ -s "\$GH_RUNS_DIR/\$sha" ]; then cat "\$GH_RUNS_DIR/\$sha"
+    elif [ -n "\${GH_RUNS_JSON:-}" ]; then printf '%s\n' "\$GH_RUNS_JSON"
     else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
+    ;;
+  *"api graphql"*)
+    # The head's commit and its parents, for the identical tree proof (#2310): GH_GRAPHQL_JSON, or a
+    # failure, as a gh with no answer for it.
+    if [ -n "\${GH_GRAPHQL_JSON:-}" ]; then printf '%s\n' "\$GH_GRAPHQL_JSON"
+    else echo "gh: no commit graph in this case" >&2; exit 1; fi
     ;;
   *"pr view"*)
     if [ -n "\${GH_VIEW_FAILS:-}" ] && [ -s "\$GH_VIEW_FAILS" ]; then
@@ -1462,6 +1471,42 @@ if denied "$out" && holds "$out" "could not read which workflow runs"; then pass
 fi
 rm -rf "$dir"
 unset GH_RUNS_LOG
+
+echo "block-red-merge: an identical tree carries the green it already earned (#2310)"
+
+# A pull request updated from main whose new head has the same tree, byte for byte, as its previous
+# head, whose checks all passed beside a base it held, has nothing left for its own run to prove
+# (L312). Its run still pending, and runs not finished, are allowed on that proof, and only on it:
+# a tree that differs, or a proof that cannot be read, refuses as a pending head always has.
+TP_PARENT='1111111111111111111111111111111111111111'
+TP_TREE='7777777777777777777777777777777777777777'
+TP_BASE='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+TP_PENDING='{"number":7,"baseRefName":"main","url":"https://github.com/acme/widget/pull/7","statusCheckRollup":[{"__typename":"CheckRun","name":"tests","workflowName":"ci","status":"IN_PROGRESS","conclusion":"","startedAt":"2026-11-06T11:00:00Z"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"}'
+TP_RED='{"number":7,"baseRefName":"main","url":"https://github.com/acme/widget/pull/7","statusCheckRollup":[{"__typename":"CheckRun","name":"tests","workflowName":"ci","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-11-06T11:00:00Z"}],"headRefOid":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"}'
+tp_graph(){   # $1 = the head's tree
+  printf '{"data":{"repository":{"object":{"oid":"%s","tree":{"oid":"%s"},"parents":{"totalCount":1,"nodes":[{"oid":"%s","tree":{"oid":"%s"},"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[{"__typename":"CheckRun","name":"tests","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-11-06T10:00:00Z","checkSuite":{"workflowRun":{"databaseId":41,"event":"pull_request","workflow":{"name":"ci"}}}}]}}}]}}}}}' \
+    "$HEAD_SHA" "$1" "$TP_PARENT" "$TP_TREE"
+}
+dir=$(make_repo with-ci "$TP_PENDING")
+mkdir -p "$dir/runs"
+printf '{"total_count":1,"workflow_runs":[{"id":41,"name":"ci","status":"completed","conclusion":"success","event":"pull_request","pull_requests":[{"number":7,"base":{"ref":"main","sha":"%s"}}]}]}\n' "$TP_BASE" > "$dir/runs/$TP_PARENT"
+HEAD_RUNS_PENDING='{"total_count":1,"workflow_runs":[{"id":42,"name":"ci","status":"in_progress","conclusion":null}]}'
+out=$(GH_RUNS_DIR="$dir/runs" GH_RUNS_JSON="$HEAD_RUNS_PENDING" GH_GRAPHQL_JSON="$(tp_graph "$TP_TREE")" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "#2310 a pending head with the same tree as its green parent was refused: $out"; else pass; fi
+out=$(GH_RUNS_DIR="$dir/runs" GH_RUNS_JSON="$HEAD_RUNS_PENDING" GH_GRAPHQL_JSON="$(tp_graph "$TP_TREE")" run_hook "$dir" "gh pr merge 7 --squash")
+if denied "$out" && holds "$out" "does not pin"; then pass; else fail "#2310 a merge carried on the proof was let through unpinned: $out"; fi
+out=$(GH_RUNS_DIR="$dir/runs" GH_RUNS_JSON="$HEAD_RUNS_PENDING" GH_GRAPHQL_JSON="$(tp_graph 8888888888888888888888888888888888888888)" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "tests=PENDING"; then pass; else fail "#2310 a pending head whose tree differs was not refused as pending: $out"; fi
+if holds "$out" "differs from every parent"; then pass; else fail "#2310 the refusal does not say why the green was not carried: $out"; fi
+out=$(GH_RUNS_DIR="$dir/runs" GH_RUNS_JSON="$HEAD_RUNS_PENDING" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "could not read the head's commit"; then pass; else fail "#2310 a proof that could not be read did not refuse, saying so: $out"; fi
+rm -rf "$dir"
+dir=$(make_repo with-ci "$TP_RED")
+mkdir -p "$dir/runs"
+printf '{"total_count":1,"workflow_runs":[{"id":41,"name":"ci","status":"completed","conclusion":"success","event":"pull_request","pull_requests":[{"number":7,"base":{"ref":"main","sha":"%s"}}]}]}\n' "$TP_BASE" > "$dir/runs/$TP_PARENT"
+out=$(GH_RUNS_DIR="$dir/runs" GH_GRAPHQL_JSON="$(tp_graph "$TP_TREE")" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "tests=FAILURE"; then pass; else fail "#2310 a red head was carried past on an identical tree: $out"; fi
+rm -rf "$dir"
 
 echo "block-red-merge: the gate's own reads are asked again on a dropped connection (#1081)"
 

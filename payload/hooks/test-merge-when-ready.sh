@@ -159,8 +159,18 @@ case "$*" in
   "api repos/acme/widget/actions/runs"*)
     # The workflow runs GitHub has created for the head (claude-config#1087): none unless a test
     # writes some to runs, the shape a repository whose runs have all finished answers with too.
+    # runs-<sha> answers for that commit alone, as the identical tree proof reads a parent's (#2310).
     fail_read runs
-    if [ -s "$ST/runs" ]; then cat "$ST/runs"; else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
+    sha="$(printf '%s\n' "$*" | sed -nE 's/.*head_sha=([0-9a-f]+).*/\1/p')"
+    if [ -n "$sha" ] && [ -s "$ST/runs-$sha" ]; then cat "$ST/runs-$sha"
+    elif [ -s "$ST/runs" ]; then cat "$ST/runs"; else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
+    ;;
+  # The head's commit and its parents, for the identical tree proof (claude-config#2310): graph holds
+  # GitHub's answer, and with none the read fails, as an answer nobody set.
+  "api graphql"*)
+    printf '%s\n' "$(rd clock)" >> "$ST/graph-times"
+    [ -s "$ST/graph" ] || { echo "fake gh: no commit graph set" >&2; exit 1; }
+    cat "$ST/graph"
     ;;
   # The repository's settings, for the merge methods it allows (claude-config#1476): methods holds the
   # JSON GitHub answers with, all three allowed when unset, as PET and claude-config answered on
@@ -256,6 +266,10 @@ export LOAD_WINDOW_DIR="$WORKDIR/load-window"
 # And the lessons review's state, where the review gate records a read key a typed command presented
 # to the helper (claude-config#1673), never this Mac's own.
 export AI_REVIEW_STATE_DIR="$WORKDIR/ai-review"
+# And the record of each identical tree decision (claude-config#2310), never this Mac's, on the
+# suite's own clock.
+export TP_LEDGER_DIR="$WORKDIR/tree-proof"
+export TP_NOW="$BIN/fake-now"
 
 # --- stub gates and review checker: log the payload or arguments, answer from files ---------------
 STUBS="$WORKDIR/stubs"; mkdir -p "$STUBS"
@@ -361,7 +375,7 @@ git init -q "$REPO"
 git -C "$REPO" remote add origin https://github.com/acme/widget.git
 
 fresh(){ # fresh <head> <behind> <rollup>
-  rm -rf "$ST" "$GH_POLL_STATE_DIR" "$MWR_TURN_DIR" "$AI_REVIEW_STATE_DIR" "$MWR_PHASE_DIR"; mkdir -p "$ST"
+  rm -rf "$ST" "$GH_POLL_STATE_DIR" "$MWR_TURN_DIR" "$AI_REVIEW_STATE_DIR" "$MWR_PHASE_DIR" "$TP_LEDGER_DIR"; mkdir -p "$ST"
   printf '%s' "$1" > "$ST/head"; printf '%s' "$2" > "$ST/behind"; printf '%s' "$3" > "$ST/rollup"
   printf '%s' "$PENDING" > "$ST/rollup-after-update"
   : > "$ST/next-heads"; : > "$ST/on-sleep"; : > "$ST/stacked"
@@ -2763,6 +2777,66 @@ check_eq "#1867 the resolver exits 10 for a case it does not handle" "10" "$rc"
 check_eq "#1867 and writes nothing then" "$before" "$(cat "$d/README.md")"
 python3 "$RR_LIB" "$RR/union-session" >/dev/null 2>&1; rc=$?
 check_eq "#1867 the resolver exits 2 when README.md is not in conflict there" "2" "$rc"
+
+# =================================================================================================
+# 28. An identical tree carries the green it already earned (claude-config#2310). On 2026-11-05 #2282
+# was updated three times, each update a fresh 38 minute suite run, and never merged inside its hold
+# on the merge line. When the updated head's tree is byte for byte its previous head's, whose checks
+# all passed beside a base it held, the helper does not wait for the rerun: it asks the gates at
+# once, and they judge that same proof (lib/tree-proof.sh). Every decision is recorded, taken or not.
+# =================================================================================================
+TP_TREE="7777777777777777777777777777777777777777"
+TP_BASE="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+tp_graph(){ # tp_graph <the new head's tree>: NEW's parent is OLD, whose one check passed in run 41
+  printf '{"data":{"repository":{"object":{"oid":"%s","tree":{"oid":"%s"},"parents":{"totalCount":2,"nodes":[{"oid":"%s","tree":{"oid":"%s"},"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[{"__typename":"CheckRun","name":"tests","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-06T10:00:00Z","checkSuite":{"workflowRun":{"databaseId":41,"event":"pull_request","workflow":{"name":"ci"}}}}]}}},{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tree":{"oid":"9999999999999999999999999999999999999999"},"statusCheckRollup":null}]}}}}}' \
+    "$NEW" "$1" "$OLD" "$TP_TREE" > "$ST/graph"
+  printf '{"total_count":1,"workflow_runs":[{"id":41,"name":"ci","status":"completed","conclusion":"success","event":"pull_request","pull_requests":[{"number":7,"base":{"ref":"main","sha":"%s"}}]}]}\n' "$TP_BASE" > "$ST/runs-$OLD"
+}
+tp_rows(){ cat "$TP_LEDGER_DIR/decisions.tsv" 2>/dev/null; }
+
+# The proof holds: merged at once, while the new head's own run is still going.
+fresh "$OLD" 4 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"
+tp_graph "$TP_TREE"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2310 an updated head with its previous head's tree merges" "0" "$rc"
+check "#2310 at the new head" "Merged #7 in acme/widget at ${NEW:0:7}" "$out"
+check "#2310 saying why it did not wait for that head's own run" "byte for byte the tree of ${OLD:0:7}" "$out"
+check_eq "#2310 with that run still going when it merged" "$PENDING" "$(cat "$ST/rollup")"
+check_eq "#2310 the merge was still judged by the checks gate" "1" "$(grep -c "match-head-commit $NEW" "$ST/red-gate-payloads")"
+check "#2310 the decision is recorded as taken, from the previous head" "$(printf 'acme/widget\t7\t%s\ttaken\t%s\t' "$NEW" "$OLD")" "$(tp_rows)"
+
+# The tree differs: waited on exactly as before, and recorded as not taken, once for the head.
+fresh "$OLD" 4 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"
+tp_graph "8888888888888888888888888888888888888888"
+printf '%s\n%s\n%s\n' ":" ":" "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2310 a head whose tree differs still merges once its checks pass" "0" "$rc"
+check_eq "#2310 after its own run went green" "$GREEN" "$(cat "$ST/rollup")"
+check "#2310 waiting on that run as before" "waiting, checks still running" "$out"
+check "#2310 the decision is recorded as not taken, saying why" "$(printf 'acme/widget\t7\t%s\tnot-taken\t\tits tree differs from every parent' "$NEW")" "$(tp_rows)"
+check_eq "#2310 considered once for the head, however many looks it waits" "1" "$(tp_rows | wc -l | tr -d ' ')"
+check_eq "#2310 so the commit graph is read once" "1" "$(wc -l < "$ST/graph-times" | tr -d ' ')"
+
+# The proof cannot be read: waited on as before, never merged on a guess, and recorded so.
+fresh "$OLD" 4 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"
+printf '%s\n%s\n' ":" "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2310 an unreadable proof still merges once the checks pass" "0" "$rc"
+check_eq "#2310 only after its own run went green" "$GREEN" "$(cat "$ST/rollup")"
+check "#2310 recorded as not taken, saying it could not read" "$(printf '%s\tnot-taken\t\tcould not read' "$NEW")" "$(tp_rows)"
+
+# A head whose own run has already failed is never merged on its parent's green.
+fresh "$OLD" 4 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"
+tp_graph "$TP_TREE"
+printf '%s' "$RED" > "$ST/rollup-after-update"
+printf 'not green: tests=FAILURE' > "$ST/red-gate-deny"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2310 a red head is not merged on an identical tree" "1" "$rc"
+check_eq "#2310 nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 echo
 echo "passed: $pass, failed: $fail"

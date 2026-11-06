@@ -11,7 +11,9 @@
 # Fails CLOSED: anything other than a positive all-green reading blocks. Pending
 # counts as not-green, because "merge as soon as it goes green" is the habit that
 # produced the mistake. A repo with no checks at all is allowed, since there is
-# nothing that could be red.
+# nothing that could be red. The one pending head allowed is one whose tree is byte
+# for byte a parent's that passed beside a base it held, proved from GitHub by
+# lib/tree-proof.sh (claude-config#2310); a proof that cannot be read refuses.
 #
 # And once it reads green, the merge must PIN that commit with
 # --match-head-commit, because the rollup answers about the pull request rather
@@ -481,7 +483,38 @@ fi
 
 bad=$(printf '%s' "$verdicts" | jq -r '[.[] | select(.result | IN("SUCCESS","NEUTRAL","SKIPPED") | not)] | map("\(.name)=\(if .result == "" then "PENDING" else .result end)") | join(", ")')
 
-[ -n "$bad" ] && deny "PR #$number is not green: $bad. Wait for it, or fix it. This gate exists because a red run was merged on 2026-07-28 by misreading the output. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+# The commit the rollup is about, and the repository it is in, read from the pull request's own url,
+# which is the one gh just answered about, then from what the merge or the folder named. Never from
+# gh's {owner}/{repo} placeholder, which is filled in from whatever checkout the call happens to run
+# in (#418). Every rule below asks GitHub about them, as the account that could see the pull request.
+head_sha=$(printf '%s' "$rollup" | jq -r '.headRefOid // ""' 2>/dev/null)
+slug=$(printf '%s' "$rollup" | jq -r '.url // ""' 2>/dev/null \
+  | sed -nE 's#^https://github\.com/([^/]+/[^/]+)/pull/[0-9]+.*$#\1#p')
+[ -n "$slug" ] || slug="$remote_slug"
+
+# AN IDENTICAL TREE CARRIES THE GREEN IT ALREADY EARNED (claude-config#2310). A pull request updated
+# from main gets a new head whose checks start again, a 30 to 38 minute suite here, and with main
+# moving often the pull request holding the merge line kept losing its turn to the rerun. When that
+# head's tree is byte for byte the tree of a parent whose checks all passed beside a base it already
+# held, the rerun can only test the same tree again (L312), so a head whose checks are only still
+# running, none failed, is judged on that proof instead. lib/tree-proof.sh holds the proof and every
+# part of it is read from GitHub here; anything it cannot read carries nothing, and the head is
+# refused as pending, as before, saying why its green was not carried.
+carried=""; tp_said=""
+if [ -n "$bad" ] && [ -n "$head_sha" ] && [ -n "$slug" ] \
+   && [ "$(printf '%s' "$verdicts" | jq '[.[] | select(.result | IN("", "PENDING", "EXPECTED", "SUCCESS", "NEUTRAL", "SKIPPED") | not)] | length')" = 0 ]; then
+  if . "$HOOK_DIR/lib/tree-proof.sh" 2>/dev/null && declare -F tp_carried_green >/dev/null; then
+    if tp_carried_green "$slug" "$head_sha" "$view_account" "$(printf '%s' "$rollup" | jq -c '[.statusCheckRollup[]?]')"; then
+      carried=1
+    else
+      tp_said=" Its green was not carried from an identical tree either: $TP_WHY."
+    fi
+  else
+    tp_said=" Whether it carries the green of an identical tree could not be judged: $HOOK_DIR/lib/tree-proof.sh is missing."
+  fi
+fi
+
+[ -n "$bad" ] && [ -z "$carried" ] && deny "PR #$number is not green: $bad.$tp_said Wait for it, or fix it. This gate exists because a red run was merged on 2026-07-28 by misreading the output. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
 
 # GREEN. Now pin the merge to the commit that reading was ABOUT (#345).
 #
@@ -498,16 +531,9 @@ bad=$(printf '%s' "$verdicts" | jq -r '[.[] | select(.result | IN("SUCCESS","NEU
 #
 # Reached only on a POSITIVE green reading, deliberately: the empty-rollup paths above exit before
 # this, because the pin protects a VERDICT and there is no verdict in a repo with no CI. Requiring
-# it there would block those repos for a reason that does not apply to them (L615, L324).
-head_sha=$(printf '%s' "$rollup" | jq -r '.headRefOid // ""' 2>/dev/null)
-
-# The repository the pull request is in, read from its own url, which is the one gh just answered
-# about, then from what the merge or the folder named. Never from gh's {owner}/{repo} placeholder,
-# which is filled in from whatever checkout the call happens to run in (#418). Both rules below ask
-# GitHub about it, as the account that could see the pull request.
-slug=$(printf '%s' "$rollup" | jq -r '.url // ""' 2>/dev/null \
-  | sed -nE 's#^https://github\.com/([^/]+/[^/]+)/pull/[0-9]+.*$#\1#p')
-[ -n "$slug" ] || slug="$remote_slug"
+# it there would block those repos for a reason that does not apply to them (L615, L324). A head
+# that carries the green of an identical tree (#2310) is pinned the same way: the proof is about that
+# head, and only that head.
 # The one step remedy both rules hand over, carrying this merge's own method so it merges the same
 # way. Only the flags the helper carries are read; anything else is not its to pass on.
 #
@@ -606,7 +632,9 @@ if [ -n "$head_sha" ]; then
   if [ "$runs_rc" -ne 0 ]; then
     deny "Refusing to merge: could not read which workflow runs GitHub has for PR #$number's head ${head_sha:0:7} in $slug (${MT_RUNS_ERR:-no answer}), so nothing here can tell whether CI is still to report on it. Not knowing is not the same as nothing being left to run: the checks reported so far may be a fast few, with the rest not registered yet. Re-run once GitHub answers. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
   fi
-  if [ -n "$MT_RUNS_PENDING" ]; then
+  # A head carrying an identical tree's green (#2310) has its own run still going by definition: the
+  # proof, not that run, is what it is judged on.
+  if [ -n "$MT_RUNS_PENDING" ] && [ -z "$carried" ]; then
     deny "PR #$number is not green yet: every check that has reported on its head ${head_sha:0:7} is green, but GitHub has workflow runs for that head that have not finished: $MT_RUNS_PENDING. Their checks have not all registered, so the green so far is about part of the head's CI, which is how Slate #3645 was merged before its CI ran (claude-config#1087). Wait for them, or have it done in the background from a checkout of the repository: $helper_cmd . It waits for those runs and the lessons review, then merges only that head. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
   fi
 fi

@@ -282,6 +282,13 @@ interval="$POLL"
 . "$MWR_LIB/merge-turn.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/merge-turn.sh is missing, so the repository's turn to merge cannot be taken. Nothing was merged." >&2; exit 1; }
 # shellcheck source=stacked-prs.sh
 . "$MWR_LIB/stacked-prs.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/stacked-prs.sh is missing, so the pull requests stacked on a branch cannot be listed. Nothing was merged." >&2; exit 1; }
+# The identical tree proof (claude-config#2310). Missing, nothing is carried and every head's own
+# checks are waited on, as before it existed, and each wait says why.
+# shellcheck source=tree-proof.sh
+if ! . "$MWR_LIB/tree-proof.sh" 2>/dev/null || [ "$(type -t tp_carried_green)" != function ]; then
+  tp_carried_green(){ TP_FROM=""; TP_WHY="$MWR_LIB/tree-proof.sh is missing, so no green was carried"; return 1; }
+  tp_record(){ return 1; }
+fi
 # A DELIBERATE LOAD WINDOW is named beside every failure (claude-config#1618). On 2026-10-23 this
 # helper stopped five times on GitHub reads at a load average of 342 while a builder's load
 # reproduction ran, and nothing it said named that load. tools/load-window.sh records each window in
@@ -783,6 +790,8 @@ finish_branch(){   # $1 = the sentence saying it merged; always stops
 
 record_asked=""; polls=0; updates=0; head_seen=""; head_since=0; started_for=""; last_status=""; last_said=0
 tip_seen=""; tip_moved_at=""
+# The head the identical tree proof was last weighed for, and whether it held (claude-config#2310).
+tp_for=""; tp_ok=""
 # The last update this run made (claude-config#1500): the head it was made to, when, and whether a
 # compare has answered since. See head_is_tip and not_caught_up.
 updated_from=""; updated_at=0; catching_up=""
@@ -1445,6 +1454,30 @@ while :; do
       waiting="checks still running (workflow runs not finished: $runs_pending)"
     elif [ "$checks_total" -eq 0 ] && [ $(( $(now) - head_since )) -lt "$GRACE" ]; then
       waiting="checks still running (none reported yet)"
+    fi
+  fi
+  # AN IDENTICAL TREE CARRIES THE GREEN IT ALREADY EARNED (claude-config#2310). On 2026-11-05 #2282
+  # was updated three times, each a fresh 38 minute suite run, and never merged inside its hold on the
+  # merge line. A head whose checks are only still running (some registered, none failed) and whose
+  # tree is byte for byte a parent's that passed beside a base it held is not waited on: the gates are
+  # asked at once, and block-red-merge.sh judges the same proof itself (lib/tree-proof.sh), so this
+  # decides only WHEN to ask, as everything here does. Weighed once per head, since nothing it reads
+  # changes while that head waits; one it could not read waits as before. Each decision is recorded,
+  # taken or not, so how often it fires can be measured.
+  if [ -n "$waiting" ] && [ "$checks_total" -gt 0 ]; then
+    if [ "$tp_for" != "$head" ]; then
+      tp_for="$head"; tp_ok=""
+      if tp_carried_green "$slug" "$head" "$account" "$(printf '%s' "$view" | jq -c '[.statusCheckRollup[]?]')"; then
+        tp_ok=1
+        say "Head ${head:0:7}: not waiting for its own check run, since $TP_WHY (claude-config#2310). Asking the gates now."
+        tp_record merge-when-ready "$slug" "$pr" "$head" taken "$TP_FROM" "$TP_WHY" || say "The decision above could not be recorded."
+      else
+        tp_record merge-when-ready "$slug" "$pr" "$head" not-taken "" "$TP_WHY" || say "Whether head ${head:0:7} carried an identical tree's green could not be recorded."
+      fi
+    fi
+    # Only while none of its own checks has failed: a failure on that tree is news, and waits.
+    if [ -n "$tp_ok" ] && [ "$(printf '%s' "$view" | jq '[.statusCheckRollup[]? | ((.conclusion // .state // "") | ascii_upcase) | select(IN("", "PENDING", "EXPECTED", "SUCCESS", "NEUTRAL", "SKIPPED") | not)] | length')" = 0 ]; then
+      waiting=""
     fi
   fi
   phase_local "asking the lessons review of ${head:0:7}"

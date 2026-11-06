@@ -1634,7 +1634,13 @@ checks, waits for both, updates again if the base has moved meanwhile, and
 then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
 `require-changelog-tag.sh`, `check-closing-merge.sh`, `check-work-names-merge.sh` (#1995),
 `design-score-gate.sh` and `require-verification-run.sh` and merges only
-when every one allows it, so it decides nothing any gate would refuse. What a gate allows with
+when every one allows it, so it decides nothing any gate would refuse. An updated head whose
+tree is byte for byte its previous head's, whose checks all passed beside a base it already held,
+is not waited on for a rerun of the same tree: `block-red-merge.sh` judges that proof itself, read
+from GitHub by `lib/tree-proof.sh`, and refuses a pending head as before whenever any part of it
+cannot be read (claude-config#2310). Each time the helper weighs it, taken or not, is a line in
+`~/.claude/state/tree-proof/decisions.tsv`, and `bash ~/.claude/hooks/lib/tree-proof.sh rate`
+says how often it fired. What a gate allows with
 something to say, such as the verification gate's warn mode verdict, is written to its log. The changelog record gate is also asked at the first look, before any update, wait or
 review, because nothing those do can add a missing label, and so are the closing keyword gate
 and the work names gate, because nothing they do can change a body or a title. Asking only the first two let nine booking app
