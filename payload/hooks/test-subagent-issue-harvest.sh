@@ -1505,7 +1505,14 @@ contains "$MUTED_REASON" "$(bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIP
 # never MAKES a review speak: a fault nobody can act on must not be able to
 # interrupt a turn (the same reason it does not beat the cooldown).
 # ---------------------------------------------------------------------------
-MUTED_STAMP="${TMPDIR:-/tmp}/claude-feature-issue-muted-$(printf '%s' "$REPO" | shasum | cut -c1-12).stamp"
+# The week's stamp lives beside the spool, not in the temp folder macOS cleans after about three and
+# a half days (claude-config#2296). Its path comes from the library, the one derivation the hook uses
+# too; where it lands is asserted separately below, against the spool root this suite set.
+MUTED_STAMP="$(bash "$SPOOL_LIB" muted-stamp "$REPO" 2>/dev/null)"
+case "$MUTED_STAMP" in
+  "$CLAUDE_ISSUE_SPOOL_DIR"/*) check "#2296 the held-back count's stamp lives under the spool root" ok ;;
+  *) check "#2296 the held-back count's stamp lives under the spool root" "path=${MUTED_STAMP:-none}" ;;
+esac
 
 reset_spool
 rm -f "$REVIEW_STAMP" "$MUTED_STAMP"
@@ -1547,6 +1554,65 @@ contains "the named agent transcript does not exist" "$(bash "$SPOOL_LIB" raw "$
 [ -f "$MUTED_STAMP" ] \
   && check "an undelivered periodic report does not restart its clock" "the stamp was written" \
   || check "an undelivered periodic report does not restart its clock" ok
+
+# THE TEMP FOLDER BEING CLEANED DOES NOT RESTART THE WEEK (claude-config#2296). macOS removes files in
+# TMPDIR untouched for about three and a half days, and the stamp used to live there, so the weekly
+# count came back every few days with nothing saying why. Deliver a count, then empty this run's
+# TMPDIR the way the cleaner would: the next review must still treat the week as running.
+reset_spool
+rm -f "$REVIEW_STAMP"
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":5,"error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+printf '%s' "$review_payload" | bash "$REVIEW" >/dev/null 2>&1
+find "$TMPDIR" -type f -name '*muted*' 2>/dev/null | grep -q . \
+  && check "#2296 a delivered count leaves no stamp in the temp folder" "$(find "$TMPDIR" -type f -name '*muted*' 2>/dev/null | head -n 3)" \
+  || check "#2296 a delivered count leaves no stamp in the temp folder" ok
+find "$TMPDIR" -type f -delete 2>/dev/null || true
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T09:00:00Z","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+out_cleaned="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+contains "HARVEST UNREADABLE" "$out_cleaned" \
+  && check "#2296 emptying the temp folder does not bring the count back early" "it repeated: ${out_cleaned:0:200}" \
+  || check "#2296 emptying the temp folder does not bring the count back early" ok
+
+# A MISSING STAMP IS SAID, NEVER READ AS A WEEK JUST STARTED (claude-config#2296). With no record of
+# when the count last went out, the count goes out now, and the line says why it came now.
+reset_spool
+rm -f "$REVIEW_STAMP"
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":4,"error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+out_missing="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+contains "HARVEST UNREADABLE" "$out_missing" \
+  && check "#2296 a missing stamp sends the count out now" ok \
+  || check "#2296 a missing stamp sends the count out now" "out=${out_missing:0:200}"
+contains "No record of when this count last went out was found" "$out_missing" \
+  && check "#2296 a missing stamp is said in the count's line" ok \
+  || check "#2296 a missing stamp is said in the count's line" "out=${out_missing:0:400}"
+# The control: once a stamp is in place and the week has passed, the count goes out with no such note.
+[ -f "$MUTED_STAMP" ] && printf '1' > "$MUTED_STAMP"
+rm -f "$REVIEW_STAMP"
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T09:00:00Z","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+out_due="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+if contains "HARVEST UNREADABLE" "$out_due" && ! contains "last went out" "$out_due"; then
+  check "#2296 a stamp a week old sends the count with no note about the stamp" ok
+else
+  check "#2296 a stamp a week old sends the count with no note about the stamp" "stamp=$([ -f "$MUTED_STAMP" ] && echo present || echo absent) out=${out_due:0:400}"
+fi
+
+# An UNREADABLE stamp is a different cause and gets its own words (L11).
+rm -f "$REVIEW_STAMP"
+mkdir -p "$(dirname "$MUTED_STAMP")"
+printf 'not a time' > "$MUTED_STAMP"
+bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T09:00:00Z","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
+out_garbled="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+contains "could not be read" "$out_garbled" \
+  && check "#2296 an unreadable stamp is said in the count's line" ok \
+  || check "#2296 an unreadable stamp is said in the count's line" "out=${out_garbled:0:400}"
+
+# Like every writer, the stamp is never written into the real spool from a test run (claude-config#278).
+real_muted="$(HOME="$TMPROOT/fakehome" CLAUDE_ISSUE_SPOOL_DIR="" CLAUDE_SUITE_RUN_ID=suite-x bash "$SPOOL_LIB" muted-sent "$REPO" 2>&1)"; real_rc=$?
+if [ "$real_rc" -ne 0 ] && [ ! -e "$TMPROOT/fakehome/.claude-issue-spool/muted" ] && contains "refusing" "$real_muted"; then
+  check "#2296 muted-sent refuses the real spool under a test run" ok
+else
+  check "#2296 muted-sent refuses the real spool under a test run" "rc=$real_rc out=$real_muted"
+fi
 
 # ---------------------------------------------------------------------------
 # The spool key must come from the SESSION, not from the agent's cwd.
