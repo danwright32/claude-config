@@ -86,6 +86,10 @@
 # CLOSED: messages it could not judge, a commit the command has not written yet, the work repository
 # list unreadable, or its library missing each refuse the push. See where it is asked.
 #
+# Then, still before any suite, it judges each test suite the push adds or changes for its own wall
+# clock (claude-config#2330), with the answer test-suite-deadline.sh gives in the full suite, and that
+# fails CLOSED the same way: a suite it could not read, or either library missing, refuses the push.
+#
 # Override: SKIP_SCANNERS_CHECK=1 git push ...   Explain why to the user first, never silently.
 
 # The clock starts here, before anything else, because Claude Code's timeout for this hook starts
@@ -126,6 +130,26 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
   case "$payload" in *SKIP_SCANNERS_CHECK=1*) exit 0 ;; esac
   case "$payload" in *push*) ;; *) exit 0 ;; esac
   echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/work-names-messages.sh, which reads the messages of the commits this push adds for a work organisation or repository name, so they were not checked. A library this gate cannot load is not a push with clean messages. Reinstall the hooks with claude-sync pull." >&2
+  exit 2
+}
+# Which files a push adds or changes, and the tree it delivers (claude-config#2330), from the one
+# reader the push gates share; and the one answer to whether a suite arms its own wall clock, the
+# same one test-suite-deadline.sh asks. Missing, the same as above: a push is refused, naming the
+# file, and any other command passes.
+# shellcheck source=lib/push-changes.sh
+{ . "$HOOK_DIR/lib/push-changes.sh" 2>/dev/null && declare -F pc_resolve >/dev/null && declare -F pc_push_tree >/dev/null; } || {
+  payload="$(ps_read_payload)"
+  case "$payload" in *SKIP_SCANNERS_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *push*) ;; *) exit 0 ;; esac
+  echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/push-changes.sh, which reads which files this push adds or changes, so the test suites among them were not checked for their own deadline. Reinstall the hooks with claude-sync pull. For this one command: SKIP_SCANNERS_CHECK=1 <the same command>" >&2
+  exit 2
+}
+# shellcheck source=lib/suite-arms-check.sh
+{ . "$HOOK_DIR/lib/suite-arms-check.sh" 2>/dev/null && declare -F suite_arms_deadline >/dev/null; } || {
+  payload="$(ps_read_payload)"
+  case "$payload" in *SKIP_SCANNERS_CHECK=1*) exit 0 ;; esac
+  case "$payload" in *push*) ;; *) exit 0 ;; esac
+  echo "BLOCKED: scanners-before-push.sh could not load $HOOK_DIR/lib/suite-arms-check.sh, which judges whether each test suite this push adds or changes arms its own deadline, so they were not checked. A suite nobody judged is not one that arms. Reinstall the hooks with claude-sync pull. For this one command: SKIP_SCANNERS_CHECK=1 <the same command>" >&2
   exit 2
 }
 
@@ -206,6 +230,68 @@ case "$_wn_rc" in
     echo "PUSH BLOCKED: this gate could not judge the messages of the commits this push adds for a work organisation or repository name: $WNM_OUT. Messages nobody could read are not clean ones." >&2
     exit 2 ;;
 esac
+
+# EVERY TEST SUITE THIS PUSH ADDS OR CHANGES ARMS ITS OWN WALL CLOCK (claude-config#2330). Until
+# then only test-suite-deadline.sh asked, and it runs in the full suite, which a builder on a loaded
+# Mac leaves to the pull request's checks: on 2026-11-05 a suite went up without it and the miss
+# surfaced in CI about 40 minutes later. Asked here, before any scanner, of each file named
+# test-*.sh the push adds or changes (the same set the runner calls suites, any tracked test-*.sh),
+# read from the tree the push DELIVERS rather than the working copy, through lib/suite-arms-check.sh,
+# the answer the full suite gives, so the two cannot disagree about a file. A suite already on the
+# remote is not judged again on every push. The push's files come from lib/push-changes.sh, the
+# reader the other push gates share. It carrying none (pc_resolve 1 or 2) leaves nothing to judge;
+# the full suite still reads every suite. A suite it could not read, or a tree it could not work
+# out, refuses: a suite nobody read is not one that arms (L10, L98).
+pc_resolve "$cmd"; _sc_pc_rc=$?
+_sc_new_suites=""
+if [ "$_sc_pc_rc" -eq 0 ]; then
+  while IFS= read -r _f; do
+    case "${_f##*/}" in test-*.sh) _sc_new_suites="$_sc_new_suites$_f"$'\n' ;; esac
+  done <<EOF
+$PC_FILES
+EOF
+fi
+if [ -n "$_sc_new_suites" ]; then
+  _sc_unarmed=""; _sc_unread=""
+  _sc_tree="$(pc_push_tree)"
+  _sc_blob="$(mktemp "${TMPDIR:-/tmp}/scanners-suite.XXXXXXXX" 2>/dev/null)" || _sc_blob=""
+  while IFS= read -r _f; do
+    [ -n "$_f" ] || continue
+    if [ -z "$_sc_tree" ] || [ -z "$_sc_blob" ] \
+       || ! git cat-file blob "$_sc_tree:$_f" > "$_sc_blob" 2>/dev/null; then
+      _sc_unread="$_sc_unread  $_f"$'\n'; continue
+    fi
+    suite_arms_deadline "$_sc_blob"; _sc_arm_rc=$?
+    case "$_sc_arm_rc" in
+      0) ;;
+      1) _sc_unarmed="$_sc_unarmed  $_f"$'\n' ;;
+      *) _sc_unread="$_sc_unread  $_f"$'\n' ;;
+    esac
+  done <<EOF
+$_sc_new_suites
+EOF
+  [ -n "$_sc_blob" ] && rm -f "$_sc_blob"
+  if [ -n "$_sc_unarmed" ] || [ -n "$_sc_unread" ]; then
+    {
+      if [ -n "$_sc_unarmed" ]; then
+        echo "PUSH BLOCKED: test suites this push adds or changes $SUITE_ARMS_WHY (claude-config#465, #2330):"
+        printf '%s' "$_sc_unarmed"
+        echo ""
+        echo "Arm each near its top, the way every suite here does: source lib/suite-deadline.sh, refusing"
+        echo "to run when it is missing, then call suite_deadline_arm || exit \$?. test-suite-deadline.sh"
+        echo "refuses the same suites in the full suite."
+      fi
+      if [ -n "$_sc_unread" ]; then
+        [ -n "$_sc_unarmed" ] && echo ""
+        echo "PUSH BLOCKED: these test suites this push adds or changes could not be read from the tree it"
+        echo "delivers, so whether they arm their own deadline was not judged (claude-config#2330):"
+        printf '%s' "$_sc_unread"
+      fi
+      echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    } >&2
+    exit 2
+  fi
+fi
 
 # Every suite that reads the repository's own files, committed or NOT (claude-config#522). Picked
 # from what git tracks, a scanner just written was not run until the push after the one that added

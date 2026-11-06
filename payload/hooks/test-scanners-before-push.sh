@@ -487,7 +487,7 @@ o38="$(fire "$R38" "git push")"; c38=$?
 # and, since #1910, the key's, and nothing else.
 FAKEHOOKS="$TMPROOT/fakehooks"; mkdir -p "$FAKEHOOKS/lib"
 cp "$H" "$FAKEHOOKS/scanners-before-push.sh"
-python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FAKEHOOKS/lib" push-scope.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js || check "the install of the fake hooks' helpers" "the install refused"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FAKEHOOKS/lib" push-scope.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js push-changes.sh suite-arms-check.sh || check "the install of the fake hooks' helpers" "the install refused"
 cat > "$FAKEHOOKS/lib/repo-files.sh" <<EOF
 #!/usr/bin/env bash
 case "\$1" in --uncommitted|--changed) echo "repo-files: git could not list the files under \$2 that are not committed." >&2; exit 1 ;; esac
@@ -1456,7 +1456,7 @@ treefire "$R1910e" "git push" >/dev/null
 nokey_hooks(){   # $1 = folder  $2 = the one thing missing: listing (the listings of what is not committed fail), pidlock or recorded (that lock library is absent), or state (nothing; the state folder is made bad by the caller)
   mkdir -p "$1/lib"
   cp "$H" "$1/scanners-before-push.sh"
-  python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$1/lib" push-scope.sh load-average.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js pid-lock.sh recorded-pid.sh repo-files.sh || check "the install of the nokey hooks' helpers" "the install refused"
+  python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$1/lib" push-scope.sh load-average.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js pid-lock.sh recorded-pid.sh repo-files.sh push-changes.sh suite-arms-check.sh || check "the install of the nokey hooks' helpers" "the install refused"
   # The one library this case is missing, removed on purpose after the install.
   [ "$2" = pidlock ] && rm -f "$1/lib/pid-lock.sh"
   [ "$2" = recorded ] && rm -f "$1/lib/recorded-pid.sh"
@@ -1618,6 +1618,81 @@ out="$(H="$WN_NOLIB/scanners-before-push.sh" wn_fire "$RC2" "git push")"; rc=$?
 [ "$rc" -eq 2 ] && grep -q -F "wn-nolib-hooks/lib/work-names-messages.sh, which reads the messages" <<< "$out" \
   && check "#1995 a gate that cannot load the message reader refuses the push, naming the file" ok \
   || check "#1995 a gate that cannot load the message reader refuses the push, naming the file" "exit=$rc out=$out"
+
+# --- every suite a push adds or changes arms its own wall clock (claude-config#2330). That rule was
+#     enforced only by test-suite-deadline.sh, which runs in the full suite, so on 2026-11-05 a suite
+#     shipped without it and the miss surfaced in CI about 40 minutes later. The gate asks the same
+#     question, through the same lib/suite-arms-check.sh, of each test-*.sh the push adds or
+#     changes, as the push delivers it, and of nothing already on the remote's default branch.
+DLB="$TMPROOT/dl-remote.git"; git init -q --bare "$DLB"
+RD="$(mkrepo deadline)"; add_scanner "$RD" alpha 0
+# A suite already published that does not arm: not this push's business until a push changes it.
+printf '#!/usr/bin/env bash\necho old\n' > "$RD/tests/test-old.sh"
+printf 'readme\n' > "$RD/README.md"
+commit_all "$RD"
+git -C "$RD" branch -M main; git -C "$RD" remote add origin "$DLB"
+git -C "$RD" push -q origin main >/dev/null 2>&1; git -C "$RD" fetch -q origin >/dev/null 2>&1
+dl_branch(){ git -C "$RD" checkout -q main; git -C "$RD" checkout -q -B "$1"; }   # $1 = a branch cut fresh from main
+dl_armed(){ printf '#!/usr/bin/env bash\n. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || exit 1\nsuite_deadline_arm || exit $?\necho %s\n' "$2" > "$1"; }
+DL_WHY="do not source lib/suite-deadline.sh and call suite_deadline_arm"
+# Control: a push touching no suite is judged as before, with the unarmed published one left alone.
+dl_branch docs; printf 'more\n' >> "$RD/README.md"; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin docs")"; rc=$?
+[ "$rc" -eq 0 ] && grep -q -F "1 whole tree scan(s) passed" <<< "$out" && ! grep -q -F "$DL_WHY" <<< "$out" \
+  && check "#2330 (control) a push touching no test suite is let through, the unarmed one already published not judged" ok \
+  || check "#2330 (control) a push touching no test suite is let through, the unarmed one already published not judged" "exit=$rc out=$out"
+# A push adding a suite that does not arm is refused, naming it, before any scanner is spent.
+dl_branch add-unarmed; printf '#!/usr/bin/env bash\necho new\n' > "$RD/payload/hooks/test-new.sh"; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin add-unarmed")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "payload/hooks/test-new.sh" <<< "$out" && grep -q -F "$DL_WHY" <<< "$out" \
+  && check "#2330 a push adding a suite that does not arm its deadline is refused, naming the suite" ok \
+  || check "#2330 a push adding a suite that does not arm its deadline is refused, naming the suite" "exit=$rc out=$out"
+grep -q -F "tests/test-old.sh" <<< "$out" \
+  && check "#2330 and names only the suites the push adds, never one already published" "out=$out" \
+  || check "#2330 and names only the suites the push adds, never one already published" ok
+grep -q -F "scan(s) passed" <<< "$out" \
+  && check "#2330 and refuses before any scanner suite is spent" "out=$out" \
+  || check "#2330 and refuses before any scanner suite is spent" ok
+# The same suite, armed, goes through.
+dl_branch add-armed; dl_armed "$RD/tests/test-armed.sh" armed; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin add-armed")"; rc=$?
+[ "$rc" -eq 0 ] && ! grep -q -F "$DL_WHY" <<< "$out" \
+  && check "#2330 a push adding a suite that arms its deadline is let through" ok \
+  || check "#2330 a push adding a suite that arms its deadline is let through" "exit=$rc out=$out"
+# A push CHANGING a published suite that does not arm is judged too: it is in the push.
+dl_branch change-old; printf 'echo changed\n' >> "$RD/tests/test-old.sh"; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin change-old")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "tests/test-old.sh" <<< "$out" \
+  && check "#2330 a push changing a suite that does not arm its deadline is refused, naming it" ok \
+  || check "#2330 a push changing a suite that does not arm its deadline is refused, naming it" "exit=$rc out=$out"
+# The suite is judged as the push DELIVERS it, never as the working copy holds it: arming it in the
+# working copy after the commit does not arm what the push carries.
+dl_branch tree-only; printf '#!/usr/bin/env bash\necho late\n' > "$RD/tests/test-late.sh"; commit_all "$RD"
+dl_armed "$RD/tests/test-late.sh" late
+out="$(wn_fire "$RD" "git push -u origin tree-only")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "tests/test-late.sh" <<< "$out" \
+  && check "#2330 the suite is judged as the push delivers it, not as the working copy holds it" ok \
+  || check "#2330 the suite is judged as the push delivers it, not as the working copy holds it" "exit=$rc out=$out"
+git -C "$RD" checkout -q -- tests/test-late.sh
+# A suite that only MENTIONS the deadline in a comment is refused here as the full suite refuses it.
+dl_branch comment-only; printf '#!/usr/bin/env bash\n# . lib/suite-deadline.sh\n# suite_deadline_arm\n' > "$RD/tests/test-talk.sh"; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin comment-only")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "tests/test-talk.sh" <<< "$out" \
+  && check "#2330 a suite that only mentions the deadline in comments is refused, as the full suite refuses it" ok \
+  || check "#2330 a suite that only mentions the deadline in comments is refused, as the full suite refuses it" "exit=$rc out=$out"
+# A copy of the gate without the shared check refuses the push, naming the file, rather than pass a
+# suite nobody judged.
+DL_NOLIB="$TMPROOT/dl-nolib-hooks"; mkdir -p "$DL_NOLIB/lib"
+cp "$H" "$DL_NOLIB/scanners-before-push.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$DL_NOLIB/lib" push-scope.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js push-changes.sh >/dev/null \
+  || check "#2330 the gate's other libraries could be installed for the missing check case" "the install refused"
+rm -f "$DL_NOLIB/lib/suite-arms-check.sh"
+dl_branch docs
+out="$(H="$DL_NOLIB/scanners-before-push.sh" wn_fire "$RD" "git push -u origin docs")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "dl-nolib-hooks/lib/suite-arms-check.sh" <<< "$out" \
+  && check "#2330 a gate that cannot load the shared deadline check refuses the push, naming the file" ok \
+  || check "#2330 a gate that cannot load the shared deadline check refuses the push, naming the file" "exit=$rc out=$out"
+git -C "$RD" checkout -q main
 
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a
