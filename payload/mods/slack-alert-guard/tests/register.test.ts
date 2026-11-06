@@ -7,6 +7,7 @@ import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
+import { readsAsSend } from './send-wording.ts'
 
 // The Slack alert guard (claude-config#2242) in a session. Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -187,6 +188,11 @@ test('new wording in a Slack alert is held until Dan approves the message as Sla
   expect(w.asked[0]?.questions[0]?.question).toContain(SHOWN)
   expect(w.asked[0]?.questions[0]?.header).toBe(HEADER)
   expect(w.asked[0]?.questions[0]?.options.map(o => o.label)).toEqual([APPROVE, CHANGE])
+  // Approving posts nothing (claude-config#2284), so nothing Dan reads in the dialog may ask to
+  // post or send: not the question above the message, not either answer.
+  const shown = w.asked[0]?.questions[0]
+  expect(readsAsSend((shown?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
+  for (const o of shown?.options ?? []) expect(readsAsSend(`${o.label} ${o.description ?? ''}`)).toBe(false)
   expect(contextOf(a)).toContain('again')
   expect(w.store[wordingKey('Deploy ${id} failed on production')]).toBeDefined()
   const again = await call($, REWORD)
