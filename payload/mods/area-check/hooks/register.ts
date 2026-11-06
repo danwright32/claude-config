@@ -5,19 +5,25 @@ import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import type { ModKitCommand, ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import {
-  LOG_READ_BYTES,
+  MARKS,
+  READ_SCRIPT,
+  ROTATE_BYTES,
+  ROTATE_SCRIPT,
+  SETTLE_MINUTES,
   bodyUnreadableRefusal,
   bodyUnresolvedRefusal,
+  branchNeedle,
   inRepo,
-  keptOf,
   logUnreadableRefusal,
   malformedDim,
   missingFrom,
   missingRefusal,
   noBodyRefusal,
   onBranch,
-  readDecisions,
-  type PrDecision,
+  readOf,
+  repoNeedle,
+  rotationStamp,
+  type LogRead,
 } from './prline.ts'
 import {
   DEADLINE_MS,
@@ -52,6 +58,7 @@ import {
   shellKey,
   shellTargets,
   questionKey,
+  legacyQuestionKey,
   restructureQuestion,
   sleepNotes,
   sweepKeys,
@@ -345,7 +352,7 @@ const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? pat
 
 // Its own failure: counted, kept in the error file, said once a session. Every step is caught on its
 // own, so a failure here can never reach the call (L561, L95). `kept` says what it means for the edit.
-const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'shell' | 'command' = 'unchecked') => {
+const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'shell' | 'command' | 'rotation' = 'unchecked') => {
   const error = msg(err)
   let n = 1
   try {
@@ -363,7 +370,9 @@ const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unc
   try {
     const rel = relTo(path, await $.session.cwd())
     $.ui.log(
-      kept === 'shell'
+      kept === 'rotation'
+        ? `The area check could not rotate its log (${error}); nothing was lost, and the error is kept in ~/${DIR}/${ERRORS}.`
+        : kept === 'shell'
         ? `The area check could not read what a shell command writes (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
         : kept === 'command'
         ? `The area check could not check the pull request command (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
@@ -476,7 +485,7 @@ const judgeEdit = async ($: EngineInterface, tool: string, id: string, path: str
     return PASS
   }
   // Dan's answer about this file, for these issues, within its week (L330): applied, never asked again.
-  const q = (await $.store.get(questionKey(repo, rel))) as Question | undefined
+  const q = await answeredQuestion($, repo, rel)
   if (answerStands(q, j.shown, started) && RELEASING.includes(q.answer)) {
     await claim($, key)
     await record({ decision: 'held', applied: q.answer })
@@ -602,7 +611,8 @@ const gateShell = async ($: EngineInterface, id: string, command: string, agent:
   let targets: ShellTarget[]
   try {
     cwd = await $.session.cwd()
-    targets = shellTargets(await $.modkit.writes({ command, cwd, home: await homeOf($) }))
+    const home = await homeOf($)
+    targets = shellTargets(await $.modkit.writes({ command, cwd, home }), home)
   } catch (err) {
     await failed($, cwd, err, 'shell')
     return PASS
@@ -658,9 +668,13 @@ const DECIDE_SCHEMA = {
   required: ['call', 'decision'],
 }
 
-const again = (h: Held) => {
+// Worded for whoever reads it (#2136): the session or agent whose call was held sends it again
+// itself; the main session, recording Dan's answer for a subagent's call, passes it to that agent.
+const again = (h: Held, by: string | null) => {
   const held = h.tool === 'Bash' ? 'Bash command' : `${h.tool} to ${h.rel}`
-  return h.agent === null ? `Send the ${held} again, unchanged.` : `The held ${held} was a subagent's: tell that agent, or a new one, to send it again, unchanged.`
+  if (h.agent === null) return `Send the ${held} again, unchanged.`
+  if (by === h.agent) return `Send the ${held} again yourself, unchanged.`
+  return `The held ${held} was a subagent's: tell that agent, or a new one, to send it again, unchanged.`
 }
 
 // A decision taken: the file claimed for whoever was held, the held entry gone, the decision logged.
@@ -685,10 +699,21 @@ const release = async ($: EngineInterface, h: Held, decided: { decision: Decisio
 }
 
 // A restructure question still waiting on Dan for this held call is settled by any decision.
+// Under its own key and the key it had before #2246, since a question asked then may still wait.
 const settleQuestion = async ($: EngineInterface, h: Held) => {
-  const k = questionKey(h.repo, h.rel)
-  const q = (await $.store.get(k)) as Question | undefined
-  if (q?.state === 'pending' && q.call === h.id) await $.store.delete(k)
+  for (const k of [await questionKey(h.repo, h.rel), legacyQuestionKey(h.repo, h.rel)]) {
+    if (k === undefined) continue
+    const q = (await $.store.get(k)) as Question | undefined
+    if (q?.state === 'pending' && q.call === h.id) await $.store.delete(k)
+  }
+}
+
+// The question about a file: under its own key, or, for an answer given before #2246, the key it had then.
+const answeredQuestion = async ($: EngineInterface, repo: string, rel: string): Promise<Question | undefined> => {
+  const q = (await $.store.get(await questionKey(repo, rel))) as Question | undefined
+  if (q !== undefined) return q
+  const old = legacyQuestionKey(repo, rel)
+  return old === undefined ? undefined : ((await $.store.get(old)) as Question | undefined)
 }
 
 // Scope modes, called in place as the engine needs (skew.ts). Not loaded is home: awake, and away
@@ -722,7 +747,7 @@ const holdAway = async ($: EngineInterface, label: string, prompt: string) => {
 const asking = (h: Held) => `call AskUserQuestion with one question and metadata {"source": "${ASK_SOURCE}:${h.id}"}; the area check words the question and its answers`
 
 const restructure = async ($: EngineInterface, h: Held, decideId: string) => {
-  const k = questionKey(h.repo, h.rel)
+  const k = await questionKey(h.repo, h.rel)
   const pending: Question = { state: 'pending', at: await $.clock.now(), issues: h.shown.map(m => m.n), session: await $.session.id(), call: h.id, agent: h.agent }
   // A subagent never asks Dan (decision 8): the main session is told at its next prompt.
   if (h.agent !== null) {
@@ -779,13 +804,12 @@ const warm = async ($: EngineInterface) => {
 //
 // gh pr create, gh pr edit given a description, and gh pr merge (by itself or through the merge
 // helper, --auto included) are refused while the description lacks a line for a file decided on the
-// branch they act on, with the lines to paste (prline.ts holds the rules and the words). The log is
-// read through a bounded grep, once per Bash call; a log that cannot be read refuses, never reads
-// as no decisions. A check that cannot be made for want of a fact the command does not depend on
+// branch they act on, with the lines to paste (prline.ts holds the rules and the words). The log
+// and its rotated decision files are read by READ_SCRIPT, once per repository and branch in a Bash
+// call (#2143); a log that cannot be read refuses, never reads as no decisions. A check that cannot be made for want of a fact the command does not depend on
 // (no checkout, no GitHub repository, GitHub not answering for a merge) lets the command through.
 
 type PrCall = { g: ModKitGh; c: ModKitCommand; folder: string | null; viaHelper: boolean }
-type LogRead = { decisions: PrDecision[]; malformed: string[] } | { why: string }
 type PrVerdict = { deny: string } | { dim: string } | null
 
 const PR_ACTS: readonly string[] = ['create', 'edit', 'merge']
@@ -809,21 +833,28 @@ const prCallsIn = async ($: EngineInterface, command: string, cwd: string, home:
   return calls
 }
 
-// The decision lines of this Mac's log, the newest LOG_READ_BYTES of them (prline.ts). One byte more
-// is read, so a line the bound begins exactly at is kept whole and only a cut one is dropped.
-const readLog = async ($: EngineInterface, d: Deadline): Promise<LogRead> => {
+// One repository's decision lines in this Mac's log and its rotated files, those naming `branch`
+// (none when it is null, for the count alone), with how many name the repository (prline.ts).
+const readLog = async ($: EngineInterface, d: Deadline, repo: string, branch: string | null): Promise<LogRead> => {
   const home = await homeOf($)
   if (!home) throw new Error('HOME is not set, so the log cannot be found')
   const ms = await left($, d)
   if (ms <= 0) return { why: LATE }
-  const r = await $.process.run(
-    ['/bin/sh', '-c', 'set -o pipefail; grep -a -F -e "$1" -e "$2" -- "$3" | tail -c "$4"', MOD, '"kind":"decided"', '"applied":', `${home}/${DIR}/${LOG}`, String(LOG_READ_BYTES + 1)],
-    { timeoutMs: ms },
-  )
+  const r = await $.process.run(['/bin/sh', '-c', READ_SCRIPT, MOD, `${home}/${DIR}`, repoNeedle(repo), branch === null ? '' : branchNeedle(branch), ...MARKS], { timeoutMs: ms })
   if (r.isStdoutTruncated) return { why: 'its decisions were more than could be read whole' }
-  if (r.exitCode === 1) return { decisions: [], malformed: [] }
-  if (r.exitCode !== 0) return { why: firstLine(r.stderr) || `grep exited ${r.exitCode}` }
-  return readDecisions(keptOf(r.stdout, LOG_READ_BYTES))
+  if (r.exitCode !== 0) return { why: firstLine(r.stderr) || `its read exited ${r.exitCode}` }
+  return readOf(r.stdout)
+}
+
+// The log rotated and any rotated log settled, at session start (prline.ts). Its failure loses
+// nothing: the log stays where it was and is read as before.
+const ROTATE_MS = 30_000
+const rotate = async ($: EngineInterface) => {
+  const home = await homeOf($)
+  if (!home) throw new Error('HOME is not set, so the log cannot be found')
+  const stamp = rotationStamp(await $.clock.now(), await $.session.id())
+  const r = await $.process.run(['/bin/sh', '-c', ROTATE_SCRIPT, MOD, `${home}/${DIR}`, stamp, String(ROTATE_BYTES), String(SETTLE_MINUTES), ...MARKS], { timeoutMs: ROTATE_MS })
+  if (r.exitCode !== 0) throw new Error(firstLine(r.stderr) || `the rotation exited ${r.exitCode}`)
 }
 
 const prNumber = (s: string): string | null => /^#?(\d+)$/.exec(s)?.[1] ?? /\/pull\/(\d+)/.exec(s)?.[1] ?? null
@@ -883,7 +914,7 @@ const bodyOf = async ($: EngineInterface, call: PrCall, folder: string, home: st
   }
 }
 
-const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: () => Promise<LogRead>): Promise<PrVerdict> => {
+const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: (repo: string, branch: string | null) => Promise<LogRead>): Promise<PrVerdict> => {
   const { g } = call
   const hasBody = g.flags.some(f => BODY_TEXT.includes(f.name) || BODY_FILE.includes(f.name))
   if (g.act === 'edit' && !hasBody) return null
@@ -898,29 +929,36 @@ const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: () =>
   const repo = g.named ?? own
   if (!repo) return null
   const verb = call.viaHelper ? 'merge through merge-when-ready.sh' : `gh pr ${g.act}`
-  const read = await log()
-  if ('why' in read) return { deny: logUnreadableRefusal(verb, read.why) }
-  const here = inRepo(read.decisions, repo)
-  if (here.length === 0) return null
   const selector = g.positionals[0]
+  // The branch is known here for a create and an edit naming a branch or none; a merge and an edit
+  // by number ask GitHub, and only once the log holds a decision in the repository at all.
+  const fromGitHub = g.act === 'merge' || (g.act === 'edit' && selector !== undefined && prNumber(selector) !== null)
   let branch: string | null = b.branch
   let github: Record<string, unknown> | null = null
   if (g.act === 'create') {
     const head = flagOf(g, HEAD)
     if (head && head.value !== true) branch = head.value.replace(/^[^:]*:/, '')
-  } else if (g.act === 'edit' && selector !== undefined) {
-    if (prNumber(selector) !== null) {
-      const v = await prView($, d, selector, repo, 'headRefName')
+  } else if (g.act === 'edit' && selector !== undefined && !fromGitHub) branch = selector
+  if (fromGitHub) {
+    const count = await log(repo, null)
+    if ('why' in count) return { deny: logUnreadableRefusal(verb, count.why) }
+    if (count.count === 0) return null
+    if (g.act === 'edit') {
+      const v = await prView($, d, selector as string, repo, 'headRefName')
       if ('why' in v) return { dim: `The area check could not read the branch of pull request ${selector} (${v.why}), so it let gh pr edit through unchecked.` }
       branch = v.headRefName as string
-    } else branch = selector
-  } else if (g.act === 'merge') {
-    const v = await prView($, d, selector ?? b.branch ?? '', repo, 'body,headRefName')
-    if ('why' in v) return { dim: `The area check could not read pull request ${selector ?? b.branch} on GitHub (${v.why}), so it let the ${verb} through unchecked.` }
-    github = v
-    branch = v.headRefName as string
+    } else {
+      const v = await prView($, d, selector ?? b.branch ?? '', repo, 'body,headRefName')
+      if ('why' in v) return { dim: `The area check could not read pull request ${selector ?? b.branch} on GitHub (${v.why}), so it let the ${verb} through unchecked.` }
+      github = v
+      branch = v.headRefName as string
+    }
   }
   if (!branch) return null
+  const read = await log(repo, branch)
+  if ('why' in read) return { deny: logUnreadableRefusal(verb, read.why) }
+  const here = inRepo(read.decisions, repo)
+  if (here.length === 0) return null
   const mergeBase =
     own && repo.toLowerCase() === own.toLowerCase() && b.defaultBranch
       ? await gitIn($, d, b.root, ['merge-base', branch === b.branch ? 'HEAD' : branch, `origin/${b.defaultBranch}`]).then(s => s.trim() || null).catch(() => null)
@@ -953,6 +991,12 @@ export const register: Register = on => {
     await $.tool.register({ name: 'decide', description: DECIDE_DESCRIPTION, inputSchema: DECIDE_SCHEMA, isDeferred: false })
     later($, e.cwd, async () => {
       await append($, LOG, { v: 1, kind: 'loaded', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), cwd: e.cwd, rule: RULE_VERSION })
+      // The log rotated once it is over its bound (#2143), its failure kept apart so the rest still runs.
+      try {
+        await rotate($)
+      } catch (err) {
+        await failed($, e.cwd, err, 'rotation')
+      }
       // Issue lists no edit has read for a week, and answers past their week (#1509).
       const now = await $.clock.now()
       const entries: [string, unknown][] = []
@@ -990,15 +1034,22 @@ export const register: Register = on => {
     const command = (e as unknown as Record<string, unknown>).command
     if (typeof command !== 'string' || !/\bgh\b|merge-when-ready/.test(command)) return next(e)
     const cwd = await $.session.cwd()
-    let malformed: string[] | null = null
+    // Each repository and branch is read once per Bash call, and the lines any read could not read
+    // are said once, together.
+    const malformed = new Set<string>()
     try {
       const d: Deadline = { at: (await $.clock.now()) + DEADLINE_MS }
-      let read: Promise<LogRead> | undefined
-      const log = () => {
-        read ??= readLog($, d).then(r => {
-          if (!('why' in r)) malformed = r.malformed
-          return r
-        })
+      const reads = new Map<string, Promise<LogRead>>()
+      const log = (repo: string, branch: string | null) => {
+        const key = `${repo.toLowerCase()}\n${branch ?? ''}`
+        let read = reads.get(key)
+        if (!read) {
+          read = readLog($, d, repo, branch).then(r => {
+            if (!('why' in r)) for (const l of r.malformed) malformed.add(l)
+            return r
+          })
+          reads.set(key, read)
+        }
         return read
       }
       for (const call of await prCallsIn($, command, cwd, await homeOf($))) {
@@ -1006,8 +1057,7 @@ export const register: Register = on => {
         if (v && 'deny' in v) return { deny: v.deny }
         if (v) $.ui.log(v.dim)
       }
-      const skipped = malformed as string[] | null
-      if (skipped && skipped.length) $.ui.log(malformedDim(skipped))
+      if (malformed.size) $.ui.log(malformedDim([...malformed]))
     } catch (err) {
       await failed($, cwd, err instanceof Late ? new Error(LATE) : err, 'command')
     }
@@ -1048,10 +1098,10 @@ export const register: Register = on => {
     await settleQuestion($, h)
     if (input.decision === 'fold') {
       await release($, h, { decision: 'fold', issue: input.issue as number })
-      return { result: `Recorded: the structural fix for #${String(input.issue)} is folded into this work. ${again(h)}` }
+      return { result: `Recorded: the structural fix for #${String(input.issue)} is folded into this work. ${again(h, agent)}` }
     }
     await release($, h, { decision: 'proceed', reason: input.reason as string })
-    return { result: `Recorded: this work goes ahead on ${h.rel}. ${again(h)}` }
+    return { result: `Recorded: this work goes ahead on ${h.rel}. ${again(h, agent)}` }
   }).catch(($, e, next) => neverThrows(() => undecided(msg(next.error)), () => HELD, HELD))
 
   // Dan's restructure question, asked in Claude Code's own dialog: the hook words the question and
@@ -1081,19 +1131,21 @@ export const register: Register = on => {
         return say(`Dan typed "${chosen}" instead of choosing, so nothing is recorded, and ${parts.still}; mod-kit could not tell him so (${msg(err)}). Tell him that in one line, answer what he said, then ${parts.again}.`)
       }
     }
-    const k = questionKey(h.repo, h.rel)
+    const k = await questionKey(h.repo, h.rel)
+    // A question asked before #2246 waits under its old key: Dan has now answered it.
+    await settleQuestion($, h)
     if (chosen === 'Fold in') {
       await $.store.delete(k)
       const who = h.agent === null ? 'Call' : `Tell subagent ${h.agent} to call`
-      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${h.shown.map(m => `#${m.n}`).join(', ')}>} to record it. ${again(h)}`)
+      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${h.shown.map(m => `#${m.n}`).join(', ')}>} to record it. ${again(h, null)}`)
     }
     await $.store.set(k, { state: 'answered', answer: chosen, at: await $.clock.now(), issues: h.shown.map(m => m.n) } satisfies Question)
     if (chosen === 'Restructure first') {
       await release($, h, { decision: 'restructure', by: 'dan' })
-      return say(`Dan chose Restructure first: do the structural fix on ${h.rel} before this work; the file is released for it. ${again(h)}`)
+      return say(`Dan chose Restructure first: do the structural fix on ${h.rel} before this work; the file is released for it. ${again(h, null)}`)
     }
     await release($, h, { decision: 'proceed', by: 'dan' })
-    return say(`Dan chose Proceed anyway: this work goes ahead on ${h.rel}. ${again(h)}`)
+    return say(`Dan chose Proceed anyway: this work goes ahead on ${h.rel}. ${again(h, null)}`)
   })
 
   // The questions waiting on Dan, said beside each prompt of the main session until he answers.

@@ -305,6 +305,7 @@ check_eq "the finished review is a pr review" "pr" "$(meta "$F" kind)"
 check_eq "and it finished" "ok" "$(meta "$F" status)"
 check_eq "with one finding counted" "1" "$(meta "$F" findings)"
 check_eq "against the merge base" "$BASE_SHA" "$(meta "$F" base)"
+check_eq "#2236 naming the repository, the main checkout's folder for an origin with no owner/name" "repo" "$(meta "$F" repository)"
 stdin="$(cat "$FAKE_LOG/stdin" 2>/dev/null)"
 check "the Swift file is in the diff (every file type)" "App/Sync.swift" "$stdin"
 check "markdown is in the diff too" "+More." "$stdin"
@@ -583,8 +584,8 @@ plain='at 4dbee97a1c2e3f4a5b6c7d8e9f00112233445566 run_every_hook_against_its_ow
 out="$(printf '%s\n' "$plain" | bash -c '. "$1" && ar_redact' _ "$DIR/lib/ai-review-common.sh")"
 check_eq "the redactor leaves a commit id, a long name, and flags without a literal secret alone" "$plain" "$out"
 # With its rule file missing the redactor withholds and fails, never passes the text through (L42).
-mkdir -p "$WORKDIR/norules"
-cp "$DIR/lib/ai-review-common.sh" "$WORKDIR/norules/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORKDIR/norules" ai-review-common.sh >/dev/null \
+  || bad "#2204 ai-review-common.sh could not be installed with what it sources"
 out="$(printf 'Error: the key %s\n' "$SK" | bash -c '. "$1" && ar_redact' _ "$WORKDIR/norules/ai-review-common.sh")"; rc=$?
 check_eq "a redactor without its rules fails" "1" "$rc"
 check_not "a redactor without its rules never passes the text through" "$SK" "$out"
@@ -1705,13 +1706,10 @@ out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base
 check_eq "#601 and refuses the merge" "1" "$rc"
 check "#601 naming that group" "Group 1 of 2" "$out"
 
-# A file whose own diff is over what a group can hold cannot be split, so it is still too large.
-reset_state
-out="$(PR_REVIEW_MAX_BYTES=2000 prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"
-check "#601 a file too large for any group is still refused as too large" "too large" "$out"
-check "#601 naming the file" "G1.swift" "$(meta "$(final_of "$GRP_SHA")" status; cat "$(final_of "$GRP_SHA")")"
-check_eq "#601 and no reviewer ran" "0" "$(calls)"
-# And a branch needing more groups than may run at once.
+# A file whose own diff is over what a group can hold was refused here until claude-config#2307,
+# when Dan chose (2026-11-05) to read such a file in consecutive parts instead; section 12b proves
+# the parts, and keeps the refusals that remain: one LINE longer than a part, and too many groups.
+# A branch needing more groups than may run at once.
 reset_state
 out="$(PR_REVIEW_MAX_BYTES=$GCAP PR_REVIEW_MAX_GROUPS=1 prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"
 check "#601 a branch needing more groups than PR_REVIEW_MAX_GROUPS is still too large" "too large" "$out"
@@ -1729,6 +1727,7 @@ done
 out="$(PR_REVIEW_MAX_BYTES=$GCAP prr check --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"; rc=$?
 check_eq "#601 every group finished: the check writes the branch's review and allows" "0" "$rc"
 check_eq "#601 as ok" "ok" "$(meta "$(final_of "$GRP_SHA")" status)"
+check_eq "#2236 and the review written from its groups names the repository" "repo" "$(meta "$(final_of "$GRP_SHA")" repository)"
 reset_state
 GP="$(grp_parts "$GRP_SHA")"; mkdir -p "$GP"
 printf 'repo=repo\nbranch=feat/groups\nsha=%s\nstarted=1\nmodel=sonnet\ndeadline=1\nkind=pr\nbase=%s\ndir=%s\ngroups=2\nrun=t1\n' "$GRP_SHA" "$GRP_BASE" "$REPO" > "$(final_of "$GRP_SHA").pending"
@@ -1797,6 +1796,149 @@ FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$HEAD_SHA" >/d
 wait_final "$HEAD_SHA" || bad "#601 the review beside the sweep finished"
 [ ! -e "$AI_REVIEW_STATE_DIR/parts/old-pr-dead" ] && ok || bad "#601 a stale group folder is swept"
 [ -e "$AI_REVIEW_STATE_DIR/parts/new-pr-live" ] && ok || bad "#601 and a recent one is left alone"
+
+# ===========================================================================================
+# 12b. Embedded base64 is left out of what the review reads, and one file whose own diff is over
+#      what a group can hold is read in consecutive parts, each a group of its own
+#      (claude-config#2307). The branch behind #2088 was 6.2 MB of diff, almost all of it image data
+#      in saved design captures, and was refused whole over content nobody can read.
+# ===========================================================================================
+# A run of base64 characters n long. Every run starts with the same 128 characters, so their absence
+# from a review input means no run of them was read anywhere in it.
+b64run(){ awk -v n="$1" 'BEGIN { a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"; for (i = 0; i < n; i++) printf "%s", substr(a, i % 64 + 1, 1) }'; }
+B64_SLICE="$(b64run 128)"
+SHORT_RUN="$(printf 'QUJD%.0s' $(seq 1 50))"
+reset_state
+G checkout -q -b feat/embedded main
+mkdir -p "$REPO/docs"
+{
+  printf '<img src="data:image/png;base64,%s">\n' "$(b64run 20000)"
+  printf '<script>function pageCode() { return 1 }</script>\n'
+  printf 'const blob = "%s";\n' "$(b64run 1500)"
+  printf '<link href="data:font/woff2;base64,bm90IGEgZm9udA==">\n'
+  printf 'const id = "%s";\n' "$SHORT_RUN"
+} > "$REPO/docs/page.html"
+G add docs/page.html
+G commit -q -m "a page with embedded image data"
+EMB_SHA="$(G rev-parse HEAD)"; EMB_BASE="$(G rev-parse main)"
+G checkout -q feat/sync
+ECAP=6000
+out="$(PR_REVIEW_MAX_BYTES=$ECAP FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$EMB_SHA" --base-ref "$EMB_BASE")"
+check "#2307 a branch over the cap only because of embedded base64 is reviewed" "started" "$out"
+check_not "#2307 and is not refused as too large" "too large" "$out"
+check_not "#2307 nor split into groups: what is left fits one review" "groups of files" "$out"
+check "#2307 the start line names each run left out, with its file, line and size" "docs/page.html line 1 (19.5 KB)" "$out"
+check "#2307 the plain long run too" "docs/page.html line 3 (1.4 KB)" "$out"
+check "#2307 saying what was left out" "embedded base64" "$out"
+wait_final "$EMB_SHA" || bad "#2307 the branch with its base64 left out was reviewed: $out"
+stdin="$(cat "$FAKE_LOG/stdin" 2>/dev/null)"
+check "#2307 the code around the data is read" "+<script>function pageCode() { return 1 }</script>" "$stdin"
+check "#2307 a data URI keeps its type and loses only its payload, named by file, line and size" '+<img src="data:image/png;base64,[base64 left out of this review: 19.5 KB, docs/page.html line 1]">' "$stdin"
+check "#2307 an unbroken run of 1,000 or more is replaced the same way" '+const blob = "[base64 left out of this review: 1.4 KB, docs/page.html line 3]";' "$stdin"
+check_not "#2307 no run of the data is read anywhere, the full file text included" "$B64_SLICE" "$stdin"
+check "#2307 a short data URI (a test fixture's few bytes) is still read" "bm90IGEgZm9udA==" "$stdin"
+check "#2307 and a 200 character run, under the minimum, is read" "$SHORT_RUN" "$stdin"
+check "#2307 the file's full text is still added, with its data left out" "FULL FILE at ${EMB_SHA:0:7}: docs/page.html" "$stdin"
+[ "$(wc -c < "$FAKE_LOG/stdin")" -le "$ECAP" ] && ok || bad "#2307 the review input fits under the cap ($(wc -c < "$FAKE_LOG/stdin") bytes)"
+out="$(PR_REVIEW_MAX_BYTES=$ECAP prr check --dir "$REPO" --sha "$EMB_SHA" --base-ref "$EMB_BASE")"; rc=$?
+check_eq "#2307 the clean review allows the merge" "0" "$rc"
+check "#2307 and the verdict names what it did not read" "docs/page.html line 1 (19.5 KB)" "$out"
+# Under the cap the data is still left out: nobody can review it at any size.
+reset_state
+out="$(FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$EMB_SHA" --base-ref "$EMB_BASE")"
+wait_final "$EMB_SHA" || bad "#2307 the review under the cap finished: $out"
+check_not "#2307 under the cap no run is read either" "$B64_SLICE" "$(cat "$FAKE_LOG/stdin" 2>/dev/null)"
+check "#2307 and the start line still names it" "docs/page.html line 1 (19.5 KB)" "$out"
+
+# The filter itself, on a diff it could misread: a removed line holding a run, content lines that look
+# like file headers, and the line on each side of the change.
+EMB_LOG="$WORKDIR/embedded.log"; rm -f "$EMB_LOG"
+filt="$(printf '%s\n' 'diff --git a/x.txt b/x.txt' '--- a/x.txt' '+++ b/x.txt' '@@ -5,3 +5,3 @@ head' ' keep' "-$(b64run 1200)" "--- a/not-a-header $(b64run 1100)" '+++ b/also-content' "+$(b64run 1300)" \
+  | AR_EMBEDDED_LOG="$EMB_LOG" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_elide_embedded")"
+check "#2307 a removed run is named by its line in the base" "-[base64 left out of this review: 1.1 KB, x.txt line 6 of the base]" "$filt"
+check "#2307 a removed line that looks like a header is still content" "--- a/not-a-header [base64 left out of this review: 1.0 KB, x.txt line 7 of the base]" "$filt"
+check "#2307 an added run is named by its line in the head" "+[base64 left out of this review: 1.2 KB, x.txt line 7]" "$filt"
+check "#2307 the file's own header is untouched" $'--- a/x.txt\n+++ b/x.txt\n@@ -5,3 +5,3 @@ head\n keep' "$filt"
+check_eq "#2307 every replacement is recorded for the start line and the verdict" "3" "$(grep -c . "$EMB_LOG" 2>/dev/null)"
+
+# A full file whose text could not be read through the filter is left out and named, never counted
+# as read with an empty body under its header (the status of every command in the pipe is checked).
+FREPO="$WORKDIR/fullfail"; rm -rf "$FREPO"; git init -q "$FREPO"
+git -C "$FREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m base
+printf 'small\n' > "$FREPO/a.txt"; git -C "$FREPO" add a.txt
+git -C "$FREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q -m add
+ffok="$(cd "$FREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_append_full_files '$WORKDIR/ff-ok.txt' HEAD~1 HEAD 100000")"
+check_eq "#2307 a full file that reads cleanly is counted as read" "1 0" "$ffok"
+ffout="$(cd "$FREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; git(){ if [ \"\$1\" = show ]; then return 128; fi; command git \"\$@\"; }; ar_append_full_files '$WORKDIR/ff-fail.txt' HEAD~1 HEAD 100000")"
+check_eq "#2307 a full file git could not show is left out and named, never counted as read" "0 1 a.txt" "$ffout"
+ffout="$(cd "$FREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_elide_embedded(){ cat >/dev/null; return 1; }; ar_append_full_files '$WORKDIR/ff-fail2.txt' HEAD~1 HEAD 100000")"
+check_eq "#2307 and so is one the filter failed on" "0 1 a.txt" "$ffout"
+
+# One file whose own diff is over what a group can hold is read in consecutive parts.
+reset_state
+G checkout -q -b feat/parts main
+seq 1 400 | sed 's/^/func p_/; s/$/() {}/' > "$REPO/Big.swift"
+printf 'func small() {}\n' > "$REPO/Small.swift"
+G add Big.swift Small.swift
+G commit -q -m "one file too large for a group"
+PRT_SHA="$(G rev-parse HEAD)"; PRT_BASE="$(G rev-parse main)"
+G checkout -q feat/sync
+PCAP=4000
+out="$(PR_REVIEW_MAX_BYTES=$PCAP FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$PRT_SHA" --base-ref "$PRT_BASE")"
+check "#2307 a branch with one file over what a group holds is reviewed, not refused" "started" "$out"
+check_not "#2307 and is not called too large" "too large" "$out"
+wait_final "$PRT_SHA" || bad "#2307 the review in parts finished: $out"
+F="$(final_of "$PRT_SHA")"
+pn="$(meta "$F" groups)"; case "$pn" in ''|*[!0-9]*) pn=0 ;; esac
+[ "$pn" -ge 3 ] && ok || bad "#2307 the big file is read in at least two parts beside the small file's group (groups=$pn)"
+check_eq "#2307 every part returned, so the branch review is ok" "ok" "$(meta "$F" status)"
+check_eq "#2307 one reviewer per part and group" "$pn" "$(calls)"
+q=$((pn - 1))
+check_eq "#2307 every line of the big file is read" "400" "$(cat "$FAKE_LOG"/stdin.g* 2>/dev/null | grep '^+func p_[0-9]*() {}$' | sort -u | grep -c .)"
+check_eq "#2307 and read once, never in two parts" "400" "$(cat "$FAKE_LOG"/stdin.g* 2>/dev/null | grep -c '^+func p_[0-9]*() {}$')"
+check "#2307 the first part starts at the file's first line" "+func p_1() {}" "$(cat "$FAKE_LOG/stdin.g1" 2>/dev/null)"
+check "#2307 the last part ends at its last" "+func p_400() {}" "$(cat "$FAKE_LOG/stdin.g$q" 2>/dev/null)"
+check "#2307 a part's file list says which part is shown" $'Big.swift\t(changed, part 1 of '"$q" "$(cat "$FAKE_LOG/stdin.g1" 2>/dev/null)"
+check "#2307 and the part is told the rest of the file is read elsewhere" "part 2 of $q of Big.swift" "$(cat "$FAKE_LOG/stdin.g2" 2>/dev/null)"
+check "#2307 still opening with the group it is" "THIS REVIEW IS GROUP 2 OF $pn" "$(cat "$FAKE_LOG/stdin.g2" 2>/dev/null)"
+hdr="$(grep -m1 '^@@ ' "$FAKE_LOG/stdin.g2" 2>/dev/null)"
+if [[ "$hdr" =~ ^@@\ -0,0\ \+([0-9]+),([0-9]+)\ @@ ]] && [ "${BASH_REMATCH[1]}" -gt 1 ]; then ok
+else bad "#2307 a later part's hunk header gives the lines it really holds ($hdr)"; fi
+check "#2307 the small file is read in a group of its own" "+func small() {}" "$(cat "$FAKE_LOG/stdin.g$pn" 2>/dev/null)"
+for g in $(seq 1 "$pn"); do
+  [ "$(wc -c < "$FAKE_LOG/stdin.g$g")" -le "$PCAP" ] && ok || bad "#2307 group $g fits under the cap ($(wc -c < "$FAKE_LOG/stdin.g$g") bytes)"
+done
+check "#2307 the branch's review names each part" "(part 1 of $q)" "$(cat "$F" 2>/dev/null)"
+out="$(PR_REVIEW_MAX_BYTES=$PCAP prr check --dir "$REPO" --sha "$PRT_SHA" --base-ref "$PRT_BASE")"; rc=$?
+check_eq "#2307 every part clean allows the merge" "0" "$rc"
+# A part that does not return a review blocks the branch, as any group does.
+reset_state
+PR_REVIEW_MAX_BYTES=$PCAP FAKE_GROUP_2_OUT='I could not review this.' FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$PRT_SHA" --base-ref "$PRT_BASE" >/dev/null
+wait_final "$PRT_SHA" || bad "#2307 the review with an unparsed part finished"
+check_eq "#2307 an unparsed part makes the branch's review unparsed" "unparsed" "$(meta "$(final_of "$PRT_SHA")" status)"
+out="$(PR_REVIEW_MAX_BYTES=$PCAP prr check --dir "$REPO" --sha "$PRT_SHA" --base-ref "$PRT_BASE")"; rc=$?
+check_eq "#2307 and refuses the merge" "1" "$rc"
+check "#2307 naming that part's group" "Group 2 of" "$out"
+# Parts count toward the groups that may run at once: past it the branch is still too large.
+reset_state
+out="$(PR_REVIEW_MAX_BYTES=$PCAP PR_REVIEW_MAX_GROUPS=2 prr start --dir "$REPO" --sha "$PRT_SHA" --base-ref "$PRT_BASE")"
+check "#2307 parts past PR_REVIEW_MAX_GROUPS are still refused as too large" "too large" "$out"
+check "#2307 saying how many groups, parts included, it would need" "groups, more than the 2 (PR_REVIEW_MAX_GROUPS)" "$(cat "$(final_of "$PRT_SHA")" 2>/dev/null)"
+check_eq "#2307 and no reviewer ran" "0" "$(calls)"
+
+# A single line longer than a part cannot be split, so that branch is still refused, naming it.
+reset_state
+G checkout -q -b feat/longline main
+printf 'let s = "%s"\n' "$(printf 'word %.0s' $(seq 1 1000))" > "$REPO/Long.swift"
+G add Long.swift
+G commit -q -m "one line too long for any part"
+LNG_SHA="$(G rev-parse HEAD)"; LNG_BASE="$(G rev-parse main)"
+G checkout -q feat/sync
+out="$(PR_REVIEW_MAX_BYTES=$PCAP prr start --dir "$REPO" --sha "$LNG_SHA" --base-ref "$LNG_BASE")"
+check "#2307 one line longer than a part is still refused as too large" "too large" "$out"
+check "#2307 naming the file and the line" "Long.swift line 1" "$(cat "$(final_of "$LNG_SHA")" 2>/dev/null)"
+check "#2307 and saying sizes are measured with embedded base64 already left out" "embedded base64" "$(cat "$(final_of "$LNG_SHA")" 2>/dev/null)"
+check_eq "#2307 and no reviewer ran" "0" "$(calls)"
 
 # ===========================================================================================
 # 13. The review of a new head is given what earlier reviews of the SAME pull request raised, and
@@ -3136,6 +3278,17 @@ check_not "#1358 nor is its review narrowed" "ONLY WHAT CHANGED SINCE" "$(cat "$
 runners_done || bad "#1358 a runner was still going at the end"
 G checkout -q feat/sync
 G branch -f main "$ROUNDS_MAIN"
+
+# #2236: a review run from an agent worktree names the repository as well as the worktree's folder,
+# which is deleted with the worktree.
+reset_state
+G worktree add -q --detach "$WORKDIR/agent-pr-wt" "$HEAD_SHA" 2>/dev/null
+FAKE_CLAUDE_OUT="No issues found." prr start --dir "$WORKDIR/agent-pr-wt" --sha "$HEAD_SHA" --branch feat/sync >/dev/null
+wait_final "$HEAD_SHA" && ok || bad "#2236 the worktree's pull request review finishes"
+check_eq "#2236 its record keeps the worktree's folder as the label" "agent-pr-wt" "$(meta "$(final_of "$HEAD_SHA")" repo)"
+check_eq "#2236 and names the main checkout as the repository" "repo" "$(meta "$(final_of "$HEAD_SHA")" repository)"
+G worktree remove --force "$WORKDIR/agent-pr-wt" 2>/dev/null
+runners_done || bad "#2236 a runner was still going at the end"
 
 echo
 echo "passed: $pass, failed: $fail"

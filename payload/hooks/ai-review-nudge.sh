@@ -221,13 +221,14 @@ elapsed_text() {   # $1 = seconds -> "1m 42s" or "42s"
   if [ "$s" -ge 60 ]; then printf '%dm %02ds' "$((s / 60))" "$((s % 60))"; else printf '%ds' "$s"; fi
 }
 
-read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m_status m_deadline m_dir m_groups
-  m_repo=""; m_branch=""; m_sha=""; m_started=""; m_finished=""; m_status=""; m_deadline=""; m_dir=""; m_groups=""
+read_meta() {   # $1 = file -> sets m_repo m_repository m_branch m_sha m_started m_finished m_status m_deadline m_dir m_groups
+  m_repo=""; m_repository=""; m_branch=""; m_sha=""; m_started=""; m_finished=""; m_status=""; m_deadline=""; m_dir=""; m_groups=""
   local line
   while IFS= read -r line; do
     [ -n "$line" ] || break
     case "$line" in
       repo=*) m_repo="${line#repo=}" ;;
+      repository=*) m_repository="${line#repository=}" ;;
       branch=*) m_branch="${line#branch=}" ;;
       sha=*) m_sha="${line#sha=}" ;;
       started=*) m_started="${line#started=}" ;;
@@ -299,8 +300,8 @@ body_bound() {   # $1 = finished review file -> sets bound
     fi
     if [ ! -e "$final" ]; then
       {
-        printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=abandoned\n\n' \
-          "$m_repo" "$m_branch" "$m_sha" "$m_started" "$now"
+        printf 'repo=%s\nrepository=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=abandoned\n\n' \
+          "$m_repo" "$m_repository" "$m_branch" "$m_sha" "$m_started" "$now"
         printf 'The review was started and never finished: %s passed with no answer written, which means the background runner died. Nothing was read back. Push again to re-run it.\n' \
           "$(elapsed_text "$age")"
       } > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final" 2>/dev/null
@@ -376,7 +377,7 @@ IFS=$' \t\n'
 # .code are inputs the run removes when it ends. Nothing reads any of them by name afterwards and no
 # run lives longer than its deadline (minutes), so one older than 14 days is what a review killed
 # mid write (a crash, a power loss) left behind, never a live run's file.
-find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' -o -name '*.txt.push-acknowledged' -o -name '*.txt.leftout' -o -name '*.txt.prread' -o -name '*.txt.round' -o -name '*.txt.tmp' -o -name '*.diff' -o -name '*.diff.reviewer' -o -name '*.marks' -o -name '*.code' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' -o -name '*.txt.push-acknowledged' -o -name '*.txt.leftout' -o -name '*.txt.embedded' -o -name '*.diff.embedded' -o -name '*.txt.prread' -o -name '*.txt.round' -o -name '*.txt.tmp' -o -name '*.diff' -o -name '*.diff.reviewer' -o -name '*.marks' -o -name '*.code' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
 sweep_session_records
 
 # Last, so a run killed at any point before it has recorded nothing (see the header): what was

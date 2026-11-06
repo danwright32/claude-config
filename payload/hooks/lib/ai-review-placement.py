@@ -166,7 +166,9 @@ def main(argv):
                     miss_lengths.append(length)
                     said = f"{length} characters"
                 where = m.FINDING.match(line).group(0)
-                miss_lines.append(f"{os.path.basename(path)} {where}{said}: {m._one_line(quote or '')}")
+                # The repository, recorded since #2236, so a miss in a removed worktree is traced.
+                repo = f" ({meta['repository']})" if meta.get("repository") else ""
+                miss_lines.append(f"{os.path.basename(path)}{repo} {where}{said}: {m._one_line(quote or '')}")
 
     if unopened:
         print(f"not counted, the file could not be opened: {', '.join(unopened)}")

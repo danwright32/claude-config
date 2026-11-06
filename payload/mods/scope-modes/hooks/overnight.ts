@@ -57,6 +57,11 @@ export type OvernightCall = {
   read: (text: string) => Promise<Cmd[]>
   /** For a Chrome call: the tabs this session created and the project's test hosts; absent, none (#2064). */
   browser?: Browser
+  /**
+   * The judge of a `gh pr merge --admin` that passed the repository rule (adminmerge.ts, #2125): why
+   * it is refused, or undefined to allow it. Absent, every admin merge is refused.
+   */
+  adminMerge?: (gh: ModKitGh, repo: string) => Promise<string | undefined>
 }
 
 /** Never approved overnight, whatever else: a question for Dan and the plan approval (H8). */
@@ -260,33 +265,83 @@ const resolveIn = (word: string, dir: string | null, home: string, expand: (w: s
 // #1132), rather than the word anywhere: on 2026-10-13 a python edit was refused for writing
 // "Scanning git work" and "import subprocess" into a file. A program runs from code when it starts
 // a quoted string or a shell command inside one (`['git', ...]`, `'/usr/bin/git'`, `"cd x && git
-// push"`, a backtick), or when one of its subcommands or an option follows it. Prose naming it with
-// neither (a git repository, the .gitignore, --git-dir, the gh CLI, gh-pages) runs nothing; prose
-// that reads as a command ("then git push", "rerun with gh run rerun") still counts.
-const callsWith = (subcommands: ReadonlySet<string>) => (next: string | undefined): boolean =>
-  next !== undefined && (next.startsWith('-') || subcommands.has(next))
-const runsFrom = (program: string, subcommands: ReadonlySet<string>) => {
+// push"`, a backtick), or when `calls` finds it runs from the words after it: the word straight
+// after, then every word of the code text past that, since code has no command boundary to stop
+// at. Prose naming it with neither (a git repository, the .gitignore, --git-dir, the gh CLI,
+// gh-pages) runs nothing; prose that reads as a command ("then git push", "rerun with gh run
+// rerun") still counts. A program with nothing after it in its string but a placeholder or the
+// string's end (`'sudo gh ' + sub`, `f'sudo gh {sub}'`) runs from code when that string is built
+// while the code runs (`built`), since the whole command arrives then (#2225). A quote with a
+// letter straight after it is an apostrophe (`gh's own store`), not the string's end. Either way
+// the program may be named by its path after another word (`sudo /opt/homebrew/bin/gh`, #2225).
+const runsFrom = (program: string, calls: (after: readonly string[]) => boolean, built: (text: string, at: number) => boolean = () => false) => {
   const starts = new RegExp(`(?:['"\`]|;|&&|\\|\\||\\||\\$\\(|\\(|\\n)[ \\t]*(?:[\\w.~/-]*\\/)?${program}(?=[\\s'"\`;|&)]|$)`)
-  const followed = new RegExp(`(?<![\\w.$/-])${program}[ \\t]+(-[\\w-]*|[a-z][\\w-]*)`, 'g')
-  const calls = callsWith(subcommands)
-  return (text: string): boolean => starts.test(text) || [...text.matchAll(followed)].some(m => calls(m[1]))
+  const followed = new RegExp(`(?<![\\w.$/-])(?:[\\w.~/-]*\\/)?${program}[ \\t]+(-[\\w-]*|[a-z][\\w-]*)`, 'g')
+  const bare = new RegExp(`(?<![\\w.$/-])(?:[\\w.~/-]*\\/)?${program}(?=[ \\t]*(?:['"\`](?![A-Za-z])|[{$%]|$))`, 'g')
+  const wordsAfter = (text: string, m: RegExpExecArray): string[] => [m[1] ?? '', ...(text.slice((m.index ?? 0) + m[0].length).match(/[\w-]+/g) ?? [])]
+  return (text: string): boolean => starts.test(text) || [...text.matchAll(followed)].some(m => calls(wordsAfter(text, m)) || ((m[1] ?? '').startsWith('-') && built(text, m.index ?? 0))) || [...text.matchAll(bare)].some(m => built(text, m.index ?? 0))
+}
+// Whether the string a word at `at` sits in is built while the code runs, so whatever follows the
+// word there is only known then: a placeholder inside it after the word (`{sub}`, `%s`, `$SUB`), or
+// something joined onto it (`+`, `%`, `.format`, `.join`, `.concat`, a variable or another string
+// straight after it closes, `+` before it opens, or a `.join(` it is an argument of), or it is put
+// in a variable (`cmd = '...'`, `cmd += '...'`) or held in a list (heldInList) that later code can
+// join anything onto. A word outside any string is in no built string.
+const QUOTES = `'"\``
+const builtAround = (text: string, at: number): boolean => {
+  let open = at - 1
+  while (open >= 0 && !QUOTES.includes(text[open] ?? '')) open--
+  if (open < 0) return false
+  const close = text.indexOf(text[open] ?? '', at)
+  if (/[{$]|%[\w(]/.test(text.slice(at, close < 0 ? undefined : close))) return true
+  if (close < 0) return false
+  const before = text.slice(0, open)
+  return /\+\s*[A-Za-z]{0,2}$/.test(before) || /[^=!<>]=\s*[A-Za-z]{0,2}$/.test(before) || /\.join\(\s*\[?[^()]*$/.test(before) || /^(?:\s*(?:\+|%|\.(?:format|join|concat)\b)|[\w$'"`])/.test(text.slice(close + 1)) || heldInList(text, open)
+}
+// Whether the string opening at `open` is an element of a list (`['sudo gh -R o/r', sub]`), a tuple
+// (`('sudo gh -R o/r', sub)`) or an item appended to one (`parts.append(...)`, `parts.push(...)`):
+// the innermost bracket left open before it is a `[`, or a `(` that is no call's (nothing before
+// it, or a keyword such as `in` or `return`) or one that appends. Code can join a list's elements with anything later (#2225). An argument of any other
+// call (`print('see gh --help', x)`) is in no list.
+const heldInList = (text: string, open: number): boolean => {
+  let depth = 0
+  for (let i = open - 1; i >= 0; i--) {
+    const ch = text[i] ?? ''
+    if (')]}'.includes(ch)) depth++
+    else if ('([{'.includes(ch)) {
+      if (depth > 0) { depth--; continue }
+      if (ch === '[') return true
+      if (ch === '{') return false
+      const head = text.slice(0, i)
+      return !/[\w$)\]]\s*$/.test(head) || /(?<![\w$.])(?:in|of|return|yield|and|or|not|if|elif|else|await)\s*$/.test(head) || /\.(?:append|push|unshift|insert)\s*$/.test(head)
+    }
+  }
+  return false
+}
+// git runs from code when one of its subcommands or any option follows it.
+const callsWith = (subcommands: ReadonlySet<string>) => (after: readonly string[]): boolean => {
+  const next = after[0]
+  return next !== undefined && (next.startsWith('-') || subcommands.has(next))
 }
 const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
-export const runsGit = runsFrom('git', GIT_SUBCOMMANDS)
-// gh's subcommands: a gh named in code runs when one of these or a flag (`-R o/r`) follows it. A
-// user's own gh alias or extension in that place is not seen; the wake check is the backstop.
+export const runsGit = runsFrom('git', callsWith(GIT_SUBCOMMANDS))
+// gh's subcommands. A user's own gh alias or extension in that place is not seen; the wake check is
+// the backstop.
 const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
-export const runsGh = runsFrom('gh', GH_SUBCOMMANDS)
-// A gh named as a word of another command (a wrapper passing it on), given the words after it as
-// mod-kit's reader reads them: it runs gh when one of gh's subcommands follows it, or when flags
-// follow and a subcommand comes anywhere after them, whichever of those flags take a value (`gh -R
-// o/r pr merge`). Flags with no subcommand after them are the other command's own, as in a search
-// for the word (`grep -n -e gh -e pipeline src`, #2127): gh could reach none of its commands.
+// A gh given the words after it, as a word of another command (a wrapper passing it on, read as
+// mod-kit's reader reads it) or in code text: it runs gh when one of gh's subcommands follows it,
+// or when flags follow and a subcommand comes anywhere after them, whichever of those flags take a
+// value (`gh -R o/r pr merge`). Flags with no subcommand after them are another command's own, as
+// in a search for the word (`grep -n -e gh -e pipeline src`, #2127, and the same in code, #2159):
+// gh could reach none of its commands. In code, flags after gh in a string built while the code
+// runs (builtAround) count too, since the subcommand may only arrive then (Dan's condition for
+// #2159, 2026-11-04).
 const ghRunsFrom = (after: readonly string[]): boolean => {
   const next = after[0]
   if (next === undefined) return false
   return GH_SUBCOMMANDS.has(next) || (next.startsWith('-') && after.some(w => GH_SUBCOMMANDS.has(w)))
 }
+export const runsGh = runsFrom('gh', ghRunsFrom, builtAround)
 
 // ---- git ----
 
@@ -376,8 +431,9 @@ const GH_READ_SUBS = new Set(['search', 'help', 'version', 'completion', 'status
 // The writes overnight work needs, each a subcommand and action and the only flags it may carry
 // beyond -R or --repo: a comment on the issue being worked (decision 3), opening, readying and
 // merging its PR (phase 7 judges merges further), and changing that PR's title or body. Nothing is
-// filed overnight, so no issue is created, and no merge skips its checks (--admin); one left to
-// land once its checks pass (--auto) still waits on them.
+// filed overnight, so no issue is created, and no merge skips its checks: --admin is refused unless
+// the judge handed in (`adminMerge`, adminmerge.ts, #2125) finds the repository opted in and its
+// pinned head commit green on GitHub. One left to land once its checks pass (--auto) still waits on them.
 const BODY = ['-t', '--title', '-b', '--body', '-F', '--body-file']
 const GH_WRITES: Record<string, string[]> = {
   'issue comment': ['-b', '--body', '-F', '--body-file'],
@@ -401,7 +457,7 @@ const REPO_FLAGS = ['-R', '--repo', '--help', '-h']
 // read (undefined). REST and GraphQL reach the same decision through the same outcomes. `a` is
 // mod-kit's reading of the command (#961), asked once per command; with none, nothing it does or
 // where it goes can be said.
-type GhVerdict = { refuse: string } | { write: string | null | undefined } | undefined
+type GhVerdict = { refuse: string } | { write: string | null | undefined; admin?: ModKitGh } | undefined
 const ghVerdict = (a: ModKitGh | undefined): GhVerdict => {
   if (!a) return { write: null }
   const { sub, act } = a
@@ -421,6 +477,8 @@ const ghVerdict = (a: ModKitGh | undefined): GhVerdict => {
   const key = `${sub} ${act}`
   if (!Object.prototype.hasOwnProperty.call(GH_WRITES, key)) return { refuse: `run gh ${key}`.trim() }
   const allowed = GH_WRITES[key] as string[]
+  // An admin merge is a write to judge further: its shape and GitHub's answers are the judge's (#2125).
+  if (key === 'pr merge' && hasFlag(a, '--admin')) return { write: a.named, admin: a }
   const other = a.flags.find(f => !allowed.includes(f.name) && !REPO_FLAGS.includes(f.name))
   if (other) return { refuse: `run gh ${key} with ${other.name}` }
   return { write: a.named }
@@ -505,14 +563,15 @@ const ghRunsUnread = async (call: OvernightCall): Promise<boolean> => {
 const UNRESOLVED = 'write to GitHub where the repository it reaches could not be resolved'
 // A GitHub write goes only to the repository the checkout it runs in is. `target` is the one the
 // call names (undefined: none, so gh takes GH_REPO, else the checkout's; null: none can be said).
-const writeRefusal = async (target: string | null | undefined, dir: string | null, call: OvernightCall, look: Look): Promise<string | undefined> => {
+// The repository the write reaches when the rule allows it, else why it is refused.
+const writeTarget = async (target: string | null | undefined, dir: string | null, call: OvernightCall, look: Look): Promise<{ why: string } | { repo: string }> => {
   // GH_REPO set inline in the command reaches gh past every word the reader gives.
-  if (wrapped(call)) return UNRESOLVED
-  if (target === null) return UNRESOLVED
+  if (wrapped(call)) return { why: UNRESOLVED }
+  if (target === null) return { why: UNRESOLVED }
   const here = dir === null ? null : await look.repoOf(dir)
   const to = target === undefined ? (call.ghRepo !== undefined ? call.ghRepo : here) : target
-  if (!to || !here) return UNRESOLVED
-  return to === here ? undefined : `write to ${to} from a checkout of ${here}`
+  if (!to || !here) return { why: UNRESOLVED }
+  return to === here ? { repo: here } : { why: `write to ${to} from a checkout of ${here}` }
 }
 
 // ---- MCP tools ----
@@ -656,8 +715,15 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
       const v = ghVerdict(c.gh)
       if (v && 'refuse' in v) return v.refuse
       if (v && 'write' in v) {
-        const why = await writeRefusal(v.write, dir, call, look)
-        if (why) return why
+        const to = await writeTarget(v.write, dir, call, look)
+        if ('why' in to) return to.why
+        // An admin merge passes the same repository rule first, then goes to the judge handed in;
+        // with none, it is refused as every other flag a merge may not carry (#2125).
+        if (v.admin) {
+          if (!call.adminMerge) return 'run gh pr merge with --admin'
+          const why = await call.adminMerge(v.admin, to.repo)
+          if (why) return why
+        }
       }
       continue
     }

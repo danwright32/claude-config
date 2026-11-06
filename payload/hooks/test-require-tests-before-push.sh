@@ -89,6 +89,80 @@ want_notdocsonly slash "$(printf -- 'diff --git a/h.js b/h.js\n--- a/h.js\n+++ b
 # A line holding code beside a comment is code, whichever comes first.
 want_notdocsonly slash "$(printf -- 'diff --git a/i.js b/i.js\n--- a/i.js\n+++ b/i.js\n@@ -1,2 +1,2 @@\n x = 1;\n-/* a */ y = 2;\n+/* b */ y = 3;\n')"
 
+# --- claude-config#2247: a line inside a Python docstring is documentation ---
+# A docstring (the first statement of a module, class or function, when it is a plain string, as
+# Python defines it) is read by lib/py-docstring-lines.py with Python's own parser, from both images
+# of the file, and each changed line lying wholly inside one is handed to the reader as a '#'
+# comment. Anything else is judged as before: an ordinary string, a string that is not the first
+# statement, code on the docstring's own line, a file either image of which does not parse, and a
+# diff not covering the file from its first line.
+HOOK_DIR="$DIR"
+eval "$(sed -n '/^py_docstrings_as_comments() {/,/^}/p' "$HOOK")"
+want_pydocs()    { if printf '%s' "$1" | py_docstrings_as_comments | diff_docs_only hash; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2247 expected DOCS-ONLY: [$1]"; fi; }
+want_notpydocs() { if printf '%s' "$1" | py_docstrings_as_comments | diff_docs_only hash; then fail=$((fail+1)); echo "FAIL: #2247 expected NOT-docs-only: [$1]"; else pass=$((pass+1)); fi; }
+PYH='diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n'
+# Newly let through: a function, class, async function or module docstring reworded, one line or
+# several, with a comment after its closing quotes, or with a comment changed beside it.
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,5 +1,5 @@\n """Module summary.\n \n-Old detail.\n+New detail.\n """\n import os\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,4 +1,4 @@\n class A:\n     """Summary.\n-    old\n+    new\n     """\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n async def g():\n-    """Old."""  # note\n+    """New."""  # note\n     return 2\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,4 @@\n def f():\n-    """Old."""\n+    # a comment\n+    """New."""\n     return 1\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    r"""Raw \\d old."""\n+    r"""Raw \\d new."""\n     return 1\n')"
+# Still refused: a docstring and a code line changed together.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n-    return 1\n+    """New words."""\n+    return 2\n')"
+# Still refused: an ordinary string literal, and a string statement that is not the first.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,1 +1,1 @@\n-x = """old"""\n+x = """new"""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n     y = 1\n-    """old"""\n+    """new"""\n')"
+# Still refused: a bytes string and an f-string are not docstrings.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f():\n-    b"""old"""\n+    b"""new"""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f():\n-    f"""old"""\n+    f"""new"""\n')"
+# Still refused: code on the docstring's own line, before it or after it.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f():\n-    """Doc."""; x = 1\n+    """Doc."""; x = 2\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,1 +1,1 @@\n-def f(): """Old."""\n+def f(): """New."""\n')"
+# Still refused: a file that does not parse, in the new image or the old one.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f(:\n-    """Old."""\n+    """New."""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n-def f(:\n+def f():\n     """Doc."""\n')"
+# Still refused: code moved into a docstring, or out of one, is code in the image it is code in.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Doc."""\n-    return 1\n+    """Doc.\n+    return 1"""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Doc.\n-    return 1"""\n+    """Doc."""\n+    return 1\n')"
+# Still refused: a diff not read from the file's first line, or in two hunks, places no line.
+want_notpydocs "$(printf -- "$PYH"'@@ -4,3 +4,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n@@ -9,2 +9,2 @@\n def g():\n-    """Old."""\n+    """New."""\n')"
+# Still refused: a hunk header that cannot be read.
+want_notpydocs "$(printf -- "$PYH"'@@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+# Still refused: a file whose own code reads __doc__ (a usage message or an argparse description
+# cut from its docstring, as regal-journey-edits/jdiff.py does) runs on its docstrings, so none
+# of them is documentation there.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,5 +1,5 @@\n """Tool.\n \n-Usage: old\n+Usage: new\n """\n USAGE = __doc__.split("\\n\\n")[1]\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old."""\n+    """New."""\n print(f.__doc__)\n')"
+# Still refused: no change at all, as before.
+want_notpydocs ""
+# When the helper cannot be trusted, the diff goes on exactly as git gave it: a docstring change is
+# judged as code again, and a plain '#' comment change still passes as it did before #2247.
+PYDOC_OK="$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+PYCOMMENT="$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    # old words\n+    # new words\n     return 1\n')"
+PYFAKE="$(mktemp -d)"
+mkdir -p "$PYFAKE/missing/lib" "$PYFAKE/short/lib" "$PYFAKE/dies/lib"
+printf '%s\n' 'import sys' 'sys.stdout.write("+# x\n")' > "$PYFAKE/short/lib/py-docstring-lines.py"
+printf '%s\n' 'import sys' 'sys.stdout.write("+# x\n")' 'sys.exit(3)' > "$PYFAKE/dies/lib/py-docstring-lines.py"
+for PYCASE in missing short dies; do
+  HOOK_DIR="$PYFAKE/$PYCASE"
+  want_notpydocs "$PYDOC_OK"
+  want_pydocs "$PYCOMMENT"
+done
+HOOK_DIR="$DIR"
+# No scratch file can be made: the diff passes through untouched, judged as before.
+mktemp() { return 1; }
+want_notpydocs "$PYDOC_OK"
+want_pydocs "$PYCOMMENT"
+# A scratch file is made but the diff cannot be written to it: nothing goes on, which is never
+# documentation, so even a comment change is refused rather than judged on part of its diff.
+mktemp() { printf '%s\n' "$PYFAKE/no-such-dir/x"; }
+want_notpydocs "$PYCOMMENT"
+unset -f mktemp
+rm -rf "$PYFAKE"
+
 # ===========================================================================
 # END TO END: drive the real hook and assert its exit code. (#734)
 #
@@ -120,10 +194,36 @@ STUB_DIR="$(mktemp -d)"
 cat > "$STUB_DIR/claude" <<'STUB'
 #!/usr/bin/env bash
 input="$(cat)"
+# STUB_CLAUDE_VANISH: the stand in removes itself once it has read its input, so every later call
+# finds no claude on the path and fails before it launches (#2153).
+[ -n "${STUB_CLAUDE_VANISH:-}" ] && rm -f "$0"
+# STUB_CLAUDE_SLEEP: seconds each call takes, so the hook's own clock moves past a deadline while
+# a reading runs (#2249); the hook's clock cannot be set mid run, only at its start.
+[ -n "${STUB_CLAUDE_SLEEP:-}" ] && sleep "$STUB_CLAUDE_SLEEP"
 [ -n "${STUB_CLAUDE_STDIN:-}" ] && printf '%s' "$input" > "$STUB_CLAUDE_STDIN"
 if [ -n "${STUB_CLAUDE_LOG:-}" ]; then
-  n=1; while [ -e "$STUB_CLAUDE_LOG/call.$n" ]; do n=$((n+1)); done
+  # Claimed with noclobber, because further readings run at once (#2153) and two calls looking for
+  # the first free number at the same moment would write one file.
+  n=1; while ! ( set -C; : > "$STUB_CLAUDE_LOG/call.$n" ) 2>/dev/null; do n=$((n+1)); done
   printf '%s' "$input" > "$STUB_CLAUDE_LOG/call.$n"
+fi
+# STUB_CLAUDE_MEET, a directory: a call over the rest of the tests marks itself there and waits, no
+# longer than the hang ceiling FAKE_HANG_S hands this stand in (hooks/lib/hang-wait.sh), for a
+# second such call to start, recording "met" when one does. Readings made one after another never
+# meet; readings made at once do, without any fixed sleep deciding it.
+if [ -n "${STUB_CLAUDE_MEET:-}" ]; then
+  case "$input" in *'CHANGES THE FIRST READER FOUND NO TEST FOR'*)
+    # The mark is taken away when the call ends, so two calls one after the other are never both
+    # marked; once two have met, later calls do not wait. The marks are counted by a glob, never a
+    # pipeline into grep (test-pipefail-shortcircuit.sh); this call's own mark is always one of them.
+    : > "$STUB_CLAUDE_MEET/started.$$"
+    t0=$SECONDS; while [ ! -e "$STUB_CLAUDE_MEET/met" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do
+      marks=("$STUB_CLAUDE_MEET"/started.*)
+      [ "${#marks[@]}" -ge 2 ] && { : > "$STUB_CLAUDE_MEET/met"; break; }
+      sleep 0.1
+    done
+    rm -f "$STUB_CLAUDE_MEET/started.$$" ;;
+  esac
 fi
 [ -n "${STUB_CLAUDE_ARGS:-}" ] && printf '%s\n' "$@" > "$STUB_CLAUDE_ARGS"
 if [ -n "${STUB_CLAUDE_RULES:-}" ]; then
@@ -459,32 +559,193 @@ want_code 2 "#1998 a later call that returns nothing still refuses"
 want_stderr "returned nothing" "#1998 naming that the later call returned nothing"
 if [ "$(ledger_last 4)" = cantjudge ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #1998 the record says $(ledger_last 4), expected cantjudge"; fi
 
-# The cost stays bounded: tests far past the budget take at most three more calls, and what is
-# left after them is refused as could not judge, naming the file, never judged on what was unseen.
+# The cost stays bounded: past the gate's cap on readings, what is left is refused as could not
+# judge, naming the file, never judged on what was unseen. The cap is 40 parts (#2153), lowered to
+# 3 here through the setting that may only lower it, so the case stays the size it was.
 JUDGE_LOG="$TMPROOT/judge-log-1998d"; mkdir -p "$JUDGE_LOG"
 printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
 W="$(mk_repo)"; seed_big_tests "$W" 260
-STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
-want_code 2 "#1998 tests past what four calls can show are refused"
+REQUIRE_TESTS_MAX_PARTS=3 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#1998 tests past what the cap of readings can show are refused"
 want_stderr "could not judge" "#1998 as could not judge"
 want_stderr "tests/register.test.js" "#1998 naming the test file not shown in full"
+want_stderr "at most 4 " "#1998 naming the cap it stopped at"
 n_calls="$(calls_in "$JUDGE_LOG")"
 if [ "$n_calls" = 4 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #1998 260 KB of tests took $n_calls judge calls, expected the cap of 4"; fi
+else fail=$((fail+1)); echo "FAIL: #1998 260 KB of tests under a cap of 3 parts took $n_calls judge calls, expected 4"; fi
+# The setting can only lower the cap: a value above it, or one that is not a number, leaves 40.
+JUDGE_LOG="$TMPROOT/judge-log-2153cap"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"; seed_big_tests "$W" 260
+REQUIRE_TESTS_MAX_PARTS=9999 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2153 260 KB of tests no part covers is refused"
+want_stderr "have no test covering them" "#2153 a setting above the cap reads every part, then refuses as missing a test"
+
+# --- claude-config#2153: a large push is read whole, however many parts it needs ----------------
+# On 2026-11-03 batch/8's test changes came to 436 KB, needing 16 readings where the gate stopped at
+# 4, and it called four tested issues untested. Now the rest of the tests is read in as many parts
+# as it takes, up to 40, several at once so they fit the deadline: real judge calls took a median
+# of 9 and at most 58 seconds over the 1,836 judged rows in the gate's record on 2026-11-03, so 16
+# one after another would not fit the 110 seconds the gate allows itself.
+JUDGE_LOG="$TMPROOT/judge-log-2153big"; mkdir -p "$JUDGE_LOG"
+MEET="$TMPROOT/meet-2153"; mkdir -p "$MEET"
+printf 'WINDING_DOWN_MARKER\t%s\n%s\t%s\n' "$COVERED_ONE" "$LATER_CALL" "$COVERED_NONE" > "$RULES"
+W="$(mk_repo)"; seed_big_tests "$W" 400
+STUB_CLAUDE_MEET="$MEET" STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 0 "#2153 a 400 KB batch whose covering test is in its last part is read whole and allowed"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" -gt 4 ] 2>/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 400 KB of tests took $n_calls judge calls, expected more than the old cap of 4 (each part under 60 KB)"; fi
+if grep -q -h 'case 00000' "$JUDGE_LOG"/call.* && grep -q -h 'case 06399' "$JUDGE_LOG"/call.* \
+   && grep -q -h 'WINDING_DOWN_MARKER' "$JUDGE_LOG"/call.*; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 some of the 400 KB of test changes reached no judge call"; fi
+if [ -f "$JUDGE_LOG/call.1" ] && ! grep -q 'WINDING_DOWN_MARKER' "$JUDGE_LOG/call.1"; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 the first call held the covering test, so this case never exercised the later parts"; fi
+if [ -e "$MEET/met" ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 no two readings of the rest ran at once, so 16 readings cannot fit the deadline"; fi
+big=0
+for f in "$JUDGE_LOG"/call.*; do [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 70000 ] && big=1; done
+if [ "$big" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2153 a judge call was sent more than 70,000 bytes"; fi
+if [ "$(ledger_last 4)" = pass ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2153 the record says $(ledger_last 4), expected pass"; fi
+# The same batch with no part covering the change: every part read, then refused as missing a test.
+JUDGE_LOG="$TMPROOT/judge-log-2153none"; mkdir -p "$JUDGE_LOG"
+printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
+W="$(mk_repo)"; seed_big_tests "$W" 400
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2153 a 400 KB batch no part covers is still refused"
+want_stderr "have no test covering them" "#2153 as missing a test, every part having been read"
+# A reading in a wave that fails, with the change in no part that answered: could not judge, never
+# allowed, naming the file.
+printf '%s\t%s\n' "$LATER_CALL" '{"result":"I could not tell"}' > "$RULES"
+W="$(mk_repo)"; seed_big_tests "$W" 400
+STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2153 readings at once that fail still refuse"
+want_stderr "could not judge" "#2153 as could not judge"
+want_stderr "tests/register.test.js" "#2153 naming the test file not judged"
+# A reading that fails BEFORE it launches leaves its start and end empty. The record of the run must
+# not take the reading's byte count for a start time (the fields were once split on a tab, which
+# collapses empty ones).
+printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
+W="$(mk_repo)"; seed_big_tests "$W" 400
+cp "$STUB_DIR/claude" "$STUB_DIR/claude.keep"
+STUB_CLAUDE_VANISH=1 STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+cp "$STUB_DIR/claude.keep" "$STUB_DIR/claude"; chmod +x "$STUB_DIR/claude"
+want_code 2 "#2153 readings that fail before launch still refuse"
+rec_start="$(ledger_last 13)"
+case "$rec_start" in
+  ''|*[!0-9]*) fail=$((fail+1)); echo "FAIL: #2153 the record's start is '$rec_start', expected epoch seconds" ;;
+  *) if [ "$rec_start" -gt 1000000000 ]; then pass=$((pass+1))
+     else fail=$((fail+1)); echo "FAIL: #2153 a reading that never launched shifted the record's start to $rec_start (its byte count)"; fi ;;
+esac
+
+# --- claude-config#2153: a push is judged against the tests its whole branch adds -----------------
+# On 2026-11-03 a work branch pushed its failing database tests first, then the migration and code
+# in two later pushes, and the gate refused those as untested: it read only the pushed commits. Now
+# the tests the branch changed since it left the default branch (their merge base) count too. The
+# source judged is still only what the push carries.
+mk_branch_with_earlier_test() {   # $1 = repo  ->  branch feat, its test already on the remote
+  (
+    cd "$1" || exit 1
+    git checkout -qb feat
+    mkdir -p tests lib
+    printf 'test("adds", () => { expect(add(1,2)).toBe(3); }); // EARLIER_TEST_MARKER\n' > tests/calc.test.js
+    git add tests/calc.test.js
+    git commit -qm "Add failing calc case"
+    git push -qu origin feat
+    printf 'export function add(a, b) { return a + b; }\n' > lib/calc.js
+    git add lib/calc.js
+    git commit -qm "add calc"
+  ) >/dev/null 2>&1
+}
+JUDGE_LOG="$TMPROOT/judge-log-2153branch"; mkdir -p "$JUDGE_LOG"
+printf 'EARLIER_TEST_MARKER\t%s\n' '{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' > "$RULES"
+W="$(mk_repo)"; mk_branch_with_earlier_test "$W"
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 0 "#2153 a push whose test went up in an earlier push of the branch is judged and allowed"
+if grep -q 'EARLIER_TEST_MARKER' "$JUDGE_LOG/call.1" 2>/dev/null && grep -q 'tests/calc.test.js' "$JUDGE_LOG/call.1"; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 the judge was not shown the test the branch pushed earlier"; fi
+if grep -q 'ALREADY ON THIS BRANCH' "$JUDGE_LOG/call.1" 2>/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 the judge was not told which tests were pushed earlier on the branch"; fi
+# The source judged is the push's own: the earlier commit's test file is not listed as pushed source.
+src_section="$(awk '/^SOURCE FILES CHANGED IN THIS PUSH/,/^FAILURE HANDLING/' "$JUDGE_LOG/call.1" 2>/dev/null)"
+case "$src_section" in *'lib/calc.js'*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: #2153 the pushed source was not listed as the push's source" ;; esac
+
+# A code only push on a branch with no test anywhere on it is still refused at the floor, without a
+# judge call, even when the default branch had tests before the branch left it: those are not the
+# branch's.
+JUDGE_LOG="$TMPROOT/judge-log-2153none2"; mkdir -p "$JUDGE_LOG"
+W="$(mk_repo)"
+(
+  cd "$W" || exit 1
+  mkdir -p tests lib
+  printf 'test("old", () => { expect(1).toBe(1); });\n' > tests/old.test.js
+  git add tests/old.test.js; git commit -qm "an old test on main"; git push -q origin HEAD
+  git checkout -qb feat
+  printf 'export const a = 1;\n' > lib/a.js
+  git add lib/a.js; git commit -qm "a"; git push -qu origin feat
+  printf 'export const b = 2;\n' > lib/b.js
+  git add lib/b.js; git commit -qm "b"
+) >/dev/null 2>&1
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' run_hook "$W" "git push"
+want_code 2 "#2153 a code only push on a branch with no test anywhere is still refused"
+want_stderr "adds or modifies no tests" "#2153 at the zero test floor"
+if [ "$(calls_in "$JUDGE_LOG")" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2153 a branch with no test reached the judge, so the floor no longer holds"; fi
+
+# The branch's base cannot be worked out (no default branch known for origin): judged as before, on
+# the push's own tests alone, so the push is refused, and the refusal says why the branch's earlier
+# tests were not counted.
+W="$(mk_repo)"; mk_branch_with_earlier_test "$W"
+( cd "$W" && git update-ref -d refs/remotes/origin/master && git update-ref -d refs/remotes/origin/main ) >/dev/null 2>&1
+STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' run_hook "$W" "git push"
+want_code 2 "#2153 with no default branch known the push is judged as before and refused"
+want_stderr "adds or modifies no tests" "#2153 at the zero test floor, as before"
+want_stderr "earlier on this branch" "#2153 saying the branch's earlier tests could not be counted"
+
+# Tests the branch pushed earlier that cannot all be read are refused as could not judge, never
+# allowed, and the refusal says a smaller push does not shrink them, since they are read with every
+# push of the branch.
+printf '%s\t%s\n' "$LATER_CALL" '{"result":"I could not tell"}' > "$RULES"
+W="$(mk_repo)"
+(
+  cd "$W" || exit 1
+  git checkout -qb feat
+) >/dev/null 2>&1
+seed_big_tests "$W" 120
+(
+  cd "$W" || exit 1
+  git push -qu origin feat
+  printf 'export const later = 1;\n' > lib/later.js
+  git add lib/later.js; git commit -qm "later code"
+) >/dev/null 2>&1
+STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2153 earlier branch tests too large to read are refused, not allowed"
+want_stderr "could not judge" "#2153 as could not judge"
+want_stderr "pushed earlier are read with every push" "#2153 saying a smaller push does not shrink the earlier tests"
 
 # Out of time: the hook must finish inside the 120 seconds its registration sets (a setting, not
 # measured), so a later call is not started without time for it, and the push is refused saying so.
+# Since #2249 the first call keeps to the deadline too, so the deadline here (25) leaves the first
+# call its 20 seconds, and the stand in judge taking 6 seconds leaves the later call short of them.
+# A machine slow enough to spend 5 seconds reading the push refuses before the first call instead,
+# which measures nothing about the later one, so that case is reported unmeasured (L411).
 JUDGE_LOG="$TMPROOT/judge-log-1998e"; mkdir -p "$JUDGE_LOG"
 printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
 W="$(mk_repo)"; seed_issue_push "$W"
-REQUIRE_TESTS_DEADLINE_SECONDS=1 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+REQUIRE_TESTS_DEADLINE_SECONDS=25 STUB_CLAUDE_SLEEP=6 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
   run_hook "$W" "git push"
-want_code 2 "#1998 no time left for a later call refuses"
-want_stderr "could not judge" "#1998 as could not judge"
-want_stderr "time" "#1998 saying it ran out of time"
 n_calls="$(calls_in "$JUDGE_LOG")"
-if [ "$n_calls" = 1 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #1998 with no time left the gate made $n_calls calls, expected 1"; fi
+case "$ERR" in *"before its first reading"*) first_refused=1 ;; *) first_refused=0 ;; esac
+if [ "$n_calls" = 0 ] && [ "$first_refused" = 1 ]; then
+  echo "SUITE-PART-UNMEASURED #1998 later call deadline: reading the push took past 5 s, so the first call was refused instead"
+else
+  want_code 2 "#1998 no time left for a later call refuses"
+  want_stderr "could not judge" "#1998 as could not judge"
+  want_stderr "ran out of time" "#1998 saying it ran out of time"
+  if [ "$n_calls" = 1 ]; then pass=$((pass+1))
+  else fail=$((fail+1)); echo "FAIL: #1998 with no time left the gate made $n_calls calls, expected 1"; fi
+fi
 
 # --- claude-config#2021: the deadline setting's two untested edges ----------
 # REQUIRE_TESTS_DEADLINE_SECONDS (#2009) can only end the further readings SOONER: it is capped at
@@ -513,11 +774,13 @@ JUDGE_LOG="$TMPROOT/judge-log-2021cap"; mkdir -p "$JUDGE_LOG"
 W="$(mk_repo)"; seed_issue_push "$W"
 SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
   run_hook "$W" "git push"
-want_code 2 "#2021 a setting above 110 is held to 110, so 95 seconds in no further reading starts"
+want_code 2 "#2021 a setting above 110 is held to 110, so 95 seconds in no reading starts"
 want_stderr "ran out of time" "#2021 and the refusal says it ran out of time"
+# None at all: 15 seconds is short of the 20 any reading needs, the first one included (#2249);
+# both are numbers the hook and this test set, not measured.
 n_calls="$(calls_in "$JUDGE_LOG")"
-if [ "$n_calls" = 1 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #2021 a setting of 500 was not held to 110: 95 seconds in the gate made $n_calls judge calls, expected 1"; fi
+if [ "$n_calls" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 a setting of 500 was not held to 110: 95 seconds in the gate made $n_calls judge calls, expected 0"; fi
 
 # 2. Without lib/whole-number.sh the setting cannot be read, and the default 110 stands. A copy of
 # the hook and its libraries with that one file taken away, so the real tree is never touched.
@@ -544,11 +807,71 @@ JUDGE_LOG="$TMPROOT/judge-log-2021nw2"; mkdir -p "$JUDGE_LOG"
 W="$(mk_repo)"; seed_issue_push "$W"
 SECONDS=95 REQUIRE_TESTS_DEADLINE_SECONDS=500 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
   run_hook "$W" "git push"
-want_code 2 "#2021 without lib/whole-number.sh the deadline is the default 110, so 95 seconds in no further reading starts"
+want_code 2 "#2021 without lib/whole-number.sh the deadline is the default 110, so 95 seconds in no reading starts"
 n_calls="$(calls_in "$JUDGE_LOG")"
-if [ "$n_calls" = 1 ]; then pass=$((pass+1))
-else fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh, 95 seconds in, the gate made $n_calls judge calls, expected 1"; fi
+if [ "$n_calls" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2021 without lib/whole-number.sh, 95 seconds in, the gate made $n_calls judge calls, expected 0"; fi
 HOOK="$REAL_HOOK"
+
+# --- claude-config#2249: the FIRST reading keeps to the deadline too -------
+# The further readings were started only with PART_MIN_SECONDS left and timed to end by the deadline
+# (#1998), but the first was always given the full JUDGE_TIMEOUT of 90 however late it started. A
+# slow scan of a large push before it left the call running past the 120 second hook limit, and
+# the hook was killed with no reason given. Every number in this block is one the hook or this
+# test sets, not measured. Now the first reading is not started
+# with less than PART_MIN_SECONDS left, its timeout is what is left when that is less than 90, and a
+# reading cut short by that shortened timeout is refused as could not judge, never let through: a
+# killed hook was a refusal already, so no push refused today is allowed by this.
+#
+# 1. Too late to start: 95 seconds in (a start this test sets) leaves 15, and no reading is made.
+JUDGE_LOG="$TMPROOT/judge-log-2249late"; mkdir -p "$JUDGE_LOG"
+printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
+W="$(mk_repo)"; seed_issue_push "$W"
+SECONDS=95 STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2249 a first reading with 15 seconds left is refused"
+want_stderr "could not judge" "#2249 as could not judge"
+want_stderr "ran out of time" "#2249 saying it ran out of time"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 0 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2249 with 15 seconds left the gate still made $n_calls judge calls, expected 0"; fi
+if [ "$(ledger_last 4)" = cantjudge ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2249 the late start is recorded as $(ledger_last 4), expected cantjudge"; fi
+
+# A stand in for `timeout`, first on the PATH, that records the seconds it was handed and answers
+# as GNU timeout does when the time runs out (124), without running the judge: what a slow judge
+# looks like to the gate, with no real wait.
+TSTUB="$TMPROOT/timeout-stub"; mkdir -p "$TSTUB"
+cat > "$TSTUB/timeout" <<'TSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$STUB_TIMEOUT_ARGS"
+cat > /dev/null
+exit 124
+TSTUB
+chmod +x "$TSTUB/timeout"
+
+# 2. Started 60 seconds in, the first reading is given the 50 left, not 90, and when it runs out
+# the push is refused as could not judge, never the DID NOT RUN allow. These are numbers this test
+# sets, not measured.
+TARGS="$TMPROOT/timeout-args-2249short"; : > "$TARGS"
+W="$(mk_repo)"; seed_issue_push "$W"
+SECONDS=60 STUB_TIMEOUT_ARGS="$TARGS" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push" "$TSTUB:$PATH_STUB"
+want_code 2 "#2249 a first reading cut short by the deadline is refused"
+want_stderr "could not judge" "#2249 a reading cut short is could not judge"
+want_stderr "deadline" "#2249 naming the deadline it was cut short by"
+case "$OUT$ERR" in *"DID NOT RUN"*) fail=$((fail+1)); echo "FAIL: #2249 a reading cut short by the deadline was let through ungated" ;; *) pass=$((pass+1)) ;; esac
+first_t="$(head -n 1 "$TARGS")"
+if [ -n "$first_t" ] && [ "$first_t" -ge 45 ] && [ "$first_t" -le 50 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2249 started 60 seconds in, the first reading was given a timeout of [$first_t], expected the 50 or so left"; fi
+if [ "$(ledger_last 4)" = cantjudge ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2249 the reading cut short is recorded as $(ledger_last 4), expected cantjudge"; fi
+
+# 3. The control: started at 0 the first reading keeps its full 90, and a judge that times out
+# there is still the DID NOT RUN allow it was, so the change narrows only the late start.
+TARGS="$TMPROOT/timeout-args-2249full"; : > "$TARGS"
+W="$(mk_repo)"; seed_issue_push "$W"
+STUB_TIMEOUT_ARGS="$TARGS" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push" "$TSTUB:$PATH_STUB"
+want_allowed_notice "#2249 the control: a full length reading that times out is the DID NOT RUN allow, as before"
+first_t="$(head -n 1 "$TARGS")"
+if [ "$first_t" = 90 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2249 started at 0, the first reading was given a timeout of [$first_t], expected the full 90"; fi
 
 # --- claude-config#930, end to end: the push that was refused --------------
 # A push changing only a suite file inside an Xcode test target folder changes no source, so the
@@ -622,6 +945,49 @@ W="$(mk_repo)"
 ( cd "$W" && printf '/* the factor */\nconst a = b\n  * 3;\n' > lib/n.js && git add lib/n.js && git commit -qm bump ) >/dev/null 2>&1
 run_hook "$W" "git push"
 want_code 2 "#1238 a leading-operator change below a closed block comment still BLOCKS"
+
+# claude-config#2247: rewording a line inside a Python docstring is documentation. On 2026-11-04 a
+# two line docstring fix in lib/ai-review-run.py needed a one time override. The docstring's opening
+# quotes sit more than git's three lines of default context above the changed line, so only a diff
+# read with the whole file around it can place the line inside it.
+PYDOC_BEFORE='"""Adds numbers.\n\nBoth may be negative.\nNeither may be NaN.\n\nReturns their sum.\n"""\n\n\ndef add(a, b):\n    """Add two numbers.\n\n    Both may be negative.\n    Neither may be NaN.\n\n    Returns their sum.\n    """\n    return a + b\n'
+PYDOC_AFTER='"""Adds numbers.\n\nBoth may be negative.\nNeither may be NaN.\n\nReturns the sum of both.\n"""\n\n\ndef add(a, b):\n    """Add two numbers.\n\n    Both may be negative.\n    Neither may be NaN.\n\n    Returns the sum of both.\n    """\n    return a + b\n'
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$PYDOC_BEFORE" > lib/doc.py && git add lib/doc.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf "$PYDOC_AFTER" > lib/doc.py && git add lib/doc.py && git commit -qm reword ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 0 "#2247 rewording inside a module and a function docstring is allowed"
+# The same edit made by the commit in the command, which reads a different diff.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$PYDOC_BEFORE" > lib/doc.py && git add lib/doc.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf "$PYDOC_AFTER" > lib/doc.py ) >/dev/null 2>&1
+run_hook "$W" "git add lib/doc.py && git commit -m reword && git push"
+want_code 0 "#2247 the same docstring rewording made by the command's own commit is allowed"
+# The docstring reworded and the code beside it changed still blocks.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$PYDOC_BEFORE" > lib/doc.py && git add lib/doc.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+PYDOC_BOTH='"""Adds numbers.\n\nBoth may be negative.\nNeither may be NaN.\n\nReturns the sum of both.\n"""\n\n\ndef add(a, b):\n    """Add two numbers.\n\n    Both may be negative.\n    Neither may be NaN.\n\n    Returns the sum of both.\n    """\n    return a - b\n'
+( cd "$W" && printf "$PYDOC_BOTH" > lib/doc.py && git add lib/doc.py && git commit -qm both ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 a docstring and a code line changed together still BLOCKS"
+# An ordinary triple quoted string is a value, not a docstring, and still blocks.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'def f():\n    x = 1\n    return """old\n    words"""\n' > lib/s.py && git add lib/s.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf 'def f():\n    x = 1\n    return """new\n    words"""\n' > lib/s.py && git add lib/s.py && git commit -qm bump ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 changing an ordinary triple quoted string still BLOCKS"
+# A file Python cannot parse is judged as before, so a docstring edit in it still blocks.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'def f(:\n    """Old."""\n' > lib/e.py && git add lib/e.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf 'def f(:\n    """New."""\n' > lib/e.py && git add lib/e.py && git commit -qm bump ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 a docstring edit in a file that does not parse still BLOCKS"
+# The same triple quoted lines in a Ruby file are judged as before: code.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'def f\n  """Old."""\nend\n' > lib/r.rb && git add lib/r.rb && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf 'def f\n  """New."""\nend\n' > lib/r.rb && git add lib/r.rb && git commit -qm bump ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 the same lines in a file that is not Python still BLOCK"
 
 # Mode-only change: the diff has no content lines, which is not the same as
 # having no change to see. Must block.
@@ -913,28 +1279,45 @@ not_in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "main's merged change is left 
 not_in_call "$JUDGE_LOG/call.1" "MAIN_COMMIT_SUBJECT" "main's commit subjects are left out of the messages"
 if [ "$(calls_in "$JUDGE_LOG")" = 1 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2028 expected one judge call, got $(calls_in "$JUDGE_LOG")"; fi
 
-# The same with its own change untested is refused, naming that change and not main's.
+# The same with its own change untested is refused, naming that change and not main's. The branch
+# pushed tests/shared.test.js earlier, so since #2153 that test counts for the push and the judge,
+# not the zero test floor, decides: the stub here refuses whatever shows it the named source file,
+# as a judge finding the earlier test does not cover it would. The cases check the judge is shown
+# the branch's earlier test and not main's change, and that the refusal names the branch's change.
+merge_block_rules() {   # $1 = the source file the stub judge finds untested
+  printf 'BIG_MAIN_MARKER\t%s\n%s\t%s\n' \
+    '{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"main big change\"]}"}' \
+    "$1" "{\"result\":\"{\\\"verdict\\\":\\\"block\\\",\\\"changes\\\":[],\\\"missing\\\":[\\\"$1 has no test\\\"]}\"}" > "$MERGE_RULES"
+}
+JUDGE_LOG="$TMPROOT/judge-log-2028b"; mkdir -p "$JUDGE_LOG"
+merge_block_rules lib/own.js
 W="$(mk_repo)"; mk_merged_main "$W" untested
-STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
 want_code 2 "#2028 a branch that merged main with its own untested change is refused"
-want_stderr "adds or modifies no tests" "#2028 the untested own change is refused by the floor"
 want_stderr "lib/own\.js" "#2028 the refusal names the branch's change"
 not_in_stderr "lib/big\.js" "the refusal does not name main's change"
+in_call "$JUDGE_LOG/call.1" "tests/shared.test.js" "the untested push is judged against the test the branch pushed earlier"
+not_in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "the untested push is judged without main's change"
 
 # A conflict resolution is a change in the merge result in neither parent: it is still judged.
+JUDGE_LOG="$TMPROOT/judge-log-2028c"; mkdir -p "$JUDGE_LOG"
+merge_block_rules lib/shared.js
 W="$(mk_repo)"; mk_merged_main "$W" conflict
-STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
 want_code 2 "#2028 an untested conflict resolution is refused"
-want_stderr "adds or modifies no tests" "#2028 the conflict resolution is judged on its own"
 want_stderr "lib/shared\.js" "#2028 the refusal names the resolved file"
 not_in_stderr "lib/big\.js" "the conflict refusal does not name main's change"
+not_in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "the conflict resolution is judged without main's change"
 
 # So is an edit slipped into a clean merge's commit.
+merge_block_rules lib/evil.js
 W="$(mk_repo)"; mk_merged_main "$W" evil
 STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
 want_code 2 "#2028 an untested edit made inside a merge commit is refused"
 want_stderr "lib/evil\.js" "#2028 the refusal names the edit made in the merge"
 not_in_stderr "lib/big\.js" "the merge edit refusal does not name main's change"
+# Restored for the cases below, which expect the stub to refuse only main's change.
+printf 'BIG_MAIN_MARKER\t%s\n' '{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"main big change\"]}"}' > "$MERGE_RULES"
 
 # No default branch known: the gate cannot tell main's commits from the branch's, so it judges
 # everything, as before #2028, never nothing, and says main's changes could not be set apart.
@@ -959,6 +1342,131 @@ STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$
 want_code 2 "#2028 when the merge cannot be worked out, the whole push is judged"
 in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "when the merge cannot be worked out, main's change is judged too"
 want_stderr "could not set apart" "#2028 the refusal says why main's changes were judged"
+
+# --- claude-config#2258: a mod's byte identical copy of a mod-kit helper is tested by mod-kit ------
+# Every mod keeps copies of mod-kit's helpers at payload/mods/<mod>/hooks/mod-kit/, and the gate
+# refused a new mod for them alone (slack-alert-guard, 2026-11-04, for hold.ts and skew.ts). A copy
+# whose bytes and mode match payload/mods/mod-kit/hooks/<same name> in the tree the push delivers,
+# and which a test under payload/mods/mod-kit/tests/ in that tree imports, is counted as tested.
+# Anything short of that is judged as before, and each narrowing is seen to refuse here.
+mk_modkit_repo() {   # -> a repo whose remote holds mod-kit's hold.ts and its test, and deliver.ts untested
+  local w; w="$(mk_repo)"
+  (
+    cd "$w" || exit 1
+    mkdir -p payload/mods/mod-kit/hooks payload/mods/mod-kit/tests
+    printf 'export const HOLD = 1\n' > payload/mods/mod-kit/hooks/hold.ts
+    printf 'export const DELIVER = 1\n' > payload/mods/mod-kit/hooks/deliver.ts
+    printf "import { HOLD } from '../hooks/hold.ts'\ntest('hold', () => expect(HOLD).toBe(1))\n" > payload/mods/mod-kit/tests/hold.test.ts
+    git add payload
+    git commit -qm "mod-kit"
+    git push -q
+  ) >/dev/null 2>&1
+  printf '%s' "$w"
+}
+# put_copy <repo> <helper> <content> [commit message]: writes the new mod's copy, committed when a
+# message is given.
+put_copy() {
+  (
+    cd "$1" || exit 1
+    mkdir -p payload/mods/newmod/hooks/mod-kit
+    printf '%b' "$3" > "payload/mods/newmod/hooks/mod-kit/$2"
+    if [ -n "${4:-}" ]; then git add "payload/mods/newmod/hooks/mod-kit/$2"; git commit -qm "$4"; fi
+  ) >/dev/null 2>&1
+}
+call_has() {   # <file> <text> <label>
+  if [ -f "$1" ] && grep -qF -- "$2" "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2258 $3: the judge was not shown $2"; fi
+}
+call_lacks() {   # <file> <text> <label>
+  if [ -f "$1" ] && ! grep -qF -- "$2" "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2258 $3: the judge was shown $2 (or never called)"; fi
+}
+COPY=payload/mods/newmod/hooks/mod-kit
+
+# The issue's push: a new mod carrying only an identical copy goes through, with no judge called,
+# and the record names the copy it counted.
+JUDGE_LOG="$TMPROOT/judge-log-2258a"; mkdir -p "$JUDGE_LOG"
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n' "new mod"
+# The control: the copy really is in the commit, so the allow below is not an empty push.
+if git -C "$W" cat-file -e "HEAD:$COPY/hold.ts" 2>/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2258 the fixture committed no copy"; fi
+STUB_CLAUDE_LOG="$JUDGE_LOG" HK_ID=t-2258a run_hook "$W" "git push"
+want_code 0 "#2258 a new mod whose mod-kit copy is byte identical goes through"
+want_row t-2258a nosource "#2258 the identical copy is recorded" "$COPY/hold.ts"
+if [ "$(calls_in "$JUDGE_LOG")" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2258 a push of identical copies alone called the judge"; fi
+
+# One byte different: refused as untested, naming the copy, exactly as before.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 2\n' "new mod"
+run_hook "$W" "git push"
+want_code 2 "#2258 a copy differing by one byte is still refused"
+want_stderr "$COPY/hold.ts" "#2258 the refusal names the differing copy"
+
+# Identical, but no mod-kit test imports that helper: refused.
+W="$(mk_modkit_repo)"; put_copy "$W" deliver.ts 'export const DELIVER = 1\n' "new mod"
+run_hook "$W" "git push"
+want_code 2 "#2258 an identical copy of a helper no mod-kit test imports is still refused"
+
+# Identical, but the same push deletes mod-kit's test: the tree the push delivers has none, so refused.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n'
+( cd "$W" && git rm -q payload/mods/mod-kit/tests/hold.test.ts && git add "$COPY/hold.ts" && git commit -qm "copy, drop test" ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2258 an identical copy is refused when the push removes mod-kit's test of it"
+
+# Identical bytes under another mode (made executable): refused, since it is not the same file.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n'
+( cd "$W" && chmod +x "$COPY/hold.ts" && git add "$COPY/hold.ts" && git commit -qm "new mod" ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2258 an identical copy under a different mode is still refused"
+
+# A mod-kit test importing the helper without its extension, in double quotes, counts the same.
+W="$(mk_modkit_repo)"
+( cd "$W" && printf 'export const BARE = 1\n' > payload/mods/mod-kit/hooks/bare.ts \
+  && printf 'import { BARE } from "../hooks/bare"\n' > payload/mods/mod-kit/tests/bare.test.ts \
+  && git add payload/mods/mod-kit && git commit -qm "bare helper" && git push -q ) >/dev/null 2>&1
+put_copy "$W" bare.ts 'export const BARE = 1\n' "new mod"
+run_hook "$W" "git push"
+want_code 0 "#2258 an identical copy of a helper imported without its extension goes through"
+
+# A symbolic link in mod-kit's hooks is not a helper file, even when the copy is the same link.
+W="$(mk_modkit_repo)"
+( cd "$W" && ln -s hold.ts payload/mods/mod-kit/hooks/alias.ts \
+  && printf "import { HOLD } from '../hooks/alias.ts'\n" > payload/mods/mod-kit/tests/alias.test.ts \
+  && git add payload/mods/mod-kit && git commit -qm "alias" && git push -q \
+  && mkdir -p "$COPY" && ln -s hold.ts "$COPY/alias.ts" && git add "$COPY/alias.ts" && git commit -qm "new mod" ) >/dev/null 2>&1
+if [ "$(git -C "$W" ls-tree HEAD -- "$COPY/alias.ts" | cut -c1-6)" = 120000 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2258 the fixture committed no link copy"; fi
+run_hook "$W" "git push"
+want_code 2 "#2258 a copy of a symbolic link in mod-kit's hooks is still refused"
+
+# mod-kit's own hooks/mod-kit folder is not a copy of anything.
+W="$(mk_modkit_repo)"
+( cd "$W" && mkdir -p payload/mods/mod-kit/hooks/mod-kit && printf 'export const HOLD = 1\n' > payload/mods/mod-kit/hooks/mod-kit/hold.ts \
+  && git add payload/mods/mod-kit/hooks/mod-kit/hold.ts && git commit -qm "self copy" ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2258 a file under mod-kit's own hooks/mod-kit is not counted as a copy"
+
+# Compared in the tree the push DELIVERS: the committed copy differs, and the command's own commit
+# makes it identical, so it goes through; and the other way round it is refused.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 2\n' "wrong copy"
+put_copy "$W" hold.ts 'export const HOLD = 1\n'
+run_hook "$W" "git add $COPY/hold.ts && git commit -qm fix && git push"
+want_code 0 "#2258 a copy the command's commit makes identical goes through"
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n' "right copy"
+put_copy "$W" hold.ts 'export const HOLD = 3\n'
+run_hook "$W" "git add $COPY/hold.ts && git commit -qm drift && git push"
+want_code 2 "#2258 a copy the command's commit makes differ is refused"
+want_stderr "$COPY/hold.ts" "#2258 the refusal names the copy the commit made differ"
+
+# Beside the mod's own code and test: the judge is still called, on the mod's own change, and is
+# never shown the counted copy among the source files or in the diff.
+JUDGE_LOG="$TMPROOT/judge-log-2258b"; mkdir -p "$JUDGE_LOG"
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n'
+( cd "$W" && mkdir -p payload/mods/newmod/tests \
+  && printf 'export const OWN_MOD_MARKER = 1\n' > payload/mods/newmod/hooks/index.ts \
+  && printf "import { OWN_MOD_MARKER } from '../hooks/index.ts'\n" > payload/mods/newmod/tests/index.test.ts \
+  && git add payload/mods/newmod && git commit -qm "new mod with code" ) >/dev/null 2>&1
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+want_code 0 "#2258 a mod with its own tested code and an identical copy passes"
+call_has "$JUDGE_LOG/call.1" "payload/mods/newmod/hooks/index.ts" "the mod's own code is judged"
+call_lacks "$JUDGE_LOG/call.1" "$COPY/hold.ts" "the counted copy is left out of what the judge reads"
 
 echo
 echo "passed: $pass, failed: $fail"
