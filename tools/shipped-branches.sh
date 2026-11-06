@@ -50,12 +50,14 @@ git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 \
 
 # The default branch, from the one rule shipped-worktrees.sh uses too. A missing library is a
 # refusal, never a run that carries on without it (L488).
+# default-branch.sh lives with the hooks, since the installed stale worktree sweep reads it too (#2309).
 libdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
-for lib in default-branch.sh pull-requests.sh; do
-  [ -f "$libdir/$lib" ] || fail "its library is missing: $libdir/$lib"
+default_branch_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/payload/hooks/lib/default-branch.sh"
+for lib in "$default_branch_lib" "$libdir/pull-requests.sh"; do
+  [ -f "$lib" ] || fail "its library is missing: $lib"
 done
-# shellcheck source=lib/default-branch.sh
-. "$libdir/default-branch.sh"
+# shellcheck source=../payload/hooks/lib/default-branch.sh
+. "$default_branch_lib"
 # shellcheck source=lib/pull-requests.sh
 . "$libdir/pull-requests.sh"
 default="$(default_branch "$repo")" \
