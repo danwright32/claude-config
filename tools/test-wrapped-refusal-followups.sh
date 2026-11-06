@@ -138,7 +138,7 @@ chmod 000 "$U/-proj-b/locked-zq.jsonl"
 ln -s "$U/-proj-b/deleted-zq.jsonl" "$U/-proj-b/gone-zq.jsonl"
 if [ -r "$U/-proj-b/locked-zq.jsonl" ]; then
   # Running as a user chmod cannot lock out (root): the unreadable case cannot be built here.
-  echo "UNMEASURED: a file with no read permission is still readable to this user, so the unreadable transcript case was not tested"
+  echo "SUITE-PART-UNMEASURED a file with no read permission is still readable to this user, so the unreadable transcript case was not tested"
 else
   out="$(python3 "$TOOL" --root "$U" --ledger "$L/refusals.tsv" --since 2026-10-23 --until 2026-11-04 2>&1)"; rc=$?
   [ "$rc" -eq 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a run with an unreadable transcript exits $rc"; echo "${out:0:3000}"; }
