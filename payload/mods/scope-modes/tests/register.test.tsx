@@ -5,6 +5,7 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
+import { adminEndpoints } from '../hooks/adminmerge.ts'
 import { answerKey, GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP_QUESTION } from '../hooks/bedtime.ts'
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { overnightRules, REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
@@ -5147,6 +5148,38 @@ test('an entry GitHub does not know under any account is closed for the night', 
   expect(repos.closed[0]?.why).toMatch(/^GitHub does not know o\/typo under any account gh is logged in to \(GraphQL: Could not resolve/)
   expect(await call($ as never, bash('gh pr merge 3 --repo o/typo'))).toMatch(/^Blocked overnight/)
   expect(await call($ as never, bash('gh pr merge 3'))).toBe('ran')
+})
+
+// #2125: an admin merge overnight is judged by the night's lists and by GitHub, read through gh api.
+const ADMIN_SHA = 'a'.repeat(40)
+const ADMIN_MERGE_CMD = `gh pr merge 7 --admin --squash --match-head-commit ${ADMIN_SHA}`
+const OPTED_NIGHT = { mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: false, adminMerge: 'green-pinned' }], closed: [] }
+const adminGithub = (conclusion: string): Record<string, string> => ({
+  'gh api repos/o/r/pulls/7': JSON.stringify({ state: 'open', draft: false, head: { sha: ADMIN_SHA }, base: { ref: 'main' } }),
+  'gh api repos/o/r/rules/branches/main?per_page=100': JSON.stringify([{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test' }] } }]),
+  'gh api repos/o/r/branches/main': JSON.stringify({ protected: false }),
+  [`gh api repos/o/r/commits/${ADMIN_SHA}/check-runs?per_page=100`]: JSON.stringify({ total_count: 1, check_runs: [{ name: 'test', status: 'completed', conclusion }] }),
+  [`gh api repos/o/r/commits/${ADMIN_SHA}/status?per_page=100`]: JSON.stringify({ state: 'pending', total_count: 0, statuses: [] }),
+})
+
+test('an admin merge overnight runs where the night opts in and GitHub shows its pinned commit green (#2125)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...night(OPTED_NIGHT), night: adminGithub('success') })
+  await start($ as never, clock)
+  expect(await call($ as never, bash(ADMIN_MERGE_CMD))).toBe('ran')
+  expect(w.runs.filter(r => r[0] === 'gh' && r[1] === 'api' && r[2]?.startsWith('repos/o/r/')).map(r => r[2])).toEqual(adminEndpoints('o/r', 7, ADMIN_SHA, 'main'))
+})
+
+test('an admin merge overnight is refused when its required check failed on the pinned commit (#2125)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(OPTED_NIGHT), night: adminGithub('failure') })
+  await start($ as never, clock)
+  expect(await call($ as never, bash(ADMIN_MERGE_CMD))).toMatch(asRegExp('Refused: sleep mode is on and Dan bans this while he sleeps, so this did not admin merge PR #7 in o/r, whose required check test is failure on its head commit.'))
+})
+
+test('an admin merge overnight is refused in a repository whose entry does not opt in, and GitHub is never asked (#2125)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...night({ mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: false }], closed: [] }), night: adminGithub('success') })
+  await start($ as never, clock)
+  expect(await call($ as never, bash(ADMIN_MERGE_CMD))).toMatch(asRegExp('Refused: sleep mode is on and Dan bans this while he sleeps, so this did not admin merge a PR in o/r, which does not allow admin merges overnight'))
+  expect(w.runs.some(r => r[0] === 'gh' && r[1] === 'api' && r[2]?.startsWith('repos/o/r/pulls/'))).toBe(false)
 })
 
 test('a repository first met after sleep began is closed and noted once', withDeps, async ($, on) => {
