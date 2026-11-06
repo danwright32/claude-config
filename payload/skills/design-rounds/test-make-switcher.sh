@@ -38,6 +38,14 @@ trap 'rm -rf "$TMP"' EXIT
 
 pass=0
 fail=0
+# What the last real Chrome run did, kept by headless_dom below, said under every failed check: most
+# of this suite's checks read a page Chrome drew, and a miss there otherwise reads only NO-PROBE
+# (claude-config#2260). Said for every failure, labelled as the last run, since a check cannot know
+# whether its value came from Chrome; the reader can.
+chrome_said() {
+  [ -s "$TMP/chrome-last.said" ] && echo "  the last Chrome run before this check: $(cat "$TMP/chrome-last.said")"
+  return 0
+}
 check() { # check <description> <expected-substring> <actual>
   if [[ "$3" == *"$2"* ]]; then
     pass=$((pass + 1))
@@ -46,6 +54,7 @@ check() { # check <description> <expected-substring> <actual>
     echo "FAIL: $1"
     echo "  expected to contain: $2"
     echo "  actual (first 400 chars): ${3:0:400}"
+    chrome_said
   fi
 }
 check_eq() { # check_eq <description> <expected> <actual>
@@ -54,6 +63,7 @@ check_eq() { # check_eq <description> <expected> <actual>
   else
     fail=$((fail + 1))
     echo "FAIL: $1 (expected '$2', got '$3')"
+    chrome_said
   fi
 }
 check_not() { # check_not <description> <forbidden-substring> <actual>
@@ -62,6 +72,7 @@ check_not() { # check_not <description> <forbidden-substring> <actual>
   else
     fail=$((fail + 1))
     echo "FAIL: $1 (output should not contain '$2')"
+    chrome_said
   fi
 }
 
@@ -359,7 +370,52 @@ REAL_CHROME="${SWITCHER_TEST_CHROME:-/Applications/Google Chrome.app/Contents/Ma
 CHROME="$REAL_CHROME"
 # Every real Chrome run below is this, so each one names headless-dom.sh where it runs and
 # check-chrome-launches.py can tell it from a Chrome started around it (claude-config#1537).
-headless_dom(){ HEADLESS_DOM_CHROME="$REAL_CHROME" bash "$HEADLESS_DOM" "$@"; }
+#
+# Its deadline is the suite's hang ceiling (lib/hang-wait.sh), never headless-dom.sh's fixed 60 s:
+# these checks ask what a page draws, not how fast Chrome starts on a loaded Mac (L290, #2260). And
+# each run's account (how it ended, what it handed back, its last words) is kept for check, check_eq
+# and check_not to print when they fail, so a missed page names its cause (L177).
+headless_dom(){
+  local rc
+  : > "$TMP/chrome-last.chrome-err"
+  HEADLESS_DOM_DEADLINE="$HANG_S" HEADLESS_DOM_CHROME_ERR="$TMP/chrome-last.chrome-err" HEADLESS_DOM_CHROME="$REAL_CHROME" \
+    bash "$HEADLESS_DOM" "$@" > "$TMP/chrome-last.out" 2> "$TMP/chrome-last.err"
+  rc=$?
+  printf 'exit %s, %s bytes back, starting %s; headless-dom.sh said: %s; Chrome last said: %s' "$rc" \
+    "$(wc -c < "$TMP/chrome-last.out" | tr -d ' ')" "$(head -c 120 "$TMP/chrome-last.out" | tr '\n' ' ' | sed 's/ *$//')" \
+    "$(tail -n 3 "$TMP/chrome-last.err" | tr '\n' ' ' | sed 's/ *$//')" \
+    "$(tail -n 3 "$TMP/chrome-last.chrome-err" | tr '\n' ' ' | sed 's/ *$//')" > "$TMP/chrome-last.said"
+  cat "$TMP/chrome-last.out"
+  cat "$TMP/chrome-last.err" >&2
+  return "$rc"
+}
+
+# claude-config#2260: in full runs at a load of 23 to 83 on 12 cores this suite twice lost one page
+# check of its 320, a different one each time, as NO-STAGE and then NO-PROBE, and passed on rerun.
+# NO-STAGE came from a page whose stage is in its static HTML, so Chrome handed back no page at all,
+# and the run said nothing more, because every real Chrome run's last words go to /dev/null. Proved
+# here on stand in Chromes, so neither depends on the machine.
+# First: a page check that misses says what the last Chrome run handed back, and its last words (L177).
+printf '#!/bin/bash\nprintf "<html><head></head><body></body></html>\\n"\necho "stand in: nothing was loaded" >&2\n' > "$TMP/blank-chrome"
+chmod +x "$TMP/blank-chrome"
+missed="$(REAL_CHROME="$TMP/blank-chrome" headless_dom --headless --dump-dom "file://$TMP/none.html" 2>/dev/null \
+  | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")')"
+said="$(pass=0; fail=0; check_eq "a stand in page check" "drawn:A" "$missed")"
+check "a page check that misses says how the last Chrome run ended and what it handed back (#2260)" \
+  "exit 0, 40 bytes back, starting <html><head></head><body></body></html>" "$said"
+check "and that run's last words" "stand in: nothing was loaded" "$said"
+said="$(pass=0; fail=0; check "a stand in page check" "drawn:A" "$missed")"
+check "and so does a contains check that misses" "exit 0, 40 bytes back" "$said"
+# Second: these checks ask what a page draws, never how fast Chrome starts, so a real Chrome run here
+# is bounded by the suite's hang ceiling and not headless-dom.sh's fixed 60 s, which a loaded Mac can
+# reach (L290). The 60 s deadline itself is tested above on stand in Chromes, at 2 s.
+printf '#!/bin/bash\nprintf "<html><body>deadline %%s</body></html>\\n" "${HEADLESS_DOM_DEADLINE:-none}"\n' > "$TMP/deadline-chrome"
+chmod +x "$TMP/deadline-chrome"
+check_eq "a real Chrome run in this suite is bounded by its hang ceiling, never a fixed deadline (#2260)" \
+  "<html><body>deadline $HANG_S</body></html>" "$(REAL_CHROME="$TMP/deadline-chrome" headless_dom --headless 2>/dev/null)"
+# The stand ins' accounts are not the real Chrome's, so no later failure is told of them.
+rm -f "$TMP/chrome-last.said"
+
 if [[ -x "$REAL_CHROME" ]]; then
 
   # And once on the real Chrome: a run leaves the real per user clone folder as it found it (#988).
