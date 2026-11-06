@@ -109,6 +109,9 @@ def read_transcript(path, since, until, counters):
     active = False
     first = None
     compactions = 0
+    # The transcript in order, for the floor of each stretch (#2283): None for a compaction, else
+    # the index of a request in `order`, at the line it first appears.
+    events = []
     try:
         fh = open(path, encoding="utf-8", errors="replace")
     except OSError:
@@ -136,8 +139,11 @@ def read_transcript(path, since, until, counters):
                 agent_id = d["agentId"]
             if session_id is None and isinstance(d.get("sessionId"), str):
                 session_id = d["sessionId"]
-            if in_window and d.get("type") == "system" and d.get("subtype") == "compact_boundary":
-                compactions += 1
+            if d.get("type") == "system" and d.get("subtype") == "compact_boundary":
+                # Every compaction starts a stretch, in the window or not; only those in it are counted.
+                events.append(None)
+                if in_window:
+                    compactions += 1
             if d.get("type") != "assistant":
                 continue
             msg = d.get("message") if isinstance(d.get("message"), dict) else {}
@@ -152,6 +158,7 @@ def read_transcript(path, since, until, counters):
             key = msg.get("id") or d.get("requestId") or ("line", counters["lines"])
             counters["lines"] += 1
             if key not in requests:
+                events.append(len(order))
                 order.append(key)
                 if ts is None:
                     # No usable timestamp: it cannot be placed in or out of the window, so it is
@@ -168,8 +175,48 @@ def read_transcript(path, since, until, counters):
         "is_side": is_side, "agent_id": agent_id, "session_id": session_id,
         "entrypoint": entrypoint, "requests": [requests[k] for k in order],
         "no_usage": no_usage, "any_usage": any_usage, "first": first,
-        "compactions": compactions,
+        "compactions": compactions, "events": events,
     }
+
+
+def judge(t, line):
+    """The line as the hook judges it (#2283), from context_size's own floor and band functions.
+
+    Returns (pairs, floors, stretches): (context, band) of each request in the window, in order;
+    ("start" or "after", context) of each floor request in the window; and, for each stretch holding
+    a request in the window, how many requests into it the line was first crossed, or None."""
+    pairs, floors, stretches = [], [], []
+    stretch = context_size.fresh_stretch()
+    crossed, seen, after = None, False, False
+    for ev in t["events"]:
+        if ev is None:
+            if seen:
+                stretches.append(crossed)
+            context_size.reset_floor(stretch)
+            crossed, seen, after = None, False, True
+            continue
+        _, in_window, usage = t["requests"][ev]
+        ctx = context_size.context_of(usage)
+        context_size.fold_floor(stretch, ctx, False)
+        band = context_size.band_of(ctx, stretch, line)
+        if not in_window:
+            continue
+        seen = True
+        if stretch["stretch_requests"] == 1:
+            floors.append(("after" if after else "start", ctx))
+        if band >= 1 and crossed is None:
+            crossed = stretch["stretch_requests"]
+        pairs.append((ctx, band))
+    if seen:
+        stretches.append(crossed)
+    return pairs, floors, stretches
+
+
+def spread(values):
+    """median, min and max, or n/a for each when there are none (never a zero, L90)."""
+    if not values:
+        return "median=n/a\tmin=n/a\tmax=n/a"
+    return "median=%d\tmin=%d\tmax=%d" % (statistics.median(values), min(values), max(values))
 
 
 def totals(usages):
@@ -223,8 +270,8 @@ def main(argv):
     paths += glob.glob(os.path.join(a.root, "*", "*", "subagents", "*.jsonl"))
     counters = {"malformed": 0, "unreadable": 0, "lines": 0, "untimed": 0}
     rows, unmeasured = [], []
-    kinds = {"main": {"usages": [], "transcripts": 0, "unmeasured": 0, "over": 0, "per": []},
-             "subagent": {"usages": [], "transcripts": 0, "unmeasured": 0, "over": 0, "per": []}}
+    kinds = {kind: {"usages": [], "transcripts": 0, "unmeasured": 0, "over": 0, "per": [],
+                    "pairs": [], "floors": [], "stretches": []} for kind in ("main", "subagent")}
     starts = []
     by_entry = {}
     since_epoch = since.timestamp()
@@ -266,8 +313,12 @@ def main(argv):
         kinds[kind]["transcripts"] += 1
         kinds[kind]["usages"].extend(usages)
         contexts = [context_size.context_of(u) for u in usages]
-        if any(c > a.context_line for c in contexts):
+        pairs, floors, stretches = judge(t, a.context_line)
+        if any(band >= 1 for _, band in pairs):
             kinds[kind]["over"] += 1
+        kinds[kind]["pairs"].extend(pairs)
+        kinds[kind]["floors"].extend(floors)
+        kinds[kind]["stretches"].extend(stretches)
         kinds[kind]["per"].append((t["compactions"], sum(contexts)))
         tt = totals(usages)
         first_ts, first_u = t["first"]
@@ -310,11 +361,23 @@ def main(argv):
                               et["w5"], et["w1"], rate(et["read"], et["all"])))
     for kind in ("main", "subagent"):
         k = kinds[kind]
-        contexts = [context_size.context_of(u) for u in k["usages"]]
-        over = [c for c in contexts if c > a.context_line]
+        contexts = [c for c, _ in k["pairs"]]
+        over = [c for c, band in k["pairs"] if band >= 1]
+        whole = [c for c in contexts if c // a.context_line >= 1]
         out.append("CONTEXT\t%s\tline=%d\ttranscripts_over=%d\trequests_over=%d\tshare_of_requests=%s"
-                   "\tshare_of_tokens=%s" % (kind, a.context_line, k["over"], len(over),
-                                            rate(len(over), len(contexts)), rate(sum(over), sum(contexts))))
+                   "\tshare_of_tokens=%s\twhole_context_requests_over=%d"
+                   % (kind, a.context_line, k["over"], len(over), rate(len(over), len(contexts)),
+                      rate(sum(over), sum(contexts)), len(whole)))
+    for kind in ("main", "subagent"):
+        k = kinds[kind]
+        firsts = [c for where, c in k["floors"] if where == "start"]
+        afters = [c for where, c in k["floors"] if where == "after"]
+        out.append("FLOOR\t%s\tsession_starts=%d\t%s\tafter_compaction=%d\t%s"
+                   % (kind, len(firsts), spread(firsts), len(afters), spread(afters)))
+        crossed = [n for n in k["stretches"] if n is not None]
+        out.append("STRETCHES\t%s\tline=%d\tstretches=%d\tcrossed=%d\tmedian_requests_to_cross=%s"
+                   % (kind, a.context_line, len(k["stretches"]), len(crossed),
+                      ("%d" % statistics.median(crossed)) if crossed else "n/a"))
     per = kinds["main"]["per"]
     hit = [(c, tok) for c, tok in per if c >= a.compactions]
     out.append("COMPACTIONS\tmain\tnudge_at=%d\ttranscripts=%d\tat_or_over=%d\tshare_of_tokens=%s\tmax=%d"
