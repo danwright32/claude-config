@@ -551,13 +551,20 @@ arms_deadline "$TMPROOT/probe-armed.sh" \
 scan_dirs="$(HOOK_TESTS_LIST_ONLY=1 bash "$DIR/run-all-tests.sh" 2>/dev/null)"
 scanned=0
 unarmed=""
+unread=""
 while IFS= read -r d; do
   [ -n "$d" ] || continue
   for s in "$d"/test-*.sh; do
     [ -f "$s" ] || continue
     scanned=$((scanned + 1))
-    arms_deadline "$s" || unarmed="$unarmed  $s
-"
+    arms_deadline "$s"
+    case $? in
+      0) ;;
+      1) unarmed="$unarmed  $s
+" ;;
+      *) unread="$unread  $s
+" ;;
+    esac
   done
 done <<EOF
 $scan_dirs
@@ -571,9 +578,15 @@ if [ -z "$unarmed" ]; then
   check "#465 every suite arms its own deadline" ok
 else
   # The wording is the library's, the same words the push gate refuses with (#2330).
-  check "#465 every suite arms its own deadline" "these ${SUITE_ARMS_WHY:-could not be judged, since lib/suite-arms-check.sh did not load}:
+  check "#465 every suite arms its own deadline" "these $SUITE_ARMS_WHY:
 $unarmed"
 fi
+# A suite that could not be read, or a check that could not load, is said in those words: neither
+# armed nor unarmed, and never a pass (#2330, L10).
+[ -z "$unread" ] \
+  && check "#2330 every suite could be read and judged" ok \
+  || check "#2330 every suite could be read and judged" "these could not be read, or lib/suite-arms-check.sh did not load:
+$unread"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
