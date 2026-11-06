@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import { DESIGN_SETTLED_QUESTION, DESIGN_SETTLED_SOURCE, DESIGN_SKIP_QUESTION, DESIGN_SKIP_SOURCE, guardAsks, guardIgnores } from '../hooks/designquestions.ts'
+import { DESIGN_SETTLED_QUESTION, DESIGN_SETTLED_SOURCE, DESIGN_SKIP_QUESTION, DESIGN_SKIP_SOURCE, guardAsks, guardIgnores, guardQuestion } from '../hooks/designquestions.ts'
 
 // #2253: the design round guard counts Dan's answer only from its own picker, a question asked with
 // its metadata source. On 2026-11-04 a plain question in the guard's words was answered Skip them,
@@ -38,4 +38,14 @@ test("the guard's own picker, and a question about anything else, are not ignore
   expect(guardIgnores('For o/r#7, keep the old flag?', undefined)).toBe(false)
   expect(guardIgnores('Run design rounds on the settings screen next?', undefined)).toBe(false)
   expect(guardIgnores('Is the API design settled enough to build on?', undefined)).toBe(false)
+})
+
+test("a guard question is told by its words alone, whatever asked it, as /sleep reads an issue's items (#2261)", () => {
+  expect(guardQuestion(DESIGN_SKIP_QUESTION)).toBe(true)
+  expect(guardQuestion(DESIGN_SETTLED_QUESTION)).toBe(true)
+  expect(guardQuestion(COPIED)).toBe(true)
+  expect(guardQuestion('o/r#12: skip the design round for the sign in button?')).toBe(true)
+  expect(guardQuestion('Keep the old flag?')).toBe(false)
+  expect(guardQuestion('Run design rounds on the settings screen next?')).toBe(false)
+  expect(guardQuestion('Is the API design settled enough to build on?')).toBe(false)
 })

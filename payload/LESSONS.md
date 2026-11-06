@@ -7565,6 +7565,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Join a time to its AM or PM, and a figure to its unit, with a non-breaking space, or a narrow column wraps the suffix alone.
 
 ## External systems
+- **L846. A dependency install that exits 0 is not a working install: npm 11 skips every install script not listed in package.json's allowScripts and only warns, so commit that list and prove a clean install by building or starting the app, never by the unit tests passing.**
+  (new-agent-onboarding#903, 2026-11-05)
+  SHORT: npm 11 skips install scripts missing from allowScripts and only warns; commit the list and prove a clean install by building, not tests.
 - **L826. A request timeout cleared when the response headers arrive leaves reading the body with no limit, so a server that answers then trickles holds the caller open; keep the timer running until the body is fully read.**
   (bidspoke#3089, 2026-10-30)
   SHORT: A request timeout cleared when headers arrive leaves the body read unbounded; keep the timer running until the body is fully read.
