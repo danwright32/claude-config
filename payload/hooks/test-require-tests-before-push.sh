@@ -1299,6 +1299,26 @@ W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n'
 run_hook "$W" "git push"
 want_code 2 "#2258 an identical copy under a different mode is still refused"
 
+# A mod-kit test importing the helper without its extension, in double quotes, counts the same.
+W="$(mk_modkit_repo)"
+( cd "$W" && printf 'export const BARE = 1\n' > payload/mods/mod-kit/hooks/bare.ts \
+  && printf 'import { BARE } from "../hooks/bare"\n' > payload/mods/mod-kit/tests/bare.test.ts \
+  && git add payload/mods/mod-kit && git commit -qm "bare helper" && git push -q ) >/dev/null 2>&1
+put_copy "$W" bare.ts 'export const BARE = 1\n' "new mod"
+run_hook "$W" "git push"
+want_code 0 "#2258 an identical copy of a helper imported without its extension goes through"
+
+# A symbolic link in mod-kit's hooks is not a helper file, even when the copy is the same link.
+W="$(mk_modkit_repo)"
+( cd "$W" && ln -s hold.ts payload/mods/mod-kit/hooks/alias.ts \
+  && printf "import { HOLD } from '../hooks/alias.ts'\n" > payload/mods/mod-kit/tests/alias.test.ts \
+  && git add payload/mods/mod-kit && git commit -qm "alias" && git push -q \
+  && mkdir -p "$COPY" && ln -s hold.ts "$COPY/alias.ts" && git add "$COPY/alias.ts" && git commit -qm "new mod" ) >/dev/null 2>&1
+if [ "$(git -C "$W" ls-tree HEAD -- "$COPY/alias.ts" | cut -c1-6)" = 120000 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2258 the fixture committed no link copy"; fi
+run_hook "$W" "git push"
+want_code 2 "#2258 a copy of a symbolic link in mod-kit's hooks is still refused"
+
 # mod-kit's own hooks/mod-kit folder is not a copy of anything.
 W="$(mk_modkit_repo)"
 ( cd "$W" && mkdir -p payload/mods/mod-kit/hooks/mod-kit && printf 'export const HOLD = 1\n' > payload/mods/mod-kit/hooks/mod-kit/hold.ts \

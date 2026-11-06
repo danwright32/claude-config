@@ -355,7 +355,7 @@ DOCS_ONLY_CONTEXT=1000000
 # mod-kit helper itself is still source here and still needs its own test.
 MODKIT_TREE=""; modkit_tree_read=0; modkit_list=""; MODKIT_EXCLUDES=()
 modkit_copy_tested() {   # $1 = a path the push carries
-  local f="$1" mod rel stem src copy_meta src_meta hits h
+  local f="$1" mod rel stem src copy_meta src_meta hits
   [[ "$f" =~ ^payload/mods/([^/]+)/hooks/mod-kit/(.+)$ ]] || return 1
   mod="${BASH_REMATCH[1]}"; rel="${BASH_REMATCH[2]}"
   [ "$mod" != mod-kit ] || return 1
@@ -370,16 +370,11 @@ modkit_copy_tested() {   # $1 = a path the push carries
   [ "$copy_meta" = "$src_meta" ] || return 1
   stem="${rel%.*}"
   hits="$(git grep -l -F \
-      -e "../hooks/$rel'" -e "../hooks/$rel\"" -e "../hooks/$rel\`" \
-      -e "../hooks/$stem'" -e "../hooks/$stem\"" -e "../hooks/$stem\`" \
+      -e "../hooks/$rel'" -e "../hooks/$rel\"" \
+      -e "../hooks/$stem'" -e "../hooks/$stem\"" \
       "$MODKIT_TREE" -- payload/mods/mod-kit/tests/ 2>/dev/null)" || return 1
-  while IFS= read -r h; do
-    h="${h#*:}"
-    [ -n "$h" ] && is_test "$h" && return 0
-  done <<HITS_EOF
-$hits
-HITS_EOF
-  return 1
+  # Every path under a tests/ folder is a test to is_test, so a hit there needs no second check.
+  [ -n "$hits" ]
 }
 
 # Said in a refusal when copies were counted, so the reader knows they were left out on purpose.
