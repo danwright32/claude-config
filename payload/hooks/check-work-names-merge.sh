@@ -33,8 +33,8 @@
 # NO OVERRIDE. It is a privacy rule, and its remedy is always open: edit the title or description,
 # or reword the commit on the branch.
 #
-# Seams, for the tests: WN_MERGE_READ_TRIES (3 in all), WN_MERGE_READ_RETRY_SECONDS (2),
-# WN_MERGE_READ_BUDGET_SECONDS (15, against a hook timeout of 30; MT_GATE_READ_BUDGET_SECONDS, which
+# Seams, for the tests: WN_MERGE_READ_TRIES (3 in all) and WN_MERGE_READ_RETRY_SECONDS (2, capped at
+# 5), both honoured only with HOOK_TESTS_RUNNING=1 (claude-config#2231); WN_MERGE_READ_BUDGET_SECONDS (15, against a hook timeout of 30; MT_GATE_READ_BUDGET_SECONDS, which
 # merge-when-ready.sh sets, when it is unset; either is clamped to 15), WN_MERGE_SLEEP (sleep), all
 # chosen, not measured; WN_MERGE_SCANNER (the scanner file, honoured only with HOOK_TESTS_RUNNING=1);
 # WN_MERGE_CLOCK_FILE (a test clock that moves this hook's clock forward only, so it can make the
@@ -134,8 +134,26 @@ pr=$(mt_pr_number "$command")
 # A refused sign in, or a network to GitHub that failed on every try, refuses in its own words
 # (mt_unanswered_said), never as GitHub being unreadable (claude-config#1615, #1728, L11).
 wn_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
-READ_TRIES="$(wn_num "${WN_MERGE_READ_TRIES:-}" 3)"
-READ_WAIT="$(wn_num "${WN_MERGE_READ_RETRY_SECONDS:-}" 2)"
+# The count of tries and the wait between them are the hook's own, 3 and 2, outside its tests
+# (claude-config#2231): Claude Code's environment reaches every hook, and a count or a wait named there
+# could hold the gate past its timeout, where it is killed and gives no verdict at all. Under the test
+# marker a test's own are read, and the wait is still capped at 5 seconds (a setting, not measured: two
+# waits of 5 sit inside the read budget of 15). A wait that is not a number keeps the default; one
+# whole_above_zero refuses is zero however written, and stays zero; one of three or more digits is past
+# the cap however the shell would read it, too long for its arithmetic included.
+READ_TRIES=3
+READ_WAIT=2
+READ_WAIT_CAP=5
+if [ "${HOOK_TESTS_RUNNING:-}" = 1 ]; then
+  READ_TRIES="$(wn_num "${WN_MERGE_READ_TRIES:-}" 3)"
+  READ_WAIT="$(wn_num "${WN_MERGE_READ_RETRY_SECONDS:-}" 2)"
+  if whole_above_zero "$READ_WAIT" READ_WAIT; then
+    case "$READ_WAIT" in ???*) READ_WAIT="$READ_WAIT_CAP" ;; esac
+    [ "$READ_WAIT" -le "$READ_WAIT_CAP" ] || READ_WAIT="$READ_WAIT_CAP"
+  else
+    READ_WAIT=0
+  fi
+fi
 READ_DEADLINE="$(mt_gate_read_budget "${WN_MERGE_READ_BUDGET_SECONDS:-}" 15)"
 # Capped, whichever setting named it (claude-config#2217). Every number here is a setting, not
 # measured: the hook timeout settings.hooks.json registers (30), the most the work repository list

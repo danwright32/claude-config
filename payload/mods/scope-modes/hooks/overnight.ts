@@ -57,6 +57,11 @@ export type OvernightCall = {
   read: (text: string) => Promise<Cmd[]>
   /** For a Chrome call: the tabs this session created and the project's test hosts; absent, none (#2064). */
   browser?: Browser
+  /**
+   * The judge of a `gh pr merge --admin` that passed the repository rule (adminmerge.ts, #2125): why
+   * it is refused, or undefined to allow it. Absent, every admin merge is refused.
+   */
+  adminMerge?: (gh: ModKitGh, repo: string) => Promise<string | undefined>
 }
 
 /** Never approved overnight, whatever else: a question for Dan and the plan approval (H8). */
@@ -426,8 +431,9 @@ const GH_READ_SUBS = new Set(['search', 'help', 'version', 'completion', 'status
 // The writes overnight work needs, each a subcommand and action and the only flags it may carry
 // beyond -R or --repo: a comment on the issue being worked (decision 3), opening, readying and
 // merging its PR (phase 7 judges merges further), and changing that PR's title or body. Nothing is
-// filed overnight, so no issue is created, and no merge skips its checks (--admin); one left to
-// land once its checks pass (--auto) still waits on them.
+// filed overnight, so no issue is created, and no merge skips its checks: --admin is refused unless
+// the judge handed in (`adminMerge`, adminmerge.ts, #2125) finds the repository opted in and its
+// pinned head commit green on GitHub. One left to land once its checks pass (--auto) still waits on them.
 const BODY = ['-t', '--title', '-b', '--body', '-F', '--body-file']
 const GH_WRITES: Record<string, string[]> = {
   'issue comment': ['-b', '--body', '-F', '--body-file'],
@@ -451,7 +457,7 @@ const REPO_FLAGS = ['-R', '--repo', '--help', '-h']
 // read (undefined). REST and GraphQL reach the same decision through the same outcomes. `a` is
 // mod-kit's reading of the command (#961), asked once per command; with none, nothing it does or
 // where it goes can be said.
-type GhVerdict = { refuse: string } | { write: string | null | undefined } | undefined
+type GhVerdict = { refuse: string } | { write: string | null | undefined; admin?: ModKitGh } | undefined
 const ghVerdict = (a: ModKitGh | undefined): GhVerdict => {
   if (!a) return { write: null }
   const { sub, act } = a
@@ -471,6 +477,8 @@ const ghVerdict = (a: ModKitGh | undefined): GhVerdict => {
   const key = `${sub} ${act}`
   if (!Object.prototype.hasOwnProperty.call(GH_WRITES, key)) return { refuse: `run gh ${key}`.trim() }
   const allowed = GH_WRITES[key] as string[]
+  // An admin merge is a write to judge further: its shape and GitHub's answers are the judge's (#2125).
+  if (key === 'pr merge' && hasFlag(a, '--admin')) return { write: a.named, admin: a }
   const other = a.flags.find(f => !allowed.includes(f.name) && !REPO_FLAGS.includes(f.name))
   if (other) return { refuse: `run gh ${key} with ${other.name}` }
   return { write: a.named }
@@ -555,14 +563,15 @@ const ghRunsUnread = async (call: OvernightCall): Promise<boolean> => {
 const UNRESOLVED = 'write to GitHub where the repository it reaches could not be resolved'
 // A GitHub write goes only to the repository the checkout it runs in is. `target` is the one the
 // call names (undefined: none, so gh takes GH_REPO, else the checkout's; null: none can be said).
-const writeRefusal = async (target: string | null | undefined, dir: string | null, call: OvernightCall, look: Look): Promise<string | undefined> => {
+// The repository the write reaches when the rule allows it, else why it is refused.
+const writeTarget = async (target: string | null | undefined, dir: string | null, call: OvernightCall, look: Look): Promise<{ why: string } | { repo: string }> => {
   // GH_REPO set inline in the command reaches gh past every word the reader gives.
-  if (wrapped(call)) return UNRESOLVED
-  if (target === null) return UNRESOLVED
+  if (wrapped(call)) return { why: UNRESOLVED }
+  if (target === null) return { why: UNRESOLVED }
   const here = dir === null ? null : await look.repoOf(dir)
   const to = target === undefined ? (call.ghRepo !== undefined ? call.ghRepo : here) : target
-  if (!to || !here) return UNRESOLVED
-  return to === here ? undefined : `write to ${to} from a checkout of ${here}`
+  if (!to || !here) return { why: UNRESOLVED }
+  return to === here ? { repo: here } : { why: `write to ${to} from a checkout of ${here}` }
 }
 
 // ---- MCP tools ----
@@ -706,8 +715,15 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
       const v = ghVerdict(c.gh)
       if (v && 'refuse' in v) return v.refuse
       if (v && 'write' in v) {
-        const why = await writeRefusal(v.write, dir, call, look)
-        if (why) return why
+        const to = await writeTarget(v.write, dir, call, look)
+        if ('why' in to) return to.why
+        // An admin merge passes the same repository rule first, then goes to the judge handed in;
+        // with none, it is refused as every other flag a merge may not carry (#2125).
+        if (v.admin) {
+          if (!call.adminMerge) return 'run gh pr merge with --admin'
+          const why = await call.adminMerge(v.admin, to.repo)
+          if (why) return why
+        }
       }
       continue
     }

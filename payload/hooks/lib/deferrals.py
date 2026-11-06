@@ -24,7 +24,9 @@ URL in a string is not a comment and "later" inside a string literal is never a 
 
 A judged line is a FINDING when it carries a phrase from lib/deferral-phrases.txt (case
 insensitive, on word boundaries) and no ISSUE REFERENCE, `#NNNN` or a GitHub issue URL, sits on the
-line itself or on the two lines either side of it in the NEW text. In a diff, removed lines are not
+line itself or on the two lines either side of it in the NEW text. A phrase QUOTED as a word, inside
+a short span of backticks or double quotes closed on the same line, is a mention and is not looked
+at (strip_mentions, below, carries the exact limits, #2133). In a diff, removed lines are not
 part of the new text and cannot clear a finding; context lines can, which is why the push hook asks
 git for at least two lines of context.
 
@@ -130,6 +132,30 @@ def strip_strings(line):
     return STRING_RE.sub(lambda m: " " * len(m.group(0)), line)
 
 
+# A phrase QUOTED as the subject of a sentence is a mention, not a deferral (claude-config#2133):
+# the README mods table names the words a mod listens for ("for now", `follow up`), and had to
+# split them across two lines to get past this check. Kept as narrow as it can be, because every
+# span it matches is text this check no longer reads:
+#   - backticks or straight double quotes only, never single quotes, which apostrophes pair up;
+#   - opened and closed on the SAME line, so an unclosed quote or a lone backtick hides nothing;
+#   - the opening mark not straight after a letter or digit and the closing one not straight
+#     before one, so an inch mark (`a 5" pipe`) never opens a span that pairs with a later quote;
+#   - six words at most inside, so a quoted deferral sentence is still judged;
+#   - only the span itself is blanked, so a deferral beside a short quoted word is still a finding.
+# Scanned left to right as one pattern, so a double quote inside a code span stays in it.
+MENTION_RE = re.compile(r'(?<![A-Za-z0-9_])(?:`[^`\n]+`|"[^"\n]+")(?![A-Za-z0-9_])')
+MENTION_MAX_WORDS = 6
+
+
+def strip_mentions(text):
+    """Short quoted spans blanked to spaces, same length, so a phrase quoted as a word is not read."""
+    def blank(m):
+        if len(m.group(0)[1:-1].split()) > MENTION_MAX_WORDS:
+            return m.group(0)
+        return " " * len(m.group(0))
+    return MENTION_RE.sub(blank, text)
+
+
 def load_phrases(path):
     phrases = []
     with open(path, encoding="utf-8", errors="replace") as fh:
@@ -229,7 +255,7 @@ def judge(path, new_lines, judged_numbers, phrase_re, reset_at=None):
         comment = reader.comment_text(text)
         if n not in judged_numbers or comment is None:
             continue
-        m = phrase_re.search(comment)
+        m = phrase_re.search(strip_mentions(comment))
         if not m:
             continue
         lo, hi = max(0, idx - WINDOW), min(len(texts), idx + WINDOW + 1)
