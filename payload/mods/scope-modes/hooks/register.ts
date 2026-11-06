@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
-import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import { ghApiOf, judgeAdminMerge } from './adminmerge.ts'
 import type {
   ScopeModes,
   ScopeModesCleanup,
@@ -1331,8 +1332,14 @@ const overnightWhy = async ($: EngineInterface, tool: string, input: Record<stri
   // that cannot be read, which refuses every write naming none itself (L42).
   const spelling = (await $.env.get('GH_REPO')) || undefined
   const ghRepo = spelling === undefined ? undefined : await $.modkit.ghRepo({ spelling }).catch(() => null)
+  // An admin merge (#2125) is judged by the lists the sleep record carries (none when it is not
+  // asleep or cannot be read, which refuses) and GitHub's answers, all in adminmerge.ts.
+  const adminMerge = async (g: ModKitGh, repo: string) => {
+    const reading = await sleepNow($)
+    return judgeAdminMerge(reading.state === 'asleep' ? reading.record.repos : undefined, g, repo, ghApiOf(argv => run($, argv)), link => $.modkit.linkRepo({ link }))
+  }
   return overnightRefusal(
-    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo !== undefined ? { ghRepo } : {}), read: text => readCommands($, text) },
+    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo !== undefined ? { ghRepo } : {}), read: text => readCommands($, text), adminMerge },
     lookOf($),
   )
 }
