@@ -5117,7 +5117,12 @@ within the hour, and keeps his word with why under `pass:<the call's key>`. Sinc
 question carries `onScreen`, one plain sentence from the session saying what on screen changes
 (which control or area, on which screen) or that nothing visible does; the question leads with it
 and names the issue and file after it, and it is refused, with nothing asked, when the sentence is
-missing, longer than 300 characters or names a file. A typed answer to the skip question records
+missing, longer than 300 characters or names a file. Since #2294 the question is not asked at all
+for an edit to an app's React screen file that the guard's own reading (rules.ts logicOnlyChange)
+finds changes only logic: no JSX, string, comment, number, true or false, word a look is spelled
+in, stylesheet or swapped import. It goes ahead and is kept under `auto:<the call's key>` with why;
+a mod's hook file, any text Dan reads, an issue whose answers cannot be read, and a pass that cannot
+be kept are held and asked as before. A typed answer to the skip question records
 nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in mod-kit's
 one wording (`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not
 yet, with nothing recorded and no toast, and Claude takes his words as the next round's feedback
