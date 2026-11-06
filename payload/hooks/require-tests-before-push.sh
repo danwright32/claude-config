@@ -338,8 +338,80 @@ diff_docs_only() {
 }
 
 # Lines of context the docs-only check reads around each change: the whole file, so a
-# '*' line can be placed inside or outside the block comment it sits in.
+# '*' line can be placed inside or outside the block comment it sits in, and a Python
+# line inside or outside a docstring.
 DOCS_ONLY_CONTEXT=1000000
+
+# A mod's copy of a mod-kit helper, tested by mod-kit's own tests (claude-config#2258). Every mod
+# keeps copies of mod-kit's helpers at payload/mods/<mod>/hooks/mod-kit/<name>, and
+# tools/check-mod-shared-parts.sh fails when one differs from payload/mods/mod-kit/hooks/<name>, yet
+# this gate refused a new mod for the copies alone: on 2026-11-04 the slack-alert-guard push was
+# refused for hold.ts and skew.ts, and got through only once mod-kit's tests were copied into the
+# mod with their imports repointed. A copy counts as tested, and is left out of the source judged,
+# only when ALL of these hold in the tree the push delivers (pc_push_tree), never in a list or in
+# the base: the mod is not mod-kit itself; payload/mods/mod-kit/hooks/<name> is there as a regular
+# file of the same mode and the same bytes (the same blob); and a test file under
+# payload/mods/mod-kit/tests/ imports ../hooks/<name>, with or without its extension. Anything short
+# of that is judged exactly as before. No tree, or git failing, counts nothing. A change to the
+# mod-kit helper itself is still source here and still needs its own test.
+MODKIT_TREE=""; modkit_tree_read=0; modkit_list=""; MODKIT_EXCLUDES=()
+modkit_copy_tested() {   # $1 = a path the push carries
+  local f="$1" mod rel stem src copy_meta src_meta hits
+  [[ "$f" =~ ^payload/mods/([^/]+)/hooks/mod-kit/(.+)$ ]] || return 1
+  mod="${BASH_REMATCH[1]}"; rel="${BASH_REMATCH[2]}"
+  [ "$mod" != mod-kit ] || return 1
+  src="payload/mods/mod-kit/hooks/$rel"
+  if [ "$modkit_tree_read" -eq 0 ]; then MODKIT_TREE="$(pc_push_tree)"; modkit_tree_read=1; fi
+  [ -n "$MODKIT_TREE" ] || return 1
+  # "<mode> <type> <blob>" of each, cut at the tab before the path.
+  copy_meta="$(git ls-tree "$MODKIT_TREE" -- "$f" 2>/dev/null)" || return 1
+  src_meta="$(git ls-tree "$MODKIT_TREE" -- "$src" 2>/dev/null)" || return 1
+  copy_meta="${copy_meta%%$'\t'*}"; src_meta="${src_meta%%$'\t'*}"
+  case "$src_meta" in "100644 blob "*|"100755 blob "*) ;; *) return 1 ;; esac
+  [ "$copy_meta" = "$src_meta" ] || return 1
+  stem="${rel%.*}"
+  hits="$(git grep -l -F \
+      -e "../hooks/$rel'" -e "../hooks/$rel\"" \
+      -e "../hooks/$stem'" -e "../hooks/$stem\"" \
+      "$MODKIT_TREE" -- payload/mods/mod-kit/tests/ 2>/dev/null)" || return 1
+  # Every path under a tests/ folder is a test to is_test, so a hit there needs no second check.
+  [ -n "$hits" ]
+}
+
+# Said in a refusal when copies were counted, so the reader knows they were left out on purpose.
+modkit_note() {
+  [ -n "$modkit_list" ] || return 0
+  echo "Note: these copies of mod-kit's helpers are byte identical to mod-kit's own,"
+  echo "which mod-kit's tests import, so they were counted as tested and not judged:"
+  printf '%s' "$modkit_list"
+  echo ""
+}
+
+# A Python file's diff on stdin, written back with each changed line lying wholly inside a
+# docstring turned into a '#' comment, so diff_docs_only reads it as the documentation it is
+# (claude-config#2247). lib/py-docstring-lines.py decides, with Python's own parser over both
+# images of the file, and leaves alone anything it cannot place: an ordinary string, code on a
+# docstring's line, a file that does not parse. It rewrites line for line, so any other line count
+# (no python3, the helper missing or dying part way) means the diff goes on exactly as git gave
+# it, and the file is judged as it was before. The diff is held in files rather than a shell
+# variable, so the raw diff passed on is byte for byte what git wrote. Where no scratch file can be
+# made, the diff passes straight through untouched; where the diff cannot be written to one, nothing
+# is passed on, which diff_docs_only reads as not documentation, so the gate fails closed.
+py_docstrings_as_comments() {
+  local in="" out=""
+  { in="$(mktemp)" && out="$(mktemp)"; } || { rm -f "$in"; cat; return 0; }
+  if ! cat > "$in"; then
+    rm -f "$in" "$out"
+    return 0
+  fi
+  if python3 "$HOOK_DIR/lib/py-docstring-lines.py" < "$in" > "$out" 2>/dev/null \
+      && [ -s "$out" ] && [ "$(wc -l < "$out")" -eq "$(wc -l < "$in")" ]; then
+    cat "$out"
+  else
+    cat "$in"
+  fi
+  rm -f "$in" "$out"
+}
 
 source_changed=0
 test_changed=0
@@ -357,6 +429,11 @@ while IFS= read -r f; do
     TEST_PATHSPEC+=("$f")
     continue
   fi
+  if is_source "$f" && modkit_copy_tested "$f"; then
+    modkit_list="${modkit_list}  - ${f}"$'\n'
+    MODKIT_EXCLUDES+=(":(exclude)$f")
+    continue
+  fi
   if is_source "$f"; then
     source_changed=1
     source_list="${source_list}  - ${f}"$'\n'
@@ -366,8 +443,10 @@ done <<EOF
 $PC_FILES
 EOF
 
-# No source touched -> nothing to gate.
-[ "$source_changed" -eq 1 ] || allow nosource
+# No source touched -> nothing to gate. The record names any mod-kit copies counted (#2258), so a
+# push let through for them reads apart from one that carried no source at all.
+[ "$source_changed" -eq 1 ] || allow nosource \
+  "$([ -n "$modkit_list" ] && printf 'mod-kit copies counted as tested: %s' "$(printf '%s' "$modkit_list" | sed 's/^  - //' | paste -sd ',' -)")"
 
 # ---------------------------------------------------------------------------
 # 4b. The tests this branch already pushed (claude-config#2153).
@@ -435,9 +514,10 @@ if [ "$test_changed" -eq 0 ]; then
     [ -z "$f" ] && continue
     examined=$((examined+1))
     style="$(docs_style_for "$f")"
-    if ! PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | diff_docs_only "$style"; then
-      docs_only=0; break
-    fi
+    case "$f" in
+      *.py) PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | py_docstrings_as_comments | diff_docs_only "$style" ;;
+      *) PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | diff_docs_only "$style" ;;
+    esac || { docs_only=0; break; }
   done <<DOCS_ONLY_EOF
 $source_paths
 DOCS_ONLY_EOF
@@ -453,7 +533,7 @@ PUSH BLOCKED: this push changes source code but adds or modifies no tests.
 Source files in this push:
 ${source_list}$( [ -n "$BRANCH_BASE" ] && printf '%s\n' "No earlier push of this branch changed a test either, since it left $BRANCH_DEF.")
 Add a test for each distinct change, then push again.
-$(widened_note; merge_note; branch_note)
+$(widened_note; merge_note; branch_note; modkit_note)
 OVERRIDE: if a test genuinely does not apply (docs / config / copy only,
 or a refactor already covered by existing tests), or the gate missed a
 test that IS in this push (false positive), re-run with:
@@ -489,7 +569,8 @@ fi
 # Everything that is NOT a test file, so the budget is not spent showing the tests twice.
 TEST_EXCLUDES=()
 for tp in "${TEST_PATHSPEC[@]}"; do TEST_EXCLUDES+=(":(exclude)$tp"); done
-diff_code="$(pc_diff . "${TEST_EXCLUDES[@]}")"
+# The mod-kit copies counted as tested (#2258) are left out too: they are not judged.
+diff_code="$(pc_diff . "${TEST_EXCLUDES[@]}" ${MODKIT_EXCLUDES[@]+"${MODKIT_EXCLUDES[@]}"})"
 
 # THE BUDGET, test changes first (claude-config#723). They are what this gate judges, so they get
 # what they need, and the rest of the diff gets what is left, down to half the budget: when both
@@ -877,7 +958,7 @@ PUSH BLOCKED: the test gate could not judge this push.
 $1, so the reviewer never answered. A gate that could not read the push does
 not approve it. Push fewer commits at a time (one commit, or split the branch) so the
 gate has less to read before it asks, then push again.
-$(widened_note; merge_note; branch_note)
+$(widened_note; merge_note; branch_note; modkit_note)
 OVERRIDE: if you have checked that every change in this push IS tested, re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>
 BEFORE overriding you MUST explain to the user, in plain non-technical
@@ -958,7 +1039,7 @@ These test files were not shown in full to any reading that answered:
 A test in one of them reads to the reviewer exactly like no test, so this is not a
 finding that tests are missing. Push fewer commits at a time (one commit, or split the
 branch) so each push's tests fit, then push again.
-${earlier_fit}$(widened_note; merge_note; branch_note)
+${earlier_fit}$(widened_note; merge_note; branch_note; modkit_note)
 OVERRIDE: if you have checked that each change named above IS tested, re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>
 BEFORE overriding you MUST explain to the user, in plain non-technical
@@ -975,7 +1056,7 @@ Distinct changes still needing a test:
 $missing_shown
 
 ${parts_note}Add a test for each, then push again.
-$(widened_note; merge_note; branch_note)
+$(widened_note; merge_note; branch_note; modkit_note)
 OVERRIDE: if the gate is wrong (the change is genuinely test-exempt,
 or an existing test already covers it), re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>

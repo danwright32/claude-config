@@ -41,7 +41,8 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/sleep-repos.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 # The reader's rules, as readRepoLists applies them: a record, v >= 1, both lists, every entry
-# owner/name, mergeDeploys true or false when given, waitOwners (when given) a list of owner names,
+# owner/name, mergeDeploys true or false when given, adminMerge (on a mergeOnly entry, when given)
+# only "green-pinned" (#2125), waitOwners (when given) a list of owner names,
 # no repository on both lists, and (stricter than the reader, which waits on it) no entry under an
 # owner that waits, so a file never carries a conflict.
 shape_of(){   # $1 = a lists file -> "ok" or what is wrong
@@ -62,6 +63,7 @@ for e in j["mayDeploy"]:
 for e in j["mergeOnly"]:
     if not isinstance(e, dict) or not isinstance(e.get("repo"), str) or not slug.match(e["repo"]): print("bad mergeOnly entry %r" % (e,)); sys.exit(0)
     if "mergeDeploys" in e and not isinstance(e["mergeDeploys"], bool): print("bad mergeDeploys on %s" % e["repo"]); sys.exit(0)
+    if "adminMerge" in e and e["adminMerge"] != "green-pinned": print("bad adminMerge on %s" % e["repo"]); sys.exit(0)
 w = j.get("waitOwners", [])
 if not isinstance(w, list): print("waitOwners is not a list"); sys.exit(0)
 for e in w:
@@ -126,6 +128,11 @@ BAD="$WORK/bad.json"
 printf '{"v":1,"mergeOnly":[{"repo":"o/x"}],"mayDeploy":["O/X"]}\n' > "$BAD"
 out="$(shape_of "$BAD")"
 case "$out" in *"on both lists: o/x"*) check "a repository on both lists is caught" ok ;; *) check "a repository on both lists is caught" "$out" ;; esac
+printf '{"v":1,"mergeOnly":[{"repo":"o/x","mergeDeploys":false,"adminMerge":"always"}],"mayDeploy":[]}\n' > "$BAD"
+out="$(shape_of "$BAD")"
+case "$out" in *"bad adminMerge on o/x"*) check "an adminMerge other than green-pinned is caught (#2125)" ok ;; *) check "an adminMerge other than green-pinned is caught (#2125)" "$out" ;; esac
+printf '{"v":1,"mergeOnly":[{"repo":"o/x","mergeDeploys":false,"adminMerge":"green-pinned"}],"mayDeploy":[]}\n' > "$BAD"
+check "an adminMerge of green-pinned on a mergeOnly entry reads (#2125)" "$(shape_of "$BAD")"
 printf '{"v":1,' > "$BAD"
 out="$(shape_of "$BAD")"
 case "$out" in *"does not parse"*) check "a file that does not parse is caught" ok ;; *) check "a file that does not parse is caught" "$out" ;; esac

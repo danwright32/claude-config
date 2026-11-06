@@ -911,7 +911,9 @@ now", "separate
 effort", "deferred
 to", "follow
 up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines.
-`deferral-edit-check.sh` says the same thing at the moment the text is written.
+A phrase quoted as a word, inside backticks or double quotes closed on the same line and six words
+at most, is a mention and is not judged (#2133). `deferral-edit-check.sh` says the same thing at the
+moment the text is written.
 
 </td><td>
 
@@ -1450,6 +1452,14 @@ wrapper, reason and outcome, before #2155 merged (2026-11-03 17:10 ET), two a se
 alone before #1963 (2026-10-30 20:28 ET). Anything else, a burst holding another row included,
 counts as real. Nothing is deleted from the record.
 
+The record cannot say how many Bash calls its refusals were out of, or whether a refusal taught
+anything. `python3 tools/wrapped-refusal-followups.py --since <day> --until <day>` reads this Mac's
+transcripts for both: every Bash call in the period, each refusal the gate wrote back, the shape
+today's gate gives each refused command (it reruns the gate itself on it, with a throwaway record),
+the script a script-file refusal names (by name only for the shared config's own installed files),
+and what came next per episode: the git, gh or rtk part run on its own, an override, or neither
+within five calls. Counts only, never a command (#1492).
+
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
 after the fact catch in one booking app session was this review, at about 5 minutes of CI a round).
@@ -1867,9 +1877,20 @@ all at once. Each group sees the complete file list, marked with where every oth
 and its own files' changes and full text. The branch counts as reviewed only when every group
 returned a review: a group that runs out of time, fails or answers in another shape makes the whole
 review that outcome, which refuses as before. The findings come back in one review, under one
-header per group, with one read key. It is refused as too large only when no split fits, because
-one file's own diff is over what a group can hold, or because it would take more than
-`PR_REVIEW_MAX_GROUPS` (8) groups.
+header per group, with one read key.
+
+Embedded base64 is never read (claude-config#2307): the payload of a `data:...;base64,` URI of 100
+or more characters, and any unbroken run of 1,000 or more, is replaced by a note naming its file,
+line and size, both in the diff and in a file's full text, and every size the review measures is
+taken with it already left out. The note keeps the code around the data, so a page carrying
+screenshots is still read for its code. Every run left out is named in the start line, the
+reviewer's input and every verdict, and the push review does the same. A file whose own diff is
+still over what a group can hold is read in consecutive parts, each a group of its own, told which
+part it is. The branch is refused as too large only when one line is longer than a part, or when it
+would take more than `PR_REVIEW_MAX_GROUPS` (8) groups. Measured 2026-11-05 on the 600 branch
+sample (the last 150 first parent commits of claude-config, Overture, Ovation and PostRoll): 22 are
+over the cap, 5 of them were refused before and none are now, and the other 17 start exactly as
+they did.
 
 Reviews launched together send their requests in turn (claude-config#1619), so they share the
 cached lessons. The lessons are the reviewer's appended system prompt, cached for five minutes, and
@@ -1932,11 +1953,20 @@ whether 7 of the first 10 misses ran past the end of the line they partly matche
 also records the length of every quote it placed by part of a line as `part_quote_lengths=`, and
 the report gives both sets of lengths in bands around the 20 character floor (under 10, 10 to 19,
 20 to 29, and up), with an older cut quote counted on its own. `--misses` lists every quote that
-matched no line, one per line. Read on the personal MacBook over the 959 reviews started from
-2026-10-25 to 2026-11-03, 8 of 672 findings were placed by part of a line, every recorded length 60
-characters or more, and the 5 misses were all longer than 60, none holding a line break. Nothing fell
-near the floor, so it decided no finding and stays at 20 (#1701). That is 8 cases from one Mac, too
-few to settle it: the work MacBook's records were not read, so run the report there too.
+matched no line, one per line. Read on the personal MacBook over the 1164 reviews started from
+2026-10-25 to 2026-11-04, 9 of 814 findings were placed by part of a line, every recorded length 60
+characters or more, and the 8 misses kept whole were all 77 characters or longer. Nothing fell near
+the floor, so it decided no finding and stays at 20 (#1701). That is one Mac's records: the work
+MacBook's were not read, so run the report there too.
+
+A miss's mark also says how the quote sits against the file, worked out while the reviewed head is
+in hand: `though it runs across lines A to B` (copied from more than one line), `though its first N
+characters end line L and the rest does not follow it` (it starts as the end of a line and runs on),
+or `nor does it run across or past the end of any line`. The report counts the three. It has to be
+said then, because a review in a worktree records the worktree folder as its `repo=`, and that
+folder is gone by the time anyone reads the report. Of those 8 misses, worked out afterwards by
+finding each reviewed commit in this Mac's checkouts, 1 ran across a line break, 3 ran past the end
+of a line, and 4 did neither (altered or paraphrased quotes).
 
 #### Scoring the review itself
 
@@ -2082,7 +2112,7 @@ A fourth gate reads the same library for a different thing an agent does to its 
 
 ### What a push actually waits on
 
-Thirty-six PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-seven PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2346,6 +2376,17 @@ subagent's `git push --force`, refused
 leaves before anything loads; 0.037 to 0.053 seconds on a subagent's, five readings the same day at
 load average 15 to 17 by a timer around the gate alone, since the tool sends no agent id: one python
 start reads the payload and finds no skip
+
+</td></tr>
+<tr><td>
+
+`slack-drafts-only-gate.sh` (#2302)
+
+</td><td>
+
+2026-11-05: 0.007 to 0.008 seconds on `git push -u origin fix/2302-slack-drafts-only`, five readings
+at load average 48 by bash's timer around the gate alone, since a command naming no Slack endpoint,
+script file or interpreter is answered before anything loads; it acts on a Slack send, not a push
 
 </td></tr>
 <tr><td>
@@ -2710,6 +2751,17 @@ a file the push does not carry, or any other kind stands as the judge gave it. A
 is listed under its own heading beside a block, and recorded in the row's detail as `withdrawn:`
 beside a pass, so how often it fires is read from the record.
 
+A push carrying no test whose every changed source line is blank or documentation is let through
+without asking the judge (#733). Documentation is a comment in the file's own language: `#` in
+Python, Ruby and Elixir, `//` and `/* */` elsewhere, with a `*` line trusted only where the whole
+file shows it inside an open block comment (#1238). Since #2247 a line lying wholly inside a Python
+docstring counts too: the first statement of a module, class or function when it is a plain
+string, found by Python's own parser (`hooks/lib/py-docstring-lines.py`) in the file before the
+change and after it. An ordinary string, a string that is not the first statement, code on the
+docstring's own line, a file either version of which does not parse, and every docstring in a file
+whose own code names `__doc__` (a usage message cut from it) are judged as code, as before, and so
+is every file that is not Python.
+
 The test judge is shown at most 60,000 bytes of diff in one call, test changes first. On 2026-10-31
 a push carrying 34,407 bytes of test changes beside a large code change was shown the first 30,000,
 the judge called a change untested whose test sat past the cut, and the push got through only one
@@ -3063,6 +3115,51 @@ quoted pieces glued together (#1125). It reads every test file the way the shell
 the same scan over that. A test fixture is written whole, in a shape the scan accepts by the rules
 above (spaces, or under a pattern's minimum length); a control that must be token shaped is a hash
 made at run time, so no token sits in the file to be split.
+
+## Slack: drafts only
+
+No session sends or schedules a Slack message; it saves a draft for Dan to send himself (his words,
+2026-11-05: "it should only ever save as draft in slack, never send directly"). The rule is in
+`payload/CLAUDE.md`, and `hooks/slack-drafts-only-gate.sh` enforces it on every Bash call and every
+Slack tool call (#2302). Its rule lives in `hooks/slack_drafts_only_gate.py`, which reads commands
+with the shared `lib/shell-words.py`.
+
+What it refuses:
+
+- `slack_send_message`, `slack_schedule_message`, `slack_post_message` and `slack_reply_to_thread`,
+  from any Slack integration (the plugin or the claude.ai connector), judged by the tool name's last
+  `__` segment. The refusal names `slack_send_message_draft` with the same channel and thread.
+- A command that posts: `curl`, `wget` and their kind aimed at a posting endpoint
+  (`chat.postMessage`, `chat.scheduleMessage`, `chat.postEphemeral`, `chat.meMessage`, an incoming
+  webhook on `hooks.slack.com`, or a `slack_webhook` variable), an interpreter's inline code naming
+  one, a script fed on standard input or in a heredoc naming one, and a script file the command runs
+  (by an interpreter, a shell, `source`, `npx`, `uv run` or its own path) that names one. A shell
+  script is read as commands, so one that only greps for an endpoint passes and one that curls it is
+  refused.
+
+What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
+(a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one exemption (Dan,
+2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
+`package.json`, its pre and post scripts included, and judged as the command line it runs.
+
+What it does not see, so a pass is not read as more than it measured: a module a script imports (so
+repo-digest's `npm run digest`, whose `src/digest.ts` imports the file that posts, still passes), a
+program run by bare name from the PATH, and an endpoint assembled from pieces on purpose. The threat it answers is a session that
+means well choosing the quickest way to post. It fails closed: a python that is missing or crashes,
+or a payload it cannot read that names a send route, is refused with the reason.
+
+Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
+names `chat.postMessage`; `python3 -m unittest` over the same file passes. This is a known false
+positive, left for Dan to decide rather than exempted.
+
+Cost, the gate alone timed by its caller on 2026-11-05: a plain `git push` stays on the quick exit
+and costs 0.007 to 0.008 s in the push gate table's five readings, and 0.010 s as the mean of 10 at
+load average 22, where bare bash took 0.005 s; a call the full rule reads starts python3, 0.05 s for `npm run x`
+or `bin/x`, 72 ms on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, and 154
+ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 calls by a timer
+around the gate, was not reproduced by these and is replaced by them. Suite: `test-slack-drafts-only-gate.sh`.
 
 ## Tests
 
@@ -3932,7 +4029,8 @@ bash tools/shipped-worktrees.sh --remove ~/Non-icloudDocuments/Apps/claude-confi
 It is a sibling of `shipped-branches.sh` rather than a mode of it because it deletes things and so
 may not act on a guess, and it is not a `claude-sync` command because it is about any git checkout
 rather than the synced config. Which branch counts as main is one rule both read, in
-`tools/lib/default-branch.sh`, and how GitHub's record of a branch's pull requests is read is one
+`payload/hooks/lib/default-branch.sh` (beside the hooks, since the installed sweep below reads it
+too), and how GitHub's record of a branch's pull requests is read is one
 reading both use, in `tools/lib/pull-requests.sh`.
 
 Agent worktrees are also removed automatically, at two moments (#1521). When
@@ -3943,9 +4041,17 @@ from inside its own worktree keeps it, and the sweep takes it later. What it rem
 it, is printed after the merge line, and nothing about it turns a merge that landed into a failure.
 And on the first prompt of a session, then again on the first prompt at least three hours after the
 session's last run (`STALE_WT_RERUN_MINUTES`), `hooks/stale-worktree-nudge.sh` starts
-`hooks/check-stale-worktrees.sh --remove` in the background. It removes a worktree only when its PR
-merged holding every commit, nothing in it is uncommitted, nothing changed in the last six hours,
-and no running process is working in it. A locked worktree is kept, with one exception:
+`hooks/check-stale-worktrees.sh --remove` in the background. The sweep judges every worktree
+`git worktree list` names, wherever its folder is (a sibling folder, a scratchpad, a name a session
+chose), and never the main checkout (#2309). It removes one only when its work is kept somewhere
+else, nothing in it is uncommitted, nothing changed in the last six hours, and no running process is
+working in it. Its work counts as kept elsewhere when its PR merged holding every commit, or when
+every commit on its branch is also on another branch, local or remote (which covers work shipped in
+a combined batch branch, or pushed with no PR), or, for a worktree on no branch, when its HEAD is on
+the default branch. The `--just-merged` removal at a merge still judges only an agent worktree
+under `.claude/worktrees`, by its merged PR alone. Anything it cannot read (the folder, git's
+status, a file's age, or an lsof that lists no process at all) keeps the worktree and says why.
+Its branch is never deleted. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
 worktree with the reason `claude agent <name> (pid <pid> start <time>)` and lifts the lock when the
 agent finishes, so an agent that never finished, because the Mac went down for example, leaves a
@@ -4178,14 +4284,16 @@ runs after every tool call, in the main session and in every subagent, and reads
 request from the transcript's usage fields (input plus cache read plus cache write), never what
 anybody wrote. Both rules were decided by Dan on 2026-11-01.
 
-- **The context line** (`CONTEXT_LINE_TOKENS`, 200,000). A builder (any subagent) or an orchestrator
-  (a main session that has dispatched an agent or set a /goal) whose last request carried more is
-  told to write down what it has decided and then restart or compact. A builder writes
+- **The context line** (`CONTEXT_LINE_TOKENS`, 330,000 tokens of work, Dan, 2026-11-05). Work is a
+  request's context minus the floor, the fixed load the session started with: the context of the
+  session's first request, or of the first request after its latest compaction. A builder (any
+  subagent) or an orchestrator (a main session that has dispatched an agent or set a /goal) whose
+  last request carried more work than that is told to write down what it has decided and then restart or compact. A builder writes
   `handoff.md` in its scratchpad folder and hands back, unless only the push and the report are
   left, and the orchestrator gives the rest to a fresh agent that starts from the note. An
   orchestrator puts each decision that belongs to an issue on that issue as a comment and the rest
   in `handoff.md`, then tells Dan, who sees the notice too, so he can type /compact or start a
-  fresh session. It is said once per band of the line (200K, 400K, ...) and again after a
+  fresh session. It is said once per band of the line (330K, 660K, ... of work) and again after a
   compaction brings the session back under it, never on every call.
 - **What must be written down before a restart**, so nothing decided lives only in the
   transcript: the goal or list in Dan's words with every constraint he stated, quoted and dated;
@@ -4201,7 +4309,7 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   `python3 tools/cache-usage.py --days 31 --summary` re-measures them through the same defaults and
   the same sum: its CONTEXT lines give the share of requests and tokens over the line, its
   COMPACTIONS line the main sessions compacted at least the nudge count. On the personal MacBook in
-  October, requests over 200,000 read 88.5% of subagent tokens and 85.4% of main session tokens.
+  October, requests over 200,000 of whole context (the rule before #2283, which counted the floor too) read 88.5% of subagent tokens and 85.4% of main session tokens.
 - **Cost.** Each run reads only the bytes appended to the transcript since its last run, with the
   offset kept in `~/.claude/state/context-size/` (one small file per session and agent, never
   synced): about 40 ms a call, and 0.11 s the first time over a 21 MB transcript (measured
@@ -5074,7 +5182,12 @@ within the hour, and keeps his word with why under `pass:<the call's key>`. Sinc
 question carries `onScreen`, one plain sentence from the session saying what on screen changes
 (which control or area, on which screen) or that nothing visible does; the question leads with it
 and names the issue and file after it, and it is refused, with nothing asked, when the sentence is
-missing, longer than 300 characters or names a file. A typed answer to the skip question records
+missing, longer than 300 characters or names a file. Since #2294 the question is not asked at all
+for an edit to an app's React screen file that the guard's own reading (rules.ts logicOnlyChange)
+finds changes only logic: no JSX, string, comment, number, true or false, word a look is spelled
+in, stylesheet or swapped import. It goes ahead and is kept under `auto:<the call's key>` with why;
+a mod's hook file, any text Dan reads, an issue whose answers cannot be read, and a pass that cannot
+be kept are held and asked as before. A typed answer to the skip question records
 nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in mod-kit's
 one wording (`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not
 yet, with nothing recorded and no toast, and Claude takes his words as the next round's feedback
@@ -5580,9 +5693,17 @@ and deploy runs since sleep began, and notes each for the top of the report. Wha
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
-waits (no merge, no deploy), listed or not, in any case and ahead of both lists. Dan's list,
-confirmed on 2026-10-07, is in that file and summarised under "Sleep mode" below, without naming
-the repositories (#2112). At
+waits (no merge, no deploy), listed or not, in any case and ahead of both lists. A `mergeOnly`
+entry may also say `"adminMerge": "green-pinned"` (#2125; no entry says it unless Dan writes it),
+and only there is a `gh pr merge --admin` allowed overnight, judged in `hooks/adminmerge.ts`: a
+squash pinned by `--match-head-commit` to the full sha of an open, non draft PR's head, on the
+checkout's own repository, once GitHub shows every check the base branch requires (its rulesets and
+its branch protection) as success on that commit, with no other check run failed or unfinished and
+no status pending or failed. Anything GitHub does not answer, a base branch requiring no checks at
+all, and a merge the night would not let run anyway (the repository waits, or a merge there deploys)
+refuse; any other `adminMerge` value makes the whole file unreadable. Dan's list, confirmed on
+2026-10-07, is in that file and summarised under "Sleep mode" below, without naming the
+repositories (#2112). At
 `/sleep` each repository a worker with a goal is in that the file does not decide is asked about
 (each question waits ten minutes, a chosen limit, not a measurement; the answer written into this
 Mac's own file, so it is asked once on each Mac; "Go to sleep, no more questions" asks nothing
@@ -6020,7 +6141,12 @@ any log still rotating and the live log, filtered by one `awk` pass to the one r
 branch, so no decision is ever too old to be asked for and the scan is the decisions plus at most a
 few MiB of log. A rebase moves the merge base, so decisions taken before it are no longer asked
 for. A log that cannot be read refuses the command; a fact the command does not depend on that
-cannot be read (no checkout, GitHub not answering for a merge) lets it through. Its structural
+cannot be read (no checkout, GitHub not answering for a merge) lets it through. When the check
+itself fails, a command whose words hold `gh pr create`, `gh pr edit`, `gh pr merge` or the merge
+helper is refused naming why, with the error kept in `errors.jsonl`, as every guard's failure holds
+its call (#2148, #2173): the merge is the last check there is, and the one at merge time runs the
+same code on this Mac only. Any other `gh` command goes ahead with one dim line, as before. Its
+structural
 labels are also what `/next-issue`'s structural slot brings forward: `rank-next-issues.py` gives the
 last pick of every picker to the highest ranked open structural issue when no pick is one, never in
 place of a p0, a p1 or a lesson sweep, and `test-rank-next-issues.sh` holds its list to this one.
@@ -6393,6 +6519,15 @@ The file has three lists: `waitOwners` (owners every repository of which waits, 
 other two), `mergeOnly` (merging allowed, deploying never; each entry says with `mergeDeploys`
 whether a merge there deploys by itself, and only `false` lets the merge run) and `mayDeploy`. A
 repository on both lists, or one GitHub cannot confirm at bedtime, waits.
+
+A `mergeOnly` entry can opt in to admin merges of green pull requests overnight by adding
+`"adminMerge": "green-pinned"`, as in `{ "repo": "owner/name", "mergeDeploys": false, "adminMerge":
+"green-pinned" }`. No repository is opted in until you add that yourself. An admin merge there then
+goes ahead only as a squash pinned to the exact commit GitHub shows at the head of an open pull
+request, and only when GitHub shows every check the base branch requires passing on that commit and
+nothing else failing or still running. If GitHub cannot be read, the branch requires no checks, or
+anything else is unclear, the merge is refused and waits for the morning. Any other `adminMerge`
+value makes the whole file unreadable, so the night waits everywhere rather than guessing.
 
 **The reports** are one per session with news (#1287): every worker, and any other session that
 noted something overnight; a session with nothing to say gets none. Each is in your Downloads

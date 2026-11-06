@@ -140,16 +140,29 @@ check "the probe never ran ls on anything outside HOME" "$(eq "$(dc_refusals)" "
 # ================================================================================================
 fresh
 mkdir -p "$H/Library/Caches/com.slow"
-dc_stub du 'exec sleep 31.7'
-start="$(date +%s)"
+# The stuck command records its own pid and its sleep's, and marks the end it would reach if nothing
+# killed it. So "did not wait" is that end not reached when the scan returns, and "killed" is both
+# pids gone: never a number of seconds, which a loaded Mac can pass, and never a match on the
+# command's text, which another run of this suite at the same moment also matches (L290, L1011,
+# claude-config#2260). The sleep is in the stub's own process group, as the real du's work would be.
+STUCK_PID="$DC_ROOT/stuck.pid"; STUCK_END="$DC_ROOT/stuck.end"
+rm -f "$STUCK_PID" "$STUCK_END"
+dc_stub du "sleep 31.7 & s=\$!; echo \"\$\$ \$s\" > '$STUCK_PID'; wait \"\$s\" && : > '$STUCK_END'"
 run_scan_env DISK_CLEAN_CATEGORY_SECONDS=1 bash "$SCAN" --only caches,trash
-took=$(( $(date +%s) - start ))
+ended_alone="$([ -e "$STUCK_END" ] && echo yes || echo no)"
+stuck="$(cat "$STUCK_PID" 2>/dev/null)"
+left=""
+for p in $stuck; do
+  st="$(ps -o stat= -p "$p" 2>/dev/null | tr -d ' ')"
+  [ -n "$st" ] && [ "${st#Z}" = "$st" ] && left="$left pid $p ($st)"
+done
 check "a category that overruns is reported as timed out" "$(eq "$(dcr_header "$REC" status.caches)" "unmeasured: timed out after 1s")"
 check "the scan still finishes and writes its record" "$(eq "$RC $(dcr_complete "$REC" && echo whole)" "0 whole")"
 check "the other categories still ran" "$(eq "$(dcr_header "$REC" status.trash)" measured)"
-check "it did not wait for the stuck command" "$([ "$took" -lt 25 ] && echo ok || echo "took ${took}s")"
+check "the stuck command did start, so the two checks below are about it" "$(eq "$(wc -w <<< "$stuck" | tr -d ' ')" 2)"
+check "it did not wait for the stuck command" "$([ "$ended_alone" = no ] && echo ok || echo "the stuck command ran to its own end before the scan returned")"
 check "the stuck command's whole process group was killed (nothing left sleeping)" \
-  "$(/usr/bin/pgrep -f 'sleep 31.7' >/dev/null && echo "sleep 31.7 is still running" || echo ok)"
+  "$([ -z "$left" ] && echo ok || echo "still running:$left")"
 run_scan_env DISK_CLEAN_CATEGORY_SECONDS=soon bash "$SCAN" --only trash
 check "a time bound that is not a number is refused" "$(eq "$RC" 2)"
 

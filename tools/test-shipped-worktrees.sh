@@ -60,6 +60,22 @@ row() {  # row <verdict> <worktree name> <text>: the report line judging that wo
   grep -E "^  $1 +\.claude/worktrees/$2( |$)" <<< "$3" || true
 }
 exists() { [ -d "$1" ]; }
+# why_rows_missing <report>: which side lost a KEEP row, read from the report alone. The tool counts
+# what it kept as it decides each row, and prints that count after every row, so a count above the
+# rows printed means rows it decided were lost after it decided them, and a count that agrees means
+# it never decided the missing one (#1919, where only the bare count was kept).
+why_rows_missing() {
+  local rows said
+  rows="$(grep -cE '^  KEEP ' <<< "$1" | tr -d ' ')"
+  said="$(sed -nE 's/^  [0-9]+ removable, ([0-9]+) kept\.$/\1/p' <<< "$1")"
+  if [ -z "$said" ]; then
+    printf 'the report stopped before its count, after %s KEEP rows, so its output was cut short\n' "$rows"
+  elif [ "$said" != "$rows" ]; then
+    printf 'the tool counted %s kept and printed %s KEEP rows, so rows it decided were lost on the way out (its write, or this capture)\n' "$said" "$rows"
+  else
+    printf 'the tool counted %s kept and printed %s, so the missing worktree was never judged: the tool skipped it, or git did not list it to the tool\n' "$said" "$rows"
+  fi
+}
 
 # A fixture step: quiet when it works, and recorded with git's own words when it does not, so a
 # fixture that was not built is reported as that and never as the tool's verdict (#1919). It
@@ -201,10 +217,15 @@ echo "shipped-worktrees: report mode judges every worktree and changes nothing"
 
 # The fixture is what the verdicts below are about, so it is proved before they are read: every
 # step worked, and git itself lists all eleven agent worktrees, the vanished one included. On
-# 2026-10-29, under a load average of 97, one run judged a fixture git listed only ten of (#1919):
-# the vanished worktree had been built, since its lines printed no error, and its record was gone
-# from the list by the time the tool read it. That has not been reproduced, so when it happens
-# again this says so, with git's own list and the records on disk, instead of a count.
+# 2026-10-29, under a load average of 97, one run's report had no row for the vanished worktree and
+# kept only the bare count (#1919). Which side lost it is not known: that run kept no stderr, no
+# git listing and not the tool's own count. Ruled out since, each by a run or by the source: git
+# pruning the record (its 3 month expiry, and a probe of commit's detached maintenance); load alone
+# (24 runs side by side at loads of 28 to 62, all whole); and bash 3.2 dropping the end of a write a
+# child's exit interrupts (L1035), which needs a child of the WRITER running, and the tool starts
+# none it does not wait for, while a child of this capturing shell exiting mid capture lost nothing
+# in 165 runs. So when it happens again this check, and the diagnosis after the count below, name
+# the side that lost it rather than a count.
 fixture_built "the report"
 listed="$(git -C "$R" worktree list --porcelain 2>&1)"
 n_listed="$(grep -c "^worktree $WT/" <<< "$listed" || true)"
@@ -215,8 +236,23 @@ $listed
 records in $R/.git/worktrees: $(ls -a "$R/.git/worktrees" 2>&1 | tr '\n' ' ')"
 fi
 
-out="$(bash "$TOOL" "$R" 2>&1)"; rc=$?
-if [ "$rc" = 0 ]; then ok; else bad "report mode should exit 0, got $rc: ${out:0:600}"; fi
+# The reading of a short report, proved on reports made to be short, before it is trusted with a
+# real one (L1): a tool that decided a row and lost it on the way out, one that never decided it,
+# and one whose output stopped before its count.
+short_kept="$(printf '  KEEP       .claude/worktrees/a   x\n  KEEP       .claude/worktrees/b   x\n\n  0 removable, 3 kept.\n')"
+short_decided="$(printf '  KEEP       .claude/worktrees/a   x\n  KEEP       .claude/worktrees/b   x\n\n  0 removable, 2 kept.\n')"
+short_cut="$(printf '  KEEP       .claude/worktrees/a   x\n  KEEP       .claude/worktrees/b   x\n')"
+says "a report counting more rows than it printed is read as rows lost after they were decided" \
+  "lost on the way out" "$(why_rows_missing "$short_kept")"
+says "a report whose own count agrees is read as a worktree never judged" \
+  "never judged" "$(why_rows_missing "$short_decided")"
+says "a report with no count is read as output that stopped early" \
+  "stopped before its count" "$(why_rows_missing "$short_cut")"
+
+# Its stderr is kept apart from the report, so a shell error (a write bash says was interrupted, a
+# fork it had to retry) is shown as that and cannot be counted as, or hidden among, the rows.
+out="$(bash "$TOOL" "$R" 2>"$WORK/report.err")"; rc=$?
+if [ "$rc" = 0 ]; then ok; else bad "report mode should exit 0, got $rc: ${out:0:600} stderr: $(cat "$WORK/report.err")"; fi
 
 says "a merged clean worktree is removable" "REMOVABLE" "$(row REMOVABLE done-kept "$out")"
 says "and it names the pull request that proves it" "#11" "$(row REMOVABLE done-kept "$out")"
@@ -245,6 +281,19 @@ if [ "$n_removable" = 2 ]; then ok; else bad "expected 2 removable, got $n_remov
 # and a count alone cannot say which worktree went missing.
 if [ "$n_keep" = 9 ]; then ok; else bad "expected 9 kept, got $n_keep. The report:
 $out"; fi
+# A missing row is diagnosed where it happens, since it has never been reproduced (#1919): which
+# side lost it, what the tool said on stderr, whether git still lists the worktree and what its
+# record holds now, and whether a second run judges it. The first failure kept only the count.
+if [ "$n_keep" != 9 ] || [ -z "$(row KEEP vanished "$out")" ]; then
+  again="$(bash "$TOOL" "$R" 2>&1)"
+  listed_after="$(git -C "$R" worktree list --porcelain 2>&1)"
+  echo "    why: $(why_rows_missing "$out")"
+  if [ -s "$WORK/report.err" ]; then echo "    the tool's stderr: $(tr '\n' ' ' < "$WORK/report.err")"
+  else echo "    the tool wrote nothing to stderr"; fi
+  echo "    git lists $(grep -c "^worktree $WT/" <<< "$listed_after" || true) agent worktrees after the report, the vanished one $(grep -q "^worktree $WT/vanished\$" <<< "$listed_after" && echo included || echo missing)"
+  echo "    its record: $(ls -la "$R/.git/worktrees/vanished" 2>&1 | tr '\n' ' ') gitdir: $(cat "$R/.git/worktrees/vanished/gitdir" 2>&1)"
+  echo "    a second run's row for it: $(row KEEP vanished "$again" | grep . || echo "none, so it is lost every time, not only under load")"
+fi
 # The primary checkout is never a candidate.
 lacks "the primary checkout is not judged" "  REMOVABLE  $R " "$out"
 

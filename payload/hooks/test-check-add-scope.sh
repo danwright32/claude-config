@@ -636,6 +636,62 @@ for c in "bash $FIX/x.sh && cat > $FIX/n.txt <<'EOF'"$'\n'"add \$HOME to the not
   allowed "#2203 control: a script beside the word add is no variable shape: $c"
 done
 
+# A script that stages everything, run with no git word in the command at all (claude-config#2301).
+# `bash ./wrapper.sh` passed: the add is in the file, and the guard read only the command. The script
+# a command runs is read now, through the one reader that already finds it (lib/shell-words.py), and
+# its commands are judged as the command's own, in the directory the script runs in. What it cannot
+# read (a script that is not there, or not readable) is judged as before, never passed for being
+# unread where it was refused before.
+S2301="$FIX/s2301"; mkdir -p "$S2301"
+printf '#!/bin/bash\nset -e\ngit add -A\n' > "$S2301/stage-all.sh"
+printf '#!/bin/bash\ncd %s && git add .\n' "$REPO" > "$S2301/cd-then-stage.sh"
+printf '#!/bin/bash\nbash %s/stage-all.sh\n' "$S2301" > "$S2301/outer.sh"
+printf '#!/bin/sh\ngit add -u\n' > "$S2301/stage-tracked"
+chmod +x "$S2301/stage-all.sh" "$S2301/stage-tracked"
+for c in "bash $S2301/stage-all.sh" "sh $S2301/stage-all.sh" "zsh $S2301/stage-all.sh" "$S2301/stage-all.sh" \
+         "source $S2301/stage-all.sh" ". $S2301/stage-all.sh" "bash ../s2301/stage-all.sh" \
+         "cd $REPO && bash ../s2301/stage-all.sh -x" "bash $S2301/cd-then-stage.sh" \
+         "bash $S2301/outer.sh" "bash -c 'bash $S2301/stage-all.sh'" "$S2301/stage-tracked" \
+         "git add mine.txt && bash $S2301/stage-all.sh" "echo start; bash $S2301/stage-all.sh; echo done"; do
+  run "$c"
+  refused "#2301 a script that stages everything is refused: $c"
+done
+run "bash $S2301/stage-all.sh"
+says "#2301 and the refusal names the script the add is in" "$S2301/stage-all.sh"
+says "#2301 and still names the foreign file" "theirs.txt"
+# The controls: a script staging only what it names, one that only mentions an add, one that stages
+# everything somewhere that is no repository, one that is not there, and one nobody can read.
+printf '#!/bin/bash\ngit add mine.txt\n' > "$S2301/stage-named.sh"
+printf '#!/bin/bash\necho "run git add -A later"\ncat > /dev/null <<'"'"'EOF'"'"'\ngit add -A\nEOF\n' > "$S2301/mention.sh"
+printf '#!/bin/bash\ngit add -A\n' > "$S2301/locked.sh"; chmod 000 "$S2301/locked.sh"
+for c in "bash $S2301/stage-named.sh" "$S2301/stage-named.sh" "bash $S2301/mention.sh" \
+         "cd $S2301 && bash ./stage-all.sh" "bash $S2301/missing.sh" "$S2301/missing.sh" \
+         "source $S2301/missing.sh" "bash $S2301/locked.sh"; do
+  run "$c"
+  allowed "#2301 control: no unscoped add the guard can read here: $c"
+done
+# Reading a script never stands down a refusal the command earned before: a script nobody can read,
+# beside an add the text names, is refused as it was (#2078).
+for c in "git fetch && bash $S2301/missing.sh add -A" "git fetch && bash $S2301/locked.sh add -A" \
+         "git fetch && bash $S2301/stage-named.sh add -A"; do
+  run "$c"
+  refused "#2301 an add beside a script is still refused, whatever the script holds: $c"
+done
+chmod 600 "$S2301/locked.sh"
+# A copy of the hook whose lib/ holds the readers but not lib/script-run-words.sh, the cheap filter
+# in front of the script reading: no filter is never "runs no script", so the script is still read.
+mkdir -p "$FIX/nofilter/lib"
+cp "$HOOK" "$FIX/nofilter/check-add-scope.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FIX/nofilter/lib" push-scope.sh shell-words.py \
+  || check "#2301 the readers could be installed into the copy without the filter" "the install refused"
+rm -f "$FIX/nofilter/lib/script-run-words.sh"
+HOOK_SAVED="$HOOK"; HOOK="$FIX/nofilter/check-add-scope.sh"
+run "bash $S2301/stage-all.sh"
+refused "#2301 with the filter missing a script that stages everything is still refused"
+run "bash $S2301/stage-named.sh"
+allowed "#2301 control: with the filter missing a script staging a named path still passes"
+HOOK="$HOOK_SAVED"
+
 run "git add ."
 refused "a bare dot is refused the same way"
 run "git add --all"
