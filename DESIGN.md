@@ -1526,8 +1526,12 @@ at once, and a CLAUDE.md it cannot read, or one with no such block or no project
 the list does. The hyphenless login is matched only as a domain, after an @ or before a dot and a
 top level domain, never as a bare word: the same letters can be an ordinary word, and a bare match
 would refuse prose that locates nothing, which is what #1568 left it out for. A project folder that
-is such a login is judged by that domain rule rather than as a bare name, for the same reason. The
-domain rule tries every way of putting one or two hyphens back into the word against the built in
+is such a login was at first judged by that domain rule alone, so the project's own name passed as a
+plain word; since #2190 it is a project name like the others, refused as a plain word wherever it is
+written, and its hash is in `WORK_PROJECTS`. That word is no dictionary word, and measured over this
+repository's tracked files, its commit messages and every issue and pull request, no occurrence was
+ordinary prose. The organisation's bare hyphenless word with no project of that spelling is still
+prose. The domain rule tries every way of putting one or two hyphens back into the word against the built in
 hashes, so the login is never written down. `tests/test-work-names-tree.sh` reads the real block,
 printing only its count, so an edit to CLAUDE.md that breaks it fails a suite before it is
 installed rather than refusing every public write on both Macs.

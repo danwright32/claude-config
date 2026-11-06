@@ -2196,15 +2196,23 @@ test("the index line is covered only within the approval's window, and a write o
 
 // #2181: after a For good on a memory file, `printf '%s\n' '<line>' >> <index>; tail -1 <index>` was
 // refused twice with the full ask, as if nothing had been approved. Which part disqualified it, the
-// trailing read, the em dash in the line, or the printf form, is answered here by sending each one
-// alone: only the trailing read does. The plain append, with its em dash and an absolute path, passes.
-test('only the trailing read disqualified the shell append of the covered index line; the em dash and printf form pass (#2181)', withKit, async ($, on) => {
+// trailing read, the em dash in the line, or the printf form, was answered by sending each one alone:
+// only the trailing read did. #2216 lets one plain read of the index follow the append, so each now
+// passes, and a trailing command that is not such a read is still asked about.
+test('the shell append of the covered index line passes with or without one trailing read of the index; another trailing command is asked (#2181, #2216)', withKit, async ($, on) => {
   const w = world($, on, { auto: true, files: { [INDEX]: INDEX_TEXT } })
   const variants: [string, (name: string) => string][] = [
     ['printf, em dash, absolute path', n => `printf '%s\\n' '${indexLine(n)}' >> ${INDEX}`],
     ['the same with a trailing tail', n => `printf '%s\\n' '${indexLine(n)}' >> ${INDEX}; tail -1 ${INDEX}`],
     ['echo with a trailing tail', n => `echo '${indexLine(n)}' >> ${INDEX}; tail -1 ${INDEX}`],
     ['printf without the em dash, with a trailing tail', n => `printf '%s\\n' '- [${n}](${n}) the rule it holds' >> ${INDEX}; tail -1 ${INDEX}`],
+    ['echo with a trailing cat, by &&', n => `echo '${indexLine(n)}' >> ${INDEX_SHOWN} && cat ${INDEX_SHOWN}`],
+    ['echo with a trailing wc, on a new line', n => `echo '${indexLine(n)}' >> ${INDEX_SHOWN}\nwc -l ${INDEX_SHOWN}`],
+    ['a trailing tail written to a file', n => `echo '${indexLine(n)}' >> ${INDEX}; tail -1 ${INDEX} > /tmp/last`],
+    ['a trailing echo into the memory folder', n => `echo '${indexLine(n)}' >> ${INDEX}; echo x >> ${MEMDIR_SHOWN}/notes.md`],
+    ['a trailing read of another file', n => `echo '${indexLine(n)}' >> ${INDEX}; tail -1 ${MEMDIR}/notes.md`],
+    ['two trailing reads', n => `echo '${indexLine(n)}' >> ${INDEX}; tail -1 ${INDEX}; tail -1 ${INDEX}`],
+    ['a read before the append', n => `tail -1 ${INDEX}; echo '${indexLine(n)}' >> ${INDEX}`],
   ]
   const outcomes: string[] = []
   for (const [i, [variant, command]] of variants.entries()) {
@@ -2215,10 +2223,19 @@ test('only the trailing read disqualified the shell append of the covered index 
   }
   expect(outcomes).toEqual([
     'printf, em dash, absolute path: passed',
-    'the same with a trailing tail: asked',
-    'echo with a trailing tail: asked',
-    'printf without the em dash, with a trailing tail: asked',
+    'the same with a trailing tail: passed',
+    'echo with a trailing tail: passed',
+    'printf without the em dash, with a trailing tail: passed',
+    'echo with a trailing cat, by &&: passed',
+    'echo with a trailing wc, on a new line: passed',
+    'a trailing tail written to a file: asked',
+    'a trailing echo into the memory folder: asked',
+    'a trailing read of another file: asked',
+    'two trailing reads: asked',
+    'a read before the append: asked',
   ])
+  // Each passing line spent its cover: the same append and read again is asked.
+  expect(refusalOf(await call($, { tool: 'Bash', command: variants[1]?.[1]('repro-1.md') ?? '' }))).toContain(ASKS)
 })
 
 // #2181: a shell command to the index that Dan's For good covers, but that is not read as one that
@@ -2227,7 +2244,7 @@ test('only the trailing read disqualified the shell append of the covered index 
 test('a shell write to a covered index that is not read as a plain append says so and names the accepted form (#2181)', withKit, async ($, on) => {
   const w = world($, on, { auto: true, files: { [INDEX]: INDEX_TEXT } })
   await saveMemoryFile($, w, 'rule.md')
-  const r = await call($, { tool: 'Bash', command: `printf '%s\\n' '${indexLine('rule.md')}' >> ${INDEX}; tail -1 ${INDEX}` })
+  const r = await call($, { tool: 'Bash', command: `printf '%s\\n' '${indexLine('rule.md')}' >> ${INDEX}; grep -c . ${INDEX}` })
   const said = refusalOf(r)
   expect(said.startsWith(
     `This command was not read as one that only appends the line linking rule.md to ${INDEX_SHOWN}, which Dan's For good on saving ${MEMDIR_SHOWN}/rule.md lets through without asking him, so it was not let through. ` +
