@@ -7,22 +7,30 @@ the transcript, never what anybody wrote (L222), and it reads each transcript on
 the byte offset it has read to is kept per session and agent, and each run reads only what was
 appended since, so a call costs the same at request 10 as at request 7,000.
 
-THE CONTEXT LINE (#1960, decided by Dan 2026-11-01). A request's context is everything it sent:
-input_tokens + cache_read_input_tokens + cache_creation_input_tokens of its usage. Once the last
-request of a builder (any subagent) or an orchestrator (a main session that has dispatched an agent
-or set a /goal) carries more than CONTEXT_LINE_TOKENS, it is told, once, to write down what it has
-decided and then restart or compact. Said once per BAND of the line (200K, 400K, 600K, ...), so one
-that carries on is told again a band later rather than on every call, and re-armed when a
-compaction brings it back under the line.
+THE CONTEXT LINE (#1960, decided by Dan 2026-11-01; measured from a floor since #2283). A request's
+context is everything it sent: input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+of its usage. Its WORK is that context minus the FLOOR of its stretch: the context of the
+transcript's first request, or of its first request after its latest compaction. The floor is the
+fixed load every request carries (the rules, the tool list, the skills re-attached after a
+compaction, the summary), which a compaction cannot remove, so only the work above it is what the
+notice's remedy can change (L111). Once the last request of a builder (any subagent) or an
+orchestrator (a main session that has dispatched an agent or set a /goal) carries more than
+CONTEXT_LINE_TOKENS of work, it is told, once, to write down what it has decided and then restart
+or compact. Said once per BAND of the line (330K, 660K, 990K, ... of work), so one that carries on
+is told again a band later rather than on every call, and re-armed by a compaction, after which
+nothing sent is no work at all.
 
-  Default 200,000. Measured on the personal MacBook with
-  `python3 tools/cache-usage.py --days 31 --now 2026-11-01T16:00:00Z --summary`, whose CONTEXT lines
-  use this module's default and context_of, so re-running it re-measures this claim: 559 of 677
-  subagents passed the line, and their requests over it were 75.1% of subagent requests and read
-  88.5% of subagent tokens; 249 of 8,576 main sessions passed it, with 57.2% of main requests and
-  85.4% of main tokens. The issue's own audit (one project, five days) found one goal run's
-  orchestrator averaging about 500K a turn and peaking near 966K, 94% of that project's spend. The
-  line sits where most builders cross it on purpose: the cost is in the requests above it.
+  Default 330,000 of work, Dan's decision of 2026-11-05 ("maybe 330k of work?", then confirmed as
+  330K of work, not of total context). Before #2283 the line was 200,000 of whole context, and on
+  the work MacBook a session's first request carried a median of 111,043 tokens and its first after
+  a compaction 134,075, so that line left about 65,000 tokens of working room after a compaction.
+  Measured on the personal MacBook with `python3 tools/cache-usage.py --days 7 --summary` on
+  2026-11-05, whose CONTEXT, FLOOR and STRETCHES lines use this module's default, work_of and
+  band_of, so re-running it re-measures this claim: floors were a median of 42,333 at a main
+  session's start (most of them one request headless runs) and 121,352 after a compaction (45
+  compactions), and 75,738 at a subagent's start. At 330,000 of work 8 of 353 subagent stretches
+  and 5 of 1,919 main stretches crossed, a median of 181 and 232 requests in; at 200,000 of work
+  it would have been 34 and 8. Re-measure each Mac with that command, reading only those lines.
 
 THE LONG SESSION NUDGE (#1940, decided by Dan 2026-11-01). A main session compacted
 CONTEXT_COMPACTIONS_NUDGE times is told, with Dan, that it should start fresh, and what its next
@@ -56,9 +64,11 @@ import os
 import re
 import sys
 
-DEFAULT_LINE = 200_000
+DEFAULT_LINE = 330_000  # of work above the floor (Dan, 2026-11-05)
 DEFAULT_COMPACTIONS = 5
-STATE_VERSION = 1
+# 2 (#2283) added the floor. A version 1 state is never read as a 2 with a floor of zero: it is
+# started again from the top of its transcript, which holds everything the state is derived from.
+STATE_VERSION = 2
 CHUNK = 8 << 20
 NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -90,7 +100,43 @@ def context_of(usage):
 def fresh_state():
     return {"v": STATE_VERSION, "offset": 0, "last_id": None, "last_ctx": 0,
             "first_ctx": 0, "requests": 0, "ctx_sum": 0, "compactions": 0, "last_pre": 0,
+            "stretch_requests": 0, "floor_ctx": 0,
             "orchestrator": False, "band_told": 0, "compactions_told": 0, "unreadable_told": False}
+
+
+def fresh_stretch():
+    """The floor of a transcript before its first request: what fold_floor and work_of keep."""
+    return {"stretch_requests": 0, "floor_ctx": 0}
+
+
+def reset_floor(stretch):
+    """A compaction starts a new stretch, whose floor is its first request (claude-config#2283)."""
+    stretch["stretch_requests"] = 0
+    stretch["floor_ctx"] = 0
+
+
+def fold_floor(stretch, ctx, same_request):
+    """Count one request line into the stretch: the floor is the context of its FIRST request.
+
+    same_request is a further line of the request just counted, whose last line's usage is the
+    request's, so it moves the floor only while that request is the stretch's first."""
+    if not same_request:
+        stretch["stretch_requests"] += 1
+    if stretch["stretch_requests"] == 1:
+        stretch["floor_ctx"] = ctx
+
+
+def work_of(ctx, stretch):
+    """The work a request carries: its context above its stretch's floor, the one predicate the
+    hook and tools/cache-usage.py both judge the line by. Nothing sent since a compaction is 0."""
+    if not stretch["stretch_requests"]:
+        return 0
+    return max(ctx - stretch["floor_ctx"], 0)
+
+
+def band_of(ctx, stretch, line):
+    """Which band of the line a request's work is in: 0 under it, 1 from one line of work, 2 from two."""
+    return work_of(ctx, stretch) // line
 
 
 def is_dispatch(d):
@@ -135,6 +181,7 @@ def scan(state, data, is_main):
             state["compactions"] += 1
             meta = d.get("compactMetadata") if isinstance(d.get("compactMetadata"), dict) else {}
             state["last_pre"] = num(meta.get("preTokens"))
+            reset_floor(state)
         if (wanted_dispatch and is_dispatch(d)) or (wanted_goal and is_goal_set(d)):
             state["orchestrator"] = True
         if wanted_usage and d.get("type") == "assistant":
@@ -144,12 +191,14 @@ def scan(state, data, is_main):
                 continue
             ctx = context_of(usage)
             mid = msg.get("id")
-            if mid is not None and mid == state["last_id"]:
+            same = mid is not None and mid == state["last_id"]
+            if same:
                 # Another content block of the same request: the last line's usage is the request's.
                 state["ctx_sum"] += ctx - state["last_ctx"]
             else:
                 state["requests"] += 1
                 state["ctx_sum"] += ctx
+            fold_floor(state, ctx, same)
             if state["requests"] == 1:
                 state["first_ctx"] = ctx
             state["last_id"] = mid
@@ -166,11 +215,22 @@ WRITE_DOWN = (
 )
 
 
+def floor_words(state, is_main):
+    """Where the floor was measured, said the way the reader would look for it."""
+    it = "this session" if is_main else "this agent"
+    if state["compactions"]:
+        return "the %s its first request after its last compaction carried" % "{:,}".format(state["floor_ctx"])
+    return "the %s %s started from" % ("{:,}".format(state["floor_ctx"]), it)
+
+
 def line_notice(state, line, is_main):
     who = "this session's" if is_main else "this agent's"
-    head = ("Context line (claude-config#1960): %s last request carried %s tokens of context, past "
-            "the line of %s, and every request from here rereads all of it. "
-            % (who, "{:,}".format(state["last_ctx"]), "{:,}".format(line)))
+    work = work_of(state["last_ctx"], state)
+    head = ("Context line (claude-config#1960, claude-config#2283): %s last request carried %s tokens of context, "
+            "%s of them work above %s (what every later request carries anyway), past the line of %s, and "
+            "every request from here rereads all of it. "
+            % (who, "{:,}".format(state["last_ctx"]), "{:,}".format(work), floor_words(state, is_main),
+               "{:,}".format(line)))
     if is_main:
         ctx = head + (
             "Before going on, write down what you have decided: put each decision that belongs to "
@@ -182,10 +242,12 @@ def line_notice(state, line, is_main):
             "so he can cancel the compact, type /compact himself if the tool was not there or refused, "
             "or start a fresh session from the note. "
             "Agents you dispatched keep running either way." % WRITE_DOWN)
-        system = ("This session is past the context line: its last request carried %s tokens "
-                  "(the line is %s). It has been asked to write down what it has decided, then "
-                  "compact or start a fresh session (claude-config#1960)."
-                  % ("{:,}".format(state["last_ctx"]), "{:,}".format(line)))
+        system = ("This session is past the context line: its last request carried %s tokens, "
+                  "%s of them above %s (the line is %s above it). It has been asked to write down "
+                  "what it has decided, then compact or start a fresh session (claude-config#1960, "
+                  "#2283)."
+                  % ("{:,}".format(state["last_ctx"]), "{:,}".format(work),
+                     floor_words(state, is_main), "{:,}".format(line)))
         return ctx, system
     ctx = head + (
         "Before going on, write down what you have decided in handoff.md in your scratchpad folder, "
@@ -364,7 +426,7 @@ def decide(state_dir, key, path, is_main):
 
     line = setting("CONTEXT_LINE_TOKENS", DEFAULT_LINE)
     every = setting("CONTEXT_COMPACTIONS_NUDGE", DEFAULT_COMPACTIONS)
-    band = state["last_ctx"] // line if state["requests"] else 0
+    band = band_of(state["last_ctx"], state, line)
     say = []
     if band == 0:
         state["band_told"] = 0

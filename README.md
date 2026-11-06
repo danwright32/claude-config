@@ -487,11 +487,42 @@ can stall unwatched and it says nothing.
 What each session has been told lives in `claude-sync-stuck-<session>.state` under `$TMPDIR`.
 Losing it costs one repeated notice.
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `SYNC_STUCK_NOTICE_AFTER` | `3600` | Seconds a stuck stretch must have lasted before a session hears about it. A chosen number, not a measurement: above an ordinary wait on CI, which is one run of five to eight minutes and routinely two, and well below the eleven hours it exists for. It matches the window after which a red shared repo already raises a desktop notification, so the two arrive together. Being wrong costs an hour of edits on one Mac in one direction and a notice about a stretch that was about to clear in the other. A value that is not a whole number of seconds is refused and the default used, said on the hook's stderr. |
-| `CLAUDE_SYNC_STUCK_STATE_DIR` | `$TMPDIR` | Where each session's record of what it was told is kept. |
-| `CLAUDE_SYNC_STUCK_NOW` | the clock | An epoch to use as now, so the suite crosses the threshold without waiting for it. |
+<table>
+<thead>
+<tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SYNC_STUCK_NOTICE_AFTER</code></td><td><code>3600</code></td><td>
+
+Seconds a stuck stretch must have lasted before a session hears about it. A chosen number, not a
+measurement: above an ordinary wait on CI, which is one run of five to eight minutes and routinely
+two, and well below the eleven hours it exists for. It matches the window after which a red shared
+repo already raises a desktop notification, so the two arrive together. Being wrong costs an hour of
+edits on one Mac in one direction and a notice about a stretch that was about to clear in the other.
+A value that is not a whole number of seconds is refused and the default used, said on the hook's
+stderr.
+
+</td></tr>
+<tr><td><code>CLAUDE_SYNC_STUCK_STATE_DIR</code></td><td><code>$TMPDIR</code></td><td>
+
+Where each session's record of what it was told is kept.
+
+</td></tr>
+<tr><td>
+
+`CLAUDE_SYNC_STUCK_NOW`
+
+</td><td>
+
+the clock
+
+</td><td>
+
+An epoch to use as now, so the suite crosses the threshold without waiting for it.
+
+</td></tr>
+</tbody>
+</table>
 
 ## Lessons: an index in context, the full text on demand
 
@@ -834,14 +865,120 @@ bundle budget, which cannot avoid one. The thresholds were measured against the 
 its last 40 real pushes, and each hook's header records the numbers and the cases it deliberately
 does not catch.
 
-| Hook | What fails a push | Escape hatch, one command only, explained first |
-| --- | --- | --- |
-| `check-duplication.sh` | A new copy of a long line (100 characters or more, `${...}` blanked) or a two line block (160 characters or more) under the source roots. Tests and fixtures are not judged. In the booking app, 6 of the last 40 real pushes would have been refused, each for a genuine copy. | `SKIP_DUPLICATION_CHECK=1` |
-| `check-public-assets.sh` | An asset under `public/`, `static/` or `assets/` that this push added or orphaned and nothing references; a raster image added or changed over 250 KB. Names browsers fetch by convention are exempt; `.claude/hygiene-allow.txt` in the project holds the rest, one path and a reason per line. | `SKIP_ASSET_CHECK=1` |
-| `check-deferrals.sh` | An added comment or doc line that defers work ("for now", "separate effort", "deferred to", "follow up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines. `deferral-edit-check.sh` says the same thing at the moment the text is written. | `SKIP_DEFERRAL_CHECK=1` |
-| `check-doc-issue-refs.sh` | A touched doc whose sentence claims an issue is still pending ("#N is the issue for", "once #N lands") when GitHub says that issue is closed or that pull merged. Anchored to the reference and blind to past tense, because 96 percent of the issues the booking app's docs cite are closed. A decision quoted with its date beside it is a citation, and a doc only main changed, arriving through a merge from main, is not read (#2185). Fails open out loud without `gh`. | `SKIP_DOC_REFS_CHECK=1` |
-| `check-bundle-budget.sh` | The gzipped client bundle (Next `.next/static/chunks`, Vite `dist/assets`) grew past both 3 percent and 10 KB over the recorded total, when the build output is newer than the commit. A stale or absent build is said and not judged. The record follows every total that passes, so it never drifts behind main (#586), and a repository committing its own `bundle-budget.txt` is left to judge itself. | `ACCEPT_BUNDLE_GROWTH=1` records the new total; `SKIP_BUNDLE_BUDGET_CHECK=1` |
-| `ai-review-on-push.sh` | Nothing. It is advisory, and runs only on a push the lessons review gate does not hold (a push of the default branch, or one carrying `SKIP_PR_REVIEW=1`; see below): after a successful push it hands the diff, plus the full text of the changed files and the complete list of every file the push changed, to `claude -p` in a detached process (a finding claiming one of those listed files was left out of the push is marked as resting on a false premise, while one saying a symbol, a line or a part inside a changed file was not updated is left as it is, claude-config#533 and #1354) and returns at once, with the lessons index in its prompt and the rest of the global config switched off; `ai-review-nudge.sh` prints the answer on a later prompt, once per session, marking it shown only once the whole message is out, so a prompt whose hook is cut off at its timeout loses nothing. A session is shown the reviews that finish during it: those already finished at its first prompt are recorded as seen and named in one line with their count and folder, never replayed (claude-config#1216). It exists for the class no scan can see, a sibling left unchanged. | `SKIP_AI_REVIEW_CHECK=1` |
+<table>
+<thead>
+<tr><th>Hook</th><th>What fails a push</th><th>Escape hatch, one command only, explained first</th></tr>
+</thead>
+<tbody>
+<tr><td>
+
+`check-duplication.sh`
+
+</td><td>
+
+A new copy of a long line (100 characters or more, `${...}` blanked) or a two line block (160
+characters or more) under the source roots. Tests and fixtures are not judged. In the booking app, 6 of the last
+40 real pushes would have been refused, each for a genuine copy.
+
+</td><td>
+
+`SKIP_DUPLICATION_CHECK=1`
+
+</td></tr>
+<tr><td>
+
+`check-public-assets.sh`
+
+</td><td>
+
+An asset under `public/`, `static/` or `assets/` that this push added or orphaned and nothing
+references; a raster image added or changed over 250 KB. Names browsers fetch by convention are
+exempt; `.claude/hygiene-allow.txt` in the project holds the rest, one path and a reason per line.
+
+</td><td>
+
+`SKIP_ASSET_CHECK=1`
+
+</td></tr>
+<tr><td>
+
+`check-deferrals.sh`
+
+</td><td>
+
+An added comment or doc line that defers work ("for
+now", "separate
+effort", "deferred
+to", "follow
+up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines.
+A phrase quoted as a word, inside backticks or double quotes closed on the same line and six words
+at most, is a mention and is not judged (#2133). `deferral-edit-check.sh` says the same thing at the
+moment the text is written.
+
+</td><td>
+
+`SKIP_DEFERRAL_CHECK=1`
+
+</td></tr>
+<tr><td>
+
+`check-doc-issue-refs.sh`
+
+</td><td>
+
+A touched doc whose sentence claims an issue is still pending ("#N is the issue for", "once #N
+lands") when GitHub says that issue is closed or that pull merged. Anchored to the reference and
+blind to past tense, because 96 percent of the issues the booking app's docs cite are closed. A decision
+quoted with its date beside it is a citation, and a doc only main changed, arriving through a merge
+from main, is not read (#2185). Fails open out loud without `gh`.
+
+</td><td>
+
+`SKIP_DOC_REFS_CHECK=1`
+
+</td></tr>
+<tr><td>
+
+`check-bundle-budget.sh`
+
+</td><td>
+
+The gzipped client bundle (Next `.next/static/chunks`, Vite `dist/assets`) grew past both 3 percent
+and 10 KB over the recorded total, when the build output is newer than the commit. A stale or absent
+build is said and not judged. The record follows every total that passes, so it never drifts behind
+main (#586), and a repository committing its own `bundle-budget.txt` is left to judge itself.
+
+</td><td>
+
+`ACCEPT_BUNDLE_GROWTH=1` records the new total; `SKIP_BUNDLE_BUDGET_CHECK=1`
+
+</td></tr>
+<tr><td>
+
+`ai-review-on-push.sh`
+
+</td><td>
+
+Nothing. It is advisory, and runs only on a push the lessons review gate does not hold (a push of
+the default branch, or one carrying `SKIP_PR_REVIEW=1`; see below): after a successful push it hands
+the diff, plus the full text of the changed files and the complete list of every file the push
+changed, to `claude -p` in a detached process (a finding claiming one of those listed files was left
+out of the push is marked as resting on a false premise, while one saying a symbol, a line or a part
+inside a changed file was not updated is left as it is, claude-config#533 and #1354) and returns at
+once, with the lessons index in its prompt and the rest of the global config switched off;
+`ai-review-nudge.sh` prints the answer on a later prompt, once per session, marking it shown only
+once the whole message is out, so a prompt whose hook is cut off at its timeout loses nothing. A
+session is shown the reviews that finish during it: those already finished at its first prompt are
+recorded as seen and named in one line with their count and folder, never replayed
+(claude-config#1216). It exists for the class no scan can see, a sibling left unchanged.
+
+</td><td>
+
+`SKIP_AI_REVIEW_CHECK=1`
+
+</td></tr>
+</tbody>
+</table>
 
 What each one measured, and what it does not catch, is in the hook's own header. Two worth knowing
 without opening them. The duplication guard does not catch a copied two line block under 160
@@ -883,16 +1020,125 @@ push time, and a third overridable push gate would teach the habit of typing `SK
 that refuse. For the same reason it never reports a clean result. Silence means no pattern matched,
 never that the push honours the lessons (L96).
 
-| Trigger | What it matches in the added lines | Lessons |
-| --- | --- | --- |
-| An error path returning empty or success | A catch (`lib/failure-handling.sh`, read as code) with a `return []`, `{}`, `null`, `None`, `true`, an empty string or a bare `return` or `pass` beside it | L10, L11, L95 |
-| New scheduled, queued or background work | `cron`, `celery` or `sidekiq` at the start of a word, after an underscore, at a camelCase join (`scheduleCron`) or after a flag's dashes, but not after a hyphen inside a word (`bg-cron`); `setInterval`, `.schedule(`, `scheduleJob`, `BackgroundTasks`, `queue.add` and `queue.send`. In a shell file outside the tests, a job started with `&`. A file with no extension is read by its shebang, and as prose when it has none | L13, L71 |
-| A new route or endpoint | `app.get(` and its siblings on `app`, `router` or `server`, an exported `GET` or `POST` handler, `@app.route`, a `fetch` event listener | L18, L19 |
-| A destructive data operation | `DROP TABLE`, `DROP COLUMN`, `TRUNCATE`, `DELETE FROM`, `rm -rf`, `fs.rm(`, `unlinkSync`, `.drop(`, less an `rm -rf` whose every target is a directory the same lines made with `mktemp` | L5, L7, L9 |
-| New retry or failure handling | A retry construct, as `lib/failure-handling.sh` reads it (the predicate the push gate and the lessons review share) | L33, L35, L77, L524 |
-| A parsed value flowing into a comparison | `parseInt`, `parseFloat`, `JSON.parse` or `Number(` with a comparison operator in the same file | L50 |
-| A test waiting a fixed time | `sleep`, `setTimeout(`, `waitForTimeout(`, `Task.sleep` and the like, in test files only | L290, L524 |
-| A workflow job with no timeout | A job under `.github/workflows/` (a key with `runs-on` or `uses`) added without `timeout-minutes` | L313 |
+<table>
+<thead>
+<tr><th>Trigger</th><th>What it matches in the added lines</th><th>Lessons</th></tr>
+</thead>
+<tbody>
+<tr><td>
+
+An error path returning empty or success
+
+</td><td>
+
+A catch (`lib/failure-handling.sh`, read as code) with a `return []`, `{}`, `null`, `None`, `true`,
+an empty string or a bare `return` or `pass` beside it
+
+</td><td>
+
+L10, L11, L95
+
+</td></tr>
+<tr><td>
+
+New scheduled, queued or background work
+
+</td><td>
+
+`cron`, `celery` or `sidekiq` at the start of a word, after an underscore, at a camelCase join
+(`scheduleCron`) or after a flag's dashes, but not after a hyphen inside a word (`bg-cron`);
+`setInterval`, `.schedule(`, `scheduleJob`, `BackgroundTasks`, `queue.add` and `queue.send`. In a
+shell file outside the tests, a job started with `&`. A file with no extension is read by its
+shebang, and as prose when it has none
+
+</td><td>
+
+L13, L71
+
+</td></tr>
+<tr><td>
+
+A new route or endpoint
+
+</td><td>
+
+`app.get(` and its siblings on `app`, `router` or `server`, an exported `GET` or `POST` handler,
+`@app.route`, a `fetch` event listener
+
+</td><td>
+
+L18, L19
+
+</td></tr>
+<tr><td>
+
+A destructive data operation
+
+</td><td>
+
+`DROP TABLE`, `DROP COLUMN`, `TRUNCATE`, `DELETE FROM`, `rm -rf`, `fs.rm(`, `unlinkSync`, `.drop(`,
+less an `rm -rf` whose every target is a directory the same lines made with `mktemp`
+
+</td><td>
+
+L5, L7, L9
+
+</td></tr>
+<tr><td>
+
+New retry or failure handling
+
+</td><td>
+
+A retry construct, as `lib/failure-handling.sh` reads it (the predicate the push gate and the
+lessons review share)
+
+</td><td>
+
+L33, L35, L77, L524
+
+</td></tr>
+<tr><td>
+
+A parsed value flowing into a comparison
+
+</td><td>
+
+`parseInt`, `parseFloat`, `JSON.parse` or `Number(` with a comparison operator in the same file
+
+</td><td>
+
+L50
+
+</td></tr>
+<tr><td>
+
+A test waiting a fixed time
+
+</td><td>
+
+`sleep`, `setTimeout(`, `waitForTimeout(`, `Task.sleep` and the like, in test files only
+
+</td><td>
+
+L290, L524
+
+</td></tr>
+<tr><td>
+
+A workflow job with no timeout
+
+</td><td>
+
+A job under `.github/workflows/` (a key with `runs-on` or `uses`) added without `timeout-minutes`
+
+</td><td>
+
+L313
+
+</td></tr>
+</tbody>
+</table>
 
 The background work, fixed wait and failure triggers read the added lines as code, with string
 contents and comments removed, so a word in a fixture argument or a comment does not fire. A file
@@ -1205,6 +1451,14 @@ those out and says how many (#2157), but only rows in exactly the shape that sui
 wrapper, reason and outcome, before #2155 merged (2026-11-03 17:10 ET), two a second apart, or one
 alone before #1963 (2026-10-30 20:28 ET). Anything else, a burst holding another row included,
 counts as real. Nothing is deleted from the record.
+
+The record cannot say how many Bash calls its refusals were out of, or whether a refusal taught
+anything. `python3 tools/wrapped-refusal-followups.py --since <day> --until <day>` reads this Mac's
+transcripts for both: every Bash call in the period, each refusal the gate wrote back, the shape
+today's gate gives each refused command (it reruns the gate itself on it, with a throwaway record),
+the script a script-file refusal names (by name only for the shared config's own installed files),
+and what came next per episode: the git, gh or rtk part run on its own, an override, or neither
+within five calls. Counts only, never a command (#1492).
 
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
@@ -1623,9 +1877,20 @@ all at once. Each group sees the complete file list, marked with where every oth
 and its own files' changes and full text. The branch counts as reviewed only when every group
 returned a review: a group that runs out of time, fails or answers in another shape makes the whole
 review that outcome, which refuses as before. The findings come back in one review, under one
-header per group, with one read key. It is refused as too large only when no split fits, because
-one file's own diff is over what a group can hold, or because it would take more than
-`PR_REVIEW_MAX_GROUPS` (8) groups.
+header per group, with one read key.
+
+Embedded base64 is never read (claude-config#2307): the payload of a `data:...;base64,` URI of 100
+or more characters, and any unbroken run of 1,000 or more, is replaced by a note naming its file,
+line and size, both in the diff and in a file's full text, and every size the review measures is
+taken with it already left out. The note keeps the code around the data, so a page carrying
+screenshots is still read for its code. Every run left out is named in the start line, the
+reviewer's input and every verdict, and the push review does the same. A file whose own diff is
+still over what a group can hold is read in consecutive parts, each a group of its own, told which
+part it is. The branch is refused as too large only when one line is longer than a part, or when it
+would take more than `PR_REVIEW_MAX_GROUPS` (8) groups. Measured 2026-11-05 on the 600 branch
+sample (the last 150 first parent commits of claude-config, Overture, Ovation and PostRoll): 22 are
+over the cap, 5 of them were refused before and none are now, and the other 17 start exactly as
+they did.
 
 Reviews launched together send their requests in turn (claude-config#1619), so they share the
 cached lessons. The lessons are the reviewer's appended system prompt, cached for five minutes, and
@@ -1688,11 +1953,20 @@ whether 7 of the first 10 misses ran past the end of the line they partly matche
 also records the length of every quote it placed by part of a line as `part_quote_lengths=`, and
 the report gives both sets of lengths in bands around the 20 character floor (under 10, 10 to 19,
 20 to 29, and up), with an older cut quote counted on its own. `--misses` lists every quote that
-matched no line, one per line. Read on the personal MacBook over the 959 reviews started from
-2026-10-25 to 2026-11-03, 8 of 672 findings were placed by part of a line, every recorded length 60
-characters or more, and the 5 misses were all longer than 60, none holding a line break. Nothing fell
-near the floor, so it decided no finding and stays at 20 (#1701). That is 8 cases from one Mac, too
-few to settle it: the work MacBook's records were not read, so run the report there too.
+matched no line, one per line. Read on the personal MacBook over the 1164 reviews started from
+2026-10-25 to 2026-11-04, 9 of 814 findings were placed by part of a line, every recorded length 60
+characters or more, and the 8 misses kept whole were all 77 characters or longer. Nothing fell near
+the floor, so it decided no finding and stays at 20 (#1701). That is one Mac's records: the work
+MacBook's were not read, so run the report there too.
+
+A miss's mark also says how the quote sits against the file, worked out while the reviewed head is
+in hand: `though it runs across lines A to B` (copied from more than one line), `though its first N
+characters end line L and the rest does not follow it` (it starts as the end of a line and runs on),
+or `nor does it run across or past the end of any line`. The report counts the three. It has to be
+said then, because a review in a worktree records the worktree folder as its `repo=`, and that
+folder is gone by the time anyone reads the report. Of those 8 misses, worked out afterwards by
+finding each reviewed commit in this Mac's checkouts, 1 ran across a line break, 3 ran past the end
+of a line, and 4 did neither (altered or paraphrased quotes).
 
 #### Scoring the review itself
 
@@ -1864,44 +2138,426 @@ stub that sleeps 50 ms reads within 20 ms of that. Run together, as a push runs 
 other than the scanner and the three that can call a model finished in 1.74 to 2.12 seconds of wall
 clock, five readings on 2026-10-28, the slowest of them `lessons-advisory.sh` every time.
 
-| Gate | What it costs on a push |
-| --- | --- |
-| `scanners-before-push.sh` (#518) | 2026-10-28: killed at its declared 180 second bound on three cold readings of three, so not a measurement, at load average 142 to 148. Earlier: 25.4 to 26.5 seconds on a branch push at load 12 to 18 on 2026-10-13 (the timing below), the gate every push waits on; 0.6 seconds on a repeat attempt over an unchanged tree, 2026-09-21. Since #1995 it first reads the messages of the commits the push adds, before any suite: 0.137 to 0.161 seconds over one commit, five readings on 2026-10-31 at load average 61, each including two python starts for the timing. After #1997 took `test-run-all-tests.sh` (510 seconds as the gate recorded it) out of its selection: every scanner finished inside the 150 second budget at load average 281 on 2026-10-31, the slowest 89 seconds, one reading, its total taken up by waiting on the sync suite's lock that another run held. That wait was the whole of every refusal for time on 2026-11-01: seven of them at load average 21 to 95 each named only the sync suite's section, running 1 or 2 seconds after another full run's lock turned it away, so #2033 moved that scan to `tests/test-undated-measurements.sh`, which takes no lock (3 seconds alone). With the lock free the whole gate took 38 to 43 seconds, three readings at load average 15 to 35 on 2026-11-01, the slowest scanner `test-suite-scratch-isolation.sh` at 35 to 41 seconds, and 41 again during another builder's full run at 44 to 51. After the move, with the lock held for the whole run, it passed in 60 seconds at load average 160, the slowest scanner 51 seconds and the moved scan 7, so the 150 second budget stays |
-| `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
-| `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
-| `require-tests-before-push.sh` | not timed on 2026-10-28, since it can ask a model. Earlier: 0.3 seconds on each of two pushes on 2026-09-21, when the change carried a test and it asked no model; a sonnet call of up to 120 seconds when it has to ask |
-| `lessons-advisory.sh` | 2026-10-28: 0.846 to 1.051 seconds alone, and 1.64 to 1.99 seconds run together with the other 28 quick gates, the slowest of them each time |
-| `check-public-assets.sh` (#446) | 2026-10-28: 0.231 to 0.301 seconds on a push carrying two changed files; the hygiene guards read what the push carries, so a larger push costs them more |
-| `check-style-guide.sh` | 2026-10-28: 0.253 to 0.272 seconds, the same push |
-| `check-grep-quiet-invert.sh` | 2026-10-28: 0.207 to 0.256 seconds, the same push |
-| `check-deferrals.sh` (#446) | 2026-10-28: 0.190 to 0.243 seconds, the same push |
-| `linux-sections-before-push.sh` | 2026-10-28: 0.148 to 0.196 seconds, having judged nothing because the docker daemon was not running, which it says (see below). Earlier: 1.5 seconds on 2026-09-21, the same way |
-| `check-bundle-budget.sh` (#446) | 2026-10-28: 0.146 to 0.195 seconds, the same push |
-| `check-doc-issue-refs.sh` (#446) | 2026-10-28: 0.168 to 0.188 seconds, the same push |
-| `check-duplication.sh` (#446) | 2026-10-28: 0.144 to 0.158 seconds, the same push |
-| `payload-write-gate.sh` | 2026-10-28: 0.126 to 0.150 seconds; it acts on a write into the payload, not a push |
-| `rtk-rewrite.sh` | 2026-10-28: 0.079 to 0.100 seconds, handing the command to rtk to rewrite |
-| `check-closing-keyword.sh` | 2026-10-28: 0.054 to 0.087 seconds; it acts on a commit or pull request whose text negates a closing word, not a push |
-| `require-issue-fields.sh` | 2026-10-28: 0.062 to 0.084 seconds; it acts on `gh issue create` and on issue and pull request bodies, not a push |
-| `no-session-link-in-comments.sh` (#1825) | 2026-10-28: 0.063 to 0.083 seconds. Its quick exit looks for `gh` anywhere in the payload, and the working directory's path holds those letters on this Mac, so it starts its python reader on every push |
-| `push-scope-notice.sh` (#552) | 2026-10-28: 0.067 to 0.079 seconds. Since #2070 added the hooks folder check, on 2026-11-02: 0.102 to 0.149 seconds on a plain push from a repository with no `core.hooksPath`, and 0.124 to 0.180 seconds from one with it set and present, ten readings of each by bash's timer around the gate alone at load average 28 to 41, against 0.080 to 0.106 seconds for the copy before it, five readings of each in the same minutes. Earlier: 0.07 seconds, five readings on this Mac on 2026-10-12 |
-| `amend-force-push-gate.sh` (#1856) | 2026-10-28: 0.027 to 0.069 seconds on the main session's push. Earlier: 0.021 to 0.026 seconds on the main session's `git push -u origin feat/x`, five readings on 2026-10-28 (load average 40 to 58), since a payload with no agent id leaves before anything loads; 0.105 to 0.126 seconds on a subagent's same push, which starts the shared reader to find no force; 0.105 to 0.148 seconds on a subagent's `git push --force`, refused |
-| `check-add-scope.sh` | 2026-10-28: 0.051 to 0.056 seconds; it acts on an unscoped `git add`, not a push |
-| `no-verify-gate.sh` (#1641) | 2026-10-28: 0.020 to 0.028 seconds on the main session's push, since a payload with no agent id leaves before anything loads; 0.037 to 0.053 seconds on a subagent's, five readings the same day at load average 15 to 17 by a timer around the gate alone, since the tool sends no agent id: one python start reads the payload and finds no skip |
-| `scratchpad-subagent-gate.sh` (#527) | 2026-10-28: 0.009 to 0.026 seconds; it acts on a write into the scratchpad root, not a push |
-| `check-gh-watch-interval.sh` (#1014) | 2026-10-28: 0.009 to 0.020 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
-| `check-wrapped-commands.sh` (#1478) | 2026-10-28: 0.012 to 0.020 seconds. Earlier: under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3). Reading a declared script's quoted arguments (#1574) adds one python start to a command that reaches a script file refusal, and nothing to any other: 0.09 to 0.12 seconds before, 0.11 to 0.13 after, five readings each on 2026-10-23 (load average 17 to 23). Reading a script run by its path (#1623) left a plain push and a git command holding paths only as arguments at 0.006 to 0.008 seconds, as on main, and `./build.sh && git push` now starts the reader, 0.10 to 0.11 seconds, as `bash ./build.sh && git push` does; five readings each on 2026-10-23 (load average 56 to 101). Over 30 days of this Mac's real commands naming git, gh or rtk (30,078), the fast path answered 24,204 before the reader loaded where main answered 26,842; 2,638 now reach the reader through it, 863 of them refused |
-| `require-changelog-tag.sh` (#1181) | 2026-10-28: 0.009 to 0.020 seconds. Earlier: 0.014 seconds, five readings on 2026-10-13, the same way as `block-red-merge.sh` |
-| `stacked-branch-delete-gate.sh` (#1723) | 2026-10-28: 0.010 to 0.018 seconds. Earlier: 0.035 to 0.058 seconds on a plain `git push`, five readings on 2026-10-26 (load average 15 to 31), since a command holding no `delete` or `graphql` in any case (#1758 added the second), no short flag cluster with d and no bare `:branch` is answered before anything loads; 0.14 to 0.17 seconds on `git push -u origin feat/1723-stacked-delete`, whose branch name holds the word and so starts the shared reader to find no delete; 0.46 to 0.51 seconds on an API delete of a branch nothing is based on, five readings through the real gh against claude-config, one list of the pull requests based on it |
-| `check-closing-merge.sh` (#1550) | 2026-10-28: 0.009 to 0.016 seconds. Earlier: 0.007 to 0.008 seconds on a push naming no merge, five readings on 2026-10-24 (load average 8 to 9), since it leaves before loading anything; 0.051 to 0.053 seconds on a push whose branch name holds the word (`feat/1550-closing-merge-gate`), which loads the shared reader to find no merge. On a merge, 0.51 to 0.69 seconds, five readings through the real gh against claude-config #1639: one read of the pull request's body and closing issues, run beside `block-red-merge.sh`, which reads the same pull request |
-| `check-work-names-merge.sh` (#1995) | 2026-10-31: 0.029 to 0.044 seconds on a plain `git push`, five readings at load average 62 to 64, timed from outside and so including a python start of about 0.02 seconds; it leaves before loading anything on a command naming no merge. On a merge, two GitHub reads: the pull request's title, description and commits, and the scanner at its base commit |
-| `check-work-names-publish.sh` (#2105) | 2026-11-02: 0.009 to 0.010 seconds on a plain `git push`, five readings at load average 27 to 33, timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109 seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo digest list and the registry, then the match |
-| `design-score-gate.sh` (#1364) | 2026-10-28: 0.009 to 0.015 seconds. Earlier: 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
-| `check-rtk-init.sh` (#1468) | 2026-10-28: 0.009 to 0.014 seconds. Earlier: 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
-| `check-zsh-builtins.sh` (#2200) | 2026-11-04: 0.027 to 0.046 seconds on `ls -la`, five readings at load average 13 to 27, timed from outside, since a command not naming log as a word leaves before python starts; 0.055 to 0.070 seconds on `git log -1`, which the judge reads. Over 129,500 past Bash commands on the personal MacBook, 7,604 (5.9%) reach the judge and 31 are refused |
-| `pr-review-gate.sh` (#560) | 2026-10-28: 0.010 to 0.013 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it acts on a merge, not a push |
-| `require-verification-run.sh` (#1529) | 2026-10-28: 0.009 to 0.013 seconds. Earlier: 0.044 to 0.056 seconds on a push, five readings on 2026-10-23 (load average 166 to 168, other suites running), since a command naming no merge leaves before anything loads. On a merge in a repository whose base branch holds no `.claude/verification/areas.json`, which is every repository today, 0.97 to 1.34 seconds, five readings through the real gh against claude-config: one read of the pull request and one of that file at its base commit, run beside `block-red-merge.sh`, which reads the same pull request |
-| `block-red-merge.sh` (#1181) | 2026-10-28: 0.009 to 0.011 seconds. Earlier: 0.014 seconds, five readings on 2026-10-13; it acts on a merge, and since it lost its `if` filter it leaves on a command naming no merge before loading anything |
+<table>
+<thead>
+<tr><th>Gate</th><th>What it costs on a push</th></tr>
+</thead>
+<tbody>
+<tr><td>
+
+`scanners-before-push.sh` (#518)
+
+</td><td>
+
+2026-10-28: killed at its declared 180 second bound on three cold readings of three, so not a
+measurement, at load average 142 to 148. Earlier: 25.4 to 26.5 seconds on a branch push at load 12
+to 18 on 2026-10-13 (the timing below), the gate every push waits on; 0.6 seconds on a repeat
+attempt over an unchanged tree, 2026-09-21. Since #1995 it first reads the messages of the commits
+the push adds, before any suite: 0.137 to 0.161 seconds over one commit, five readings on 2026-10-31
+at load average 61, each including two python starts for the timing. After #1997 took
+`test-run-all-tests.sh` (510 seconds as the gate recorded it) out of its selection: every scanner
+finished inside the 150 second budget at load average 281 on 2026-10-31, the slowest 89 seconds, one
+reading, its total taken up by waiting on the sync suite's lock that another run held. That wait was
+the whole of every refusal for time on 2026-11-01: seven of them at load average 21 to 95 each named
+only the sync suite's section, running 1 or 2 seconds after another full run's lock turned it away,
+so #2033 moved that scan to `tests/test-undated-measurements.sh`, which takes no lock (3 seconds
+alone). With the lock free the whole gate took 38 to 43 seconds, three readings at load average 15
+to 35 on 2026-11-01, the slowest scanner `test-suite-scratch-isolation.sh` at 35 to 41 seconds, and
+41 again during another builder's full run at 44 to 51. After the move, with the lock held for the
+whole run, it passed in 60 seconds at load average 160, the slowest scanner 51 seconds and the moved
+scan 7, so the 150 second budget stays
+
+</td></tr>
+<tr><td>
+
+`simplify-before-push.sh`
+
+</td><td>
+
+not measured: a model call of up to 90 seconds when the push changes source files, none otherwise
+
+</td></tr>
+<tr><td>
+
+`pr-review-push-gate.sh` (#599)
+
+</td><td>
+
+not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that
+review is usually finished by the push, having started at the commit
+
+</td></tr>
+<tr><td>
+
+`require-tests-before-push.sh`
+
+</td><td>
+
+not timed on 2026-10-28, since it can ask a model. Earlier: 0.3 seconds on each of two pushes on
+2026-09-21, when the change carried a test and it asked no model; a sonnet call of up to 120 seconds
+when it has to ask
+
+</td></tr>
+<tr><td>
+
+`lessons-advisory.sh`
+
+</td><td>
+
+2026-10-28: 0.846 to 1.051 seconds alone, and 1.64 to 1.99 seconds run together with the other 28
+quick gates, the slowest of them each time
+
+</td></tr>
+<tr><td>
+
+`check-public-assets.sh` (#446)
+
+</td><td>
+
+2026-10-28: 0.231 to 0.301 seconds on a push carrying two changed files; the hygiene guards read
+what the push carries, so a larger push costs them more
+
+</td></tr>
+<tr><td>
+
+`check-style-guide.sh`
+
+</td><td>
+
+2026-10-28: 0.253 to 0.272 seconds, the same push
+
+</td></tr>
+<tr><td>
+
+`check-grep-quiet-invert.sh`
+
+</td><td>
+
+2026-10-28: 0.207 to 0.256 seconds, the same push
+
+</td></tr>
+<tr><td>
+
+`check-deferrals.sh` (#446)
+
+</td><td>
+
+2026-10-28: 0.190 to 0.243 seconds, the same push
+
+</td></tr>
+<tr><td>
+
+`linux-sections-before-push.sh`
+
+</td><td>
+
+2026-10-28: 0.148 to 0.196 seconds, having judged nothing because the docker daemon was not running,
+which it says (see below). Earlier: 1.5 seconds on 2026-09-21, the same way
+
+</td></tr>
+<tr><td>
+
+`check-bundle-budget.sh` (#446)
+
+</td><td>
+
+2026-10-28: 0.146 to 0.195 seconds, the same push
+
+</td></tr>
+<tr><td>
+
+`check-doc-issue-refs.sh` (#446)
+
+</td><td>
+
+2026-10-28: 0.168 to 0.188 seconds, the same push
+
+</td></tr>
+<tr><td>
+
+`check-duplication.sh` (#446)
+
+</td><td>
+
+2026-10-28: 0.144 to 0.158 seconds, the same push
+
+</td></tr>
+<tr><td>
+
+`payload-write-gate.sh`
+
+</td><td>
+
+2026-10-28: 0.126 to 0.150 seconds; it acts on a write into the payload, not a push
+
+</td></tr>
+<tr><td>
+
+`rtk-rewrite.sh`
+
+</td><td>
+
+2026-10-28: 0.079 to 0.100 seconds, handing the command to rtk to rewrite
+
+</td></tr>
+<tr><td>
+
+`check-closing-keyword.sh`
+
+</td><td>
+
+2026-10-28: 0.054 to 0.087 seconds; it acts on a commit or pull request whose text negates a closing
+word, not a push
+
+</td></tr>
+<tr><td>
+
+`require-issue-fields.sh`
+
+</td><td>
+
+2026-10-28: 0.062 to 0.084 seconds; it acts on `gh issue create` and on issue and pull request
+bodies, not a push
+
+</td></tr>
+<tr><td>
+
+`no-session-link-in-comments.sh` (#1825)
+
+</td><td>
+
+2026-10-28: 0.063 to 0.083 seconds. Its quick exit looks for `gh` anywhere in the payload, and the
+working directory's path holds those letters on this Mac, so it starts its python reader on every
+push
+
+</td></tr>
+<tr><td>
+
+`push-scope-notice.sh` (#552)
+
+</td><td>
+
+2026-10-28: 0.067 to 0.079 seconds. Since #2070 added the hooks folder check, on 2026-11-02: 0.102
+to 0.149 seconds on a plain push from a repository with no `core.hooksPath`, and 0.124 to 0.180
+seconds from one with it set and present, ten readings of each by bash's timer around the gate alone
+at load average 28 to 41, against 0.080 to 0.106 seconds for the copy before it, five readings of
+each in the same minutes. Earlier: 0.07 seconds, five readings on this Mac on 2026-10-12
+
+</td></tr>
+<tr><td>
+
+`amend-force-push-gate.sh` (#1856)
+
+</td><td>
+
+2026-10-28: 0.027 to 0.069 seconds on the main session's push. Earlier: 0.021 to 0.026 seconds on
+the main session's `git push -u origin feat/x`, five readings on 2026-10-28 (load average 40 to 58),
+since a payload with no agent id leaves before anything loads; 0.105 to 0.126 seconds on a
+subagent's same push, which starts the shared reader to find no force; 0.105 to 0.148 seconds on a
+subagent's `git push --force`, refused
+
+</td></tr>
+<tr><td>
+
+`check-add-scope.sh`
+
+</td><td>
+
+2026-10-28: 0.051 to 0.056 seconds; it acts on an unscoped `git add`, not a push
+
+</td></tr>
+<tr><td>
+
+`no-verify-gate.sh` (#1641)
+
+</td><td>
+
+2026-10-28: 0.020 to 0.028 seconds on the main session's push, since a payload with no agent id
+leaves before anything loads; 0.037 to 0.053 seconds on a subagent's, five readings the same day at
+load average 15 to 17 by a timer around the gate alone, since the tool sends no agent id: one python
+start reads the payload and finds no skip
+
+</td></tr>
+<tr><td>
+
+`scratchpad-subagent-gate.sh` (#527)
+
+</td><td>
+
+2026-10-28: 0.009 to 0.026 seconds; it acts on a write into the scratchpad root, not a push
+
+</td></tr>
+<tr><td>
+
+`check-gh-watch-interval.sh` (#1014)
+
+</td><td>
+
+2026-10-28: 0.009 to 0.020 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it answers a
+command that never mentions a watch before loading anything
+
+</td></tr>
+<tr><td>
+
+`check-wrapped-commands.sh` (#1478)
+
+</td><td>
+
+2026-10-28: 0.012 to 0.020 seconds. Earlier: under 0.05 seconds on a plain `git push`, five readings
+on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything
+loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the
+wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader
+reads through wrappers for every gate now, and on a plain push the gates beside it measured the same
+as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047
+seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3).
+Reading a declared script's quoted arguments (#1574) adds one python start to a command that reaches
+a script file refusal, and nothing to any other: 0.09 to 0.12 seconds before, 0.11 to 0.13 after,
+five readings each on 2026-10-23 (load average 17 to 23). Reading a script run by its path (#1623)
+left a plain push and a git command holding paths only as arguments at 0.006 to 0.008 seconds, as on
+main, and `./build.sh && git push` now starts the reader, 0.10 to 0.11 seconds, as
+`bash ./build.sh && git push` does; five readings each on 2026-10-23 (load average 56 to 101). Over
+30 days of this Mac's real commands naming git, gh or rtk (30,078), the fast path answered 24,204
+before the reader loaded where main answered 26,842; 2,638 now reach the reader through it, 863 of
+them refused
+
+</td></tr>
+<tr><td>
+
+`require-changelog-tag.sh` (#1181)
+
+</td><td>
+
+2026-10-28: 0.009 to 0.020 seconds. Earlier: 0.014 seconds, five readings on 2026-10-13, the same
+way as `block-red-merge.sh`
+
+</td></tr>
+<tr><td>
+
+`stacked-branch-delete-gate.sh` (#1723)
+
+</td><td>
+
+2026-10-28: 0.010 to 0.018 seconds. Earlier: 0.035 to 0.058 seconds on a plain `git push`, five
+readings on 2026-10-26 (load average 15 to 31), since a command holding no `delete` or `graphql` in
+any case (#1758 added the second), no short flag cluster with d and no bare `:branch` is answered
+before anything loads; 0.14 to 0.17 seconds on `git push -u origin feat/1723-stacked-delete`, whose
+branch name holds the word and so starts the shared reader to find no delete; 0.46 to 0.51 seconds
+on an API delete of a branch nothing is based on, five readings through the real gh against
+claude-config, one list of the pull requests based on it
+
+</td></tr>
+<tr><td>
+
+`check-closing-merge.sh` (#1550)
+
+</td><td>
+
+2026-10-28: 0.009 to 0.016 seconds. Earlier: 0.007 to 0.008 seconds on a push naming no merge, five
+readings on 2026-10-24 (load average 8 to 9), since it leaves before loading anything; 0.051 to
+0.053 seconds on a push whose branch name holds the word (`feat/1550-closing-merge-gate`), which
+loads the shared reader to find no merge. On a merge, 0.51 to 0.69 seconds, five readings through
+the real gh against claude-config #1639: one read of the pull request's body and closing issues, run
+beside `block-red-merge.sh`, which reads the same pull request
+
+</td></tr>
+<tr><td>
+
+`check-work-names-merge.sh` (#1995)
+
+</td><td>
+
+2026-10-31: 0.029 to 0.044 seconds on a plain `git push`, five readings at load average 62 to 64,
+timed from outside and so including a python start of about 0.02 seconds; it leaves before loading
+anything on a command naming no merge. On a merge, two GitHub reads: the pull request's title,
+description and commits, and the scanner at its base commit
+
+</td></tr>
+<tr><td>
+
+`check-work-names-publish.sh` (#2105)
+
+</td><td>
+
+2026-11-02: 0.009 to 0.010 seconds on a plain `git push`, five readings at load average 27 to 33,
+timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109
+seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds
+on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo
+digest list and the registry, then the match
+
+</td></tr>
+<tr><td>
+
+`design-score-gate.sh` (#1364)
+
+</td><td>
+
+2026-10-28: 0.009 to 0.015 seconds. Earlier: 0.008 seconds on a push whose command names no closing
+word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one
+(`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a
+merge, not a push
+
+</td></tr>
+<tr><td>
+
+`check-rtk-init.sh` (#1468)
+
+</td><td>
+
+2026-10-28: 0.009 to 0.014 seconds. Earlier: 0.01 to 0.03 seconds on a push naming no rtk and init,
+five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on
+a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to
+find no rtk init; both with the full suite running beside it (load average 234)
+
+</td></tr>
+<tr><td>
+
+`check-zsh-builtins.sh` (#2200)
+
+</td><td>
+
+2026-11-04: 0.027 to 0.046 seconds on `ls -la`, five readings at load average 13 to 27, timed from
+outside, since a command not naming log as a word leaves before python starts; 0.055 to 0.070
+seconds on `git log -1`, which the judge reads. Over 129,500 past Bash commands on the personal
+MacBook, 7,604 (5.9%) reach the judge and 31 are refused
+
+</td></tr>
+<tr><td>
+
+`pr-review-gate.sh` (#560)
+
+</td><td>
+
+2026-10-28: 0.010 to 0.013 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it acts on a
+merge, not a push
+
+</td></tr>
+<tr><td>
+
+`require-verification-run.sh` (#1529)
+
+</td><td>
+
+2026-10-28: 0.009 to 0.013 seconds. Earlier: 0.044 to 0.056 seconds on a push, five readings on
+2026-10-23 (load average 166 to 168, other suites running), since a command naming no merge leaves
+before anything loads. On a merge in a repository whose base branch holds no
+`.claude/verification/areas.json`, which is every repository today, 0.97 to 1.34 seconds, five
+readings through the real gh against claude-config: one read of the pull request and one of that
+file at its base commit, run beside `block-red-merge.sh`, which reads the same pull request
+
+</td></tr>
+<tr><td>
+
+`block-red-merge.sh` (#1181)
+
+</td><td>
+
+2026-10-28: 0.009 to 0.011 seconds. Earlier: 0.014 seconds, five readings on 2026-10-13; it acts on
+a merge, and since it lost its `if` filter it leaves on a command naming no merge before loading
+anything
+
+</td></tr>
+</tbody>
+</table>
 
 Claude Code runs every matching hook in parallel ("All matching hooks run in parallel", the hooks
 reference), so a push waits for the SLOWEST gate, not for their sum, and the tool runs them together
@@ -1913,11 +2569,53 @@ timing run started a paid lessons review, whose wait is the `pr-review-push-gate
 straight to main is refused by `linux-sections-before-push.sh` within a second (a change reaches
 main through a pull request here), but the other gates still run to the end, so it waits as long:
 
-| The push, and how the gates are run | Before git runs | Where it goes |
-| --- | --- | --- |
-| A branch push, gates together as Claude Code runs them | 26.1, 27.0 and 27.0 seconds | `scanners-before-push.sh` 25.4 to 26.5; every other gate finishes inside it, 0.9 seconds or less each (2026-10-13) |
-| A push straight to main, gates together | 24.2, 24.8 and 25.2 seconds | `scanners-before-push.sh` 23.7 to 24.6; every other gate 0.7 seconds or less (2026-10-13) |
-| The same push to main, gates one after another, as this tool used to | 30.4, 30.5 and 31.0 seconds | the same gates summed, which no push waits through (2026-10-13) |
+<table>
+<thead>
+<tr><th>The push, and how the gates are run</th><th>Before git runs</th><th>Where it goes</th></tr>
+</thead>
+<tbody>
+<tr><td>
+
+A branch push, gates together as Claude Code runs them
+
+</td><td>
+
+26.1, 27.0 and 27.0 seconds
+
+</td><td>
+
+`scanners-before-push.sh` 25.4 to 26.5; every other gate finishes inside it, 0.9 seconds or less
+each (2026-10-13)
+
+</td></tr>
+<tr><td>
+
+A push straight to main, gates together
+
+</td><td>
+
+24.2, 24.8 and 25.2 seconds
+
+</td><td>
+
+`scanners-before-push.sh` 23.7 to 24.6; every other gate 0.7 seconds or less (2026-10-13)
+
+</td></tr>
+<tr><td>
+
+The same push to main, gates one after another, as this tool used to
+
+</td><td>
+
+30.4, 30.5 and 31.0 seconds
+
+</td><td>
+
+the same gates summed, which no push waits through (2026-10-13)
+
+</td></tr>
+</tbody>
+</table>
 
 So a push waits about as long as the whole-tree scanner gate takes, and every other gate costs it
 nothing while that one runs, which is where any speed work belongs (L299). The earlier readings
@@ -2041,6 +2739,17 @@ delivers it names that symbol, as a whole word, on more than one line. A finding
 a file the push does not carry, or any other kind stands as the judge gave it. A withdrawn finding
 is listed under its own heading beside a block, and recorded in the row's detail as `withdrawn:`
 beside a pass, so how often it fires is read from the record.
+
+A push carrying no test whose every changed source line is blank or documentation is let through
+without asking the judge (#733). Documentation is a comment in the file's own language: `#` in
+Python, Ruby and Elixir, `//` and `/* */` elsewhere, with a `*` line trusted only where the whole
+file shows it inside an open block comment (#1238). Since #2247 a line lying wholly inside a Python
+docstring counts too: the first statement of a module, class or function when it is a plain
+string, found by Python's own parser (`hooks/lib/py-docstring-lines.py`) in the file before the
+change and after it. An ordinary string, a string that is not the first statement, code on the
+docstring's own line, a file either version of which does not parse, and every docstring in a file
+whose own code names `__doc__` (a usage message cut from it) are judged as code, as before, and so
+is every file that is not Python.
 
 The test judge is shown at most 60,000 bytes of diff in one call, test changes first. On 2026-10-31
 a push carrying 34,407 bytes of test changes beside a large code change was shown the first 30,000,
@@ -3264,7 +3973,8 @@ bash tools/shipped-worktrees.sh --remove ~/Non-icloudDocuments/Apps/claude-confi
 It is a sibling of `shipped-branches.sh` rather than a mode of it because it deletes things and so
 may not act on a guess, and it is not a `claude-sync` command because it is about any git checkout
 rather than the synced config. Which branch counts as main is one rule both read, in
-`tools/lib/default-branch.sh`, and how GitHub's record of a branch's pull requests is read is one
+`payload/hooks/lib/default-branch.sh` (beside the hooks, since the installed sweep below reads it
+too), and how GitHub's record of a branch's pull requests is read is one
 reading both use, in `tools/lib/pull-requests.sh`.
 
 Agent worktrees are also removed automatically, at two moments (#1521). When
@@ -3275,9 +3985,17 @@ from inside its own worktree keeps it, and the sweep takes it later. What it rem
 it, is printed after the merge line, and nothing about it turns a merge that landed into a failure.
 And on the first prompt of a session, then again on the first prompt at least three hours after the
 session's last run (`STALE_WT_RERUN_MINUTES`), `hooks/stale-worktree-nudge.sh` starts
-`hooks/check-stale-worktrees.sh --remove` in the background. It removes a worktree only when its PR
-merged holding every commit, nothing in it is uncommitted, nothing changed in the last six hours,
-and no running process is working in it. A locked worktree is kept, with one exception:
+`hooks/check-stale-worktrees.sh --remove` in the background. The sweep judges every worktree
+`git worktree list` names, wherever its folder is (a sibling folder, a scratchpad, a name a session
+chose), and never the main checkout (#2309). It removes one only when its work is kept somewhere
+else, nothing in it is uncommitted, nothing changed in the last six hours, and no running process is
+working in it. Its work counts as kept elsewhere when its PR merged holding every commit, or when
+every commit on its branch is also on another branch, local or remote (which covers work shipped in
+a combined batch branch, or pushed with no PR), or, for a worktree on no branch, when its HEAD is on
+the default branch. The `--just-merged` removal at a merge still judges only an agent worktree
+under `.claude/worktrees`, by its merged PR alone. Anything it cannot read (the folder, git's
+status, a file's age, or an lsof that lists no process at all) keeps the worktree and says why.
+Its branch is never deleted. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
 worktree with the reason `claude agent <name> (pid <pid> start <time>)` and lifts the lock when the
 agent finishes, so an agent that never finished, because the Mac went down for example, leaves a
@@ -3510,14 +4228,16 @@ runs after every tool call, in the main session and in every subagent, and reads
 request from the transcript's usage fields (input plus cache read plus cache write), never what
 anybody wrote. Both rules were decided by Dan on 2026-11-01.
 
-- **The context line** (`CONTEXT_LINE_TOKENS`, 200,000). A builder (any subagent) or an orchestrator
-  (a main session that has dispatched an agent or set a /goal) whose last request carried more is
-  told to write down what it has decided and then restart or compact. A builder writes
+- **The context line** (`CONTEXT_LINE_TOKENS`, 330,000 tokens of work, Dan, 2026-11-05). Work is a
+  request's context minus the floor, the fixed load the session started with: the context of the
+  session's first request, or of the first request after its latest compaction. A builder (any
+  subagent) or an orchestrator (a main session that has dispatched an agent or set a /goal) whose
+  last request carried more work than that is told to write down what it has decided and then restart or compact. A builder writes
   `handoff.md` in its scratchpad folder and hands back, unless only the push and the report are
   left, and the orchestrator gives the rest to a fresh agent that starts from the note. An
   orchestrator puts each decision that belongs to an issue on that issue as a comment and the rest
   in `handoff.md`, then tells Dan, who sees the notice too, so he can type /compact or start a
-  fresh session. It is said once per band of the line (200K, 400K, ...) and again after a
+  fresh session. It is said once per band of the line (330K, 660K, ... of work) and again after a
   compaction brings the session back under it, never on every call.
 - **What must be written down before a restart**, so nothing decided lives only in the
   transcript: the goal or list in Dan's words with every constraint he stated, quoted and dated;
@@ -3533,7 +4253,7 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   `python3 tools/cache-usage.py --days 31 --summary` re-measures them through the same defaults and
   the same sum: its CONTEXT lines give the share of requests and tokens over the line, its
   COMPACTIONS line the main sessions compacted at least the nudge count. On the personal MacBook in
-  October, requests over 200,000 read 88.5% of subagent tokens and 85.4% of main session tokens.
+  October, requests over 200,000 of whole context (the rule before #2283, which counted the floor too) read 88.5% of subagent tokens and 85.4% of main session tokens.
 - **Cost.** Each run reads only the bytes appended to the transcript since its last run, with the
   offset kept in `~/.claude/state/context-size/` (one small file per session and agent, never
   synced): about 40 ms a call, and 0.11 s the first time over a 21 MB transcript (measured
@@ -4327,7 +5047,13 @@ Write, Edit, or a shell append of one quoted `echo`, `printf` or `cat` heredoc w
 must be left as it was with exactly one line added whose one markdown link is the file's name; a
 second line, a changed line, a line linking another file, another folder's index, or a write after
 the window is asked about as before, and the cover lapses in silence (rules.ts `indexLineAdded`,
-`shellAppended`). Another mod asks `$.askBeforeSaving.isApproved({ tool, input })` whether a call
+`shellAppended`). Since #2216 that append may be followed by one plain read of the index alone,
+after `;`, `&&` or a new line: `tail` or `head` with at most a line count, `cat` with no option, or
+`wc` with at most one of `-l -w -c -m`, naming the index by its absolute path or a bare `~/`
+(rules.ts `readBack`); any other or further command, a read with a redirect, pipe, substitution,
+glob, variable, here doc, `..` or another file, a reader led by anything, `||` or `&`, and a read
+before the append are still asked about. Another mod asks
+`$.askBeforeSaving.isApproved({ tool, input })` whether a call
 carries a live, unspent approval for exactly what it writes, matched as a call sent again is (#1483:
 no build asks it before letting that one lessons Edit through); it only looks, and the approval is
 spent here as the call passes. A patch it reads from a device or a fifo is never opened, through
@@ -4340,7 +5066,7 @@ writes is said whole, with why its new lines could not be told.
 
 </td><td>
 
-#618, #705, #707, #726, #743, #738, #867, #1241, #1483, #1592, #1794, #1765, #1814, #1883
+#618, #705, #707, #726, #743, #738, #867, #1241, #1483, #1592, #1794, #1765, #1814, #1883, #2216
 
 </td></tr>
 <tr><td>
@@ -4400,7 +5126,12 @@ within the hour, and keeps his word with why under `pass:<the call's key>`. Sinc
 question carries `onScreen`, one plain sentence from the session saying what on screen changes
 (which control or area, on which screen) or that nothing visible does; the question leads with it
 and names the issue and file after it, and it is refused, with nothing asked, when the sentence is
-missing, longer than 300 characters or names a file. A typed answer to the skip question records
+missing, longer than 300 characters or names a file. Since #2294 the question is not asked at all
+for an edit to an app's React screen file that the guard's own reading (rules.ts logicOnlyChange)
+finds changes only logic: no JSX, string, comment, number, true or false, word a look is spelled
+in, stylesheet or swapped import. It goes ahead and is kept under `auto:<the call's key>` with why;
+a mod's hook file, any text Dan reads, an issue whose answers cannot be read, and a pass that cannot
+be kept are held and asked as before. A typed answer to the skip question records
 nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in mod-kit's
 one wording (`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not
 yet, with nothing recorded and no toast, and Claude takes his words as the next round's feedback
@@ -4906,9 +5637,17 @@ and deploy runs since sleep began, and notes each for the top of the report. Wha
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
-waits (no merge, no deploy), listed or not, in any case and ahead of both lists. Dan's list,
-confirmed on 2026-10-07, is in that file and summarised under "Sleep mode" below, without naming
-the repositories (#2112). At
+waits (no merge, no deploy), listed or not, in any case and ahead of both lists. A `mergeOnly`
+entry may also say `"adminMerge": "green-pinned"` (#2125; no entry says it unless Dan writes it),
+and only there is a `gh pr merge --admin` allowed overnight, judged in `hooks/adminmerge.ts`: a
+squash pinned by `--match-head-commit` to the full sha of an open, non draft PR's head, on the
+checkout's own repository, once GitHub shows every check the base branch requires (its rulesets and
+its branch protection) as success on that commit, with no other check run failed or unfinished and
+no status pending or failed. Anything GitHub does not answer, a base branch requiring no checks at
+all, and a merge the night would not let run anyway (the repository waits, or a merge there deploys)
+refuse; any other `adminMerge` value makes the whole file unreadable. Dan's list, confirmed on
+2026-10-07, is in that file and summarised under "Sleep mode" below, without naming the
+repositories (#2112). At
 `/sleep` each repository a worker with a goal is in that the file does not decide is asked about
 (each question waits ten minutes, a chosen limit, not a measurement; the answer written into this
 Mac's own file, so it is asked once on each Mac; "Go to sleep, no more questions" asks nothing
@@ -5724,6 +6463,15 @@ The file has three lists: `waitOwners` (owners every repository of which waits, 
 other two), `mergeOnly` (merging allowed, deploying never; each entry says with `mergeDeploys`
 whether a merge there deploys by itself, and only `false` lets the merge run) and `mayDeploy`. A
 repository on both lists, or one GitHub cannot confirm at bedtime, waits.
+
+A `mergeOnly` entry can opt in to admin merges of green pull requests overnight by adding
+`"adminMerge": "green-pinned"`, as in `{ "repo": "owner/name", "mergeDeploys": false, "adminMerge":
+"green-pinned" }`. No repository is opted in until you add that yourself. An admin merge there then
+goes ahead only as a squash pinned to the exact commit GitHub shows at the head of an open pull
+request, and only when GitHub shows every check the base branch requires passing on that commit and
+nothing else failing or still running. If GitHub cannot be read, the branch requires no checks, or
+anything else is unclear, the merge is refused and waits for the morning. Any other `adminMerge`
+value makes the whole file unreadable, so the night waits everywhere rather than guessing.
 
 **The reports** are one per session with news (#1287): every worker, and any other session that
 noted something overnight; a session with nothing to say gets none. Each is in your Downloads

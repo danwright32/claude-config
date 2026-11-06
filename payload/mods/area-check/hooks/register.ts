@@ -683,9 +683,13 @@ const DECIDE_SCHEMA = {
   required: ['call', 'decision'],
 }
 
-const again = (h: Held) => {
+// Worded for whoever reads it (#2136): the session or agent whose call was held sends it again
+// itself; the main session, recording Dan's answer for a subagent's call, passes it to that agent.
+const again = (h: Held, by: string | null) => {
   const held = h.tool === 'Bash' ? 'Bash command' : `${h.tool} to ${h.rel}`
-  return h.agent === null ? `Send the ${held} again, unchanged.` : `The held ${held} was a subagent's: tell that agent, or a new one, to send it again, unchanged.`
+  if (h.agent === null) return `Send the ${held} again, unchanged.`
+  if (by === h.agent) return `Send the ${held} again yourself, unchanged.`
+  return `The held ${held} was a subagent's: tell that agent, or a new one, to send it again, unchanged.`
 }
 
 // A decision taken: the file claimed for whoever was held, the held entry gone, the decision logged.
@@ -1118,10 +1122,10 @@ export const register: Register = on => {
     await settleQuestion($, h)
     if (input.decision === 'fold') {
       await release($, h, { decision: 'fold', issue: input.issue as number })
-      return { result: `Recorded: the structural fix for #${String(input.issue)} is folded into this work. ${again(h)}` }
+      return { result: `Recorded: the structural fix for #${String(input.issue)} is folded into this work. ${again(h, agent)}` }
     }
     await release($, h, { decision: 'proceed', reason: input.reason as string })
-    return { result: `Recorded: this work goes ahead on ${h.rel}. ${again(h)}` }
+    return { result: `Recorded: this work goes ahead on ${h.rel}. ${again(h, agent)}` }
   }).catch(($, e, next) => neverThrows(() => undecided(msg(next.error)), () => HELD, HELD))
 
   // Dan's restructure question, asked in Claude Code's own dialog: the hook words the question and
@@ -1157,15 +1161,15 @@ export const register: Register = on => {
     if (chosen === 'Fold in') {
       await $.store.delete(k)
       const who = h.agent === null ? 'Call' : `Tell subagent ${h.agent} to call`
-      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${h.shown.map(m => `#${m.n}`).join(', ')}>} to record it. ${again(h)}`)
+      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${h.shown.map(m => `#${m.n}`).join(', ')}>} to record it. ${again(h, null)}`)
     }
     await $.store.set(k, { state: 'answered', answer: chosen, at: await $.clock.now(), issues: h.shown.map(m => m.n) } satisfies Question)
     if (chosen === 'Restructure first') {
       await release($, h, { decision: 'restructure', by: 'dan' })
-      return say(`Dan chose Restructure first: do the structural fix on ${h.rel} before this work; the file is released for it. ${again(h)}`)
+      return say(`Dan chose Restructure first: do the structural fix on ${h.rel} before this work; the file is released for it. ${again(h, null)}`)
     }
     await release($, h, { decision: 'proceed', by: 'dan' })
-    return say(`Dan chose Proceed anyway: this work goes ahead on ${h.rel}. ${again(h)}`)
+    return say(`Dan chose Proceed anyway: this work goes ahead on ${h.rel}. ${again(h, null)}`)
   })
 
   // The questions waiting on Dan, said beside each prompt of the main session until he answers.
