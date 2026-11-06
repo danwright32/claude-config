@@ -39,6 +39,31 @@ case "${WORK%/}" in
 esac
 trap 'rm -rf "$WORK"' EXIT
 
+# The gate's own limits, read from its source rather than written out again here (claude-config#2243),
+# so a change to one moves every expectation built on it, and what can still fail on such a change is
+# the check against something the gate does not hold: the timeout settings.hooks.json registers it
+# with (section 3). Each is one whole line of the gate. A line rewritten past recognition stops the
+# suite naming it, never leaves an expectation built on nothing (L100).
+gate_number() {  # $1 = variable to set, $2 = what it is, $3 = extended regex for its whole line, the number its one group
+  local hits
+  hits="$(sed -n -E "s/$3/\1/p" "$HOOK")"
+  case "$hits" in
+    ''|*[!0-9]*)
+      echo "  FAIL: $2 could not be read from check-work-names-merge.sh as one whole number (got [$hits]), so nothing built on it can be checked"
+      printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$((failed + 1))"
+      exit 1 ;;
+  esac
+  printf -v "$1" '%s' "$hits"
+}
+gate_number READ_CAP "the read budget cap" '^READ_BUDGET_CAP=([0-9]+)$'
+gate_number READ_DEFAULT "the default read budget" '^READ_DEADLINE="\$\(mt_gate_read_budget "\$\{WN_MERGE_READ_BUDGET_SECONDS:-\}" ([0-9]+)\)"$'
+gate_number LIST_SECONDS "the seconds the work repository list is given after the reads" '^repos_budget=\$\(\( READ_DEADLINE \+ ([0-9]+) - SECONDS \)\)$'
+# The budget the reads get when none is set is the default held to the cap, and the work repository
+# list is handed what is left of that plus its own seconds: these are the most it can be handed.
+READ_USED=$(( READ_DEFAULT < READ_CAP ? READ_DEFAULT : READ_CAP ))
+LIST_MOST=$(( READ_USED + LIST_SECONDS ))
+LIST_MOST_CAPPED=$(( READ_CAP + LIST_SECONDS ))
+
 FAKE_HASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
 printf 'console.log(JSON.stringify({state: "missing", file: "/nowhere/repos.local.json"}))\n' > "$WORK/registry-missing.js"
 printf 'console.log("not json")\n' > "$WORK/registry-broken.js"
@@ -168,12 +193,12 @@ run_hook "$MERGE 7 --squash" FAKE_LIST="$WORK/no-such-list.json"
 expect_deny "a work repository list that cannot be read refuses the merge" "work repository list"
 expect_deny "as the scanner giving no verdict" "gave no verdict"
 # Under 3 seconds of the budget left for the list is refused before the scanner starts, since a hook
-# killed at its timeout gives no verdict at all. The default read budget of 15 leaves 27 seconds for
-# the list, and a scope read that "took" until second 25 leaves 2, so the list is never asked for.
-# The scope read moves the hook's clock through its test clock file rather than sleeping, so the case
-# runs at once and the same under load (claude-config#2169, L290, L524). Every number here is one
-# this test or the hook sets, not measured.
-run_hook "$MERGE 7 --squash" FAKE_CLOCK_AT_SCOPE=25
+# killed at its timeout gives no verdict at all. The default read budget leaves the list LIST_MOST
+# seconds from the hook's start, and a scope read that "took" until 2 seconds before that leaves 2,
+# so the list is never asked for. The scope read moves the hook's clock through its test clock file
+# rather than sleeping, so the case runs at once and the same under load (claude-config#2169, L290,
+# L524). Every number here is one this test or the hook sets, not measured.
+run_hook "$MERGE 7 --squash" FAKE_CLOCK_AT_SCOPE=$(( LIST_MOST - 2 ))
 expect_deny "under 3 seconds left for the work repository list refuses the merge" "had no time left to be read"
 if grep -q 'contents/payload/hooks/lib/work-names.py' "$WORK/gh.log"; then pass; else fail "the late case never reached the scope read: $(cat "$WORK/gh.log")"; fi
 if grep -q 'contents/repos.json' "$WORK/gh.log"; then fail "the list was read with no budget left for it: $(cat "$WORK/gh.log")"; else pass; fi
@@ -194,35 +219,35 @@ budget_at_most() {  # $1 = description, $2 = the most the list read may be hande
 }
 stub_run() { run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/scanner-stub.py" "$@"; }
 stub_run FAKE_CLOCK_AT_SCOPE=20
-budget_at_most "a clock moved forward to 20 leaves the list at most 7 of the 27 seconds" 7
+budget_at_most "a clock moved forward to 20 leaves the list at most $(( LIST_MOST - 20 )) of the $LIST_MOST seconds" $(( LIST_MOST - 20 ))
 stub_run FAKE_CLOCK_AT_VIEW=14 FAKE_CLOCK_AT_SCOPE=0
-budget_at_most "a later, earlier reading never moves the clock back" 13
+budget_at_most "a later, earlier reading never moves the clock back" $(( LIST_MOST - 14 ))
 stub_run FAKE_CLOCK_AT_SCOPE=-100
-budget_at_most "a negative reading is ignored, never a longer budget" 27
+budget_at_most "a negative reading is ignored, never a longer budget" "$LIST_MOST"
 stub_run FAKE_CLOCK_AT_VIEW=14 FAKE_CLOCK_AT_SCOPE=99999999999999999999
-budget_at_most "a reading too long to be a clock, which bash would wrap to 0, is ignored" 13
+budget_at_most "a reading too long to be a clock, which bash would wrap to 0, is ignored" $(( LIST_MOST - 14 ))
 stub_run FAKE_CLOCK_AT_VIEW=14 FAKE_CLOCK_AT_SCOPE=1000
-budget_at_most "a reading of four digits or more is out of range and ignored" 13
+budget_at_most "a reading of four digits or more is out of range and ignored" $(( LIST_MOST - 14 ))
 stub_run FAKE_CLOCK_AT_VIEW=14 FAKE_CLOCK_AT_SCOPE=" 3"
-budget_at_most "a reading that is not plain digits is ignored" 13
+budget_at_most "a reading that is not plain digits is ignored" $(( LIST_MOST - 14 ))
 # Text that bash arithmetic would run as a command is never evaluated: a subscript of a set variable,
 # since under the hook's set -u an unset one stops the shell before the subscript runs.
 stub_run FAKE_CLOCK_AT_SCOPE="SECONDS[\$(touch $WORK/clock-ran)]"
 if [ -e "$WORK/clock-ran" ]; then fail "a test clock reading ran as a command"; rm -f "$WORK/clock-ran"; else pass; fi
-budget_at_most "and that reading is ignored" 27
+budget_at_most "and that reading is ignored" "$LIST_MOST"
 # A clock file that is not a regular file is never opened: a fifo with no writer would hold the hook
 # until its timeout, and a hook killed there gives no verdict at all. The alarm bounds a looser gate.
 mkfifo "$WORK/clock-fifo"
 HOOK_ALARM=10 stub_run WN_MERGE_CLOCK_FILE="$WORK/clock-fifo"
-budget_at_most "a fifo for a clock file is ignored, never waited on" 27
+budget_at_most "a fifo for a clock file is ignored, never waited on" "$LIST_MOST"
 # The read budget's cap (claude-config#2217) holds for what the list read is handed, not only for
 # what the refusal says: a budget of 100 or merge-when-ready.sh's 90 still leaves the list at most
-# the 15 plus 12 seconds the cap allows, with the test clock moved or not. Every number here is one
-# this test or the hook sets, not measured.
+# the cap plus the list's own seconds (LIST_MOST_CAPPED), with the test clock moved or not. Every
+# number here is one this test or the hook sets, not measured.
 stub_run WN_MERGE_READ_BUDGET_SECONDS=100 FAKE_CLOCK_AT_SCOPE=20
-budget_at_most "a budget past the cap leaves the list no more than the cap does" 7
+budget_at_most "a budget past the cap leaves the list no more than the cap does" $(( LIST_MOST_CAPPED - 20 ))
 stub_run MT_GATE_READ_BUDGET_SECONDS=90
-budget_at_most "merge-when-ready.sh's budget leaves the list no more than the cap does" 27
+budget_at_most "merge-when-ready.sh's budget leaves the list no more than the cap does" "$LIST_MOST_CAPPED"
 # And the stub scanner these cases use is the gate's verdict only under the test marker: with it
 # cleared, the gate's own scanner judges and the stub never runs (claude-config#2217).
 stub_run HOOK_TESTS_RUNNING=
@@ -342,16 +367,19 @@ if [ "$slept" = "3 " ]; then pass; else fail "a wait padded with zeros is read a
 slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=soon
 if [ "$slept" = "2 " ]; then pass; else fail "a wait that is not a number is not believed, and the default holds: slept [$slept]"; fi
 
-# The budget, read off the refusal a scope read that keeps failing gives, which names it.
+# The budget, read off the refusal a scope read that keeps failing gives, which names it. The cases
+# below ask for 90 and more to be clamped and for 5 to be kept, so they test the clamp only while the
+# cap sits between the two.
+if [ 5 -lt "$READ_CAP" ] && [ "$READ_CAP" -lt 90 ]; then pass; else fail "the read budget cap of $READ_CAP is not between the 5 these cases keep and the 90 they clamp, so they no longer test the clamp"; fi
 run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=100
-expect_deny "a read budget past the cap is clamped to it" "(3 tries, 15 seconds)"
+expect_deny "a read budget past the cap is clamped to it" "(3 tries, $READ_CAP seconds)"
 run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 MT_GATE_READ_BUDGET_SECONDS=90
-expect_deny "so is the budget merge-when-ready.sh hands every gate" "(3 tries, 15 seconds)"
+expect_deny "so is the budget merge-when-ready.sh hands every gate" "(3 tries, $READ_CAP seconds)"
 run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=123456789012345678901234567890
-expect_deny "a budget too long for the shell's arithmetic is clamped too" "(3 tries, 15 seconds)"
+expect_deny "a budget too long for the shell's arithmetic is clamped too" "(3 tries, $READ_CAP seconds)"
 if says "integer expression expected"; then fail "a budget too long for the shell's arithmetic reached a comparison: $hook_out"; else pass; fi
 run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=lots MT_GATE_READ_BUDGET_SECONDS=-5
-expect_deny "a budget that is not a number is not believed, and the read still refuses" "(3 tries, 15 seconds)"
+expect_deny "a budget that is not a number is not believed, and the read still refuses" "(3 tries, $READ_USED seconds)"
 run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=5
 expect_deny "(control) a budget under the cap is still the test's own" "(3 tries, 5 seconds)"
 run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=0005
@@ -361,14 +389,17 @@ expect_allow "a budget with a leading zero is read in base ten, not crashed on"
 pr_json "Add the Acme-HQ reader" "Adds the reader." "clean" > "$WORK/pr.json"
 run_hook "$MERGE 7 --squash" WN_MERGE_READ_BUDGET_SECONDS=lots MT_GATE_READ_BUDGET_SECONDS=lots
 expect_deny "a budget that is not a number never opens the gate" "title:1: a work organisation name"
-# The cap is held below the timeout the gate is registered with, less the 12 seconds the work
+# The cap is held below the timeout the gate is registered with, less the seconds the work
 # repository list is given after it: a gate killed at its timeout gives no verdict of its own. All
-# three numbers are settings, not measured.
+# three numbers are settings, not measured. The cap and the list's seconds are read from the gate
+# (READ_CAP, LIST_SECONDS) and the timeout from settings.hooks.json, which the gate never reads, so
+# this is the check that fails when either of the gate's numbers grows past it (claude-config#2243,
+# L721).
 . "$HOOK_DIR/lib/settings-file.sh"
 timeout="$(jq -r '[.. | objects | select((.command? // "") | endswith("/check-work-names-merge.sh")) | .timeout] | first // empty' "$(hook_settings_file "$HOOK_DIR/..")" 2>/dev/null)"
 case "$timeout" in
   ''|*[!0-9]*) fail "no timeout for check-work-names-merge.sh could be read from settings.hooks.json (got '$timeout')" ;;
-  *) if [ $(( 15 + 12 )) -lt "$timeout" ]; then pass; else fail "the read budget cap of 15 plus the list's 12 seconds is not inside the registered timeout of $timeout"; fi ;;
+  *) if [ "$LIST_MOST_CAPPED" -lt "$timeout" ]; then pass; else fail "the read budget cap of $READ_CAP plus the list's $LIST_SECONDS seconds is not inside the registered timeout of $timeout"; fi ;;
 esac
 
 # 4. One pull request per command: the text read is one pull request's (claude-config#1062).

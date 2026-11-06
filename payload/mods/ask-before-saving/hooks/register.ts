@@ -476,7 +476,7 @@ const indexLineOf = async ($: EngineInterface, tool: string, input: Record<strin
     return edited === undefined ? undefined : indexLineAdded(old, edited)
   }
   const command = String(input.command ?? '')
-  const appended = shellAppended(command, await $.modkit.pipeline({ command }), await $.modkit.writes({ command, cwd: at.cwd, home: at.home }), index)
+  const appended = shellAppended(command, await $.modkit.pipeline({ command }), await $.modkit.writes({ command, cwd: at.cwd, home: at.home }), index, at.home)
   return appended === undefined ? NOT_AN_APPEND : indexLineAdded(old, (old ?? '') + appended)
 }
 

@@ -33,9 +33,13 @@ import { resolveDir, syncCall } from './overnight.ts'
 
 /**
  * One mergeOnly entry: `mergeDeploys` true when a merge itself deploys, `unknown` when the file does
- * not say. Only false lets a merge run overnight.
+ * not say. Only false lets a merge run overnight. `adminMerge`, present only as "green-pinned", lets
+ * an admin merge of a PR pinned to a head commit GitHub shows green run overnight (#2125,
+ * adminmerge.ts); absent, every admin merge is refused.
  */
-export type RepoEntry = { repo: string; mergeDeploys: boolean | 'unknown' }
+export type RepoEntry = { repo: string; mergeDeploys: boolean | 'unknown'; adminMerge?: typeof ADMIN_MERGE }
+/** The one adminMerge value this reader knows. */
+export const ADMIN_MERGE = 'green-pinned'
 /** This Mac's lists file, as read. */
 export type RepoLists = { mayDeploy: string[]; mergeOnly: RepoEntry[]; waitOwners: string[] }
 /** A repository closed for the night, and why, for the refusal and the morning report. */
@@ -44,7 +48,10 @@ export type ClosedRepo = { repo: string; why: string }
 export type NightRepos = { mayDeploy: string[]; mergeOnly: RepoEntry[]; closed: ClosedRepo[]; waitOwners?: string[]; listWhy?: string }
 
 /** What a repository may do tonight. */
-export type Policy = { kind: 'deploy'; repo: string } | { kind: 'merge-only'; repo: string; mergeDeploys: boolean | 'unknown' } | { kind: 'closed'; repo?: string; why: string }
+export type Policy =
+  | { kind: 'deploy'; repo: string }
+  | { kind: 'merge-only'; repo: string; mergeDeploys: boolean | 'unknown'; adminMerge?: typeof ADMIN_MERGE }
+  | { kind: 'closed'; repo?: string; why: string }
 
 export const REPO_LIST_FILE = 'mods/sleep-repos.local.json'
 const SLUG = /^[\w.-]+\/[\w.-]+$/
@@ -79,8 +86,10 @@ export const readRepoLists = (text: string | null): { lists: RepoLists } | { why
     const o = e as Record<string, unknown> | null
     if (!o || typeof o !== 'object' || typeof o.repo !== 'string' || !SLUG.test(o.repo)) return { why: `${REPO_LIST_FILE} has a mergeOnly entry with no owner/name: ${JSON.stringify(e)}` }
     if (o.mergeDeploys !== undefined && typeof o.mergeDeploys !== 'boolean') return { why: `${REPO_LIST_FILE} gives ${o.repo} a mergeDeploys that is not true or false` }
+    // Any adminMerge but the one known value makes the whole file untrusted, as any other bad entry does.
+    if (o.adminMerge !== undefined && o.adminMerge !== ADMIN_MERGE) return { why: `${REPO_LIST_FILE} gives ${o.repo} an adminMerge this reader does not know (only "${ADMIN_MERGE}")` }
     // Unsaid is the strict answer: a merge is taken to deploy until the file says it does not (L72).
-    mergeOnly.push({ repo: o.repo, mergeDeploys: o.mergeDeploys === undefined ? 'unknown' : o.mergeDeploys })
+    mergeOnly.push({ repo: o.repo, mergeDeploys: o.mergeDeploys === undefined ? 'unknown' : o.mergeDeploys, ...(o.adminMerge === ADMIN_MERGE ? { adminMerge: ADMIN_MERGE } : {}) })
   }
   const waitOwners: string[] = []
   if (r.waitOwners !== undefined) {
@@ -151,7 +160,8 @@ export const policyOf = (night: unknown, repo: string | undefined): Policy => {
   if (shut) return { kind: 'closed', repo, why: shut.why }
   if (night.mayDeploy.some(r => key(r) === key(repo))) return { kind: 'deploy', repo }
   const m = night.mergeOnly.find(e => key(e.repo) === key(repo))
-  if (m) return { kind: 'merge-only', repo, mergeDeploys: m.mergeDeploys }
+  // The record is read back from disk, so only the exact known value opts in (L50).
+  if (m) return { kind: 'merge-only', repo, mergeDeploys: m.mergeDeploys, ...(m.adminMerge === ADMIN_MERGE ? { adminMerge: ADMIN_MERGE } : {}) }
   return { kind: 'closed', repo, why: `${repo} is on neither list in ${REPO_LIST_FILE}` }
 }
 

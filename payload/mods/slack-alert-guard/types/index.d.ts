@@ -12,6 +12,8 @@ export type SlackAlertPending = {
   removed: string[]
   /** The store keys Dan's Approve wording records: one per added string, or the call's own for a removal or a shell call. */
   keys: string[]
+  /** For a template another file sends to Slack (#2248): that file, named on the card and refusal. */
+  sender?: string
   /** A subagent's call, told to stop and report rather than ask. */
   agent?: true
 }

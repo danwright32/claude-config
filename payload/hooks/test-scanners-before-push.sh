@@ -950,20 +950,44 @@ fi
 #     process group of its own, writing to a file, refuses saying so, and a later push of the SAME
 #     tree and uncommitted files counts its verdict rather than running it again.
 #
-#     The budget is injected (SCANNERS_BUDGET_SECONDS), so these cases wait 2 seconds rather than
-#     150. A held scanner records its process id and each run it makes, so "still running", "not
+#     The budget is injected (SCANNERS_BUDGET_SECONDS), and ends once the held scanner is holding
+#     (below), so these cases wait about 2 seconds rather than 150. A held scanner records its process id and each run it makes, so "still running", "not
 #     run twice" and "stopped" are checked on the processes and the runs rather than believed from
 #     the gate's message (L1). It holds while its hold file exists, for at most 60 seconds, so a
 #     case can release it rather than sleep, and a leaked one ends on its own (L290).
-add_held_scanner(){   # $1 = repo  $2 = name  $3 = the hold file  $4 = exit code once released
+#
+#     THE BUDGET RUNS OUT ONLY ONCE THE HELD SCANNER IS HOLDING (claude-config#2206, L290). A
+#     budget of 2 seconds counts from the gate's start, so on 2026-11-04, under load, it ran out
+#     before a held scanner had even recorded its process id, and a case that checks what happens
+#     to a scanner STILL RUNNING at the budget failed over one that had not started. So these cases
+#     give the gate a budget of 20 seconds that ends sooner, once a file exists
+#     (SCANNERS_BUDGET_ENDS_WHEN) and not before 2 seconds, and the held scanner writes that file
+#     once it is holding, after the scanners named as its siblings have finished (their exit code is
+#     in their run folder, where the gate reads it). The budget then ends at 2 seconds or once the
+#     scanner is holding, whichever is later, at any load. Ending a budget sooner can only refuse
+#     more, so the gate is never loosened for the case. Released, the scanner removes the file, so
+#     the next run of that repository waits for a holding scanner of its own.
+budget_ready(){   # $1 = repo -> the file its held scanner writes once holding
+  printf '%s' "$TMPROOT/$(basename "$1").budget-ready"
+}
+add_held_scanner(){   # $1 = repo  $2 = name  $3 = the hold file  $4 = exit code once released  [$5 = siblings it waits for, by name]
   cat > "$1/payload/hooks/test-$2.sh" <<EOF
 #!/usr/bin/env bash
+[ -z "\${HELD_STARTS_LATE:-}" ] || sleep "\$HELD_STARTS_LATE"
 git ls-files '*.sh' >/dev/null
 echo ran >> "$TMPROOT/$2.runs"
 echo "scanner $2 started"
 echo \$\$ > "$TMPROOT/$2.pid"
+runs="\${SCANNERS_STATE_DIR:-}/runs/\$(printf '%s' "\$(pwd -P)" | shasum -a 256 | awk '{print \$1}')"
+sibling_done(){ local o; for o in "\$runs"/*/out; do grep -q -x "scanner \$1 ran" "\$o" 2>/dev/null && [ -f "\${o%/out}/rc" ] && return 0; done; return 1; }
+for sib in ${5:-}; do
+  n=0
+  until sibling_done "\$sib" || [ "\$n" -ge 600 ]; do sleep 0.1; n=\$((n+1)); done
+done
+: > "$(budget_ready "$1")"
 n=0
 while [ -e "$3" ] && [ "\$n" -lt 600 ]; do sleep 0.1; n=\$((n+1)); done
+rm -f "$(budget_ready "$1")"
 echo "scanner $2 finished"
 exit ${4:-0}
 EOF
@@ -996,17 +1020,19 @@ reap_held(){
 }
 trap 'reap_held; rm -rf "$TMPROOT"' EXIT
 BUDGETSTATE="$TMPROOT/budget-state"
-budgetfire(){ SCANNERS_STATE_DIR="$BUDGETSTATE" SCANNERS_BUDGET_SECONDS=2 fire "$@"; }
+budgetfire(){ SCANNERS_STATE_DIR="$BUDGETSTATE" SCANNERS_BUDGET_SECONDS=20 SCANNERS_BUDGET_ENDS_WHEN="$(budget_ready "$1")" SCANNERS_BUDGET_ENDS_NOT_BEFORE=2 fire "$@"; }
 
 R1881="$(mkrepo outoftime)"; HOLD1881="$TMPROOT/hold-1881"; : > "$HOLD1881"
-add_scanner "$R1881" alpha 0; add_held_scanner "$R1881" omega "$HOLD1881" 0; commit_all "$R1881"
+add_scanner "$R1881" alpha 0; add_held_scanner "$R1881" omega "$HOLD1881" 0 alpha; commit_all "$R1881"
 _t0="$(date +%s)"
 o1881="$(budgetfire "$R1881" "git push")"; c1881=$?
 _took=$(( $(date +%s) - _t0 ))
 note_held omega
 [ "$c1881" -eq 2 ] && check "#1881 a scanner still running when the gate's budget runs out blocks the push" ok \
   || check "#1881 a scanner still running when the gate's budget runs out blocks the push" "exit=$c1881 out=$o1881"
-grep -q 'did not finish in 2 seconds' <<< "$o1881" \
+# The budget ended once omega was holding, no sooner than the floor this case sets, so the message
+# names the time it really gave, never the budget it was set to (#2206, L11). Settings, not measured.
+grep -q -E 'did not finish in ([2-9]|1[0-9]) seconds' <<< "$o1881" \
   && check "#1881 and says the scanners ran out of time, with the budget" ok \
   || check "#1881 and says the scanners ran out of time, with the budget" "out=$o1881"
 grep -q 'test-omega.sh' <<< "$o1881" && ! grep -q 'payload/hooks/test-alpha.sh' <<< "$o1881" \
@@ -1131,6 +1157,9 @@ _stranger="$(cat "$TMPROOT/stranger.pid" 2>/dev/null)"
 printf '%s' "$_stranger" > "$_ydir/pid"
 rm -f "$_ydir/rc"
 printf '%s\n' "$(( $(date +%s) - 3600 ))" > "$_ydir/started"
+# The run killed above never released, so its holding file is still there; this push must wait for
+# the new run to hold (#2206).
+rm -f "$(budget_ready "$R1881y")"
 o1881y2="$(budgetfire "$R1881y" "git push")"; c1881y2=$?
 note_held upsilon
 if [ -z "$_ydir" ]; then
@@ -1185,7 +1214,7 @@ o1881f3="$(budgetfire "$R1881f" "git push")"; c1881f3=$?
 # remembered, by the gate's standing rule that a blocked push lets no sibling be skipped (#1146),
 # so the push after that runs it again. Pinned here so that rule is a decision, not a side effect.
 R1881s="$(mkrepo bgsibling)"; HOLD1881s="$TMPROOT/hold-1881s"; : > "$HOLD1881s"
-add_scanner "$R1881s" gamma 1; add_held_scanner "$R1881s" rho "$HOLD1881s" 0; commit_all "$R1881s"
+add_scanner "$R1881s" gamma 1; add_held_scanner "$R1881s" rho "$HOLD1881s" 0 gamma; commit_all "$R1881s"
 budgetfire "$R1881s" "git push" >/dev/null
 note_held rho
 rm -f "$HOLD1881s"
@@ -1206,6 +1235,9 @@ o1881t="$(budgetfire "$R1881t" "git push")"; c1881t=$?
 note_held tau
 _taupid1="$(cat "$TMPROOT/tau.pid" 2>/dev/null)"
 echo "a change" > "$R1881t/changed.txt"; commit_all "$R1881t"
+# The old run is still holding, and is stopped rather than released, so its holding file would end
+# this push's budget before the new run starts (#2206).
+rm -f "$(budget_ready "$R1881t")"
 o1881t2="$(budgetfire "$R1881t" "git push")"; c1881t2=$?
 note_held tau
 _taupid2="$(cat "$TMPROOT/tau.pid" 2>/dev/null)"
@@ -1223,12 +1255,12 @@ rm -f "$HOLD1881t"
 # A scanner that finished and FAILED inside the budget is still reported as failing, with the one
 # that ran out of time named beside it, since a finding outranks a missing verdict.
 R1881c="$(mkrepo outoftimefail)"; HOLD1881c="$TMPROOT/hold-1881c"; : > "$HOLD1881c"
-add_scanner "$R1881c" gamma 1; add_held_scanner "$R1881c" psi "$HOLD1881c" 0; commit_all "$R1881c"
+add_scanner "$R1881c" gamma 1; add_held_scanner "$R1881c" psi "$HOLD1881c" 0 gamma; commit_all "$R1881c"
 o1881c="$(budgetfire "$R1881c" "git push")"; c1881c=$?
 note_held psi; rm -f "$HOLD1881c"
 [ "$c1881c" -eq 2 ] && grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o1881c" \
   && grep -q 'test-gamma.sh' <<< "$o1881c" && grep -q 'test-psi.sh' <<< "$o1881c" \
-  && grep -q 'did not finish in 2 seconds' <<< "$o1881c" \
+  && grep -q -E 'did not finish in ([2-9]|1[0-9]) seconds' <<< "$o1881c" \
   && check "#1881 a failure inside the budget is reported as one, with the scanner that ran out of time named too" ok \
   || check "#1881 a failure inside the budget is reported as one, with the scanner that ran out of time named too" "exit=$c1881c out=$o1881c"
 
@@ -1477,12 +1509,17 @@ lib/pid-lock.sh could not be loaded
 lib/recorded-pid.sh could not be loaded
 could not be made"
 nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 = a state folder, whose runs folder it must name too]
-  local hooks="$TMPROOT/nokey-$1-hooks" repo hold out rc pid mark others=""
+  local hooks="$TMPROOT/nokey-$1-hooks" repo hold out rc pid mark others="" t0 took late=""
   nokey_hooks "$hooks" "$2"
   repo="$(mkrepo "nokey$1")"; hold="$TMPROOT/hold-nokey-$1"; : > "$hold"
   add_held_scanner "$repo" "nk$1" "$hold" 0; commit_all "$repo"
-  out="$(H="$hooks/scanners-before-push.sh" SCANNERS_STATE_DIR="${4:-$TMPROOT/nokey-$1-state}" SCANNERS_BUDGET_SECONDS=2 \
-         fire "$repo" "git push")"; rc=$?
+  # The budget ends once the scanner is holding (#2206), so a scanner that starts late is still the
+  # running scanner this case is about, and the gate returns long before the 20 it was given.
+  [ -z "${HELD_STARTS_LATE:-}" ] || late=", its scanner starting ${HELD_STARTS_LATE} seconds late"
+  t0="$(date +%s)"
+  out="$(H="$hooks/scanners-before-push.sh" SCANNERS_STATE_DIR="${4:-$TMPROOT/nokey-$1-state}" SCANNERS_BUDGET_SECONDS=20 \
+         SCANNERS_BUDGET_ENDS_WHEN="$(budget_ready "$repo")" SCANNERS_BUDGET_ENDS_NOT_BEFORE=2 fire "$repo" "git push")"; rc=$?
+  took=$(( $(date +%s) - t0 ))
   note_held "nk$1"
   pid="$(cat "$TMPROOT/nk$1.pid" 2>/dev/null)"
   while IFS= read -r mark; do
@@ -1492,13 +1529,39 @@ nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 =
   if [ "$rc" -eq 2 ] && [ -n "$pid" ] && hang_wait "! kill -0 $pid 2>/dev/null" \
      && grep -q 'stopped rather than left running' <<< "$out" && grep -q -F "$3" <<< "$out" \
      && grep -q 'a retry stops them' <<< "$out" && [ -z "$others" ] \
-     && { [ -z "${4:-}" ] || grep -q -F "$4/runs/" <<< "$out"; }; then
-    check "#1910 when a run cannot be left running ($2), it is stopped at the budget and the refusal says why, naming $3 and no other cause" ok
+     && { [ -z "${4:-}" ] || grep -q -F "$4/runs/" <<< "$out"; } && [ "$took" -lt 15 ]; then
+    check "#1910 when a run cannot be left running ($2$late), it is stopped at the budget and the refusal says why, naming $3 and no other cause" ok
   else
-    check "#1910 when a run cannot be left running ($2), it is stopped at the budget and the refusal says why, naming $3 and no other cause" "exit=$rc pid=${pid:-none} other causes named:${others:- none} out=$out"
+    check "#1910 when a run cannot be left running ($2$late), it is stopped at the budget and the refusal says why, naming $3 and no other cause" "exit=$rc pid=${pid:-none} took=${took}s other causes named:${others:- none} out=$out"
   fi
   rm -f "$hold"
 }
+# The case that failed on 2026-11-04 (#2206), made certain rather than left to the load: the held
+# scanner starts 3 seconds after the gate, later than the 2 second budget the case used to give.
+HELD_STARTS_LATE=3 nokey_case late pidlock 'lib/pid-lock.sh could not be loaded'
+# The early end is a setting for this suite, honoured only while the record of passes is a
+# throwaway, as it is in every case here and never for a real push (#2206, #2217). One push, the
+# same scanner (it starts late by the delay this case sets, then passes) and the file already there
+# with no floor, fired with a throwaway record and with the real one under a stand in home:
+# honoured, the budget ends at once and the push is refused; ignored, the scanner finishes inside
+# its budget and the push goes. The times are settings, not measured.
+EEHOME="$TMPROOT/earlyend-home"; mkdir -p "$EEHOME"
+REE="$(mkrepo earlyend)"; add_held_scanner "$REE" eta "$TMPROOT/earlyend-never-held" 0; commit_all "$REE"
+: > "$TMPROOT/earlyend-ready"
+oEE1="$(HELD_STARTS_LATE=2 SCANNERS_STATE_DIR="$TMPROOT/earlyend-state" SCANNERS_BUDGET_SECONDS=20 \
+        SCANNERS_BUDGET_ENDS_WHEN="$TMPROOT/earlyend-ready" fire "$REE" "git push")"; cEE1=$?
+[ "$cEE1" -eq 2 ] && grep -q 'did not finish in' <<< "$oEE1" \
+  && check "#2206 with a throwaway record of passes, the early end is honoured and the budget ends once its file exists" ok \
+  || check "#2206 with a throwaway record of passes, the early end is honoured and the budget ends once its file exists" "exit=$cEE1 out=$oEE1"
+# The refused push left its run going, as a push with a key does; it is let finish, so the second
+# push's scanner is the only one running.
+hang_wait "ls '$TMPROOT/earlyend-state/runs/'*/*/rc >/dev/null 2>&1"
+: > "$TMPROOT/earlyend-ready"
+oEE2="$( unset SCANNERS_STATE_DIR; HOME="$EEHOME" HELD_STARTS_LATE=2 SCANNERS_BUDGET_SECONDS=20 \
+         SCANNERS_BUDGET_ENDS_WHEN="$TMPROOT/earlyend-ready" fire "$REE" "git push")"; cEE2=$?
+[ "$cEE2" -eq 0 ] \
+  && check "#2206 with the real record of passes, the early end is ignored and the scanner gets its whole budget" ok \
+  || check "#2206 with the real record of passes, the early end is ignored and the scanner gets its whole budget" "exit=$cEE2 out=$oEE2"
 nokey_case listing listing 'repo-files.sh --changed'
 nokey_case pidlock pidlock 'lib/pid-lock.sh could not be loaded'
 nokey_case recorded recorded 'lib/recorded-pid.sh could not be loaded'
