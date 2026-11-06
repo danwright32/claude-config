@@ -2710,6 +2710,17 @@ a file the push does not carry, or any other kind stands as the judge gave it. A
 is listed under its own heading beside a block, and recorded in the row's detail as `withdrawn:`
 beside a pass, so how often it fires is read from the record.
 
+A push carrying no test whose every changed source line is blank or documentation is let through
+without asking the judge (#733). Documentation is a comment in the file's own language: `#` in
+Python, Ruby and Elixir, `//` and `/* */` elsewhere, with a `*` line trusted only where the whole
+file shows it inside an open block comment (#1238). Since #2247 a line lying wholly inside a Python
+docstring counts too: the first statement of a module, class or function when it is a plain
+string, found by Python's own parser (`hooks/lib/py-docstring-lines.py`) in the file before the
+change and after it. An ordinary string, a string that is not the first statement, code on the
+docstring's own line, a file either version of which does not parse, and every docstring in a file
+whose own code names `__doc__` (a usage message cut from it) are judged as code, as before, and so
+is every file that is not Python.
+
 The test judge is shown at most 60,000 bytes of diff in one call, test changes first. On 2026-10-31
 a push carrying 34,407 bytes of test changes beside a large code change was shown the first 30,000,
 the judge called a change untested whose test sat past the cut, and the push got through only one
