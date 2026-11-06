@@ -35,9 +35,8 @@ check(){ if [[ "$3" == *"$2"* ]]; then ok; else bad "$1"; echo "  expected to co
 command -v python3 >/dev/null 2>&1 || { echo "test-check-zsh-builtins: python3 is not on PATH, so nothing was verified." >&2; exit 2; }
 [ -f "$HOOK" ] || { bad "#2200 $HOOK does not exist"; printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"; exit 1; }
 
-# The looser copy: the hook, its judge and its libraries, with the judge's predicate made to never
-# fire. Checked to differ from the real judge, since a substitution that matched nothing would leave
-# a copy identical to the original and every looser run would prove nothing (L100).
+# The looser copy: the hook, its judge and its libraries, with both of the judge's predicates
+# (shadowed for log, tied_assignment for #2347) made to never fire.
 LOOSE="$WORKDIR/loose"; mkdir -p "$LOOSE/lib"
 cp "$HOOK" "$DIR/zsh_builtin_gate.py" "$LOOSE/"
 python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LOOSE/lib" push-scope.sh shell-words.py || bad "#2147 the hook helpers could not be installed into $LOOSE/lib"
