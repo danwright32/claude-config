@@ -240,6 +240,29 @@ test("a subagent's edit is held for itself, and restructure hands the question t
   expect((after.context ?? []).join(' ')).not.toContain('area-check:c1')
 })
 
+// #2136: the reply to a decision is worded for whoever took it. A subagent deciding its own held edit
+// is told to send it again itself; the main session, recording Dan's answer for a subagent's edit, is
+// told to pass that on to the agent.
+test("a subagent that decides its own held edit is told to send it again itself, not to tell an agent (#2136)", KIT, async ($, on) => {
+  const w = world($, on)
+  await edit($ as never, w, SLACK, { agentId: 'a1' })
+  const d = await decide($ as never, { call: 'c1', decision: 'proceed', reason: REASON }, { agentId: 'a1' })
+  expect(d.deny).toBe(undefined)
+  expect(said(d)).toContain('Send the Edit to src/lib/slack.ts again yourself, unchanged.')
+  expect(said(d)).not.toContain('tell that agent')
+  expect((await edit($ as never, w, SLACK, { agentId: 'a1' }, 'c2')).result).toBe('done')
+})
+
+test("the main session recording Dan's answer for a subagent's held edit is told to have that agent send it again (#2136)", KIT, async ($, on) => {
+  const w = world($, on)
+  await edit($ as never, w, SLACK, { agentId: 'a1' })
+  await decide($ as never, { call: 'c1', decision: 'restructure' }, { agentId: 'a1' })
+  w.ctl.answer = 'Proceed anyway'
+  const a = await askDan($ as never, 'c1')
+  expect(said(a)).toContain("The held Edit to src/lib/slack.ts was a subagent's: tell that agent, or a new one, to send it again, unchanged.")
+  expect(said(a)).not.toContain('again yourself')
+})
+
 test('asleep, restructure notes the question for the morning, one note per issue shown, and asks nobody', KIT, async ($, on) => {
   const w = world($, on)
   w.ctl.asleep = true

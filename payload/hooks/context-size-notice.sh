@@ -5,10 +5,11 @@
 #
 # Two notices read from the size of each request, both decided by Dan on 2026-11-01:
 #
-# - The context line (claude-config#1960). A builder (any subagent) or an orchestrator (a main
-#   session that has dispatched an agent or set a /goal) whose last request carried more than
-#   CONTEXT_LINE_TOKENS (200,000) is told, once per band of the line, to write down what it has
-#   decided and then restart or compact: an orchestrator puts decisions on their issues and the rest
+# - The context line (claude-config#1960, #2283). A builder (any subagent) or an orchestrator (a
+#   main session that has dispatched an agent or set a /goal) whose last request carried more than
+#   CONTEXT_LINE_TOKENS (330,000, Dan 2026-11-05) of work, its context above the floor of its first
+#   request or its first since its latest compaction, is told, once per band of the line, to write
+#   down what it has decided and then restart or compact: an orchestrator puts decisions on their issues and the rest
 #   in a handoff note, and tells Dan so he can /compact or start fresh; a builder writes the note and
 #   hands back so the main session gives the rest to a fresh agent.
 # - The long session nudge (claude-config#1940). A main session compacted

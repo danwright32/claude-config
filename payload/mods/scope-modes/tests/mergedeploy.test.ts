@@ -43,6 +43,18 @@ describe('the lists file of this Mac, read', () => {
     expect(why('{"v":1,"mergeOnly":[],"mayDeploy":["slate"]}')).toMatch(/mayDeploy entry that is not owner\/name/)
     expect(why('{"v":1,"mergeOnly":[{"repo":"o/r","mergeDeploys":"yes"}],"mayDeploy":[]}')).toMatch(/mergeDeploys that is not true or false/)
   })
+  test('adminMerge on a mergeOnly entry is read only as "green-pinned", is off when unsaid, and reaches the night and its policy (#2125)', () => {
+    const r = readRepoLists('{"v":1,"mergeOnly":[{"repo":"o/r","mergeDeploys":false,"adminMerge":"green-pinned"},{"repo":"o/q","mergeDeploys":false}],"mayDeploy":[]}')
+    expect('lists' in r && r.lists.mergeOnly).toEqual([
+      { repo: 'o/r', mergeDeploys: false, adminMerge: 'green-pinned' },
+      { repo: 'o/q', mergeDeploys: false },
+    ])
+    const night = nightRepos(r, [])
+    expect(policyOf(night, 'O/R')).toEqual({ kind: 'merge-only', repo: 'O/R', mergeDeploys: false, adminMerge: 'green-pinned' })
+    expect(policyOf(night, 'o/q')).toEqual({ kind: 'merge-only', repo: 'o/q', mergeDeploys: false })
+    const bad = readRepoLists('{"v":1,"mergeOnly":[{"repo":"o/r","mergeDeploys":false,"adminMerge":true}],"mayDeploy":[]}')
+    expect('why' in bad && bad.why).toBe('mods/sleep-repos.local.json gives o/r an adminMerge this reader does not know (only "green-pinned")')
+  })
 })
 
 describe('a bedtime answer, added to the lists file of this Mac', () => {

@@ -38,6 +38,9 @@
 #                          at a folder of their own). Copies are only ever removed when it exists
 #                          and sits inside this user's own per user temp folder, by real path.
 #   HEADLESS_DOM_LSOF      the lsof to tell this run's copy by, default lsof
+#   HEADLESS_DOM_CHROME_ERR a file to receive a copy of everything Chrome wrote on stderr, on every
+#                          way out, a complete page included, whose stderr is otherwise thrown away
+#                          (claude-config#2260: a test can then say why a page came back empty)
 #   HEADLESS_DOM_EXEC      1 to run Chrome IN PLACE of this script instead, for a caller that starts
 #                          and stops Chrome itself (below)
 #
@@ -87,7 +90,7 @@ LIMIT="${HEADLESS_DOM_DEADLINE:-60}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KILL_TREE="$HERE/../../hooks/lib/kill-tree.sh"
 work="$(mktemp -d "${TMPDIR:-/tmp}/headless-dom.XXXXXX")" || { echo "headless-dom.sh: could not make a scratch folder" >&2; exit 1; }
-trap 'rm -rf "$work"' EXIT
+trap '[ -n "${HEADLESS_DOM_CHROME_ERR:-}" ] && cp "$work/err" "$HEADLESS_DOM_CHROME_ERR" 2>/dev/null; rm -rf "$work"' EXIT
 
 # This user's own per user temp folder, the parent of getconf DARWIN_USER_TEMP_DIR, by its real
 # path (lsof reports /private/var where TMPDIR says /var). Built only from a lookup that succeeded,

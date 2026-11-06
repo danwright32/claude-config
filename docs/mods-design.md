@@ -2620,15 +2620,25 @@ and the band question is removed rather than kept beside it (L29). Three defects
   reads), and a shell append, read with mod-kit's own readers as one command only: `echo`, `printf
   '%s\n'` or `printf '<text>\n'` of text quoted whole, or `cat` fed a heredoc (quoted, or holding no
   `$`, backtick or backslash), with `>>` into the index and no other redirect, pipe, command or file
-  written (rules.ts `shellAppended`). Anything else to `MEMORY.md` (a second line, a changed line, a
-  line linking another file, another folder's index, `tee -a`, a write after the window, a write
-  before the memory file is saved) is asked about as before. Chosen: the cover is made when the
-  memory file's save lands, not at the press, so the line can never point at a file that was not
-  saved; and it lapses in silence, since Dan never answered about the index and a toast saying it
-  went unused would be noise. A write of the line that does not land gives the cover back for the
-  rest of the window, as an approval is given back; a shell command that failed spends it. A Bash
-  For good covering more than one file, and Dan's own permanent words, record no cover. The noun
-  (`isApproved`, #1483) does not answer for a cover: its one caller asks only about the lessons file.
+  written (rules.ts `shellAppended`). Since #2216 (after `printf ... >> MEMORY.md; tail -1
+  MEMORY.md` was asked about twice in #2181) that append may be followed by one plain read of the
+  index and nothing more: after `;`, `&&` or a new line, `tail` or `head` with at most a line count
+  (`-1`, `-n 3`, `-n3`), `cat` with no option, or `wc` with at most one of `-l`, `-w`, `-c`, `-m`,
+  naming the index alone by its absolute path (bare, or quoted whole) or by a bare `~/` (rules.ts
+  `readBack`). The append before it is judged exactly as it is alone. Still asked about: any other
+  second command or more than one, a read with a redirect, pipe, `tee`, substitution, glob,
+  variable, backslash, here doc or `..`, a read of another file or of the index and another, `tail
+  -f` or any other option, a reader led by `sudo`, `env`, `exec`, `!`, a group or an assignment,
+  `||` or `&` between the two, and a read before the append. Anything else to `MEMORY.md` (a
+  second line, a changed line, a line linking another file, another folder's index, `tee -a`, a
+  write after the window, a write before the memory file is saved) is asked about as before.
+  Chosen: the cover is made when the memory file's save lands, not at the press, so the line can
+  never point at a file that was not saved; and it lapses in silence, since Dan never answered about
+  the index and a toast saying it went unused would be noise. A write of the line that does not land
+  gives the cover back for the rest of the window, as an approval is given back; a shell command
+  that failed spends it. A Bash For good covering more than one file, and Dan's own permanent words,
+  record no cover. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
+  only about the lessons file.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
   which for a heredoc or a script was unreadable.
@@ -3496,6 +3506,32 @@ worktree-agent-a09a06788b6ba53ab in claude-config" (2026-10-29, for #1859), a na
   `modHookTsHold` that only tests called, is gone; its tests now assert which hold each change gets
   (the look, a message's words, or none), which the wrapper could not tell apart.
 
+### What #2294 changed, 2026-11-05
+
+Dan, 2026-11-05: "if nothing on screen changes, why even ask me to skip. If you're confident that
+nothing on screen changes don't ask me to make a decision and just skip design rounds
+automatically". The same day a skip question for #2173 said "Nothing on screen changes" of an edit
+adding a refusal Dan reads, so confidence comes from the guard's own reading, never the session's.
+
+- **What passes.** An Edit, MultiEdit, Write or git put back to an app's React screen file (a .tsx or
+  .jsx file that is no mod's hook file) that rules.ts `logicOnlyChange` reads as logic only: on the
+  lines the change touches, no JSX, no string but a module's name, no template literal, no colour
+  and no word a look is spelled in (`APP_LOOK_WORDS`: class, style, theme, colour, size, icon and
+  the like, read on each part of a camelCase name); across the whole file every comment, string,
+  JSX element, number and true or false the same, in order; no stylesheet or bare import coming or
+  going and no import swapped for another. Only when every file the call waits on passes so.
+- **What it leaves.** Nothing asked and no card. `auto:<the call's key>` in the mod's store holds a
+  `DesignRoundAutoPass`: kind `no-screen-change`, when, the tool, the files, the issue it would have
+  waited on, why (rules.ts `autoPassWhy`) and the call. Nothing reads it to let a call through.
+- **What stays held.** A mod's hook file (its own readings, #1138 to #2161, decide it, and a
+  message's words there are asked about, which keeps the #2173 shape held); any string, comment or
+  number change anywhere in an app file; a call also changing a file that is held for any other
+  reason; an issue whose answers or checkout cannot be read; text the reader cannot follow; and a
+  pass whose record cannot be written, which is held and asked about as before.
+- **Known risk.** Logic decides which element renders, so a condition changed (`a > 0` to `a >= 0`)
+  can show or hide something with no text changing. The issue allows logic; what Dan reads and how
+  it looks are what is held.
+
 ### What #2261 changed, 2026-11-05
 
 - **The guard says when it recorded an answer.** Its store is private, so nothing else could tell
@@ -3993,10 +4029,21 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
   whole. The gap: a line found elsewhere in the command, such as the title, passes too.
 - **When a fact cannot be read.** A log that cannot be read refuses the command, never reads as no
   decisions (L10). A fact the command does not depend on (no checkout, no GitHub repository, GitHub
-  not answering for a merge) lets it through, and the check's own failure lets the command through
-  with one dim line kept in the error file. Only this Mac's log is read, so a file decided on the
+  not answering for a merge) lets it through. Only this Mac's log is read, so a file decided on the
   other Mac is not asked for; every refusal that lists lines to paste says so, and the unreadable
   log refusal says it reads this Mac's log only.
+- **When the check itself fails (#2173, 2026-11-05).** The check's own failure (a throw, the
+  deadline, or the hook failing before its `try`, answered by the registration catch through
+  `neverThrows`) holds a command that could be a pull request one, as every guard's failure holds
+  its call since #2148: `mayActOnPr` in `hooks/prline.ts` asks whether its words hold `gh pr
+  create`, `gh pr edit`, `gh pr merge` or the merge helper, and `checkFailedRefusal` names why and
+  that the error is kept in `errors.jsonl`. It was let through with a dim line until then, on the
+  reasoning that a check at merge time would catch what was missed; it cannot, since a merge is the
+  last check there is, it runs the same code (a fault that fails one fails both), and it reads this
+  Mac's log only, so a merge from the other Mac, the web or GitHub's auto merge is never checked.
+  The same check already refused when its log could not be read, and a false hold costs one refused
+  command that names why. Any other command (`gh issue create`, `gh pr view`) cannot be one it
+  refuses, so it goes ahead with one dim line kept in the error file, as before.
 
 ### The weekly line and escalation, built 2026-11-05 (#1511)
 

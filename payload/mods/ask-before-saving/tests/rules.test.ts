@@ -719,7 +719,7 @@ test('an Edit applied to a file leaves it with its old text replaced once, or no
 
 test('a shell append adds its text only as one echo, printf or cat of quoted text with >> into the index and nothing else', () => {
   const shown = '~/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md'
-  const appended = (command: string) => shellAppended(command, pipeline(command), commandWrites(command, '/Users/dan/Apps/slate', HOME), IDX)
+  const appended = (command: string) => shellAppended(command, pipeline(command), commandWrites(command, '/Users/dan/Apps/slate', HOME), IDX, HOME)
   expect(appended(`echo '${LINE}' >> ${shown}`)).toBe(`${LINE}\n`)
   expect(appended(`echo "${LINE}" >> "${IDX}"`)).toBe(`${LINE}\n`)
   expect(appended(`printf '%s\\n' '${LINE}' >> ${shown}`)).toBe(`${LINE}\n`)
@@ -749,4 +749,80 @@ test('a shell append adds its text only as one echo, printf or cat of quoted tex
     `cat >> ${shown} <<<'${LINE}'`,
   ]
   for (const command of refused) expect(`${command}: ${appended(command)}`).toBe(`${command}: undefined`)
+})
+
+// #2216: after a For good, `printf '%s\n' '<line>' >> <index>; tail -1 <index>` was asked about,
+// because one command was all the append took. An append followed by one plain read of the index
+// itself (tail, head, cat or wc, by ; or && or a new line) adds just what the append adds; any
+// other second command, or anything the reader cannot read whole, is still asked about.
+test('a shell append may be followed by one plain read of the index, and by nothing else (#2216)', () => {
+  const shown = '~/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md'
+  const appended = (command: string) => shellAppended(command, pipeline(command), commandWrites(command, '/Users/dan/Apps/slate', HOME), IDX, HOME)
+  const passes = [
+    `printf '%s\\n' '${LINE}' >> ${IDX}; tail -1 ${IDX}`,
+    `echo '${LINE}' >> ${shown}; tail -1 ${shown}`,
+    `echo '${LINE}' >> ${shown} && tail -n 3 ${shown}`,
+    `echo '${LINE}' >> ${shown}\ntail -n2 ${IDX}`,
+    `echo '${LINE}' >> ${shown}; head -5 '${IDX}'`,
+    `echo '${LINE}' >> ${shown}; cat "${IDX}"`,
+    `echo '${LINE}' >> ${shown}; wc -l ${shown}`,
+    `echo '${LINE}' >> ${shown}; wc ${shown}`,
+    `cat >> ${shown} <<'EOF'\n${LINE}\nEOF\ntail -1 ${shown}`,
+  ]
+  for (const command of passes) expect(`${command}: ${appended(command)}`).toBe(`${command}: ${LINE}\n`)
+  // A read inside the append's own quotes is text it appends, read as such, never as a read.
+  expect(appended(`echo '${LINE}; tail -1 ${shown}' >> ${shown}`)).toBe(`${LINE}; tail -1 ${shown}\n`)
+  const refused = [
+    // A second command that writes: anywhere else, through tee, by a redirect, or over the index.
+    `echo '${LINE}' >> ${shown}; echo x >> ${MEMORY_DIR}/notes.md`,
+    `echo '${LINE}' >> ${shown}; tail -1 ${shown} | tee ${MEMORY_DIR}/notes.md`,
+    `echo '${LINE}' >> ${shown}; tail -1 ${shown} > /tmp/y`,
+    `echo '${LINE}' >> ${shown}; tail -1 ${shown} 2>/dev/null`,
+    `echo '${LINE}' >> ${shown}; cat ${shown} > ${shown}`,
+    `echo '${LINE}' >> ${shown}; cat ${shown} >> ${shown}`,
+    // A second command that runs anything else, or a reader run by something else or with a
+    // variable set before it.
+    `echo '${LINE}' >> ${shown}; rm ${shown}`,
+    `echo '${LINE}' >> ${shown}; tail -f ${shown}`,
+    `echo '${LINE}' >> ${shown}; sudo tail -1 ${shown}`,
+    `echo '${LINE}' >> ${shown}; env tail -1 ${shown}`,
+    `echo '${LINE}' >> ${shown}; DYLD_INSERT_LIBRARIES=/tmp/x.dylib tail -1 ${shown}`,
+    `echo '${LINE}' >> ${shown}; wc --files0-from=/etc/passwd`,
+    `echo '${LINE}' >> ${shown}; cat -v ${shown}`,
+    // A read of another file, or of the index and another.
+    `echo '${LINE}' >> ${shown}; tail -1 /etc/passwd`,
+    `echo '${LINE}' >> ${shown}; tail -1 ${MEMORY_DIR}/notes.md`,
+    `echo '${LINE}' >> ${shown}; cat ${shown} /etc/passwd`,
+    `echo '${LINE}' >> ${shown}; tail -1 "${shown}"`,
+    `echo '${LINE}' >> ${shown}; tail -1 ${MEMORY_DIR}/../memory/MEMORY.md`,
+    // Substitution, a pipe, a glob, a variable, a here doc, or a backslash in the read.
+    `echo '${LINE}' >> ${shown}; tail -1 $(echo ${shown})`,
+    `echo '${LINE}' >> ${shown}; tail -1 \`echo ${shown}\``,
+    `echo '${LINE}' >> ${shown}; tail -1 ${shown} | head -1`,
+    `echo '${LINE}' >> ${shown}; tail -1 ${MEMORY_DIR}/MEMORY.m?`,
+    `echo '${LINE}' >> ${shown}; tail -1 ${MEMORY_DIR}/*.md`,
+    `echo '${LINE}' >> ${shown}; tail -1 $HOME/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md`,
+    `F=${shown}; echo '${LINE}' >> "$F"; tail -1 "$F"`,
+    `echo '${LINE}' >> ${shown}; cat <<EOF\n${LINE}\nEOF`,
+    `echo '${LINE}' >> ${shown}; tail -1 ${MEMORY_DIR}/MEMORY\\.md`,
+    // Joined by anything but ; && or a new line: || runs it only when the append fails, & beside it.
+    `echo '${LINE}' >> ${shown} || tail -1 ${shown}`,
+    `echo '${LINE}' >> ${shown} & tail -1 ${shown}`,
+    // More than one trailing command, or the read before the append.
+    `echo '${LINE}' >> ${shown}; tail -1 ${shown}; tail -1 ${shown}`,
+    `echo '${LINE}' >> ${shown}; tail -1 ${shown}; echo x >> ${MEMORY_DIR}/notes.md`,
+    `tail -1 ${shown}; echo '${LINE}' >> ${shown}`,
+    // A read the shell would only see inside a heredoc that never ends, where it is text appended.
+    `cat >> ${shown} <<'EOF'\n${LINE}\ntail -1 ${shown}`,
+    `cat >> ${shown} <<'EOF'\ntail -1 ${shown}`,
+    // Anything leading the read: a negation, a group, exec.
+    `echo '${LINE}' >> ${shown}; ! tail -1 ${shown}`,
+    `echo '${LINE}' >> ${shown}; (tail -1 ${shown})`,
+    `echo '${LINE}' >> ${shown}; exec tail -1 ${shown}`,
+    // An append that was refused alone is refused with a read after it too.
+    `echo '${LINE}' > ${shown}; tail -1 ${shown}`,
+    `echo "${LINE} $(whoami)" >> ${shown}; tail -1 ${shown}`,
+  ]
+  // Every one let through is named at once, so a looser check shows each case it would let past.
+  expect(refused.filter(command => appended(command) !== undefined)).toEqual([])
 })
