@@ -1,6 +1,7 @@
 #!/bin/bash
 # PreToolUse gate: refuse a Bash command whose `log`, in command position, would run zsh's own
-# builtin rather than /usr/bin/log (claude-config#2200).
+# builtin rather than /usr/bin/log (claude-config#2200), and one that assigns path or another name
+# zsh ties to an uppercase twin, which replaces the command search path (claude-config#2347).
 #
 # WHY. zsh, which runs the Bash tool on both Macs, has a builtin named log (it lists logins), and a
 # builtin wins over a program on PATH. Given any argument it prints `(eval):log:1: too many
@@ -20,7 +21,8 @@
 #
 # When it cannot read the command word by word (no python3, the judge or lib/shell-words.py missing,
 # a payload nothing can parse or read as a call), it refuses only a command whose text puts log and
-# an argument at the start of a command or a quoted string, saying it could not be read, and erring
+# an argument at the start of a command or a quoted string, or plainly assigns a tied name (the
+# TIED_* readings below), saying it could not be read, and erring
 # toward refusing since it cannot tell which shell runs it; everything else passes. The fix is always
 # one word, so there is no override.
 #
