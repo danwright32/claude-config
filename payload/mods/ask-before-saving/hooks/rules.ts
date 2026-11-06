@@ -711,10 +711,48 @@ const UNCHANGED = /^[^\\$`\n]+$/
  * into the index and no other redirect, pipe or command beside it, writing nothing else, by mod-kit's
  * one reader of what a command writes and runs. echo's and printf's text must be quoted whole in the
  * command, single or double, so the shell neither splits it nor reads its brackets as a pattern.
- * Anything else is undefined, and is asked about. `command` is the command as written, `cmds` and
- * `w` mod-kit's reading of it.
+ * One plain read of the index may follow it (#2216, readBack). Anything else is undefined, and is
+ * asked about. `command` is the command as written, `cmds` and `w` mod-kit's reading of it, `home`
+ * the home folder a read's `~/` names.
  */
-export const shellAppended = (command: string, cmds: readonly ShellCommand[], w: IndexWrites, index: string): string | undefined => {
+export const shellAppended = (command: string, cmds: readonly ShellCommand[], w: IndexWrites, index: string, home: string): string | undefined => {
+  if (cmds.length === 1) return appendAlone(command, cmds, w, index)
+  const read = cmds.length === 2 ? readBack(command, index, home) : undefined
+  const second = cmds[1]
+  if (!read || !second || Object.keys(second).some(k => !READ_KEYS.has(k)) || JSON.stringify(second.words) !== JSON.stringify(read.words)) return undefined
+  return appendAlone(read.append, cmds.slice(0, 1), w, index)
+}
+
+// The one read an append of the index line may be followed by (#2216): `tail` or `head` with at most
+// a line count (`-n 3`, `-n3`, `-3`), `cat` alone, or `wc` with at most one of -l, -w, -c, -m, of the
+// index named plainly: its absolute path, bare or quoted whole, or `~/` and the rest bare. Matched on
+// the command as written, at its very end, after a ; && or new line, so nothing leads it (no runner,
+// assignment, negation, group or exec) and nothing follows it (no redirect, pipe or second file);
+// its file holds no $, backtick, backslash, glob, space or `..`. mod-kit's reading must then see
+// exactly the append and this one command, with these words and nothing else read of it.
+const READ_BACK = /(?:;|&&|\n)[ \t]*((?:tail|head)(?:[ \t]+(?:-n[ \t]*\d+|-\d+))?|cat|wc(?:[ \t]+-[lwcm])?)[ \t]+('[A-Za-z0-9_./-]+'|"[A-Za-z0-9_./-]+"|~?[A-Za-z0-9_./-]+)[ \t]*$/
+// What mod-kit's reading may give of that read beyond its words: which words were quoted, its folder.
+const READ_KEYS = new Set(['words', 'literal', 'folder'])
+
+/**
+ * The read at the end of `command` that may follow an append of the index line (READ_BACK), as the
+ * words mod-kit reads it with, and the command before it; undefined when its end is no such read of
+ * `index`, or what is before it ends in another operator.
+ */
+export const readBack = (command: string, index: string, home: string): { append: string; words: string[] } | undefined => {
+  const m = READ_BACK.exec(command)
+  if (!m || m[1] === undefined || m[2] === undefined) return undefined
+  const append = command.slice(0, m.index)
+  if (!append.trim() || /[;&|]\s*$/.test(append)) return undefined
+  const word = m[2]
+  const file = /^['"]/.test(word) ? word.slice(1, -1) : word
+  // `~` is the home folder only bare, at the start; quoted it names a folder called ~.
+  const path = word.startsWith('~/') ? home + file.slice(1) : file
+  if (!path.startsWith('/') || /(?:^|\/)\.\.(?:\/|$)/.test(path) || resolvePath(path, '/', home) !== index) return undefined
+  return { append, words: [...m[1].split(/[ \t]+/), file] }
+}
+
+const appendAlone = (command: string, cmds: readonly ShellCommand[], w: IndexWrites, index: string): string | undefined => {
   const into = w.files[0]
   if (cmds.length !== 1 || w.files.length !== 1 || into?.path !== index || into.edits || w.unnamed.length || w.runs?.length || w.changes?.length || w.byGit?.length) return undefined
   const c = cmds[0]
