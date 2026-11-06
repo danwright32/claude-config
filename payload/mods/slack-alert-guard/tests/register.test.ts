@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVE, CHANGE, HEADER, SCAN_MS, wordingKey } from '../hooks/rules.ts'
+import { APPROVE, CHANGE, HEADER, REEXPORT_HOPS, SCAN_MS, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
@@ -104,7 +104,11 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       if (argv[3] === 'grep') {
         if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
         const patterns = argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [new RegExp(a, 'i')] : []))
-        const hits = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && patterns.every(re => re.test(files[p] ?? '')))
+        // The pathspecs after --, as git reads them: '.' is every file, '*.ts' any file ending .ts.
+        const specs = argv.slice(argv.indexOf('--') + 1)
+        const inSpec = (p: string) => specs.some(s => s === '.' || (s.startsWith('*.') && p.endsWith(s.slice(1))))
+        // git grep reads line by line, so each pattern must match within one line of the file.
+        const hits = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && inSpec(p) && patterns.every(re => (files[p] ?? '').split('\n').some(l => re.test(l))))
         if (!hits.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
         return ok(hits.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''))
       }
@@ -372,7 +376,8 @@ test('a template no file sends passes, after a search that ran; so does a file o
   const DIGEST = '/w/app/lib/templates/digest.ts'
   const w = world($, on, { files: { ...sent.files, [DIGEST]: 'export const digest = `Nightly digest ready`\n' } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'Nightly digest ready', new_string: 'Nightly digest is ready' }))).toBe('')
-  expect(grepped(w)).toBe(1)
+  // One grep for files sending it, one for files handing it on (#2286).
+  expect(grepped(w)).toBe(2)
   // Every git call is bounded by the scan's deadline.
   expect(w.gits.every(g => typeof g.timeoutMs === 'number' && g.timeoutMs > 0 && g.timeoutMs <= SCAN_MS)).toBe(true)
   expect(refusalOf(await call($, { tool: 'Write', file_path: '/elsewhere/messages.ts', content: 'export const m = "Disk is full"\n' }))).toBe('')
@@ -405,6 +410,78 @@ test('a search that cannot finish, runs past its deadline, or meets an unreadabl
   expect(unread).toContain('could not check')
   expect(unread).toContain(SENDER)
   expect(w.ran).toEqual([])
+})
+
+// claude-config#2286: the template reaches its sender through files that import and re-export it.
+const BARREL = '/w/app/lib/templates/index.ts'
+const BARREL_TEXT = "export * from './deploy'\n"
+const NOTIFY = '/w/app/lib/notify.ts'
+const notifies = (from: string) =>
+  `import { deployFailed } from '${from}'\nexport const notify = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: deployFailed(id) }) })\n`
+const reexports = (from: string) => `export { deployFailed } from '${from}'\n`
+
+test('a template re-exported once, then sent to Slack, is held naming the file that sends it', withKit, async ($, on) => {
+  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [NOTIFY]: notifies('./templates') } })
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(TEMPLATE)
+  expect(why).toContain(`which ${NOTIFY} sends to Slack`)
+  expect(w.ran).toEqual([])
+  await ask($, w, why, APPROVE)
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+})
+
+test('a template re-exported twice, then sent to Slack, is held naming the file that sends it', withKit, async ($, on) => {
+  const MESSAGES = '/w/app/lib/messages.ts'
+  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [MESSAGES]: reexports('./templates'), [NOTIFY]: notifies('./messages') } })
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(`which ${NOTIFY} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
+test(`a template handed on through ${REEXPORT_HOPS} files is followed; through more, the edit is held as could not check`, withKit, async ($, on) => {
+  const ALPHA = '/w/app/lib/alpha.ts'
+  const BRAVO = '/w/app/lib/bravo.ts'
+  const CHARLIE = '/w/app/lib/charlie.ts'
+  const chain = { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [ALPHA]: reexports('./templates'), [BRAVO]: reexports('./alpha') }
+  const w = world($, on, { files: { ...chain, [NOTIFY]: notifies('./bravo') } })
+  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${NOTIFY} sends to Slack`)
+  // One file more than the guard follows: it cannot say whether that file is sent, so it holds.
+  w.files[CHARLIE] = reexports('./bravo')
+  w.files[NOTIFY] = notifies('./charlie')
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain('could not check')
+  expect(why).toContain(`more than ${REEXPORT_HOPS} files`)
+  expect(why).toContain(CHARLIE)
+  expect(w.ran).toEqual([])
+})
+
+test('a re-export cycle ends: with a sender beside it the edit is held, with none it passes', withKit, async ($, on) => {
+  const ALPHA = '/w/app/lib/alpha.ts'
+  const BRAVO = '/w/app/lib/bravo.ts'
+  const loop = { [TEMPLATE]: TEMPLATE_TEXT, [ALPHA]: "export * from './templates/deploy'\nexport * from './bravo'\n", [BRAVO]: "export * from './alpha'\n" }
+  const w = world($, on, { files: { ...loop, [NOTIFY]: notifies('./bravo') } })
+  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${NOTIFY} sends to Slack`)
+  expect(w.ran).toEqual([])
+  delete w.files[NOTIFY]
+  const before = grepped(w)
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  // Each level of the search is one grep for senders and one for files handing it on, and the
+  // loop back to alpha.ts adds no level.
+  expect(grepped(w) - before).toBeGreaterThan(2)
+  expect(grepped(w) - before).toBeLessThanOrEqual(2 * (REEXPORT_HOPS + 1))
+  expect(w.ran.length).toBe(1)
+})
+
+test('a template re-exported but sent to Slack by nothing passes, after the chain was followed', withKit, async ($, on) => {
+  const MESSAGES = '/w/app/lib/messages.ts'
+  const USES = '/w/app/lib/report.ts'
+  const w = world($, on, {
+    files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [MESSAGES]: reexports('./templates'), [USES]: "import { deployFailed } from './messages'\nconsole.log(deployFailed('1'))\n" },
+  })
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  // Past the first grep: the barrel and messages.ts were each searched for.
+  expect(grepped(w)).toBeGreaterThan(2)
+  expect(w.ran.length).toBe(1)
 })
 
 test('the calls waiting on Dan are dropped at session end', withKit, async ($, on) => {

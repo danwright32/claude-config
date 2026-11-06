@@ -21,6 +21,8 @@ export const APPROVE = 'Approve wording'
 export const CHANGE = 'Change wording'
 /** How long the search for a file that sends a template may take, every git call and read in it. */
 export const SCAN_MS = 3000
+/** How many files that import and re-export a template the search follows before it holds as could not check (#2286). */
+export const REEXPORT_HOPS = 3
 
 // Files that can post: code and the config that carries a message. Prose files post nothing.
 const CODE = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'sh', 'bash', 'zsh', 'swift', 'kt', 'java', 'php', 'cs', 'rs', 'json', 'yml', 'yaml'])
@@ -190,6 +192,43 @@ export const refersTo = (senderRel: string, text: string, templateRel: string): 
     } else if (tok.includes('.') && byModule(tok, false)) return true
   }
   return importedModules(lower).some(m => byModule(m, true))
+}
+
+/**
+ * Whether a file can hand what it imports on to another file (#2286): a JavaScript or TypeScript
+ * file with an export, or any python module, since python exposes every name a module imports.
+ * Other languages are not followed.
+ */
+export const handsOn = (rel: string, text: string): boolean => {
+  const ext = extOf(rel)
+  if (ext === 'py') return true
+  if (ext === undefined || !JS.has(ext)) return false
+  return /(^|\n)[ \t]*export[\s{*]/.test(text) || /(^|[^.\w$])(module\.exports|exports\.[\w$]+\s*=)/.test(text)
+}
+
+/** The files a template may be handed on through, as git pathspecs. */
+export const LINK_PATHS = [...JS, 'py'].map(e => `*.${e}`)
+
+/** The search words for several files at once, for git grep -E: one word bare, several as alternatives. */
+export const termsPattern = (rels: string[]): string => {
+  const terms = [...new Set(rels.map(r => escapeRe(searchTerm(r))))]
+  return terms.length === 1 ? (terms[0] as string) : `(${terms.join('|')})`
+}
+
+/**
+ * The line a file handing on any of `rels` must hold, for git grep -E with case ignored: an import,
+ * require or from line naming one, or its file name with its extension. Written without \b, which
+ * macOS git grep -E reads as matching nothing.
+ */
+export const linkPattern = (rels: string[]): string => {
+  const alts = new Set<string>()
+  for (const r of rels) {
+    const t = escapeRe(searchTerm(r))
+    alts.add(`(from|require|import).*${t}`)
+    const ext = extOf(r)
+    if (ext !== undefined) alts.add(`${t}\\.${escapeRe(ext)}`)
+  }
+  return [...alts].join('|')
 }
 
 /** How a file's strings are read: python through mod-kit's reader, YAML with its plain values, a hash comment language, or a C-like one. */
