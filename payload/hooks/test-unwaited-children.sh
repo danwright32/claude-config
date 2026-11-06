@@ -316,7 +316,8 @@ case "$missing" in *'could not be read'*) missing_named=1 ;; esac
 # reading of a heredoc to fall back on, so the scan refuses to run and names the missing reader,
 # rather than judging every file with a reading of its own that could pass what bash runs.
 mkdir -p "$TMPROOT/noreader"
-cp "$SCAN" "$TMPROOT/noreader/unwaited-children.py"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMPROOT/noreader" unwaited-children.py \
+  || check "#2147 the hook helpers install into $TMPROOT/noreader" "the install refused"
 printf 'echo hi\n' > "$TMPROOT/plain.sh"
 nr="$(printf 'plain.sh\n' | python3 "$TMPROOT/noreader/unwaited-children.py" --root "$TMPROOT" 2>&1)"; nr_rc=$?
 nr_named=0
@@ -328,8 +329,8 @@ case "$nr" in *'shell-words.py'*) nr_named=1 ;; esac
 # what test-push-scope.sh refuses (#1017), and a copy of the scan run beside a copy of the reader
 # shows whether this scan leaves one.
 mkdir -p "$TMPROOT/pyc"
-cp "$SCAN" "$TMPROOT/pyc/unwaited-children.py"
-cp "$DIR/lib/shell-words.py" "$TMPROOT/pyc/shell-words.py"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMPROOT/pyc" unwaited-children.py shell-words.py \
+  || check "#2147 the hook helpers install into $TMPROOT/pyc" "the install refused"
 printf 'plain.sh\n' | python3 "$TMPROOT/pyc/unwaited-children.py" --root "$TMPROOT" >/dev/null 2>&1; pyc_rc=$?
 pyc_left="$(ls "$TMPROOT/pyc/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
 [ "$pyc_rc" = 0 ] && [ "$pyc_left" = 0 ] \

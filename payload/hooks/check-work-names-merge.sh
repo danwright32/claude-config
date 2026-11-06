@@ -35,8 +35,10 @@
 #
 # Seams, for the tests: WN_MERGE_READ_TRIES (3 in all), WN_MERGE_READ_RETRY_SECONDS (2),
 # WN_MERGE_READ_BUDGET_SECONDS (15, against a hook timeout of 30; MT_GATE_READ_BUDGET_SECONDS, which
-# merge-when-ready.sh sets, when it is unset), WN_MERGE_SLEEP (sleep), all chosen, not measured;
-# WN_MERGE_SCANNER (the scanner file).
+# merge-when-ready.sh sets, when it is unset; either is clamped to 15), WN_MERGE_SLEEP (sleep), all
+# chosen, not measured; WN_MERGE_SCANNER (the scanner file, honoured only with HOOK_TESTS_RUNNING=1);
+# WN_MERGE_CLOCK_FILE (a test clock that moves this hook's clock forward only, so it can make the
+# gate refuse sooner and never later, wn_clock_catch_up).
 
 set -uo pipefail
 
@@ -59,7 +61,12 @@ WHAT="Cannot tell whether this merge publishes a work organisation or repository
   exit 2
 }
 
-SCANNER="${WN_MERGE_SCANNER:-$HOOK_DIR/lib/work-names.py}"
+# WN_MERGE_SCANNER names the scanner whose answer is the verdict, so it is honoured only under the
+# hooks' own test runner, which exports HOOK_TESTS_RUNNING=1 to every suite (run-all-tests.sh). This
+# hook reads Claude Code's own environment, and a script named there that exits 0 would approve every
+# merge; anywhere else the gate's own scanner judges, whatever the variable says (claude-config#2217).
+SCANNER="$HOOK_DIR/lib/work-names.py"
+[ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "${WN_MERGE_SCANNER:-}" ] && SCANNER="$WN_MERGE_SCANNER"
 SCOPE_PATH="payload/hooks/lib/work-names.py"
 
 # On stderr with exit 2 rather than through deny(), which builds its JSON with jq, one of the tools
@@ -130,17 +137,54 @@ wn_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; e
 READ_TRIES="$(wn_num "${WN_MERGE_READ_TRIES:-}" 3)"
 READ_WAIT="$(wn_num "${WN_MERGE_READ_RETRY_SECONDS:-}" 2)"
 READ_DEADLINE="$(mt_gate_read_budget "${WN_MERGE_READ_BUDGET_SECONDS:-}" 15)"
+# Capped, whichever setting named it (claude-config#2217). Every number here is a setting, not
+# measured: the hook timeout settings.hooks.json registers (30), the most the work repository list
+# is given after these reads (12), and so a cap of 15 that leaves 3 for the refusal itself. A longer
+# budget is clamped to the cap rather than ignored, since it asks for as long as possible and the cap
+# is the longest this hook can honour; ignoring it would hand the choice to the next setting, which
+# may be just as long. That holds even where merge-when-ready.sh asks this gate under no hook timeout
+# with a longer budget. mt_gate_read_budget has already refused anything but digits, so a value
+# whole_above_zero (lib/whole-number.sh) refuses is zero however written, and stays zero. Otherwise
+# it hands the value back with its leading zeros cut, since the shell reads them as octal and a
+# budget of 08 crashed the gate; then three or more digits are past the cap however the shell would
+# read them, too long for its arithmetic included.
+READ_BUDGET_CAP=15
+if whole_above_zero "$READ_DEADLINE" READ_DEADLINE; then
+  case "$READ_DEADLINE" in ???*) READ_DEADLINE="$READ_BUDGET_CAP" ;; esac
+  [ "$READ_DEADLINE" -le "$READ_BUDGET_CAP" ] || READ_DEADLINE="$READ_BUDGET_CAP"
+else
+  READ_DEADLINE=0
+fi
 READ_SLEEP="${WN_MERGE_SLEEP:-sleep}"
 BUDGET_SPENT="this hook's read budget of $READ_DEADLINE seconds was spent before it could be read"
 TRIED_WITHIN=". Tried within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)"
 read_again(){ mt_retry_read "$READ_TRIES" "$READ_WAIT" "$READ_SLEEP" "$READ_DEADLINE" "" "$1"; }
 
+# The test clock (claude-config#2169): WN_MERGE_CLOCK_FILE names a file a test's fake gh writes a
+# reading of this hook's clock into, so a read can take seconds without a real wait (L290, L524). It
+# moves SECONDS FORWARD only, so whoever can set the variable can make this gate refuse sooner, never
+# later. A reading that is not one to three plain digits (a negative, one too long to be a clock, which
+# bash would wrap to 0, or text bash arithmetic would evaluate) is ignored, leaving the real clock: the
+# gate exactly as it is with no file, so ignoring never lets through what the gate would refuse. Only a
+# regular file is opened, since a fifo would hold the hook until its timeout, and a hook killed there
+# gives no verdict at all.
+wn_clock_catch_up(){
+  local file="${WN_MERGE_CLOCK_FILE:-}" reading=""
+  { [ -n "$file" ] && [ -f "$file" ]; } || return 0
+  IFS= read -r -n 8 reading < "$file" 2>/dev/null
+  case "$reading" in [0-9]|[0-9][0-9]|[0-9][0-9][0-9]) ;; *) return 0 ;; esac
+  if [ "$reading" -gt "$SECONDS" ]; then SECONDS="$reading"; fi
+  return 0
+}
+
 read_view(){
+  wn_clock_catch_up
   if [ "$SECONDS" -gt "$READ_DEADLINE" ]; then
     envelope=$(jq -nc --arg e "$BUDGET_SPENT" '{found: false, wrongRepo: "", notFound: false, error: $e}')
     return 1
   fi
   envelope=$(mt_pr_view "$pr" "number,url,baseRefOid,title,body,commits" "$slug" "$repo_flag")
+  wn_clock_catch_up
   mt_view_class "$envelope"
 }
 read_again read_view; view_rc=$?
@@ -178,10 +222,14 @@ fi
 # The scope: the scanner at the base commit. Only gh's own 404 is "not guarded"; any other failure is
 # unknown, and refused (L42).
 read_scope(){
+  local rc
+  wn_clock_catch_up
   if [ "$SECONDS" -gt "$READ_DEADLINE" ]; then
     MT_READ_STATE="unknown"; MT_READ_ERR="$BUDGET_SPENT"; return 1
   fi
-  mt_api_read /dev/null "$view_account" "repos/$api_slug/contents/$SCOPE_PATH?ref=$base_oid"
+  mt_api_read /dev/null "$view_account" "repos/$api_slug/contents/$SCOPE_PATH?ref=$base_oid"; rc=$?
+  wn_clock_catch_up
+  return "$rc"
 }
 read_again read_scope; scope_rc=$?
 scope_what="$SCOPE_PATH at the base commit $base_oid of $api_slug"
@@ -220,6 +268,7 @@ printf '%s' "$view" | jq -j '
 # The scan also reads the work repository list through GitHub (--work-repos, claude-config#2111), so
 # it gets what is left before the hook's own timeout, less a margin for the refusal: a hook killed at
 # its timeout gives no verdict at all, and this one must refuse in its own words instead.
+wn_clock_catch_up
 repos_budget=$(( READ_DEADLINE + 12 - SECONDS ))
 [ "$repos_budget" -ge 3 ] || deny "$WHAT: $BUDGET_SPENT: the work repository list, which the messages are checked against, had no time left to be read."
 findings=$(WORK_NAMES_REPOS_BUDGET_SECONDS="$repos_budget" python3 "$SCANNER" --texts0-from "$STREAM" --work-repos 2>&1); scan_rc=$?

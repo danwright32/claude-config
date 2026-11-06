@@ -457,6 +457,27 @@ fire_push "git push origin main" 0
 check "a diff over the cap is skipped and says the size and the cap" "over the 300 KB cap" "$OUT"
 check_eq "and starts nothing" 2 "$(calls)"
 
+# #2307: a diff over the cap only because of an embedded image is read with the image's base64 left
+# out, and the start line names what was not read. The big file is removed in a push of its own
+# first (its removal is over the cap too, so it is skipped), so this push's diff holds only the image.
+G rm -q src/huge.ts
+G commit -q -m "remove huge"
+G push -q origin main 2>/dev/null
+fire_push "git push origin main" 0
+python3 -c '
+import sys
+with open(sys.argv[1], "w") as f:
+    f.write("export const logo = \"data:image/png;base64," + "QUJD" * 100000 + "\";\n")
+    f.write("export const size = 64;\n")
+' "$REPO/src/logo.ts"
+G add src/logo.ts; G commit -q -m logo
+G push -q origin main 2>/dev/null
+fire_push "git push origin main" 0
+check "#2307 an image over the cap is read with its base64 left out" "started in the background" "$OUT"
+check "#2307 and the start line names it by file and line" "src/logo.ts line 1" "$OUT"
+check "#2307 saying what kind of thing was left out" "embedded base64" "$OUT"
+wait_for_final "$(G rev-parse HEAD)" && ok || bad "#2307 that review finishes before section 4 counts calls"
+
 # ===========================================================================
 # 4. The deadline: a review that does not return is recorded as unfinished, and the fake is killed.
 # ===========================================================================
@@ -541,13 +562,14 @@ check_eq "a session in another repository is shown nothing" "" "$OUT"
 . "$DIR/lib/ai-review-common.sh"
 stale_key="$(ar_repo_key "$REPO")"
 stale_sha="0000000000000000000000000000000000000abc"
-printf 'repo=repo\nbranch=fix/dead\nsha=%s\nstarted=%s\nmodel=sonnet\ndeadline=240\n' \
+printf 'repo=repo\nrepository=example/repo\nbranch=fix/dead\nsha=%s\nstarted=%s\nmodel=sonnet\ndeadline=240\n' \
   "$stale_sha" "$(( $(date +%s) - 1000 ))" > "$AI_REVIEW_STATE_DIR/$stale_key-$stale_sha.txt.pending"
 nudge n1
 check "a review pending past its deadline is reported once as never finished" "was started and never finished" "$OUT"
 check "naming its branch" "fix/dead" "$OUT"
 [ -e "$AI_REVIEW_STATE_DIR/$stale_key-$stale_sha.txt.pending" ] && bad "and the stale pending file is retired" || ok
 [ -f "$AI_REVIEW_STATE_DIR/$stale_key-$stale_sha.txt" ] && ok || bad "into a finished file that says so"
+check "#2236 which keeps the repository its pending marker named" $'\nrepository=example/repo\n' "$(cat "$AI_REVIEW_STATE_DIR/$stale_key-$stale_sha.txt" 2>/dev/null)"
 nudge n1
 check_eq "and is not reported to that session again" "" "$OUT"
 
@@ -1522,6 +1544,71 @@ check "marked as not placed" "quoted no line" "$placed_body"
 check "the review records how its findings were placed" "placement=whole:1,marker:0,part:0,path:0,unplaced:1" "$placed_body"
 check "and the lengths of the quotes it placed by part of a line, none here" "$(printf '\npart_quote_lengths=\n')" "$placed_body"
 check_not "and the approximate marker is gone from it" "src/placed.ts:~1:" "$placed_body"
+
+# ===========================================================================
+# #2236. The record names the repository beside the folder label. repo= is the checkout's folder,
+# which for an agent worktree is a folder deleted with the worktree, so a record read later could
+# not be traced to its commits without searching every checkout.
+# ===========================================================================
+# The forms an origin is written in, each read to owner/name and never kept whole, since a URL can
+# carry a credential. A local path has no owner/name, so the main checkout's folder stands in.
+repository_of(){ bash -c ". '$DIR/lib/ai-review-common.sh'; ar_repository \"\$1\"" _ "$1"; }
+repo_of_url(){ # repo_of_url <origin url or empty> -> what a checkout with that origin records
+  local d="$WORKDIR/url-probe"
+  rm -rf "$d"; git init -q "$d"
+  [ -n "$1" ] && git -C "$d" remote add origin "$1"
+  repository_of "$d"
+}
+check_eq "#2236 an https origin is read to owner/name" "example/repo" "$(repo_of_url https://github.com/example/repo.git)"
+check_eq "#2236 with a user and password in it, only owner/name is kept" "example/repo" "$(repo_of_url https://someone:not-a-secret@github.com/example/repo)"
+check_eq "#2236 an scp like origin" "example/repo" "$(repo_of_url git@github.com:example/repo.git)"
+check_eq "#2236 an ssh origin with a port and a trailing slash" "example/repo" "$(repo_of_url ssh://git@example.test:2222/example/repo.git/)"
+check_eq "#2236 a local path origin falls back to the checkout's folder" "url-probe" "$(repo_of_url "$WORKDIR/origin.git")"
+check_eq "#2236 a file URL is a local path too" "url-probe" "$(repo_of_url "file://$WORKDIR/origin.git")"
+check_eq "#2236 and so is no origin at all" "url-probe" "$(repo_of_url "")"
+G worktree add -q --detach "$WORKDIR/agent-local1" 2>/dev/null
+check_eq "#2236 a worktree of a checkout with a local origin names the main checkout's folder, not its own" "repo" "$(repository_of "$WORKDIR/agent-local1")"
+G worktree remove --force "$WORKDIR/agent-local1" 2>/dev/null
+
+# End to end: a push from an agent worktree whose origin is a GitHub URL. The URL is rewritten to a
+# local bare repository for the transport only, so the push really lands while the record's
+# owner/name is read from the URL as written.
+HOSTED="$WORKDIR/hosted"; mkdir -p "$HOSTED"
+git init -q --bare "$HOSTED/repo.git"
+WT_MAIN="$WORKDIR/wtmain"; mkdir -p "$WT_MAIN/src"
+git init -q "$WT_MAIN"
+GW(){ git -C "$WT_MAIN" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+GW symbolic-ref HEAD refs/heads/main
+printf 'export const a = 1;\n' > "$WT_MAIN/src/a.ts"
+GW add src/a.ts; GW commit -q -m seed
+GW config "url.$HOSTED/.insteadOf" "https://github.com/example/"
+GW remote add origin https://github.com/example/repo.git
+GW push -q -u origin main 2>/dev/null
+# The worktree pushes main, since a push of any other branch is held for the pull request review
+# (pr-review-push-gate.sh) and starts no review here; the main checkout steps off main to free it.
+WT_AGENT="$WORKDIR/agent-a1b2c3"
+GW checkout -q --detach
+GW worktree add -q "$WT_AGENT" main 2>/dev/null
+GA(){ git -C "$WT_AGENT" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+printf 'export const a = 2;\n' > "$WT_AGENT/src/a.ts"
+GA commit -q -am change
+GA push -q origin main 2>/dev/null
+SHA_WT="$(GA rev-parse HEAD)"
+FAKE_CLAUDE_OUT='src/a.ts:1: a changed. Should be: kept. [severity: minor]
+Quote: a line that is in no file at all' \
+  fire_push "git push origin main" 0 "$WT_AGENT"
+wait_for_final "$SHA_WT" && ok || { bad "#2236 the worktree's review finishes"; echo "  the hook said: $OUT"; }
+wt_final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_WT".txt )
+wt_body="$(cat "${wt_final[0]:-/dev/null}" 2>/dev/null)"
+check "#2236 the record keeps the folder label older readers use" $'repo=agent-a1b2c3\n' "$wt_body"
+check "#2236 and names the repository itself" $'\nrepository=example/repo\n' "$wt_body"
+check_not "#2236 and never the origin URL" "github.com" "$wt_body"
+# The worktree removed, as an agent's is when it finishes: the record alone still says where its
+# commits are, and the placement report's list of quote misses carries it.
+GW worktree remove --force "$WT_AGENT" 2>/dev/null
+[ -d "$WT_AGENT" ] && bad "#2236 the worktree folder is removed" || ok
+misses="$(python3 "$DIR/lib/ai-review-placement.py" --state-dir "$AI_REVIEW_STATE_DIR" --misses 2>&1)"
+check "#2236 with the worktree gone, its quote miss is listed with the repository" "${wt_final[0]##*/} (example/repo) src/a.ts:1: " "$misses"
 
 echo
 echo "passed: $pass, failed: $fail"

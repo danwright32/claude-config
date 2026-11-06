@@ -570,6 +570,72 @@ allowed "#1478 control: a scoped add in bash -c is allowed"
 run "echo \"bash -c 'git add -A'\""
 allowed "#1478 control: a wrapped add only echoed is no add"
 
+# A command that stages nothing is not an add because the word add is somewhere in it
+# (claude-config#2078). Beside a wrapper nobody can read into (a script file run, a shell or eval
+# whose command is a variable), any bare `add` in the text used to count, so a `git worktree add`
+# chained with a script, and a search whose quoted words held "git worktree add", were refused
+# with the override as the only way through. The add has to be git's own subcommand.
+run "git fetch && git -C $REPO worktree add -b wt-2078 $FIX/wt-2078 main"
+allowed "#2078 a worktree add chained after a fetch stages nothing"
+run "git fetch && git -C $REPO worktree add -b wt-2078 $FIX/wt-2078 main && bash $FIX/setup.sh"
+allowed "#2078 and nor does one chained with a script run"
+run "bash $FIX/milestone-candidates.sh --like \"Stop the add scope guard refusing git worktree add\""
+allowed "#2078 a search whose quoted words hold git worktree add stages nothing"
+run "cd $REPO && bash x/milestone-candidates.sh --like \"git worktree add\""
+allowed "#2078 and nor does one after a cd"
+run "git -C $REPO remote add up https://example.invalid/x.git && bash $FIX/setup.sh"
+allowed "#2078 a remote add beside a script run stages nothing"
+# Every real staging form is still caught, the forms git takes options in front of add included.
+for c in "git -C $REPO add -A" "git -c core.x=1 add -A" "git --git-dir=$REPO/.git --work-tree=$REPO add -A" \
+         "git --git-dir $REPO/.git add ." "rtk git -C $REPO add --all" "git fetch && git add ." \
+         "cd $REPO && git add -A" "git -C $REPO worktree add -b w $FIX/w main && git -C $REPO add -A" \
+         "sh -c 'git -C $REPO add -A'" "bash -c \"cd $REPO && git -c x=1 add .\""; do
+  run "$c"
+  refused "#2078 an unscoped add is still refused: $c"
+done
+# And beside a wrapper nobody can read into, an add the text still names, however it is named.
+for c in "CMD=\"git add -A\"; bash -c \"\$CMD\"" "CMD='git -C $REPO add -A'; eval \"\$CMD\"" \
+         "git fetch && bash $FIX/wrapper.sh add -A" "CMD=\"git \$SUB -A\"; bash -c \"\$CMD\" --label \"stage then add\"" \
+         "SUB=add; bash -c \"\$CMD\"; git log --grep \"fix the add\"" \
+         "bash $FIX/x.sh --like \"git add -A\"" "bash $FIX/x.sh --like \"git -c k=v add .\"" \
+         "git worktree add $FIX/w main && CMD=\"git add -A\"; eval \"\$CMD\""; do
+  run "$c"
+  refused "#2078 an add beside an unreadable wrapper is still refused: $c"
+done
+
+# A command substitution runs its commands as surely as the line does (claude-config#2203). An echo
+# of `$(git add -A)`, or a variable assigned from one, stages everything, and the guard never saw
+# it: the reader cut the line at its separators and read only what each piece started with. And an
+# add reached through a variable, the subcommand or the program held in one, was missed whenever no
+# git word came before the word add, because the cheap filter in front of the reader wanted git
+# first. Both are read now; what only mentions an add, or a substitution running something else, is
+# still no add.
+for c in "echo \"\$(git add -A)\"" "echo \$(git add -A)" "x=\$(git add -A)" "x=\`git add -A\`" \
+         "out=\"\$(git -C $REPO add .)\"" "echo \"staged: \$(cd $REPO && git add --all)\"" \
+         "printf '%s' \"\$(git add -u)\"" "SUB=add; git \$SUB -A" "SUB=add; eval \"git \$SUB -A\"" \
+         "for s in add; do git \"\$s\" .; done" "G=git; \$G add -A" "\"\$GIT\" add ." \
+         "\$(command -v git) add -A"; do
+  run "$c"
+  refused "#2203 an unscoped add in a substitution or through a variable is refused: $c"
+done
+for c in "echo \"git add -A\"" "echo 'x=\$(git add -A)'" "git commit -m \"fix the git add -A shape\"" \
+         "x=\$(git status --short)" "echo \"\$(git status)\" && git add mine.txt" \
+         "echo \"\$(git add mine.txt)\"" "SUB=add; git \$SUB mine.txt" "git \$SUB log -1" \
+         "echo \"\$HOME\" && echo add"; do
+  run "$c"
+  allowed "#2203 control: no unscoped add here: $c"
+done
+# Measured against 6,597 real commands holding the word add: a $ anywhere and the word add anywhere
+# is not a variable shape. A script run beside a heredoc whose prose says add, or a script given its
+# own add subcommand with no git anywhere, stages nothing the guard can see, so it still passes.
+for c in "bash $FIX/x.sh && cat > $FIX/n.txt <<'EOF'"$'\n'"add \$HOME to the note"$'\n'"EOF" \
+         "bash $FIX/x.sh add \"\$ITEM\"" "source $FIX/x.sh \"\$HOME\" && echo add" \
+         "echo add && git --no-pager log -1 \"\$REV\" && bash $FIX/x.sh" \
+         "bash $FIX/x.sh && cat > $FIX/n.txt <<'EOF'"$'\n'"run \`git status\` and add a note"$'\n'"EOF"; do
+  run "$c"
+  allowed "#2203 control: a script beside the word add is no variable shape: $c"
+done
+
 run "git add ."
 refused "a bare dot is refused the same way"
 run "git add --all"
@@ -597,7 +663,8 @@ refused "and so is one right after do"
 # (lessons review of #1017, L490).
 mkdir -p "$FIX/noreader/lib"
 cp "$HOOK" "$FIX/noreader/check-add-scope.sh"
-cp "$DIR/lib/push-scope.sh" "$FIX/noreader/lib/push-scope.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FIX/noreader/lib" push-scope.sh \
+  || check "#2204 push-scope.sh could be installed into the copy without a reader" "the install refused"
 HOOK_SAVED="$HOOK"; HOOK="$FIX/noreader/check-add-scope.sh"
 run "cd $REPO && git add -A"
 HOOK="$HOOK_SAVED"

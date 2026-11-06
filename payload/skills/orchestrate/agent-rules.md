@@ -32,6 +32,7 @@ Delete or drop data, apply migrations to a shared database, send anything to peo
 ## Tools
 
 - Never drive the Playwright browser. Read pages with WebFetch, or with the Claude in Chrome tools in a tab you create.
+- With the Claude in Chrome tools, call `tabs_create_mcp` once, keep the tabId it returns, and pass that tabId on every Claude in Chrome call, each call inside `browser_batch` included. Every agent shares one tab group, and a call naming no tab acts on the group's first tab, which can be another agent's. Never use a tabId read from `tabs_context_mcp`, which lists every agent's tabs. Close your tab with `tabs_close_mcp` before you hand back. `hooks/chrome-subagent-tab-gate.sh` refuses a call from you that names no tabId.
 - Never end your turn waiting on your own background work. Wait in the foreground or stop it. Stop any dev server you started before you hand back.
 
 ## Your report

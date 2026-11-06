@@ -47,6 +47,7 @@ because every phrase is anchored to its reference and "(#730) will refuse" has a
 phrase needs a space. The brief's named false positive, "#1041 added the links", is a past
 claim and produces no row.
 """
+import bisect
 import re
 import io
 import sys
@@ -108,7 +109,14 @@ ISSUE_REF = re.compile(
 FENCE = re.compile(r"^\s*(```|~~~)")
 LIST_ITEM = re.compile(r"^\s*([-*+]|\d+[.)])\s+|^\s*\|")
 INLINE_CODE = re.compile(r"`[^`\n]*`")
-SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z*`#(\"'\[\x00])|\s*\|\s*")
+# The table cell half reads whitespace before its `|` only from where a whitespace run starts
+# (claude-config#2220). Written as a bare `\s*\|\s*` it was tried at EVERY position of a run and
+# read to the run's end from each, so a run of n spaces cost n squared steps; blanked inline code is
+# such a run, and a settled design page's one long line holds a script template literal that blanks
+# to two million of them, which took the gate past its 60 s limit on 2026-11-04. The matches are the same: a
+# match inside a run can only begin there when one at the run's start would have matched first, and
+# a `|` right after the previous match (as in "| |") still starts one with no whitespace before it.
+SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z*`#(\"'\[\x00])|(?:(?<!\s)\s+)?\|\s*")
 
 
 def paragraphs(lines):
@@ -277,6 +285,11 @@ def scan(name, text, explain=False):
             prev = m.end()
         bounds.append((prev, len(marked)))
         records = quoted_record_spans(marked)
+        # Where every marker of the paragraph sits, found once (claude-config#2233). Counting them
+        # afresh over the paragraph for each row cost rows times its length, so a paragraph of many
+        # claims was quadratic. Every marker byte is listed, including one the input itself held,
+        # so the index below is exactly the count it replaced.
+        marks = [m.start() for m in re.finditer(REF, marked)]
         for a, b in bounds:
             sent = marked[a:b].lower()
             if REF not in sent:
@@ -287,7 +300,7 @@ def scan(name, text, explain=False):
                 if any(lo <= a + offset < hi for lo, hi in records):
                     continue  # inside a dated quote: the record of a decision, not a claim
                 # Which reference of the paragraph this is: the count of markers before it.
-                idx = marked[: a + offset].count(REF)
+                idx = bisect.bisect_left(marks, a + offset)
                 issue, line_no = ref_ids[idx], ref_lines[idx]
                 row = f"{name}:{line_no}:{issue}:{lines[line_no - 1].strip()}"
                 if explain:

@@ -2,6 +2,7 @@
 // made a rule permanent, and what Claude is told to ask in Claude Code's own dialog (#777). Pure, so
 // each rule is tested on its own.
 import type { AskBeforeSavingApproval } from '../types/index.d.ts'
+import { withinGrace } from './mod-kit/hold.ts'
 
 export const MOD = 'ask-before-saving'
 
@@ -376,6 +377,19 @@ export const addedText = (content: string, old: string | undefined): string => {
 export const cannotCheck = (failure: { message?: string } | undefined): string =>
   `Not saved: Ask before saving could not check whether this writes lasting memory (${failure?.message || 'it failed'}). Tell Dan what you meant to save instead.`
 
+/** The engine's own words for a hook out of time, for a catch that had too little grace left (#2039). */
+export const OUT_OF_TIME = { message: 'it ran out of time' }
+
+/**
+ * How each of the mod's catches judges the call once more (#2026, #2039). The engine gives a catch
+ * 1,000 ms of its own time, and a catch cut there lets the call run unjudged, so the rerun starts
+ * only through withinGrace, while half that grace is left; otherwise the call is held, `held` shaping
+ * the refusal for the hook it answers. `budget` is the catch's next.budget, handed in so a test can
+ * set it (L524).
+ */
+export const rerunInGrace = <R>(budget: { readonly remainingMs: number }, rerun: () => R | Promise<R>, held: (reason: string) => R): R | Promise<R> =>
+  withinGrace(budget, rerun, () => held(cannotCheck(OUT_OF_TIME)))
+
 /**
  * What a save writes, as the key For good approves it by (#738): a Write's file and content, an
  * Edit's file and change, a Bash call's command and the folder its relative targets resolve in.
@@ -697,10 +711,48 @@ const UNCHANGED = /^[^\\$`\n]+$/
  * into the index and no other redirect, pipe or command beside it, writing nothing else, by mod-kit's
  * one reader of what a command writes and runs. echo's and printf's text must be quoted whole in the
  * command, single or double, so the shell neither splits it nor reads its brackets as a pattern.
- * Anything else is undefined, and is asked about. `command` is the command as written, `cmds` and
- * `w` mod-kit's reading of it.
+ * One plain read of the index may follow it (#2216, readBack). Anything else is undefined, and is
+ * asked about. `command` is the command as written, `cmds` and `w` mod-kit's reading of it, `home`
+ * the home folder a read's `~/` names.
  */
-export const shellAppended = (command: string, cmds: readonly ShellCommand[], w: IndexWrites, index: string): string | undefined => {
+export const shellAppended = (command: string, cmds: readonly ShellCommand[], w: IndexWrites, index: string, home: string): string | undefined => {
+  if (cmds.length === 1) return appendAlone(command, cmds, w, index)
+  const read = cmds.length === 2 ? readBack(command, index, home) : undefined
+  const second = cmds[1]
+  if (!read || !second || Object.keys(second).some(k => !READ_KEYS.has(k)) || JSON.stringify(second.words) !== JSON.stringify(read.words)) return undefined
+  return appendAlone(read.append, cmds.slice(0, 1), w, index)
+}
+
+// The one read an append of the index line may be followed by (#2216): `tail` or `head` with at most
+// a line count (`-n 3`, `-n3`, `-3`), `cat` alone, or `wc` with at most one of -l, -w, -c, -m, of the
+// index named plainly: its absolute path, bare or quoted whole, or `~/` and the rest bare. Matched on
+// the command as written, at its very end, after a ; && or new line, so nothing leads it (no runner,
+// assignment, negation, group or exec) and nothing follows it (no redirect, pipe or second file);
+// its file holds no $, backtick, backslash, glob, space or `..`. mod-kit's reading must then see
+// exactly the append and this one command, with these words and nothing else read of it.
+const READ_BACK = /(?:;|&&|\n)[ \t]*((?:tail|head)(?:[ \t]+(?:-n[ \t]*\d+|-\d+))?|cat|wc(?:[ \t]+-[lwcm])?)[ \t]+('[A-Za-z0-9_./-]+'|"[A-Za-z0-9_./-]+"|~?[A-Za-z0-9_./-]+)[ \t]*$/
+// What mod-kit's reading may give of that read beyond its words: which words were quoted, its folder.
+const READ_KEYS = new Set(['words', 'literal', 'folder'])
+
+/**
+ * The read at the end of `command` that may follow an append of the index line (READ_BACK), as the
+ * words mod-kit reads it with, and the command before it; undefined when its end is no such read of
+ * `index`, or what is before it ends in another operator.
+ */
+export const readBack = (command: string, index: string, home: string): { append: string; words: string[] } | undefined => {
+  const m = READ_BACK.exec(command)
+  if (!m || m[1] === undefined || m[2] === undefined) return undefined
+  const append = command.slice(0, m.index)
+  if (!append.trim() || /[;&|]\s*$/.test(append)) return undefined
+  const word = m[2]
+  const file = /^['"]/.test(word) ? word.slice(1, -1) : word
+  // `~` is the home folder only bare, at the start; quoted it names a folder called ~.
+  const path = word.startsWith('~/') ? home + file.slice(1) : file
+  if (!path.startsWith('/') || /(?:^|\/)\.\.(?:\/|$)/.test(path) || resolvePath(path, '/', home) !== index) return undefined
+  return { append, words: [...m[1].split(/[ \t]+/), file] }
+}
+
+const appendAlone = (command: string, cmds: readonly ShellCommand[], w: IndexWrites, index: string): string | undefined => {
   const into = w.files[0]
   if (cmds.length !== 1 || w.files.length !== 1 || into?.path !== index || into.edits || w.unnamed.length || w.runs?.length || w.changes?.length || w.byGit?.length) return undefined
   const c = cmds[0]
@@ -761,6 +813,20 @@ export const askInstruction = (id: string, files: string[], guessed: string[] = 
     `If he answers ${FOR_GOOD}, send this same call again unchanged and it is saved. Until he answers, do not write it any other way.`
   )
 }
+
+/**
+ * What Claude is told first when a shell command writes to a memory index whose one line a For good
+ * covers, but is not read as one that only appends text it spells out (#2181): the refusal alone read
+ * as though Dan had approved nothing. It names the forms shellAppended reads, and says a read of the
+ * file goes in a call of its own. `covers` are the memory files whose line may be added, `index` the
+ * index as Dan reads it. It claims only what was measured: the command was not read as such an append.
+ */
+export const notAnAppendNote = (covers: readonly { name: string; files: readonly string[] }[], index: string): string =>
+  `This command was not read as one that only appends the line linking ${covers.map(c => c.name).join(' or ')} to ${index}, ` +
+  `which Dan's For good on saving ${covers.flatMap(c => c.files).join(', ')} lets through without asking him, so it was not let through. ` +
+  `To add just that line, send the append as a command of its own, with nothing before or after it: ` +
+  `printf '%s\\n' '<the line>' >> ${index}, echo '<the line>' >> ${index}, or cat >> ${index} fed a quoted heredoc, or add it with Edit; ` +
+  `read the file back in a separate call. Only if it has to do more than add that line:`
 
 /**
  * The rule Dan kept for this session only, from the question Claude asked: the plain words after the

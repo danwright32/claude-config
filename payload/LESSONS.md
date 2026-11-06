@@ -7565,6 +7565,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Join a time to its AM or PM, and a figure to its unit, with a non-breaking space, or a narrow column wraps the suffix alone.
 
 ## External systems
+- **L846. A dependency install that exits 0 is not a working install: npm 11 skips every install script not listed in package.json's allowScripts and only warns, so commit that list and prove a clean install by building or starting the app, never by the unit tests passing.**
+  (new-agent-onboarding#903, 2026-11-05)
+  SHORT: npm 11 skips install scripts missing from allowScripts and only warns; commit the list and prove a clean install by building, not tests.
 - **L826. A request timeout cleared when the response headers arrive leaves reading the body with no limit, so a server that answers then trickles holds the caller open; keep the timer running until the body is fully read.**
   (bidspoke#3089, 2026-10-30)
   SHORT: A request timeout cleared when headers arrive leaves the body read unbounded; keep the timer running until the body is fully read.
@@ -8932,6 +8935,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L845. When the reason behind queued work is withdrawn, any step that can retry or restart that work must check the reason still holds at the moment it acts, because a cancel that only stops work still running leaves finished but retryable work to go ahead later.**
+  (slate#4546, 2026-11-04)
+  SHORT: A retry must recheck that the work's reason still holds when it acts; a cancel that stops only running work lets retryable work go ahead.
 - **L844. A cache keyed on a calendar period (a day, an hour) is empty for the first reader of every period, so a read under a deadline must find it already written by a scheduled job before the period opens, and a fill started by a read that can overrun its deadline must be held open past that deadline, or one slow read leaves the cache cold for the next reader too.**
   (bidspoke#3252, 2026-11-04)
   SHORT: A period-keyed cache is cold for each period's first reader, so seed it on a schedule before the period, and hold open a fill that outlives a deadline.
