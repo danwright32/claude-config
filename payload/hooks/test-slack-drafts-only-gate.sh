@@ -349,7 +349,7 @@ printf '%s\n' 'export const s = 1;' > "$T/imp/sealed.ts"
 printf '%s\n' 'import { s } from "./sealed.ts";' 'console.log(s);' > "$T/imp/reads-sealed.ts"
 chmod 000 "$T/imp/sealed.ts"
 if [ -r "$T/imp/sealed.ts" ]; then
-  check "a script importing a module the gate cannot read (UNMEASURED: running as a user who can read a mode 000 file)" ok
+  echo "SUITE-PART-UNMEASURED #2318 a script importing a module the gate cannot read: this user can read a mode 000 file (running as root), so no unreadable module could be made"
 else
   run_bash "node $T/imp/reads-sealed.ts"
   refused "a script importing a module the gate cannot read"
