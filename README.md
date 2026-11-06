@@ -1867,9 +1867,20 @@ all at once. Each group sees the complete file list, marked with where every oth
 and its own files' changes and full text. The branch counts as reviewed only when every group
 returned a review: a group that runs out of time, fails or answers in another shape makes the whole
 review that outcome, which refuses as before. The findings come back in one review, under one
-header per group, with one read key. It is refused as too large only when no split fits, because
-one file's own diff is over what a group can hold, or because it would take more than
-`PR_REVIEW_MAX_GROUPS` (8) groups.
+header per group, with one read key.
+
+Embedded base64 is never read (claude-config#2307): the payload of a `data:...;base64,` URI of 100
+or more characters, and any unbroken run of 1,000 or more, is replaced by a note naming its file,
+line and size, both in the diff and in a file's full text, and every size the review measures is
+taken with it already left out. The note keeps the code around the data, so a page carrying
+screenshots is still read for its code. Every run left out is named in the start line, the
+reviewer's input and every verdict, and the push review does the same. A file whose own diff is
+still over what a group can hold is read in consecutive parts, each a group of its own, told which
+part it is. The branch is refused as too large only when one line is longer than a part, or when it
+would take more than `PR_REVIEW_MAX_GROUPS` (8) groups. Measured 2026-11-05 on the 600 branch
+sample (the last 150 first parent commits of claude-config, Overture, Ovation and PostRoll): 22 are
+over the cap, 5 of them were refused before and none are now, and the other 17 start exactly as
+they did.
 
 Reviews launched together send their requests in turn (claude-config#1619), so they share the
 cached lessons. The lessons are the reviewer's appended system prompt, cached for five minutes, and
