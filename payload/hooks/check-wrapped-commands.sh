@@ -36,7 +36,8 @@
 # unread and passed: a script on PATH run by its bare name, an interpreter running a file (`python3
 # x.py`), a command word that is a variable with no slash, one whose name before its first slash
 # holds = or : (an assignment or a URL to both readings), and a function or alias. The fast path
-# below answers a command running no script by its path before the reader loads (RUNS_FILE_*).
+# below answers a command running no script by its path before the reader loads (RUNS_FILE_* in
+# lib/script-run-words.sh, claude-config#2301).
 #
 # A SCRIPT WHOSE ARGUMENTS ARE DATA (claude-config#1574). A script file cannot be read, so `bash x.sh`
 # beside git, gh or rtk is refused, and that included those words inside a quoted argument: the
@@ -121,24 +122,16 @@ READ_ONLY_CALLS=(
   "~/claude-config-sync/claude-sync lesson"
 )
 
-# A script run by its path, or sourced, where a command can begin (claude-config#1623), read off the
-# payload as written, so a command naming git with paths only as its arguments (`git -C /x add ./y`)
-# is still answered before the reader loads. A command begins at the start of the command, after
-# ; & | ( ` ! or `{ `, or a line break, past blanks, reserved words, assignments (`X="a b" ./x`,
-# `T=$(gh auth token -u x) ./x`) and runners with their options and values (`sudo -u bob ./x`,
-# `timeout 30 ./x`); what can begin it is `source`, `.`, or a path: a word holding a slash, its name
-# before the slash free of = and : as the reader requires, or starting ~ or /, or a variable then a
-# slash, optionally quoted or escaped. It must be a superset of what the reader calls a script run,
-# since a command it misses passes unread, so it errs wide, and test-check-wrapped-commands.sh runs
-# every refused case through a copy of the guard with no reader to hold it to that. The payload is
-# JSON: a line break is \n and a double quote \" there.
-RUNS_FILE_AT='(^|[;&|(`!]|\{[[:space:]]|\\[nt]|"command"[[:space:]]*:[[:space:]]*")'
-RUNS_FILE_VALUE="(\\\$\\([^()]*\\)|\\\\\"[^\"]*\\\\\"|'[^']*'|[^[:space:];&|])*"
-RUNS_FILE_PAST="([[:space:]]|(then|do|else|elif|if|while|until|time)[[:space:]]|[A-Za-z_][A-Za-z0-9_]*=$RUNS_FILE_VALUE[[:space:]]|(nohup|exec|command|sudo|doas|xargs|caffeinate|stdbuf|nice|timeout|gtimeout|env|proxy)([[:space:]]+(-[^[:space:];&|]*([[:space:]]+[^-[:space:];&|][^[:space:];&|]*)?|[0-9][^[:space:];&|]*|[A-Za-z_][A-Za-z0-9_]*=$RUNS_FILE_VALUE))*[[:space:]])*"
-SQ="'"
-RUNS_FILE_WORD='(\\\\)?(\\"|'$SQ')?((source|\.)[[:space:]]|\.*/|[^[:space:];&|"'$SQ'=:/~$\\()`<>{}][^[:space:];&|"'$SQ'=:]*/|[~/]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(\\"|'$SQ')?/)'
-
-WRAPPER_WORD='(^|[^A-Za-z0-9_.-]|\\[nt])(bash|sh|zsh|dash|ksh|eval|env|find|watch|script|parallel)([^A-Za-z0-9_.-]|$)'
+# Whether the command names a wrapper or runs a script by its path or by source, read off the payload
+# before the reader loads, is lib/script-run-words.sh's srw_may_run_script, the one copy of those
+# patterns, which check-add-scope.sh reads too (claude-config#1623, #2301). It errs wide, and
+# test-check-wrapped-commands.sh runs every refused case through a copy of this guard with no reader
+# to hold it to that. A copy of it that cannot be loaded is no filter at all, so every command naming
+# git, gh or rtk then goes on to the reader, which refuses here when it is missing too.
+SRW_LOADED=0
+case "${BASH_SOURCE[0]}" in */*) _SRW="${BASH_SOURCE[0]%/*}/lib/script-run-words.sh" ;; *) _SRW=lib/script-run-words.sh ;; esac
+# shellcheck source=lib/script-run-words.sh
+{ . "$_SRW" 2>/dev/null && declare -F srw_may_run_script >/dev/null && SRW_LOADED=1; } || true
 GUARDED_WORD='(^|[^A-Za-z0-9_.-]|\\[nt])(git|gh|rtk)([^A-Za-z0-9_.-]|$)'
 
 # Does payload text $1 match regex $2? Under a UTF-8 locale bash's =~ stops at a byte that is not
@@ -152,14 +145,15 @@ payload="$(cat)"
 # Every Bash call passes through here, and nearly none name a wrapper or run a script by its path
 # beside git, gh or rtk: answer those at once, before the shared reader is even loaded. The payload is
 # JSON, so a line break or a tab before a word is written \n or \t there.
-if payload_match "$payload" "$WRAPPER_WORD"; then
-  # The wrapper the text names, which is all a refusal made with no reader to judge it can record.
-  NAMED_WRAPPER="${BASH_REMATCH[2]}"
-  NAMED_WHAT="names a shell, eval, env, find, watch, script or parallel"
-elif payload_match "$payload" "$RUNS_FILE_AT$RUNS_FILE_PAST$RUNS_FILE_WORD"; then
-  # The longest match ends in a blank only for source or `.`.
-  case "${BASH_REMATCH[0]}" in
-    *[[:space:]]) NAMED_WRAPPER=source; NAMED_WHAT="sources a file" ;;
+if [ "$SRW_LOADED" = 0 ]; then
+  # No filter: the reader below decides, and a refusal made before it can only say so.
+  NAMED_WRAPPER=unfiltered
+  NAMED_WHAT="could not be filtered ($_SRW could not be loaded), so it was taken to name a wrapper or run a script,"
+elif srw_may_run_script "$payload"; then
+  case "$SRW_NAMED" in
+    # The wrapper the text names, which is all a refusal made with no reader to judge it can record.
+    wrapper) NAMED_WRAPPER="$SRW_WRAPPER"; NAMED_WHAT="names a shell, eval, env, find, watch, script or parallel" ;;
+    source) NAMED_WRAPPER=source; NAMED_WHAT="sources a file" ;;
     *) NAMED_WRAPPER=direct; NAMED_WHAT="runs a script by its path" ;;
   esac
 else

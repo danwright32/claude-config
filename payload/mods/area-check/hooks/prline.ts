@@ -210,6 +210,24 @@ export const bodyUnreadableRefusal = (verb: string, file: string, why: string): 
     ? `The area check refused this ${verb}: its description comes from standard input (${why}), which the area check cannot read, and files were decided on this branch. Give it with --body, with --body-file and a file, or with --body-file - fed by a heredoc.`
     : `The area check refused this ${verb}: it could not read the description file ${file} (${why}), and files were decided on this branch. Check the path, or give the description with --body.`
 
+/**
+ * Whether a command's words could hold a gh pr create, edit or merge, or the merge helper: asked
+ * only once the check has failed and could not read the command (#2173), so it errs toward yes. A
+ * command it says no to cannot be one the check refuses, and goes ahead as before.
+ */
+export const mayActOnPr = (command: string): boolean =>
+  /merge-when-ready/.test(command) || (/\bgh\b/.test(command) && /\bpr\b/.test(command) && /\b(?:create|edit|merge)\b/.test(command))
+
+export const ERRORS_SHOWN = '~/.claude-area-check/errors.jsonl'
+
+/**
+ * The check itself failed on a pull request command (#2173): held, as every guard's failure holds
+ * its call (#2148), never let through. A merge is the last check, and the one at merge time runs the
+ * same code on this Mac only, so it is no backstop for a description that was never checked.
+ */
+export const checkFailedRefusal = (why: string): string =>
+  `The area check refused this pull request command: its check failed (${shorten(why)}), so it cannot tell whether the description carries a line for each file decided on this branch. Run the command again; if it fails the same way, the area check itself needs fixing, and the error is kept in ${ERRORS_SHOWN}.`
+
 /** The log could not be read: named, with why and the way back, never read as no decisions. */
 export const logUnreadableRefusal = (verb: string, why: string): string =>
   `The area check refused this ${verb}: it could not read its log ${LOG_SHOWN} (${why}), so it cannot tell which files were decided on this branch. It reads this Mac's log only. If the log was deleted, a new session writes it again (and reads as no decisions); if it cannot be read, make it readable to you again. Then run the command again.`

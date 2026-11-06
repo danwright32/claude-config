@@ -309,6 +309,18 @@
             "statusMessage": "Checking the comment carries no Claude session link"
           }
         ]
+      },
+      {
+        "matcher": "Bash|mcp__.*slack.*|mcp__.*Slack.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/slack-drafts-only-gate.sh",
+            "timeout": 15,
+            "onFailure": "block",
+            "statusMessage": "Checking this saves a Slack draft rather than sending"
+          }
+        ]
       }
     ],
     "PostToolUse": [

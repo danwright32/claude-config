@@ -862,6 +862,38 @@ if ! whole_above_zero "$_sc_budget" _sc_budget; then
   echo "scanners-before-push: SCANNERS_BUDGET_SECONDS is '$_sc_budget', not a whole number of seconds, so the default of $_sc_budget_default is used." >&2
   _sc_budget="$_sc_budget_default"
 fi
+# A TEST CAN END THE BUDGET SOONER, NEVER LATER (claude-config#2206, L290). The suite's cases about
+# a scanner still running at the budget used a budget of 2 seconds counted from this gate's start,
+# and on 2026-11-04, under load, it ran out before the scanner had even started, so a case checking
+# what happens to a RUNNING scanner failed over one that never ran. Here a case gives the gate a
+# long budget and names a file (SCANNERS_BUDGET_ENDS_WHEN) its scanner writes once it is holding;
+# the budget then ends as soon as that file exists, but not before SCANNERS_BUDGET_ENDS_NOT_BEFORE
+# seconds. Ending sooner can only refuse a push the budget would have let through, never pass one it
+# would have refused, so this cannot loosen the gate. And it is honoured only while the record of
+# passes is somewhere other than the real one, which every run of the suite sets and no real push
+# does (claude-config#2217), so a real push never reads it at all.
+_sc_budget_ends_when=""
+_sc_budget_not_before=0
+if [ -n "${SCANNERS_BUDGET_ENDS_WHEN:-}" ] && [ "$_sc_state_dir" != "$HOME/.claude/state/scanners-passed" ]; then
+  _sc_budget_ends_when="$SCANNERS_BUDGET_ENDS_WHEN"
+  whole_above_zero "${SCANNERS_BUDGET_ENDS_NOT_BEFORE:-0}" _sc_budget_not_before || _sc_budget_not_before=0
+fi
+_sc_budget_spent(){   # -> 0 once the budget has run out
+  local now
+  now="$(date +%s)"
+  [ "$now" -ge $(( _sc_t0 + _sc_budget )) ] && return 0
+  [ -n "$_sc_budget_ends_when" ] && [ "$now" -ge $(( _sc_t0 + _sc_budget_not_before )) ] && [ -e "$_sc_budget_ends_when" ]
+}
+_sc_budget_ended(){   # at the budget: says so, and stops waiting on this round's runs
+  local given
+  _sc_out_of_time=1
+  # A budget ended sooner is reported as the time it really gave, so no message claims more (L11).
+  if [ -n "$_sc_budget_ends_when" ]; then
+    given=$(( $(date +%s) - _sc_t0 ))
+    [ "$given" -lt "$_sc_budget" ] && _sc_budget="$given"
+  fi
+  _sc_stop_inflight
+}
 _sc_inflight=""
 _sc_inflight_idx=""
 _sc_out_of_time=""
@@ -882,13 +914,19 @@ _sc_wait_bounded(){    # waits for this round's runs until the budget runs out, 
   # wait for every child, the watchdog included, so there is nothing to wait for and it returns.
   case "$_sc_inflight" in *[![:space:]]*) ;; *) return 0 ;; esac
   left=$(( _sc_t0 + _sc_budget - $(date +%s) ))
-  if [ "$left" -le 0 ]; then
-    _sc_out_of_time=1
-    _sc_stop_inflight
+  if [ "$left" -le 0 ] || _sc_budget_spent; then
+    _sc_budget_ended
   else
-    trap '_sc_out_of_time=1; _sc_stop_inflight' USR1
+    trap '_sc_budget_ended' USR1
     # Safe as it is (#1989): nothing is written until it has been killed and waited for below.
-    perl -e 'sleep shift; kill "USR1", shift' "$left" "$$" </dev/null >/dev/null 2>&1 &
+    if [ -z "$_sc_budget_ends_when" ]; then
+      perl -e 'sleep shift; kill "USR1", shift' "$left" "$$" </dev/null >/dev/null 2>&1 &
+    else
+      # Ends at the budget, or sooner once the named file exists and the floor has passed (#2206).
+      perl -e 'my ($left, $pid, $file, $floor) = @ARGV; my $end = time + $left; $floor = $left if $floor > $left; sleep $floor if $floor > 0;
+        while (time < $end && ! -e $file) { select(undef, undef, undef, 0.1) } kill "USR1", $pid' \
+        "$left" "$$" "$_sc_budget_ends_when" "$(( _sc_t0 + _sc_budget_not_before - $(date +%s) ))" </dev/null >/dev/null 2>&1 &
+    fi
     watchdog=$!
     # A wait interrupted by the watchdog's signal returns at once, after the trap has stopped the
     # runs, so it is waited again to reap them.
@@ -968,7 +1006,7 @@ _sc_locked="$(_sc_locked_list)"
 # The lock wait is spent out of the gate's budget too (#1881): it stops trying once the budget is
 # gone, and a run still refused then is reported as held on the lock, below.
 while [ -n "$_sc_locked" ] && [ "$_sc_tries_left" -gt 0 ] && [ -z "$_sc_out_of_time" ] \
-      && [ "$(date +%s)" -lt $(( _sc_t0 + _sc_budget )) ]; do
+      && ! _sc_budget_spent; do
   "$_sc_sleep" "$_sc_lock_poll"
   _sc_tries_left=$(( _sc_tries_left - 1 ))
   # Only the refused runs go again, so they are the runs in flight at once this time.
