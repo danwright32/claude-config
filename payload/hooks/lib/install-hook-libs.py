@@ -32,7 +32,7 @@ exit is 1. A require in a comment or a string is not read.
 A helper loaded another way, by its path (shell_code_lines.py loads shell-words.py that way, and a
 shell helper may run `python3 "$LIB/x.py"`), is installed only when it is named, so a suite can
 still build a folder missing one on purpose. A suite that needs a folder missing a helper that IS
-imported or sourced installs it and then removes that one file, so the absence is written in the
+imported, sourced or required installs it and then removes that one file, so the absence is written in the
 suite where it can be read.
 
 It sits in lib/ rather than tests/ because the suites in payload/hooks also run from the installed
