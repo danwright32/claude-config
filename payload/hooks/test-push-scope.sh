@@ -834,13 +834,13 @@ else check "#1017 reading an add leaves no shell-words bytecode beside it" ok; f
 
 # The review runner is loaded by path from three places, and each used to leave
 # lib/__pycache__/ai-review-run.cpython-*.pyc in the installed, synced lib (#2353, the #1017 class):
-# ai-review-placement.py's runner(), and the two ai-review suites. Each is run in a private copy of
-# the hooks directory, never the shared one other suites write into (#2103, L411), with the
-# environment's bytecode switches cleared so only the loader's own setting is measured (L322).
-# The copy holds no bytecode before the run, so anything there afterwards was written by it.
-PYC2353="$RD/pyc2353/hooks"; mkdir -p "$PYC2353"
-cp -R "$DIR/." "$PYC2353/" && find "$PYC2353" -name __pycache__ -type d -prune -exec rm -rf {} +
-cp "$DIR"/../LESSONS-INDEX-*.md "$RD/pyc2353/"   # the review suite reads the lessons beside the hooks
+# ai-review-placement.py's runner(), and the loader snippets in the two ai-review suites. Only the
+# loaders run, never the suites (those take minutes), in a private copy of lib, never the shared one
+# other suites write into (#2103, L411), with the environment's bytecode switches cleared so only the
+# loader's own setting is measured (L322). The copy holds no bytecode before a run, so anything
+# there afterwards was written by it.
+PYC2353="$RD/pyc2353"; mkdir -p "$PYC2353/snippets"
+cp -R "$DIR/lib" "$PYC2353/lib" && find "$PYC2353/lib" -name __pycache__ -type d -prune -exec rm -rf {} +
 pyc2353_run() { env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX "$@"; }
 # Only the runner's own bytecode counts: the probe below loads ai-review-placement.py itself.
 pyc2353_left() { find "$PYC2353/lib" -name 'ai-review-run*.pyc' -print | tr '\n' ' '; }
@@ -854,15 +854,31 @@ elif [ -n "$pyc2353_got" ]; then
   check "#2353 ai-review-placement.py's runner() leaves no bytecode in lib" "it wrote [$pyc2353_got]"
 else check "#2353 ai-review-placement.py's runner() leaves no bytecode in lib" ok; fi
 rm -rf "$PYC2353/lib/__pycache__"
+# Each suite's python heredoc that loads ai-review-run.py, cut off after its exec_module line, so only
+# the loader runs. The count is checked against the loader lines in the suite, so a heredoc this
+# extraction misses is reported rather than skipped (L98).
 for pyc2353_suite in test-ai-review-start-order.sh test-ai-review-on-push.sh; do
-  pyc2353_out="$(pyc2353_run bash "$PYC2353/$pyc2353_suite" 2>&1 | grep '^SUITE-RESULT')"
+  rm -f "$PYC2353"/snippets/*
+  awk -v out="$PYC2353/snippets" '
+    /<<.EOF.( \|\| true)?$/ { inb = 1; body = ""; done = 0; next }
+    inb && /^EOF$/ { if (body ~ /spec_from_file_location\("ai_review_run"/) { n++; f = out "/" n ".py"; printf "%s", body > f; close(f) } inb = 0; next }
+    inb && !done { body = body $0 "\n"; if ($0 ~ /exec_module\(m\)/) done = 1 }
+  ' "$DIR/$pyc2353_suite"
+  pyc2353_want="$(grep -c 'spec_from_file_location("ai_review_run"' "$DIR/$pyc2353_suite")"
+  pyc2353_have="$(ls "$PYC2353/snippets" | wc -l | tr -d ' ')"
+  if [ "$pyc2353_have" != "$pyc2353_want" ] || [ "$pyc2353_have" = 0 ]; then
+    check "#2353 $pyc2353_suite's runner loaders leave no bytecode in lib" "extracted $pyc2353_have loader snippet(s) against $pyc2353_want loader line(s), so it was not measured"
+    continue
+  fi
+  pyc2353_bad=""
+  for pyc2353_snip in "$PYC2353"/snippets/*.py; do
+    pyc2353_err="$(pyc2353_run python3 - "$PYC2353/lib/ai-review-run.py" < "$pyc2353_snip" 2>&1)" \
+      || pyc2353_bad="$pyc2353_bad [$(basename "$pyc2353_snip") did not run: $pyc2353_err]"
+  done
   pyc2353_got="$(pyc2353_left)"
-  case "$pyc2353_out" in
-    *"failed=0"*) : ;;
-    *) check "#2353 $pyc2353_suite leaves no bytecode in lib" "the copy's run did not pass ([$pyc2353_out]), so it was not measured"; continue ;;
-  esac
-  if [ -n "$pyc2353_got" ]; then check "#2353 $pyc2353_suite leaves no bytecode in lib" "it wrote [$pyc2353_got]"
-  else check "#2353 $pyc2353_suite leaves no bytecode in lib" ok; fi
+  if [ -n "$pyc2353_bad" ]; then check "#2353 $pyc2353_suite's runner loaders leave no bytecode in lib" "not measured:$pyc2353_bad"
+  elif [ -n "$pyc2353_got" ]; then check "#2353 $pyc2353_suite's runner loaders leave no bytecode in lib" "it wrote [$pyc2353_got]"
+  else check "#2353 $pyc2353_suite's runner loaders leave no bytecode in lib" ok; fi
   rm -rf "$PYC2353/lib/__pycache__"
 done
 
