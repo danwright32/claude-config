@@ -105,6 +105,24 @@ W="$(mk_repo)"
   || no "PC_DIFF_CONTEXT did not show the far line around both changes: [$(cat "$TMPROOT/diff-wide")]"
 grep -q '^ far_marker' "$TMPROOT/diff-narrow" && no "without PC_DIFF_CONTEXT the diff showed more than git's default context" || ok
 
+# pc_push_tree stages the pending files into a COPY of the index, and a copy made with a fresh
+# modification time loses git's racy clean check: a same size edit made in the same second as the
+# index was written matches the entry's stat data, so the copy kept the committed blob and the tree
+# reported the edit as never made (claude-config#2258, where the mod-kit copy check read it). The
+# second is pinned with touch rather than waited for: the file and the index share one old time,
+# so the real index sees the entry as racy, and core.trustctime is off so ctime cannot decide it.
+W="$(mk_repo)"
+( cd "$W" && git config core.trustctime false && mkdir -p lib \
+    && printf 'export const HOLD = 2\n' > lib/hold.js && touch -t 202001010000 lib/hold.js \
+    && git add lib/hold.js && git commit -qm wrong \
+    && printf 'export const HOLD = 1\n' > lib/hold.js && touch -t 202001010000 lib/hold.js \
+    && touch -t 202001010000 "$(git rev-parse --git-path index)" ) >/dev/null 2>&1
+( cd "$W" && pc_resolve "git add lib/hold.js && git commit -m fix && git push" >/dev/null 2>&1
+  t="$(pc_push_tree)"
+  printf '%s\n' "$(git rev-parse "$t:lib/hold.js" 2>&1)" "$(git hash-object lib/hold.js)" ) > "$TMPROOT/racy" 2>&1
+if [ "$(sed -n 1p "$TMPROOT/racy")" = "$(sed -n 2p "$TMPROOT/racy")" ] && [ -n "$(sed -n 2p "$TMPROOT/racy")" ]; then ok
+else no "pc_push_tree kept the committed blob for a same size edit made in the index's second: [$(tr '\n' ' ' < "$TMPROOT/racy")]"; fi
+
 # A push level with its upstream carries nothing: 1, quiet.
 W="$(mk_repo)"
 ( cd "$W" && pc_resolve "git push"; echo "$?" ) > "$TMPROOT/rc" 2>/dev/null
