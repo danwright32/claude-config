@@ -1563,8 +1563,9 @@ reset_spool
 rm -f "$REVIEW_STAMP"
 bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-20T09:00:00Z","status":"error","agent":"subagent","count":5,"error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
 printf '%s' "$review_payload" | bash "$REVIEW" >/dev/null 2>&1
-find "$TMPDIR" -type f -name '*muted*' 2>/dev/null | grep -q . \
-  && check "#2296 a delivered count leaves no stamp in the temp folder" "$(find "$TMPDIR" -type f -name '*muted*' 2>/dev/null | head -n 3)" \
+temp_muted="$(find "$TMPDIR" -type f -name '*muted*' 2>/dev/null)"
+[ -n "$temp_muted" ] \
+  && check "#2296 a delivered count leaves no stamp in the temp folder" "${temp_muted:0:300}" \
   || check "#2296 a delivered count leaves no stamp in the temp folder" ok
 find "$TMPDIR" -type f -delete 2>/dev/null || true
 bash "$SPOOL_LIB" append "$REPO" '{"ts":"2026-08-29T09:00:00Z","status":"error","agent":"subagent","error":"the named agent transcript does not exist"}' "$PARENT_TRANSCRIPT" >/dev/null 2>&1
