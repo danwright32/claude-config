@@ -40,6 +40,9 @@ if [ ! -f "$HOOK" ]; then
   exit 2
 fi
 
+# The settings run it by its path, never through bash, so a hook that is not executable never runs.
+[ -x "$HOOK" ] && check "the hook is executable, as the settings run it by its path" ok || check "the hook is executable, as the settings run it by its path" "mode lacks x"
+
 SQL_TOOL="mcp__claude_ai_Supabase__execute_sql"
 SF_PREFIX="mcp__claude_ai_SFDC_-_Read_Only__"
 
