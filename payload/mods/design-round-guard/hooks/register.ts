@@ -1604,6 +1604,13 @@ type AskInput = { questions?: { question?: unknown }[]; answers?: unknown; metad
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; afkTimeoutMs?: unknown }
 
 export const register: Register = on => {
+  // The guard's own noun (#2261): the bottom of designRound.answered, a no-op every mod reading what
+  // the guard recorded hooks on its way down, as mod-kit's modkit.login is (#1205).
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, designRound: { answered: async () => undefined } }
+  })
+
   // A subagent's call, judged where its loop is known: refused like the main session's, and told to
   // stop and report rather than ask Dan. One it lets through is not judged again beneath.
   on('tool.call', async ($, e, next) => {
@@ -1701,6 +1708,14 @@ export const register: Register = on => {
       if (typeof chosen !== 'string' || !chosen.trim()) return { r, none: 'Dan gave no answer, so nothing is recorded. Ask him again, or leave it.' }
       return { r, chosen }
     }
+    // Said once his answer is written down in full for the issue (Skip them, Settled), and never
+    // otherwise (#2261), so never for a one call Not a look or wording change pass, for any mod reading
+    // what the guard recorded: picker manners checks the question off on its issue only then. Said
+    // after the write, so it changes nothing the guard decides. A mod listening says its own failures
+    // (picker manners logs whatever its issue write meets); one that throws is caught here, so his
+    // answer, recorded all the same, is never told to Claude as unread.
+    const recorded = (question: string, answer: string, options: { label: string }[]) =>
+      $.designRound.answered({ call: String(e.tool_use_id ?? ''), question, answer, options: options.map(o => o.label) }).catch(() => undefined)
     // What Claude is told beside Dan's answer, in the dialog's own result; a refusal carries none.
     const say = (r: Awaited<ReturnType<typeof next>>, text: string) => (r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), text] })
     // Dan's answer kept for each subject, one at a time: what was kept, and, when a write failed,
@@ -1788,7 +1803,8 @@ export const register: Register = on => {
           return { deny: `Nothing to ask: ${listed(waiting.subjects.map(x => x.label))} already has his answer, so the edit goes through. Make it again.` }
         }
         const s = listed(open.map(x => x.label))
-        const { r, chosen, none } = await asked(skipQuestion(onScreen, waiting.files, open), skipOptions(open))
+        const options = skipOptions(open)
+        const { r, chosen, none } = await asked(skipQuestion(onScreen, waiting.files, open), options)
         if (chosen === undefined) return none ? say(r, none) : r
         // The call stays waiting until his Skip them is recorded, so an answer in his own words, a
         // Run /design-rounds he changes his mind on, or a record that failed can be asked about again
@@ -1803,6 +1819,8 @@ export const register: Register = on => {
           } catch (err) {
             return say(r, `Dan answered ${NOT_LOOK}, but it could not be recorded (${message(err)}), so the edit to ${listed(waiting.files)} stays blocked. Tell him, and ask again.`)
           }
+          // Not said as recorded (lessons review of PR #2274): nothing is kept for the issue, whose
+          // next look changing edit is asked about again, so its question stays open there.
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
           return say(r, `Dan answered ${NOT_LOOK}: this one edit to ${listed(waiting.files)} goes ahead, recorded as his word that it changes neither the look nor any wording. ${again(waiting)} Any other edit that changes the look on ${s} is still held.`)
         }
@@ -1810,6 +1828,7 @@ export const register: Register = on => {
         const kept = await record(open, 'skipped')
         if (kept.why !== undefined) return say(r, partly(SKIP_YES, kept))
         await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
+        await recorded(skipQuestion(onScreen, waiting.files, open), SKIP_YES, options)
         return say(r, `Dan answered ${SKIP_YES}: edits that change the look go ahead on ${s} without a design round, until the next issue. ${again(waiting)}`)
       }
 
@@ -1825,7 +1844,8 @@ export const register: Register = on => {
       if ('deny' in found) return { deny: found.deny }
       const { subjects, from } = found
       const s = listed(subjects.map(x => x.label))
-      const { r, chosen, none } = await asked(settledQuestion(subjects), settledOptions(subjects))
+      const options = settledOptions(subjects)
+      const { r, chosen, none } = await asked(settledQuestion(subjects), options)
       if (chosen === undefined) return none ? say(r, none) : r
       if (chosen === SETTLED_NO) return say(r, `Dan answered ${SETTLED_NO}: ${settledNotYet}`)
       // A typed answer counts as Not yet, and is the next round's feedback (#1336).
@@ -1836,6 +1856,7 @@ export const register: Register = on => {
       // where a skip question about it is told it already has his answer.
       const done = new Set(kept.done.map(x => x.key))
       const resend = from.filter(w => w.subjects.every(y => done.has(y.key))).map(again)
+      await recorded(settledQuestion(subjects), SETTLED_YES, options)
       return say(r, `Dan answered ${SETTLED_YES}: the design is recorded as settled for ${s}, and edits that change the look go ahead there. Now write the settled design file the design rounds skill describes.${resend.length ? ` ${resend.join(' ')}` : ''}`)
     }
     try {
