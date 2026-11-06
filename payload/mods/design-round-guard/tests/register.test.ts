@@ -609,6 +609,59 @@ test("Run /design-rounds, an answer in Dan's own words, and a dialog that closed
   expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
 })
 
+// #2261: picker manners checks the guard's question off on its issue only when the guard says it
+// wrote Dan's answer down for the issue, so that is said for Skip them and Settled, once each is
+// stored, and for nothing the guard does not record for the issue.
+test('the guard says it recorded an answer only once it has: never for one it records nothing for, nor one whose save failed (#2261)', withKit, async ($, on) => {
+  const w = world($, on)
+  const heard: { call: string; question: string; answer: string; options: string[] }[] = []
+  on('designRound.answered', async ($, e, next) => {
+    heard.push({ ...e })
+    return next(e)
+  })
+  const why = refusalOf(await call($, PAGE))
+  await askSkip($, w, why, SKIP_NO)
+  await askSkip($, w, refusalOf(await call($, PAGE)), 'maybe later')
+  w.dialog.afk = true
+  await askSkip($, w, refusalOf(await call($, PAGE)), SKIP_YES)
+  w.dialog.afk = false
+  await askSettled($, w, SETTLED_NO)
+  await askSettled($, w, 'it is fine I guess')
+  w.ctl.storeSetFails = true
+  await askSkip($, w, refusalOf(await call($, PAGE)), SKIP_YES)
+  w.ctl.storeSetFails = false
+  expect(heard).toEqual([])
+  const skipped = await askSkip($, w, refusalOf(await call($, PAGE)), SKIP_YES)
+  expect(contextOf(skipped)).toContain(`Dan answered ${SKIP_YES}`)
+  const shown = w.asked[w.asked.length - 1]?.questions[0]
+  expect(heard).toEqual([{ call: expect.any(String), question: shown?.question, answer: SKIP_YES, options: [SKIP_YES, SKIP_NO, NOT_LOOK] }])
+  expect(heard[0]?.question).toContain(SKIP_QUESTION)
+})
+// Lessons review of PR #2274: Not a look or wording change lets one call through and records nothing
+// for the issue, whose next look changing edit is held and asked about again, so it is never said as
+// recorded, or picker manners would check the issue's question off while it is still open.
+test('the guard says it recorded Settled, and never a not a look change answer, which settles nothing for the issue (#2261)', withKit, async ($, on) => {
+  const w = world($, on)
+  const heard: { answer: string; question: string }[] = []
+  on('designRound.answered', async ($, e, next) => {
+    heard.push({ answer: e.answer, question: e.question })
+    return next(e)
+  })
+  const why = refusalOf(await call($, PAGE))
+  const passed = await askSkip($, w, why, NOT_LOOK)
+  expect(contextOf(passed)).toContain(`Dan answered ${NOT_LOOK}`)
+  expect(heard).toEqual([])
+  // The one call still goes through, unchanged, as before.
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  // Another edit to the page is held again, and the settled question asked about it.
+  expect(refusalOf(await call($, { ...PAGE, content: 'another look' }))).toContain(SKIP_QUESTION)
+  expect(heard).toEqual([])
+  await askSettled($, w, SETTLED_YES)
+  expect(heard.map(x => x.answer)).toEqual([SETTLED_YES])
+  expect(heard[0]?.question).toContain('Is this design settled?')
+  expect(heard[0]?.question).toBe(w.asked[w.asked.length - 1]?.questions[0]?.question)
+})
+
 // Lessons review of #991: the refused call was taken off the waiting list before Dan's answer was
 // acted on, so "ask him again" after a save that failed, or an answer in his own words, was refused.
 test('when Skip them cannot be recorded, or Dan answers in his own words, he can be asked again about the same call', withKit, async ($, on) => {
