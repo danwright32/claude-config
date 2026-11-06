@@ -229,7 +229,7 @@ export const register: Register = on => {
       const rendered = String(ask.metadata?.rendered).trim()
       const q = question(waiting.file, rendered)
       const options = [
-        { label: APPROVE, description: 'Post this wording. The edit goes ahead.' },
+        { label: APPROVE, description: 'The wording is right. Only the edit to the file goes ahead.' },
         { label: CHANGE, description: 'Hold the edit, and say what it should say instead.' },
       ]
       const r = await next({ ...e, questions: [{ question: q, header: HEADER, options, multiSelect: false }] } as typeof e)
