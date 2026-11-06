@@ -1953,11 +1953,20 @@ whether 7 of the first 10 misses ran past the end of the line they partly matche
 also records the length of every quote it placed by part of a line as `part_quote_lengths=`, and
 the report gives both sets of lengths in bands around the 20 character floor (under 10, 10 to 19,
 20 to 29, and up), with an older cut quote counted on its own. `--misses` lists every quote that
-matched no line, one per line. Read on the personal MacBook over the 959 reviews started from
-2026-10-25 to 2026-11-03, 8 of 672 findings were placed by part of a line, every recorded length 60
-characters or more, and the 5 misses were all longer than 60, none holding a line break. Nothing fell
-near the floor, so it decided no finding and stays at 20 (#1701). That is 8 cases from one Mac, too
-few to settle it: the work MacBook's records were not read, so run the report there too.
+matched no line, one per line. Read on the personal MacBook over the 1164 reviews started from
+2026-10-25 to 2026-11-04, 9 of 814 findings were placed by part of a line, every recorded length 60
+characters or more, and the 8 misses kept whole were all 77 characters or longer. Nothing fell near
+the floor, so it decided no finding and stays at 20 (#1701). That is one Mac's records: the work
+MacBook's were not read, so run the report there too.
+
+A miss's mark also says how the quote sits against the file, worked out while the reviewed head is
+in hand: `though it runs across lines A to B` (copied from more than one line), `though its first N
+characters end line L and the rest does not follow it` (it starts as the end of a line and runs on),
+or `nor does it run across or past the end of any line`. The report counts the three. It has to be
+said then, because a review in a worktree records the worktree folder as its `repo=`, and that
+folder is gone by the time anyone reads the report. Of those 8 misses, worked out afterwards by
+finding each reviewed commit in this Mac's checkouts, 1 ran across a line break, 3 ran past the end
+of a line, and 4 did neither (altered or paraphrased quotes).
 
 #### Scoring the review itself
 
@@ -2103,7 +2112,7 @@ A fourth gate reads the same library for a different thing an agent does to its 
 
 ### What a push actually waits on
 
-Thirty-six PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-seven PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2367,6 +2376,17 @@ subagent's `git push --force`, refused
 leaves before anything loads; 0.037 to 0.053 seconds on a subagent's, five readings the same day at
 load average 15 to 17 by a timer around the gate alone, since the tool sends no agent id: one python
 start reads the payload and finds no skip
+
+</td></tr>
+<tr><td>
+
+`slack-drafts-only-gate.sh` (#2302)
+
+</td><td>
+
+2026-11-05: 0.007 to 0.008 seconds on `git push -u origin fix/2302-slack-drafts-only`, five readings
+at load average 48 by bash's timer around the gate alone, since a command naming no Slack endpoint,
+script file or interpreter is answered before anything loads; it acts on a Slack send, not a push
 
 </td></tr>
 <tr><td>
@@ -3095,6 +3115,51 @@ quoted pieces glued together (#1125). It reads every test file the way the shell
 the same scan over that. A test fixture is written whole, in a shape the scan accepts by the rules
 above (spaces, or under a pattern's minimum length); a control that must be token shaped is a hash
 made at run time, so no token sits in the file to be split.
+
+## Slack: drafts only
+
+No session sends or schedules a Slack message; it saves a draft for Dan to send himself (his words,
+2026-11-05: "it should only ever save as draft in slack, never send directly"). The rule is in
+`payload/CLAUDE.md`, and `hooks/slack-drafts-only-gate.sh` enforces it on every Bash call and every
+Slack tool call (#2302). Its rule lives in `hooks/slack_drafts_only_gate.py`, which reads commands
+with the shared `lib/shell-words.py`.
+
+What it refuses:
+
+- `slack_send_message`, `slack_schedule_message`, `slack_post_message` and `slack_reply_to_thread`,
+  from any Slack integration (the plugin or the claude.ai connector), judged by the tool name's last
+  `__` segment. The refusal names `slack_send_message_draft` with the same channel and thread.
+- A command that posts: `curl`, `wget` and their kind aimed at a posting endpoint
+  (`chat.postMessage`, `chat.scheduleMessage`, `chat.postEphemeral`, `chat.meMessage`, an incoming
+  webhook on `hooks.slack.com`, or a `slack_webhook` variable), an interpreter's inline code naming
+  one, a script fed on standard input or in a heredoc naming one, and a script file the command runs
+  (by an interpreter, a shell, `source`, `npx`, `uv run` or its own path) that names one. A shell
+  script is read as commands, so one that only greps for an endpoint passes and one that curls it is
+  refused.
+
+What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
+(a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one exemption (Dan,
+2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
+`package.json`, its pre and post scripts included, and judged as the command line it runs.
+
+What it does not see, so a pass is not read as more than it measured: a module a script imports (so
+repo-digest's `npm run digest`, whose `src/digest.ts` imports the file that posts, still passes), a
+program run by bare name from the PATH, and an endpoint assembled from pieces on purpose. The threat it answers is a session that
+means well choosing the quickest way to post. It fails closed: a python that is missing or crashes,
+or a payload it cannot read that names a send route, is refused with the reason.
+
+Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
+names `chat.postMessage`; `python3 -m unittest` over the same file passes. This is a known false
+positive, left for Dan to decide rather than exempted.
+
+Cost, the gate alone timed by its caller on 2026-11-05: a plain `git push` stays on the quick exit
+and costs 0.007 to 0.008 s in the push gate table's five readings, and 0.010 s as the mean of 10 at
+load average 22, where bare bash took 0.005 s; a call the full rule reads starts python3, 0.05 s for `npm run x`
+or `bin/x`, 72 ms on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, and 154
+ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 calls by a timer
+around the gate, was not reproduced by these and is replaced by them. Suite: `test-slack-drafts-only-gate.sh`.
 
 ## Tests
 
@@ -5117,7 +5182,12 @@ within the hour, and keeps his word with why under `pass:<the call's key>`. Sinc
 question carries `onScreen`, one plain sentence from the session saying what on screen changes
 (which control or area, on which screen) or that nothing visible does; the question leads with it
 and names the issue and file after it, and it is refused, with nothing asked, when the sentence is
-missing, longer than 300 characters or names a file. A typed answer to the skip question records
+missing, longer than 300 characters or names a file. Since #2294 the question is not asked at all
+for an edit to an app's React screen file that the guard's own reading (rules.ts logicOnlyChange)
+finds changes only logic: no JSX, string, comment, number, true or false, word a look is spelled
+in, stylesheet or swapped import. It goes ahead and is kept under `auto:<the call's key>` with why;
+a mod's hook file, any text Dan reads, an issue whose answers cannot be read, and a pass that cannot
+be kept are held and asked as before. A typed answer to the skip question records
 nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in mod-kit's
 one wording (`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not
 yet, with nothing recorded and no toast, and Claude takes his words as the next round's feedback
@@ -6071,7 +6141,12 @@ any log still rotating and the live log, filtered by one `awk` pass to the one r
 branch, so no decision is ever too old to be asked for and the scan is the decisions plus at most a
 few MiB of log. A rebase moves the merge base, so decisions taken before it are no longer asked
 for. A log that cannot be read refuses the command; a fact the command does not depend on that
-cannot be read (no checkout, GitHub not answering for a merge) lets it through. Its structural
+cannot be read (no checkout, GitHub not answering for a merge) lets it through. When the check
+itself fails, a command whose words hold `gh pr create`, `gh pr edit`, `gh pr merge` or the merge
+helper is refused naming why, with the error kept in `errors.jsonl`, as every guard's failure holds
+its call (#2148, #2173): the merge is the last check there is, and the one at merge time runs the
+same code on this Mac only. Any other `gh` command goes ahead with one dim line, as before. Its
+structural
 labels are also what `/next-issue`'s structural slot brings forward: `rank-next-issues.py` gives the
 last pick of every picker to the highest ranked open structural issue when no pick is one, never in
 place of a p0, a p1 or a lesson sweep, and `test-rank-next-issues.sh` holds its list to this one.

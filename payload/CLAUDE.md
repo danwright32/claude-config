@@ -56,7 +56,7 @@ the size. Past either banner every file still loads in full.
 - Use `slack_send_message_draft` (with the thread timestamp for a reply). Never call `slack_send_message` or `slack_schedule_message`, from any Slack integration (the Slack plugin or the claude.ai connector), and never post another way (`curl` to `chat.postMessage`, a webhook, a script) to get around it. The one exemption is `/nudge`, which posts as Nudge Bot and runs only when Dan types it himself (his choice, 2026-11-05).
 - A picker about a Slack reply offers "Save as a draft", never "Post" or "Send". If Dan himself says to post or send, still save a draft and tell him it is waiting in Slack's Drafts. Reword nothing after he has chosen: run `/no-ai-tells` before the picker, so the text he picks is the text in the draft.
 - Afterwards say plainly that it is a draft, where it is (channel, or the person for a DM, and the thread), and that nothing was sent.
-- This covers reactions, canvases and lists only where they post a message to people; reading Slack is unaffected. The enforced blocker is tracked in claude-config (a synced deny on the send tools plus a gate on the other routes).
+- This covers reactions, canvases and lists only where they post a message to people; reading Slack is unaffected. `hooks/slack-drafts-only-gate.sh` refuses every send and schedule tool, and any command, script or package script that names a Slack posting endpoint, except /nudge (claude-config#2302).
 
 ## Progress & Feedback (UI)
 
