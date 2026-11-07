@@ -163,6 +163,8 @@ type Job = {
   slow?: { cmd: string; ms: number }
   /** Its output file is no longer there (#784: an entry left after its process went). */
   missing?: boolean
+  /** The reason $.fs.stat of its output file is refused with, in place of a size (#2150). */
+  statRefusal?: string
   /** ps cannot say whether its group still runs (#1387): it fails with an error. */
   psFails?: boolean
   /** It ends as Claude Code answers the watcher's stop, so the stop's refusal races its end (#1491). */
@@ -403,6 +405,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     if (late?.slow && o.clock) await o.clock.sleep(late.slow.ms)
     const j = list[byPath(path)]
     if (j?.missing) return refusedStat('ENOENT')
+    if (j?.statRefusal) return refusedStat(j.statRefusal)
     if (!j || j.unreadable) return refusedStat('EACCES')
     return statOf(j.size, j.mtime ?? 0)
   })
@@ -2629,6 +2632,20 @@ test('an untraced job whose output file stat refuses for another reason is kept,
   await clock.advance(MIN + 1)
   expect((await jobsOf($)).length).toBe(1)
   expect(w.statProcesses).toBe(0)
+})
+
+// #2150: gone is decided by the failure's code, never by a search of its text. A refusal for
+// another reason whose path happens to hold the word ENOENT keeps the job, where a search of the
+// text for ENOENT found the word in the path and dropped it as gone.
+test('an untraced job whose output file stat is refused for another reason is kept even when its path holds ENOENT (#2150)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'x\n', size: 2, holder: 'error' }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'bash suite.sh', run_in_background: true } as never)
+  job.statRefusal = "EACCES: permission denied, stat '/tmp/ENOENT/job1.output'"
+  await clock.advance(MIN + 1)
+  expect((await jobsOf($)).length).toBe(1)
 })
 
 // #2016: a look, and a leftover's judging with its logs and claim, read every size and time through

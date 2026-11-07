@@ -341,6 +341,10 @@ export MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh"
 export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh"
 export MWR_VERIFY_GATE="$STUBS/verify-gate.sh" MWR_CLOSING_GATE="$STUBS/closing-gate.sh"
 export MWR_WORK_NAMES_GATE="$STUBS/work-names-gate.sh"
+# The helper honours MWR_WORK_NAMES_GATE only under HOOK_TESTS_RUNNING=1, the marker run-all-tests.sh
+# exports to every suite (claude-config#2231); exported here too, so this suite run on its own behaves
+# as it does inside a full run.
+export HOOK_TESTS_RUNNING=1
 
 # --- git with no network and no Mac's own settings ------------------------------------------------
 # A conflicted update is now merged locally when only README.md's mods table rows conflict
@@ -1150,6 +1154,15 @@ out="$(run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1995 a title edited during the wait stops the merge" "1" "$rc"
 check "#1995 in the gate's words" "title now names a work organisation" "$out"
 check_eq "#1995 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+# The work names gate is named by MWR_WORK_NAMES_GATE only under the test marker (claude-config#2231):
+# a script named there that answers nothing would stand in for a privacy gate on every merge this
+# helper makes. Outside a test run the installed gate beside it is asked, so the stub never is.
+fresh "$OLD" 0 "$GREEN"
+out="$(HOOK_TESTS_RUNNING= run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2231 outside a test run the work names gate named in the environment is never asked" "" "$(cat "$ST/work-names-gate-payloads" 2>/dev/null)"
+fresh "$OLD" 0 "$GREEN"
+out="$(HOOK_TESTS_RUNNING=0 run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2231 nor with the test marker set to anything but 1" "" "$(cat "$ST/work-names-gate-payloads" 2>/dev/null)"
 
 # THE CLASS (L30, L96): the gates this helper asks must be every gate a typed merge meets. The list
 # here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that

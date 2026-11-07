@@ -299,6 +299,16 @@
         ]
       },
       {
+        "matcher": "mcp__claude_ai_Supabase__execute_sql|mcp__claude_ai_SFDC_-_Read_Only__(find|getObjectSchema|getRelatedRecords|getUserInfo|listRecentSobjectRecords|soqlQuery)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/read-only-query-allow.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "Bash|mcp__.*__slack_(send_message|send_message_draft|schedule_message|create_canvas|update_canvas|add_list_record|update_list_record)",
         "hooks": [
           {
@@ -307,6 +317,18 @@
             "timeout": 15,
             "onFailure": "block",
             "statusMessage": "Checking the comment carries no Claude session link"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|mcp__.*slack.*|mcp__.*Slack.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/slack-drafts-only-gate.sh",
+            "timeout": 15,
+            "onFailure": "block",
+            "statusMessage": "Checking this saves a Slack draft rather than sending"
           }
         ]
       }

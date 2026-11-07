@@ -52,6 +52,16 @@
 # mod-kit button's press is such a noun (modkit.press), and a switch or a compact behind it takes longer
 # than 10 s, so each publisher takes the press at once and does its work on a timer.
 #
+# So is a function written in place that a noun's code hands to a mod helper which only gives it to a
+# timer the helper starts (picker manners' `offTheDialog($, () => work())`, #2299): read as the timer
+# written in place would be. The helper is known by what it does, never by a list of names (L96):
+# each mention of that parameter in its body lies in the callback of a timer it starts outside any
+# promise it builds, as that callback itself, inside a function written there, or as a whole argument
+# there of a mod function that does nothing but make a function. A helper that also calls it, arms
+# its timer with a call that may run it, or keeps its timer inside a promise it hands back defers
+# nothing; nor does a value worked out at the call (`later($, work())`), nor a call made inside a
+# promise the noun's code builds, which it may be waiting on.
+#
 # What it does not read: a promise stored any other way (inside an object, returned through a
 # chain of variables), a member of a race reached through a variable rather than written in the
 # race, and how long an engine `$` call other than these takes. A hook has its own 10 s budget,
@@ -598,25 +608,166 @@ def declaration(f, at, name):
 BY_PATH = resolve_all(mods)
 
 
-def deferred_spans(f, start, end):
-    """The argument spans of each timer a region starts (#939): what runs after the noun answered.
-    A timer inside a promise the region builds is not: the promise may be what the noun waits on,
-    so the timer's work may be what the noun's answer waits for (lessons review of #952)."""
+def held_promises(f, start, end):
+    """The argument spans of each `new Promise(...)` a region builds."""
     held = []
     for m in re.finditer(r"(?<![\w$.])new\s+Promise\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
         open_at = start + m.end() - 1
         close = closing(f.code, open_at)
         if close is not None:
             held.append((open_at, close))
+    return held
+
+
+def timers_started(f, start, end):
+    """Each timer a region starts: (where its ( is, where its call ends, its callback's span or None).
+    A timer inside a promise the region builds is left out: the promise may be what the noun waits
+    on, so the timer's work may be what the noun's answer waits for (lessons review of #952)."""
+    held = held_promises(f, start, end)
     out = []
     for m in re.finditer(r"(?:\.\s*clock\s*\.\s*after|(?<![\w$.])setTimeout)\s*\(", f.code[start:end]):
         open_at = start + m.end() - 1
         if any(a <= open_at < b for a, b in held):
             continue
         close = closing(f.code, open_at)
-        if close is not None:
-            out.append((f.rel, open_at, close))
+        if close is None:
+            continue
+        args = spans_top(f.code, open_at + 1, close - 1)
+        k = 0 if m.group(0).startswith("setTimeout") else 1
+        out.append((open_at, close, args[k] if len(args) > k else None))
     return out
+
+
+def deferred_spans(f, start, end):
+    """The argument spans of each timer a region starts (#939): what runs after the noun answered."""
+    return [(f.rel, open_at, close) for open_at, close, _ in timers_started(f, start, end)]
+
+
+def function_written(text):
+    """Whether text is one function written in place, an arrow or a function expression, and nothing
+    more: what it holds runs when it is called, never as the text is evaluated."""
+    t = re.sub(r"^async\s+", "", text.strip())
+    if t.startswith("function"):
+        m = re.match(r"function\s*\*?\s*(?:" + IDENT + r")?\s*\(", t)
+        end = closing(t, m.end() - 1) if m else None
+        brace = t.find("{", end) if end is not None else -1
+        if brace < 0 or not re.fullmatch(r"\s*(?::[^{]*)?", t[end:brace]):
+            return False
+        return closing(t, brace) == len(t)
+    if t.startswith("("):
+        end = closing(t, 0)
+        if end is None:
+            return False
+        rest = t[end:]
+    else:
+        m = re.match(IDENT, t)
+        if not m:
+            return False
+        rest = t[m.end() :]
+    arrow = re.match(r"\s*(?::[^=]*?)?=>\s*", rest)
+    if not arrow:
+        return False
+    body = rest[arrow.end() :]
+    # A braced body must be the whole rest; an expression body runs to the end by the grammar.
+    return closing(body, 0) == len(body) if body.startswith("{") else bool(body)
+
+
+def parameter_slots(f, start, body_at):
+    """The parameters of the function written at f.code[start:body_at] (its head), one entry per
+    position: the name, or None where the parameter is not a plain name (destructured, rest)."""
+    head = re.sub(r"^(?:(?:const|let|var)\s+" + IDENT + r"[^=]*=(?!=)\s*)?(?:async\s+)?", "", f.code[start:body_at].strip())
+    if head.startswith("function"):
+        m = re.match(r"function\s*\*?\s*(?:" + IDENT + r")?\s*(?:<[^()]*>)?\s*\(", head)
+        end = closing(head, m.end() - 1) if m else None
+        if end is None:
+            return None
+        params = head[m.end() : end - 1]
+    elif head.startswith("("):
+        end = closing(head, 0)
+        if end is None:
+            return None
+        params = head[1 : end - 1]
+    else:
+        m = re.match(IDENT + r"(?=\s*=>)", head)
+        if not m:
+            return None
+        params = m.group(0)
+    out = []
+    for p in split_top(params):
+        m = re.match(r"\s*(" + IDENT + r")\s*(?=[?:=]|$)", p)
+        out.append(m.group(1) if m else None)
+    return out
+
+
+def makes_only_a_function(df, start, stop):
+    """Whether the mod's function at df.code[start:stop] does nothing but make a function, so a
+    call of it runs none of what it is given (`(work) => () => work()`)."""
+    fn = function_of(df.code[start:stop])
+    return fn is not None and function_written(fn[1])
+
+
+def handed_to_timer(files, df, at, name, callbacks):
+    """Whether the mention of the parameter name at position at in df lies in the callback of a timer
+    the function starts (callbacks) in a way that runs it only when the timer fires: as that callback
+    itself, inside a function written there, or as a whole argument of a call there of a mod function
+    that only makes a function (picker manners' `$.clock.after(0, reportingFailure($, work))`)."""
+    for a, b in callbacks:
+        if not a <= at < b:
+            continue
+        text = df.code[a:b]
+        x = a + len(text) - len(text.lstrip())
+        t = text.strip()
+        if t == name or function_written(t):
+            return True
+        m = re.match(r"(" + IDENT + r")\s*\(", t)
+        if not m or m.group(1) in KEYWORDS:
+            return False
+        open_at = x + m.end() - 1
+        if closing(df.code, open_at) != x + len(t):
+            return False
+        whole = any(s <= at < e and df.code[s:e].strip() == name for s, e in spans_top(df.code, open_at + 1, x + len(t) - 1))
+        found = resolve(files, df, x, m.group(1)) if whole else None
+        return bool(found) and makes_only_a_function(*found)
+    return False
+
+
+DEFERS = {}
+
+
+def defers(files, df, start, stop):
+    """The positions of the parameters the mod's function at df.code[start:stop] only ever hands to a
+    timer it starts (#2299): each mention of the parameter is handed_to_timer, so whatever a caller
+    passes there runs after the caller has returned, as a timer written in place in the caller would.
+    Known by what the function does, never by its name (L96). An empty set when it cannot be read."""
+    key = (id(df), start)
+    if key not in DEFERS:
+        DEFERS[key] = set()
+        fn = function_of(df.code[start:stop])
+        body_at = df.code.rfind(fn[1], start, stop) if fn else -1
+        slots = parameter_slots(df, start, body_at) if body_at >= 0 else None
+        if slots:
+            body_end = body_at + len(fn[1])
+            callbacks = [cb for _, _, cb in timers_started(df, body_at, body_end) if cb]
+            out = set()
+            for i, name in enumerate(slots):
+                if name is None:
+                    continue
+                seen = [body_at + m.start() for m in re.finditer(r"(?<![\w$.])" + re.escape(name) + r"(?![\w$])", fn[1])]
+                if seen and all(handed_to_timer(files, df, at, name, callbacks) for at in seen):
+                    out.add(i)
+            DEFERS[key] = out
+    return DEFERS[key]
+
+
+def deferred_arguments(files, f, open_at, found):
+    """The spans of the arguments the call whose ( is at open_at hands to a timer its function starts
+    (defers): only a function written in place, since anything else is worked out at the call."""
+    slots = defers(files, *found)
+    close = closing(f.code, open_at) if slots else None
+    if close is None:
+        return []
+    args = spans_top(f.code, open_at + 1, close - 1)
+    return [(f.rel, *args[i]) for i in sorted(slots) if i < len(args) and function_written(f.code[args[i][0] : args[i][1]])]
 
 
 for entry, folder, man, files in mods:
@@ -648,6 +799,7 @@ for entry, folder, man, files in mods:
         seen.add((f.rel, start, end))
         regions.append((f, start, end, name))
         deferred += deferred_spans(f, start, end)
+        held = held_promises(f, start, end)
         for m in re.finditer(r"(?<![\w$.])(" + IDENT + r")\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
             # Called from a timer the region starts: it runs after the noun answered (#939).
             if is_deferred(f, start + m.start()):
@@ -656,6 +808,12 @@ for entry, folder, man, files in mods:
                 found = resolve(files, f, start + m.start(), m.group(1))
                 if found:
                     todo.append((*found, m.group(1)))
+                    # A function written in place and handed to a helper that only gives it to a
+                    # timer it starts runs after the noun answered too, as the timer written here
+                    # would (#2299); not inside a promise the region builds, which it may wait on.
+                    open_at = start + m.end() - 1
+                    if not any(a <= open_at < b for a, b in held):
+                        deferred += deferred_arguments(files, f, open_at, found)
         # A function handed over as a shorthand property (`{ wait }`, a noun's method) is that
         # function's code too, as the compiler resolves the name (#895).
         for at, (role, _) in f.refs.items():
