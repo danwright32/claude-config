@@ -442,6 +442,64 @@ allowed "node -e requiring only a builtin"
 run_bash "cat $T/rd/src/digest.ts"
 allowed "reading the importing script runs nothing"
 
+echo "slack drafts only: a file handed to a script as data is not code it runs (claude-config#2362)"
+
+# The two refusals measured 2026-11-06. The end of turn review's TO FILE THESE line, bash
+# lib/issue-spool.sh clear <project> <transcript .jsonl> <stamp .manifest>, over a session transcript
+# whose conversation text names chat.postMessage; and node running a script over a saved gh listing
+# (a .json) that names it. Both were refused (exit 2), each data file read as though it were a script.
+mkdir -p "$T/ds/proj"
+printf '%s\n' '{"type":"user","message":{"content":"curl -X POST https://slack.com/api/chat.postMessage -d text=hi"}}' \
+  '{"type":"assistant","message":{"content":"the gate refuses hooks.slack.com too"}}' > "$T/ds/session.jsonl"
+printf '%s\n' '{"keys":{}}' > "$T/ds/claude-issue-findings.session.manifest"
+printf '%s\n' '[{"number":2302,"title":"Refuse chat.postMessage from every session"}]' > "$T/ds/issues.json"
+printf '%s\n' 'const fs = require("fs");' 'const rows = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));' \
+  'console.log(rows.map((r) => r.title).join(", "));' > "$T/ds/titles.js"
+printf '%s\n' 'import json, sys' 'print(len(json.load(open(sys.argv[1]))))' > "$T/ds/count.py"
+run_bash "bash $DIR/lib/issue-spool.sh clear $T/ds/proj $T/ds/session.jsonl $T/ds/claude-issue-findings.session.manifest"
+allowed "issue-spool.sh clear over a transcript whose conversation names chat.postMessage"
+for reads in "node $T/ds/titles.js $T/ds/issues.json" "cd $T/ds && node titles.js issues.json" \
+  "python3 $T/ds/count.py $T/ds/issues.json" "python3 -I $T/ds/count.py $T/ds/session.jsonl"; do
+  run_bash "$reads"
+  allowed "a script reading a data file that names an endpoint, run as: $reads"
+done
+
+# The controls: a data file is still code where the program runs it, and a script that can send, or
+# runs what it is handed, still has the files it is handed read.
+for runs in "node $T/ds/issues.json" "python3 $T/ds/session.jsonl" "bash $T/ds/session.jsonl" \
+  "python3 -I $T/ds/issues.json $T/ds/count.py"; do
+  run_bash "$runs"
+  refused "a data file naming an endpoint given to the program as its script: $runs"
+done
+run_bash "python3 $T/alert.py $T/ds/issues.json"
+refused "a script whose own code posts, handed a data file"
+says "that refusal names the script that posts" "alert.py"
+printf '%s\n' '{"url": "https://slack.com/api/chat.postMessage", "text": "hi"}' > "$T/ds/msg.json"
+printf '%s\n' 'const fs = require("fs");' 'const m = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));' \
+  'await fetch(m.url, { method: "POST", body: JSON.stringify({ text: m.text }) });' > "$T/ds/post.mjs"
+run_bash "node $T/ds/post.mjs $T/ds/msg.json"
+refused "a script that sends a request, handed a data file naming the endpoint"
+says "that refusal names the data file" "msg.json"
+printf '%s\n' 'import json, sys, urllib.request' 'm = json.load(open(sys.argv[1]))' \
+  'urllib.request.urlopen(urllib.request.Request(m["url"], data=m["text"].encode()))' > "$T/ds/post.py"
+run_bash "python3 $T/ds/post.py $T/ds/msg.json"
+refused "a Python script that sends a request, handed a data file naming the endpoint"
+printf '%s\n' 'curl -s -X POST https://hooks.slack.com/services/T0/B0/x -d text=hi' > "$T/ds/hook.conf"
+printf '%s\n' '#!/bin/bash' 'cfg="$1"' 'source "$cfg"' > "$T/ds/load.sh"
+printf '%s\n' '#!/bin/bash' 'exec bash "$@"' > "$T/ds/run-it.sh"
+run_bash "source $T/ds/hook.conf"
+refused "a sourced file that posts"
+run_bash "bash $T/ds/load.sh $T/ds/hook.conf"
+refused "a shell script that sources the file it is handed, which posts"
+run_bash "bash $T/ds/run-it.sh $T/ds/hook.conf"
+refused "a shell script that runs the file it is handed, which posts"
+printf '%s\n' 'import runpy, sys' 'runpy.run_path(sys.argv[1])' > "$T/ds/runner.py"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/ds/job.txt"
+run_bash "python3 $T/ds/runner.py $T/ds/job.txt"
+refused "a Python script that runs the file it is handed, which posts"
+run_bash "python3 $T/ds/count.py $T/alert.py"
+refused "a script file handed to another script is still read, since a wrapper may run it"
+
 echo "slack drafts only: /nudge is the one script let through"
 
 if [ -f "$NUDGE" ]; then check "nudge.py is where the gate expects it, beside the hooks" ok

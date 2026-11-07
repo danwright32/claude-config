@@ -3166,6 +3166,22 @@ package and is not read; a relative import that names nothing there is refused. 
 (`node -e`, `python3 -c`) or fed on standard input has its imports followed from the folder it runs
 in. Over the 110 Python files in this payload, run as `python3 <file>`, the refused count stayed at 2.
 
+A file handed to a script as data is not code it runs (#2362). The first word after the program that
+names a file is the script, and is read whatever it is called (`python3 issues.json` still refuses
+one naming an endpoint). A later file shaped like data (an extension no interpreter here runs, such
+as `.json`, `.jsonl`, `.txt` or `.manifest`, and no `#!`) is an argument the script reads, so an
+endpoint named in it is not a send: the end of turn review's `issue-spool.sh clear` over a session
+transcript, and `node titles.js issues.json` over a saved `gh` listing, were both refused on
+2026-11-06 and now pass. Such a file is still read when the script can act on it as more than data: a
+shell script that runs `curl` (or its kind), or runs, sources or evals a file named by its arguments;
+a Python or JavaScript script, or a local module it imports, that names a way to send a request
+(`fetch`, `urllib`, `requests`, ...) or run code (`exec`, `runpy`, `subprocess`, `child_process`, a
+`require` of a computed path, ...); and a script of any other kind. A later file with a script's
+extension, a `#!` or no extension at all is read as before, since a wrapper may run it. Arguments a
+script passes on to another program are not followed there. Cost: the clear line takes about 0.21 s
+in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
+with its arguments as well as for what it names.
+
 What it does not see, so a pass is not read as more than it measured: an import of a package or
 through a path alias (`@/lib/x`), a Python module that is not on disk beside the script, a module run
 with `python3 -m`, an import path built at run time, a program run by bare name from the PATH, and an

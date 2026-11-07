@@ -20,7 +20,9 @@ Two routes are judged:
     npm test) is followed through the nearest package.json, pre and post scripts included, and
     judged as the command line it runs. The local modules a JavaScript, TypeScript or Python script
     imports, from a file, inline code (`node -e`, `python3 -c`) or its input, are followed, each
-    judged the same way (claude-config#2318). The one script let through is /nudge, at
+    judged the same way (claude-config#2318). A file a script is handed as data (shaped like data,
+    after the script) is not read for an endpoint unless the script can send a request or run what it
+    is handed (claude-config#2362). The one script let through is /nudge, at
     skills/nudge/nudge.py beside this hooks folder, by its real path; a copy anywhere else is refused
     like any other script that posts.
 
@@ -93,6 +95,26 @@ PY_IMPORT_LINE = re.compile(r"^[ \t]*(?:from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+\
 # payload: the largest reaches 11 (repo-digest's src/manage-repos.ts; src/digest.ts reaches 8,
 # NurseDex's largest 5), and none imports a local file that could not be found.
 IMPORT_MAX_FILES = 300
+# A file handed to a script is DATA, not code it runs, when it is shaped like data: an extension none
+# of these interpreters runs, and no #! (claude-config#2362). A file with no extension is read as
+# code, since a script is often written without one. The two refusals that asked for this were a
+# session transcript (.jsonl) handed to issue-spool.sh clear and a saved gh listing (.json) handed to
+# a node script; each named chat.postMessage in text nobody runs.
+CODE_EXT = SHELL_EXT + JS_EXT + (".ksh", ".py", ".pyw", ".rb", ".pl", ".pm", ".php", ".applescript", ".scpt",
+                                 ".lua", ".tcl", ".r", ".jl", ".ps1")
+# What lets a script act on a data file as more than data: sending a request (whose address the file
+# can hold) or running code (which the file can be). A Python or JavaScript script, or a module it
+# imports, naming any of these still has the data files it is handed read. Read from the text, comments
+# included, which can only refuse more.
+PY_ACTS = re.compile(r"\b(urllib|urlopen|requests|httpx|aiohttp|http\.client|pycurl|socket|websockets?|"
+                     r"subprocess|os\.(system|popen|exec\w*|spawn\w*)|exec|execfile|eval|compile|runpy|"
+                     r"__import__|import_module|pty)\b")
+JS_ACTS = re.compile(r"\b(fetch|axios|got|undici|XMLHttpRequest|WebSocket|ky|superagent|node-fetch|"
+                     r"https?\.(request|get)|child_process|execSync|execFileSync|spawnSync|execFile|spawn|"
+                     r"eval|Function|vm|Deno\.(run|Command)|Bun\.(spawn|\$))\b|"
+                     r"""\b(require|import)\s*\(\s*[^'"`\s)]|['"](node:)?(https?|net|tls|http2|dgram)['"]""")
+# A shell expansion of the arguments a script was handed: $1 to $9, $@, $*, and their braced forms.
+POSITIONAL = r"\$\{?[1-9@*]"
 
 
 def load_reader():
@@ -193,6 +215,18 @@ class Judge:
         run what the gate never saw; so is a script reaching more than IMPORT_MAX_FILES modules. An
         import whose path is assembled at run time (a template holding ${...}, importlib) is not
         followed: no file is named to read."""
+        for why, via, target, found in self.modules(start, origin, root, body, kind):
+            if why:
+                return why
+            hit = MARKER.search(found)
+            if hit:
+                return f"{via} ({target}), which posts to Slack (it names {hit.group(0)})"
+        return None
+
+    def modules(self, start, origin, root, body, kind):
+        """Each local module a script's imports reach, as (None, how it is reached, its file, its text),
+        each once; or, where an import cannot be followed, (the reason, None, None, None) and no more.
+        The one walk both imports() and acts() read, so the two cannot disagree about what is reached."""
         seen = {origin} if origin else set()
         queue = [(origin, root, body, start)]
         while queue:
@@ -200,25 +234,26 @@ class Judge:
             for spec, targets in self.import_targets(text, kind, cur_dir, root):
                 via = f"{chain}, which imports {spec}"
                 if targets is False:
-                    return f"{via}, a module the gate cannot find, so it cannot see what that runs"
+                    yield f"{via}, a module the gate cannot find, so it cannot see what that runs", None, None, None
+                    return
                 for target in targets:
                     target = os.path.realpath(target)
                     if target in seen:
                         continue
                     seen.add(target)
                     if len(seen) > IMPORT_MAX_FILES:
-                        return (f"{start} imports more than {IMPORT_MAX_FILES} modules, past what the gate "
-                                "reads, so it cannot see what they run")
+                        yield (f"{start} imports more than {IMPORT_MAX_FILES} modules, past what the gate "
+                               "reads, so it cannot see what they run"), None, None, None
+                        return
                     try:
                         with open(target, "rb") as f:
                             found = f.read(MAX_FILE).decode("utf-8", "replace")
                     except OSError:
-                        return f"{via} ({target}), a module the gate cannot read, so it cannot see what that runs"
-                    hit = MARKER.search(found)
-                    if hit:
-                        return f"{via} ({target}), which posts to Slack (it names {hit.group(0)})"
+                        yield (f"{via} ({target}), a module the gate cannot read, so it cannot see what that "
+                               "runs"), None, None, None
+                        return
+                    yield None, via, target, found
                     queue.append((target, os.path.dirname(target), found, f"{via} ({os.path.basename(target)})"))
-        return None
 
     def import_targets(self, text, kind, cur_dir, root):
         """(the import as written, the files it runs, or False when it names a local file not there),
@@ -418,13 +453,130 @@ class Judge:
         Which word is the script depends on each program's own option table (python3 -I takes no
         value, ruby -I does), and a table that is wrong for one program hides the script behind an
         option. So every word naming a file is read, which can only refuse more (lessons review,
-        2026-11-05, round 3)."""
+        2026-11-05, round 3).
+
+        Except a file the script is handed as DATA (claude-config#2362): one after the first word
+        naming a file (the script, whatever any option table says), shaped like data (data_shaped), is
+        an argument the script reads, not code the program runs, so text in it naming an endpoint is
+        not a send. It is still read when the script can act on it as more than data (acts): sending a
+        request, whose address the file can hold, or running code, which the file can be."""
+        script, acts = None, None
         for w in words[1:]:
             if w.startswith("-") or w.startswith("+") or self.sw.REDIRECT_WORD.match(w):
+                continue
+            path = self.resolve(w, d)
+            if script and os.path.isfile(path) and self.data_shaped(path):
+                if acts is None:
+                    acts = self.acts(script[1], d, shell_hint, lang) or ""
+                if not acts:
+                    continue  # data the script reads; it neither sends nor runs what it is handed
+                try:
+                    with open(path, "rb") as f:
+                        hit = MARKER.search(f.read(MAX_FILE).decode("utf-8", "replace"))
+                except OSError:
+                    continue  # unreadable to us is unreadable to the script that would read it
+                if hit:
+                    return f"the script {script[0]} {acts}, and is handed {w}, which names {hit.group(0)}"
                 continue
             reason = self.script(w, d, depth, shell_hint, lang)
             if reason:
                 return reason
+            if script is None and os.path.isfile(path):
+                script = (w, path)
+        return None
+
+    @staticmethod
+    def data_shaped(path):
+        """Whether a file is shaped like data rather than a script: an extension none of the programs
+        this gate reads runs (CODE_EXT), and no #! line."""
+        ext = os.path.splitext(path)[1].lower()
+        if not ext or ext in CODE_EXT:
+            return False
+        try:
+            with open(path, "rb") as f:
+                return not f.read(2).startswith(b"#!")
+        except OSError:
+            return True
+
+    def acts(self, path, d, shell_hint, lang):
+        """How a script can act on a file it is handed as more than data, as a phrase ("sends a request
+        (curl)", "runs the file it is handed (source)"), or None when it only reads what it is handed.
+
+        A shell script acts when one of its commands sends a request, or runs, sources or evals a
+        file or command named by the arguments it was handed (or a variable set from them). A Python
+        or JavaScript script acts when it, or a local module it imports, names a way to send a request
+        or to run code (PY_ACTS, JS_ACTS). A script of any other kind, one that cannot be read, and
+        one whose imports cannot all be followed are taken to act: only a script seen to do neither
+        has its data files left unread. Arguments a script passes on to ANOTHER program are not
+        followed there: that program is judged for what it names, not for what it does with them."""
+        real = os.path.realpath(path)
+        try:
+            with open(real, "rb") as f:
+                body = f.read(MAX_FILE).decode("utf-8", "replace")
+        except OSError:
+            return "could not be read to see what it does with its arguments"
+        first = body.split("\n", 1)[0]
+        if shell_hint or real.endswith(SHELL_EXT) or SHELL_BANG.match(first):
+            return self.shell_acts(body, d)
+        kind = self.language(real, first, lang)
+        if not kind:
+            return "is a kind of script the gate does not read for what it does with its arguments"
+        pattern = JS_ACTS if kind == "js" else PY_ACTS
+        hit = pattern.search(body)
+        if hit:
+            return f"can send a request or run code ({hit.group(0).strip()})"
+        for why, _, target, found in self.modules("it", real, os.path.dirname(real), body, kind):
+            if why:
+                return f"imports a module the gate cannot follow ({why})"
+            hit = pattern.search(found)
+            if hit:
+                return f"can send a request or run code through {os.path.basename(target)} ({hit.group(0).strip()})"
+        return None
+
+    def shell_acts(self, body, d):
+        """acts() for a shell script's body: the first of its commands that sends a request, or runs
+        what the script was handed, as a phrase, or None."""
+        names = {"OPTARG"} if "getopts" in body else set()
+        while True:
+            given = POSITIONAL + (r"|\$\{?(?:" + "|".join(sorted(names)) + r")\b" if names else "")
+            found = {m.group(1) for m in re.finditer(
+                r"(?:^|[\s;&|(])(?:(?:local|readonly|export|declare|typeset)\s+(?:-\w+\s+)*)?([A-Za-z_]\w*)="
+                r"[^\n;]*?(?:" + given + ")", body)}
+            found |= {m.group(1) for m in re.finditer(
+                r"\bfor\s+([A-Za-z_]\w*)\s*(?:;|\n|\s+do\b|\s+in\b[^\n;]*?(?:" + given + "))", body)}
+            if found <= names:
+                break
+            names |= found
+        handed = re.compile(given)
+        try:
+            records = self.sw.every_command(body, d)
+        except Exception:
+            return "could not be read as commands to see what it does with its arguments"
+        for _, text, _, _, _ in records:
+            rest, _ = self.sw.command_rest(text)
+            words = self.sw.command_words(rest)
+            if not words:
+                continue
+            if re.match(r"[A-Za-z_]\w*(\[[^]]*\])?\+?=", words[0]):
+                continue  # an assignment (list+=("$1") too), which runs nothing
+            name = os.path.basename(words[0])
+            if handed.search(words[0]):
+                return f"runs a command named by its arguments ({words[0]})"
+            if name in SENDERS:
+                return f"sends a request ({name})"
+            if name in ("source", ".", "eval"):
+                if any(handed.search(w) for w in words[1:]):
+                    return f"runs the file it is handed ({name})"
+                continue
+            if name in SHELLS or INTERPRETER.match(name):
+                operand, inline, _ = self.operands(words)
+                if inline:
+                    code = next((words[k + 1] for k in range(1, len(words) - 1)
+                                 if words[k] in INLINE or INLINE_CLUSTER.match(words[k])), "")
+                    if handed.search(code):
+                        return f"runs code it is handed ({name})"
+                elif operand and handed.search(operand):
+                    return f"runs the file it is handed ({name})"
         return None
 
     def package(self, name, words, d, depth):
