@@ -60,6 +60,9 @@ import {
   heldUnder,
   shellKey,
   shellTargets,
+  scriptProgram,
+  scriptWrite,
+  unreadPart,
   questionKey,
   legacyQuestionKey,
   restructureQuestion,
@@ -70,8 +73,10 @@ import {
   type Held,
   type Question,
   type Ranked,
+  type ShellRun,
   type ShellTarget,
 } from './rules.ts'
+import { currentText } from './mod-kit/inputs.ts'
 
 // The area check (claude-config#1506), phase 2 (#1509): the HOLD. Dan, 2026-10-22: sessions build
 // in fragile areas without noticing that the area already has open structural issues, or is growing
@@ -641,6 +646,24 @@ const folderAt = async ($: EngineInterface, path: string): Promise<boolean | { u
 
 type Unread = Extract<ShellTarget, { unread: string }>
 
+// Whether a script handed a folder can write there (#2407): its file read as mod-kit reads every file
+// a command names (currentText, which never opens a device or a fifo), fed to its interpreter as the
+// program it runs (scriptProgram), and read by mod-kit's one reader of what a command writes, run from
+// the folder the session is in. `writes: null` only when every step answered and the script writes
+// nothing the area check could judge; anything that cannot be read, or any write, is why it may write
+// there, so the folder is judged as before (fail closed).
+const scriptWritesIn = async ($: EngineInterface, run: ShellRun): Promise<{ writes: string | null }> => {
+  if (!run.path) return { writes: `${run.what} is named by no path that can be read` }
+  const cur = await currentText({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, run.path)
+  if (!('text' in cur)) return { writes: 'unreadable' in cur ? `the script cannot be read: ${cur.unreadable}` : 'the script is not there' }
+  const prog = scriptProgram(run, cur.text)
+  if ('unread' in prog) return { writes: prog.unread }
+  const [cwd, home] = await Promise.all([$.session.cwd(), homeOf($)])
+  const unread = unreadPart(await $.modkit.pipeline({ command: prog.command, cwd, home }), prog.delimiter)
+  if (unread) return { writes: unread }
+  return { writes: scriptWrite(await $.modkit.writes({ command: prog.command, cwd, home }), home) }
+}
+
 // A path a command writes, judged as its first edit would be; then, for a write marked `tree` or a
 // path the disk says is a folder (#2321), each file under it the area check could hold, which refuses
 // the command naming that file. A folder whose files cannot be listed, too many of them to judge one
@@ -661,6 +684,20 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
     }
     if (kind === false) return PASS
     if (kind !== true) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at }
+    // A folder handed to a script whose text writes nothing is only read (#2407); the pass is logged,
+    // so a reading that lets everything through shows in the log rather than as quiet.
+    if (t.run) {
+      let can: { writes: string | null }
+      try {
+        can = await scriptWritesIn($, t.run)
+      } catch (err) {
+        can = { writes: `its writes could not be read (${msg(err)})` }
+      }
+      if (can.writes === null) {
+        await logged($, at, { v: 1, kind: 'script-reads', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), agent, word: t.word, script: t.run.path, decision: 'passed' })
+        return PASS
+      }
+    }
   }
   let under: Awaited<ReturnType<typeof underTree>>
   try {

@@ -43,6 +43,13 @@ const WRITES: Record<string, unknown> = {
   'python3 rewrite.py src/locked': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/locked', path: '/w/app/src/locked' }] }] },
   'cp -R lib/. src/': { files: [{ word: 'src/.', path: '/w/app/src/.', sources: ['/w/app/lib'] }], changes: [], unnamed: [] },
   'rsync -a lib/ src/': { files: [{ word: 'src/', path: '/w/app/src', sources: ['/w/app/lib'], mayBeFolder: true }], changes: [], unnamed: [] },
+  // #2407: a folder handed to a script whose own text is read for what it writes there.
+  'bash scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  './scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a script file run directly', script: './scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash rewrite.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash wrap.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'wrap.sh', path: '/w/app/wrap.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash locked.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'locked.sh', path: '/w/app/locked.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  './odd.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a script file run directly', script: './odd.sh', path: '/w/app/odd.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
 }
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
@@ -734,6 +741,38 @@ test('a folder holding 26 files that could be held is held whole as unread, judg
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'gen', decision: 'held' })
   await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
   expect((await bash($ as never, w, 'python3 rewrite.py gen', {}, 'b2')).result).toBe('done')
+})
+
+// #2407: a folder handed to a script is held only when the script can write there. Its file is read,
+// and mod-kit's one reader of what a command writes reads it as the program its interpreter runs;
+// a script that cannot be read, or that writes anything at all, is held as #2321 holds it.
+const SCAN = 'for f in "$1"/*.ts; do\n  grep -n TODO "$f" 2>/dev/null\ndone\nwc -l "$1"/*.ts | sort -n\ncommand -v git >/dev/null 2>&1\n'
+
+test('a read only scan handed a folder holding held files runs judging no file, run by bash or directly (#2407)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/scan.sh`] = `#!/usr/bin/env bash\n${SCAN}`
+  expect((await bash($ as never, w, 'bash scan.sh src/')).result).toBe('done')
+  expect((await bash($ as never, w, './scan.sh src/', {}, 'b2')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+})
+
+test('a script that writes into the folder it is handed, or runs another script, is still held, naming the file (#2407)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/rewrite.sh`] = `#!/bin/bash\n${SCAN}sed -i '' 's/a/b/' "$1"/*.ts\n`
+  w.files[`${APP}/wrap.sh`] = `${SCAN}python3 tools/fix.py "$1"\n`
+  expect(refusal(await bash($ as never, w, 'bash rewrite.sh src/'))).toContain('The area check held this Bash command, which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, 'bash wrap.sh src/', {}, 'b2'))).toContain('The area check held this Bash command, which writes src/big.ts.')
+})
+
+test('a script handed a folder that cannot be read, is not there, or runs under an interpreter mod-kit does not read is still held (#2407)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/locked.sh`] = SCAN
+  w.ctl.unreadableFiles.push(`${APP}/locked.sh`)
+  w.files[`${APP}/odd.sh`] = `#!/usr/bin/env frob\n${SCAN}`
+  expect(refusal(await bash($ as never, w, 'bash locked.sh src/'))).toContain('which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, './odd.sh src/', {}, 'b2'))).toContain('which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, SCRIPT_SRC, {}, 'b3'))).toContain('which writes src/big.ts.')
 })
 
 // #2373: a write marked as reaching a whole folder (find with exec, git putting a folder back) is

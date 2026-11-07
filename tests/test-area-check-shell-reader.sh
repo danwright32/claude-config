@@ -84,15 +84,18 @@ const NOTE = `bash ~/.claude/hooks/lib/issue-spool.sh note . "${F}" "builder 225
 is('a findings note to the installed spool helper is not judged, whatever its text holds', NOTE, [])
 is('a findings note chained with an in place edit still judges the edit', `${NOTE} && sed -i '' 's/a/b/' src/lib/slack.ts`, [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
 is('an edit run by substitution inside the note text is still judged', `bash ~/.claude/hooks/lib/issue-spool.sh note . "$(sed -i '' s/a/b/ src/lib/slack.ts)" "x"`, [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+// Each path a script is handed carries the script (#2407), so a folder among them is judged by what it writes.
+const COPY = { what: 'a bash script file', path: '/w/app/payload/hooks/lib/issue-spool.sh' }
+const HELPER = { what: 'a bash script file', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh' }
 is('a copy of the spool helper in a checkout is judged as any script', `bash payload/hooks/lib/issue-spool.sh note . "${F}" "builder 2254"`, [
-  { word: 'note', path: '/w/app/note' },
-  { word: '.', path: '/w/app' },
+  { word: 'note', path: '/w/app/note', run: COPY },
+  { word: '.', path: '/w/app', run: COPY },
   { word: F, unread: `a bash script file is handed ${F}, built as the command runs` },
-  { word: 'builder 2254', path: '/w/app/builder 2254' },
+  { word: 'builder 2254', path: '/w/app/builder 2254', run: COPY },
 ])
 is("the spool helper's other subcommands are judged as before", 'bash ~/.claude/hooks/lib/issue-spool.sh append . "$RECORD"', [
-  { word: 'append', path: '/w/app/append' },
-  { word: '.', path: '/w/app' },
+  { word: 'append', path: '/w/app/append', run: HELPER },
+  { word: '.', path: '/w/app', run: HELPER },
   { word: '$RECORD', unread: 'a bash script file is handed $RECORD, built as the command runs' },
 ])
 
@@ -104,7 +107,7 @@ is('quoted prose holding a wildcard and a question mark is judged as the one fil
 is('a pattern quoted in double quotes, or only around its wildcard, is judged the same way', `python3 probe.py "src/*.ts" src/'*'.ts`, [{ word: 'src/*.ts', path: '/w/app/src/*.ts' }])
 unread('an unquoted pattern handed to a script file is still unread', 'python3 probe.py src/*.ts', 'src/*.ts', 'a pattern', '/w/app/src')
 unread('a dollar sign in double quotes, filled in as the command runs, is still unread', 'python3 probe.py "$OUT/*.ts"', '$OUT/*.ts', 'built as the command runs', undefined)
-is('a variable the command sets to a held file is judged as that file', 'X=src/big.ts; python3 probe.py "$X"', [{ word: '$X', path: '/w/app/src/big.ts' }])
+is('a variable the command sets to a held file is judged as that file', 'X=src/big.ts; python3 probe.py "$X"', [{ word: '$X', path: '/w/app/src/big.ts', run: { what: 'a python3 script file', path: '/w/app/probe.py' } }])
 is('a quoted pattern beside a redirect into a file still judges that file', "python3 probe.py 'src/*.ts' > src/big.ts", [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts' }])
 is('a quoted pattern beside a heredoc written into a file still judges that file', "python3 probe.py 'src/*.ts' && cat > src/big.ts <<'EOF'\nx\nEOF", [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts' }])
 unread('a quoted pattern handed to a tool, which expands its own operands, is still unread', "npx foo 'src/*.ts'", 'src/*.ts', 'a pattern', '/w/app/src')
