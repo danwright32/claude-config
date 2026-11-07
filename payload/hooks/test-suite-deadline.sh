@@ -514,14 +514,20 @@ esac
 # run directly, and nothing required one: a behaviour each suite must opt into is a convention
 # until something fails on the one that does not (L621, L613).
 #
-# A suite arms when it SOURCES the helper and CALLS suite_deadline_arm, each on a line of its own
-# that is code rather than a comment, so a suite that only talks about the deadline, as this file
-# does in its fixtures' text, does not answer for one that has it (L135, L178).
-arms_deadline(){   # arms_deadline <suite file> -> 0 when it sources the helper and arms it
-  grep -Eq '^[[:space:]]*(\.|source)[[:space:]]+[^#]*suite-deadline\.sh' "$1" 2>/dev/null || return 1
-  grep -Eq '^[[:space:]]*suite_deadline_arm([[:space:]]|$)' "$1" 2>/dev/null || return 1
-  return 0
-}
+# Whether a suite arms is lib/suite-arms-check.sh's answer, the one scanners-before-push.sh also
+# asks of each suite a push adds or changes (claude-config#2330), so the push and this scan cannot
+# disagree about a file. Missing, this check cannot be made, and that is a failure, never a pass.
+if . "$DIR/lib/suite-arms-check.sh" 2>/dev/null && declare -F suite_arms_deadline >/dev/null; then
+  arms_deadline(){ suite_arms_deadline "$1"; }
+else
+  check "#2330 lib/suite-arms-check.sh loads, the one answer to whether a suite arms" "it is missing or holds no suite_arms_deadline"
+  arms_deadline(){ return 2; }
+fi
+# A file it cannot read is said to be unread (2), never judged unarmed or armed.
+arms_deadline "$TMPROOT/probe-not-there.sh"; ad_rc=$?
+[ "$ad_rc" -eq 2 ] \
+  && check "#2330 a suite that cannot be read is reported unread, not judged" ok \
+  || check "#2330 a suite that cannot be read is reported unread, not judged" "returned $ad_rc"
 # Seen to fail before it is trusted (L1): each way of not arming is refused, and the real shape
 # passes. Without the pass, a predicate refusing everything would satisfy the refusals.
 printf '#!/usr/bin/env bash\necho no deadline here\n' > "$TMPROOT/probe-none.sh"
@@ -545,13 +551,20 @@ arms_deadline "$TMPROOT/probe-armed.sh" \
 scan_dirs="$(HOOK_TESTS_LIST_ONLY=1 bash "$DIR/run-all-tests.sh" 2>/dev/null)"
 scanned=0
 unarmed=""
+unread=""
 while IFS= read -r d; do
   [ -n "$d" ] || continue
   for s in "$d"/test-*.sh; do
     [ -f "$s" ] || continue
     scanned=$((scanned + 1))
-    arms_deadline "$s" || unarmed="$unarmed  $s
-"
+    arms_deadline "$s"
+    case $? in
+      0) ;;
+      1) unarmed="$unarmed  $s
+" ;;
+      *) unread="$unread  $s
+" ;;
+    esac
   done
 done <<EOF
 $scan_dirs
@@ -564,9 +577,16 @@ EOF
 if [ -z "$unarmed" ]; then
   check "#465 every suite arms its own deadline" ok
 else
-  check "#465 every suite arms its own deadline" "these do not source lib/suite-deadline.sh and call suite_deadline_arm, so run directly they have no wall clock and nothing stops what they start:
+  # The wording is the library's, the same words the push gate refuses with (#2330).
+  check "#465 every suite arms its own deadline" "these $SUITE_ARMS_WHY:
 $unarmed"
 fi
+# A suite that could not be read, or a check that could not load, is said in those words: neither
+# armed nor unarmed, and never a pass (#2330, L10).
+[ -z "$unread" ] \
+  && check "#2330 every suite could be read and judged" ok \
+  || check "#2330 every suite could be read and judged" "these could not be read, or lib/suite-arms-check.sh did not load:
+$unread"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

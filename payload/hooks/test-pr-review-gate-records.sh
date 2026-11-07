@@ -60,13 +60,28 @@ refused(){ # refused <label> <command>
 }
 
 # The judge loads lib/shell-words.py by its path, which leaves a bytecode cache beside it unless told
-# not to, and lib/ is installed and synced (#1017). Judged on the gate under test's own lib/, first,
-# before any other case has run the judge and left one to compare against.
-GATE_LIB="$(dirname "$GATE")/lib"
-pyc_before="$(ls -A "$GATE_LIB/__pycache__" 2>/dev/null)"
-fire "grep -n ar_readkeys_issue payload/hooks/test-pr-review.sh" >/dev/null
-pyc_after="$(ls -A "$GATE_LIB/__pycache__" 2>/dev/null)"
-[ "$pyc_after" = "$pyc_before" ] && ok || bad "#2050 judging a command leaves no bytecode cache in the hooks' lib/ (before '$pyc_before', after '$pyc_after')"
+# not to, and lib/ is installed and synced (#1017). Judged on a private copy of the gate under test
+# and its lib/, made with no cache in it, so whatever cache appears there is this one command's
+# write. Listing the shared lib/ before and after instead blamed the command for any other suite
+# importing a lib Python file in the same moment (#2345, L375). The two variables that move or stop
+# bytecode writes are cleared for this command, so a runner setting either cannot pass it unmeasured.
+OWN_HOOKS="$WORKDIR/own-hooks"
+mkdir -p "$OWN_HOOKS/lib"
+cp "$GATE" "$OWN_HOOKS/pr-review-gate.sh"
+find "$(dirname "$GATE")/lib" -mindepth 1 -maxdepth 1 ! -name __pycache__ -exec cp -R {} "$OWN_HOOKS/lib/" \;
+find "$OWN_HOOKS/lib" -name __pycache__ -prune -exec rm -rf {} +
+got="$(unset PYTHONDONTWRITEBYTECODE PYTHONPYCACHEPREFIX; GATE="$OWN_HOOKS/pr-review-gate.sh"; fire "grep -n ar_readkeys_issue payload/hooks/test-pr-review.sh")"
+rc="${got##*$'\n'}"; out="${got%$'\n'*}"
+pyc_own="$(cd "$OWN_HOOKS/lib" && find . -name '*.pyc' 2>/dev/null)"
+# Let through means the judge ran to its answer, so an empty cache is a measurement, not a gate that
+# stopped before reaching python.
+if [ "$rc" != 0 ] || [[ "$out" == *"Refused"* ]]; then
+  bad "#2050 the private copy of the gate let the judged command through, so its bytecode was measured (exit $rc): ${out:0:600}"
+elif [ -n "$pyc_own" ]; then
+  bad "#2050 judging a command leaves no bytecode cache in the hooks' lib/ (found: $pyc_own)"
+else
+  ok
+fi
 
 # ---- let through: the real commands refused on 2026-11-01 ----
 # Held in text files beside this suite, not in a heredoc here, so the pipe into head in the second
