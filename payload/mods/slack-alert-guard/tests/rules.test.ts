@@ -5,10 +5,13 @@ import {
   REEXPORT_HOPS,
   SENDER_PREFILTER,
   agentRefusal,
+  copyBuilder,
   editedText,
   handsOn,
   heldText,
+  importTerms,
   inScope,
+  isMessage,
   isOwnRecord,
   isProse,
   linkPattern,
@@ -20,8 +23,10 @@ import {
   renderedProblem,
   searchTerm,
   slackMarked,
+  stringsOf,
   templateLines,
   termsPattern,
+  testFile,
   textTemplate,
   wordingChange,
   wordingKey,
@@ -149,6 +154,75 @@ test('a held template names the file that sends it, and says the template itself
   expect(agentRefusal('t1', '/w/a/t.ts', ['Backup is late'], [], '/w/a/notify.ts')).toContain('/w/a/notify.ts sends to Slack')
 })
 
+// claude-config#2361, #2364, #2290: hold only text a Slack send builds.
+
+test('a test file is told by its name or a test folder, read from the repository root', () => {
+  for (const p of ['lib/alert.test.ts', 'app/route.spec.tsx', 'lib/__tests__/alert.ts', 'tests/notify.py', 'test/notify.js', 'pkg/notify_test.go', 'app/test_notify.py', 'app/notify_test.py', 'lib/notify_spec.rb', 'spec/notify.rb', 'hooks/test-notify.sh', 'lib/__mocks__/slack.ts'])
+    expect(testFile(p)).toBe(true)
+  // A word holding "test" or "spec" is not a test.
+  for (const p of ['lib/alert.ts', 'lib/latest.ts', 'app/contest.py', 'lib/attestation.ts', 'lib/special.ts', 'scripts/post-test-results.ts', 'lib/testing-copy.ts']) expect(testFile(p)).toBe(false)
+})
+
+test('a copy builder is a module named for the copy it holds', () => {
+  for (const p of ['src/lib/notify/outage-copy.ts', 'src/lib/alertCopy.ts', 'src/lib/notify/copy.ts', 'app/alerts/backup_copy.py', 'src/lib/notify/copy/index.ts'])
+    expect(copyBuilder(p)).toBe(true)
+  for (const p of ['src/lib/copyFile.ts', 'src/lib/photocopy.ts', 'src/lib/copyright.ts', 'src/lib/notify/send.ts']) expect(copyBuilder(p)).toBe(false)
+})
+
+test('docs are not text templates any more; a plain text template still is', () => {
+  for (const p of ['/w/a/docs/runbook.md', '/w/a/README.markdown']) expect(textTemplate(p)).toBe(false)
+  expect(textTemplate('/w/a/templates/backup.txt')).toBe(true)
+})
+
+test('a database select list or a code template is not message text; a sentence beside them still is', () => {
+  for (const s of ['id, starts_at, buckets!bookings_bucket_id_fkey!inner(code)', 'id, name', '*, owner:profiles(id, full_name)', 'id, created_at, status'])
+    expect(isMessage(s)).toBe(false)
+  const worker = 'export default {\n  async fetch(request, env) {\n    const body = await request.text();\n    return new Response(body);\n  }\n}\n'
+  expect(isMessage(worker)).toBe(false)
+  expect(isMessage('const run = (x) => x + 1;')).toBe(false)
+  for (const s of ['Deploy failed, rolling back', 'Booking ${id} failed', 'Payment for ${name} is late, retrying', 'The function failed (exit 1)', 'Deploy failed; retry in five minutes'])
+    expect(isMessage(s)).toBe(true)
+  expect(wordingOf(['id, starts_at', 'Deploy failed on production'])).toEqual(['Deploy failed on production'])
+})
+
+test('a string passed to a query builder call is marked as a query, at any argument and inside a nested call', () => {
+  const ts =
+    'const { data } = await db.from("bookings").select("id, starts_at, buckets!fk!inner(code)").eq("status", "Payment failed today").order("starts_at", { ascending: true })\nawait notify(`Booking ${id} failed`)\nconst q = sql`SELECT id FROM bookings WHERE status = ${s}`\n'
+  const strings = stringsOf(ts, false, true)
+  expect(strings.filter(s => !s.query).map(s => s.text)).toEqual(['Booking ${id} failed'])
+  expect(strings.filter(s => s.query).map(s => s.text)).toContain('Payment failed today')
+  expect(strings.filter(s => s.query).map(s => s.text)).toContain('SELECT id FROM bookings WHERE status = ${s}')
+  // literalsOf still reads every string, as before.
+  expect(literalsOf(ts, false)).toContain('Payment failed today')
+})
+
+test('a placeholder JavaScript writes as text, in single or double quotes or escaped in a template, is told apart from one filled at run time', () => {
+  const ts = "const a = 'Run with ${name} set'\nconst b = `Hello ${user}`\nconst c = `Use \\${HOME} here`\n"
+  const s = stringsOf(ts, false, true)
+  expect(s.map(x => x.literal)).toEqual([['${name}'], [], ['${HOME}']])
+  // Outside JavaScript no placeholder is read as literal text.
+  expect(stringsOf('msg = "Run with ${name} set"\n', true, false).map(x => x.literal)).toEqual([[]])
+})
+
+test('an approval may carry a placeholder the code writes as text, and still not one filled at run time', () => {
+  const added = ['Run the job with ${name} set']
+  expect(renderedProblem('Run the job with ${name} set', added, ['${name}'])).toBeUndefined()
+  expect(renderedProblem('Run the job with ${name} set', added)).toContain('${name}')
+  expect(renderedProblem('Run the job with ${other} set', added, ['${name}'])).toContain('${other}')
+})
+
+test('a sender naming a template only in a comment does not refer to it', () => {
+  expect(refersTo('lib/notify.ts', '// the wording is in docs/runbook.txt\nconst x = 1\n', 'docs/runbook.txt')).toBe(false)
+  expect(refersTo('app/notify.py', '# see templates/backup.txt\nx = 1\n', 'app/templates/backup.txt')).toBe(false)
+  expect(refersTo('lib/notify.ts', 'const body = readFileSync("docs/runbook.txt", "utf8")\n', 'docs/runbook.txt')).toBe(true)
+})
+
+test('the modules a file imports give the words a search for its send helper looks for', () => {
+  const ts = "import { postAlert } from '@/lib/notify/post'\nimport React from 'react'\nconst x = require('../slack/index.js')\nimport { miscCopy } from './outage-copy'\n"
+  expect(importTerms(ts).sort()).toEqual(['outage-copy', 'post', 'slack'])
+  expect(importTerms('from app.alerts.sender import post_alert\n').sort()).toContain('sender')
+})
+
 test('a sender names a template by a relative import, resolved against its own folder or the repository root', () => {
   const T = 'src/lib/templates/deploy.ts'
   expect(refersTo('src/lib/notify.ts', "import { deployFailed } from './templates/deploy'\n", T)).toBe(true)
@@ -189,7 +263,7 @@ test('a word that only shares the template name is not a reference to it', () =>
 })
 
 test('a text template is read line by line, and the search term is the name a sender writes', () => {
-  for (const p of ['/w/a/templates/backup.txt', '/w/a/t/alert.md', '/w/a/t/alert.hbs', '/w/a/t/alert.j2', '/w/a/t/alert.mustache']) expect(textTemplate(p)).toBe(true)
+  for (const p of ['/w/a/templates/backup.txt', '/w/a/t/alert.hbs', '/w/a/t/alert.j2', '/w/a/t/alert.mustache']) expect(textTemplate(p)).toBe(true)
   for (const p of ['/w/a/x.css', '/w/a/x.ts', '/w/a/Makefile']) expect(textTemplate(p)).toBe(false)
   expect(templateLines('Backup is late\n\n  on {host}  \n')).toEqual(['Backup is late', 'on {host}'])
   expect(searchTerm('src/lib/templates/deploy.ts')).toBe('deploy')

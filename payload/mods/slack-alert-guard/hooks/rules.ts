@@ -10,9 +10,15 @@
 //    carries a Slack marker and names the template's path (refersTo).
 // 2. Approval is for exact wording (L64): any change to approved text is held again, and a change
 //    to an alert file that touches no message text passes unasked.
-// 3. Approval is keyed to the wording, never the file (wordingKey), so a test repeating wording Dan
-//    already approved goes through, and a test carrying wording he has not seen is held. No file is
-//    exempted.
+// 3. Approval is keyed to the wording, never the file (wordingKey), so the same wording approved in
+//    one file goes through in another.
+//
+// Narrowed to text a Slack send builds (#2361, #2364, #2290, #2287; Dan, 2026-11-06, reversing the
+// earlier "no file is exempted" in decision 3): a test file (testFile) and a doc send nothing, and
+// neither is a template nor a sender; a string handed to a query builder call, a select list, or a
+// code template is not message text (stringsOf, isMessage); a file in no git repository, as a
+// scratchpad script is, has nothing that sends it. A copy builder (copyBuilder) is held when a file
+// that uses it also uses a Slack send helper, which a marker or reference search alone misses.
 
 export const GUARD = 'Slack alert guard'
 export const SOURCE = 'slack-alert-guard'
@@ -30,6 +36,12 @@ const extOf = (path: string): string | undefined => {
   const name = path.slice(path.lastIndexOf('/') + 1)
   const dot = name.lastIndexOf('.')
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : undefined
+}
+
+/** Whether a file can be code by its name alone: a code or config extension, or none (a script's shebang is read later). */
+export const mayBeCode = (path: string): boolean => {
+  const ext = extOf(path)
+  return ext === undefined || CODE.has(ext)
 }
 
 /** Whether a file is one this guard reads: a code or config extension, or a script with a shebang and no extension. */
@@ -66,8 +78,22 @@ export const slackMarked = (text: string): boolean => MARKERS.some(m => m.test(t
  */
 export const SENDER_PREFILTER = 'slack|postmessage'
 
-// Prose files a script reads and sends as they are, each line its own message text (#2248).
-const TEXT_TEMPLATE = new Set(['txt', 'md', 'markdown', 'hbs', 'handlebars', 'mustache', 'j2', 'jinja', 'jinja2', 'tmpl', 'tpl', 'liquid', 'ejs', 'erb'])
+/**
+ * Whether a path, relative to its repository's root, is a test: a .test. or .spec. file, a _test or
+ * _spec one, a python test_ module, a test- shell suite, or anything in a test or mock folder. A test
+ * never posts to Slack, so its titles and fixtures are never message text (#2290).
+ */
+export const testFile = (rel: string): boolean => {
+  const segs = rel.split('/')
+  const name = segs[segs.length - 1] ?? ''
+  if (/\.(test|spec)\.[^/]+$/.test(name) || /_(test|spec)\.[^/.]+$/.test(name) || /^test_[^/]*\.py$/.test(name) || /^test-[^/]*\.(sh|bash|zsh)$/.test(name)) return true
+  return segs.slice(0, -1).some(s => TEST_DIRS.has(s))
+}
+const TEST_DIRS = new Set(['__tests__', '__mocks__', '__fixtures__', 'test', 'tests', 'spec', 'specs', 'e2e'])
+
+// Prose files a script reads and sends as they are, each line its own message text (#2248). Docs
+// (markdown) are not among them: a runbook is read by people, never posted (#2361).
+const TEXT_TEMPLATE = new Set(['txt', 'hbs', 'handlebars', 'mustache', 'j2', 'jinja', 'jinja2', 'tmpl', 'tpl', 'liquid', 'ejs', 'erb'])
 /** Whether a file is a text template: wording a script reads and sends, with no code around it. */
 export const textTemplate = (path: string): boolean => {
   const ext = extOf(path)
@@ -89,11 +115,25 @@ export const searchTerm = (rel: string): string => {
   const stem = stemOf(segs[segs.length - 1] ?? '')
   return PACKAGE.has(stem) && segs.length > 1 ? (segs[segs.length - 2] ?? stem) : stem
 }
+/**
+ * Whether a module is a copy builder (#2361): named for the copy it holds, as outage-copy.ts,
+ * alertCopy.ts, copy.ts or a copy folder's index, so its exports are wording another file posts.
+ */
+export const copyBuilder = (rel: string): boolean => {
+  const term = searchTerm(rel)
+  return /(^|[-_.])copy$/i.test(term) || /[a-z0-9]Copy$/.test(term)
+}
+
 /** A word escaped for an extended regular expression, as git grep -E reads one. */
 export const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 // The extensions one JavaScript or TypeScript import may name the same file by.
 const JS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'mts', 'cts'])
+/** Whether a file is JavaScript or TypeScript, whose single and double quotes fill nothing in. */
+export const isJs = (path: string): boolean => {
+  const e = extOf(path)
+  return e !== undefined && JS.has(e)
+}
 // One path segment naming another: equal, or without its extension, or by a sibling JS one.
 const sameName = (s: string, t: string): boolean => {
   if (s === t) return true
@@ -162,7 +202,8 @@ export const refersTo = (senderRel: string, text: string, templateRel: string): 
   const mod = [...t.slice(0, -1), stemOf(last)]
   const mods = pkg ? [mod, t.slice(0, -1)] : [mod]
   const senderDir = senderRel.toLowerCase().split('/').slice(0, -1)
-  const lower = text.toLowerCase()
+  // A path named only in a comment is a note to a reader, never a file the sender reads (#2361).
+  const lower = withoutComments(text, languageOf(senderRel, text) !== 'c').toLowerCase()
   const byModule = (name: string, whole: boolean): boolean => {
     const m = name.split('.').filter(Boolean)
     return m.length > 0 && mods.some(f => {
@@ -206,6 +247,29 @@ export const handsOn = (rel: string, text: string): boolean => {
   return /(^|\n)[ \t]*export[\s{*]/.test(text) || /(^|[^.\w$])(module\.exports|exports\.[\w$]+\s*=)/.test(text)
 }
 
+/**
+ * The words a search for the modules a file imports looks for (#2361): the last name of each local
+ * JavaScript or TypeScript import (a relative or aliased path, never a bare package), its folder's for
+ * an index, and the last name of each python import.
+ */
+export const importTerms = (text: string): string[] => {
+  const out = new Set<string>()
+  const code = withoutComments(text, false)
+  for (const m of code.matchAll(/(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g)) {
+    const spec = m[1] as string
+    if (!spec.startsWith('.') && !spec.includes('/')) continue
+    const segs = spec.split('/').filter(s => s && s !== '.' && s !== '..')
+    const stem = stemOf(segs[segs.length - 1] ?? '')
+    const term = PACKAGE.has(stem) ? (segs[segs.length - 2] ?? '') : stem
+    if (term.length > 1) out.add(term)
+  }
+  for (const mod of importedModules(withoutComments(text, true))) {
+    const last = mod.split('.').filter(Boolean).pop() ?? ''
+    if (last.length > 1) out.add(last)
+  }
+  return [...out]
+}
+
 /** The files a template may be handed on through, as git pathspecs. */
 export const LINK_PATHS = [...JS, 'py'].map(e => `*.${e}`)
 
@@ -247,17 +311,53 @@ const unescape = (s: string): string => s.replace(/\\([\s\S])/g, (_m, c: string)
  * Every string literal in a file's text, comments passed over: double, single and backtick quoted,
  * escapes read. `hash` for a language whose comments open with a hash, else // and block comments.
  */
-export const literalsOf = (text: string, hash: boolean): string[] => {
-  const tokens = hash
-    ? /#[^\n]*|"((?:\\[\s\S]|[^"\\])*)"|'((?:\\[\s\S]|[^'\\\n])*)'|`((?:\\[\s\S]|[^`\\])*)`/g
-    : /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"((?:\\[\s\S]|[^"\\\n])*)"|'((?:\\[\s\S]|[^'\\\n])*)'|`((?:\\[\s\S]|[^`\\])*)`/g
-  const out: string[] = []
+export const literalsOf = (text: string, hash: boolean): string[] => stringsOf(text, hash).map(s => s.text)
+
+// A file's comments and strings, as literalsOf reads them: a hash comment language, or a C-like one.
+const HASH_TOKENS = /#[^\n]*|"((?:\\[\s\S]|[^"\\])*)"|'((?:\\[\s\S]|[^'\\\n])*)'|`((?:\\[\s\S]|[^`\\])*)`/.source
+const C_TOKENS = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"((?:\\[\s\S]|[^"\\\n])*)"|'((?:\\[\s\S]|[^'\\\n])*)'|`((?:\\[\s\S]|[^`\\])*)`/.source
+
+// The query builder calls whose arguments are a database's words, never a person's (#2364).
+const QUERY_CALLS =
+  'select|order|eq|neq|gt|gte|lt|lte|like|ilike|is|in|contains|containedBy|overlaps|filter|match|or|not|textSearch|from|rpc|schema|onConflict|returning|where|orWhere|andWhere|whereIn|whereRaw|orderBy|groupBy|having|join|leftJoin|innerJoin|raw|query|execute|prepare'
+const CALL_TOKENS = `(\\.\\s*(?:${QUERY_CALLS})\\s*\\()|(\\()|(\\))`
+
+/** One string literal: its text with escapes read, where its text starts, and how it is used. */
+export type Str = {
+  text: string
+  start: number
+  /** Whether it is an argument of a query builder call, at any depth, or a sql tagged template. */
+  query: boolean
+  /** The ${...} placeholders it holds as written text rather than filled at run time (JavaScript only). */
+  literal: string[]
+}
+
+/**
+ * Every string literal in a file's text, comments passed over, as literalsOf reads them, each with
+ * whether it is a query builder's argument (#2364) and, in JavaScript (`js`), which ${...} it writes
+ * as text: all of them in single or double quotes, and an escaped \${...} in a template.
+ */
+export const stringsOf = (text: string, hash: boolean, js = false): Str[] => {
+  const tokens = new RegExp(`${hash ? HASH_TOKENS : C_TOKENS}|${CALL_TOKENS}`, 'g')
+  const calls: boolean[] = []
+  const out: Str[] = []
   for (const m of text.matchAll(tokens)) {
+    if (m[4] !== undefined) calls.push(true)
+    else if (m[5] !== undefined) calls.push(false)
+    else if (m[6] !== undefined) calls.pop()
     const body = m[1] ?? m[2] ?? m[3]
-    if (body !== undefined) out.push(unescape(body))
+    if (body === undefined) continue
+    const at = m.index ?? 0
+    const tagged = m[3] !== undefined && /(^|[^\w$])sql\s*$/i.test(text.slice(Math.max(0, at - 12), at))
+    const literal = !js ? [] : m[3] === undefined ? [...body.matchAll(/\$\{[^}]*\}/g)].map(x => x[0]) : [...body.matchAll(/\\(\$\{[^}]*\})/g)].map(x => x[1] as string)
+    out.push({ text: unescape(body), start: at + 1, query: tagged || calls.includes(true), literal })
   }
   return out
 }
+
+/** A file's text with its comments blanked, its strings kept. */
+export const withoutComments = (text: string, hash: boolean): string =>
+  text.replace(new RegExp(hash ? HASH_TOKENS : C_TOKENS, 'g'), t => (t.startsWith('#') || t.startsWith('//') || t.startsWith('/*') ? ' ' : t))
 
 /** A YAML file's plain (unquoted) values, each line's text after its key or list mark; quoted ones are read by literalsOf. */
 export const plainYamlValues = (text: string): string[] => {
@@ -281,8 +381,57 @@ export const isProse = (s: string): boolean => {
   return words.length >= 2 && words.some(w => WORD.test(w))
 }
 
+// A string split at its commas outside any parentheses.
+const topLevelItems = (s: string): string[] => {
+  const out: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const c of s) {
+    if (c === '(') depth++
+    else if (c === ')') depth = Math.max(0, depth - 1)
+    if (c === ',' && depth === 0) {
+      out.push(cur.trim())
+      cur = ''
+    } else cur += c
+  }
+  out.push(cur.trim())
+  return out
+}
+const SELECT_ITEM = /^(\w+:)?[\w*.]+(!\w+)*(\([\s\S]*\))?$/
+
+/**
+ * Whether a string is a database select list (#2364): two or more comma separated column names, each
+ * a bare name with any alias, hints and embedded list, and either one written as a database writes it
+ * (an underscore, a hint, an embed, a star) or none capitalised as a sentence opens.
+ */
+export const selectList = (s: string): boolean => {
+  const items = topLevelItems(s)
+  if (items.length < 2 || !items.every(i => SELECT_ITEM.test(i))) return false
+  return items.some(i => /[_!(*:.]/.test(i)) || !items.some(i => /^[A-Z]/.test(i))
+}
+
+// What code reads like, as a string a program writes out (a sandbox's module, a script) does.
+const CODE_SIGNS = [
+  /=>/,
+  /\b(const|let|var)\s+[\w$]+\s*=/,
+  /\bfunction\b\s*[\w$]*\s*\(/,
+  /\bexport\s+(default|const|function|async|class|\{)/,
+  /\bimport\s+[\w${*][^\n]*\bfrom\b/,
+  /\breturn\b[^\n]*;/,
+  /\bawait\s+[\w$.]+\(/,
+  /;\s*(\n|$)/,
+  /\)\s*\{/,
+  /\bmodule\.exports\b/,
+  /\bnew\s+[A-Z]\w*\(/,
+]
+/** Whether a string is code a program writes out (#2361): two or more signs of code in it. */
+export const codeText = (s: string): boolean => CODE_SIGNS.filter(r => r.test(s)).length >= 2
+
+/** Whether a string is message text: prose, and neither a select list nor code. */
+export const isMessage = (s: string): boolean => isProse(s) && !selectList(s) && !codeText(s)
+
 /** The message text among a file's literals, each kept as often as it appears. */
-export const wordingOf = (literals: string[]): string[] => literals.filter(isProse)
+export const wordingOf = (literals: string[]): string[] => literals.filter(isMessage)
 
 /** The message text an edit adds and takes away, counted, so text only moved is no change. */
 export const wordingChange = (before: string[], after: string[]): { added: string[]; removed: string[] } => {
@@ -359,11 +508,13 @@ const PLACEHOLDER = /\$\{[^}]*\}|#\{[^}]*\}|\{\{[^}]*\}\}|%[sd]\b|\{[A-Za-z_][\w
 /**
  * Why the message Claude shows Dan is not yet the real one, or undefined when it is: it must be
  * given, carry no placeholder still to fill, and hold every fixed part of each string the call adds.
+ * A placeholder in `literal`, one the code writes as text rather than fills (stringsOf), is the
+ * message as posted, so it may stand (#2361).
  */
-export const renderedProblem = (rendered: unknown, added: string[]): string | undefined => {
+export const renderedProblem = (rendered: unknown, added: string[], literal: string[] = []): string | undefined => {
   if (typeof rendered !== 'string' || !rendered.trim())
     return 'Give metadata "rendered": the message exactly as Slack will post it, every variable filled in from a realistic example.'
-  const left = PLACEHOLDER.exec(rendered)?.[0]
+  const left = [...rendered.matchAll(new RegExp(PLACEHOLDER.source, 'g'))].map(m => m[0]).find(p => !literal.includes(p))
   if (left !== undefined) return `The message shown still has ${left} in it: fill every variable in from a realistic example, so Dan reads the message as Slack will post it.`
   const shown = norm(rendered)
   for (const s of added)
