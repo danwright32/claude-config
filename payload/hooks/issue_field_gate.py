@@ -197,8 +197,10 @@ def _here():
     return scan.Place(os.getcwd(), dict(os.environ))
 
 
-def body_files(args, command, place=None):
+def body_files(args, command, place=None, flags=("--body-file", "-F")):
     """What the gate can tell about each --body-file one create names, as (word, state, detail).
+    flags: the flag naming the file, long then short; the work names gate reads gh release's
+    --notes-file (-F) and a gist's files by the same rule (claude-config#2398).
 
     word is the path as the command spells it, after the shell's quoting. state is one of:
       "stdin"       `-F -`, `-F-`, `--body-file=-`: standard input, judged from the command text
@@ -220,7 +222,7 @@ def body_files(args, command, place=None):
     blank description, so it counts as unreadable too.
     """
     place = place or _here()
-    words = scan.flag_values(args, "--body-file", "-F")
+    words = scan.flag_values(args, *flags)
     if not words:
         return []
     try:

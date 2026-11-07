@@ -189,7 +189,13 @@ repository, in the hook and the guard alike: `--editor` is refused, and so is `g
 unless both a title and a body are given; `gh pr create` with no `--head` is judged with what it may
 push (the branch's name and the messages of the commits no remote holds); `gh repo create --push`
 with the whole history it sends, unless the new repository is private or internal; and `gh repo
-sync` into a public repository from a `--source` that is not public is refused. Still not covered:
+sync` into a public repository from a `--source` that is not public is refused. gh's other names
+for a write (#2398), `gh pr new`, `gh issue new`, `gh release new`, `gh gist new` and the rest, are
+read as the long form by the one reading of gh (`lib/shell-words.py`), so every gate built on it,
+the issue field gate included, judges them; and the text gh posts outside pull requests and issues
+is judged for a public target: release titles and notes (`--notes`, `--notes-file`, with
+`--generate-notes` and `--notes-from-tag` refused as unreadable), a public gist's files and
+description, and the description and homepage `gh repo create` or `gh repo edit` sets. Still not covered:
 gh run by its absolute path, a script that rewrites PATH, and curl or an API library.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is

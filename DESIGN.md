@@ -1596,6 +1596,21 @@ destination updates the checkout and writes nothing to GitHub; with one, it copi
 commits there, so a public destination is refused a `--source` that is not public, and passes from
 its parent, which GitHub keeps public for every public fork.
 
+gh's other names for its writes, and public text outside pull requests and issues (#2398). gh
+answers to `gh pr new`, `gh issue new`, `gh release new`, `gh gist new`, `gh repo new`, `gh secret
+remove`, `gh variable remove` and `gh pr co` as to their long forms, and to `a11y`, `cs`, `at`,
+`rs`, `ext`, `extensions`, `agent`, `agents` and `agent-tasks` for its command groups (each read
+from the ALIASES section of that command's help on gh 2.89.0). They live in one table in
+`lib/shell-words.py` (`GH_GROUP_ALIASES`, `GH_ACTION_ALIASES`), and `gh_path` returns the long form,
+so every gate asking `gh_command` or `tool_field` reads them, and the work names guard's list of
+gh's own commands takes the group names from the same table. The aliases of `list` (`ls`) are left
+as written: list writes nothing, and a gate reading list as a harmless read would otherwise pass a
+command it now asks about. Release notes are read from `--notes-file` by the issue field gate's
+body file rule, `--generate-notes` and `--notes-from-tag` are refused for a public repository since
+their text is not on this machine, a public gist's files are read the same way (standard input is
+refused when no file is named; a `-` is refused by the command hook and read by the guard), and `gh repo create` is judged on its own
+text for a public repository with or without `--push`, as is `gh repo edit`.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on

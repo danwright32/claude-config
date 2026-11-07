@@ -48,17 +48,19 @@ BODY_FILE_COMMANDS = {CREATE, ("issue", "edit"), ("issue", "comment"),
 # would take as a different subcommand or action, one outside the gated pairs that no flag in front of
 # it can be taking as a value. The flags written in front of the action are the action's own, as gh
 # reads them (claude-config#1449: dropping them let `gh issue --body-file empty.md edit 5` past the body
-# file rule, and refused `gh issue -m M create`).
-def crude_gh_command(words):
+# file rule, and refused `gh issue -m M create`). The gated pairs are the caller's (kinds), so the work
+# names gate's release, gist and repo commands are read too (claude-config#2398).
+def crude_gh_command(words, kinds=BODY_FILE_COMMANDS):
     names = [w.split("/")[-1] for w in words]
     if "gh" not in names:  # gh-reader: the crude text reading gated_in_text uses
         return None
-    subs = {s for s, _ in BODY_FILE_COMMANDS}
+    subs = {s for s, _ in kinds}
     front, sub, prev = [], None, ""
     for k in range(names.index("gh") + 1, len(words)):  # gh-reader: the crude text reading gated_in_text uses
         w = words[k]
-        if (sub, w) in BODY_FILE_COMMANDS:
-            return (sub, w, front, list(words[k + 1:]))
+        act = gh_long_form(sub, w)[1] if sub else w  # gh issue new is gh issue create (claude-config#2398)
+        if (sub, act) in kinds:
+            return (sub, act, front, list(words[k + 1:]))
         if sub is None and w in subs:
             sub = w
         elif w.startswith("-") and len(w) > 1:
@@ -98,6 +100,10 @@ try:
     _sw = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_sw)
     gh_command = _sw.gh_command
+    # gh's long name for an alias (claude-config#2398), asked by the crude reading too, so both
+    # readings know one list of gh's aliases, the reader's.
+    gh_long_form = _sw.gh_long_form
+    GH_GROUP_ALIASES = dict(_sw.GH_GROUP_ALIASES)
     # A command run from a string by a shell, eval or env -S (claude-config#1478): (wrapper, string,
     # why), or None. Its string is scanned as a command line of its own.
     wrapped_words, MAX_DEPTH = _sw.wrapped_words, _sw.MAX_DEPTH
@@ -114,6 +120,16 @@ def _no_reader():
 if READER_ERROR is not None:
     def gh_command(words):
         _no_reader()  # a caller asking which gh command some words run is told there is no reader
+
+    def gh_long_form(sub, act):
+        # With no reader there is no list of gh's aliases, so the crude reading sees the long names
+        # only, as it did before claude-config#2398: an alias such as gh issue new goes unseen until
+        # the reader is back, which the refusal naming the missing reader asks for.
+        return sub, act
+
+    # No group's other names either: a gate building on these reads only gh's long names, and the work
+    # names guard then asks about `gh cs` as an alias and refuses it as an extension, never passes it.
+    GH_GROUP_ALIASES = {}
 
 
 
@@ -814,7 +830,7 @@ def gated_in_text(command, kinds=BODY_FILE_COMMANDS):
     """
     out = []
     for piece in TEXT_PIECE.split(command or ""):
-        found = crude_gh_command(TEXT_WORD.findall(piece))
+        found = crude_gh_command(TEXT_WORD.findall(piece), kinds)
         if found and tuple(found[:2]) in kinds:
             out.append((tuple(found[:2]), list(found[2]) + list(found[3])))
     return out
