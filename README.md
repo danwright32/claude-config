@@ -157,13 +157,31 @@ does a public repository a work owner holds. It reads the whole command, a hered
 and every body file it names, and refuses text naming a work organisation OR a work repository,
 showing the name it matched so the text can be rewritten. The names are read live on each judged
 command and never written to disk: the repo digest's repository list (the one
-`lib/lesson-fanout.sh` reads), this Mac's dev update registry, and the two built in hashes. Matching
+`lib/lesson-fanout.sh` reads), this Mac's dev update registry, the work MacBook's project folders
+from the Projects section of the global CLAUDE.md, the organisation's web and email domain (matched
+only as a domain, after an @ or before a dot and a top level domain), and the two built in hashes
+(#2184). Matching
 repository names departs from #1568, which leaves them out of the file scan on purpose, for public
 text only (Dan, 2026-11-02, after a repository name leaked into a public pull request description);
 the file scan and the send scan are unchanged, and the commit message checks above read the same
 list through the same reader (#2111). Whatever it cannot tell is refused: the visibility or
 the list unreadable, a body file it cannot read, a command it cannot parse, the 35 second budget
 spent. There is no override; the remedy is to rewrite the text.
+
+The same check reaches GitHub writes made inside a script (#2183). The hook above sees only the
+command Claude runs, so a Python or shell script making gh calls went unjudged (one scrub made 239
+edits that way). `gh-guard-path.sh`, a SessionStart hook, puts `hooks/bin` first on the session's
+PATH through `CLAUDE_ENV_FILE`, and `hooks/bin/gh` there judges every gh a script runs with the same
+rule before handing it to the real gh. It refuses with exit 1 without naming what it matched,
+since a script's output can land in a log, and otherwise runs the real gh with its exit code and
+its standard input unchanged. A gh alias is judged as what it expands to, in the hook and the guard
+alike (Dan, on #2183); the guard refuses an alias it cannot read, while the hook passes it as before
+and leaves it to the guard. A session started before this was installed, or one whose PATH does not
+carry the guard, keeps exactly its old checks and is told once that gh writes inside scripts are
+not checked until a new session starts: refusing those scripts instead would stop
+`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Still not
+covered: gh run by its absolute path, a script that rewrites PATH, curl or an API library, and gh
+extensions.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -2493,7 +2511,11 @@ description and commits, and the scanner at its base commit
 timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109
 seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds
 on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo
-digest list and the registry, then the match
+digest list and the registry, then the match. With the once per session notice (#2183), on
+2026-11-03, five readings each at load average 60 to 84, timed from outside with a python3 clock
+(which adds its own start up to every reading): 0.06 to 0.36 seconds on a plain `git push` in a
+session already stamped, against 0.04 to 0.06 with no session id, a file test and noise apart.
+Re-measure at a quieter load
 
 </td></tr>
 <tr><td>
@@ -2569,6 +2591,12 @@ anything
 </td></tr>
 </tbody>
 </table>
+
+`hooks/bin/gh` (#2183) has no row, since no push waits on it: it stands in front of every gh a
+script runs. In the same readings on 2026-11-03 it added 0.02 to 0.20 seconds to a gh command it
+does not judge (`gh --version`: real 0.07 to 0.11, guard 0.09 to 0.27) and about 0.11 to one it
+judges (`gh pr view --help`: real 0.08 to 0.12, guard 0.18 to 0.22), its python3 start; a judged
+write then pays the publish gate's own reads in the row above. Re-measure at a quieter load.
 
 Claude Code runs every matching hook in parallel ("All matching hooks run in parallel", the hooks
 reference), so a push waits for the SLOWEST gate, not for their sum, and the tool runs them together
@@ -3144,11 +3172,34 @@ What passes: every Slack read, `slack_send_message_draft`, a command that only m
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
 `package.json`, its pre and post scripts included, and judged as the command line it runs.
 
-What it does not see, so a pass is not read as more than it measured: a module a script imports (so
-repo-digest's `npm run digest`, whose `src/digest.ts` imports the file that posts, still passes), a
-program run by bare name from the PATH, and an endpoint assembled from pieces on purpose. The threat it answers is a session that
-means well choosing the quickest way to post. It fails closed: a python that is missing or crashes,
-or a payload it cannot read that names a send route, is refused with the reason.
+A JavaScript or TypeScript script's relative imports are followed (#2318): `import ... from './x'`,
+`export ... from`, `import './x'`, `import('./x')` and `require('./x')`, resolved as node and
+TypeScript do (the path, each extension, the `.ts` a `.js` names, a folder's `package.json` main or
+its index). Each module found is judged as the script is, by the endpoint it names, then its own
+imports followed, each module read once, so a cycle ends. So repo-digest's `npm run digest`, whose
+`src/digest.ts` imports `src/slack.ts`, is refused, naming `slack.ts`, as are NurseDex's
+`scripts/check-*.ts` that import `scripts/slack-alert.ts`. An import it cannot find or read is
+refused, since node may still find it (package.json exports, a path alias, a loader) and run what the
+gate never saw, and so is a script reaching more than 300 modules (the largest real one reaches 11).
+A module is judged by its text, as a Python script is, so a helper that only greps for an endpoint
+names it and is refused like a script run directly would be; a helper that names none (one that
+saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and NurseDex's
+`scripts/` on 2026-11-06, run as `node <file>`: refused went from 3 to 22, 7 of them test files
+importing a helper that posts (their `npm test` globs are not read, so `npm test` still passes).
+
+A Python script's imports are followed the same way: `import x`, `from x import y` and relative
+`from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
+own folder as Python finds it. A module not on disk there is the standard library or an installed
+package and is not read; a relative import that names nothing there is refused. Code given inline
+(`node -e`, `python3 -c`) or fed on standard input has its imports followed from the folder it runs
+in. Over the 110 Python files in this payload, run as `python3 <file>`, the refused count stayed at 2.
+
+What it does not see, so a pass is not read as more than it measured: an import of a package or
+through a path alias (`@/lib/x`), a Python module that is not on disk beside the script, a module run
+with `python3 -m`, an import path built at run time, a program run by bare name from the PATH, and an
+endpoint assembled from pieces on purpose. The threat it answers is a session that means well choosing the quickest way to
+post. It fails closed: a python that is missing or crashes, or a payload it cannot read that names a
+send route, is refused with the reason.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`; `python3 -m unittest` over the same file passes. This is a known false
@@ -3159,7 +3210,9 @@ and costs 0.007 to 0.008 s in the push gate table's five readings, and 0.010 s a
 load average 22, where bare bash took 0.005 s; a call the full rule reads starts python3, 0.05 s for `npm run x`
 or `bin/x`, 72 ms on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, and 154
 ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 calls by a timer
-around the gate, was not reproduced by these and is replaced by them. Suite: `test-slack-drafts-only-gate.sh`.
+around the gate, was not reproduced by these and is replaced by them. Following imports (2026-11-06,
+median of 10 at load average about 21): `npm run digest` in repo-digest 0.069 s against 0.063 s
+before; a plain push still takes the quick exit, whose code this did not change. Suite: `test-slack-drafts-only-gate.sh`.
 
 ## Read only queries are approved without asking
 
@@ -3478,16 +3531,149 @@ attribute, and the sync suite's own deadline guard was measured firing at 1192s 
 200 on a loaded Mac, written down 2026-08-21. So the budget below is divided between the suites running at once, each suite
 is told its share, and the product is printed at the top of every run.
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `HOOK_TESTS_BUDGET` | CPUs, capped at 8 | How many processes the whole run may have in flight. Everything else is derived from it. A value that is not a positive whole number is refused rather than guessed at. |
-| `HOOK_TESTS_JOBS` | half the budget, but never fewer than 2 and never more than the budget | How many suites run at once. The floor of 2 is for the small machine: the CI runner has two cores, half of two is one, and every suite would have run strictly one after another while a second slot sat reserved. `1` runs them one at a time, which is what to reach for when a suite only fails alongside others. A value that is not a positive whole number is refused rather than guessed at, because it decides how many processes start. |
-| `HOOK_TESTS_TIMINGS` | `~/.cache/claude-config/suite-timings` | Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a duration measured on this machine is not configuration, and mirroring it would make the other Mac order its runs by numbers from hardware it does not have. |
-| `HOOK_TESTS_FLAKY_OUTPUT` | `~/.cache/claude-config/flaky-suite-output` | Where the first, failing run of a suite marked FLAKY is kept, its whole output in one file named by the time and the suite, and the FAIL line names that file. That output used to live only in the run's work folder, which is removed at the end, so a flake left nothing to diagnose from but the few lines printed (#1788, L297). Only a FLAKY suite writes here: a passing run writes nothing. Pruned after each write to the newest 20 copies, by the time in their names, and nothing else in the folder is touched (`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`). Set it to empty to keep nothing, and the FAIL line says so. |
-| `HOOK_TESTS_LOCK_WAIT` | `1200` locally, always `0` under CI | How many seconds a suite may wait for a lock another run holds, handed to every suite as `SUITE_LOCK_WAIT` whatever was inherited. Twenty minutes is about three runs of the sync suite on this Mac, so a run queued behind two or three overlapping ones still reports it rather than NOT RUN (#1297). A flake recheck is asked to wait for nothing, since its deadline is set by what the suite measured; one refused its lock that way never ran, so its FAIL line says `recheck could not run: the suite lock is held by` whoever holds it, never FLAKY and never a bare FAIL that reads as the failure seen twice, and the suite stays failed (#1312). A value that is not a whole number is refused. |
-| `HOOK_TESTS_SLOT` | unset: only a whole run queues | `1` queues any run for this Mac's one full suite slot and `0` none, for one run. Unset, a run queues only when it names no directories (or names directories holding half the tree's suites or more, at least 3, #2034), sets no `HOOK_TESTS_ROOT`, was not started inside another run and is not under CI, and not when a run above it holds the slot. `HOOK_TESTS_SLOT_WAIT` (`3600`) is how long it waits before refusing with exit 75, `HOOK_TESTS_SLOT_HOLD` (`2700`) how long a live holder keeps the slot before a waiter passes it over, `HOOK_TESTS_SLOT_SAY_EVERY` (`60`) how often a wait says it is still waiting, `HOOK_TESTS_SLOT_POLL` (`2`) how often it looks, and `HOOK_TESTS_SLOT_DIR` where the queue lives. They are settings, not measurements: the wait is longer than one hold so the run first in line is never refused while the holder is inside its own, and claude-sync's check after a pull stops its own run at 1800 seconds, recording one stopped while it waited as not completed (#2012). Any of them unreadable is refused. |
-| `HOOK_TESTS_DEADLINE` | none locally; under GitHub Actions the running job's own `timeout-minutes` | The epoch second by which the run must have printed its report. No flake recheck runs past it less `HOOK_TESTS_DEADLINE_RESERVE` (default `120`, in seconds, set on 2026-10-29 from the job setup times measured beside it in the runner): one with no time left is not started and its FAIL line says `not rechecked`, and one cut short says `recheck stopped after`, naming the limit, never `recheck timed out`, which is a recheck that ran out its own allowance (#1901). That allowance, `HOOK_TESTS_FLAKE_RECHECK_MAX`, is whole seconds on the same clock, and the FAIL line names the seconds it really waited; it was a count of polls printed as seconds until #1901. Under GitHub Actions it is read from the workflow file and job the platform names (`GITHUB_WORKFLOW_REF`, `GITHUB_JOB`) through `hooks/lib/workflow-job-timeout.sh`, counted from `HOOK_TESTS_JOB_STARTED`, which the workflow's first step records, and the run says the limit it read or why it could not. Separately, a suite stopped at its own wall clock is named on a `run-all-tests: STOPPED` line the moment it is stopped, before the report and any recheck, so a job cancelled later still names it. A value that is not a whole number is refused. The deadline is read against the real clock, or against `HOOK_TESTS_NOW`, an epoch second set for tests so the time a case leaves before its deadline does not depend on how busy the Mac is (#1937); it is refused the same way. |
-| `HOOK_TESTS_SLOTS` | set BY the runner | Each suite's share of the budget, which is the budget divided by how many suites are running at once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its own processes it may start. Point the runner at one directory holding one suite and that suite is handed the whole budget, so running the long suite on its own is as fast as it ever was. |
+<table>
+<thead>
+<tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td>
+
+`HOOK_TESTS_BUDGET`
+
+</td><td>
+
+CPUs, capped at 8
+
+</td><td>
+
+How many processes the whole run may have in flight. Everything else is derived from it. A value
+that is not a positive whole number is refused rather than guessed at.
+
+</td></tr>
+<tr><td>
+
+`HOOK_TESTS_JOBS`
+
+</td><td>
+
+half the budget, but never fewer than 2 and never more than the budget
+
+</td><td>
+
+How many suites run at once. The floor of 2 is for the small machine: the CI runner has two cores,
+half of two is one, and every suite would have run strictly one after another while a second slot
+sat reserved. `1` runs them one at a time, which is what to reach for when a suite only fails
+alongside others. A value that is not a positive whole number is refused rather than guessed at,
+because it decides how many processes start.
+
+</td></tr>
+<tr><td><code>HOOK_TESTS_TIMINGS</code></td><td><code>~/.cache/claude-config/suite-timings</code></td><td>
+
+Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the
+suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the
+record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a
+duration measured on this machine is not configuration, and mirroring it would make the other Mac
+order its runs by numbers from hardware it does not have.
+
+</td></tr>
+<tr><td><code>HOOK_TESTS_FLAKY_OUTPUT</code></td><td><code>~/.cache/claude-config/flaky-suite-output</code></td><td>
+
+Where the first, failing run of a suite marked FLAKY is kept, its whole output in one file named by
+the time and the suite, and the FAIL line names that file. That output used to live only in the
+run's work folder, which is removed at the end, so a flake left nothing to diagnose from but the few
+lines printed (#1788, L297). Only a FLAKY suite writes here: a passing run writes nothing. Pruned
+after each write to the newest 20 copies, by the time in their names, and nothing else in the folder
+is touched (`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`). Set it to empty to keep
+nothing, and the FAIL line says so.
+
+</td></tr>
+<tr><td>
+
+`HOOK_TESTS_LOCK_WAIT`
+
+</td><td>
+
+`1200` locally, always `0` under CI
+
+</td><td>
+
+How many seconds a suite may wait for a lock another run holds, handed to every suite as
+`SUITE_LOCK_WAIT` whatever was inherited. Twenty minutes is about three runs of the sync suite on
+this Mac, so a run queued behind two or three overlapping ones still reports it rather than NOT RUN
+(#1297). A flake recheck is asked to wait for nothing, since its deadline is set by what the suite
+measured; one refused its lock that way never ran, so its FAIL line says `recheck could not run: the
+suite lock is held by` whoever holds it, never FLAKY and never a bare FAIL that reads as the failure
+seen twice, and the suite stays failed (#1312). A value that is not a whole number is refused.
+
+</td></tr>
+<tr><td>
+
+`HOOK_TESTS_SLOT`
+
+</td><td>
+
+unset: only a whole run queues
+
+</td><td>
+
+`1` queues any run for this Mac's one full suite slot and `0` none, for one run. Unset, a run queues
+only when it names no directories (or names directories holding half the tree's suites or more, at
+least 3, #2034), sets no `HOOK_TESTS_ROOT`, was not started inside another run and is not under CI,
+and not when a run above it holds the slot. `HOOK_TESTS_SLOT_WAIT` (`3600`) is how long it waits
+before refusing with exit 75, `HOOK_TESTS_SLOT_HOLD` (`2700`) how long a live holder keeps the slot
+before a waiter passes it over, `HOOK_TESTS_SLOT_SAY_EVERY` (`60`) how often a wait says it is still
+waiting, `HOOK_TESTS_SLOT_POLL` (`2`) how often it looks, and `HOOK_TESTS_SLOT_DIR` where the queue
+lives. They are settings, not measurements: the wait is longer than one hold so the run first in
+line is never refused while the holder is inside its own, and claude-sync's check after a pull stops
+its own run at 1800 seconds, recording one stopped while it waited as not completed (#2012). Any of
+them unreadable is refused.
+
+</td></tr>
+<tr><td>
+
+`HOOK_TESTS_DEADLINE`
+
+</td><td>
+
+none locally; under GitHub Actions the running job's own `timeout-minutes`
+
+</td><td>
+
+The epoch second by which the run must have printed its report. No flake recheck runs past it less
+`HOOK_TESTS_DEADLINE_RESERVE` (default `120`, in seconds, set on 2026-10-29 from the job setup times
+measured beside it in the runner): one with no time left is not started and its FAIL line says `not
+rechecked`, and one cut short says `recheck stopped after`, naming the limit, never `recheck timed
+out`, which is a recheck that ran out its own allowance (#1901). That allowance,
+`HOOK_TESTS_FLAKE_RECHECK_MAX`, is whole seconds on the same clock, and the FAIL line names the
+seconds it really waited; it was a count of polls printed as seconds until #1901. Under GitHub
+Actions it is read from the workflow file and job the platform names (`GITHUB_WORKFLOW_REF`,
+`GITHUB_JOB`) through `hooks/lib/workflow-job-timeout.sh`, counted from `HOOK_TESTS_JOB_STARTED`,
+which the workflow's first step records, and the run says the limit it read or why it could not.
+Separately, a suite stopped at its own wall clock is named on a `run-all-tests: STOPPED` line the
+moment it is stopped, before the report and any recheck, so a job cancelled later still names it. A
+value that is not a whole number is refused. The deadline is read against the real clock, or against
+`HOOK_TESTS_NOW`, an epoch second set for tests so the time a case leaves before its deadline does
+not depend on how busy the Mac is (#1937); it is refused the same way.
+
+</td></tr>
+<tr><td>
+
+`HOOK_TESTS_SLOTS`
+
+</td><td>
+
+set BY the runner
+
+</td><td>
+
+Each suite's share of the budget, which is the budget divided by how many suites are running at
+once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its
+own processes it may start. Point the runner at one directory holding one suite and that suite is
+handed the whole budget, so running the long suite on its own is as fast as it ever was.
+
+</td></tr>
+</tbody>
+</table>
 
 What the budget costs, measured on this Mac on 2026-08-21 as one pair of runs back to back: 124 seconds against
 88 seconds for the same 38 suites run the old way (8 suites at once, each splitting itself four ways). The machine was 183% busy
@@ -3563,12 +3749,73 @@ seconds that way and 243 in a single process, with no single section dominating 
 were 22s, 13s, 11s, 11s and 9s), so there was nothing to speed up, only work to spread. The parent holds the one run at a time lock and the
 shards run under it, so this is still one logical run.
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `SUITE_JOBS` | the runner's grant, or `4` | How many shards a full run splits into. Under `run-all-tests.sh` it defaults to `HOOK_TESTS_SLOTS`, this suite's share of that run's budget; started by hand it is 4. Setting it wins over the grant, because that is somebody asking rather than a share being allocated. `1` runs the whole thing in one process, which is what to reach for when a section only fails alongside others. A value that is not a whole number is refused, and so is a grant that cannot be read. |
-| `SUITE_PLAN_ONLY` | unset | Prints `SUITE-PLAN jobs=<n> source=<where it came from>` and runs nothing. The number decides what a run costs, and the only other way to see which one was chosen is to pay that cost. |
-| `SUITE_SHARD_COVERAGE_ONLY` | unset | Prints the shard's `SUITE-SHARD-COVERAGE` line, which names the sections it would run, and runs none of them. |
-| `SUITE_SHARD` | unset | `i/n` runs the prelude plus every n-th section from the i-th offset, for running one slice by hand or on another machine. A spec that is not `i/n`, or that names a shard outside the range, or that would hold no sections at all, is refused rather than reporting a pass over a set nobody chose. |
+<table>
+<thead>
+<tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td>
+
+`SUITE_JOBS`
+
+</td><td>
+
+the runner's grant, or `4`
+
+</td><td>
+
+How many shards a full run splits into. Under `run-all-tests.sh` it defaults to `HOOK_TESTS_SLOTS`,
+this suite's share of that run's budget; started by hand it is 4. Setting it wins over the grant,
+because that is somebody asking rather than a share being allocated. `1` runs the whole thing in one
+process, which is what to reach for when a section only fails alongside others. A value that is not
+a whole number is refused, and so is a grant that cannot be read.
+
+</td></tr>
+<tr><td>
+
+`SUITE_PLAN_ONLY`
+
+</td><td>
+
+unset
+
+</td><td>
+
+Prints `SUITE-PLAN jobs=<n> source=<where it came from>` and runs nothing. The number decides what a
+run costs, and the only other way to see which one was chosen is to pay that cost.
+
+</td></tr>
+<tr><td>
+
+`SUITE_SHARD_COVERAGE_ONLY`
+
+</td><td>
+
+unset
+
+</td><td>
+
+Prints the shard's `SUITE-SHARD-COVERAGE` line, which names the sections it would run, and runs none
+of them.
+
+</td></tr>
+<tr><td>
+
+`SUITE_SHARD`
+
+</td><td>
+
+unset
+
+</td><td>
+
+`i/n` runs the prelude plus every n-th section from the i-th offset, for running one slice by hand
+or on another machine. A spec that is not `i/n`, or that names a shard outside the range, or that
+would hold no sections at all, is refused rather than reporting a pass over a set nobody chose.
+
+</td></tr>
+</tbody>
+</table>
 
 The shards' totals are added up, and separately their COVERAGE is checked: every section after the
 prelude has to be the target of exactly one shard (#137). Each shard prints what it selected and
@@ -3733,20 +3980,154 @@ never built, under a name that does not exist, and it cost two wasted runs befor
 
 One run at a time, and none of them open ended:
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `SUITE_TIMEOUT` | `3600` | Seconds of wall clock before a run is killed however well it is going. Since #152 this is only an absolute ceiling for a runaway, not what catches a hang: `SUITE_STALL_TIMEOUT` does that. Generous on purpose, because a full single process run measured 348 seconds idle and 1943 at load 160 to 188 on 2026-08-22, so a tighter one kills a healthy run on a busy Mac. It also has a floor of twice `SUITE_STALL_TIMEOUT`, checked by the suite: a ceiling that expires first means the stall bound can never fire, and every real hang is then reported as a run that simply went on too long. At the end of a full run the suite says whether the ceiling still has room over the wall clock that run took, and uses the run's own processor time to tell a suite that has grown from a machine that was busy. `0` disables it. |
-| `SUITE_STALL_TIMEOUT` | `1200` | Seconds a run may go without reaching a new section before it is killed as hung and told which section it stopped in. This is what actually catches a hang, and a machine that is merely slow keeps moving between sections and is left alone. Re-measured 2026-08-22 across four loads: the slowest single section was 44 seconds idle, 88 under three competing full runs, and 208 once, so this is at least 5.7x the worst observed. It was 600, which at a 3x floor left no room at all once the suite had grown, and a busy afternoon turned the run red with nothing wrong. The suite checks that ratio against what the sections really take rather than against this sentence: each section at the quickest of its last ten readings, this run's included (`SUITE_SECTION_SAMPLES`, #1541), because one loaded run stretches its own sections and load only ever adds time. It prints the margin it achieved on every run so a shrinking one is visible before it fails. `0` disables it. Both this and `SUITE_TIMEOUT` at `0` is refused, since that is a run with no bound at all. |
-| `SUITE_LOCK` | `$TMPDIR/claude-sync-suite.lock` | Where the one run at a time lock lives. A second run REFUSES, naming the process that holds it and how long it has been going, rather than queueing, unless it was asked to wait with `SUITE_LOCK_WAIT`. |
-| `SUITE_LOCK_WAIT` | `0` (run-all-tests.sh sets it, `1200` locally) | Seconds to wait for a lock another run holds before refusing, counted from the first look that finds it held, so a busy machine cannot spend the wait before the run has looked (#1327). A run that waits says so as it starts, writes how long it has waited where its watchdog reads progress, prints `SUITE-NOTE waited <n>s ...` and `SUITE-LOCK-WAITED <n>` once it gets the lock, and at the bound refuses as before, adding how long it waited. Read once and not handed on, so the lock checks this suite runs on itself are never asked to wait (#1297). |
-| `SUITE_LOCK_WAIT_POLL` | `2` | Seconds between looks at the lock while waiting. A test seam: the bound itself is read off the clock. |
-| `SUITE_NO_LOCK` | unset | Run without taking the lock. For when you know the run it names has finished. |
-| `SUITE_LOCK_MAX_AGE` | `1800` | Seconds after which a lock from ANOTHER machine is broken. A lock from this machine is judged by whether its process is alive, never by the clock, so a clock jump cannot break a live one. |
-| `SUITE_MAX_DEPTH` | `1` | How deeply a run may be nested inside another. The suite runs itself as a subprocess in many places, every one of them one level down, and past this it refuses to start rather than multiplying. |
-| `SECTION_ONLY` | unset | Run the preamble, the first four sections, and the one named, plus anything it declares it needs. Refuses an ambiguous or unmatched name. |
-| `SECTION_UNTIL` | unset | Run from the start up to and including the section named. Refuses to be combined with `SECTION_ONLY`. |
-| `SUITE_FROM_COPY` | unset | Set to `1` to run this file in place rather than from a copy. It exists so the checks that guard the copy can be watched failing, and it puts a run back in the state where editing the suite mid-run corrupts it. |
-| `SUITE_SLOW_IN` | unset | Pause deliberately in the section named. It exists so the duration column can be watched reporting a known number: most sections legitimately read 0s, and a broken clock would read 0s everywhere too. |
+<table>
+<thead>
+<tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SUITE_TIMEOUT</code></td><td><code>3600</code></td><td>
+
+Seconds of wall clock before a run is killed however well it is going. Since #152 this is only an
+absolute ceiling for a runaway, not what catches a hang: `SUITE_STALL_TIMEOUT` does that. Generous
+on purpose, because a full single process run measured 348 seconds idle and 1943 at load 160 to 188
+on 2026-08-22, so a tighter one kills a healthy run on a busy Mac. It also has a floor of twice
+`SUITE_STALL_TIMEOUT`, checked by the suite: a ceiling that expires first means the stall bound can
+never fire, and every real hang is then reported as a run that simply went on too long. At the end
+of a full run the suite says whether the ceiling still has room over the wall clock that run took,
+and uses the run's own processor time to tell a suite that has grown from a machine that was busy.
+`0` disables it.
+
+</td></tr>
+<tr><td><code>SUITE_STALL_TIMEOUT</code></td><td><code>1200</code></td><td>
+
+Seconds a run may go without reaching a new section before it is killed as hung and told which
+section it stopped in. This is what actually catches a hang, and a machine that is merely slow keeps
+moving between sections and is left alone. Re-measured 2026-08-22 across four loads: the slowest
+single section was 44 seconds idle, 88 under three competing full runs, and 208 once, so this is at
+least 5.7x the worst observed. It was 600, which at a 3x floor left no room at all once the suite
+had grown, and a busy afternoon turned the run red with nothing wrong. The suite checks that ratio
+against what the sections really take rather than against this sentence: each section at the
+quickest of its last ten readings, this run's included (`SUITE_SECTION_SAMPLES`, #1541), because one
+loaded run stretches its own sections and load only ever adds time. It prints the margin it achieved
+on every run so a shrinking one is visible before it fails. `0` disables it. Both this and
+`SUITE_TIMEOUT` at `0` is refused, since that is a run with no bound at all.
+
+</td></tr>
+<tr><td><code>SUITE_LOCK</code></td><td><code>$TMPDIR/claude-sync-suite.lock</code></td><td>
+
+Where the one run at a time lock lives. A second run REFUSES, naming the process that holds it and
+how long it has been going, rather than queueing, unless it was asked to wait with
+`SUITE_LOCK_WAIT`.
+
+</td></tr>
+<tr><td>
+
+`SUITE_LOCK_WAIT`
+
+</td><td>
+
+`0` (run-all-tests.sh sets it, `1200` locally)
+
+</td><td>
+
+Seconds to wait for a lock another run holds before refusing, counted from the first look that finds
+it held, so a busy machine cannot spend the wait before the run has looked (#1327). A run that waits
+says so as it starts, writes how long it has waited where its watchdog reads progress, prints
+`SUITE-NOTE waited <n>s ...` and `SUITE-LOCK-WAITED <n>` once it gets the lock, and at the bound
+refuses as before, adding how long it waited. Read once and not handed on, so the lock checks this
+suite runs on itself are never asked to wait (#1297).
+
+</td></tr>
+<tr><td><code>SUITE_LOCK_WAIT_POLL</code></td><td><code>2</code></td><td>
+
+Seconds between looks at the lock while waiting. A test seam: the bound itself is read off the
+clock.
+
+</td></tr>
+<tr><td>
+
+`SUITE_NO_LOCK`
+
+</td><td>
+
+unset
+
+</td><td>
+
+Run without taking the lock. For when you know the run it names has finished.
+
+</td></tr>
+<tr><td><code>SUITE_LOCK_MAX_AGE</code></td><td><code>1800</code></td><td>
+
+Seconds after which a lock from ANOTHER machine is broken. A lock from this machine is judged by
+whether its process is alive, never by the clock, so a clock jump cannot break a live one.
+
+</td></tr>
+<tr><td><code>SUITE_MAX_DEPTH</code></td><td><code>1</code></td><td>
+
+How deeply a run may be nested inside another. The suite runs itself as a subprocess in many places,
+every one of them one level down, and past this it refuses to start rather than multiplying.
+
+</td></tr>
+<tr><td>
+
+`SECTION_ONLY`
+
+</td><td>
+
+unset
+
+</td><td>
+
+Run the preamble, the first four sections, and the one named, plus anything it declares it needs.
+Refuses an ambiguous or unmatched name.
+
+</td></tr>
+<tr><td>
+
+`SECTION_UNTIL`
+
+</td><td>
+
+unset
+
+</td><td>
+
+Run from the start up to and including the section named. Refuses to be combined with
+`SECTION_ONLY`.
+
+</td></tr>
+<tr><td>
+
+`SUITE_FROM_COPY`
+
+</td><td>
+
+unset
+
+</td><td>
+
+Set to `1` to run this file in place rather than from a copy. It exists so the checks that guard the
+copy can be watched failing, and it puts a run back in the state where editing the suite mid-run
+corrupts it.
+
+</td></tr>
+<tr><td>
+
+`SUITE_SLOW_IN`
+
+</td><td>
+
+unset
+
+</td><td>
+
+Pause deliberately in the section named. It exists so the duration column can be watched reporting a
+known number: most sections legitimately read 0s, and a broken clock would read 0s everywhere too.
+
+</td></tr>
+</tbody>
+</table>
 
 ## Scratch left behind by a killed run
 
@@ -3781,16 +4162,71 @@ whole of it: 113,912 entries on this Mac, 25 of them ours, which was most of wha
 that location is now read on an interval rather than on every call, and `claude-sync reap-scratch`
 reads it every time whatever the interval says.
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `SYNC_SCRATCH_ROOT` | `$TMPDIR` | The temp root. Scratch is created in the `claude-sync` directory inside it, and the sweep looks there and, on an interval, in the root itself. |
-| `SYNC_SCRATCH_DIRNAME` | `claude-sync` | The name of that directory. It is half of the pattern deciding what `reap-scratch` may remove, so anything that is not a single directory name is refused. |
-| `SYNC_SCRATCH_MAX_AGE` | `14400` | Seconds before scratch counts as abandoned. Four times the suite's own 3600 second ceiling, so the longest run the tool permits is a quarter of the way to being swept, and 2400x the 6 second sync timed on 2026-08-17. The ratio against the ceiling is checked by the suite rather than stated here, because these are one setting living in two files and #152 moved half of it. The cost is that a burst of interrupted runs is not reclaimed until four hours after the last of them. `0` turns the sweep off entirely, and a value that is not a whole number is refused rather than guessed at. |
-| `SYNC_REAP_INTERVAL` | `86400` | Seconds between automatic sweeps of the tool's own scratch directory, read from a stamp inside that directory so a restarted process cannot reset it. Only mutating commands sweep, through the same handler that releases the sync lock, so no read-only command ever removes anything. `0` sweeps on every mutating run, and a value that is not a whole number is refused. |
-| `SYNC_SCRATCH_NOTE` | `1` | Whether a run writes the note naming what it was doing beside its scratch. `0` turns it off. |
-| `SYNC_SCRATCH_NOTE_ECHO` | `0` | `1` prints the note's path and content to stderr as it is written. It exists so the writer can be watched working: without it the only observable trace is a note a killed run left behind, which a test has to plant by hand, so the whole thing could be inert and every check would still pass. |
-| `SYNC_SCRATCH_LEGACY_EVERY` | `86400` | Seconds between reads of the old flat location in the temp root. Reading it is what costs six figures of directory entries, so it is not done on every call. The cost is stated: something left there can go unreported for up to this long, though `reap-scratch` always reads it. `0` reads it every call, and a value that is not a whole number is refused. |
-| `SYNC_SCRATCH_DU_TIMEOUT` | `30` | Seconds each `du` sizing abandoned scratch may run before it is stopped, and the size reported as not known rather than as the part that was read. The alarm is set on `du` itself, so it holds even when the `status` that started it has been killed. `0` lets `du` run unbounded, and a value that is not a whole number is refused. |
+<table>
+<thead>
+<tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SYNC_SCRATCH_ROOT</code></td><td><code>$TMPDIR</code></td><td>
+
+The temp root. Scratch is created in the `claude-sync` directory inside it, and the sweep looks
+there and, on an interval, in the root itself.
+
+</td></tr>
+<tr><td><code>SYNC_SCRATCH_DIRNAME</code></td><td><code>claude-sync</code></td><td>
+
+The name of that directory. It is half of the pattern deciding what `reap-scratch` may remove, so
+anything that is not a single directory name is refused.
+
+</td></tr>
+<tr><td><code>SYNC_SCRATCH_MAX_AGE</code></td><td><code>14400</code></td><td>
+
+Seconds before scratch counts as abandoned. Four times the suite's own 3600 second ceiling, so the
+longest run the tool permits is a quarter of the way to being swept, and 2400x the 6 second sync
+timed on 2026-08-17. The ratio against the ceiling is checked by the suite rather than stated here,
+because these are one setting living in two files and #152 moved half of it. The cost is that a
+burst of interrupted runs is not reclaimed until four hours after the last of them. `0` turns the
+sweep off entirely, and a value that is not a whole number is refused rather than guessed at.
+
+</td></tr>
+<tr><td><code>SYNC_REAP_INTERVAL</code></td><td><code>86400</code></td><td>
+
+Seconds between automatic sweeps of the tool's own scratch directory, read from a stamp inside that
+directory so a restarted process cannot reset it. Only mutating commands sweep, through the same
+handler that releases the sync lock, so no read-only command ever removes anything. `0` sweeps on
+every mutating run, and a value that is not a whole number is refused.
+
+</td></tr>
+<tr><td><code>SYNC_SCRATCH_NOTE</code></td><td><code>1</code></td><td>
+
+Whether a run writes the note naming what it was doing beside its scratch. `0` turns it off.
+
+</td></tr>
+<tr><td><code>SYNC_SCRATCH_NOTE_ECHO</code></td><td><code>0</code></td><td>
+
+`1` prints the note's path and content to stderr as it is written. It exists so the writer can be
+watched working: without it the only observable trace is a note a killed run left behind, which a
+test has to plant by hand, so the whole thing could be inert and every check would still pass.
+
+</td></tr>
+<tr><td><code>SYNC_SCRATCH_LEGACY_EVERY</code></td><td><code>86400</code></td><td>
+
+Seconds between reads of the old flat location in the temp root. Reading it is what costs six
+figures of directory entries, so it is not done on every call. The cost is stated: something left
+there can go unreported for up to this long, though `reap-scratch` always reads it. `0` reads it
+every call, and a value that is not a whole number is refused.
+
+</td></tr>
+<tr><td><code>SYNC_SCRATCH_DU_TIMEOUT</code></td><td><code>30</code></td><td>
+
+Seconds each `du` sizing abandoned scratch may run before it is stopped, and the size reported as
+not known rather than as the part that was read. The alarm is set on `du` itself, so it holds even
+when the `status` that started it has been killed. `0` lets `du` run unbounded, and a value that is
+not a whole number is refused.
+
+</td></tr>
+</tbody>
+</table>
 
 `claude-sync status` also reports watcher processes and test runs the tool left behind, counting
 how many started independently and how deeply they are nested. It stays silent for one watcher
@@ -3825,7 +4261,9 @@ which set to 0 turns the deadline off. `tests/test-claude-sync.sh` is the one su
 its own, its `SUITE_TIMEOUT` plus a margin, because a healthy run of it on a loaded Mac outlasts the
 shared default. A suite that does not arm it is a failure in `test-suite-deadline.sh`, which scans
 the suites the runner runs, so the next suite added cannot quietly have no bound
-(claude-config#465). When it stops a suite it reads the load average through
+(claude-config#465). The push asks it too: `scanners-before-push.sh` refuses a push that adds or
+changes a `test-*.sh` that does not arm, judged as the push delivers it, through
+`hooks/lib/suite-arms-check.sh`, the same answer the full suite gives (claude-config#2330). When it stops a suite it reads the load average through
 `hooks/lib/load-average.sh` and judges it by that file's one predicate: where the load beyond the
 suite's own share (`HOOK_TESTS_SLOTS`, 1 when started directly) is more than the machine has cores,
 the stop says UNMEASURED with the figures, since a suite starved of the processor cannot be told
@@ -4466,7 +4904,13 @@ once per load, and a noun that is absent (its mod not loaded) stays its own case
 before saving, auto session name, the collision guard, the design round guard, handoff, the job
 watcher and picker manners build every message from a caught error with its `errorText`, so a
 member missing from an older mod-kit or session registry reaches the screen as that sentence, never
-as the raw `TypeError`.
+as the raw `TypeError`. Since #2150 `errorText` also says a call the engine refused or that failed
+in plain words, never with the engine's own name for the call: "the file could not be read:
+permission denied (/path)", not "scope-modes: $.fs.read: EACCES: ...". A code it has no words for
+keeps the engine's own reason, and an abandoned command's "aborted" text is left as it is for
+/sleep. A caller that decides by the kind of failure asks `errorCode` (the job watcher's check for
+an output file that is gone), and `tools/check-mod-shared-parts.sh` fails a mod that reads the
+prefix by hand (its engine-prefix part).
 Every mod that waits on Dan or on a long job takes mod-kit's reload hold around that wait with one
 helper, mod-kit's `hooks/held.ts`, kept as a byte for byte copy at `hooks/mod-kit/held.ts` in the
 mod, so a prompt a mod sends or an answer Dan gives is not lost when the mods reload mid wait.
@@ -6439,6 +6883,10 @@ each call a noun makes to the function the TypeScript compiler's own checker res
 parameters are the language's answer rather than the first function of that name in the mod (#895).
 A promise kept in a variable outside a noun's code is linked to a noun's read the same way, so only
 a read of that same variable counts, never another function's variable sharing its name (#915).
+Work a noun's code hands to a timer runs after the noun answered and is not read as its code (#939),
+and that includes a function written in place and handed to a mod helper that only gives it to a
+timer it starts, such as picker manners' `offTheDialog`: the helper is recognised by what its body
+does with that parameter, never by its name (#2299).
 Run on its own, it installs that compiler as the type check does, and refuses (exit 4, naming why
 and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
