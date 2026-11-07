@@ -243,6 +243,17 @@ run_hook "$W" "git push" "$TO_DIR:$PATH_STUB"
 want_allowed_notice "judge timed out"
 want_stderr "timed out after 90s" "judge timed out"
 
+# --- a listing of the push that git FAILED is not an empty push (claude-config#2349) ---------------
+# lib/push-changes.sh answered it as one, and the gate allowed the push silently, as "empty", with
+# nothing judged. It now says it could not read what the push carries. git is a stand in failing
+# only that listing.
+. "$DIR/lib/test_failing_git_listing.sh" || { fail=$((fail+1)); echo "FAIL: #2349 lib/test_failing_git_listing.sh is missing"; }
+GF_DIR="$TMPROOT/gitfail"
+failing_git_listing "$GF_DIR" committed || { fail=$((fail+1)); echo "FAIL: #2349 the failing git listing stand in could not be written"; }
+W="$(mk_repo)"; seed_source "$W"
+run_hook "$W" "git push" "$GF_DIR:$PATH_STUB"
+want_allowed_notice "#2349 a failed listing of the push says the gate could not list it" "SIMPLIFY GATE DID NOT RUN.*could not list the files this push carries"
+
 # --- a push run from a SUBDIRECTORY is judged on the whole push (claude-config#1076) ----------------
 # The diff was asked for with paths relative to the root while git read them from the subdirectory,
 # so a change outside it reached the judge as nothing, and the gate allowed the push unjudged and

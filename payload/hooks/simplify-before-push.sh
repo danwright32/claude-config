@@ -109,6 +109,8 @@ ps_has_override "$cmd" SKIP_SIMPLIFY_CHECK && allow override
 case $resolved in
   1) allow empty ;;
   2) fail_open "no upstream branch: cannot tell what this push adds" ;;
+  # A listing git failed is not an empty push (#2349): the files read are only part of it, if any.
+  3) fail_open "could not list the files this push carries: git failed reading $PC_LIST_FAILED" ;;
 esac
 
 # ---------------------------------------------------------------------------

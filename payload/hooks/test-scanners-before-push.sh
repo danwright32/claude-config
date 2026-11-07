@@ -1771,6 +1771,18 @@ out="$(wn_fire "$RD" "git push -u origin rename-unarmed")"; rc=$?
   && ! grep -q -F "tests/test-old.sh" <<< "$out" && ! grep -q -F "could not be read from the tree" <<< "$out" \
   && check "#2330 a push renaming an unarmed suite is refused under its new name, the old name not read" ok \
   || check "#2330 a push renaming an unarmed suite is refused under its new name, the old name not read" "exit=$rc out=$out"
+# A listing of the push that git FAILED refuses it (claude-config#2349). lib/push-changes.sh once
+# answered it as a push carrying nothing, so this check judged no suite and an unarmed one went on to
+# CI. git is a stand in here that fails only that listing; the same push with the real git is the
+# add-unarmed case above, refused for the suite itself.
+. "$DIR/lib/test_failing_git_listing.sh" || check "#2349 lib/test_failing_git_listing.sh loads" "it is missing"
+DL_GITFAIL="$TMPROOT/dl-gitfail"
+failing_git_listing "$DL_GITFAIL" committed || check "#2349 the failing git listing stand in is written" "it could not be"
+dl_branch list-fails; printf '#!/usr/bin/env bash\necho new\n' > "$RD/payload/hooks/test-new.sh"; commit_all "$RD"
+out="$(PATH="$DL_GITFAIL:$PATH" wn_fire "$RD" "git push -u origin list-fails")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "could not list the files this push carries" <<< "$out" && ! grep -q -F "scan(s) passed" <<< "$out" \
+  && check "#2349 a push whose file listing git failed is refused, saying the listing failed, before any scanner" ok \
+  || check "#2349 a push whose file listing git failed is refused, saying the listing failed, before any scanner" "exit=$rc out=$out"
 # A copy of the gate without the shared check refuses the push, naming the file, rather than pass a
 # suite nobody judged.
 DL_NOLIB="$TMPROOT/dl-nolib-hooks"; mkdir -p "$DL_NOLIB/lib"

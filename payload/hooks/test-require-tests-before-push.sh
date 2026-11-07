@@ -394,6 +394,16 @@ STUB_CLAUDE_OUT='{"result":"sure thing, looks good to me"}' run_hook "$W" "git p
 want_allowed_notice "judge verdict unparseable"
 want_stderr "judge" "judge verdict unparseable"
 
+# A listing of the push that git FAILED is not an empty push (claude-config#2349). lib/push-changes.sh
+# answered it as one, and the gate let the canary's untested change through silently, as "empty". It
+# now says it could not read what the push carries. git is a stand in failing only that listing.
+. "$DIR/lib/test_failing_git_listing.sh" || { fail=$((fail+1)); echo "FAIL: #2349 lib/test_failing_git_listing.sh is missing"; }
+GF_DIR="$TMPROOT/gitfail"
+failing_git_listing "$GF_DIR" committed || { fail=$((fail+1)); echo "FAIL: #2349 the failing git listing stand in could not be written"; }
+W="$(mk_repo)"; seed_source_only "$W"
+run_hook "$W" "git push" "$GF_DIR:$PATH_STUB"
+want_allowed_notice "#2349 a failed listing of the push says the gate could not list it" "TEST GATE DID NOT RUN.*could not list the files this push carries"
+
 # --- the gate's real verdicts must be unaffected by the above -------------
 W="$(mk_repo)"; seed_source_and_test "$W"
 STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' \

@@ -52,12 +52,15 @@ pc_files_since() {   # $1 = commit or tree
 #   PC_WIDENED         1 when the command's git add could not be read and the whole working tree
 #                      was counted instead; a refusal must say so (lib/push-scope.sh, #457)
 #   PC_FILES           the files, one per line, relative to the repository root
+#   PC_LIST_FAILED     which listing git failed, empty when every listing was read
 # and moves the shell to the repository root, which every path above is relative to.
 #
 # Returns 0 when the push carries files, 1 when it carries none with an upstream to compare against
 # (a correct, quiet verdict), and 2 when it carries none and there is no upstream: the base may have
 # fallen back to the current commit, so "nothing" is the gate being blind, not the push being empty
-# (#736), and the caller must say so.
+# (#736), and the caller must say so. Returns 3 when git failed a listing (#2349), whatever the
+# others found: PC_FILES is then only part of the push, and an empty one is not an empty push, so
+# the caller refuses or says it could not read, never passes quietly as it does on 1.
 pc_resolve() {   # $1 = command
   local pending_list top f
   PC_UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
@@ -83,14 +86,18 @@ pc_resolve() {   # $1 = command
   [ -n "$PC_MB" ] && pc__set_apart_merged
 
   local committed="" pending=""
-  [ -n "$PC_FROM" ] && committed="$(pc_files_since "$PC_FROM")"
+  PC_LIST_FAILED=""
+  if [ -n "$PC_FROM" ]; then
+    committed="$(pc_files_since "$PC_FROM")" || PC_LIST_FAILED="the files the commits since $PC_FROM change"
+  fi
 
   # The PENDING files when the command commits before it pushes: the index, plus what the shared
   # reader says the commit takes beyond it (#457), counting only files that exist. Read here, in the
   # directory the command runs in, because the paths its git add names are relative to it.
   PC_WIDENED=0; PC_PENDING_ALL=""
   if [ "$PC_COMMIT_IN_CHAIN" -eq 1 ]; then
-    pending="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
+    pending="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)" \
+      || PC_LIST_FAILED="${PC_LIST_FAILED:+$PC_LIST_FAILED, and }the staged files the commit in this command takes"
     pending_list="$(ps_pending_files "$1")"
     [ "${pending_list%%$'\n'*}" = "WIDENED" ] && PC_WIDENED=1
     # Every path the commit takes beyond the index, deletions included, for pc_push_tree.
@@ -110,6 +117,9 @@ LOOP_INPUT
   # Every path from here on is relative to the root, so the shell stands there.
   top="$(git rev-parse --show-toplevel 2>/dev/null)"
   [ -n "$top" ] && cd "$top" 2>/dev/null
+  # A listing git failed leaves PC_FILES holding only what the other listings read, so it is not an
+  # answer at all, however many files it names.
+  [ -n "$PC_LIST_FAILED" ] && return 3
   if [ -z "$PC_FILES" ]; then
     [ -z "$PC_UPSTREAM" ] && return 2
     return 1
