@@ -7,6 +7,7 @@ import {
   agentRefusal,
   ciMessages,
   ciWorkflow,
+  codeOf,
   editedText,
   handsOn,
   heldText,
@@ -16,6 +17,7 @@ import {
   isMessage,
   isOwnRecord,
   isProse,
+  isProseFile,
   literalsOf,
   mentionsStore,
   namePatterns,
@@ -272,6 +274,15 @@ test('a sender that names a file without importing or reading it does not refer 
   expect(refersTo('app/notify.py', 'TPL = os.path.join(BASE, "templates/backup.txt")\nbody = open(TPL).read()\n', 'app/templates/backup.txt')).toBe(true)
 })
 
+// #2368 met #2361: curl reads a file it is handed by `@` and posts its text, so that line reads it.
+test("curl's data or form argument taking a file by @ reads it; naming the file to curl without @ does not", () => {
+  const T = 'alerts/late.txt'
+  for (const run of ['--data-binary @alerts/late.txt', '-d @alerts/late.txt','--data=@alerts/late.txt', "--data-urlencode '@alerts/late.txt'", '-F file=@alerts/late.txt'])
+    expect(refersTo('.github/workflows/late.yml', `steps:\n  - run: curl -X POST "$SLACK_ALERTS_WEBHOOK" ${run}\n`, T)).toBe(true)
+  expect(refersTo('.github/workflows/late.yml', 'steps:\n  - run: curl -o alerts/late.txt https://example.com/late\n', T)).toBe(false)
+  expect(refersTo('scripts/mail.sh', 'git add alerts/late.txt\nnotify @alerts\n', T)).toBe(false)
+})
+
 test('an ordinary array or string method is not a query builder call, so an alert inside one is still message text', () => {
   const ts = "items.filter(x => notify('Deploy failed on main'))\nconst s = parts.join(', and then retry')\nArray.from(rows, r => alert('Backup is late again'))\n"
   expect(stringsOf(ts, false, true).filter(s => s.query)).toEqual([])
@@ -508,4 +519,25 @@ test('the question approves the wording of an automated alert in the named file,
   expect(lead).toContain('automated')
   expect(lead).toContain('sends nothing')
   expect(q.endsWith('\n\nDeploy 4182 failed on production')).toBe(true)
+})
+
+// #2368's line reader and #2361's comment blanking were one rule written twice; codeOf is now the
+// tokenizer, and this holds the behaviours #2368's test of the line reader asserted.
+test('codeOf leaves comments out and keeps code, strings, and code after a closed block comment', () => {
+  const ts = codeOf('a.ts', '// notify.ts\nrun(id)\n/* notify.ts */\n/**\n * notify.ts\n */\n/* x */ run(id)\n')
+  expect(ts).not.toContain('notify.ts')
+  expect(ts.match(/run\(id\)/g)?.length).toBe(2)
+  const yml = codeOf('a.yml', '# notify.ts\nsteps:\n  - run: go\n')
+  expect(yml).not.toContain('notify.ts')
+  expect(yml).toContain('steps:\n  - run: go\n')
+  const job = codeOf('job', '#!/bin/sh\n# notify.ts\ncurl x\n')
+  expect(job).not.toContain('notify.ts')
+  expect(job).toContain('curl x\n')
+  expect(codeOf('a.json', '{"a": "#b"}\n')).toBe('{"a": "#b"}\n')
+  expect(codeOf('a.ts', 'send("see // notify.ts")\n')).toContain('"see // notify.ts"')
+})
+
+test('only prose files are ruled out as senders', () => {
+  for (const p of ['CLAUDE.md', 'docs/runbook.markdown', 'a.mdx', 'a.rst', 'a.adoc', 'notes.txt']) expect(isProseFile(p)).toBe(true)
+  for (const p of ['a.ts', 'a.vue', 'a.sql', 'a.toml', 'a.yml', 'Makefile']) expect(isProseFile(p)).toBe(false)
 })

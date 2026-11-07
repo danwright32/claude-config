@@ -679,6 +679,7 @@ declare_advisory_pre(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
 {
   declare_advisory_pre rtk-rewrite.sh      '{"command": "gh api repos/o/r"}' "rewrites a command to its rtk form and never refuses; a payload it cannot read is left as it came"
   declare_advisory_pre lessons-advisory.sh '{"command": "git push origin feature"}' "hands Claude the lessons a push matches and never refuses (its header: WHY ADVISORY AND NOT A GATE)"
+  declare_advisory_pre read-only-query-allow.sh '{"command": "select 1"}' "approves a read only query or says nothing, and never refuses; a payload it cannot read goes to the usual permission check (#2343)"
 } > "$WORK/advisory-pre"
 while IFS= read -r g; do
   grep -q -x -F "$g" "$WORK/blocking" && continue

@@ -185,15 +185,32 @@ fi
 # It never MAKES a review speak. `urgent` above is untouched, for the same
 # reason it excludes ordinary failures: a fault nobody can act on must not be
 # able to interrupt a turn.
+#
+# When it last went out is kept BESIDE THE SPOOL, never in TMPDIR (claude-config#2296): macOS empties
+# the temp folder of anything untouched for about three and a half days, so a stamp there vanished
+# mid week and the count came back early with nothing saying why. The library names the path, one
+# derivation. A stamp that is missing or unreadable sends the count now, never starts a fresh week,
+# and the line says which, so a stamp that keeps disappearing shows up as the note repeating.
 MUTED_REPORT_SECONDS="${CLAUDE_ISSUE_MUTED_REPORT_SECONDS:-604800}"  # 7 days
-muted_stamp="${TMPDIR:-/tmp}/claude-feature-issue-muted-$(printf '%s' "$proj" | shasum | cut -c1-12).stamp"
 muted_line=""
 if [ -f "$SPOOL_LIB" ]; then
+  muted_stamp="$(bash "$SPOOL_LIB" muted-stamp "$proj" 2>/dev/null)" || muted_stamp=""
   muted_last=0
-  [ -f "$muted_stamp" ] && muted_last=$(cat "$muted_stamp" 2>/dev/null || echo 0)
-  case "$muted_last" in ''|*[!0-9]*) muted_last=0 ;; esac
+  muted_note=""
+  if [ -z "$muted_stamp" ] || [ ! -f "$muted_stamp" ]; then
+    muted_note="No record of when this count last went out was found, so it is shown now rather than a week after the last one."
+  else
+    muted_last=$(cat "$muted_stamp" 2>/dev/null) || muted_last=""
+    case "$muted_last" in
+      ''|*[!0-9]*)
+        muted_last=0
+        muted_note="The record of when this count last went out ($muted_stamp) could not be read, so it is shown now rather than a week after the last one."
+        ;;
+    esac
+  fi
   if [ $(( $(date +%s) - muted_last )) -ge "$MUTED_REPORT_SECONDS" ]; then
     muted_line=$(bash "$SPOOL_LIB" muted-summary "$proj" "$transcript" 2>/dev/null) || muted_line=""
+    if [ -n "$muted_line" ] && [ -n "$muted_note" ]; then muted_line="$muted_line $muted_note"; fi
   fi
 fi
 # The held-back count stays in the REASON, never in the findings file. This hook
@@ -362,7 +379,9 @@ if [ -n "$payload" ]; then
   # reason itself, so it is delivered exactly when this branch is taken.
   if [ -n "$muted_line" ] && [ -f "$SPOOL_LIB" ]; then
     bash "$SPOOL_LIB" file-muted "$proj" "$transcript" >/dev/null 2>&1 || true
-    printf '%s' "$(date +%s)" > "$muted_stamp" 2>/dev/null || true
+    # The reason has already gone out, so a stamp that cannot be written cannot be said here; the
+    # next review finds no record and says so in the count's line instead (#2296).
+    bash "$SPOOL_LIB" muted-sent "$proj" >/dev/null 2>&1 || true
   fi
   # The week restarts only once the line, or why it could not be built, actually went out (#1511).
   if [ -n "$area_now" ] && { [ -n "$area_line" ] || [ -n "$area_failed" ]; }; then

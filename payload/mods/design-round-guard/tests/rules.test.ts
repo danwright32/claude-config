@@ -54,6 +54,7 @@ import {
   nameFromVariable,
   editWouldNotApply,
   outputTrusted,
+  freshTemp,
   inScratchpad,
   namesScratchpad,
   joinedOnly,
@@ -321,6 +322,68 @@ test('#1832: only a substitution running git rev-parse alone is trusted to name 
     'app/page.tsx',
   ])
     expect([w, outputTrusted(w)]).toEqual([w, false])
+})
+
+// #2171, Dan, 2026-11-04 (picker answer: trust bare mktemp the way git rev-parse is trusted): a write
+// to a variable alone whose every value is `$(mktemp)` or `$(mktemp -d)` names a new file outside every
+// screen path. Nothing else is trusted, and nothing at all where the command could make mktemp print
+// another name or give the variable another value.
+test('#2171: only a variable every assignment gives bare mktemp or mktemp -d names a fresh file', () => {
+  for (const [word, values, command] of [
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); git show HEAD:app/page.tsx > "$T"; diff "$T" app/page.tsx'],
+    ['${T}', ['$(mktemp)'], 'T=$(mktemp); wc -l $(ls app/page.tsx) > ${T}'],
+    ['$D', ['$(mktemp -d)'], 'D=$(mktemp -d); cp app/page.tsx "$D"'],
+    ['$T', ['$(mktemp)'], 'T="$(mktemp)"; git show HEAD:app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp)', '$(mktemp -d)'], 'T=$(mktemp); T=$(mktemp -d); cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp)'], 'export T=$(mktemp); cat app/page.tsx > "$T"'],
+  ] as const)
+    expect([command, freshTemp(word, [...values], command)]).toEqual([command, true])
+  for (const [word, values, command] of [
+    // Any other value, or a flag or template that chooses where the file goes.
+    ['$T', ['$(head -1 list)'], 'ls app/*.tsx > list; T=$(head -1 list); echo x > "$T"'],
+    ['$OUT', ['$(ls app/*.tsx|head -1)'], 'OUT=$(ls app/*.tsx|head -1); echo x > "$OUT"'],
+    ['$T', ['$(mktemp -t x)'], 'T=$(mktemp -t x); cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp app/x.XXXX)'], 'T=$(mktemp app/x.XXXX); cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp -p app)'], 'T=$(mktemp -p app); cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp)', '$(head -1 list)'], 'T=$(mktemp); T=$(head -1 list); echo x > "$T"'],
+    ['$T', ['`mktemp`'], 'T=`mktemp`; cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp; echo app/page.tsx)'], 'T=$(mktemp; echo app/page.tsx); echo x > "$T"'],
+    // The command can make mktemp print a name in a screen folder.
+    ['$T', ['$(mktemp)'], 'TMPDIR=app T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'export TMPDIR=/w/slate/app; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'PATH=./bin:$PATH; T=$(mktemp); cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp)'], 'mktemp(){ echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'function mktemp { echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], "alias mktemp='echo app/page.tsx'; T=$(mktemp); echo x > \"$T\""],
+    ['$T', ['$(mktemp)'], 'hash -p ./bin/fake mktemp; T=$(mktemp); echo x > "$T"'],
+    // zsh takes a quoted or escaped function name, and a function or a name set through its table.
+    ['$T', ['$(mktemp)'], '"mktemp"(){ echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'm\\ktemp(){ echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], "functions[mktemp]='echo app/page.tsx'; T=$(mktemp); echo x > \"$T\""],
+    ['$T', ['$(mktemp)'], 'path=(./bin $path); T=$(mktemp); echo x > "$T"'],
+    // zsh's lowercase path array is PATH, so every way of setting it is held too.
+    ['$T', ['$(mktemp)'], 'path+=(./bin); T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'path[1]=./bin; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'typeset path; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'typeset -a path=(./bin); T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'read -A path < list; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'set -A path ./bin; T=$(mktemp); echo x > "$T"'],
+    // A quoted, escaped or run time name for TMPDIR or PATH.
+    ['$T', ['$(mktemp)'], 'export TMP"DIR"=app; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], "export $'TMP\\x44IR'=app; T=$(mktemp); echo x > \"$T\""],
+    ['$T', ['$(mktemp)'], 'V=TMP; export ${V}DIR=app; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'printf -v "$V" app; T=$(mktemp); echo x > "$T"'],
+    // An assignment of the variable the reader did not give, a prefix one dropped before a command.
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); T=app/page.tsx : ; echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); T+=.tsx; echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); T+=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); T[0]=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); T[0]=app/page.tsx; echo x > "$T"'],
+    // A word that is more than the variable alone, or no values.
+    ['$T/a', ['$(mktemp)'], 'T=$(mktemp); cat app/page.tsx > "$T/a"'],
+    ['$T', [], 'cat app/page.tsx > "$T"'],
+  ] as const)
+    expect([command, freshTemp(word, [...values], command)]).toEqual([command, false])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {

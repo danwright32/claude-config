@@ -796,6 +796,48 @@ test('a template no file sends passes, after a search that ran; so does a file o
   expect(w.ran.length).toBe(3)
 })
 
+// Pivot, 2026-11-06: a project's CLAUDE.md named an engine file and a Slack webhook secret, and a
+// workflow's comment named a test file, so ordinary code edits to both were held as alert wording.
+test('a prose file, or a comment, that names a template and mentions Slack does not make a sender', withKit, async ($, on) => {
+  const USAGE = '/w/app/src/turn-usage.ts'
+  const USAGE_TEXT = 'export const insertUsage = "insert into turn_usage (turn) values (?)"\n'
+  const NOTES = '/w/app/CLAUDE.md'
+  const YML = '/w/app/.github/workflows/deploy.yml'
+  const COMMENTED = '# turn-usage.ts keeps the cost; failures post with SLACK_ALERTS_WEBHOOK\nsteps:\n  - run: curl -X POST "$SLACK_ALERTS_WEBHOOK" -d "{}"\n'
+  const w = world($, on, {
+    files: {
+      [USAGE]: USAGE_TEXT,
+      [NOTES]: 'Usage lives in `src/turn-usage.ts`. Alerts post through `SLACK_ALERTS_WEBHOOK` to Slack.\n',
+      [YML]: COMMENTED,
+    },
+  })
+  const edit = { tool: 'Edit', file_path: USAGE, old_string: 'insert into turn_usage (turn) values (?)', new_string: 'insert into turn_usage (turn, run) values (?, ?)' }
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('a sender in a language the guard does not list as code still sends', withKit, async ($, on) => {
+  const VUE = '/w/app/lib/notify.vue'
+  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, [VUE]: SENDER_TEXT } })
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(`which ${VUE} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
+test('a workflow that names a template in a step, not a comment, still sends it', withKit, async ($, on) => {
+  const MSG = '/w/app/alerts/late.txt'
+  const YML = '/w/app/.github/workflows/late.yml'
+  const w = world($, on, {
+    files: {
+      [MSG]: 'Backup is late\n',
+      [YML]: '# posts the late notice\nsteps:\n  - run: curl -X POST "$SLACK_ALERTS_WEBHOOK" --data-binary @alerts/late.txt\n',
+    },
+  })
+  const why = refusalOf(await call($, { tool: 'Write', file_path: MSG, content: 'Backup is late on db-1\n' }))
+  expect(why).toContain(`which ${YML} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
 test('a search that cannot finish, runs past its deadline, or meets an unreadable file holds the edit, saying why', withKit, async ($, on) => {
   const w = world($, on, sent)
   w.ctl.gitFails = 'timed out after 3000ms'
@@ -890,6 +932,41 @@ test('a template re-exported but sent to Slack by nothing passes, after the chai
   // Past the first grep: the barrel and messages.ts were each searched for.
   expect(grepped(w)).toBeGreaterThan(2)
   expect(w.ran.length).toBe(1)
+})
+
+// #2368 met #2286: past the template's own level, a prose file or a comment still sends nothing.
+test('a prose file, or a comment, naming a file that hands the template on does not make a sender', withKit, async ($, on) => {
+  const NOTES = '/w/app/docs/alerts.md'
+  const YML = '/w/app/.github/workflows/deploy.yml'
+  const w = world($, on, {
+    files: {
+      [TEMPLATE]: TEMPLATE_TEXT,
+      [BARREL]: BARREL_TEXT,
+      [NOTES]: 'Deploy notices come from `lib/templates/index.ts` and post through SLACK_WEBHOOK_URL.\n',
+      [YML]: '# lib/templates/index.ts holds the wording; it posts with SLACK_WEBHOOK_URL\nsteps:\n  - run: curl -X POST "$SLACK_WEBHOOK_URL" -d "{}"\n',
+    },
+  })
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  // The barrel's level was searched too, so the prose file and the comment were met and passed over.
+  expect(grepped(w)).toBeGreaterThan(2)
+})
+
+test('a commented import does not hand a template on, and a Slack marker in a comment does not stop a file that does', withKit, async ($, on) => {
+  const MESSAGES = '/w/app/lib/messages.ts'
+  const w = world($, on, {
+    files: {
+      [TEMPLATE]: TEMPLATE_TEXT,
+      [MESSAGES]: "// was: export { deployFailed } from './templates/deploy'\nexport const other = 1\n",
+      [NOTIFY]: notifies('./messages'),
+    },
+  })
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  // A comment naming the Slack webhook makes messages.ts neither the sender nor a dead end: it is
+  // followed to the file that really sends the template.
+  w.files[MESSAGES] = "// posts nothing itself, never SLACK_WEBHOOK_URL; notify.ts does\nexport { deployFailed } from './templates/deploy'\n"
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(`which ${NOTIFY} sends to Slack`)
+  expect(why).not.toContain(`which ${MESSAGES}`)
 })
 
 test('the calls waiting on Dan are dropped at session end', withKit, async ($, on) => {
