@@ -29,6 +29,7 @@ import {
 } from './prline.ts'
 import {
   DEADLINE_MS,
+  FOLDER_JUDGE_MAX,
   GROWTH_DAYS,
   ISSUE_LIMIT,
   ISSUES_TTL_MS,
@@ -602,8 +603,10 @@ const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarge
 
 // A write reaching a whole folder (#2142 lessons review) reaches every file under it: the files there
 // the area check could hold, from the same tracked list and issues an edit is judged by, or why they
-// cannot be listed. A folder in no checkout, or in one not on GitHub, holds nothing to judge.
-const underTree = async ($: EngineInterface, path: string): Promise<{ paths: string[] } | { unread: string }> => {
+// cannot be listed. A folder in no checkout, or in one not on GitHub, holds nothing to judge. `max`,
+// given for a folder found only on the disk (#2321), bounds how many of them are judged one by one:
+// past it the files are not listed for judging, and the command is held whole (FOLDER_JUDGE_MAX).
+const underTree = async ($: EngineInterface, path: string, max?: number): Promise<{ paths: string[] } | { unread: string }> => {
   const d: Deadline = { at: (await $.clock.now()) + DEADLINE_MS }
   const b = await $.modkit.branch({ path })
   if (!b || 'unreadable' in b) return { paths: [] }
@@ -616,7 +619,63 @@ const underTree = async ($: EngineInterface, path: string): Promise<{ paths: str
   if (!('tracked' in ranked)) return { unread: `the files under it cannot be listed (${ranked.unread})` }
   const rel = path === b.root ? '' : relTo(path, b.root)
   const held = heldUnder(rel, { tracked: ranked.tracked, top: ranked.ranked.top, issues: issues.state === 'unread' ? [] : issues.issues })
+  if (max !== undefined && held.length > max) return { unread: `${held.length} files under it could be held, more than the ${max} the area check judges one by one (among them ${held.slice(0, 3).join(', ')})` }
   return { paths: held.map(r => `${b.root}/${r}`) }
+}
+
+// A path without its `.` segments or a trailing slash (`src/.` is src), so it is matched as git lists it.
+const plain = (path: string) => path.replace(/\/\.(?=\/|$)/g, '').replace(/(.)\/+$/, '$1')
+
+// Whether a path a command names is a folder (#2321): mod-kit names a folder handed to a script, or a
+// copy's folder destination, by its path as it would a file, so only the disk can say. Nothing there
+// is no folder; a path that exists but whose stat is refused cannot be told apart, said with why.
+const folderAt = async ($: EngineInterface, path: string): Promise<boolean | { unread: string }> => {
+  if (!(await $.fs.exists(path))) return false
+  try {
+    return (await $.fs.stat(path)).kind === 'dir'
+  } catch (err) {
+    return { unread: msg(err) }
+  }
+}
+
+type Unread = Extract<ShellTarget, { unread: string }>
+
+// A path a command writes, judged as its first edit would be; then, for a write marked `tree` or a
+// path the disk says is a folder (#2321), each file under it the area check could hold, which refuses
+// the command naming that file. A folder whose files cannot be listed, too many of them to judge one
+// by one, or a path that may be a folder but cannot be read, comes back as a write that cannot be
+// named, held as one (fail closed: one decision lets it through, where letting it pass would let a
+// write into a held file go unasked). A judging that throws passes, said, as gate's own does.
+const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, { path: string }>, agent: string | null): Promise<{ deny: string } | typeof PASS | Unread> => {
+  const v = await gate($, 'Bash', id, t.path, agent)
+  if ('deny' in v) return v
+  const at = plain(t.path)
+  let max: number | undefined
+  if (!t.tree) {
+    let kind: Awaited<ReturnType<typeof folderAt>>
+    try {
+      kind = await folderAt($, at)
+    } catch (err) {
+      await failed($, t.path, err)
+      return PASS
+    }
+    if (kind === false) return PASS
+    if (kind !== true) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at }
+    max = FOLDER_JUDGE_MAX
+  }
+  let under: Awaited<ReturnType<typeof underTree>>
+  try {
+    under = await underTree($, at, max)
+  } catch (err) {
+    await failed($, t.path, err)
+    return PASS
+  }
+  if ('unread' in under) return { word: t.word, unread: `${t.word} reaches every file under it, and ${under.unread}`, folder: t.path }
+  for (const p of under.paths) {
+    const w = await gate($, 'Bash', id, p, agent)
+    if ('deny' in w) return w
+  }
+  return PASS
 }
 
 // A command's verdict: the first file it writes that is held refuses it. The reader failing lets the
@@ -632,27 +691,14 @@ const gateShell = async ($: EngineInterface, id: string, command: string, agent:
     await failed($, cwd, err, 'shell')
     return PASS
   }
-  for (let t of targets) {
-    if ('path' in t) {
-      const v = await gate($, 'Bash', id, t.path, agent)
-      if ('deny' in v) return v
-      if (!t.tree) continue
-      let under: Awaited<ReturnType<typeof underTree>>
-      try {
-        under = await underTree($, t.path)
-      } catch (err) {
-        await failed($, t.path, err)
-        continue
-      }
-      if ('paths' in under) {
-        for (const p of under.paths) {
-          const w = await gate($, 'Bash', id, p, agent)
-          if ('deny' in w) return w
-        }
-        continue
-      }
-      t = { word: t.word, unread: `${t.word} reaches every file under it, and ${under.unread}`, folder: t.path }
-    }
+  for (const target of targets) {
+    let t: Unread
+    if ('path' in target) {
+      const r = await gatePath($, id, target, agent)
+      if ('deny' in r) return r
+      if ('pass' in r) continue
+      t = r
+    } else t = target
     try {
       const v = await judgeUnread($, id, t, command, agent)
       if ('pass' in v) continue

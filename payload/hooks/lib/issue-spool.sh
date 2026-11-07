@@ -54,6 +54,9 @@
 #                                              their periodic count has gone out
 #   issue-spool.sh muted-summary <dir>         the periodic count of held-back
 #                                              failures; exit 1 if none
+#   issue-spool.sh muted-stamp  <dir>          where the review records when that count
+#                                              last went out, beside the spool (#2296)
+#   issue-spool.sh muted-sent   <dir>          record that it went out now
 #   issue-spool.sh reach-report                which pending keys no session can open
 #
 # `raw` and `archive` exit 0 on an empty spool. They used to exit non-zero,
@@ -1925,6 +1928,38 @@ issue_spool_file_muted() { # file-muted <dir> [session-transcript]
   issue_spool_file_subset "$1" muted "${2:-}"
 }
 
+# WHEN THE HELD-BACK COUNT LAST WENT OUT, kept beside the spool (claude-config#2296). The review sends
+# that count once a week and has to remember when it last did. It used to keep that in TMPDIR, which
+# macOS's cleaner empties of anything untouched for about three and a half days (measured 2026-10-12,
+# see kept-ledger above), so the week silently restarted twice a week. The spool root is outside the
+# cleaner's reach and the review runs as a hook that can write it. Keyed on the project directory's
+# SHA-1, as the temp stamp was, so the week stays one per project.
+issue_spool_muted_stamp() { # muted-stamp <dir> -> where the review records when the count last went out
+  printf '%s/muted/%s.stamp' "$(issue_spool_root)" "$(issue_spool_sha12 "${1:-$PWD}")"
+}
+
+# Record that the count went out now. Written beside and renamed into place, so a reader never sees a
+# half written time, and refused into the real spool from a test run like every other writer (#278).
+# Says why on failure; the review then finds no record next time and says so in the count's line.
+issue_spool_muted_sent() { # muted-sent <dir>
+  local stamp tmp
+  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ] && [ "$(issue_spool_root)" = "${HOME%/}/.claude-issue-spool" ]; then
+    echo "issue-spool: refusing to write the held-back count's stamp into the real spool at $(issue_spool_root): this is running under a test suite (CLAUDE_SUITE_RUN_ID=$CLAUDE_SUITE_RUN_ID)." >&2
+    return 3
+  fi
+  stamp="$(issue_spool_muted_stamp "${1:-$PWD}")"
+  if ! mkdir -p "${stamp%/*}" 2>/dev/null; then
+    echo "issue-spool: could not make ${stamp%/*} for the held-back count's stamp." >&2
+    return 1
+  fi
+  tmp="${stamp}.$$"
+  if ! { printf '%s' "$(date +%s)" > "$tmp" && mv -f "$tmp" "$stamp"; } 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null
+    echo "issue-spool: could not write the held-back count's stamp at $stamp." >&2
+    return 1
+  fi
+}
+
 issue_spool_file_subset() { # file-subset <dir> <errors|muted> [session-transcript]
   local key rc=0
   while IFS= read -r key; do
@@ -2041,6 +2076,8 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     file-errors)  issue_spool_file_errors "${1:-$PWD}" "${2:-}" ;;
     file-muted)   issue_spool_file_muted "${1:-$PWD}" "${2:-}" ;;
     muted-summary) issue_spool_muted_summary "${1:-$PWD}" "${2:-}" ;;
+    muted-stamp)  issue_spool_muted_stamp "${1:-$PWD}" ;;
+    muted-sent)   issue_spool_muted_sent "${1:-$PWD}" ;;
     reach-report) issue_spool_reach_report ;;
     *)            echo "issue-spool.sh: unknown command '${cmd}'" >&2; exit 2 ;;
   esac

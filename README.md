@@ -157,13 +157,31 @@ does a public repository a work owner holds. It reads the whole command, a hered
 and every body file it names, and refuses text naming a work organisation OR a work repository,
 showing the name it matched so the text can be rewritten. The names are read live on each judged
 command and never written to disk: the repo digest's repository list (the one
-`lib/lesson-fanout.sh` reads), this Mac's dev update registry, and the two built in hashes. Matching
+`lib/lesson-fanout.sh` reads), this Mac's dev update registry, the work MacBook's project folders
+from the Projects section of the global CLAUDE.md, the organisation's web and email domain (matched
+only as a domain, after an @ or before a dot and a top level domain), and the two built in hashes
+(#2184). Matching
 repository names departs from #1568, which leaves them out of the file scan on purpose, for public
 text only (Dan, 2026-11-02, after a repository name leaked into a public pull request description);
 the file scan and the send scan are unchanged, and the commit message checks above read the same
 list through the same reader (#2111). Whatever it cannot tell is refused: the visibility or
 the list unreadable, a body file it cannot read, a command it cannot parse, the 35 second budget
 spent. There is no override; the remedy is to rewrite the text.
+
+The same check reaches GitHub writes made inside a script (#2183). The hook above sees only the
+command Claude runs, so a Python or shell script making gh calls went unjudged (one scrub made 239
+edits that way). `gh-guard-path.sh`, a SessionStart hook, puts `hooks/bin` first on the session's
+PATH through `CLAUDE_ENV_FILE`, and `hooks/bin/gh` there judges every gh a script runs with the same
+rule before handing it to the real gh. It refuses with exit 1 without naming what it matched,
+since a script's output can land in a log, and otherwise runs the real gh with its exit code and
+its standard input unchanged. A gh alias is judged as what it expands to, in the hook and the guard
+alike (Dan, on #2183); the guard refuses an alias it cannot read, while the hook passes it as before
+and leaves it to the guard. A session started before this was installed, or one whose PATH does not
+carry the guard, keeps exactly its old checks and is told once that gh writes inside scripts are
+not checked until a new session starts: refusing those scripts instead would stop
+`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Still not
+covered: gh run by its absolute path, a script that rewrites PATH, curl or an API library, and gh
+extensions.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -1734,7 +1752,8 @@ GitHub (another host, or a path on disk) passes unasked. A GitHub other than git
 `GH_HOST` or `gh api --hostname`, is still GitHub, where the delete closes stacked pull requests
 just the same, but the gate lists them on github.com only, so a delete there refuses, naming the
 host, and is never listed against a same named github.com repository (#1758). The method is read in
-any case, so `-X delete` is a delete as much as `-X DELETE`. `SKIP_STACKED_CHECK=1` in front of the one command overrides it. Since the merge the gates judge no longer carries `--delete-branch`, the helper
+any case, so `-X delete` is a delete as much as `-X DELETE`. `SKIP_STACKED_CHECK=1` in front of the one command overrides it. Since the merge the
+gates judge no longer carries `--delete-branch`, the helper
 runs them with `MWR_DELETE_BRANCH=1` when it was asked to delete, so the rerun command
 `block-red-merge.sh` suggests on sending the merge back still carries the flag (claude-config#1351).
 That command carries the merge method and the delete a typed merge asked for in any spelling gh
@@ -1774,9 +1793,14 @@ than three hours, and three of them each ran out with it still moving and were q
 at the back. So it counts only time in which nothing ahead advanced (the turn passing to another
 ticket, or one ahead leaving), a run keeps its place while the line moves, and it says once, when it
 passes the budget, that it is keeping its place and why. It stops as "nothing ahead of it in line has
-moved for 3h" when the line stood still, and as the ceiling, "its 9h ceiling in line
-(`MWR_LINE_MAX_SECONDS`), with the line still moving", when a line that keeps moving has still not
-reached it in nine hours (room for about 27 merges of 20 minutes; a setting). While it waits in line
+moved for 3h" when the line stood still. A line that keeps moving never ends a run (claude-config#2351):
+the nine hour ceiling #1697 also put on the whole wait, counted from the run's start, ended 11 helpers
+1 to 3 places from the front on 2026-11-06 with the line still moving, and each ran again at the back
+behind about 20 others, so the pull requests that had waited longest merged last. That ceiling is gone,
+and the count of looks (`MWR_MAX_POLLS`) no longer holds against a run the looks it took in line up to
+each move of the line. A wait still ends: nobody can join a line ahead of a run, so it can move only as
+many times as there were pull requests ahead, and the line standing still for three hours ends it.
+While it waits in line
 its looks at GitHub grow to three minutes apart as checks' do, since nothing there needs reading
 every minute, while the turn itself is read on this Mac at every base look, so a turn passing is
 still taken at once: a line of 15 waiters read once a minute was about 900 of the account's 5,000
@@ -1785,9 +1809,10 @@ decided by the line budget alone while it waits (claude-config#1975): on 2026-10
 passed over, kept its place in a line that was still moving, and stopped in the same second "at the
 end of its 180m deadline from taking the turn", because the deadline went on counting while it
 waited. Now the deadline counts only time a run holds the turn, it takes the turn back with what it
-has not held, and its time in line, which the ceiling measures, leaves out the time it held the
-turn. Neither budget restarts, so a run still lasts at most twelve hours: nine in line and three
-holding the turn. And
+has not held, and its time in line leaves out the time it held the turn. Time holding the turn is
+at most the three hour deadline; time in line has no fixed longest since claude-config#2351, ending
+only when the line stands still for its line budget, so a run behind a very long moving line can
+outlast is-it-live's 24 hour window for a background merge. And
 each time the turn comes to a run it first reads how long the repository's recent check runs took
 (the longest of the ten most recent heads among its latest successful pull request runs, each head
 timed from its first run created to its last finished; claude-config's took 15 to 23 minutes on
@@ -1930,7 +1955,8 @@ already exists), so those rows are counted with no lookup. For older rows, which
 a commit comes from one batched GraphQL query per repository per 50 commits, held
 to `PR_REVIEW_REPORT_CALL_BUDGET` (100 by default); whatever the budget does not reach is reported as
 UNMEASURED with its count. Before the first call it reads the allowance left and refuses to start,
-exit 75, when that is under the budget plus `PR_REVIEW_REPORT_RATE_MARGIN` (1000, kept wide because one reading of the allowance is approximate: GitHub answered two different GraphQL windows for one token within a second, #1014). It never fetches
+exit 75, when that is under the budget plus `PR_REVIEW_REPORT_RATE_MARGIN` (1000, kept wide because one reading of the allowance is approximate:
+GitHub answered two different GraphQL windows for one token within a second, #1014). It never fetches
 into a checkout: a final head the checkout lacks is fetched into a scratch repository that borrows
 the checkout's objects read only. `--no-github` asks GitHub nothing.
 
@@ -2493,7 +2519,11 @@ description and commits, and the scanner at its base commit
 timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109
 seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds
 on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo
-digest list and the registry, then the match
+digest list and the registry, then the match. With the once per session notice (#2183), on
+2026-11-03, five readings each at load average 60 to 84, timed from outside with a python3 clock
+(which adds its own start up to every reading): 0.06 to 0.36 seconds on a plain `git push` in a
+session already stamped, against 0.04 to 0.06 with no session id, a file test and noise apart.
+Re-measure at a quieter load
 
 </td></tr>
 <tr><td>
@@ -2569,6 +2599,12 @@ anything
 </td></tr>
 </tbody>
 </table>
+
+`hooks/bin/gh` (#2183) has no row, since no push waits on it: it stands in front of every gh a
+script runs. In the same readings on 2026-11-03 it added 0.02 to 0.20 seconds to a gh command it
+does not judge (`gh --version`: real 0.07 to 0.11, guard 0.09 to 0.27) and about 0.11 to one it
+judges (`gh pr view --help`: real 0.08 to 0.12, guard 0.18 to 0.22), its python3 start; a judged
+write then pays the publish gate's own reads in the row above. Re-measure at a quieter load.
 
 Claude Code runs every matching hook in parallel ("All matching hooks run in parallel", the hooks
 reference), so a push waits for the SLOWEST gate, not for their sum, and the tool runs them together
@@ -3144,11 +3180,34 @@ What passes: every Slack read, `slack_send_message_draft`, a command that only m
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
 `package.json`, its pre and post scripts included, and judged as the command line it runs.
 
-What it does not see, so a pass is not read as more than it measured: a module a script imports (so
-repo-digest's `npm run digest`, whose `src/digest.ts` imports the file that posts, still passes), a
-program run by bare name from the PATH, and an endpoint assembled from pieces on purpose. The threat it answers is a session that
-means well choosing the quickest way to post. It fails closed: a python that is missing or crashes,
-or a payload it cannot read that names a send route, is refused with the reason.
+A JavaScript or TypeScript script's relative imports are followed (#2318): `import ... from './x'`,
+`export ... from`, `import './x'`, `import('./x')` and `require('./x')`, resolved as node and
+TypeScript do (the path, each extension, the `.ts` a `.js` names, a folder's `package.json` main or
+its index). Each module found is judged as the script is, by the endpoint it names, then its own
+imports followed, each module read once, so a cycle ends. So repo-digest's `npm run digest`, whose
+`src/digest.ts` imports `src/slack.ts`, is refused, naming `slack.ts`, as are NurseDex's
+`scripts/check-*.ts` that import `scripts/slack-alert.ts`. An import it cannot find or read is
+refused, since node may still find it (package.json exports, a path alias, a loader) and run what the
+gate never saw, and so is a script reaching more than 300 modules (the largest real one reaches 11).
+A module is judged by its text, as a Python script is, so a helper that only greps for an endpoint
+names it and is refused like a script run directly would be; a helper that names none (one that
+saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and NurseDex's
+`scripts/` on 2026-11-06, run as `node <file>`: refused went from 3 to 22, 7 of them test files
+importing a helper that posts (their `npm test` globs are not read, so `npm test` still passes).
+
+A Python script's imports are followed the same way: `import x`, `from x import y` and relative
+`from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
+own folder as Python finds it. A module not on disk there is the standard library or an installed
+package and is not read; a relative import that names nothing there is refused. Code given inline
+(`node -e`, `python3 -c`) or fed on standard input has its imports followed from the folder it runs
+in. Over the 110 Python files in this payload, run as `python3 <file>`, the refused count stayed at 2.
+
+What it does not see, so a pass is not read as more than it measured: an import of a package or
+through a path alias (`@/lib/x`), a Python module that is not on disk beside the script, a module run
+with `python3 -m`, an import path built at run time, a program run by bare name from the PATH, and an
+endpoint assembled from pieces on purpose. The threat it answers is a session that means well choosing the quickest way to
+post. It fails closed: a python that is missing or crashes, or a payload it cannot read that names a
+send route, is refused with the reason.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`; `python3 -m unittest` over the same file passes. This is a known false
@@ -3159,7 +3218,9 @@ and costs 0.007 to 0.008 s in the push gate table's five readings, and 0.010 s a
 load average 22, where bare bash took 0.005 s; a call the full rule reads starts python3, 0.05 s for `npm run x`
 or `bin/x`, 72 ms on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, and 154
 ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 calls by a timer
-around the gate, was not reproduced by these and is replaced by them. Suite: `test-slack-drafts-only-gate.sh`.
+around the gate, was not reproduced by these and is replaced by them. Following imports (2026-11-06,
+median of 10 at load average about 21): `npm run digest` in repo-digest 0.069 s against 0.063 s
+before; a plain push still takes the quick exit, whose code this did not change. Suite: `test-slack-drafts-only-gate.sh`.
 
 ## Read only queries are approved without asking
 
@@ -4208,7 +4269,9 @@ which set to 0 turns the deadline off. `tests/test-claude-sync.sh` is the one su
 its own, its `SUITE_TIMEOUT` plus a margin, because a healthy run of it on a loaded Mac outlasts the
 shared default. A suite that does not arm it is a failure in `test-suite-deadline.sh`, which scans
 the suites the runner runs, so the next suite added cannot quietly have no bound
-(claude-config#465). When it stops a suite it reads the load average through
+(claude-config#465). The push asks it too: `scanners-before-push.sh` refuses a push that adds or
+changes a `test-*.sh` that does not arm, judged as the push delivers it, through
+`hooks/lib/suite-arms-check.sh`, the same answer the full suite gives (claude-config#2330). When it stops a suite it reads the load average through
 `hooks/lib/load-average.sh` and judges it by that file's one predicate: where the load beyond the
 suite's own share (`HOOK_TESTS_SLOTS`, 1 when started directly) is more than the machine has cores,
 the stop says UNMEASURED with the figures, since a suite starved of the processor cannot be told
@@ -4344,8 +4407,22 @@ one pruned walk of the home folder (never into `~/Library`, the Trash, key folde
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
 Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
-transcripts, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
-`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything.
+worktrees whose repository is gone, transcripts, runaway logs, forgotten tools and large personal
+files. Each module answers `scan` and `judge <target>`, and `disk-remove.sh` runs the same judge
+again just before removing anything.
+
+Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
+folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so
+`git worktree remove` cannot reach them and the stale worktree sweep skips them on purpose; the
+Finished worktrees kind no longer lists them too. Each is listed with its size and the date anything
+in it last changed, and moved to the Trash only when Dan ticks it, since it can still hold work
+nothing else has. A folder is left alone, counted in the kind's note and never judged, when it is in
+a synced folder (`dcs_synced` in `scan-lib.sh`: iCloud Drive, Desktop or Documents when iCloud syncs
+them, any `~/Library/CloudStorage` mount, a sync client's folder), when its gitdir is outside this
+Mac's own home folder, or when its gitdir is in a synced folder. An iCloud copy of the work
+MacBook's Documents holds links naming the work MacBook's home folder, which from the personal
+MacBook all look gone, and trashing one would sync the removal back. Its suite is
+`test-disk-clean-forgotten-worktrees.sh`.
 
 On top of its own rule, every kind but the Trash keeps one floor, `dcs_floor` in `scan-lib.sh` with
 `DCS_UNUSED_DAYS=30` (Dan's rule, claude-config#2134): an item is offered only when nothing at or
@@ -4751,7 +4828,8 @@ Claude Code finds them through `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of e
 actually present (a folder without a manifest is not named), and so does every send, so a mod
 written on this Mac is named here at once rather than after this Mac's next pull (#628). A send does
 this even when a gate (a hold, being behind) stops it publishing, and it never removes a mod folder:
-only an apply clears the empty folder a removal on the other Mac leaves behind, and only for a folder this Mac last held as a mod (`.mods-seen`), so a mod folder just made here and still empty is never taken for one (#629). Only entries under `~/.claude/mods/`
+only an apply clears the empty folder a removal on the other Mac leaves behind, and only for a folder this Mac last held as a mod (`.mods-seen`), so a mod folder just made here
+and still empty is never taken for one (#629). Only entries under `~/.claude/mods/`
 are the sync's; any other folder named there by hand is kept. With none left, the key is removed.
 The change reaches **new** sessions only: a running session keeps the plugins it loaded.
 `hooks/rule-files-changed.sh`, the same per prompt check that names a rule file changed under a
@@ -4813,9 +4891,23 @@ repo but not applied here (what a pull that stops before its apply leaves). The 
 the clone status runs in, which it names, so run it from the scheduled clone for that clone's
 records.
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `SYNC_MODS_LAG_AFTER` | `90000` | Seconds the oldest missing mod change may have been on the shared repo before status mentions it. A chosen number, not a measurement: a day, which is the receive timer's default interval (a Mac making no edits of its own is a day behind on a healthy day), plus an hour for a CI run or two before the gated receive takes a commit in. Being wrong costs an hour of old mods unremarked in one direction and a line about a lag the next timer run was about to clear in the other. A value that is not a whole number of seconds is said in status and nothing is compared. |
+<table>
+<thead>
+<tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SYNC_MODS_LAG_AFTER</code></td><td><code>90000</code></td><td>
+
+Seconds the oldest missing mod change may have been on the shared repo before status mentions it. A
+chosen number, not a measurement: a day, which is the receive timer's default interval (a Mac making
+no edits of its own is a day behind on a healthy day), plus an hour for a CI run or two before the
+gated receive takes a commit in. Being wrong costs an hour of old mods unremarked in one direction
+and a line about a lag the next timer run was about to clear in the other. A value that is not a
+whole number of seconds is said in status and nothing is compared.
+
+</td></tr>
+</tbody>
+</table>
 
 Measured on Daniels-MacBook-Pro-2 on 2026-10-22, with 370 installed mod files of which 30 were
 behind, one reading each and so only an order of size: status took 12.5 seconds with the comparison
@@ -5440,9 +5532,11 @@ the foreground or the background, and the card tool refusing a number for that r
 whatever the session owes under it, so a misreading costs one refusal, never one per turn end; an
 owed PR is named once however many runs merged it, and a card made since GitHub's time for the merge
 settles every run that found it merged (#1943). A helper run in the background is asked again at
-each turn end for up to twenty four hours (`WAIT_MS`, twice the longest the helper can run, its nine
-hour ceiling in line for a turn plus its three hour deadline from taking it, #1697, a ratio the
-helper's suite checks, #1271, #1604) and owed once GitHub says it merged. That question is mod-kit's
+each turn end for up to twenty four hours (`WAIT_MS`, twice the helper's three hours in line with
+the line standing still plus its three hour deadline from taking the turn, a ratio the helper's
+suite checks, #1271, #1604; since #2351 a line that keeps moving never ends the helper, so a run
+behind a very long moving line can outlast it) and owed once GitHub says it merged. That question
+is mod-kit's
 one check of whether a pull request merged (`hooks/prmerged.ts`, copied byte for byte into each mod
 using it), which the goal box asks too: as each account gh is logged in to, by the repository the
 command named, else the one GitHub's link for the pull request named when the helper started (in the
@@ -6752,7 +6846,8 @@ behind the UNMEASURED exit. The check allows the `./x.ts` imports every mod uses
 (`--allowImportingTsExtensions`), since the laid tsconfig does not, so no mod needs its own copy of
 that setting. Errors fail the run with the mod named and counted, except a mod listed in
 `tools/typescript/known-type-errors.tsv` (empty since #822 fixed the errors the first run found,
-2026-10-05, in 12 mods), kept by file and error code, which passes while each file and code is at or under its recorded count and fails on any beyond it, so fixing one error makes no room for a new one. A compiler
+2026-10-05, in 12 mods), kept by file and error code, which passes while each file and code is at or under its recorded count and fails on any beyond it,
+so fixing one error makes no room for a new one. A compiler
 that exits without any type error is said as that, never as 0 errors. Where no compiler is found,
 each mod's line says its types were not checked and why (with why the pinned one could not be
 installed), and the run says UNMEASURED, counting them and naming the install command, which is not a
@@ -7044,39 +7139,681 @@ lessons core re-rank needs both Macs' citation counts and one settled set of tag
 numbers and The monthly re-rank above.) A folder COPIED or RESTORED from a backup carries stale ones, which is why each has a
 defined answer for being absent or untrustworthy.
 
-| File | Written by | Read by | Missing or stale |
-| --- | --- | --- | --- |
-| `.last-applied` | every apply, and a `push` or `send` whose payload is fully applied here afterwards | the guard that blocks sending while behind, and the staging that holds back what the repo has changed | absent means nothing is protected yet, so sending is allowed. A `push` records it only when nothing was kept back, because this Mac may hold commits it has not applied and claiming otherwise would let the next send revert the other Mac (#511, #514) |
-| `.mods-seen` | every send and apply (#606) | the send, deciding whether an empty `mods` folder is a deletion | absent or empty means this Mac has never held a mod, so an empty mods folder publishes nothing and cannot wipe the other Mac's mods; a stale list only means the next empty folder is read as a deletion, which is what it is if the mods were here |
-| `.trees-seen` | every send and apply (#627) | the send, deciding whether an empty hooks, agents, commands, audits, mods or skills folder is a deletion | absent is read as the trees the commit this Mac last applied held files in (so a Mac upgrading to it keeps what it held), and no record at all, on a Mac that has applied nothing, means it held nothing; a tree not listed means this Mac has never held files in it, so an empty folder for it clears nothing from the shared copy and the send says so. An apply never drops a tree from it, since an apply can leave a tree empty by holding back this Mac's deletion of its last file; a stale list only means the next empty folder is read as a deletion, which is what it is if the files were here |
-| `.last-success` | a successful pull, fetch or push | the outage clock | absent, unparseable, or dated in the FUTURE all mean "no record", which alerts rather than staying quiet |
-| `.last-sent` | a push that went through | `claude-sync status` | absent means nothing has ever gone up from this clone, which is said in those words rather than shown as a date; a value that will not parse is reported as unreadable, never as never |
-| `.last-received` | an apply that wrote at least one file | `claude-sync status` | same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block, since that is regenerated from whatever payload is present, including one this Mac just staged itself |
-| `.hook-tests` | any run that reached a verdict on the hook suite it installed: `pull`, `sync`, the reconcile `send` falls through to, or `apply-only` | `claude-sync status`, in this clone and in any other clone on this Mac | absent means nothing has verified anything here yet and status says nothing, since it reports what needs attention. A record that will not parse is reported as unreadable, never as a pass. A pass is silent; every other outcome keeps its own wording, so a suite that FAILED and one that could NOT be run stay apart. It also carries how many suites ran and how many could not, with `?` where the runner's report could not be read, which is never written as zero. Since #218 it carries the measured wall clock too, and a PASS is no longer silent: it reports how long that run took against the deadline it is given, and says so plainly when it has used over half of it, so a suite outgrowing `SYNC_HOOK_TESTS_TIMEOUT` shows up as headroom shrinking rather than as a timeout on the day it runs out. A record written before that field existed says no duration was recorded, which is never folded into being within budget |
-| `.resurrected-reported` | a send that refused to publish a leftover copy back over a deletion, and was told to keep it with `SYNC_ACCEPT_DELETIONS=0`, and a pull that kept such a copy for the same reason (#1013); and a send that published a deleted file back as this Mac's own work (lines starting `publishing`, #1022) | that same refusal, and that same "publishing" line, to say each once per file rather than on every edit. With the default, which removes the leftover, there is nothing left to repeat and nothing is written for it | absent means nothing has been refused here, which is the normal state. Each line is the path AND a digest of its content, so a file that CHANGES is a new decision and is reported again, and a file the person deletes or edits stops matching. Losing it costs one repeated message and nothing else, which is why it is not treated as important state |
-| `.hooks-refused` | every apply that merged the hooks block, removed when nothing is refused (#1913) | the send, which takes a line refused here for one this Mac has not seen yet rather than one it removed, so the refusal is never published as a deletion; and the apply, to say each refusal once | absent means no line is being left out for want of its script, which is the normal state. Losing it while a line is refused costs one repeated message, and lets the next send read that line as removed here |
-| `.unloadable-notified` | every send and apply, recording which skills folders each cannot load notice (not sent, not applied, kept local files a send will refuse) last named, an empty set included | those same notices, to post the desktop notification only when a folder is new to the set (claude-config#968) | absent or unreadable means the next notice is posted, which is the safe side: a repeated notification is noise, a missing one is a broken skill nobody hears about. Stale costs at most one skipped notification for a folder already named. A `.unloadable-notified.XXXXXX` beside it is a write that died before its rename, and is ignored |
-| `.ci-unreadable-since` | the automatic pull, the first time it cannot read whether the shared repo's head passed its tests | that same gate, to decide when to stop waiting for an answer that is not coming | absent means the last verdict was readable, whatever it said, which is the normal state. It holds when the condition started and, once expired, when that was first reported, so the alert is raised on the transition rather than on every edit. Any readable verdict removes it, including a red one, because those mean the lookup is working. Expiring does NOT remove it: once the verdict is judged unobtainable, config keeps arriving until the lookup works again, since restarting the clock would deliver config in three hour bursts. A value that will not parse is treated as the condition starting now, which errs toward waiting rather than toward applying unjudged config |
-| `.behind-skips` | a watcher send that found itself behind and whose reconcile did not clear it | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, and the escalation that tells you once rather than on every edit | absent means sending is not stuck, which is the normal state and is said by saying nothing. It holds the count, the moment the run of skips started, the moment of the last one, when the reconcile was last attempted, and why that attempt did not clear it (#1398), which is what the notice gives as the reason; a record from before that last field reads as the general reason it always gave. Any run that gets through removes it, and so does a send that put this Mac's changes up on top of a shared commit still being tested, so the count is a measurement of the current state rather than a total that only grows. A count that will not parse is counted from zero again by the next skip, and until then status and the notice say the record could not be read, never that sending is stuck and never nothing |
-| `.watch-stale` | a change watcher running an older `claude-sync` than the one on disk, on each change it refuses because that newer copy fails its self test (#1569) | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, which says it at once | absent means the watcher is not stuck on an older copy, the normal state. It holds the moment the stretch started, how many changes it has refused, the copy the watcher runs, the copy on disk and what is wrong with it. Removed by a watcher starting, by a tick that finds the file back on the copy it runs, and by a restart. A count that will not parse is said as a record that could not be read, never as stuck and never as nothing |
-| `.watch-restarted` | a change watcher exiting to restart onto a newer `claude-sync` that passed its self test (#1569) | the watcher launchd starts next, which logs that it restarted, from which copy, and sends once | absent means the last watcher to start was not a restart, so it waits for a change before sending. Consumed on read, so it describes only the restart that just happened |
-| `.sent-over-untested` | a watcher send that put this Mac's commits up on top of a shared commit still being tested, without taking that commit in (#1398) | the next such send, to send only what is newer; the record of what this clone has sent, and the two hour unsent check, so the commits it names are not counted as waiting; and the sync that finally takes the tested commit in, which moves this clone's commits onto the one they became; a sync that takes in only an older commit whose tests passed (#2230) points it at the new ids its rebase gave this clone's commits, or removes it when that rebase did not replay every one | absent means nothing went up that way. It names the last local commit sent and the commit it became in the shared repo, and it is believed only while the first is still in this clone's history and the second in the shared repo's; otherwise it is ignored and removed, and the clone's commits are treated as unsent, which sends again rather than missing anything |
-| `.reconcile-outcome` | the sync a send runs to catch up, when it finds itself behind or its own push is refused (#1398, #1402); never a sync typed by hand | that same send, straight after, to report what went (`sent`, `nothing to send`, or the files the hook suite gate held back, which are its lines after the first) or why nothing could, and so what the watcher logs | absent means the sync never decided what to send (it could not fetch, or stopped earlier): a behind send counts a skip with the general reason, and a send whose push was refused says nothing it cannot measure, which the watcher logs as a send that did not say what it did. It is removed before each catch up and after it is read, so it can only describe the run that wrote it |
-| `.send-refused` | the secret scan, whenever it refuses a send (#947) | a `pull` or `sync` that has to set aside the uncommitted edits that refused send left in the clone, to name the scan's finding as the cause rather than leave git's complaint as the only explanation | absent means no send is being refused by the scan, which is the normal state. It holds when the scan last refused and the files it found. The next scan that passes removes it. A time that will not parse is left out of the sentence rather than guessed |
-| `.ci-red-since` | the automatic pull, the first time the shared repo's head reads as having failed its tests | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, and the escalation that tells you once rather than on every tick | absent means the shared repo's head is not red, which is the normal state and is said by saying nothing. It holds when the run of red verdicts started, how many there have been, and, once past its window, when that was first reported, so the alert is raised on the transition rather than on every automatic tick. The clock is on the CONDITION and not on the commit: keyed per commit it would reset on every push, and a push is exactly what keeps happening while somebody is fixing the red. Any readable verdict that is not red removes it, so the count measures the current state rather than growing for ever. Unlike `.ci-unreadable-since` it never expires into applying anyway: nobody can act on an unreadable verdict, and anybody can act on a red one, so the escape here is to tell a person rather than to lower the gate. Only the last field may be empty, because a blank middle column would be read as the one after it. A count that will not parse is reported as a record that could not be read, never as nothing |
-| `.my-push` | the trap every mutating run passes through, when that run left this Mac level with the shared repo | the next run, to ask what became of it, and `claude-sync status` once the answer is in | absent means the last thing this Mac sent was judged and passed, or nothing has been sent, which is the normal state. It holds the commit, when the current run of failures started, and, once reported, when that was. The verdict is deliberately NOT waited for at send time: a run holds the lock and a test run takes minutes, so the sha is written down and a later run asks. A green or cancelled verdict removes it, cancelled because there is nothing to report about a run nobody finished (the workflow no longer cancels a superseded run on main, #594, but a run can still be cancelled by hand). A push made while it still stands keeps its start time and its reported marker and only moves the commit, so a run of failures is announced once rather than per push. A verdict that never arrives is given up on after the same window an unreadable one gets. Only the last field may be empty |
-| `.send-suite-verdicts` | a send that ran a suite covering a hook it is about to publish | the next send, to decide whether that suite has to run again | absent means every relevant suite runs, which is the pre-#269 behaviour and only costs time. An entry is keyed on a digest of the whole staged hook set, so any hook edit retires it; a verdict is never reused across a change to what it judged. A `fail` is remembered exactly like a `pass`, because what it saves is re-running a red suite on every keystroke while the sync lock is held |
-| `.resolved/` | a conflict resolved automatically because this Mac's version held nothing extra | nothing reads it; it exists so a wrong resolution is recoverable | absent means no conflict has resolved itself here. Entries are swept once older than two weeks, and one whose date cannot be read is KEPT rather than deleted on a guess, since this directory holds the only copy of something |
-| `.claude-sync-clones` (in your home, not in a clone) | every clone on this Mac, the first time it takes the lock | `claude-sync status`, to find the records other clones hold | absent means no clone has done work since this was added, so status reports only what it can reach through the launch agents. An entry naming a clone that has gone is skipped rather than reported, and nothing prunes it: the file is only ever appended to, so a run that dies part way cannot lose the entries already there |
-| `.claude-sync-watch.pid` (in your home, not in a clone) | `claude-sync watch`, on the way up, claimed so two watchers starting together cannot both write it (#604) | the next `claude-sync watch`, to refuse starting a second one, and every running watcher's loop before each send, which stops when the file names another live watcher or the watcher that started the loop has gone | absent means no watcher has started here since this was added, and the next one starts normally. The pid in it is confirmed against what that process actually IS before it is believed, because a stale pid is reused by the system constantly and a guard that trusts the number refuses to start over something unrelated. It is removed on the way out, and only by the watcher whose own pid it holds, so one watcher exiting cannot clear another's record |
-| `.claude-sync.log` (in your home, not in a clone) | the scheduled and watch jobs, whose launch agents send their output here; the watcher one summary line per send, with whatever the send said indented beneath it, and a send that held files back logged as `NOT sent: <files> held back,` with its reason rather than as nothing to send (#849), and a send whose catch up sent logged as `sent` (#1402); and any send that holds the hooks block back, which appends its verdict with a time whichever entry point ran it (#592). A run whose `CLAUDE_HOME` is not your own `~/.claude` (every test fixture) appends nothing to it, unless `SYNC_LOG_FILE` names a file, and says once that its lines went nowhere (#1486) | a person diagnosing a notification or a quiet sync | absent means no automatic job has run here yet. It is never read by the tool itself, so nothing goes wrong when it is removed |
-| `.claude-sync-hold` (in your home, not in a clone) | `claude-sync hold`, and `claude-sync release`, which removes the caller's own line (or a named session's, with `--other`) | the watcher's send, `claude-sync status`, `claude-sync release`, and the payload write hooks through `hooks/lib/sync-clone.sh` | absent means no hold, which is the normal state. One line per hold, one hold per session (#1863): `<ends> <taken> <host> session=<id> <why>`, longest hold first, so a claude-sync or hook from before #1863, which reads only the first line, still sees the Mac held for as long as any hold lasts. A line with no `session=` field, the single line every hold was before #1863, is read as a hold by `unknown`, which any release lifts. Each line carries its own expiry and fails OPEN: once that passes the line is cleared, the rest kept, and the watcher says which hold expired, because a hold that outlives the session that took it silently stops the sync. A line that will not parse is cleared too, and reported in its own words rather than as an expiry, since obeying it would stop the sync until somebody found the file and ignoring it silently would discard a decision somebody made. Rewritten whole by a rename, under the `.claude-sync-hold.lock` beside it, and read back before `hold` says it is in force (#1854) |
-| `.claude-sync-hold.lock` (in your home, beside the hold record) | any change to the hold record (#1863) | every other change to it, which waits up to ten seconds (`SYNC_HOLD_LOCK_WAIT`) | absent means nothing is changing the record, which is the normal state. It holds the pid of the run changing the record and is made by a hard link, so it never exists empty; one whose pid is no longer running is taken over rather than waited on |
-| `.outage-log` | every outage decision | `claude-sync status` | absent means no decisions yet, and a line that will not parse is counted and reported as unreadable rather than skipped |
-| `.sync-lock/` | any mutating run | every mutating run | a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or with no Mac recorded, is broken once older than an hour |
-| `.sync-lock.next` | a typed `claude-sync pull` that finds the lock held, while it waits for it (#850) | every mutating run, before it takes the lock, so a run arriving while a pull waits does not take the lock in front of it | absent means nobody is waiting, which is the normal state. It names the waiting pull's process and is created by a hard link, so two waiters cannot both hold it. The pull removes it on taking the lock or at its deadline; one left by a process that has gone, or older than any wait could last, is removed by the next run rather than honoured |
-| `state/` | every apply | nothing reads the local copy; it exists so a marker is only republished when it changes | absent just means the next apply republishes |
-| `refs/claude-sync-state` | every apply, pushed per Mac | `claude-sync verify` | nothing published means "cannot be answered", never agreement; a Mac silent for 60 days is reported as retired |
+<table>
+<thead>
+<tr><th>File</th><th>Written by</th><th>Read by</th><th>Missing or stale</th></tr>
+</thead>
+<tbody>
+<tr><td>
+
+`.last-applied`
+
+</td><td>
+
+every apply, and a `push` or `send` whose payload is fully applied here afterwards
+
+</td><td>
+
+the guard that blocks sending while behind, and the staging that holds back what the repo has
+changed
+
+</td><td>
+
+absent means nothing is protected yet, so sending is allowed. A `push` records it only when nothing
+was kept back, because this Mac may hold commits it has not applied and claiming otherwise would let
+the next send revert the other Mac (#511, #514)
+
+</td></tr>
+<tr><td>
+
+`.mods-seen`
+
+</td><td>
+
+every send and apply (#606)
+
+</td><td>
+
+the send, deciding whether an empty `mods` folder is a deletion
+
+</td><td>
+
+absent or empty means this Mac has never held a mod, so an empty mods folder publishes nothing and
+cannot wipe the other Mac's mods; a stale list only means the next empty folder is read as a
+deletion, which is what it is if the mods were here
+
+</td></tr>
+<tr><td>
+
+`.trees-seen`
+
+</td><td>
+
+every send and apply (#627)
+
+</td><td>
+
+the send, deciding whether an empty hooks, agents, commands, audits, mods or skills folder is a
+deletion
+
+</td><td>
+
+absent is read as the trees the commit this Mac last applied held files in (so a Mac upgrading to it
+keeps what it held), and no record at all, on a Mac that has applied nothing, means it held nothing;
+a tree not listed means this Mac has never held files in it, so an empty folder for it clears
+nothing from the shared copy and the send says so. An apply never drops a tree from it, since an
+apply can leave a tree empty by holding back this Mac's deletion of its last file; a stale list only
+means the next empty folder is read as a deletion, which is what it is if the files were here
+
+</td></tr>
+<tr><td>
+
+`.last-success`
+
+</td><td>
+
+a successful pull, fetch or push
+
+</td><td>
+
+the outage clock
+
+</td><td>
+
+absent, unparseable, or dated in the FUTURE all mean "no record", which alerts rather than staying
+quiet
+
+</td></tr>
+<tr><td>
+
+`.last-sent`
+
+</td><td>
+
+a push that went through
+
+</td><td>
+
+`claude-sync status`
+
+</td><td>
+
+absent means nothing has ever gone up from this clone, which is said in those words rather than
+shown as a date; a value that will not parse is reported as unreadable, never as never
+
+</td></tr>
+<tr><td>
+
+`.last-received`
+
+</td><td>
+
+an apply that wrote at least one file
+
+</td><td>
+
+`claude-sync status`
+
+</td><td>
+
+same three answers as `.last-sent`. It does not move for an apply that only rebuilt the hooks block,
+since that is regenerated from whatever payload is present, including one this Mac just staged
+itself
+
+</td></tr>
+<tr><td>
+
+`.hook-tests`
+
+</td><td>
+
+any run that reached a verdict on the hook suite it installed: `pull`, `sync`, the reconcile `send`
+falls through to, or `apply-only`
+
+</td><td>
+
+`claude-sync status`, in this clone and in any other clone on this Mac
+
+</td><td>
+
+absent means nothing has verified anything here yet and status says nothing, since it reports what
+needs attention. A record that will not parse is reported as unreadable, never as a pass. A pass is
+silent; every other outcome keeps its own wording, so a suite that FAILED and one that could NOT be
+run stay apart. It also carries how many suites ran and how many could not, with `?` where the
+runner's report could not be read, which is never written as zero. Since #218 it carries the
+measured wall clock too, and a PASS is no longer silent: it reports how long that run took against
+the deadline it is given, and says so plainly when it has used over half of it, so a suite
+outgrowing `SYNC_HOOK_TESTS_TIMEOUT` shows up as headroom shrinking rather than as a timeout on the
+day it runs out. A record written before that field existed says no duration was recorded, which is
+never folded into being within budget
+
+</td></tr>
+<tr><td>
+
+`.resurrected-reported`
+
+</td><td>
+
+a send that refused to publish a leftover copy back over a deletion, and was told to keep it with
+`SYNC_ACCEPT_DELETIONS=0`, and a pull that kept such a copy for the same reason (#1013); and a send
+that published a deleted file back as this Mac's own work (lines starting `publishing`, #1022)
+
+</td><td>
+
+that same refusal, and that same "publishing" line, to say each once per file rather than on every
+edit. With the default, which removes the leftover, there is nothing left to repeat and nothing is
+written for it
+
+</td><td>
+
+absent means nothing has been refused here, which is the normal state. Each line is the path AND a
+digest of its content, so a file that CHANGES is a new decision and is reported again, and a file
+the person deletes or edits stops matching. Losing it costs one repeated message and nothing else,
+which is why it is not treated as important state
+
+</td></tr>
+<tr><td>
+
+`.hooks-refused`
+
+</td><td>
+
+every apply that merged the hooks block, removed when nothing is refused (#1913)
+
+</td><td>
+
+the send, which takes a line refused here for one this Mac has not seen yet rather than one it
+removed, so the refusal is never published as a deletion; and the apply, to say each refusal once
+
+</td><td>
+
+absent means no line is being left out for want of its script, which is the normal state. Losing it
+while a line is refused costs one repeated message, and lets the next send read that line as removed
+here
+
+</td></tr>
+<tr><td>
+
+`.unloadable-notified`
+
+</td><td>
+
+every send and apply, recording which skills folders each cannot load notice (not sent, not applied,
+kept local files a send will refuse) last named, an empty set included
+
+</td><td>
+
+those same notices, to post the desktop notification only when a folder is new to the set
+(claude-config#968)
+
+</td><td>
+
+absent or unreadable means the next notice is posted, which is the safe side: a repeated
+notification is noise, a missing one is a broken skill nobody hears about. Stale costs at most one
+skipped notification for a folder already named. A `.unloadable-notified.XXXXXX` beside it is a
+write that died before its rename, and is ignored
+
+</td></tr>
+<tr><td>
+
+`.ci-unreadable-since`
+
+</td><td>
+
+the automatic pull, the first time it cannot read whether the shared repo's head passed its tests
+
+</td><td>
+
+that same gate, to decide when to stop waiting for an answer that is not coming
+
+</td><td>
+
+absent means the last verdict was readable, whatever it said, which is the normal state. It holds
+when the condition started and, once expired, when that was first reported, so the alert is raised
+on the transition rather than on every edit. Any readable verdict removes it, including a red one,
+because those mean the lookup is working. Expiring does NOT remove it: once the verdict is judged
+unobtainable, config keeps arriving until the lookup works again, since restarting the clock would
+deliver config in three hour bursts. A value that will not parse is treated as the condition
+starting now, which errs toward waiting rather than toward applying unjudged config
+
+</td></tr>
+<tr><td>
+
+`.behind-skips`
+
+</td><td>
+
+a watcher send that found itself behind and whose reconcile did not clear it
+
+</td><td>
+
+`claude-sync status`, `claude-sync stuck` and so the per prompt notice, and the escalation that
+tells you once rather than on every edit
+
+</td><td>
+
+absent means sending is not stuck, which is the normal state and is said by saying nothing. It holds
+the count, the moment the run of skips started, the moment of the last one, when the reconcile was
+last attempted, and why that attempt did not clear it (#1398), which is what the notice gives as the
+reason; a record from before that last field reads as the general reason it always gave. Any run
+that gets through removes it, and so does a send that put this Mac's changes up on top of a shared
+commit still being tested, so the count is a measurement of the current state rather than a total
+that only grows. A count that will not parse is counted from zero again by the next skip, and until
+then status and the notice say the record could not be read, never that sending is stuck and never
+nothing
+
+</td></tr>
+<tr><td>
+
+`.watch-stale`
+
+</td><td>
+
+a change watcher running an older `claude-sync` than the one on disk, on each change it refuses
+because that newer copy fails its self test (#1569)
+
+</td><td>
+
+`claude-sync status`, `claude-sync stuck` and so the per prompt notice, which says it at once
+
+</td><td>
+
+absent means the watcher is not stuck on an older copy, the normal state. It holds the moment the
+stretch started, how many changes it has refused, the copy the watcher runs, the copy on disk and
+what is wrong with it. Removed by a watcher starting, by a tick that finds the file back on the copy
+it runs, and by a restart. A count that will not parse is said as a record that could not be read,
+never as stuck and never as nothing
+
+</td></tr>
+<tr><td>
+
+`.watch-restarted`
+
+</td><td>
+
+a change watcher exiting to restart onto a newer `claude-sync` that passed its self test (#1569)
+
+</td><td>
+
+the watcher launchd starts next, which logs that it restarted, from which copy, and sends once
+
+</td><td>
+
+absent means the last watcher to start was not a restart, so it waits for a change before sending.
+Consumed on read, so it describes only the restart that just happened
+
+</td></tr>
+<tr><td>
+
+`.sent-over-untested`
+
+</td><td>
+
+a watcher send that put this Mac's commits up on top of a shared commit still being tested, without
+taking that commit in (#1398)
+
+</td><td>
+
+the next such send, to send only what is newer; the record of what this clone has sent, and the two
+hour unsent check, so the commits it names are not counted as waiting; and the sync that finally
+takes the tested commit in, which moves this clone's commits onto the one they became; a sync that
+takes in only an older commit whose tests passed (#2230) points it at the new ids its rebase gave
+this clone's commits, or removes it when that rebase did not replay every one
+
+</td><td>
+
+absent means nothing went up that way. It names the last local commit sent and the commit it became
+in the shared repo, and it is believed only while the first is still in this clone's history and the
+second in the shared repo's; otherwise it is ignored and removed, and the clone's commits are
+treated as unsent, which sends again rather than missing anything
+
+</td></tr>
+<tr><td>
+
+`.reconcile-outcome`
+
+</td><td>
+
+the sync a send runs to catch up, when it finds itself behind or its own push is refused (#1398,
+#1402); never a sync typed by hand
+
+</td><td>
+
+that same send, straight after, to report what went (`sent`, `nothing to send`, or the files the
+hook suite gate held back, which are its lines after the first) or why nothing could, and so what
+the watcher logs
+
+</td><td>
+
+absent means the sync never decided what to send (it could not fetch, or stopped earlier): a behind
+send counts a skip with the general reason, and a send whose push was refused says nothing it cannot
+measure, which the watcher logs as a send that did not say what it did. It is removed before each
+catch up and after it is read, so it can only describe the run that wrote it
+
+</td></tr>
+<tr><td>
+
+`.send-refused`
+
+</td><td>
+
+the secret scan, whenever it refuses a send (#947)
+
+</td><td>
+
+a `pull` or `sync` that has to set aside the uncommitted edits that refused send left in the clone,
+to name the scan's finding as the cause rather than leave git's complaint as the only explanation
+
+</td><td>
+
+absent means no send is being refused by the scan, which is the normal state. It holds when the scan
+last refused and the files it found. The next scan that passes removes it. A time that will not
+parse is left out of the sentence rather than guessed
+
+</td></tr>
+<tr><td>
+
+`.ci-red-since`
+
+</td><td>
+
+the automatic pull, the first time the shared repo's head reads as having failed its tests
+
+</td><td>
+
+`claude-sync status`, `claude-sync stuck` and so the per prompt notice, and the escalation that
+tells you once rather than on every tick
+
+</td><td>
+
+absent means the shared repo's head is not red, which is the normal state and is said by saying
+nothing. It holds when the run of red verdicts started, how many there have been, and, once past its
+window, when that was first reported, so the alert is raised on the transition rather than on every
+automatic tick. The clock is on the CONDITION and not on the commit: keyed per commit it would reset
+on every push, and a push is exactly what keeps happening while somebody is fixing the red. Any
+readable verdict that is not red removes it, so the count measures the current state rather than
+growing for ever. Unlike `.ci-unreadable-since` it never expires into applying anyway: nobody can
+act on an unreadable verdict, and anybody can act on a red one, so the escape here is to tell a
+person rather than to lower the gate. Only the last field may be empty, because a blank middle
+column would be read as the one after it. A count that will not parse is reported as a record that
+could not be read, never as nothing
+
+</td></tr>
+<tr><td>
+
+`.my-push`
+
+</td><td>
+
+the trap every mutating run passes through, when that run left this Mac level with the shared repo
+
+</td><td>
+
+the next run, to ask what became of it, and `claude-sync status` once the answer is in
+
+</td><td>
+
+absent means the last thing this Mac sent was judged and passed, or nothing has been sent, which is
+the normal state. It holds the commit, when the current run of failures started, and, once reported,
+when that was. The verdict is deliberately NOT waited for at send time: a run holds the lock and a
+test run takes minutes, so the sha is written down and a later run asks. A green or cancelled
+verdict removes it, cancelled because there is nothing to report about a run nobody finished (the
+workflow no longer cancels a superseded run on main, #594, but a run can still be cancelled by
+hand). A push made while it still stands keeps its start time and its reported marker and only moves
+the commit, so a run of failures is announced once rather than per push. A verdict that never
+arrives is given up on after the same window an unreadable one gets. Only the last field may be
+empty
+
+</td></tr>
+<tr><td>
+
+`.send-suite-verdicts`
+
+</td><td>
+
+a send that ran a suite covering a hook it is about to publish
+
+</td><td>
+
+the next send, to decide whether that suite has to run again
+
+</td><td>
+
+absent means every relevant suite runs, which is the pre-#269 behaviour and only costs time. An
+entry is keyed on a digest of the whole staged hook set, so any hook edit retires it; a verdict is
+never reused across a change to what it judged. A `fail` is remembered exactly like a `pass`,
+because what it saves is re-running a red suite on every keystroke while the sync lock is held
+
+</td></tr>
+<tr><td>
+
+`.resolved/`
+
+</td><td>
+
+a conflict resolved automatically because this Mac's version held nothing extra
+
+</td><td>
+
+nothing reads it; it exists so a wrong resolution is recoverable
+
+</td><td>
+
+absent means no conflict has resolved itself here. Entries are swept once older than two weeks, and
+one whose date cannot be read is KEPT rather than deleted on a guess, since this directory holds the
+only copy of something
+
+</td></tr>
+<tr><td>
+
+`.claude-sync-clones` (in your home, not in a clone)
+
+</td><td>
+
+every clone on this Mac, the first time it takes the lock
+
+</td><td>
+
+`claude-sync status`, to find the records other clones hold
+
+</td><td>
+
+absent means no clone has done work since this was added, so status reports only what it can reach
+through the launch agents. An entry naming a clone that has gone is skipped rather than reported,
+and nothing prunes it: the file is only ever appended to, so a run that dies part way cannot lose
+the entries already there
+
+</td></tr>
+<tr><td>
+
+`.claude-sync-watch.pid` (in your home, not in a clone)
+
+</td><td>
+
+`claude-sync watch`, on the way up, claimed so two watchers starting together cannot both write it
+(#604)
+
+</td><td>
+
+the next `claude-sync watch`, to refuse starting a second one, and every running watcher's loop
+before each send, which stops when the file names another live watcher or the watcher that started
+the loop has gone
+
+</td><td>
+
+absent means no watcher has started here since this was added, and the next one starts normally. The
+pid in it is confirmed against what that process actually IS before it is believed, because a stale
+pid is reused by the system constantly and a guard that trusts the number refuses to start over
+something unrelated. It is removed on the way out, and only by the watcher whose own pid it holds,
+so one watcher exiting cannot clear another's record
+
+</td></tr>
+<tr><td>
+
+`.claude-sync.log` (in your home, not in a clone)
+
+</td><td>
+
+the scheduled and watch jobs, whose launch agents send their output here; the watcher one summary
+line per send, with whatever the send said indented beneath it, and a send that held files back
+logged as `NOT sent: <files> held back,` with its reason rather than as nothing to send (#849), and
+a send whose catch up sent logged as `sent` (#1402); and any send that holds the hooks block back,
+which appends its verdict with a time whichever entry point ran it (#592). A run whose `CLAUDE_HOME`
+is not your own `~/.claude` (every test fixture) appends nothing to it, unless `SYNC_LOG_FILE` names
+a file, and says once that its lines went nowhere (#1486)
+
+</td><td>
+
+a person diagnosing a notification or a quiet sync
+
+</td><td>
+
+absent means no automatic job has run here yet. It is never read by the tool itself, so nothing goes
+wrong when it is removed
+
+</td></tr>
+<tr><td>
+
+`.claude-sync-hold` (in your home, not in a clone)
+
+</td><td>
+
+`claude-sync hold`, and `claude-sync release`, which removes the caller's own line (or a named
+session's, with `--other`)
+
+</td><td>
+
+the watcher's send, `claude-sync status`, `claude-sync release`, and the payload write hooks through
+`hooks/lib/sync-clone.sh`
+
+</td><td>
+
+absent means no hold, which is the normal state. One line per hold, one hold per session (#1863):
+`<ends> <taken> <host> session=<id> <why>`, longest hold first, so a claude-sync or hook from before
+#1863, which reads only the first line, still sees the Mac held for as long as any hold lasts. A
+line with no `session=` field, the single line every hold was before #1863, is read as a hold by
+`unknown`, which any release lifts. Each line carries its own expiry and fails OPEN: once that
+passes the line is cleared, the rest kept, and the watcher says which hold expired, because a hold
+that outlives the session that took it silently stops the sync. A line that will not parse is
+cleared too, and reported in its own words rather than as an expiry, since obeying it would stop the
+sync until somebody found the file and ignoring it silently would discard a decision somebody made.
+Rewritten whole by a rename, under the `.claude-sync-hold.lock` beside it, and read back before
+`hold` says it is in force (#1854)
+
+</td></tr>
+<tr><td>
+
+`.claude-sync-hold.lock` (in your home, beside the hold record)
+
+</td><td>
+
+any change to the hold record (#1863)
+
+</td><td>
+
+every other change to it, which waits up to ten seconds (`SYNC_HOLD_LOCK_WAIT`)
+
+</td><td>
+
+absent means nothing is changing the record, which is the normal state. It holds the pid of the run
+changing the record and is made by a hard link, so it never exists empty; one whose pid is no longer
+running is taken over rather than waited on
+
+</td></tr>
+<tr><td>
+
+`.outage-log`
+
+</td><td>
+
+every outage decision
+
+</td><td>
+
+`claude-sync status`
+
+</td><td>
+
+absent means no decisions yet, and a line that will not parse is counted and reported as unreadable
+rather than skipped
+
+</td></tr>
+<tr><td>
+
+`.sync-lock/`
+
+</td><td>
+
+any mutating run
+
+</td><td>
+
+every mutating run
+
+</td><td>
+
+a lock from THIS Mac whose process is alive is respected whatever its age; one from another Mac, or
+with no Mac recorded, is broken once older than an hour
+
+</td></tr>
+<tr><td>
+
+`.sync-lock.next`
+
+</td><td>
+
+a typed `claude-sync pull` that finds the lock held, while it waits for it (#850)
+
+</td><td>
+
+every mutating run, before it takes the lock, so a run arriving while a pull waits does not take the
+lock in front of it
+
+</td><td>
+
+absent means nobody is waiting, which is the normal state. It names the waiting pull's process and
+is created by a hard link, so two waiters cannot both hold it. The pull removes it on taking the
+lock or at its deadline; one left by a process that has gone, or older than any wait could last, is
+removed by the next run rather than honoured
+
+</td></tr>
+<tr><td>
+
+`state/`
+
+</td><td>
+
+every apply
+
+</td><td>
+
+nothing reads the local copy; it exists so a marker is only republished when it changes
+
+</td><td>
+
+absent just means the next apply republishes
+
+</td></tr>
+<tr><td>
+
+`refs/claude-sync-state`
+
+</td><td>
+
+every apply, pushed per Mac
+
+</td><td>
+
+`claude-sync verify`
+
+</td><td>
+
+nothing published means "cannot be answered", never agreement; a Mac silent for 60 days is reported
+as retired
+
+</td></tr>
+</tbody>
+</table>
 
 None of this travels between Macs except the published refs, and those deliberately never
 land on the config branch: a marker commit there is a commit the other Mac does not have,
