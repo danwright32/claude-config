@@ -623,6 +623,12 @@ for reads in "$T/ds/titles-direct $T/ds/issues.json" "cd $T/ds && ./count-direct
   run_bash "$reads"
   allowed "a script run by its own path reading a data file that names an endpoint: $reads"
 done
+# A compiled program run by its path has no #! to name an interpreter and is not a script the gate
+# reads, so the files it is handed stay unread as before (lessons review at b3c887d): reading them
+# would refuse a pager or a JSON tool over any file naming an endpoint.
+cp /bin/cat "$T/ds/cat-bin"
+run_bash "cd $T/ds && ./cat-bin session.jsonl"
+allowed "a compiled program run by its own path over a data file that names an endpoint"
 
 echo "slack drafts only: /nudge is the one script let through"
 

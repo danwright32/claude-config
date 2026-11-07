@@ -805,13 +805,18 @@ class Judge:
             # Its arguments are read as they are for the interpreter its #! names, so `./post.mjs
             # msg.json` is judged as `node post.mjs msg.json` is (claude-config#2400): the script
             # first, then each file it is handed, the data files by what the script does with them.
+            # A program with no #! (compiled, like a copy of cat or jq) is not a script the gate reads,
+            # so the files it is handed stay unread, as for one run by bare name (lessons review at
+            # b3c887d): reading them would refuse it over any file naming an endpoint.
             path = self.resolve(words[0], d)
             try:
                 with open(path, "rb") as f:
                     first = f.readline(512).decode("utf-8", "replace")
             except OSError:
-                return self.script(words[0], d, depth, False)
+                first = ""
             shell = path.endswith(SHELL_EXT) or bool(SHELL_BANG.match(first))
+            if not (shell or first.startswith("#!")):
+                return self.script(words[0], d, depth, False)
             lang = "js" if JS_BANG.match(first) else "py" if PY_BANG.match(first) else None
             return self.every_file([words[0]] + words, d, depth, shell, lang)
         return None
