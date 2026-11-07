@@ -5,7 +5,8 @@
 
 Copies each NAME from SRC_LIB (payload/hooks/lib) into DEST_LIB (the scratch home's
 ~/.claude/hooks/lib, or any folder standing in for it), with every helper in SRC_LIB the Python
-ones import and the shell ones source, and so on through what those import and source. Then every
+ones import, the shell ones source and the JavaScript ones require, and so on through what those
+import, source and require. Then every
 Python file in DEST_LIB must find each module it imports, either beside it or installed with
 Python; any that cannot is named and the exit is 1, so a suite stops with the cause rather than
 failing everywhere downstream (claude-config#2138: #2118 made sleep-report.py import repo_slug, and
@@ -21,15 +22,22 @@ named with its line and the exit is 1, never skipped: a helper this cannot follo
 suites would go on breaking the way the Python ones did before #2147. Lines in a comment, a
 heredoc's body or a quoted string are not the helper's own and are not read (lib/shell_code_lines.py).
 
+A JavaScript helper's `require` calls are followed the same way (claude-config#2298): a relative
+path beside it (`'./x'`, `"./x.js"`), `path.join(__dirname, 'x.js')`, `__dirname + '/x.js'` or
+`` `${__dirname}/x.js` ``, tried as written and then with .js and .json, as Node does. A built in or
+package name (`fs`, `node:path`) is no helper and is left alone. Any other require, one reaching
+outside the folder, and one naming a file SRC_LIB does not have, is named with its line and the
+exit is 1. A require in a comment or a string is not read.
+
 A helper loaded another way, by its path (shell_code_lines.py loads shell-words.py that way, and a
 shell helper may run `python3 "$LIB/x.py"`), is installed only when it is named, so a suite can
 still build a folder missing one on purpose. A suite that needs a folder missing a helper that IS
-imported or sourced installs it and then removes that one file, so the absence is written in the
+imported, sourced or required installs it and then removes that one file, so the absence is written in the
 suite where it can be read.
 
 It sits in lib/ rather than tests/ because the suites in payload/hooks also run from the installed
-~/.claude/hooks, which carries no tests/ (#2147). Every suite installing a Python or shell helper
-goes through it, and lib/hand-written-lib-list.py fails one that copies a helper by hand instead.
+~/.claude/hooks, which carries no tests/ (#2147). Every suite installing a Python, shell or
+JavaScript helper goes through it, and lib/hand-written-lib-list.py fails one that copies a helper by hand instead.
 """
 import ast
 import importlib.util
@@ -151,6 +159,99 @@ def sourced(path):
     return found
 
 
+REQUIRE = re.compile(r'(?<![\w$.])require\s*\(')
+JS_STRING = re.compile(r'''^(['"])([^'"\\]*)\1$''')
+JS_BESIDE = (re.compile(r'''^path\.join\(\s*__dirname\s*,\s*(['"])([^'"\\]+)\1\s*\)$'''),
+             re.compile(r'''^__dirname\s*\+\s*(['"])/([^'"\\]+)\1$'''),
+             re.compile(r'''^()`\$\{__dirname\}/([^`$\\]+)`$'''))
+# A `/` after one of these, or at the start, opens a regular expression rather than dividing.
+JS_REGEX_BEFORE = set('(,=:[!&|?{};+-*%<>~^')
+
+
+def js_code(text):
+    """The text with every comment blanked and every string, template and regular expression's
+    contents replaced by x, newlines kept, so a position in it is a position in the text and only
+    the file's own code can match. A require inside a template's ${...} is not seen."""
+    out, i, n = list(text), 0, len(text)
+
+    def blank(a, b, keep):
+        for k in range(a, b):
+            if out[k] != '\n':
+                out[k] = keep
+    last = ''  # the last character of code before i that is not white space
+    while i < n:
+        c = text[i]
+        if text.startswith('//', i):
+            j = text.find('\n', i)
+            j = n if j < 0 else j
+            blank(i, j, ' ')
+            i = j
+        elif text.startswith('/*', i):
+            j = text.find('*/', i + 2)
+            j = n if j < 0 else j + 2
+            blank(i, j, ' ')
+            i = j
+        elif c in '\'"`' or (c == '/' and (last == '' or last in JS_REGEX_BEFORE
+                                           or re.search(r'\b(?:return|typeof|case)\s*$', text[max(0, i - 20):i]))):
+            j, in_class = i + 1, False
+            while j < n:
+                if text[j] == '\\':
+                    j += 2
+                    continue
+                if c == '/' and text[j] == '[':
+                    in_class = True
+                elif c == '/' and text[j] == ']':
+                    in_class = False
+                elif text[j] == c and not in_class:
+                    break
+                elif text[j] == '\n' and c != '`':
+                    break
+                j += 1
+            blank(i + 1, min(j, n), 'x')
+            i = j + 1
+            last = c
+        else:
+            if not c.isspace():
+                last = c
+            i += 1
+    return ''.join(out)
+
+
+def required(path):
+    """What a JavaScript file requires: (line, argument as written, the file name beside it or
+    None). A built in or package name (`fs`, `node:path`) is no file beside it and is left out."""
+    try:
+        text = open(path, encoding='utf-8', errors='strict').read()
+    except (OSError, ValueError) as e:
+        raise SystemExit(f'install-hook-libs: {path} could not be read as text ({e})')
+    code = js_code(text)
+    found = []
+    for m in REQUIRE.finditer(code):
+        depth, j = 1, m.end()
+        while j < len(code) and depth:
+            depth += {'(': 1, ')': -1}.get(code[j], 0)
+            j += 1
+        arg = text[m.end():j - 1].strip()
+        line = code.count('\n', 0, m.start()) + 1
+        lit = JS_STRING.match(arg)
+        if lit:
+            value = lit.group(2)
+            if not value.startswith(('.', '/')):
+                continue
+            name = value[2:] if value.startswith('./') else None
+        else:
+            name = next((p.match(arg).group(2) for p in JS_BESIDE if p.match(arg)), None)
+        if name is not None and '/' in name:
+            name = None
+        found.append((line, plain(arg), name))
+    return found
+
+
+def js_beside(src, name):
+    """The file in src a require of name loads, trying it as written and then with .js and .json."""
+    return next((f for f in (name, name + '.js', name + '.json') if os.path.isfile(os.path.join(src, f))), None)
+
+
 def main(argv):
     # Only Python's own path answers "installed with Python": this file's folder is not on it.
     sys.path[:] = [p for p in sys.path if os.path.abspath(p or '.') != HERE]
@@ -159,7 +260,8 @@ def main(argv):
     src, dest, names = argv[0], argv[1], argv[2:]
     os.makedirs(dest, exist_ok=True)
     # The named files, then every helper beside them in SRC_LIB that an installed Python file
-    # imports or an installed shell file sources, and so on, so a helper gaining an import or a
+    # imports, an installed shell file sources or an installed JavaScript file requires, and so on,
+    # so a helper gaining an import, a require or a
     # source line needs no edit to any suite's list.
     todo, done, missing = list(names), set(), []
     while todo:
@@ -181,6 +283,14 @@ def main(argv):
                     todo.append(beside)
                 else:
                     missing.append(f'{name} line {n} sources {beside}, which {src} does not have')
+        elif name.endswith('.js'):
+            for n, op, beside in required(os.path.join(dest, name)):
+                if beside is None:
+                    missing.append(f'{name} line {n} requires {op}, which could not be resolved to a file beside it')
+                elif js_beside(src, beside):
+                    todo.append(js_beside(src, beside))
+                else:
+                    missing.append(f'{name} line {n} requires {op}, which {src} does not have')
     for f in sorted(os.listdir(dest)):
         if not f.endswith('.py'):
             continue

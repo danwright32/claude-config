@@ -38,6 +38,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def runner():
+    # Loading ai-review-run.py by path would otherwise leave lib/__pycache__ in the installed, synced
+    # hooks lib (#2353, the #1017 class).
+    sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location("ai_review_run", os.path.join(HERE, "ai-review-run.py"))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
@@ -105,6 +108,7 @@ def main(argv):
     why = {k: 0 for k, _ in m.UNPLACED_KINDS}
     why["other"] = 0
     tried = {"marker": 0, "part": 0, "short": 0}
+    shapes = {k: 0 for k, _ in m.MISS_SHAPES}
     part_lengths, part_recorded, miss_lengths, miss_cut, miss_lines = [], 0, [], 0, []
     for path in sorted(glob.glob(os.path.join(a.state_dir, "*.txt"))):
         try:
@@ -154,6 +158,9 @@ def main(argv):
                 tried["marker"] += "without its leading" in words
                 tried["part"] += "whole or in part" in words
                 tried["short"] += "too short to be placed by part of a line" in words
+                shape = m.miss_shape(reason)
+                if shape:
+                    shapes[shape] += 1
                 quote, length = m.mark_quote(reason)
                 if length is None:
                     miss_cut += 1
@@ -201,6 +208,9 @@ def main(argv):
           f"record them: {bands(part_lengths)}")
     print(f"quote lengths matching no line: {bands(miss_lengths)}, and longer than {m.OLD_QUOTE_SHOWN} "
           f"but cut to {m.OLD_QUOTE_SHOWN} by a mark from before #1701: {miss_cut}")
+    print(f"quote misses by shape, from the {sum(shapes.values())} of {why['no_match']} that record it: "
+          f"across a line break {shapes['across']}, past the end of a line {shapes['past_end']}, "
+          f"neither {shapes['neither']}")
     if a.misses:
         print("quotes that matched no line:" if miss_lines else "no quote matched no line.")
         for row in miss_lines:

@@ -65,6 +65,7 @@ tally(){   # $1 = what the block tests, $2 = cases expected, $3 = its output
 # ===========================================================================
 turn_out="$(python3 - "$RUNNER" "$WORKDIR/turns" <<'EOF'
 import fcntl, importlib.util, os, sys, time
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -216,6 +217,7 @@ tally "the turn" 30 "$turn_out"
 # ===========================================================================
 race_out="$(python3 - "$RUNNER" "$WORKDIR/race" <<'EOF'
 import importlib.util, os, sys, threading
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -250,6 +252,7 @@ tally "eight reviews at once" 3 "$race_out"
 # ===========================================================================
 stream_out="$(python3 - "$RUNNER" <<'EOF'
 import importlib.util, json, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -352,6 +355,7 @@ export AI_REVIEW_WARM_DIR="$E2E/warm"
 unset AI_REVIEW_START_WAIT_SECONDS 2>/dev/null || true
 KEY="$(python3 - "$RUNNER" "$E2E/lessons" <<'EOF'
 import importlib.util, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)

@@ -120,6 +120,10 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     slowLogOnce?: boolean
     // mod-kit's shell reader failing (#2142), and the default branch's 90 days in place of NUMSTAT.
     writesThrows?: boolean
+    // mod-kit's pipeline reader failing, and the session's folder failing to be read (#2173): the one
+    // inside the pull request check, the other before it, so the hook itself fails.
+    pipelineThrows?: boolean
+    cwdThrows?: boolean
     numstat?: string
     sha: string
     goal: string | null
@@ -153,7 +157,10 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   const clock = mock.clock(on, { now: T0 })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
-  on('session.cwd', () => ({ value: APP }) as never)
+  on('session.cwd', () => {
+    if (ctl.cwdThrows) throw new Error('the session folder could not be read')
+    return { value: APP } as never
+  })
   on('session.repo', () => ({ value: { root: APP, remote: 'git@github.com:dan/app.git' } }) as never)
   on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
   on('fs.read', ($, e) => {
@@ -218,6 +225,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     if (argv[0] === '__modkit') {
       const input = JSON.parse(argv[2] as string)
       // mod-kit's command readers, standing in: their byte for byte copies, as is it live keeps.
+      if (argv[1] === 'pipeline' && ctl.pipelineThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the pipeline could not be read' })
       if (argv[1] === 'gh' || argv[1] === 'mergeHelper' || argv[1] === 'pipeline') {
         const read = argv[1] === 'gh' ? ghArgs(input.words) : argv[1] === 'mergeHelper' ? mergeHelperArgs(input as Command) : input.cwd !== undefined ? pipelineIn(input.command, input.cwd, input.home ?? '') : pipeline(input.command)
         return answer(ok(read === undefined ? 'null' : JSON.stringify(read)))

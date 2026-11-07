@@ -457,6 +457,27 @@ fire_push "git push origin main" 0
 check "a diff over the cap is skipped and says the size and the cap" "over the 300 KB cap" "$OUT"
 check_eq "and starts nothing" 2 "$(calls)"
 
+# #2307: a diff over the cap only because of an embedded image is read with the image's base64 left
+# out, and the start line names what was not read. The big file is removed in a push of its own
+# first (its removal is over the cap too, so it is skipped), so this push's diff holds only the image.
+G rm -q src/huge.ts
+G commit -q -m "remove huge"
+G push -q origin main 2>/dev/null
+fire_push "git push origin main" 0
+python3 -c '
+import sys
+with open(sys.argv[1], "w") as f:
+    f.write("export const logo = \"data:image/png;base64," + "QUJD" * 100000 + "\";\n")
+    f.write("export const size = 64;\n")
+' "$REPO/src/logo.ts"
+G add src/logo.ts; G commit -q -m logo
+G push -q origin main 2>/dev/null
+fire_push "git push origin main" 0
+check "#2307 an image over the cap is read with its base64 left out" "started in the background" "$OUT"
+check "#2307 and the start line names it by file and line" "src/logo.ts line 1" "$OUT"
+check "#2307 saying what kind of thing was left out" "embedded base64" "$OUT"
+wait_for_final "$(G rev-parse HEAD)" && ok || bad "#2307 that review finishes before section 4 counts calls"
+
 # ===========================================================================
 # 4. The deadline: a review that does not return is recorded as unfinished, and the fake is killed.
 # ===========================================================================
@@ -1064,6 +1085,7 @@ check "and the answer says how many findings were marked" "1 finding below" "$wi
 RUNNER="$DIR/lib/ai-review-run.py"
 IFS= read -r -d '' premise_out_prog <<'EOF' || true
 import importlib.util, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -1221,6 +1243,7 @@ P rm -q src/old.ts; P commit -q -m "remove old"
 PLACE_SHA="$(P rev-parse HEAD)"
 IFS= read -r -d '' place_out_prog <<'EOF' || true
 import importlib.util, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -1344,6 +1367,21 @@ one("a phrase in no line at all keeps its number and says part of a line was tri
     "docs/notes.md:4: the answer is said to be shared." + S +
     "\nQuote: written into the local file so it is asked twice",
     "docs/notes.md:4: ", "matches no line of docs/notes.md at the reviewed head, whole or in part")
+# How a miss sits against the file is said in its mark, worked out while the reviewed head is in
+# hand (claude-config#1701): a review of a worktree records the worktree folder as its repo, and the
+# folder is gone by the time anyone reads the report, so the shape cannot be judged afterwards.
+one("a quote running across two lines says which lines it runs across",
+    "docs/notes.md:4: the sync time is not stated." + S +
+    "\nQuote: written once a night by the scheduled sync. The bedtime answer is written",
+    "docs/notes.md:4: ", "whole or in part, though it runs across lines 4 to 5,")
+one("a quote that starts as the end of a line and runs on past it says how much ended the line",
+    "docs/notes.md:5: the answer is said to be shared." + S +
+    "\nQuote: is asked once, and kept there. Then the sync reads it back",
+    "docs/notes.md:5: ", "whole or in part, though its first 30 characters end line 5 and the rest does not follow it,")
+one("a quote neither across nor past the end of a line says so",
+    "docs/notes.md:4: the answer is said to be shared." + S +
+    "\nQuote: written into the local file so it is asked twice",
+    "docs/notes.md:4: ", "whole or in part, nor does it run across or past the end of any line,")
 
 # A cited path that is not a file at the head (claude-config#1368: the other 4 of the 13). One held
 # `..`, two a stray folder in front of the real path, one a bare file name. Each is tried as the
@@ -1495,7 +1533,7 @@ while IFS=$'\t' read -r verdict rest; do
     *) [ -n "$verdict" ] && bad "placement fixture printed something unexpected: $verdict $rest" ;;
   esac
 done <<< "$place_out"
-[ "$place_ran" -eq 47 ] && ok || bad "the placement fixtures ran $place_ran of 47 cases"
+[ "$place_ran" -eq 50 ] && ok || bad "the placement fixtures ran $place_ran of 50 cases"
 
 # End to end, through the hook and the detached runner: the stored review holds the placed line and
 # no Quote line, and an answer whose only finding is approximate is a review, not unparsed.

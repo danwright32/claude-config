@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Suites that copy a Python or shell hook helper by hand instead of through
-lib/install-hook-libs.py (claude-config#2147, shell helpers since #2204).
+"""Suites that copy a Python, shell or JavaScript hook helper by hand instead of through
+lib/install-hook-libs.py (claude-config#2147, shell helpers since #2204, JavaScript since #2298).
 
 A suite building a scratch home, or any folder standing in for hooks/lib, used to name each helper
 it copied. When a helper gained an import the list did not, and the copy failed only where the
@@ -9,22 +9,24 @@ hand written lists in tests/test-sleep-real-engine.sh and payload/hooks/test-sle
 had to learn repo_slug.py by hand (#2138). lib/install-hook-libs.py installs a helper with every
 module beside it that it imports, and every shell helper with what it sources (#2204), so no list
 has to know a helper's imports or source lines. Shell helpers were copied the same way, from lists
-that would break the first time one helper started sourcing another. This finds the next suite that
-copies one by hand instead (L613).
+that would break the first time one helper started sourcing another, and JavaScript helpers
+(workflow-syntax.js, dev-update-registry.js) the same way the first time one requires another, which
+the install follows too (#2298). This finds the next suite that copies one by hand instead (L613).
 
-WHAT IT LOOKS FOR, in a suite file (a test-*.sh): a `cp` whose source is a Python or shell file in
-payload/hooks/lib, the folder this file sits in. The source is read as written (`"$DIR/lib/x.py"`,
+WHAT IT LOOKS FOR, in a suite file (a test-*.sh): a `cp` whose source is a Python, shell or
+JavaScript file in payload/hooks/lib, the folder this file sits in. The source is read as written (`"$DIR/lib/x.py"`,
 `"$(dirname "$SCRIPT")/payload/hooks/lib/x.sh"`), through a variable the file assigns such a path
 to (`PY="$DIR/lib/x.py"` then `cp "$PY" ...`), or as `"$(dirname "$V")/x.py"` where V is such a
-variable. Only helpers count: a copy of a hook in payload/hooks, of a JavaScript helper, or of a
-whole lib folder (`cp -R "$DIR/lib"`), is not a list of helpers and is not reported.
+variable. Only helpers count: a copy of a hook in payload/hooks, or of a whole lib folder
+(`cp -R "$DIR/lib"`), is not a list of helpers and is not reported.
 A `cp` inside a quoted string (a fixture written with printf), a comment, or a heredoc's body (a
 stand in the suite writes) is not the suite's own command and is not judged
 (lib/shell_code_lines.py).
 
 A suite that means to leave a helper out (to see a scan refuse without lib/shell-words.py) still
-goes through install-hook-libs.py: it follows `import` and `source` lines only, so a helper loaded
-by its path stays out unless it is named, and one that is imported or sourced is installed and then
+goes through install-hook-libs.py: it follows `import`, `source` and `require` lines only, so a
+helper loaded by its path stays out unless it is named, and one imported, sourced or required is
+installed and then
 removed by the suite, in a line that says so.
 
 Reads the paths to judge, relative to --root, one per line on stdin, and judges only the suite files
@@ -56,8 +58,8 @@ LIB_FILE = re.compile(r'(?:^|/)lib/([^/]+)$')
 
 
 def helpers():
-    """The Python and shell helpers: every .py and .sh in the folder this scan sits in."""
-    return {f for f in os.listdir(HERE) if f.endswith(('.py', '.sh'))}
+    """The helpers: every .py, .sh and .js in the folder this scan sits in."""
+    return {f for f in os.listdir(HERE) if f.endswith(('.py', '.sh', '.js'))}
 
 
 def unquote(word):

@@ -62,7 +62,7 @@ PLANTED="$WORK/planted"; git init -q "$PLANTED"
 printf 'clean\n' > "$PLANTED/clean.md"; git -C "$PLANTED" add clean.md
 printf 'see %s/widget#3\n' "$FAKE_ORG" > "$PLANTED/new.md"
 plant_out="$(git -C "$PLANTED" ls-files --cached --others --exclude-standard -z \
-  | WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" python3 "$SCAN" --root "$PLANTED" --files0-from - 2>&1)"; plant_rc=$?
+  | HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" python3 "$SCAN" --root "$PLANTED" --files0-from - 2>&1)"; plant_rc=$?
 check "(control) the same listing finds a name in a file not yet committed (exit $plant_rc)" [ "$plant_rc" -eq 1 ]
 check "and names that file: $plant_out" has "$plant_out" "new.md:1"
 
@@ -75,7 +75,7 @@ printf '{"hooks":{}}\n' > "$CA/settings.json"
 printf -- '---\nname: fixture-skill\ndescription: a fixture skill for the suite\n---\nbody\n' > "$CA/skills/fixture-skill/SKILL.md"
 SENV=(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 SYNC_CLAUDE_BIN="$WORK/no-claude")
 syncA(){ env "${SENV[@]}" HOME="$WORK/sync-home-A" CLAUDE_HOME="$CA" SYNC_REPO="$RA" SYNC_HOSTNAME=fixtureMacA \
-  WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" bash "$SCRIPT" "$@" 2>&1; }
+  HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" bash "$SCRIPT" "$@" 2>&1; }
 main_tree(){ git -C "$BARE" ls-tree -r --name-only main 2>/dev/null; }
 out_first="$(syncA sync)"
 check "(control) a clean skill is sent: $out_first" has "$(main_tree)" "payload/skills/fixture-skill/SKILL.md"

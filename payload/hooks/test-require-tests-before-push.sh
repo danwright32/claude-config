@@ -89,6 +89,80 @@ want_notdocsonly slash "$(printf -- 'diff --git a/h.js b/h.js\n--- a/h.js\n+++ b
 # A line holding code beside a comment is code, whichever comes first.
 want_notdocsonly slash "$(printf -- 'diff --git a/i.js b/i.js\n--- a/i.js\n+++ b/i.js\n@@ -1,2 +1,2 @@\n x = 1;\n-/* a */ y = 2;\n+/* b */ y = 3;\n')"
 
+# --- claude-config#2247: a line inside a Python docstring is documentation ---
+# A docstring (the first statement of a module, class or function, when it is a plain string, as
+# Python defines it) is read by lib/py-docstring-lines.py with Python's own parser, from both images
+# of the file, and each changed line lying wholly inside one is handed to the reader as a '#'
+# comment. Anything else is judged as before: an ordinary string, a string that is not the first
+# statement, code on the docstring's own line, a file either image of which does not parse, and a
+# diff not covering the file from its first line.
+HOOK_DIR="$DIR"
+eval "$(sed -n '/^py_docstrings_as_comments() {/,/^}/p' "$HOOK")"
+want_pydocs()    { if printf '%s' "$1" | py_docstrings_as_comments | diff_docs_only hash; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2247 expected DOCS-ONLY: [$1]"; fi; }
+want_notpydocs() { if printf '%s' "$1" | py_docstrings_as_comments | diff_docs_only hash; then fail=$((fail+1)); echo "FAIL: #2247 expected NOT-docs-only: [$1]"; else pass=$((pass+1)); fi; }
+PYH='diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n'
+# Newly let through: a function, class, async function or module docstring reworded, one line or
+# several, with a comment after its closing quotes, or with a comment changed beside it.
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,5 +1,5 @@\n """Module summary.\n \n-Old detail.\n+New detail.\n """\n import os\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,4 +1,4 @@\n class A:\n     """Summary.\n-    old\n+    new\n     """\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n async def g():\n-    """Old."""  # note\n+    """New."""  # note\n     return 2\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,4 @@\n def f():\n-    """Old."""\n+    # a comment\n+    """New."""\n     return 1\n')"
+want_pydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    r"""Raw \\d old."""\n+    r"""Raw \\d new."""\n     return 1\n')"
+# Still refused: a docstring and a code line changed together.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n-    return 1\n+    """New words."""\n+    return 2\n')"
+# Still refused: an ordinary string literal, and a string statement that is not the first.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,1 +1,1 @@\n-x = """old"""\n+x = """new"""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n     y = 1\n-    """old"""\n+    """new"""\n')"
+# Still refused: a bytes string and an f-string are not docstrings.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f():\n-    b"""old"""\n+    b"""new"""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f():\n-    f"""old"""\n+    f"""new"""\n')"
+# Still refused: code on the docstring's own line, before it or after it.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f():\n-    """Doc."""; x = 1\n+    """Doc."""; x = 2\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,1 +1,1 @@\n-def f(): """Old."""\n+def f(): """New."""\n')"
+# Still refused: a file that does not parse, in the new image or the old one.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n def f(:\n-    """Old."""\n+    """New."""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,2 +1,2 @@\n-def f(:\n+def f():\n     """Doc."""\n')"
+# Still refused: code moved into a docstring, or out of one, is code in the image it is code in.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Doc."""\n-    return 1\n+    """Doc.\n+    return 1"""\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Doc.\n-    return 1"""\n+    """Doc."""\n+    return 1\n')"
+# Still refused: a diff not read from the file's first line, or in two hunks, places no line.
+want_notpydocs "$(printf -- "$PYH"'@@ -4,3 +4,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n@@ -9,2 +9,2 @@\n def g():\n-    """Old."""\n+    """New."""\n')"
+# Still refused: a hunk header that cannot be read.
+want_notpydocs "$(printf -- "$PYH"'@@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+# Still refused: a file whose own code reads __doc__ (a usage message or an argparse description
+# cut from its docstring, as regal-journey-edits/jdiff.py does) runs on its docstrings, so none
+# of them is documentation there.
+want_notpydocs "$(printf -- "$PYH"'@@ -1,5 +1,5 @@\n """Tool.\n \n-Usage: old\n+Usage: new\n """\n USAGE = __doc__.split("\\n\\n")[1]\n')"
+want_notpydocs "$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old."""\n+    """New."""\n print(f.__doc__)\n')"
+# Still refused: no change at all, as before.
+want_notpydocs ""
+# When the helper cannot be trusted, the diff goes on exactly as git gave it: a docstring change is
+# judged as code again, and a plain '#' comment change still passes as it did before #2247.
+PYDOC_OK="$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    """Old words."""\n+    """New words."""\n     return 1\n')"
+PYCOMMENT="$(printf -- "$PYH"'@@ -1,3 +1,3 @@\n def f():\n-    # old words\n+    # new words\n     return 1\n')"
+PYFAKE="$(mktemp -d)"
+mkdir -p "$PYFAKE/missing/lib" "$PYFAKE/short/lib" "$PYFAKE/dies/lib"
+printf '%s\n' 'import sys' 'sys.stdout.write("+# x\n")' > "$PYFAKE/short/lib/py-docstring-lines.py"
+printf '%s\n' 'import sys' 'sys.stdout.write("+# x\n")' 'sys.exit(3)' > "$PYFAKE/dies/lib/py-docstring-lines.py"
+for PYCASE in missing short dies; do
+  HOOK_DIR="$PYFAKE/$PYCASE"
+  want_notpydocs "$PYDOC_OK"
+  want_pydocs "$PYCOMMENT"
+done
+HOOK_DIR="$DIR"
+# No scratch file can be made: the diff passes through untouched, judged as before.
+mktemp() { return 1; }
+want_notpydocs "$PYDOC_OK"
+want_pydocs "$PYCOMMENT"
+# A scratch file is made but the diff cannot be written to it: nothing goes on, which is never
+# documentation, so even a comment change is refused rather than judged on part of its diff.
+mktemp() { printf '%s\n' "$PYFAKE/no-such-dir/x"; }
+want_notpydocs "$PYCOMMENT"
+unset -f mktemp
+rm -rf "$PYFAKE"
+
 # ===========================================================================
 # END TO END: drive the real hook and assert its exit code. (#734)
 #
@@ -872,6 +946,49 @@ W="$(mk_repo)"
 run_hook "$W" "git push"
 want_code 2 "#1238 a leading-operator change below a closed block comment still BLOCKS"
 
+# claude-config#2247: rewording a line inside a Python docstring is documentation. On 2026-11-04 a
+# two line docstring fix in lib/ai-review-run.py needed a one time override. The docstring's opening
+# quotes sit more than git's three lines of default context above the changed line, so only a diff
+# read with the whole file around it can place the line inside it.
+PYDOC_BEFORE='"""Adds numbers.\n\nBoth may be negative.\nNeither may be NaN.\n\nReturns their sum.\n"""\n\n\ndef add(a, b):\n    """Add two numbers.\n\n    Both may be negative.\n    Neither may be NaN.\n\n    Returns their sum.\n    """\n    return a + b\n'
+PYDOC_AFTER='"""Adds numbers.\n\nBoth may be negative.\nNeither may be NaN.\n\nReturns the sum of both.\n"""\n\n\ndef add(a, b):\n    """Add two numbers.\n\n    Both may be negative.\n    Neither may be NaN.\n\n    Returns the sum of both.\n    """\n    return a + b\n'
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$PYDOC_BEFORE" > lib/doc.py && git add lib/doc.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf "$PYDOC_AFTER" > lib/doc.py && git add lib/doc.py && git commit -qm reword ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 0 "#2247 rewording inside a module and a function docstring is allowed"
+# The same edit made by the commit in the command, which reads a different diff.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$PYDOC_BEFORE" > lib/doc.py && git add lib/doc.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf "$PYDOC_AFTER" > lib/doc.py ) >/dev/null 2>&1
+run_hook "$W" "git add lib/doc.py && git commit -m reword && git push"
+want_code 0 "#2247 the same docstring rewording made by the command's own commit is allowed"
+# The docstring reworded and the code beside it changed still blocks.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$PYDOC_BEFORE" > lib/doc.py && git add lib/doc.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+PYDOC_BOTH='"""Adds numbers.\n\nBoth may be negative.\nNeither may be NaN.\n\nReturns the sum of both.\n"""\n\n\ndef add(a, b):\n    """Add two numbers.\n\n    Both may be negative.\n    Neither may be NaN.\n\n    Returns the sum of both.\n    """\n    return a - b\n'
+( cd "$W" && printf "$PYDOC_BOTH" > lib/doc.py && git add lib/doc.py && git commit -qm both ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 a docstring and a code line changed together still BLOCKS"
+# An ordinary triple quoted string is a value, not a docstring, and still blocks.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'def f():\n    x = 1\n    return """old\n    words"""\n' > lib/s.py && git add lib/s.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf 'def f():\n    x = 1\n    return """new\n    words"""\n' > lib/s.py && git add lib/s.py && git commit -qm bump ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 changing an ordinary triple quoted string still BLOCKS"
+# A file Python cannot parse is judged as before, so a docstring edit in it still blocks.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'def f(:\n    """Old."""\n' > lib/e.py && git add lib/e.py && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf 'def f(:\n    """New."""\n' > lib/e.py && git add lib/e.py && git commit -qm bump ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 a docstring edit in a file that does not parse still BLOCKS"
+# The same triple quoted lines in a Ruby file are judged as before: code.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'def f\n  """Old."""\nend\n' > lib/r.rb && git add lib/r.rb && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf 'def f\n  """New."""\nend\n' > lib/r.rb && git add lib/r.rb && git commit -qm bump ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2247 the same lines in a file that is not Python still BLOCK"
+
 # Mode-only change: the diff has no content lines, which is not the same as
 # having no change to see. Must block.
 W="$(mk_repo)"
@@ -1225,6 +1342,160 @@ STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$MERGE_RULES" STUB_CLAUDE_OUT="$
 want_code 2 "#2028 when the merge cannot be worked out, the whole push is judged"
 in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "when the merge cannot be worked out, main's change is judged too"
 want_stderr "could not set apart" "#2028 the refusal says why main's changes were judged"
+
+# --- claude-config#2258: a mod's byte identical copy of a mod-kit helper is tested by mod-kit ------
+# Every mod keeps copies of mod-kit's helpers at payload/mods/<mod>/hooks/mod-kit/, and the gate
+# refused a new mod for them alone (slack-alert-guard, 2026-11-04, for hold.ts and skew.ts). A copy
+# whose bytes and mode match payload/mods/mod-kit/hooks/<same name> in the tree the push delivers,
+# and which a test under payload/mods/mod-kit/tests/ in that tree imports, is counted as tested.
+# Anything short of that is judged as before, and each narrowing is seen to refuse here.
+mk_modkit_repo() {   # -> a repo whose remote holds mod-kit's hold.ts and its test, and deliver.ts untested
+  local w; w="$(mk_repo)"
+  (
+    cd "$w" || exit 1
+    mkdir -p payload/mods/mod-kit/hooks payload/mods/mod-kit/tests
+    printf 'export const HOLD = 1\n' > payload/mods/mod-kit/hooks/hold.ts
+    printf 'export const DELIVER = 1\n' > payload/mods/mod-kit/hooks/deliver.ts
+    printf "import { HOLD } from '../hooks/hold.ts'\ntest('hold', () => expect(HOLD).toBe(1))\n" > payload/mods/mod-kit/tests/hold.test.ts
+    git add payload
+    git commit -qm "mod-kit"
+    git push -q
+  ) >/dev/null 2>&1
+  printf '%s' "$w"
+}
+# put_copy <repo> <helper> <content> [commit message]: writes the new mod's copy, committed when a
+# message is given.
+put_copy() {
+  (
+    cd "$1" || exit 1
+    mkdir -p payload/mods/newmod/hooks/mod-kit
+    printf '%b' "$3" > "payload/mods/newmod/hooks/mod-kit/$2"
+    if [ -n "${4:-}" ]; then git add "payload/mods/newmod/hooks/mod-kit/$2"; git commit -qm "$4"; fi
+  ) >/dev/null 2>&1
+}
+call_has() {   # <file> <text> <label>
+  if [ -f "$1" ] && grep -qF -- "$2" "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2258 $3: the judge was not shown $2"; fi
+}
+call_lacks() {   # <file> <text> <label>
+  if [ -f "$1" ] && ! grep -qF -- "$2" "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2258 $3: the judge was shown $2 (or never called)"; fi
+}
+COPY=payload/mods/newmod/hooks/mod-kit
+
+# The issue's push: a new mod carrying only an identical copy goes through, with no judge called,
+# and the record names the copy it counted.
+JUDGE_LOG="$TMPROOT/judge-log-2258a"; mkdir -p "$JUDGE_LOG"
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n' "new mod"
+# The control: the copy really is in the commit, so the allow below is not an empty push.
+if git -C "$W" cat-file -e "HEAD:$COPY/hold.ts" 2>/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2258 the fixture committed no copy"; fi
+STUB_CLAUDE_LOG="$JUDGE_LOG" HK_ID=t-2258a run_hook "$W" "git push"
+want_code 0 "#2258 a new mod whose mod-kit copy is byte identical goes through"
+want_row t-2258a nosource "#2258 the identical copy is recorded" "$COPY/hold.ts"
+if [ "$(calls_in "$JUDGE_LOG")" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2258 a push of identical copies alone called the judge"; fi
+
+# One byte different: refused as untested, naming the copy, exactly as before.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 2\n' "new mod"
+run_hook "$W" "git push"
+want_code 2 "#2258 a copy differing by one byte is still refused"
+want_stderr "$COPY/hold.ts" "#2258 the refusal names the differing copy"
+
+# Identical, but no mod-kit test imports that helper: refused.
+W="$(mk_modkit_repo)"; put_copy "$W" deliver.ts 'export const DELIVER = 1\n' "new mod"
+run_hook "$W" "git push"
+want_code 2 "#2258 an identical copy of a helper no mod-kit test imports is still refused"
+
+# Identical, but the same push deletes mod-kit's test: the tree the push delivers has none, so refused.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n'
+( cd "$W" && git rm -q payload/mods/mod-kit/tests/hold.test.ts && git add "$COPY/hold.ts" && git commit -qm "copy, drop test" ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2258 an identical copy is refused when the push removes mod-kit's test of it"
+
+# Identical bytes under another mode (made executable): refused, since it is not the same file.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n'
+( cd "$W" && chmod +x "$COPY/hold.ts" && git add "$COPY/hold.ts" && git commit -qm "new mod" ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2258 an identical copy under a different mode is still refused"
+
+# A mod-kit test importing the helper without its extension, in double quotes, counts the same.
+W="$(mk_modkit_repo)"
+( cd "$W" && printf 'export const BARE = 1\n' > payload/mods/mod-kit/hooks/bare.ts \
+  && printf 'import { BARE } from "../hooks/bare"\n' > payload/mods/mod-kit/tests/bare.test.ts \
+  && git add payload/mods/mod-kit && git commit -qm "bare helper" && git push -q ) >/dev/null 2>&1
+put_copy "$W" bare.ts 'export const BARE = 1\n' "new mod"
+run_hook "$W" "git push"
+want_code 0 "#2258 an identical copy of a helper imported without its extension goes through"
+
+# A symbolic link in mod-kit's hooks is not a helper file, even when the copy is the same link.
+W="$(mk_modkit_repo)"
+( cd "$W" && ln -s hold.ts payload/mods/mod-kit/hooks/alias.ts \
+  && printf "import { HOLD } from '../hooks/alias.ts'\n" > payload/mods/mod-kit/tests/alias.test.ts \
+  && git add payload/mods/mod-kit && git commit -qm "alias" && git push -q \
+  && mkdir -p "$COPY" && ln -s hold.ts "$COPY/alias.ts" && git add "$COPY/alias.ts" && git commit -qm "new mod" ) >/dev/null 2>&1
+if [ "$(git -C "$W" ls-tree HEAD -- "$COPY/alias.ts" | cut -c1-6)" = 120000 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2258 the fixture committed no link copy"; fi
+run_hook "$W" "git push"
+want_code 2 "#2258 a copy of a symbolic link in mod-kit's hooks is still refused"
+
+# mod-kit's own hooks/mod-kit folder is not a copy of anything.
+W="$(mk_modkit_repo)"
+( cd "$W" && mkdir -p payload/mods/mod-kit/hooks/mod-kit && printf 'export const HOLD = 1\n' > payload/mods/mod-kit/hooks/mod-kit/hold.ts \
+  && git add payload/mods/mod-kit/hooks/mod-kit/hold.ts && git commit -qm "self copy" ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2258 a file under mod-kit's own hooks/mod-kit is not counted as a copy"
+
+# Compared in the tree the push DELIVERS: the committed copy differs, and the command's own commit
+# makes it identical, so it goes through; and the other way round it is refused.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 2\n' "wrong copy"
+put_copy "$W" hold.ts 'export const HOLD = 1\n'
+run_hook "$W" "git add $COPY/hold.ts && git commit -qm fix && git push"
+want_code 0 "#2258 a copy the command's commit makes identical goes through"
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n' "right copy"
+put_copy "$W" hold.ts 'export const HOLD = 3\n'
+run_hook "$W" "git add $COPY/hold.ts && git commit -qm drift && git push"
+want_code 2 "#2258 a copy the command's commit makes differ is refused"
+want_stderr "$COPY/hold.ts" "#2258 the refusal names the copy the commit made differ"
+
+# Beside the mod's own code and test: the judge is still called, on the mod's own change, and is
+# never shown the counted copy among the source files or in the diff.
+JUDGE_LOG="$TMPROOT/judge-log-2258b"; mkdir -p "$JUDGE_LOG"
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n'
+( cd "$W" && mkdir -p payload/mods/newmod/tests \
+  && printf 'export const OWN_MOD_MARKER = 1\n' > payload/mods/newmod/hooks/index.ts \
+  && printf "import { OWN_MOD_MARKER } from '../hooks/index.ts'\n" > payload/mods/newmod/tests/index.test.ts \
+  && git add payload/mods/newmod && git commit -qm "new mod with code" ) >/dev/null 2>&1
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+want_code 0 "#2258 a mod with its own tested code and an identical copy passes"
+call_has "$JUDGE_LOG/call.1" "payload/mods/newmod/hooks/index.ts" "the mod's own code is judged"
+call_lacks "$JUDGE_LOG/call.1" "$COPY/hold.ts" "the counted copy is left out of what the judge reads"
+
+# claude-config#2337: when the gate cannot read the tree or git fails part way, an otherwise
+# identical, tested copy counts as nothing and is judged as untested source (refused, as before
+# #2258). A stub git on the path fails one call at a time: STUB_GIT_FAIL names which. The control
+# case runs the same stub with nothing to fail and must still let the copy through, so each refusal
+# below is the failure's doing and not the stub's.
+FAKE_GIT_2337="$TMPROOT/fake-git-2337"; mkdir -p "$FAKE_GIT_2337"
+cat > "$FAKE_GIT_2337/git" <<STUB
+#!/usr/bin/env bash
+case "\${STUB_GIT_FAIL:-}" in
+  tree) [ "\${1:-}" = rev-parse ] && [[ "\$*" == *'HEAD^{tree}'* ]] && exit 128 ;;
+  copy) [ "\${1:-}" = ls-tree ] && [[ "\$*" == *newmod* ]] && exit 128 ;;
+  src)  [ "\${1:-}" = ls-tree ] && [[ "\$*" == *mod-kit/hooks/hold.ts* ]] && [[ "\$*" != *newmod* ]] && exit 128 ;;
+  grep) [ "\${1:-}" = grep ] && exit 128 ;;
+  emptytree) [ "\${1:-}" = rev-parse ] && [[ "\$*" == *'HEAD^{tree}'* ]] && exit 0 ;;
+esac
+exec "$GIT_REAL" "\$@"
+STUB
+chmod +x "$FAKE_GIT_2337/git"
+for mode in none tree copy src grep emptytree; do
+  W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n' "new mod"
+  STUB_GIT_FAIL="$mode" run_hook "$W" "git push" "$FAKE_GIT_2337:$PATH_STUB"
+  if [ "$mode" = none ]; then
+    want_code 0 "#2337 control: the same stub with nothing failing still counts the identical copy"
+  else
+    want_code 2 "#2337 an identical copy counts as nothing when git fails at: $mode"
+    want_stderr "$COPY/hold.ts" "#2337 the copy is judged as untested source when git fails at: $mode"
+  fi
+done
 
 echo
 echo "passed: $pass, failed: $fail"
