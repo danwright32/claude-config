@@ -1504,6 +1504,22 @@ for m in text-repeat text-triple text-prefix; do
     || check "and names $m, pointing it at modkit.pythonText" "$out"
 done
 case "$out" in *clean-asks-text*) check "a mod asking the kit where python holds text passes" "$out" ;; *) check "a mod asking the kit where python holds text passes" ok ;; esac
+# #2150: auto session name stripped the engine's "<mod>: $.noun.member: " prefix from its notices
+# itself, and every other mod showed it to Dan. mod-kit's errorText now says such a failure in words,
+# so a mod reading the prefix by hand fails the run, pointed at errorText; a mod asking errorText,
+# or reading an abandoned command's "$.process.run(x) aborted" as /sleep does, passes.
+M9P="$TMPROOT/m9p"
+mkmodsrc "$M9P" clean-asks-words 'const said = errorText(err, MOD)'
+mkmodsrc "$M9P" clean-reads-aborted 'const ENGINE_REFUSAL = /\$\.[A-Za-z]+\.[A-Za-z]+(?:\([^)]*\))? aborted/'
+mkmodsrc "$M9P" prefix-strip 'const errText = (err: unknown) => errorText(err, MOD).replace(/^[\w-]+: \$\.[\w.]+: /, "")'
+mkmodsrc "$M9P" prefix-match 'const refused = /^scope-modes: \$\.fs\.read: /.test(message)'
+out="$(bash "$SHARED" "$M9P" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod reading the engine prefix off an error by hand fails the run" ok || check "a mod reading the engine prefix off an error by hand fails the run" "exit=$code out=$out"
+for m in prefix-strip prefix-match; do
+  printf '%s\n' "$out" | grep "$m keeps its own engine-prefix" | grep -q 'errorText(err, mod)' && check "and names $m, pointing it at errorText" ok \
+    || check "and names $m, pointing it at errorText" "$out"
+done
+case "$out" in *clean-asks-words*|*clean-reads-aborted*) check "a mod asking errorText, or reading an abandoned command, passes" "$out" ;; *) check "a mod asking errorText, or reading an abandoned command, passes" ok ;; esac
 # #1765: three guards read each file a command reads by hand, looping over the write reader's inputs,
 # and one meeting /dev/stdin or a fifo waited for ever, so the call never ran. Each hand rolled loop
 # fails the run, pointed at inputTexts in the copy of mod-kit's hooks/inputs.ts; a mod handing the

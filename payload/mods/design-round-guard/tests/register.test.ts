@@ -757,6 +757,43 @@ test('a write the reader cannot follow is held when the command names a look cha
   expect(w.ran.length).toBe(1)
 })
 
+// #2171, Dan, 2026-11-04: a write to a variable every assignment gives bare `mktemp` or `mktemp -d`
+// names a new file outside every screen path, so a command reading a screen file into one runs. Every
+// other way the variable may name a screen file is still held, each listed, so a looser guard shows
+// which case it lets through.
+test('#2171: a write to a bare mktemp file runs beside a screen file read, and every other unfollowed write is held', withKit, async ($, on) => {
+  world($, on)
+  for (const command of [
+    'cd /w/slate && T=$(mktemp); git show HEAD:app/page.tsx > "$T"; diff "$T" app/page.tsx',
+    'cd /w/slate && T=$(mktemp); wc -l $(ls app/page.tsx) > "$T"',
+    'cd /w/slate && T="$(mktemp)"; cat app/page.tsx > ${T}',
+    'cd /w/slate && D=$(mktemp -d); git show HEAD:app/page.tsx > "$D"',
+  ])
+    expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  const passed: string[] = []
+  for (const command of [
+    'cd /w/slate && ls app/*.tsx > list; T=$(head -1 list); echo x > "$T"',
+    'cd /w/slate && OUT=$(ls app/*.tsx | head -1); echo x > "$OUT"',
+    'cd /w/slate && T=$(mktemp -t x); cat app/page.tsx > "$T"',
+    'cd /w/slate && T=$(mktemp app/x.XXXX); cat app/page.tsx > "$T"',
+    'cd /w/slate && T=$(mktemp -p app); cat app/page.tsx > "$T"',
+    'cd /w/slate && T=$(mktemp); T=$(head -1 list); cat app/page.tsx > "$T"',
+    'cd /w/slate && TMPDIR=app T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && PATH=./bin:$PATH; T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && path=(./bin $path); T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && path+=(./bin); T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && typeset path; T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && mktemp(){ echo app/page.tsx; }; T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && T=$(mktemp); T=app/page.tsx : ; cat app/page.tsx > "$T"',
+    'cd /w/slate && wc -l $(ls app/page.tsx) > "$(mktemp)"',
+    'cd /w/slate && T=`mktemp`; cat app/page.tsx > "$T"',
+    'cd /w/slate && T=$(mktemp); read T < list; cat app/page.tsx > "$T"',
+    'cd /w/slate && cat app/page.tsx > "$T"',
+  ])
+    if (!refusalOf(await call($, { tool: 'Bash', command }))) passed.push(command)
+  expect(passed).toEqual([])
+})
+
 test('shell writes to a look changing file are caught: redirects, sed in place, copies, removals and inline scripts', withKit, async ($, on) => {
   const w = world($, on)
   for (const command of [
@@ -1258,8 +1295,9 @@ test('#1010: a Next.js dynamic segment is followed as the folder it names, relat
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect([command, why.includes('issue #978 in slate') && why.includes(shown) && !why.includes('could not be followed')]).toEqual([command, true])
   }
-  // The edit tools were never in doubt, and once Dan answers, the shell write goes through.
-  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/src/app/booking/[SO_ID]/page.tsx', content: 'x' }))).toContain('issue #978 in slate')
+  // The edit tools were never in doubt, and once Dan answers, the shell write goes through. The Write
+  // draws something, since one changing only logic goes ahead unasked (#2294).
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/src/app/booking/[SO_ID]/page.tsx', content: 'export default function P() { return <p>x</p> }\n' }))).toContain('issue #978 in slate')
   await askSkip($, w, refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/src/app/booking/[SO_ID]/page.tsx' })), SKIP_YES)
   expect(refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/src/app/booking/[SO_ID]/page.tsx' }))).toBe('')
   // A bracket that is a pattern is no route segment: since #1015 its folder is followed, so it is held
@@ -1680,15 +1718,22 @@ test("#1138: a mod hook file: a logic edit outside its JSX passes unasked; its J
     ["kind: 'left-rule'", "kind: 'box'"],
   ]
   for (const [from, to] of drawn) expect(refusalOf(await call($, edit(from, to)))).toContain(SKIP_QUESTION)
-  // The same logic edit in an app's screen file is still asked: only a mod's hook file is read so.
-  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/app/page.tsx')))).toContain(SKIP_QUESTION)
-  // So is an app's own hooks folder under a folder named mods, which no plugin.json beside it makes a
-  // Claude Code mod (lessons review).
-  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/src/mods/shop/hooks/useCart.tsx')))).toContain(SKIP_QUESTION)
+  // The same logic edit in an app's screen file was asked until #2294: it now goes ahead by the app
+  // reading (rules.ts logicOnlyChange), never the mod one, so it is kept as an automatic pass, which a
+  // mod hook file's pass never is. The mod one's comment edit above would be held there (Tailwind
+  // reads comments), and so would its quoted 'y'.
+  expect(Object.keys(w.store).some(k => k.startsWith('auto:'))).toBe(false)
+  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/app/page.tsx')))).toBe('')
+  // So does an app's own hooks folder under a folder named mods, which no plugin.json beside it makes
+  // a Claude Code mod (lessons review): read as an app's file, never a mod's.
+  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/src/mods/shop/hooks/useCart.tsx')))).toBe('')
+  expect(Object.keys(w.store).filter(k => k.startsWith('auto:')).length).toBe(2)
+  expect(refusalOf(await call($, edit("if (!sameReply(e.props.text, 'x')) return next(e)", "if (!sameReply(e.props.text, 'y')) return next(e)", '/w/slate/app/page.tsx')))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(5)
   // A mod hook file whose text the reader cannot follow is asked about, never passed.
   w.files[MOD_HOOK] = MOD_TEXT.replace('// Whether the reply is the one offered.', 'const unclosed = <Box>')
   expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b')))).toContain(SKIP_QUESTION)
-  expect(w.ran.length).toBe(3)
+  expect(w.ran.length).toBe(5)
 })
 
 // #1248: a logic line added directly above a line that draws was asked about for that untouched line.
@@ -1892,6 +1937,50 @@ test("#1841: a toast reworded in a mod's .ts hook file is asked about, by an Edi
   expect(why).toContain(SKIP_QUESTION)
   expect(why).toContain('was undone')
   expect(w.files[GUARD_HOOK]).toBe(now)
+})
+
+// #2294: Dan, 2026-11-05: "If you're confident that nothing on screen changes don't ask me to make a
+// decision and just skip design rounds automatically". Decided by the guard's own reading of the edit
+// (rules.ts logicOnlyChange), never by what a session says, and each pass is recorded with why.
+test('#2294: a logic only edit to an app page goes through unasked and is recorded as an automatic pass; text, a look, unreadable text and a failed record are still held', withKit, async ($, on) => {
+  const w = world($, on, { files: { [RESULT]: RESULT_TEXT } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: RESULT, old_string: from, new_string: to })
+  expect(refusalOf(await call($, edit('}: Props)', '}: ResultProps)')))).toBe('')
+  expect(w.ran.length).toBe(1)
+  const autos = Object.entries(w.store).filter(([k]) => k.startsWith('auto:'))
+  expect(autos.length).toBe(1)
+  expect(autos[0]?.[1]).toMatchObject({ kind: 'no-screen-change', tool: 'Edit', files: ['src/app/my-offers/result/page.tsx'], subjects: ['issue #978 in slate'] })
+  expect(String((autos[0]?.[1] as { why?: string }).why)).toContain('#2294')
+  // Nothing asked, no card, no answer for the issue, and Dan's own passes are never written.
+  expect(w.asked).toEqual([])
+  expect(w.cards).toEqual([])
+  expect(w.store['record:/w/slate|issue:978']).toBeUndefined()
+  expect(Object.keys(w.store).some(k => k.startsWith('pass:'))).toBe(false)
+  // Held: a new message, a look word, text the reader cannot follow.
+  expect(refusalOf(await call($, edit('  return (', "  if (!slots) throw new Error('No slots to book')\n  return (")))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('  return (', '  const theme = pick(slots)\n  return (')))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('  return (', "  const a = 'x\n  return (")))).toContain(SKIP_QUESTION)
+  // An import swapped for another is held even split into two runs of lines, one taking the old
+  // import away at the top and one adding the new at the end (lessons review of #2294): the
+  // logic reading judges the whole change, never a run at a time.
+  const page = String(w.files[RESULT])
+  const swapped = `${page.replace("import { BookingCalendar } from '@/components/BookingCalendar'\n", '')}import { BookingCalendar } from '@/components/OtherCalendar'\n`
+  expect(refusalOf(await call($, { tool: 'Write', file_path: RESULT, content: swapped }))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+  // A pass that cannot be recorded is not made: held and asked, as before.
+  w.ctl.storeSetFails = true
+  expect(refusalOf(await call($, edit('}: Props)', '}: PageProps)')))).toContain(SKIP_QUESTION)
+  w.ctl.storeSetFails = false
+  expect(w.ran.length).toBe(1)
+})
+
+test('#2294: a new refusal message in a mod hook file is still held (the #2173 shape), however little else changes', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: GUARD_HOOK, old_string: from, new_string: to })
+  expect(refusalOf(await call($, edit('  if (what.length > 3)', "  if (!what) return { deny: 'Blocked: there was nothing to check.' }\n  if (what.length > 3)")))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('Blocked a command that would', 'Blocked a command that may')))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(0)
+  expect(Object.keys(w.store).some(k => k.startsWith('auto:'))).toBe(false)
 })
 
 // #1925: the #1904 builder's Edit adding "or wording" to the skip question's answers in the guard's own

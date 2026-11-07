@@ -109,11 +109,30 @@ const spoolNote = (r: ModKitRun, home: string | undefined): boolean =>
   r.args[0]?.word === 'note'
 
 /**
+ * The one file a quoted pattern handed to a script file names (#2255), or undefined. mod-kit marks an
+ * argument `quoted` when every pattern character in it is quoted or after a backslash and nothing in it
+ * is expanded, so the shell matched it against no file and the script is handed its characters as
+ * written: a probe's search text, a regex, a finding. It is judged as the one file those characters
+ * name, as every other word a script is handed is (#1586), and as the design round guard reads it
+ * (#1951); what a script then matches with it is its own choice, unread, as with a folder it is handed,
+ * which is not judged at all. Only a script file: a tool expands its own operands (#1815). Never a
+ * group (`{a,b}`), which names several files, nor a pattern character before the last slash, where the
+ * folder mod-kit gives is not the one the name sits in. Anything else stays a pattern.
+ */
+const quotedName = (r: ModKitRun, a: ModKitRun['args'][number]): string | undefined => {
+  if (!a.quoted || !a.folder || r.tool) return undefined
+  const cut = a.word.lastIndexOf('/')
+  if (/[{}]/.test(a.word) || /[*?[\]]/.test(a.word.slice(0, Math.max(cut, 0)))) return undefined
+  return `${a.folder.replace(/\/+$/, '')}/${a.word.slice(cut + 1)}`
+}
+
+/**
  * Every file a command writes that could add lines to a source or test file: a redirect, a copy or an
  * in place edit (`files`), an emptying (`changes` truncate), git writing a path (`byGit` write), a
  * script's arguments (`runs`), and a program's own targets (`unnamed`). A removal, a stamp, a new
  * folder and a mode change add no lines, so they are not judged; nor is a folder handed to a script.
- * Nor are the words of a findings note (#2254), given `home`: see spoolNote.
+ * Nor are the words of a findings note (#2254), given `home`: see spoolNote. A quoted pattern handed to
+ * a script file is judged as the one file its characters name (#2255): see quotedName.
  */
 export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   const out: ShellTarget[] = []
@@ -140,7 +159,9 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   for (const r of w.runs ?? []) {
     if (spoolNote(r, home)) continue
     for (const a of r.args) {
+      const literal = a.path ? undefined : quotedName(r, a)
       if (a.path) add({ word: a.word, path: a.path })
+      else if (literal) add({ word: a.word, path: literal })
       else if (a.folder) {
         if (mayBeSource(a.word)) add({ word: a.word, unread: `${a.word} is a pattern handed to ${r.what}`, folder: a.folder })
       } else if (mayBeSource(a.word) && !a.unexpanded) add({ word: a.word, unread: `${r.what} is handed ${a.word}, built as the command runs` })

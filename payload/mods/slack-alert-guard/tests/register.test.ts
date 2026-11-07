@@ -2,11 +2,12 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVE, CHANGE, HEADER, wordingKey } from '../hooks/rules.ts'
+import { APPROVE, CHANGE, HEADER, SCAN_MS, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
+import { readsAsSend } from './send-wording.ts'
 
 // The Slack alert guard (claude-config#2242) in a session. Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -60,6 +61,8 @@ const STORE = `${HOME}/.claude/plugins/store/slack-alert-guard_inline-ab12cd34ef
 const ALERT = '/w/app/lib/alert.ts'
 const ALERT_TEXT = 'export const alert = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: JSON.stringify({ text: `Deploy ${id} failed` }) })\n'
 const PLAIN = '/w/app/lib/date.ts'
+// The repository the files above are in, as git names it.
+const REPO = '/w/app'
 
 type Asked = { questions: { question: string; header: string; options: { label: string; description?: string }[]; multiSelect: boolean }[]; metadata?: Record<string, unknown> }
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
@@ -67,18 +70,46 @@ const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isSt
 const world = (engine: Engine, on: On, init: { files?: Record<string, string> } = {}) => {
   const files: Record<string, string> = { [ALERT]: ALERT_TEXT, [PLAIN]: 'export const x = 1\n', ...(init.files ?? {}) }
   const store: Record<string, unknown> = {}
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '' }
+  // gitFails: git is killed and exits nonzero with this on stderr (as at its timeoutMs); gitThrows:
+  // git cannot be run at all, so the call rejects (a hook that throws is skipped, and nothing answers);
+  // gitSlow: the search answers, but only after the clock has moved past the scan's deadline.
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0 }
+  // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
+  // guard that never searched.
+  const gits: { argv: string[]; timeoutMs?: number }[] = []
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
   const dialog: { answer?: string; afk?: boolean } = {}
   const cards: Record<string, unknown>[] = []
   const toasts: string[] = []
-  mock.clock(on, { now: T0 })
+  const clock = mock.clock(on, { now: T0 })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
   on('session.cwd', () => ({ value: '/w/app' }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
   on('process.run', async ($, e) => {
     const [cmd, method, raw] = e.argv.map(String)
+    // git, standing in over the files above: one repository at /w/app, searched as git grep does.
+    if (cmd === 'git') {
+      const argv = e.argv.map(String)
+      gits.push({ argv, timeoutMs: e.init?.timeoutMs })
+      if (ctl.gitThrows) throw new Error('git could not be started')
+      if (ctl.gitFails) return { value: { exitCode: 143, stdout: '', stderr: `${ctl.gitFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      const dir = argv[2] ?? ''
+      const inRepo = dir === REPO || dir.startsWith(`${REPO}/`)
+      if (argv[3] === 'rev-parse') {
+        if (!inRepo) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
+        // As git prints it: the top folder, then the folder below it ending in a slash, empty at the top.
+        return ok(`${REPO}\n${dir === REPO ? '' : `${dir.slice(REPO.length + 1)}/`}\n`)
+      }
+      if (argv[3] === 'grep') {
+        if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
+        const patterns = argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [new RegExp(a, 'i')] : []))
+        const hits = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && patterns.every(re => re.test(files[p] ?? '')))
+        if (!hits.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+        return ok(hits.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''))
+      }
+      throw new Error(`unexpected git command: ${argv.join(' ')}`)
+    }
     if (cmd === '__modkit' && method === 'writes') {
       const input = JSON.parse(String(raw)) as { command: string; cwd: string; home: string }
       return ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home)))
@@ -90,7 +121,8 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     }
     throw new Error(`unexpected command: ${e.argv.join(' ')}`)
   })
-  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
+  // A folder exists while any file is in it.
+  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined || Object.keys(files).some(p => p.startsWith(`${e.path}/`)) }) as never)
   on('fs.read', ($, e) => {
     if (ctl.unreadable === e.path) throw new Error(`EACCES: ${e.path}`)
     const t = files[e.path]
@@ -132,7 +164,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (tool === 'Write') files[String(input.file_path)] = String(input.content)
     return { result: 'written', text: 'written' } as never
   })
-  return { files, store, ctl, ran, asked, dialog, cards, toasts }
+  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits }
 }
 type W = ReturnType<typeof world>
 
@@ -187,6 +219,11 @@ test('new wording in a Slack alert is held until Dan approves the message as Sla
   expect(w.asked[0]?.questions[0]?.question).toContain(SHOWN)
   expect(w.asked[0]?.questions[0]?.header).toBe(HEADER)
   expect(w.asked[0]?.questions[0]?.options.map(o => o.label)).toEqual([APPROVE, CHANGE])
+  // Approving posts nothing (claude-config#2284), so nothing Dan reads in the dialog may ask to
+  // post or send: not the question above the message, not either answer.
+  const shown = w.asked[0]?.questions[0]
+  expect(readsAsSend((shown?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
+  for (const o of shown?.options ?? []) expect(readsAsSend(`${o.label} ${o.description ?? ''}`)).toBe(false)
   expect(contextOf(a)).toContain('again')
   expect(w.store[wordingKey('Deploy ${id} failed on production')]).toBeDefined()
   const again = await call($, REWORD)
@@ -294,6 +331,122 @@ test('a shell write into a Slack posting file is held until Dan approves it, the
   await ask($, w, why, APPROVE, { rendered: 'Disk is full on db-1' })
   expect(refusalOf(await call($, cmd))).toBe('')
   expect(w.ran.map(x => x.tool)).toEqual(['Bash', 'Bash'])
+})
+
+// claude-config#2248: the wording lives in a template, and a different file sends it to Slack.
+const TEMPLATE = '/w/app/lib/templates/deploy.ts'
+const TEMPLATE_TEXT = 'export const deployFailed = (id: string) => `Deploy ${id} failed`\n'
+const SENDER = '/w/app/lib/notify.ts'
+const SENDER_TEXT =
+  "import { deployFailed } from './templates/deploy'\nexport const notify = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: deployFailed(id) }) })\n"
+const RETEMPLATE = { tool: 'Edit', file_path: TEMPLATE, old_string: 'Deploy ${id} failed', new_string: 'Deploy ${id} failed on production' }
+const sent = { files: { [TEMPLATE]: TEMPLATE_TEXT, [SENDER]: SENDER_TEXT } }
+const grepped = (w: W) => w.gits.filter(g => g.argv[3] === 'grep').length
+
+test('new wording in a template that another file sends to Slack is held, naming the sender, until Dan approves it', withKit, async ($, on) => {
+  const w = world($, on, sent)
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(TEMPLATE)
+  expect(why).toContain(`which ${SENDER} sends to Slack`)
+  expect(why).toContain('Deploy ${id} failed on production')
+  expect(w.ran).toEqual([])
+  await ask($, w, why, APPROVE)
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('a text template a script reads and sends is held too, by a Write and by a shell write', withKit, async ($, on) => {
+  const TXT = '/w/app/templates/backup.txt'
+  const PY = '/w/app/jobs/backup.py'
+  const w = world($, on, { files: { [TXT]: 'Backup is late\n', [PY]: 'from slack_sdk import WebClient\nbody = open("templates/backup.txt").read()\n' } })
+  const why = refusalOf(await call($, { tool: 'Write', file_path: TXT, content: 'Backup is late on db-1\n' }))
+  expect(why).toContain('Backup is late on db-1')
+  expect(why).toContain(`which ${PY} sends to Slack`)
+  const shell = refusalOf(await call($, { tool: 'Bash', command: `printf 'Backup failed\\n' > ${TXT}` }))
+  expect(shell).toContain('shell command')
+  expect(shell).toContain(`which ${PY} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
+test('a template no file sends passes, after a search that ran; so does a file outside any repository', withKit, async ($, on) => {
+  const DIGEST = '/w/app/lib/templates/digest.ts'
+  const w = world($, on, { files: { ...sent.files, [DIGEST]: 'export const digest = `Nightly digest ready`\n' } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'Nightly digest ready', new_string: 'Nightly digest is ready' }))).toBe('')
+  expect(grepped(w)).toBe(1)
+  // Every git call is bounded by the scan's deadline.
+  expect(w.gits.every(g => typeof g.timeoutMs === 'number' && g.timeoutMs > 0 && g.timeoutMs <= SCAN_MS)).toBe(true)
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/elsewhere/messages.ts', content: 'export const m = "Disk is full"\n' }))).toBe('')
+  // An edit touching no wording never searches at all.
+  const before = w.gits.length
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: TEMPLATE, old_string: 'id: string', new_string: 'deployId: string' }))).toBe('')
+  expect(w.gits.length).toBe(before)
+  expect(w.ran.length).toBe(3)
+})
+
+// Pivot, 2026-11-06: a project's CLAUDE.md named an engine file and a Slack webhook secret, and a
+// workflow's comment named a test file, so ordinary code edits to both were held as alert wording.
+test('a prose file, or a comment, that names a template and mentions Slack does not make a sender', withKit, async ($, on) => {
+  const USAGE = '/w/app/src/turn-usage.ts'
+  const USAGE_TEXT = 'export const insertUsage = "insert into turn_usage (turn) values (?)"\n'
+  const NOTES = '/w/app/CLAUDE.md'
+  const YML = '/w/app/.github/workflows/deploy.yml'
+  const COMMENTED = '# turn-usage.ts keeps the cost; failures post with SLACK_ALERTS_WEBHOOK\nsteps:\n  - run: curl -X POST "$SLACK_ALERTS_WEBHOOK" -d "{}"\n'
+  const w = world($, on, {
+    files: {
+      [USAGE]: USAGE_TEXT,
+      [NOTES]: 'Usage lives in `src/turn-usage.ts`. Alerts post through `SLACK_ALERTS_WEBHOOK` to Slack.\n',
+      [YML]: COMMENTED,
+    },
+  })
+  const edit = { tool: 'Edit', file_path: USAGE, old_string: 'insert into turn_usage (turn) values (?)', new_string: 'insert into turn_usage (turn, run) values (?, ?)' }
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('a sender in a language the guard does not list as code still sends', withKit, async ($, on) => {
+  const VUE = '/w/app/lib/notify.vue'
+  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, [VUE]: SENDER_TEXT } })
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(`which ${VUE} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
+test('a workflow that names a template in a step, not a comment, still sends it', withKit, async ($, on) => {
+  const MSG = '/w/app/alerts/late.txt'
+  const YML = '/w/app/.github/workflows/late.yml'
+  const w = world($, on, {
+    files: {
+      [MSG]: 'Backup is late\n',
+      [YML]: '# posts the late notice\nsteps:\n  - run: curl -X POST "$SLACK_ALERTS_WEBHOOK" --data-binary @alerts/late.txt\n',
+    },
+  })
+  const why = refusalOf(await call($, { tool: 'Write', file_path: MSG, content: 'Backup is late on db-1\n' }))
+  expect(why).toContain(`which ${YML} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
+test('a search that cannot finish, runs past its deadline, or meets an unreadable file holds the edit, saying why', withKit, async ($, on) => {
+  const w = world($, on, sent)
+  w.ctl.gitFails = 'timed out after 3000ms'
+  const failed = refusalOf(await call($, RETEMPLATE))
+  expect(failed).toContain('could not check')
+  expect(failed).toContain('timed out after 3000ms')
+  w.ctl.gitFails = ''
+  w.ctl.gitThrows = true
+  const unrun = refusalOf(await call($, RETEMPLATE))
+  expect(unrun).toContain('could not check')
+  expect(unrun).toContain('could not be searched')
+  w.ctl.gitThrows = false
+  w.ctl.gitSlow = SCAN_MS + 1
+  const late = refusalOf(await call($, RETEMPLATE))
+  expect(late).toContain('could not check')
+  expect(late).toContain(`${SCAN_MS / 1000} seconds`)
+  w.ctl.gitSlow = 0
+  w.ctl.unreadable = SENDER
+  const unread = refusalOf(await call($, RETEMPLATE))
+  expect(unread).toContain('could not check')
+  expect(unread).toContain(SENDER)
+  expect(w.ran).toEqual([])
 })
 
 test('the calls waiting on Dan are dropped at session end', withKit, async ($, on) => {

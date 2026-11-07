@@ -226,6 +226,9 @@ INPUTS="$TMPROOT/inputs"
 mkdir -p "$INPUTS"
 : > "$INPUTS/1-empty"
 printf '{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"gh issue create --title t --body b && gh run watch 1 -i 5 && rtk init -g && git branch -D x && gh pr comment 1 --body b && log show"}}' "$DECOY" > "$INPUTS/2-command"
+# A Slack send, which slack-drafts-only-gate.sh lets past its quick exit; every other hook reads it as
+# a tool it does not judge (#2302).
+printf '{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"mcp__claude_ai_Slack__slack_send_message","cwd":"%s","tool_input":{"channel_id":"C0","message":"m"}}' "$DECOY" > "$INPUTS/3-slack-send"
 # cat alone on PATH, so a hook can read its payload at all, and nothing else (dirname least of all).
 CAT_ONLY="$TMPROOT/cat-only"
 mkdir -p "$CAT_ONLY"

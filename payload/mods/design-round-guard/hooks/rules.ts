@@ -651,6 +651,48 @@ export const outputTrusted = (word: string): boolean => {
   return inner.length > 0 && inner.every((cmd) => /^\s*git\s+(-C\s+[^\s;&|`()<>]+\s+)?rev-parse(\s+[^;&|\n`$()<>]*)?\s*$/.test(cmd))
 }
 
+// The two values of a variable Dan trusts to name a new file outside every screen path (#2171).
+const FRESH_TEMP = new Set(['$(mktemp)', '$(mktemp -d)'])
+// A builtin that sets the variable its argument names, so a name built at run time may be any one.
+const SETS_NAMED = /^(?:export|declare|typeset|local|readonly|read|printf|getopts|mapfile|readarray|unset|let)$/
+/**
+ * Whether a write to a variable alone (`$T`, `${T}`) whose every value mod-kit's reader gives is
+ * `$(mktemp)` or `$(mktemp -d)` names a new file outside every screen path (#2171, Dan, 2026-11-04,
+ * picker answer: trust bare mktemp the way git rev-parse is trusted). A template, -t, -p, any other
+ * flag and backticks are not trusted. Stricter than his rule: nothing is trusted where the command
+ * could make mktemp print another name, or give the variable a value the reader did not give. It is
+ * read with its quotes and backslashes taken out, as zsh takes `"mktemp"(){` and `m\ktemp(){` for a
+ * function named mktemp, and it must not mention TMPDIR or PATH (zsh's `path` array included, set,
+ * appended, by element, or named to `typeset`, `read`, `set` or another setting builtin), define any
+ * function, name mktemp anywhere but those two values, hash a command, use `$'...'`, hand a setting
+ * builtin a name built at run time (`export ${V}DIR=`), or assign the variable anywhere any other
+ * value (a prefix assignment, `T=x cmd`, which the reader drops, an append, an element).
+ */
+export const freshTemp = (word: string, values: readonly string[], command: string): boolean => {
+  const alone = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/.exec(word)
+  if (!alone || values.length === 0 || !values.every((v) => FRESH_TEMP.has(v))) return false
+  if (command.includes("$'")) return false
+  const text = command.replace(/["'\\]/g, '')
+  if (/TMPDIR|\bPATH\b|(?:^|[^A-Za-z0-9_$-])path(?:\[[^\]]*\])?\+?=|\(\s*\)|\bfunctions?\b|\bhash\b|\balias\b/.test(text)) return false
+  if (/mktemp/.test(text.replace(/\$\(mktemp(?: -d)?\)/g, ''))) return false
+  for (const part of text.split(/[;&|\n]/)) {
+    const words = part.trim().split(/\s+/)
+    let i = 0
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++
+    if (!SETS_NAMED.test(words[i] ?? '') && words[i] !== 'set') continue
+    // zsh's path array is PATH: `typeset path`, `read -A path` or `set -A path` may change it.
+    if (words.slice(i + 1).some((w) => w.split(/[=[]/)[0] === 'path')) return false
+    if (words[i] === 'set') continue
+    if (words.slice(i + 1).some((w) => (w.split('=')[0] as string).includes('$'))) return false
+  }
+  const name = (alone[1] ?? alone[2]) as string
+  for (const a of text.matchAll(new RegExp(`(?:^|[^A-Za-z0-9_])${name}(\\[[^\\]]*\\])?(\\+?)=`, 'g'))) {
+    if (a[1] || a[2]) return false
+    if (!/^\$\(mktemp(?: -d)?\)(?=$|[\s;&|)])/.test(text.slice((a.index ?? 0) + a[0].length))) return false
+  }
+  return true
+}
+
 /**
  * Whether a file name the shell expands as a pattern may name a look changing file (#1015): `look`
  * when some name it can expand to is one (`[t]ailwind.config.ts`, `app/[t]okens.json`, `page.ts[x]`,
@@ -1078,6 +1120,17 @@ export const changedSpan = (before: string, after: string): { at: number; before
 }
 
 /**
+ * The lines a change touches in one of its two texts, from `at` (changedSpan's) to `end`, that text's
+ * end of the change: ending where the change ends, never on the unchanged line after them (#1248).
+ * Where the change only adds to the other text, none, an empty span where the lines go.
+ */
+const linesTouched = (text: string, at: number, end: number): Span => {
+  const from = text.lastIndexOf('\n', at - 1) + 1
+  const nl = end === at ? from : text[end - 1] === '\n' ? end - 1 : text.indexOf('\n', end)
+  return [from, nl < 0 ? text.length : nl]
+}
+
+/**
  * Whether changing a mod's hook file (isModHook) from `before` to `after` changes only logic, by what
  * the file draws (#1138): every line the change touches (changedSpan, ending where the change ends,
  * never on the unchanged line after it, #1248), in both texts, lies outside every JSX element
@@ -1106,12 +1159,7 @@ const modHookReading = (before: string, after: string): { verdict: 'logic' | 'wo
   ] as const) {
     const spans = sourceSpans(text)
     if (!spans) return undefined
-    // The lines the change touches in this text, ending where it ends, never on the unchanged line
-    // after them (#1248). Where it only adds to the other text, none, so all this text is asked is
-    // whether an element spans the place the lines go.
-    const from = text.lastIndexOf('\n', span.at - 1) + 1
-    const nl = end === span.at ? from : text[end - 1] === '\n' ? end - 1 : text.indexOf('\n', end)
-    const to = nl < 0 ? text.length : nl
+    const [from, to] = linesTouched(text, span.at, end)
     lines.push([from, to])
     if (spans.jsx.some(([a, b]) => a < to && from < b)) verdict = 'drawn'
     let shown = ''
@@ -1215,6 +1263,107 @@ export const commentOnlyChange = (before: string, after: string, jsx: boolean): 
   const was = withoutComments(before, jsx)
   return was !== null && was === withoutComments(after, jsx)
 }
+
+// The words an app's look is spelled in outside its JSX (#2294): class helpers, style objects and
+// themes, the design tokens, CSS's own property names, and the colours spelled as words. Read on each
+// part of a camelCase name (`buttonClassName`, `twMerge`), so a line naming any of them is held, as a
+// hold costs Dan one answer and a pass a look he never saw.
+const APP_LOOK_WORDS = new Set(
+  'class classes classname cls cn clsx cva tw twmerge css sx style styles styled theme themes palette color colors colour colours variant variants tone tones size sizes token tokens spacing font fonts weight bold italic underline bg background border borders shadow radius rounded padding margin gap width height opacity animate animation animations transition motion align justify flex grid display position overflow cursor hex rgb hsl icon icons'.split(
+    ' ',
+  ),
+)
+// What stands before a string naming a module: `from`, `import`, or a dynamic `import(`, never a
+// property or a call named from (`Array.from(`, `from(`).
+const MODULE_BEFORE = /(?:^|[^\w$.])(?:from\s*|import\s*\(\s*|import\s*)$/
+// A module imported for what loading it does, with no name taken from it (`import './setup'`).
+const BARE_IMPORT = /(?:^|[\n;])\s*import\s*$/
+// A stylesheet, which changes the page with no word on it.
+const STYLE_MODULE = /\.(css|scss|sass|less|styl|stylus|pcss|postcss)([?#].*)?$/i
+
+type AppReading = { spans: NonNullable<ReturnType<typeof sourceSpans>>; module: Set<number>; modules: string[]; shown: string[] }
+
+// What a React screen file shows by its text, for logicOnlyChange: the modules it imports (each as
+// `bare|name` or `named|name`), which of its strings name one, and, in order, every part that can be
+// on screen or read by Tailwind: each comment, string, template part and JSX element, and each number
+// and true or false in its code. Null for text the reader cannot follow (sourceSpans).
+const appReading = (text: string): AppReading | null => {
+  const spans = sourceSpans(text)
+  if (!spans) return null
+  const module = new Set<number>()
+  const modules: string[] = []
+  spans.strings.forEach(([a, b], k) => {
+    if (text[a - 1] !== "'" && text[a - 1] !== '"') return
+    const head = text.slice(Math.max(0, a - 81), a - 1)
+    if (!MODULE_BEFORE.test(head)) return
+    module.add(k)
+    modules.push(`${BARE_IMPORT.test(head) ? 'bare' : 'named'}|${text.slice(a, b)}`)
+  })
+  const parts: [number, string][] = []
+  for (const [a, b] of spans.comments) parts.push([a, `comment ${text.slice(a, b)}`])
+  spans.strings.forEach(([a, b], k) => {
+    if (!module.has(k)) parts.push([a, `string ${text.slice(a, b)}`])
+  })
+  for (const [a, b] of spans.jsx) parts.push([a, `jsx ${text.slice(a, b)}`])
+  // The code alone: comments, strings and JSX blanked, so a number there is one the code holds.
+  const code = text.split('')
+  for (const [a, b] of [...spans.comments, ...spans.strings, ...spans.jsx]) for (let i = a; i < b; i++) code[i] = ' '
+  for (const m of code.join('').matchAll(/[A-Za-z_$][\w$]*|\.?\d[\w.]*/g)) if (/^\.?\d/.test(m[0]) || m[0] === 'true' || m[0] === 'false') parts.push([m.index ?? 0, `code ${m[0]}`])
+  parts.sort((x, y) => x[0] - y[0] || (x[1] < y[1] ? -1 : 1))
+  return { spans, module, modules, shown: parts.map(p => p[1]) }
+}
+
+/**
+ * Whether changing an app's React screen file from `before` to `after` changes only its logic, read by
+ * the guard from the edit itself and never from a session's word (#2294, Dan, 2026-11-05: "If you're
+ * confident that nothing on screen changes don't ask me to make a decision and just skip design rounds
+ * automatically"). True only when both texts can be read (sourceSpans) and:
+ * - on every line the change touches (changedSpan, linesTouched), in both texts: no JSX element, no
+ *   string but a module's name, no template literal, no colour spelled out (MOD_LOOK_LITERAL), and,
+ *   comments aside, no word an app's look is spelled in (APP_LOOK_WORDS);
+ * - across the whole file, every comment (Tailwind reads them, #1341), string, JSX element, number and
+ *   true or false reads the same, in the same order;
+ * - no stylesheet or bare side effect import comes or goes, and no import is swapped for another
+ *   (both one added and one taken away), since that may change a component.
+ * Identifiers and logic can still decide which element renders; the issue allows those.
+ */
+export const logicOnlyChange = (before: string, after: string): boolean => {
+  if (before === after) return false
+  const was = appReading(before)
+  const now = appReading(after)
+  if (!was || !now) return false
+  const span = changedSpan(before, after)
+  for (const [text, r, end] of [
+    [before, was, span.before],
+    [after, now, span.after],
+  ] as const) {
+    const [from, to] = linesTouched(text, span.at, end)
+    const over = ([a, b]: Span) => a < to && from < b
+    if (r.spans.jsx.some(over)) return false
+    if (r.spans.strings.some((s, k) => !r.module.has(k) && over(s))) return false
+    let shown = ''
+    for (let i = from; i < to; i++) if (!r.spans.comments.some(([a, b]) => a <= i && i < b)) shown += text[i]
+    if (shown.includes('`') || shown.includes('${') || MOD_LOOK_LITERAL.test(shown)) return false
+    for (const w of shown.match(/[A-Za-z]+/g) ?? [])
+      for (const part of w.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')) if (APP_LOOK_WORDS.has(part) || APP_LOOK_WORDS.has(w.toLowerCase())) return false
+  }
+  if (JSON.stringify(was.shown) !== JSON.stringify(now.shown)) return false
+  // The modules imported, as a multiset: what came and what went.
+  const left = [...now.modules]
+  const removed: string[] = []
+  for (const m of was.modules) {
+    const k = left.indexOf(m)
+    if (k < 0) removed.push(m)
+    else left.splice(k, 1)
+  }
+  const changed = [...left, ...removed]
+  if (left.length && removed.length) return false
+  return !changed.some(m => m.startsWith('bare|') || STYLE_MODULE.test(m.slice(m.indexOf('|') + 1)))
+}
+
+/** An automatic pass of a logic only edit (#2294), kept with the call: what it let through, and why. */
+export const autoPassWhy = (files: readonly string[]): string =>
+  `The guard read this edit to ${listed(files)} itself and found it changes only logic: no JSX, text, comment, number, true or false, style word, stylesheet or swapped import. So this guard let it through with no design round and nothing asked (#2294); another check may still have refused it.`
 
 /**
  * What a refusal says of a mod hook file a shell command writes that could not be read before it ran
