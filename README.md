@@ -6219,14 +6219,17 @@ SDK, a Slack env setting, or a send helper named for Slack, called or imported, 
 template such a file sends (below). A Write, Edit or
 MultiEdit there that adds message text, changes it or takes it away is refused. Only text a Slack
 send builds counts (#2361, #2364, #2290, #2287): a test file (a `.test.` or `.spec.` file, a `_test`
-or `test_` one, a `test-*.sh` suite, or anything under a test or mock folder) and a doc send nothing,
+or `test_` one, a `test-*.sh` suite, or anything under a test or mock folder) and a doc send
+nothing,
 so neither is held nor read as a sender; a string handed to a query builder call (`.select(`,
-`.eq(`, `.order(` and the like, as a direct argument, never inside a call nested in one), a database select list, a SQL statement or
+`.eq(`, `.order(` and the like, as a direct argument, never inside a call nested in one), a
+database select list, a SQL statement or
 fragment, and a code template a program writes out are not message text; in a CI workflow only what
 a Slack step posts counts (a payload, text or message value, a MESSAGE env value, the strings of a
 run command that itself posts to Slack), never step or job names, needs lists, input descriptions or
 other run commands; and a file in no git repository, as a scratchpad script is, is let through even
-when it posts to Slack itself. Claude then shows Dan the whole message, every variable filled in from a realistic
+when it posts to Slack itself. Claude then shows Dan the whole message, every variable filled in
+from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
 kept in the mod's store by the exact wording, never by the file, so the same wording repeated in
@@ -6244,7 +6247,10 @@ relative import, or its python module, on a line that imports or reads it (a pat
 as in `git add package.json`, or one in a comment, does not count). The card and refusal name that
 sender. A
 module is held too when a file that imports it also imports a Slack send helper (a copy builder
-such as `outage-copy.ts`, or a notice builder), and the card names that file as the sender. The search is one `git grep` for files holding both the template's name and the word
+such as `outage-copy.ts`, or a notice builder), and the card names that file as
+the sender. The search is one
+`git grep` for files holding
+both the template's name and the word
 slack or postMessage, then a read of each, all within 3 seconds per call, following files that
 re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
 unreadable file, or would follow further holds the call as could not check. One that finds more
