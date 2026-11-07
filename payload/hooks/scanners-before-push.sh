@@ -241,8 +241,20 @@ esac
 # remote is not judged again on every push. The push's files come from lib/push-changes.sh, the
 # reader the other push gates share. It carrying none (pc_resolve 1 or 2) leaves nothing to judge;
 # the full suite still reads every suite. A suite it could not read, or a tree it could not work
-# out, refuses: a suite nobody read is not one that arms (L10, L98).
+# out, refuses: a suite nobody read is not one that arms (L10, L98). So does a listing of the push
+# git failed (pc_resolve 3, #2349), which once read as a push carrying nothing and let an unarmed
+# suite through.
 pc_resolve "$cmd"; _sc_pc_rc=$?
+if [ "$_sc_pc_rc" -eq 3 ]; then
+  {
+    echo "PUSH BLOCKED: this gate could not list the files this push carries, because git failed reading"
+    echo "${PC_LIST_FAILED:-a listing}, so whether the test suites it adds or changes arm their own"
+    echo "deadline was not judged (claude-config#2349). Run git status in the repository, fix what it"
+    echo "reports, then push again."
+    echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+  } >&2
+  exit 2
+fi
 _sc_new_suites=""
 if [ "$_sc_pc_rc" -eq 0 ]; then
   while IFS= read -r _f; do

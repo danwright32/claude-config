@@ -4,7 +4,8 @@
 # module calls.
 #
 # From the walk: every .git FILE naming a folder under some repository's .git/worktrees (a
-# submodule's .git file names .git/modules and is not one). A .git file iCloud keeps only in the
+# submodule's .git file names .git/modules and is not one), apart from one whose gitdir is gone, which
+# no repository lists and forgotten-worktrees.sh lists or leaves alone instead (#2346). A .git file iCloud keeps only in the
 # cloud is never read, since reading it makes iCloud fetch it: its folder is listed as unmeasured. Offered, through `git worktree remove`
 # without --force (disk-remove.sh's worktree method), only when ALL of these hold, checked in order:
 #   no Claude Code session's working folder is in it (the live session map)
@@ -83,14 +84,19 @@ wt_rules() { # <worktree>
 do_scan() {
   dcs_walk_ready
   read_map
-  local g
+  local g gd
   : > "$DCS_WORK/wt.paths"
   while IFS= read -r g; do
     case "$g" in */.git) ;; *) continue ;; esac
     [ -f "$g" ] || continue
     # A .git file kept only in iCloud cannot be read to tell, so the folder is listed for wt_rules
     # to call unmeasured rather than left out without a word (L10, L11).
-    if dcs_dataless "$g" || is_worktree "${g%/.git}"; then printf '%s\n' "${g%/.git}" >> "$DCS_WORK/wt.paths"; fi
+    if dcs_dataless "$g"; then printf '%s\n' "${g%/.git}" >> "$DCS_WORK/wt.paths"; continue; fi
+    is_worktree "${g%/.git}" || continue
+    # One whose gitdir is gone no repository lists, so git cannot remove it: it is the forgotten
+    # worktrees kind's, which lists it or counts it as left alone (#2346), never both kinds.
+    gd="$(dcs_gitdir "${g%/.git}")" && [ ! -e "$gd" ] && continue
+    printf '%s\n' "${g%/.git}" >> "$DCS_WORK/wt.paths"
   done < "$DCS_WALK"
   dcs_measure "$DCS_WORK/wt.paths" > "$DCS_WORK/wt.sized"
   local p kib size ident flags cred

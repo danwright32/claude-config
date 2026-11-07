@@ -224,6 +224,35 @@ describe('writes: copying, moving and linking', () => {
     // Into a folder, each lands under its own name, so none may be a folder in its turn.
     expect(read('cp a.md b.md ~/other/').files.map(f => f.mayBeFolder)).toEqual([undefined, undefined])
   })
+  // macOS cp (BSD) copies what a source ending in a slash holds into the destination, making the
+  // destination as that copy where it does not exist, so either way the write reaches every file under
+  // the destination, a tree (#2372). GNU cp takes the slash as nothing and writes the folder under its
+  // own name; the words cannot say which cp runs, so that write is kept beside the tree.
+  test('cp of a source ending in a slash writes its contents into the destination, a whole tree', () => {
+    const tree = (dest: string, src: string) => ({ word: dest, path: `${CWD}/${dest}`, sources: [`${CWD}/${src}`], tree: true })
+    for (const flag of ['-r', '-R', '-a', '-Rp'])
+      expect(read(`cp ${flag} lib/ src/`).files).toEqual([{ word: 'src/lib', path: `${CWD}/src/lib`, sources: [`${CWD}/lib`] }, tree('src', 'lib')])
+    // A destination with no slash, there or not: BSD cp puts the contents in it or makes it as the copy.
+    expect(read('cp -R lib/ src').files).toEqual([{ ...tree('src', 'lib'), mayBeFolder: true }])
+    // Through a cd, and a destination named from home.
+    expect(read('cd app && cp -R lib/ ~/out/').files.find(f => f.tree)).toEqual({ word: '~/out', path: `${HOME}/out`, sources: [`${CWD}/app/lib`], tree: true })
+  })
+  test('with several sources only one ending in a slash adds the tree, and each keeps its own name', () => {
+    expect(read('cp -R a/ b dest/').files).toEqual([
+      { word: 'dest/a', path: `${CWD}/dest/a`, sources: [`${CWD}/a`] },
+      { word: 'dest/b', path: `${CWD}/dest/b`, sources: [`${CWD}/b`] },
+      { word: 'dest', path: `${CWD}/dest`, sources: [`${CWD}/a`], tree: true },
+    ])
+  })
+  test('a source with no slash still lands as the folder itself, with no tree', () => {
+    expect(read('cp -R lib src/').files).toEqual([{ word: 'src/lib', path: `${CWD}/src/lib`, sources: [`${CWD}/lib`] }])
+    expect(read('cp -R lib src').files).toEqual([{ word: 'src', path: `${CWD}/src`, sources: [`${CWD}/lib`], mayBeFolder: true }])
+  })
+  test('the slash reading is cp\'s alone: mv, ln, install and a GNU only -t are read as before', () => {
+    expect(read('mv lib/ src/').files.some(f => f.tree)).toBe(false)
+    expect(read('ln -s lib/ src/').files.some(f => f.tree)).toBe(false)
+    expect(read('cp -R -t src lib/').files.some(f => f.tree)).toBe(false)
+  })
   test('rsync writes its local destination, and a remote one is no file here', () => {
     expect(paths('rsync -av --exclude .git notes.md ~/.claude/CLAUDE.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
     expect(paths('rsync -av CLAUDE.md host:backup/')).toEqual([])

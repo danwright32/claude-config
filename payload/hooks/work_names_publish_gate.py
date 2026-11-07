@@ -59,7 +59,20 @@ does not put the guard first on PATH, keeps exactly the checks it had: refusing 
 stop merge-when-ready.sh, so every merge on both Macs, until each session restarted. The command
 hook tells it once (a stamp per session id under WN_SCRIPTS_NOTICE_DIR) that gh writes inside
 scripts are not checked until a new session starts. Not covered at all: gh run by its absolute path,
-a script that rewrites PATH, curl or an API library, and gh extensions.
+a script that rewrites PATH, and curl or an API library.
+
+PROGRAMS GH STARTS (claude-config#2207). The real gh is handed the guard first on PATH, so a gh that
+a shell alias's command, a pager, an editor or git runs meets the guard again. What the guard cannot
+stand in front of is refused (program_refusal): a gh extension, gh copilot, and an alias naming
+another alias.
+
+TEXT NOT ON THE COMMAND LINE (claude-config#2326), for a public repository: --editor is refused (gh
+runs the editor with no terminal and posts what it wrote), and so is gh pr create --fill unless both
+a title and a body are given. gh pr create with no --head is judged with what it may push: the
+branch's name and the messages of the commits no remote holds. gh repo create --push is judged with
+the whole history it sends, unless the new repository is private or internal. gh repo sync into a
+public destination from a --source that is not public is refused, since those commits are not here
+to read.
 
 Seams (tests): WORK_NAMES_EXTRA_HASHES, WORK_NAMES_REGISTRY_READER and WORK_NAMES_PROJECT_LIST,
 read by lib/work-names.py;
@@ -78,14 +91,24 @@ sys.dont_write_bytecode = True
 _HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
 
 
+_GUARD_DIR = os.path.realpath(os.path.join(_HERE, "bin"))
+
+
 def _without_guard(path):
     """PATH without the guard on gh (bin/gh, claude-config#2183), so the gh this gate runs for its own
     reads is the real one: through the guard, every one of them would start this gate again."""
-    guard = os.path.realpath(os.path.join(_HERE, "bin"))
-    return ":".join(d for d in (path or "").split(":") if d and os.path.realpath(d) != guard)
+    return ":".join(d for d in (path or "").split(":") if d and os.path.realpath(d) != _GUARD_DIR)
 
 
-os.environ["PATH"] = _without_guard(os.environ.get("PATH"))
+def _with_guard_first(path):
+    """PATH with the guard first, for the real gh the guard hands a command to (claude-config#2207).
+    gh runs a shell alias's command, an extension, a pager, an editor and git with its own PATH
+    (measured on gh 2.89.0), so a gh any of them runs meets the guard again, not the real gh."""
+    return ":".join([_GUARD_DIR] + [d for d in _without_guard(path).split(":") if d])
+
+
+_CALLER_PATH = os.environ.get("PATH")
+os.environ["PATH"] = _without_guard(_CALLER_PATH)
 
 
 def _load(name, path):
@@ -178,19 +201,35 @@ def _env_value(name, envs, place):
     return os.environ.get(name) or None
 
 
-def judge(what, slug, cwd, gh_repo, command, bodies):
-    """None when it may post, else the reason. bodies: [(shown as, text or None when hidden)]."""
+def _work_owner(owner):
+    matcher, owners, _odd = names()
+    owner = (owner or "").lower()
+    return bool(owner) and (owner in owners or wn.sha(owner) in matcher.hashes)
+
+
+def published(slug, cwd, gh_repo):
+    """The repository's full name when text posted there is public and judged (a public repository
+    no work owner owns), else None. Raises CannotTell as visibility does."""
     full, vis = visibility(slug, cwd, gh_repo)
-    if vis != "PUBLIC":
+    if vis != "PUBLIC" or _work_owner(full.split("/", 1)[0]):
         return None
-    matcher, owners, odd = names()
-    owner = full.split("/", 1)[0].lower()
-    if owner in owners or wn.sha(owner) in matcher.hashes:
+    return full
+
+
+def judge(what, slug, cwd, gh_repo, command, bodies, unseen=()):
+    """None when it may post, else the reason. bodies: [(shown as, text, None when hidden, or a
+    function returning the text, called only for a public repository)]. unseen: clauses saying what
+    else the command posts that cannot be read (claude-config#2326), each refused for a public one."""
+    full = published(slug, cwd, gh_repo)
+    if full is None:
         return None
+    matcher, _owners, odd = names()
     hit = find(command, matcher, odd)
     if hit:
         return "%s posts to %s, a public repository, and its text names %s." % (what, full, _shown(hit))
     for shown, text in bodies:
+        if callable(text):
+            text = text()
         if text is None:
             return ("%s posts to %s, a public repository, from %s, which this command writes from "
                     "something it does not show, so whether it names a work organisation or repository "
@@ -199,7 +238,133 @@ def judge(what, slug, cwd, gh_repo, command, bodies):
         hit = find(text, matcher, odd)
         if hit:
             return "%s posts to %s, a public repository, and %s names %s." % (what, full, shown, _shown(hit))
+    for clause in unseen:
+        return "%s posts to %s, a public repository, %s" % (what, full, clause)
     return None
+
+
+# Text gh posts that is not on its command line (claude-config#2326), each form measured on gh 2.89.0
+# in a throwaway repository against a local stand in for GitHub. With no terminal, gh issue comment
+# --editor and gh pr comment --editor run the editor and post what it wrote (gh issue create and gh pr
+# create refuse --editor there), and gh pr create aborts rather than push an unpushed branch, which it
+# does push when it can ask where to.
+EDITOR_FLAGS = ("--editor", "-e")
+FILL_FLAGS = ("--fill", "-f", "--fill-first", "--fill-verbose")
+TITLE_FLAGS = ("--title", "-t")
+BODY_FLAGS = ("--body", "-b", "--body-file", "-F")
+EDITED = ("with text an editor program wrote (--editor), which this check cannot read, so whether it "
+          "names a work organisation or repository cannot be told. Write the text with --body or "
+          "--body-file instead.")
+FILLED = ("with a title or body gh fills from commit messages (--fill), which this check does not read, "
+          "so whether it names a work organisation or repository cannot be told. Give --title and "
+          "--body (or --body-file) instead; given both, gh uses them over --fill.")
+REPO_CREATE = frozenset({("repo", "create"), ("repo", "new")})
+REPO_SYNC = ("repo", "sync")
+# gh repo create's flags that take a value, so the word after one is never the repository's name.
+REPO_CREATE_VALUES = frozenset(("--description", "-d", "--homepage", "-h", "--team", "-t", "--template",
+                                "-p", "--gitignore", "-g", "--license", "-l", "--source", "-s",
+                                "--remote", "-r"))
+REPO_SYNC_VALUES = frozenset(("--branch", "-b", "--source", "-s"))
+
+
+def _given(args, flags):
+    """Whether any of flags is written in args, alone or as --flag=value. A value that looks like one
+    of them counts as one, the reading that refuses more, never less."""
+    return any(a in flags or (a.startswith("--") and a.split("=", 1)[0] in flags) for a in args)
+
+
+def _positionals(args, valued):
+    out, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+        elif a.startswith("-"):
+            skip = a in valued
+        else:
+            out.append(a)
+    return out
+
+
+def _git(where, *args):
+    import subprocess
+    try:
+        return subprocess.run(["git", "-C", where or os.getcwd()] + list(args), capture_output=True,
+                              text=True, errors="replace", timeout=20)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise CannotTell("git could not be run to read what would be pushed (%s)" % type(e).__name__)
+
+
+def pushed_text(where, history):
+    """The text a push gh makes from where would publish: the names of the refs it pushes and the
+    messages of the commits it sends. history False: the current branch and the commits no remote ref
+    holds, what gh pr create pushes; True: every commit HEAD reaches, what gh repo create --push sends
+    to a new repository, or every ref of a bare one, which it mirrors.
+
+    "" when where is no git checkout or HEAD is on no branch, since gh pushes nothing from there.
+    Raises CannotTell when git cannot list the commits."""
+    r = _git(where, "rev-parse", "--is-bare-repository")
+    if r.returncode != 0:
+        return ""
+    if r.stdout.strip() == "true":
+        refs = _git(where, "for-each-ref", "--format=%(refname:short)")
+        names_, revs = (refs.stdout if refs.returncode == 0 else None), ["--all"]
+    else:
+        b = _git(where, "symbolic-ref", "--quiet", "--short", "HEAD")
+        if b.returncode != 0:
+            return ""
+        names_ = b.stdout
+        if _git(where, "rev-parse", "--verify", "--quiet", "HEAD").returncode != 0:
+            return "branch %s" % names_
+        revs = ["HEAD"] if history else ["HEAD", "--not", "--remotes"]
+    log = _git(where, "log", "--format=%B%x00", *revs)
+    if names_ is None or log.returncode != 0:
+        raise CannotTell("git could not list the commits a push from %s would send (%s)"
+                         % (where, (log.stderr or "for-each-ref failed").strip()[:200]))
+    return "branch %s\n%s" % (names_, log.stdout)
+
+
+def judge_repo_create(what, args, where, command):
+    """gh repo create --push sends the whole history to the new repository (claude-config#2326).
+    Judged unless the repository is made private or internal, or a work owner's."""
+    if not _given(args, ("--push",)) or _given(args, ("--private", "--internal")):
+        return None
+    name = (_positionals(args, REPO_CREATE_VALUES) or [""])[0]
+    if "/" in name and _work_owner(name.split("/", 1)[0]):
+        return None
+    matcher, _owners, odd = names()
+    shown = name or "a new repository"
+    hit = find(command, matcher, odd)
+    if hit:
+        return "%s makes %s, a public repository, and its text names %s." % (what, shown, _shown(hit))
+    source = os.path.expanduser((scan.flag_values(args, "--source", "-s") or ["."])[-1])
+    if not os.path.isabs(source):
+        source = os.path.normpath(os.path.join(where or os.getcwd(), source))
+    hit = find(pushed_text(source, True), matcher, odd)
+    if hit:
+        return ("%s --push publishes the history of %s to %s, a public repository, and its branch names "
+                "or commit messages name %s." % (what, source, shown, _shown(hit)))
+    return None
+
+
+def judge_repo_sync(what, args, where):
+    """gh repo sync with a destination copies the source's commits into it on GitHub (#2326). Their
+    messages are not here to read, so a public destination takes them only from a public source, whose
+    commits are public already. With no destination it updates this checkout and writes nothing to
+    GitHub; with no source the source is the destination's parent, and GitHub keeps every fork of a
+    private repository private, so a public destination's parent is public."""
+    dest = _positionals(args, REPO_SYNC_VALUES)
+    sources = scan.flag_values(args, "--source", "-s")
+    if not dest or not sources:
+        return None
+    full = published(dest[0], where, None)
+    if full is None:
+        return None
+    src, vis = visibility(sources[-1], where, None)
+    if vis == "PUBLIC":
+        return None
+    return ("%s copies the commits of %s, which is not public, into %s, a public repository, and their "
+            "messages cannot be read here, so whether they name a work organisation or repository cannot "
+            "be told." % (what, src, full))
 
 
 # The command hook names the name it matched: only the session sees it, and the session already holds
@@ -255,12 +420,52 @@ def api_writes(command, cwd):
     return out
 
 
-# gh's own top level commands. gh never lets an alias shadow one, so only a first word outside this set
-# can be an alias (claude-config#2183). A word missing here is only asked about as an alias, never
-# passed unjudged: an alias list that does not hold it means it is not one.
-BUILTIN = frozenset("""accessibility agent-task alias api attestation auth browse cache codespace completion
-config copilot extension gist gpg-key help issue label licenses org pr preview project release repo
-ruleset run search secret ssh-key status variable version workflow""".split())
+# gh's own top level commands, with the other names gh answers to for them, its help topics, its hidden
+# credits command and the completion commands of the library it is built on (each read from gh 2.89.0:
+# gh help, the ALIASES of each command's help, and `gh <word> --help`). gh never lets an alias or an
+# extension shadow one, so only a first word outside this set can be an alias (claude-config#2183) or
+# an extension (#2207). A word missing here is asked about as an alias and, when it is not one, refused
+# as an extension, never passed unjudged.
+BUILTIN = frozenset("""accessibility a11y actions agent-task agent-tasks agent agents alias api attestation at
+auth browse cache codespace cs completion config copilot credits environment exit-codes extension
+extensions ext formatting gist gpg-key help issue label licenses mintty org pr preview project reference
+release repo ruleset rs run search secret ssh-key status variable version workflow __complete
+__completeNoDesc""".split())
+# The command whose exec subcommand runs an extension by name, under each of its names.
+EXTENSION = frozenset(("extension", "extensions", "ext"))
+# What gh copilot takes without starting the Copilot CLI.
+COPILOT_OWN = frozenset(("--help", "-h", "--remove"))
+CANNOT_SEE = ("a program that can write to GitHub with no gh in between for the guard to stand in front "
+              "of, so whether it names a work organisation or repository cannot be told")
+
+
+def program_refusal(args):
+    """The reason, when gh given args (its own name left off, any alias already expanded) would start a
+    program the guard cannot see into, else None (claude-config#2207).
+
+    An extension (a word that is neither gh's own command nor an alias, or gh extension exec) and the
+    Copilot CLI that gh copilot starts can each write to GitHub through the API with no gh the guard
+    could judge, so both are refused. Any gh a program gh starts runs meets the guard again, since the
+    real gh is handed the guard first on PATH, so those need nothing here."""
+    if not args or args[0].startswith("-"):
+        return None
+    word = args[0]
+    if word in EXTENSION:
+        sub = next((a for a in args[1:] if not a.startswith("-")), None)
+        if sub == "exec":
+            return "gh %s exec runs a gh extension, %s." % (word, CANNOT_SEE)
+        return None
+    if word == "copilot":
+        if args[1:] and all(a in COPILOT_OWN for a in args[1:]):
+            return None
+        return "gh copilot starts the GitHub Copilot CLI, %s." % CANNOT_SEE
+    if word in BUILTIN:
+        return None
+    if word in aliases():
+        return ("gh %s is another gh alias, which gh does not expand inside an alias (measured on gh "
+                "2.89.0), so what it runs cannot be told." % word)
+    return ("gh %s is neither one of gh's own commands nor a gh alias, so it runs a gh extension, %s."
+            % (word, CANNOT_SEE))
 ALIAS_LINE = re.compile(r"^([^\s:]+): (.*)$")
 _ALIASES = []
 
@@ -312,8 +517,8 @@ def aliases():
 
 
 def expand_alias(args):
-    """-> (alias name, the gh command text it runs) when args (gh's arguments, the program's own name
-    left off) run an alias, else None.
+    """-> (alias name, the gh command text it runs, gh's arguments it runs or None for a shell alias)
+    when args (gh's arguments, the program's own name left off) run an alias, else None.
 
     gh's own expansion: $1, $2 ... take the arguments after the alias name, and the arguments no
     placeholder took go on the end. A shell alias (`!...`) is the shell command with the arguments
@@ -326,7 +531,7 @@ def expand_alias(args):
         return None
     expansion, rest = table[args[0]], list(args[1:])
     if expansion.startswith("!"):
-        return args[0], expansion[1:] + (" " + shlex.join(rest) if rest else "")
+        return args[0], expansion[1:] + (" " + shlex.join(rest) if rest else ""), None
     extra = []
     for n, a in enumerate(rest, 1):
         if "$%d" % n in expansion:
@@ -337,7 +542,7 @@ def expand_alias(args):
         words = shlex.split(expansion)
     except ValueError as e:
         raise CannotTell("the gh alias %s expands to text that cannot be read (%s)" % (args[0], e))
-    return args[0], shlex.join(["gh"] + words + extra)
+    return args[0], shlex.join(["gh"] + words + extra), words + extra
 
 
 def alias_runs(command):
@@ -382,7 +587,7 @@ def evaluate(command, cwd, depth=0):
                 if why not in reasons:
                     reasons.append(why)
     try:
-        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS)
+        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS | REPO_CREATE | {REPO_SYNC})
         apis = api_writes(command, cwd) if re.search(r"\bapi\b", command) else []
     except scan.Unreadable as e:
         named = scan.gated_in_text(command, KINDS) or CRUDE_API.search(command or "")
@@ -393,17 +598,14 @@ def evaluate(command, cwd, depth=0):
         return reasons
     for kind, args, envs, place in found:
         what = "gh %s %s" % kind
+        where = place.cwd or place.start or cwd
         try:
-            slugs = scan.flag_values(args, "--repo", "-R")
-            slug = slugs[-1] if slugs else None
-            gh_repo = None if slug else _env_value("GH_REPO", envs, place)
-            bodies = []
-            for word, state, detail in field.body_files(args, command, place):
-                if state == "hidden":
-                    bodies.append(("--body-file %s" % word, None))
-                elif state == "text":
-                    bodies.append(("--body-file %s" % word, detail))
-            why = judge(what, slug, place.cwd or place.start or cwd, gh_repo, command, bodies)
+            if kind in REPO_CREATE:
+                why = judge_repo_create(what, args, where, command)
+            elif kind == REPO_SYNC:
+                why = judge_repo_sync(what, args, where)
+            else:
+                why = _judge_text(kind, what, args, envs, place, where, command)
         except CannotTell as e:
             why = "%s: %s." % (what, e)
         if why and why not in reasons:
@@ -417,6 +619,29 @@ def evaluate(command, cwd, depth=0):
         if why and why not in reasons:
             reasons.append(why)
     return reasons
+
+
+def _judge_text(kind, what, args, envs, place, where, command):
+    """judge() for one gh pr or issue command: its body files, and what it posts that is not on its
+    command line (claude-config#2326). Raises CannotTell."""
+    slugs = scan.flag_values(args, "--repo", "-R")
+    slug = slugs[-1] if slugs else None
+    gh_repo = None if slug else _env_value("GH_REPO", envs, place)
+    bodies = []
+    for word, state, detail in field.body_files(args, command, place):
+        if state == "hidden":
+            bodies.append(("--body-file %s" % word, None))
+        elif state == "text":
+            bodies.append(("--body-file %s" % word, detail))
+    unseen = [EDITED] if _given(args, EDITOR_FLAGS) else []
+    if kind == ("pr", "create"):
+        if _given(args, FILL_FLAGS) and not (_given(args, TITLE_FLAGS) and _given(args, BODY_FLAGS)):
+            unseen.append(FILLED)
+        if not _given(args, ("--head", "-H")):
+            # With no --head, gh pushes the branch when it is not fully pushed and it can ask where.
+            bodies.append(("what it may push (the branch's name and the commits no remote holds)",
+                           lambda: pushed_text(where, False)))
+    return judge(what, slug, where, gh_repo, command, bodies, unseen)
 
 
 # The guard's refusal starts as gh's own errors do, with the program's name. Written as a format so
@@ -455,10 +680,12 @@ def gh_main(real, args):
                       for a in judged]
         try:
             got = expand_alias(judged)
+            starts = program_refusal(judged if got is None else (got[2] or []))
         except CannotTell as e:
             return _refuse("gh %s could be a gh alias, and %s, so what it runs cannot be told."
                            % (judged[0], e))
-        reasons = evaluate(got[1] if got else shlex.join(["gh"] + judged), os.getcwd())
+        reasons = ([starts] if starts else []) + evaluate(got[1] if got else shlex.join(["gh"] + judged),
+                                                          os.getcwd())
     finally:
         if seen is not None:
             os.unlink(seen.name)
@@ -469,7 +696,10 @@ def gh_main(real, args):
         os.dup2(feed.fileno(), 0)
     sys.stdout.flush()
     sys.stderr.flush()
-    os.execv(real, [real] + list(args))
+    # The guard goes back first on PATH for the real gh, so a gh that anything gh starts runs (a shell
+    # alias's command, a pager, an editor, git and its hooks) is judged too (claude-config#2207).
+    env = dict(os.environ, PATH=_with_guard_first(_CALLER_PATH))
+    os.execve(real, [real] + list(args), env)
 
 
 def main():
