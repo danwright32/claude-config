@@ -5446,10 +5446,11 @@ the foreground or the background, and the card tool refusing a number for that r
 whatever the session owes under it, so a misreading costs one refusal, never one per turn end; an
 owed PR is named once however many runs merged it, and a card made since GitHub's time for the merge
 settles every run that found it merged (#1943). A helper run in the background is asked again at
-each turn end for up to twenty four hours (`WAIT_MS`, twice the helper's three hours in line with the
-line standing still plus its three hour deadline from taking the turn, a ratio the helper's suite
-checks, #1271, #1604; since #2351 a line that keeps moving never ends the helper, so a run behind a
-very long moving line can outlast it) and owed once GitHub says it merged. That question is mod-kit's
+each turn end for up to twenty four hours (`WAIT_MS`, twice the helper's three hours in line with
+the line standing still plus its three hour deadline from taking the turn, a ratio the helper's
+suite checks, #1271, #1604; since #2351 a line that keeps moving never ends the helper, so a run
+behind a very long moving line can outlast it) and owed once GitHub says it merged. That question
+is mod-kit's
 one check of whether a pull request merged (`hooks/prmerged.ts`, copied byte for byte into each mod
 using it), which the goal box asks too: as each account gh is logged in to, by the repository the
 command named, else the one GitHub's link for the pull request named when the helper started (in the
