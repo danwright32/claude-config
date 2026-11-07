@@ -2297,10 +2297,13 @@ check "#1604 but says it could not read them, with GitHub's error" "could not re
 #     15 pull requests in one line at about 20 minutes a merge, longer than the fixed three hours in
 #     line, and #4148, #4164 and #4177 each ran out (exit 3, "at the end of its 180m in line for a
 #     turn") with the line still moving, and were queued again by hand at the back. Now
-#     MWR_LINE_SECONDS counts only time in which nothing ahead advanced, a ceiling of its own
-#     (MWR_LINE_MAX_SECONDS) bounds the whole wait, and each stop says which it was. While it waits
-#     in line it reads GitHub less often (the wait grows, as on checks), and reads its turn locally
-#     every base look, so a turn passing is still taken at once.
+#     MWR_LINE_SECONDS counts only time in which nothing ahead advanced. While it waits in line it
+#     reads GitHub less often (the wait grows, as on checks), and reads its turn locally every base
+#     look, so a turn passing is still taken at once. The ceiling #1697 also put on the whole wait,
+#     nine hours from the run's start however much the line moved, is gone (claude-config#2351): on
+#     2026-11-06 it ended 11 helpers 1 to 3 places from the front of a line still moving, and each
+#     joined again behind about 20 others. A line that keeps moving now never ends a run, by clock or
+#     by its count of looks; a line standing still still does.
 # =================================================================================================
 # leave <pr>: the step that ends that pull request's place in line, whichever ticket it has.
 leave(){ printf 'for f in "$MWR_TURN_DIR"/acme/widget/[0-9]*; do grep -qx "pr %s" "$f" && rm -f "$f" "$f.head"; done' "$1"; }
@@ -2332,21 +2335,30 @@ check "#1697 control: said as nothing ahead having moved for the budget" "nothin
 check_not "#1697 control: never as the line still moving" "still moving" "$out"
 check_eq "#1697 control: after ten minutes still" "yes" "$( e="$(el)"; [ "$e" -ge 600 ] && [ "$e" -lt 630 ] && echo yes || echo no)"
 
-# The line moving but never reaching it: the ceiling on the whole wait ends it, said as the ceiling
-# with the line still moving, so it is told from a line that stood still (L11).
+# Its count of looks follows the line too (claude-config#2351, L704): the looks it takes in line up
+# to each move of the line are not held against MWR_MAX_POLLS, so a long line that keeps moving never
+# runs it out of looks, while a line standing still still does. Six ahead, each leaving after ten
+# looks, sixty looks in line in all, against a cap of twenty. Fixture settings, not measured.
 fresh "$OLD" 0 "$GREEN"
 for p in 9 10 11 12 13 14; do "$BIN/take-turn" acme/widget "$p"; done
 for p in 9 10 11 12 13 14; do
   for _ in $(seq 1 9); do printf ':\n' >> "$ST/on-sleep"; done
   leave "$p" >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"
 done
-out="$(MWR_LINE_SECONDS=600 MWR_LINE_MAX_SECONDS=900 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
-check_eq "#1697 a line that moves but never reaches it stops at the ceiling" "3" "$rc"
-check "#1697 said as the ceiling on the wait in line, with the line still moving" "at the end of its 15m ceiling in line (MWR_LINE_MAX_SECONDS), with the line still moving" "$out"
-check_not "#1697 never as a line that stood still" "nothing ahead of it in line has moved for 10m (MWR_LINE_SECONDS)" "$out"
-check_eq "#1697 at fifteen minutes" "yes" "$( e="$(el)"; [ "$e" -ge 900 ] && [ "$e" -lt 930 ] && echo yes || echo no)"
-check_eq "#1697 updating nothing" "0" "$(count gh-calls 'pr update-branch')"
-check_not "#1697 and its place is given up" "7" "$(ticket_prs)"
+out="$(MWR_LINE_SECONDS=600 MWR_MAX_POLLS=20 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
+check_eq "#2351 a long line that keeps moving does not run a run out of looks" "0" "$rc"
+check "#2351 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_not "#2351 never said as the most looks it makes" "MWR_MAX_POLLS" "$out"
+check_not "#2351 never out of time" "Out of time" "$out"
+
+# Control, the line standing still (L497): the same cap of twenty looks, a holder that never leaves
+# and a line budget too long to end it first, so the count still ends the wait.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9
+out="$(MWR_LINE_SECONDS=100000 MWR_MAX_POLLS=20 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
+check_eq "#2351 control: behind a line standing still the count of looks still ends the wait" "3" "$rc"
+check "#2351 control: said as the most looks it makes" "the most it makes (MWR_MAX_POLLS)" "$out"
+check_eq "#2351 control: nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 # The shared polling budget (L24): in line, GitHub is read on a wait that grows to its ceiling, while
 # the turn is read locally at every base look, so a turn passing mid wait is taken at once. #9 leaves
@@ -2362,22 +2374,39 @@ check_eq "#1697 never sleeping longer than a base look in line" "60" "$(sort -n 
 reads_in_line="$(awk '$1 < 1000720' "$ST/view-times" | wc -l | tr -d ' ')"
 check_eq "#1697 reading GitHub fewer times than once a minute while in line (5 reads in its 12 minutes in line, not 12)" "5" "$reads_in_line"
 
-# Its default ceiling, measured by running it out (L107), with a line that moves at every look: each
-# of twenty pull requests ahead holds the turn for a look and is passed over. Nine hours, so a line of
-# about 27 merges at 20 minutes each, longer than Slate's 15 on 2026-10-24, is waited through.
+# A long line that keeps moving, at the default settings (claude-config#2351): each of twenty pull
+# requests ahead holds the turn for a look of 30m and is passed over, ten hours in all, past the nine
+# hours (540m) that used to end the wait from the run's start. A line moving at every look never ends
+# the run, so it waits its whole way to the front and merges. One place among them belongs to a run
+# that has died, and is still passed over at once, as before.
 fresh "$OLD" 0 "$GREEN"
-for p in $(seq 101 120); do "$BIN/take-turn" acme/widget "$p"; done
+for p in $(seq 101 110); do "$BIN/take-turn" acme/widget "$p"; done
+"$BIN/take-turn" acme/widget 130 99999999 "Thu Jan  1 00:00:00 1970"
+for p in $(seq 111 120); do "$BIN/take-turn" acme/widget "$p"; done
 out="$(MWR_POLL_SECONDS=1800 MWR_HEARTBEAT_SECONDS=1800 MWR_TURN_HOLD_SECONDS=1800 run 7 --squash)"; rc=$?
-default_line_max=$(el)
-check_eq "#1697 with no ceiling set, a run in a line that keeps moving stops after nine hours" "3 32400" "$rc $default_line_max"
-check "#1697 said as the ceiling" "ceiling in line (MWR_LINE_MAX_SECONDS), with the line still moving" "$out"
-# THE RATIO (L227), as #1271 and #1604 hold it, over the longest a run can now last: its ceiling in
-# line plus its deadline from the turn.
-if [[ "${wait_s:-}" =~ ^[0-9]+$ ]]; then
-  [ "$wait_s" -ge $(( 2 * (default_line_max + default_deadline) )) ] && ok || bad "#1697 is-it-live's WAIT_MS (${wait_s}s) is not at least twice the longest a run can last, its ceiling in line plus its deadline ($(( default_line_max + default_deadline ))s)"
-else
-  bad "#1697 WAIT_MS was not read from is-it-live's merges.ts"
-fi
+check_eq "#2351 a run in a long line that keeps moving waits past 540m and merges" "0" "$rc"
+check "#2351 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#2351 having waited past the 540m that used to end it" "yes" "$( [ "$(el)" -gt 32400 ] && echo yes || echo no)"
+check_not "#2351 never out of time" "Out of time" "$out"
+check "#2351 a dead run's place is still passed over" "#130's place in line was passed over: its run (pid 99999999) is no longer running." "$out"
+
+# Control, a long line that then stands still (L497): the same twenty go, one a look, then #121 holds
+# the turn and is never passed over, so three hours (MWR_LINE_SECONDS, the default) after the line last
+# moved, the run stops, said as the line standing still, and gives up its place.
+fresh "$OLD" 0 "$GREEN"
+for p in $(seq 101 121); do "$BIN/take-turn" acme/widget "$p"; done
+for p in $(seq 101 120); do leave "$p" >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"; done
+out="$(MWR_POLL_SECONDS=1800 MWR_HEARTBEAT_SECONDS=1800 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
+check_eq "#2351 control: a long line that stops moving still ends the wait" "3" "$rc"
+stop_line="$(grep 'Out of time' <<<"$out")"
+check "#2351 control: its stop said as nothing ahead having moved for three hours" "nothing ahead of it in line has moved for 180m (MWR_LINE_SECONDS)" "$stop_line"
+check_not "#2351 control: its stop never as a line still moving" "still moving" "$stop_line"
+check_eq "#2351 control: three hours after the last of the twenty went (ten hours in)" "yes" "$( e="$(el)"; [ "$e" -ge 46800 ] && [ "$e" -lt 48600 ] && echo yes || echo no)"
+check_eq "#2351 control: nothing merged" "0" "$(count gh-calls 'pr merge')"
+check_eq "#2351 control: and its place is given up" "121" "$(ticket_prs)"
+# THE RATIO (L227): with no ceiling on a moving line, the longest a run lasts is no longer one fixed
+# figure; the check of is-it-live's WAIT_MS against the line budget plus the deadline (#1604, above)
+# is the one that still holds, for a line standing still.
 
 # A run passed over and back in line (claude-config#1975). On 2026-10-30 #1962 took the turn, held
 # it the hour any one pull request may, was passed over and joined the line again, and stopped at
@@ -2386,8 +2415,8 @@ fi
 # counting through the wait in line, so the line rule never governed it. Now the deadline counts
 # only time the run holds the turn (or goes on without one), and the line rule governs every wait
 # in line, its time in line counting only time spent waiting. Scaled down by twelve, every figure a
-# fixture setting: deadline 15m (180m), line 15m (180m), ceiling 45m (540m), passed over at 5m
-# (60m), each holder ahead leaving after 4m.
+# fixture setting: deadline 15m (180m), line 15m (180m), passed over at 5m (60m), each holder
+# ahead leaving after 4m.
 # drive: run after every fake sleep. At DRIVE_STEAL_AT seconds in, this run's ticket (1) is taken
 # away and DRIVE_AHEAD join ahead of it, as a waiter passing it over would leave things; then every
 # DRIVE_LEAVE_EVERY seconds the first of them leaves, and once none is left the checks go green.
@@ -2416,8 +2445,8 @@ chmod +x "$BIN/drive"
 drive_queue(){ local i; for i in $(seq 1 400); do printf '"$BIN_DIR/drive"\n' >> "$ST/on-sleep"; done; }
 # secs_of <line>: the elapsed figure a said line carries ([Xm YYs]), in seconds.
 secs_of(){ local l="${1%%$'\n'*}"; [[ "$l" =~ ^merge-when-ready:\ \[([0-9]+)m\ ([0-9]+)s\] ]] && printf '%s' $(( 10#${BASH_REMATCH[1]} * 60 + 10#${BASH_REMATCH[2]} )); }
-# Every run here: deadline 15m, line budget 15m, ceiling 45m, and no holder passed over by this run.
-line_run(){ MWR_DEADLINE_SECONDS=900 MWR_LINE_SECONDS=900 MWR_LINE_MAX_SECONDS=2700 MWR_TURN_HOLD_SECONDS=100000 BIN_DIR="$BIN" run 7 --squash; }
+# Every run here: deadline 15m, line budget 15m, and no holder passed over by this run.
+line_run(){ MWR_DEADLINE_SECONDS=900 MWR_LINE_SECONDS=900 MWR_TURN_HOLD_SECONDS=100000 BIN_DIR="$BIN" run 7 --squash; }
 
 # Passed over at 5m, then five ahead each leaving after 4m: it waits 20m in line, past its 15m line
 # budget and past 15m from taking the turn, with the line never still for 15m, so it keeps waiting,
@@ -2447,15 +2476,15 @@ check_not "#1975 control: never as the line still moving" "still moving" "$out"
 check_eq "#1975 control: 15m after joining the line again at 5m" "yes" "$( e="$(el)"; [ "$e" -ge 1200 ] && [ "$e" -lt 1260 ] && echo yes || echo no)"
 check_eq "#1975 control: nothing merged" "0" "$(count gh-calls 'pr merge')"
 
-# The ceiling still holds: a line that keeps moving but never reaches it ends at 45m in line, counted
-# from the time it spent in line (none before the turn, 45m after it), said as the ceiling.
+# A long moving line after being passed over (claude-config#2351): twelve ahead, one leaving every
+# 4m, 48m in line, past the 45m (540m scaled down by twelve) that used to end the wait. The line
+# never stands still for 15m, so it waits its whole way back to the front and merges.
 fresh "$OLD" 0 "$PENDING"; drive_queue
 out="$(DRIVE_STEAL_AT=300 DRIVE_AHEAD="$(seq -s ' ' 9 20)" DRIVE_LEAVE_EVERY=240 line_run)"; rc=$?
-check_eq "#1975 ceiling: a moving line that never reaches it still stops" "3" "$rc"
-check "#1975 ceiling: said as the ceiling with the line still moving" "at the end of its 45m ceiling in line (MWR_LINE_MAX_SECONDS), with the line still moving" "$out"
-check_not "#1975 ceiling: never as its deadline from the turn" "deadline from taking the turn" "$out"
-check_eq "#1975 ceiling: 45m in line after the 5m it held the turn" "yes" "$( e="$(el)"; [ "$e" -ge 3000 ] && [ "$e" -lt 3060 ] && echo yes || echo no)"
-check_eq "#1975 ceiling: nothing merged" "0" "$(count gh-calls 'pr merge')"
+check_eq "#2351 passed over, a run in a long moving line waits through it and merges" "0" "$rc"
+check "#2351 passed over: and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#2351 passed over: past 45m in line after the 5m it held the turn" "yes" "$( [ "$(el)" -gt 3000 ] && echo yes || echo no)"
+check_not "#2351 passed over: never out of time" "Out of time" "$out"
 
 # The deadline still bounds the time it holds the turn, over both holds: passed over at 5m, back
 # at 9m with 10m left, and its checks never finish, so it stops at 19m, 15m of holding in all.
