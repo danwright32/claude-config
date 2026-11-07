@@ -1085,6 +1085,7 @@ check "and the answer says how many findings were marked" "1 finding below" "$wi
 RUNNER="$DIR/lib/ai-review-run.py"
 IFS= read -r -d '' premise_out_prog <<'EOF' || true
 import importlib.util, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -1242,6 +1243,7 @@ P rm -q src/old.ts; P commit -q -m "remove old"
 PLACE_SHA="$(P rev-parse HEAD)"
 IFS= read -r -d '' place_out_prog <<'EOF' || true
 import importlib.util, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
