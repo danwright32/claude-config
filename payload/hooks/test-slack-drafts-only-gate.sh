@@ -262,6 +262,186 @@ grep -rn chat.postMessage .
 EOF"
 allowed "a shell fed a heredoc that only greps for the endpoint"
 
+echo "slack drafts only: a script posting through a module it imports is refused (claude-config#2318)"
+
+# The shape measured in repo-digest on 2026-11-05: package.json runs `FORCE_RUN=1 node src/digest.ts`,
+# src/digest.ts names no endpoint and imports ./slack.ts (with its .ts extension written, beside a
+# node builtin and an `import type`), and src/slack.ts names chat.postMessage. The #2302 gate let it
+# through (exit 0).
+mkdir -p "$T/rd/src"
+printf '%s\n' '{"name": "repo-digest", "type": "module", "scripts": {' \
+  '  "digest": "FORCE_RUN=1 node src/digest.ts", "fmt": "node src/fmt-only.ts"}}' > "$T/rd/package.json"
+cat > "$T/rd/src/digest.ts" <<'TS'
+import { readFileSync } from "node:fs";
+import { buildDigest } from "./format.ts";
+import { postDigest } from "./slack.ts";
+await postDigest(buildDigest(JSON.parse(readFileSync("repos.json", "utf8"))));
+TS
+cat > "$T/rd/src/format.ts" <<'TS'
+export type SlackBlock = { type: string };
+export function buildDigest(x: unknown): SlackBlock[] { return [{ type: String(x) }]; }
+TS
+cat > "$T/rd/src/slack.ts" <<'TS'
+import type { SlackBlock } from "./format.ts";
+export async function postDigest(blocks: SlackBlock[]) {
+  await fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: JSON.stringify(blocks) });
+}
+TS
+printf '%s\n' 'import { buildDigest } from "./format.ts";' 'console.log(buildDigest(1));' > "$T/rd/src/fmt-only.ts"
+for posts in "cd $T/rd && npm run digest" "cd $T/rd && node src/digest.ts" "node $T/rd/src/digest.ts" \
+  "cd $T/rd && npx tsx src/digest.ts" "cd $T/rd/src && FORCE_RUN=1 node digest.ts"; do
+  run_bash "$posts"
+  refused "a script importing a helper that posts, run as: $posts"
+done
+run_bash "cd $T/rd && npm run digest"
+says "the refusal names the helper the script imports" "slack.ts"
+says "the refusal names the endpoint the helper holds" "chat.postMessage"
+run_bash "cd $T/rd && npm run fmt"
+allowed "a package script whose script imports only a helper that names no endpoint"
+
+# The resolutions node and TypeScript make: no extension, a directory's index, require(), a dynamic
+# import(), an `export ... from`, and the .js a TypeScript ESM file writes for its own .ts sibling.
+mkdir -p "$T/imp/lib/notify" "$T/imp/deep" "$T/imp/cyc" "$T/imp/ok"
+printf '%s\n' 'module.exports = () => fetch("https://hooks.slack.com/services/T0/B0/x");' > "$T/imp/lib/notify/index.js"
+printf '%s\n' 'const notify = require("./lib/notify");' 'notify();' > "$T/imp/req.js"
+printf '%s\n' 'const m = await import("./lib/notify/index.js");' > "$T/imp/dyn.mjs"
+printf '%s\n' 'export { post } from "./ts-helper.js";' > "$T/imp/reexport.ts"
+printf '%s\n' 'export const post = () => fetch("https://slack.com/api/chat.scheduleMessage");' > "$T/imp/ts-helper.ts"
+printf '%s\n' '#!/usr/bin/env node' 'require("../lib/notify")();' > "$T/imp/deep/notify-cli"
+chmod +x "$T/imp/deep/notify-cli"
+for posts in "node $T/imp/req.js" "node $T/imp/dyn.mjs" "npx tsx $T/imp/reexport.ts" "$T/imp/deep/notify-cli"; do
+  run_bash "$posts"
+  refused "a script reaching a posting helper through an import node resolves, run as: $posts"
+done
+run_bash "node $T/imp/req.js"
+says "a helper found as a directory's index is named" "index.js"
+
+# Two imports deep: the script names nothing, the helper it imports names nothing, and the helper
+# that one imports posts.
+printf '%s\n' 'import { a } from "./mid";' 'a();' > "$T/imp/deep/top.ts"
+printf '%s\n' 'import { b } from "./bottom";' 'export const a = () => b();' > "$T/imp/deep/mid.ts"
+printf '%s\n' 'export const b = () => fetch("https://slack.com/api/chat.postMessage");' > "$T/imp/deep/bottom.ts"
+run_bash "node $T/imp/deep/top.ts"
+refused "a script whose helper imports a helper that posts"
+says "the refusal names the helper two imports deep" "bottom.ts"
+
+# A cycle ends: two helpers importing each other are each read once, and a poster reached only past
+# the cycle is still found.
+printf '%s\n' 'import { y } from "./y";' 'export const x = () => y();' > "$T/imp/cyc/x.ts"
+printf '%s\n' 'import { x } from "./x";' 'export const y = () => x;' > "$T/imp/cyc/y.ts"
+printf '%s\n' 'import { x } from "./x";' 'x();' > "$T/imp/cyc/main.ts"
+run_bash "node $T/imp/cyc/main.ts"
+allowed "an import cycle that names no endpoint ends and passes"
+printf '%s\n' 'import { x } from "./x";' 'import { z } from "./z";' 'export const w = () => x() + z();' > "$T/imp/cyc/w.ts"
+printf '%s\n' 'import { w } from "./w";' 'export const z = () => fetch("https://slack.com/api/chat.postEphemeral");' > "$T/imp/cyc/z.ts"
+printf '%s\n' 'import { w } from "./w";' 'w();' > "$T/imp/cyc/main2.ts"
+run_bash "node $T/imp/cyc/main2.ts"
+refused "a poster reached through an import cycle"
+says "the refusal names the helper past the cycle" "z.ts"
+
+# An import the gate cannot find or read is a module it cannot see, and node may still find it
+# (package.json exports, a path alias, a loader), so it is refused rather than passed.
+printf '%s\n' 'import { gone } from "./not-here";' 'gone();' > "$T/imp/missing.ts"
+run_bash "node $T/imp/missing.ts"
+refused "a script importing a relative module the gate cannot find"
+says "the refusal names the import it could not find" "./not-here"
+printf '%s\n' 'export const s = 1;' > "$T/imp/sealed.ts"
+printf '%s\n' 'import { s } from "./sealed.ts";' 'console.log(s);' > "$T/imp/reads-sealed.ts"
+chmod 000 "$T/imp/sealed.ts"
+if [ -r "$T/imp/sealed.ts" ]; then
+  echo "SUITE-PART-UNMEASURED #2318 a script importing a module the gate cannot read: this user can read a mode 000 file (running as root), so no unreadable module could be made"
+else
+  run_bash "node $T/imp/reads-sealed.ts"
+  refused "a script importing a module the gate cannot read"
+  says "the refusal names the module it could not read" "sealed.ts"
+fi
+chmod 644 "$T/imp/sealed.ts"
+# Past the most modules it reads (IMPORT_MAX_FILES, 300; the largest real script reaches 11), what
+# lies beyond is unseen, so it is refused; a short chain of the same shape passes.
+mkdir -p "$T/imp/chain" "$T/imp/short"
+for n in $(seq 0 305); do printf 'import "./m%s";\n' "$((n + 1))" > "$T/imp/chain/m$n.ts"; done
+printf '%s\n' 'export {};' > "$T/imp/chain/m306.ts"
+for n in 0 1 2; do printf 'import "./m%s";\n' "$((n + 1))" > "$T/imp/short/m$n.ts"; done
+printf '%s\n' 'export {};' > "$T/imp/short/m3.ts"
+run_bash "node $T/imp/chain/m0.ts"
+refused "a script whose imports reach more modules than the gate reads"
+says "the refusal says the imports go past what it reads" "more than 300 modules"
+run_bash "node $T/imp/short/m0.ts"
+allowed "a short import chain that names no endpoint"
+
+# Passes: a helper that only saves a draft, packages and node builtins (not ours to read, and not
+# relative), and an import whose path is assembled at run time.
+cat > "$T/imp/ok/draft.ts" <<'TS'
+import { writeFileSync } from "node:fs";
+// Saves the message as a draft for Dan to send himself (slack_send_message_draft does the rest).
+export const saveDraft = (text: string) => writeFileSync("drafts/digest.md", text);
+TS
+cat > "$T/imp/ok/main.ts" <<'TS'
+import express from "express";
+import { join } from "node:path";
+import { saveDraft } from "./draft";
+const lang = process.env.LANG_CODE;
+const words = await import(`./locales/${lang}.js`);
+saveDraft(join("a", String(express), String(words)));
+TS
+run_bash "node $T/imp/ok/main.ts"
+allowed "a script importing a helper that only saves a draft, a package and a builtin"
+run_bash "grep -rn chat.postMessage $T/rd/src/slack.ts"
+allowed "a grep for the endpoint in the helper still passes"
+
+# A Python script's imports are followed the same way: a sibling module, a package and its
+# __init__.py, a relative import inside a package. A module not on disk beside it is the standard
+# library or an installed package, so `import json` is not an import the gate cannot find; a relative
+# one that names nothing is.
+mkdir -p "$T/py/helpers/inner" "$T/py/ok" "$T/py/cyc" "$T/py/badpkg"
+printf '%s\n' 'import json, os' 'import notify_helper' 'notify_helper.go()' > "$T/py/run_alert.py"
+printf '%s\n' 'import urllib.request' 'def go():' '    urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/py/notify_helper.py"
+printf '%s\n' 'from helpers.inner import relay' 'relay.go()' > "$T/py/run_pkg.py"
+: > "$T/py/helpers/__init__.py"; : > "$T/py/helpers/inner/__init__.py"
+printf '%s\n' 'from . import sender' 'def go():' '    sender.send()' > "$T/py/helpers/inner/relay.py"
+printf '%s\n' 'def send():' '    return "https://hooks.slack.com/services/T0/B0/x"' > "$T/py/helpers/inner/sender.py"
+printf '%s\n' 'from .gone import thing' > "$T/py/badpkg/mod.py"; : > "$T/py/badpkg/__init__.py"
+printf '%s\n' 'from badpkg import mod' > "$T/py/run_bad.py"
+for posts in "python3 $T/py/run_alert.py" "cd $T/py && python3 run_alert.py" "uv run $T/py/run_alert.py" \
+  "python3 $T/py/run_pkg.py"; do
+  run_bash "$posts"
+  refused "a Python script importing a helper that posts, run as: $posts"
+done
+run_bash "python3 $T/py/run_alert.py"
+says "the refusal names the Python helper" "notify_helper.py"
+run_bash "python3 $T/py/run_pkg.py"
+says "the refusal names the Python helper three imports deep" "sender.py"
+run_bash "python3 $T/py/run_bad.py"
+refused "a Python relative import the gate cannot find"
+says "the refusal names the relative import it could not find" ".gone"
+printf '%s\n' 'import a_mod' 'a_mod.f()' > "$T/py/cyc/main.py"
+printf '%s\n' 'import b_mod' 'def f():' '    return b_mod' > "$T/py/cyc/a_mod.py"
+printf '%s\n' 'import a_mod' > "$T/py/cyc/b_mod.py"
+run_bash "python3 $T/py/cyc/main.py"
+allowed "a Python import cycle that names no endpoint ends and passes"
+printf '%s\n' 'import json, sys, requests' 'from pathlib import Path' 'from draft_saver import save' 'save("hi")' > "$T/py/ok/main.py"
+printf '%s\n' 'from pathlib import Path' 'def save(text):' '    Path("drafts/out.md").write_text(text)  # a draft for Dan' > "$T/py/ok/draft_saver.py"
+run_bash "python3 $T/py/ok/main.py"
+allowed "a Python script importing the standard library, a package and a helper that only saves a draft"
+
+# Code given inline or fed on standard input imports from the directory it runs in.
+run_bash "cd $T/py && python3 -c 'import notify_helper; notify_helper.go()'"
+refused "python3 -c importing a helper that posts"
+run_bash "cd $T/imp && node -e 'require(\"./lib/notify\")()'"
+refused "node -e requiring a helper that posts"
+says "the inline refusal names the helper" "index.js"
+run_bash "cd $T/py && python3 - <<'PY'
+import notify_helper
+notify_helper.go()
+PY"
+refused "a Python script fed on standard input importing a helper that posts"
+run_bash "cd $T/py && python3 -c 'import json; print(json.dumps(1))'"
+allowed "python3 -c importing only the standard library"
+run_bash "cd $T/imp && node -e 'console.log(require(\"node:fs\").existsSync(\"x\"))'"
+allowed "node -e requiring only a builtin"
+run_bash "cat $T/rd/src/digest.ts"
+allowed "reading the importing script runs nothing"
+
 echo "slack drafts only: /nudge is the one script let through"
 
 if [ -f "$NUDGE" ]; then check "nudge.py is where the gate expects it, beside the hooks" ok
