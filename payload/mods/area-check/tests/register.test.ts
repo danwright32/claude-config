@@ -43,7 +43,8 @@ const WRITES: Record<string, unknown> = {
   'cp -R lib/. src/': { files: [{ word: 'src/.', path: '/w/app/src/.', sources: ['/w/app/lib'] }, { word: 'src', path: '/w/app/src', sources: ['/w/app/lib'], tree: true }], changes: [], unnamed: [] },
   // ditto merges what a source folder holds into its destination whatever the slash, a tree (#2396).
   'ditto gen/ src/': { files: [{ word: 'src/gen', path: '/w/app/src/gen', sources: ['/w/app/gen'] }, { word: 'src', path: '/w/app/src', sources: ['/w/app/gen'], tree: true }], changes: [], unnamed: [] },
-  'rsync -a lib/ src/': { files: [{ word: 'src/', path: '/w/app/src', sources: ['/w/app/lib'], mayBeFolder: true }], changes: [], unnamed: [] },
+  // rsync copies what a source ending in a slash holds into src, a whole tree (#2396).
+  'rsync -a lib/ src/': { files: [{ word: 'src/', path: '/w/app/src', sources: ['/w/app/lib'], mayBeFolder: true, tree: true }], changes: [], unnamed: [] },
 }
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or

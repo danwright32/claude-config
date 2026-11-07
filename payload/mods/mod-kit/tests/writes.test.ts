@@ -292,6 +292,17 @@ describe('writes: copying, moving and linking', () => {
     expect(paths('rsync -av --exclude .git notes.md ~/.claude/CLAUDE.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
     expect(paths('rsync -av CLAUDE.md host:backup/')).toEqual([])
   })
+  // rsync copies what a source ending in a slash or slash dot holds into the destination, there or not
+  // (measured on this Mac's rsync 3.4.1, #2396): a tree. A source with neither lands under its own name.
+  test('rsync of a source ending in a slash or slash dot writes its contents into the destination, a whole tree', () => {
+    for (const command of ['rsync -a lib/ src/', 'rsync -a lib/ src', 'rsync -a lib/. src/', 'rsync -a lib/. src', 'rsync -av --exclude .git lib/./ src'])
+      expect(trees(command)).toEqual([{ path: `${CWD}/src`, sources: [`${CWD}/lib`] }])
+    expect(trees('rsync -a lib/ host:src/')).toEqual([])
+  })
+  test('rsync of a source with no slash lands as the folder itself, with no tree', () => {
+    expect(read('rsync -a lib src/').files).toEqual([{ word: 'src/lib', path: `${CWD}/src/lib`, sources: [`${CWD}/lib`] }])
+    expect(trees('rsync -a lib/.git src/')).toEqual([])
+  })
   test('dd writes what of= names', () => {
     expect(paths('dd if=rules.md of=CLAUDE.md bs=1k')).toEqual([`${CWD}/CLAUDE.md`])
   })

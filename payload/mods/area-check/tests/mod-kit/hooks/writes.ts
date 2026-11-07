@@ -929,13 +929,15 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       let into: string | undefined
       let sources = ops
       let copied = true
+      // A source whose last part is a dot (lib/., or . itself) names what that folder holds (#2396).
+      const dotted = (s: string) => /(^|\/)\.\/*$/.test(s)
       if (typeof intoOpt === 'string') into = intoOpt
       else {
         const dest = ops[ops.length - 1]
         sources = ops.slice(0, -1)
         if (dest === undefined || sources.length === 0 || isRemote(dest)) copied = false
-        // rsync copies a folder's contents for a source ending in /, so only the folder is known.
-        else if ((sources.length > 1 || dest.endsWith('/')) && !(name === 'rsync' && sources.some(s => s.endsWith('/')))) into = dest
+        // rsync copies a folder's contents for a source ending in / or /., so only the folder is known.
+        else if ((sources.length > 1 || dest.endsWith('/')) && !(name === 'rsync' && sources.some(s => s.endsWith('/') || dotted(s)))) into = dest
         // One source onto one name lands inside it when that is an existing folder, which only the
         // disk can say (the collision guard's reading, #654), so the write says so.
         else add(dest, abs(dest), { sources: absAll(sources), mayBeFolder: true })
@@ -957,10 +959,12 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       // folder, so every source makes it a tree beside the reading above, which a file source gets
       // (#2396); ditto -c makes the destination one archive file instead. -c is read only in a cluster
       // of ditto's own letters, since its old -rsrc holds a c and copies (all measured on macOS).
+      // rsync copies what a source ending in a slash or slash dot holds into the destination, there or
+      // not, so that is a tree too, beside the folder named above (rsync 3.4.1 on macOS, #2396).
       const archive = name === 'ditto' && [...opts.keys()].some(k => /^-[vVXczjxkh]*c[vVXczjxkh]*$/.test(k))
-      if ((name === 'cp' || (name === 'ditto' && !archive)) && copied) {
+      if ((name === 'cp' || name === 'rsync' || (name === 'ditto' && !archive)) && copied) {
         const dest = (into ?? ops[ops.length - 1]) as string
-        const contents = name === 'ditto' ? sources : sources.filter(s => /(^|\/)\.\/*$/.test(s) || (typeof intoOpt !== 'string' && s.endsWith('/')))
+        const contents = name === 'ditto' ? sources : sources.filter(s => dotted(s) || (typeof intoOpt !== 'string' && s.endsWith('/')))
         const word = dest.replace(/\/+$/, '') || '/'
         if (contents.length) add(word, abs(dest), { sources: absAll(contents), tree: true }, (asWritten.get(dest) ?? dest).replace(/\/+$/, '') || '/')
       }
