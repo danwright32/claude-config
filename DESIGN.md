@@ -1564,8 +1564,37 @@ holding the guard's export; a refusal does not use the notice up. Gh aliases (Da
 judged as what they expand to, read from `gh alias list`. The guard refuses an alias whose list it
 cannot read (cannot tell); the command hook passes it as it always did, consistent with keeping an
 unguarded session's checks unchanged, and in a guarded session the guard refuses it when it runs.
-Not covered, and said so: gh run by its absolute path, a script that rewrites PATH, curl or an API
-library, and gh extensions.
+Not covered, and said so: gh run by its absolute path, a script that rewrites PATH, and curl or an
+API library.
+
+Programs gh starts itself (#2207). The guard first took itself off PATH so its own reads reached the
+real gh, and handed the real gh that PATH, so a gh a shell alias's command ran was the real one,
+unjudged. Measured on gh 2.89.0 in an isolated config folder: a shell alias's command and an
+extension both get gh's own PATH unchanged, and gh expands an alias one level only (an alias naming
+another fails as an unknown command). So the real gh now gets the guard back first on PATH (bin/gh
+puts it there for the commands it lets skip the judge too), which covers a gh run by a shell alias,
+a pager, an editor, a browser command, git or its hooks. What the guard cannot stand in front of is
+refused: an extension (a word that is neither gh's own command nor an alias, an alias to one, or
+`gh extension exec`), since a compiled extension calls the API with no gh at all; `gh copilot`, which
+starts the Copilot CLI, an agent that writes to GitHub itself; and an alias naming another alias, as
+cannot tell. gh's own commands are listed with every other name gh answers to, read from 2.89.0's
+help, so a short name such as `gh cs` is never taken for an extension.
+
+Text gh posts that is not on its command line (#2326). Measured on gh 2.89.0 in a throwaway
+repository, against a local stand in for GitHub (`GH_HOST=github.localhost` makes gh speak plain
+http, so a local proxy answered every request and nothing left the Mac): with no terminal, `gh issue
+comment --editor` and `gh pr comment --editor` run the editor and post what it wrote; `gh issue
+create` and `gh pr create` refuse `--editor`; and `gh pr create` aborts rather than push an unpushed
+branch, which it pushes only when it can ask where. Each form is read where its text can be read and
+refused where it cannot. `--editor` is refused for a public repository. `--fill` is refused unless
+both a title and a body are given, which gh uses over it, rather than reproducing gh's choice of base
+branch and commits. `gh pr create` with no `--head` is judged with the branch's name and the messages
+of every commit no remote holds, a superset of what it would push, so a terminal reaching it changes
+nothing. `gh repo create --push` is judged with the whole history it sends (every ref, for a bare
+repository it mirrors), unless the new repository is private or internal. `gh repo sync` with no
+destination updates the checkout and writes nothing to GitHub; with one, it copies the source's
+commits there, so a public destination is refused a `--source` that is not public, and passes from
+its parent, which GitHub keeps public for every public fork.
 
 ## One watcher, and a leftover loop stops itself (#604)
 

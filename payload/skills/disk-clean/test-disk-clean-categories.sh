@@ -761,6 +761,6 @@ for m in "$CATS"/*.sh; do
   case "${m##*/}" in trash.sh|docker.sh) continue ;; esac
   check "floor: ${m##*/} applies dcs_floor" "$(grep -q 'dcs_floor "' "$m" && echo ok || echo "no dcs_floor call in $m")"
 done
-check "floor: the folder holds the kinds this suite expects (a control on the loop)" "$(eq "$(ls "$CATS"/*.sh | wc -l | tr -d ' ')" 12)"
+check "floor: the folder holds the kinds this suite expects (a control on the loop)" "$(eq "$(ls "$CATS"/*.sh | wc -l | tr -d ' ')" 13)"
 
 finish
