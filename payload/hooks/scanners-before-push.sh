@@ -569,8 +569,12 @@ mkdir -p "$_sc_runs" 2>/dev/null
 _sc_run_stale="${SCANNERS_RUN_STALE_SECONDS:-21600}"
 # Zero however written is the default, never "stale at once" (lib/whole-number.sh, claude-config#1948).
 whole_above_zero "$_sc_run_stale" _sc_run_stale || _sc_run_stale=21600
-# A poll delay that can be injected (L524), for the wait on the suite lock further down.
-_sc_sleep="${SCANNERS_SLEEP:-sleep}"
+# A poll delay that can be injected (L524), for the wait on the suite lock further down. It names a
+# command this gate runs, so it is honoured only under the hooks' test marker, HOOK_TESTS_RUNNING=1,
+# which run-all-tests.sh exports to every suite and no real push carries (claude-config#2399, the
+# class #2317 closed for the merge gates' settings). Anywhere else the sleep on the PATH runs.
+_sc_sleep=sleep
+[ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "${SCANNERS_SLEEP:-}" ] && _sc_sleep="$SCANNERS_SLEEP"
 
 # The run's own script: it runs the suite with its output in the run's folder, then records how long
 # it took and, last, its exit code, written whole by a rename so a reader never sees half of one.
