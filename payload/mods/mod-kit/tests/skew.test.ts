@@ -147,6 +147,15 @@ test("a failed call's code and words are read whatever its path holds, a bracket
   )
 })
 
+// A path that itself holds ") failed: " must not cut the argument short there: the reason is what
+// follows the LAST one (#2328).
+test("a failed call's code and words are read from after the last failed marker, whatever the path holds", async () => {
+  expect(errorCode(new Error('job-watcher: $.fs.stat(/tmp/a) failed: b/job.log) failed: ENOENT'))).toBe('ENOENT')
+  expect(errorText(new Error('scope-modes: $.fs.stat(/tmp/a) failed: b/job.log) failed: EACCES'), 'scope-modes')).toBe(
+    'the file could not be looked up: permission denied (/tmp/a) failed: b/job.log)',
+  )
+})
+
 test('the news of a skew is given once per mod and member in a load, and never for anything else', async () => {
   const a = await thrown(() => $.modkit.mergeHelper({}))
   const b = await thrown(() => $.modkit.mergeHelper({}))

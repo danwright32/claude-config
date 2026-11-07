@@ -30,6 +30,17 @@ test('the state leads the title', () => {
   expect(titleOf('no-deploy', 'x')).toBe('Merged, no deploy step recorded: x')
 })
 
+test('a card with several problems gets every one named in one refusal, and one problem names only itself (#2374)', () => {
+  const why = reasonToRefuse({ ...base, repo: 'scheduler', deploy: 'live', checked: '', changed: 'One sentence.', see: { link: 'nope', clicks: [''] } }) ?? ''
+  expect(why).toContain('owner/name')
+  expect(why).toContain('how it was checked')
+  expect(why).toContain('2 to 3 sentences')
+  expect(why).toContain('see.link')
+  expect(why).toContain('see.clicks')
+  expect(reasonToRefuse({ ...base, pr: 0 })).toBe('pr must be the pull request number.')
+  expect(reasonToRefuse({ ...base, deploy: 'maybe' as never, repo: 'x' }) ?? '').toContain('owner/name')
+})
+
 test('what changed is two or three sentences, and a call missing a field is refused by name', () => {
   expect(reasonToRefuse({ ...base, changed: 'One sentence.' })).toContain('2 to 3 sentences')
   expect(reasonToRefuse({ ...base, changed: 'A. B. C. D.' })).toContain('2 to 3 sentences')

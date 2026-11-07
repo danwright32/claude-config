@@ -2299,6 +2299,17 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 # than moving the budget, which still speaks at the same fraction of the ceiling for the reason
 # given above. The margin on the slower runners is the one to read.
 #
+# WHAT THE SLOWER RUNNERS ARE, read 2026-11-07 (claude-config#2369) from the logs of the 60 runs of
+# the tests workflow on main from 2026-11-05 08:50 to 2026-11-07 05:44 ET: still two groups with
+# nothing between them, 934s to 1180s (39 runs) and 1263s to 1379s (21 runs). Every runner reported
+# 4 cores and the same image, so neither explains it. The slower group is slower at another suite
+# bound by its own work too (test-merge-when-ready.sh, 365s against 287s on average) and hardly at
+# one that mostly waits (test-run-all-tests.sh, 447s against 428s), so it is the processor. It
+# follows the Azure region the log names: centralus was fast in 15 runs of 16, westus3 in 9 of 9,
+# while eastus was slow in 8 of 10 and westus in 4 of 4. The log never names the processor model, so
+# which hardware sits behind each region cannot be read from it. A hosted runner cannot be chosen, so
+# the budget has to fit the slower group, and #2369 cut the three newest sections rather than move it.
+#
 # SET FROM THAT SPREAD, 2026-10-25 (claude-config#1667). The 40 runs of the tests workflow on main
 # from 2026-10-24 01:17 to 2026-10-25 04:24 UTC, read from their logs with gh, are in
 # tests/ci-section-time-readings.tsv: the same two groups, 885s to 1092s and 1192s to 1362s, the
@@ -7337,10 +7348,18 @@ printf '%s\n' "${st:-in_progress}"
 STUB
 chmod +x "$TABIN/gh"
 ta_set(){ printf '%s %s\n' "$1" "$2" >> "$TASTATES"; }   # $1 = commit  $2 = its check state
-ta_publish(){   # $1 = skill  $2 = body -> the other Mac publishes by hand, and the new head is printed
-  mkskill "$TAHA/skills/$1/SKILL.md" "$2"
-  CLAUDE_HOME="$TAHA" SYNC_REPO="$TAA" SYNC_HOSTNAME=mac-ta-A SYNC_CLONE_REGISTRY="$TAREG" \
-    SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1 || true
+# Every commit after the base lands on main with git alone, the way the incident's did: #2194 and
+# #2202 were pull requests merging, not another Mac's send. A whole claude-sync run on the other
+# side added nothing this section reads, since only the commit and its check state decide what a
+# tick takes in, and it cost about a second for each of seven commits (claude-config#2369). The
+# base still goes up through claude-sync, below, so the shared repo has the shape a send gives it.
+ta_publish(){   # $1 = skill  $2 = body -> a commit lands on the shared main, and the new head is printed
+  git -C "$TAA" fetch -q origin 2>/dev/null
+  git -C "$TAA" reset -q --hard origin/main
+  mkskill "$TAA/payload/skills/$1/SKILL.md" "$2"
+  git -C "$TAA" add "payload/skills/$1/SKILL.md"
+  git -C "$TAA" -c user.name=fixture -c user.email=fixture@example.invalid commit -q -m "add the $1 skill"
+  git -C "$TAA" push -q origin HEAD:main 2>/dev/null
   git -C "$TAB" rev-parse main
 }
 ta_tick(){   # -> the output of an automatic tick on Mac B, the one the watcher runs
@@ -7354,7 +7373,9 @@ ta_shared_has(){   # $1 = skill  $2 = text -> does the shared repo's main hold i
   case "$body" in *"$2"*) return 0 ;; *) return 1 ;; esac
 }
 ta_clone_holds(){ git -C "$TAR" merge-base --is-ancestor "$1" HEAD 2>/dev/null; }
-ta_publish base 'base' >/dev/null
+mkskill "$TAHA/skills/base/SKILL.md" 'base'
+CLAUDE_HOME="$TAHA" SYNC_REPO="$TAA" SYNC_HOSTNAME=mac-ta-A SYNC_CLONE_REGISTRY="$TAREG" \
+  SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1 || true
 CLAUDE_HOME="$TAHB" SYNC_REPO="$TAR" SYNC_HOSTNAME=mac-ta-B SYNC_CLONE_REGISTRY="$TAREG" \
   SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1 || true
 # The other Mac publishes twice, faster than one run of the tests takes, and this Mac edits too.
@@ -20807,13 +20828,21 @@ check "onFailure a field this Mac changed itself still wins on the send" \
 # The apply direction. B changes a field and does NOT send it; A changes a different registration
 # and publishes; B pulls. What arrives is primary and still holds the field as it was, so B's unsent
 # change is the secondary side's change and must survive the apply.
+#
+# A's change is made on its own copy, which has never taken in B's timeout, and goes up in the same
+# send that has to keep that timeout. That used to be two sends, one with nothing of A's own in it
+# and one after rewriting A's copy with B's timeout already filled in, a whole run of claude-sync
+# for nothing the checks below cannot see (#2369). A stale copy that also carries a change of its
+# own is the harder of the two for the send, since it cannot simply publish nothing.
 jq --arg c "$OFB_H/hooks/scangate.sh" '(.hooks.PreToolUse[].hooks[] | select(.command == $c) | .statusMessage) = "Scanning B"' \
   "$OFB_H/settings.json" > "$OFB_H/settings.json.new" && mv "$OFB_H/settings.json.new" "$OFB_H/settings.json"
+check "onFailure (the fixture: A's own copy still holds the timeout B replaced)" \
+  "[ \"\$(of_entry '$OFA_H/settings.json' scangate.sh | jq -r '.[0].timeout')\" = 180 ]"
+jq --arg c "$OFA_H/hooks/other.sh" '(.hooks.PreToolUse[].hooks[] | select(.command == $c) | .timeout) = 5' \
+  "$OFA_H/settings.json" > "$OFA_H/settings.json.new" && mv "$OFA_H/settings.json.new" "$OFA_H/settings.json"
 of_sync "$OFA_H" "$OFA_R"
 check "onFailure A's own send took B's timeout rather than reverting it" \
   "[ \"\$(of_entry '$OFA_R/payload/settings.hooks.json' scangate.sh | jq -r '.[0].timeout')\" = 300 ]"
-of_settings "$OFA_H" '{"timeout":300,"onFailure":"block","statusMessage":"Scanning","futureField":{"nested":[1,2]}}' '{"timeout":5}'
-of_sync "$OFA_H" "$OFA_R"
 of_pull "$OFB_H" "$OFB_R"
 check "onFailure the apply really brought A's change in" \
   "[ \"\$(of_entry '$OFB_H/settings.json' other.sh)\" = '[{\"type\":\"command\",\"timeout\":5}]' ]"
@@ -20886,9 +20915,16 @@ done
 NR_DANGLING
 chmod +x "$NR_SHIM/dangling.sh"
 
-# A publishes the base: three Bash gates.
-nr_script "$NRA_H" keep.sh gone.sh moved.sh
-nr_settings "$NRA_H" "Bash=keep.sh,gone.sh,moved.sh"
+# nr_level <clone> -> the clone's HEAD is the shared repo's tip, so a pull there would take in nothing
+nr_level(){
+  local b; b="$(git -C "$1" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+  [ "$(git -C "$1" rev-parse HEAD 2>/dev/null)" = "$(git -C "$1" ls-remote origin "refs/heads/$b" 2>/dev/null | cut -f1)" ]
+}
+
+# A publishes the base: four Bash gates. keep2.sh is there for the controls further down, which
+# used to add it with a publish and an apply of their own, two runs of claude-sync each (#2369).
+nr_script "$NRA_H" keep.sh gone.sh moved.sh keep2.sh
+nr_settings "$NRA_H" "Bash=keep.sh,gone.sh,moved.sh,keep2.sh"
 nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a1"
 git clone -q "$NRB" "$NRB_R" 2>/dev/null
 nr_pull "$NRB_H" "$NRB_R" "$NR_OUT/b1"
@@ -20898,7 +20934,7 @@ check "#1902 B starts from the published base" \
 # A removes one gate outright and moves another to a different matcher group, and publishes. B's
 # clone is brought forward by git alone: pulled, not yet applied, the window of the incident.
 rm -f "$NRA_H/hooks/gone.sh"
-nr_settings "$NRA_H" "Bash=keep.sh" "Edit|Write=moved.sh"
+nr_settings "$NRA_H" "Bash=keep.sh,keep2.sh" "Edit|Write=moved.sh"
 nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a2"
 nr_fetch "$NRB_R"
 check "#1902 B's payload holds the removal and the move its config has not seen" \
@@ -20919,11 +20955,10 @@ check "#1902 a gate nobody touched is still registered on both sides" \
 
 # THE CONTROLS (L324). A registration B CHANGED itself, which the repo removed meanwhile, is B's
 # work rather than a stale copy, so it is kept: a removal never beats an unsent edit (L5). And a
-# registration B added and has not sent still goes up.
-nr_script "$NRA_H" keep2.sh
-nr_settings "$NRA_H" "Bash=keep.sh,keep2.sh" "Edit|Write=moved.sh"
-nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a3"
-nr_pull "$NRB_H" "$NRB_R" "$NR_OUT/b3"
+# registration B added and has not sent still goes up. B has held keep2.sh since the base, applied
+# and unchanged, which is the state the repo's removal of it now meets.
+check "#1902 (the fixture: B holds keep2.sh, applied and unchanged, before the repo removes it)" \
+  "[ \"\$(nr_group_of '$NRB_H/settings.json' keep2.sh)\" = Bash ] && [ \"\$(jq -r --arg c '/hooks/keep2.sh' '[.hooks.PreToolUse[].hooks[] | select(.command | endswith(\$c)) | .timeout // \"none\"] | join(\",\")' '$NRB_H/settings.json')\" = none ]"
 nr_settings "$NRA_H" "Bash=keep.sh" "Edit|Write=moved.sh"
 nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a4"
 nr_fetch "$NRB_R"
@@ -20998,7 +21033,9 @@ check "#1913 an unchanged refusal is said once, not on every pull" \
 nr_sync "$NRB_H" "$NRB_R" "$NR_OUT/b8"
 check "#1913 the refusal is not sent back as a removal" \
   "[ \"\$(nr_shared '$NRB_R' | jq -r '[.. | .command? // empty | select(endswith(\"/hooks/nofile.sh\"))] | length')\" = 1 ]"
-nr_pull "$NRA_H" "$NRA_R" "$NR_OUT/a8"
+# A pull on A here took in nothing, and cost a run of claude-sync (#2369): B's send above held its
+# refusal back, so A's own last sync is still the shared tip. Asserted rather than assumed.
+check "#1913 (the fixture: A is level with the shared repo, so it has nothing to take in first)" "nr_level '$NRA_R'"
 nr_script "$NRA_H" nofile.sh
 nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a9"
 nr_pull "$NRB_H" "$NRB_R" "$NR_OUT/b9"
@@ -21018,7 +21055,7 @@ printf 'ran\n' >> "$NR_OUT/shim-ran"
 exit \$rc
 NR_RSYNC
 chmod +x "$NR_SHIM/rsync"
-nr_pull "$NRA_H" "$NRA_R" "$NR_OUT/a9b"
+check "#1913 (the fixture: A is still level with the shared repo before the rename)" "nr_level '$NRA_R'"
 nr_script "$NRA_H" renamed.sh
 rm -f "$NRA_H/hooks/keep.sh"
 nr_settings "$NRA_H" "Bash=renamed.sh,nofile.sh" "Edit|Write=moved.sh"
@@ -21067,7 +21104,7 @@ check "#1902 a pull puts back every registration when settings.json lost them al
 # block: read as the repo removing every line it holds unchanged, the drop would publish that and
 # its own apply would empty it too. An empty secondary side drops nothing, so it publishes its block
 # back instead.
-nr_pull "$NRA_H" "$NRA_R" "$NR_OUT/a13"
+check "#1902 (the fixture: A is level with the shared repo, since only pulls ran after its send)" "nr_level '$NRA_R'"
 jq 'del(.hooks)' "$NRA_H/settings.json" > "$NRA_H/settings.json.new" && mv "$NRA_H/settings.json.new" "$NRA_H/settings.json"
 nr_sync "$NRA_H" "$NRA_R" "$NR_OUT/a14"
 check "#1902 a Mac that lost its hooks publishes an empty block (the case below is real)" \
@@ -22768,10 +22805,24 @@ out_606h="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANG" SYNC
 _mh=$(( SECONDS - _mh0 ))
 check "#606 a hanging claude does not hold the pull for its whole hang" "[ '$_mh' -lt \$(( _mhang / 2 )) ]"
 check "#606 and the pull says the check did not answer in time" "line_has \"\$out_606h\" 'could not check' 'within'"
-# The same bound holds the per mod validation, which is the other question asked.
+# The same bound holds the per mod validation, which is the other question asked. One bound covers
+# both calls, so with a 1s bound the LIST had to answer inside 1s before the validation was reached:
+# at load 9.79 on 2026-11-06 it did not, the pull said the list timed out, and no mod was named (#2091, reproduced
+# by slowing the list past the bound). So the clock is SET rather than waited out (L290): the bound
+# is far longer than the list can take, and the validation stub reads the alarm it inherited across
+# exec (proving SYNC_CLAUDE_CHECK_TIMEOUT reached it, not no bound and not the 30s default) and then
+# fires it at once, which is what the bound does to a validation that hangs.
 MDHANGV="$WORK/mods-hanging-validate"
-printf '#!/bin/bash\ncase "$1 $2" in "plugin list") echo "[{\\"id\\":\\"alpha-mod@inline\\",\\"enabled\\":true}]" ;; "plugin validate") exec sleep 60 ;; esac\n' > "$MDHANGV"; chmod +x "$MDHANGV"
-out_606hv="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANGV" SYNC_CLAUDE_CHECK_TIMEOUT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+cat > "$MDHANGV" <<'HANGV'
+#!/bin/bash
+case "$1 $2" in
+  "plugin list") echo '[{"id":"alpha-mod@inline","enabled":true}]' ;;
+  "plugin validate") exec perl -e 'my $left = alarm 0; if ($left <= 60) { print "error: bound left ${left}s\n"; exit 3 } kill "ALRM", $$; sleep 60' ;;
+esac
+HANGV
+chmod +x "$MDHANGV"
+out_606hv="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANGV" SYNC_CLAUDE_CHECK_TIMEOUT=120 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#606 hanging validation pull: $out_606hv"
 check "#606 a hanging validation is stopped and named for its mod" "line_has \"\$out_606hv\" 'alpha-mod' 'within'"
 # The match is on the `<name>@inline` id measured on 2.1.288. A list with no inline plugin at all is
 # either every mod failing to load or a renamed format, and nothing here can tell which: one line

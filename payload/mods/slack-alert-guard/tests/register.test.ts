@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVE, CHANGE, HEADER, SCAN_MS, wordingKey } from '../hooks/rules.ts'
+import { APPROVE, CHANGE, HEADER, REEXPORT_HOPS, SCAN_MS, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
@@ -104,7 +104,11 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       if (argv[3] === 'grep') {
         if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
         const patterns = argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [new RegExp(a, 'i')] : []))
-        const hits = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && patterns.every(re => re.test(files[p] ?? '')))
+        // The pathspecs after --, as git reads them: '.' is every file, '*.ts' any file ending .ts.
+        const specs = argv.slice(argv.indexOf('--') + 1)
+        const inSpec = (p: string) => specs.some(s => s === '.' || (s.startsWith('*.') && p.endsWith(s.slice(1))))
+        // git grep reads line by line, so each pattern must match within one line of the file.
+        const hits = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && inSpec(p) && patterns.every(re => (files[p] ?? '').split('\n').some(l => re.test(l))))
         if (!hits.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
         return ok(hits.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''))
       }
@@ -372,7 +376,8 @@ test('a template no file sends passes, after a search that ran; so does a file o
   const DIGEST = '/w/app/lib/templates/digest.ts'
   const w = world($, on, { files: { ...sent.files, [DIGEST]: 'export const digest = `Nightly digest ready`\n' } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'Nightly digest ready', new_string: 'Nightly digest is ready' }))).toBe('')
-  expect(grepped(w)).toBe(1)
+  // One grep for files sending it, one for files handing it on (#2286).
+  expect(grepped(w)).toBe(2)
   // Every git call is bounded by the scan's deadline.
   expect(w.gits.every(g => typeof g.timeoutMs === 'number' && g.timeoutMs > 0 && g.timeoutMs <= SCAN_MS)).toBe(true)
   expect(refusalOf(await call($, { tool: 'Write', file_path: '/elsewhere/messages.ts', content: 'export const m = "Disk is full"\n' }))).toBe('')
@@ -381,6 +386,48 @@ test('a template no file sends passes, after a search that ran; so does a file o
   expect(refusalOf(await call($, { tool: 'Edit', file_path: TEMPLATE, old_string: 'id: string', new_string: 'deployId: string' }))).toBe('')
   expect(w.gits.length).toBe(before)
   expect(w.ran.length).toBe(3)
+})
+
+// Pivot, 2026-11-06: a project's CLAUDE.md named an engine file and a Slack webhook secret, and a
+// workflow's comment named a test file, so ordinary code edits to both were held as alert wording.
+test('a prose file, or a comment, that names a template and mentions Slack does not make a sender', withKit, async ($, on) => {
+  const USAGE = '/w/app/src/turn-usage.ts'
+  const USAGE_TEXT = 'export const insertUsage = "insert into turn_usage (turn) values (?)"\n'
+  const NOTES = '/w/app/CLAUDE.md'
+  const YML = '/w/app/.github/workflows/deploy.yml'
+  const COMMENTED = '# turn-usage.ts keeps the cost; failures post with SLACK_ALERTS_WEBHOOK\nsteps:\n  - run: curl -X POST "$SLACK_ALERTS_WEBHOOK" -d "{}"\n'
+  const w = world($, on, {
+    files: {
+      [USAGE]: USAGE_TEXT,
+      [NOTES]: 'Usage lives in `src/turn-usage.ts`. Alerts post through `SLACK_ALERTS_WEBHOOK` to Slack.\n',
+      [YML]: COMMENTED,
+    },
+  })
+  const edit = { tool: 'Edit', file_path: USAGE, old_string: 'insert into turn_usage (turn) values (?)', new_string: 'insert into turn_usage (turn, run) values (?, ?)' }
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('a sender in a language the guard does not list as code still sends', withKit, async ($, on) => {
+  const VUE = '/w/app/lib/notify.vue'
+  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, [VUE]: SENDER_TEXT } })
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(`which ${VUE} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
+test('a workflow that names a template in a step, not a comment, still sends it', withKit, async ($, on) => {
+  const MSG = '/w/app/alerts/late.txt'
+  const YML = '/w/app/.github/workflows/late.yml'
+  const w = world($, on, {
+    files: {
+      [MSG]: 'Backup is late\n',
+      [YML]: '# posts the late notice\nsteps:\n  - run: curl -X POST "$SLACK_ALERTS_WEBHOOK" --data-binary @alerts/late.txt\n',
+    },
+  })
+  const why = refusalOf(await call($, { tool: 'Write', file_path: MSG, content: 'Backup is late on db-1\n' }))
+  expect(why).toContain(`which ${YML} sends to Slack`)
+  expect(w.ran).toEqual([])
 })
 
 test('a search that cannot finish, runs past its deadline, or meets an unreadable file holds the edit, saying why', withKit, async ($, on) => {
@@ -405,6 +452,113 @@ test('a search that cannot finish, runs past its deadline, or meets an unreadabl
   expect(unread).toContain('could not check')
   expect(unread).toContain(SENDER)
   expect(w.ran).toEqual([])
+})
+
+// claude-config#2286: the template reaches its sender through files that import and re-export it.
+const BARREL = '/w/app/lib/templates/index.ts'
+const BARREL_TEXT = "export * from './deploy'\n"
+const NOTIFY = '/w/app/lib/notify.ts'
+const notifies = (from: string) =>
+  `import { deployFailed } from '${from}'\nexport const notify = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: deployFailed(id) }) })\n`
+const reexports = (from: string) => `export { deployFailed } from '${from}'\n`
+
+test('a template re-exported once, then sent to Slack, is held naming the file that sends it', withKit, async ($, on) => {
+  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [NOTIFY]: notifies('./templates') } })
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(TEMPLATE)
+  expect(why).toContain(`which ${NOTIFY} sends to Slack`)
+  expect(w.ran).toEqual([])
+  await ask($, w, why, APPROVE)
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+})
+
+test('a template re-exported twice, then sent to Slack, is held naming the file that sends it', withKit, async ($, on) => {
+  const MESSAGES = '/w/app/lib/messages.ts'
+  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [MESSAGES]: reexports('./templates'), [NOTIFY]: notifies('./messages') } })
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(`which ${NOTIFY} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
+test(`a template handed on through ${REEXPORT_HOPS} files is followed; through more, the edit is held as could not check`, withKit, async ($, on) => {
+  const ALPHA = '/w/app/lib/alpha.ts'
+  const BRAVO = '/w/app/lib/bravo.ts'
+  const CHARLIE = '/w/app/lib/charlie.ts'
+  const chain = { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [ALPHA]: reexports('./templates'), [BRAVO]: reexports('./alpha') }
+  const w = world($, on, { files: { ...chain, [NOTIFY]: notifies('./bravo') } })
+  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${NOTIFY} sends to Slack`)
+  // One file more than the guard follows: it cannot say whether that file is sent, so it holds.
+  w.files[CHARLIE] = reexports('./bravo')
+  w.files[NOTIFY] = notifies('./charlie')
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain('could not check')
+  expect(why).toContain(`more than ${REEXPORT_HOPS} files`)
+  expect(why).toContain(CHARLIE)
+  expect(w.ran).toEqual([])
+})
+
+test('a re-export cycle ends: with a sender beside it the edit is held, with none it passes', withKit, async ($, on) => {
+  const ALPHA = '/w/app/lib/alpha.ts'
+  const BRAVO = '/w/app/lib/bravo.ts'
+  const loop = { [TEMPLATE]: TEMPLATE_TEXT, [ALPHA]: "export * from './templates/deploy'\nexport * from './bravo'\n", [BRAVO]: "export * from './alpha'\n" }
+  const w = world($, on, { files: { ...loop, [NOTIFY]: notifies('./bravo') } })
+  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${NOTIFY} sends to Slack`)
+  expect(w.ran).toEqual([])
+  delete w.files[NOTIFY]
+  const before = grepped(w)
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  // Each level of the search is one grep for senders and one for files handing it on, and the
+  // loop back to alpha.ts adds no level.
+  expect(grepped(w) - before).toBeGreaterThan(2)
+  expect(grepped(w) - before).toBeLessThanOrEqual(2 * (REEXPORT_HOPS + 1))
+  expect(w.ran.length).toBe(1)
+})
+
+test('a template re-exported but sent to Slack by nothing passes, after the chain was followed', withKit, async ($, on) => {
+  const MESSAGES = '/w/app/lib/messages.ts'
+  const USES = '/w/app/lib/report.ts'
+  const w = world($, on, {
+    files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [MESSAGES]: reexports('./templates'), [USES]: "import { deployFailed } from './messages'\nconsole.log(deployFailed('1'))\n" },
+  })
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  // Past the first grep: the barrel and messages.ts were each searched for.
+  expect(grepped(w)).toBeGreaterThan(2)
+  expect(w.ran.length).toBe(1)
+})
+
+// #2368 met #2286: past the template's own level, a prose file or a comment still sends nothing.
+test('a prose file, or a comment, naming a file that hands the template on does not make a sender', withKit, async ($, on) => {
+  const NOTES = '/w/app/docs/alerts.md'
+  const YML = '/w/app/.github/workflows/deploy.yml'
+  const w = world($, on, {
+    files: {
+      [TEMPLATE]: TEMPLATE_TEXT,
+      [BARREL]: BARREL_TEXT,
+      [NOTES]: 'Deploy notices come from `lib/templates/index.ts` and post through SLACK_WEBHOOK_URL.\n',
+      [YML]: '# lib/templates/index.ts holds the wording; it posts with SLACK_WEBHOOK_URL\nsteps:\n  - run: curl -X POST "$SLACK_WEBHOOK_URL" -d "{}"\n',
+    },
+  })
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  // The barrel's level was searched too, so the prose file and the comment were met and passed over.
+  expect(grepped(w)).toBeGreaterThan(2)
+})
+
+test('a commented import does not hand a template on, and a Slack marker in a comment does not stop a file that does', withKit, async ($, on) => {
+  const MESSAGES = '/w/app/lib/messages.ts'
+  const w = world($, on, {
+    files: {
+      [TEMPLATE]: TEMPLATE_TEXT,
+      [MESSAGES]: "// was: export { deployFailed } from './templates/deploy'\nexport const other = 1\n",
+      [NOTIFY]: notifies('./messages'),
+    },
+  })
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  // A comment naming the Slack webhook makes messages.ts neither the sender nor a dead end: it is
+  // followed to the file that really sends the template.
+  w.files[MESSAGES] = "// posts nothing itself, never SLACK_WEBHOOK_URL; notify.ts does\nexport { deployFailed } from './templates/deploy'\n"
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(`which ${NOTIFY} sends to Slack`)
+  expect(why).not.toContain(`which ${MESSAGES}`)
 })
 
 test('the calls waiting on Dan are dropped at session end', withKit, async ($, on) => {

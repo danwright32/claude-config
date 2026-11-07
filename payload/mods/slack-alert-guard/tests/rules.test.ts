@@ -2,13 +2,18 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   MARKERS,
+  REEXPORT_HOPS,
   SENDER_PREFILTER,
   agentRefusal,
+  codeOf,
   editedText,
+  handsOn,
   heldText,
   inScope,
   isOwnRecord,
   isProse,
+  isProseFile,
+  linkPattern,
   literalsOf,
   mentionsStore,
   question,
@@ -18,6 +23,7 @@ import {
   searchTerm,
   slackMarked,
   templateLines,
+  termsPattern,
   textTemplate,
   wordingChange,
   wordingKey,
@@ -193,6 +199,36 @@ test('a text template is read line by line, and the search term is the name a se
   expect(searchTerm('app/alerts/__init__.py')).toBe('alerts')
 })
 
+// claude-config#2286: a template handed on through a file that imports and re-exports it.
+test('a file hands a template on when it can export what it imports: a JS or TS export, or any python module', () => {
+  for (const text of ["export * from './deploy'\n", "export { deployFailed } from './deploy'\n", "import t from './deploy'\nexport default t\n", "export{ t }\n", "module.exports = require('./deploy')\n", "exports.deployFailed = require('./deploy').deployFailed\n"])
+    expect(handsOn('lib/messages.ts', text)).toBe(true)
+  expect(handsOn('lib/messages.mjs', "export * from './deploy'\n")).toBe(true)
+  expect(handsOn('app/templates/__init__.py', 'from .deploy import TEXT\n')).toBe(true)
+  // A JS file that only uses what it imports cannot hand it to another file.
+  expect(handsOn('lib/use.ts', "import { deployFailed } from './deploy'\nconsole.log(deployFailed('1'))\n")).toBe(false)
+  expect(handsOn('lib/use.ts', "import { deployFailed } from './deploy'\nconst exporter = 1\nfoo.exports.x = 1\n")).toBe(false)
+  // A shell script, a text file, or JSON hands nothing on.
+  expect(handsOn('bin/run.sh', 'export DEPLOY=./deploy\n')).toBe(false)
+  expect(handsOn('docs/notes.md', "export * from './deploy'\n")).toBe(false)
+})
+
+test('the re-export search finds the line that names the template, in a pattern macOS git grep reads', () => {
+  const re = (rels: string[]) => new RegExp(linkPattern(rels), 'i')
+  const one = re(['lib/templates/deploy.ts'])
+  for (const line of ["export * from './deploy'", "const t = require('./deploy')", 'from .deploy import TEXT', 'import templates.deploy', "body = readFileSync('templates/deploy.ts')"]) expect(one.test(line)).toBe(true)
+  expect(one.test('const deploy = 1')).toBe(false)
+  expect(re(['jobs/templates/backup.txt']).test('body = open("templates/backup.txt").read()')).toBe(true)
+  const two = re(['lib/templates/index.ts', 'lib/alpha.ts'])
+  expect(two.test("export * from './templates'")).toBe(true)
+  expect(two.test("export * from './alpha'")).toBe(true)
+  // macOS git grep -E reads \b as matching nothing (measured), so neither pattern may use it.
+  expect(linkPattern(['lib/a.ts', 'b.txt']).includes('\\b')).toBe(false)
+  expect(termsPattern(['lib/templates/deploy.ts'])).toBe('deploy')
+  expect(termsPattern(['lib/templates/index.ts', 'lib/alpha.ts'])).toBe('(templates|alpha)')
+  expect(REEXPORT_HOPS).toBe(3)
+})
+
 test('the sender search keeps every file a Slack marker can match: each marker names slack or postMessage', () => {
   // The repository is searched for SENDER_PREFILTER before any file is read, so a marker that could
   // match text holding neither word would never see its file read.
@@ -219,4 +255,16 @@ test('the question approves the wording of an automated alert in the named file,
   expect(lead).toContain('automated')
   expect(lead).toContain('sends nothing')
   expect(q.endsWith('\n\nDeploy 4182 failed on production')).toBe(true)
+})
+
+test('codeOf drops whole line comments and keeps code, a shebang and code after a closed block comment', () => {
+  expect(codeOf('a.ts', '// notify.ts\nrun(id)\n/* notify.ts */\n * notify.ts\n/* x */ run(id)\n')).toBe('run(id)\n/* x */ run(id)\n')
+  expect(codeOf('a.yml', '# notify.ts\nsteps:\n  - run: go\n')).toBe('steps:\n  - run: go\n')
+  expect(codeOf('job', '#!/bin/sh\n# notify.ts\ncurl x\n')).toBe('#!/bin/sh\ncurl x\n')
+  expect(codeOf('a.json', '{"a": "#b"}\n')).toBe('{"a": "#b"}\n')
+})
+
+test('only prose files are ruled out as senders', () => {
+  for (const p of ['CLAUDE.md', 'docs/runbook.markdown', 'a.mdx', 'a.rst', 'a.adoc', 'notes.txt']) expect(isProseFile(p)).toBe(true)
+  for (const p of ['a.ts', 'a.vue', 'a.sql', 'a.toml', 'a.yml', 'Makefile']) expect(isProseFile(p)).toBe(false)
 })

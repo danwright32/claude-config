@@ -38,6 +38,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def runner():
+    # Loading ai-review-run.py by path would otherwise leave lib/__pycache__ in the installed, synced
+    # hooks lib (#2353, the #1017 class).
+    sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location("ai_review_run", os.path.join(HERE, "ai-review-run.py"))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)

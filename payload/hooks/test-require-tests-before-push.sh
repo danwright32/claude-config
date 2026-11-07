@@ -394,6 +394,44 @@ STUB_CLAUDE_OUT='{"result":"sure thing, looks good to me"}' run_hook "$W" "git p
 want_allowed_notice "judge verdict unparseable"
 want_stderr "judge" "judge verdict unparseable"
 
+# A listing of the push that git FAILED is not an empty push (claude-config#2349). lib/push-changes.sh
+# answered it as one, and the gate let the canary's untested change through silently, as "empty". It
+# now says it could not read what the push carries. git is a stand in failing only that listing.
+. "$DIR/lib/test_failing_git_listing.sh" || { fail=$((fail+1)); echo "FAIL: #2349 lib/test_failing_git_listing.sh is missing"; }
+GF_DIR="$TMPROOT/gitfail"
+failing_git_listing "$GF_DIR" committed || { fail=$((fail+1)); echo "FAIL: #2349 the failing git listing stand in could not be written"; }
+W="$(mk_repo)"; seed_source_only "$W"
+run_hook "$W" "git push" "$GF_DIR:$PATH_STUB"
+want_allowed_notice "#2349 a failed listing of the push says the gate could not list it" "TEST GATE DID NOT RUN.*could not list the files this push carries"
+
+# The same for each DIFF the gate reads (#2349 review): the files were listed, git failed showing
+# their changes, and each reader took that as a diff with nothing in it. The stand in fails only the
+# one diff each case names, so the case shows which reader it was.
+# The docs only check: a diff it could not read is still not docs only, so the zero test floor still
+# refuses (fail closed, #733), but the refusal now says why the comment only exemption was not given.
+GF_DOCS="$TMPROOT/gitfail-docs"
+failing_git_listing "$GF_DOCS" diff '*" diff -U"*' || { fail=$((fail+1)); echo "FAIL: #2349 the failing git diff stand in could not be written"; }
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf '// a note on add\n' > lib/calc.js && git add lib/calc.js && git commit -qm note ) >/dev/null 2>&1
+run_hook "$W" "git push" "$GF_DOCS:$PATH_STUB"
+want_code 2 "#2349 a docs only check whose diff git failed still refuses an untested push"
+want_stderr "could not check whether .*only comments" "#2349 the refusal says the docs only check could not read the diff"
+want_stderr "git failed reading the diff of the commits since .* for lib/calc.js" "#2349 the refusal names the diff git failed and the file"
+# The diff of the tests, and the diff of everything else: either one missing showed the judge a push
+# with half of it gone, and a judge passing that half let the push through silently.
+GF_TESTS="$TMPROOT/gitfail-tests"; GF_CODE="$TMPROOT/gitfail-code"
+failing_git_listing "$GF_TESTS" diff '*" -- tests/calc.test.js "*' || { fail=$((fail+1)); echo "FAIL: #2349 the failing git diff stand in could not be written"; }
+failing_git_listing "$GF_CODE" diff '*" -- . "*' || { fail=$((fail+1)); echo "FAIL: #2349 the failing git diff stand in could not be written"; }
+for gf in tests:"$GF_TESTS" code:"$GF_CODE"; do
+  W="$(mk_repo)"; seed_source_and_test "$W"
+  GF_LOG="$TMPROOT/gitfail-log-${gf%%:*}"; rm -rf "$GF_LOG"; mkdir -p "$GF_LOG"
+  STUB_CLAUDE_LOG="$GF_LOG" STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' \
+    run_hook "$W" "git push" "${gf#*:}:$PATH_STUB"
+  want_allowed_notice "#2349 a failed diff of the ${gf%%:*} says the gate could not read it" "TEST GATE DID NOT RUN.*could not read the diff of the ${gf%%:*}"
+  if [ ! -e "$GF_LOG/call.1" ]; then pass=$((pass+1))
+  else fail=$((fail+1)); echo "FAIL: #2349 a push whose ${gf%%:*} diff git failed was sent to the judge"; fi
+done
+
 # --- the gate's real verdicts must be unaffected by the above -------------
 W="$(mk_repo)"; seed_source_and_test "$W"
 STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"changes\":[],\"missing\":[]}"}' \
@@ -1467,6 +1505,35 @@ STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git pus
 want_code 0 "#2258 a mod with its own tested code and an identical copy passes"
 call_has "$JUDGE_LOG/call.1" "payload/mods/newmod/hooks/index.ts" "the mod's own code is judged"
 call_lacks "$JUDGE_LOG/call.1" "$COPY/hold.ts" "the counted copy is left out of what the judge reads"
+
+# claude-config#2337: when the gate cannot read the tree or git fails part way, an otherwise
+# identical, tested copy counts as nothing and is judged as untested source (refused, as before
+# #2258). A stub git on the path fails one call at a time: STUB_GIT_FAIL names which. The control
+# case runs the same stub with nothing to fail and must still let the copy through, so each refusal
+# below is the failure's doing and not the stub's.
+FAKE_GIT_2337="$TMPROOT/fake-git-2337"; mkdir -p "$FAKE_GIT_2337"
+cat > "$FAKE_GIT_2337/git" <<STUB
+#!/usr/bin/env bash
+case "\${STUB_GIT_FAIL:-}" in
+  tree) [ "\${1:-}" = rev-parse ] && [[ "\$*" == *'HEAD^{tree}'* ]] && exit 128 ;;
+  copy) [ "\${1:-}" = ls-tree ] && [[ "\$*" == *newmod* ]] && exit 128 ;;
+  src)  [ "\${1:-}" = ls-tree ] && [[ "\$*" == *mod-kit/hooks/hold.ts* ]] && [[ "\$*" != *newmod* ]] && exit 128 ;;
+  grep) [ "\${1:-}" = grep ] && exit 128 ;;
+  emptytree) [ "\${1:-}" = rev-parse ] && [[ "\$*" == *'HEAD^{tree}'* ]] && exit 0 ;;
+esac
+exec "$GIT_REAL" "\$@"
+STUB
+chmod +x "$FAKE_GIT_2337/git"
+for mode in none tree copy src grep emptytree; do
+  W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n' "new mod"
+  STUB_GIT_FAIL="$mode" run_hook "$W" "git push" "$FAKE_GIT_2337:$PATH_STUB"
+  if [ "$mode" = none ]; then
+    want_code 0 "#2337 control: the same stub with nothing failing still counts the identical copy"
+  else
+    want_code 2 "#2337 an identical copy counts as nothing when git fails at: $mode"
+    want_stderr "$COPY/hold.ts" "#2337 the copy is judged as untested source when git fails at: $mode"
+  fi
+done
 
 echo
 echo "passed: $pass, failed: $fail"
