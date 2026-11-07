@@ -1629,7 +1629,12 @@ new and the refusal says why.
 A pull request the merge gate sends back for being behind its base (`block-red-merge.sh`, #766) can
 be updated, waited on and merged in one step, run in the background from a checkout of the
 repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] --squash`
-(claude-config#851). It updates the branch, starts the new head's lessons review alongside its
+(claude-config#851). For a log of the run, add `--log=<file>` rather than piping it into `tee`: a
+background command reports its pipeline's last exit, so `... 2>&1 | tee <log>` reads as exit 0
+however the helper ended, and on 2026-11-05 ten helpers stopped by a network outage were each
+reported "completed (exit code 0)", the same as a merge (claude-config#2304). With `--log` the
+helper appends what it says to the file itself, beside its own output, and ends the file with its
+exit and what it means. It updates the branch, starts the new head's lessons review alongside its
 checks, waits for both, updates again if the base has moved meanwhile, and
 then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
 `require-changelog-tag.sh`, `check-closing-merge.sh`, `check-work-names-merge.sh` (#1995),

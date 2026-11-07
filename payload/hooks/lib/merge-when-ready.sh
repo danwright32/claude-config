@@ -3,7 +3,14 @@
 # merge-when-ready.sh: update a pull request that is behind its base, wait for the new head's checks
 # and lessons review, and merge exactly that head the moment both are green (claude-config#851).
 #
-#   bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] [--squash|--merge|--rebase] [--delete-branch]
+#   bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] [--squash|--merge|--rebase] [--delete-branch] [--log=<file>]
+#
+# For a log of the run, pass --log=<file>, never a pipe into tee (claude-config#2304): a background
+# command's exit is its pipeline's last command, so `... 2>&1 | tee <log>` reports tee's exit 0
+# however the helper ended, and on 2026-11-05 ten helpers that had stopped on a network outage were
+# each reported "completed (exit code 0)", the same as a merge. With --log the helper appends what it
+# says to the file itself, beside its own output, and ends the file with its exit and what it means,
+# so the exit the session is told and the log's last line are both the helper's own.
 #
 # With no merge method, the repository's settings choose one when they allow only one, and it stops
 # at once, naming them, when they allow more (claude-config#1476, see choose_method).
@@ -231,9 +238,29 @@ MERGE_WAIT="$(num_or "${MWR_MERGE_RETRY_SECONDS:-}" 120)"
 wrong_head=""; wrong_tries=0
 SELF="bash ~/.claude/hooks/lib/merge-when-ready.sh"
 
+# The log a run was asked to keep (claude-config#2304, see the header): everything it says is
+# appended there too, by say and early, and log_result ends it with the exit and what it means.
+log=""
+to_log(){ [ -z "$log" ] || printf '%s\n' "$1" >> "$log" 2>/dev/null || true; }
+early(){ printf 'merge-when-ready: %s\n' "$1" >&2; to_log "merge-when-ready: $1"; exit 1; }
+log_result(){   # $1 = the exit
+  [ -n "$log" ] || return 0
+  local m
+  case "$1" in
+    0) m="merged" ;;
+    1) m="stopped, needing a person; nothing was merged by this stop" ;;
+    3) m="out of time while still waiting; nothing was merged, and running the same command again resumes" ;;
+    4) m="merged, but the branch was left in place; running the same command again finishes it" ;;
+    64) m="refused its arguments; nothing was merged" ;;
+    129|130|143) m="stopped by a signal; nothing was merged by this run unless a line above says it merged" ;;
+    *) m="ended unexpectedly; read the lines above before assuming anything merged" ;;
+  esac
+  to_log "merge-when-ready: exit $1: $m."
+}
+
 usage(){
-  [ -n "${1:-}" ] && printf 'merge-when-ready: %s\n' "$1" >&2
-  echo "usage: $SELF <pr> [--repo owner/name] [--squash|--merge|--rebase] [--delete-branch]" >&2
+  [ -n "${1:-}" ] && { printf 'merge-when-ready: %s\n' "$1" >&2; to_log "merge-when-ready: $1"; }
+  echo "usage: $SELF <pr> [--repo owner/name] [--squash|--merge|--rebase] [--delete-branch] [--log=<file>]" >&2
   exit 64
 }
 
@@ -244,6 +271,10 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || usage "--repo needs owner/name."
       repo="$2"; shift 2 ;;
     --repo=*) repo="${1#--repo=}"; shift ;;
+    --log)
+      [ $# -ge 2 ] || usage "--log needs a file."
+      log="$2"; shift 2 ;;
+    --log=*) log="${1#--log=}"; shift ;;
     --squash|-s|--merge|-m|--rebase|-r|--delete-branch|-d) flags+=("$1"); shift ;;
     [0-9]*)
       case "$1" in *[!0-9]*) usage "$1 is not a pull request number." ;; esac
@@ -253,6 +284,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$pr" ] || usage "name the pull request by number."
+if [ -n "$log" ]; then
+  if ! : >> "$log" 2>/dev/null; then l="$log"; log=""; usage "--log $l cannot be written. Nothing was merged."; fi
+  to_log "merge-when-ready: started for #$pr${repo:+ in $repo} at $(date '+%Y-%m-%d %H:%M:%S %Z') (pid $$)."
+  trap 'log_result $?' EXIT
+fi
 if [ -n "$repo" ] && ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
   usage "--repo $repo is not owner/name."
 fi
@@ -267,8 +303,7 @@ case "$read_key" in *[!a-f0-9]*) usage "PR_REVIEW_READ is not a read key (a key 
 if [ -n "$read_key" ]; then
   # shellcheck source=ai-review-common.sh
   if ! . "$MWR_LIB/ai-review-common.sh" 2>/dev/null || [ "$(type -t ar_helper_key_typed)" != function ]; then
-    echo "merge-when-ready: $MWR_LIB/ai-review-common.sh is missing, so whether PR_REVIEW_READ was typed in front of this command cannot be read. Nothing was merged." >&2
-    exit 1
+    early "$MWR_LIB/ai-review-common.sh is missing, so whether PR_REVIEW_READ was typed in front of this command cannot be read. Nothing was merged."
   fi
   ar_helper_key_typed "$read_key" || usage "PR_REVIEW_READ was not typed in front of this command, so it does not show the findings were read: a key read out of this helper's output by a script, or carried in a variable or an export, is refused (claude-config#1673). Read the findings, then type the key from the review's refusal: PR_REVIEW_READ=<key> $SELF <pr> ... Nothing was merged."
 fi
@@ -280,15 +315,15 @@ caller_dir="$(pwd -P)"
 cd "$top" || usage "could not enter $top."
 
 # shellcheck source=merge-target.sh
-. "$MWR_LIB/merge-target.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/merge-target.sh is missing, so the pull request cannot be read. Nothing was merged." >&2; exit 1; }
+. "$MWR_LIB/merge-target.sh" 2>/dev/null || early "$MWR_LIB/merge-target.sh is missing, so the pull request cannot be read. Nothing was merged."
 # shellcheck source=gh-poll.sh
-. "$MWR_LIB/gh-poll.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/gh-poll.sh, the polling policy every look follows, is missing. Nothing was merged." >&2; exit 1; }
+. "$MWR_LIB/gh-poll.sh" 2>/dev/null || early "$MWR_LIB/gh-poll.sh, the polling policy every look follows, is missing. Nothing was merged."
 POLL_MAX="$(num_or "${MWR_POLL_MAX_SECONDS:-}" "$GHP_MAX_DEFAULT")"; [ "$POLL_MAX" -ge "$POLL" ] || POLL_MAX="$POLL"
 interval="$POLL"
 # shellcheck source=merge-turn.sh
-. "$MWR_LIB/merge-turn.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/merge-turn.sh is missing, so the repository's turn to merge cannot be taken. Nothing was merged." >&2; exit 1; }
+. "$MWR_LIB/merge-turn.sh" 2>/dev/null || early "$MWR_LIB/merge-turn.sh is missing, so the repository's turn to merge cannot be taken. Nothing was merged."
 # shellcheck source=stacked-prs.sh
-. "$MWR_LIB/stacked-prs.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/stacked-prs.sh is missing, so the pull requests stacked on a branch cannot be listed. Nothing was merged." >&2; exit 1; }
+. "$MWR_LIB/stacked-prs.sh" 2>/dev/null || early "$MWR_LIB/stacked-prs.sh is missing, so the pull requests stacked on a branch cannot be listed. Nothing was merged."
 # A DELIBERATE LOAD WINDOW is named beside every failure (claude-config#1618). On 2026-10-23 this
 # helper stopped five times on GitHub reads at a load average of 342 while a builder's load
 # reproduction ran, and nothing it said named that load. tools/load-window.sh records each window in
@@ -318,10 +353,10 @@ fi
 # goes the same way, however this run ends.
 rr_dir=""
 rr_cleanup(){ [ -z "$rr_dir" ] || rm -rf "$rr_dir"; rr_dir=""; return 0; }
-trap 'turn_leave; mp_clear; rr_cleanup' EXIT
+trap 'mwr_rc=$?; turn_leave; mp_clear; rr_cleanup; log_result "$mwr_rc"' EXIT
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 for t in gh jq git; do
-  command -v "$t" >/dev/null 2>&1 || { echo "merge-when-ready: $t is not on PATH. Nothing was merged." >&2; exit 1; }
+  command -v "$t" >/dev/null 2>&1 || early "$t is not on PATH. Nothing was merged."
 done
 slug="${repo:-$(mt_remote_slug)}"
 [ -n "$slug" ] || usage "this checkout has no GitHub origin; name the repository with --repo owner/name."
@@ -339,7 +374,9 @@ t0="$(now)"
 export MT_SIGNIN_RUN="mwr-$$-$t0"
 dur(){ if [ "$1" -ge 60 ]; then printf '%dm %02ds' "$(($1 / 60))" "$(($1 % 60))"; else printf '%ds' "$1"; fi; }
 elapsed(){ dur $(( $(now) - t0 )); }
-say(){ printf 'merge-when-ready: [%s] %s\n' "$(elapsed)" "$*"; }
+say(){ local l; l="$(printf 'merge-when-ready: [%s] %s' "$(elapsed)" "$*")"; printf '%s\n' "$l"; to_log "$l"; }
+# Text this run prints that is not one of its own lines (the lessons review's verdict), logged the same.
+emit(){ printf '%s\n' "$1"; to_log "$1"; }
 # Every stop after a merge that landed (finish_branch, and a pull request found already merged)
 # tidies the merged branch's agent worktree once its own line is said. The tidy is never able to
 # change the exit: a merge that landed is reported as landed whatever the tidy found.
@@ -1522,9 +1559,9 @@ while :; do
     # An allow can carry findings that repeat ones already answered, listed as answered
     # (claude-config#1338), and minor findings, printed as advisory (claude-config#1356), so the
     # verdict is shown, once each time it changes.
-    0) [ -n "$rev_out" ] && [ "$rev_out" != "${rev_said:-}" ] && { printf '%s\n' "$rev_out"; rev_said="$rev_out"; } ;;
+    0) [ -n "$rev_out" ] && [ "$rev_out" != "${rev_said:-}" ] && { emit "$rev_out"; rev_said="$rev_out"; } ;;
     3) waiting="${waiting:+$waiting, }lessons review still running" ;;
-    *) printf '%s\n' "$rev_out"
+    *) emit "$rev_out"
        # After three rounds of findings the review asks to step back (claude-config#1358), and this
        # line asks the same rather than for the one finding at a time fix the review is asking to end.
        # The words are AR_STEP_BACK_LEAD, defined once in lib/ai-review-common.sh, and count only at

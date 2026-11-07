@@ -1022,6 +1022,46 @@ check_eq "#2289 control: another merge error stops at once" "1" "$rc"
 check_eq "#2289 control: one merge command" "1" "$(count gh-calls 'pr merge')"
 check "#2289 control: naming it" "Stopped: gh pr merge did not merge #7 at ${OLD:0:7}: GraphQL: Pull request is not mergeable" "$out"
 
+# The helper writes its own log (claude-config#2304). Started as `... 2>&1 | tee <log>`, a background
+# helper reports tee's exit, not its own: on 2026-11-05 ten helpers stopped on a network outage and
+# every one was reported as "completed (exit code 0)", the same as a merge. With --log=<file> the
+# helper appends everything it says to the file itself, so no pipe is needed and the exit the session
+# is told is the helper's, and it ends the file with that exit and what it means, so the log alone
+# cannot read a stop as a finish either.
+LOGS="$WORKDIR/logs"; mkdir -p "$LOGS"
+fresh "$OLD" 0 "$GREEN"; rm -f "$LOGS/a.log"
+out="$(run 7 --squash --log="$LOGS/a.log")"; rc=$?
+check_eq "#2304 a merge run with --log exits as the helper does" "0" "$rc"
+check "#2304 still says it on its own output" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check "#2304 the log holds what it said" "Merged #7 in acme/widget at ${OLD:0:7}" "$(cat "$LOGS/a.log" 2>/dev/null)"
+check "#2304 the log's last line is the exit and what it means" "merge-when-ready: exit 0: merged" "$(tail -1 "$LOGS/a.log" 2>/dev/null)"
+check_not "#2304 --log is never handed to gh" "--log" "$(grep 'pr merge' "$ST/gh-calls")"
+
+fresh "$OLD" 0 "$GREEN"; rm -f "$LOGS/b.log"; printf '%s' 'CI is red.' > "$ST/red-gate-deny"
+out="$(run 7 --squash --log "$LOGS/b.log")"; rc=$?
+check_eq "#2304 a stopped run with --log exits 1, never 0" "1" "$rc"
+check "#2304 the log holds the stop" "Stopped: block-red-merge.sh refused the merge of #7" "$(cat "$LOGS/b.log" 2>/dev/null)"
+check "#2304 and ends saying it stopped, nothing merged" "merge-when-ready: exit 1: stopped, needing a person; nothing was merged by this stop" "$(tail -1 "$LOGS/b.log" 2>/dev/null)"
+check_not "#2304 a stopped log never reads as merged" "exit 0" "$(tail -1 "$LOGS/b.log" 2>/dev/null)"
+
+# A log is appended to, each run marked where it starts, so a log kept across runs reads run by run.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash --log="$LOGS/b.log")"; rc=$?
+check_eq "#2304 a second run appended to the same log" "2" "$(grep -c '^merge-when-ready: started' "$LOGS/b.log")"
+check "#2304 its own result last" "merge-when-ready: exit 0: merged" "$(tail -1 "$LOGS/b.log" 2>/dev/null)"
+
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash --log="$LOGS/no-such-folder/c.log")"; rc=$?
+check_eq "#2304 a log that cannot be written is refused before anything" "64" "$rc"
+check "#2304 saying so" "--log $LOGS/no-such-folder/c.log cannot be written" "$out"
+check_eq "#2304 and GitHub was never asked" "0" "$(count gh-calls 'pr view')"
+
+# Every place that documents running it in the background names --log=, never a pipe into tee.
+for f in "$DIR/../../README.md" "$DIR/../skills/orchestrate/SKILL.md" "$HELPER"; do
+  check "#2304 $(basename "$f") documents --log= for a background run" "--log=" "$(cat "$f")"
+  check_not "#2304 $(basename "$f") never pipes the helper into tee" "merge-when-ready.sh <pr> 2>&1 | tee" "$(cat "$f")"
+done
+
 # Refused sign ins are counted across runs too (claude-config#1626): each one this run sees is written
 # to this Mac's ledger, and once the last day holds five, the run says so as a rate across runs, once,
 # where it announces the retry. Four from earlier runs are seeded, inside the day on the fake clock.
