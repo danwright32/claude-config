@@ -1539,29 +1539,29 @@ nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 =
 # The case that failed on 2026-11-04 (#2206), made certain rather than left to the load: the held
 # scanner starts 3 seconds after the gate, later than the 2 second budget the case used to give.
 HELD_STARTS_LATE=3 nokey_case late pidlock 'lib/pid-lock.sh could not be loaded'
-# The early end is a setting for this suite, honoured only while the record of passes is a
-# throwaway, as it is in every case here and never for a real push (#2206, #2217). One push, the
-# same scanner (it starts late by the delay this case sets, then passes) and the file already there
-# with no floor, fired with a throwaway record and with the real one under a stand in home:
-# honoured, the budget ends at once and the push is refused; ignored, the scanner finishes inside
-# its budget and the push goes. The times are settings, not measured.
-EEHOME="$TMPROOT/earlyend-home"; mkdir -p "$EEHOME"
+# The early end is a setting for this suite, honoured only under the hooks' test marker,
+# HOOK_TESTS_RUNNING=1, which run-all-tests.sh exports to every suite and no real push carries
+# (#2206, #2231, the one marker the work names gates read too). One push, the same scanner (it
+# starts late by the delay this case sets, then passes) and the file already there with no floor,
+# fired with the marker and without it, each with a throwaway record of passes: honoured, the
+# budget ends at once and the push is refused; ignored, the scanner finishes inside its budget and
+# the push goes. The times are settings, not measured.
 REE="$(mkrepo earlyend)"; add_held_scanner "$REE" eta "$TMPROOT/earlyend-never-held" 0; commit_all "$REE"
 : > "$TMPROOT/earlyend-ready"
 oEE1="$(HELD_STARTS_LATE=2 SCANNERS_STATE_DIR="$TMPROOT/earlyend-state" SCANNERS_BUDGET_SECONDS=20 \
         SCANNERS_BUDGET_ENDS_WHEN="$TMPROOT/earlyend-ready" fire "$REE" "git push")"; cEE1=$?
 [ "$cEE1" -eq 2 ] && grep -q 'did not finish in' <<< "$oEE1" \
-  && check "#2206 with a throwaway record of passes, the early end is honoured and the budget ends once its file exists" ok \
-  || check "#2206 with a throwaway record of passes, the early end is honoured and the budget ends once its file exists" "exit=$cEE1 out=$oEE1"
+  && check "#2206 under the test marker, the early end is honoured and the budget ends once its file exists" ok \
+  || check "#2206 under the test marker, the early end is honoured and the budget ends once its file exists" "exit=$cEE1 out=$oEE1"
 # The refused push left its run going, as a push with a key does; it is let finish, so the second
 # push's scanner is the only one running.
 hang_wait "ls '$TMPROOT/earlyend-state/runs/'*/*/rc >/dev/null 2>&1"
 : > "$TMPROOT/earlyend-ready"
-oEE2="$( unset SCANNERS_STATE_DIR; HOME="$EEHOME" HELD_STARTS_LATE=2 SCANNERS_BUDGET_SECONDS=20 \
+oEE2="$(HOOK_TESTS_RUNNING= HELD_STARTS_LATE=2 SCANNERS_STATE_DIR="$TMPROOT/earlyend-state-unmarked" SCANNERS_BUDGET_SECONDS=20 \
          SCANNERS_BUDGET_ENDS_WHEN="$TMPROOT/earlyend-ready" fire "$REE" "git push")"; cEE2=$?
 [ "$cEE2" -eq 0 ] \
-  && check "#2206 with the real record of passes, the early end is ignored and the scanner gets its whole budget" ok \
-  || check "#2206 with the real record of passes, the early end is ignored and the scanner gets its whole budget" "exit=$cEE2 out=$oEE2"
+  && check "#2231 outside a test run, the early end is ignored and the scanner gets its whole budget, whatever record of passes is named" ok \
+  || check "#2231 outside a test run, the early end is ignored and the scanner gets its whole budget, whatever record of passes is named" "exit=$cEE2 out=$oEE2"
 nokey_case listing listing 'repo-files.sh --changed'
 nokey_case pidlock pidlock 'lib/pid-lock.sh could not be loaded'
 nokey_case recorded recorded 'lib/recorded-pid.sh could not be loaded'

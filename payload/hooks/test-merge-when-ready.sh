@@ -1327,15 +1327,56 @@ out="$(run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1995 a title edited during the wait stops the merge" "1" "$rc"
 check "#1995 in the gate's words" "title now names a work organisation" "$out"
 check_eq "#1995 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
-# The work names gate is named by MWR_WORK_NAMES_GATE only under the test marker (claude-config#2231):
-# a script named there that answers nothing would stand in for a privacy gate on every merge this
-# helper makes. Outside a test run the installed gate beside it is asked, so the stub never is.
+# Every script this helper runs is named from the environment only under the test marker
+# (claude-config#2231 for the work names gate, #2317 for the rest): a script named there would stand
+# in for a merge gate, the lessons review or the worktree check on every merge this helper makes.
+# Outside a test run the installed one beside the helper is run instead. The real installed scripts
+# would reach GitHub and start a real lessons review, so these cases run a copy of the helper from a
+# folder of its own, whose installed scripts are stand ins that log their own name and then answer
+# as this suite's stubs do. Every setting names a decoy that logs and refuses, and outside a test run
+# no decoy may ever run.
+FAKE_HOOKS="$WORKDIR/installed-hooks"
+mkdir -p "$FAKE_HOOKS"
+cp -R "$DIR/lib" "$FAKE_HOOKS/lib"
+FAKE_HELPER="$FAKE_HOOKS/lib/merge-when-ready.sh"
+installed(){ # installed <path inside the fake hooks folder> <the script it hands to>
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s" >> "$ST/installed-asked"\nexec bash "%s" "$@"\n' "$1" "$2" > "$FAKE_HOOKS/$1"
+}
+installed block-red-merge.sh "$STUBS/red-gate.sh"
+installed pr-review-gate.sh "$STUBS/review-gate.sh"
+installed require-changelog-tag.sh "$STUBS/changelog-gate.sh"
+installed design-score-gate.sh "$STUBS/design-gate.sh"
+installed require-verification-run.sh "$STUBS/verify-gate.sh"
+installed check-closing-merge.sh "$STUBS/closing-gate.sh"
+installed check-work-names-merge.sh "$STUBS/work-names-gate.sh"
+installed lib/pr-review.sh "$STUBS/pr-review.sh"
+# The worktree check hands to the real one, so a removal it allows really happens.
+installed check-stale-worktrees.sh "$DIR/check-stale-worktrees.sh"
+DECOY="$WORKDIR/decoy.sh"
+printf '#!/usr/bin/env bash\nprintf "ran %%s\\n" "$*" >> "$ST/decoys-asked"\necho "decoy: a script named in the environment ran" >&2\njq -nc %s\nexit 3\n' \
+  "'{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"decoy\"}}'" > "$DECOY"
+# fake_in <folder> [VAR=value ...] <command ...>: outside a test run, every setting naming a decoy.
+fake_in(){
+  local d="$1"; shift
+  (cd "$d" && env HOOK_TESTS_RUNNING= MWR_RED_GATE="$DECOY" MWR_REVIEW_GATE="$DECOY" MWR_CHANGELOG_GATE="$DECOY" \
+    MWR_DESIGN_GATE="$DECOY" MWR_VERIFY_GATE="$DECOY" MWR_CLOSING_GATE="$DECOY" MWR_WORK_NAMES_GATE="$DECOY" \
+    MWR_REVIEW_LIB="$DECOY" MWR_WORKTREE_CHECK="$DECOY" "$@" 2>&1)
+}
+for marker in "" 0; do
+  fresh "$OLD" 0 "$GREEN"
+  out="$(fake_in "$REPO" HOOK_TESTS_RUNNING="$marker" bash "$FAKE_HELPER" 7 --repo acme/widget --squash)"; rc=$?
+  check_eq "#2317 outside a test run (marker '$marker') no script named in the environment is run" "" "$(cat "$ST/decoys-asked" 2>/dev/null)"
+  check_eq "#2317 and the merge goes through the installed gates (marker '$marker')" "0" "$rc"
+  for g in block-red-merge.sh pr-review-gate.sh require-changelog-tag.sh design-score-gate.sh \
+           require-verification-run.sh check-closing-merge.sh check-work-names-merge.sh lib/pr-review.sh; do
+    check "#2317 outside a test run the installed $g is run (marker '$marker')" "$g" "$(cat "$ST/installed-asked" 2>/dev/null)"
+  done
+done
+# Control: under the marker each setting is still the test's own, so the seam the suite uses works.
 fresh "$OLD" 0 "$GREEN"
-out="$(HOOK_TESTS_RUNNING= run 7 --repo acme/widget --squash)"; rc=$?
-check_eq "#2231 outside a test run the work names gate named in the environment is never asked" "" "$(cat "$ST/work-names-gate-payloads" 2>/dev/null)"
-fresh "$OLD" 0 "$GREEN"
-out="$(HOOK_TESTS_RUNNING=0 run 7 --repo acme/widget --squash)"; rc=$?
-check_eq "#2231 nor with the test marker set to anything but 1" "" "$(cat "$ST/work-names-gate-payloads" 2>/dev/null)"
+out="$(fake_in "$REPO" HOOK_TESTS_RUNNING=1 bash "$FAKE_HELPER" 7 --repo acme/widget --squash)"; rc=$?
+check "#2317 control: under the test marker a script named in the environment is run" "ran" "$(cat "$ST/decoys-asked" 2>/dev/null)"
+check_eq "#2317 control: and its refusal stops the merge" "0" "$(count gh-calls 'pr merge')"
 
 # THE CLASS (L30, L96): the gates this helper asks must be every gate a typed merge meets. The list
 # here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that
@@ -2089,6 +2130,13 @@ wt_fresh
 out="$(cd "$WREPO" && MWR_WORKTREE_CHECK="$WORKDIR/not-there.sh" bash "$HELPER" 7 --squash 2>&1)"; rc=$?
 check_eq "#1521 a check that is missing still leaves the merge at exit 0" "0" "$rc"
 check_eq "#1521 and the worktree is kept" "yes" "$(there)"
+# Outside a test run the worktree check named in the environment is never run (claude-config#2317):
+# the installed check beside the helper judges, and here removes, the merged branch's worktree.
+wt_fresh
+out="$(fake_in "$WREPO" bash "$FAKE_HELPER" 7 --squash)"; rc=$?
+check_eq "#2317 outside a test run the worktree check named in the environment is never run" "" "$(cat "$ST/decoys-asked" 2>/dev/null)"
+check "#2317 the installed worktree check is run instead" "check-stale-worktrees.sh" "$(cat "$ST/installed-asked" 2>/dev/null)"
+check_eq "#2317 and its removal happens" "no" "$(there)"
 
 # Merged with the branch left in place (stop 4) still removes the worktree, and so does a run that
 # finds the pull request already merged.
