@@ -278,9 +278,11 @@ while [ $# -gt 0 ]; do
       repo="$2"; shift 2 ;;
     --repo=*) repo="${1#--repo=}"; shift ;;
     --log)
-      [ $# -ge 2 ] || usage "--log needs a file."
+      [ $# -ge 2 ] && [ -n "$2" ] || usage "--log needs a file."
       log="$2"; shift 2 ;;
-    --log=*) log="${1#--log=}"; shift ;;
+    --log=*)
+      log="${1#--log=}"; [ -n "$log" ] || usage "--log needs a file."
+      shift ;;
     --squash|-s|--merge|-m|--rebase|-r|--delete-branch|-d) flags+=("$1"); shift ;;
     [0-9]*)
       case "$1" in *[!0-9]*) usage "$1 is not a pull request number." ;; esac
@@ -291,7 +293,15 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$pr" ] || usage "name the pull request by number."
 if [ -n "$log" ]; then
-  if ! : >> "$log" 2>/dev/null; then l="$log"; log=""; usage "--log $l cannot be written. Nothing was merged."; fi
+  # A relative path names a file relative to where the caller ran this, so it is made absolute here,
+  # before the move to the checkout's top below: kept as given, every line after that move would go
+  # to a second file the caller never named (lessons review of #2386).
+  l="$log"; d="$(dirname -- "$log")"
+  if ! d="$(cd -- "$d" 2>/dev/null && pwd -P)"; then
+    log=""; usage "--log $l cannot be written: its folder $(dirname -- "$l") does not exist. Nothing was merged."
+  fi
+  log="$d/$(basename -- "$l")"
+  if ! { : >> "$log"; } 2>/dev/null; then log=""; usage "--log $l cannot be written. Nothing was merged."; fi
   to_log "merge-when-ready: started for #$pr${repo:+ in $repo} at $(date '+%Y-%m-%d %H:%M:%S %Z') (pid $$)."
   trap 'log_result $?' EXIT
 fi
