@@ -39,17 +39,27 @@ const extOf = (path: string): string | undefined => {
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : undefined
 }
 
-/** Whether a file can be code by its name alone: a code or config extension, or none (a script's shebang is read later). */
-export const mayBeCode = (path: string): boolean => {
-  const ext = extOf(path)
-  return ext === undefined || CODE.has(ext)
-}
-
 /** Whether a file is one this guard reads: a code or config extension, or a script with a shebang and no extension. */
 export const inScope = (path: string, text: string): boolean => {
   const ext = extOf(path)
   return ext === undefined ? text.startsWith('#!') : CODE.has(ext)
 }
+
+// Prose files are read by people, never run, so they post nothing. Only these are ruled out as
+// senders: a file in a language CODE does not list (a .vue, a .sql posting through pg_net, a .toml)
+// may still send, so it is read as a sender is.
+const PROSE = new Set(['md', 'markdown', 'mdx', 'rst', 'adoc', 'txt'])
+/** Whether a file is prose (a README, a CLAUDE.md, a runbook), which can name a template but never send it. */
+export const isProseFile = (path: string): boolean => PROSE.has(extOf(path) ?? '')
+
+/**
+ * A file's text with its comments blanked and its strings kept, as its language writes comments, so
+ * a sender is judged by what it runs (Pivot, 2026-11-06: a workflow comment naming a test file made
+ * that test a Slack template; #2361: a runbook named in a code comment). One reader for both: the
+ * Slack marker and handsOn read this, and refersTo reads it for a reference. A `#` or `//` inside a
+ * string is kept, and code after a closed block comment is still read.
+ */
+export const codeOf = (path: string, text: string): string => withoutComments(text, languageOf(path, text) !== 'c')
 
 // Each marker is written so this file's own source does not match it: a dot or underscore escaped
 // or in a class, so the guard's rules are not themselves read as a Slack poster.
@@ -180,9 +190,10 @@ const importedModules = (text: string): string[] => {
 // A line that imports a file or reads its text: an import, require, from or export line, an include
 // or load, a call that opens, reads or renders a file, cat, a shell source line, or $(< file); or one
 // that builds a path to read later (path.join, resolve, Path, __dirname), as `const T = path.join(...)`
-// before `readFileSync(T)` does.
+// before `readFileSync(T)` does; or curl's data or form argument taking a file's text by `@`, as a
+// workflow's `curl ... --data-binary @alerts/late.txt` posts it (#2368). Matched on lower cased text.
 const READS =
-  /\b(import|require|from|export|cat|source)\b|\b(include|load\w*|open|read\w*|render\w*|\w*template\w*|send_?file|join|resolve|Path|URL)\s*\(|__dirname|__file__|import\.meta|\$\(\s*<|^\s*\.\s+\S/
+  /\b(import|require|from|export|cat|source)\b|\b(include|load\w*|open|read\w*|render\w*|\w*template\w*|send_?file|join|resolve|Path|URL)\s*\(|__dirname|__file__|import\.meta|\$\(\s*<|^\s*\.\s+\S|(^|\s)(-d|--data(-[a-z]+)?)(\s+|=)['"]?@|(^|\s)(-f|--form)\s+['"]?[\w-]+=@/
 
 /**
  * Whether a sender's text names a template's path, both given relative to the repository root.
@@ -202,7 +213,7 @@ export const refersTo = (senderRel: string, text: string, templateRel: string): 
   const mods = pkg ? [mod, t.slice(0, -1)] : [mod]
   const senderDir = senderRel.toLowerCase().split('/').slice(0, -1)
   // A path named only in a comment is a note to a reader, never a file the sender reads (#2361).
-  const lower = withoutComments(text, languageOf(senderRel, text) !== 'c').toLowerCase()
+  const lower = codeOf(senderRel, text).toLowerCase()
   const byModule = (name: string, whole: boolean): boolean => {
     const m = name.split('.').filter(Boolean)
     return m.length > 0 && mods.some(f => {

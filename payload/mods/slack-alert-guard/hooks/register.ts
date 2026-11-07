@@ -14,6 +14,7 @@ import {
   agentRefusal,
   ciMessages,
   ciWorkflow,
+  codeOf,
   editHalves,
   editedText,
   escapeRe,
@@ -23,9 +24,9 @@ import {
   inScope,
   isJs,
   isOwnRecord,
+  isProseFile,
   languageOf,
   linkPattern,
-  mayBeCode,
   mentionsStore,
   plainYamlValues,
   question,
@@ -197,8 +198,10 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     }
     const sends = `send ${path} to Slack`
     const handsOnTo = `hand ${path} on to the file that sends it`
-    // A test sends nothing and a doc posts nothing, so neither is read as a sender or a link (#2290, #2361).
-    const candidates = (rels: string[]) => rels.filter(r => !testFile(r) && mayBeCode(r))
+    // A test sends nothing and a prose file (a doc, a CLAUDE.md, a runbook) posts nothing, so neither is
+    // read as a sender or a link (#2290, #2361, #2368). A file in a language the guard does not list as
+    // code (a .vue, a .sql posting through pg_net) may still send, so only prose is ruled out.
+    const candidates = (rels: string[]) => rels.filter(r => !testFile(r) && !isProseFile(r))
     /**
      * Of the files using the template (a copy builder, a notice builder), the first that imports a
      * Slack send helper, so sends its text through it (#2361): the helper is found by git grep for the
@@ -242,17 +245,23 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       const rels = await grep(`send ${path}`, ['--all-match', '-E', '-e', termsPattern(level), '-e', SENDER_PREFILTER, '--', '.'])
       budget(rels)
       for (const rel of rels) {
+        // Only what a file runs can send: a comment naming the template beside a Slack webhook's name
+        // posts nothing (Pivot, 2026-11-06, where it held ordinary code edits as alert wording).
+        // refersTo leaves comments out itself.
         const text = await textOf(rel, sends)
-        if (inScope(rel, text) && slackMarked(text) && level.some(t => refersTo(rel, text, t))) return { sender: `${top}/${rel}` }
+        if (slackMarked(codeOf(rel, text)) && level.some(t => refersTo(rel, text, t))) return { sender: `${top}/${rel}` }
       }
       const links = (await grep(`hand ${path} on`, ['-E', '-e', linkPattern(level), '--', ...LINK_PATHS])).filter(r => !seen.has(r))
       budget(links)
       const next: string[] = []
       const users: { rel: string; text: string }[] = []
       for (const rel of links) {
+        // Judged by what it runs, as a sender is, so a comment neither hands the template on nor
+        // stops a file that does from being followed.
         const text = await textOf(rel, handsOnTo)
-        if (slackMarked(text) || !level.some(t => refersTo(rel, text, t))) continue
-        if (handsOn(rel, text)) next.push(rel)
+        const code = codeOf(rel, text)
+        if (slackMarked(code) || !level.some(t => refersTo(rel, text, t))) continue
+        if (handsOn(rel, code)) next.push(rel)
         users.push({ rel, text })
       }
       const user = await helperUser(users)
