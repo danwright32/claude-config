@@ -21,8 +21,9 @@
 #     tally's (hooks/lib/disk-clean-units.sh, #1866): "Size unknown" when no size of what can go in
 #     it was read, never 0; "At least" when some was read but something was only partly measured or
 #     not at all, or the kind was cut short, since then the figure is a lower bound (L11);
-#   - kinds largest first by what can go, with Tools not used in 180 days and Large personal files
-#     always last, in that order, because those are Dan's own and cannot come back (D3). A kind the
+#   - kinds largest first by what can go, with Worktrees whose repository is gone, Tools not used in
+#     180 days and Large personal files always last, in that order, because those are Dan's own and
+#     cannot come back (D3; the worktrees one added for #2346, since it can hold uncommitted work). A kind the
 #     scan found nothing in is not drawn, as the design draws it; a kind it could not measure at all
 #     is (Dan, 2026-10-28): its heading greyed, with no tick box and no rows, and the reason the scan
 #     recorded (its status, else its note) where the total goes, after the measured kinds that
@@ -153,15 +154,15 @@ awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v ta
     }
     # D3: largest first by what can go (a stable insertion sort over a dozen kinds); then the kinds
     # the scan could not measure at all, which have no size, in the scan order; your own files last.
-    nr = 0
+    nr = 0; np = split("forgotten-worktrees forgotten-tools large-files", own, " ")
+    for (j = 1; j <= np; j++) mine[own[j]] = 1
     for (j = 1; j <= nk; j++) {
-      c = kinds[j]; if (c == "forgotten-tools" || c == "large-files" || !(c in n)) continue
+      c = kinds[j]; if ((c in mine) || !(c in n)) continue
       r = ++nr; order[r] = c
       while (r > 1 && kib[order[r - 1]] + 0 < kib[c] + 0) { order[r] = order[r - 1]; r--; order[r] = c }
     }
-    for (j = 1; j <= nk; j++) { c = kinds[j]; if (c != "forgotten-tools" && c != "large-files" && !(c in n)) order[++nr] = c }
-    if (("forgotten-tools" in n) || ("forgotten-tools" in unm)) order[++nr] = "forgotten-tools"
-    if (("large-files" in n) || ("large-files" in unm)) order[++nr] = "large-files"
+    for (j = 1; j <= nk; j++) { c = kinds[j]; if (!(c in mine) && !(c in n)) order[++nr] = c }
+    for (j = 1; j <= np; j++) { c = own[j]; if ((c in n) || (c in unm)) order[++nr] = c }
     for (r = 1; r <= nr; r++) {
       c = order[r]; rank[c] = r
       total = (kind[c] == "unknown") ? "Size unknown" : ((kind[c] == "lower") ? "At least " : "") dcu_h(kib[c] + 0)
