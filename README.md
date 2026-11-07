@@ -179,9 +179,18 @@ alike (Dan, on #2183); the guard refuses an alias it cannot read, while the hook
 and leaves it to the guard. A session started before this was installed, or one whose PATH does not
 carry the guard, keeps exactly its old checks and is told once that gh writes inside scripts are
 not checked until a new session starts: refusing those scripts instead would stop
-`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Still not
-covered: gh run by its absolute path, a script that rewrites PATH, curl or an API library, and gh
-extensions.
+`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Programs gh starts
+itself (#2207): the real gh runs with the guard first on PATH, so a gh that a shell alias's command,
+a pager, an editor or git runs is judged too; a gh extension (by name, through an alias, or with
+`gh extension exec`), the Copilot CLI that `gh copilot` starts, and an alias naming another alias
+(which gh 2.89.0 does not expand) are refused, since an extension or the Copilot CLI can write to
+GitHub with no gh in between. Text gh posts that is not on its command line (#2326), for a public
+repository, in the hook and the guard alike: `--editor` is refused, and so is `gh pr create --fill`
+unless both a title and a body are given; `gh pr create` with no `--head` is judged with what it may
+push (the branch's name and the messages of the commits no remote holds); `gh repo create --push`
+with the whole history it sends, unless the new repository is private or internal; and `gh repo
+sync` into a public repository from a `--source` that is not public is refused. Still not covered:
+gh run by its absolute path, a script that rewrites PATH, and curl or an API library.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
