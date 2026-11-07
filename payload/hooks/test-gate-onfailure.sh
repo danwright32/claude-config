@@ -263,12 +263,39 @@ while IFS=$'\t' read -r script onfail matcher; do
         continue
       fi
       probed=$((probed + 1))
+      [ -z "$agent" ] && printf '%s\t%s\n' "$script" "$tool" >> "$WORK/received.tsv"
       why="$(probe "$DIR/$script" "$p" "$allowed")"
       [ -z "$why" ] && ok \
         || bad "#1899 $script, registered with onFailure block, $why on an ordinary $tool call from $who, so Claude Code would block every such call. Make that path exit 0."
     done <<< "$calls"
   done
 done <<< "$ROWS"
+
+# #2350: each gate is sent the FIRST sample its matcher matches, so moving a sample in payloads()
+# would quietly hand a gate a different call and weaken what this suite checks (the Slack drafts only
+# gate is probed with a read only because that sample sits before the send). This names the tools
+# each gate is expected to receive from the main session. A gate not listed must get only Bash.
+EXPECTED_SAMPLES="payload-write-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
+no-verify-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
+scratchpad-subagent-gate.sh Write,Bash
+monitor-action-gate.sh Monitor
+handback-claims-gate.sh SubagentHandback
+playwright-subagent-gate.sh mcp__playwright__browser_snapshot,mcp__plugin_playwright_playwright__browser_snapshot
+chrome-subagent-tab-gate.sh mcp__claude-in-chrome__navigate
+no-session-link-in-comments.sh Bash,mcp__plugin_slack_slack__slack_send_message
+slack-drafts-only-gate.sh Bash,mcp__claude_ai_Slack__slack_read_channel"
+if [ -s "$WORK/received.tsv" ]; then
+  received_gates="$(cut -f1 "$WORK/received.tsv" | awk '!seen[$0]++')"
+  while IFS= read -r script; do
+    want="$(grep -m1 -F "$script " <<< "$EXPECTED_SAMPLES" | cut -d' ' -f2)"
+    [ -n "$want" ] || want="Bash"
+    got="$(awk -F'\t' -v s="$script" '$1 == s { printf "%s%s", sep, $2; sep = "," }' "$WORK/received.tsv")"
+    [ "$got" = "$want" ] && ok \
+      || bad "#2350 $script was sent the samples '$got' but is expected to get '$want'. A sample moved in payloads(), so this gate is probed with a different call than the suite means it to be."
+  done <<< "$received_gates"
+else
+  bad "#2350 no gate recorded which sample it was sent, so the expected sample table was never checked"
+fi
 
 # Judged by the count it ran (L288): every refusing gate is probed at least once from the main
 # session and once from a subagent, so fewer probes than that means some gate was never run.
