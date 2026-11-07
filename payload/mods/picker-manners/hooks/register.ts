@@ -152,10 +152,10 @@ export const register: Register = on => {
   // #2261: the design round guard has written down Dan's answer to its own picker, so the question
   // goes onto its issue checked off with that answer, off the dialog's path as every other one is.
   // With the guard not loaded nothing raises this, and nothing is written: the safe direction. This is
-  // a call to a noun, which Claude Code cuts off at 10 s while gh is given 20, so the timer is started
-  // here, where the noun's code can be seen to hand GitHub over and answer at once (#744, #939).
+  // a call to a noun, which Claude Code cuts off at 10 s while gh is given 20, so GitHub is handed to
+  // offTheDialog's timer, which the noun waits check reads as work after the noun answered (#939, #2299).
   on('designRound.answered', async ($, e, next) => {
-    $.clock.after(0, reportingFailure($, () => recordOnIssues($, e.question, e.answer, e.options)))
+    offTheDialog($, () => recordOnIssues($, e.question, e.answer, e.options))
     return next(e)
   })
 
