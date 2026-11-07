@@ -178,8 +178,11 @@ const importedModules = (text: string): string[] => {
 }
 
 // A line that imports a file or reads its text: an import, require, from or export line, an include
-// or load, a call that opens, reads or renders a file, cat, a shell source line, or $(< file).
-const READS = /\b(import|require|from|export|cat|source)\b|\b(include|load\w*|open|read\w*|render\w*|\w*template\w*|send_?file)\s*\(|\$\(\s*<|^\s*\.\s+\S/
+// or load, a call that opens, reads or renders a file, cat, a shell source line, or $(< file); or one
+// that builds a path to read later (path.join, resolve, Path, __dirname), as `const T = path.join(...)`
+// before `readFileSync(T)` does.
+const READS =
+  /\b(import|require|from|export|cat|source)\b|\b(include|load\w*|open|read\w*|render\w*|\w*template\w*|send_?file|join|resolve|Path|URL)\s*\(|__dirname|__file__|import\.meta|\$\(\s*<|^\s*\.\s+\S/
 
 /**
  * Whether a sender's text names a template's path, both given relative to the repository root.
@@ -319,9 +322,11 @@ export const literalsOf = (text: string, hash: boolean): string[] => stringsOf(t
 const HASH_TOKENS = /#[^\n]*|"((?:\\[\s\S]|[^"\\])*)"|'((?:\\[\s\S]|[^'\\\n])*)'|`((?:\\[\s\S]|[^`\\])*)`/.source
 const C_TOKENS = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"((?:\\[\s\S]|[^"\\\n])*)"|'((?:\\[\s\S]|[^'\\\n])*)'|`((?:\\[\s\S]|[^`\\])*)`/.source
 
-// The query builder calls whose arguments are a database's words, never a person's (#2364).
+// The query builder calls whose arguments are a database's words, never a person's (#2364). Names an
+// ordinary array, string or promise method shares (filter, join, from, match, not) are left out, so an
+// alert inside such a call is still read; a SQL string handed to query or execute is caught by sqlText.
 const QUERY_CALLS =
-  'select|order|eq|neq|gt|gte|lt|lte|like|ilike|is|in|contains|containedBy|overlaps|filter|match|or|not|textSearch|from|rpc|schema|onConflict|returning|where|orWhere|andWhere|whereIn|whereRaw|orderBy|groupBy|having|join|leftJoin|innerJoin|raw|query|execute|prepare'
+  'select|order|eq|neq|gt|gte|lt|lte|like|ilike|contains|containedBy|overlaps|textSearch|rpc|schema|onConflict|returning|where|orWhere|andWhere|whereIn|whereRaw|orderBy|groupBy|having|leftJoin|innerJoin|raw'
 const CALL_TOKENS = `(\\.\\s*(?:${QUERY_CALLS})\\s*\\()|(\\()|(\\))`
 
 /** One string literal: its text with escapes read, where its text starts, and how it is used. */

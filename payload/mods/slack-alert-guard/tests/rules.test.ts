@@ -184,7 +184,8 @@ test('a string passed to a query builder call is marked as a query, at any argum
   const ts =
     'const { data } = await db.from("bookings").select("id, starts_at, buckets!fk!inner(code)").eq("status", "Payment failed today").order("starts_at", { ascending: true })\nawait notify(`Booking ${id} failed`)\nconst q = sql`SELECT id FROM bookings WHERE status = ${s}`\n'
   const strings = stringsOf(ts, false, true)
-  expect(strings.filter(s => !s.query).map(s => s.text)).toEqual(['Booking ${id} failed'])
+  // .from( is left out of the query calls (an array method shares it); its table name is one word, never prose.
+  expect(strings.filter(s => !s.query).map(s => s.text)).toEqual(['bookings', 'Booking ${id} failed'])
   expect(strings.filter(s => s.query).map(s => s.text)).toContain('Payment failed today')
   expect(strings.filter(s => s.query).map(s => s.text)).toContain('SELECT id FROM bookings WHERE status = ${s}')
   // literalsOf still reads every string, as before.
@@ -214,6 +215,14 @@ test('a sender that names a file without importing or reading it does not refer 
   expect(refersTo('scripts/deploy.ts', "const pkg = require('../package.json')\n", 'package.json')).toBe(true)
   expect(refersTo('scripts/deploy.sh', 'BODY=$(cat lib/templates/deploy.txt)\n', 'lib/templates/deploy.txt')).toBe(true)
   expect(refersTo('scripts/deploy.sh', 'BODY=$(< lib/templates/deploy.txt)\n', 'lib/templates/deploy.txt')).toBe(true)
+  // A path built on one line and read on the next still refers (lessons review at 395e7be).
+  expect(refersTo('lib/notify.ts', "const TPL = path.join(__dirname, 'templates', 'deploy.txt')\nconst body = readFileSync(TPL, 'utf8')\n", 'lib/templates/deploy.txt')).toBe(true)
+  expect(refersTo('app/notify.py', 'TPL = os.path.join(BASE, "templates/backup.txt")\nbody = open(TPL).read()\n', 'app/templates/backup.txt')).toBe(true)
+})
+
+test('an ordinary array or string method is not a query builder call, so an alert inside one is still message text', () => {
+  const ts = "items.filter(x => notify('Deploy failed on main'))\nconst s = parts.join(', and then retry')\nArray.from(rows, r => alert('Backup is late again'))\n"
+  expect(stringsOf(ts, false, true).filter(s => s.query)).toEqual([])
 })
 
 test('a SQL statement or fragment is not message text, and a sentence that opens with a SQL word still is (Dan item 2)', () => {
