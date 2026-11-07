@@ -278,27 +278,59 @@ export const importTerms = (text: string): string[] => {
 /** The files a template may be handed on through, as git pathspecs. */
 export const LINK_PATHS = [...JS, 'py'].map(e => `*.${e}`)
 
-/** The search words for several files at once, for git grep -E: one word bare, several as alternatives. */
-export const termsPattern = (rels: string[]): string => {
-  const terms = [...new Set(rels.map(r => escapeRe(searchTerm(r))))]
-  return terms.length === 1 ? (terms[0] as string) : `(${terms.join('|')})`
-}
+// A character that cannot be part of a name, and one that also cannot open a quote or a brace, which
+// a python import line never holds (importedModules). Written without \b, which macOS git grep -E
+// reads as matching nothing.
+const EDGE = '[^A-Za-z0-9_]'
+const NAME_END = `(${EDGE}|$)`
+const BARE = '[^"\'`{}]'
+const BARE_EDGE = '[^A-Za-z0-9_"\'`{}]'
 
 /**
- * The line a file handing on any of `rels` must hold, for git grep -E with case ignored: an import,
- * require or from line naming one, or its file name with its extension. Written without \b, which
- * macOS git grep -E reads as matching nothing.
+ * What git grep -E, case ignored, is given to list the files that may name any of `rels` (#2371):
+ * `word`, the names alone, which git tests first and cheaply, and `shape`, tested only on a line
+ * holding one (`-e word --and -e shape`): the name in a form refersTo can accept. That is after a
+ * slash (a path), as a file name with its extension, after its folder's name and a dot (a dotted
+ * module), or on a python import line; a package's index or __init__ is named by its folder, as a
+ * whole word. A word the name is only a piece of (et in settings, memory in "kept in memory") is
+ * never listed, so a common short name no longer lists a crowd of files to read. Every form
+ * refersTo accepts holds one of these, so nothing it would find is left out.
  */
-export const linkPattern = (rels: string[]): string => {
-  const alts = new Set<string>()
+export const namePatterns = (rels: string[]): { word: string; shape: string } => {
+  const words = new Set<string>()
+  const shapes = new Set<string>()
   for (const r of rels) {
+    const segs = r.split('/')
     const t = escapeRe(searchTerm(r))
-    alts.add(`(from|require|import).*${t}`)
+    words.add(t)
+    if (PACKAGE.has(stemOf(segs[segs.length - 1] ?? '')) && segs.length > 1) {
+      shapes.add(`(^|${EDGE})${t}${NAME_END}`)
+      continue
+    }
+    shapes.add(`/${t}${NAME_END}`)
     const ext = extOf(r)
-    if (ext !== undefined) alts.add(`${t}\\.${escapeRe(ext)}`)
+    if (ext !== undefined) shapes.add(`(^|${EDGE})${t}\\.(${(JS.has(ext) ? [...JS] : [ext]).map(escapeRe).join('|')})${NAME_END}`)
+    const dir = segs[segs.length - 2]
+    if (dir) shapes.add(`${escapeRe(dir)}\\.${t}${NAME_END}`)
+    shapes.add(`^[ \t]*(from|import)([ \t]|[ \t]${BARE}*${BARE_EDGE})${t}(${BARE_EDGE}[^"'\`{}#]*)?(#.*)?$`)
   }
-  return [...alts].join('|')
+  const w = [...words]
+  return { word: w.length === 1 ? (w[0] as string) : `(${w.join('|')})`, shape: [...shapes].join('|') }
 }
+
+// A name written as a git glob matches it as written, its glob signs escaped.
+const globName = (s: string): string => s.replace(/[*?[\]\\]/g, '\\$&')
+
+/**
+ * The git pathspecs for every file a module's local imports can be (#2371): each imported name as a
+ * file of any extension, a folder's index, or a python package, in any folder, case ignored. A send
+ * helper is found by its path, as the import names it, never by what its text happens to hold.
+ */
+export const importSpecs = (text: string): string[] =>
+  importTerms(text).flatMap(t => {
+    const g = globName(t)
+    return [`:(glob,icase)**/${g}.*`, `:(glob,icase)**/${g}/index.*`, `:(glob,icase)**/${g}/__init__.py`]
+  })
 
 /** How a file's strings are read: python through mod-kit's reader, YAML with its plain values, a hash comment language, or a C-like one. */
 export const languageOf = (path: string, text: string): 'python' | 'yaml' | 'hash' | 'c' => {

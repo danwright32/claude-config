@@ -16,17 +16,16 @@ import {
   ciWorkflow,
   editHalves,
   editedText,
-  escapeRe,
   handsOn,
   heldText,
-  importTerms,
+  importSpecs,
   inScope,
   isJs,
   isOwnRecord,
   languageOf,
-  linkPattern,
   mayBeCode,
   mentionsStore,
+  namePatterns,
   plainYamlValues,
   question,
   refersTo,
@@ -37,7 +36,6 @@ import {
   slackMarked,
   stringsOf,
   templateLines,
-  termsPattern,
   testFile,
   textTemplate,
   wordingChange,
@@ -202,18 +200,19 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     /**
      * Of the files using the template (a copy builder, a notice builder), the first that imports a
      * Slack send helper, so sends its text through it (#2361): the helper is found by git grep for the
-     * names the user imports beside the
-     * word slack or postMessage, then read for a marker and a reference from the user. A search that
+     * word slack or postMessage in the files whose path one of the user's imports names (importSpecs,
+     * #2371), never by what their text holds, so a helper whose text never names its own module is
+     * found and a common import (db, utils) lists no crowd; it is then read for a marker and a
+     * reference from the user. A search that
      * fails, runs late, or would read more than MOST_READ files cannot tell, so it is maybe: held for
      * Dan to approve.
      */
     const helperUser = async (users: { rel: string; text: string }[]): Promise<string | undefined> => {
-      const terms = [...new Set(users.flatMap(u => importTerms(u.text)))].map(escapeRe)
-      if (!terms.length) return undefined
+      const specs = [...new Set(users.flatMap(u => importSpecs(u.text)))]
+      if (!specs.length) return undefined
       const ms = await left()
       if (ms <= 0) end(MAYBE)
-      const pattern = terms.length === 1 ? (terms[0] as string) : `(${terms.join('|')})`
-      const hits = await $.process.run(['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', '--all-match', '-E', '-e', pattern, '-e', SENDER_PREFILTER, '--', ...LINK_PATHS], { timeoutMs: ms })
+      const hits = await $.process.run(['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', '-E', '-e', SENDER_PREFILTER, '--', ...specs], { timeoutMs: ms })
       if (hits.exitCode === 1) return undefined
       if (hits.exitCode !== 0 || hits.isStdoutTruncated) end(MAYBE)
       const helpers = candidates(hits.stdout.split('\u0000').filter(r => r && r !== templateRel))
@@ -239,13 +238,15 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     const seen = new Set([templateRel])
     let level = [templateRel]
     for (let hop = 0; ; hop++) {
-      const rels = await grep(`send ${path}`, ['--all-match', '-E', '-e', termsPattern(level), '-e', SENDER_PREFILTER, '--', '.'])
+      // Only files naming the level in a form a reference takes, so a common short name lists no crowd (#2371).
+      const name = namePatterns(level)
+      const rels = await grep(`send ${path}`, ['--all-match', '-E', '-e', SENDER_PREFILTER, '-e', name.word, '--and', '-e', name.shape, '--', '.'])
       budget(rels)
       for (const rel of rels) {
         const text = await textOf(rel, sends)
         if (inScope(rel, text) && slackMarked(text) && level.some(t => refersTo(rel, text, t))) return { sender: `${top}/${rel}` }
       }
-      const links = (await grep(`hand ${path} on`, ['-E', '-e', linkPattern(level), '--', ...LINK_PATHS])).filter(r => !seen.has(r))
+      const links = (await grep(`hand ${path} on`, ['-E', '-e', name.word, '--and', '-e', name.shape, '--', ...LINK_PATHS])).filter(r => !seen.has(r))
       budget(links)
       const next: string[] = []
       const users: { rel: string; text: string }[] = []

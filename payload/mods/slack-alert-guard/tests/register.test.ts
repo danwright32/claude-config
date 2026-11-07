@@ -73,7 +73,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // gitFails: git is killed and exits nonzero with this on stderr (as at its timeoutMs); gitThrows:
   // git cannot be run at all, so the call rejects (a hook that throws is skipped, and nothing answers);
   // gitSlow: the search answers, but only after the clock has moved past the scan's deadline.
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0 }
+  // readMs: each file the guard reads and checks moves the clock this far, standing in for reading
+  // and checking a real file on a busy Mac (#2371); cwd: the folder the session is in.
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, readMs: 0, cwd: '/w/app' }
+  let reads = 0
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
   // guard that never searched.
   const gits: { argv: string[]; timeoutMs?: number }[] = []
@@ -84,7 +87,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   const toasts: string[] = []
   const clock = mock.clock(on, { now: T0 })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
-  on('session.cwd', () => ({ value: '/w/app' }) as never)
+  on('session.cwd', () => ({ value: ctl.cwd }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
   on('process.run', async ($, e) => {
     const [cmd, method, raw] = e.argv.map(String)
@@ -104,9 +107,13 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       if (argv[3] === 'grep') {
         if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
         const patterns = argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [new RegExp(a, 'i')] : []))
-        // The pathspecs after --, as git reads them: '.' is every file, '*.ts' any file ending .ts.
+        // The pathspecs after --, as git reads them: '.' is every file, '*.ts' any file ending .ts, and
+        // ':(glob,icase)**/name.*' a path matched as a glob from the top, case ignored.
         const specs = argv.slice(argv.indexOf('--') + 1)
-        const inSpec = (p: string) => specs.some(s => s === '.' || (s.startsWith('*.') && p.endsWith(s.slice(1))))
+        const glob = (g: string) =>
+          new RegExp(`^${g.replace(/\\(.)|(\*\*\/)|(\*)|(\?)|([.+^${}()|[\]])/g, (m, esc, all, star, one, lit) => (esc ? `\\${esc}` : all ? '(.*/)?' : star ? '[^/]*' : one ? '[^/]' : `\\${lit}`))}$`, 'i')
+        const inSpec = (p: string) =>
+          specs.some(s => s === '.' || (s.startsWith('*.') && p.endsWith(s.slice(1))) || (s.startsWith(':(glob,icase)') && glob(s.slice(':(glob,icase)'.length)).test(p.slice(dir.length + 1))))
         // git grep reads line by line, so each pattern must match within one line of the file.
         const hits = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && inSpec(p) && patterns.every(re => (files[p] ?? '').split('\n').some(l => re.test(l))))
         if (!hits.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
@@ -127,10 +134,12 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   })
   // A folder exists while any file is in it.
   on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined || Object.keys(files).some(p => p.startsWith(`${e.path}/`)) }) as never)
-  on('fs.read', ($, e) => {
+  on('fs.read', async ($, e) => {
     if (ctl.unreadable === e.path) throw new Error(`EACCES: ${e.path}`)
     const t = files[e.path]
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
+    reads++
+    if (ctl.readMs) await clock.advance(ctl.readMs)
     return { value: t } as never
   })
   on('store.get', ($, e) => {
@@ -168,7 +177,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (tool === 'Write') files[String(input.file_path)] = String(input.content)
     return { result: 'written', text: 'written' } as never
   })
-  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits }
+  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, reads: () => reads }
 }
 type W = ReturnType<typeof world>
 
@@ -440,7 +449,8 @@ test('a copy builder used by a route that posts nothing passes', withKit, async 
 
 test('more files could send a template than the guard reads: the edit is held with an id Dan can approve, never refused unanswerably', withKit, async ($, on) => {
   const many: Record<string, string> = {}
-  for (let i = 0; i < 201; i++) many[`/w/app/lib/jobs/job${i}.ts`] = `// slack channel for deploy news\nexport const n${i} = ${i}\n`
+  // Each names the template as an import does, and mentions Slack only in a comment, so each must be read (#2371).
+  for (let i = 0; i < 201; i++) many[`/w/app/lib/jobs/job${i}.ts`] = `// slack channel for deploy news\nimport { deployFailed } from '../templates/deploy'\nexport const n${i} = deployFailed\n`
   const w = world($, on, { files: { ...sent.files, ...many } })
   const why = refusalOf(await call($, RETEMPLATE))
   expect(why).not.toContain('could not check')
@@ -453,7 +463,7 @@ test('more files could send a template than the guard reads: the edit is held wi
   expect(w.ran.length).toBe(1)
 })
 
-test('the real shapes over the limit: a page gaining a metadata title is held with an id Dan approves; a deploy doc gaining bullets is a doc and passes', withKit, async ($, on) => {
+test('the real shapes that were over the limit: a page gaining a metadata title among 452 pages that mention Slack passes, since no file names it (#2371); a deploy doc gaining bullets is a doc and passes', withKit, async ($, on) => {
   const PAGE = '/w/app/src/app/login/page.tsx'
   const DOC = '/w/app/DEPLOY.md'
   const many: Record<string, string> = {}
@@ -462,16 +472,80 @@ test('the real shapes over the limit: a page gaining a metadata title is held wi
   for (let i = 0; i < 50; i++) many[`/w/app/docs/notes${i}.md`] = 'The login page posts to hooks.slack.com\n'
   const w = world($, on, { files: { ...many, [PAGE]: 'export default function Login() { return null }\n', [DOC]: '# Deploy\n\n- Set the region\n' } })
   const edit = { tool: 'Edit', file_path: PAGE, old_string: 'export default', new_string: 'export const metadata = { title: "Sign in" };\nexport default' }
-  const why = refusalOf(await call($, edit))
-  expect(why).not.toContain('could not check')
-  expect(why).toContain('"Sign in"')
-  expect(idIn(why)).toBeDefined()
-  await ask($, w, why, APPROVE, { rendered: 'Sign in' })
-  // Approved, the same edit goes through: a retry is never refused the same way again.
+  // Every other page holds the word page and the word slack, but none names this page, so none is read.
   expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.reads()).toBeLessThan(5)
   const bullets = '- Set the region\n- Set DATABASE_URL to the pooled address\n- Set SENTRY_DSN for errors\n- Set SLACK_WEBHOOK_URL for deploy notices\n'
   expect(refusalOf(await call($, { tool: 'Edit', file_path: DOC, old_string: '- Set the region\n', new_string: bullets }))).toBe('')
   expect(w.ran.length).toBe(2)
+})
+
+// claude-config#2371, Dan's item 3: a template with a common short name. The name is a piece of many
+// words (et in let, get and settings; memory in "kept in memory"), so a search for the bare word
+// listed a crowd of files, and reading every one ran past the deadline: the write was held as could
+// not check, with nothing Dan could approve.
+const crowd = (n: number) => {
+  const many: Record<string, string> = {}
+  for (let i = 0; i < n; i++)
+    many[`/w/app/src/app/area${i}/page.tsx`] = `import { getSettings } from '@/lib/get-settings'\n// the digest is kept in memory, then posted to slack\nexport const let${i} = getSettings()\n`
+  return many
+}
+const ET = '/w/app/src/lib/et.ts'
+const MEMORY = '/w/app/src/lib/memory.ts'
+const LABEL = 'export const nowEt = () => new Date()\nexport const label = "Eastern time"\n'
+const relabel = (file: string) => ({ tool: 'Edit', file_path: file, old_string: '"Eastern time"', new_string: '"Eastern time, as Dan reads it"' })
+
+test('a write to a file with a common short name (et.ts, memory.ts) is judged by the files that name it, within the deadline (Dan item 3)', withKit, async ($, on) => {
+  const CLOCK = '/w/app/src/app/clock/page.tsx'
+  const w = world($, on, {
+    files: {
+      ...crowd(150),
+      [ET]: LABEL,
+      [MEMORY]: LABEL,
+      // An importer that posts nothing.
+      [CLOCK]: "import { nowEt } from '@/lib/et'\nimport { remember } from '@/lib/memory'\nimport { db } from '@/lib/db'\nexport default function Clock() { return nowEt() }\n",
+    },
+  })
+  // Reading and checking 120 files takes the whole 3 seconds.
+  w.ctl.readMs = 25
+  for (const file of [ET, MEMORY]) {
+    const before = w.reads()
+    expect(refusalOf(await call($, relabel(file)))).toBe('')
+    // Only the files that name it were read, never the crowd.
+    expect(w.reads() - before).toBeLessThan(10)
+  }
+  expect(w.ran.length).toBe(2)
+  // A file that does send it to Slack is still found, in the same crowd, and the edit is held naming it.
+  const DIGEST = '/w/app/src/jobs/digest.ts'
+  w.files[DIGEST] = "import { nowEt } from '../lib/et'\nexport const send = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: nowEt() })\n"
+  const why = refusalOf(await call($, relabel(ET)))
+  expect(why).toContain(`which ${DIGEST} sends to Slack`)
+  expect(why).toContain('Eastern time, as Dan reads it')
+  expect(w.ran.length).toBe(2)
+})
+
+test("a module's importers that also import common helpers (db, utils) do not make its write a hold (Dan item 3)", withKit, async ($, on) => {
+  const many: Record<string, string> = {}
+  for (let i = 0; i < 60; i++) many[`/w/app/src/app/api/r${i}/route.ts`] = `import { remember } from '@/lib/memory'\nimport { db } from '@/lib/db'\nimport { cn } from '@/lib/utils'\nexport const GET = () => remember(db, cn)\n`
+  // Files that mention utils and slack, none of them the utils module.
+  for (let i = 0; i < 250; i++) many[`/w/app/src/components/c${i}.tsx`] = `// utils for the slack digest card\nexport const c${i} = ${i}\n`
+  const w = world($, on, { files: { ...many, [MEMORY]: LABEL, '/w/app/src/lib/db.ts': 'export const db = {}\n', '/w/app/src/lib/utils.ts': 'export const cn = () => ""\n' } })
+  expect(refusalOf(await call($, relabel(MEMORY)))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('a send helper whose text never names its own module is still found through the import, so the copy it sends is held (Dan item 3)', withKit, async ($, on) => {
+  const ROUTE = '/w/app/src/app/api/digest/route.ts'
+  const w = world($, on, {
+    files: {
+      [MEMORY]: LABEL,
+      '/w/app/src/lib/messenger.ts': 'export const send = (text: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: JSON.stringify({ text }) })\n',
+      [ROUTE]: "import { label } from '@/lib/memory'\nimport { send } from '@/lib/messenger'\nexport const GET = () => send(label)\n",
+    },
+  })
+  const why = refusalOf(await call($, relabel(MEMORY)))
+  expect(why).toContain(`which ${ROUTE} sends to Slack`)
+  expect(w.ran).toEqual([])
 })
 
 test('an approval can carry a placeholder the code writes as text', withKit, async ($, on) => {
