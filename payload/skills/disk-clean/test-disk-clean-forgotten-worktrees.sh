@@ -57,8 +57,9 @@ OLD=202401011200   # a modification time well past every threshold, and the last
 OLD_DATE=2024-01-01
 # Five days ago: well inside the 30 day floor (L290: set, never waited for).
 RECENT="$(date -v-5d '+%Y%m%d%H%M' 2>/dev/null || date -d '5 days ago' '+%Y%m%d%H%M')"
-# Another Mac's home folder. It must not exist on this machine, or the link would not look gone.
-OTHER="/Users/dc-other-home-2346"
+# Another Mac's home folder: a folder beside the throwaway home, outside it. It must not exist, or the
+# link would not look gone.
+OTHER="${H%/*}/other-mac-home"
 
 dc_stub du 'for a in "$@"; do case "$a" in -*) ;; *) printf "12\t%s\n" "$a" ;; esac; done'
 dc_stub lsof 'exit 1'

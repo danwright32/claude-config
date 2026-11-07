@@ -4,7 +4,8 @@
 # module calls.
 #
 # From the walk: every .git FILE naming a folder under some repository's .git/worktrees (a
-# submodule's .git file names .git/modules and is not one). A .git file iCloud keeps only in the
+# submodule's .git file names .git/modules and is not one), apart from one whose gitdir is gone, which
+# no repository lists and forgotten-worktrees.sh lists or leaves alone instead (#2346). A .git file iCloud keeps only in the
 # cloud is never read, since reading it makes iCloud fetch it: its folder is listed as unmeasured. Offered, through `git worktree remove`
 # without --force (disk-remove.sh's worktree method), only when ALL of these hold, checked in order:
 #   no Claude Code session's working folder is in it (the live session map)
