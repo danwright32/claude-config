@@ -262,6 +262,8 @@ check "there is exactly one AskUserQuestion confirm picker" \
 check "and it sits in the step after the check" "$(grep -q 'AskUserQuestion' <<< "$check_sec" && echo ok || echo "not in the check step")"
 check "the Trash and Dan's own files are named one by one in it" \
   "$(grep -qF 'Trash' <<< "$check_sec" && grep -qF 'Large personal files' <<< "$check_sec" && grep -qF 'Tools not used in 180 days' <<< "$check_sec" && grep -qi 'by path' <<< "$check_sec" && echo ok || echo "the step does not name them")"
+check "and so are worktrees whose repository is gone, by the name the record gives them (#2346)" \
+  "$(tr '\n' ' ' <<< "$check_sec" | grep -qF 'Worktrees whose repository is gone' && echo ok || echo "the step does not name them")"
 
 # ================================================================================================
 # 6. The removal, its verified result by df, and nothing removed by hand
