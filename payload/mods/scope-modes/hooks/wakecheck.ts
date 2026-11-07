@@ -1,5 +1,6 @@
 import { repoFromRemotes, type GithubOf } from './overnight.ts'
 import { etWhen } from './sleep.ts'
+import { errorText } from './mod-kit/skew.ts'
 
 // Sleep mode phase 3 (#834): the wake check. The overnight rules (overnight.ts) judge the words of a
 // call, and a text match always has a way around it, so at wake the real state since sleep began is
@@ -176,7 +177,7 @@ export const wakeCheck = async (
     try {
       config = await repoFromRemotes(remotes.stdout, o.github)
     } catch (err) {
-      unread = `its remotes could not be read: ${firstLine(String((err as Error)?.message ?? err))}`
+      unread = `its remotes could not be read: ${firstLine(errorText(err, 'scope-modes'))}`
     }
   }
   const lessonHits: string[] = []
@@ -196,7 +197,7 @@ export const wakeCheck = async (
   try {
     mtime = await o.mtimeOf(`${o.home}/.claude/LESSONS.md`)
   } catch (err) {
-    unreadMtime = firstLine(String((err as Error)?.message ?? err)) || 'the read failed'
+    unreadMtime = firstLine(errorText(err, 'scope-modes')) || 'the read failed'
   }
   if (!Number.isFinite(mtime) || mtime <= 0) unmeasured.push(`the installed LESSONS.md was not checked (its last change could not be read: ${unreadMtime})`)
   else if (mtime >= o.since) lessonHits.push(`The installed LESSONS.md changed overnight, at ${etWhen(mtime)}`)

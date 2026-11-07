@@ -10,12 +10,14 @@ import {
   SENDER_PREFILTER,
   SOURCE,
   agentRefusal,
+  codeOf,
   editHalves,
   editedText,
   escapeRe,
   heldText,
   inScope,
   isOwnRecord,
+  isProseFile,
   languageOf,
   literalsOf,
   mentionsStore,
@@ -140,7 +142,12 @@ const findSender = async ($: EngineInterface, path: string, deadline: number): P
       } catch (err) {
         return { unchecked: `${file}, which could send ${path} to Slack, could not be read: ${message(err)}` }
       }
-      if (slackMarked(text) && refersTo(rel, text, templateRel)) return { sender: file }
+      // Only code or config can send, and only what it runs: a prose file (a CLAUDE.md, a runbook)
+      // or a comment naming the template beside a Slack webhook's name posts nothing (Pivot,
+      // 2026-11-06, where both held ordinary code edits as alert wording).
+      if (isProseFile(rel)) continue
+      const code = codeOf(rel, text)
+      if (slackMarked(code) && refersTo(rel, code, templateRel)) return { sender: file }
     }
     return NONE
   } catch (err) {
