@@ -308,13 +308,13 @@ done
 
 # The words bin/gh lets skip the judge must all be gh's own commands to the judge as well, and never
 # a command that starts a program the guard cannot see into.
-skipped="$(python3 - "$GUARD" <<'PY'
+cat > "$WORK/skip-list.py" <<'PY'
 import re, sys
 t = open(sys.argv[1]).read()
 m = re.search(r'case "\$\{1:-\}" in\n(.*?)\) ;;', t, re.S)
 print("\n".join(w for w in re.sub(r"[\s\\]", "", m.group(1)).split("|") if w not in ('""', "-*")) if m else "")
 PY
-)"
+skipped="$(python3 "$WORK/skip-list.py" "$GUARD")"
 builtin="$(GATE_DIR="$HERE" python3 -c 'import importlib.util, sys
 s = importlib.util.spec_from_file_location("g", sys.argv[1]); g = importlib.util.module_from_spec(s); s.loader.exec_module(g)
 print("\n".join(sorted(g.BUILTIN)))' "$HERE/work_names_publish_gate.py" 2>&1)"
