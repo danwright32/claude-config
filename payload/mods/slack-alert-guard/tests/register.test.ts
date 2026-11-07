@@ -249,6 +249,19 @@ test('a test file sends nothing: its titles and fixtures pass, by an edit and by
   expect(refusalOf(await call($, { tool: 'Edit', file_path: ALERT, old_string: 'Deploy ${id} failed', new_string: 'Backup is late again' }))).toContain('Backup is late again')
 })
 
+test('a file a test only names is not held: a deploy test naming package.json leaves its npm scripts free to change', withKit, async ($, on) => {
+  const PKG = '/w/app/package.json'
+  const DEPLOY_TEST = '/w/app/scripts/deploy.test.ts'
+  const w = world($, on, {
+    files: {
+      [PKG]: '{ "scripts": { "build": "next build" } }\n',
+      [DEPLOY_TEST]: "import { sendSlackAlert } from '../lib/alert'\nit('reads the version from package.json', () => expect(version).toBe('1.2.0'))\n",
+    },
+  })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: PKG, old_string: '"next build"', new_string: '"next build && npm run lint"' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
 test('database query strings in a Slack sender pass, and an alert sentence in the same file is still held', withKit, async ($, on) => {
   const ROUTE = '/w/app/lib/cron.ts'
   const text = 'import { notifySlack } from "./alert"\nexport const run = async () => {\n  const { data } = await db.from("bookings").select("id, starts_at").eq("status", "late")\n  await notifySlack(`Booking ${data[0].id} is late`)\n}\n'
