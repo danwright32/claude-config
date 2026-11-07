@@ -790,8 +790,9 @@ finish_branch(){   # $1 = the sentence saying it merged; always stops
 
 record_asked=""; polls=0; updates=0; head_seen=""; head_since=0; started_for=""; last_status=""; last_said=0
 tip_seen=""; tip_moved_at=""
-# The head the identical tree proof was last weighed for, and whether it held (claude-config#2310).
-tp_for=""; tp_ok=""
+# The head and check list the identical tree proof was last weighed for, whether it held, and the
+# head whose unread proof was last recorded (claude-config#2310).
+tp_for=""; tp_ok=""; tp_unread_for=""; tp_carrying=""
 # The last update this run made (claude-config#1500): the head it was made to, when, and whether a
 # compare has answered since. See head_is_tip and not_caught_up.
 updated_from=""; updated_at=0; catching_up=""
@@ -1461,23 +1462,32 @@ while :; do
   # merge line. A head whose checks are only still running (some registered, none failed) and whose
   # tree is byte for byte a parent's that passed beside a base it held is not waited on: the gates are
   # asked at once, and block-red-merge.sh judges the same proof itself (lib/tree-proof.sh), so this
-  # decides only WHEN to ask, as everything here does. Weighed once per head, since nothing it reads
-  # changes while that head waits; one it could not read waits as before. Each decision is recorded,
-  # taken or not, so how often it fires can be measured.
+  # decides only WHEN to ask, as everything here does. Weighed again whenever the head or the list
+  # of its checks changes, since a check that registers later must be one the parent passed; a proof
+  # GitHub did not answer is asked again at the next look rather than given up for the head (lessons
+  # review of 9362ece). Each decision is recorded, taken or not, so how often it fires can be
+  # measured; an unread proof is recorded once per head, however often it is asked again.
+  tp_carrying=""
   if [ -n "$waiting" ] && [ "$checks_total" -gt 0 ]; then
-    if [ "$tp_for" != "$head" ]; then
-      tp_for="$head"; tp_ok=""
-      if tp_carried_green "$slug" "$head" "$account" "$(printf '%s' "$view" | jq -c '[.statusCheckRollup[]?]')"; then
-        tp_ok=1
-        say "Head ${head:0:7}: not waiting for its own check run, since $TP_WHY (claude-config#2310). Asking the gates now."
-        tp_record merge-when-ready "$slug" "$pr" "$head" taken "$TP_FROM" "$TP_WHY" || say "The decision above could not be recorded."
-      else
-        tp_record merge-when-ready "$slug" "$pr" "$head" not-taken "" "$TP_WHY" || say "Whether head ${head:0:7} carried an identical tree's green could not be recorded."
-      fi
+    tp_key="$head $(printf '%s' "$view" | jq -r '[.statusCheckRollup[]? | "\(.workflowName // "")/\(.name // .context // "check")"] | unique | join(",")')"
+    if [ "$tp_for" != "$tp_key" ]; then
+      tp_ok=""
+      tp_carried_green "$slug" "$head" "$account" "$(printf '%s' "$view" | jq -c '[.statusCheckRollup[]?]')"; tp_rc=$?
+      case "$tp_rc" in
+        0) tp_for="$tp_key"; tp_ok=1
+           say "Head ${head:0:7}: not waiting for its own check run, since $TP_WHY (claude-config#2310). Asking the gates now."
+           tp_record merge-when-ready "$slug" "$pr" "$head" taken "$TP_FROM" "$TP_WHY" || say "The decision above could not be recorded." ;;
+        2) if [ "$tp_unread_for" != "$head" ]; then
+             tp_unread_for="$head"
+             tp_record merge-when-ready "$slug" "$pr" "$head" not-taken "" "$TP_WHY" || say "Whether head ${head:0:7} carried an identical tree's green could not be recorded."
+           fi ;;
+        *) tp_for="$tp_key"
+           tp_record merge-when-ready "$slug" "$pr" "$head" not-taken "" "$TP_WHY" || say "Whether head ${head:0:7} carried an identical tree's green could not be recorded." ;;
+      esac
     fi
     # Only while none of its own checks has failed: a failure on that tree is news, and waits.
     if [ -n "$tp_ok" ] && [ "$(printf '%s' "$view" | jq '[.statusCheckRollup[]? | ((.conclusion // .state // "") | ascii_upcase) | select(IN("", "PENDING", "EXPECTED", "SUCCESS", "NEUTRAL", "SKIPPED") | not)] | length')" = 0 ]; then
-      waiting=""
+      waiting=""; tp_carrying=1
     fi
   fi
   phase_local "asking the lessons review of ${head:0:7}"
@@ -1518,6 +1528,15 @@ while :; do
   turn_check || continue
   cmd="$(merge_text "$head")"
   if ! why="$(ask_gate "$RED_GATE" "$cmd")"; then
+    # A head asked about only because it carried an identical tree's green (claude-config#2310) still
+    # has its own checks coming, so the gate not taking that green is a wait for them, not a stop
+    # (lessons review of 9362ece). The carry is not weighed again for this head and check list.
+    if [ -n "$tp_carrying" ]; then
+      tp_ok=""; tp_carrying=""
+      say "block-red-merge.sh did not take the green head ${head:0:7} carried ($why), so this waits for the head's own checks."
+      tp_record merge-when-ready "$slug" "$pr" "$head" not-taken "" "the checks gate refused it: $why" || say "That refusal could not be recorded."
+      continue
+    fi
     stop 1 "Stopped: block-red-merge.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi
   review_cmd="$cmd"; [ -n "$read_key" ] && review_cmd="PR_REVIEW_READ=$read_key $cmd"

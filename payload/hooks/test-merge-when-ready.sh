@@ -2827,6 +2827,48 @@ out="$(run 7 --squash)"; rc=$?
 check_eq "#2310 an unreadable proof still merges once the checks pass" "0" "$rc"
 check_eq "#2310 only after its own run went green" "$GREEN" "$(cat "$ST/rollup")"
 check "#2310 recorded as not taken, saying it could not read" "$(printf '%s\tnot-taken\t\tcould not read' "$NEW")" "$(tp_rows)"
+check_eq "#2310 recorded once for the head, however often it is asked again" "1" "$(tp_rows | wc -l | tr -d ' ')"
+
+# A read that failed is asked again at the next look (lessons review of 9362ece): GitHub answering
+# then carries the green, and the merge does not wait for the rerun because of one bad read.
+fresh "$OLD" 4 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"
+printf '%s\n' ":" "tp_graph_now" > "$ST/on-sleep"
+tp_graph "$TP_TREE"; mv "$ST/graph" "$WORKDIR/graph-later"
+printf '#!/usr/bin/env bash\nmv "%s" "$ST/graph"\n' "$WORKDIR/graph-later" > "$BIN/tp_graph_now"; chmod +x "$BIN/tp_graph_now"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2310 a proof unread at one look and read at the next merges" "0" "$rc"
+check_eq "#2310 while the head's own run is still going" "$PENDING" "$(cat "$ST/rollup")"
+check "#2310 the head's record ends taken" "$(printf '%s\ttaken\t%s' "$NEW" "$OLD")" "$(tp_rows | tail -1)"
+check "#2310 after the unread look was recorded" "$(printf '%s\tnot-taken\t\tcould not read' "$NEW")" "$(tp_rows | head -1)"
+
+# A check that registers after the proof was weighed is weighed again (lessons review of 9362ece):
+# the review still running keeps the head waiting, a lint check the previous head never ran appears,
+# and the carry is withdrawn, so the head waits for its own checks.
+fresh "$OLD" 4 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"
+tp_graph "$TP_TREE"
+TWO_PENDING='[{"__typename":"CheckRun","name":"tests","workflowName":"ci","status":"IN_PROGRESS","conclusion":"","startedAt":"2026-10-06T10:05:00Z"},{"__typename":"CheckRun","name":"lint","workflowName":"ci","status":"IN_PROGRESS","conclusion":"","startedAt":"2026-10-06T10:06:00Z"}]'
+TWO_GREEN='[{"__typename":"CheckRun","name":"tests","workflowName":"ci","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-06T10:05:00Z"},{"__typename":"CheckRun","name":"lint","workflowName":"ci","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-06T10:06:00Z"}]'
+printf '3\n0\n0\n0\n' > "$ST/review-answers"
+printf '%s\n%s\n%s\n' ":" "printf '%s' '$TWO_PENDING' > \"\$ST/rollup\"" "printf '%s' '$TWO_GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2310 a head whose check list grew still merges" "0" "$rc"
+check_eq "#2310 only once its own checks, the new one included, passed" "$TWO_GREEN" "$(cat "$ST/rollup")"
+check "#2310 the head's record ends not taken, naming the new check" "never passed (ci/lint)" "$(tp_rows | tail -1)"
+
+# The checks gate refusing a carried head is a wait, not a stop (lessons review of 9362ece): its own
+# read can fail where the helper's did not, and the head's own checks are still coming.
+fresh "$OLD" 4 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"
+tp_graph "$TP_TREE"
+printf 'not green: tests=PENDING. could not read the workflow runs' > "$ST/red-gate-deny"
+printf '%s\n' ":" "printf '%s' '$GREEN' > \"\$ST/rollup\"; : > \"\$ST/red-gate-deny\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2310 a carried head the checks gate refused merges once its own checks pass" "0" "$rc"
+check "#2310 saying the gate did not take the carried green" "did not take the green" "$out"
+check_eq "#2310 after its own run went green" "$GREEN" "$(cat "$ST/rollup")"
+check "#2310 the head's record ends not taken, naming the refusal" "$(printf '%s\tnot-taken\t\tthe checks gate refused it' "$NEW")" "$(tp_rows | tail -1)"
 
 # A head whose own run has already failed is never merged on its parent's green.
 fresh "$OLD" 4 "$GREEN"

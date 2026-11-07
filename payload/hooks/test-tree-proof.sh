@@ -115,12 +115,13 @@ check "#2310 saying the tree differs" "differs from" "$out"
 
 proven; printf 'gh: Something went wrong (HTTP 502)\n' > "$ST/graph-fails"
 out="$(prove "$HEAD_PENDING")"
-check "#2310 a commit graph that cannot be read carries nothing" "rc=1" "$out"
+# A read that failed is not a judgement: it returns 2, so the helper can ask again at its next look.
+check "#2310 a commit graph that cannot be read carries nothing, as unread (2)" "rc=2" "$out"
 check "#2310 saying it could not be read, with GitHub's words" "HTTP 502" "$out"
 
 proven; printf 'not json' > "$ST/graph"
 out="$(prove "$HEAD_PENDING")"
-check "#2310 a commit graph that is not the answer carries nothing" "rc=1" "$out"
+check "#2310 a commit graph that is not the answer carries nothing, as unread" "rc=2" "$out"
 
 proven
 out="$(prove "$HEAD_RED")"
@@ -151,7 +152,7 @@ check "#2310 naming it" "vercel" "$out"
 
 proven; printf 'gh: Server Error (HTTP 500)\n' > "$ST/runs-fails"
 out="$(prove "$HEAD_PENDING")"
-check "#2310 workflow runs that cannot be read carry nothing" "rc=1" "$out"
+check "#2310 workflow runs that cannot be read carry nothing, as unread" "rc=2" "$out"
 check "#2310 saying so" "HTTP 500" "$out"
 
 proven; runs "$P1" "41:in_progress::pull_request:$BASE"
@@ -182,7 +183,7 @@ check "#2310 saying so, naming the base" "${BASE:0:7}" "$out"
 
 proven; printf 'gh: Not Found (HTTP 404)\n' > "$ST/compare-fails"
 out="$(prove "$HEAD_PENDING")"
-check "#2310 a containment that cannot be read carries nothing" "rc=1" "$out"
+check "#2310 a containment that cannot be read carries nothing, as unread" "rc=2" "$out"
 
 # The second parent (main's tip) has the same tree but was tested by a push run: never carried.
 fresh; graph "$TREE" "$P1" "$OTHER_TREE" "$GREEN_P1" "$MAIN" "$TREE" "[$(crun tests SUCCESS 52 push)]"
@@ -200,6 +201,12 @@ check_eq "#2310 one line per decision" "2" "$(wc -l < "$TP_LEDGER_DIR/decisions.
 check "#2310 each line carries time, who, repository, pull request, head, outcome and parent" "$(printf '1000000\tmerge-when-ready\tacme/widget\t7\t%s\ttaken\t%s\t' "$HEAD" "$P1")" "$(cat "$TP_LEDGER_DIR/decisions.tsv")"
 out="$(bash "$LIB" rate)"
 check "#2310 the reader counts how often it was taken of how often it was considered" "taken 1 of 2" "$out"
+# A head weighed more than once (an unread proof asked again, a refusal after a carry) counts once,
+# by its last decision.
+( . "$LIB" && tp_record merge-when-ready acme/widget 9 "$P1" not-taken "" "could not read" && tp_record merge-when-ready acme/widget 9 "$P1" taken "$P1" "same tree" \
+    && tp_record merge-when-ready acme/widget 10 "$MAIN" taken "$P1" "same tree" && tp_record merge-when-ready acme/widget 10 "$MAIN" not-taken "" "the checks gate refused it" )
+out="$(bash "$LIB" rate)"
+check "#2310 each head counts once, by its last decision" "taken 2 of 4" "$out"
 rm -rf "$TP_LEDGER_DIR"
 out="$(bash "$LIB" rate)"
 check "#2310 with nothing recorded the reader says so rather than a zero rate" "nothing recorded" "$out"

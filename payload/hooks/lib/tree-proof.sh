@@ -26,8 +26,9 @@
 # uses it only to decide when to ask that gate (one predicate, L263, L370).
 #
 #   tp_carried_green <owner/name> <head sha> <account or empty> <the head's statusCheckRollup as JSON>
-#     returns 0 when the head carries a parent's green and 1 otherwise; sets TP_FROM (the parent, on
-#     0) and TP_WHY (the proof, or why it does not hold, as a clause).
+#     returns 0 when the head carries a parent's green, 1 when it does not, and 2 when something it
+#     needed could not be read from GitHub, which a caller may ask again; sets TP_FROM (the parent,
+#     on 0) and TP_WHY (the proof, or why it does not hold, as a clause).
 #   tp_record <who> <owner/name> <pr> <head> <taken|not-taken> <parent or empty> <why>
 #     appends one line to the record (see THE RECORD); returns non zero, saying where, when it cannot.
 #   bash tree-proof.sh rate
@@ -61,11 +62,11 @@ tp_carried_green(){
   graph="$(tp__gh "$account" api graphql -f query="$TP_QUERY" -f owner="${slug%%/*}" -f name="${slug#*/}" -f oid="$head" 2>"$errf")"; rc=$?
   if [ "$rc" -ne 0 ]; then
     TP_WHY="could not read the head's commit and its parents from GitHub ($(tp__first "$(cat "$errf" 2>/dev/null)")${rc:+, exit $rc})"
-    [ "$errf" != /dev/null ] && rm -f "$errf"; return 1
+    [ "$errf" != /dev/null ] && rm -f "$errf"; return 2
   fi
   [ "$errf" != /dev/null ] && rm -f "$errf"
   htree="$(printf '%s' "$graph" | jq -r '.data.repository.object.tree.oid // ""' 2>/dev/null)"
-  [ -n "$htree" ] || { TP_WHY="GitHub's answer about the head's commit was not one this can read ($(tp__first "$graph"))"; return 1; }
+  [ -n "$htree" ] || { TP_WHY="could not read GitHub's answer about the head's commit ($(tp__first "$graph"))"; return 2; }
   for p in $(printf '%s' "$graph" | jq -r '.data.repository.object.parents.nodes[]? | "\(.oid):\(.tree.oid)"'); do
     ptree="${p#*:}"
     if [ "$ptree" = "$htree" ]; then cand="${p%%:*}"; break; fi
@@ -94,7 +95,7 @@ tp_carried_green(){
   runs="$(tp__gh "$account" api "repos/$slug/actions/runs?head_sha=$cand&per_page=100" 2>"$errf")"; rc=$?
   if [ "$rc" -ne 0 ] || [ "$(printf '%s' "$runs" | jq -r '(.workflow_runs | type) == "array"' 2>/dev/null)" != true ]; then
     TP_WHY="could not read the workflow runs of ${cand:0:7} ($(tp__first "$(cat "$errf" 2>/dev/null) $runs"))"
-    [ "$errf" != /dev/null ] && rm -f "$errf"; return 1
+    [ "$errf" != /dev/null ] && rm -f "$errf"; return 2
   fi
   [ "$errf" != /dev/null ] && rm -f "$errf"
   ids="$(jq -rn --argjson r "$runs" --argjson p "$pctx" '
@@ -110,7 +111,7 @@ tp_carried_green(){
     behind="$(printf '%s' "$cmp" | jq -r '.behind_by // ""' 2>/dev/null)"
     case "$behind" in
       0) ;;
-      ''|*[!0-9]*) TP_WHY="could not read whether ${cand:0:7} contains ${b:0:7}, the base its run was tested beside ($(tp__first "$cmp"), exit $rc)"; return 1 ;;
+      ''|*[!0-9]*) TP_WHY="could not read whether ${cand:0:7} contains ${b:0:7}, the base its run was tested beside ($(tp__first "$cmp"), exit $rc)"; return 2 ;;
       *) TP_WHY="the run of ${cand:0:7} was tested beside base ${b:0:7}, which ${cand:0:7} does not contain, so the tree it passed was not its own"; return 1 ;;
     esac
   done
@@ -138,8 +139,11 @@ tp_record(){   # $1 who, $2 slug, $3 pr, $4 head, $5 taken|not-taken, $6 parent,
 tp_rate(){
   local f; f="$(tp__ledger)"
   [ -s "$f" ] || { echo "tree-proof: nothing recorded yet in $f, so there is no rate to give."; return 0; }
-  awk -F'\t' '{ n[$2]++; if ($6 == "taken") t[$2]++ }
-    END { for (w in n) printf "%s: the identical tree skip was taken %d of %d time(s) it was considered\n", w, t[w] + 0, n[w] }' "$f"
+  # Each head counts once, by its last decision: an unread proof asked again, or a carry the checks
+  # gate refused, writes a second line for the same head.
+  awk -F'\t' '{ k = $2 SUBSEP $3 SUBSEP $4 SUBSEP $5; if (!(k in last)) { n[$2]++; who[k] = $2 } last[k] = $6 }
+    END { for (k in last) if (last[k] == "taken") t[who[k]]++
+          for (w in n) printf "%s: the identical tree skip was taken %d of %d time(s), one per head it was considered for\n", w, t[w] + 0, n[w] }' "$f"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
