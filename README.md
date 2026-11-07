@@ -6221,7 +6221,7 @@ MultiEdit there that adds message text, changes it or takes it away is refused. 
 send builds counts (#2361, #2364, #2290, #2287): a test file (a `.test.` or `.spec.` file, a `_test`
 or `test_` one, a `test-*.sh` suite, or anything under a test or mock folder) and a doc send nothing,
 so neither is held nor read as a sender; a string handed to a query builder call (`.select(`,
-`.eq(`, `.order(` and the like, at any argument), a database select list, a SQL statement or
+`.eq(`, `.order(` and the like, as a direct argument, never inside a call nested in one), a database select list, a SQL statement or
 fragment, and a code template a program writes out are not message text; in a CI workflow only what
 a Slack step posts counts (a payload, text or message value, a MESSAGE env value, the strings of a
 run command that itself posts to Slack), never step or job names, needs lists, input descriptions or
@@ -6248,8 +6248,9 @@ such as `outage-copy.ts`, or a notice builder), and the card names that file as 
 slack or postMessage, then a read of each, all within 3 seconds per call, following files that
 re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
 unreadable file, or would follow further holds the call as could not check. One that finds more
-than 200 files to read holds the call for Dan to approve like any other, naming no sender, rather
-than refusing it with nothing he can answer (#2364). A shell write to a path the write reader cannot
+than 200 files to read, or a send helper search that fails, runs late or meets an unreadable helper,
+holds the call for Dan to approve like any other, naming no sender, rather than refusing it with
+nothing he can answer (#2364). A shell write to a path the write reader cannot
 name is outside it.
 
 </td><td>

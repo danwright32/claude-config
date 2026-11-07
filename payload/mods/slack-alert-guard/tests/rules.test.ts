@@ -180,7 +180,7 @@ test('a database select list or a code template is not message text; a sentence 
   expect(wordingOf(['id, starts_at', 'Deploy failed on production'])).toEqual(['Deploy failed on production'])
 })
 
-test('a string passed to a query builder call is marked as a query, at any argument and inside a nested call', () => {
+test('a string passed to a query builder call is marked as a query, at any argument of it, and a sql tagged template too', () => {
   const ts =
     'const { data } = await db.from("bookings").select("id, starts_at, buckets!fk!inner(code)").eq("status", "Payment failed today").order("starts_at", { ascending: true })\nawait notify(`Booking ${id} failed`)\nconst q = sql`SELECT id FROM bookings WHERE status = ${s}`\n'
   const strings = stringsOf(ts, false, true)
@@ -223,6 +223,9 @@ test('a sender that names a file without importing or reading it does not refer 
 test('an ordinary array or string method is not a query builder call, so an alert inside one is still message text', () => {
   const ts = "items.filter(x => notify('Deploy failed on main'))\nconst s = parts.join(', and then retry')\nArray.from(rows, r => alert('Backup is late again'))\n"
   expect(stringsOf(ts, false, true).filter(s => s.query)).toEqual([])
+  // Only a direct argument counts: a call nested inside a query builder call is read as usual.
+  const nested = "rows.where(r => notify('Deploy failed on main')).order('starts_at', { ascending: true })\n"
+  expect(stringsOf(nested, false, true).map(s => [s.text, s.query])).toEqual([['Deploy failed on main', false], ['starts_at', true]])
 })
 
 test('a SQL statement or fragment is not message text, and a sentence that opens with a SQL word still is (Dan item 2)', () => {

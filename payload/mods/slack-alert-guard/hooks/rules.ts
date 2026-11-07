@@ -333,7 +333,7 @@ const CALL_TOKENS = `(\\.\\s*(?:${QUERY_CALLS})\\s*\\()|(\\()|(\\))`
 export type Str = {
   text: string
   start: number
-  /** Whether it is an argument of a query builder call, at any depth, or a sql tagged template. */
+  /** Whether it is a direct argument of a query builder call (never one of a call nested inside it), or a sql tagged template. */
   query: boolean
   /** The ${...} placeholders it holds as written text rather than filled at run time (JavaScript only). */
   literal: string[]
@@ -357,7 +357,7 @@ export const stringsOf = (text: string, hash: boolean, js = false): Str[] => {
     const at = m.index ?? 0
     const tagged = m[3] !== undefined && /(^|[^\w$])sql\s*$/i.test(text.slice(Math.max(0, at - 12), at))
     const literal = !js ? [] : m[3] === undefined ? [...body.matchAll(/\$\{[^}]*\}/g)].map(x => x[0]) : [...body.matchAll(/\\(\$\{[^}]*\})/g)].map(x => x[1] as string)
-    out.push({ text: unescape(body), start: at + 1, query: tagged || calls.includes(true), literal })
+    out.push({ text: unescape(body), start: at + 1, query: tagged || calls[calls.length - 1] === true, literal })
   }
   return out
 }
