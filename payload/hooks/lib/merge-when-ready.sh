@@ -883,7 +883,7 @@ line_note(){   # $1 = now
 }
 # Said once, when the wait in line passes MWR_LINE_SECONDS with the line still moving, so a run that
 # keeps its place says why rather than reading like one that should have stopped. Its time in line is
-# the run's time less the time it held the turn (claude-config#1975), as the ceiling counts it.
+# the run's time less the time it held the turn (claude-config#1975).
 line_long_note(){
   local t; t="$(now)"
   [ -z "$line_long_said" ] && [ $(( t - t0 - dl_used )) -ge "$LINE" ] && [ "${line_moved_at:-$line_from}" -gt "$line_from" ] && [ $(( t - line_moved_at )) -lt "$LINE" ] || return 0

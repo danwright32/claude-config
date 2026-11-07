@@ -1790,9 +1790,10 @@ decided by the line budget alone while it waits (claude-config#1975): on 2026-10
 passed over, kept its place in a line that was still moving, and stopped in the same second "at the
 end of its 180m deadline from taking the turn", because the deadline went on counting while it
 waited. Now the deadline counts only time a run holds the turn, it takes the turn back with what it
-has not held, and its time in line, which the ceiling measures, leaves out the time it held the
-turn. Neither budget restarts, so a run still lasts at most twelve hours: nine in line and three
-holding the turn. And
+has not held, and its time in line leaves out the time it held the turn. Time holding the turn is
+at most the three hour deadline; time in line has no fixed longest since claude-config#2351, ending
+only when the line stands still for its line budget, so a run behind a very long moving line can
+outlast is-it-live's 24 hour window for a background merge. And
 each time the turn comes to a run it first reads how long the repository's recent check runs took
 (the longest of the ten most recent heads among its latest successful pull request runs, each head
 timed from its first run created to its last finished; claude-config's took 15 to 23 minutes on
@@ -5445,9 +5446,10 @@ the foreground or the background, and the card tool refusing a number for that r
 whatever the session owes under it, so a misreading costs one refusal, never one per turn end; an
 owed PR is named once however many runs merged it, and a card made since GitHub's time for the merge
 settles every run that found it merged (#1943). A helper run in the background is asked again at
-each turn end for up to twenty four hours (`WAIT_MS`, twice the longest the helper can run, its nine
-hour ceiling in line for a turn plus its three hour deadline from taking it, #1697, a ratio the
-helper's suite checks, #1271, #1604) and owed once GitHub says it merged. That question is mod-kit's
+each turn end for up to twenty four hours (`WAIT_MS`, twice the helper's three hours in line with the
+line standing still plus its three hour deadline from taking the turn, a ratio the helper's suite
+checks, #1271, #1604; since #2351 a line that keeps moving never ends the helper, so a run behind a
+very long moving line can outlast it) and owed once GitHub says it merged. That question is mod-kit's
 one check of whether a pull request merged (`hooks/prmerged.ts`, copied byte for byte into each mod
 using it), which the goal box asks too: as each account gh is logged in to, by the repository the
 command named, else the one GitHub's link for the pull request named when the helper started (in the
